@@ -1,0 +1,45 @@
+# Окно настроек: общее + ярлыки вкладок.
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+# --- Окно настроек: общее ---
+settings.save:
+  ru: "Сохранить"
+  en: "Save"
+  es: "Guardar"
+settings.saved:
+  ru: "Сохранено"
+  en: "Saved"
+  es: "Guardado"
+settings.window_title:
+  ru: "MoonTerminal — Настройки"
+  en: "MoonTerminal — Settings"
+  es: "MoonTerminal — Ajustes"
+settings.title:
+  ru: "Настройки"
+  en: "Settings"
+  es: "Ajustes"
+
+# --- Ярлыки вкладок настроек ---
+tab.connections:
+  ru: "Подключения"
+  en: "Connections"
+  es: "Conexiones"
+tab.general:
+  ru: "Общие"
+  en: "General"
+  es: "General"
+tab.hotkeys:
+  ru: "Хоткеи"
+  en: "Hotkeys"
+  es: "Atajos"
+tab.interface:
+  ru: "Интерфейс"
+  en: "Interface"
+  es: "Interfaz"
+# Содержимое вкладки «Линии» — трейдинг-термины (Buy/Sell/Stop/dashed/…), НЕ переводим;
+# переводим только ярлык вкладки.
+tab.lines:
+  ru: "Линии"
+  en: "Lines"
+  es: "Líneas"

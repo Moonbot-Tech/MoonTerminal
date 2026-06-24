@@ -1,0 +1,82 @@
+[package]
+name = "moon-ui-gpui"
+version = "0.1.0"
+edition = "2024"
+description = "MoonTerminal GPUI shell over moon-core and MoonUI."
+
+[features]
+default = ["linux-x11", "linux-wayland"]
+debug-tools = ["moon-core/moonproto-diagnostics"]
+linux-x11 = ["gpui_platform/x11"]
+linux-wayland = ["gpui_platform/wayland"]
+
+[[bin]]
+name = "moonterminal"
+path = "src/main.rs"
+
+[build-dependencies]
+ico = "0.3"
+winresource = "0.1"
+
+[dependencies]
+# Общий backend (config/session/market/metrics/...). UI-агностик.
+moon-core = { path = "../moon-core" }
+# Чарт-математика/геометрия (view/axes/transform/build_order_geometry/инстанс-типы,
+# константы). wgpu-free: данные рисует НАШ own-pass DX11 (chartdx), не wgpu-движок.
+moon-chart = { path = "../moon-chart" }
+image = "0.25"
+bytemuck = { version = "1", features = ["derive"] }
+
+# Canonical Moon UI source: standalone GPUI runtime + Moon components.
+# Local development overrides this Git source through untracked `.cargo/config.toml`.
+gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
+gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master", features = ["font-kit"] }
+moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
+
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+# Локализация интерфейса: словари в корневом `locales/*.yml` (см. locales/README.md).
+# Версия = как в MoonUI (rust-i18n 4.1), чтобы глобальный backend локали был общий.
+rust-i18n = "4.1"
+# Окно «Отчёт» читает локальную SQLite напрямую (как egui ReportView). Версия и
+# фича bundled унифицируются с moon-core — отдельной сборки SQLite не будет.
+rusqlite = "0.32"
+# Сериализация раскладки доков/откреплённых окон (→ docks.json / detached.json).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Локальное смещение времени (подписи часов) + НАШ DX11 own-pass рендер чарта (chartdx).
+# Только Windows; иначе UTC. moon-chart намеренно windows-free, поэтому tz/DX11 здесь.
+# Версия 0.61 = как стенд chart_bench (проверено с RawGpuAccess-кастом форка; COM ABI
+# стабилен между версиями windows-rs, поэтому несовпадение с версией форка безопасно).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_System_SystemInformation",
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { git = "https://github.com/zed-industries/wgpu.git", rev = "357a0c56e0070480ad9daea5d2eaa83150b79e88" }
+x11 = { version = "2.21", features = ["xlib", "xtest"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "0.33"
+foreign-types = "0.5"
+block = "0.1"
+objc = "0.2"
+core-graphics = "0.24"

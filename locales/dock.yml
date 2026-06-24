@@ -1,0 +1,108 @@
+# Нижний док: вкладки, открепление, лог.
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+# --- Нижний док: вкладки ---
+dock.tab.orders:
+  ru: "Ордера"
+  en: "Orders"
+  es: "Órdenes"
+dock.tab.assets:
+  ru: "Активы"
+  en: "Assets"
+  es: "Activos"
+dock.tab.log:
+  ru: "Лог"
+  en: "Log"
+  es: "Registro"
+dock.tab.report:
+  ru: "Отчёт"
+  en: "Report"
+  es: "Informe"
+dock.tab.detects:
+  ru: "Детекты"
+  en: "Detects"
+  es: "Detecciones"
+dock.todo.assets:
+  ru: "Активы: канал балансов ядра пока не подключён"
+  en: "Assets: core balance feed not wired yet"
+  es: "Activos: el feed de balances del núcleo aún no está conectado"
+dock.log.empty:
+  ru: "Лог пуст"
+  en: "Log is empty"
+  es: "El registro está vacío"
+dock.collapse:
+  ru: "Свернуть док"
+  en: "Collapse dock"
+  es: "Contraer panel"
+dock.expand:
+  ru: "Развернуть док"
+  en: "Expand dock"
+  es: "Expandir panel"
+dock.tab.dblclick_hint:
+  ru: "двойной клик по вкладке — открепить / вернуть"
+  en: "double-click a tab to detach / re-dock it"
+  es: "doble clic en una pestaña para separar / reacoplar"
+dock.tab.hint_docked:
+  ru: "Клик — выбрать · двойной клик или перетаскивание — открепить в окно"
+  en: "Click to select · double-click or drag to pop out into a window"
+  es: "Clic para seleccionar · doble clic o arrastrar para abrir en ventana"
+dock.tab.hint_detached:
+  ru: "Открыто в отдельном окне · двойной клик — вернуть в док"
+  en: "Open in a separate window · double-click to return to dock"
+  es: "Abierto en otra ventana · doble clic para volver al panel"
+dock.tab.in_window:
+  ru: "Открыто в отдельном окне"
+  en: "Open in a separate window"
+  es: "Abierto en una ventana aparte"
+# Глиф ↩ — отдельным segment-ом в коде, в словаре только текст.
+dock.tab.generic:
+  ru: "Панель"
+  en: "Panel"
+  es: "Panel"
+dock.stub_soon:
+  ru: "%{name} — скоро"
+  en: "%{name} — coming soon"
+  es: "%{name} — próximamente"
+dock.tab.repin:
+  ru: "Вернуть в док"
+  en: "Return to dock"
+  es: "Volver al panel"
+
+# --- Лог ---
+log.source.local:
+  ru: "Локальный"
+  en: "Local"
+  es: "Local"
+log.source.group:
+  ru: "Лог группы"
+  en: "Group log"
+  es: "Registro del grupo"
+log.source.all:
+  ru: "Все ядра"
+  en: "All cores"
+  es: "Todos los núcleos"
+log.live:
+  ru: "Live (текущий)"
+  en: "Live (current)"
+  es: "Live (actual)"
+log.file:
+  ru: "Файл"
+  en: "File"
+  es: "Archivo"
+log.search:
+  ru: "Поиск…"
+  en: "Search…"
+  es: "Buscar…"
+log.errors_only:
+  ru: "Только ошибки"
+  en: "Errors only"
+  es: "Solo errores"
+log.empty_filtered:
+  ru: "Нет строк по фильтру"
+  en: "No lines match the filter"
+  es: "Ninguna línea coincide con el filtro"
+log.count:
+  ru: "%{shown} из %{total}"
+  en: "%{shown} of %{total}"
+  es: "%{shown} de %{total}"

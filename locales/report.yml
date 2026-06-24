@@ -1,0 +1,165 @@
+# Панель «Отчёт» (сделки): заголовки колонок таблицы, фильтры, итоги.
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Технические колонки (ID/TaskID/ExOrderID/Strat/BaseCur/Sell set) — НЕ переводим (термины БД).
+_version: 2
+
+# --- Заголовки колонок ---
+report.col.buydate:
+  ru: "Открыт (UTC)"
+  en: "Opened (UTC)"
+  es: "Abierto (UTC)"
+report.col.closedate:
+  ru: "Закрыт (UTC)"
+  en: "Closed (UTC)"
+  es: "Cerrado (UTC)"
+report.col.last_update:
+  ru: "Обновлён"
+  en: "Updated"
+  es: "Actualizado"
+report.col.core:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+report.col.coin:
+  ru: "Монета"
+  en: "Coin"
+  es: "Moneda"
+report.col.side:
+  ru: "Сторона"
+  en: "Side"
+  es: "Lado"
+report.col.quantity:
+  ru: "Кол-во"
+  en: "Qty"
+  es: "Cant."
+report.col.bought:
+  ru: "Куплено"
+  en: "Bought"
+  es: "Comprado"
+report.col.buyprice:
+  ru: "Покупка"
+  en: "Buy"
+  es: "Compra"
+report.col.sellprice:
+  ru: "Продажа"
+  en: "Sell"
+  es: "Venta"
+report.col.spentbtc:
+  ru: "Влож.BTC"
+  en: "Spent BTC"
+  es: "Invert.BTC"
+report.col.gainedbtc:
+  ru: "Получ.BTC"
+  en: "Gained BTC"
+  es: "Recib.BTC"
+report.col.profitbtc:
+  ru: "Профит BTC"
+  en: "Profit BTC"
+  es: "Beneficio BTC"
+report.col.lev:
+  ru: "Плечо"
+  en: "Lev"
+  es: "Apal."
+report.col.channel:
+  ru: "Канал"
+  en: "Channel"
+  es: "Canal"
+report.col.signal:
+  ru: "Сигнал"
+  en: "Signal"
+  es: "Señal"
+report.col.file:
+  ru: "Файл"
+  en: "File"
+  es: "Archivo"
+report.col.emulator:
+  ru: "Эму"
+  en: "Emu"
+  es: "Emu"
+report.col.status:
+  ru: "Статус"
+  en: "Status"
+  es: "Estado"
+report.col.reason:
+  ru: "Причина"
+  en: "Reason"
+  es: "Motivo"
+report.col.comment:
+  ru: "Коммент"
+  en: "Comment"
+  es: "Comentario"
+
+# --- Значения ячеек стороны/эмулятора ---
+report.side.short:
+  ru: "Шорт"
+  en: "Short"
+  es: "Corto"
+report.side.long:
+  ru: "Лонг"
+  en: "Long"
+  es: "Largo"
+report.cell.emu:
+  ru: "эму"
+  en: "emu"
+  es: "emu"
+
+# --- Фильтры и комбобоксы ---
+report.filter.all:
+  ru: "Все"
+  en: "All"
+  es: "Todas"
+report.filter.core:
+  ru: "Ядро:"
+  en: "Core:"
+  es: "Núcleo:"
+report.filter.coin:
+  ru: "Монета:"
+  en: "Coin:"
+  es: "Moneda:"
+report.filter.side:
+  ru: "Сторона:"
+  en: "Side:"
+  es: "Lado:"
+report.filter.from:
+  ru: "С:"
+  en: "From:"
+  es: "Desde:"
+report.filter.to:
+  ru: "По:"
+  en: "To:"
+  es: "Hasta:"
+report.filter.coin_ph:
+  ru: "все"
+  en: "all"
+  es: "todas"
+report.filter.date_ph:
+  ru: "ГГГГ-ММ-ДД"
+  en: "YYYY-MM-DD"
+  es: "AAAA-MM-DD"
+# Глиф ▾ — отдельно в коде; в словаре только текст.
+report.columns_menu:
+  ru: "Колонки"
+  en: "Columns"
+  es: "Columnas"
+
+# --- Пустые состояния и итоги ---
+report.all_cols_hidden:
+  ru: "Все колонки скрыты — включите в «Колонки»."
+  en: "All columns are hidden — enable some in “Columns”."
+  es: "Todas las columnas están ocultas — actívalas en «Columnas»."
+report.empty:
+  ru: "Нет отчётов под фильтр (или БД пуста)."
+  en: "No reports match the filter (or the DB is empty)."
+  es: "Ningún informe coincide con el filtro (o la BD está vacía)."
+report.totals:
+  ru: "Итого за период:"
+  en: "Period total:"
+  es: "Total del periodo:"
+report.orders_count:
+  ru: "ордеров: %{count}"
+  en: "orders: %{count}"
+  es: "órdenes: %{count}"
+report.shown_top:
+  ru: "показано (топ): %{n}"
+  en: "shown (top): %{n}"
+  es: "mostrado (top): %{n}"

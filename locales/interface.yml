@@ -1,0 +1,92 @@
+# Вкладка «Интерфейс» окна настроек (тема оформления, theme.toml).
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+iface.sec_font:
+  ru: "Интерфейс: шрифт"
+  en: "Interface: font"
+  es: "Interfaz: fuente"
+iface.font_delta:
+  ru: "Прибавка к размеру шрифта"
+  en: "Font size increase"
+  es: "Aumento del tamaño de fuente"
+iface.sec_chart:
+  ru: "График: фон и сетка"
+  en: "Chart: background & grid"
+  es: "Gráfico: fondo y rejilla"
+iface.bg:
+  ru: "Цвет фона графика"
+  en: "Chart background"
+  es: "Fondo del gráfico"
+iface.grid:
+  ru: "Цвет сетки"
+  en: "Grid color"
+  es: "Color de rejilla"
+iface.grid_alpha:
+  ru: "Видимость сетки"
+  en: "Grid visibility"
+  es: "Visibilidad de rejilla"
+iface.sec_cross:
+  ru: "График: перекрестие"
+  en: "Chart: crosshair"
+  es: "Gráfico: cruz"
+iface.cross:
+  ru: "Цвет перекрестия"
+  en: "Crosshair color"
+  es: "Color de la cruz"
+iface.cross_alpha:
+  ru: "Прозрачность линий"
+  en: "Line opacity"
+  es: "Opacidad de líneas"
+iface.cross_thickness:
+  ru: "Толщина линий"
+  en: "Line thickness"
+  es: "Grosor de líneas"
+iface.halo_radius:
+  ru: "Радиус ореола"
+  en: "Halo radius"
+  es: "Radio del halo"
+iface.halo_intensity:
+  ru: "Яркость ореола"
+  en: "Halo intensity"
+  es: "Intensidad del halo"
+iface.sec_book:
+  ru: "Стакан"
+  en: "Order book"
+  es: "Libro de órdenes"
+iface.book_bg:
+  ru: "Фон стакана"
+  en: "Order book background"
+  es: "Fondo del libro"
+iface.book_bid:
+  ru: "Цвет покупок (bid)"
+  en: "Bid color"
+  es: "Color de compra (bid)"
+iface.book_ask:
+  ru: "Цвет продаж (ask)"
+  en: "Ask color"
+  es: "Color de venta (ask)"
+iface.book_level_alpha:
+  ru: "Яркость линий уровней"
+  en: "Level lines brightness"
+  es: "Brillo de las líneas de niveles"
+iface.sec_panels:
+  ru: "Панели"
+  en: "Panels"
+  es: "Paneles"
+iface.panel_bg:
+  ru: "Фон панелей (тулбар, ордер, док, статус)"
+  en: "Panels background (toolbar, order, dock, status)"
+  es: "Fondo de paneles (barra, orden, dock, estado)"
+iface.sec_closed:
+  ru: "Закрытый график"
+  en: "Closed chart"
+  es: "Gráfico cerrado"
+iface.closed_bg:
+  ru: "Фон пустого контейнера"
+  en: "Empty container background"
+  es: "Fondo del contenedor vacío"
+iface.hint:
+  ru: "Меняется вживую. «Сохранить» пишет theme.toml рядом с программой — им можно делиться."
+  en: "Changes live. “Save” writes theme.toml next to the app — you can share it."
+  es: "Cambia en vivo. «Guardar» escribe theme.toml junto a la app — puedes compartirlo."

@@ -1,0 +1,150 @@
+# Верхняя панель, статус-бар, тулбар, откреплённое чарт-окно.
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Намеренно НЕ переводим: BUY · SELL · LONG · SHORT · ON · OFF · Live · строку метрик статус-бара.
+_version: 2
+
+# --- Shell (верхняя панель / статус) ---
+# Глифы-иконки (⚙ ▶ ⏸ …) в словаре НЕ храним — они отдельным segment-ом в коде (см. README).
+shell.settings_btn:
+  ru: "Настройки"
+  en: "Settings"
+  es: "Ajustes"
+status.connecting:
+  ru: "подключение…"
+  en: "connecting…"
+  es: "conectando…"
+status.live:
+  ru: "онлайн"
+  en: "live"
+  es: "en vivo"
+status.disconnected:
+  ru: "отключено"
+  en: "disconnected"
+  es: "desconectado"
+status.connected_count:
+  ru: "подключено"
+  en: "connected"
+  es: "conectado"
+# Селектор активного торгового ядра в шапке: текст, когда в группе нет ядер.
+header.no_cores:
+  ru: "нет ядер"
+  en: "no cores"
+  es: "sin núcleos"
+
+# --- Тулбар ---
+toolbar.size:
+  ru: "Размер"
+  en: "Size"
+  es: "Tamaño"
+toolbar.scale:
+  ru: "Масштаб"
+  en: "Scale"
+  es: "Escala"
+toolbar.scale_auto:
+  ru: "Авто"
+  en: "Auto"
+  es: "Auto"
+# «Live» — отраслевой термин, не переводим; глиф ▶ — отдельный segment.
+toolbar.live:
+  ru: "Live"
+  en: "Live"
+  es: "Live"
+toolbar.pause:
+  ru: "Пауза"
+  en: "Pause"
+  es: "Pausa"
+toolbar.live_tip:
+  ru: "Live: график бежит за рынком. Пауза: заморожен, можно листать (ЛКМ-перетаскивание, колесо)."
+  en: "Live: the chart follows the market. Pause: frozen, you can scroll (LMB drag, wheel)."
+  es: "Live: el gráfico sigue al mercado. Pausa: congelado, puedes desplazarte (arrastrar con clic izquierdo, rueda)."
+toolbar.close_chart:
+  ru: "Закрыть график"
+  en: "Close chart"
+  es: "Cerrar gráfico"
+toolbar.reports:
+  ru: "Отчёты"
+  en: "Reports"
+  es: "Informes"
+toolbar.help:
+  ru: "Справка"
+  en: "Help"
+  es: "Ayuda"
+toolbar.strategies:
+  ru: "Стратегии"
+  en: "Strategies"
+  es: "Estrategias"
+# Заголовки попапов торговых метрик (слайдер + поле ввода).
+toolbar.tp_title:
+  ru: "Тейк-профит"
+  en: "Take profit"
+  es: "Take profit"
+toolbar.sl_title:
+  ru: "Стоп-лосс"
+  en: "Stop loss"
+  es: "Stop loss"
+toolbar.lev_title:
+  ru: "Плечо"
+  en: "Leverage"
+  es: "Apalancamiento"
+# Чекбокс расширенного диапазона TP (флаг x_tmode / «s9»): 100..900% вместо 0..100%.
+toolbar.tp_ext:
+  ru: "×10 (100–900%)"
+  en: "×10 (100–900%)"
+  es: "×10 (100–900%)"
+# Файн-слайдер TP (суб-процент через scalp) и тоггл hedge-mode (dual-side позиции).
+toolbar.tp_fine:
+  ru: "Точно (0.01%)"
+  en: "Fine (0.01%)"
+  es: "Fino (0.01%)"
+toolbar.hedge:
+  ru: "Hedge Mode"
+  en: "Hedge Mode"
+  es: "Hedge Mode"
+
+# --- Чарт-вкладка / откреплённое чарт-окно ---
+chartwin.tab_title:
+  ru: "Чарт %{n}"
+  en: "Chart %{n}"
+  es: "Gráfico %{n}"
+chartwin.clear:
+  ru: "Закрыть окно (убрать все графики)"
+  en: "Close window (remove all charts)"
+  es: "Cerrar ventana (quitar todos los gráficos)"
+
+# --- Попап настроек раскладки чарт-вкладки (Fit/Scroll + раздельные высоты) ---
+chart.layout.title:
+  ru: "Раскладка вкладки"
+  en: "Tab layout"
+  es: "Disposición de pestaña"
+chart.layout.height_fit:
+  ru: "Высота Fit"
+  en: "Fit height"
+  es: "Altura Fit"
+chart.layout.height_fit_hint:
+  ru: "0 — растянуть по окну\n≥20 — фиксированная высота без скролла"
+  en: "0 — stretch to window\n≥20 — fixed height, no scroll"
+  es: "0 — estirar a ventana\n≥20 — altura fija sin scroll"
+chart.layout.height_scroll:
+  ru: "Высота Scroll"
+  en: "Scroll height"
+  es: "Altura Scroll"
+chart.layout.height_scroll_hint:
+  ru: "≥20 — фиксированная высота"
+  en: "≥20 — fixed height"
+  es: "≥20 — altura fija"
+chart.layout.tip:
+  ru: "Настройки раскладки этой вкладки"
+  en: "This tab's layout settings"
+  es: "Ajustes de disposición de esta pestaña"
+chart.layout.apply_all_windows:
+  ru: "Применить ко всем окнам"
+  en: "Apply to all windows"
+  es: "Aplicar a todas las ventanas"
+chart.layout.apply_all_charts:
+  ru: "Применить ко всем чартам"
+  en: "Apply to all charts"
+  es: "Aplicar a todos los gráficos"
+chart.layout.orderbook:
+  ru: "Стакан"
+  en: "Order book"
+  es: "Libro de órdenes"

@@ -1,0 +1,16 @@
+# Сообщения об ошибках (валидация настроек, GPU).
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+err.dup_name:
+  ru: "Дубликат имени сервера: «%{name}»"
+  en: "Duplicate server name: «%{name}»"
+  es: "Nombre de servidor duplicado: «%{name}»"
+err.dup_key:
+  ru: "Дубликат ключа у сервера «%{name}» (такое ядро уже есть)"
+  en: "Duplicate key on server «%{name}» (this core already exists)"
+  es: "Clave duplicada en el servidor «%{name}» (ese núcleo ya existe)"
+err.no_gpu:
+  ru: "нет подходящего GPU adapter"
+  en: "no suitable GPU adapter"
+  es: "no hay adaptador de GPU adecuado"

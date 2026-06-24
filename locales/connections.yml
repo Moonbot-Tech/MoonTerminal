@@ -1,0 +1,238 @@
+# Вкладка «Подключения» окна настроек (ядра, группы, статусы, колонки, тултипы).
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Колонки таблиц — короткие ярлыки (Акт/Окн/Орд/…); переводы тоже короткие.
+_version: 2
+
+conn.servers_heading:
+  ru: "Ядра (серверы)"
+  en: "Cores (servers)"
+  es: "Núcleos (servidores)"
+conn.market_src:
+  ru: "Источник рыночных данных"
+  en: "Market data source"
+  es: "Fuente de datos de mercado"
+conn.market_src_tip:
+  ru: "Откуда брать крестики и стакан. Дедуп: одно ядро-провайдер на биржу тянет рынок за всех (экономно при многих ядрах). По ядрам: каждый чарт берёт рынок со своего ядра (без дедупа)."
+  en: "Where crosses and the order book come from. Dedup: one provider core per exchange serves the market for all (cheap with many cores). Per-core: each chart reads the market from its own core (no dedup)."
+  es: "De dónde vienen los cruces y el libro de órdenes. Dedup: un núcleo proveedor por bolsa sirve el mercado a todos (económico con muchos núcleos). Por núcleo: cada gráfico lee el mercado de su propio núcleo (sin dedup)."
+conn.market_dedup:
+  ru: "Дедуп (провайдер на биржу)"
+  en: "Dedup (provider per exchange)"
+  es: "Dedup (proveedor por bolsa)"
+conn.market_percore:
+  ru: "По ядрам (без дедупа)"
+  en: "Per-core (no dedup)"
+  es: "Por núcleo (sin dedup)"
+conn.groups_heading:
+  ru: "Группы"
+  en: "Groups"
+  es: "Grupos"
+conn.no_groups:
+  ru: "добавь ядро ниже и впиши ему «Группу» — появится ветка группы"
+  en: "add a core below and give it a “Group” — a group branch will appear"
+  es: "añade un núcleo abajo y asígnale un «Grupo» — aparecerá una rama de grupo"
+conn.show_group:
+  ru: "Показать окно группы"
+  en: "Show group window"
+  es: "Mostrar ventana del grupo"
+# Глиф + — отдельным segment-ом в коде, в словаре только текст.
+conn.add_core:
+  ru: "Добавить ядро (в «default»)"
+  en: "Add core (to “default”)"
+  es: "Añadir núcleo (a «default»)"
+conn.add_core_short:
+  ru: "ядро"
+  en: "core"
+  es: "núcleo"
+conn.groups_panel_heading:
+  ru: "Ядра по группам"
+  en: "Cores by group"
+  es: "Núcleos por grupo"
+conn.groups_panel_tip:
+  ru: "Группа = отдельное главное окно (ядра группы в одном окне). Колонка «Чарты» сводит детекты с нескольких ядер группы в один график."
+  en: "A group = a separate main window (the group's cores live in one window). The “Charts” column merges detects from several cores of a group into one chart."
+  es: "Un grupo = una ventana principal aparte (los núcleos del grupo viven en una ventana). La columna «Gráficos» une las detecciones de varios núcleos de un grupo en un solo gráfico."
+conn.member_count:
+  ru: "%{n} ядр."
+  en: "%{n} cores"
+  es: "%{n} núcleos"
+conn.icon_btn:
+  ru: "Иконка"
+  en: "Icon"
+  es: "Icono"
+conn.icon_for:
+  ru: "Иконка для «%{name}»"
+  en: "Icon for “%{name}”"
+  es: "Icono de «%{name}»"
+conn.pick:
+  ru: "выбор"
+  en: "pick"
+  es: "elegir"
+conn.delete:
+  ru: "Удал"
+  en: "Del"
+  es: "Elim"
+conn.reconnect:
+  ru: "Переподключить"
+  en: "Reconnect"
+  es: "Reconectar"
+conn.filter_note:
+  ru: "фильтр на клиенте"
+  en: "client-side filter"
+  es: "filtro en el cliente"
+
+# Кружок статуса подключения в конце строки сервера
+conn.status.ready:
+  ru: "Подключено"
+  en: "Connected"
+  es: "Conectado"
+conn.status.connecting:
+  ru: "Подключение…"
+  en: "Connecting…"
+  es: "Conectando…"
+conn.status.stage:
+  ru: "Подключение: %{stage}"
+  en: "Connecting: %{stage}"
+  es: "Conectando: %{stage}"
+conn.status.failed:
+  ru: "Ошибка: %{err}"
+  en: "Error: %{err}"
+  es: "Error: %{err}"
+conn.status.disconnected:
+  ru: "Отключено"
+  en: "Disconnected"
+  es: "Desconectado"
+conn.status.inactive:
+  ru: "Не подключается (галка «Акт» снята)"
+  en: "Not connecting (the “Act” box is off)"
+  es: "Sin conexión (la casilla «Act» está desactivada)"
+conn.status.none:
+  ru: "Нет данных (сохрани настройки, чтобы подключиться)"
+  en: "No data (save settings to connect)"
+  es: "Sin datos (guarda los ajustes para conectar)"
+
+# Заголовки колонок таблицы серверов
+conn.col.act:
+  ru: "Акт"
+  en: "Act"
+  es: "Act"
+conn.col.win:
+  ru: "Окн"
+  en: "Win"
+  es: "Ven"
+conn.col.name:
+  ru: "Имя"
+  en: "Name"
+  es: "Nombre"
+conn.col.key:
+  ru: "Ключ"
+  en: "Key"
+  es: "Clave"
+conn.col.group:
+  ru: "Группа"
+  en: "Group"
+  es: "Grupo"
+conn.col.bundle:
+  ru: "Чарты"
+  en: "Charts"
+  es: "Gráficos"
+conn.col.color:
+  ru: "Цвет"
+  en: "Color"
+  es: "Color"
+conn.col.data:
+  ru: "Данные"
+  en: "Data"
+  es: "Datos"
+conn.col.orders:
+  ru: "Орд"
+  en: "Ord"
+  es: "Órd"
+conn.col.detects:
+  ru: "Дет"
+  en: "Det"
+  es: "Det"
+conn.col.reports:
+  ru: "Отч"
+  en: "Rep"
+  es: "Inf"
+conn.col.balance:
+  ru: "Бал"
+  en: "Bal"
+  es: "Sal"
+conn.col.strat:
+  ru: "Стр"
+  en: "Str"
+  es: "Est"
+conn.col.log:
+  ru: "Лог"
+  en: "Log"
+  es: "Reg"
+conn.col.alerts:
+  ru: "Алр"
+  en: "Alr"
+  es: "Ale"
+conn.col.arb:
+  ru: "Арб"
+  en: "Arb"
+  es: "Arb"
+
+# Заголовки колонок таблицы групп
+conn.gcol.ico:
+  ru: "Ico"
+  en: "Ico"
+  es: "Ico"
+
+# Подсказки (тултипы)
+conn.tip.act:
+  ru: "Подключаться к ядру"
+  en: "Connect to the core"
+  es: "Conectarse al núcleo"
+conn.tip.win:
+  ru: "Рисовать окно/чарт. Выкл = headless: данные в БД/память без окна"
+  en: "Draw window/chart. Off = headless: data to DB/memory without a window"
+  es: "Dibujar ventana/gráfico. Desactivado = headless: datos a BD/memoria sin ventana"
+conn.tip.flags:
+  ru: "Приём данных от ядра. Серая = принимаем всё; цветная = часть категорий выключена. Клик — настроить."
+  en: "Data received from the core. Gray = all on; colored = some categories off. Click to configure."
+  es: "Datos recibidos del núcleo. Gris = todo activado; en color = algunas categorías desactivadas. Clic para configurar."
+conn.tip.group:
+  ru: "Группа = ОТДЕЛЬНОЕ главное окно. Все ядра с одинаковым именем группы живут в одном окне; новое имя группы → новое главное окно."
+  en: "Group = a SEPARATE main window. All cores with the same group name live in one window; a new group name → a new main window."
+  es: "Grupo = una ventana principal SEPARADA. Todos los núcleos con el mismo nombre de grupo viven en una ventana; un nombre de grupo nuevo → una ventana principal nueva."
+conn.tip.bundle:
+  ru: "Имя чарт-связки: детекты AddToChart с НЕСКОЛЬКИХ ядер одной группы с одинаковым именем сводятся в ОДИН чарт (одну вкладку, имя — в её заголовке). Пусто = по глобальной настройке (своя вкладка на ядро / все в одной)."
+  en: "Chart bundle name: AddToChart detects from SEVERAL cores of one group sharing the same name merge into ONE chart (one tab, the name in its title). Empty = per the global setting (a tab per core / all in one)."
+  es: "Nombre del conjunto de gráfico: las detecciones AddToChart de VARIOS núcleos de un grupo con el mismo nombre se unen en UN gráfico (una pestaña, el nombre en su título). Vacío = según el ajuste global (una pestaña por núcleo / todas en una)."
+conn.tip.orders:
+  ru: "Открытые ордера"
+  en: "Open orders"
+  es: "Órdenes abiertas"
+conn.tip.detects:
+  ru: "Детекты"
+  en: "Detects"
+  es: "Detecciones"
+conn.tip.reports:
+  ru: "Отчёты по закрытым ордерам → SQLite"
+  en: "Reports on closed orders → SQLite"
+  es: "Informes de órdenes cerradas → SQLite"
+conn.tip.balance:
+  ru: "Балансы / аккаунт"
+  en: "Balances / account"
+  es: "Saldos / cuenta"
+conn.tip.strat:
+  ru: "Стратегии"
+  en: "Strategies"
+  es: "Estrategias"
+conn.tip.log:
+  ru: "Серверный лог"
+  en: "Server log"
+  es: "Registro del servidor"
+conn.tip.alerts:
+  ru: "Chart-алерты / текст"
+  en: "Chart alerts / text"
+  es: "Alertas de gráfico / texto"
+conn.tip.arb:
+  ru: "Арбитраж"
+  en: "Arbitrage"
+  es: "Arbitraje"

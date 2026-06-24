@@ -1,0 +1,61 @@
+# Диалоги (создание/переименование/удаление) и общие кнопки.
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+# --- Общие кнопки ---
+dialogs.cancel:
+  ru: "Отмена"
+  en: "Cancel"
+  es: "Cancelar"
+dialogs.yes:
+  ru: "Да"
+  en: "Yes"
+  es: "Sí"
+dialogs.create:
+  ru: "Создать"
+  en: "Create"
+  es: "Crear"
+dialogs.rename:
+  ru: "Переименовать"
+  en: "Rename"
+  es: "Renombrar"
+
+# --- Заголовки диалогов (стратегии) ---
+dialogs.new_strategy:
+  ru: "Новая стратегия"
+  en: "New strategy"
+  es: "Nueva estrategia"
+dialogs.new_folder:
+  ru: "Новая папка"
+  en: "New folder"
+  es: "Nueva carpeta"
+dialogs.rename_folder:
+  ru: "Переименовать папку"
+  en: "Rename folder"
+  es: "Renombrar carpeta"
+dialogs.delete_q:
+  ru: "Удалить?"
+  en: "Delete?"
+  es: "¿Eliminar?"
+dialogs.operation:
+  ru: "Операция"
+  en: "Operation"
+  es: "Operación"
+
+# --- Поля и подсказки диалогов ---
+dialogs.name_ph:
+  ru: "имя"
+  en: "name"
+  es: "nombre"
+dialogs.folder_prefix:
+  ru: "папка: %{path}"
+  en: "folder: %{path}"
+  es: "carpeta: %{path}"
+dialogs.into_prefix:
+  ru: "в: %{path}"
+  en: "into: %{path}"
+  es: "en: %{path}"
+dialogs.delete_confirm:
+  ru: "Удалить %{what}? Действие необратимо."
+  en: "Delete %{what}? This cannot be undone."
+  es: "¿Eliminar %{what}? Esta acción no se puede deshacer."

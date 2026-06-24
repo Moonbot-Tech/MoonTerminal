@@ -1,0 +1,80 @@
+# Окно/панель «Активы»: панель управления, колонки таблицы, кошельки.
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+assets.window_title:
+  ru: "MoonTerminal — Активы"
+  en: "MoonTerminal — Assets"
+  es: "MoonTerminal — Activos"
+assets.show_all:
+  ru: "показать всё"
+  en: "show all"
+  es: "mostrar todo"
+assets.cores_free_total:
+  ru: "Ядра · своб/итого"
+  en: "Cores · free/total"
+  es: "Núcleos · libre/total"
+assets.no_cores:
+  ru: "нет ядер"
+  en: "no cores"
+  es: "sin núcleos"
+assets.empty:
+  ru: "нет активов"
+  en: "no assets"
+  es: "sin activos"
+
+# --- Колонки таблицы активов ---
+assets.col.core:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+assets.col.coin:
+  ru: "Актив"
+  en: "Asset"
+  es: "Activo"
+assets.col.qty:
+  ru: "Кол-во"
+  en: "Qty"
+  es: "Cant."
+assets.col.price:
+  ru: "Цена"
+  en: "Price"
+  es: "Precio"
+assets.col.value:
+  ru: "Стоим.$"
+  en: "Value $"
+  es: "Valor $"
+assets.col.pos:
+  ru: "Поз."
+  en: "Pos."
+  es: "Pos."
+assets.col.pos_price:
+  ru: "Поз.цена"
+  en: "Pos. price"
+  es: "Precio pos."
+assets.col.profit:
+  ru: "Профит"
+  en: "Profit"
+  es: "Beneficio"
+assets.col.kind:
+  ru: "Рынок"
+  en: "Market"
+  es: "Mercado"
+
+# --- Кошельки (перенос монет между контейнерами) ---
+assets.wallets_hint:
+  ru: "Кошельки · перетащи монету между контейнерами"
+  en: "Wallets · drag a coin between containers"
+  es: "Carteras · arrastra una moneda entre contenedores"
+assets.transfer_title:
+  ru: "Перенос %{coin}: %{from} → %{to}"
+  en: "Transfer %{coin}: %{from} → %{to}"
+  es: "Transferir %{coin}: %{from} → %{to}"
+assets.free:
+  ru: "свободно: %{n}"
+  en: "free: %{n}"
+  es: "libre: %{n}"
+assets.transfer_btn:
+  ru: "Перенести"
+  en: "Transfer"
+  es: "Transferir"

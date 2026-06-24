@@ -1,0 +1,406 @@
+# Вкладка «Хоткеи» окна настроек.
+_version: 2
+
+hotkeys.unassigned:
+  ru: "Не задано"
+  en: "Unassigned"
+  es: "Sin asignar"
+hotkeys.recording:
+  ru: "Нажмите сочетание..."
+  en: "Press shortcut..."
+  es: "Pulsa el atajo..."
+
+hotkeys.group.presets:
+  ru: "Пресеты ордера"
+  en: "Order presets"
+  es: "Preajustes de orden"
+hotkeys.group.presets_hint:
+  ru: "Те же F1-F6 и S1-S6, что в MoonBot: размер ручного ордера и fixed sell."
+  en: "The same F1-F6 and S1-S6 as MoonBot: manual order size and fixed sell."
+  es: "Los mismos F1-F6 y S1-S6 que MoonBot: tamaño de orden manual y venta fija."
+hotkeys.order_size:
+  ru: "Выбрать размер ручного ордера %{n}"
+  en: "Select manual order size %{n}"
+  es: "Seleccionar tamaño de orden manual %{n}"
+hotkeys.sell_preset:
+  ru: "Выбрать fixed sell %{n}"
+  en: "Select fixed sell %{n}"
+  es: "Seleccionar venta fija %{n}"
+
+hotkeys.group.trading:
+  ru: "Торговые команды"
+  en: "Trading commands"
+  es: "Comandos de trading"
+hotkeys.group.trading_hint:
+  ru: "Команды, которые в MoonBot назначаются через HotkeysConfig и работают с активным рынком."
+  en: "MoonBot HotkeysConfig commands that operate on the active market."
+  es: "Comandos de HotkeysConfig de MoonBot que operan sobre el mercado activo."
+hotkeys.cancel_buy:
+  ru: "Cancel Buy"
+  en: "Cancel Buy"
+  es: "Cancel Buy"
+hotkeys.cancel_buy_hint:
+  ru: "Отмена активного buy-ордера."
+  en: "Cancel the active buy order."
+  es: "Cancela la orden buy activa."
+hotkeys.panic_sell:
+  ru: "Panic Sell"
+  en: "Panic Sell"
+  es: "Panic Sell"
+hotkeys.panic_sell_hint:
+  ru: "Аварийная продажа по активному рынку."
+  en: "Emergency sell on the active market."
+  es: "Venta de emergencia en el mercado activo."
+hotkeys.panic_sell_one:
+  ru: "Panic Sell One"
+  en: "Panic Sell One"
+  es: "Panic Sell One"
+hotkeys.panic_sell_one_hint:
+  ru: "MoonBot-дефолт: Ctrl+F1."
+  en: "MoonBot default: Ctrl+F1."
+  es: "Valor por defecto de MoonBot: Ctrl+F1."
+hotkeys.cancel_all_buys:
+  ru: "Cancel All Buys"
+  en: "Cancel All Buys"
+  es: "Cancel All Buys"
+hotkeys.cancel_all_buys_hint:
+  ru: "MoonBot-дефолт: Ctrl+Del."
+  en: "MoonBot default: Ctrl+Del."
+  es: "Valor por defecto de MoonBot: Ctrl+Del."
+hotkeys.join_sells:
+  ru: "Join Sells"
+  en: "Join Sells"
+  es: "Join Sells"
+hotkeys.join_sells_hint:
+  ru: "Объединить sell-ордера активного рынка."
+  en: "Join sell orders for the active market."
+  es: "Une órdenes sell del mercado activo."
+hotkeys.new_long:
+  ru: "New Long"
+  en: "New Long"
+  es: "New Long"
+hotkeys.new_long_hint:
+  ru: "Создать long-сценарий, если поддержано активным ядром."
+  en: "Create a long scenario when the active core supports it."
+  es: "Crea escenario long si el núcleo activo lo admite."
+hotkeys.new_short:
+  ru: "New Short"
+  en: "New Short"
+  es: "New Short"
+hotkeys.new_short_hint:
+  ru: "Создать short-сценарий, если поддержано активным ядром."
+  en: "Create a short scenario when the active core supports it."
+  es: "Crea escenario short si el núcleo activo lo admite."
+hotkeys.split_order:
+  ru: "Split Order"
+  en: "Split Order"
+  es: "Split Order"
+hotkeys.split_order_hint:
+  ru: "Разбить ордер на части."
+  en: "Split an order into parts."
+  es: "Divide una orden en partes."
+hotkeys.split_order_x:
+  ru: "Split Order X"
+  en: "Split Order X"
+  es: "Split Order X"
+hotkeys.split_order_x_hint:
+  ru: "Альтернативный split-режим MoonBot."
+  en: "MoonBot alternative split mode."
+  es: "Modo split alternativo de MoonBot."
+
+hotkeys.group.chart:
+  ru: "График"
+  en: "Chart"
+  es: "Gráfico"
+hotkeys.group.chart_hint:
+  ru: "Перезагрузка, показ и режимы графиков."
+  en: "Chart reload, visibility, and chart modes."
+  es: "Recarga, visibilidad y modos del gráfico."
+hotkeys.reload_chart:
+  ru: "Reload Chart"
+  en: "Reload Chart"
+  es: "Reload Chart"
+hotkeys.reload_chart_hint:
+  ru: "MoonBot-дефолт: Ctrl+R."
+  en: "MoonBot default: Ctrl+R."
+  es: "Valor por defecto de MoonBot: Ctrl+R."
+hotkeys.reload_book:
+  ru: "Reload Book"
+  en: "Reload Book"
+  es: "Reload Book"
+hotkeys.reload_book_hint:
+  ru: "Перезагрузить стакан активного рынка."
+  en: "Reload the active market order book."
+  es: "Recarga el libro de órdenes activo."
+hotkeys.switch_charts:
+  ru: "Switch Charts"
+  en: "Switch Charts"
+  es: "Switch Charts"
+hotkeys.switch_charts_hint:
+  ru: "Переключение графиков MoonBot."
+  en: "MoonBot chart switching."
+  es: "Cambio de gráficos MoonBot."
+hotkeys.show_charts:
+  ru: "Show Charts"
+  en: "Show Charts"
+  es: "Show Charts"
+hotkeys.show_charts_hint:
+  ru: "MoonBot-дефолт для свежего конфига: F4."
+  en: "MoonBot fresh-config default: F4."
+  es: "Valor por defecto de MoonBot en config nueva: F4."
+hotkeys.switch_figure:
+  ru: "Switch Figure"
+  en: "Switch Figure"
+  es: "Switch Figure"
+hotkeys.switch_figure_hint:
+  ru: "MoonBot-дефолт: Ctrl+F."
+  en: "MoonBot default: Ctrl+F."
+  es: "Valor por defecto de MoonBot: Ctrl+F."
+hotkeys.fit_sells:
+  ru: "Fit Sells"
+  en: "Fit Sells"
+  es: "Fit Sells"
+hotkeys.fit_sells_hint:
+  ru: "MoonBot-дефолт: Ctrl+S."
+  en: "MoonBot default: Ctrl+S."
+  es: "Valor por defecto de MoonBot: Ctrl+S."
+hotkeys.scale_plus:
+  ru: "Scale +"
+  en: "Scale +"
+  es: "Scale +"
+hotkeys.scale_plus_hint:
+  ru: "MoonBot-дефолт: Ctrl+Q."
+  en: "MoonBot default: Ctrl+Q."
+  es: "Valor por defecto de MoonBot: Ctrl+Q."
+hotkeys.scale_minus:
+  ru: "Scale -"
+  en: "Scale -"
+  es: "Scale -"
+hotkeys.scale_minus_hint:
+  ru: "MoonBot-дефолт: Ctrl+W."
+  en: "MoonBot default: Ctrl+W."
+  es: "Valor por defecto de MoonBot: Ctrl+W."
+
+hotkeys.group.order_move:
+  ru: "Сдвиг и подстройка ордеров"
+  en: "Order move and tuning"
+  es: "Movimiento y ajuste de órdenes"
+hotkeys.group.order_move_hint:
+  ru: "Сдвиги buy/sell и изменение fixed sell."
+  en: "Buy/sell shifts and fixed-sell tuning."
+  es: "Desplazamientos buy/sell y ajuste de venta fija."
+hotkeys.shift_buy_up:
+  ru: "Shift Buy Up"
+  en: "Shift Buy Up"
+  es: "Shift Buy Up"
+hotkeys.shift_buy_up_hint:
+  ru: "Сдвинуть buy вверх."
+  en: "Move buy up."
+  es: "Mueve buy arriba."
+hotkeys.shift_buy_down:
+  ru: "Shift Buy Down"
+  en: "Shift Buy Down"
+  es: "Shift Buy Down"
+hotkeys.shift_buy_down_hint:
+  ru: "Сдвинуть buy вниз."
+  en: "Move buy down."
+  es: "Mueve buy abajo."
+hotkeys.shift_sell_up:
+  ru: "Shift Sell Up"
+  en: "Shift Sell Up"
+  es: "Shift Sell Up"
+hotkeys.shift_sell_up_hint:
+  ru: "Сдвинуть sell вверх."
+  en: "Move sell up."
+  es: "Mueve sell arriba."
+hotkeys.shift_sell_down:
+  ru: "Shift Sell Down"
+  en: "Shift Sell Down"
+  es: "Shift Sell Down"
+hotkeys.shift_sell_down_hint:
+  ru: "Сдвинуть sell вниз."
+  en: "Move sell down."
+  es: "Mueve sell abajo."
+hotkeys.sell_plus:
+  ru: "Sell +"
+  en: "Sell +"
+  es: "Sell +"
+hotkeys.sell_plus_hint:
+  ru: "MoonBot-дефолт: Ctrl+1."
+  en: "MoonBot default: Ctrl+1."
+  es: "Valor por defecto de MoonBot: Ctrl+1."
+hotkeys.sell_minus:
+  ru: "Sell -"
+  en: "Sell -"
+  es: "Sell -"
+hotkeys.sell_minus_hint:
+  ru: "MoonBot-дефолт: Ctrl+2."
+  en: "MoonBot default: Ctrl+2."
+  es: "Valor por defecto de MoonBot: Ctrl+2."
+
+hotkeys.group.mouse:
+  ru: "Мышь на стакане"
+  en: "Order book mouse"
+  es: "Ratón en libro"
+hotkeys.group.mouse_hint:
+  ru: "Живой MoonBot-путь из ChartFrameUnit: постановка и перенос ордеров кликами в зоне стакана."
+  en: "Live MoonBot ChartFrameUnit path: place and move orders by clicking inside the book area."
+  es: "Ruta viva de MoonBot ChartFrameUnit: crear y mover órdenes con clics en el libro."
+hotkeys.mouse.buy_set:
+  ru: "Поставить Long"
+  en: "Place Long"
+  es: "Crear Long"
+hotkeys.mouse.buy_set_hint:
+  ru: "MultiOrders.BuySetClick. MoonBot-дефолт: Dbl_Click."
+  en: "MultiOrders.BuySetClick. MoonBot default: Dbl_Click."
+  es: "MultiOrders.BuySetClick. Valor por defecto: Dbl_Click."
+hotkeys.mouse.short_set:
+  ru: "Поставить Short"
+  en: "Place Short"
+  es: "Crear Short"
+hotkeys.mouse.short_set_hint:
+  ru: "MultiOrders.ShortSetClick. MoonBot-дефолт: None_Click."
+  en: "MultiOrders.ShortSetClick. MoonBot default: None_Click."
+  es: "MultiOrders.ShortSetClick. Valor por defecto: None_Click."
+hotkeys.mouse.pending_long:
+  ru: "Pending Long"
+  en: "Pending Long"
+  es: "Pending Long"
+hotkeys.mouse.pending_long_hint:
+  ru: "PendingOrderSetClick. MoonBot-дефолт: None_Click."
+  en: "PendingOrderSetClick. MoonBot default: None_Click."
+  es: "PendingOrderSetClick. Valor por defecto: None_Click."
+hotkeys.mouse.pending_short:
+  ru: "Pending Short"
+  en: "Pending Short"
+  es: "Pending Short"
+hotkeys.mouse.pending_short_hint:
+  ru: "MultiOrders.PendingShortSetClick. MoonBot-дефолт: None_Click."
+  en: "MultiOrders.PendingShortSetClick. MoonBot default: None_Click."
+  es: "MultiOrders.PendingShortSetClick. Valor por defecto: None_Click."
+hotkeys.mouse.buy_move:
+  ru: "Move Open Long"
+  en: "Move Open Long"
+  es: "Mover Open Long"
+hotkeys.mouse.buy_move_hint:
+  ru: "MultiOrders.BuyMoveClick. MoonBot-дефолт: Shift_Click."
+  en: "MultiOrders.BuyMoveClick. MoonBot default: Shift_Click."
+  es: "MultiOrders.BuyMoveClick. Valor por defecto: Shift_Click."
+hotkeys.mouse.sell_move:
+  ru: "Move TP Long"
+  en: "Move TP Long"
+  es: "Mover TP Long"
+hotkeys.mouse.sell_move_hint:
+  ru: "MultiOrders.SellMoveClick. MoonBot-дефолт: CTRL_Click."
+  en: "MultiOrders.SellMoveClick. MoonBot default: CTRL_Click."
+  es: "MultiOrders.SellMoveClick. Valor por defecto: CTRL_Click."
+hotkeys.mouse.buy_move2:
+  ru: "Move Open Long #2"
+  en: "Move Open Long #2"
+  es: "Mover Open Long #2"
+hotkeys.mouse.buy_move2_hint:
+  ru: "MultiOrders.BuyMoveClick2. MoonBot-дефолт: None_Click."
+  en: "MultiOrders.BuyMoveClick2. MoonBot default: None_Click."
+  es: "MultiOrders.BuyMoveClick2. Valor por defecto: None_Click."
+hotkeys.mouse.sell_move2:
+  ru: "Move TP Long #2"
+  en: "Move TP Long #2"
+  es: "Mover TP Long #2"
+hotkeys.mouse.sell_move2_hint:
+  ru: "MultiOrders.SellMoveClick2. MoonBot-дефолт: None_Click."
+  en: "MultiOrders.SellMoveClick2. MoonBot default: None_Click."
+  es: "MultiOrders.SellMoveClick2. Valor por defecto: None_Click."
+hotkeys.mouse.same_move:
+  ru: "Short move использует те же жесты, что Long move"
+  en: "Short move uses the same gestures as Long move"
+  es: "Short move usa los mismos gestos que Long move"
+hotkeys.mouse.short_buy_move:
+  ru: "Move Open Short"
+  en: "Move Open Short"
+  es: "Mover Open Short"
+hotkeys.mouse.short_buy_move_hint:
+  ru: "MultiOrders.ShortBuyMoveClick. При SameHotkeysForMove копируется из BuyMoveClick."
+  en: "MultiOrders.ShortBuyMoveClick. With SameHotkeysForMove it mirrors BuyMoveClick."
+  es: "MultiOrders.ShortBuyMoveClick. Con SameHotkeysForMove copia BuyMoveClick."
+hotkeys.mouse.short_sell_move:
+  ru: "Move TP Short"
+  en: "Move TP Short"
+  es: "Mover TP Short"
+hotkeys.mouse.short_sell_move_hint:
+  ru: "MultiOrders.ShortSellMoveClick. При SameHotkeysForMove копируется из SellMoveClick."
+  en: "MultiOrders.ShortSellMoveClick. With SameHotkeysForMove it mirrors SellMoveClick."
+  es: "MultiOrders.ShortSellMoveClick. Con SameHotkeysForMove copia SellMoveClick."
+hotkeys.mouse.short_buy_move2:
+  ru: "Move Open Short #2"
+  en: "Move Open Short #2"
+  es: "Mover Open Short #2"
+hotkeys.mouse.short_buy_move2_hint:
+  ru: "MultiOrders.ShortBuyMoveClick2. При SameHotkeysForMove копируется из BuyMoveClick2."
+  en: "MultiOrders.ShortBuyMoveClick2. With SameHotkeysForMove it mirrors BuyMoveClick2."
+  es: "MultiOrders.ShortBuyMoveClick2. Con SameHotkeysForMove copia BuyMoveClick2."
+hotkeys.mouse.short_sell_move2:
+  ru: "Move TP Short #2"
+  en: "Move TP Short #2"
+  es: "Mover TP Short #2"
+hotkeys.mouse.short_sell_move2_hint:
+  ru: "MultiOrders.ShortSellMoveClick2. При SameHotkeysForMove копируется из SellMoveClick2."
+  en: "MultiOrders.ShortSellMoveClick2. With SameHotkeysForMove it mirrors SellMoveClick2."
+  es: "MultiOrders.ShortSellMoveClick2. Con SameHotkeysForMove copia SellMoveClick2."
+
+hotkeys.group.tools:
+  ru: "Инструменты"
+  en: "Tools"
+  es: "Herramientas"
+hotkeys.group.tools_hint:
+  ru: "Скриншоты, скрытие баланса и вспомогательные команды MoonBot."
+  en: "Screenshots, balance hiding, and MoonBot helper commands."
+  es: "Capturas, ocultar balance y comandos auxiliares de MoonBot."
+hotkeys.make_shot:
+  ru: "Make Shot"
+  en: "Make Shot"
+  es: "Make Shot"
+hotkeys.make_shot_hint:
+  ru: "MoonBot-дефолт: Ctrl+F10."
+  en: "MoonBot default: Ctrl+F10."
+  es: "Valor por defecto de MoonBot: Ctrl+F10."
+hotkeys.make_shot_bot:
+  ru: "Make Shot Bot"
+  en: "Make Shot Bot"
+  es: "Make Shot Bot"
+hotkeys.make_shot_bot_hint:
+  ru: "MoonBot-дефолт: Ctrl+F12."
+  en: "MoonBot default: Ctrl+F12."
+  es: "Valor por defecto de MoonBot: Ctrl+F12."
+hotkeys.spy_mode:
+  ru: "Spy / Hide Balance"
+  en: "Spy / Hide Balance"
+  es: "Spy / Hide Balance"
+hotkeys.spy_mode_hint:
+  ru: "MoonBot-дефолт: F7."
+  en: "MoonBot default: F7."
+  es: "Valor por defecto de MoonBot: F7."
+hotkeys.broadcast:
+  ru: "Broadcast Coin"
+  en: "Broadcast Coin"
+  es: "Broadcast Coin"
+hotkeys.broadcast_hint:
+  ru: "Отправить активную монету во внешний broadcast-сценарий."
+  en: "Send the active coin to an external broadcast scenario."
+  es: "Envía la moneda activa a un escenario broadcast externo."
+
+hotkeys.group.manual_strategy:
+  ru: "Ручные стратегии"
+  en: "Manual strategies"
+  es: "Estrategias manuales"
+hotkeys.group.manual_strategy_hint:
+  ru: "10 хоткеев ManualStratsConfig.hotKeys из MoonBot. По умолчанию пустые."
+  en: "10 MoonBot ManualStratsConfig.hotKeys. Empty by default."
+  es: "10 ManualStratsConfig.hotKeys de MoonBot. Vacíos por defecto."
+hotkeys.manual_strategy:
+  ru: "Ручная стратегия %{n}"
+  en: "Manual strategy %{n}"
+  es: "Estrategia manual %{n}"
+hotkeys.manual_strategy_hint:
+  ru: "Запуск ручной стратегии %{n}, если она настроена."
+  en: "Run manual strategy %{n} when configured."
+  es: "Ejecuta estrategia manual %{n} si está configurada."

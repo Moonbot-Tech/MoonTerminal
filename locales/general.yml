@@ -1,0 +1,68 @@
+# Вкладка «Общие» окна настроек.
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+general.language:
+  ru: "Язык интерфейса"
+  en: "Interface language"
+  es: "Idioma de la interfaz"
+general.language_hint:
+  ru: "Применяется после сохранения."
+  en: "Applies after saving."
+  es: "Se aplica al guardar."
+general.charts_split_by_core:
+  ru: "Отдельная чарт-вкладка на каждое ядро"
+  en: "Separate chart tab per core"
+  es: "Pestaña de gráfico separada por núcleo"
+general.charts_split_by_core_hint:
+  ru: "AddToChart по умолчанию: вкл — своя вкладка на ядро, выкл — все ядра группы в одной. Колонка «Связка» у ядра (Подключения) переопределяет это: ядра с одинаковым именем связки сводятся в одну вкладку."
+  en: "AddToChart default: on — a tab per core, off — all cores of a group in one. The core's “Bundle” column (Connections) overrides this: cores sharing a bundle name merge into one tab."
+  es: "AddToChart por defecto: act — una pestaña por núcleo, des — todos los núcleos del grupo en una. La columna «Conjunto» del núcleo (Conexiones) lo anula: los núcleos con el mismo nombre de conjunto se unen en una pestaña."
+general.separate_control_zones:
+  ru: "Раздельные зоны управления"
+  en: "Separate control zones"
+  es: "Zonas de control separadas"
+general.separate_control_zones_hint:
+  ru: "Вкл — выставлять ордера и двигать линии можно ТОЛЬКО в зоне стакана; выкл — по всей области графика."
+  en: "On — orders can be placed and lines dragged ONLY in the order-book zone; off — anywhere on the chart."
+  es: "Act — las órdenes y el arrastre de líneas SOLO en la zona del libro de órdenes; des — en todo el gráfico."
+general.charts_scroll:
+  ru: "Показывать графики со скроллом"
+  en: "Show charts with scrolling"
+  es: "Mostrar gráficos con desplazamiento"
+general.charts_scroll_hint:
+  ru: "Вкл — каждый график фиксированной высоты, вертикальный скролл. Выкл (как раньше) — графики делят высоту окна (масштаб по вертикали)."
+  en: "On — each chart has a fixed height with vertical scrolling. Off (as before) — charts share the window height (scaled vertically)."
+  es: "Act — cada gráfico tiene altura fija con desplazamiento vertical. Des (como antes) — los gráficos reparten la altura de la ventana (escalado vertical)."
+general.chart_height:
+  ru: "Высота графика, px"
+  en: "Chart height, px"
+  es: "Altura del gráfico, px"
+general.compress_fill:
+  ru: "Сжимать по заполнению (без скролла)"
+  en: "Compress to fit (no scrolling)"
+  es: "Comprimir para ajustar (sin desplazamiento)"
+general.compress_fill_hint:
+  ru: "Скролл не появляется: графики рисуются заданной высоты, пока не упрутся в конец окна, затем сжимаются (как без скролла)."
+  en: "No scrollbar appears: charts keep the set height until they reach the window bottom, then compress (as without scrolling)."
+  es: "No aparece desplazamiento: los gráficos mantienen la altura fijada hasta llegar al fondo de la ventana y luego se comprimen (como sin desplazamiento)."
+general.log_to_file:
+  ru: "Писать лог в файлы"
+  en: "Write log to files"
+  es: "Escribir registro en archivos"
+general.log_to_file_hint:
+  ru: "Лог приложения и ядер пишется в logs/<дата>_<источник>.log (по файлу на источник в день)."
+  en: "App and core logs are written to logs/<date>_<source>.log (one file per source per day)."
+  es: "Los registros de app y núcleos se escriben en logs/<fecha>_<fuente>.log (un archivo por fuente al día)."
+general.log_retention:
+  ru: "Хранить лог, дней"
+  en: "Keep log, days"
+  es: "Conservar registro, días"
+general.log_retention_hint:
+  ru: "Файлы старше указанного срока удаляются при запуске и раз в сутки. 0 — хранить всё."
+  en: "Files older than this are deleted on startup and once a day. 0 — keep everything."
+  es: "Los archivos más antiguos se eliminan al iniciar y una vez al día. 0 — conservar todo."
+general.days:
+  ru: "дн."
+  en: "days"
+  es: "días"

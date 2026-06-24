@@ -1,0 +1,29 @@
+/target
+/tmp/
+/.cargo/
+/Cargo.lock
+# Локальные конфиги с ключами — НИКОГДА не коммитим.
+/config.toml
+/config.enc
+/servers.enc
+/settings.toml
+# Cargo.lock локальный и ignored: терминал берёт текущие Git-зависимости
+# из публичных Cargo.toml, а локальная разработка может подменять MoonUI через .cargo/config.toml.
+/legasy
+*.log
+/docAi
+# Выходы бенчмарка (CSV семплов/сводок) — локальные, не коммитим.
+/tools/bench-out/
+# Лабы миграции на GPUI: клон gpui-component для гейтов (Gate 0/Лаба 1/2/3).
+# Локальный, тяжёлый, не коммитим — это испытательный стенд, не часть продукта.
+/vendor/
+render_diag.log
+# Приватные рабочие доки (хендоффы, sin-лог, дизайн, baseline-скрины, OLD-архивы) —
+# только на этом компе, в публичный репо НЕ уходят. Публичными остаются только
+# чисто архитектурные docs/ (RENDER_INVALIDATION, REFACTOR_RENDER, ARCHITECTURE_MULTICORE).
+/docs-internal/
+# Внутренние агент-инструкции и рабочие заметки — на диске остаются (агент их читает
+# локально), но в публичный репо НЕ коммитятся. Удалены из истории (filter-repo).
+/CLAUDE.md
+/AGENTS.md
+/DisQuestions

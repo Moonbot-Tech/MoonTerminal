@@ -1,0 +1,92 @@
+# Правая панель ордера + нижний док: таблица ордеров.
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Намеренно НЕ переводим: Buy · Sell.
+_version: 2
+
+# --- Правая панель ордера ---
+order.title:
+  ru: "Ордер"
+  en: "Order"
+  es: "Orden"
+order.size:
+  ru: "размер %{n}"
+  en: "size %{n}"
+  es: "tamaño %{n}"
+order.settings:
+  ru: "Настройки ордера…"
+  en: "Order settings…"
+  es: "Ajustes de orden…"
+
+# --- Нижний док: таблица ордеров ---
+orders.title:
+  ru: "Открытые ордера группы (%{count})"
+  en: "Open group orders (%{count})"
+  es: "Órdenes abiertas del grupo (%{count})"
+orders.empty:
+  ru: "нет открытых ордеров"
+  en: "no open orders"
+  es: "sin órdenes abiertas"
+orders.col.core:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+orders.col.side:
+  ru: "Сторона"
+  en: "Side"
+  es: "Lado"
+orders.col.token:
+  ru: "Токен"
+  en: "Token"
+  es: "Token"
+orders.col.price:
+  ru: "Цена"
+  en: "Price"
+  es: "Precio"
+orders.open_hint:
+  ru: "Открыть чарт на Main (это ядро)"
+  en: "Open chart on Main (this core)"
+  es: "Abrir gráfico en Main (este núcleo)"
+orders.all_cores:
+  ru: "Все ядра"
+  en: "All cores"
+  es: "Todos los núcleos"
+orders.kind.all:
+  ru: "Все"
+  en: "All"
+  es: "Todas"
+orders.kind.real:
+  ru: "Реальные"
+  en: "Real"
+  es: "Reales"
+orders.kind.emu:
+  ru: "Эмуляторные"
+  en: "Emulator"
+  es: "Emulador"
+orders.only_current:
+  ru: "Только ордера текущего маркета"
+  en: "Only current market orders"
+  es: "Solo órdenes del mercado actual"
+orders.show_all:
+  ru: "Показать все"
+  en: "Show all"
+  es: "Mostrar todo"
+orders.sort.sell:
+  ru: "Sell первые"
+  en: "Sell first"
+  es: "Sell primero"
+orders.sort.buy:
+  ru: "Buy первые"
+  en: "Buy first"
+  es: "Buy primero"
+orders.sort.creation:
+  ru: "По созданию ордера"
+  en: "By order creation"
+  es: "Por creación de orden"
+orders.sort.new:
+  ru: "Новые первые"
+  en: "Newest first"
+  es: "Más nuevos primero"
+orders.sort.old:
+  ru: "Старые первые"
+  en: "Oldest first"
+  es: "Más antiguos primero"

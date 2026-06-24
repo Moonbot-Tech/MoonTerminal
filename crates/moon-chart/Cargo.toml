@@ -1,0 +1,17 @@
+[package]
+name = "moon-chart"
+version = "0.1.0"
+edition = "2021"
+description = "MoonTerminal chart math/geometry (wgpu-free): axes/view/transform, order-line instance types, build_order_geometry. Данные рисует own-pass DX11 (chartdx)."
+
+[lib]
+name = "moon_chart"
+path = "src/lib.rs"
+
+[dependencies]
+# Доменные данные/конфиг/сессии (UI-агностик).
+moon-core = { path = "../moon-core" }
+
+# Только для #[derive(Pod/Zeroable)] на типах инстансов/ChartUniform. wgpu больше нет:
+# wgpu-движок чарта удалён вместе с egui-бинарём, рисует own-pass DX11 (chartdx).
+bytemuck = { version = "1", features = ["derive"] }

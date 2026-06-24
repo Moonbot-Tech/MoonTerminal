@@ -1,0 +1,407 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --bg: #f6f6f6;
+      --panel: #ffffff;
+      --text: #151515;
+      --muted: #666666;
+      --line: #d8d8d8;
+      --blue: #0b57d0;
+      --green: #087333;
+      --orange: #9a5200;
+      --red: #b3261e;
+      --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 12px;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      padding: 10px 12px;
+      background: #eeeeee;
+      border-bottom: 1px solid var(--line);
+    }
+    h1 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 18px;
+      font-weight: 700;
+    }
+    .sub {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 14px;
+      font-family: var(--mono);
+    }
+    main { padding: 12px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      margin-bottom: 10px;
+      padding: 10px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .space { justify-content: space-between; }
+    .title {
+      font-size: 15px;
+      line-height: 20px;
+      font-weight: 700;
+      color: var(--blue);
+      word-break: break-word;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 2px 7px;
+      border: 1px solid var(--line);
+      background: #f7f7f7;
+      color: #333333;
+      font-size: 10px;
+      font-weight: 700;
+      font-family: var(--mono);
+      white-space: nowrap;
+    }
+    .chip.green { color: var(--green); border-color: #91c9a6; background: #eef9f1; }
+    .chip.orange { color: var(--orange); border-color: #e0b071; background: #fff5e8; }
+    .chip.red { color: var(--red); border-color: #e2a09a; background: #fff0ee; }
+    .field { margin-top: 9px; }
+    .label {
+      margin-bottom: 3px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .value {
+      line-height: 16px;
+      word-break: break-word;
+    }
+    .mono {
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 15px;
+    }
+    .list {
+      margin: 0;
+      padding-left: 16px;
+    }
+    .list li { margin: 2px 0; }
+    button {
+      min-height: 28px;
+      padding: 5px 8px;
+      border: 1px solid #b9b9b9;
+      background: #ffffff;
+      color: #222222;
+      font: 11px var(--sans);
+      cursor: pointer;
+    }
+    button.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #ffffff;
+      font-weight: 700;
+    }
+    button:active { transform: translateY(1px); }
+    button.linkish {
+      min-height: 22px;
+      padding: 2px 6px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--blue);
+      border-color: #bfd0f5;
+      background: #f3f6ff;
+    }
+    pre {
+      max-height: 260px;
+      overflow: auto;
+      margin: 0;
+      padding: 8px;
+      background: #111111;
+      color: #f2f2f2;
+      font: 10px/14px var(--mono);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .empty {
+      color: var(--muted);
+      line-height: 17px;
+    }
+    .status {
+      margin-top: 6px;
+      font-size: 10px;
+      line-height: 14px;
+      color: var(--muted);
+    }
+    .bad { color: var(--red); }
+    .ok { color: var(--green); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MoonProto Contract Inspector</h1>
+    <div class="sub">sharedPluginData: moonbot.ui.n3 / contract</div>
+  </header>
+  <main id="app"></main>
+
+  <script>
+    const app = document.getElementById("app");
+    let lastPayload = null;
+    let lastValidation = null;
+    let lastSelectResult = null;
+
+    function post(message) {
+      parent.postMessage({ pluginMessage: message }, "*");
+    }
+
+    function html(value) {
+      return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function pretty(value) {
+      return JSON.stringify(value, null, 2);
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text);
+      }
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.style.position = "fixed";
+      area.style.left = "-1000px";
+      document.body.appendChild(area);
+      area.focus();
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+      return Promise.resolve();
+    }
+
+    function chip(kind) {
+      const cls = kind === "MoonProtoBound" ? "green" : kind === "TerminalOnly" ? "orange" : "red";
+      return `<span class="chip ${cls}">${html(kind || "unknown")}</span>`;
+    }
+
+    function section(label, body) {
+      if (!body) return "";
+      return `<div class="field"><div class="label">${html(label)}</div><div class="value">${body}</div></div>`;
+    }
+
+    function list(values) {
+      if (!Array.isArray(values) || values.length === 0) return `<span class="empty">none</span>`;
+      return `<ul class="list">${values.map((v) => `<li class="mono">${html(typeof v === "string" ? v : JSON.stringify(v))}</li>`).join("")}</ul>`;
+    }
+
+    function linkTargetButton(target) {
+      const isTbc = typeof target === "string" && target.startsWith("ToBeConnected:");
+      const title = isTbc ? "Target is not created yet" : "Select linked node";
+      return `<button class="linkish" data-select-stable-id="${html(target)}" title="${html(title)}">${html(target)}</button>`;
+    }
+
+    function linkList(contract) {
+      const out = [];
+      for (const field of ["opens", "targets", "updates_state", "owns", "owned_by", "depends_on"]) {
+        const value = contract[field];
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (typeof item === "string") out.push({ field, target: item });
+            if (item && typeof item === "object") {
+              for (const key of ["target", "state", "id"]) {
+                if (typeof item[key] === "string") out.push({ field: `${field}.${key}`, target: item[key] });
+              }
+            }
+          }
+        }
+      }
+      if (Array.isArray(contract.actions)) {
+        for (const item of contract.actions) {
+          if (item && typeof item === "object") {
+            if (typeof item.target === "string") out.push({ field: "actions.target", target: item.target });
+            if (typeof item.state === "string") out.push({ field: "actions.state", target: item.state });
+          }
+        }
+      }
+      if (!out.length) return `<span class="empty">none</span>`;
+      return `<ul class="list">${out.map((x) => `<li><span class="mono">${html(x.field)}</span>: ${linkTargetButton(x.target)}</li>`).join("")}</ul>`;
+    }
+
+    function renderValidation() {
+      if (!lastValidation) return "";
+      const v = lastValidation;
+      const head = v.valid
+        ? `<span class="ok">valid</span>`
+        : `<span class="bad">${html(v.errors.length)} error(s)</span>`;
+      const errors = v.errors && v.errors.length
+        ? `<ul class="list">${v.errors.slice(0, 25).map((e) => `<li><span class="mono">${html(e.id || e.nodeId)}</span>: ${html(e.error)}</li>`).join("")}</ul>`
+        : `<div class="empty">No contract errors on current page.</div>`;
+      return `
+        <div class="panel">
+          <div class="row space">
+            <div><b>Validation:</b> ${head}</div>
+            <span class="chip">${html(v.uiNodeCount)} ui nodes</span>
+          </div>
+          <div class="status">
+            MoonProtoBound ${html(v.moonProtoBound)}, TerminalOnly ${html(v.terminalOnly)}, ToBeConnected ${html(v.toBeConnected)}, missing_api ${html(v.missingApi)}
+          </div>
+          <div class="field">${errors}</div>
+        </div>`;
+    }
+
+    function renderEmpty(payload) {
+      const text = payload.state === "empty"
+        ? "Select one runtime UI element."
+        : payload.state === "multiple"
+          ? `Selected ${payload.count} nodes. Select exactly one node.`
+          : "Selected node has no contract on itself or parents.";
+      const trail = payload.trail
+        ? section("Selection trail", `<ul class="list">${payload.trail.map((n) => `<li class="mono">${html(n.name)} (${html(n.type)})</li>`).join("")}</ul>`)
+        : "";
+      return `
+        <div class="panel">
+          <div class="empty">${html(text)}</div>
+          ${trail}
+        </div>
+        <div class="panel row">
+          <button class="primary" data-action="refresh">Refresh</button>
+          <button data-action="validate">Validate page</button>
+        </div>
+        ${renderValidation()}`;
+    }
+
+    function renderReady(payload) {
+      const c = payload.contract || {};
+      const s = c.semantic || {};
+      const selectedChild = payload.owner && payload.selected && payload.owner.id !== payload.selected.id;
+      const selectOwnerButton = selectedChild
+        ? `<button data-select-owner="${html(payload.owner.id)}">Select contract node</button>`
+        : "";
+      const selectResult = lastSelectResult
+        ? `<div class="status">${html(lastSelectResult.requested)}: ${lastSelectResult.resolved ? "resolved" : "not found"}</div>`
+        : "";
+      return `
+        <div class="panel">
+          <div class="row space">
+            <div class="title">${html(c.id || payload.owner.stableId)}</div>
+            ${chip(c.kind)}
+          </div>
+          <div class="status">
+            Selected: <span class="mono">${html(payload.selected.name)}</span><br>
+            Contract node: <span class="mono">${html(payload.owner.name)}</span>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button class="primary" data-copy="json">Copy JSON</button>
+            <button data-copy="id">Copy id</button>
+            ${selectOwnerButton}
+            <button data-action="validate">Validate page</button>
+          </div>
+        </div>
+        <div class="panel">
+          ${section("Human name", html(s.human_name || ""))}
+          ${section("Meaning", html(s.meaning || c.purpose || ""))}
+          ${section("Domain / concept", `<span class="mono">${html(s.domain || "")}</span> / <span class="mono">${html(s.concept || "")}</span>`)}
+          ${section("Displayed / value type", `<span class="mono">${html(s.displayed_value || "")}</span> / <span class="mono">${html(s.value_type || "")}</span>`)}
+        </div>
+        <div class="panel">
+          ${section("Reads", list(c.reads))}
+          ${section("Writes", list(c.writes))}
+          ${section("Events", list(c.events))}
+          ${section("UI links", linkList(c))}
+          ${section("Missing API", list(c.missing_api))}
+          ${selectResult}
+        </div>
+        <div class="panel">
+          ${section("Source", list(c.source))}
+        </div>
+        <div class="panel">
+          <div class="label">Raw contract JSON</div>
+          <pre>${html(payload.raw || pretty(c))}</pre>
+        </div>
+        ${renderValidation()}`;
+    }
+
+    function renderInvalidJson(payload) {
+      return `
+        <div class="panel">
+          <div class="row space">
+            <div class="title">${html(payload.owner ? payload.owner.stableId : "invalid contract")}</div>
+            <span class="chip red">invalid JSON</span>
+          </div>
+          <div class="field bad">${html(payload.parseError)}</div>
+        </div>
+        <div class="panel">
+          <div class="label">Raw value</div>
+          <pre>${html(payload.raw || "")}</pre>
+        </div>`;
+    }
+
+    function render() {
+      const payload = lastPayload || { state: "empty" };
+      if (payload.state === "ready") app.innerHTML = renderReady(payload);
+      else if (payload.state === "invalid_json") app.innerHTML = renderInvalidJson(payload);
+      else app.innerHTML = renderEmpty(payload);
+    }
+
+    window.onmessage = (event) => {
+      const message = event.data && event.data.pluginMessage;
+      if (!message) return;
+      if (message.type === "selection") {
+        lastPayload = message.payload;
+        lastSelectResult = null;
+        render();
+      }
+      if (message.type === "validation") {
+        lastValidation = message.payload;
+        render();
+      }
+      if (message.type === "selectStableIdResult") {
+        lastSelectResult = message.payload;
+        render();
+      }
+    };
+
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const action = target.getAttribute("data-action");
+      if (action === "refresh") post({ type: "refresh" });
+      if (action === "validate") post({ type: "validate" });
+
+      const copy = target.getAttribute("data-copy");
+      if (copy === "json" && lastPayload) copyText(lastPayload.raw || pretty(lastPayload.contract || {}));
+      if (copy === "id" && lastPayload && lastPayload.contract) copyText(lastPayload.contract.id || "");
+
+      const ownerId = target.getAttribute("data-select-owner");
+      if (ownerId) post({ type: "selectOwner", nodeId: ownerId });
+
+      const stableId = target.getAttribute("data-select-stable-id");
+      if (stableId) post({ type: "selectStableId", stableId });
+    });
+
+    render();
+  </script>
+</body>
+</html>

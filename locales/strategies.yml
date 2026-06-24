@@ -1,0 +1,171 @@
+# Окно «Стратегии» (дерево, фильтр, параметры).
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+strat.window_title:
+  ru: "MoonTerminal — Стратегии"
+  en: "MoonTerminal — Strategies"
+  es: "MoonTerminal — Estrategias"
+strat.search:
+  ru: "поиск"
+  en: "search"
+  es: "buscar"
+strat.all_kinds:
+  ru: "все типы"
+  en: "all types"
+  es: "todos los tipos"
+strat.all_dirs:
+  ru: "все"
+  en: "all"
+  es: "todos"
+strat.clear:
+  ru: "Очистить"
+  en: "Clear"
+  es: "Limpiar"
+strat.only_active:
+  ru: "только активные"
+  en: "active only"
+  es: "solo activos"
+strat.selected_count:
+  ru: "выбрано: %{n}"
+  en: "selected: %{n}"
+  es: "seleccionados: %{n}"
+strat.differs:
+  ru: "значения у выбранных различаются"
+  en: "values differ across selection"
+  es: "los valores difieren en la selección"
+strat.expand_all:
+  ru: "Развернуть всё"
+  en: "Expand all"
+  es: "Expandir todo"
+strat.collapse_all:
+  ru: "Свернуть всё"
+  en: "Collapse all"
+  es: "Contraer todo"
+# Глифы ▶ / ■ — отдельным segment-ом в коде, в словаре только текст.
+strat.start_checked:
+  ru: "отмеченных"
+  en: "checked"
+  es: "marcadas"
+strat.stop_checked:
+  ru: "отмеченных"
+  en: "checked"
+  es: "marcadas"
+strat.staged:
+  ru: "изменений: %{n}"
+  en: "staged: %{n}"
+  es: "pendientes: %{n}"
+strat.sections:
+  ru: "Разделы"
+  en: "Sections"
+  es: "Secciones"
+strat.fields_count:
+  ru: "полей: %{n}"
+  en: "fields: %{n}"
+  es: "campos: %{n}"
+strat.help:
+  ru: "Описание"
+  en: "Description"
+  es: "Descripción"
+strat.folder:
+  ru: "папка"
+  en: "folder"
+  es: "carpeta"
+strat.type:
+  ru: "тип"
+  en: "type"
+  es: "tipo"
+strat.default:
+  ru: "по умолчанию"
+  en: "default"
+  es: "por defecto"
+strat.options:
+  ru: "варианты"
+  en: "options"
+  es: "opciones"
+strat.no_selection:
+  ru: "выберите стратегию в дереве"
+  en: "select a strategy in the tree"
+  es: "selecciona una estrategia en el árbol"
+strat.no_schema:
+  ru: "схема не получена"
+  en: "schema not received"
+  es: "esquema no recibido"
+strat.pick_field:
+  ru: "выберите поле для описания"
+  en: "select a field for details"
+  es: "selecciona un campo para detalles"
+strat.pick_kind:
+  ru: "выберите вид"
+  en: "select a type"
+  es: "selecciona un tipo"
+strat.mixed_values:
+  ru: "разные значения"
+  en: "mixed values"
+  es: "valores distintos"
+strat.root:
+  ru: "корень"
+  en: "root"
+  es: "raíz"
+strat.count_strategies:
+  ru: "%{n} стратегий"
+  en: "%{n} strategies"
+  es: "%{n} estrategias"
+strat.folder_named:
+  ru: "папку «%{name}»"
+  en: "folder “%{name}”"
+  es: "carpeta «%{name}»"
+
+# --- Дерево стратегий: контекстное меню и тулбар ---
+strat.menu_create:
+  ru: "Создать"
+  en: "Create"
+  es: "Crear"
+strat.menu_new_strategy:
+  ru: "Новая стратегия…"
+  en: "New strategy…"
+  es: "Nueva estrategia…"
+strat.menu_new_folder:
+  ru: "Новая папка…"
+  en: "New folder…"
+  es: "Nueva carpeta…"
+strat.menu_new_strategy_here:
+  ru: "Новая стратегия здесь…"
+  en: "New strategy here…"
+  es: "Nueva estrategia aquí…"
+strat.menu_new_folder_here:
+  ru: "Новая папка здесь…"
+  en: "New folder here…"
+  es: "Nueva carpeta aquí…"
+strat.menu_rename:
+  ru: "Переименовать…"
+  en: "Rename…"
+  es: "Renombrar…"
+strat.menu_copy:
+  ru: "Копировать"
+  en: "Copy"
+  es: "Copiar"
+strat.menu_paste_here:
+  ru: "Вставить сюда"
+  en: "Paste here"
+  es: "Pegar aquí"
+strat.menu_delete_folder:
+  ru: "Удалить папку…"
+  en: "Delete folder…"
+  es: "Eliminar carpeta…"
+strat.menu_delete_strategy:
+  ru: "Удалить…"
+  en: "Delete…"
+  es: "Eliminar…"
+strat.action_copy:
+  ru: "копировать"
+  en: "copy"
+  es: "copiar"
+strat.action_paste:
+  ru: "вставить"
+  en: "paste"
+  es: "pegar"
+strat.action_delete:
+  ru: "удалить"
+  en: "delete"
+  es: "eliminar"

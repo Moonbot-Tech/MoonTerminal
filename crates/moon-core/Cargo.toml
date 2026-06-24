@@ -1,0 +1,51 @@
+[package]
+name = "moon-core"
+version = "0.1.0"
+edition = "2021"
+description = "MoonTerminal backend core — feed/session/market/config/db, UI-agnostic. Делится между egui-оболочкой и будущей GPUI-оболочкой."
+
+[lib]
+name = "moon_core"
+path = "src/lib.rs"
+
+[features]
+# Explicit debug/test bridge for the terminal debug button. Default builds must
+# not enable MoonProto diagnostics; see tests/moonproto_feature_guard.rs.
+moonproto-diagnostics = ["moonproto/diagnostics"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
+log = "0.4"
+
+# Логгер-обёртка TeeLogger (applog.rs) делегирует в env_logger; ставится в main.
+env_logger = "0.11"
+
+# Язык по системной локали (config/lang.rs::from_system).
+sys-locale = "0.3"
+
+# Метрики CPU/RAM (metrics.rs).
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+
+# Зашифрованный конфиг: AES-256-GCM, ключ в OS keyring (config/crypto.rs).
+# В keyring v3 нет default platform features: без явного Linux backend на Linux
+# включается mock-хранилище в памяти процесса, и servers.enc нельзя прочитать
+# даже следующим запуском приложения.
+aes-gcm = "0.10"
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
+getrandom = "0.2"
+base64 = "0.22"
+zeroize = "1"
+
+# SoA-инстансы тиков/стакана (data/, бывш. chart/data) — Pod-лейаут под GPU.
+bytemuck = { version = "1", features = ["derive"] }
+
+# Локальная БД отчётов (db/).
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Связь с ядром MoonBot (feed/live.rs) — единственный, кто знает транспорт.
+moonproto = { git = "https://github.com/Moonbot-Tech/MoonProtoBeta" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Performance"] }

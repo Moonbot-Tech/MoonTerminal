@@ -1,0 +1,38 @@
+# Virtual workspace. Единственный бинарь — GPUI-оболочка moon-ui-gpui (`moonterminal`)
+# поверх UI-агностичного ядра moon-core; общий чарт-крейт moon-chart даёт математику/
+# геометрию (view/axes/transform/build_order_geometry/инстанс-типы), wgpu-free.
+#
+# Старый egui-бинарь moon-terminal (корневой src/) удалён вместе с wgpu-движком и
+# offscreen→readback — рисование переведено на own-pass DX11 (chartdx). См.
+# docs/REFACTOR_RENDER.md.
+[workspace]
+members = ["crates/moon-core", "crates/moon-chart", "crates/moon-ui-gpui"]
+resolver = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
+
+# Dev-сборка для GPUI-оболочки: главный источник рывков (вплоть до курсора) — DX12
+# debug/validation-слой, который GPUI и wgpu включают в debug по `cfg!(debug_assertions)`
+# (он же `HRESULT 0x887A002D` на старте без Graphics Tools). Отключаем его, не уходя в
+# release: debug_assertions=false снимает оба слоя; зависимости (gpui/skia) собираем
+# оптимизированно — рантайм близок к release, а инкрементальная сборка своего кода быстра.
+[profile.dev]
+debug-assertions = false
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# Moon UI: единая локальная/публичная база для GPUI runtime + компонентов.
+#
+# Канонический источник Moon-стека теперь Moonbot-Tech/MoonUI: standalone GPUI
+# (`moon-gpui`) + Moon components (`moon-ui`). Публичные зависимости идут через Git;
+# локальная разработка подменяет их на соседний checkout в untracked `.cargo/config.toml`.
+
+# Zed's crates.io patches are not inherited transitively when GPUI is consumed as a dependency.
+# Keep the GPUI process stack on the same patched crates the fork itself uses.
+[patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }

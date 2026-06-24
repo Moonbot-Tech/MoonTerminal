@@ -1,0 +1,282 @@
+//! Backend-neutral GPU structs shared by DX11, Metal, and wgpu chart passes.
+//! Плюс мелкие билдеры/хелперы, превращающие данные фида в эти GPU-инстансы.
+
+use bytemuck::Zeroable;
+use moon_core::data::PriceLinePoint;
+use moon_core::feed::{PricePoint, Side, Tick};
+
+/// Единая дефолтная прозрачность volume для всех native backend-ов.
+pub const DEFAULT_VOLUME_ALPHA: f32 = 0.34;
+
+/// sRGB [u8;3] → [f32;4] (alpha 1) для cbuffer-цветов (шейдер переводит в linear).
+pub fn rgb4(c: [u8; 3]) -> [f32; 4] {
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+        1.0,
+    ]
+}
+
+/// Заполнить буфер GPU-крестов трейдов из тиков (время → относительное от epoch).
+pub fn fill_cross_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross>) {
+    out.clear();
+    out.reserve(ticks.len());
+    out.extend(ticks.iter().map(|t| ChartCross {
+        time_rel: (t.time_ms - epoch_ms) as f32,
+        price: t.price,
+        side: match t.side {
+            Side::Buy => 0,
+            Side::Sell => 1,
+        },
+        qty: t.qty.max(0.0),
+    }));
+}
+
+/// Заполнить буфер точек ценовой линии (last/mark) из `PricePoint`, отбрасывая неконечные.
+pub fn fill_price_upload(points: &[PricePoint], epoch_ms: f64, out: &mut Vec<PriceLinePoint>) {
+    out.clear();
+    out.reserve(points.len());
+    out.extend(points.iter().filter_map(|p| {
+        (p.price.is_finite() && p.price > 0.0).then_some(PriceLinePoint {
+            time_rel_ms: (p.time_ms - epoch_ms) as f32,
+            price: p.price,
+        })
+    }));
+}
+
+/// One trade marker in GPU memory. Layout matches chart shaders.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ChartCross {
+    pub time_rel: f32,
+    pub price: f32,
+    pub side: u32,
+    pub qty: f32,
+}
+
+#[allow(dead_code)]
+pub fn ordered_cross_ring(
+    buf: &[ChartCross],
+    head: usize,
+    count: usize,
+    capacity: usize,
+) -> Vec<ChartCross> {
+    let capacity = capacity.max(1);
+    let count = count.min(capacity).min(buf.len());
+    if count == 0 {
+        return Vec::new();
+    }
+    let start = if count == capacity {
+        head % capacity
+    } else {
+        0
+    };
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let idx = (start + i) % capacity;
+        if let Some(cross) = buf.get(idx) {
+            out.push(*cross);
+        }
+    }
+    out
+}
+
+#[allow(dead_code)]
+pub fn reset_cross_ring(
+    buf: &mut Vec<ChartCross>,
+    head: &mut usize,
+    count: &mut usize,
+    capacity: usize,
+    data: &[ChartCross],
+) {
+    let capacity = capacity.max(1);
+    let start = data.len().saturating_sub(capacity);
+    buf.clear();
+    buf.extend_from_slice(&data[start..]);
+    *count = buf.len();
+    *head = *count % capacity;
+}
+
+#[allow(dead_code)]
+pub fn append_cross_ring(
+    buf: &mut Vec<ChartCross>,
+    head: &mut usize,
+    count: &mut usize,
+    capacity: usize,
+    data: &[ChartCross],
+) {
+    let capacity = capacity.max(1);
+    if data.is_empty() {
+        return;
+    }
+    if data.len() >= capacity {
+        reset_cross_ring(buf, head, count, capacity, data);
+        return;
+    }
+    if buf.len() < capacity {
+        buf.resize(capacity, ChartCross::zeroed());
+    }
+    for cross in data {
+        buf[*head] = *cross;
+        *head = (*head + 1) % capacity;
+        *count = (*count + 1).min(capacity);
+    }
+}
+
+/// Chart transform uniform. Keep field order in sync with HLSL/MSL/WGSL.
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ChartViewGpu {
+    pub bounds: [f32; 4],
+    pub resolution: [f32; 2],
+    pub time_to_px: f32,
+    pub view_time0: f32,
+    pub price_to_px: f32,
+    pub view_price0: f32,
+    pub marker_half: f32,
+    pub pad: f32,
+    pub volume_buy_inv: f32,
+    pub volume_sell_inv: f32,
+    pub volume_alpha: f32,
+    pub _pad2: f32,
+}
+
+/// Quad blit/background uniform.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BlitParams {
+    pub dst: [f32; 4],
+    pub resolution: [f32; 2],
+    pub uv_off: [f32; 2],
+    pub uv_scale: [f32; 2],
+    pub pad: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BackgroundParams {
+    pub dst: [f32; 4],
+    pub resolution: [f32; 2],
+    pub uv_off: [f32; 2],
+    pub uv_scale: [f32; 2],
+    pub opacity: f32,
+    pub _pad: f32,
+    pub bg: [f32; 4],
+}
+
+impl Default for BackgroundParams {
+    fn default() -> Self {
+        Self {
+            dst: [0.0, 0.0, 1.0, 1.0],
+            resolution: [1.0, 1.0],
+            uv_off: [0.0, 0.0],
+            uv_scale: [1.0, 1.0],
+            opacity: 0.0,
+            _pad: 0.0,
+            bg: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GridParams {
+    pub bounds: [f32; 4],
+    pub resolution: [f32; 2],
+    pub n_vert: f32,
+    pub price_to_px: f32,
+    pub view_price0: f32,
+    pub price_interval: f32,
+    pub grid_alpha: f32,
+    pub bg_alpha: f32,
+    pub bg: [f32; 4],
+    pub grid_col: [f32; 4],
+}
+
+/// Native cursor/crosshair overlay. Coordinates are physical window pixels.
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CursorParams {
+    /// Combined chart+book area: x, y, w, h.
+    pub bounds: [f32; 4],
+    pub resolution: [f32; 2],
+    pub cursor: [f32; 2],
+    pub color: [f32; 4],
+    pub thickness: f32,
+    pub enabled: f32,
+    pub _pad: [f32; 2],
+}
+
+/// Native cursor readout chip background. Coordinates are physical window pixels.
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ReadoutRect {
+    pub dst: [f32; 4],
+    pub bg: [f32; 4],
+    pub border: [f32; 4],
+    /// x = border width in px.
+    pub m: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BookStyle {
+    pub book_bg: [f32; 4],
+    pub bid: [f32; 4],
+    pub ask: [f32; 4],
+    /// x = level-line opacity, y = level-line height in physical px.
+    pub level: [f32; 4],
+}
+
+impl Default for BookStyle {
+    fn default() -> Self {
+        Self {
+            book_bg: [0.0745, 0.0784, 0.0863, 1.0],
+            bid: [0.1294, 0.5137, 0.1922, 1.0],
+            ask: [1.0, 0.4980, 0.3137, 1.0],
+            level: [0.5, 1.5, 0.0, 0.0],
+        }
+    }
+}
+
+pub fn cover_uv(dst_w: f32, dst_h: f32, img_aspect: f32) -> ([f32; 2], [f32; 2]) {
+    let dst_aspect = dst_w.max(1.0) / dst_h.max(1.0);
+    if img_aspect > dst_aspect {
+        let u = (dst_aspect / img_aspect).clamp(0.0, 1.0);
+        ([(1.0 - u) * 0.5, 0.0], [u, 1.0])
+    } else {
+        let v = (img_aspect / dst_aspect).clamp(0.0, 1.0);
+        ([0.0, (1.0 - v) * 0.5], [1.0, v])
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct HLineGpu {
+    pub color: [f32; 4],
+    pub m: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ZoneGpu {
+    pub color: [f32; 4],
+    pub m: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SegGpu {
+    pub pts: [f32; 4],
+    pub color: [f32; 4],
+    pub m: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MarkerGpu {
+    pub color: [f32; 4],
+    pub pos: [f32; 4],
+    pub m: [f32; 4],
+}
