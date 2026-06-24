@@ -6,17 +6,18 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonInputEvent,
+    MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonInputEvent,
     MoonInputState, MoonPalette, MoonWindowFrame, MoonWindowFrameControls, Root, h_flex, v_flex,
 };
 use rust_i18n::t;
 use std::time::Duration;
 
-use super::{AddChartStack, ChartTabs, Tab, chart_pane_label, layout_popup};
+use super::{AddChartStack, ChartTabs, Tab, chart_pane_label, coin_search, layout_popup};
 use crate::Backend;
 use crate::chart_persist::{self, StackLayoutMode};
 use crate::design;
 use moon_core::config::ChartBucket;
+use moon_core::session::CoreId;
 
 impl ChartTabs {
     /// Дабл-клик по чарту AddToChart-вкладки → открыть монету на Main + переключиться.
@@ -347,6 +348,12 @@ struct DetachedChartHost {
     layout_fit_input: Entity<MoonInputState>,
     /// Поле высоты режима Scroll.
     layout_scroll_input: Entity<MoonInputState>,
+    /// Поле ввода монеты (поиск) шапки окна; набор зависит от ядер bucket-а этого окна.
+    coin_input: Entity<MoonInputState>,
+    /// Текущий текст в поле монеты (зеркало `coin_input`).
+    coin_query: String,
+    /// Открыт ли список совпадений монеты.
+    coin_popup_open: bool,
 }
 
 impl DetachedChartHost {
@@ -449,6 +456,20 @@ impl DetachedChartHost {
             },
         )
         .detach();
+        let coin_input = cx.new(|cx| {
+            MoonInputState::new(window, cx).placeholder(t!("chart.coin.search").to_string())
+        });
+        cx.subscribe(&coin_input, |this, input, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                let value = input.read(cx).value().to_string();
+                if this.coin_query != value {
+                    this.coin_popup_open = !value.trim().is_empty();
+                    this.coin_query = value;
+                    cx.notify();
+                }
+            }
+        })
+        .detach();
         Self {
             panel,
             backend,
@@ -462,7 +483,34 @@ impl DetachedChartHost {
             layout_popup_hovered: false,
             layout_fit_input,
             layout_scroll_input,
+            coin_input,
+            coin_query: String::new(),
+            coin_popup_open: false,
         }
+    }
+
+    /// Совпадения поля монеты для этого окна (ядра bucket-а).
+    fn coin_results(&self, cx: &App) -> Vec<(CoreId, String, String)> {
+        coin_search::search(
+            self.backend.read(cx),
+            &self.group,
+            Some(&self.bucket),
+            &self.coin_query,
+        )
+    }
+
+    /// Открыть выбранную монету в стеке этого окна.
+    fn open_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+        self.panel.update(cx, |p, c| {
+            p.add_coin(core, &market, coin_search::MANUAL_COIN_TTL_MS, c)
+        });
+        cx.notify();
+    }
+
+    fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
+        self.coin_query.clear();
+        self.coin_popup_open = false;
+        cx.notify();
     }
 
     /// Текущая per-tab раскладка панели этого окна: `(mode, height_fit, height_scroll)`.
@@ -852,6 +900,77 @@ impl Render for DetachedChartHost {
                     app.stop_propagation();
                 })
         });
+        // Поле ввода монеты (поиск) шапки + список совпадений. Список рисуем на уровне v_flex
+        // (после тела), иначе тело окна (paint-порядок ниже) перекроет выпадашку из шапки.
+        // Свой крестик очистки (чёткий ✕ поверх правого края поля): встроенный cleanable у
+        // MoonInput почти не виден, а форк правим только по явной просьбе.
+        let coin_clear = (!self.coin_query.trim().is_empty()).then(|| {
+            let input = self.coin_input.clone();
+            let view = cx.entity();
+            div()
+                .id("detached-coin-clear")
+                .absolute()
+                .right(px(4.0))
+                .top_0()
+                .bottom_0()
+                .flex()
+                .items_center()
+                .px(px(2.0))
+                .cursor_pointer()
+                .text_size(design::t_body(cx))
+                .text_color(rgb(p.text_muted))
+                .hover(|s| s.text_color(rgb(p.text)))
+                .on_mouse_down(MouseButton::Left, move |_, window, app| {
+                    input.update(app, |inp, c| inp.set_value(SharedString::default(), window, c));
+                    view.update(app, |this, cx| this.clear_coin_search(cx));
+                    app.stop_propagation();
+                })
+                .child("✕")
+        });
+        let coin_search_el = div()
+            .relative()
+            .child(
+                div().w(px(140.0)).child(
+                    MoonInput::new("detached-coin-search")
+                        .state(&self.coin_input)
+                        .small(),
+                ),
+            )
+            .children(coin_clear);
+        let coin_popup = self.coin_popup_open.then(|| {
+            let results = self.coin_results(cx);
+            let view = cx.entity();
+            let input = self.coin_input.clone();
+            coin_search::render_popup(
+                "detached-coin",
+                results,
+                p,
+                cx,
+                move |core, market, window, app| {
+                    view.update(app, |this, cx| this.open_coin(core, market, cx));
+                    input.update(app, |inp, c| inp.set_value(SharedString::default(), window, c));
+                    view.update(app, |this, cx| this.clear_coin_search(cx));
+                },
+            )
+            .absolute()
+            .right(px(6.0))
+            .top(px(38.0))
+        });
+        // Перехватчик клика вне списка — только ниже шапки (top 34), чтобы не блокировать само поле.
+        let coin_dismiss = self.coin_popup_open.then(|| {
+            let entity = cx.entity();
+            div()
+                .id("detached-coin-dismiss")
+                .absolute()
+                .top(px(34.0))
+                .left(px(0.0))
+                .right(px(0.0))
+                .bottom(px(0.0))
+                .on_mouse_down(MouseButton::Left, move |_, _w, app| {
+                    entity.update(app, |this, cx| this.clear_coin_search(cx));
+                    app.stop_propagation();
+                })
+        });
         // Шапка — ТОЛЬКО у выносных окон вкладок (в основном доке её нет): масштаб слева,
         // «закрыть все графики» справа.
         v_flex()
@@ -876,6 +995,7 @@ impl Render for DetachedChartHost {
                             .min_w_0()
                             .items_center(),
                     )
+                    .child(coin_search_el)
                     .child(crate::controls::scale_dropdown_for_add_stack(
                         scale,
                         panel.clone(),
@@ -927,6 +1047,8 @@ impl Render for DetachedChartHost {
                     // тёмный clear окна (правка форка MoonUI), белого нет.
                     .child(self.panel.clone()),
             )
+            .children(coin_dismiss)
+            .children(coin_popup)
             .children(layout_dismiss)
             .children(layout_popup)
     }

@@ -6,12 +6,12 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonRect, MoonTabItem,
-    MoonTabStrip, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette, MoonRect, MoonTabItem,
+    MoonTabStrip, h_flex, v_flex,
 };
 use rust_i18n::t;
 
-use super::{CHART_TAB_STRIP_H, ChartTabs, Tab, layout_popup};
+use super::{CHART_TAB_STRIP_H, ChartTabs, Tab, coin_search, layout_popup};
 use crate::chart_persist::StackLayoutMode;
 
 impl Render for ChartTabs {
@@ -165,12 +165,85 @@ impl Render for ChartTabs {
                 })
                 .render()
         };
-        // Правый кластер полосы вкладок: [масштаб] [▦?] [⚙]. ⚙ держим у правого края
+        // Поле ввода монеты (поиск) — слева от масштаба, своё на окно; набор зависит от ядер
+        // активной вкладки. Список совпадений рисуем абсолютно от обёртки поля (top_full), а сам
+        // кластер выносим на уровень v_flex (ниже): overflow_hidden полоски не срежет выпадашку.
+        let coin_popup = self.coin_popup_open.then(|| {
+            let results = self.coin_results(cx);
+            let view = cx.entity();
+            let input = self.coin_input.clone();
+            coin_search::render_popup(
+                "tabs-coin",
+                results,
+                p_strip,
+                cx,
+                move |core, market, window, app| {
+                    view.update(app, |this, cx| this.open_coin_on_active(core, market, cx));
+                    input.update(app, |inp, c| inp.set_value(SharedString::default(), window, c));
+                    view.update(app, |this, cx| this.clear_coin_search(cx));
+                },
+            )
+            .absolute()
+            .top_full()
+            .right_0()
+            .mt(px(2.0))
+        });
+        // Свой крестик очистки (cleanable у MoonInput почти не виден — это стайлинг форка,
+        // править форк не наша зона): чёткий ✕ поверх правого края поля, виден при непустом вводе.
+        let coin_clear = (!self.coin_query.trim().is_empty()).then(|| {
+            let input = self.coin_input.clone();
+            let view = cx.entity();
+            div()
+                .id("tabs-coin-clear")
+                .absolute()
+                .right(px(4.0))
+                .top_0()
+                .bottom_0()
+                .flex()
+                .items_center()
+                .px(px(2.0))
+                .cursor_pointer()
+                .text_size(crate::design::t_body(cx))
+                .text_color(rgb(p_strip.text_muted))
+                .hover(|s| s.text_color(rgb(p_strip.text)))
+                .on_mouse_down(MouseButton::Left, move |_, window, app| {
+                    input.update(app, |inp, c| inp.set_value(SharedString::default(), window, c));
+                    view.update(app, |this, cx| this.clear_coin_search(cx));
+                    app.stop_propagation();
+                })
+                .child("✕")
+        });
+        let coin_search_el = div()
+            .relative()
+            .child(
+                div().w(px(140.0)).child(
+                    MoonInput::new("tabs-coin-search")
+                        .state(&self.coin_input)
+                        .small(),
+                ),
+            )
+            .children(coin_clear)
+            .children(coin_popup);
+        // Слой-перехватчик клика вне списка монеты (закрыть). Ниже кластера в z-порядке.
+        let coin_dismiss = self.coin_popup_open.then(|| {
+            let entity = cx.entity();
+            div()
+                .id("tabs-coin-dismiss")
+                .absolute()
+                .inset_0()
+                .on_mouse_down(MouseButton::Left, move |_, _w, app| {
+                    entity.update(app, |this, cx| this.clear_coin_search(cx));
+                    app.stop_propagation();
+                })
+        });
+
+        // Правый кластер полосы вкладок: [монета] [масштаб] [▦?] [⚙]. ⚙ держим у правого края
         // (right≈6px) — попап раскладки якорится именно к нему (right(6) ниже).
         let right_cluster = div().absolute().right(px(6.0)).top(px(4.0)).child(
-            moon_ui::h_flex()
+            h_flex()
                 .items_center()
                 .gap(px(4.0))
+                .child(coin_search_el)
                 .child(scale_dropdown)
                 .children(gather_btn)
                 .child(settings_btn),
@@ -282,13 +355,14 @@ impl Render for ChartTabs {
             .size_full()
             .relative()
             .child(
+                // Только таб-стрип под overflow_hidden (режет лишние табы). Правый кластер и
+                // выпадашки — отдельными детьми v_flex ниже, чтобы их не срезало по высоте полосы.
                 div()
                     .h(px(CHART_TAB_STRIP_H))
                     .w_full()
                     .relative()
                     .overflow_hidden()
-                    .child(strip)
-                    .child(right_cluster),
+                    .child(strip),
             )
             .child(
                 div()
@@ -297,6 +371,10 @@ impl Render for ChartTabs {
                     .min_h(px(0.0))
                     .child(self.active_element()),
             )
+            // coin_dismiss ниже кластера в z-порядке: клик по строке списка (в кластере) ловит
+            // строка, клик мимо — этот слой закрывает список.
+            .children(coin_dismiss)
+            .child(right_cluster)
             .children(layout_dismiss)
             .children(layout_popup)
     }

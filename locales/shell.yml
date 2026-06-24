@@ -156,3 +156,11 @@ chart.layout.auto_pin:
   ru: "Авто-пин при выставлении ордера"
   en: "Auto-pin on order"
   es: "Auto-fijar al poner orden"
+chart.coin.search:
+  ru: "Монета…"
+  en: "Coin…"
+  es: "Moneda…"
+chart.coin.no_results:
+  ru: "Нет совпадений"
+  en: "No matches"
+  es: "Sin coincidencias"

@@ -8,6 +8,7 @@
 //! `DetachedChartHost`) — в [`windows`].
 
 mod add_stack;
+mod coin_search;
 mod layout_popup;
 mod main_stack;
 mod sig;
@@ -88,6 +89,13 @@ pub struct ChartTabs {
     layout_fit_input: Entity<MoonInputState>,
     /// Поле высоты режима Scroll.
     layout_scroll_input: Entity<MoonInputState>,
+    /// Поле ввода монеты (поиск) полоски вкладок — своё на окно; набор монет зависит от ядер
+    /// АКТИВНОЙ вкладки (см. [`coin_search`]).
+    coin_input: Entity<MoonInputState>,
+    /// Текущий текст в поле монеты (зеркало `coin_input`, обновляется по `Change`).
+    coin_query: String,
+    /// Открыт ли выпадающий список совпадений монеты.
+    coin_popup_open: bool,
 }
 
 impl ChartTabs {
@@ -199,6 +207,22 @@ impl ChartTabs {
             cx.notify();
         })
         .detach();
+        let coin_input = cx.new(|cx| {
+            MoonInputState::new(window, cx).placeholder(rust_i18n::t!("chart.coin.search").to_string())
+        });
+        // Печать в поле монеты → обновить запрос и (пере)открыть список совпадений. Render читает
+        // `coin_query`, а не сам инпут как источник событий (мирроринг StrategiesView).
+        cx.subscribe(&coin_input, |this, input, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                let value = input.read(cx).value().to_string();
+                if this.coin_query != value {
+                    this.coin_popup_open = !value.trim().is_empty();
+                    this.coin_query = value;
+                    cx.notify();
+                }
+            }
+        })
+        .detach();
         let layout_fit_input = cx.new(|cx| MoonInputState::new(window, cx));
         let layout_scroll_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(
@@ -243,6 +267,9 @@ impl ChartTabs {
             layout_popup_hovered: false,
             layout_fit_input,
             layout_scroll_input,
+            coin_input,
+            coin_query: String::new(),
+            coin_popup_open: false,
         };
         this.restore_detached(cx);
         this.sync_active_scale(cx);
@@ -877,6 +904,47 @@ impl ChartTabs {
     pub(crate) fn pick_active_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {
         self.set_active_scale(pct, cx);
         self.persist_scales(cx);
+        cx.notify();
+    }
+
+    /// Совпадения поля монеты для АКТИВНОЙ вкладки (Main → ядра группы; Add → ядра bucket-а).
+    fn coin_results(&self, cx: &App) -> Vec<(CoreId, String, String)> {
+        let bucket = match &self.active {
+            Tab::Main => None,
+            Tab::Add(_, b) => Some(b.clone()),
+        };
+        coin_search::search(
+            self.backend.read(cx),
+            &self.group,
+            bucket.as_ref(),
+            &self.coin_query,
+        )
+    }
+
+    /// Открыть выбранную монету на АКТИВНОЙ вкладке: Main → fullscreen-чарт; Add → её стек.
+    fn open_coin_on_active(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+        match self.active.clone() {
+            Tab::Main => self
+                .main
+                .update(cx, |m, c| m.open_or_focus(core, market, c)),
+            Tab::Add(n, b) => {
+                if let Some((_, _, panel)) =
+                    self.add.iter().find(|(num, bk, _)| *num == n && *bk == b)
+                {
+                    panel.update(cx, |p, c| {
+                        p.add_coin(core, &market, coin_search::MANUAL_COIN_TTL_MS, c)
+                    });
+                }
+            }
+        }
+        self.sync_main_chart_target(cx);
+        cx.notify();
+    }
+
+    /// Очистить поле монеты и закрыть список (после выбора / по клику вне).
+    fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
+        self.coin_query.clear();
+        self.coin_popup_open = false;
         cx.notify();
     }
 

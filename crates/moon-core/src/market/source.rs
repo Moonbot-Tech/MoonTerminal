@@ -590,6 +590,34 @@ impl MarketDataSource {
         Ok(price)
     }
 
+    /// Search the provider's market universe for a terminal coin-search box.
+    ///
+    /// Returns canonical market names (e.g. `"BTCUSDT"`) ranked by MoonProto's
+    /// built-in search (exact → prefix → contains). Empty when the core has no
+    /// provider/client/snapshot yet or the query is blank. The terminal pairs
+    /// each name with the core's server name for the `"BTC - Bybit1"` display.
+    pub fn search_markets(&self, core: CoreId, query: &str, limit: usize) -> Vec<String> {
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let Some(provider) = inner.core_provider.get(&core).copied() else {
+                return Vec::new();
+            };
+            match inner.clients.get(&provider).and_then(SharedMoonClient::get) {
+                Some(client) => client,
+                None => return Vec::new(),
+            }
+        };
+        let Some(snapshot) = client.snapshot_versioned() else {
+            return Vec::new();
+        };
+        snapshot
+            .markets()
+            .search(query, limit)
+            .into_iter()
+            .map(|handle| handle.name().to_string())
+            .collect()
+    }
+
     pub fn read_chart_history_into(
         &self,
         core: CoreId,
