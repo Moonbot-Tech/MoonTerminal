@@ -379,64 +379,42 @@ fn size_strip(
         .items(items)
         .render();
 
-    let mut root = div().relative().flex().items_center().child(seg);
-
-    // Overlay взаимодействия по каждой кнопке (клик/дабл/колесо). Прозрачный, поверх сегментов.
-    if let Some(core) = core {
-        for i in 0..6 {
-            let left: f32 = SIZE_W.iter().take(i).sum();
-            let backend_click = backend.clone();
-            let backend_wheel = backend.clone();
-            root = root.child(
-                div()
-                    .id(SharedString::from(format!("size-hit-{i}")))
-                    .absolute()
-                    .left(px(left))
-                    .top(px(0.0))
-                    .w(px(SIZE_W[i]))
-                    .h_full()
-                    .on_mouse_down(MouseButton::Left, move |ev, _w, cx| {
-                        let dbl = ev.click_count >= 2;
-                        backend_click.update(cx, |b, bcx| {
-                            if dbl {
-                                b.order_size_edit_req = Some((core, i));
-                            } else {
-                                b.order_size_sel.insert(core, i);
-                            }
-                            b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                            bcx.notify();
-                        });
-                    })
-                    .on_scroll_wheel(move |ev, _w, cx| {
-                        let up = scroll_up(ev);
-                        backend_wheel.update(cx, |b, bcx| {
-                            let cur = b.order_size_value(core, i);
-                            let next = wheel_step(cur, up, 1.0);
-                            if next != cur {
-                                b.set_order_size_value(core, i, next);
-                                b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                                bcx.notify();
-                            }
-                        });
-                    }),
-            );
-        }
-    }
-
-    // Инпут поверх редактируемой кнопки (absolute по сумме ширин предыдущих), на самом верху.
-    if let Some(ix) = edit_ix.filter(|i| *i < 6) {
-        let left: f32 = SIZE_W.iter().take(ix).sum();
-        root = root.child(
-            div()
-                .absolute()
-                .left(px(left))
-                .top(px(0.0))
-                .w(px(SIZE_W[ix]))
-                .h_full()
-                .child(MoonInput::new("toolbar-size-edit").state(input).small()),
-        );
-    }
-    root
+    let backend_click = backend.clone();
+    strip_with_overlay(
+        seg,
+        "size",
+        &SIZE_W,
+        edit_ix,
+        "toolbar-size-edit",
+        input,
+        core.is_some(),
+        // Одиночный клик = выбор пресета; дабл = инлайн-правка (`order_size_edit_req`).
+        move |i, dbl, cx| {
+            let Some(core) = core else { return };
+            backend_click.update(cx, |b, bcx| {
+                if dbl {
+                    b.order_size_edit_req = Some((core, i));
+                } else {
+                    b.order_size_sel.insert(core, i);
+                }
+                b.order_size_rev = b.order_size_rev.wrapping_add(1);
+                bcx.notify();
+            });
+        },
+        // Колесо = ±значение с шагом по порядку величины (frac 1.0).
+        move |i, up, cx| {
+            let Some(core) = core else { return };
+            backend.update(cx, |b, bcx| {
+                let cur = b.order_size_value(core, i);
+                let next = wheel_step(cur, up, 1.0);
+                if next != cur {
+                    b.set_order_size_value(core, i, next);
+                    b.order_size_rev = b.order_size_rev.wrapping_add(1);
+                    bcx.notify();
+                }
+            });
+        },
+    )
 }
 
 /// Ширины кнопок продажи (визуал как был).
@@ -471,74 +449,108 @@ fn sell_strip(
         .items(items)
         .render();
 
+    let backend_click = backend.clone();
+    strip_with_overlay(
+        seg,
+        "sell",
+        &SELL_W,
+        edit_ix,
+        "toolbar-sell-edit",
+        input,
+        core.is_some(),
+        // Одиночный клик = выбрать слот (меняет TP); дабл = инлайн-правка %.
+        move |i, dbl, cx| {
+            let Some(core) = core else { return };
+            backend_click.update(cx, |b, bcx| {
+                if dbl {
+                    b.sell_edit_req = Some((core, i));
+                } else if let Err(error) = b
+                    .session
+                    .edit_client_settings(core, ClientSettingsEdit::SelectFixedSellSlot(i + 1))
+                {
+                    log::warn!("select fixed-sell slot failed: {error}");
+                }
+                bcx.notify();
+            });
+        },
+        // Колесо = ±% полразрядом (frac 0.5). Значение % — на ядре, читаем из снимка ClientSettings.
+        move |i, up, cx| {
+            let Some(core) = core else { return };
+            backend.update(cx, |b, bcx| {
+                let cur = b.fixed_sell_pct(core, i);
+                let next = wheel_step(cur, up, 0.5);
+                if next != cur {
+                    // Оптимистично: локальный кэш + перерисовка СРАЗУ; в ядро — тоже.
+                    b.set_fixed_sell_pct_local(core, i, next);
+                    b.order_size_rev = b.order_size_rev.wrapping_add(1);
+                    bcx.notify();
+                    if let Err(error) = b.session.edit_client_settings(
+                        core,
+                        ClientSettingsEdit::SetFixedSellPct {
+                            slot: i + 1,
+                            pct: next,
+                        },
+                    ) {
+                        log::warn!("set fixed-sell pct (wheel) failed: {error}");
+                    }
+                }
+            });
+        },
+    )
+}
+
+/// Общий каркас полос пресетов (size/sell): сегментированный контрол + прозрачные overlay
+/// поверх каждой кнопки (MoonSegmentedControl сам клик/дабл/колесо не различает) + инлайн-инпут
+/// поверх редактируемой кнопки. Отличия size/sell — только в `on_click`/`on_wheel` (наведи и
+/// крути, не нажимая). `overlay=false` (нет ядра) → без взаимодействия.
+#[allow(clippy::too_many_arguments)]
+fn strip_with_overlay(
+    seg: impl IntoElement,
+    id_prefix: &'static str,
+    widths: &[f32; 6],
+    edit_ix: Option<usize>,
+    edit_input_id: &'static str,
+    input: &Entity<MoonInputState>,
+    overlay: bool,
+    on_click: impl Fn(usize, bool, &mut App) + Clone + 'static,
+    on_wheel: impl Fn(usize, bool, &mut App) + Clone + 'static,
+) -> impl IntoElement {
     let mut root = div().relative().flex().items_center().child(seg);
 
-    // Overlay взаимодействия: одиночный клик = выбрать слот (меняет TP); дабл = инлайн-правка
-    // %; КОЛЕСО = ±% полразрядом (frac 0.5). Значение % — на ядре, читаем из снимка ClientSettings.
-    if let Some(core) = core {
+    if overlay {
         for i in 0..6 {
-            let left: f32 = SELL_W.iter().take(i).sum();
-            let backend_click = backend.clone();
-            let backend_wheel = backend.clone();
+            let left: f32 = widths.iter().take(i).sum();
+            let on_click = on_click.clone();
+            let on_wheel = on_wheel.clone();
             root = root.child(
                 div()
-                    .id(SharedString::from(format!("sell-hit-{i}")))
+                    .id(SharedString::from(format!("{id_prefix}-hit-{i}")))
                     .absolute()
                     .left(px(left))
                     .top(px(0.0))
-                    .w(px(SELL_W[i]))
+                    .w(px(widths[i]))
                     .h_full()
                     .on_mouse_down(MouseButton::Left, move |ev, _w, cx| {
-                        let dbl = ev.click_count >= 2;
-                        backend_click.update(cx, |b, bcx| {
-                            if dbl {
-                                b.sell_edit_req = Some((core, i));
-                            } else if let Err(error) = b.session.edit_client_settings(
-                                core,
-                                ClientSettingsEdit::SelectFixedSellSlot(i + 1),
-                            ) {
-                                log::warn!("select fixed-sell slot failed: {error}");
-                            }
-                            bcx.notify();
-                        });
+                        on_click(i, ev.click_count >= 2, cx);
                     })
                     .on_scroll_wheel(move |ev, _w, cx| {
-                        let up = scroll_up(ev);
-                        backend_wheel.update(cx, |b, bcx| {
-                            let cur = b.fixed_sell_pct(core, i);
-                            let next = wheel_step(cur, up, 0.5);
-                            if next != cur {
-                                // Оптимистично: локальный кэш + перерисовка СРАЗУ; в ядро — тоже.
-                                b.set_fixed_sell_pct_local(core, i, next);
-                                b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                                bcx.notify();
-                                if let Err(error) = b.session.edit_client_settings(
-                                    core,
-                                    ClientSettingsEdit::SetFixedSellPct {
-                                        slot: i + 1,
-                                        pct: next,
-                                    },
-                                ) {
-                                    log::warn!("set fixed-sell pct (wheel) failed: {error}");
-                                }
-                            }
-                        });
+                        on_wheel(i, scroll_up(ev), cx);
                     }),
             );
         }
     }
 
-    // Инпут поверх редактируемой S-кнопки (на самом верху).
+    // Инпут поверх редактируемой кнопки (absolute по сумме ширин предыдущих), на самом верху.
     if let Some(ix) = edit_ix.filter(|i| *i < 6) {
-        let left: f32 = SELL_W.iter().take(ix).sum();
+        let left: f32 = widths.iter().take(ix).sum();
         root = root.child(
             div()
                 .absolute()
                 .left(px(left))
                 .top(px(0.0))
-                .w(px(SELL_W[ix]))
+                .w(px(widths[ix]))
                 .h_full()
-                .child(MoonInput::new("toolbar-sell-edit").state(input).small()),
+                .child(MoonInput::new(edit_input_id).state(input).small()),
         );
     }
     root
@@ -555,41 +567,47 @@ fn scale_label(scale: Option<f32>) -> &'static str {
 /// Дропдаун масштаба для полоски чарт-вкладок главного окна: применяет масштаб ТОЛЬКО к
 /// АКТИВНОЙ вкладке (Main или конкретный AddToChart), не трогая другие вкладки/окна, и
 /// сохраняет (per-вкладочный масштаб). Стоит рядом с кнопкой ⚙ настроек раскладки.
-pub(crate) fn scale_dropdown_for_tabs(
+/// Общая сборка дропдауна масштаба: единственные отличия вкладок и AddToChart-stack —
+/// набор id, размер триггера (`Micro`/`Toolbar`) и куда писать выбранный масштаб
+/// (`on_pick`). Визуал/тултип/лупа/«А» для Авто — общие.
+fn scale_dropdown(
     scale: Option<f32>,
-    tabs: Entity<crate::chart_tabs::ChartTabs>,
+    tip_id: &'static str,
+    dropdown_id: &'static str,
+    item_key_prefix: &'static str,
+    trigger_size: MoonButtonSize,
     p: MoonPalette,
+    on_pick: impl Fn(Option<f32>, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
     let selected_label = scale_label(scale);
     let mut items = Vec::with_capacity(SCALES.len());
     for (label, pct) in SCALES {
-        let tabs = tabs.clone();
+        let on_pick = on_pick.clone();
         items.push(
-            MoonMenuItem::with_key(format!("scale-tab-{label}"), label)
+            MoonMenuItem::with_key(format!("{item_key_prefix}-{label}"), label)
                 .selected(scale == pct)
                 .checked(scale == pct)
-                .on_click(move |_, _, cx| {
-                    tabs.update(cx, |t, tcx| t.pick_active_scale(pct, tcx));
-                }),
+                .on_click(move |_, _, cx| on_pick(pct, cx)),
         );
     }
 
+    // Лупа вместо слова «МАСШТАБ» + «А» для Авто (компактнее); подсказка «Масштаб» — тултипом.
     let trigger_val = if scale.is_none() {
         "А"
     } else {
         selected_label
     };
     div()
-        .id("tabs-scale-tip")
+        .id(tip_id)
         .tooltip(|_window, cx| {
             cx.new(|_| MoonTooltipView::new(t!("toolbar.scale").to_string()))
                 .into()
         })
         .child(
-            MoonDropdown::new("tabs-scale-dropdown")
+            MoonDropdown::new(dropdown_id)
                 .trigger_width(72.0)
                 .trigger_variant(MoonButtonVariant::Neutral)
-                .trigger_size(MoonButtonSize::Micro)
+                .trigger_size(trigger_size)
                 .menu_width(116.0)
                 .menu_size(MoonMenuSize::Compact)
                 .segment(
@@ -606,6 +624,24 @@ pub(crate) fn scale_dropdown_for_tabs(
         )
 }
 
+pub(crate) fn scale_dropdown_for_tabs(
+    scale: Option<f32>,
+    tabs: Entity<crate::chart_tabs::ChartTabs>,
+    p: MoonPalette,
+) -> impl IntoElement {
+    scale_dropdown(
+        scale,
+        "tabs-scale-tip",
+        "tabs-scale-dropdown",
+        "scale-tab",
+        MoonButtonSize::Micro,
+        p,
+        move |pct, cx| {
+            tabs.update(cx, |t, tcx| t.pick_active_scale(pct, tcx));
+        },
+    )
+}
+
 /// Дропдаун масштаба для AddToChart-stack: пишет масштаб во все отдельные ChartPanel внутри
 /// stack-а. Это сохраняет Delphi-модель "один график = одна сущность", но управление масштабом
 /// остаётся единым для окна/вкладки.
@@ -614,51 +650,17 @@ pub(crate) fn scale_dropdown_for_add_stack(
     stack: Entity<crate::chart_tabs::AddChartStack>,
     p: MoonPalette,
 ) -> impl IntoElement {
-    let selected_label = scale_label(scale);
-    let mut items = Vec::with_capacity(SCALES.len());
-    for (label, pct) in SCALES {
-        let stack = stack.clone();
-        items.push(
-            MoonMenuItem::with_key(format!("scale-stack-{label}"), label)
-                .selected(scale == pct)
-                .checked(scale == pct)
-                .on_click(move |_, _, cx| {
-                    stack.update(cx, |st, scx| st.set_scale(pct, scx));
-                }),
-        );
-    }
-
-    // Лупа вместо слова «МАСШТАБ» + «А» для Авто (компактнее); подсказка «Масштаб» — тултипом.
-    let trigger_val = if scale.is_none() {
-        "А"
-    } else {
-        selected_label
-    };
-    div()
-        .id("detached-stack-scale-tip")
-        .tooltip(|_window, cx| {
-            cx.new(|_| MoonTooltipView::new(t!("toolbar.scale").to_string()))
-                .into()
-        })
-        .child(
-            MoonDropdown::new("detached-stack-scale-dropdown")
-                .trigger_width(72.0)
-                .trigger_variant(MoonButtonVariant::Neutral)
-                .trigger_size(MoonButtonSize::Toolbar)
-                .menu_width(116.0)
-                .menu_size(MoonMenuSize::Compact)
-                .segment(
-                    MoonButtonSegment::new("🔍")
-                        .color(p.text_muted)
-                        .weight(400.0),
-                )
-                .segment(
-                    MoonButtonSegment::new(trigger_val)
-                        .color(p.text)
-                        .weight(500.0),
-                )
-                .items(items),
-        )
+    scale_dropdown(
+        scale,
+        "detached-stack-scale-tip",
+        "detached-stack-scale-dropdown",
+        "scale-stack",
+        MoonButtonSize::Toolbar,
+        p,
+        move |pct, cx| {
+            stack.update(cx, |st, scx| st.set_scale(pct, scx));
+        },
+    )
 }
 
 /// Полоса тулбара: рисуется как обычный child `Shell` (между шапкой и доком), не dock-панель.

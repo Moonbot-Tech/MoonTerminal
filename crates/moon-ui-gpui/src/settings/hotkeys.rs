@@ -669,74 +669,52 @@ fn parse_hotkey(raw: &str) -> Option<Keystroke> {
     }
 }
 
+/// Единый список «слот → поле `HotkeysConfig`»: геттер и сеттер раньше дублировали 30
+/// строк маппинга (одну под `&`, другую под `&mut`). Макрос держит список в одном месте;
+/// `$($brw)+` принимает `&` или `&mut`, исчерпывающий match по-прежнему проверяет компилятор.
+macro_rules! hotkey_field {
+    ($hotkeys:ident, $slot:expr, $($brw:tt)+) => {
+        match $slot {
+            HotkeySlot::OrderSize(i) => $($brw)+ $hotkeys.order_size[i],
+            HotkeySlot::SellPreset(i) => $($brw)+ $hotkeys.sell_preset[i],
+            HotkeySlot::ManualStrategy(i) => $($brw)+ $hotkeys.manual_strategy[i],
+            HotkeySlot::CancelBuy => $($brw)+ $hotkeys.cancel_buy,
+            HotkeySlot::PanicSell => $($brw)+ $hotkeys.panic_sell,
+            HotkeySlot::PanicSellOne => $($brw)+ $hotkeys.panic_sell_one,
+            HotkeySlot::CancelAllBuys => $($brw)+ $hotkeys.cancel_all_buys,
+            HotkeySlot::JoinSells => $($brw)+ $hotkeys.join_sells,
+            HotkeySlot::SwitchCharts => $($brw)+ $hotkeys.switch_charts,
+            HotkeySlot::ReloadBook => $($brw)+ $hotkeys.reload_book,
+            HotkeySlot::NewLong => $($brw)+ $hotkeys.new_long,
+            HotkeySlot::NewShort => $($brw)+ $hotkeys.new_short,
+            HotkeySlot::SplitOrder => $($brw)+ $hotkeys.split_order,
+            HotkeySlot::SplitOrderX => $($brw)+ $hotkeys.split_order_x,
+            HotkeySlot::ShiftBuyUp => $($brw)+ $hotkeys.shift_buy_up,
+            HotkeySlot::ShiftBuyDown => $($brw)+ $hotkeys.shift_buy_down,
+            HotkeySlot::ShiftSellUp => $($brw)+ $hotkeys.shift_sell_up,
+            HotkeySlot::ShiftSellDown => $($brw)+ $hotkeys.shift_sell_down,
+            HotkeySlot::MakeShot => $($brw)+ $hotkeys.make_shot,
+            HotkeySlot::MakeShotBot => $($brw)+ $hotkeys.make_shot_bot,
+            HotkeySlot::ReloadChart => $($brw)+ $hotkeys.reload_chart,
+            HotkeySlot::ScalePlus => $($brw)+ $hotkeys.scale_plus,
+            HotkeySlot::ScaleMinus => $($brw)+ $hotkeys.scale_minus,
+            HotkeySlot::SellPlus => $($brw)+ $hotkeys.sell_plus,
+            HotkeySlot::SellMinus => $($brw)+ $hotkeys.sell_minus,
+            HotkeySlot::SpyMode => $($brw)+ $hotkeys.spy_mode,
+            HotkeySlot::ShowCharts => $($brw)+ $hotkeys.show_charts,
+            HotkeySlot::SwitchFigure => $($brw)+ $hotkeys.switch_figure,
+            HotkeySlot::FitSells => $($brw)+ $hotkeys.fit_sells,
+            HotkeySlot::Broadcast => $($brw)+ $hotkeys.broadcast,
+        }
+    };
+}
+
 fn slot_value(hotkeys: &HotkeysConfig, slot: HotkeySlot) -> &str {
-    match slot {
-        HotkeySlot::OrderSize(i) => &hotkeys.order_size[i],
-        HotkeySlot::SellPreset(i) => &hotkeys.sell_preset[i],
-        HotkeySlot::ManualStrategy(i) => &hotkeys.manual_strategy[i],
-        HotkeySlot::CancelBuy => &hotkeys.cancel_buy,
-        HotkeySlot::PanicSell => &hotkeys.panic_sell,
-        HotkeySlot::PanicSellOne => &hotkeys.panic_sell_one,
-        HotkeySlot::CancelAllBuys => &hotkeys.cancel_all_buys,
-        HotkeySlot::JoinSells => &hotkeys.join_sells,
-        HotkeySlot::SwitchCharts => &hotkeys.switch_charts,
-        HotkeySlot::ReloadBook => &hotkeys.reload_book,
-        HotkeySlot::NewLong => &hotkeys.new_long,
-        HotkeySlot::NewShort => &hotkeys.new_short,
-        HotkeySlot::SplitOrder => &hotkeys.split_order,
-        HotkeySlot::SplitOrderX => &hotkeys.split_order_x,
-        HotkeySlot::ShiftBuyUp => &hotkeys.shift_buy_up,
-        HotkeySlot::ShiftBuyDown => &hotkeys.shift_buy_down,
-        HotkeySlot::ShiftSellUp => &hotkeys.shift_sell_up,
-        HotkeySlot::ShiftSellDown => &hotkeys.shift_sell_down,
-        HotkeySlot::MakeShot => &hotkeys.make_shot,
-        HotkeySlot::MakeShotBot => &hotkeys.make_shot_bot,
-        HotkeySlot::ReloadChart => &hotkeys.reload_chart,
-        HotkeySlot::ScalePlus => &hotkeys.scale_plus,
-        HotkeySlot::ScaleMinus => &hotkeys.scale_minus,
-        HotkeySlot::SellPlus => &hotkeys.sell_plus,
-        HotkeySlot::SellMinus => &hotkeys.sell_minus,
-        HotkeySlot::SpyMode => &hotkeys.spy_mode,
-        HotkeySlot::ShowCharts => &hotkeys.show_charts,
-        HotkeySlot::SwitchFigure => &hotkeys.switch_figure,
-        HotkeySlot::FitSells => &hotkeys.fit_sells,
-        HotkeySlot::Broadcast => &hotkeys.broadcast,
-    }
+    hotkey_field!(hotkeys, slot, &)
 }
 
 fn set_slot_value(hotkeys: &mut HotkeysConfig, slot: HotkeySlot, value: String) -> bool {
-    let target = match slot {
-        HotkeySlot::OrderSize(i) => &mut hotkeys.order_size[i],
-        HotkeySlot::SellPreset(i) => &mut hotkeys.sell_preset[i],
-        HotkeySlot::ManualStrategy(i) => &mut hotkeys.manual_strategy[i],
-        HotkeySlot::CancelBuy => &mut hotkeys.cancel_buy,
-        HotkeySlot::PanicSell => &mut hotkeys.panic_sell,
-        HotkeySlot::PanicSellOne => &mut hotkeys.panic_sell_one,
-        HotkeySlot::CancelAllBuys => &mut hotkeys.cancel_all_buys,
-        HotkeySlot::JoinSells => &mut hotkeys.join_sells,
-        HotkeySlot::SwitchCharts => &mut hotkeys.switch_charts,
-        HotkeySlot::ReloadBook => &mut hotkeys.reload_book,
-        HotkeySlot::NewLong => &mut hotkeys.new_long,
-        HotkeySlot::NewShort => &mut hotkeys.new_short,
-        HotkeySlot::SplitOrder => &mut hotkeys.split_order,
-        HotkeySlot::SplitOrderX => &mut hotkeys.split_order_x,
-        HotkeySlot::ShiftBuyUp => &mut hotkeys.shift_buy_up,
-        HotkeySlot::ShiftBuyDown => &mut hotkeys.shift_buy_down,
-        HotkeySlot::ShiftSellUp => &mut hotkeys.shift_sell_up,
-        HotkeySlot::ShiftSellDown => &mut hotkeys.shift_sell_down,
-        HotkeySlot::MakeShot => &mut hotkeys.make_shot,
-        HotkeySlot::MakeShotBot => &mut hotkeys.make_shot_bot,
-        HotkeySlot::ReloadChart => &mut hotkeys.reload_chart,
-        HotkeySlot::ScalePlus => &mut hotkeys.scale_plus,
-        HotkeySlot::ScaleMinus => &mut hotkeys.scale_minus,
-        HotkeySlot::SellPlus => &mut hotkeys.sell_plus,
-        HotkeySlot::SellMinus => &mut hotkeys.sell_minus,
-        HotkeySlot::SpyMode => &mut hotkeys.spy_mode,
-        HotkeySlot::ShowCharts => &mut hotkeys.show_charts,
-        HotkeySlot::SwitchFigure => &mut hotkeys.switch_figure,
-        HotkeySlot::FitSells => &mut hotkeys.fit_sells,
-        HotkeySlot::Broadcast => &mut hotkeys.broadcast,
-    };
+    let target = hotkey_field!(hotkeys, slot, &mut);
     if *target == value {
         false
     } else {

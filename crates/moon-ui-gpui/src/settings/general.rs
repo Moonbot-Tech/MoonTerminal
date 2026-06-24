@@ -32,18 +32,44 @@ impl SettingsView {
         }
     }
 
+    /// Дефолт секунд при ВКЛючении авто-закрытия Main по неактивности (чекбокс 0↔дефолт).
+    const IDLE_DEFAULT_SECS: u32 = 120;
+
+    /// Изменить таймаут авто-закрытия Main (клампим 5..=3600), правит draft. Активно только
+    /// когда фича включена (значение > 0).
+    fn adjust_idle(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let changed = self.backend.update(cx, |b, bcx| {
+            let mut changed = false;
+            if let Some(p) = b.preview.as_mut() {
+                if p.main_idle_close_secs > 0 {
+                    let v = (p.main_idle_close_secs as i32 + delta).clamp(5, 3600) as u32;
+                    if p.main_idle_close_secs != v {
+                        p.main_idle_close_secs = v;
+                        bcx.notify();
+                        changed = true;
+                    }
+                }
+            }
+            changed
+        });
+        if changed {
+            cx.notify();
+        }
+    }
+
     /// Вкладка «Общие» — порт egui `settings/general.rs` точь-в-точь: язык (выпадающий
     /// список) + хинт; разделитель; чекбокс «чарт-вкладка на ядро» + хинт; разделитель;
     /// чекбокс «писать лог в файлы» + хинт; срок хранения (число) + хинт.
     pub(super) fn general_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
-        let (split, scz, logf, ret) = {
+        let (split, scz, idle_secs, logf, ret) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             (
                 d.charts_split_by_core,
                 d.separate_control_zones,
+                d.main_idle_close_secs,
                 d.log_to_file,
                 d.log_retention_days,
             )
@@ -99,6 +125,73 @@ impl SettingsView {
                 .size(MoonCheckboxSize::Normal),
             )
             .child(hint(&t!("general.separate_control_zones_hint")))
+            .child(super::separator(p, cx))
+            // Авто-закрытие графиков Main при неактивности окна (чекбокс 0↔дефолт + счётчик сек).
+            .child(
+                self.draft_checkbox(cx, "idle-close", idle_secs > 0, |p, v| {
+                    let want = if v { Self::IDLE_DEFAULT_SECS } else { 0 };
+                    // Вкл при уже выставленном значении не сбрасываем; выкл = 0.
+                    let target = if v && p.main_idle_close_secs > 0 {
+                        p.main_idle_close_secs
+                    } else {
+                        want
+                    };
+                    if p.main_idle_close_secs != target {
+                        p.main_idle_close_secs = target;
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .label(t!("general.main_idle_close").to_string())
+                .size(MoonCheckboxSize::Normal),
+            )
+            .child(
+                h_flex()
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(if idle_secs > 0 {
+                                rgba_from(p.text, 1.0)
+                            } else {
+                                muted
+                            })
+                            .child(t!("general.main_idle_close_secs").to_string()),
+                    )
+                    .child(
+                        MoonButton::new("idle-")
+                            .ghost()
+                            .size(MoonButtonSize::Micro)
+                            .width(24.0)
+                            .label("-")
+                            .disabled(idle_secs == 0)
+                            .on_click(cx.listener(|this, _, _, cx| this.adjust_idle(-10, cx)))
+                            .render(),
+                    )
+                    .child(
+                        div()
+                            .w(px(64.0))
+                            .text_center()
+                            .text_color(if idle_secs > 0 {
+                                rgba_from(p.text, 1.0)
+                            } else {
+                                muted
+                            })
+                            .child(format!("{idle_secs} {}", t!("general.seconds"))),
+                    )
+                    .child(
+                        MoonButton::new("idle+")
+                            .ghost()
+                            .size(MoonButtonSize::Micro)
+                            .width(24.0)
+                            .label("+")
+                            .disabled(idle_secs == 0)
+                            .on_click(cx.listener(|this, _, _, cx| this.adjust_idle(10, cx)))
+                            .render(),
+                    ),
+            )
+            .child(hint(&t!("general.main_idle_close_hint")))
             .child(super::separator(p, cx))
             // Раскладка стека (FIT/SCROLL/COMPRESS + высота) теперь per-вкладка — кнопка ⚙
             // в полоске вкладок / шапке выносного окна (см. chart_tabs::layout_popup).

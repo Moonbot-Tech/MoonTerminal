@@ -26,6 +26,22 @@ general.separate_control_zones_hint:
   ru: "Вкл — выставлять ордера и двигать линии можно ТОЛЬКО в зоне стакана; выкл — по всей области графика."
   en: "On — orders can be placed and lines dragged ONLY in the order-book zone; off — anywhere on the chart."
   es: "Act — las órdenes y el arrastre de líneas SOLO en la zona del libro de órdenes; des — en todo el gráfico."
+general.main_idle_close:
+  ru: "Автозакрытие графиков Main при неактивности"
+  en: "Auto-close Main charts when idle"
+  es: "Cierre automático de gráficos Main al estar inactivo"
+general.main_idle_close_secs:
+  ru: "Закрывать через, сек"
+  en: "Close after, sec"
+  es: "Cerrar tras, seg"
+general.main_idle_close_hint:
+  ru: "Неактивность = окно Main не в фокусе ЛИБО в фокусе, но мышь не двигается. Каждый график закрывается через N сек своей неактивности (недавно открытый — последним); фулскрин тоже закроется и режим выключится. Подписки на стакан снимаются сразу."
+  en: "Idle = the Main window is not focused OR focused but the mouse is not moving. Each chart closes after N seconds of its own inactivity (the most recently opened closes last); a fullscreen chart closes too and exits fullscreen. Order-book subscriptions are dropped immediately."
+  es: "Inactivo = la ventana Main no está enfocada O está enfocada pero el ratón no se mueve. Cada gráfico se cierra tras N segundos de su propia inactividad (el más reciente, el último); el de pantalla completa también se cierra y sale del modo. Las suscripciones al libro de órdenes se cancelan de inmediato."
+general.seconds:
+  ru: "сек"
+  en: "sec"
+  es: "seg"
 general.charts_scroll:
   ru: "Показывать графики со скроллом"
   en: "Show charts with scrolling"

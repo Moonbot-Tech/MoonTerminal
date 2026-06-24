@@ -11,6 +11,9 @@ mod logic;
 mod params;
 mod rules;
 mod tree;
+mod tree_dialogs;
+mod tree_dnd;
+mod tree_menu;
 mod tree_ops;
 mod tree_ui;
 

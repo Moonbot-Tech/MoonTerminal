@@ -239,6 +239,11 @@ struct Backend {
     /// окна группы закрывает принадлежащие ей откреп-чарты; при закрытии самого откреп-окна
     /// чистится по window_id. (Отдельно от `detached` — то про dock-панели, это про чарты.)
     detached_chart_windows: Vec<(String, WindowHandle<Root>)>,
+    /// Время последнего «активного» ввода главного окна группы (движение мыши при фокусе),
+    /// по группе. Авто-закрытие Main по неактивности (config `main_idle_close_secs`) меряет
+    /// от него: окно теряет фокус / мышь не двигается → значение «замораживается», и графики
+    /// закроются через N сек. Обновляется только при активном окне (см. Shell on_mouse_move).
+    last_main_input: std::collections::HashMap<String, std::time::Instant>,
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
     debug_window: Option<WindowHandle<Root>>,
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
@@ -427,6 +432,27 @@ impl Backend {
 
     fn main_chart_target(&self, group: &str) -> Option<(CoreId, String)> {
         self.main_chart_targets.get(group).cloned()
+    }
+
+    /// Отметить «активный» ввод в главном окне группы (движение мыши при сфокусированном окне).
+    /// Сбрасывает таймер авто-закрытия Main по неактивности. Зовётся из Shell on_mouse_move
+    /// ТОЛЬКО когда окно активно.
+    pub(crate) fn note_main_input(&mut self, group: &str) {
+        self.last_main_input
+            .insert(group.to_string(), std::time::Instant::now());
+    }
+
+    /// Время последнего активного ввода в главном окне группы (для авто-закрытия по неактивности).
+    pub(crate) fn main_input_at(&self, group: &str) -> Option<std::time::Instant> {
+        self.last_main_input.get(group).copied()
+    }
+
+    /// Авто-закрытие Main по неактивности, сек (config; 0 = выключено).
+    pub(crate) fn main_idle_close_secs(&self) -> u32 {
+        self.preview
+            .as_ref()
+            .unwrap_or(&self.config)
+            .main_idle_close_secs
     }
 
     /// Активное торговое ядро группы для шапки/тулбара: sticky-override (ручной выбор в
@@ -789,6 +815,7 @@ fn main() -> anyhow::Result<()> {
             chart_repin_request: Vec::new(),
             chart_apply_all: Vec::new(),
             detached_chart_windows: Vec::new(),
+            last_main_input: std::collections::HashMap::new(),
             #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
             debug_window: None,
             #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]

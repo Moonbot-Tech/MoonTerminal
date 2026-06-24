@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use moonproto::state::{
-    LastPricePoint, MarkPricePoint, OrderBookKind, SeqRingCursor, TradeHistoryRow,
+    LastPricePoint, MarkPricePoint, OrderBookKind, SeqRingCursor, SeqRingReader, SeqRingTimedRow,
+    TradeHistoryRow,
 };
 use moonproto::MoonTime;
 
@@ -666,55 +667,33 @@ impl MarketDataSource {
         }
 
         if let Some(reader) = readers.last_prices {
-            read.price_line_capacity = read.price_line_capacity.max(reader.capacity());
-            let reset = force_reset || cursor.last_prices.is_none();
-            let mut changed = reset;
-            if reset {
-                cursor.last_prices = Some(reader.cursor_from_now());
-            } else if let Some(cur) = cursor.last_prices.as_mut() {
-                let meta =
-                    reader.drain_new_bounded(cur, reader.capacity(), &mut cursor.last_price_rows);
-                read.clipped |= meta.clipped;
-                read.caught_up &= meta.caught_up;
-                changed = meta.copied > 0 || meta.clipped;
-            }
-            if changed {
-                reader.copy_time_range(
-                    from_time,
-                    to_time,
-                    reader.capacity(),
-                    &mut cursor.last_price_rows,
-                );
-                last_rows_to_points(&cursor.last_price_rows, &mut out.last_points);
-                read.price_lines_changed = true;
-            }
+            drain_price_line(
+                &reader,
+                from_time,
+                to_time,
+                force_reset,
+                &mut cursor.last_prices,
+                &mut cursor.last_price_rows,
+                &mut out.last_points,
+                &mut read,
+                last_rows_to_points,
+            );
         } else {
             cursor.last_prices = None;
         }
 
         if let Some(reader) = readers.mark_prices {
-            read.price_line_capacity = read.price_line_capacity.max(reader.capacity());
-            let reset = force_reset || cursor.mark_prices.is_none();
-            let mut changed = reset;
-            if reset {
-                cursor.mark_prices = Some(reader.cursor_from_now());
-            } else if let Some(cur) = cursor.mark_prices.as_mut() {
-                let meta =
-                    reader.drain_new_bounded(cur, reader.capacity(), &mut cursor.mark_price_rows);
-                read.clipped |= meta.clipped;
-                read.caught_up &= meta.caught_up;
-                changed = meta.copied > 0 || meta.clipped;
-            }
-            if changed {
-                reader.copy_time_range(
-                    from_time,
-                    to_time,
-                    reader.capacity(),
-                    &mut cursor.mark_price_rows,
-                );
-                mark_rows_to_points(&cursor.mark_price_rows, &mut out.mark_points);
-                read.price_lines_changed = true;
-            }
+            drain_price_line(
+                &reader,
+                from_time,
+                to_time,
+                force_reset,
+                &mut cursor.mark_prices,
+                &mut cursor.mark_price_rows,
+                &mut out.mark_points,
+                &mut read,
+                mark_rows_to_points,
+            );
         } else {
             cursor.mark_prices = None;
         }
@@ -742,6 +721,40 @@ impl MarketDataSource {
 
 fn moon_time_from_rel_ms(epoch_ms: f64, rel_ms: f32) -> MoonTime {
     MoonTime::from_unix_millis((epoch_ms + rel_ms as f64).round() as i64)
+}
+
+/// Дренаж линии цены (last/mark) — обе ветви идентичны по структуре, отличаются лишь
+/// курсором/буфером/выходом/конвертером. reset|первый вызов → ставим курсор «от сейчас»;
+/// иначе тянем новое (clipped/caught_up копятся в `read`); при изменении — копируем видимый
+/// диапазон и конвертируем в точки. Вызывается только когда ридер существует.
+#[allow(clippy::too_many_arguments)]
+fn drain_price_line<R: SeqRingTimedRow>(
+    reader: &SeqRingReader<R>,
+    from_time: MoonTime,
+    to_time: MoonTime,
+    force_reset: bool,
+    cursor_slot: &mut Option<SeqRingCursor>,
+    rows: &mut Vec<R>,
+    out: &mut Vec<PricePoint>,
+    read: &mut ChartHistoryRead,
+    convert: impl Fn(&[R], &mut Vec<PricePoint>),
+) {
+    read.price_line_capacity = read.price_line_capacity.max(reader.capacity());
+    let reset = force_reset || cursor_slot.is_none();
+    let mut changed = reset;
+    if reset {
+        *cursor_slot = Some(reader.cursor_from_now());
+    } else if let Some(cur) = cursor_slot.as_mut() {
+        let meta = reader.drain_new_bounded(cur, reader.capacity(), rows);
+        read.clipped |= meta.clipped;
+        read.caught_up &= meta.caught_up;
+        changed = meta.copied > 0 || meta.clipped;
+    }
+    if changed {
+        reader.copy_time_range(from_time, to_time, reader.capacity(), rows);
+        convert(rows, out);
+        read.price_lines_changed = true;
+    }
 }
 
 fn rows_to_ticks(rows: &[TradeHistoryRow], out: &mut Vec<Tick>) {

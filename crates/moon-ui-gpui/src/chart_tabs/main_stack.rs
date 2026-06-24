@@ -2,6 +2,8 @@
 //! fullscreen, ПКМ по области панели графика разворачивает весь stack. Вынесено из `chart_tabs` как
 //! самостоятельная вью-модель; общий рендер стека — в [`super::stack`].
 
+use std::time::{Duration, Instant};
+
 use gpui::*;
 use moon_ui::MoonVirtualListScrollHandle;
 
@@ -36,6 +38,9 @@ pub(crate) struct MainChartStack {
     layout_height_scroll: Option<u16>,
     /// Показывать ли стакан на графиках вкладки (per-окно). None = дефолт (вкл).
     orderbook_enabled: Option<bool>,
+    /// Армирован ли one-shot таймер авто-закрытия по неактивности (config `main_idle_close_secs`).
+    /// Тикает ~1 Гц, пока фича включена и есть графики; сам пере-армится. См. `arm_idle_timer`.
+    idle_timer_armed: bool,
     scroll: MoonVirtualListScrollHandle,
 }
 
@@ -61,6 +66,7 @@ impl MainChartStack {
             layout_height_fit: None,
             layout_height_scroll: None,
             orderbook_enabled: None,
+            idle_timer_armed: false,
             scroll: MoonVirtualListScrollHandle::new(),
         };
         if let Some((core, market)) = focus_open {
@@ -140,6 +146,83 @@ impl MainChartStack {
                 .or_else(|| Some(self.active.unwrap_or(0).min(self.charts.len() - 1)));
         }
         changed
+    }
+
+    /// Армировать (если ещё нет) one-shot таймер авто-закрытия по неактивности. Тикает ~1 Гц,
+    /// пока фича включена (config `main_idle_close_secs` > 0) и есть графики; сам пере-армится
+    /// в колбэке. Зовётся из render — поэтому стартует и при включении фичи на лету.
+    fn arm_idle_timer(&mut self, cx: &mut Context<Self>) {
+        if self.idle_timer_armed
+            || self.charts.is_empty()
+            || self.backend.read(cx).main_idle_close_secs() == 0
+        {
+            return;
+        }
+        self.idle_timer_armed = true;
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(Duration::from_secs(1)).await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    this.idle_timer_armed = false;
+                    this.prune_idle(cx);
+                    this.arm_idle_timer(cx);
+                })
+                .is_ok()
+            });
+        })
+        .detach();
+    }
+
+    /// Авто-закрытие графиков по неактивности окна (config `main_idle_close_secs`, сек). Дедлайн
+    /// графика = max(последний активный ввод окна, время его прихода) + N → новейший закрывается
+    /// последним; ровно N сек после начала неактивности для уже открытых. Если закрылся активный
+    /// фулскрин-график — выходим из фулскрина (оставшиеся показываем стеком). Закрытие сразу
+    /// отписывает стаканы (через `close_all_panes` панели). Возвращает, было ли изменение.
+    fn prune_idle(&mut self, cx: &mut Context<Self>) -> bool {
+        let secs = self.backend.read(cx).main_idle_close_secs();
+        if secs == 0 || self.charts.is_empty() {
+            return false;
+        }
+        let ttl = Duration::from_secs(secs as u64);
+        let last_input = self.backend.read(cx).main_input_at(&self.group);
+        let now = Instant::now();
+        let expired: Vec<usize> = self
+            .charts
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                let base = match last_input {
+                    Some(t) => t.max(e.arrived_at),
+                    None => e.arrived_at,
+                };
+                now.duration_since(base) >= ttl
+            })
+            .map(|(ix, _)| ix)
+            .collect();
+        if expired.is_empty() {
+            return false;
+        }
+        let active_closed = self.active.is_some_and(|a| expired.contains(&a));
+        // С конца, чтобы индексы не съезжали; перед удалением закрываем панель (отписка стаканов).
+        for &ix in expired.iter().rev() {
+            let entry = self.charts.remove(ix);
+            entry.panel.update(cx, |p, pcx| p.close_all_panes(pcx));
+        }
+        if self.charts.is_empty() {
+            self.active = None;
+            self.show_stack = false;
+        } else {
+            // Активный закрылся в фулскрине → выходим из фулскрина, показываем оставшиеся стеком.
+            if active_closed && !self.show_stack {
+                self.show_stack = true;
+            }
+            self.active = Some(self.active.unwrap_or(0).min(self.charts.len() - 1));
+        }
+        self.sync_visibility(cx);
+        self.sync_backend_active(cx);
+        cx.notify();
+        true
     }
 
     pub(crate) fn scale(&self) -> Option<f32> {
@@ -328,6 +411,8 @@ impl MainChartStack {
 
 impl Render for MainChartStack {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Запустить (если надо) таймер авто-закрытия по неактивности — идемпотентно, дёшево.
+        self.arm_idle_timer(cx);
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
             return div()

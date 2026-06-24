@@ -87,6 +87,10 @@ pub(crate) struct Shell {
     /// другого не сфокусировано (пустой Main). Фокусируем на старте; клик по чарту/инпуту
     /// уводит фокус туда, но F-клавиши всплывают обратно к корню.
     focus: FocusHandle,
+    /// Активно ли (в фокусе) это ОС-окно. Авто-закрытие Main по неактивности обновляет
+    /// «активность» (`Backend::note_main_input`) ТОЛЬКО когда окно активно: иначе движение
+    /// мыши над неактивным окном не должно сбрасывать таймер. Ставится observe_window_activation.
+    window_active: bool,
 }
 
 impl Shell {
@@ -272,6 +276,18 @@ impl Shell {
         })
         .detach();
 
+        // Активность окна для авто-закрытия Main по неактивности: пока окно НЕ в фокусе,
+        // движение мыши над ним не считается активностью (таймер неактивности тикает). При
+        // получении фокуса засчитываем активность, чтобы не закрыть графики сразу после возврата.
+        cx.observe_window_activation(window, |this, window, cx| {
+            this.window_active = window.is_window_active();
+            if this.window_active {
+                let group = this.group.clone();
+                this.backend.update(cx, |b, _| b.note_main_input(&group));
+            }
+        })
+        .detach();
+
         // Инпут инлайн-редактирования размера ордера (дабл-клик по кнопке F1-F6). По Blur
         // (клик вне) или Enter — пишем значение в `ServerConfig.order_sizes` фокусного ядра
         // и сохраняем на диск (config.save). Пустой/нечисловой ввод — отмена без записи.
@@ -365,87 +381,19 @@ impl Shell {
         let sl_input = cx.new(|cx| MoonInputState::new(window, cx));
         let lev_input = cx.new(|cx| MoonInputState::new(window, cx));
 
-        // Слайдеры: на каждое изменение шлём правку активному ядру И обновляем поле попапа
-        // (живой numeric-фидбэк). moonproto коалесит pending settings → драг не штормит провод.
-        cx.subscribe(&tp_slider_normal, |this, _e, ev: &MoonSliderEvent, cx| {
-            if let MoonSliderEvent::Change(v) = ev {
-                let v = v.end();
-                this.commit_client_edit(
-                    ClientSettingsEdit::TakeProfit {
-                        pct: v as f64,
-                        extended: false,
-                    },
-                    cx,
-                );
-                this.live_set_field(this.tp_input.clone(), controls::fmt_field2(v), cx);
-                // Верхний дошёл до минимума (2) → нижний (файн) становится активным и равным 2.
-                if v <= controls::TP_FINE_MAX {
-                    this.defer_set_slider(this.tp_fine_slider.clone(), controls::TP_FINE_MAX, cx);
-                }
-            }
-        })
-        .detach();
-        cx.subscribe(&tp_slider_ext, |this, _e, ev: &MoonSliderEvent, cx| {
-            if let MoonSliderEvent::Change(v) = ev {
-                let v = v.end();
-                this.commit_client_edit(
-                    ClientSettingsEdit::TakeProfit {
-                        pct: v as f64,
-                        extended: true,
-                    },
-                    cx,
-                );
-                this.live_set_field(this.tp_input.clone(), controls::fmt_field2(v), cx);
-            }
-        })
-        .detach();
-        cx.subscribe(&sl_slider, |this, _e, ev: &MoonSliderEvent, cx| {
-            if let MoonSliderEvent::Change(v) = ev {
-                let v = v.end();
-                this.commit_client_edit(ClientSettingsEdit::StopLossPct(v), cx);
-                this.live_set_field(this.sl_input.clone(), controls::fmt_field2_signed(v), cx);
-            }
-        })
-        .detach();
-        cx.subscribe(&lev_slider, |this, _e, ev: &MoonSliderEvent, cx| {
-            if let MoonSliderEvent::Change(v) = ev {
-                let v = v.end();
-                this.commit_lev_edit(LevManageEdit::FixLev(v as i32), cx);
-                this.live_set_field(this.lev_input.clone(), format!("{}", v as i32), cx);
-            }
-        })
-        .detach();
-
-        // Поля ввода: коммит по Blur/Enter (точное значение). Пустой/нечисловой ввод — игнор.
-        // TP читает текущий режим x_tmode активного ядра, чтобы отправить правку в тот же диапазон.
-        cx.subscribe(&tp_input, |this, inp, ev: &MoonInputEvent, cx| {
-            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
-                return;
-            }
-            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
-                let extended = this.active_tp_extended(cx);
-                this.commit_client_edit(ClientSettingsEdit::TakeProfit { pct: v, extended }, cx);
-            }
-        })
-        .detach();
-        cx.subscribe(&sl_input, |this, inp, ev: &MoonInputEvent, cx| {
-            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
-                return;
-            }
-            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f32>() {
-                this.commit_client_edit(ClientSettingsEdit::StopLossPct(v), cx);
-            }
-        })
-        .detach();
-        cx.subscribe(&lev_input, |this, inp, ev: &MoonInputEvent, cx| {
-            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
-                return;
-            }
-            if let Ok(v) = inp.read(cx).value().trim().parse::<i32>() {
-                this.commit_lev_edit(LevManageEdit::FixLev(v), cx);
-            }
-        })
-        .detach();
+        // Слайдеры/поля метрик: на изменение шлём правку активному ядру и держим numeric-поле
+        // попапа в синхроне. Вынесено в `wire_metric_subscriptions` — в `new` это ~80 строк
+        // повторяющегося плумбинга подписок.
+        Self::wire_metric_subscriptions(
+            cx,
+            &tp_slider_normal,
+            &tp_slider_ext,
+            &sl_slider,
+            &lev_slider,
+            &tp_input,
+            &sl_input,
+            &lev_input,
+        );
 
         // Фокус корня окна для хоткеев (см. поле `focus`). Фокусируем сразу, чтобы F-клавиши
         // работали даже при пустом Main (когда фокусировать в доке нечего).
@@ -478,6 +426,7 @@ impl Shell {
             open_metric_popup: None,
             metric_popup_hovered: false,
             focus,
+            window_active: true,
         }
     }
 
@@ -531,43 +480,110 @@ impl Shell {
             });
         });
     }
-}
 
-impl Render for Shell {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        crate::diag::bump(&crate::diag::SHELL_RENDER);
-        let _order_count = panels::count_orders(self.backend.read(cx), &self.group);
+    /// Подписки слайдеров/полей попапов торговых метрик (TP/SL/Lev): на каждое изменение
+    /// шлём правку активному ядру и обновляем numeric-поле попапа. moonproto коалесит pending
+    /// settings → драг не штормит провод. Регистрируется из `new` (self ещё строится, поэтому
+    /// сущности приходят параметрами; `this` в замыканиях даёт сам `cx.subscribe`).
+    fn wire_metric_subscriptions(
+        cx: &mut Context<Self>,
+        tp_slider_normal: &Entity<MoonSliderState>,
+        tp_slider_ext: &Entity<MoonSliderState>,
+        sl_slider: &Entity<MoonSliderState>,
+        lev_slider: &Entity<MoonSliderState>,
+        tp_input: &Entity<MoonInputState>,
+        sl_input: &Entity<MoonInputState>,
+        lev_input: &Entity<MoonInputState>,
+    ) {
+        cx.subscribe(tp_slider_normal, |this, _e, ev: &MoonSliderEvent, cx| {
+            if let MoonSliderEvent::Change(v) = ev {
+                let v = v.end();
+                this.commit_client_edit(
+                    ClientSettingsEdit::TakeProfit {
+                        pct: v as f64,
+                        extended: false,
+                    },
+                    cx,
+                );
+                this.live_set_field(this.tp_input.clone(), controls::fmt_field2(v), cx);
+                // Верхний дошёл до минимума (2) → нижний (файн) становится активным и равным 2.
+                if v <= controls::TP_FINE_MAX {
+                    this.defer_set_slider(this.tp_fine_slider.clone(), controls::TP_FINE_MAX, cx);
+                }
+            }
+        })
+        .detach();
+        cx.subscribe(tp_slider_ext, |this, _e, ev: &MoonSliderEvent, cx| {
+            if let MoonSliderEvent::Change(v) = ev {
+                let v = v.end();
+                this.commit_client_edit(
+                    ClientSettingsEdit::TakeProfit {
+                        pct: v as f64,
+                        extended: true,
+                    },
+                    cx,
+                );
+                this.live_set_field(this.tp_input.clone(), controls::fmt_field2(v), cx);
+            }
+        })
+        .detach();
+        cx.subscribe(sl_slider, |this, _e, ev: &MoonSliderEvent, cx| {
+            if let MoonSliderEvent::Change(v) = ev {
+                let v = v.end();
+                this.commit_client_edit(ClientSettingsEdit::StopLossPct(v), cx);
+                this.live_set_field(this.sl_input.clone(), controls::fmt_field2_signed(v), cx);
+            }
+        })
+        .detach();
+        cx.subscribe(lev_slider, |this, _e, ev: &MoonSliderEvent, cx| {
+            if let MoonSliderEvent::Change(v) = ev {
+                let v = v.end();
+                this.commit_lev_edit(LevManageEdit::FixLev(v as i32), cx);
+                this.live_set_field(this.lev_input.clone(), format!("{}", v as i32), cx);
+            }
+        })
+        .detach();
 
-        // Header-данные (рынок/цена/conn). Чарт/ввод/оси — в ChartPanel.
-        // FPS рендера (сглаженный) — диагностика статус-бара (порт host.fps).
-        let now_inst = Instant::now();
-        if let Some(prev) = self.last_frame {
-            let dt = now_inst.duration_since(prev).as_secs_f32().max(1e-4);
-            self.fps = self.fps * 0.9 + (1.0 / dt) * 0.1;
-        }
-        self.last_frame = Some(now_inst);
-        let fps = self.fps;
+        // Поля ввода: коммит по Blur/Enter (точное значение). Пустой/нечисловой ввод — игнор.
+        // TP читает текущий режим x_tmode активного ядра, чтобы отправить правку в тот же диапазон.
+        cx.subscribe(tp_input, |this, inp, ev: &MoonInputEvent, cx| {
+            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                return;
+            }
+            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
+                let extended = this.active_tp_extended(cx);
+                this.commit_client_edit(ClientSettingsEdit::TakeProfit { pct: v, extended }, cx);
+            }
+        })
+        .detach();
+        cx.subscribe(sl_input, |this, inp, ev: &MoonInputEvent, cx| {
+            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                return;
+            }
+            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f32>() {
+                this.commit_client_edit(ClientSettingsEdit::StopLossPct(v), cx);
+            }
+        })
+        .detach();
+        cx.subscribe(lev_input, |this, inp, ev: &MoonInputEvent, cx| {
+            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                return;
+            }
+            if let Ok(v) = inp.read(cx).value().trim().parse::<i32>() {
+                this.commit_lev_edit(LevManageEdit::FixLev(v), cx);
+            }
+        })
+        .detach();
+    }
 
-        let (conn, license, snap, book_levels) = {
-            let b = self.backend.read(cx);
-            let conn = b.session.conn_summary_group(&self.group);
-            let license = b.session.license_summary_group(&self.group);
-            let snap = b.snap;
-            // Для статус-бара нужно лишь число уровней стакана текущего Main-чарта.
-            let book_levels = match b.main_chart_target(&self.group) {
-                Some((core, m)) => b.session.with_orderbook_view(core, &m, |data| {
-                    data.map(|(book, _)| book.len()).unwrap_or(0)
-                }),
-                None => 0,
-            };
-            (conn, license, snap, book_levels)
-        };
-        let chrome_width = f32::from(window.viewport_size().width);
-        let p = MoonPalette::active(cx);
-
-        // Overlay-попап активной метрики тулбара (TP/SL/Lev): абсолютный бокс под кнопкой +
-        // полноэкранный dismiss-слой (как попап раскладки чарта). Клик внутри не закрывает
-        // (stop_propagation), клик вне или увод мыши — закрывает.
+    /// Слой попапа активной метрики тулбара (TP/SL/Lev): сам попап (absolute, под кнопкой) +
+    /// полноэкранный dismiss-слой под ним. Возвращает `(попап, dismiss)` — оба `None`, если
+    /// попап закрыт. Вынесено из `render` (там это ~70 строк сборки оверлея).
+    fn metric_popup_layers(
+        &self,
+        p: MoonPalette,
+        cx: &mut Context<Self>,
+    ) -> (Option<AnyElement>, Option<AnyElement>) {
         let metric_overlay = self.open_metric_popup.map(|metric| {
             use controls::TradeMetric;
             let extended = self.active_tp_extended(cx);
@@ -623,6 +639,7 @@ impl Render for Shell {
                     }
                 }))
                 .child(content)
+                .into_any_element()
         });
         let metric_dismiss = self.open_metric_popup.map(|_| {
             div()
@@ -636,70 +653,126 @@ impl Render for Shell {
                         cx.stop_propagation();
                     }),
                 )
+                .into_any_element()
         });
+        (metric_overlay, metric_dismiss)
+    }
+
+    /// Обработка хоткея корня окна: F1-F6 = выбрать пресет размера активного ядра; S1-S6 =
+    /// выбрать fixed-sell слот (меняет TP); cancel_buy — отмена покупок Main. Гасит событие,
+    /// если хоткей совпал.
+    fn on_hotkey(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        let group = self.group.clone();
+        let handled = self.backend.update(cx, |b, bcx| {
+            // Фаза 1 (только чтение cfg): какой хоткей совпал. Сравниваем нажатую
+            // клавишу с каждым настроенным сочетанием (gpui Keystroke).
+            let (size_ix, sell_ix, is_cancel) = {
+                let cfg = b.preview.as_ref().unwrap_or(&b.config);
+                let pressed = |raw: &str| {
+                    let raw = raw.trim();
+                    !raw.is_empty() && matches!(Keystroke::parse(raw), Ok(k) if k == ev.keystroke)
+                };
+                let size_ix = cfg.hotkeys.order_size.iter().position(|r| pressed(r));
+                let sell_ix = cfg.hotkeys.sell_preset.iter().position(|r| pressed(r));
+                (size_ix, sell_ix, pressed(&cfg.hotkeys.cancel_buy))
+            };
+            // Фаза 2 (мутация): F1-F6 = выбрать пресет размера активного ядра; S1-S6 =
+            // выбрать fixed-sell слот (меняет TP); cancel_buy — отмена покупок Main.
+            if let Some(i) = size_ix {
+                match b.active_trade_core(&group) {
+                    Some(core) => {
+                        b.order_size_sel.insert(core, i);
+                        b.order_size_rev = b.order_size_rev.wrapping_add(1);
+                        bcx.notify();
+                        true
+                    }
+                    None => false,
+                }
+            } else if let Some(i) = sell_ix {
+                match b.active_trade_core(&group) {
+                    Some(core) => {
+                        if let Err(error) = b.session.edit_client_settings(
+                            core,
+                            ClientSettingsEdit::SelectFixedSellSlot(i + 1),
+                        ) {
+                            log::warn!("hotkey select fixed-sell slot failed: {error}");
+                        }
+                        true
+                    }
+                    None => false,
+                }
+            } else if is_cancel {
+                b.cancel_buy_for_main_chart(&group);
+                true
+            } else {
+                false
+            }
+        });
+        if handled {
+            cx.stop_propagation();
+        }
+    }
+}
+
+impl Render for Shell {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::SHELL_RENDER);
+        let _order_count = panels::count_orders(self.backend.read(cx), &self.group);
+
+        // Header-данные (рынок/цена/conn). Чарт/ввод/оси — в ChartPanel.
+        // FPS рендера (сглаженный) — диагностика статус-бара (порт host.fps).
+        let now_inst = Instant::now();
+        if let Some(prev) = self.last_frame {
+            let dt = now_inst.duration_since(prev).as_secs_f32().max(1e-4);
+            self.fps = self.fps * 0.9 + (1.0 / dt) * 0.1;
+        }
+        self.last_frame = Some(now_inst);
+        let fps = self.fps;
+
+        let (conn, license, snap, book_levels) = {
+            let b = self.backend.read(cx);
+            let conn = b.session.conn_summary_group(&self.group);
+            let license = b.session.license_summary_group(&self.group);
+            let snap = b.snap;
+            // Для статус-бара нужно лишь число уровней стакана текущего Main-чарта.
+            let book_levels = match b.main_chart_target(&self.group) {
+                Some((core, m)) => b.session.with_orderbook_view(core, &m, |data| {
+                    data.map(|(book, _)| book.len()).unwrap_or(0)
+                }),
+                None => 0,
+            };
+            (conn, license, snap, book_levels)
+        };
+        let chrome_width = f32::from(window.viewport_size().width);
+        let p = MoonPalette::active(cx);
+
+        // Overlay-попап активной метрики тулбара (TP/SL/Lev): абсолютный бокс под кнопкой +
+        // полноэкранный dismiss-слой (как попап раскладки чарта). Клик внутри не закрывает
+        // (stop_propagation), клик вне или увод мыши — закрывает.
+        let (metric_overlay, metric_dismiss) = self.metric_popup_layers(p, cx);
 
         v_flex()
             .size_full()
             .relative() // для absolute-позиционирования демо-попапа поверх дока
             // Фокусируемый корень → хоткеи (`on_key_down`) ловятся даже при пустом Main.
             .track_focus(&self.focus)
+            // Активность для авто-закрытия Main по неактивности: любое движение мыши при
+            // активном окне сбрасывает таймер. Без notify — это не визуальное изменение, лишь
+            // отметка времени (дёшево, хоть и часто). Неактивное окно движения не считает.
+            .on_mouse_move(cx.listener(|this, _e: &MouseMoveEvent, _window, cx| {
+                if this.window_active {
+                    let group = this.group.clone();
+                    this.backend.update(cx, |b, _| b.note_main_input(&group));
+                }
+            }))
             // НЕТ корневого .bg(): чарт-регион (центр дока) держим прозрачным «окном» под
             // own-pass (UnderScene). Хром (хедер/тулбар/панели/статус) красит свой фон сам.
             .font_family(design::mono())
             .text_color(rgb(p.text))
             .text_size(design::t_body(cx))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| {
-                let group = this.group.clone();
-                let handled = this.backend.update(cx, |b, bcx| {
-                    // Фаза 1 (только чтение cfg): какой хоткей совпал. Сравниваем нажатую
-                    // клавишу с каждым настроенным сочетанием (gpui Keystroke).
-                    let (size_ix, sell_ix, is_cancel) = {
-                        let cfg = b.preview.as_ref().unwrap_or(&b.config);
-                        let pressed = |raw: &str| {
-                            let raw = raw.trim();
-                            !raw.is_empty()
-                                && matches!(Keystroke::parse(raw), Ok(k) if k == ev.keystroke)
-                        };
-                        let size_ix = cfg.hotkeys.order_size.iter().position(|r| pressed(r));
-                        let sell_ix = cfg.hotkeys.sell_preset.iter().position(|r| pressed(r));
-                        (size_ix, sell_ix, pressed(&cfg.hotkeys.cancel_buy))
-                    };
-                    // Фаза 2 (мутация): F1-F6 = выбрать пресет размера активного ядра; S1-S6 =
-                    // выбрать fixed-sell слот (меняет TP); cancel_buy — отмена покупок Main.
-                    if let Some(i) = size_ix {
-                        match b.active_trade_core(&group) {
-                            Some(core) => {
-                                b.order_size_sel.insert(core, i);
-                                b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                                bcx.notify();
-                                true
-                            }
-                            None => false,
-                        }
-                    } else if let Some(i) = sell_ix {
-                        match b.active_trade_core(&group) {
-                            Some(core) => {
-                                if let Err(error) = b.session.edit_client_settings(
-                                    core,
-                                    ClientSettingsEdit::SelectFixedSellSlot(i + 1),
-                                ) {
-                                    log::warn!("hotkey select fixed-sell slot failed: {error}");
-                                }
-                                true
-                            }
-                            None => false,
-                        }
-                    } else if is_cancel {
-                        b.cancel_buy_for_main_chart(&group);
-                        true
-                    } else {
-                        false
-                    }
-                });
-                if handled {
-                    cx.stop_propagation();
-                }
-            }))
+            .on_key_down(
+                cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_hotkey(ev, cx)),
+            )
             // ── Header ──────────────────────────────────────────────
             .child(terminal_chrome::header(
                 &self.group,

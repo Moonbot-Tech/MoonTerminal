@@ -7,7 +7,7 @@
 //! Текст осей/readout — retained gpu_canvas text; линии перекрестия — native chartdx cursor layer.
 
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -156,6 +156,11 @@ pub struct ChartPanel {
     auto_live_timer_armed: bool,
     order_drag: Option<OrderDrag>,
     order_hover: Option<OrderHoverKey>,
+    /// Момент последнего закрытия pane крестиком (×). Быстрое закрытие нескольких графиков
+    /// подряд создаёт у GPUI двойной клик на том же экранном месте; после того как график
+    /// уезжает, второй клик попадал бы на стакан и засчитывался как дабл-клик → ордер. Гасим
+    /// постановку ордера на ~600мс после закрытия. См. `try_place_order_click`.
+    last_pane_close: Option<Instant>,
     focus: FocusHandle,
 }
 
@@ -263,6 +268,7 @@ impl ChartPanel {
             auto_live_timer_armed: false,
             order_drag: None,
             order_hover: None,
+            last_pane_close: None,
             focus: cx.focus_handle(),
         }
     }
@@ -346,6 +352,7 @@ impl ChartPanel {
             auto_live_timer_armed: false,
             order_drag: None,
             order_hover: None,
+            last_pane_close: None,
             focus: cx.focus_handle(),
         }
     }
@@ -428,6 +435,10 @@ impl ChartPanel {
         let Some((core, market)) = self.chart.remove_pane(idx) else {
             return;
         };
+        // Гасим постановку ордера сразу после закрытия (защита от дабл-клика по стакану при
+        // быстром закрытии нескольких графиков подряд — кнопка × уезжает, второй клик попал бы
+        // на стакан).
+        self.last_pane_close = Some(Instant::now());
         self.view_dirty = true;
         if !self.chart.uses_market(core, &market) {
             self.release_market_ref(core, &market, cx);
@@ -827,6 +838,14 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
+        // Дебаунс после закрытия графика (×): не ставим ордер ~600мс, иначе быстрый второй
+        // клик «закрыть» попадает на стакан уехавшего графика и засчитывается как дабл-клик.
+        if self
+            .last_pane_close
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(600))
+        {
+            return false;
+        }
         // Раздельные зоны: ордер ставим только в стакане; иначе — по любой pane-области графика.
         let pane = if self.separate_zones(cx) {
             self.glass_pane_at(pos)
@@ -1661,7 +1680,9 @@ impl Render for ChartPanel {
                     .label("×")
                     .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
-                    .bounds(MoonRect::new(right - 18.0, top + 3.0, 15.0, 15.0))
+                    // Крупнее (было 15×15) — чтобы не мискликнуть мимо на стакан при быстром
+                    // закрытии нескольких графиков подряд.
+                    .bounds(MoonRect::new(right - 26.0, top + 3.0, 22.0, 22.0))
                     .on_click(move |_, _w, app| {
                         entity.update(app, |this, cx| this.remove_pane(idx, cx));
                     })

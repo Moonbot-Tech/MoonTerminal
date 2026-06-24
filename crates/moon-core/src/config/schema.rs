@@ -136,6 +136,9 @@ pub struct SettingsFile {
     /// false = по всей области графика. Дефолт false.
     #[serde(default)]
     pub separate_control_zones: bool,
+    /// Авто-закрытие графиков Main при неактивности окна, сек. 0 = выключено. Дефолт 0.
+    #[serde(default)]
+    pub main_idle_close_secs: u32,
     /// Писать лог (приложения и ядер) в файлы logs/<дата>_<источник>.log. Дефолт on.
     #[serde(default = "servers::default_true")]
     pub log_to_file: bool,

@@ -17,6 +17,19 @@ use moon_core::feed::ConnStatus;
 use crate::{Backend, design, settings, strategies};
 
 pub fn header(group: &str, backend: Entity<Backend>, p: MoonPalette, cx: &App) -> impl IntoElement {
+    // Баланс/PnL активного торгового ядра группы (серверные значения в USDT). Нет ядра/данных
+    // → нули. «Real» = серверный pnl_usdt; Session/Unreal/Risk пока заглушки.
+    let (free_usdt, total_usdt, pnl_usdt) = {
+        let b = backend.read(cx);
+        b.active_trade_core(group)
+            .and_then(|c| b.session.store().core(c))
+            .map(|cd| {
+                let g = &cd.assets.global;
+                (g.free_usdt, g.total_usdt, g.pnl_usdt)
+            })
+            .unwrap_or((0.0, 0.0, 0.0))
+    };
+    let pnl_color = if pnl_usdt < 0.0 { p.red } else { p.green };
     h_flex()
         .w_full()
         .h(design::fit_h_px(cx, design::HEADER_TOP_H, 14.0, 9.0))
@@ -38,7 +51,7 @@ pub fn header(group: &str, backend: Entity<Backend>, p: MoonPalette, cx: &App) -
                 .gap(design::ui_px(cx, 10.0))
                 .items_center()
                 .child(core_selector(group, &backend, p, cx))
-                .child(balance_label(p, cx)),
+                .child(balance_label(free_usdt, total_usdt, p, cx)),
         )
         .child(
             MoonWindowFrame::main("terminal-header-metrics-drag", 0.0)
@@ -49,7 +62,7 @@ pub fn header(group: &str, backend: Entity<Backend>, p: MoonPalette, cx: &App) -
                 .min_w_0()
                 .overflow_hidden()
                 .child(metric("Session", "+$24.30", p.green, p, cx))
-                .child(metric("Real", "+$104.20", p.green, p, cx))
+                .child(metric("Real", fmt_signed_usd(pnl_usdt), pnl_color, p, cx))
                 .child(metric("Unreal", "−$8.10", p.orange, p, cx))
                 .child(risk_meter(p, cx)),
         )
@@ -99,13 +112,20 @@ pub fn header(group: &str, backend: Entity<Backend>, p: MoonPalette, cx: &App) -
         )
 }
 
+/// Знаковый USD для шапки: `+$104.20` / `−$8.10` (минус — U+2212 как в дизайне).
+fn fmt_signed_usd(v: f64) -> String {
+    let sign = if v < 0.0 { "−" } else { "+" };
+    format!("{sign}${:.2}", v.abs())
+}
+
 fn metric(
     label: &'static str,
-    value: &'static str,
+    value: impl Into<SharedString>,
     color: u32,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
+    let value: SharedString = value.into();
     h_flex()
         .h(design::fit_h_px(cx, 22.0, 13.0, 4.5))
         .gap(design::ui_px(cx, 5.0))
@@ -219,7 +239,7 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         .into_any_element()
 }
 
-fn balance_label(p: MoonPalette, cx: &App) -> impl IntoElement {
+fn balance_label(free_usdt: f64, total_usdt: f64, p: MoonPalette, cx: &App) -> impl IntoElement {
     h_flex()
         .gap(px(0.0))
         .font_family(design::mono())
@@ -230,9 +250,13 @@ fn balance_label(p: MoonPalette, cx: &App) -> impl IntoElement {
             div()
                 .text_color(rgb(p.text))
                 .font_weight(FontWeight::SEMIBOLD)
-                .child("50.00"),
+                .child(format!("{free_usdt:.2}")),
         )
-        .child(div().text_color(rgb(p.text_muted)).child(" /50 USDT"))
+        .child(
+            div()
+                .text_color(rgb(p.text_muted))
+                .child(format!(" /{total_usdt:.0} USDT")),
+        )
 }
 
 fn header_action(

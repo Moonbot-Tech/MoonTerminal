@@ -65,6 +65,10 @@ pub struct AppConfig {
     pub chart_stack_height: u16,
     /// Раздельные зоны управления: ордера/линии только в зоне стакана (settings.toml). Дефолт false.
     pub separate_control_zones: bool,
+    /// Авто-закрытие графиков Main при неактивности окна, сек (settings.toml). 0 = выключено.
+    /// Неактивность = окно не в фокусе ЛИБО в фокусе, но мышь не двигается. Каждый график
+    /// закрывается через N сек своей неактивности (новейший — последним), фулскрин тоже.
+    pub main_idle_close_secs: u32,
     /// Писать лог (приложения и ядер) в файлы logs/ (settings.toml). Дефолт on.
     pub log_to_file: bool,
     /// Срок хранения файлов лога, дней; 0 = хранить всё (settings.toml). Дефолт 14.
@@ -106,6 +110,7 @@ impl AppConfig {
                 charts_stack_compress: merged.charts_stack_compress,
                 chart_stack_height: merged.chart_stack_height,
                 separate_control_zones: merged.separate_control_zones,
+                main_idle_close_secs: merged.main_idle_close_secs,
                 log_to_file: merged.log_to_file,
                 log_retention_days: merged.log_retention_days,
                 ui_font_delta: merged.ui_font_delta,
@@ -237,6 +242,7 @@ impl AppConfig {
             charts_stack_compress: false,
             chart_stack_height: schema::default_chart_stack_height(),
             separate_control_zones: false,
+            main_idle_close_secs: 0,
             log_to_file: true,
             log_retention_days: servers::default_log_retention_days(),
             ui_font_delta: schema::default_ui_font_delta(),
@@ -264,6 +270,7 @@ impl AppConfig {
             self.charts_stack_compress,
             self.chart_stack_height,
             self.separate_control_zones,
+            self.main_idle_close_secs,
             self.log_to_file,
             self.log_retention_days,
             self.ui_font_delta,
@@ -332,6 +339,7 @@ impl AppConfig {
             false, // charts_stack_compress — чисто визуальный
             schema::default_chart_stack_height(), // высота стека — не структурная
             false, // separate_control_zones — поведенческий, не структурный
+            0,     // main_idle_close_secs — поведенческий, не структурный
             true,  // лог-настройки тоже не структурные (без реконнекта/ребилда)
             14,
             schema::default_ui_font_delta(),
