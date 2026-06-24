@@ -1,0 +1,49 @@
+name: build
+
+# Windows — реальный релизный .exe (артефакт).
+# macOS  — диагностический зонд: собирает chartdx Metal-бэкенд на нативном
+#          раннере, чтобы выявить настоящие ошибки компиляции (с Windows это
+#          невозможно — нет macOS SDK / Apple-линкера).
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  windows:
+    name: Windows .exe (x86_64-msvc)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build -p moon-ui-gpui --bin moonterminal --release --target x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moonterminal-windows-x86_64
+          path: target/x86_64-pc-windows-msvc/release/moonterminal.exe
+          if-no-files-found: error
+
+  macos-probe:
+    name: macOS probe (aarch64-darwin) — diagnostic
+    runs-on: macos-14
+    # Зонд: ожидаем ошибки компиляции Metal-бэкенда. Не валим весь пайплайн —
+    # читаем лог job'а, чтобы получить конкретный список того, что надо чинить.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Probe-compile chartdx Metal backend
+        run: cargo build -p moon-ui-gpui --target aarch64-apple-darwin
