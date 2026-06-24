@@ -987,7 +987,7 @@ impl Runtime {
                     .get(group)
                     .and_then(|chart| chart.order_render_probe(run.core, &run.market));
                 #[cfg(not(any(debug_assertions, moon_profile_debug, feature = "debug-tools")))]
-                let probe = {
+                let probe: Option<crate::chartdx::OrderRenderProbe> = {
                     let _ = (backend, group);
                     None
                 };
