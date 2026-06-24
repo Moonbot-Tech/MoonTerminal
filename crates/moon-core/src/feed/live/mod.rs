@@ -513,6 +513,15 @@ pub fn run(
                 }
                 if sig != last_strat_sig {
                     last_strat_sig = sig;
+                    // Колонка Strat таблицы ордеров резолвит strat_id → тип через этот же
+                    // реестр (`build_order_row`). Реестр наполняется ПОЗЖЕ ордеров, а сама
+                    // таблица пересобирается только на order-событии → до него видны сырые
+                    // strat_id. Смена состава стратегий = повод пере-резолвить имена: взводим
+                    // orders_table_pending, чтобы таблица пересобралась в пределах ~250мс даже
+                    // без нового order-события (order_wait ниже разбудит цикл по таймеру).
+                    if server.feed.orders {
+                        orders_table_pending = true;
+                    }
                     let strategies: Vec<StrategyRow> = strats
                         .snapshots()
                         .map(|s| {
