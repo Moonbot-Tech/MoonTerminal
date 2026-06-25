@@ -126,7 +126,7 @@ impl StrategiesView {
                     }),
                 );
             }
-            MenuTarget::Strategy(_id) => {
+            MenuTarget::Strategy(id) => {
                 items.push(
                     MoonMenuItem::with_key("copy-strategy", t!("strat.menu_copy").to_string())
                         .on_click({
@@ -140,6 +140,25 @@ impl StrategiesView {
                             }
                         }),
                 );
+                // Имя кликнутой стратегии → поиск по нему (показать все одноимённые).
+                let store = self.backend.read(cx).session.store();
+                if let Some(name) = row(store, core, *id).map(|r| r.name.clone()) {
+                    items.push(
+                        MoonMenuItem::with_key(
+                            "find-by-name",
+                            t!("strat.menu_find_by_name").to_string(),
+                        )
+                        .on_click({
+                            let view = view.clone();
+                            move |_, window, app| {
+                                window.close_context_menu(app);
+                                view.update(app, |this, cx| {
+                                    this.search_by_name(name.clone(), window, cx);
+                                });
+                            }
+                        }),
+                    );
+                }
                 items.push(
                     MoonMenuItem::with_key(
                         "delete-strategy",

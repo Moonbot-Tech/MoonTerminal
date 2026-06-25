@@ -396,6 +396,23 @@ impl StrategiesView {
         self.focused_field = None;
     }
 
+    /// Поставить фильтр поиска по точному имени стратегии и сфокусировать поле — пункт
+    /// меню «Найти все с этим именем». Имя пишем и в фильтр, и в сам инпут (`set_value`
+    /// не эмитит Change, поэтому фильтр выставляем вручную).
+    pub(super) fn search_by_name(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.filter.search = name.clone();
+        self.search.update(cx, |st, cx| {
+            st.set_value(name, window, cx);
+            st.focus(window, cx);
+        });
+        cx.notify();
+    }
+
     fn field_input_state(
         &mut self,
         id: String,

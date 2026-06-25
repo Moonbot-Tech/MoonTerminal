@@ -157,6 +157,10 @@ strat.menu_paste_here:
   ru: "Вставить сюда"
   en: "Paste here"
   es: "Pegar aquí"
+strat.menu_find_by_name:
+  ru: "Найти все с этим именем"
+  en: "Find all with this name"
+  es: "Buscar todas con este nombre"
 strat.menu_delete_folder:
   ru: "Удалить папку…"
   en: "Delete folder…"
