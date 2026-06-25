@@ -16,7 +16,8 @@ pub(super) fn orders_table(
     let view = cx.entity();
     let table_rows = rows.clone();
     let p = MoonPalette::active(cx);
-    // Видимые колонки в каноничном порядке — общий список для header и строк.
+    // Видимые колонки в каноничном порядке — общий список для header и строк. Drag-перестановку
+    // (`state.column_order`) применяет сам MoonDataTable: и к шапке, и к ячейкам тела.
     let visible: Rc<Vec<OrdCol>> = Rc::new(
         OrdCol::ALL
             .iter()

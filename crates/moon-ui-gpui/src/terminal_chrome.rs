@@ -7,8 +7,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem,
-    MoonMenuSize, MoonPalette, MoonProgress, MoonTag, MoonWindowFrame, h_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize, MoonPalette,
+    MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonProgress, MoonSelectorPill,
+    MoonSelectorSegment, MoonTag, MoonWindowFrame, h_flex,
 };
 use rust_i18n::t;
 
@@ -176,9 +177,9 @@ fn risk_meter(p: MoonPalette, cx: &App) -> impl IntoElement {
 /// `Backend::active_trade_core` (авто-следование за фуллскрин-чартом + sticky-override
 /// при ручном выборе). Все торговые контролы тулбара/шапки читают это же ядро.
 fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> AnyElement {
-    // Геометрия пилюли: фикс. ширина/высота (не «дышит»), полное скругление = ½ высоты.
-    // `SEL_NAME_MAX` — лимит символов имени под `SEL_W` (обрезка справа, без overflow-клипа).
-    const SEL_W: f32 = 140.0;
+    // Геометрия пилюли: высота фикс., полное скругление = ½ высоты (ширина — по контенту, как в
+    // каноне MoonSelectorPill). `SEL_NAME_MAX` — лимит символов имени (обрезка справа, у пилюли
+    // нет overflow-клипа).
     const SEL_H: f32 = 26.0;
     const SEL_NAME_MAX: usize = 13;
 
@@ -206,10 +207,9 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         .and_then(|id| cores.iter().find(|(cid, _)| *cid == id))
         .map(|(_, n)| n.clone())
         .unwrap_or_else(|| "—".to_string());
-    // Пилюля фикс. ширины (см. ниже), а у базового Button нет overflow-клипа → длинное имя
-    // обрезаем САМИ по символам, оставляя ЛЕВУЮ часть (как просили: «обрезать справа», левый
-    // край на месте). Короткие имена остаются как есть; многоточие не добавляем (имя и так
-    // лишь подпись активного ядра, точный список — в выпадашке).
+    // У пилюли нет overflow-клипа → длинное имя обрезаем САМИ по символам, оставляя ЛЕВУЮ часть
+    // (как просили: «обрезать справа», левый край на месте). Короткие имена остаются как есть;
+    // многоточие не добавляем (имя — лишь подпись активного ядра, точный список — в попапе).
     let active_name: String = active_name.chars().take(SEL_NAME_MAX).collect();
 
     let mut items = Vec::with_capacity(cores.len());
@@ -230,38 +230,36 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         );
     }
 
-    // Вариант `Neutral` (фон 0x1F2126), НЕ `Panel`: у шапки фон = `shell_high` (0x1A1C1F),
-    // а Panel красит кнопку тем же `shell_high` → коробка пилюли сливалась с шапкой (виден был
-    // лишь «● имя ▾» без рамки). Neutral светлее фона шапки и совпадает с эталонными пилюлями
-    // тулбара (TP/SL/Lev) → контрол читается как «таблетка» с точкой статуса, как в макете.
+    // Каноничный визуал `MoonSelectorPill` (точка статуса со свечением + каретка-иконка) как
+    // триггер `MoonPopover`, контент — `MoonPopupMenu` со списком ядер. Всё напрямую из moonui:
+    // ни ручной стилизации триггера, ни хака размеров. Popover сам держит open-стейт (внутренний
+    // `use_keyed_state`) и тогглит по клику; `close_on_content_click` закрывает после выбора ядра.
     //
-    // Форма: фикс. ширина `SEL_W` (не «дышит» при смене имени ядра) + полное скругление
-    // (radius = ½ высоты → полукруги по краям). База `Button` центрирует контент
-    // (`justify_center`) → текст по центру. Имя уже обрезано справа (см. выше).
-    MoonDropdown::new("header-core-selector")
-        .trigger_variant(MoonButtonVariant::Neutral)
-        .trigger_size(MoonButtonSize::Custom {
-            height: SEL_H,
-            radius: SEL_H / 2.0,
-            font_size: 10.5,
-            line_height: 16.0,
-            gap: 5.0,
-        })
-        .trigger_width(SEL_W)
-        .menu_width(180.0)
-        .menu_size(MoonMenuSize::Compact)
-        .segment(MoonButtonSegment::new("●").color(dot_color).weight(400.0))
-        .segment(
-            MoonButtonSegment::new(active_name)
-                .color(p.text)
-                .weight(500.0),
+    // Фон пилюли = `p.panel`; у `MoonSelectorPill` есть явный бордер `p.border` → «таблетка»
+    // читается даже на фоне шапки `shell_high` (в отличие от старого Panel-кейса без рамки).
+    MoonPopover::new("header-core-selector")
+        .placement(MoonPopoverPlacement::BottomStart)
+        .width(192.0) // 180 ширина меню + 2×6 паддинг попапа
+        .close_on_content_click(true)
+        .trigger(
+            MoonSelectorPill::new("header-core-pill")
+                .height(SEL_H)
+                .radius(SEL_H / 2.0)
+                .leading_dot(dot_color)
+                .segment(
+                    MoonSelectorSegment::new(active_name)
+                        .color(p.text)
+                        .weight(500.0),
+                )
+                .render(),
         )
-        .segment(
-            MoonButtonSegment::new("▾")
-                .color(p.text_muted)
-                .weight(400.0),
+        .content(
+            MoonPopupMenu::new("header-core-menu")
+                .width(180.0)
+                .size(MoonMenuSize::Compact)
+                .items(items)
+                .render(),
         )
-        .items(items)
         .into_any_element()
 }
 
