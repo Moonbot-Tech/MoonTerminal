@@ -52,5 +52,31 @@ PLIST
 # signing + notarization needs an Apple cert in secrets — out of scope for v0.0.1.
 codesign --force --deep --sign - "$APP" || true
 
-hdiutil create -volname "MoonTerminal" -srcfolder "$APP" -ov -format UDZO "$DMG"
+# Assemble a Finder-friendly DMG staging root instead of imaging the bare .app:
+# the app, a drag-to-install alias to /Applications, and a short RU readme. The
+# image is built from this folder so the user sees the familiar "drag into
+# Applications" layout. (Background image / .DS_Store window layout intentionally
+# omitted for now — can be layered on later.)
+DMG_ROOT="dist/dmg-root"
+rm -rf "$DMG_ROOT"
+mkdir -p "$DMG_ROOT"
+cp -R "$APP" "$DMG_ROOT/MoonTerminal.app"
+ln -s /Applications "$DMG_ROOT/Applications"
+
+cat > "$DMG_ROOT/README.txt" <<'README'
+MoonTerminal — Installation
+
+1. Drag MoonTerminal.app into the Applications folder (alias next to it).
+2. First launch: right-click the app -> "Open" -> "Open".
+   macOS may warn about an unidentified developer — this is expected
+   (the build is ad-hoc signed, not notarized).
+   Alternative: System Settings -> Privacy & Security -> "Open Anyway".
+
+Updating:
+Drag the new version into Applications and confirm the replacement.
+Your cores and settings are preserved — they live OUTSIDE the app, in
+~/Library/Application Support/com.moonbot.moonterminal/.
+README
+
+hdiutil create -volname "MoonTerminal" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG"
 echo "Built $DMG (version $VERSION)"
