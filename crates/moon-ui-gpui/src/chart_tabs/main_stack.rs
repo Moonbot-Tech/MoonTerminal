@@ -196,6 +196,27 @@ impl MainChartStack {
         if secs == 0 || self.charts.is_empty() {
             return false;
         }
+        // Не закрывать графики Main, пока в фокусе любое выносное ОКНО ГРАФИКА этой группы:
+        // его активность не даёт mouse-move в Main-окне (это другое ОС-окно), поэтому таймер
+        // иначе досчитал бы до закрытия, пока пользователь работает с откреплённым чартом.
+        // Освежаем отметку активности → после расфокуса окна Main получает полный TTL, а не
+        // закрывается мгновенно.
+        let group = self.group.clone();
+        let chart_handles: Vec<_> = self
+            .backend
+            .read(cx)
+            .detached_chart_windows
+            .iter()
+            .filter(|(g, _)| *g == group)
+            .map(|(_, h)| *h)
+            .collect();
+        let chart_focused = chart_handles
+            .into_iter()
+            .any(|h| h.is_active(cx).unwrap_or(false));
+        if chart_focused {
+            self.backend.update(cx, |b, _| b.note_main_input(&group));
+            return false;
+        }
         let ttl = Duration::from_secs(secs as u64);
         let last_input = self.backend.read(cx).main_input_at(&self.group);
         let now = Instant::now();

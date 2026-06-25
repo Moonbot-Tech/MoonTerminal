@@ -755,12 +755,18 @@ impl Render for Shell {
         // движения мыши, в т.ч. над виджетами/панелями/чартом, которые блокируют hitbox
         // корня (там gated `.on_mouse_move` молчал — отсюда «график закрылся, хотя мышь
         // двигалась в окне»). Только при активном окне; без notify — это лишь отметка
-        // времени (дёшево, хоть и часто). Bubble-фаза, чтобы засчитать один раз за событие.
+        // времени (дёшево, хоть и часто).
+        //
+        // CAPTURE-фаза (а НЕ bubble): чарт-панель в своём элементном `.on_mouse_move` при
+        // наведении зовёт `cx.stop_propagation()` (render.rs) — в bubble это гасит корневой
+        // слушатель, и движение НАД ЧАРТОМ не считалось активностью → график закрывался, хотя
+        // мышь по нему водили. Capture проходит до bubble и не подвержен его stop_propagation
+        // (gpui window.rs: фазы идут capture→bubble на одном флаге `propagate_event`).
         {
             let backend = self.backend.clone();
             let group = self.group.clone();
             window.on_mouse_event::<MouseMoveEvent>(move |_e, phase, window, cx| {
-                if phase == DispatchPhase::Bubble && window.is_window_active() {
+                if phase == DispatchPhase::Capture && window.is_window_active() {
                     backend.update(cx, |b, _| b.note_main_input(&group));
                 }
             });

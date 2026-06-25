@@ -192,8 +192,10 @@ impl Render for DetachedWindow {
         {
             let backend = self.backend.clone();
             let group = self.group.clone();
+            // CAPTURE-фаза (как в Shell): проходит до элементных bubble-обработчиков и не
+            // подвержена их `stop_propagation` — отметка активности надёжна над любым виджетом.
             window.on_mouse_event::<MouseMoveEvent>(move |_e, phase, window, cx| {
-                if phase == DispatchPhase::Bubble && window.is_window_active() {
+                if phase == DispatchPhase::Capture && window.is_window_active() {
                     backend.update(cx, |b, _| b.note_main_input(&group));
                 }
             });
