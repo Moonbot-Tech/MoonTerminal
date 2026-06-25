@@ -12,6 +12,7 @@ mod params;
 mod rules;
 mod tree;
 mod tree_dialogs;
+mod tree_moon;
 mod tree_dnd;
 mod tree_menu;
 mod tree_ops;
@@ -27,7 +28,7 @@ use moon_ui::{
     MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonCheckboxSize, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
     MoonMenuSize, MoonPalette, MoonTextArea, MoonTextAreaEvent, MoonTextAreaState, MoonTone,
-    MoonWindowFrame, Root, h_flex, rgba_from, v_flex,
+    MoonTreeState, MoonWindowFrame, Root, h_flex, rgba_from, v_flex,
 };
 
 use crate::{Backend, design};
@@ -67,6 +68,9 @@ pub struct StrategiesView {
     anchor: Option<Key>,
     /// Плоский порядок видимых стратегий прошлого кадра — для Shift-диапазона.
     flat_order: Vec<Key>,
+    /// Состояние дерева MoonTree (флэттинг/виртуализация/раскрытие/DnD-hitbox). Выбор/стейджинг
+    /// остаются в полях выше — `TreeState` лишь рендерит и отдаёт hitbox-и под декораторы.
+    tree_state: Entity<MoonTreeState>,
     /// Индекс выбранной секции в схеме её вида. НЕ сбрасывается при смене стратегии,
     /// только клампится при выходе за диапазон.
     selected_section: usize,
@@ -186,6 +190,7 @@ impl StrategiesView {
             sel: HashSet::new(),
             anchor: None,
             flat_order: Vec::new(),
+            tree_state: cx.new(|cx| MoonTreeState::new(cx)),
             selected_section: 0,
             staged: HashMap::new(),
             field_edits: HashMap::new(),
@@ -671,24 +676,29 @@ impl Render for StrategiesView {
                 .collect()
         };
 
-        // Плоский порядок прошлого кадра (для Shift-диапазона) + новый накапливаем.
-        let order = Arc::new(self.flat_order.clone());
-        let mut built: Vec<Key> = Vec::new();
+        // Адаптер MoonTree (owned, без заимствования стора наружу), затем синк состояния дерева.
+        let build = {
+            let store = self.backend.read(cx).session.store();
+            tree_moon::build(self, store, &cores)
+        };
+        self.flat_order = build.flat;
+        let searching = build.searching;
+        self.tree_state.update(cx, |st, c| {
+            st.set_items(build.items, c);
+            st.set_force_expanded(searching, c);
+            st.set_expanded(build.expanded_ids, c);
+        });
+        let node_data = std::rc::Rc::new(build.node_data);
 
         let (tree, sections, params_model) = {
             let store = self.backend.read(cx).session.store();
             (
-                self.tree_panel(store, &cores, &order, &mut built, cx),
+                self.tree_panel(store, &cores, node_data, cx),
                 self.sections_panel(store, cx),
                 self.params_model(store),
             )
         };
         let params = self.params_panel(params_model, window, cx);
-        // Сохранить порядок текущего кадра (store-borrow держит cx, не self). Это render-cache
-        // для Shift-диапазона; не будим view, если порядок не изменился.
-        if self.flat_order != built {
-            self.flat_order = built;
-        }
 
         let p = MoonPalette::active(cx);
         let chrome_width = match window.window_bounds() {

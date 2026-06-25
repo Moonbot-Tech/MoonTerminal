@@ -25,6 +25,11 @@ env_logger = "0.11"
 # Язык по системной локали (config/lang.rs::from_system).
 sys-locale = "0.3"
 
+# Пользовательская директория данных вне бандла (config/paths.rs): на macOS/Linux
+# данные лежат в ~/Library/Application Support|~/.config, не внутри .app (см. ТЗ
+# про безопасное обновление через DMG). На Windows сборка остаётся переносимой.
+dirs = "6"
+
 # Метрики CPU/RAM (metrics.rs).
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 

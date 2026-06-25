@@ -34,9 +34,14 @@ use crate::chart_persist;
 use moon_core::config::{ChartBucket, ChartTheme};
 use moon_core::session::CoreId;
 
-/// Высота полоски чарт-вкладок (px). Табы в MoonTabStrip — h=28 + подчёркивание; 30 даёт
-/// ровный ряд. Резервируется в layout сверху, и в неё же кладутся bounds стрипа.
-const CHART_TAB_STRIP_H: f32 = 30.0;
+/// Высота полоски чарт-вкладок (px). Должна РАВНЯТЬСЯ высоте таба `MoonTabStrip`
+/// (`tab.rs`: `fit_height(28, 13, 7.5)`), иначе при изменении масштаба интерфейса/шрифта
+/// (`scale.ui`/`font_delta`) полоса и линия под ней рассинхронятся с самими табами
+/// (таб масштабируется через `fit_height`, а не через чистый `ui()`). При дефолте
+/// (ui=1, font_delta=2) даёт 30 — прежнее значение константы.
+pub(super) fn chart_tab_strip_h(cx: &App) -> f32 {
+    crate::design::fit_h_value(cx, 28.0, 13.0, 7.5)
+}
 
 /// Идентичность вкладки чарта. Main — фуллскрин; Add(номер, bucket) — AddToChart-вкладка,
 /// где `bucket` — куда сведены графики ядра внутри группы (своё ядро / общая / именованная

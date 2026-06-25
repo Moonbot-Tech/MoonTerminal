@@ -11,8 +11,9 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{CHART_TAB_STRIP_H, ChartTabs, Tab, coin_search, layout_popup};
+use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search, layout_popup};
 use crate::chart_persist::StackLayoutMode;
+use crate::design;
 
 impl Render for ChartTabs {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -59,10 +60,13 @@ impl Render for ChartTabs {
         // (flex_1 ниже) забирает всю высоту (ровно баг «график есть, вкладок нет»). Даём
         // ширину окна (контейнер ниже обрежет до ширины панели) и фикс. высоту полосы.
         let strip_w = f32::from(window.viewport_size().width).max(1.0);
+        // Высота полосы = высоте таба (fit_height), чтобы при смене ui_scale/шрифта полоса и
+        // линия под ней не отъезжали от табов. См. chart_tab_strip_h.
+        let strip_h = chart_tab_strip_h(cx);
         let strip = MoonTabStrip::new("chart-tabs-strip")
             .padding_left(8.0)
             .gap(4.0)
-            .bounds(MoonRect::new(0.0, 0.0, strip_w, CHART_TAB_STRIP_H))
+            .bounds(MoonRect::new(0.0, 0.0, strip_w, strip_h))
             .items(items)
             .on_click({
                 let tab_keys = tab_keys.clone();
@@ -246,7 +250,7 @@ impl Render for ChartTabs {
                 .id("chart-layout-popup-scene")
                 .absolute()
                 .right(px(6.0))
-                .top(px(CHART_TAB_STRIP_H + 4.0))
+                .top(px(strip_h + design::ui_value(cx, 4.0)))
                 .w(size.width)
                 .h(size.height)
                 .on_mouse_down(MouseButton::Left, |_, _window, app| {
@@ -333,7 +337,7 @@ impl Render for ChartTabs {
                 // Только таб-стрип под overflow_hidden (режет лишние табы). Правый кластер и
                 // выпадашки — отдельными детьми v_flex ниже, чтобы их не срезало по высоте полосы.
                 div()
-                    .h(px(CHART_TAB_STRIP_H))
+                    .h(px(strip_h))
                     .w_full()
                     .relative()
                     .overflow_hidden()
