@@ -30,7 +30,8 @@ pub struct SegInstance {
     pub t1_rel: f32,
     pub p1: f32,
     pub thickness: f32,
-    pub dashed: f32,
+    /// 0 = solid, 1 = DashDotDot, 2 = Dot (MoonBot trace parity).
+    pub pattern: f32,
     /// 1 = t1 берётся из userdata uniform edge (`cv_pad`) в шейдере.
     pub extend: f32,
     pub color: [f32; 4],

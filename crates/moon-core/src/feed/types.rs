@@ -70,6 +70,7 @@ pub struct OrderTrace {
     pub points: Vec<OrderTracePoint>,
     pub tmp_point: Option<OrderTracePoint>,
     pub stop_price: Option<f32>,
+    pub stop_time_ms: Option<f64>,
 }
 
 /// Открытый ордер (для нижнего дока).

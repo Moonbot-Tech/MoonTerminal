@@ -70,10 +70,10 @@ float4 hline_fragment(HOut i) : SV_Target {
     return float4(i.color.rgb, i.color.a);
 }
 
-// ── Отрезок (SegInstance: pts=(t0,p0,t1,p1), color, m=(thickness,dashed,_,_)) ─
+// ── Отрезок (SegInstance: pts=(t0,p0,t1,p1), color, m=(thickness,pattern,_,_)) ─
 struct Seg { float4 pts; float4 color; float4 m; };
 StructuredBuffer<Seg> segs : register(t1);
-struct SOut { float4 pos : SV_Position; float4 color : COLOR0; nointerpolation float dashed : TEXCOORD0; float dist : TEXCOORD1; };
+struct SOut { float4 pos : SV_Position; float4 color : COLOR0; nointerpolation float pattern : TEXCOORD0; float dist : TEXCOORD1; };
 
 SOut seg_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     Seg s = segs[iid];
@@ -87,10 +87,15 @@ SOut seg_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float along[6] = { 0, 1, 1, 0, 1, 0 };
     float side[6]  = { -1, -1, 1, -1, 1, 1 };
     float2 px = lerp(a, b, along[vid]) + nrm * side[vid];
-    SOut o; o.pos = float4(to_clip(px), 0, 1); o.color = s.color; o.dashed = s.m.y; o.dist = len * along[vid]; return o;
+    SOut o; o.pos = float4(to_clip(px), 0, 1); o.color = s.color; o.pattern = s.m.y; o.dist = len * along[vid]; return o;
 }
 float4 seg_fragment(SOut i) : SV_Target {
-    if (i.dashed >= 0.5 && frac(i.dist / 16.0) > (9.0 / 16.0)) discard;
+    if (i.pattern >= 1.5) {
+        if (frac(i.dist / 6.0) > (2.0 / 6.0)) discard;
+    } else if (i.pattern >= 0.5) {
+        float x = frac(i.dist / 20.0) * 20.0;
+        if (!(x < 8.0 || (x >= 11.0 && x < 13.0) || (x >= 16.0 && x < 18.0))) discard;
+    }
     return float4(i.color.rgb, i.color.a);
 }
 

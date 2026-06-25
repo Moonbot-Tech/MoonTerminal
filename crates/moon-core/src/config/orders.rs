@@ -113,6 +113,8 @@ pub struct OrdersStyle {
     pub liq: LineStyle,
     /// Путь (trail) — змейка движения линий по истории перестановок (опц.).
     pub path: PathStyle,
+    /// Прозрачность серверной трассы ордера (`CO_OrderLine.Thikness2` в MoonBot).
+    pub trace_alpha: f32,
 
     /// Прозрачность активных линий, 0..1.
     pub active_alpha: f32,
@@ -151,6 +153,7 @@ impl Default for OrdersStyle {
             pending_cond,
             liq,
             path: PathStyle::default(),
+            trace_alpha: 0.4,
             active_alpha: 0.95,
             closed_alpha: 0.35,
             pending_dashed: true,

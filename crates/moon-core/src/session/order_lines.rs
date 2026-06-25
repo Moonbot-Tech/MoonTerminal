@@ -67,11 +67,15 @@ fn price_eps(p: f32) -> f32 {
 pub struct LineTrace {
     /// Ступени `(t_ms, price)`: с `t_ms` цена = `price` до следующей ступени.
     pub steps: Vec<(f64, f32)>,
-    /// Точная серверная polyline-трасса для buy/sell. Когда она есть, рендерит
-    /// именно её; `steps` остаётся fallback для старых/неполных снимков.
+    /// Точная серверная трасса для buy/sell. Это отдельная история движения
+    /// линии; основная рабочая линия ордера всё равно рисуется прямой по
+    /// текущей цене. `steps` остаётся fallback для старых/неполных снимков.
     pub server_points: Vec<(f64, f32)>,
     /// Живая temp-точка серверной трассы: рисуется пунктиром от последней точки.
     pub tmp_point: Option<(f64, f32)>,
+    /// Stop-line, пришедшая вместе с серверной трассой, как в MoonBot `SetStopPrice`.
+    pub server_stop_price: Option<f32>,
+    pub server_stop_time_ms: Option<f64>,
     /// Линия выключена (цена стала недоступна), но ордер ещё жив. Конец линии.
     pub off_ms: Option<f64>,
 }
@@ -85,6 +89,8 @@ impl LineTrace {
         if had_server {
             self.server_points.clear();
             self.tmp_point = None;
+            self.server_stop_price = None;
+            self.server_stop_time_ms = None;
         }
         match price {
             Some(p) if p.is_finite() && p > 0.0 => {
@@ -122,11 +128,18 @@ impl LineTrace {
         };
         let points: Vec<(f64, f32)> = trace.points.iter().map(|p| (p.time_ms, p.price)).collect();
         let tmp = trace.tmp_point.map(|p| (p.time_ms, p.price));
-        let changed =
-            self.server_points != points || self.tmp_point != tmp || self.off_ms.is_some();
+        let stop_price = trace.stop_price;
+        let stop_time = trace.stop_time_ms;
+        let changed = self.server_points != points
+            || self.tmp_point != tmp
+            || self.server_stop_price != stop_price
+            || self.server_stop_time_ms != stop_time
+            || self.off_ms.is_some();
         if changed {
             self.server_points = points;
             self.tmp_point = tmp;
+            self.server_stop_price = stop_price;
+            self.server_stop_time_ms = stop_time;
             self.off_ms = None;
         }
         changed

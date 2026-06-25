@@ -360,7 +360,7 @@ fragment float4 hline_fragment(HOut in [[stage_in]]) {
     return in.color;
 }
 
-struct SOut { float4 position [[position]]; float4 color; float dashed [[flat]]; float dist; };
+struct SOut { float4 position [[position]]; float4 color; float pattern [[flat]]; float dist; };
 
 vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                        constant ChartView& cv [[buffer(0)]],
@@ -380,7 +380,12 @@ vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
 }
 
 fragment float4 seg_fragment(SOut in [[stage_in]]) {
-    if (in.dashed >= 0.5 && fract(in.dist / 16.0) > 9.0 / 16.0) discard_fragment();
+    if (in.pattern >= 1.5) {
+        if (fract(in.dist / 6.0) > 2.0 / 6.0) discard_fragment();
+    } else if (in.pattern >= 0.5) {
+        float x = fract(in.dist / 20.0) * 20.0;
+        if (!(x < 8.0 || (x >= 11.0 && x < 13.0) || (x >= 16.0 && x < 18.0))) discard_fragment();
+    }
     return in.color;
 }
 

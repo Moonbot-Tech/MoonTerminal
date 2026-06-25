@@ -40,7 +40,7 @@ fn data_to_px(cv: ChartView, t_rel: f32, price: f32) -> vec2<f32> {
 struct SOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) @interpolate(flat) dashed: f32,
+    @location(1) @interpolate(flat) pattern: f32,
     @location(2) dist: f32,
 };
 
@@ -60,15 +60,22 @@ fn seg_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32
     var out: SOut;
     out.pos = to_clip(px, cv.resolution);
     out.color = s.color;
-    out.dashed = s.m.y;
+    out.pattern = s.m.y;
     out.dist = len * along[vid];
     return out;
 }
 
 @fragment
 fn seg_fragment(in: SOut) -> @location(0) vec4<f32> {
-    if in.dashed >= 0.5 && fract(in.dist / 16.0) > 9.0 / 16.0 {
-        discard;
+    if in.pattern >= 1.5 {
+        if fract(in.dist / 6.0) > 2.0 / 6.0 {
+            discard;
+        }
+    } else if in.pattern >= 0.5 {
+        let x = fract(in.dist / 20.0) * 20.0;
+        if !(x < 8.0 || (x >= 11.0 && x < 13.0) || (x >= 16.0 && x < 18.0)) {
+            discard;
+        }
     }
     return in.color;
 }

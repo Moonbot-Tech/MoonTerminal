@@ -13,7 +13,18 @@ use crate::feed::{
     OrderTrace, OrderTracePoint, RuntimeState,
 };
 
-fn trace_point(p: OrderTraceChartPoint) -> Option<OrderTracePoint> {
+fn trace_point(p: OrderTraceChartPoint) -> OrderTracePoint {
+    OrderTracePoint {
+        time_ms: p.unix_millis() as f64,
+        price: p.price,
+    }
+}
+
+fn valid_trace_point(p: &OrderTracePoint) -> bool {
+    p.time_ms > 1.0 && p.price.is_finite() && p.price > 0.0
+}
+
+fn valid_trace_tmp_point(p: OrderTraceChartPoint) -> Option<OrderTracePoint> {
     let time_ms = p.unix_millis() as f64;
     (time_ms > 1.0 && p.price.is_finite() && p.price > 0.0).then_some(OrderTracePoint {
         time_ms,
@@ -163,15 +174,19 @@ fn order_trace(line: &OrderTraceLine) -> Option<OrderTrace> {
         .points
         .iter()
         .copied()
-        .filter_map(trace_point)
+        .map(trace_point)
         .collect();
-    if points.is_empty() {
+    if !points.iter().any(valid_trace_point) {
         return None;
     }
     Some(OrderTrace {
         points,
-        tmp_point: line.tmp_point.and_then(trace_point),
+        tmp_point: line.tmp_point.and_then(valid_trace_tmp_point),
         stop_price: line.stop_price.filter(|p| p.is_finite() && *p > 0.0),
+        stop_time_ms: line
+            .stop_time
+            .map(|time| time.unix_millis() as f64)
+            .filter(|time_ms| *time_ms > 1.0),
     })
 }
 

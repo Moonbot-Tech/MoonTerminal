@@ -11,6 +11,11 @@ pub const PRICE_AXIS_W: f32 = 56.0;
 pub const TIME_AXIS_H: f32 = 16.0;
 /// Ширина зоны стакана справа (как BOOK_WIDTH_CSS стенда = 220), физ. пиксели.
 pub const GLASS_ZONE_PX: f32 = 220.0;
+const SEG_PATTERN_SOLID: f32 = 0.0;
+const SEG_PATTERN_DASH_DOT_DOT: f32 = 1.0;
+const SEG_PATTERN_DOT: f32 = 2.0;
+/// MoonBot: `ShowLightLines := T.RangeT > 0.02`, где RangeT — Delphi days.
+const MB_TRACE_LIGHT_RANGE_MS: f32 = 0.02 * 86_400_000.0;
 
 pub mod axes;
 pub mod container;
@@ -48,9 +53,10 @@ fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, usize); 7] {
     ]
 }
 
-/// Собирает геометрию линий ордеров рынка `market`: отрезки лестницы (горизонтали
-/// на ступенях + вертикальные стыки), кресты начала/конца, узелки перестановок и
-/// непрерывную линию ликвидации. Куллит ордера вне видимого окна по времени.
+/// Собирает геометрию линий ордеров рынка `market`: рабочие линии ордеров,
+/// отдельную trace-историю их движения, кресты начала/конца, узелки fallback-
+/// ступеней и непрерывную линию ликвидации. Куллит ордера вне видимого окна по
+/// времени.
 #[allow(clippy::too_many_arguments)]
 pub fn build_order_geometry(
     store: &OrderLineStore,
@@ -141,7 +147,11 @@ pub fn build_order_geometry(
 
         let path = &style.path;
         let path_col = rgba(path.color, alpha);
-        let path_dash = if path.dashed { 1.0 } else { 0.0 };
+        let path_dash = if path.dashed {
+            SEG_PATTERN_DASH_DOT_DOT
+        } else {
+            SEG_PATTERN_SOLID
+        };
 
         for (st, idx) in kinds {
             let line = &ord.lines[idx];
@@ -149,149 +159,40 @@ pub fn build_order_geometry(
             let dashed =
                 st.dashed || (idx == LineKind::Buy as usize && ord.pending && style.pending_dashed);
             let col = rgba(st.color, line_alpha);
-            let dash = if dashed { 1.0 } else { 0.0 };
+            let dash = if dashed {
+                SEG_PATTERN_DASH_DOT_DOT
+            } else {
+                SEG_PATTERN_SOLID
+            };
             let thickness = st.thickness * highlight_thickness_mul;
+            let preview_price = drag_preview
+                .filter(|(_, kind, _)| *kind as usize == idx)
+                .map(|(_, _, price)| price);
 
-            if let Some((_, _, preview_price)) =
-                drag_preview.filter(|(_, kind, _)| *kind as usize == idx)
-            {
-                let start_t = line
-                    .server_points
-                    .first()
-                    .map(|(t, _)| *t)
-                    .or_else(|| line.steps.first().map(|(t, _)| *t))
-                    .unwrap_or(ord.create_ms);
-                segs.push(SegInstance {
-                    t0_rel: to_rel(start_t),
-                    p0: preview_price,
-                    t1_rel: edge_rel,
-                    p1: preview_price,
-                    thickness,
-                    dashed: dash,
-                    extend: 1.0,
-                    color: col,
-                });
-                if st.start_marker {
-                    markers.push(MarkerInstance {
-                        t_rel: to_rel(start_t),
-                        price: preview_price,
-                        size: st.marker_size * highlight_marker_mul,
-                        thickness: st.marker_thickness * highlight_thickness_mul,
-                        shape: 0.0,
-                        color: col,
-                    });
-                }
-                continue;
-            }
-
-            if !line.server_points.is_empty() {
-                for pair in line.server_points.windows(2) {
-                    let (t0, p0) = pair[0];
-                    let (t1, p1) = pair[1];
-                    let t0_rel = to_rel(t0);
-                    let t1_rel = to_rel(t1);
-                    if t0_rel.max(t1_rel) < left_rel || t0_rel.min(t1_rel) > right_rel {
-                        continue;
-                    }
-                    // П.8: ступенчатая (step-after) ордер-линия под ПРЯМЫМ углом, а не
-                    // диагональ. Цена p0 действует с t0 до момента изменения t1 → горизонталь
-                    // на уровне p0; затем скачок до p1 → вертикаль на t1. Раньше пара
-                    // соединялась одним наклонным сегментом (подступенек был наклонным).
+            let has_server_trace = !line.server_points.is_empty();
+            let points: &[(f64, f32)] = if has_server_trace {
+                &line.server_points
+            } else {
+                &line.steps
+            };
+            let n = points.len();
+            if n == 0 {
+                if let Some(preview_price) = preview_price {
+                    let start_t = ord.create_ms;
                     segs.push(SegInstance {
-                        t0_rel,
-                        p0,
-                        t1_rel,
-                        p1: p0,
+                        t0_rel: to_rel(start_t),
+                        p0: preview_price,
+                        t1_rel: edge_rel,
+                        p1: preview_price,
                         thickness,
-                        dashed: dash,
-                        extend: 0.0,
+                        pattern: dash,
+                        extend: 1.0,
                         color: col,
                     });
-                    segs.push(SegInstance {
-                        t0_rel: t1_rel,
-                        p0,
-                        t1_rel,
-                        p1,
-                        thickness,
-                        dashed: dash,
-                        extend: 0.0,
-                        color: col,
-                    });
-                }
-
-                if !ended {
-                    let (last_t, last_p) = *line.server_points.last().unwrap();
-                    if let Some((tmp_t, tmp_p)) = line.tmp_point {
-                        // Живая temp-точка — ступенькой под ПРЯМЫМ углом, а не косым пунктиром.
-                        // В норме цена та же (tmp_p == last_p) → видна только горизонталь; при
-                        // перестановке ордера раньше мелькала диагональ от старой точки к новой
-                        // (пользователь жаловался на «косой пунктир»). Горизонталь на last_p до
-                        // tmp_t, затем вертикаль на tmp_t до tmp_p (вертикаль вырождена, если цена
-                        // не менялась).
-                        let last_rel = to_rel(last_t);
-                        let tmp_rel = to_rel(tmp_t);
-                        segs.push(SegInstance {
-                            t0_rel: last_rel,
-                            p0: last_p,
-                            t1_rel: tmp_rel,
-                            p1: last_p,
-                            thickness,
-                            dashed: 1.0,
-                            extend: 0.0,
-                            color: col,
-                        });
-                        segs.push(SegInstance {
-                            t0_rel: tmp_rel,
-                            p0: last_p,
-                            t1_rel: tmp_rel,
-                            p1: tmp_p,
-                            thickness,
-                            dashed: 1.0,
-                            extend: 0.0,
-                            color: col,
-                        });
-                    } else {
-                        segs.push(SegInstance {
-                            t0_rel: to_rel(last_t),
-                            p0: last_p,
-                            t1_rel: 0.0,
-                            p1: last_p,
-                            thickness,
-                            dashed: dash,
-                            extend: 1.0,
-                            color: col,
-                        });
-                    }
-                }
-
-                if st.start_marker {
-                    let (t, p) = line.server_points[0];
-                    markers.push(MarkerInstance {
-                        t_rel: to_rel(t),
-                        price: p,
-                        size: st.marker_size * highlight_marker_mul,
-                        thickness: st.marker_thickness * highlight_thickness_mul,
-                        shape: 0.0,
-                        color: col,
-                    });
-                }
-                if st.knots {
-                    for &(t, p) in line.server_points.iter().skip(1) {
+                    if st.start_marker {
                         markers.push(MarkerInstance {
-                            t_rel: to_rel(t),
-                            price: p,
-                            size: st.knot_size * highlight_marker_mul,
-                            thickness: st.marker_thickness * highlight_thickness_mul,
-                            shape: 1.0,
-                            color: col,
-                        });
-                    }
-                }
-                if st.end_marker && ended {
-                    if let Some(&(t, p)) = line.server_points.last() {
-                        markers.push(MarkerInstance {
-                            t_rel: to_rel(t),
-                            price: p,
+                            t_rel: to_rel(start_t),
+                            price: preview_price,
                             size: st.marker_size * highlight_marker_mul,
                             thickness: st.marker_thickness * highlight_thickness_mul,
                             shape: 0.0,
@@ -301,35 +202,148 @@ pub fn build_order_geometry(
                 }
                 continue;
             }
-
-            let n = line.steps.len();
-            if n == 0 {
-                continue;
-            }
             // Линия завершена, если выключена сама или закрыт ордер. У активной
             // (незавершённой) линии КОНЦА НЕТ — она тянется до правого края plot
             // (через стакан), без креста конца. У завершённой конец = off/close время.
             let line_end = line.off_ms.unwrap_or(order_end);
 
-            let start_t = line.steps[0].0;
+            let start_t = points[0].0;
             // Текущая цена — последняя ступень. Основная линия ПРЯМАЯ на текущей цене
             // от начала до конца (вся переезжает при перестановке).
-            let cur_p = line.steps[n - 1].1;
+            let cur_p = preview_price.unwrap_or(points[n - 1].1);
             let t0_rel = to_rel(start_t);
             // Активная линия — до правого края (edge_rel, через стакан); завершённая —
             // до своего времени конца.
             let t1_rel = if ended { to_rel(line_end) } else { edge_rel };
 
-            // Опциональный «путь» (trail): змейка реальных позиций по истории —
-            // рисуем ПОД основной линией, своим стилем.
-            if path.show && n > 1 {
+            if has_server_trace {
+                // MoonProtoBeta уже хранит points в том же формате, что Delphi
+                // TOrderLine.SetPointTrade: anchor + группы по 3 точки. Рисуем
+                // именно как TOrderLine.DrawInternal, а не как обычную polyline.
+                let show_light_lines = (right_rel - left_rel) > MB_TRACE_LIGHT_RANGE_MS;
+                let base_trace_alpha = if highlighted {
+                    style.trace_alpha.max(0.7)
+                } else {
+                    style.trace_alpha
+                };
+                let trace_alpha = if show_light_lines {
+                    base_trace_alpha * 0.5
+                } else {
+                    base_trace_alpha
+                };
+                let trace_color = rgba(st.color, trace_alpha);
+                let trace_thickness = if highlighted { 2.0 } else { 1.0 };
+                let trace_dash = if show_light_lines {
+                    SEG_PATTERN_SOLID
+                } else {
+                    SEG_PATTERN_DASH_DOT_DOT
+                };
+                let trace_inner_dash = if show_light_lines {
+                    SEG_PATTERN_SOLID
+                } else {
+                    SEG_PATTERN_DOT
+                };
+                let valid_trace_point = |(t, p): (f64, f32)| t > 1.0 && p.is_finite() && p > 0.0;
+
+                let mut k = 0;
+                while k + 3 < n {
+                    let p0 = points[k];
+                    let p1 = points[k + 1];
+                    let p2 = points[k + 2];
+                    let p3 = points[k + 3];
+                    if valid_trace_point(p0) && valid_trace_point(p1) {
+                        let a = to_rel(p0.0);
+                        let b = to_rel(p1.0);
+                        if a.max(b) < left_rel || a.min(b) > right_rel {
+                            k += 3;
+                            continue;
+                        }
+                    }
+                    if valid_trace_point(p0) && valid_trace_point(p1) {
+                        segs.push(SegInstance {
+                            t0_rel: to_rel(p0.0),
+                            p0: p0.1,
+                            t1_rel: to_rel(p1.0),
+                            p1: p1.1,
+                            thickness: trace_thickness,
+                            pattern: trace_dash,
+                            extend: 0.0,
+                            color: trace_color,
+                        });
+                    }
+                    if valid_trace_point(p1) && valid_trace_point(p3) {
+                        segs.push(SegInstance {
+                            t0_rel: to_rel(p1.0),
+                            p0: p1.1,
+                            t1_rel: to_rel(p3.0),
+                            p1: p3.1,
+                            thickness: trace_thickness,
+                            pattern: trace_dash,
+                            extend: 0.0,
+                            color: trace_color,
+                        });
+                    }
+                    if valid_trace_point(p2) {
+                        segs.push(SegInstance {
+                            t0_rel: to_rel(p2.0),
+                            p0: p1.1,
+                            t1_rel: to_rel(p2.0),
+                            p1: p2.1,
+                            thickness: 1.0,
+                            pattern: trace_inner_dash,
+                            extend: 0.0,
+                            color: trace_color,
+                        });
+                    }
+                    k += 3;
+                }
+
+                if !ended {
+                    if let (Some(&(last_t, last_p)), Some((tmp_t, tmp_p))) =
+                        (points.last(), line.tmp_point)
+                    {
+                        if valid_trace_point((last_t, last_p)) && valid_trace_point((tmp_t, tmp_p))
+                        {
+                            segs.push(SegInstance {
+                                t0_rel: to_rel(tmp_t),
+                                p0: last_p,
+                                t1_rel: to_rel(tmp_t),
+                                p1: tmp_p,
+                                thickness: 1.0,
+                                pattern: SEG_PATTERN_DOT,
+                                extend: 0.0,
+                                color: trace_color,
+                            });
+                        }
+                    }
+                }
+
+                if let (Some(stop_price), Some(stop_time_ms), Some(&(start_time, _))) = (
+                    line.server_stop_price,
+                    line.server_stop_time_ms,
+                    points.first(),
+                ) {
+                    if start_time > 1.0
+                        && stop_time_ms > 1.0
+                        && stop_price.is_finite()
+                        && stop_price > 0.0
+                    {
+                        segs.push(SegInstance {
+                            t0_rel: to_rel(start_time),
+                            p0: stop_price,
+                            t1_rel: to_rel(stop_time_ms),
+                            p1: stop_price,
+                            thickness: 2.0,
+                            pattern: SEG_PATTERN_DOT,
+                            extend: 0.0,
+                            color: rgba(style.stop.color, trace_alpha),
+                        });
+                    }
+                }
+            } else if path.show && n > 1 {
                 for i in 0..n {
-                    let (t, p) = line.steps[i];
-                    let seg_end_t = if i + 1 < n {
-                        line.steps[i + 1].0
-                    } else {
-                        line_end
-                    };
+                    let (t, p) = points[i];
+                    let seg_end_t = if i + 1 < n { points[i + 1].0 } else { line_end };
                     if seg_end_t > t {
                         segs.push(SegInstance {
                             t0_rel: to_rel(t),
@@ -337,20 +351,20 @@ pub fn build_order_geometry(
                             t1_rel: to_rel(seg_end_t),
                             p1: p,
                             thickness: path.thickness,
-                            dashed: path_dash,
+                            pattern: path_dash,
                             extend: 0.0,
                             color: path_col,
                         });
                     }
                     if i + 1 < n {
-                        let p2 = line.steps[i + 1].1;
+                        let p2 = points[i + 1].1;
                         segs.push(SegInstance {
                             t0_rel: to_rel(seg_end_t),
                             p0: p,
                             t1_rel: to_rel(seg_end_t),
                             p1: p2,
                             thickness: path.thickness,
-                            dashed: path_dash,
+                            pattern: path_dash,
                             extend: 0.0,
                             color: path_col,
                         });
@@ -365,16 +379,17 @@ pub fn build_order_geometry(
                 t1_rel,
                 p1: cur_p,
                 thickness,
-                dashed: dash,
+                pattern: dash,
                 extend: if ended { 0.0 } else { 1.0 },
                 color: col,
             });
 
-            // Узелки — точки на прямой линии в моменты перестановок (steps[1..]).
-            if st.knots {
+            // Узелки — точки fallback-steps на прямой линии. Для серверной трассы
+            // не дублируем узлы на рабочей линии: сама трасса уже отдельный объект.
+            if st.knots && !has_server_trace {
                 for i in 1..n {
                     markers.push(MarkerInstance {
-                        t_rel: to_rel(line.steps[i].0),
+                        t_rel: to_rel(points[i].0),
                         price: cur_p,
                         size: st.knot_size * highlight_marker_mul,
                         thickness: st.marker_thickness * highlight_thickness_mul,
@@ -406,5 +421,207 @@ pub fn build_order_geometry(
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moon_core::feed::{OrderRow, OrderTrace, OrderTracePoint};
+
+    fn test_order_with_buy_trace() -> OrderRow {
+        OrderRow {
+            market: "BTCUSDT".into(),
+            is_short: false,
+            size: 0.01,
+            sl_on: false,
+            ts_on: false,
+            vstop_on: false,
+            buy_price: 60_000.0,
+            sell_price: 0.0,
+            create_time_ms: 1_000.0,
+            price: 61_000.0,
+            fill_pct: 0.0,
+            strat: "test".into(),
+            uid: 42,
+            emulator: false,
+            job_is_done: false,
+            pending: false,
+            filled: false,
+            stop_loss: None,
+            trailing: None,
+            take_profit: None,
+            vstop: None,
+            pending_cond: None,
+            liq: None,
+            panic_sell: false,
+            is_moon_shot: false,
+            corridor_price_down: 0.0,
+            corridor_price_up: 0.0,
+            buy_trace: Some(OrderTrace {
+                points: vec![
+                    OrderTracePoint {
+                        time_ms: 1_000.0,
+                        price: 60_000.0,
+                    },
+                    OrderTracePoint {
+                        time_ms: 2_000.0,
+                        price: 60_000.0,
+                    },
+                    OrderTracePoint {
+                        time_ms: 0.0,
+                        price: 0.0,
+                    },
+                    OrderTracePoint {
+                        time_ms: 2_000.0,
+                        price: 61_000.0,
+                    },
+                ],
+                tmp_point: Some(OrderTracePoint {
+                    time_ms: 2_500.0,
+                    price: 61_500.0,
+                }),
+                stop_price: Some(59_500.0),
+                stop_time_ms: Some(2_000.0),
+            }),
+            sell_trace: None,
+        }
+    }
+
+    fn near(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.001
+    }
+
+    #[test]
+    fn server_trace_is_separate_from_active_order_line() {
+        let mut store = OrderLineStore::default();
+        assert!(store.update(&[test_order_with_buy_trace()]));
+
+        let mut zones = Vec::new();
+        let mut hlines = Vec::new();
+        let mut segs = Vec::new();
+        let mut markers = Vec::new();
+        build_order_geometry(
+            &store,
+            "BTCUSDT",
+            &OrdersStyle::default(),
+            None,
+            None,
+            0.0,
+            3_000.0,
+            0.0,
+            10_000.0,
+            10_000.0,
+            &mut zones,
+            &mut hlines,
+            &mut segs,
+            &mut markers,
+        );
+
+        assert!(
+            segs.iter().any(|s| {
+                near(s.extend, 1.0)
+                    && near(s.p0, 61_000.0)
+                    && near(s.p1, 61_000.0)
+                    && near(s.t0_rel, 1_000.0)
+            }),
+            "active order line must stay a straight current-price segment"
+        );
+        assert!(
+            segs.iter().any(|s| {
+                near(s.extend, 0.0)
+                    && near(s.t0_rel, 1_000.0)
+                    && near(s.t1_rel, 2_000.0)
+                    && near(s.p0, 60_000.0)
+                    && near(s.p1, 60_000.0)
+                    && near(s.pattern, SEG_PATTERN_DASH_DOT_DOT)
+                    && near(s.thickness, 1.0)
+            }),
+            "server trace must keep its own horizontal history segment"
+        );
+        assert!(
+            segs.iter().any(|s| {
+                near(s.extend, 0.0)
+                    && near(s.t0_rel, 2_000.0)
+                    && near(s.t1_rel, 2_000.0)
+                    && near(s.p0, 60_000.0)
+                    && near(s.p1, 61_000.0)
+                    && near(s.pattern, SEG_PATTERN_DASH_DOT_DOT)
+                    && near(s.thickness, 1.0)
+            }),
+            "server trace must keep its own vertical price-change segment"
+        );
+        assert!(
+            segs.iter().any(|s| {
+                near(s.extend, 0.0)
+                    && near(s.t0_rel, 2_500.0)
+                    && near(s.t1_rel, 2_500.0)
+                    && near(s.p0, 61_000.0)
+                    && near(s.p1, 61_500.0)
+                    && near(s.pattern, SEG_PATTERN_DOT)
+                    && near(s.thickness, 1.0)
+            }),
+            "server trace temp point must be drawn as MoonBot dotted vertical preview"
+        );
+        assert!(
+            segs.iter().any(|s| {
+                near(s.extend, 0.0)
+                    && near(s.t0_rel, 1_000.0)
+                    && near(s.t1_rel, 2_000.0)
+                    && near(s.p0, 59_500.0)
+                    && near(s.p1, 59_500.0)
+                    && near(s.pattern, SEG_PATTERN_DOT)
+                    && near(s.thickness, 2.0)
+            }),
+            "server trace stop-line must be drawn like MoonBot SetStopPrice"
+        );
+    }
+
+    #[test]
+    fn dragging_order_keeps_server_trace_visible() {
+        let mut store = OrderLineStore::default();
+        assert!(store.update(&[test_order_with_buy_trace()]));
+
+        let mut zones = Vec::new();
+        let mut hlines = Vec::new();
+        let mut segs = Vec::new();
+        let mut markers = Vec::new();
+        build_order_geometry(
+            &store,
+            "BTCUSDT",
+            &OrdersStyle::default(),
+            None,
+            Some((42, LineKind::Buy, 62_000.0)),
+            0.0,
+            3_000.0,
+            0.0,
+            10_000.0,
+            10_000.0,
+            &mut zones,
+            &mut hlines,
+            &mut segs,
+            &mut markers,
+        );
+
+        assert!(
+            segs.iter().any(|s| {
+                near(s.extend, 1.0)
+                    && near(s.p0, 62_000.0)
+                    && near(s.p1, 62_000.0)
+                    && near(s.t0_rel, 1_000.0)
+            }),
+            "drag preview must move only the active order line"
+        );
+        assert!(
+            segs.iter().any(|s| {
+                near(s.extend, 0.0)
+                    && near(s.t0_rel, 1_000.0)
+                    && near(s.t1_rel, 2_000.0)
+                    && near(s.p0, 60_000.0)
+                    && near(s.p1, 60_000.0)
+                    && near(s.pattern, SEG_PATTERN_DASH_DOT_DOT)
+            }),
+            "drag preview must not hide the server trace object"
+        );
     }
 }
