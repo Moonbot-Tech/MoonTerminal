@@ -42,14 +42,6 @@ iface.cross_thickness:
   ru: "Толщина линий"
   en: "Line thickness"
   es: "Grosor de líneas"
-iface.halo_radius:
-  ru: "Радиус ореола"
-  en: "Halo radius"
-  es: "Radio del halo"
-iface.halo_intensity:
-  ru: "Яркость ореола"
-  en: "Halo intensity"
-  es: "Intensidad del halo"
 iface.sec_book:
   ru: "Стакан"
   en: "Order book"
@@ -78,14 +70,6 @@ iface.panel_bg:
   ru: "Фон панелей (тулбар, ордер, док, статус)"
   en: "Panels background (toolbar, order, dock, status)"
   es: "Fondo de paneles (barra, orden, dock, estado)"
-iface.sec_closed:
-  ru: "Закрытый график"
-  en: "Closed chart"
-  es: "Gráfico cerrado"
-iface.closed_bg:
-  ru: "Фон пустого контейнера"
-  en: "Empty container background"
-  es: "Fondo del contenedor vacío"
 iface.hint:
   ru: "Меняется вживую. «Сохранить» пишет theme.toml рядом с программой — им можно делиться."
   en: "Changes live. “Save” writes theme.toml next to the app — you can share it."

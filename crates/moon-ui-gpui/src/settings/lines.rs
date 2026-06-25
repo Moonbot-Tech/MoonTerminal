@@ -1,6 +1,7 @@
 //! Вкладка «Линии» — стиль ордер-линий (порт egui `settings/lines.rs`): сворачиваемый
-//! блок на каждый вид линии (Buy/Sell/Stop/…) + Path + Global. Англ. подписи (трейдинг-
-//! термины), как в оригинале. Правки идут в draft (живое превью), «Сохранить» — orders.toml.
+//! блок на каждый вид линии (Buy/Sell/Stop/…) + Path + Global. НАЗВАНИЯ линий —
+//! трейдинг-термины, остаются англ. (как в оригинале); атрибуты/общие подписи локализованы
+//! (`locales/lines.yml`). Правки идут в draft (живое превью), «Сохранить» — orders.toml.
 //! Состояние редактора — [`Lines`]; раскрытость блоков живёт в `SettingsView.open_lines`.
 
 use gpui::*;
@@ -12,11 +13,12 @@ use moon_ui::{
 use super::{SettingsView, separator, slider_row};
 use crate::Backend;
 use moon_core::config::OrdersStyle;
+use rust_i18n::t;
 
-/// Чекбокс ордер-стиля: (id, подпись, геттер, сеттер) — для тела блока линии.
+/// Чекбокс ордер-стиля: (id, локализованная подпись, геттер, сеттер) — для тела блока линии.
 type Check = (
     &'static str,
-    &'static str,
+    String,
     fn(&OrdersStyle) -> bool,
     fn(&mut OrdersStyle, bool),
 );
@@ -199,7 +201,7 @@ impl SettingsView {
         &self,
         cx: &Context<Self>,
         id: &'static str,
-        label: &'static str,
+        label: &str,
         get: fn(&OrdersStyle) -> bool,
         set: fn(&mut OrdersStyle, bool),
     ) -> impl IntoElement {
@@ -228,7 +230,10 @@ impl SettingsView {
         key: &'static str,
         title: &str,
         body: AnyElement,
-    ) -> impl IntoElement {
+        // `use<>`: возвращаемый элемент НЕ заимствует `title` (сразу копируем в owned SharedString).
+        // Без этого Rust 2024 синтаксически «захватывает» лайфтайм `&str` в `impl IntoElement`,
+        // и временный `&t!(..)` из вложенного блока (Path) ловит E0716.
+    ) -> impl IntoElement + use<> {
         let open = self.open_lines.contains(key);
         let title: SharedString = title.to_string().into();
         let entity = cx.entity();
@@ -277,7 +282,7 @@ impl SettingsView {
                     .gap(px(10.0))
                     .items_center()
                     .child(MoonColorPicker::new(&ed.color))
-                    .child(slider_row("thickness", &ed.thickness, cx)),
+                    .child(slider_row(&t!("lines.thickness"), &ed.thickness, cx)),
             )
             .child(chk(0));
         if markers {
@@ -285,10 +290,14 @@ impl SettingsView {
                 .child(separator(p, cx))
                 .child(chk(1))
                 .child(chk(2))
-                .child(slider_row("cross size", &ed.marker_size, cx))
-                .child(slider_row("cross thickness", &ed.marker_thickness, cx))
+                .child(slider_row(&t!("lines.cross_size"), &ed.marker_size, cx))
+                .child(slider_row(
+                    &t!("lines.cross_thickness"),
+                    &ed.marker_thickness,
+                    cx,
+                ))
                 .child(chk(3))
-                .child(slider_row("knot size", &ed.knot_size, cx));
+                .child(slider_row(&t!("lines.knot_size"), &ed.knot_size, cx));
         }
         col.into_any_element()
     }
@@ -307,8 +316,8 @@ impl SettingsView {
         self.collapse_section(cx, key, title, body)
     }
 
-    /// Вкладка «Линии» — порт egui `settings/lines.rs` точь-в-точь: «Order lines», по
-    /// сворачиваемому блоку на вид линии (англ. подписи), затем «Path» и «Global».
+    /// Вкладка «Линии»: «Order lines», по сворачиваемому блоку на вид линии (названия —
+    /// англ. трейдинг-термины), затем «Path» и «Global». Атрибуты — из `locales/lines.yml`.
     pub(super) fn lines_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let l = &self.lines;
         v_flex()
@@ -322,20 +331,30 @@ impl SettingsView {
                 &l.buy,
                 true,
                 &[
-                    ("buy-d", "dashed", |o| o.buy.dashed, |o, v| o.buy.dashed = v),
+                    (
+                        "buy-d",
+                        t!("lines.dashed").to_string(),
+                        |o| o.buy.dashed,
+                        |o, v| o.buy.dashed = v,
+                    ),
                     (
                         "buy-s",
-                        "start cross",
+                        t!("lines.start_cross").to_string(),
                         |o| o.buy.start_marker,
                         |o, v| o.buy.start_marker = v,
                     ),
                     (
                         "buy-e",
-                        "end cross",
+                        t!("lines.end_cross").to_string(),
                         |o| o.buy.end_marker,
                         |o, v| o.buy.end_marker = v,
                     ),
-                    ("buy-k", "knots", |o| o.buy.knots, |o, v| o.buy.knots = v),
+                    (
+                        "buy-k",
+                        t!("lines.knots").to_string(),
+                        |o| o.buy.knots,
+                        |o, v| o.buy.knots = v,
+                    ),
                 ],
             ))
             .child(self.line_section(
@@ -347,23 +366,28 @@ impl SettingsView {
                 &[
                     (
                         "sell-d",
-                        "dashed",
+                        t!("lines.dashed").to_string(),
                         |o| o.sell.dashed,
                         |o, v| o.sell.dashed = v,
                     ),
                     (
                         "sell-s",
-                        "start cross",
+                        t!("lines.start_cross").to_string(),
                         |o| o.sell.start_marker,
                         |o, v| o.sell.start_marker = v,
                     ),
                     (
                         "sell-e",
-                        "end cross",
+                        t!("lines.end_cross").to_string(),
                         |o| o.sell.end_marker,
                         |o, v| o.sell.end_marker = v,
                     ),
-                    ("sell-k", "knots", |o| o.sell.knots, |o, v| o.sell.knots = v),
+                    (
+                        "sell-k",
+                        t!("lines.knots").to_string(),
+                        |o| o.sell.knots,
+                        |o, v| o.sell.knots = v,
+                    ),
                 ],
             ))
             .child(self.line_section(
@@ -375,23 +399,28 @@ impl SettingsView {
                 &[
                     (
                         "stop-d",
-                        "dashed",
+                        t!("lines.dashed").to_string(),
                         |o| o.stop.dashed,
                         |o, v| o.stop.dashed = v,
                     ),
                     (
                         "stop-s",
-                        "start cross",
+                        t!("lines.start_cross").to_string(),
                         |o| o.stop.start_marker,
                         |o, v| o.stop.start_marker = v,
                     ),
                     (
                         "stop-e",
-                        "end cross",
+                        t!("lines.end_cross").to_string(),
                         |o| o.stop.end_marker,
                         |o, v| o.stop.end_marker = v,
                     ),
-                    ("stop-k", "knots", |o| o.stop.knots, |o, v| o.stop.knots = v),
+                    (
+                        "stop-k",
+                        t!("lines.knots").to_string(),
+                        |o| o.stop.knots,
+                        |o, v| o.stop.knots = v,
+                    ),
                 ],
             ))
             .child(self.line_section(
@@ -403,25 +432,25 @@ impl SettingsView {
                 &[
                     (
                         "tr-d",
-                        "dashed",
+                        t!("lines.dashed").to_string(),
                         |o| o.trailing.dashed,
                         |o, v| o.trailing.dashed = v,
                     ),
                     (
                         "tr-s",
-                        "start cross",
+                        t!("lines.start_cross").to_string(),
                         |o| o.trailing.start_marker,
                         |o, v| o.trailing.start_marker = v,
                     ),
                     (
                         "tr-e",
-                        "end cross",
+                        t!("lines.end_cross").to_string(),
                         |o| o.trailing.end_marker,
                         |o, v| o.trailing.end_marker = v,
                     ),
                     (
                         "tr-k",
-                        "knots",
+                        t!("lines.knots").to_string(),
                         |o| o.trailing.knots,
                         |o, v| o.trailing.knots = v,
                     ),
@@ -436,25 +465,25 @@ impl SettingsView {
                 &[
                     (
                         "tp-d",
-                        "dashed",
+                        t!("lines.dashed").to_string(),
                         |o| o.take_profit.dashed,
                         |o, v| o.take_profit.dashed = v,
                     ),
                     (
                         "tp-s",
-                        "start cross",
+                        t!("lines.start_cross").to_string(),
                         |o| o.take_profit.start_marker,
                         |o, v| o.take_profit.start_marker = v,
                     ),
                     (
                         "tp-e",
-                        "end cross",
+                        t!("lines.end_cross").to_string(),
                         |o| o.take_profit.end_marker,
                         |o, v| o.take_profit.end_marker = v,
                     ),
                     (
                         "tp-k",
-                        "knots",
+                        t!("lines.knots").to_string(),
                         |o| o.take_profit.knots,
                         |o, v| o.take_profit.knots = v,
                     ),
@@ -469,23 +498,28 @@ impl SettingsView {
                 &[
                     (
                         "vs-d",
-                        "dashed",
+                        t!("lines.dashed").to_string(),
                         |o| o.vstop.dashed,
                         |o, v| o.vstop.dashed = v,
                     ),
                     (
                         "vs-s",
-                        "start cross",
+                        t!("lines.start_cross").to_string(),
                         |o| o.vstop.start_marker,
                         |o, v| o.vstop.start_marker = v,
                     ),
                     (
                         "vs-e",
-                        "end cross",
+                        t!("lines.end_cross").to_string(),
                         |o| o.vstop.end_marker,
                         |o, v| o.vstop.end_marker = v,
                     ),
-                    ("vs-k", "knots", |o| o.vstop.knots, |o, v| o.vstop.knots = v),
+                    (
+                        "vs-k",
+                        t!("lines.knots").to_string(),
+                        |o| o.vstop.knots,
+                        |o, v| o.vstop.knots = v,
+                    ),
                 ],
             ))
             .child(self.line_section(
@@ -497,25 +531,25 @@ impl SettingsView {
                 &[
                     (
                         "pc-d",
-                        "dashed",
+                        t!("lines.dashed").to_string(),
                         |o| o.pending_cond.dashed,
                         |o, v| o.pending_cond.dashed = v,
                     ),
                     (
                         "pc-s",
-                        "start cross",
+                        t!("lines.start_cross").to_string(),
                         |o| o.pending_cond.start_marker,
                         |o, v| o.pending_cond.start_marker = v,
                     ),
                     (
                         "pc-e",
-                        "end cross",
+                        t!("lines.end_cross").to_string(),
                         |o| o.pending_cond.end_marker,
                         |o, v| o.pending_cond.end_marker = v,
                     ),
                     (
                         "pc-k",
-                        "knots",
+                        t!("lines.knots").to_string(),
                         |o| o.pending_cond.knots,
                         |o, v| o.pending_cond.knots = v,
                     ),
@@ -527,7 +561,12 @@ impl SettingsView {
                 "Liquidation",
                 &l.liq,
                 false,
-                &[("liq-d", "dashed", |o| o.liq.dashed, |o, v| o.liq.dashed = v)],
+                &[(
+                    "liq-d",
+                    t!("lines.dashed").to_string(),
+                    |o| o.liq.dashed,
+                    |o, v| o.liq.dashed = v,
+                )],
             ))
             .child(separator(MoonPalette::active(cx), cx))
             // Path (trail / змейка) — свой сворачиваемый блок.
@@ -539,7 +578,7 @@ impl SettingsView {
                     .child(self.ord_check(
                         cx,
                         "path-show",
-                        "show path",
+                        &t!("lines.show_path"),
                         |o| o.path.show,
                         |o, v| o.path.show = v,
                     ))
@@ -548,39 +587,39 @@ impl SettingsView {
                             .gap(px(10.0))
                             .items_center()
                             .child(MoonColorPicker::new(&l.path_color))
-                            .child(slider_row("thickness", &l.path_thickness, cx)),
+                            .child(slider_row(&t!("lines.thickness"), &l.path_thickness, cx)),
                     )
                     .child(self.ord_check(
                         cx,
                         "path-dash",
-                        "dashed",
+                        &t!("lines.dashed"),
                         |o| o.path.dashed,
                         |o, v| o.path.dashed = v,
                     ))
                     .into_any_element();
-                self.collapse_section(cx, "path", "Path (trail / змейка)", body)
+                self.collapse_section(cx, "path", &t!("lines.path_title"), body)
             })
             .child(separator(MoonPalette::active(cx), cx))
-            .child(div().mt_1().font_bold().child("Global"))
-            .child(slider_row("active alpha", &l.active_alpha, cx))
+            .child(div().mt_1().font_bold().child(t!("lines.global").to_string()))
+            .child(slider_row(&t!("lines.active_alpha"), &l.active_alpha, cx))
             .child(slider_row(
-                "cancelled/closed visibility",
+                &t!("lines.closed_visibility"),
                 &l.closed_alpha,
                 cx,
             ))
             .child(self.ord_check(
                 cx,
                 "pending-dash",
-                "pending order: dashed entry",
+                &t!("lines.pending_dashed"),
                 |o| o.pending_dashed,
                 |o, v| o.pending_dashed = v,
             ))
-            .child(slider_row("max closed orders drawn", &l.max_closed, cx))
+            .child(slider_row(&t!("lines.max_closed"), &l.max_closed, cx))
             .child(
                 div()
                     .mt_2()
                     .text_color(rgb(MoonPalette::active(cx).text_soft))
-                    .child("Stop/Trailing/Liq lines appear only after the entry is filled."),
+                    .child(t!("lines.hint").to_string()),
             )
     }
 }

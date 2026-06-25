@@ -22,16 +22,12 @@ pub struct ChartTheme {
     pub background_opacity: f32,
 
     // --- График: перекрестие ---
-    /// Цвет перекрестия и ореола (sRGB).
+    /// Цвет перекрестия (sRGB).
     pub cross: [u8; 3],
     /// Прозрачность линий перекрестия 0..1.
     pub cross_alpha: f32,
     /// Полутолщина линий перекрестия, px.
     pub cross_thickness: f32,
-    /// Радиус размытого ореола у курсора, px.
-    pub halo_radius: f32,
-    /// Яркость ореола 0..1.
-    pub halo_intensity: f32,
 
     // --- Стакан ---
     /// Фон зоны стакана (sRGB).
@@ -49,10 +45,6 @@ pub struct ChartTheme {
     // --- Панели (egui-хром: тулбар, панель ордера, док ордеров, статус) ---
     /// Фон панелей (sRGB).
     pub panel_bg: [u8; 3],
-
-    // --- Закрытый график (пустой контейнер без чарта) ---
-    /// Фон зоны при закрытом графике (sRGB).
-    pub closed_bg: [u8; 3],
 }
 
 impl Default for ChartTheme {
@@ -65,14 +57,11 @@ impl Default for ChartTheme {
             cross: palette::ACCENT, // --accent (янтарный)
             cross_alpha: 0.5,
             cross_thickness: 1.0,
-            halo_radius: 44.0,
-            halo_intensity: 0.14,
             book_bg: palette::BG,      // как фон чарта
             book_bid: palette::GREEN,  // --long (зелёный)
             book_ask: palette::ORANGE, // --short (оранжевый)
             book_level_alpha: 0.5,
-            panel_bg: palette::BG,         // --bg
-            closed_bg: palette::SURFACE_1, // --surface-1 (нейтральный контейнер)
+            panel_bg: palette::BG, // --bg
         }
     }
 }

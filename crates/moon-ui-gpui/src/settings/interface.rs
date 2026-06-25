@@ -1,6 +1,6 @@
 //! Вкладка «Интерфейс» — тема оформления (порт egui `settings/interface.rs`): цвета
-//! графика/перекрестия/стакана/панелей/закрытого графика + слайдеры. Правки идут в
-//! draft (живое превью), «Сохранить» пишет theme.toml. Состояние редактора — [`Iface`].
+//! графика/перекрестия/стакана/панелей + слайдеры. Правки идут в draft (живое превью),
+//! «Сохранить» пишет theme.toml. Состояние редактора — [`Iface`].
 
 use gpui::*;
 use moon_ui::{MoonColorPickerState, MoonPalette, MoonSliderState, v_flex};
@@ -19,14 +19,11 @@ pub(super) struct Iface {
     cross: Entity<MoonColorPickerState>,
     cross_alpha: Entity<MoonSliderState>,
     cross_thickness: Entity<MoonSliderState>,
-    halo_radius: Entity<MoonSliderState>,
-    halo_intensity: Entity<MoonSliderState>,
     book_bg: Entity<MoonColorPickerState>,
     book_bid: Entity<MoonColorPickerState>,
     book_ask: Entity<MoonColorPickerState>,
     book_level_alpha: Entity<MoonSliderState>,
     panel_bg: Entity<MoonColorPickerState>,
-    closed_bg: Entity<MoonColorPickerState>,
 }
 
 /// Слайдер f32, привязанный к общему AppConfig, а не к теме чарта (переустанавливает тему).
@@ -142,24 +139,6 @@ pub(super) fn build(
             4.0,
             0.1,
         ),
-        halo_radius: num_field(
-            backend,
-            cx,
-            |t| t.halo_radius,
-            |t, v| t.halo_radius = v,
-            0.0,
-            120.0,
-            1.0,
-        ),
-        halo_intensity: num_field(
-            backend,
-            cx,
-            |t| t.halo_intensity,
-            |t, v| t.halo_intensity = v,
-            0.0,
-            0.6,
-            0.01,
-        ),
         book_bg: color_field(backend, window, cx, |t| t.book_bg, |t, v| t.book_bg = v),
         book_bid: color_field(backend, window, cx, |t| t.book_bid, |t, v| t.book_bid = v),
         book_ask: color_field(backend, window, cx, |t| t.book_ask, |t, v| t.book_ask = v),
@@ -173,14 +152,12 @@ pub(super) fn build(
             0.01,
         ),
         panel_bg: color_field(backend, window, cx, |t| t.panel_bg, |t, v| t.panel_bg = v),
-        closed_bg: color_field(backend, window, cx, |t| t.closed_bg, |t, v| t.closed_bg = v),
     }
 }
 
 impl SettingsView {
-    /// Вкладка «Интерфейс» — порт egui `settings/interface.rs` точь-в-точь: секции
-    /// График(фон/сетка) · Перекрестие · Стакан · Панели · Закрытый график, цветовые
-    /// ряды (свотч+подпись) и слайдеры; разделители между секциями; хинт внизу.
+    /// Вкладка «Интерфейс»: секции График(фон/сетка) · Перекрестие · Стакан · Панели,
+    /// цветовые ряды (свотч+подпись) и слайдеры; разделители между секциями; хинт внизу.
     pub(super) fn interface_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let i = &self.iface;
         let p = MoonPalette::active(cx);
@@ -206,12 +183,6 @@ impl SettingsView {
                 &i.cross_thickness,
                 cx,
             ))
-            .child(slider_row(&t!("iface.halo_radius"), &i.halo_radius, cx))
-            .child(slider_row(
-                &t!("iface.halo_intensity"),
-                &i.halo_intensity,
-                cx,
-            ))
             .child(separator(p, cx))
             // Стакан
             .child(section(&t!("iface.sec_book"), p, cx))
@@ -227,10 +198,6 @@ impl SettingsView {
             // Панели
             .child(section(&t!("iface.sec_panels"), p, cx))
             .child(color_row(&t!("iface.panel_bg"), &i.panel_bg, p, cx))
-            .child(separator(p, cx))
-            // Закрытый график
-            .child(section(&t!("iface.sec_closed"), p, cx))
-            .child(color_row(&t!("iface.closed_bg"), &i.closed_bg, p, cx))
             .child(
                 div()
                     .mt_2()

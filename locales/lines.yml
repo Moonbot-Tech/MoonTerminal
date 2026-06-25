@@ -1,0 +1,71 @@
+# Вкладка «Линии» окна настроек (стиль ордер-линий, orders.toml).
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка.
+_version: 2
+
+# Названия линий (Order lines, Buy/Sell/Stop/Trailing/Take Profit/VStop/Pending cond/
+# Liquidation) — трейдинг-термины, по договорённости НЕ переводим: в lines.rs они англ.
+# литералами. Здесь только атрибуты/общие подписи.
+lines.dashed:
+  ru: "пунктир"
+  en: "dashed"
+  es: "discontinua"
+lines.start_cross:
+  ru: "крест в начале"
+  en: "start cross"
+  es: "cruz inicial"
+lines.end_cross:
+  ru: "крест в конце"
+  en: "end cross"
+  es: "cruz final"
+lines.knots:
+  ru: "узлы"
+  en: "knots"
+  es: "nudos"
+lines.thickness:
+  ru: "толщина"
+  en: "thickness"
+  es: "grosor"
+lines.cross_size:
+  ru: "размер креста"
+  en: "cross size"
+  es: "tamaño de cruz"
+lines.cross_thickness:
+  ru: "толщина креста"
+  en: "cross thickness"
+  es: "grosor de cruz"
+lines.knot_size:
+  ru: "размер узла"
+  en: "knot size"
+  es: "tamaño de nudo"
+lines.path_title:
+  ru: "Путь (трейл / змейка)"
+  en: "Path (trail)"
+  es: "Ruta (trail)"
+lines.show_path:
+  ru: "показывать путь"
+  en: "show path"
+  es: "mostrar ruta"
+lines.global:
+  ru: "Общее"
+  en: "Global"
+  es: "Global"
+lines.active_alpha:
+  ru: "прозрачность активных"
+  en: "active alpha"
+  es: "opacidad activa"
+lines.closed_visibility:
+  ru: "видимость отменённых/закрытых"
+  en: "cancelled/closed visibility"
+  es: "visibilidad cancel./cerradas"
+lines.pending_dashed:
+  ru: "отлож. ордер: пунктир входа"
+  en: "pending order: dashed entry"
+  es: "orden pendiente: entrada discontinua"
+lines.max_closed:
+  ru: "макс. закрытых ордеров на графике"
+  en: "max closed orders drawn"
+  es: "máx. órdenes cerradas dibujadas"
+lines.hint:
+  ru: "Линии Stop/Trailing/Liq появляются только после исполнения входа."
+  en: "Stop/Trailing/Liq lines appear only after the entry is filled."
+  es: "Las líneas Stop/Trailing/Liq aparecen solo tras ejecutarse la entrada."
