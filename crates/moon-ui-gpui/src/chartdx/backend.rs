@@ -271,6 +271,9 @@ impl PlatformLayers {
             .render(orderbook_view, context, rtv, gpu, panel_clip);
         crate::diag::bump(&crate::diag::CHART_USER_DRAW);
         self.userdata.render(view, context, rtv, gpu);
+        if self.combo.has_data() {
+            super::gpu::debug_dump_rtv_once(device, context, rtv);
+        }
     }
 
     #[cfg(windows)]

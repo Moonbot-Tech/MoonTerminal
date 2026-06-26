@@ -5,7 +5,11 @@
 //! Шейдеры компилируются из ВКОМПИЛЕННОЙ строки (`include_str!` → `D3DCompile`), а не из
 //! файла на диске — бинарь самодостаточен при деплое (нет внешних .hlsl рядом с exe).
 
-use std::ffi::{CString, c_void};
+use std::{
+    ffi::{CString, c_void},
+    path::PathBuf,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use gpui::RawGpuAccess;
 use windows::Win32::Foundation::RECT;
@@ -16,6 +20,10 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_UNKNOWN;
 use windows::core::{Interface, PCSTR};
 
 pub use super::types::{BlitParams, ChartCross, ChartViewGpu};
+
+static DEBUG_FRAME_DUMP_DONE: AtomicBool = AtomicBool::new(false);
+static DEBUG_FRAME_DUMP_SEEN: AtomicU64 = AtomicU64::new(0);
+static DEBUG_COMBO_DUMP_DONE: AtomicBool = AtomicBool::new(false);
 
 // ───────────────────────── GPU-типы (layout = HLSL) ─────────────────────────
 
@@ -175,6 +183,29 @@ pub fn create_alpha_blend(device: &ID3D11Device) -> ID3D11BlendState {
     }
 }
 
+/// Blend для текстуры, где RGB уже premultiplied через предыдущий alpha-pass.
+///
+/// Combo bake рисует полупрозрачные объёмы/линии в прозрачную texture обычным
+/// alpha blend, поэтому RGB внутри texture уже содержит `src.rgb * src.a`.
+/// Финальный перенос такой texture в backbuffer должен использовать `(1, 1-src.a)`,
+/// иначе alpha применяется второй раз и volume почти исчезает.
+pub fn create_premultiplied_alpha_blend(device: &ID3D11Device) -> ID3D11BlendState {
+    let mut desc = D3D11_BLEND_DESC::default();
+    desc.RenderTarget[0].BlendEnable = true.into();
+    desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    desc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+    desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    desc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+    desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8;
+    unsafe {
+        let mut s = None;
+        device.CreateBlendState(&desc, Some(&mut s)).unwrap();
+        s.unwrap()
+    }
+}
+
 /// Point-семпл clamp-сэмплер (combo-блит 1:1).
 pub fn create_point_sampler(device: &ID3D11Device) -> ID3D11SamplerState {
     let d = D3D11_SAMPLER_DESC {
@@ -267,6 +298,158 @@ pub fn borrow_d3d(
         let rtv = ID3D11RenderTargetView::from_raw_borrowed(&gpu.render_target.as_ptr())?.clone();
         Some((device, context, rtv))
     }
+}
+
+/// Debug-only DX11 readback: dumps the current render target to PNG once when
+/// `MOON_CHART_DUMP_FRAME` is set. This captures the renderer output directly,
+/// unlike desktop screenshots that can miss transparent/own-pass windows.
+#[cfg(windows)]
+pub fn debug_dump_rtv_once(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    rtv: &ID3D11RenderTargetView,
+) {
+    if DEBUG_FRAME_DUMP_DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let Some(path) = std::env::var_os("MOON_CHART_DUMP_FRAME").map(PathBuf::from) else {
+        DEBUG_FRAME_DUMP_DONE.store(false, Ordering::Relaxed);
+        return;
+    };
+    if path.as_os_str().is_empty() {
+        DEBUG_FRAME_DUMP_DONE.store(false, Ordering::Relaxed);
+        return;
+    }
+    let after = std::env::var("MOON_CHART_DUMP_FRAME_AFTER")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1);
+    let seen = DEBUG_FRAME_DUMP_SEEN.fetch_add(1, Ordering::Relaxed) + 1;
+    if seen < after {
+        DEBUG_FRAME_DUMP_DONE.store(false, Ordering::Relaxed);
+        return;
+    }
+    if let Err(error) = debug_dump_rtv_png(device, context, rtv, &path) {
+        log::warn!("chartdx frame dump failed at {}: {error:?}", path.display());
+    } else {
+        log::info!("chartdx frame dumped to {}", path.display());
+    }
+}
+
+#[cfg(windows)]
+fn debug_dump_rtv_png(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    rtv: &ID3D11RenderTargetView,
+    path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let resource = unsafe { rtv.GetResource()? };
+    let texture: ID3D11Texture2D = resource.cast()?;
+    debug_dump_texture_png(device, context, &texture, path)
+}
+
+/// Debug-only readback of the offscreen Combo cache texture.
+#[cfg(windows)]
+pub fn debug_dump_combo_texture_once(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    texture: &ID3D11Texture2D,
+) {
+    if DEBUG_COMBO_DUMP_DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let Some(path) = std::env::var_os("MOON_CHART_DUMP_COMBO").map(PathBuf::from) else {
+        DEBUG_COMBO_DUMP_DONE.store(false, Ordering::Relaxed);
+        return;
+    };
+    if path.as_os_str().is_empty() {
+        DEBUG_COMBO_DUMP_DONE.store(false, Ordering::Relaxed);
+        return;
+    }
+    if let Err(error) = debug_dump_texture_png(device, context, texture, &path) {
+        log::warn!("chartdx combo dump failed at {}: {error:?}", path.display());
+    } else {
+        log::info!("chartdx combo dumped to {}", path.display());
+    }
+}
+
+#[cfg(windows)]
+fn debug_dump_texture_png(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    texture: &ID3D11Texture2D,
+    path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe {
+        texture.GetDesc(&mut desc);
+    }
+    if desc.Width == 0 || desc.Height == 0 {
+        anyhow::bail!("empty render target {}x{}", desc.Width, desc.Height);
+    }
+
+    let staging_desc = D3D11_TEXTURE2D_DESC {
+        Width: desc.Width,
+        Height: desc.Height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: desc.Format,
+        SampleDesc: desc.SampleDesc,
+        Usage: D3D11_USAGE_STAGING,
+        BindFlags: 0,
+        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+        MiscFlags: 0,
+    };
+    let mut staging = None;
+    unsafe {
+        device.CreateTexture2D(&staging_desc, None, Some(&mut staging))?;
+    }
+    let staging: ID3D11Texture2D =
+        staging.ok_or_else(|| anyhow::anyhow!("staging texture is null"))?;
+    let source_resource: ID3D11Resource = texture.cast()?;
+    let staging_resource: ID3D11Resource = staging.cast()?;
+    unsafe {
+        context.CopyResource(&staging_resource, &source_resource);
+    }
+
+    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+    unsafe {
+        context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+    }
+    let result = (|| -> anyhow::Result<()> {
+        let width = desc.Width as usize;
+        let height = desc.Height as usize;
+        let row_pitch = mapped.RowPitch as usize;
+        let src = mapped.pData as *const u8;
+        let mut rgba = vec![0u8; width * height * 4];
+        for y in 0..height {
+            let row = unsafe { std::slice::from_raw_parts(src.add(y * row_pitch), width * 4) };
+            for x in 0..width {
+                let si = x * 4;
+                let di = (y * width + x) * 4;
+                rgba[di] = row[si + 2];
+                rgba[di + 1] = row[si + 1];
+                rgba[di + 2] = row[si];
+                rgba[di + 3] = row[si + 3];
+            }
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        image::save_buffer(
+            path,
+            &rgba,
+            desc.Width,
+            desc.Height,
+            image::ColorType::Rgba8,
+        )?;
+        Ok(())
+    })();
+    unsafe {
+        context.Unmap(&staging, 0);
+    }
+    result
 }
 
 // ───────────────────────── Scissor (обрезка слоёв к зоне) ─────────────────────────

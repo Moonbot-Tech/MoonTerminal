@@ -14,13 +14,13 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 
 use super::gpu::{
-    create_alpha_blend, create_dynamic_cb, create_point_sampler, create_srv, create_srv_range,
+    BlitParams, ChartCross, ChartViewGpu, create_alpha_blend, create_dynamic_cb,
+    create_point_sampler, create_premultiplied_alpha_blend, create_srv, create_srv_range,
     create_structured, full_viewport, ring_write_no_overwrite, set_scissor_rect, update_dynamic,
-    BlitParams, ChartCross, ChartViewGpu,
 };
 use super::types::{
-    append_cross_ring, cross_volume_max, evicted_cross_ranges, ranges_have_entries,
-    ranges_touch_volume_max, reset_cross_ring, update_cross_volume_max, DEFAULT_VOLUME_ALPHA,
+    DEFAULT_VOLUME_ALPHA, append_cross_ring, cross_volume_max, evicted_cross_ranges,
+    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, update_cross_volume_max,
 };
 
 const MIN_COMBO_CAPACITY: u32 = 1;
@@ -45,6 +45,7 @@ struct CrossPipe {
     price_last_ps: ID3D11PixelShader,
     price_mark_ps: ID3D11PixelShader,
     blend: ID3D11BlendState,
+    premultiplied_blend: ID3D11BlendState,
     buffer: ID3D11Buffer,
     srv: ID3D11ShaderResourceView,
     last_line_buf: ID3D11Buffer,
@@ -128,6 +129,10 @@ impl ComboLayer {
     /// last_device_gen: сменилось → кольцо пустое, нужна полная перезаливка истории.
     pub fn device_gen(&self) -> u64 {
         self.device_gen
+    }
+
+    pub fn has_data(&self) -> bool {
+        self.count > 0
     }
 
     pub fn set_capacity(&mut self, cross_capacity: usize, price_line_capacity: usize) {
@@ -254,22 +259,31 @@ impl ComboLayer {
         let pipe = self.pipe.as_ref().unwrap();
         let last_line_count = self.last_line_count;
         let mark_line_count = self.mark_line_count;
-        let tex = self.tex.as_mut().unwrap();
-        if tex.last_time_to_px != view.time_to_px
-            || tex.last_price_to_px != view.price_to_px
-            || tex.last_view_price0 != view.view_price0
-            || tex.last_marker_half != view.marker_half
-        {
-            tex.valid = false;
-        }
         let ttp = view.time_to_px;
-        let u_left_px = (view.view_time0 - tex.bake_t0) * ttp;
-        let need_full = !tex.valid || u_left_px < 0.0 || u_left_px > margin_px;
+        let tex_ref = self.tex.as_ref().unwrap();
+        let transform_changed = tex_ref.last_time_to_px != view.time_to_px
+            || tex_ref.last_price_to_px != view.price_to_px
+            || tex_ref.last_view_price0 != view.view_price0
+            || tex_ref.last_marker_half != view.marker_half;
+        let u_left_px = (view.view_time0 - tex_ref.bake_t0) * ttp;
+        let mut need_full =
+            transform_changed || !tex_ref.valid || u_left_px < 0.0 || u_left_px > margin_px;
         let bake_t0 = if need_full {
             texel_aligned_time0(view.view_time0, ttp)
         } else {
-            tex.bake_t0
+            tex_ref.bake_t0
         };
+        let (buy_max, sell_max) = self.volume_scale_for_bake_window(bake_t0, tex_w as f32, ttp);
+        let tex = self.tex.as_mut().unwrap();
+        if transform_changed {
+            tex.valid = false;
+        }
+        if (buy_max, sell_max) != (self.volume_buy_max, self.volume_sell_max) {
+            self.volume_buy_max = buy_max;
+            self.volume_sell_max = sell_max;
+            tex.valid = false;
+            need_full = true;
+        }
         // bake-юнформ: левый край времени = bake_t0 (фикс), viewport = весь битмап.
         // При full re-bake держим bake_t0 на глобальной texel-фазе. Иначе формула
         // "старый bake + rounded UV scroll" и формула "новый сырой view_time0" расходятся
@@ -303,6 +317,7 @@ impl ComboLayer {
             set_scissor_rect(context, 0.0, 0.0, tex_w as f32, tex_h as f32);
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             context.VSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
+            context.PSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
             if need_full {
                 crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);
@@ -351,6 +366,7 @@ impl ComboLayer {
                 }
                 tex.last_baked_head = self.head;
             }
+            super::gpu::debug_dump_combo_texture_once(device, context, &tex._tex);
         }
     }
 
@@ -406,7 +422,7 @@ impl ComboLayer {
             context.PSSetConstantBuffers(0, Some(&[Some(tex.blit_cb.clone())]));
             context.PSSetShaderResources(0, Some(&[Some(tex.srv.clone())]));
             context.PSSetSamplers(0, Some(&[Some(tex.sampler.clone())]));
-            context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
+            context.OMSetBlendState(&pipe.premultiplied_blend, None, 0xFFFFFFFF);
             context.Draw(6, 0);
         }
     }
@@ -512,6 +528,46 @@ impl ComboLayer {
         self.volume_sell_max = max.1;
     }
 
+    fn volume_scale_for_bake_window(
+        &self,
+        bake_t0: f32,
+        tex_w: f32,
+        time_to_px: f32,
+    ) -> (f32, f32) {
+        if !(time_to_px > 1e-9) || self.resident_count == 0 {
+            return (1e-6, 1e-6);
+        }
+        let time_left = bake_t0 - 2.0 / time_to_px;
+        let time_right = bake_t0 + (tex_w + 2.0) / time_to_px;
+        let capacity = self.cross_capacity.max(1) as usize;
+        let count = self
+            .resident_count
+            .min(capacity)
+            .min(self.resident_crosses.len());
+        let start = if count == capacity {
+            self.resident_head % capacity
+        } else {
+            0
+        };
+        let mut buy = 1e-6f32;
+        let mut sell = 1e-6f32;
+        for i in 0..count {
+            let idx = (start + i) % capacity;
+            let Some(c) = self.resident_crosses.get(idx) else {
+                continue;
+            };
+            if c.time_rel < time_left || c.time_rel > time_right || c.qty <= 0.0 {
+                continue;
+            }
+            if c.side == 0 {
+                buy = buy.max(c.qty);
+            } else {
+                sell = sell.max(c.qty);
+            }
+        }
+        (buy, sell)
+    }
+
     fn draw_price_lines(
         context: &ID3D11DeviceContext,
         pipe: &CrossPipe,
@@ -542,6 +598,7 @@ impl ComboLayer {
         let price_last_ps = super::gpu::make_ps(device, CROSSES_HLSL, "price_last_fragment");
         let price_mark_ps = super::gpu::make_ps(device, CROSSES_HLSL, "price_mark_fragment");
         let blend = create_alpha_blend(device);
+        let premultiplied_blend = create_premultiplied_alpha_blend(device);
         let buffer = create_structured(
             device,
             std::mem::size_of::<ChartCross>() as u32,
@@ -570,6 +627,7 @@ impl ComboLayer {
             price_last_ps,
             price_mark_ps,
             blend,
+            premultiplied_blend,
             buffer,
             srv,
             last_line_buf,
