@@ -489,7 +489,8 @@ impl ChartDataState {
             let cam_px = ((pane.view.right_time_ms - pane.view.epoch_ms)
                 * pane.view.px_per_ms.max(1e-9) as f64)
                 .round() as i64;
-            let marker_margin = pane.view.marker_half_px / pane.view.px_per_ms.max(1e-6);
+            let marker_margin = view::cross_cull_margin_physical_px(&pane.view, self.last_ppp)
+                / pane.view.px_per_ms.max(1e-6);
             let history_prefetch = (window_ms * 0.20).max(marker_margin);
             let history_from = view_time0 - history_prefetch;
             let history_to = view_time0 + window_ms + history_prefetch;
@@ -691,7 +692,7 @@ impl ChartDataState {
                 w: chart_area.w,
                 h: chart_area.h,
             };
-            let next_view = view::view_gpu(&pane.view, area_win, res);
+            let next_view = view::view_gpu(&pane.view, area_win, res, self.last_ppp);
             if pr.view != next_view {
                 pr.view = next_view;
                 pr.gpu_prepare_dirty = true;
@@ -747,7 +748,7 @@ impl ChartDataState {
                 w: glass_area.w,
                 h: glass_area.h,
             };
-            let next_orderbook_view = view::view_gpu(&pane.view, glass_win, res);
+            let next_orderbook_view = view::view_gpu(&pane.view, glass_win, res, self.last_ppp);
             if pr.orderbook_view != next_orderbook_view {
                 pr.orderbook_view = next_orderbook_view;
                 pr.gpu_prepare_dirty = true;

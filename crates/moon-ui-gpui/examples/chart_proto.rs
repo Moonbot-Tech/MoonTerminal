@@ -10,9 +10,9 @@
 use std::time::Instant;
 
 use gpui::{
-    App, Application, Bounds, Context, MouseMoveEvent, Pixels, Point, Render, SharedString,
-    TextRun, TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div, fill, point,
-    prelude::*, px, rgb, size,
+    canvas, div, fill, point, prelude::*, px, rgb, size, App, Bounds, Context, MouseMoveEvent,
+    Pixels, Point, Render, SharedString, TextAlign, TextRun, TitlebarOptions, Window, WindowBounds,
+    WindowOptions,
 };
 
 struct Proto {
@@ -210,12 +210,19 @@ fn draw(
     let line = window
         .text_system()
         .shape_line(text, px(14.0), &[run], None);
-    let _ = line.paint(point(px(left + 8.0), px(top + 6.0)), px(18.0), window, cx);
+    let _ = line.paint(
+        point(px(left + 8.0), px(top + 6.0)),
+        px(18.0),
+        TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    Application::new().run(|cx: &mut App| {
+    gpui_platform::application().run(|cx: &mut App| {
         cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {

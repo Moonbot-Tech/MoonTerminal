@@ -63,12 +63,22 @@ fn chart_background_policy_keeps_gpu_canvas_under_scene() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let chart_panel = fs::read_to_string(root.join("panels").join("chart.rs")).unwrap();
+    let chart_panel = [
+        root.join("panels").join("chart").join("mod.rs"),
+        root.join("panels").join("chart").join("render.rs"),
+    ]
+    .into_iter()
+    .map(|path| {
+        fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
     let chart_tabs_mod = fs::read_to_string(root.join("chart_tabs").join("mod.rs")).unwrap();
     let chart_tabs_windows =
         fs::read_to_string(root.join("chart_tabs").join("windows.rs")).unwrap();
     let chart_tabs = format!("{chart_tabs_mod}\n{chart_tabs_windows}");
-    let shell = fs::read_to_string(root.join("shell.rs")).unwrap();
+    let shell = fs::read_to_string(root.join("shell").join("mod.rs")).unwrap();
     let detached = fs::read_to_string(root.join("detached.rs")).unwrap();
 
     assert!(
@@ -233,6 +243,9 @@ fn terminal_overlays_use_moonui_window_layers_and_moon_components() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let strategies_mod = fs::read_to_string(root.join("strategies").join("mod.rs")).unwrap();
     let strategies_tree = fs::read_to_string(root.join("strategies").join("tree_ui.rs")).unwrap();
+    let strategies_dialogs =
+        fs::read_to_string(root.join("strategies").join("tree_dialogs.rs")).unwrap();
+    let strategies_menu = fs::read_to_string(root.join("strategies").join("tree_menu.rs")).unwrap();
     let strategies_params = fs::read_to_string(root.join("strategies").join("params.rs")).unwrap();
     let assets_mod = fs::read_to_string(root.join("panels").join("assets").join("mod.rs")).unwrap();
     let assets_wallets =
@@ -247,9 +260,9 @@ fn terminal_overlays_use_moonui_window_layers_and_moon_components() {
         "Assets transfer modal must use a unique MoonUI Root dialog with a visible close button, not a manual panel child overlay"
     );
     assert!(
-        strategies_tree.contains("WindowExt as _")
-            && strategies_tree.contains("window.open_unique_moon_dialog(")
-            && strategies_tree.contains("fn op_has_close_button(")
+        strategies_dialogs.contains("WindowExt as _")
+            && strategies_dialogs.contains("window.open_unique_moon_dialog(")
+            && strategies_dialogs.contains("fn op_has_close_button(")
             && !strategies_tree.contains("fn op_overlay(")
             && !strategies_mod.contains("op_overlay(cx)")
             && !strategies_mod.contains("popup_overlay(cx)")
@@ -257,8 +270,8 @@ fn terminal_overlays_use_moonui_window_layers_and_moon_components() {
         "Strategies modal overlays must use unique MoonUI Root dialogs with close-button policy, not manual absolute overlays"
     );
     assert!(
-        strategies_tree.contains("MoonContextMenuWindowExt")
-            && strategies_tree.contains("window.open_moon_context_menu(")
+        strategies_menu.contains("MoonContextMenuWindowExt")
+            && strategies_menu.contains("window.open_moon_context_menu(")
             && !strategies_mod.contains("menu: Option<tree_ui::ContextMenu>")
             && !strategies_mod.contains("menu_overlay(cx)")
             && !strategies_tree.contains("fn menu_overlay(")

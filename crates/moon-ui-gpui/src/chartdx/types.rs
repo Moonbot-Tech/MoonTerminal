@@ -56,6 +56,108 @@ pub struct ChartCross {
 }
 
 #[allow(dead_code)]
+pub fn cross_append_ranges(start: usize, len: usize, capacity: usize) -> [(usize, usize); 2] {
+    if len == 0 || capacity == 0 {
+        return [(0, 0), (0, 0)];
+    }
+    let start = start.min(capacity - 1);
+    let first = len.min(capacity - start);
+    let second = len.saturating_sub(first);
+    [(start, first), (0, second)]
+}
+
+#[allow(dead_code)]
+pub fn evicted_cross_ranges(
+    head: usize,
+    count: usize,
+    capacity: usize,
+    append_len: usize,
+) -> [(usize, usize); 2] {
+    if append_len == 0 || capacity == 0 || count == 0 {
+        return [(0, 0), (0, 0)];
+    }
+    let count = count.min(capacity);
+    let append_len = append_len.min(capacity);
+    if count == capacity {
+        return cross_append_ranges(head, append_len, capacity);
+    }
+    let evicted = count.saturating_add(append_len).saturating_sub(capacity);
+    if evicted == 0 {
+        [(0, 0), (0, 0)]
+    } else {
+        [(0, evicted.min(count)), (0, 0)]
+    }
+}
+
+#[allow(dead_code)]
+pub fn cross_volume_max<'a>(crosses: impl IntoIterator<Item = &'a ChartCross>) -> (f32, f32) {
+    let mut buy = 1e-6f32;
+    let mut sell = 1e-6f32;
+    for c in crosses {
+        if c.side == 0 {
+            buy = buy.max(c.qty);
+        } else {
+            sell = sell.max(c.qty);
+        }
+    }
+    (buy, sell)
+}
+
+#[allow(dead_code)]
+pub fn update_cross_volume_max(max: &mut (f32, f32), data: &[ChartCross]) -> bool {
+    let before = *max;
+    for c in data {
+        if c.side == 0 {
+            max.0 = max.0.max(c.qty);
+        } else {
+            max.1 = max.1.max(c.qty);
+        }
+    }
+    before != *max
+}
+
+#[allow(dead_code)]
+pub fn ranges_touch_volume_max(
+    crosses: &[ChartCross],
+    ranges: &[(usize, usize); 2],
+    volume_max: (f32, f32),
+) -> bool {
+    for &(start, count) in ranges {
+        let end = start.saturating_add(count).min(crosses.len());
+        for c in &crosses[start.min(end)..end] {
+            if (c.side == 0 && c.qty >= volume_max.0) || (c.side != 0 && c.qty >= volume_max.1) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[allow(dead_code)]
+pub fn ranges_have_entries(ranges: &[(usize, usize); 2]) -> bool {
+    ranges.iter().any(|&(_, count)| count > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evicted_cross_ranges_reports_overwritten_ring_slots() {
+        assert_eq!(cross_append_ranges(3, 4, 5), [(3, 2), (0, 2)]);
+        assert_eq!(evicted_cross_ranges(0, 3, 5, 3), [(0, 1), (0, 0)]);
+        assert_eq!(evicted_cross_ranges(2, 5, 5, 2), [(2, 2), (0, 0)]);
+        assert!(ranges_have_entries(&evicted_cross_ranges(2, 5, 5, 2)));
+        assert!(!ranges_have_entries(&evicted_cross_ranges(0, 2, 5, 2)));
+    }
+
+    #[test]
+    fn evicted_cross_ranges_handles_wrapped_full_ring() {
+        assert_eq!(evicted_cross_ranges(4, 5, 5, 3), [(4, 1), (0, 2)]);
+    }
+}
+
+#[allow(dead_code)]
 pub fn ordered_cross_ring(
     buf: &[ChartCross],
     head: usize,

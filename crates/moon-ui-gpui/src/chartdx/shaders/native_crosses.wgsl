@@ -50,8 +50,9 @@ fn crosses_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     sx = round(sx);
     sy = round(sy);
     var out: CrossOut;
-    if sx < cv.bounds.x - 8.0 || sx > cv.bounds.x + cv.bounds.z + 8.0 ||
-       sy < cv.bounds.y - 8.0 || sy > cv.bounds.y + cv.bounds.w + 8.0 {
+    let cull_margin = max(8.0, cv.marker_half + 1.0);
+    if sx < cv.bounds.x - cull_margin || sx > cv.bounds.x + cv.bounds.z + cull_margin ||
+       sy < cv.bounds.y - cull_margin || sy > cv.bounds.y + cv.bounds.w + cull_margin {
         out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
         out.uv = vec2<f32>(0.0, 0.0);
         out.side = 0u;

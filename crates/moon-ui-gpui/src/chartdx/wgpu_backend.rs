@@ -9,9 +9,10 @@ use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance
 use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
-    BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams, DEFAULT_VOLUME_ALPHA,
-    GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu, append_cross_ring,
-    ordered_cross_ring, reset_cross_ring,
+    append_cross_ring, cross_append_ranges, cross_volume_max, evicted_cross_ranges,
+    ordered_cross_ring, ranges_have_entries, ranges_touch_volume_max, reset_cross_ring,
+    update_cross_volume_max, BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams,
+    GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu, DEFAULT_VOLUME_ALPHA,
 };
 
 const BACKGROUND_SHADER: &str = include_str!("shaders/native_background.wgsl");
@@ -34,15 +35,6 @@ fn texel_aligned_time0(time0: f32, time_to_px: f32) -> f32 {
         return time0;
     }
     (time0 * time_to_px).floor() / time_to_px
-}
-
-fn append_ranges(start: usize, len: usize, capacity: usize) -> [(usize, usize); 2] {
-    if len == 0 || capacity == 0 {
-        return [(0, 0), (0, 0)];
-    }
-    let first = len.min(capacity - start.min(capacity - 1));
-    let second = len.saturating_sub(first);
-    [(start, first), (0, second)]
 }
 
 fn hl_of(h: &LineInstance) -> HLineGpu {
@@ -395,6 +387,8 @@ pub struct WgpuLayers {
     cursor_uniform: BufferSlot,
     readout_rect_buffer: BufferSlot,
     view_uniform: BufferSlot,
+    /// Combo texture is baked in its own coordinate space; never reuse live view_uniform.
+    combo_view_uniform: BufferSlot,
     book_view_uniform: BufferSlot,
     book_style_uniform: BufferSlot,
     cross_buffer: BufferSlot,
@@ -441,6 +435,7 @@ impl WgpuLayers {
             cursor_uniform: BufferSlot::default(),
             readout_rect_buffer: BufferSlot::default(),
             view_uniform: BufferSlot::default(),
+            combo_view_uniform: BufferSlot::default(),
             book_view_uniform: BufferSlot::default(),
             book_style_uniform: BufferSlot::default(),
             cross_buffer: BufferSlot::default(),
@@ -523,7 +518,13 @@ impl WgpuLayers {
         }
         let before_scale = (self.volume_buy_max, self.volume_sell_max);
         let old_head = self.cross_head;
+        let old_count = self.cross_count;
         let full_reset = data.len() >= self.combo_capacity;
+        let evicted_ranges =
+            evicted_cross_ranges(old_head, old_count, self.combo_capacity, data.len());
+        let evicted_any = ranges_have_entries(&evicted_ranges);
+        let evicted_scale_max =
+            ranges_touch_volume_max(&self.crosses, &evicted_ranges, before_scale);
         append_cross_ring(
             &mut self.crosses,
             &mut self.cross_head,
@@ -535,16 +536,21 @@ impl WgpuLayers {
             self.crosses
                 .resize(self.combo_capacity, ChartCross::zeroed());
         }
-        self.update_volume_scale(data);
+        if full_reset || evicted_scale_max {
+            self.recalc_volume_scale();
+        } else {
+            self.update_volume_scale(data);
+        }
         self.combo_buffers_dirty = true;
-        if full_reset || before_scale != (self.volume_buy_max, self.volume_sell_max) {
+        if full_reset || evicted_any || before_scale != (self.volume_buy_max, self.volume_sell_max)
+        {
             if let Some(tex) = self.combo_texture.as_mut() {
                 tex.valid = false;
             }
             self.combo_dirty_ranges.clear();
         } else {
             let appended = data.len().min(self.combo_capacity);
-            for (start, count) in append_ranges(old_head, appended, self.combo_capacity) {
+            for (start, count) in cross_append_ranges(old_head, appended, self.combo_capacity) {
                 if count > 0 {
                     self.combo_dirty_ranges.push((start, count));
                 }
@@ -597,6 +603,7 @@ impl WgpuLayers {
         self.cursor_uniform = BufferSlot::default();
         self.readout_rect_buffer = BufferSlot::default();
         self.view_uniform = BufferSlot::default();
+        self.combo_view_uniform = BufferSlot::default();
         self.book_view_uniform = BufferSlot::default();
         self.book_style_uniform = BufferSlot::default();
         self.cross_buffer = BufferSlot::default();
@@ -880,7 +887,7 @@ impl WgpuLayers {
         count: usize,
         include_price_lines: bool,
     ) {
-        let recreated = self.view_uniform.write(
+        let recreated = self.combo_view_uniform.write(
             device,
             queue,
             "moon_chart_combo_view_uniform",
@@ -1142,6 +1149,13 @@ impl WgpuLayers {
             wgpu::BufferUsages::UNIFORM,
             &[view],
         );
+        binds_dirty |= self.combo_view_uniform.write(
+            device,
+            queue,
+            "moon_chart_combo_view_uniform",
+            wgpu::BufferUsages::UNIFORM,
+            &[view],
+        );
         binds_dirty |= self.book_view_uniform.write(
             device,
             queue,
@@ -1158,10 +1172,11 @@ impl WgpuLayers {
         );
         if self.combo_buffers_dirty || self.cross_buffer.buffer.is_none() {
             if self.cross_buffer.buffer.is_some() && !self.combo_dirty_ranges.is_empty() {
+                let mut recreated = false;
                 for &(start, count) in &self.combo_dirty_ranges {
                     let end = start.saturating_add(count).min(self.crosses.len());
                     if start < end {
-                        binds_dirty |= self.cross_buffer.write_range(
+                        recreated |= self.cross_buffer.write_range(
                             device,
                             queue,
                             "moon_chart_crosses",
@@ -1171,6 +1186,15 @@ impl WgpuLayers {
                             self.crosses.len(),
                         );
                     }
+                }
+                if recreated {
+                    binds_dirty |= self.cross_buffer.write(
+                        device,
+                        queue,
+                        "moon_chart_crosses",
+                        wgpu::BufferUsages::STORAGE,
+                        &self.crosses,
+                    );
                 }
             } else {
                 binds_dirty |= self.cross_buffer.write(
@@ -1337,6 +1361,7 @@ impl WgpuLayers {
         &'a self,
         device: &wgpu::Device,
         layout: &'a wgpu::BindGroupLayout,
+        uniform: &'a BufferSlot,
         storage: &'a BufferSlot,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1345,7 +1370,7 @@ impl WgpuLayers {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.view_uniform.binding(),
+                    resource: uniform.binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1394,16 +1419,22 @@ impl WgpuLayers {
         let grid_bind = self.bind_uniform(device, &pipelines.grid_layout, &self.grid_uniform);
         let cursor_bind = self.bind_uniform(device, &pipelines.cursor_layout, &self.cursor_uniform);
         let readout_bind = self.bind_readout(device, &pipelines.readout_layout);
-        let cross_bind =
-            self.bind_view_storage(device, &pipelines.view_storage_layout, &self.cross_buffer);
+        let cross_bind = self.bind_view_storage(
+            device,
+            &pipelines.view_storage_layout,
+            &self.combo_view_uniform,
+            &self.cross_buffer,
+        );
         let last_bind = self.bind_view_storage(
             device,
             &pipelines.view_storage_layout,
+            &self.combo_view_uniform,
             &self.last_line_buffer,
         );
         let mark_bind = self.bind_view_storage(
             device,
             &pipelines.view_storage_layout,
+            &self.combo_view_uniform,
             &self.mark_line_buffer,
         );
         let book_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1424,14 +1455,30 @@ impl WgpuLayers {
                 },
             ],
         });
-        let zone_bind =
-            self.bind_view_storage(device, &pipelines.view_storage_layout, &self.zone_buffer);
-        let hline_bind =
-            self.bind_view_storage(device, &pipelines.view_storage_layout, &self.hline_buffer);
-        let seg_bind =
-            self.bind_view_storage(device, &pipelines.view_storage_layout, &self.seg_buffer);
-        let marker_bind =
-            self.bind_view_storage(device, &pipelines.view_storage_layout, &self.marker_buffer);
+        let zone_bind = self.bind_view_storage(
+            device,
+            &pipelines.view_storage_layout,
+            &self.view_uniform,
+            &self.zone_buffer,
+        );
+        let hline_bind = self.bind_view_storage(
+            device,
+            &pipelines.view_storage_layout,
+            &self.view_uniform,
+            &self.hline_buffer,
+        );
+        let seg_bind = self.bind_view_storage(
+            device,
+            &pipelines.view_storage_layout,
+            &self.view_uniform,
+            &self.seg_buffer,
+        );
+        let marker_bind = self.bind_view_storage(
+            device,
+            &pipelines.view_storage_layout,
+            &self.view_uniform,
+            &self.marker_buffer,
+        );
         self.prepared_binds = Some(PreparedBindGroups {
             bg: bg_bind,
             grid: grid_bind,
@@ -1449,25 +1496,16 @@ impl WgpuLayers {
     }
 
     fn recalc_volume_scale(&mut self) {
-        self.volume_buy_max = 1e-6;
-        self.volume_sell_max = 1e-6;
-        for c in self.crosses.iter().take(self.cross_count) {
-            if c.side == 0 {
-                self.volume_buy_max = self.volume_buy_max.max(c.qty);
-            } else {
-                self.volume_sell_max = self.volume_sell_max.max(c.qty);
-            }
-        }
+        let (buy, sell) = cross_volume_max(self.crosses.iter().take(self.cross_count));
+        self.volume_buy_max = buy;
+        self.volume_sell_max = sell;
     }
 
     fn update_volume_scale(&mut self, data: &[ChartCross]) {
-        for c in data {
-            if c.side == 0 {
-                self.volume_buy_max = self.volume_buy_max.max(c.qty);
-            } else {
-                self.volume_sell_max = self.volume_sell_max.max(c.qty);
-            }
-        }
+        let mut max = (self.volume_buy_max, self.volume_sell_max);
+        update_cross_volume_max(&mut max, data);
+        self.volume_buy_max = max.0;
+        self.volume_sell_max = max.1;
     }
 }
 

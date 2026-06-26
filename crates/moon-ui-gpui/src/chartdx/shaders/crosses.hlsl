@@ -49,8 +49,9 @@ CrossOut crosses_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     sy = round(sy);
 
     // off-screen по X/Y → выкинуть из NDC, растеризатор отсечёт бесплатно
-    if (sx < cv_bounds.x - 8.0 || sx > cv_bounds.x + cv_bounds.z + 8.0 ||
-        sy < cv_bounds.y - 8.0 || sy > cv_bounds.y + cv_bounds.w + 8.0) {
+    float cull_margin = max(8.0, cv_marker_half + 1.0);
+    if (sx < cv_bounds.x - cull_margin || sx > cv_bounds.x + cv_bounds.z + cull_margin ||
+        sy < cv_bounds.y - cull_margin || sy > cv_bounds.y + cv_bounds.w + cull_margin) {
         o.pos = float4(2.0, 2.0, 0.0, 1.0);
         o.uv = float2(0.0, 0.0);
         o.side = 0u;

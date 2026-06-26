@@ -6,6 +6,7 @@
 //! Защита от device-lost (P0-4): при смене поколения device хука (GPUI пересоздал
 //! устройство) сбрасываем ВСЕ ресурсы — иначе рисовали бы stale-буферами на новом контексте.
 
+use bytemuck::Zeroable;
 use gpui::RawGpuAccess;
 use moon_core::data::PriceLinePoint;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -13,11 +14,14 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 
 use super::gpu::{
-    BlitParams, ChartCross, ChartViewGpu, create_alpha_blend, create_dynamic_cb,
-    create_point_sampler, create_srv, create_srv_range, create_structured, full_viewport,
-    ring_write_no_overwrite, set_scissor_rect, update_dynamic,
+    create_alpha_blend, create_dynamic_cb, create_point_sampler, create_srv, create_srv_range,
+    create_structured, full_viewport, ring_write_no_overwrite, set_scissor_rect, update_dynamic,
+    BlitParams, ChartCross, ChartViewGpu,
 };
-use super::types::DEFAULT_VOLUME_ALPHA;
+use super::types::{
+    append_cross_ring, cross_volume_max, evicted_cross_ranges, ranges_have_entries,
+    ranges_touch_volume_max, reset_cross_ring, update_cross_volume_max, DEFAULT_VOLUME_ALPHA,
+};
 
 const MIN_COMBO_CAPACITY: u32 = 1;
 const CROSSES_HLSL: &str = include_str!("shaders/crosses.hlsl");
@@ -78,6 +82,9 @@ pub struct ComboLayer {
     pending_reset: Option<Vec<ChartCross>>,
     pending_append: Vec<ChartCross>,
     pending_lines: Option<(Vec<PriceLinePoint>, Vec<PriceLinePoint>)>,
+    resident_crosses: Vec<ChartCross>,
+    resident_head: usize,
+    resident_count: usize,
     last_line_count: u32,
     mark_line_count: u32,
     cross_capacity: u32,
@@ -102,6 +109,9 @@ impl ComboLayer {
             pending_reset: None,
             pending_append: Vec::new(),
             pending_lines: None,
+            resident_crosses: Vec::new(),
+            resident_head: 0,
+            resident_count: 0,
             last_line_count: 0,
             mark_line_count: 0,
             cross_capacity: MIN_COMBO_CAPACITY,
@@ -133,6 +143,9 @@ impl ComboLayer {
         self.tex = None;
         self.count = 0;
         self.head = 0;
+        self.resident_crosses.clear();
+        self.resident_head = 0;
+        self.resident_count = 0;
         self.last_line_count = 0;
         self.mark_line_count = 0;
         self.pending_append.clear();
@@ -176,6 +189,9 @@ impl ComboLayer {
             self.tex = None;
             self.count = 0;
             self.head = 0;
+            self.resident_crosses.clear();
+            self.resident_head = 0;
+            self.resident_count = 0;
             self.last_line_count = 0;
             self.mark_line_count = 0;
             self.device_generation_seen = generation;
@@ -421,7 +437,18 @@ impl ComboLayer {
             update_dynamic(context, &tick_buffer, data);
             self.count = data.len() as u32;
             self.head = (data.len() as u32) % cap;
-            self.reset_volume_scale(data);
+            reset_cross_ring(
+                &mut self.resident_crosses,
+                &mut self.resident_head,
+                &mut self.resident_count,
+                cap as usize,
+                data,
+            );
+            if self.resident_crosses.len() < cap as usize {
+                self.resident_crosses
+                    .resize(cap as usize, ChartCross::zeroed());
+            }
+            self.recalc_volume_scale();
             self.volume_scale_dirty = true;
         }
         if !self.pending_append.is_empty() {
@@ -432,38 +459,57 @@ impl ComboLayer {
             } else {
                 &data
             };
+            let before_scale = (self.volume_buy_max, self.volume_sell_max);
+            let old_head = self.resident_head;
+            let old_count = self.resident_count;
+            let full_reset = data.len() >= cap as usize;
+            let evicted_ranges =
+                evicted_cross_ranges(old_head, old_count, cap as usize, data.len());
+            let evicted_any = ranges_have_entries(&evicted_ranges);
+            let evicted_scale_max =
+                ranges_touch_volume_max(&self.resident_crosses, &evicted_ranges, before_scale);
             let n = data.len() as u32;
             ring_write_no_overwrite(context, &tick_buffer, self.head, cap, data);
             self.head = (self.head + n) % cap;
             self.count = (self.count + n).min(cap);
-            if self.update_volume_scale(data) {
+            append_cross_ring(
+                &mut self.resident_crosses,
+                &mut self.resident_head,
+                &mut self.resident_count,
+                cap as usize,
+                data,
+            );
+            if self.resident_crosses.len() < cap as usize {
+                self.resident_crosses
+                    .resize(cap as usize, ChartCross::zeroed());
+            }
+            if full_reset || evicted_scale_max {
+                self.recalc_volume_scale();
+            } else {
+                self.update_volume_scale(data);
+            }
+            if before_scale != (self.volume_buy_max, self.volume_sell_max) {
                 self.volume_scale_dirty = true;
             }
-        }
-    }
-
-    fn reset_volume_scale(&mut self, data: &[ChartCross]) {
-        self.volume_buy_max = 1e-6;
-        self.volume_sell_max = 1e-6;
-        for c in data {
-            if c.side == 0 {
-                self.volume_buy_max = self.volume_buy_max.max(c.qty);
-            } else {
-                self.volume_sell_max = self.volume_sell_max.max(c.qty);
+            if full_reset || evicted_any {
+                if let Some(tex) = self.tex.as_mut() {
+                    tex.valid = false;
+                }
             }
         }
     }
 
-    fn update_volume_scale(&mut self, data: &[ChartCross]) -> bool {
-        let before = (self.volume_buy_max, self.volume_sell_max);
-        for c in data {
-            if c.side == 0 {
-                self.volume_buy_max = self.volume_buy_max.max(c.qty);
-            } else {
-                self.volume_sell_max = self.volume_sell_max.max(c.qty);
-            }
-        }
-        before != (self.volume_buy_max, self.volume_sell_max)
+    fn recalc_volume_scale(&mut self) {
+        let (buy, sell) = cross_volume_max(self.resident_crosses.iter().take(self.resident_count));
+        self.volume_buy_max = buy;
+        self.volume_sell_max = sell;
+    }
+
+    fn update_volume_scale(&mut self, data: &[ChartCross]) {
+        let mut max = (self.volume_buy_max, self.volume_sell_max);
+        update_cross_volume_max(&mut max, data);
+        self.volume_buy_max = max.0;
+        self.volume_sell_max = max.1;
     }
 
     fn draw_price_lines(

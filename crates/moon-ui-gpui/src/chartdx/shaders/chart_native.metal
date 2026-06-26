@@ -213,11 +213,12 @@ struct CrossOut { float4 position [[position]]; float2 uv; uint side [[flat]]; }
 vertex CrossOut crosses_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                constant ChartView& cv [[buffer(0)]],
                                const device Cross* crosses [[buffer(1)]]) {
-    Cross c = crosses[uint(max(cv.pad, 0.0)) + iid];
+    Cross c = crosses[iid];
     float sx = round(cv.bounds.x + (c.time_rel - cv.view_time0) * cv.time_to_px);
     float sy = round(cv.bounds.y + cv.bounds.w - (c.price - cv.view_price0) * cv.price_to_px);
-    if (sx < cv.bounds.x - 8.0 || sx > cv.bounds.x + cv.bounds.z + 8.0 ||
-        sy < cv.bounds.y - 8.0 || sy > cv.bounds.y + cv.bounds.w + 8.0) {
+    float cull_margin = max(8.0, cv.marker_half + 1.0);
+    if (sx < cv.bounds.x - cull_margin || sx > cv.bounds.x + cv.bounds.z + cull_margin ||
+        sy < cv.bounds.y - cull_margin || sy > cv.bounds.y + cv.bounds.w + cull_margin) {
         return { float4(2.0, 2.0, 0.0, 1.0), float2(0.0), 0 };
     }
     float2 corner = CORNERS_PM[vid];
@@ -240,7 +241,7 @@ struct VolumeOut { float4 position [[position]]; uint side [[flat]]; };
 vertex VolumeOut volume_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                constant ChartView& cv [[buffer(0)]],
                                const device Cross* crosses [[buffer(1)]]) {
-    Cross c = crosses[uint(max(cv.pad, 0.0)) + iid];
+    Cross c = crosses[iid];
     float sx = cv.bounds.x + (c.time_rel - cv.view_time0) * cv.time_to_px;
     if (sx < cv.bounds.x - 2.0 || sx > cv.bounds.x + cv.bounds.z + 2.0 || c.qty <= 0.0) {
         return { float4(2.0, 2.0, 0.0, 1.0), 0 };
