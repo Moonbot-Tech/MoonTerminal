@@ -224,15 +224,12 @@ impl RenderState {
             let plot_top = pr.view.bounds[1] / sf;
             let plot_w = pr.view.bounds[2] / sf;
             let plot_h = pr.view.bounds[3] / sf;
-            if plot_w < 60.0 || plot_h < 60.0 || pr.view.price_to_px <= 0.0 {
-                continue;
-            }
-
-            let plot_bottom = plot_top + plot_h;
             let plot_right = plot_left + plot_w;
 
             // Прозрачная плашка-подложка под угловую подпись (alpha 0.2 — 80% прозрачности).
             // Якорь совпадает с текстом (text.rs): есть стакан → у края панели, нет → у края плота.
+            // Рисуем ДО гейта `plot_w<60` — иначе в режиме «только стакан» (чарт схлопнут) подложки
+            // под подписью не было (как сейчас у соседей с метлой).
             if pr.caption_w > 0.0 {
                 let lines = (!pr.core_name.is_empty()) as u32 + (!pr.market.is_empty()) as u32;
                 if lines > 0 {
@@ -259,6 +256,13 @@ impl RenderState {
                     });
                 }
             }
+
+            // Дальше — курсорные плашки/оси, только для нормального (не схлопнутого) чарта.
+            if plot_w < 60.0 || plot_h < 60.0 || pr.view.price_to_px <= 0.0 {
+                continue;
+            }
+
+            let plot_bottom = plot_top + plot_h;
 
             let Some(cursor) = cursor.filter(|c| c.pane == idx) else {
                 continue;
