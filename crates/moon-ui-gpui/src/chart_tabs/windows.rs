@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::{AddChartStack, ChartTabs, Tab, chart_pane_label, coin_search, layout_popup};
 use crate::Backend;
-use crate::chart_persist::{self, StackLayoutMode};
+use crate::chart_persist::{self, StackLayoutMode, StackOrientation};
 use crate::design;
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
@@ -42,19 +42,23 @@ impl ChartTabs {
         }
     }
 
-    /// Отцепить AddToChart-вкладку в отдельное ОС-окно (убрать из стрипа).
+    /// Отцепить AddToChart/Custom-вкладку в отдельное ОС-окно (убрать из стрипа). Кастомная
+    /// вкладка живёт в `self.custom`, обычная — в `self.add`; обе используют `AddChartStack`.
     pub(super) fn detach(&mut self, tab: Tab, cx: &mut Context<Self>) {
-        let Tab::Add(n, bucket) = tab.clone() else {
+        let (n, bucket, is_custom) = match tab.clone() {
+            Tab::Add(n, b) => (n, b, false),
+            Tab::Custom(n, b) => (n, b, true),
+            Tab::Main => return,
+        };
+        let from = if is_custom {
+            &self.custom
+        } else {
+            &self.add
+        };
+        let Some(pos) = from.iter().position(|(num, c, _)| *num == n && *c == bucket) else {
             return;
         };
-        let Some(pos) = self
-            .add
-            .iter()
-            .position(|(num, c, _)| *num == n && *c == bucket)
-        else {
-            return;
-        };
-        let (_, _, panel) = self.add[pos].clone();
+        let panel = from[pos].2.clone();
         // Геометрия: сохранённая (если уже откреплялась) или дефолт-каскад.
         let geom = self
             .spec_geom(cx, n, &bucket)
@@ -67,8 +71,16 @@ impl ChartTabs {
         if !self.open_chart_window(n, panel.clone(), bucket.clone(), geom, false, cx) {
             return;
         }
-        let (_, _, panel) = self.add.remove(pos);
-        panel.update(cx, |p, pcx| p.set_scene_visible(false, pcx));
+        // Откреплённая вкладка держит свой спрос на стаканы (окно видимо) → снимаем suspend-гейт.
+        panel.update(cx, |p, pcx| {
+            p.set_orderbook_suspended(false, pcx);
+            p.set_scene_visible(false, pcx);
+        });
+        if is_custom {
+            self.custom.retain(|(num, c, _)| !(*num == n && *c == bucket));
+        } else {
+            self.add.remove(pos);
+        }
         self.detached.push((n, bucket.clone(), panel));
         if self.active == tab {
             self.active = Tab::Main;
@@ -212,6 +224,9 @@ impl ChartTabs {
                     orderbook_enabled: None,
                     show_zone: None,
                     auto_pin: None,
+                    layout_orientation: None,
+                    custom_coins: None,
+                    custom_label: None,
                 };
                 f(&mut s);
                 b.chart_specs.push(s);
@@ -243,19 +258,42 @@ impl ChartTabs {
             out
         });
         for (n, bucket) in reqs {
+            // Кастомная вкладка возвращается в стрип как Custom (по наличию custom_coins/label
+            // в спеке), обычная — как Add.
+            let (is_custom, custom_label) = {
+                let specs = &self.backend.read(cx).chart_specs;
+                let spec = specs
+                    .iter()
+                    .find(|s| s.group == self.group && s.num == n && s.bucket() == bucket);
+                (
+                    spec.is_some_and(|s| s.custom_coins.is_some()),
+                    spec.and_then(|s| s.custom_label.clone()),
+                )
+            };
             if let Some(p) = self
                 .detached
                 .iter()
                 .position(|(num, c, _)| *num == n && *c == bucket)
             {
                 let (num, c, pnl) = self.detached.remove(p);
-                self.add.push((num, c, pnl));
-                self.add.sort_by_key(|(num, c, _)| (*num, c.clone()));
+                if is_custom {
+                    self.custom.push((num, c, pnl));
+                    if let Some(label) = custom_label {
+                        self.custom_labels.entry(n).or_insert(label);
+                    }
+                } else {
+                    self.add.push((num, c, pnl));
+                    self.add.sort_by_key(|(num, c, _)| (*num, c.clone()));
+                }
             }
             self.upsert_spec(cx, n, &bucket, |s| s.detached = None);
             moon_core::detect_diag::line(&format!(
-                "[repin] n={n} bucket={bucket:?} → detached=None (окно закрыли/репин)"
+                "[repin] n={n} bucket={bucket:?} custom={is_custom} → detached=None (окно закрыли/репин)"
             ));
+            // Вернулась в стрип неактивной (active=Main) → запустить 5с-гейт стаканов для кастома.
+            if is_custom {
+                self.refresh_orderbook_gates(cx);
+            }
             cx.notify();
         }
     }
@@ -306,6 +344,62 @@ impl ChartTabs {
                     if scale.is_some() {
                         panel.update(cx, |p, pcx| p.set_scale(scale, pcx));
                     }
+                    // Откреплённая КАСТОМНАЯ вкладка: ингест её не наполняет → заливаем тикеры из
+                    // спека (с раскладкой/ориентацией/пином) прямо сейчас, как при создании.
+                    #[allow(clippy::type_complexity)]
+                    let custom: Option<(
+                        Vec<(CoreId, String)>,
+                        Option<String>,
+                        (Option<StackLayoutMode>, Option<u16>, Option<u16>),
+                        Option<StackOrientation>,
+                        Option<bool>,
+                        Option<bool>,
+                        Option<bool>,
+                    )> = {
+                        let specs = &this.backend.read(cx).chart_specs;
+                        specs
+                            .iter()
+                            .find(|s| s.group == this.group && s.num == n && s.bucket() == bucket)
+                            .and_then(|s| {
+                                s.custom_coins.clone().map(|coins| {
+                                    (
+                                        coins,
+                                        s.custom_label.clone(),
+                                        (s.layout_mode, s.layout_height_fit, s.layout_height_scroll),
+                                        s.layout_orientation,
+                                        s.orderbook_enabled,
+                                        s.show_zone,
+                                        s.auto_pin,
+                                    )
+                                })
+                            })
+                    };
+                    if let Some((coins, label, layout, orientation, ob, sz, ap)) = custom {
+                        panel.update(cx, |s, c| {
+                            s.set_orientation(
+                                Some(orientation.unwrap_or(StackOrientation::Horizontal)),
+                                c,
+                            );
+                            s.set_layout(layout.0, layout.1, layout.2, c);
+                            if let Some(v) = ob {
+                                s.set_orderbook_enabled(Some(v), c);
+                            }
+                            if let Some(v) = sz {
+                                s.set_show_zone(Some(v), c);
+                            }
+                            if let Some(v) = ap {
+                                s.set_auto_pin(Some(v), c);
+                            }
+                            for (core, market) in &coins {
+                                s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);
+                            }
+                            s.pin_all(c);
+                        });
+                        if let Some(label) = label {
+                            this.custom_labels.insert(n, label);
+                        }
+                        this.next_custom_num = this.next_custom_num.max(n + 1);
+                    }
                     if this.open_chart_window(n, panel.clone(), bucket.clone(), geom, true, cx) {
                         panel.update(cx, |p, pcx| p.set_scene_visible(false, pcx));
                         this.detached.push((n, bucket, panel));
@@ -348,6 +442,8 @@ struct DetachedChartHost {
     layout_fit_input: Entity<MoonInputState>,
     /// Поле высоты режима Scroll.
     layout_scroll_input: Entity<MoonInputState>,
+    /// Поле имени кастомной вкладки (в попапе ⚙, только если окно — откреплённая Custom-вкладка).
+    custom_name_input: Entity<MoonInputState>,
     /// Поле ввода монеты (поиск) шапки окна; набор зависит от ядер bucket-а этого окна.
     coin_input: Entity<MoonInputState>,
     /// Текущий текст в поле монеты (зеркало `coin_input`).
@@ -456,6 +552,20 @@ impl DetachedChartHost {
             },
         )
         .detach();
+        // Поле имени кастомной вкладки: коммит переименования по Blur/Enter.
+        let custom_name_input = cx.new(|cx| MoonInputState::new(window, cx));
+        cx.subscribe(
+            &custom_name_input,
+            |this, input, ev: &MoonInputEvent, cx| {
+                if this.layout_popup_open
+                    && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
+                {
+                    let name = input.read(cx).value().to_string();
+                    this.rename_custom(name, cx);
+                }
+            },
+        )
+        .detach();
         let coin_input = cx.new(|cx| {
             MoonInputState::new(window, cx).placeholder(t!("chart.coin.search").to_string())
         });
@@ -483,10 +593,40 @@ impl DetachedChartHost {
             layout_popup_hovered: false,
             layout_fit_input,
             layout_scroll_input,
+            custom_name_input,
             coin_input,
             coin_query: String::new(),
             coin_popup_open: false,
         }
+    }
+
+    /// Это окно — откреплённая кастомная вкладка? (спек с `custom_coins`).
+    fn is_custom(&self, cx: &App) -> bool {
+        let (group, num, bucket) = (&self.group, self.num, &self.bucket);
+        self.backend.read(cx).chart_specs.iter().any(|s| {
+            s.group == *group && s.num == num && s.bucket() == *bucket && s.custom_coins.is_some()
+        })
+    }
+
+    /// Переименовать кастомную вкладку этого окна (поле имени в попапе ⚙): пишем `custom_label`
+    /// в charts.json. Заголовок окна (через `chart_pane_label`) обновится на следующем render.
+    fn rename_custom(&mut self, name: String, cx: &mut Context<Self>) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
+        self.backend.update(cx, |b, _| {
+            if let Some(s) = b
+                .chart_specs
+                .iter_mut()
+                .find(|s| s.group == group && s.num == num && s.bucket() == bucket)
+            {
+                s.custom_label = Some(name);
+                b.chart_specs_dirty = true;
+            }
+        });
+        cx.notify();
     }
 
     /// Совпадения поля монеты для этого окна (ядра bucket-а).
@@ -504,7 +644,36 @@ impl DetachedChartHost {
         self.panel.update(cx, |p, c| {
             p.add_coin(core, &market, coin_search::MANUAL_COIN_TTL_MS, c)
         });
+        // Если это окно — откреплённая КАСТОМНАЯ вкладка, держим её список тикеров в charts.json
+        // синхронным (добавили монету в окне → попадёт в персист и переживёт рестарт).
+        self.persist_custom_coins_if_any(cx);
         cx.notify();
+    }
+
+    /// Если спек этого окна — кастомная вкладка (`custom_coins.is_some()`), переписать её тикеры
+    /// из текущего состава панели. Для обычных AddToChart-окон — no-op.
+    fn persist_custom_coins_if_any(&self, cx: &mut Context<Self>) {
+        let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
+        let is_custom = {
+            let specs = &self.backend.read(cx).chart_specs;
+            specs
+                .iter()
+                .any(|s| s.group == group && s.num == num && s.bucket() == bucket && s.custom_coins.is_some())
+        };
+        if !is_custom {
+            return;
+        }
+        let coins = self.panel.read(cx).coins(cx);
+        self.backend.update(cx, |b, _| {
+            if let Some(s) = b
+                .chart_specs
+                .iter_mut()
+                .find(|s| s.group == group && s.num == num && s.bucket() == bucket)
+            {
+                s.custom_coins = Some(coins);
+                b.chart_specs_dirty = true;
+            }
+        });
     }
 
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
@@ -547,6 +716,12 @@ impl DetachedChartHost {
             .update(cx, |input, c| input.set_value(fit, window, c));
         self.layout_scroll_input
             .update(cx, |input, c| input.set_value(scroll, window, c));
+        // Имя кастомной вкладки — для поля переименования.
+        if self.is_custom(cx) {
+            let name = chart_pane_label(&self.backend, &self.group, self.num, &self.bucket, cx);
+            self.custom_name_input
+                .update(cx, |input, c| input.set_value(name, window, c));
+        }
     }
 
     fn read_layout_height(&self, mode: StackLayoutMode, cx: &App) -> Option<u16> {
@@ -599,6 +774,7 @@ impl DetachedChartHost {
         let orderbook = Some(self.panel.read(cx).orderbook_enabled().unwrap_or(true));
         let show_zone = Some(self.panel.read(cx).show_zone().unwrap_or(true));
         let auto_pin = Some(self.panel.read(cx).auto_pin().unwrap_or(false));
+        let orientation = self.panel.read(cx).layout_orientation();
         self.backend.update(cx, |bk, bcx| {
             bk.chart_apply_all.push(crate::ChartApplyAll {
                 group,
@@ -610,9 +786,46 @@ impl DetachedChartHost {
                 orderbook,
                 show_zone,
                 auto_pin,
+                orientation,
             });
             bcx.notify();
         });
+    }
+
+    /// Сменить ориентацию (верт/гор) панели этого окна + persist.
+    fn apply_orientation(&mut self, orientation: crate::chart_persist::StackOrientation, cx: &mut Context<Self>) {
+        self.panel
+            .update(cx, |p, c| p.set_orientation(Some(orientation), c));
+        let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
+        self.backend.update(cx, |bk, _| {
+            if let Some(s) = bk
+                .chart_specs
+                .iter_mut()
+                .find(|s| s.group == group && s.num == num && s.bucket() == bucket)
+            {
+                s.layout_orientation = Some(orientation);
+            } else {
+                bk.chart_specs.push(chart_persist::ChartTabSpec {
+                    group,
+                    num,
+                    core: None,
+                    bucket: Some(bucket),
+                    scale: None,
+                    detached: None,
+                    layout_mode: None,
+                    layout_height_fit: None,
+                    layout_height_scroll: None,
+                    orderbook_enabled: None,
+                    show_zone: None,
+                    auto_pin: None,
+                    layout_orientation: Some(orientation),
+                    custom_coins: None,
+                    custom_label: None,
+                });
+            }
+            bk.chart_specs_dirty = true;
+        });
+        cx.notify();
     }
 
     /// Применить раскладку к панели вкладки и сохранить в charts.json.
@@ -649,6 +862,9 @@ impl DetachedChartHost {
                     orderbook_enabled: None,
                     show_zone: None,
                     auto_pin: None,
+                    layout_orientation: None,
+                    custom_coins: None,
+                    custom_label: None,
                 });
             }
             bk.chart_specs_dirty = true;
@@ -682,6 +898,9 @@ impl DetachedChartHost {
                     orderbook_enabled: Some(enabled),
                     show_zone: None,
                     auto_pin: None,
+                    layout_orientation: None,
+                    custom_coins: None,
+                    custom_label: None,
                 });
             }
             bk.chart_specs_dirty = true;
@@ -715,6 +934,9 @@ impl DetachedChartHost {
                     orderbook_enabled: None,
                     show_zone: Some(show),
                     auto_pin: None,
+                    layout_orientation: None,
+                    custom_coins: None,
+                    custom_label: None,
                 });
             }
             bk.chart_specs_dirty = true;
@@ -747,6 +969,9 @@ impl DetachedChartHost {
                     orderbook_enabled: None,
                     show_zone: None,
                     auto_pin: Some(on),
+                    layout_orientation: None,
+                    custom_coins: None,
+                    custom_label: None,
                 });
             }
             bk.chart_specs_dirty = true;
@@ -818,16 +1043,23 @@ impl Render for DetachedChartHost {
         let popup_open = self.layout_popup_open;
         let layout_popup = self.layout_popup_open.then(|| {
             let mode = self.panel_layout(cx).0.unwrap_or(StackLayoutMode::Fit);
+            let orientation = self
+                .panel
+                .read(cx)
+                .layout_orientation()
+                .unwrap_or(crate::chart_persist::StackOrientation::Vertical);
             let orderbook_enabled = self.panel.read(cx).orderbook_enabled().unwrap_or(true);
             let show_zone = self.panel.read(cx).show_zone().unwrap_or(true);
             let auto_pin = self.panel.read(cx).auto_pin().unwrap_or(false);
+            let is_custom = self.is_custom(cx);
             let pick_entity = cx.entity();
             let all_entity = cx.entity();
             let ob_entity = cx.entity();
             let sz_entity = cx.entity();
             let ap_entity = cx.entity();
+            let or_entity = cx.entity();
             let hover_entity = cx.entity();
-            let size = layout_popup::content_size(cx);
+            let size = layout_popup::content_size(cx, is_custom);
             div()
                 .id("detached-chart-layout-popup-scene")
                 .absolute()
@@ -850,6 +1082,8 @@ impl Render for DetachedChartHost {
                 .child(layout_popup::render_layout_popup(
                     "detached-chart-layout",
                     mode,
+                    orientation,
+                    is_custom.then_some(&self.custom_name_input),
                     &self.layout_fit_input,
                     &self.layout_scroll_input,
                     orderbook_enabled,
@@ -887,6 +1121,21 @@ impl Render for DetachedChartHost {
                     move |checked, app| {
                         ap_entity.update(app, |this, cx| this.apply_auto_pin(checked, cx));
                     },
+                    move |app| {
+                        or_entity.update(app, |this, cx| {
+                            use crate::chart_persist::StackOrientation as O;
+                            let next = match this
+                                .panel
+                                .read(cx)
+                                .layout_orientation()
+                                .unwrap_or(O::Vertical)
+                            {
+                                O::Vertical => O::Horizontal,
+                                O::Horizontal => O::Vertical,
+                            };
+                            this.apply_orientation(next, cx);
+                        });
+                    },
                 ))
         });
         let layout_dismiss = self.layout_popup_open.then(|| {
@@ -915,6 +1164,8 @@ impl Render for DetachedChartHost {
             coin_search::render_popup(
                 "detached-coin",
                 results,
+                &std::collections::HashSet::new(),
+                false,
                 p,
                 cx,
                 move |core, market, window, app| {
@@ -922,6 +1173,8 @@ impl Render for DetachedChartHost {
                     input.update(app, |inp, c| inp.set_value(SharedString::default(), window, c));
                     view.update(app, |this, cx| this.clear_coin_search(cx));
                 },
+                |_core, _market, _app| {},
+                |_app| {},
             )
             .absolute()
             .right(px(6.0))

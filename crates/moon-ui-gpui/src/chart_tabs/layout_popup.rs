@@ -12,7 +12,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use crate::chart_persist::StackLayoutMode;
+use crate::chart_persist::{StackLayoutMode, StackOrientation};
 use crate::design;
 
 /// Порядок режимов в сегмент-контроле попапа (два положения).
@@ -25,7 +25,7 @@ pub(super) const MAX_H: u16 = 4000;
 
 /// Размер сценового попапа (логич. px), посчитанный из тех же метрик, что и содержимое.
 /// Вызывающий ставит контейнер в absolute layer и задаёт этот размер.
-pub(super) fn content_size(cx: &App) -> Size<Pixels> {
+pub(super) fn content_size(cx: &App, with_rename: bool) -> Size<Pixels> {
     let pad = f32::from(design::ui_px(cx, 8.0));
     let gap = f32::from(design::ui_px(cx, 8.0));
     let cap = f32::from(design::t_caption(cx)) + 6.0;
@@ -34,10 +34,13 @@ pub(super) fn content_size(cx: &App) -> Size<Pixels> {
     let line_h = f32::from(design::ui_px(cx, 30.0));
     let cb_h = f32::from(design::ui_px(cx, 22.0));
     let border = 2.0;
+    // Доп. строка имени (для кастомных вкладок): инпут + зазор.
+    let rename_h = if with_rename { line_h + gap } else { 0.0 };
     let h = border
         + 2.0 * pad
         + title_h
         + gap
+        + rename_h
         + seg_h
         + gap
         + line_h
@@ -65,9 +68,11 @@ fn mode_label(m: StackLayoutMode) -> &'static str {
 /// `height_fit_input`/`height_scroll_input` — раздельные поля (подписку на Blur/Enter держит
 /// вызывающий). `on_pick_mode` вызывается при выборе режима. Позиционируется вызывающим.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_layout_popup<F, G, H, I, J>(
+pub(super) fn render_layout_popup<F, G, H, I, J, K>(
     id: &str,
     current: StackLayoutMode,
+    orientation: StackOrientation,
+    rename_input: Option<&Entity<MoonInputState>>,
     height_fit_input: &Entity<MoonInputState>,
     height_scroll_input: &Entity<MoonInputState>,
     orderbook_enabled: bool,
@@ -81,6 +86,7 @@ pub(super) fn render_layout_popup<F, G, H, I, J>(
     on_toggle_orderbook: H,
     on_toggle_show_zone: I,
     on_toggle_auto_pin: J,
+    on_toggle_orientation: K,
 ) -> AnyElement
 where
     F: Fn(StackLayoutMode, &mut App) + 'static,
@@ -88,7 +94,9 @@ where
     H: Fn(bool, &mut App) + 'static,
     I: Fn(bool, &mut App) + 'static,
     J: Fn(bool, &mut App) + 'static,
+    K: Fn(&mut App) + 'static,
 {
+    let horizontal = orientation.is_horizontal();
     let sel = POPUP_MODES.iter().position(|m| *m == current).unwrap_or(0);
     let items: Vec<MoonSegmentItem> = POPUP_MODES
         .iter()
@@ -111,17 +119,28 @@ where
         })
         .render();
 
-    // Поле + примечание — только для активного режима.
-    let (input, label, hint) = match current {
-        StackLayoutMode::Fit => (
+    // Поле + примечание — только для активного режима. При гориз. ориентации значение трактуется
+    // как ШИРИНА слота → подписи/хинты берём из *width* ключей (та же логика, диапазон 20..4000).
+    let (input, label, hint) = match (current, horizontal) {
+        (StackLayoutMode::Fit, false) => (
             height_fit_input,
             t!("chart.layout.height_fit").to_string(),
             t!("chart.layout.height_fit_hint").to_string(),
         ),
-        StackLayoutMode::Scroll => (
+        (StackLayoutMode::Fit, true) => (
+            height_fit_input,
+            t!("chart.layout.width_fit").to_string(),
+            t!("chart.layout.width_fit_hint").to_string(),
+        ),
+        (StackLayoutMode::Scroll, false) => (
             height_scroll_input,
             t!("chart.layout.height_scroll").to_string(),
             t!("chart.layout.height_scroll_hint").to_string(),
+        ),
+        (StackLayoutMode::Scroll, true) => (
+            height_scroll_input,
+            t!("chart.layout.width_scroll").to_string(),
+            t!("chart.layout.width_scroll_hint").to_string(),
         ),
     };
     // "Высота X  [поле]  px"
@@ -166,6 +185,21 @@ where
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_auto_pin(*ch, app));
 
+    // Тоггл ориентации стека — рядом с «применить ко всем». «↕» = вертикально (стопка),
+    // «↔» = горизонтально (колонки). Клик перестраивает текущее отображение активной вкладки.
+    let orientation_btn = MoonButton::new(SharedString::from(format!("{id}-orientation")))
+        .label(if horizontal { "↔" } else { "↕" })
+        .tooltip(t!("chart.layout.orientation_tip").to_string())
+        .size(MoonButtonSize::Micro)
+        .variant(if horizontal {
+            MoonButtonVariant::Blue
+        } else {
+            MoonButtonVariant::Ghost
+        })
+        .selected(horizontal)
+        .on_click(move |_, _w, app| on_toggle_orientation(app))
+        .render();
+
     // Иконка «применить ко всем» — справа в строке заголовка, только символ + всплывающая подсказка
     // (текст области: ко всем окнам / только чартам).
     let apply_all_btn = MoonButton::new(SharedString::from(format!("{id}-apply-all")))
@@ -175,6 +209,26 @@ where
         .variant(MoonButtonVariant::Ghost)
         .on_click(move |_, _w, app| on_apply_all(app))
         .render();
+
+    // Поле имени — только для кастомных вкладок (rename_input = Some). Коммит по Blur/Enter
+    // держит вызывающий (подписка на инпут).
+    let rename_row = rename_input.map(|input| {
+        h_flex()
+            .gap(design::ui_px(cx, 6.0))
+            .items_center()
+            .child(
+                div()
+                    .text_color(rgb(p.text_muted))
+                    .child(t!("chart.tab.rename").to_string()),
+            )
+            .child(
+                div().flex_1().child(
+                    MoonInput::new(SharedString::from(format!("{id}-name")))
+                        .state(input)
+                        .small(),
+                ),
+            )
+    });
 
     // Контент заполняет сценовый popup-контейнер. Фон непрозрачный: если поверх него виден
     // chart text, это настоящий z-order баг, а не дизайнерская прозрачность.
@@ -198,8 +252,10 @@ where
                         .child(t!("chart.layout.title").to_string()),
                 )
                 .child(div().flex_1())
+                .child(orientation_btn)
                 .child(apply_all_btn),
         )
+        .children(rename_row)
         .child(seg)
         .child(height_line)
         .child(hint_block)

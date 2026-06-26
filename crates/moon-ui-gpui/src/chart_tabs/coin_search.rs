@@ -7,9 +7,14 @@
 //!
 //! Общий код для полоски вкладок ([`super::strip`]) и выносных окон ([`super::windows`]).
 
+use std::collections::HashSet;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonPalette, h_flex};
+use moon_ui::{
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
+    h_flex,
+};
 use rust_i18n::t;
 
 use crate::Backend;
@@ -86,36 +91,42 @@ pub(super) fn search(
     out
 }
 
-/// Выпадающий список совпадений (или «нет совпадений»). `on_pick(core, market, window, app)`
-/// зовётся по клику строки — владелец сам открывает монету и чистит поле.
-pub(super) fn render_popup<F>(
+/// Выпадающий список совпадений (или «нет совпадений») + чекбоксы мульти-выбора и кнопка
+/// «Открыть в новой вкладке». Клик по строке (вне чекбокса) = `on_pick` (открыть одну монету);
+/// клик по чекбоксу = `on_toggle` (накопить выбор); кнопка снизу = `on_open_new` (создать вкладку
+/// из выбранных). `selected` — текущий набор отмеченных монет (для подсветки чекбоксов).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_popup<F, G, H>(
     id: &'static str,
     results: Vec<(CoreId, String, String)>,
+    selected: &HashSet<(CoreId, String)>,
+    multi_select: bool,
     p: MoonPalette,
     cx: &App,
     on_pick: F,
+    on_toggle: G,
+    on_open_new: H,
 ) -> Stateful<Div>
 where
     F: Fn(CoreId, String, &mut Window, &mut App) + Clone + 'static,
+    G: Fn(CoreId, String, &mut App) + Clone + 'static,
+    H: Fn(&mut App) + Clone + 'static,
 {
     let hover_bg = rgb(p.shell_high);
+    let selected_count = selected.len();
     // `.id(..)` делает контейнер stateful → доступен `overflow_y_scroll` (gpui сам трекает
     // прокрутку колесом по этому id); иначе длинный список просто обрезался бы по `max_h`.
     let mut list = div()
-        .id(id)
+        .id(SharedString::from(format!("{id}-list")))
         .flex()
         .flex_col()
-        .w(px(220.0))
+        .w_full()
         .max_h(px(280.0))
         .overflow_y_scroll()
-        .bg(rgb(p.panel_high))
-        .border_1()
-        .border_color(rgb(p.border))
-        .rounded(px(4.0))
         .py(design::ui_px(cx, 4.0));
 
     if results.is_empty() {
-        return list.child(
+        list = list.child(
             div()
                 .px(design::ui_px(cx, 8.0))
                 .py(design::ui_px(cx, 4.0))
@@ -130,6 +141,9 @@ where
         let base = moon_core::symbol::base_symbol(&market, &quote).to_string();
         let on_pick = on_pick.clone();
         let market_pick = market.clone();
+        let checked = selected.contains(&(core, market.clone()));
+        let on_toggle = on_toggle.clone();
+        let market_toggle = market.clone();
         list = list.child(
             div()
                 .id(SharedString::from(format!("{id}-row-{i}")))
@@ -138,38 +152,105 @@ where
                 .py(design::ui_px(cx, 4.0))
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
-                .on_mouse_down(MouseButton::Left, move |_, window, app| {
-                    on_pick(core, market_pick.clone(), window, app);
-                    app.stop_propagation();
-                })
                 .child(
                     h_flex()
                         .w_full()
-                        .gap(design::ui_px(cx, 4.0))
-                        .items_baseline()
-                        .child(
-                            div()
-                                .text_size(design::t_body(cx))
-                                .text_color(rgb(p.text))
-                                .child(base),
-                        )
-                        .child(
-                            div()
-                                .text_size(design::t_caption(cx))
-                                .text_color(rgb(p.text_muted))
-                                .child(format!("- {server}")),
-                        )
-                        .when(!quote.is_empty(), |row| {
+                        .gap(design::ui_px(cx, 6.0))
+                        .items_center()
+                        // Чекбокс мульти-выбора: клик НЕ открывает монету (stop_propagation в
+                        // обёртке ниже не нужен — MoonCheckbox сам не триггерит on_pick строки).
+                        .when(multi_select, |row| {
                             row.child(
-                                div()
-                                    .ml_auto()
-                                    .text_size(design::t_caption(cx))
-                                    .text_color(rgb(p.text_muted))
-                                    .child(quote),
+                                MoonCheckbox::new(SharedString::from(format!("{id}-cb-{i}")))
+                                    .checked(checked)
+                                    .size(MoonCheckboxSize::Compact)
+                                    .on_change(move |_v: &bool, _w, app| {
+                                        on_toggle(core, market_toggle.clone(), app);
+                                        app.stop_propagation();
+                                    }),
                             )
-                        }),
+                        })
+                        // Текст строки = открыть одну монету (on_pick).
+                        .child(
+                            h_flex()
+                                .flex_1()
+                                .gap(design::ui_px(cx, 4.0))
+                                .items_baseline()
+                                .on_mouse_down(MouseButton::Left, move |_, window, app| {
+                                    on_pick(core, market_pick.clone(), window, app);
+                                    app.stop_propagation();
+                                })
+                                .child(
+                                    div()
+                                        .text_size(design::t_body(cx))
+                                        .text_color(rgb(p.text))
+                                        .child(base),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(design::t_caption(cx))
+                                        .text_color(rgb(p.text_muted))
+                                        .child(format!("- {server}")),
+                                )
+                                .when(!quote.is_empty(), |row| {
+                                    row.child(
+                                        div()
+                                            .ml_auto()
+                                            .text_size(design::t_caption(cx))
+                                            .text_color(rgb(p.text_muted))
+                                            .child(quote),
+                                    )
+                                }),
+                        ),
                 ),
         );
     }
-    list
+
+    // Футер с кнопкой «Открыть в новой вкладке» — только в мульти-режиме; активна при непустом
+    // выборе. Вне скролла, чтобы всегда была видна. Счётчик выбранных — в подписи.
+    let footer = multi_select.then(|| {
+        let label = if selected_count > 0 {
+            format!("{} ({selected_count})", t!("chart.coin.open_new_tab"))
+        } else {
+            t!("chart.coin.open_new_tab").to_string()
+        };
+        div()
+            .w_full()
+            .px(design::ui_px(cx, 6.0))
+            .py(design::ui_px(cx, 6.0))
+            .border_t_1()
+            .border_color(rgb(p.border))
+            .child(
+                MoonButton::new(SharedString::from(format!("{id}-open-new")))
+                    .label(label)
+                    .size(MoonButtonSize::Toolbar)
+                    .variant(if selected_count > 0 {
+                        MoonButtonVariant::Blue
+                    } else {
+                        MoonButtonVariant::Soft
+                    })
+                    .disabled(selected_count == 0)
+                    .on_click(move |_, _w, app| {
+                        on_open_new(app);
+                        app.stop_propagation();
+                    })
+                    .render(),
+            )
+    });
+
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .w(px(240.0))
+        .bg(rgb(p.panel_high))
+        .border_1()
+        .border_color(rgb(p.border))
+        .rounded(px(4.0))
+        // Перехват mouse_down на всём попапе: иначе клик по чекбоксу (он реагирует на on_change,
+        // а не на mouse_down) проваливается на слой-дисмиссер под попапом и закрывает список.
+        // У строки-пика свой on_mouse_down со stop_propagation — он отработает раньше этого.
+        .on_mouse_down(MouseButton::Left, |_, _window, app| app.stop_propagation())
+        .child(list)
+        .children(footer)
 }

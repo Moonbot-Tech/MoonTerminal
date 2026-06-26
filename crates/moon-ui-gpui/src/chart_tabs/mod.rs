@@ -17,17 +17,19 @@ mod strip;
 mod windows;
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 pub(crate) use add_stack::AddChartStack;
 pub(crate) use main_stack::MainChartStack;
 use sig::{chart_tabs_sig, core_belongs_to_group};
 
-use crate::chart_persist::StackLayoutMode;
+use crate::chart_persist::{StackLayoutMode, StackOrientation};
 
 use gpui::*;
 use moon_ui::{
     MoonBackgroundPolicy, MoonInputEvent, MoonInputState, Panel, PanelEvent, PanelState,
 };
+use rust_i18n::t;
 
 use crate::Backend;
 use crate::chart_persist;
@@ -50,7 +52,16 @@ pub(super) fn chart_tab_strip_h(cx: &App) -> f32 {
 enum Tab {
     Main,
     Add(u32, ChartBucket),
+    /// Сессионная вкладка из мульти-выбора монет (кнопка «Открыть в новой вкладке»). Та же
+    /// форма, что `Add` (номер+bucket) → большинство веток сворачиваются `Add | Custom`. Номера
+    /// идут с `CUSTOM_NUM_BASE` (не пересекаются с детект-номерами Add); НЕ персистится и НЕ
+    /// наполняется ингестом (детекты в неё не текут — bucket синтетический `Shared`).
+    Custom(u32, ChartBucket),
 }
+
+/// База номеров кастомных (session-only) вкладок — заведомо выше детект-номеров AddToChart,
+/// чтобы `(num, bucket)` кастома не совпал с обычной Add-вкладкой.
+const CUSTOM_NUM_BASE: u32 = 100_000;
 
 pub struct ChartTabs {
     backend: Entity<Backend>,
@@ -61,6 +72,18 @@ pub struct ChartTabs {
     main: Entity<MainChartStack>,
     /// AddToChart-вкладки (номер, bucket, стек графиков), отсортированы по (номер, bucket).
     add: Vec<(u32, ChartBucket, Entity<AddChartStack>)>,
+    /// Сессионные кастомные вкладки из мульти-выбора монет (та же тройка). Не персистятся, не
+    /// наполняются ингестом. Лейблы — отдельно в `custom_labels`.
+    custom: Vec<(u32, ChartBucket, Entity<AddChartStack>)>,
+    /// Лейблы кастомных вкладок по номеру (показ в стрипе).
+    custom_labels: HashMap<u32, String>,
+    /// Следующий номер кастомной вкладки.
+    next_custom_num: u32,
+    /// Отмеченные чекбоксами монеты в выпадашке поиска (для «Открыть в новой вкладке»).
+    coin_selected: std::collections::HashSet<(CoreId, String)>,
+    /// Поколение «гейта стаканов» по номеру кастомной вкладки — отменяет устаревшие 5с-таймеры
+    /// suspend (ушли→вернулись→снова ушли: считается только последний таймер).
+    custom_gate_gen: HashMap<u32, u64>,
     /// Откреплённые в своё ОС-окно вкладки — держим Entity, чтобы при закрытии окна
     /// вернуть панель в стрип (repin) и чтобы новые детекты этого номера шли в неё.
     detached: Vec<(u32, ChartBucket, Entity<AddChartStack>)>,
@@ -94,6 +117,8 @@ pub struct ChartTabs {
     layout_fit_input: Entity<MoonInputState>,
     /// Поле высоты режима Scroll.
     layout_scroll_input: Entity<MoonInputState>,
+    /// Поле имени кастомной вкладки (в попапе ⚙, только для Custom).
+    custom_name_input: Entity<MoonInputState>,
     /// Поле ввода монеты (поиск) полоски вкладок — своё на окно; набор монет зависит от ядер
     /// АКТИВНОЙ вкладки (см. [`coin_search`]).
     coin_input: Entity<MoonInputState>,
@@ -252,6 +277,20 @@ impl ChartTabs {
             },
         )
         .detach();
+        // Поле имени кастомной вкладки в попапе ⚙: коммит по Blur/Enter.
+        let custom_name_input = cx.new(|cx| MoonInputState::new(window, cx));
+        cx.subscribe(
+            &custom_name_input,
+            |this, input, ev: &MoonInputEvent, cx| {
+                if this.layout_popup_open
+                    && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
+                {
+                    let name = input.read(cx).value().to_string();
+                    this.rename_active_custom(name, cx);
+                }
+            },
+        )
+        .detach();
         let mut this = Self {
             backend,
             group,
@@ -259,6 +298,11 @@ impl ChartTabs {
             theme,
             main,
             add: Vec::new(),
+            custom: Vec::new(),
+            custom_labels: HashMap::new(),
+            next_custom_num: CUSTOM_NUM_BASE,
+            coin_selected: std::collections::HashSet::new(),
+            custom_gate_gen: HashMap::new(),
             detached: Vec::new(),
             active: Tab::Main,
             seen: HashMap::new(),
@@ -272,11 +316,13 @@ impl ChartTabs {
             layout_popup_hovered: false,
             layout_fit_input,
             layout_scroll_input,
+            custom_name_input,
             coin_input,
             coin_query: String::new(),
             coin_popup_open: false,
         };
         this.restore_detached(cx);
+        this.restore_custom_tabs(cx);
         this.sync_active_scale(cx);
         this.sync_main_chart_target(cx);
         this.persist_scales(cx);
@@ -386,6 +432,12 @@ impl ChartTabs {
             .update(cx, |input, c| input.set_value(fit, window, c));
         self.layout_scroll_input
             .update(cx, |input, c| input.set_value(scroll, window, c));
+        // Имя кастомной вкладки — для поля переименования в попапе.
+        if let Tab::Custom(n, _) = &self.active {
+            let name = self.custom_label(*n);
+            self.custom_name_input
+                .update(cx, |input, c| input.set_value(name, window, c));
+        }
     }
 
     fn read_layout_height(&self, mode: StackLayoutMode, cx: &App) -> Option<u16> {
@@ -427,11 +479,26 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// Ключ персиста активной вкладки: Main → (0, Shared); AddToChart → (num, bucket).
+    /// Ключ персиста активной вкладки: Main → (0, Shared); AddToChart/Custom → (num, bucket).
+    /// (Для Custom персист всё равно пропускается — см. `persist_active`.)
     fn active_stack_key(&self) -> (u32, ChartBucket) {
         match &self.active {
             Tab::Main => (0, ChartBucket::Shared),
-            Tab::Add(n, b) => (*n, b.clone()),
+            Tab::Add(n, b) | Tab::Custom(n, b) => (*n, b.clone()),
+        }
+    }
+
+    /// Кастомная (мульти-монетная) вкладка активна? Влияет на юниверс поиска монеты (все ядра
+    /// группы) и на гейтинг подписок стаканов по фокусу.
+    fn active_is_custom(&self) -> bool {
+        matches!(self.active, Tab::Custom(..))
+    }
+
+    /// Активный Add/Custom-стек (None для Main / если не найден).
+    fn active_stack(&self) -> Option<Entity<AddChartStack>> {
+        match &self.active {
+            Tab::Main => None,
+            Tab::Add(n, b) | Tab::Custom(n, b) => self.add_stack(*n, b),
         }
     }
 
@@ -439,11 +506,9 @@ impl ChartTabs {
     fn active_layout_mode(&self, cx: &App) -> Option<StackLayoutMode> {
         match &self.active {
             Tab::Main => self.main.read(cx).layout_mode(),
-            Tab::Add(n, b) => self
-                .add
-                .iter()
-                .find(|(num, bk, _)| num == n && bk == b)
-                .and_then(|(_, _, p)| p.read(cx).layout_mode()),
+            Tab::Add(n, b) | Tab::Custom(n, b) => {
+                self.add_stack(*n, b).and_then(|p| p.read(cx).layout_mode())
+            }
         }
     }
 
@@ -451,11 +516,9 @@ impl ChartTabs {
     fn active_layout_height_fit(&self, cx: &App) -> Option<u16> {
         match &self.active {
             Tab::Main => self.main.read(cx).layout_height_fit(),
-            Tab::Add(n, b) => self
-                .add
-                .iter()
-                .find(|(num, bk, _)| num == n && bk == b)
-                .and_then(|(_, _, p)| p.read(cx).layout_height_fit()),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .and_then(|p| p.read(cx).layout_height_fit()),
         }
     }
 
@@ -463,11 +526,9 @@ impl ChartTabs {
     fn active_layout_height_scroll(&self, cx: &App) -> Option<u16> {
         match &self.active {
             Tab::Main => self.main.read(cx).layout_height_scroll(),
-            Tab::Add(n, b) => self
-                .add
-                .iter()
-                .find(|(num, bk, _)| num == n && bk == b)
-                .and_then(|(_, _, p)| p.read(cx).layout_height_scroll()),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .and_then(|p| p.read(cx).layout_height_scroll()),
         }
     }
 
@@ -475,11 +536,9 @@ impl ChartTabs {
     fn active_orderbook_enabled(&self, cx: &App) -> bool {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).orderbook_enabled(),
-            Tab::Add(n, b) => self
-                .add
-                .iter()
-                .find(|(num, bk, _)| num == n && bk == b)
-                .and_then(|(_, _, p)| p.read(cx).orderbook_enabled()),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .and_then(|p| p.read(cx).orderbook_enabled()),
         };
         v.unwrap_or(true)
     }
@@ -488,11 +547,9 @@ impl ChartTabs {
     fn active_show_zone(&self, cx: &App) -> bool {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).show_zone(),
-            Tab::Add(n, b) => self
-                .add
-                .iter()
-                .find(|(num, bk, _)| num == n && bk == b)
-                .and_then(|(_, _, p)| p.read(cx).show_zone()),
+            Tab::Add(n, b) | Tab::Custom(n, b) => {
+                self.add_stack(*n, b).and_then(|p| p.read(cx).show_zone())
+            }
         };
         v.unwrap_or(true)
     }
@@ -501,24 +558,30 @@ impl ChartTabs {
     fn active_auto_pin(&self, cx: &App) -> bool {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).auto_pin(),
-            Tab::Add(n, b) => self
-                .add
-                .iter()
-                .find(|(num, bk, _)| num == n && bk == b)
-                .and_then(|(_, _, p)| p.read(cx).auto_pin()),
+            Tab::Add(n, b) | Tab::Custom(n, b) => {
+                self.add_stack(*n, b).and_then(|p| p.read(cx).auto_pin())
+            }
         };
         v.unwrap_or(false)
+    }
+
+    /// Ориентация стека активной вкладки (None → дефолт Vertical).
+    fn active_layout_orientation(&self, cx: &App) -> Option<StackOrientation> {
+        match &self.active {
+            Tab::Main => self.main.read(cx).layout_orientation(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .and_then(|p| p.read(cx).layout_orientation()),
+        }
     }
 
     /// Масштаб цены активной вкладки (None = Авто).
     fn active_scale_value(&self, cx: &App) -> Option<f32> {
         match &self.active {
             Tab::Main => self.main.read(cx).scale(),
-            Tab::Add(n, b) => self
-                .add
-                .iter()
-                .find(|(num, bk, _)| num == n && bk == b)
-                .and_then(|(_, _, p)| p.read(cx).scale()),
+            Tab::Add(n, b) | Tab::Custom(n, b) => {
+                self.add_stack(*n, b).and_then(|p| p.read(cx).scale())
+            }
         }
     }
 
@@ -528,9 +591,8 @@ impl ChartTabs {
             Tab::Main => self
                 .main
                 .update(cx, |s, c| s.set_orderbook_enabled(Some(enabled), c)),
-            Tab::Add(n, b) => {
-                if let Some((_, _, p)) = self.add.iter().find(|(num, bk, _)| *num == n && *bk == b)
-                {
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(p) = self.active_stack() {
                     p.update(cx, |s, c| s.set_orderbook_enabled(Some(enabled), c));
                 }
             }
@@ -548,9 +610,8 @@ impl ChartTabs {
     fn apply_show_zone(&mut self, show: bool, cx: &mut Context<Self>) {
         match self.active.clone() {
             Tab::Main => self.main.update(cx, |s, c| s.set_show_zone(Some(show), c)),
-            Tab::Add(n, b) => {
-                if let Some((_, _, p)) = self.add.iter().find(|(num, bk, _)| *num == n && *bk == b)
-                {
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(p) = self.active_stack() {
                     p.update(cx, |s, c| s.set_show_zone(Some(show), c));
                 }
             }
@@ -566,9 +627,8 @@ impl ChartTabs {
     fn apply_auto_pin(&mut self, on: bool, cx: &mut Context<Self>) {
         match self.active.clone() {
             Tab::Main => self.main.update(cx, |s, c| s.set_auto_pin(Some(on), c)),
-            Tab::Add(n, b) => {
-                if let Some((_, _, p)) = self.add.iter().find(|(num, bk, _)| *num == n && *bk == b)
-                {
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(p) = self.active_stack() {
                     p.update(cx, |s, c| s.set_auto_pin(Some(on), c));
                 }
             }
@@ -576,6 +636,23 @@ impl ChartTabs {
         let (num, bucket) = self.active_stack_key();
         self.upsert_spec(cx, num, &bucket, move |s| {
             s.auto_pin = Some(on);
+        });
+        cx.notify();
+    }
+
+    /// Сменить ориентацию (верт/гор) на АКТИВНОЙ вкладке + persist. Тоггл из попапа ⚙.
+    fn apply_orientation(&mut self, orientation: StackOrientation, cx: &mut Context<Self>) {
+        match self.active.clone() {
+            Tab::Main => self.main.update(cx, |s, c| s.set_orientation(Some(orientation), c)),
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(p) = self.active_stack() {
+                    p.update(cx, |s, c| s.set_orientation(Some(orientation), c));
+                }
+            }
+        }
+        let (num, bucket) = self.active_stack_key();
+        self.upsert_spec(cx, num, &bucket, move |s| {
+            s.layout_orientation = Some(orientation);
         });
         cx.notify();
     }
@@ -593,9 +670,8 @@ impl ChartTabs {
             Tab::Main => self
                 .main
                 .update(cx, |s, c| s.set_layout(mode, height_fit, height_scroll, c)),
-            Tab::Add(n, b) => {
-                if let Some((_, _, p)) = self.add.iter().find(|(num, bk, _)| *num == n && *bk == b)
-                {
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(p) = self.active_stack() {
                     p.update(cx, |s, c| s.set_layout(mode, height_fit, height_scroll, c));
                 }
             }
@@ -623,6 +699,7 @@ impl ChartTabs {
         orderbook: Option<bool>,
         show_zone: Option<bool>,
         auto_pin: Option<bool>,
+        orientation: Option<StackOrientation>,
         cx: &mut Context<Self>,
     ) {
         let ob = orderbook.unwrap_or(true);
@@ -635,6 +712,7 @@ impl ChartTabs {
                 s.set_orderbook_enabled(Some(ob), c);
                 s.set_show_zone(Some(sz), c);
                 s.set_auto_pin(Some(ap), c);
+                s.set_orientation(orientation, c);
             });
             self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| {
                 s.layout_mode = mode;
@@ -644,12 +722,14 @@ impl ChartTabs {
                 s.orderbook_enabled = Some(ob);
                 s.show_zone = Some(sz);
                 s.auto_pin = Some(ap);
+                s.layout_orientation = orientation;
             });
         }
-        // «Чарты» = add-вкладки в стрипе + откреплённые в окна (их стеки держим в self.detached).
+        // «Чарты» = add-вкладки в стрипе + кастомные + откреплённые в окна (стеки в self.detached).
         let targets: Vec<(u32, ChartBucket, Entity<AddChartStack>)> = self
             .add
             .iter()
+            .chain(self.custom.iter())
             .chain(self.detached.iter())
             .map(|(n, b, p)| (*n, b.clone(), p.clone()))
             .collect();
@@ -660,6 +740,7 @@ impl ChartTabs {
                 s.set_orderbook_enabled(Some(ob), c);
                 s.set_show_zone(Some(sz), c);
                 s.set_auto_pin(Some(ap), c);
+                s.set_orientation(orientation, c);
             });
             self.upsert_spec(cx, num, &bucket, |s| {
                 s.layout_mode = mode;
@@ -669,6 +750,7 @@ impl ChartTabs {
                 s.orderbook_enabled = Some(ob);
                 s.show_zone = Some(sz);
                 s.auto_pin = Some(ap);
+                s.layout_orientation = orientation;
             });
         }
         self.backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
@@ -695,6 +777,7 @@ impl ChartTabs {
                 r.orderbook,
                 r.show_zone,
                 r.auto_pin,
+                r.orientation,
                 cx,
             );
         }
@@ -848,15 +931,16 @@ impl ChartTabs {
     fn add_stack(&self, n: u32, bucket: &ChartBucket) -> Option<Entity<AddChartStack>> {
         self.add
             .iter()
+            .chain(self.custom.iter())
             .find(|(num, c, _)| *num == n && c == bucket)
             .map(|(_, _, p)| p.clone())
     }
 
-    /// Активная панель (Main или AddToChart stack) для показа.
+    /// Активная панель (Main или AddToChart/Custom stack) для показа.
     fn active_element(&self) -> AnyElement {
         match &self.active {
             Tab::Main => self.main.clone().into_any_element(),
-            Tab::Add(n, bucket) => self
+            Tab::Add(n, bucket) | Tab::Custom(n, bucket) => self
                 .add_stack(*n, bucket)
                 .map(|p| p.into_any_element())
                 .unwrap_or_else(|| self.main.clone().into_any_element()),
@@ -866,7 +950,7 @@ impl ChartTabs {
     fn active_scale(&self, cx: &App) -> Option<f32> {
         match &self.active {
             Tab::Main => self.main.read(cx).scale(),
-            Tab::Add(n, bucket) => self
+            Tab::Add(n, bucket) | Tab::Custom(n, bucket) => self
                 .add_stack(*n, bucket)
                 .map(|p| p.read(cx).scale())
                 .unwrap_or_else(|| self.main.read(cx).scale()),
@@ -894,7 +978,7 @@ impl ChartTabs {
     fn set_active_scale(&self, pct: Option<f32>, cx: &mut Context<Self>) {
         match &self.active {
             Tab::Main => self.main.update(cx, |p, pcx| p.set_scale(pct, pcx)),
-            Tab::Add(n, bucket) => {
+            Tab::Add(n, bucket) | Tab::Custom(n, bucket) => {
                 if let Some(stack) = self.add_stack(*n, bucket) {
                     stack.update(cx, |p, pcx| p.set_scale(pct, pcx));
                 }
@@ -912,10 +996,11 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// Совпадения поля монеты для АКТИВНОЙ вкладки (Main → ядра группы; Add → ядра bucket-а).
+    /// Совпадения поля монеты для АКТИВНОЙ вкладки (Main/Custom → все ядра группы; Add → ядра
+    /// bucket-а). Кастомная вкладка собирает монеты с разных ядер → ищем по всей группе.
     fn coin_results(&self, cx: &App) -> Vec<(CoreId, String, String)> {
         let bucket = match &self.active {
-            Tab::Main => None,
+            Tab::Main | Tab::Custom(..) => None,
             Tab::Add(_, b) => Some(b.clone()),
         };
         coin_search::search(
@@ -926,24 +1011,262 @@ impl ChartTabs {
         )
     }
 
-    /// Открыть выбранную монету на АКТИВНОЙ вкладке: Main → fullscreen-чарт; Add → её стек.
+    /// Открыть выбранную монету на АКТИВНОЙ вкладке: Main → fullscreen-чарт; Add/Custom → её стек.
     fn open_coin_on_active(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
         match self.active.clone() {
             Tab::Main => self
                 .main
                 .update(cx, |m, c| m.open_or_focus(core, market, c)),
-            Tab::Add(n, b) => {
-                if let Some((_, _, panel)) =
-                    self.add.iter().find(|(num, bk, _)| *num == n && *bk == b)
-                {
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(panel) = self.active_stack() {
                     panel.update(cx, |p, c| {
                         p.add_coin(core, &market, coin_search::MANUAL_COIN_TTL_MS, c)
                     });
                 }
             }
         }
+        // Кастомная вкладка изменила состав → пере-персист её тикеров.
+        if self.active_is_custom() {
+            self.persist_custom_active(cx);
+        }
         self.sync_main_chart_target(cx);
         cx.notify();
+    }
+
+    /// Тоггл выбора монеты чекбоксом в выпадашке (накапливается для «Открыть в новой вкладке»).
+    /// Выбор переживает смену запроса (можно искать BTC → отметить, потом ETH → отметить).
+    fn toggle_coin_selected(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+        let key = (core, market);
+        if !self.coin_selected.remove(&key) {
+            self.coin_selected.insert(key);
+        }
+        cx.notify();
+    }
+
+    /// Создать кастомную вкладку из отмеченных монет: чарты сразу запинены, горизонтальная
+    /// ориентация, фокус переходит на новую вкладку. Персистится (тикеры + имя + раскладка).
+    fn open_selected_in_new_tab(&mut self, cx: &mut Context<Self>) {
+        if self.coin_selected.is_empty() {
+            return;
+        }
+        let coins: Vec<(CoreId, String)> = self.coin_selected.iter().cloned().collect();
+        let num = self.next_custom_num;
+        self.next_custom_num += 1;
+        let label = t!("chart.tab.custom", n = num - CUSTOM_NUM_BASE + 1).to_string();
+        let bucket = ChartBucket::Shared;
+        let stack = cx.new(|_| {
+            AddChartStack::new(
+                self.backend.clone(),
+                num,
+                bucket.clone(),
+                self.epoch,
+                self.theme.clone(),
+            )
+        });
+        // По умолчанию — горизонтальная ориентация.
+        stack.update(cx, |s, c| s.set_orientation(Some(StackOrientation::Horizontal), c));
+        for (core, market) in &coins {
+            stack.update(cx, |s, c| {
+                s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c)
+            });
+        }
+        // Чарты сразу запинены (защита от TTL-закрытия).
+        stack.update(cx, |s, c| s.pin_all(c));
+        self.custom.push((num, bucket.clone(), stack));
+        self.custom_labels.insert(num, label.clone());
+        self.active = Tab::Custom(num, bucket.clone());
+        self.persist_custom(cx, num, &bucket, &coins, &label);
+        // Сброс выбора/поля/попапа.
+        self.coin_selected.clear();
+        self.coin_query.clear();
+        self.coin_popup_open = false;
+        self.sync_active_scale(cx);
+        self.sync_inactive_chart_visibility(cx);
+        self.refresh_orderbook_gates(cx);
+        self.sync_main_chart_target(cx);
+        cx.notify();
+    }
+
+    /// Метка кастомной вкладки (имя пользователя или дефолт «Набор N»).
+    fn custom_label(&self, n: u32) -> String {
+        self.custom_labels.get(&n).cloned().unwrap_or_else(|| {
+            t!("chart.tab.custom", n = n - CUSTOM_NUM_BASE + 1).to_string()
+        })
+    }
+
+    /// Переименовать активную кастомную вкладку (поле имени в попапе ⚙) + persist.
+    fn rename_active_custom(&mut self, name: String, cx: &mut Context<Self>) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        if let Tab::Custom(n, b) = self.active.clone() {
+            self.custom_labels.insert(n, name.clone());
+            self.upsert_spec(cx, n, &b, move |s| s.custom_label = Some(name));
+            cx.notify();
+        }
+    }
+
+    /// Записать спек кастомной вкладки (тикеры + имя + гориз. ориентация) в charts.json.
+    fn persist_custom(
+        &self,
+        cx: &mut Context<Self>,
+        num: u32,
+        bucket: &ChartBucket,
+        coins: &[(CoreId, String)],
+        label: &str,
+    ) {
+        let coins = coins.to_vec();
+        let label = label.to_string();
+        self.upsert_spec(cx, num, bucket, move |s| {
+            s.custom_coins = Some(coins);
+            s.custom_label = Some(label);
+            if s.layout_orientation.is_none() {
+                s.layout_orientation = Some(StackOrientation::Horizontal);
+            }
+        });
+    }
+
+    /// Удалить спек кастомной вкладки из charts.json (закрытие вкладки = удаление сохранёнки).
+    fn remove_custom_spec(&self, n: u32, cx: &mut Context<Self>) {
+        let group = self.group.clone();
+        self.backend.update(cx, |b, _| {
+            let before = b.chart_specs.len();
+            b.chart_specs
+                .retain(|s| !(s.group == group && s.num == n && s.custom_coins.is_some()));
+            if b.chart_specs.len() != before {
+                b.chart_specs_dirty = true;
+            }
+        });
+    }
+
+    /// Пере-персист тикеров активной кастомной вкладки (после изменения состава).
+    fn persist_custom_active(&mut self, cx: &mut Context<Self>) {
+        if let Tab::Custom(n, b) = self.active.clone() {
+            if let Some(stack) = self.add_stack(n, &b) {
+                let coins = stack.read(cx).coins(cx);
+                let label = self.custom_label(n);
+                self.persist_custom(cx, n, &b, &coins, &label);
+            }
+        }
+    }
+
+    /// Восстановить кастомные вкладки из charts.json (спеки с `custom_coins`): создать стек,
+    /// залить тикеры (пин), применить раскладку/ориентацию/масштаб, имя. В стрипе (не окном).
+    fn restore_custom_tabs(&mut self, cx: &mut Context<Self>) {
+        #[allow(clippy::type_complexity)]
+        let specs: Vec<(
+            u32,
+            ChartBucket,
+            Vec<(CoreId, String)>,
+            Option<String>,
+            Option<f32>,
+            (Option<StackLayoutMode>, Option<u16>, Option<u16>),
+            Option<StackOrientation>,
+            Option<bool>,
+            Option<bool>,
+            Option<bool>,
+        )> = {
+            let all = &self.backend.read(cx).chart_specs;
+            all.iter()
+                .filter(|s| s.group == self.group && s.detached.is_none())
+                .filter_map(|s| {
+                    s.custom_coins.clone().map(|coins| {
+                        (
+                            s.num,
+                            s.bucket(),
+                            coins,
+                            s.custom_label.clone(),
+                            s.scale,
+                            (s.layout_mode, s.layout_height_fit, s.layout_height_scroll),
+                            s.layout_orientation,
+                            s.orderbook_enabled,
+                            s.show_zone,
+                            s.auto_pin,
+                        )
+                    })
+                })
+                .collect()
+        };
+        for (num, bucket, coins, label, scale, layout, orientation, ob, sz, ap) in specs {
+            let stack = cx.new(|_| {
+                AddChartStack::new(
+                    self.backend.clone(),
+                    num,
+                    bucket.clone(),
+                    self.epoch,
+                    self.theme.clone(),
+                )
+            });
+            stack.update(cx, |s, c| {
+                s.set_orientation(Some(orientation.unwrap_or(StackOrientation::Horizontal)), c);
+                if scale.is_some() {
+                    s.set_scale(scale, c);
+                }
+                s.set_layout(layout.0, layout.1, layout.2, c);
+                if let Some(v) = ob {
+                    s.set_orderbook_enabled(Some(v), c);
+                }
+                if let Some(v) = sz {
+                    s.set_show_zone(Some(v), c);
+                }
+                if let Some(v) = ap {
+                    s.set_auto_pin(Some(v), c);
+                }
+                for (core, market) in &coins {
+                    s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);
+                }
+                s.pin_all(c);
+            });
+            self.custom.push((num, bucket, stack));
+            if let Some(label) = label {
+                self.custom_labels.insert(num, label);
+            }
+            self.next_custom_num = self.next_custom_num.max(num + 1);
+        }
+        if !self.custom.is_empty() {
+            self.refresh_orderbook_gates(cx);
+        }
+    }
+
+    /// Обновить гейты стаканов кастомных вкладок по фокусу: активная → resume сразу; неактивные
+    /// в стрипе → через 5с suspend (отписка), если так и не вернулись. Откреплённых нет в
+    /// `self.custom` → они не suspend'ятся (окно само держит спрос).
+    fn refresh_orderbook_gates(&mut self, cx: &mut Context<Self>) {
+        let active = self.active.clone();
+        let customs: Vec<(u32, ChartBucket, Entity<AddChartStack>)> = self.custom.clone();
+        for (n, b, stack) in customs {
+            if Tab::Custom(n, b.clone()) == active {
+                // Вернулись на вкладку → отменяем pending-таймер и сразу переподписываемся.
+                *self.custom_gate_gen.entry(n).or_insert(0) += 1;
+                stack.update(cx, |s, c| s.set_orderbook_suspended(false, c));
+            } else {
+                // Ушли с вкладки → ставим 5с-таймер на отписку (последний побеждает по поколению).
+                let want_gen = {
+                    let e = self.custom_gate_gen.entry(n).or_insert(0);
+                    *e += 1;
+                    *e
+                };
+                let stack = stack.clone();
+                cx.spawn(async move |this, cx| {
+                    let executor = cx.update(|cx| cx.background_executor().clone());
+                    executor.timer(Duration::from_secs(5)).await;
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |this, cx| {
+                            // Таймер ещё актуален, вкладка всё ещё неактивна и в стрипе?
+                            let still = this.custom_gate_gen.get(&n) == Some(&want_gen)
+                                && !matches!(&this.active, Tab::Custom(nn, _) if *nn == n)
+                                && this.custom.iter().any(|(num, _, _)| *num == n);
+                            if still {
+                                stack.update(cx, |s, c| s.set_orderbook_suspended(true, c));
+                            }
+                        })
+                        .ok();
+                    });
+                })
+                .detach();
+            }
+        }
     }
 
     /// Очистить поле монеты и закрыть список (после выбора / по клику вне).
@@ -974,6 +1297,10 @@ impl ChartTabs {
             if Tab::Add(*n, c.clone()) != active {
                 panel.update(cx, |panel, pcx| panel.set_scene_visible(false, pcx));
             }
+        }
+        for (n, c, panel) in &self.custom {
+            let visible = Tab::Custom(*n, c.clone()) == active;
+            panel.update(cx, |panel, pcx| panel.set_scene_visible(visible, pcx));
         }
     }
 
@@ -1039,6 +1366,21 @@ fn chart_pane_label(
     bucket: &ChartBucket,
     cx: &App,
 ) -> String {
+    // Кастомная (мульти-монетная) вкладка: метка = её имя (custom_label) или дефолт «Набор N»,
+    // а не сырой номер «100000-…». Узнаём по наличию custom_coins в спеке.
+    {
+        let specs = &backend.read(cx).chart_specs;
+        if let Some(s) = specs
+            .iter()
+            .find(|s| s.group == group && s.num == n && s.bucket() == *bucket)
+        {
+            if s.custom_coins.is_some() {
+                return s.custom_label.clone().unwrap_or_else(|| {
+                    t!("chart.tab.custom", n = n - CUSTOM_NUM_BASE + 1).to_string()
+                });
+            }
+        }
+    }
     let mut label = if group.is_empty() {
         n.to_string()
     } else {

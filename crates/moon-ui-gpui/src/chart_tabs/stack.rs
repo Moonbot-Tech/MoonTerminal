@@ -5,7 +5,7 @@
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use moon_ui::{MoonScrollbarVisibility, MoonVirtualList, MoonVirtualListScrollHandle, v_flex};
+use moon_ui::{MoonScrollbarVisibility, MoonVirtualList, MoonVirtualListScrollHandle, h_flex, v_flex};
 
 use crate::chart_persist::StackLayoutMode;
 use crate::panels::ChartPanel;
@@ -121,15 +121,16 @@ pub(super) fn retain_nonempty_panels(entries: &mut Vec<ChartStackEntry>, cx: &Ap
     entries.len() != before
 }
 
-/// 3-режимная вертикальная раскладка стека (режим — из Настроек):
-///  • scroll=false               → FIT: панели делят высоту окна;
-///  • scroll=true, compress=false → SCROLL: фикс. высота `cfg_h`, `MoonVirtualList` со скроллом;
-///  • scroll=true, compress=true  → COMPRESS: фикс. высота, без скролла, сжатие при переполнении.
+/// 3-режимная раскладка стека (режим — из Настроек), ориентация `horizontal`:
+///  • scroll=false               → FIT: панели делят высоту (верт.) / ширину (гор.) окна;
+///  • scroll=true, compress=false → SCROLL: фикс. размер `cfg_h`, скролл по вертикали
+///    (`MoonVirtualList`) либо по горизонтали (`overflow_x_scroll`-контейнер);
+///  • scroll=true, compress=true  → COMPRESS: фикс. размер, без скролла, сжатие при переполнении.
 ///
-/// `panel_at` достаёт панель по индексу, `tile` строит одну плитку (Main — с ПКМ-возвратом,
-/// Add — простую). FIT/COMPRESS итерируют переданный `s` (это `&self` вызывающего стека), а
-/// SCROLL берёт панели через weak-entity в App-контексте — поэтому own-entity не читается
-/// через `cx` (иначе RefCell-паника «already mutably borrowed» во время render).
+/// `cfg_h` — фикс. размер слота вдоль оси стека (высота при верт., ширина при гор.). `panel_at`
+/// достаёт панель по индексу, `tile(s, ix, panel, size, flex, horizontal, border, ent)` строит
+/// одну плитку. FIT/COMPRESS итерируют переданный `s` (это `&self` вызывающего стека); вертикальный
+/// SCROLL берёт панели через weak-entity в App-контексте (иначе RefCell-паника при render).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_chart_stack<S, P, T>(
     base_id: &str,
@@ -138,6 +139,7 @@ pub(super) fn render_chart_stack<S, P, T>(
     count: usize,
     scroll: bool,
     compress: bool,
+    horizontal: bool,
     cfg_h: f32,
     scroll_handle: &MoonVirtualListScrollHandle,
     border: Rgba,
@@ -147,12 +149,30 @@ pub(super) fn render_chart_stack<S, P, T>(
 where
     S: Render + 'static,
     P: Fn(&S, usize) -> Option<Entity<ChartPanel>> + Copy + 'static,
-    T: Fn(&S, usize, Entity<ChartPanel>, Option<f32>, bool, Rgba, Entity<S>) -> AnyElement
+    T: Fn(&S, usize, Entity<ChartPanel>, Option<f32>, bool, bool, Rgba, Entity<S>) -> AnyElement
         + Copy
         + 'static,
 {
     if scroll && !compress {
-        // SCROLL: фикс. высота, виртуальный список со скроллбаром. Плитку строим через
+        if horizontal {
+            // Горизонтальный SCROLL: `MoonVirtualList` умеет только вертикаль (gpui `uniform_list`),
+            // поэтому строим невиртуализированный ряд фикс-ширины в `overflow_x_scroll` (чартов
+            // единицы — виртуализация не нужна). Каждая плитка: фикс. ШИРИНА cfg_h, full height.
+            let mut tiles: Vec<AnyElement> = Vec::with_capacity(count);
+            for ix in 0..count {
+                if let Some(panel) = panel_at(s, ix) {
+                    tiles.push(tile(s, ix, panel, Some(cfg_h), false, true, border, entity.clone()));
+                }
+            }
+            return div()
+                .id(format!("{base_id}-hscroll"))
+                .relative()
+                .size_full()
+                .overflow_x_scroll()
+                .child(h_flex().h_full().children(tiles))
+                .into_any_element();
+        }
+        // Вертикальный SCROLL: фикс. высота, виртуальный список со скроллбаром. Плитку строим через
         // weak-entity (фабрика `MoonVirtualList` отдаёт `App`, а не `Context`).
         let weak = entity.downgrade();
         let list = MoonVirtualList::new(
@@ -167,7 +187,7 @@ where
                 let Some(panel) = panel_at(s, ix) else {
                     return div().into_any_element();
                 };
-                tile(s, ix, panel, Some(cfg_h), false, border, ent.clone())
+                tile(s, ix, panel, Some(cfg_h), false, false, border, ent.clone())
             },
         )
         .track_scroll(scroll_handle)
@@ -183,38 +203,51 @@ where
             .into_any_element();
     }
 
-    // FIT / COMPRESS: v_flex на всю высоту окна, без скролла.
-    // COMPRESS: каждый слот flex с cap = cfg_h (height=Some+flex=true → max_h в плитке): мало
-    // графиков — каждый по cfg_h (низ пустой), много — сжимаются до window/count. FIT: flex без cap.
+    // FIT / COMPRESS: v_flex (верт.) / h_flex (гор.) на всё окно, без скролла.
+    // COMPRESS: каждый слот flex с cap = cfg_h (size=Some+flex=true → max по оси в плитке): мало
+    // графиков — каждый по cfg_h (хвост пустой), много — сжимаются до window/count. FIT: flex без cap.
     let mut tiles: Vec<AnyElement> = Vec::with_capacity(count);
     for ix in 0..count {
-        let (height, flex) = if compress {
+        let (size, flex) = if compress {
             (Some(cfg_h), true)
         } else {
             (None, true)
         };
         match panel_at(s, ix) {
-            Some(panel) => tiles.push(tile(s, ix, panel, height, flex, border, entity.clone())),
+            Some(panel) => {
+                tiles.push(tile(s, ix, panel, size, flex, horizontal, border, entity.clone()))
+            }
             None => {
-                // Пустой (держащийся) слот COMPRESS — прозрачная плашка тех же размеров.
-                let mut e = div().w_full().relative().overflow_hidden();
+                // Пустой (держащийся) слот COMPRESS — прозрачная плашка тех же размеров (по оси).
+                let mut e = div().relative().overflow_hidden();
+                e = if horizontal { e.h_full() } else { e.w_full() };
                 if flex {
-                    e = e.flex_1().min_h(px(0.0));
-                    if let Some(h) = height {
-                        e = e.max_h(px(h));
+                    e = e.flex_1();
+                    e = if horizontal { e.min_w(px(0.0)) } else { e.min_h(px(0.0)) };
+                    if let Some(v) = size {
+                        e = if horizontal { e.max_w(px(v)) } else { e.max_h(px(v)) };
                     }
-                } else if let Some(h) = height {
-                    e = e.h(px(h)).min_h(px(0.0));
+                } else if let Some(v) = size {
+                    e = if horizontal {
+                        e.w(px(v)).min_w(px(0.0))
+                    } else {
+                        e.h(px(v)).min_h(px(0.0))
+                    };
                 }
                 tiles.push(e.into_any_element());
             }
         }
     }
+    let inner = if horizontal {
+        h_flex().size_full().children(tiles)
+    } else {
+        v_flex().size_full().children(tiles)
+    };
     div()
         .id(format!("{base_id}-fit"))
         .relative()
         .size_full()
         .overflow_hidden()
-        .child(v_flex().size_full().children(tiles))
+        .child(inner)
         .into_any_element()
 }

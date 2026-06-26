@@ -100,6 +100,7 @@ pub(crate) struct ChartApplyAll {
     pub orderbook: Option<bool>,
     pub show_zone: Option<bool>,
     pub auto_pin: Option<bool>,
+    pub orientation: Option<chart_persist::StackOrientation>,
 }
 
 /// Общий backend: живёт в одном `Entity`, дренится таймером, будит окна по notify.

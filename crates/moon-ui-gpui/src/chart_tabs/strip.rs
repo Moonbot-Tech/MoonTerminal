@@ -32,6 +32,17 @@ impl Render for ChartTabs {
                 true,
             )
         }));
+        // Кастомные (мульти-монетные) вкладки: своё имя, без бейджа, закрываемы (×). Дабл-клик
+        // НЕ открепляет (guard в on_click), но closable=true → крестик есть.
+        tabs.extend(self.custom.iter().map(|(n, bucket, _)| {
+            (
+                Tab::Custom(*n, bucket.clone()),
+                self.custom_label(*n),
+                0,
+                0,
+                true,
+            )
+        }));
         let tab_keys = Rc::new(
             tabs.iter()
                 .map(|(tab, _, _, _, _)| tab.clone())
@@ -76,22 +87,30 @@ impl Render for ChartTabs {
                         return;
                     };
                     view.update(app, |this, cx| {
-                        if !matches!(tab_id, Tab::Main) && event.click_count() >= 2 {
+                        // Дабл-клик открепляет Add и Custom-вкладки в своё ОС-окно (Main — нет).
+                        if matches!(tab_id, Tab::Add(..) | Tab::Custom(..))
+                            && event.click_count() >= 2
+                        {
                             this.detach(tab_id, cx);
-                        } else if matches!(tab_id, Tab::Main)
+                            return;
+                        }
+                        let exists = matches!(tab_id, Tab::Main)
                             || this
                                 .add
                                 .iter()
                                 .any(|(n, c, _)| Tab::Add(*n, c.clone()) == tab_id)
-                        {
-                            if this.active != tab_id {
-                                this.active = tab_id;
-                                this.sync_seen_for_active(cx);
-                                this.sync_active_scale(cx);
-                                this.sync_inactive_chart_visibility(cx);
-                                this.persist_scales(cx);
-                                cx.notify();
-                            }
+                            || this
+                                .custom
+                                .iter()
+                                .any(|(n, c, _)| Tab::Custom(*n, c.clone()) == tab_id);
+                        if exists && this.active != tab_id {
+                            this.active = tab_id;
+                            this.sync_seen_for_active(cx);
+                            this.sync_active_scale(cx);
+                            this.sync_inactive_chart_visibility(cx);
+                            this.refresh_orderbook_gates(cx);
+                            this.persist_scales(cx);
+                            cx.notify();
                         }
                     });
                 }
@@ -109,12 +128,22 @@ impl Render for ChartTabs {
                     view.update(app, |this, cx| {
                         this.add
                             .retain(|(n, c, _)| Tab::Add(*n, c.clone()) != tab_id);
+                        // Кастомную вкладку закрываем совсем: убираем стек, лейбл и её спек из
+                        // charts.json (закрытие = удаление сохранённой вкладки).
+                        if let Tab::Custom(n, _) = &tab_id {
+                            let n = *n;
+                            this.custom
+                                .retain(|(num, c, _)| Tab::Custom(*num, c.clone()) != tab_id);
+                            this.custom_labels.remove(&n);
+                            this.remove_custom_spec(n, cx);
+                        }
                         if this.active == tab_id {
                             this.active = Tab::Main;
                         }
                         this.sync_seen_for_active(cx);
                         this.sync_active_scale(cx);
                         this.sync_inactive_chart_visibility(cx);
+                        this.refresh_orderbook_gates(cx);
                         this.persist_scales(cx);
                         cx.notify();
                     });
@@ -176,15 +205,25 @@ impl Render for ChartTabs {
             let results = self.coin_results(cx);
             let view = cx.entity();
             let input = self.coin_input.clone();
+            let view_toggle = cx.entity();
+            let view_open = cx.entity();
             coin_search::render_popup(
                 "tabs-coin",
                 results,
+                &self.coin_selected,
+                true,
                 p_strip,
                 cx,
                 move |core, market, window, app| {
                     view.update(app, |this, cx| this.open_coin_on_active(core, market, cx));
                     input.update(app, |inp, c| inp.set_value(SharedString::default(), window, c));
                     view.update(app, |this, cx| this.clear_coin_search(cx));
+                },
+                move |core, market, app| {
+                    view_toggle.update(app, |this, cx| this.toggle_coin_selected(core, market, cx));
+                },
+                move |app| {
+                    view_open.update(app, |this, cx| this.open_selected_in_new_tab(cx));
                 },
             )
             .absolute()
@@ -230,10 +269,14 @@ impl Render for ChartTabs {
         let layout_popup = self.layout_popup_open.then(|| {
             let p = MoonPalette::active(cx);
             let mode = self.active_layout_mode(cx).unwrap_or(StackLayoutMode::Fit);
+            let orientation = self
+                .active_layout_orientation(cx)
+                .unwrap_or(crate::chart_persist::StackOrientation::Vertical);
             let orderbook_enabled = self.active_orderbook_enabled(cx);
             let show_zone = self.active_show_zone(cx);
             let auto_pin = self.active_auto_pin(cx);
             let include_main = matches!(self.active, Tab::Main);
+            let is_custom = matches!(self.active, Tab::Custom(..));
             let apply_all_label = if include_main {
                 t!("chart.layout.apply_all_windows").to_string()
             } else {
@@ -244,8 +287,9 @@ impl Render for ChartTabs {
             let ob_entity = cx.entity();
             let sz_entity = cx.entity();
             let ap_entity = cx.entity();
+            let or_entity = cx.entity();
             let hover_entity = cx.entity();
-            let size = layout_popup::content_size(cx);
+            let size = layout_popup::content_size(cx, is_custom);
             div()
                 .id("chart-layout-popup-scene")
                 .absolute()
@@ -268,6 +312,8 @@ impl Render for ChartTabs {
                 .child(layout_popup::render_layout_popup(
                     "chart-layout",
                     mode,
+                    orientation,
+                    is_custom.then_some(&self.custom_name_input),
                     &self.layout_fit_input,
                     &self.layout_scroll_input,
                     orderbook_enabled,
@@ -289,11 +335,12 @@ impl Render for ChartTabs {
                             let hs = this.read_layout_height(StackLayoutMode::Scroll, cx);
                             let mode =
                                 Some(this.active_layout_mode(cx).unwrap_or(StackLayoutMode::Fit));
-                            // Копируем ВСЕ настройки активной вкладки: + масштаб + галку стакана.
+                            // Копируем ВСЕ настройки активной вкладки: + масштаб + стакан + ориентация.
                             let scale = this.active_scale_value(cx);
                             let ob = Some(this.active_orderbook_enabled(cx));
                             let sz = Some(this.active_show_zone(cx));
                             let ap = Some(this.active_auto_pin(cx));
+                            let or = this.active_layout_orientation(cx);
                             this.apply_layout_to_all(
                                 include_main,
                                 mode,
@@ -303,6 +350,7 @@ impl Render for ChartTabs {
                                 ob,
                                 sz,
                                 ap,
+                                or,
                                 cx,
                             );
                         });
@@ -315,6 +363,20 @@ impl Render for ChartTabs {
                     },
                     move |checked, app| {
                         ap_entity.update(app, |this, cx| this.apply_auto_pin(checked, cx));
+                    },
+                    move |app| {
+                        or_entity.update(app, |this, cx| {
+                            // Тоггл: текущая → противоположная.
+                            use crate::chart_persist::StackOrientation as O;
+                            let next = match this
+                                .active_layout_orientation(cx)
+                                .unwrap_or(O::Vertical)
+                            {
+                                O::Vertical => O::Horizontal,
+                                O::Horizontal => O::Vertical,
+                            };
+                            this.apply_orientation(next, cx);
+                        });
                     },
                 ))
         });

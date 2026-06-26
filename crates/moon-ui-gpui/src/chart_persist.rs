@@ -31,6 +31,22 @@ pub enum StackLayoutMode {
     Scroll,
 }
 
+/// Ориентация стека чартов (per-tab). `Vertical` — графики стопкой сверху-вниз (дефолт),
+/// `Horizontal` — колонками слева-направо. В горизонтальном режиме поле «высота слота» попапа
+/// раскладки трактуется как ШИРИНА слота (та же логика FIT/COMPRESS/SCROLL, просто мерим по X).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum StackOrientation {
+    Vertical,
+    Horizontal,
+}
+
+impl StackOrientation {
+    /// Горизонтальная раскладка? (None в спеке = Vertical).
+    pub fn is_horizontal(self) -> bool {
+        matches!(self, StackOrientation::Horizontal)
+    }
+}
+
 /// Состояние одной чарт-вкладки. `num == 0` — Main; `num >= 1` — AddToChart-N.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ChartTabSpec {
@@ -71,6 +87,17 @@ pub struct ChartTabSpec {
     /// Авто-пин графика при выставлении ордера. None → дефолт (выкл). Per-окно/вкладка.
     #[serde(default)]
     pub auto_pin: Option<bool>,
+    /// Ориентация стека (Vertical/Horizontal). None → дефолт (Vertical). Per-окно/вкладка.
+    #[serde(default)]
+    pub layout_orientation: Option<StackOrientation>,
+    /// Кастомная (мульти-монетная) вкладка из поиска: явный список тикеров `(core, market)`.
+    /// `Some` помечает спек как кастомный — на старте вкладка восстанавливается и заполняется
+    /// ИМЕННО этими чартами (а не ждёт детект, как обычные AddToChart). None → обычная вкладка.
+    #[serde(default)]
+    pub custom_coins: Option<Vec<(CoreId, String)>>,
+    /// Имя кастомной вкладки (редактируется в попапе ⚙). None → дефолтная метка «Набор N».
+    #[serde(default)]
+    pub custom_label: Option<String>,
 }
 
 impl ChartTabSpec {

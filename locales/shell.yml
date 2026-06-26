@@ -164,3 +164,36 @@ chart.coin.no_results:
   ru: "Нет совпадений"
   en: "No matches"
   es: "Sin coincidencias"
+chart.coin.open_new_tab:
+  ru: "Открыть в новой вкладке"
+  en: "Open in new tab"
+  es: "Abrir en pestaña nueva"
+# --- Ориентация стека (верт/гор) + подписи ширины при горизонтали ---
+chart.layout.orientation_tip:
+  ru: "Ориентация: вертикально / горизонтально"
+  en: "Orientation: vertical / horizontal"
+  es: "Orientación: vertical / horizontal"
+chart.layout.width_fit:
+  ru: "Ширина Fit"
+  en: "Fit width"
+  es: "Ancho Fit"
+chart.layout.width_fit_hint:
+  ru: "0 — растянуть по окну\n≥20 — фиксированная ширина без скролла"
+  en: "0 — stretch to window\n≥20 — fixed width, no scroll"
+  es: "0 — estirar a ventana\n≥20 — ancho fijo sin scroll"
+chart.layout.width_scroll:
+  ru: "Ширина Scroll"
+  en: "Scroll width"
+  es: "Ancho Scroll"
+chart.layout.width_scroll_hint:
+  ru: "≥20 — фиксированная ширина"
+  en: "≥20 — fixed width"
+  es: "≥20 — ancho fijo"
+chart.tab.custom:
+  ru: "Набор %{n}"
+  en: "Set %{n}"
+  es: "Conjunto %{n}"
+chart.tab.rename:
+  ru: "Имя"
+  en: "Name"
+  es: "Nombre"

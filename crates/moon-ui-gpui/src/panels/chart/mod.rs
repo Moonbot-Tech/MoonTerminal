@@ -353,6 +353,22 @@ impl ChartPanel {
         (0..self.chart.pane_count()).any(|i| self.chart.pane_pinned(i))
     }
 
+    /// Идемпотентно закрепить все панели чарта (кастомная вкладка: чарты сразу запинены).
+    /// Пин отменяет авто-закрытие по TTL → пере-арм таймера дедлайнов.
+    pub fn ensure_pinned(&mut self, cx: &mut Context<Self>) {
+        let mut changed = false;
+        for i in 0..self.chart.pane_count() {
+            if !self.chart.pane_pinned(i) && self.chart.toggle_pane_pin(i) {
+                changed = true;
+            }
+        }
+        if changed {
+            self.view_dirty = true;
+            self.arm_ttl_timer(cx);
+            cx.notify();
+        }
+    }
+
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
     pub fn debug_data_handle(&self) -> crate::chartdx::ChartDataHandle {
         self.chart.data_handle()

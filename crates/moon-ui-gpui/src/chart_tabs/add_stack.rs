@@ -10,7 +10,7 @@ use super::stack::{
     set_panels_auto_pin, set_panels_scale, set_panels_show_zone,
 };
 use crate::Backend;
-use crate::chart_persist::StackLayoutMode;
+use crate::chart_persist::{StackLayoutMode, StackOrientation};
 use crate::panels::ChartPanel;
 use moon_core::config::{ChartBucket, ChartTheme};
 use moon_core::session::CoreId;
@@ -38,6 +38,12 @@ pub(crate) struct AddChartStack {
     show_zone: Option<bool>,
     /// Авто-пин графика при выставлении ордера (per-окно). None = дефолт (выкл).
     auto_pin: Option<bool>,
+    /// Ориентация стека (per-окно). None = дефолт (Vertical).
+    layout_orientation: Option<StackOrientation>,
+    /// Подписки на стаканы временно приостановлены (вкладка не в фокусе > 5с). Эффективный
+    /// стакан = `orderbook_enabled ∧ !suspended` — не затирает пользовательскую галку «Стакан».
+    /// Откреплённые в окно вкладки никогда не suspend (окно само держит спрос).
+    orderbook_suspended: bool,
     /// Скролл-хэндл вертикального MoonVirtualList (scroll-режим стека).
     scroll: MoonVirtualListScrollHandle,
 }
@@ -64,6 +70,8 @@ impl AddChartStack {
             orderbook_enabled: None,
             show_zone: None,
             auto_pin: None,
+            layout_orientation: None,
+            orderbook_suspended: false,
             scroll: MoonVirtualListScrollHandle::new(),
         }
     }
@@ -129,9 +137,11 @@ impl AddChartStack {
         if scale.is_some() {
             panel.update(cx, |panel, pcx| panel.set_scale(scale, pcx));
         }
-        if let Some(en) = self.orderbook_enabled {
-            panel.update(cx, |panel, pcx| panel.set_orderbook_enabled(en, pcx));
-        }
+        // Эффективный стакан (учитывая suspend-гейт): новый чарт не должен подписываться, если
+        // вкладка сейчас приостановлена (или галка «Стакан» снята).
+        panel.update(cx, |panel, pcx| {
+            panel.set_orderbook_enabled(self.effective_orderbook(), pcx)
+        });
         if let Some(sz) = self.show_zone {
             panel.update(cx, |panel, pcx| panel.set_show_zone(sz, pcx));
         }
@@ -198,13 +208,30 @@ impl AddChartStack {
         self.orderbook_enabled
     }
 
-    /// Вкл/выкл стакан для всех графиков стека (per-окно).
+    /// Эффективный стакан = пользовательская галка (None→вкл) И не приостановлен по фокусу.
+    fn effective_orderbook(&self) -> bool {
+        self.orderbook_enabled.unwrap_or(true) && !self.orderbook_suspended
+    }
+
+    /// Вкл/выкл стакан для всех графиков стека (per-окно). Применяется с учётом suspend-гейта.
     pub(crate) fn set_orderbook_enabled(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
         if self.orderbook_enabled == enabled {
             return;
         }
         self.orderbook_enabled = enabled;
-        set_panels_orderbook_enabled(&self.charts, enabled.unwrap_or(true), cx);
+        set_panels_orderbook_enabled(&self.charts, self.effective_orderbook(), cx);
+        cx.notify();
+    }
+
+    /// Приостановить/возобновить подписки на стаканы по фокусу вкладки (гейтинг кастомных
+    /// вкладок: ушли > 5с → suspend=true → отписка; вернулись → resume). Не трогает галку «Стакан».
+    pub(crate) fn set_orderbook_suspended(&mut self, suspended: bool, cx: &mut Context<Self>) {
+        if self.orderbook_suspended == suspended {
+            return;
+        }
+        self.orderbook_suspended = suspended;
+        set_panels_orderbook_enabled(&self.charts, self.effective_orderbook(), cx);
+        self.backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
         cx.notify();
     }
 
@@ -233,6 +260,19 @@ impl AddChartStack {
         }
         self.auto_pin = on;
         set_panels_auto_pin(&self.charts, on.unwrap_or(false), cx);
+        cx.notify();
+    }
+
+    pub(crate) fn layout_orientation(&self) -> Option<StackOrientation> {
+        self.layout_orientation
+    }
+
+    /// Сменить ориентацию стека (per-окно). Перестраивает текущее отображение.
+    pub(crate) fn set_orientation(&mut self, orientation: Option<StackOrientation>, cx: &mut Context<Self>) {
+        if self.layout_orientation == orientation {
+            return;
+        }
+        self.layout_orientation = orientation;
         cx.notify();
     }
 
@@ -272,6 +312,23 @@ impl AddChartStack {
             self.charts.retain(|e| !e.vacated);
         }
         cx.notify();
+    }
+
+    /// Текущий список тикеров стека `(core, market)` — для персиста кастомной вкладки.
+    /// Пустые/освобождённые слоты пропускаем.
+    pub(crate) fn coins(&self, cx: &App) -> Vec<(CoreId, String)> {
+        self.charts
+            .iter()
+            .filter(|e| !e.vacated && e.panel.read(cx).pane_count() > 0)
+            .map(|e| (e.core, e.market.clone()))
+            .collect()
+    }
+
+    /// Закрепить (pin) все графики стека — для кастомной вкладки (чарты сразу запинены).
+    pub(crate) fn pin_all(&mut self, cx: &mut Context<Self>) {
+        for e in &self.charts {
+            e.panel.update(cx, |p, pcx| p.ensure_pinned(pcx));
+        }
     }
 
     pub(super) fn set_scene_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
@@ -326,6 +383,10 @@ impl Render for AddChartStack {
         let border = rgb(palette.border);
         let accent = rgb(palette.blue);
         let base_id = format!("add-chart-stack-{}", self.num);
+        let horizontal = self
+            .layout_orientation
+            .unwrap_or(StackOrientation::Vertical)
+            .is_horizontal();
         let entity = cx.entity();
         render_chart_stack(
             &base_id,
@@ -334,6 +395,7 @@ impl Render for AddChartStack {
             count,
             scroll,
             compress,
+            horizontal,
             cfg_h,
             &self.scroll,
             border,
@@ -344,7 +406,7 @@ impl Render for AddChartStack {
                     .filter(|e| !e.vacated)
                     .map(|e| e.panel.clone())
             },
-            move |s, ix, panel, height, flex, border, _ent| {
+            move |s, ix, panel, size, flex, horizontal, border, _ent| {
                 let (id, fresh) = match s.charts.get(ix) {
                     Some(e) => (
                         format!("add-chart-stack-tile-{}-{}-{}", s.num, e.core, e.market),
@@ -354,20 +416,25 @@ impl Render for AddChartStack {
                 };
                 let mut tile = div()
                     .id(SharedString::from(id.clone()))
-                    .w_full()
                     .relative()
                     .overflow_hidden()
                     .border_1()
                     .border_color(border);
-                // flex+height → max_h (COMPRESS: до cfg_h, сжатие при переполнении); height без
-                // flex → фикс; flex без height → растяжение (FIT).
+                // Поперёк оси — на всю ширину/высоту; вдоль оси — flex+cap (COMPRESS до size, сжатие),
+                // фикс (size без flex) или растяжение (FIT). Гор: ось = X (ширина), верт: ось = Y.
+                tile = if horizontal { tile.h_full() } else { tile.w_full() };
                 if flex {
-                    tile = tile.flex_1().min_h(px(0.0));
-                    if let Some(h) = height {
-                        tile = tile.max_h(px(h));
+                    tile = tile.flex_1();
+                    tile = if horizontal { tile.min_w(px(0.0)) } else { tile.min_h(px(0.0)) };
+                    if let Some(v) = size {
+                        tile = if horizontal { tile.max_w(px(v)) } else { tile.max_h(px(v)) };
                     }
-                } else if let Some(h) = height {
-                    tile = tile.h(px(h)).min_h(px(0.0));
+                } else if let Some(v) = size {
+                    tile = if horizontal {
+                        tile.w(px(v)).min_w(px(0.0))
+                    } else {
+                        tile.h(px(v)).min_h(px(0.0))
+                    };
                 }
                 // Подсветка только что появившегося графика: яркая акцентная рамка поверх, пульс
                 // (3 мигания за HIGHLIGHT). Сдвинута внутрь на 1px, чтобы overflow_hidden её не

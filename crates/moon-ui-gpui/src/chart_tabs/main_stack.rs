@@ -12,7 +12,7 @@ use super::stack::{
     set_panels_auto_pin, set_panels_orderbook_enabled, set_panels_scale, set_panels_show_zone,
 };
 use crate::Backend;
-use crate::chart_persist::StackLayoutMode;
+use crate::chart_persist::{StackLayoutMode, StackOrientation};
 use crate::panels::ChartPanel;
 use moon_core::config::ChartTheme;
 use moon_core::session::CoreId;
@@ -42,6 +42,8 @@ pub(crate) struct MainChartStack {
     show_zone: Option<bool>,
     /// Авто-пин графика при выставлении ордера (per-окно). None = дефолт (выкл).
     auto_pin: Option<bool>,
+    /// Ориентация стека (per-окно). None = дефолт (Vertical).
+    layout_orientation: Option<StackOrientation>,
     /// Армирован ли one-shot таймер авто-закрытия по неактивности (config `main_idle_close_secs`).
     /// Тикает ~1 Гц, пока фича включена и есть графики; сам пере-армится. См. `arm_idle_timer`.
     idle_timer_armed: bool,
@@ -72,6 +74,7 @@ impl MainChartStack {
             orderbook_enabled: None,
             show_zone: None,
             auto_pin: None,
+            layout_orientation: None,
             idle_timer_armed: false,
             scroll: MoonVirtualListScrollHandle::new(),
         };
@@ -345,6 +348,23 @@ impl MainChartStack {
         cx.notify();
     }
 
+    pub(crate) fn layout_orientation(&self) -> Option<StackOrientation> {
+        self.layout_orientation
+    }
+
+    /// Сменить ориентацию стека (per-окно). Перестраивает текущее отображение.
+    pub(crate) fn set_orientation(
+        &mut self,
+        orientation: Option<StackOrientation>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.layout_orientation == orientation {
+            return;
+        }
+        self.layout_orientation = orientation;
+        cx.notify();
+    }
+
     pub(crate) fn active_target(&self, cx: &App) -> Option<(CoreId, String)> {
         self.active
             .and_then(|ix| self.charts.get(ix))
@@ -425,19 +445,20 @@ impl MainChartStack {
         cx.notify();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_tile(
         &self,
         ix: usize,
         panel: Entity<ChartPanel>,
-        height: Option<f32>,
+        size: Option<f32>,
         flex: bool,
+        horizontal: bool,
         border: Rgba,
         entity: Entity<Self>,
     ) -> Stateful<Div> {
         let panel_for_event = panel.clone();
         let mut tile = div()
             .id(("main-chart-stack-tile", ix))
-            .w_full()
             .relative()
             .overflow_hidden()
             .border_1()
@@ -456,15 +477,25 @@ impl MainChartStack {
                     }
                 },
             );
-        // flex+height → max_h (COMPRESS: до cfg_h, сжатие при переполнении); height без flex →
-        // фикс; flex без height → растяжение (FIT).
+        // Поперёк оси — на всю ширину/высоту; вдоль оси — flex+cap (COMPRESS до size, сжатие),
+        // фикс (size без flex) или растяжение (FIT). Гор: ось = X (ширина), верт: ось = Y.
+        tile = if horizontal { tile.h_full() } else { tile.w_full() };
         if flex {
-            tile = tile.flex_1().min_h(px(0.0));
-            if let Some(height) = height {
-                tile = tile.max_h(px(height));
+            tile = tile.flex_1();
+            tile = if horizontal {
+                tile.min_w(px(0.0))
+            } else {
+                tile.min_h(px(0.0))
+            };
+            if let Some(v) = size {
+                tile = if horizontal { tile.max_w(px(v)) } else { tile.max_h(px(v)) };
             }
-        } else if let Some(height) = height {
-            tile = tile.h(px(height)).min_h(px(0.0));
+        } else if let Some(v) = size {
+            tile = if horizontal {
+                tile.w(px(v)).min_w(px(0.0))
+            } else {
+                tile.h(px(v)).min_h(px(0.0))
+            };
         }
         tile.child(div().size_full().relative().overflow_hidden().child(panel))
     }
@@ -492,7 +523,7 @@ impl Render for MainChartStack {
             let panel = self.charts[active].panel.clone();
             let entity = cx.entity();
             return self
-                .render_tile(active, panel, None, false, rgb(palette.border), entity)
+                .render_tile(active, panel, None, false, false, rgb(palette.border), entity)
                 .size_full()
                 .border_0()
                 .into_any_element();
@@ -507,6 +538,10 @@ impl Render for MainChartStack {
         let count = self.charts.len();
         let border = rgb(palette.border);
         let base_id = format!("main-chart-stack-{}", self.group);
+        let horizontal = self
+            .layout_orientation
+            .unwrap_or(StackOrientation::Vertical)
+            .is_horizontal();
         let entity = cx.entity();
         render_chart_stack(
             &base_id,
@@ -515,12 +550,13 @@ impl Render for MainChartStack {
             count,
             scroll,
             compress,
+            horizontal,
             cfg_h,
             &self.scroll,
             border,
             |s, ix| s.charts.get(ix).map(|e| e.panel.clone()),
-            |s, ix, panel, height, flex, border, ent| {
-                s.render_tile(ix, panel, height, flex, border, ent)
+            |s, ix, panel, size, flex, horizontal, border, ent| {
+                s.render_tile(ix, panel, size, flex, horizontal, border, ent)
                     .into_any_element()
             },
         )
