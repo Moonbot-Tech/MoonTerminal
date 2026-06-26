@@ -407,6 +407,10 @@ impl MarketDataSource {
         let key = (provider, market.to_string());
         let mut book_update: Option<OrderBook> = None;
         let mut has_book_snapshot = false;
+        // Какой kind фактически отдал снимок (для диагностики Hyperliquid/HIP-3 и
+        // spot/futures-расхождений между ядром и движком). None — снимка нет ни под
+        // одним kind (тогда вопрос в резолве имени, а не в kind).
+        let mut book_kind_used: Option<OrderBookKind> = None;
         let book_dirty_revision: u64;
         let book_due: bool;
 
@@ -430,8 +434,26 @@ impl MarketDataSource {
             book_due =
                 book_dirty || book_slot.is_some_and(|slot| cursor.last_book_slot != Some(slot));
             if book_due {
-                if let Some(book) = snapshot.order_book(market, orderbook_kind) {
+                // Compat fallback по kind. Движок штампует стакан на проводе флагом
+                // book_kind (0=Futures/1=Spot), и классификация ядра в терминале не
+                // всегда совпадает: spot-ядра gs/bgs шлют книгу как Futures; перпы
+                // Hyperliquid HIP-3 (префикс «xyz:…», deployer-коды) тоже могут не
+                // совпасть с ожидаемым kind. Lookup идёт по (market_index, kind), а у
+                // одного рынка реально заполнен ровно один kind — поэтому пробуем
+                // ожидаемый, затем противоположный. На корректных ядрах противоположный
+                // запрос не делается (первый уже Some). Если оба None — дело не в kind,
+                // а в резолве имени (см. диагностику ниже).
+                let other_kind = match orderbook_kind {
+                    OrderBookKind::Spot => OrderBookKind::Futures,
+                    _ => OrderBookKind::Spot,
+                };
+                let book = snapshot
+                    .order_book(market, orderbook_kind)
+                    .map(|b| (orderbook_kind, b))
+                    .or_else(|| snapshot.order_book(market, other_kind).map(|b| (other_kind, b)));
+                if let Some((used_kind, book)) = book {
                     has_book_snapshot = true;
+                    book_kind_used = Some(used_kind);
                     let revision = book.revision();
                     if cursor.last_book_revision != Some(revision) {
                         cursor.last_book_revision = Some(revision);
@@ -465,9 +487,11 @@ impl MarketDataSource {
             if market_diag_enabled()
                 && market_diag_due(format!("no-view:{provider}:{market}"), MARKET_DIAG_FLOOR)
             {
+                let price_known = snapshot.markets().price(market).is_some();
                 market_diag(format!(
                     "refresh core={core} provider={provider} market={market}: no store view \
-                     kind={orderbook_kind:?} book_dirty_rev={book_dirty_revision} \
+                     kind={orderbook_kind:?} used_kind={book_kind_used:?} \
+                     price_known={price_known} book_dirty_rev={book_dirty_revision} \
                      book_due={book_due} snapshot_book={has_book_snapshot} pulled_book={:?}",
                     book_update.as_ref().map(|b| (b.bids.len(), b.asks.len()))
                 ));
@@ -488,11 +512,13 @@ impl MarketDataSource {
                 .view(provider, market)
                 .map(|v| v.book.len())
                 .unwrap_or(0);
+            let price_known = snapshot.markets().price(market).is_some();
             market_diag(format!(
                 "refresh core={core} provider={provider} market={market}: changed={changed} \
-                 kind={orderbook_kind:?} book_dirty_rev={book_dirty_revision} \
-                 book_due={book_due} snapshot_book={has_book_snapshot} \
-                 pulled_book={pulled_book_shape:?} view_book_len={book_len}",
+                 kind={orderbook_kind:?} used_kind={book_kind_used:?} price_known={price_known} \
+                 book_dirty_rev={book_dirty_revision} book_due={book_due} \
+                 snapshot_book={has_book_snapshot} pulled_book={pulled_book_shape:?} \
+                 view_book_len={book_len}",
             ));
         }
         changed
