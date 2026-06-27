@@ -146,6 +146,10 @@ pub struct ChartTabSpec {
     /// Положение оси цен (Left/Right/Hide). None → дефолт (Left). Per-окно/вкладка.
     #[serde(default)]
     pub price_axis_pos: Option<PriceAxisPos>,
+    /// Показывать ли ось времени (нижние подписи + жёлоб под них). None → дефолт (вкл).
+    /// Per-окно/вкладка. Выкл = подписи времени не рисуются, плот занимает всю высоту.
+    #[serde(default)]
+    pub time_axis_visible: Option<bool>,
 }
 
 impl ChartTabSpec {
@@ -173,6 +177,7 @@ impl ChartTabSpec {
             compare_anchor: None,
             compare_orderbook_only: false,
             price_axis_pos: None,
+            time_axis_visible: None,
         }
     }
 

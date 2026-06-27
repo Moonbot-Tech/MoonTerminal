@@ -357,6 +357,17 @@ impl ChartEngine {
         true
     }
 
+    /// Видимость оси времени для всех панелей движка (per-окно). `true` при изменении.
+    pub fn set_time_axis_visible(&mut self, visible: bool) -> bool {
+        let mut data = self.data.borrow_mut();
+        if data.time_axis_visible == visible {
+            return false;
+        }
+        data.time_axis_visible = visible;
+        data.mark_view_dirty();
+        true
+    }
+
     /// Глобальный live-follow из тулбара (Live/Пауза) для единственной панели этого
     /// `ChartEngine`. Реагирует только на смену самого глобального флага (явный клик).
     /// Пан/rejoin отдельной панели живут в её `view.follow`; сюда уже сведённое значение

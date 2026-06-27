@@ -171,6 +171,7 @@ impl ChartTabs {
             main_auto_pin,
             main_action_pos,
             main_axis_pos,
+            main_time_axis,
             restore_pending,
         ): (
             Option<f32>,
@@ -183,6 +184,7 @@ impl ChartTabs {
                 Option<chart_persist::ChartBtnPos>,
             ),
             Option<chart_persist::PriceAxisPos>,
+            Option<bool>,
             Vec<_>,
         ) = {
             let specs = &backend.read(cx).chart_specs;
@@ -197,6 +199,7 @@ impl ChartTabs {
             let main_action_pos =
                 main_spec.map_or((None, None), |s| (s.cancel_buy_pos, s.panic_sell_pos));
             let main_axis_pos = main_spec.and_then(|s| s.price_axis_pos);
+            let main_time_axis = main_spec.and_then(|s| s.time_axis_visible);
             let pending = specs
                 .iter()
                 .filter(|s| s.group == group && s.num >= 1 && s.detached.is_some())
@@ -210,6 +213,7 @@ impl ChartTabs {
                 main_auto_pin,
                 main_action_pos,
                 main_axis_pos,
+                main_time_axis,
                 pending,
             )
         };
@@ -237,6 +241,9 @@ impl ChartTabs {
         }
         if main_axis_pos.is_some() {
             main.update(cx, |p, pcx| p.set_price_axis_pos(main_axis_pos, pcx));
+        }
+        if main_time_axis.is_some() {
+            main.update(cx, |p, pcx| p.set_time_axis_visible(main_time_axis, pcx));
         }
         cx.observe(&backend, |this, backend, cx| {
             // Запросы «применить ко всем» из выносных окон — до early-return по sig (они sig не меняют).

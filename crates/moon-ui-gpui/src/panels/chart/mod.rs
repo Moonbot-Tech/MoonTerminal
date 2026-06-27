@@ -102,6 +102,9 @@ pub struct ChartPanel {
     /// Положение оси цен (Left/Right/Hide) этой панели (per-окно/вкладка, из попапа ⚙). Применяется
     /// в render (`set_price_axis_pos` движка) и в раскладке/хит-тесте. Дефолт — Left.
     price_axis_pos: crate::chart_persist::PriceAxisPos,
+    /// Видна ли ось времени (per-окно/вкладка, из попапа ⚙). Применяется в render
+    /// (`set_time_axis_visible` движка) и в раскладке/хит-тесте (высота плота). Дефолт — вкл.
+    time_axis_visible: bool,
     /// Номер AddToChart-вкладки (None = Main).
     num: Option<u32>,
     /// Рынки, владельцем которых является именно эта chart panel. Backend держит refcount
@@ -258,6 +261,7 @@ impl ChartPanel {
             cancel_buy_pos: Default::default(),
             panic_sell_pos: Default::default(),
             price_axis_pos: Default::default(),
+            time_axis_visible: true,
             num: None,
             registered_markets,
             registered_orderbook,
@@ -354,6 +358,7 @@ impl ChartPanel {
             cancel_buy_pos: Default::default(),
             panic_sell_pos: Default::default(),
             price_axis_pos: Default::default(),
+            time_axis_visible: true,
             num: Some(num),
             registered_markets: HashSet::new(),
             registered_orderbook: HashSet::new(),
@@ -542,6 +547,16 @@ impl ChartPanel {
     ) {
         if self.price_axis_pos != pos {
             self.price_axis_pos = pos;
+            self.view_dirty = true;
+            cx.notify();
+        }
+    }
+
+    /// Видимость оси времени этой панели (per-окно/вкладка). Применяется в render через
+    /// `set_time_axis_visible` движка; влияет и на высоту плота (раскладка/хит-тест).
+    pub fn set_time_axis_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.time_axis_visible != visible {
+            self.time_axis_visible = visible;
             self.view_dirty = true;
             cx.notify();
         }

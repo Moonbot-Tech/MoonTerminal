@@ -11,6 +11,7 @@ use super::stack::{
     ChartStackEntry, apply_setting, chart_stack_card, compare_role, render_chart_stack,
     resolve_layout, retain_nonempty_panels, set_panels_action_btn_pos, set_panels_auto_pin,
     set_panels_orderbook_enabled, set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
+    set_panels_time_axis_visible,
     sync_compare,
 };
 use crate::Backend;
@@ -51,6 +52,8 @@ pub(crate) struct MainChartStack {
     panic_sell_pos: Option<ChartBtnPos>,
     /// Положение оси цен (Left/Right/Hide) для графиков стека (per-окно). None = дефолт (Left).
     price_axis_pos: Option<PriceAxisPos>,
+    /// Видимость оси времени для графиков стека (per-окно). None = дефолт (вкл).
+    time_axis_visible: Option<bool>,
     /// Якорь сравнения `(core, market)` — ведущий по цене (замок горит, стоит слева). None = выкл.
     compare_anchor: Option<(CoreId, String)>,
     /// Общее Y-окно сравнения, следует за последней изменённой панелью.
@@ -91,6 +94,7 @@ impl MainChartStack {
             cancel_buy_pos: None,
             panic_sell_pos: None,
             price_axis_pos: None,
+            time_axis_visible: None,
             compare_anchor: None,
             compare_y: None,
             compare_orderbook_only: false,
@@ -148,6 +152,9 @@ impl MainChartStack {
         });
         panel.update(cx, |panel, pcx| {
             panel.set_price_axis_pos(self.price_axis_pos.unwrap_or_default(), pcx)
+        });
+        panel.update(cx, |panel, pcx| {
+            panel.set_time_axis_visible(self.time_axis_visible.unwrap_or(true), pcx)
         });
         panel
     }
@@ -389,6 +396,17 @@ impl MainChartStack {
     pub(crate) fn set_price_axis_pos(&mut self, pos: Option<PriceAxisPos>, cx: &mut Context<Self>) {
         apply_setting(&mut self.price_axis_pos, pos, &self.charts, cx, |c, cx| {
             set_panels_price_axis_pos(c, pos.unwrap_or_default(), cx)
+        });
+    }
+
+    pub(crate) fn time_axis_visible(&self) -> Option<bool> {
+        self.time_axis_visible
+    }
+
+    /// Видимость оси времени для всех графиков стека (per-окно).
+    pub(crate) fn set_time_axis_visible(&mut self, visible: Option<bool>, cx: &mut Context<Self>) {
+        apply_setting(&mut self.time_axis_visible, visible, &self.charts, cx, |c, cx| {
+            set_panels_time_axis_visible(c, visible.unwrap_or(true), cx)
         });
     }
 

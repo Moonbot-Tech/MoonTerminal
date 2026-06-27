@@ -74,6 +74,7 @@ impl Render for ChartPanel {
             | self.chart.set_orderbook_enabled(self.orderbook_enabled)
             | self.chart.set_orderbook_only(self.orderbook_only)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
+            | self.chart.set_time_axis_visible(self.time_axis_visible)
             | self.chart.set_follow(follow, now_unix_ms());
         // Режим сравнения: пока активен lock, держим Y-окно якоря (перебивает scale каждый кадр —
         // set_locked_y идемпотентен, без изменений вернёт false). Снятие lock — в set_locked_y.

@@ -112,6 +112,7 @@ pub(crate) struct ChartApplyAll {
     pub cancel_pos: Option<chart_persist::ChartBtnPos>,
     pub panic_pos: Option<chart_persist::ChartBtnPos>,
     pub price_axis_pos: Option<chart_persist::PriceAxisPos>,
+    pub time_axis_visible: Option<bool>,
 }
 
 /// Общий backend: живёт в одном `Entity`, дренится таймером, будит окна по notify.

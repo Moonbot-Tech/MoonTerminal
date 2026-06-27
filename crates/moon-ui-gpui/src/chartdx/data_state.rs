@@ -24,6 +24,7 @@ impl ChartDataState {
             orderbook_enabled: true,
             orderbook_only: false,
             price_axis_pos: crate::chart_persist::PriceAxisPos::Left,
+            time_axis_visible: true,
             order_highlight: None,
             order_drag_preview: None,
             market_source: None,
@@ -466,7 +467,12 @@ impl ChartDataState {
             } else {
                 moon_chart::PRICE_AXIS_W * self.last_ppp
             };
-            let time_axis_h = moon_chart::TIME_AXIS_H * self.last_ppp;
+            // Ось времени скрыта → жёлоб под подписи не резервируем, плот занимает всю высоту.
+            let time_axis_h = if self.time_axis_visible {
+                moon_chart::TIME_AXIS_H * self.last_ppp
+            } else {
+                0.0
+            };
             let plot_h = (rect.h - time_axis_h).max(1.0);
             // П.3: при узком графике стакан не должен съедать половину. База — GLASS_ZONE_PX
             // (ограничена половиной слота). Если ширина графика при базовом стакане < 2× самого
@@ -825,6 +831,7 @@ impl ChartDataState {
             pr.orderbook_only = self.orderbook_only;
             // Эффективная позиция оси (с учётом форс-Hide в режиме метлы) — для рендера подписей.
             pr.price_axis_pos = axis_pos;
+            pr.time_axis_visible = self.time_axis_visible;
             let orderbook_on = self.orderbook_enabled || self.orderbook_only;
             pr.orderbook_enabled = orderbook_on;
             // Стакан выключен (per-окно) → уровни не строим и не грузим (а если были — чистим).

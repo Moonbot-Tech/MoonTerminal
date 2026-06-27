@@ -127,10 +127,11 @@ impl DetachedChartHost {
                     s.auto_pin,
                     (s.cancel_buy_pos, s.panic_sell_pos),
                     s.price_axis_pos,
+                    s.time_axis_visible,
                 )
             })
         });
-        if let Some((m, hf, hs, ob, sz, ap, action_pos, axis_pos)) = saved {
+        if let Some((m, hf, hs, ob, sz, ap, action_pos, axis_pos, time_axis)) = saved {
             if m.is_some() || hf.is_some() || hs.is_some() {
                 panel.update(cx, |p, pcx| p.set_layout(m, hf, hs, pcx));
             }
@@ -150,6 +151,9 @@ impl DetachedChartHost {
             }
             if axis_pos.is_some() {
                 panel.update(cx, |p, pcx| p.set_price_axis_pos(axis_pos, pcx));
+            }
+            if time_axis.is_some() {
+                panel.update(cx, |p, pcx| p.set_time_axis_visible(time_axis, pcx));
             }
         }
         let layout_fit_input = cx.new(|cx| MoonInputState::new(window, cx));
@@ -415,6 +419,7 @@ impl DetachedChartHost {
             (Some(c.unwrap_or_default()), Some(pp.unwrap_or_default()))
         };
         let price_axis_pos = Some(self.panel.read(cx).price_axis_pos().unwrap_or_default());
+        let time_axis_visible = Some(self.panel.read(cx).time_axis_visible().unwrap_or(true));
         self.backend.update(cx, |bk, bcx| {
             bk.chart_apply_all.push(crate::ChartApplyAll {
                 group,
@@ -430,6 +435,7 @@ impl DetachedChartHost {
                 cancel_pos,
                 panic_pos,
                 price_axis_pos,
+                time_axis_visible,
             });
             bcx.notify();
         });
@@ -558,6 +564,17 @@ impl DetachedChartHost {
         cx.notify();
     }
 
+    /// Видимость оси времени этого окна + persist.
+    fn apply_time_axis_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        self.panel
+            .update(cx, |p, c| p.set_time_axis_visible(Some(visible), c));
+        let bucket = self.bucket.clone();
+        self.upsert_spec(cx, self.num, &bucket, move |s| {
+            s.time_axis_visible = Some(visible);
+        });
+        cx.notify();
+    }
+
     fn persist_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
         // У восстановленного окна сохранение задержано до `persist_armed`: не даём стартовому
         // авто-размещению GPUI/Win32 перезаписать сохранённую позицию DPI-мусором.
@@ -635,6 +652,7 @@ impl Render for DetachedChartHost {
                 (c.unwrap_or_default(), pp.unwrap_or_default())
             };
             let price_axis_pos = self.panel.read(cx).price_axis_pos().unwrap_or_default();
+            let time_axis_visible = self.panel.read(cx).time_axis_visible().unwrap_or(true);
             let is_custom = self.is_custom(cx);
             let pick_entity = cx.entity();
             let all_entity = cx.entity();
@@ -645,6 +663,7 @@ impl Render for DetachedChartHost {
             let cbp_entity = cx.entity();
             let psp_entity = cx.entity();
             let pap_entity = cx.entity();
+            let tav_entity = cx.entity();
             let hover_entity = cx.entity();
             let size = layout_popup::content_size(cx, is_custom);
             div()
@@ -679,6 +698,7 @@ impl Render for DetachedChartHost {
                     cancel_pos,
                     panic_pos,
                     price_axis_pos,
+                    time_axis_visible,
                     p,
                     cx,
                     move |mode, app| {
@@ -734,6 +754,9 @@ impl Render for DetachedChartHost {
                     },
                     move |pos, app| {
                         pap_entity.update(app, |this, cx| this.apply_price_axis_pos(pos, cx));
+                    },
+                    move |checked, app| {
+                        tav_entity.update(app, |this, cx| this.apply_time_axis_visible(checked, cx));
                     },
                 ))
         });

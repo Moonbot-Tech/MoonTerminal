@@ -219,6 +219,9 @@ struct PaneRender {
     /// Положение оси цен (Left/Right/Hide) — определяет, с какой стороны рисуются подписи оси
     /// и где резервируется жёлоб под неё. Применяется ко всем панелям движка.
     price_axis_pos: crate::chart_persist::PriceAxisPos,
+    /// Видна ли ось времени (нижние подписи + жёлоб под них). Выкл → подписи времени не
+    /// рисуются, плот занимает всю высоту слота. Применяется ко всем панелям движка.
+    time_axis_visible: bool,
     /// CPU/base inputs changed and D3D prepare must upload/bake resident resources before draw.
     /// Cursor-only presents leave this false.
     gpu_prepare_dirty: bool,
@@ -277,6 +280,7 @@ impl PaneRender {
             orderbook_enabled: true,
             orderbook_only: false,
             price_axis_pos: crate::chart_persist::PriceAxisPos::Left,
+            time_axis_visible: true,
             gpu_prepare_dirty: true,
         }
     }
@@ -471,6 +475,9 @@ struct ChartDataState {
     /// Положение оси цен (Left/Right/Hide), per-окно. Управляет раскладкой жёлоба оси и стороной
     /// рендера подписей. Дефолт — Left (жёлоб слева, исторический вид).
     price_axis_pos: crate::chart_persist::PriceAxisPos,
+    /// Видна ли ось времени (нижние подписи + жёлоб под них), per-окно. Выкл → подписи времени
+    /// не рисуются, плот занимает всю высоту. Дефолт — вкл.
+    time_axis_visible: bool,
     /// Интерактивная подсветка линии ордера (hover/drag). Это не меняет рыночные данные:
     /// только заставляет редкую пересборку userdata при смене uid.
     order_highlight: Option<(CoreId, u64)>,

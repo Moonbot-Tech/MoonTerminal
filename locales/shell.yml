@@ -165,6 +165,10 @@ chart.layout.price_axis:
   ru: "Ось цен"
   en: "Price axis"
   es: "Eje de precios"
+chart.layout.time_axis:
+  ru: "Ось времени"
+  en: "Time axis"
+  es: "Eje de tiempo"
 chart.coin.search:
   ru: "Монета…"
   en: "Coin…"

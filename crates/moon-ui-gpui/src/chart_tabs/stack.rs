@@ -235,6 +235,17 @@ pub(super) fn set_panels_price_axis_pos<S: 'static>(
     }
 }
 
+/// Применить видимость оси времени ко всем панелям стека.
+pub(super) fn set_panels_time_axis_visible<S: 'static>(
+    entries: &[ChartStackEntry],
+    visible: bool,
+    cx: &mut Context<S>,
+) {
+    for e in entries {
+        e.panel.update(cx, |p, pcx| p.set_time_axis_visible(visible, pcx));
+    }
+}
+
 /// Обработать клики по замку (режим сравнения): забрать pending у всех панелей. Если кликнули —
 /// переключить якорь: повторный клик по текущему якорю снимает сравнение; иначе назначить новый
 /// якорь и переставить его в индекс 0 (крайний левый). Возвращает true при изменении якоря/порядка.

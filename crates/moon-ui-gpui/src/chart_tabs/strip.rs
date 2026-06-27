@@ -282,6 +282,7 @@ impl Render for ChartTabs {
             let auto_pin = self.active_auto_pin(cx);
             let (cancel_pos, panic_pos) = self.active_action_btn_pos(cx);
             let price_axis_pos = self.active_price_axis_pos(cx);
+            let time_axis_visible = self.active_time_axis_visible(cx);
             let include_main = matches!(self.active, Tab::Main);
             let is_custom = matches!(self.active, Tab::Custom(..));
             let apply_all_label = if include_main {
@@ -298,6 +299,7 @@ impl Render for ChartTabs {
             let cbp_entity = cx.entity();
             let psp_entity = cx.entity();
             let pap_entity = cx.entity();
+            let tav_entity = cx.entity();
             let hover_entity = cx.entity();
             let size = layout_popup::content_size(cx, is_custom);
             div()
@@ -332,6 +334,7 @@ impl Render for ChartTabs {
                     cancel_pos,
                     panic_pos,
                     price_axis_pos,
+                    time_axis_visible,
                     p,
                     cx,
                     move |mode, app| {
@@ -356,6 +359,7 @@ impl Render for ChartTabs {
                             let or = this.active_layout_orientation(cx);
                             let (cp, pp) = this.active_action_btn_pos(cx);
                             let pax = this.active_price_axis_pos(cx);
+                            let tax = this.active_time_axis_visible(cx);
                             this.apply_layout_to_all(
                                 include_main,
                                 mode,
@@ -369,6 +373,7 @@ impl Render for ChartTabs {
                                 Some(cp),
                                 Some(pp),
                                 Some(pax),
+                                Some(tax),
                                 cx,
                             );
                         });
@@ -402,6 +407,9 @@ impl Render for ChartTabs {
                     },
                     move |pos, app| {
                         pap_entity.update(app, |this, cx| this.apply_price_axis_pos(pos, cx));
+                    },
+                    move |checked, app| {
+                        tav_entity.update(app, |this, cx| this.apply_time_axis_visible(checked, cx));
                     },
                 ))
         });

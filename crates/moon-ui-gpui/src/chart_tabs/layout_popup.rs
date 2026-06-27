@@ -169,6 +169,9 @@ pub(super) fn content_size(cx: &App, with_rename: bool) -> Size<Pixels> {
         + cb_h
         + gap
         + cb_h
+        // + чекбокс «Ось времени».
+        + gap
+        + cb_h
         // + 2 строки селекторов позиции кнопок (Cancel Buy / Panic Sell) + строка оси цен.
         + gap
         + cb_h
@@ -192,7 +195,7 @@ fn mode_label(m: StackLayoutMode) -> &'static str {
 /// `height_fit_input`/`height_scroll_input` — раздельные поля (подписку на Blur/Enter держит
 /// вызывающий). `on_pick_mode` вызывается при выборе режима. Позиционируется вызывающим.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N>(
+pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O>(
     id: &str,
     current: StackLayoutMode,
     orientation: StackOrientation,
@@ -205,6 +208,7 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N>(
     cancel_buy_pos: ChartBtnPos,
     panic_sell_pos: ChartBtnPos,
     price_axis_pos: PriceAxisPos,
+    time_axis_visible: bool,
     p: MoonPalette,
     cx: &App,
     on_pick_mode: F,
@@ -217,6 +221,7 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N>(
     on_pick_cancel_pos: L,
     on_pick_panic_pos: M,
     on_pick_price_axis: N,
+    on_toggle_time_axis: O,
 ) -> AnyElement
 where
     F: Fn(StackLayoutMode, &mut App) + 'static,
@@ -228,6 +233,7 @@ where
     L: Fn(ChartBtnPos, &mut App) + 'static,
     M: Fn(ChartBtnPos, &mut App) + 'static,
     N: Fn(PriceAxisPos, &mut App) + 'static,
+    O: Fn(bool, &mut App) + 'static,
 {
     let horizontal = orientation.is_horizontal();
     let sel = POPUP_MODES.iter().position(|m| *m == current).unwrap_or(0);
@@ -317,6 +323,13 @@ where
         .checked(auto_pin)
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_auto_pin(*ch, app));
+
+    // Чекбокс «Ось времени» — вкл/выкл нижние подписи времени на графиках вкладки.
+    let time_axis_cb = MoonCheckbox::new(SharedString::from(format!("{id}-time-axis")))
+        .label(t!("chart.layout.time_axis").to_string())
+        .checked(time_axis_visible)
+        .size(MoonCheckboxSize::Compact)
+        .on_change(move |ch: &bool, _w, app| on_toggle_time_axis(*ch, app));
 
     // Селекторы позиции кнопок Cancel Buy / Panic Sell в зоне чарта (— L C R). Названия кнопок —
     // бренд-термины MoonBot, НЕ переводим.
@@ -423,6 +436,7 @@ where
         .child(orderbook_cb)
         .child(show_zone_cb)
         .child(auto_pin_cb)
+        .child(time_axis_cb)
         .child(cancel_pos_row)
         .child(panic_pos_row)
         .child(price_axis_row)

@@ -102,7 +102,11 @@ impl ChartPanel {
         } else {
             moon_chart::PRICE_AXIS_W * self.last_ppp
         };
-        let time_axis_h = moon_chart::TIME_AXIS_H * self.last_ppp;
+        let time_axis_h = if self.time_axis_visible {
+            moon_chart::TIME_AXIS_H * self.last_ppp
+        } else {
+            0.0
+        };
         let plot_h = (rect.h - time_axis_h).max(1.0);
         let glass_cap = rect.w * 0.5;
         let glass_base = moon_chart::GLASS_ZONE_PX.min(glass_cap);
@@ -157,7 +161,11 @@ impl ChartPanel {
             return self.local_glass_rect(pane).filter(|g| g.w > 0.0);
         }
         let rect = self.local_pane_rect(pane)?;
-        let time_axis_h = moon_chart::TIME_AXIS_H * self.last_ppp;
+        let time_axis_h = if self.time_axis_visible {
+            moon_chart::TIME_AXIS_H * self.last_ppp
+        } else {
+            0.0
+        };
         let plot_h = (rect.h - time_axis_h).max(1.0);
         let w = moon_chart::GLASS_ZONE_PX.min(rect.w * 0.5);
         Some(moon_chart::view::Rect {

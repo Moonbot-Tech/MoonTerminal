@@ -254,6 +254,7 @@ impl ChartTabs {
             Option<(CoreId, String)>,
             bool,
             Option<crate::chart_persist::PriceAxisPos>,
+            Option<bool>,
         )> = {
             let all = &self.backend.read(cx).chart_specs;
             all.iter()
@@ -274,6 +275,7 @@ impl ChartTabs {
                             s.compare_anchor.clone(),
                             s.compare_orderbook_only,
                             s.price_axis_pos,
+                            s.time_axis_visible,
                         )
                     })
                 })
@@ -293,6 +295,7 @@ impl ChartTabs {
             anchor,
             broom,
             axis_pos,
+            time_axis,
         ) in specs
         {
             let stack = cx.new(|_| {
@@ -322,6 +325,9 @@ impl ChartTabs {
                 }
                 if axis_pos.is_some() {
                     s.set_price_axis_pos(axis_pos, c);
+                }
+                if time_axis.is_some() {
+                    s.set_time_axis_visible(time_axis, c);
                 }
                 for (core, market) in &coins {
                     s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);

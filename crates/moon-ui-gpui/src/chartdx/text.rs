@@ -234,6 +234,7 @@ impl RenderState {
                 market,
                 orderbook_enabled,
                 price_axis_pos,
+                time_axis_visible,
             ) = {
                 let pr = &self.panes[idx];
                 (
@@ -245,6 +246,7 @@ impl RenderState {
                     pr.market.clone(),
                     pr.orderbook_enabled,
                     pr.price_axis_pos,
+                    pr.time_axis_visible,
                 )
             };
             if !active {
@@ -402,6 +404,9 @@ impl RenderState {
             let min_h_gap = 6.0;
             let mut last_right = f32::NEG_INFINITY;
             for k in 0..=6 {
+                if !time_axis_visible {
+                    break;
+                }
                 let frac = k as f64 / 6.0;
                 let x = plot_left + (frac as f32) * plot_w;
                 let unix = left_unix + frac * window_ms;
