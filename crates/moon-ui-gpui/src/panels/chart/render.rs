@@ -13,6 +13,14 @@ use crate::{axes, input};
 use super::trade::TradeMouseButton;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};
 
+fn rgb3_from_hex(hex: u32) -> [u8; 3] {
+    [
+        ((hex >> 16) & 0xFF) as u8,
+        ((hex >> 8) & 0xFF) as u8,
+        (hex & 0xFF) as u8,
+    ]
+}
+
 impl Render for ChartPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::CHART_RENDER);
@@ -39,11 +47,17 @@ impl Render for ChartPanel {
         self.chart.set_present_rate_hz(effective_present_rate_hz);
         // ВАЖНО: НЕТ request_animation_frame/continuous-present. `gpu_canvas.frame()` решает
         // present на platform tick без dirty GPUI tree; `draw()` рисует в тот же tick.
-        let (theme, orders_style, follow) = {
+        let (mut theme, orders_style, follow) = {
             let b = self.backend.read(cx);
             let eff = b.preview.as_ref().unwrap_or(&b.config);
             (eff.theme.clone(), eff.orders.clone(), b.follow)
         };
+        if palette.is_light() {
+            theme.bg = rgb3_from_hex(palette.chart_bg);
+            theme.grid = rgb3_from_hex(palette.row_line);
+            theme.grid_alpha = theme.grid_alpha.clamp(0.0, 1.0);
+            theme.book_bg = rgb3_from_hex(palette.chart_bg);
+        }
         // Масштаб — ПО-ВКЛАДОЧНЫЙ: берём self.scale (его правят set_scale из тулбара активной
         // вкладки / шапки выносного окна), а не глобальный backend.price_scale.
         let mut settings_changed = self.chart.set_theme(theme)
@@ -537,7 +551,7 @@ impl Render for ChartPanel {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(crate::design::logo_glow_sized(logo_w)),
+                        .child(crate::design::logo_glow_sized(cx, logo_w)),
                 )
             })
             // FireTest probe only. Геометрию самого чарта не берём из GPUI-probe: единственный

@@ -44,12 +44,16 @@ fn data_dir_raw() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         // ~/Library/Application Support
-        dirs::data_dir().map(|d| d.join(APP_ID)).unwrap_or_else(exe_dir)
+        dirs::data_dir()
+            .map(|d| d.join(APP_ID))
+            .unwrap_or_else(exe_dir)
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         // Linux и прочие unix: ~/.config
-        dirs::config_dir().map(|d| d.join(APP_ID)).unwrap_or_else(exe_dir)
+        dirs::config_dir()
+            .map(|d| d.join(APP_ID))
+            .unwrap_or_else(exe_dir)
     }
 }
 
@@ -58,7 +62,10 @@ fn data_dir_raw() -> PathBuf {
 pub fn data_dir() -> PathBuf {
     let dir = data_dir_raw();
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        log::warn!("не удалось создать директорию данных {}: {e}", dir.display());
+        log::warn!(
+            "не удалось создать директорию данных {}: {e}",
+            dir.display()
+        );
     }
     dir
 }

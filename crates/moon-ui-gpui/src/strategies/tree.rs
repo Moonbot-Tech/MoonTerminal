@@ -10,9 +10,7 @@ impl StrategiesView {
         &self,
         store: &CoreStore,
         cores: &[(CoreId, String)],
-        node_data: std::rc::Rc<
-            std::collections::HashMap<SharedString, super::tree_moon::NodeData>,
-        >,
+        node_data: std::rc::Rc<std::collections::HashMap<SharedString, super::tree_moon::NodeData>>,
         cx: &Context<Self>,
     ) -> AnyElement {
         let p = MoonPalette::active(cx);
@@ -279,7 +277,6 @@ impl StrategiesView {
         }
         bar.child(right).into_any_element()
     }
-
 
     // ── Панель 2: разделы (секции) ────────────────────────────────────────────
 }

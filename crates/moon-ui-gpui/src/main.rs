@@ -43,9 +43,9 @@ use gpui::*;
 
 use chartdx::ChartDataHandle;
 
-use moon_ui::{DockAreaState, MoonTheme, MoonThemeConfig, Root, init as init_moon_ui};
+use moon_ui::{DockAreaState, MoonTheme, MoonThemeConfig, Root, ThemeMode, init as init_moon_ui};
 
-use moon_core::config::{AppConfig, WindowLayout};
+use moon_core::config::{AppConfig, UiThemeMode, WindowLayout};
 use moon_core::metrics::{Metrics, MetricsSnapshot};
 use moon_core::session::{CoreId, SessionManager};
 
@@ -78,7 +78,15 @@ fn embedded_fonts() -> Vec<Cow<'static, [u8]>> {
 }
 
 pub(crate) fn moon_theme_config_for(cfg: &AppConfig) -> MoonThemeConfig {
-    MoonThemeConfig::moon_terminal()
+    let mut theme = match cfg.ui_theme_mode {
+        UiThemeMode::Dark => MoonThemeConfig::moon_terminal(),
+        UiThemeMode::Light => MoonThemeConfig::moon_light(),
+    };
+    theme.mode = match cfg.ui_theme_mode {
+        UiThemeMode::Dark => ThemeMode::Dark,
+        UiThemeMode::Light => ThemeMode::Light,
+    };
+    theme
         .with_font_delta(cfg.ui_font_delta)
         .with_ui_scale(cfg.ui_scale)
 }
@@ -204,6 +212,9 @@ struct Backend {
     /// сюда СРАЗУ (дисплей живой), параллельно шлём в ядро. Иначе значение обновлялось бы только
     /// эхом сервера (`send_settings` локальный снимок не трогает) — для sell это незаметно/лаг.
     sell_pct_local: HashMap<(CoreId, usize), f64>,
+    /// Оптимистичный локальный выбор fixed-sell слота. `Some(slot)` = горит S1-S6,
+    /// `None` = горит основной TP. Без этого клик визуально ждёт echo ClientSettings от ядра.
+    sell_slot_local: HashMap<CoreId, Option<usize>>,
     /// Backend-level notify is only for slow GPUI chrome/status/overlays. High-rate chart
     /// data goes straight into retained chart handles and must not dirty the whole tree.
     backend_dirty_since_notify: bool,
@@ -342,6 +353,21 @@ impl Backend {
             .unwrap_or(fallback)
     }
 
+    fn set_fixed_sell_slot_local(&mut self, core: CoreId, slot: Option<usize>) {
+        self.sell_slot_local.insert(core, slot);
+    }
+
+    fn fixed_sell_slot_with(&self, core: CoreId, fallback: Option<usize>) -> Option<usize> {
+        self.sell_slot_local.get(&core).copied().unwrap_or(fallback)
+    }
+
+    fn fixed_sell_mode_with(&self, core: CoreId, fallback: bool) -> bool {
+        self.sell_slot_local
+            .get(&core)
+            .map(|slot| slot.is_some())
+            .unwrap_or(fallback)
+    }
+
     fn cancel_buy_for_main_chart(&self, group: &str) -> usize {
         let Some((core, market)) = self.main_chart_target(group) else {
             log::warn!("cancel buy ignored: no open main chart for group={group}");
@@ -459,8 +485,8 @@ impl Backend {
     }
 
     /// Активное торговое ядро группы для шапки/тулбара: sticky-override (ручной выбор в
-    /// шапке), если он ещё валиден (ядро в группе), иначе ядро фуллскрин-чарта. None — нет
-    /// ни override, ни открытого фуллскрина.
+    /// шапке), если он ещё валиден (ядро в группе), иначе ядро фуллскрин-чарта, иначе первое
+    /// ядро группы. Тулбар не должен превращаться в прочерки только потому, что чарт ещё не открыт.
     fn active_trade_core(&self, group: &str) -> Option<CoreId> {
         if let Some(&core) = self.trade_core_override.get(group) {
             let in_group = self
@@ -472,7 +498,15 @@ impl Backend {
                 return Some(core);
             }
         }
-        self.main_chart_target(group).map(|(core, _)| core)
+        self.main_chart_target(group)
+            .map(|(core, _)| core)
+            .or_else(|| {
+                self.session
+                    .sessions()
+                    .iter()
+                    .find(|s| s.group == group)
+                    .map(|s| s.id)
+            })
     }
 
     /// Записать ручной выбор активного торгового ядра (клик в селекторе шапки).
@@ -808,6 +842,7 @@ fn main() -> anyhow::Result<()> {
             order_size_edit_req: None,
             sell_edit_req: None,
             sell_pct_local: HashMap::new(),
+            sell_slot_local: HashMap::new(),
             backend_dirty_since_notify: false,
             last_backend_notify: None,
             reconnect_request: Vec::new(),

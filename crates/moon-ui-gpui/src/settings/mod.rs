@@ -462,8 +462,9 @@ impl SettingsView {
             v
         };
         let bundle_changed = bundle_sig(before) != bundle_sig(&after);
-        let ui_theme_changed =
-            before.ui_font_delta != after.ui_font_delta || before.ui_scale != after.ui_scale;
+        let ui_theme_changed = before.ui_font_delta != after.ui_font_delta
+            || before.ui_theme_mode != after.ui_theme_mode
+            || before.ui_scale != after.ui_scale;
 
         if ui_theme_changed {
             crate::install_moon_theme_for_config(&after, cx);
@@ -765,6 +766,7 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.log_to_file.hash(&mut h);
     cfg.log_retention_days.hash(&mut h);
     cfg.ui_font_delta.to_bits().hash(&mut h);
+    cfg.ui_theme_mode.hash(&mut h);
     cfg.ui_scale.to_bits().hash(&mut h);
     cfg.hotkeys.hash(&mut h);
     format!("{:?}", cfg.theme).hash(&mut h);

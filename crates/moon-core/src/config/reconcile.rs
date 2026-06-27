@@ -9,7 +9,7 @@ use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::schema::{
     clamp_chart_memory_percent, clamp_chart_stack_height, ServerEntry, ServerMeta, ServersFile,
-    SettingsFile, COREID_UID_VERSION, SCHEMA_VERSION,
+    SettingsFile, UiThemeMode, COREID_UID_VERSION, SCHEMA_VERSION,
 };
 use super::servers;
 use super::ServerConfig;
@@ -41,6 +41,8 @@ pub struct Merged {
     pub log_retention_days: u32,
     /// Прибавка к базовым размерам UI-шрифтов в logical px.
     pub ui_font_delta: f32,
+    /// Тёмная/светлая тема MoonUI.
+    pub ui_theme_mode: UiThemeMode,
     /// Общий масштаб геометрии UI.
     pub ui_scale: f32,
     /// Множитель бюджета retained chart history.
@@ -75,6 +77,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile) -> Merged {
     let log_to_file = meta.log_to_file;
     let log_retention_days = meta.log_retention_days;
     let ui_font_delta = meta.ui_font_delta;
+    let ui_theme_mode = meta.ui_theme_mode;
     let ui_scale = meta.ui_scale;
     let chart_memory_percent = clamp_chart_memory_percent(meta.chart_memory_percent);
     let hotkeys = meta.hotkeys;
@@ -137,6 +140,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile) -> Merged {
         log_to_file,
         log_retention_days,
         ui_font_delta,
+        ui_theme_mode,
         ui_scale,
         chart_memory_percent,
         hotkeys,
@@ -161,6 +165,7 @@ pub fn split(
     log_to_file: bool,
     log_retention_days: u32,
     ui_font_delta: f32,
+    ui_theme_mode: UiThemeMode,
     ui_scale: f32,
     chart_memory_percent: u16,
     hotkeys: HotkeysConfig,
@@ -188,6 +193,7 @@ pub fn split(
         log_to_file,
         log_retention_days,
         ui_font_delta,
+        ui_theme_mode,
         ui_scale,
         chart_memory_percent: clamp_chart_memory_percent(chart_memory_percent),
         hotkeys,

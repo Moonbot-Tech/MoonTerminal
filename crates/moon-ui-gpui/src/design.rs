@@ -130,8 +130,12 @@ pub fn fit_h_px(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f
     px(fit_h_value(cx, base_height, base_line_height, base_pad_y))
 }
 
-pub fn logo_glow_sized(width: f32) -> impl IntoElement {
-    let paths = LOGO_GLOW_SVG_RAW
+pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
+    let p = MoonPalette::active(cx);
+    let text_fill = format!("#{text:06X}", text = p.text);
+    let logo =
+        LOGO_GLOW_SVG_RAW.replace(r##"fill="#E7E7E7""##, &format!(r##"fill="{text_fill}""##));
+    let paths = logo
         .split_once(r#"<g clip-path="url(#clip0_3800_3393)">"#)
         .and_then(|(_, rest)| rest.split_once("</g>"))
         .map(|(paths, _)| paths)
@@ -141,13 +145,14 @@ pub fn logo_glow_sized(width: f32) -> impl IntoElement {
     let r = LOGO_GLOW_VIEW_W * 0.5;
     let logo_x = (LOGO_GLOW_VIEW_W - LOGO_SRC_W) * 0.5;
     let logo_y = (LOGO_GLOW_VIEW_H - LOGO_SRC_H) * 0.5;
+    let aura_alpha = if p.is_light() { 0.5 } else { 1.0 };
     let svg = format!(
         r##"<svg width="{view_w}" height="{view_h}" viewBox="0 0 {view_w} {view_h}" fill="none" xmlns="http://www.w3.org/2000/svg">
 <defs>
   <radialGradient id="moonbot_aura" cx="50%" cy="50%" r="50%">
-    <stop offset="0%" stop-color="#00BCFF" stop-opacity="0.30"/>
-    <stop offset="34%" stop-color="#1A76FF" stop-opacity="0.19"/>
-    <stop offset="68%" stop-color="#0A5CFF" stop-opacity="0.07"/>
+    <stop offset="0%" stop-color="#00BCFF" stop-opacity="{aura_0:.3}"/>
+    <stop offset="34%" stop-color="#1A76FF" stop-opacity="{aura_1:.3}"/>
+    <stop offset="68%" stop-color="#0A5CFF" stop-opacity="{aura_2:.3}"/>
     <stop offset="100%" stop-color="#0A5CFF" stop-opacity="0"/>
   </radialGradient>
 </defs>
@@ -161,6 +166,9 @@ pub fn logo_glow_sized(width: f32) -> impl IntoElement {
         r = r,
         logo_x = logo_x,
         logo_y = logo_y,
+        aura_0 = 0.30 * aura_alpha,
+        aura_1 = 0.19 * aura_alpha,
+        aura_2 = 0.07 * aura_alpha,
         paths = paths,
     );
     let frame_w = width * (LOGO_GLOW_VIEW_W / 199.0);

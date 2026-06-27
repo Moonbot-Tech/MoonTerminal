@@ -6,9 +6,10 @@ use gpui::*;
 use moon_ui::MoonVirtualListScrollHandle;
 
 use super::stack::{
-    ChartStackEntry, CompareRole, HIGHLIGHT, apply_compare, handle_compare_broom_requests,
-    handle_compare_lock_requests, render_chart_stack, resolve_layout, set_panels_auto_pin,
-    set_panels_orderbook_enabled, set_panels_scale, set_panels_show_zone,
+    ChartStackEntry, CompareRole, HIGHLIGHT, apply_compare, chart_stack_card,
+    handle_compare_broom_requests, handle_compare_lock_requests, render_chart_stack,
+    resolve_layout, set_panels_auto_pin, set_panels_orderbook_enabled, set_panels_scale,
+    set_panels_show_zone,
 };
 use crate::Backend;
 use crate::chart_persist::{StackLayoutMode, StackOrientation};
@@ -362,7 +363,11 @@ impl AddChartStack {
     }
 
     /// Сменить ориентацию стека (per-окно). Перестраивает текущее отображение.
-    pub(crate) fn set_orientation(&mut self, orientation: Option<StackOrientation>, cx: &mut Context<Self>) {
+    pub(crate) fn set_orientation(
+        &mut self,
+        orientation: Option<StackOrientation>,
+        cx: &mut Context<Self>,
+    ) {
         if self.layout_orientation == orientation {
             return;
         }
@@ -458,7 +463,7 @@ impl Render for AddChartStack {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(crate::design::logo_glow_sized(220.0))
+                .child(crate::design::logo_glow_sized(cx, 220.0))
                 .into_any_element();
         }
 
@@ -477,13 +482,14 @@ impl Render for AddChartStack {
         }
         let count = self.charts.len();
         let border = rgb(palette.border);
-        let accent = rgb(palette.blue);
+        let accent = rgb(palette.accent);
         let base_id = format!("add-chart-stack-{}", self.num);
         let horizontal = self
             .layout_orientation
             .unwrap_or(StackOrientation::Vertical)
             .is_horizontal();
         let entity = cx.entity();
+        let p = palette;
         render_chart_stack(
             &base_id,
             self,
@@ -503,28 +509,41 @@ impl Render for AddChartStack {
                     .map(|e| e.panel.clone())
             },
             move |s, ix, panel, size, flex, min_w, horizontal, border, _ent| {
-                let (id, fresh) = match s.charts.get(ix) {
+                let (id, label, fresh) = match s.charts.get(ix) {
                     Some(e) => (
                         format!("add-chart-stack-tile-{}-{}-{}", s.num, e.core, e.market),
+                        e.market.clone(),
                         e.arrived_at.elapsed() < HIGHLIGHT,
                     ),
-                    None => (format!("add-chart-stack-tile-{}-{ix}", s.num), false),
+                    None => (
+                        format!("add-chart-stack-tile-{}-{ix}", s.num),
+                        "Chart".to_string(),
+                        false,
+                    ),
                 };
-                let mut tile = div()
-                    .id(SharedString::from(id.clone()))
-                    .relative()
-                    .overflow_hidden()
-                    .border_1()
-                    .border_color(border);
+                let mut tile =
+                    chart_stack_card(SharedString::from(id.clone()), label, panel, p, border);
                 // Поперёк оси — на всю ширину/высоту; вдоль оси — flex+cap (COMPRESS до size, сжатие),
                 // фикс (size без flex) или растяжение (FIT). Гор: ось = X (ширина), верт: ось = Y.
-                tile = if horizontal { tile.h_full() } else { tile.w_full() };
+                tile = if horizontal {
+                    tile.h_full()
+                } else {
+                    tile.w_full()
+                };
                 if flex {
                     tile = tile.flex_1();
                     let m = min_w.unwrap_or(0.0);
-                    tile = if horizontal { tile.min_w(px(m)) } else { tile.min_h(px(m)) };
+                    tile = if horizontal {
+                        tile.min_w(px(m))
+                    } else {
+                        tile.min_h(px(m))
+                    };
                     if let Some(v) = size {
-                        tile = if horizontal { tile.max_w(px(v)) } else { tile.max_h(px(v)) };
+                        tile = if horizontal {
+                            tile.max_w(px(v))
+                        } else {
+                            tile.max_h(px(v))
+                        };
                     }
                 } else if let Some(v) = size {
                     // Фикс. БЕЗ сжатия (min=max=v): в SCROLL тайлы переполняют контейнер → скролл.
@@ -543,7 +562,7 @@ impl Render for AddChartStack {
                         .top(px(1.0))
                         .left(px(1.0))
                         .right(px(1.0))
-                        .bottom(px(1.0))
+                        .bottom(px(9.0))
                         .border_2()
                         .border_color(accent)
                         .rounded(px(2.0))
@@ -557,9 +576,7 @@ impl Render for AddChartStack {
                             },
                         )
                 });
-                tile.child(div().size_full().relative().overflow_hidden().child(panel))
-                    .children(highlight)
-                    .into_any_element()
+                tile.children(highlight).into_any_element()
             },
             |s, ix| s.compare_role(ix),
         )

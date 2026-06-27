@@ -10,9 +10,9 @@
 use std::time::Instant;
 
 use gpui::{
-    canvas, div, fill, point, prelude::*, px, rgb, size, App, Bounds, Context, MouseMoveEvent,
-    Pixels, Point, Render, SharedString, TextAlign, TextRun, TitlebarOptions, Window, WindowBounds,
-    WindowOptions,
+    App, Bounds, Context, MouseMoveEvent, Pixels, Point, Render, SharedString, TextAlign, TextRun,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div, fill, point, prelude::*, px,
+    rgb, size,
 };
 
 struct Proto {

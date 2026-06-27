@@ -2,8 +2,8 @@
 //! подтвердить удаление. Само открытое окно живёт в MoonUI Root; здесь — сборка тела/
 //! футера диалога и подтверждённый диспетч в `moon-core`.
 
-use super::tree_ui::TreeOp;
 use super::tree_ops;
+use super::tree_ui::TreeOp;
 use super::*;
 use anyhow::Result;
 use moon_core::feed::NewStrategySpec;

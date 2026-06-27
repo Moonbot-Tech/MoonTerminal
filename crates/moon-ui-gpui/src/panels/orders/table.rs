@@ -101,12 +101,21 @@ fn order_table_row(
     p: MoonPalette,
     cols: &[OrdCol],
 ) -> MoonDataRow {
-    MoonDataRow::new(cols.iter().map(|c| cell_for(*c, e, view, p)).collect::<Vec<_>>())
+    MoonDataRow::new(
+        cols.iter()
+            .map(|c| cell_for(*c, e, view, p))
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// Ячейка для одной колонки строки. Порядок ячеек ДОЛЖЕН совпадать с `column_def` по тем
 /// же видимым колонкам — оба идут по одному списку `cols`.
-fn cell_for(col: OrdCol, e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> MoonDataCell {
+fn cell_for(
+    col: OrdCol,
+    e: &OrderEntry,
+    view: &Entity<OrdersPanel>,
+    p: MoonPalette,
+) -> MoonDataCell {
     let r = &e.row;
     match col {
         OrdCol::Core => MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
@@ -184,7 +193,11 @@ fn order_pnl(r: &OrderRow) -> Option<f64> {
     if filled_qty <= 0.0 {
         return None;
     }
-    let entry = if r.is_short { r.sell_price } else { r.buy_price };
+    let entry = if r.is_short {
+        r.sell_price
+    } else {
+        r.buy_price
+    };
     let mark = r.price as f64;
     if entry <= 0.0 || mark <= 0.0 {
         return None;
@@ -262,7 +275,10 @@ fn flag_toggle_cell(
                 .render(),
         )
         .on_click(move |_, _window, app| {
-            log::info!("orders UI click toggle stop core={core} uid={uid} kind={kind:?} on={on} -> {}", !on);
+            log::info!(
+                "orders UI click toggle stop core={core} uid={uid} kind={kind:?} on={on} -> {}",
+                !on
+            );
             view.update(app, |this, cx| {
                 this.backend.update(cx, |b, _| {
                     if let Err(err) = b.session.set_order_stop(core, uid, kind, !on) {

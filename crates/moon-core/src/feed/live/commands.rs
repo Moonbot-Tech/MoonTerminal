@@ -176,10 +176,8 @@ pub(super) fn drain_commands(
                         for (name, val) in changes {
                             let existing = sc.fields.get(name).cloned();
                             let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
-                            sc.fields.insert(
-                                name.as_str(),
-                                fv_from_str(existing.as_ref(), stype, val),
-                            );
+                            sc.fields
+                                .insert(name.as_str(), fv_from_str(existing.as_ref(), stype, val));
                         }
                         sc.last_date = now.max(sc.last_date + 1);
                         edited += 1;

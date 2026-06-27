@@ -22,6 +22,8 @@ fn to_clip(px: vec2<f32>, resolution: vec2<f32>) -> vec4<f32> {
 
 @group(0) @binding(0) var<uniform> gp: GridParams;
 
+const GRID_LINE_HALF_PX: f32 = 0.5;
+
 struct GridOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) px: vec2<f32>,
@@ -44,13 +46,13 @@ fn grid_fragment(in: GridOut) -> @location(0) vec4<f32> {
     var hit = false;
     let step_x = gp.bounds.z / max(gp.n_vert, 1.0);
     let local_x = in.px.x - gp.bounds.x;
-    if abs(local_x - round(local_x / step_x) * step_x) < 1.0 {
+    if abs(local_x - round(local_x / step_x) * step_x) < GRID_LINE_HALF_PX {
         hit = true;
     }
     if gp.price_interval > 1e-12 && gp.price_to_px > 1e-9 {
         let price = gp.view_price0 + (gp.bounds.y + gp.bounds.w - in.px.y) / gp.price_to_px;
         let k = price / gp.price_interval;
-        if abs(k - round(k)) * gp.price_interval * gp.price_to_px < 1.0 {
+        if abs(k - round(k)) * gp.price_interval * gp.price_to_px < GRID_LINE_HALF_PX {
             hit = true;
         }
     }

@@ -2,6 +2,18 @@
 # Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
 _version: 2
 
+iface.sec_theme:
+  ru: "Тема"
+  en: "Theme"
+  es: "Tema"
+iface.light_theme:
+  ru: "Светлая тема"
+  en: "Light theme"
+  es: "Tema claro"
+iface.light_theme_hint:
+  ru: "Переключает палитру всего интерфейса MoonUI. Сохраняется в settings.toml."
+  en: "Switches the whole MoonUI interface palette. Saved to settings.toml."
+  es: "Cambia la paleta de toda la interfaz MoonUI. Se guarda en settings.toml."
 iface.sec_font:
   ru: "Интерфейс: шрифт"
   en: "Interface: font"

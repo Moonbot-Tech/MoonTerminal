@@ -3,12 +3,12 @@
 //! «Сохранить» пишет theme.toml. Состояние редактора — [`Iface`].
 
 use gpui::*;
-use moon_ui::{MoonColorPickerState, MoonPalette, MoonSliderState, v_flex};
+use moon_ui::{MoonColorPickerState, MoonPalette, MoonSliderState, MoonToggle, v_flex};
 use rust_i18n::t;
 
 use super::{SettingsView, color_row, section, separator, slider_row};
 use crate::Backend;
-use moon_core::config::{AppConfig, ChartTheme};
+use moon_core::config::{AppConfig, ChartTheme, UiThemeMode};
 
 /// Состояние редактора темы: по entity на каждое поле.
 pub(super) struct Iface {
@@ -161,9 +161,47 @@ impl SettingsView {
     pub(super) fn interface_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let i = &self.iface;
         let p = MoonPalette::active(cx);
+        let ui_theme_mode = {
+            let b = self.backend.read(cx);
+            b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode
+        };
         v_flex()
             .w_full()
             .gap_1()
+            .child(section(&t!("iface.sec_theme"), p, cx))
+            .child(
+                MoonToggle::new("ui-theme-mode")
+                    .checked(ui_theme_mode == UiThemeMode::Light)
+                    .label(t!("iface.light_theme").to_string())
+                    .on_change(cx.listener(|this, checked: &bool, _window, cx| {
+                        let mode = if *checked {
+                            UiThemeMode::Light
+                        } else {
+                            UiThemeMode::Dark
+                        };
+                        let changed = this.backend.update(cx, |b, bcx| {
+                            let Some(p) = b.preview.as_mut() else {
+                                return false;
+                            };
+                            if p.ui_theme_mode == mode {
+                                return false;
+                            }
+                            p.ui_theme_mode = mode;
+                            crate::install_moon_theme_for_config(p, bcx);
+                            bcx.notify();
+                            true
+                        });
+                        if changed {
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(
+                div()
+                    .text_color(rgb(p.text_soft))
+                    .child(t!("iface.light_theme_hint").to_string()),
+            )
+            .child(separator(p, cx))
             // UI: шрифты и масштаб
             .child(section(&t!("iface.sec_font"), p, cx))
             .child(slider_row(&t!("iface.font_delta"), &i.ui_font_delta, cx))

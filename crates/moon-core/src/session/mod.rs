@@ -50,7 +50,14 @@ fn conn_sig(server: &ServerConfig) -> u64 {
     server.key.expose().hash(&mut h);
     let f = server.feed;
     [
-        f.orders, f.detects, f.reports, f.balance, f.strategies, f.log, f.alerts, f.arb,
+        f.orders,
+        f.detects,
+        f.reports,
+        f.balance,
+        f.strategies,
+        f.log,
+        f.alerts,
+        f.arb,
     ]
     .hash(&mut h);
     server.synthetic.hash(&mut h);
@@ -688,7 +695,11 @@ impl SessionManager {
         kind: OrderStopKind,
         on: bool,
     ) -> Result<()> {
-        self.send_core_cmd(core, CoreCmd::SetOrderStop { uid, kind, on }, "set order stop")
+        self.send_core_cmd(
+            core,
+            CoreCmd::SetOrderStop { uid, kind, on },
+            "set order stop",
+        )
     }
 
     /// Точечная правка `ClientSettings` ядра из тулбара (TP/SL/выбор sell-пресета). feed

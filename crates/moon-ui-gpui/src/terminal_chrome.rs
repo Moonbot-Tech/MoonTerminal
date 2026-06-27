@@ -8,8 +8,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonProgress, MoonSelectorPill,
-    MoonSelectorSegment, MoonTag, MoonWindowFrame, h_flex,
+    MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill, MoonSelectorSegment,
+    MoonTag, MoonWindowFrame, h_flex, rgba_from,
 };
 use rust_i18n::t;
 
@@ -19,18 +19,27 @@ use crate::{Backend, design, settings, strategies};
 
 pub fn header(group: &str, backend: Entity<Backend>, p: MoonPalette, cx: &App) -> impl IntoElement {
     // Баланс/PnL активного торгового ядра группы (серверные значения в USDT). Нет ядра/данных
-    // → нули. «Real» = серверный pnl_usdt; Session/Unreal/Risk пока заглушки.
-    let (free_usdt, total_usdt, pnl_usdt) = {
+    // → нули. «Real» = серверный pnl_usdt; Session/Unreal пока заглушки.
+    let (free_usdt, total_usdt, pnl_usdt, risk_pct) = {
         let b = backend.read(cx);
         b.active_trade_core(group)
             .and_then(|c| b.session.store().core(c))
             .map(|cd| {
                 let g = &cd.assets.global;
-                (g.free_usdt, g.total_usdt, g.pnl_usdt)
+                (
+                    g.free_usdt,
+                    g.total_usdt,
+                    g.pnl_usdt,
+                    account_usage_pct(g.free_usdt, g.total_usdt),
+                )
             })
-            .unwrap_or((0.0, 0.0, 0.0))
+            .unwrap_or((0.0, 0.0, 0.0, 0.0))
     };
-    let pnl_color = if pnl_usdt < 0.0 { p.red } else { p.green };
+    let pnl_color = if pnl_usdt < 0.0 {
+        danger_text(p)
+    } else {
+        positive_text(p)
+    };
     h_flex()
         .w_full()
         .h(design::fit_h_px(cx, design::HEADER_TOP_H, 14.0, 9.0))
@@ -62,10 +71,10 @@ pub fn header(group: &str, backend: Entity<Backend>, p: MoonPalette, cx: &App) -
                 .items_center()
                 .min_w_0()
                 .overflow_hidden()
-                .child(metric("Session", "+$24.30", p.green, p, cx))
+                .child(metric("Session", "+$24.30", positive_text(p), p, cx))
                 .child(metric("Real", fmt_signed_usd(pnl_usdt), pnl_color, p, cx))
-                .child(metric("Unreal", "−$8.10", p.orange, p, cx))
-                .child(risk_meter(p, cx)),
+                .child(metric("Unreal", "−$8.10", negative_text(p), p, cx))
+                .child(risk_meter(risk_pct, p, cx)),
         )
         .child(
             MoonWindowFrame::main("terminal-header-spacer-drag", 0.0)
@@ -119,6 +128,25 @@ fn fmt_signed_usd(v: f64) -> String {
     format!("{sign}${:.2}", v.abs())
 }
 
+fn account_usage_pct(free_usdt: f64, total_usdt: f64) -> f32 {
+    if !free_usdt.is_finite() || !total_usdt.is_finite() || total_usdt <= 0.0 {
+        return 0.0;
+    }
+    (((total_usdt - free_usdt).max(0.0) / total_usdt) * 100.0).clamp(0.0, 100.0) as f32
+}
+
+fn positive_text(p: MoonPalette) -> u32 {
+    if p.is_light() { p.green_text } else { p.green }
+}
+
+fn negative_text(p: MoonPalette) -> u32 {
+    if p.is_light() { p.red_text } else { p.orange }
+}
+
+fn danger_text(p: MoonPalette) -> u32 {
+    if p.is_light() { p.red_text } else { p.red }
+}
+
 fn metric(
     label: &'static str,
     value: impl Into<SharedString>,
@@ -147,7 +175,9 @@ fn metric(
         )
 }
 
-fn risk_meter(p: MoonPalette, cx: &App) -> impl IntoElement {
+fn risk_meter(value: f32, p: MoonPalette, cx: &App) -> impl IntoElement {
+    let value = value.clamp(0.0, 100.0);
+    let tone = risk_tone(value, p);
     h_flex()
         .h(design::fit_h_px(cx, 22.0, 13.0, 4.5))
         .gap(design::ui_px(cx, 8.0))
@@ -160,17 +190,68 @@ fn risk_meter(p: MoonPalette, cx: &App) -> impl IntoElement {
                 .text_color(rgb(p.text_muted))
                 .child("Risk"),
         )
+        .child(risk_heat_bar(value, p, cx))
+        .child(div().text_color(rgb(tone)).child(format!("{value:.0}%")))
+}
+
+fn risk_tone(value: f32, p: MoonPalette) -> u32 {
+    if value >= 66.0 {
+        danger_text(p)
+    } else if value >= 33.0 {
+        p.amber
+    } else {
+        positive_text(p)
+    }
+}
+
+fn risk_heat_bar(value: f32, p: MoonPalette, cx: &App) -> impl IntoElement {
+    let value = value.clamp(0.0, 100.0);
+    let width = design::ui_px(cx, 64.0);
+    let filled = 64.0 * value / 100.0;
+    let green_w = filled.min(64.0 / 3.0);
+    let amber_w = (filled - 64.0 / 3.0).clamp(0.0, 64.0 / 3.0);
+    let red_w = (filled - 128.0 / 3.0).clamp(0.0, 64.0 / 3.0);
+
+    div()
+        .id("risk-heat-meter")
+        .relative()
+        .w(width)
+        .h(design::ui_px(cx, 3.0))
+        .rounded(px(1.5))
+        .overflow_hidden()
+        .bg(rgba_from(
+            if p.is_light() {
+                p.border_soft
+            } else {
+                p.panel_head
+            },
+            if p.is_light() { 0.78 } else { 0.42 },
+        ))
         .child(
-            div().w(px(64.0)).child(
-                MoonProgress::new("risk-meter")
-                    .value(18.0)
-                    .color(p.green)
-                    .height(4.0)
-                    .radius(2.0)
-                    .render(),
-            ),
+            h_flex()
+                .absolute()
+                .left_0()
+                .top_0()
+                .h_full()
+                .child(
+                    div()
+                        .h_full()
+                        .w(design::ui_px(cx, green_w))
+                        .bg(rgb(positive_text(p))),
+                )
+                .child(
+                    div()
+                        .h_full()
+                        .w(design::ui_px(cx, amber_w))
+                        .bg(rgb(p.amber)),
+                )
+                .child(
+                    div()
+                        .h_full()
+                        .w(design::ui_px(cx, red_w))
+                        .bg(rgb(danger_text(p))),
+                ),
         )
-        .child(div().text_color(rgb(p.green)).child("18%"))
 }
 
 /// Селектор «активного торгового ядра» группы. Список ядер группы; текущий выбор =
@@ -194,7 +275,7 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
             .outline()
             .rounded_full()
             .child(design::status_dot(p.text_muted, cx))
-            .child(t!("header.no_cores").to_string())
+            .label(t!("header.no_cores").to_string())
             .into_any_element();
     }
 
@@ -202,7 +283,11 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         .and_then(|id| store.core(id))
         .map(|c| c.status == ConnStatus::Ready)
         .unwrap_or(false);
-    let dot_color = if active_ready { p.green } else { p.red };
+    let dot_color = if active_ready {
+        positive_text(p)
+    } else {
+        danger_text(p)
+    };
     let active_name = active
         .and_then(|id| cores.iter().find(|(cid, _)| *cid == id))
         .map(|(_, n)| n.clone())

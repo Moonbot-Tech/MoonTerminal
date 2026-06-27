@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 use moon_ui::{
-    MoonScrollableElement, MoonScrollbarVisibility, MoonVirtualList, MoonVirtualListScrollHandle,
-    h_flex, v_flex,
+    MoonPalette, MoonScrollableElement, MoonScrollbarVisibility, MoonVirtualList,
+    MoonVirtualListScrollHandle, h_flex, v_flex,
 };
 
 use crate::chart_persist::StackLayoutMode;
@@ -61,6 +61,92 @@ pub(super) enum CompareRole {
 
 /// Длительность подсветки рамки только что появившегося графика (пульс).
 pub(super) const HIGHLIGHT: Duration = Duration::from_millis(2600);
+
+const STACK_GUTTER: f32 = 8.0;
+const STACK_HEADER_H: f32 = 20.0;
+
+/// Визуальная оболочка одного chart-host в stack-режиме.
+///
+/// Важно: body вокруг `ChartPanel` намеренно без `.bg()`. Chart own-pass рисуется через
+/// UnderScene, и любой непрозрачный quad над plot-зоной закроет график. Красим только header,
+/// border, left-accent и отдельный gutter вне plot-зоны.
+pub(super) fn chart_stack_card(
+    id: SharedString,
+    label: impl Into<SharedString>,
+    panel: Entity<ChartPanel>,
+    p: MoonPalette,
+    border: Rgba,
+) -> Stateful<Div> {
+    let label = label.into();
+    div()
+        .id(id)
+        .w_full()
+        .relative()
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .h(px(STACK_GUTTER))
+                .bg(rgb(p.gutter)),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom(px(STACK_GUTTER))
+                .overflow_hidden()
+                .border_1()
+                .border_color(border)
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(3.0))
+                        .bg(rgb(p.accent)),
+                )
+                .child(
+                    h_flex()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(STACK_HEADER_H))
+                        .pl(px(11.0))
+                        .pr(px(8.0))
+                        .items_center()
+                        .overflow_hidden()
+                        .bg(rgb(p.panel_head))
+                        .border_b_1()
+                        .border_color(border)
+                        .child(
+                            div()
+                                .font_family(crate::design::mono())
+                                .text_size(px(10.0))
+                                .text_color(rgb(p.text_soft))
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .child(label),
+                        ),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(STACK_HEADER_H))
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .overflow_hidden()
+                        .child(panel),
+                ),
+        )
+}
 
 /// Разрешить раскладку стека из per-tab настроек вкладки в `(scroll, compress, высота_слота)`:
 /// - `Fit` + высота 0 → растяжение (делят высоту окна): `(false, false, _)`;
@@ -281,7 +367,17 @@ where
     // tile(s, ix, panel, size, flex, min_w, horizontal, border, ent)
     //   flex=true:  size → max_w, min_w → min_w (якорь-stretch).
     //   flex=false: size → фикс. ширина БЕЗ сжатия (SCROLL переполняет → скролл).
-    T: Fn(&S, usize, Entity<ChartPanel>, Option<f32>, bool, Option<f32>, bool, Rgba, Entity<S>) -> AnyElement
+    T: Fn(
+            &S,
+            usize,
+            Entity<ChartPanel>,
+            Option<f32>,
+            bool,
+            Option<f32>,
+            bool,
+            Rgba,
+            Entity<S>,
+        ) -> AnyElement
         + Copy
         + 'static,
     // Роль слота в режиме метлы (Anchor берёт свою ширину, Follower — стакан). Normal = обычный.
@@ -338,14 +434,24 @@ where
                 let Some(panel) = panel_at(s, ix) else {
                     return div().into_any_element();
                 };
-                tile(s, ix, panel, Some(cfg_h), false, None, false, border, ent.clone())
+                tile(
+                    s,
+                    ix,
+                    panel,
+                    Some(cfg_h),
+                    false,
+                    None,
+                    false,
+                    border,
+                    ent.clone(),
+                )
             },
         )
         .track_scroll(scroll_handle)
         .surface(false)
         .border(false)
         .radius(0.0)
-        .scrollbar_visibility(MoonScrollbarVisibility::Scrolling);
+        .scrollbar_visibility(MoonScrollbarVisibility::Hover);
         return div()
             .id(format!("{base_id}-scroll"))
             .relative()
@@ -406,9 +512,17 @@ where
                 if flex {
                     e = e.flex_1();
                     let m = min_w.unwrap_or(0.0);
-                    e = if horizontal { e.min_w(px(m)) } else { e.min_h(px(m)) };
+                    e = if horizontal {
+                        e.min_w(px(m))
+                    } else {
+                        e.min_h(px(m))
+                    };
                     if let Some(v) = size {
-                        e = if horizontal { e.max_w(px(v)) } else { e.max_h(px(v)) };
+                        e = if horizontal {
+                            e.max_w(px(v))
+                        } else {
+                            e.max_h(px(v))
+                        };
                     }
                 } else if let Some(v) = size {
                     // Фикс. БЕЗ сжатия (min=max=v) — иначе в SCROLL flex ужмёт и не будет переполнения.

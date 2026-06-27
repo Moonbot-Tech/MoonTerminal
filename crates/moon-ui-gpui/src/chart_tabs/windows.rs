@@ -50,12 +50,11 @@ impl ChartTabs {
             Tab::Custom(n, b) => (n, b, true),
             Tab::Main => return,
         };
-        let from = if is_custom {
-            &self.custom
-        } else {
-            &self.add
-        };
-        let Some(pos) = from.iter().position(|(num, c, _)| *num == n && *c == bucket) else {
+        let from = if is_custom { &self.custom } else { &self.add };
+        let Some(pos) = from
+            .iter()
+            .position(|(num, c, _)| *num == n && *c == bucket)
+        else {
             return;
         };
         let panel = from[pos].2.clone();
@@ -77,7 +76,8 @@ impl ChartTabs {
             p.set_scene_visible(false, pcx);
         });
         if is_custom {
-            self.custom.retain(|(num, c, _)| !(*num == n && *c == bucket));
+            self.custom
+                .retain(|(num, c, _)| !(*num == n && *c == bucket));
         } else {
             self.add.remove(pos);
         }
@@ -369,7 +369,11 @@ impl ChartTabs {
                                     (
                                         coins,
                                         s.custom_label.clone(),
-                                        (s.layout_mode, s.layout_height_fit, s.layout_height_scroll),
+                                        (
+                                            s.layout_mode,
+                                            s.layout_height_fit,
+                                            s.layout_height_scroll,
+                                        ),
                                         s.layout_orientation,
                                         s.orderbook_enabled,
                                         s.show_zone,
@@ -825,7 +829,11 @@ impl DetachedChartHost {
     }
 
     /// Сменить ориентацию (верт/гор) панели этого окна + persist.
-    fn apply_orientation(&mut self, orientation: crate::chart_persist::StackOrientation, cx: &mut Context<Self>) {
+    fn apply_orientation(
+        &mut self,
+        orientation: crate::chart_persist::StackOrientation,
+        cx: &mut Context<Self>,
+    ) {
         self.panel
             .update(cx, |p, c| p.set_orientation(Some(orientation), c));
         let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
@@ -1212,7 +1220,9 @@ impl Render for DetachedChartHost {
                 cx,
                 move |core, market, window, app| {
                     view.update(app, |this, cx| this.open_coin(core, market, cx));
-                    input.update(app, |inp, c| inp.set_value(SharedString::default(), window, c));
+                    input.update(app, |inp, c| {
+                        inp.set_value(SharedString::default(), window, c)
+                    });
                     view.update(app, |this, cx| this.clear_coin_search(cx));
                 },
                 |_core, _market, _app| {},

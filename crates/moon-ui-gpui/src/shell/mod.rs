@@ -785,9 +785,7 @@ impl Render for Shell {
             .font_family(design::mono())
             .text_color(rgb(p.text))
             .text_size(design::t_body(cx))
-            .on_key_down(
-                cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_hotkey(ev, cx)),
-            )
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_hotkey(ev, cx)))
             // ── Header ──────────────────────────────────────────────
             .child(terminal_chrome::header(
                 &self.group,

@@ -40,6 +40,7 @@ pub use layout::{DetachedLayout, GeomRect, GroupLayout, WindowLayout};
 pub use orders::{LineStyle, OrdersStyle};
 pub use secrets::Secret;
 pub use servers::{ChartBucket, FeedFlags, ServerConfig};
+pub use schema::UiThemeMode;
 pub use theme::ChartTheme;
 
 use std::collections::HashSet;
@@ -75,6 +76,8 @@ pub struct AppConfig {
     pub log_retention_days: u32,
     /// Прибавка к базовым размерам UI-шрифтов в logical px. Дефолт +2.
     pub ui_font_delta: f32,
+    /// Тёмная/светлая тема MoonUI (settings.toml, открытый формат).
+    pub ui_theme_mode: UiThemeMode,
     /// Общий масштаб геометрии UI. Дефолт 1.0.
     pub ui_scale: f32,
     /// Множитель RAM-budget для retained market history. 100 = авто-база, 800 = 8x.
@@ -125,6 +128,7 @@ impl AppConfig {
                 log_to_file: merged.log_to_file,
                 log_retention_days: merged.log_retention_days,
                 ui_font_delta: merged.ui_font_delta,
+                ui_theme_mode: merged.ui_theme_mode,
                 ui_scale: merged.ui_scale,
                 chart_memory_percent: merged.chart_memory_percent,
                 hotkeys: merged.hotkeys,
@@ -157,6 +161,7 @@ impl AppConfig {
             cfg.log_to_file = true;
             cfg.log_retention_days = 14;
             cfg.ui_font_delta = schema::default_ui_font_delta();
+            cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = HotkeysConfig::default();
@@ -173,6 +178,7 @@ impl AppConfig {
             cfg.log_to_file = true;
             cfg.log_retention_days = 14;
             cfg.ui_font_delta = schema::default_ui_font_delta();
+            cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = HotkeysConfig::default();
@@ -190,6 +196,7 @@ impl AppConfig {
             log_to_file: true,
             log_retention_days: 14,
             ui_font_delta: schema::default_ui_font_delta(),
+            ui_theme_mode: UiThemeMode::default(),
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             hotkeys: HotkeysConfig::default(),
@@ -258,6 +265,7 @@ impl AppConfig {
             log_to_file: true,
             log_retention_days: servers::default_log_retention_days(),
             ui_font_delta: schema::default_ui_font_delta(),
+            ui_theme_mode: UiThemeMode::default(),
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             hotkeys: HotkeysConfig::default(),
@@ -287,6 +295,7 @@ impl AppConfig {
             self.log_to_file,
             self.log_retention_days,
             self.ui_font_delta,
+            self.ui_theme_mode,
             self.ui_scale,
             self.chart_memory_percent,
             self.hotkeys.clone(),
@@ -356,6 +365,7 @@ impl AppConfig {
             true,  // лог-настройки тоже не структурные (без реконнекта/ребилда)
             14,
             schema::default_ui_font_delta(),
+            UiThemeMode::default(),
             schema::default_ui_scale(),
             schema::default_chart_memory_percent(),
             HotkeysConfig::default(),

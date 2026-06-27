@@ -5,10 +5,10 @@
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use moon_ui::MoonVirtualListScrollHandle;
+use moon_ui::{MoonPalette, MoonVirtualListScrollHandle};
 
 use super::stack::{
-    ChartStackEntry, CompareRole, apply_compare, handle_compare_broom_requests,
+    ChartStackEntry, CompareRole, apply_compare, chart_stack_card, handle_compare_broom_requests,
     handle_compare_lock_requests, render_chart_stack, resolve_layout, retain_nonempty_panels,
     set_panels_auto_pin, set_panels_orderbook_enabled, set_panels_scale, set_panels_show_zone,
 };
@@ -145,7 +145,8 @@ impl MainChartStack {
         }
         let mut changed =
             handle_compare_lock_requests(&mut self.charts, &mut self.compare_anchor, cx);
-        changed |= handle_compare_broom_requests(&self.charts, &mut self.compare_orderbook_only, cx);
+        changed |=
+            handle_compare_broom_requests(&self.charts, &mut self.compare_orderbook_only, cx);
         if self.compare_anchor.is_none() {
             self.compare_orderbook_only = false;
         }
@@ -522,37 +523,68 @@ impl MainChartStack {
         horizontal: bool,
         border: Rgba,
         entity: Entity<Self>,
+        palette: MoonPalette,
+        stack_card: bool,
     ) -> Stateful<Div> {
         let panel_for_event = panel.clone();
-        let mut tile = div()
-            .id(("main-chart-stack-tile", ix))
-            .relative()
-            .overflow_hidden()
-            .border_1()
-            .border_color(border)
-            .on_mouse_up(
-                MouseButton::Right,
-                move |event: &MouseUpEvent, _window, app| {
-                    // Возврат из фулскрина — короткий ПКМ по области панели, включая стакан.
-                    // RMB-drag цены остаётся зумом/scale-жестом и не переключает stack.
-                    let panel = panel_for_event.read(app);
-                    if panel.window_pos_allows_main_stack_toggle(event.position)
-                        && !panel.rmb_was_moved()
-                    {
-                        entity.update(app, |this, cx| this.toggle_from_chart(ix, cx));
-                        app.stop_propagation();
-                    }
-                },
-            );
+        let label = self
+            .charts
+            .get(ix)
+            .map(|e| e.market.clone())
+            .unwrap_or_else(|| "Chart".to_string());
+        let mut tile = if stack_card {
+            chart_stack_card(
+                SharedString::from(format!("main-chart-stack-tile-{ix}")),
+                label,
+                panel,
+                palette,
+                border,
+            )
+        } else {
+            div()
+                .id(("main-chart-stack-tile", ix))
+                .w_full()
+                .relative()
+                .overflow_hidden()
+                .border_1()
+                .border_color(border)
+                .child(div().size_full().relative().overflow_hidden().child(panel))
+        }
+        .on_mouse_up(
+            MouseButton::Right,
+            move |event: &MouseUpEvent, _window, app| {
+                // Возврат из фулскрина — короткий ПКМ по области панели, включая стакан.
+                // RMB-drag цены остаётся зумом/scale-жестом и не переключает stack.
+                let panel = panel_for_event.read(app);
+                if panel.window_pos_allows_main_stack_toggle(event.position)
+                    && !panel.rmb_was_moved()
+                {
+                    entity.update(app, |this, cx| this.toggle_from_chart(ix, cx));
+                    app.stop_propagation();
+                }
+            },
+        );
         // Поперёк оси — на всю ширину/высоту; вдоль оси — flex+cap (COMPRESS до size, сжатие),
         // фикс (size без flex) или растяжение (FIT). Гор: ось = X (ширина), верт: ось = Y.
-        tile = if horizontal { tile.h_full() } else { tile.w_full() };
+        tile = if horizontal {
+            tile.h_full()
+        } else {
+            tile.w_full()
+        };
         if flex {
             tile = tile.flex_1();
             let m = min_w.unwrap_or(0.0);
-            tile = if horizontal { tile.min_w(px(m)) } else { tile.min_h(px(m)) };
+            tile = if horizontal {
+                tile.min_w(px(m))
+            } else {
+                tile.min_h(px(m))
+            };
             if let Some(v) = size {
-                tile = if horizontal { tile.max_w(px(v)) } else { tile.max_h(px(v)) };
+                tile = if horizontal {
+                    tile.max_w(px(v))
+                } else {
+                    tile.max_h(px(v))
+                };
             }
         } else if let Some(v) = size {
             // Фикс. БЕЗ сжатия (min=max=v): в SCROLL тайлы переполняют контейнер → есть скролл.
@@ -562,7 +594,7 @@ impl MainChartStack {
                 tile.h(px(v)).min_h(px(v))
             };
         }
-        tile.child(div().size_full().relative().overflow_hidden().child(panel))
+        tile
     }
 }
 
@@ -579,7 +611,7 @@ impl Render for MainChartStack {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(crate::design::logo_glow_sized(220.0))
+                .child(crate::design::logo_glow_sized(cx, 220.0))
                 .into_any_element();
         }
 
@@ -588,7 +620,18 @@ impl Render for MainChartStack {
             let panel = self.charts[active].panel.clone();
             let entity = cx.entity();
             return self
-                .render_tile(active, panel, None, false, None, false, rgb(palette.border), entity)
+                .render_tile(
+                    active,
+                    panel,
+                    None,
+                    false,
+                    None,
+                    false,
+                    rgb(palette.border),
+                    entity,
+                    palette,
+                    false,
+                )
                 .size_full()
                 .border_0()
                 .into_any_element();
@@ -608,6 +651,7 @@ impl Render for MainChartStack {
             .unwrap_or(StackOrientation::Vertical)
             .is_horizontal();
         let entity = cx.entity();
+        let p = palette;
         render_chart_stack(
             &base_id,
             self,
@@ -620,9 +664,11 @@ impl Render for MainChartStack {
             &self.scroll,
             border,
             |s, ix| s.charts.get(ix).map(|e| e.panel.clone()),
-            |s, ix, panel, size, flex, min_w, horizontal, border, ent| {
-                s.render_tile(ix, panel, size, flex, min_w, horizontal, border, ent)
-                    .into_any_element()
+            move |s, ix, panel, size, flex, min_w, horizontal, border, ent| {
+                s.render_tile(
+                    ix, panel, size, flex, min_w, horizontal, border, ent, p, true,
+                )
+                .into_any_element()
             },
             |s, ix| s.compare_role(ix),
         )

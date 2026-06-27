@@ -23,7 +23,8 @@ use crate::market::MarketDataMode;
 /// v9: добавлен `charts_stack_scroll`. v10: добавлен блок `hotkeys`.
 /// v11: рантайм-`CoreId` стал стабильным (= `uid`, а не позиция) → одноразовый
 ///      ремап legacy позиционных CoreId в `charts.json` (см. `COREID_UID_VERSION`).
-pub const SCHEMA_VERSION: u32 = 11;
+/// v12: добавлен `ui_theme_mode` (dark/light для MoonUI, открытый settings.toml).
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// Версия схемы, начиная с которой рантайм-`CoreId == uid` (стабильный). Конфиги
 /// старее неё хранили в `charts.json` ПОЗИЦИОННЫЕ CoreId — их надо один раз
@@ -59,6 +60,14 @@ pub fn default_chart_stack_height() -> u16 {
 
 pub fn clamp_chart_stack_height(value: u16) -> u16 {
     value.clamp(120, 2000)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiThemeMode {
+    Light,
+    #[default]
+    Dark,
 }
 
 /// Запись сервера в servers.enc (секрет + стабильный uid).
@@ -157,6 +166,9 @@ pub struct SettingsFile {
     /// дизайнерский 10px текст становится 12px, без полного zoom интерфейса.
     #[serde(default = "default_ui_font_delta")]
     pub ui_font_delta: f32,
+    /// Тёмная/светлая тема MoonUI. Открытая настройка: это не секрет и не chart theme.
+    #[serde(default)]
+    pub ui_theme_mode: UiThemeMode,
     /// Общий масштаб геометрии UI. Пока без публичной ручки, но хранится рядом с
     /// font_delta, чтобы компонентная тема имела один источник правды.
     #[serde(default = "default_ui_scale")]

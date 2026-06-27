@@ -32,7 +32,11 @@ impl ChartPanel {
         self.sync_orderbook_refs(cx);
     }
 
-    pub(super) fn release_market_refs_except(&mut self, keep: Option<(CoreId, &str)>, cx: &mut App) {
+    pub(super) fn release_market_refs_except(
+        &mut self,
+        keep: Option<(CoreId, &str)>,
+        cx: &mut App,
+    ) {
         self.sync_market_ref_epoch(cx);
         let keep = keep.map(|(core, market)| (core, market.to_string()));
         let old = std::mem::take(&mut self.registered_markets);

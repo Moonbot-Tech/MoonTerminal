@@ -189,12 +189,7 @@ pub(super) fn apply_lev_manage_edit(l: &mut moonproto::LevManage, edit: LevManag
 }
 
 fn order_trace(line: &OrderTraceLine) -> Option<OrderTrace> {
-    let points: Vec<OrderTracePoint> = line
-        .points
-        .iter()
-        .copied()
-        .map(trace_point)
-        .collect();
+    let points: Vec<OrderTracePoint> = line.points.iter().copied().map(trace_point).collect();
     if !points.iter().any(valid_trace_point) {
         return None;
     }

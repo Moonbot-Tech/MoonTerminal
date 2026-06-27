@@ -136,7 +136,7 @@ fn metric_button(
         } else {
             MoonButtonVariant::Neutral
         })
-        .size(MoonButtonSize::Toolbar)
+        .size(MoonButtonSize::ToolbarCompact)
         .selected(lit)
         .segment(
             MoonButtonSegment::new(metric.label())
@@ -321,6 +321,26 @@ pub fn fmt_adaptive(v: f64) -> String {
     }
 }
 
+fn fmt_sell_pct(v: f64) -> String {
+    let a = v.abs();
+    if a >= 1000.0 {
+        let k = v / 1000.0;
+        let mut s = if k.abs() >= 100.0 {
+            format!("{k:.0}")
+        } else if k.abs() >= 10.0 {
+            format!("{k:.1}")
+        } else {
+            format!("{k:.2}")
+        };
+        if s.contains('.') {
+            s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+        }
+        format!("{s}k")
+    } else {
+        fmt_adaptive(v)
+    }
+}
+
 /// Шаг колеса по порядку величины: `step = frac · 10^floor(log10(v))`. `frac=1.0` — полный
 /// разряд (размер: 18→20→30; 93→100→200; 980→1000→2000; 0.001→0.002). `frac=0.5` — полразряда
 /// (sell: 10→15→20→25; 0.1→0.15→0.2). Вверх — следующий кратный, вниз — предыдущий; на точной
@@ -440,7 +460,7 @@ fn sell_strip(
     let items: Vec<MoonSegmentItem> = (0..6)
         .map(|i| {
             let value = match pcts {
-                Some(p) => format!("+{}%", fmt_adaptive(p[i])),
+                Some(p) => format!("+{}%", fmt_sell_pct(p[i])),
                 None => "—".to_string(),
             };
             let mut it = MoonSegmentItem::new("", value).width(SELL_W[i]);
@@ -473,11 +493,13 @@ fn sell_strip(
                     b.sell_edit_req = Some((core, i));
                 } else {
                     // Повторный клик по уже горящему слоту → возврат к главному TP.
-                    let edit = if sel_slot == Some(i + 1) {
-                        ClientSettingsEdit::EngageMainTakeProfit
+                    let (edit, local_slot) = if sel_slot == Some(i + 1) {
+                        (ClientSettingsEdit::EngageMainTakeProfit, None)
                     } else {
-                        ClientSettingsEdit::SelectFixedSellSlot(i + 1)
+                        (ClientSettingsEdit::SelectFixedSellSlot(i + 1), Some(i + 1))
                     };
+                    b.set_fixed_sell_slot_local(core, local_slot);
+                    b.order_size_rev = b.order_size_rev.wrapping_add(1);
                     if let Err(error) = b.session.edit_client_settings(core, edit) {
                         log::warn!("toggle fixed-sell slot failed: {error}");
                     }
@@ -580,7 +602,7 @@ fn scale_label(scale: Option<f32>) -> &'static str {
 /// АКТИВНОЙ вкладке (Main или конкретный AddToChart), не трогая другие вкладки/окна, и
 /// сохраняет (per-вкладочный масштаб). Стоит рядом с кнопкой ⚙ настроек раскладки.
 /// Общая сборка дропдауна масштаба: единственные отличия вкладок и AddToChart-stack —
-/// набор id, размер триггера (`Micro`/`Toolbar`) и куда писать выбранный масштаб
+/// набор id, размер триггера (`Micro`/`ToolbarCompact`) и куда писать выбранный масштаб
 /// (`on_pick`). Визуал/тултип/лупа/«А» для Авто — общие.
 fn scale_dropdown(
     scale: Option<f32>,
@@ -667,7 +689,7 @@ pub(crate) fn scale_dropdown_for_add_stack(
         "detached-stack-scale-tip",
         "detached-stack-scale-dropdown",
         "scale-stack",
-        MoonButtonSize::Toolbar,
+        MoonButtonSize::ToolbarCompact,
         p,
         move |pct, cx| {
             stack.update(cx, |st, scx| st.set_scale(pct, scx));
@@ -721,8 +743,12 @@ pub fn toolbar(
         let tp_str = cs
             .map(|s| format!("{}%", fmt_field2(s.take_profit_main_pct as f32)))
             .unwrap_or_else(|| "—".to_string());
-        // TP «горит», когда fixed-sell выключен (нет ядра → по умолчанию горит TP).
-        let tp_engaged = cs.map(|s| !s.fixed_sell_mode).unwrap_or(true);
+        // TP «горит», когда fixed-sell выключен. Локальный optimistic-state перекрывает
+        // снимок ядра, чтобы клик по S/TP отображался сразу, а не после echo ClientSettings.
+        let tp_engaged = match (focus_core, cs) {
+            (Some(core), Some(s)) => !b.fixed_sell_mode_with(core, s.fixed_sell_mode),
+            _ => true,
+        };
         // SL знаковый: «+1,00%» / «-20,00%» (а не «--» из ручного минуса перед отрицательным).
         let sl_str = cs
             .map(|s| format!("{}%", fmt_field2_signed(s.stop_loss_pct)))
@@ -734,7 +760,12 @@ pub fn toolbar(
             arr
         });
         // S-слот подсвечен ТОЛЬКО когда fixed-sell включён (иначе по умолчанию все S погашены).
-        let sell_slot = cs.filter(|s| s.fixed_sell_mode).map(|s| s.fixed_sell_slot);
+        let sell_slot = match (focus_core, cs) {
+            (Some(core), Some(s)) => {
+                b.fixed_sell_slot_with(core, s.fixed_sell_mode.then_some(s.fixed_sell_slot))
+            }
+            _ => None,
+        };
         // Lev = плечо монеты main-чарта на активном ядре (per-core, per-coin) из ассетов.
         let lev_str = TradeMetric::Lev
             .current(b, group)
@@ -755,6 +786,8 @@ pub fn toolbar(
         )
     };
     let p = MoonPalette::active(cx);
+    let tp_color = if p.is_light() { p.accent } else { p.blue };
+    let sl_color = if p.is_light() { p.red_text } else { p.red };
 
     let mut row = h_flex()
         .id("toolbar")
@@ -773,7 +806,7 @@ pub fn toolbar(
         .child(metric_button(
             TradeMetric::Tp,
             tp_str,
-            p.blue,
+            tp_color,
             74.6,
             open_metric == Some(TradeMetric::Tp),
             tp_engaged,
@@ -795,7 +828,7 @@ pub fn toolbar(
         .child(metric_button(
             TradeMetric::Sl,
             sl_str,
-            p.red,
+            sl_color,
             74.6,
             open_metric == Some(TradeMetric::Sl),
             false,
@@ -838,7 +871,7 @@ pub fn toolbar(
             } else {
                 MoonButtonVariant::Soft
             })
-            .size(MoonButtonSize::Toolbar)
+            .size(MoonButtonSize::ToolbarCompact)
             .selected(follow)
             .label(if follow {
                 t!("toolbar.live").to_string()

@@ -17,10 +17,10 @@ use objc::{msg_send, sel, sel_impl};
 use std::ffi::c_void;
 
 use super::types::{
-    append_cross_ring, cross_append_ranges, cross_volume_max, evicted_cross_ranges,
-    ordered_cross_ring, ranges_have_entries, ranges_touch_volume_max, reset_cross_ring,
-    update_cross_volume_max, BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu, DEFAULT_VOLUME_ALPHA,
+    BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams, DEFAULT_VOLUME_ALPHA,
+    GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu, append_cross_ring,
+    cross_append_ranges, cross_volume_max, evicted_cross_ranges, ordered_cross_ring,
+    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, update_cross_volume_max,
 };
 
 const SHADER: &str = include_str!("shaders/chart_native.metal");

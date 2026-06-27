@@ -244,9 +244,15 @@ impl ChartTabs {
     }
 
     /// Сменить ориентацию (верт/гор) на АКТИВНОЙ вкладке + persist. Тоггл из попапа ⚙.
-    pub(super) fn apply_orientation(&mut self, orientation: StackOrientation, cx: &mut Context<Self>) {
+    pub(super) fn apply_orientation(
+        &mut self,
+        orientation: StackOrientation,
+        cx: &mut Context<Self>,
+    ) {
         match self.active.clone() {
-            Tab::Main => self.main.update(cx, |s, c| s.set_orientation(Some(orientation), c)),
+            Tab::Main => self
+                .main
+                .update(cx, |s, c| s.set_orientation(Some(orientation), c)),
             Tab::Add(..) | Tab::Custom(..) => {
                 if let Some(p) = self.active_stack() {
                     p.update(cx, |s, c| s.set_orientation(Some(orientation), c));

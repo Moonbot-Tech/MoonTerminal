@@ -250,7 +250,9 @@ impl MarketDataSource {
         let mut inner = self.inner.write().expect("market source poisoned");
         inner.clients.remove(&core);
         inner.cursors.retain(|(provider, _), _| *provider != core);
-        inner.market_revisions.retain(|(provider, _), _| *provider != core);
+        inner
+            .market_revisions
+            .retain(|(provider, _), _| *provider != core);
         inner.provider_orderbook_kind.remove(&core);
         inner.core_provider.remove(&core);
         bump_generation(&mut inner.provider_generations, core);

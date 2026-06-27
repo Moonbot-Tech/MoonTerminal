@@ -600,7 +600,12 @@ impl SettingsView {
                 self.collapse_section(cx, "path", &t!("lines.path_title"), body)
             })
             .child(separator(MoonPalette::active(cx), cx))
-            .child(div().mt_1().font_bold().child(t!("lines.global").to_string()))
+            .child(
+                div()
+                    .mt_1()
+                    .font_bold()
+                    .child(t!("lines.global").to_string()),
+            )
             .child(slider_row(&t!("lines.active_alpha"), &l.active_alpha, cx))
             .child(slider_row(
                 &t!("lines.closed_visibility"),

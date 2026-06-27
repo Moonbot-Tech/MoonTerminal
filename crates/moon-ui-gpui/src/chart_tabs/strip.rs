@@ -219,7 +219,9 @@ impl Render for ChartTabs {
                 cx,
                 move |core, market, window, app| {
                     view.update(app, |this, cx| this.open_coin_on_active(core, market, cx));
-                    input.update(app, |inp, c| inp.set_value(SharedString::default(), window, c));
+                    input.update(app, |inp, c| {
+                        inp.set_value(SharedString::default(), window, c)
+                    });
                     view.update(app, |this, cx| this.clear_coin_search(cx));
                 },
                 move |core, market, app| {
@@ -371,13 +373,11 @@ impl Render for ChartTabs {
                         or_entity.update(app, |this, cx| {
                             // Тоггл: текущая → противоположная.
                             use crate::chart_persist::StackOrientation as O;
-                            let next = match this
-                                .active_layout_orientation(cx)
-                                .unwrap_or(O::Vertical)
-                            {
-                                O::Vertical => O::Horizontal,
-                                O::Horizontal => O::Vertical,
-                            };
+                            let next =
+                                match this.active_layout_orientation(cx).unwrap_or(O::Vertical) {
+                                    O::Vertical => O::Horizontal,
+                                    O::Horizontal => O::Vertical,
+                                };
                             this.apply_orientation(next, cx);
                         });
                     },

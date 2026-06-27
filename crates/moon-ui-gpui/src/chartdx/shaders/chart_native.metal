@@ -141,16 +141,17 @@ vertex GridOut grid_vertex(uint vid [[vertex_id]], constant GridParams& gp [[buf
 }
 
 fragment float4 grid_fragment(GridOut in [[stage_in]], constant GridParams& gp [[buffer(0)]]) {
+    const float GRID_LINE_HALF_PX = 0.5;
     float3 bg = gp.bg.rgb;
     float3 grid_col = mix(bg, gp.grid_col.rgb, saturate(gp.grid_alpha));
     bool hit = false;
     float step_x = gp.bounds.z / max(gp.n_vert, 1.0);
     float local_x = in.px.x - gp.bounds.x;
-    if (abs(local_x - round(local_x / step_x) * step_x) < 1.0) hit = true;
+    if (abs(local_x - round(local_x / step_x) * step_x) < GRID_LINE_HALF_PX) hit = true;
     if (gp.price_interval > 1e-12 && gp.price_to_px > 1e-9) {
         float price = gp.view_price0 + (gp.bounds.y + gp.bounds.w - in.px.y) / gp.price_to_px;
         float k = price / gp.price_interval;
-        if (abs(k - round(k)) * gp.price_interval * gp.price_to_px < 1.0) hit = true;
+        if (abs(k - round(k)) * gp.price_interval * gp.price_to_px < GRID_LINE_HALF_PX) hit = true;
     }
     float alpha = hit ? 1.0 : saturate(gp.bg_alpha);
     return float4(hit ? grid_col : bg, alpha);

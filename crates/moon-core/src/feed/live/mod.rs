@@ -282,8 +282,18 @@ pub fn run(
         let license_state = settings_event_snapshot(
             &events,
             &client,
-            |ev| matches!(ev, &Event::Settings(SettingsEvent::KernelLicenseStateUpdated)),
-            |state| state.settings().kernel_license_state.map(license_state_from_proto),
+            |ev| {
+                matches!(
+                    ev,
+                    &Event::Settings(SettingsEvent::KernelLicenseStateUpdated)
+                )
+            },
+            |state| {
+                state
+                    .settings()
+                    .kernel_license_state
+                    .map(license_state_from_proto)
+            },
         );
         if let Some(license) = license_state {
             if tx.send(FeedMsg::License(license)).is_err() {
@@ -313,7 +323,13 @@ pub fn run(
             &events,
             &client,
             |ev| matches!(ev, &Event::Settings(SettingsEvent::LevManageUpdated)),
-            |state| state.settings().lev_manage.as_ref().map(lev_manage_from_proto),
+            |state| {
+                state
+                    .settings()
+                    .lev_manage
+                    .as_ref()
+                    .map(lev_manage_from_proto)
+            },
         );
         if let Some(lev) = lev_manage {
             if tx.send(FeedMsg::LevManage(lev)).is_err() {

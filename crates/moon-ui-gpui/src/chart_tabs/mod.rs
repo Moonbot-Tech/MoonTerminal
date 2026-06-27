@@ -240,7 +240,8 @@ impl ChartTabs {
         })
         .detach();
         let coin_input = cx.new(|cx| {
-            MoonInputState::new(window, cx).placeholder(rust_i18n::t!("chart.coin.search").to_string())
+            MoonInputState::new(window, cx)
+                .placeholder(rust_i18n::t!("chart.coin.search").to_string())
         });
         // Печать в поле монеты → обновить запрос и (пере)открыть список совпадений. Render читает
         // `coin_query`, а не сам инпут как источник событий (мирроринг StrategiesView).

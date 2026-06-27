@@ -7,7 +7,7 @@ use std::time::Duration;
 use gpui::*;
 use rust_i18n::t;
 
-use super::{AddChartStack, ChartTabs, Tab, coin_search, CUSTOM_NUM_BASE};
+use super::{AddChartStack, CUSTOM_NUM_BASE, ChartTabs, Tab, coin_search};
 use crate::chart_persist::{StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
@@ -28,7 +28,12 @@ impl ChartTabs {
     }
 
     /// Открыть выбранную монету на АКТИВНОЙ вкладке: Main → fullscreen-чарт; Add/Custom → её стек.
-    pub(super) fn open_coin_on_active(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+    pub(super) fn open_coin_on_active(
+        &mut self,
+        core: CoreId,
+        market: String,
+        cx: &mut Context<Self>,
+    ) {
         match self.active.clone() {
             Tab::Main => self
                 .main
@@ -51,7 +56,12 @@ impl ChartTabs {
 
     /// Тоггл выбора монеты чекбоксом в выпадашке (накапливается для «Открыть в новой вкладке»).
     /// Выбор переживает смену запроса (можно искать BTC → отметить, потом ETH → отметить).
-    pub(super) fn toggle_coin_selected(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+    pub(super) fn toggle_coin_selected(
+        &mut self,
+        core: CoreId,
+        market: String,
+        cx: &mut Context<Self>,
+    ) {
         let key = (core, market);
         if !self.coin_selected.remove(&key) {
             self.coin_selected.insert(key);
@@ -110,9 +120,10 @@ impl ChartTabs {
 
     /// Метка кастомной вкладки (имя пользователя или дефолт «Набор N»).
     pub(super) fn custom_label(&self, n: u32) -> String {
-        self.custom_labels.get(&n).cloned().unwrap_or_else(|| {
-            t!("chart.tab.custom", n = n - CUSTOM_NUM_BASE + 1).to_string()
-        })
+        self.custom_labels
+            .get(&n)
+            .cloned()
+            .unwrap_or_else(|| t!("chart.tab.custom", n = n - CUSTOM_NUM_BASE + 1).to_string())
     }
 
     /// Переименовать активную кастомную вкладку (поле имени в попапе ⚙) + persist.

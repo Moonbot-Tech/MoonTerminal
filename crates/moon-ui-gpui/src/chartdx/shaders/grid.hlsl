@@ -22,6 +22,8 @@ struct GridOut {
     float2 px  : TEXCOORD0; // экранные пиксели
 };
 
+static const float GRID_LINE_HALF_PX = 0.5;
+
 static const float2 CORNERS[6] = {
     float2(0, 0), float2(1, 0), float2(0, 1),
     float2(0, 1), float2(1, 0), float2(1, 1)
@@ -52,7 +54,7 @@ float4 grid_fragment(GridOut i) : SV_Target {
     // Вертикали: фикс. деления ширины (статичны — НЕ зависят от времени).
     float step_x = g_bounds.z / max(g_n_vert, 1.0);
     float local_x = i.px.x - g_bounds.x;
-    if (abs(local_x - round(local_x / step_x) * step_x) < 1.0) {
+    if (abs(local_x - round(local_x / step_x) * step_x) < GRID_LINE_HALF_PX) {
         hit = true;
     }
 
@@ -61,7 +63,7 @@ float4 grid_fragment(GridOut i) : SV_Target {
     if (g_price_interval > 1e-12 && g_price_to_px > 1e-9) {
         float price = g_view_price0 + (g_bounds.y + g_bounds.w - i.px.y) / g_price_to_px;
         float k = price / g_price_interval;
-        if (abs(k - round(k)) * g_price_interval * g_price_to_px < 1.0) {
+        if (abs(k - round(k)) * g_price_interval * g_price_to_px < GRID_LINE_HALF_PX) {
             hit = true;
         }
     }

@@ -293,7 +293,9 @@ impl StrategiesView {
             {
                 let data = data.clone();
                 move |entry, _meta| match data.get(entry.item().id()) {
-                    Some(NodeData::Folder { core, path, label, .. }) => {
+                    Some(NodeData::Folder {
+                        core, path, label, ..
+                    }) => {
                         let _ = label;
                         Some(FolderDrag {
                             core: *core,
@@ -328,7 +330,9 @@ impl StrategiesView {
                     .drag_over::<FolderDrag>(move |s, _d, _w, _a| s.bg(hl))
                     .on_drop::<StratDrag>(move |drag: &StratDrag, _w, app| {
                         let d = drag.clone();
-                        vs.update(app, |this, cx| this.drop_strategies(core, ts.clone(), &d, cx));
+                        vs.update(app, |this, cx| {
+                            this.drop_strategies(core, ts.clone(), &d, cx)
+                        });
                     })
                     .on_drop::<FolderDrag>(move |drag: &FolderDrag, _w, app| {
                         let d = drag.clone();
@@ -506,22 +510,25 @@ fn core_folder_row(
             });
         })
         .when_some(menu, |row, (core, path)| {
-            row.on_mouse_down(MouseButton::Right, move |e: &MouseDownEvent, window, app| {
-                app.stop_propagation();
-                let pos = e.position;
-                let path = path.clone();
-                view_menu.update(app, |this, cx| {
-                    this.open_menu(
-                        ContextMenu {
-                            core,
-                            target: MenuTarget::Folder(path),
-                            pos,
-                        },
-                        window,
-                        cx,
-                    );
-                });
-            })
+            row.on_mouse_down(
+                MouseButton::Right,
+                move |e: &MouseDownEvent, window, app| {
+                    app.stop_propagation();
+                    let pos = e.position;
+                    let path = path.clone();
+                    view_menu.update(app, |this, cx| {
+                        this.open_menu(
+                            ContextMenu {
+                                core,
+                                target: MenuTarget::Folder(path),
+                                pos,
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                },
+            )
         })
         .into_any_element()
 }
@@ -544,7 +551,11 @@ fn strategy_row(
     let p = MoonPalette::active(app);
     let key: Key = (core, id);
     let val = staged.unwrap_or(server_checked);
-    let dot = if server_checked { p.green } else { p.text_muted };
+    let dot = if server_checked {
+        p.green
+    } else {
+        p.text_muted
+    };
     let kind_txt = if open_orders > 0 {
         format!("{kind}({open_orders})")
     } else {
@@ -602,27 +613,30 @@ fn strategy_row(
                 }
             });
         })
-        .on_mouse_down(MouseButton::Right, move |e: &MouseDownEvent, window, app| {
-            app.stop_propagation();
-            let pos = e.position;
-            view_menu.update(app, |this, cx| {
-                if !this.sel.contains(&key) {
-                    this.sel.clear();
-                    this.sel.insert(key);
-                    this.selected = Some(key);
-                    this.clamp_selected_section(cx);
-                }
-                this.open_menu(
-                    ContextMenu {
-                        core,
-                        target: MenuTarget::Strategy(id),
-                        pos,
-                    },
-                    window,
-                    cx,
-                );
-            });
-        });
+        .on_mouse_down(
+            MouseButton::Right,
+            move |e: &MouseDownEvent, window, app| {
+                app.stop_propagation();
+                let pos = e.position;
+                view_menu.update(app, |this, cx| {
+                    if !this.sel.contains(&key) {
+                        this.sel.clear();
+                        this.sel.insert(key);
+                        this.selected = Some(key);
+                        this.clamp_selected_section(cx);
+                    }
+                    this.open_menu(
+                        ContextMenu {
+                            core,
+                            target: MenuTarget::Strategy(id),
+                            pos,
+                        },
+                        window,
+                        cx,
+                    );
+                });
+            },
+        );
     if highlighted {
         name_row = name_row
             .bg(moon_alpha(p.amber, 0.16))
