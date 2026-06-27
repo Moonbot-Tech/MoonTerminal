@@ -618,6 +618,34 @@ impl MarketDataSource {
         Ok(price)
     }
 
+    /// Курс валюты `currency` в USD: USD-стейбл → 1; иначе `p_last` рынка `<currency>USDT`
+    /// (напр. BTC → BTCUSDT). `None` — курс неизвестен (нет провайдера/снимка/рынка).
+    /// Та же линейная модель, что у `feed::assets` (без контрактных множителей).
+    pub fn currency_usd_rate(&self, core: CoreId, currency: &str) -> Option<f64> {
+        if currency.is_empty() {
+            return None;
+        }
+        if crate::symbol::is_usd_stable(currency) {
+            return Some(1.0);
+        }
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied()?;
+            inner.clients.get(&provider).and_then(SharedMoonClient::get)?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        let market = format!("{}USDT", currency.to_ascii_uppercase());
+        let p = snapshot.markets().price(&market)?;
+        (p.p_last.is_finite() && p.p_last > 0.0).then_some(p.p_last)
+    }
+
+    /// Курс котировки рынка `market` в USD (для пересчёта ноционала qty·price в $).
+    /// USDT-котировка → 1; BTC-котировка → курс BTC/USDT. `None` — неизвестен.
+    pub fn quote_usd_rate(&self, core: CoreId, market: &str) -> Option<f64> {
+        let quote = crate::symbol::resolve_quote(market);
+        self.currency_usd_rate(core, &quote)
+    }
+
     /// Search the provider's market universe for a terminal coin-search box.
     ///
     /// Returns canonical market names (e.g. `"BTCUSDT"`) ranked by MoonProto's

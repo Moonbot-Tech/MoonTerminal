@@ -269,6 +269,24 @@ impl RenderState {
 
             let plot_bottom = plot_top + plot_h;
 
+            // Плашки-подложки под подписи ордеров/курсора (раскладку дал `prepare_text`). Лёгкая
+            // плашка (как угловая подпись монеты, alpha 0.2) для ордерных; плотная (alpha 0.96) для
+            // курсорных — они приоритетные, на переднем плане. Строим ДО гейта по курсору — ордерные
+            // подписи видны и без курсора.
+            let placed = std::mem::take(&mut pr.label_placed);
+            let light = hex_rgba(self.ui_palette.chart_bg, 0.2);
+            for pl in &placed {
+                let dst = readout_rect_dst(pl.x, pl.y, pl.w, pl.ax, pl.ay, sf);
+                let pbg = if pl.solid { bg } else { light };
+                pr.readout_rects.push(ReadoutRect {
+                    dst,
+                    bg: pbg,
+                    border: pbg,
+                    m,
+                });
+            }
+            pr.label_placed = placed;
+
             let Some(cursor) = cursor.filter(|c| c.pane == idx) else {
                 continue;
             };

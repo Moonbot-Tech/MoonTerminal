@@ -18,6 +18,14 @@ pub fn resolve_quote(market: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Является ли валюта USD-стейблом (курс к USD ≈ 1). Список зеркалит `feed::assets`.
+pub fn is_usd_stable(currency: &str) -> bool {
+    matches!(
+        currency.to_ascii_uppercase().as_str(),
+        "USDT" | "USDC" | "BUSD" | "USD" | "FDUSD" | "TUSD" | "DAI" | "USDP"
+    )
+}
+
 /// Базовая монета: срезает `quote` с конца `sym` (если совпал). `quote` пуст или
 /// не подошёл → возвращаем символ как есть.
 pub fn base_symbol<'a>(sym: &'a str, quote: &str) -> &'a str {

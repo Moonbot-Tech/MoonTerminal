@@ -308,9 +308,21 @@ impl Backend {
         (sizes, sel)
     }
 
-    fn manual_order_size(&self, core: CoreId) -> f64 {
+    pub(crate) fn manual_order_size(&self, core: CoreId) -> f64 {
         let (sizes, sel) = self.manual_order_size_state(core);
         sizes[sel]
+    }
+
+    /// Прогнозный размер ручного ордера (s1-s6 активного ядра) в USD: размер в базовой валюте
+    /// аккаунта × курс базы→USD. None — нет ядра/размера/курса. Для подписи на перекрестии чарта.
+    pub(crate) fn prospective_order_usd(&self, core: CoreId) -> Option<f64> {
+        let size = self.manual_order_size(core);
+        if !(size > 0.0) {
+            return None;
+        }
+        let base = self.session.core_base(core).unwrap_or("");
+        let rate = self.session.market_source().currency_usd_rate(core, base)?;
+        (rate > 0.0).then_some(size * rate)
     }
 
     /// Значение пресета размера `ix` (F1-F6) ядра — из конфига (или дефолт по базе).

@@ -55,10 +55,15 @@ impl Render for ChartPanel {
         self.chart.set_present_rate_hz(effective_present_rate_hz);
         // ВАЖНО: НЕТ request_animation_frame/continuous-present. `gpu_canvas.frame()` решает
         // present на platform tick без dirty GPUI tree; `draw()` рисует в тот же tick.
-        let (mut theme, orders_style, follow) = {
+        let (mut theme, orders_style, follow, prospective_usd) = {
             let b = self.backend.read(cx);
             let eff = b.preview.as_ref().unwrap_or(&b.config);
-            (eff.theme.clone(), eff.orders.clone(), b.follow)
+            // Прогнозный размер ордера (s1-s6) активной монеты в $ — для подписи на перекрестии.
+            let prospective = self
+                .chart
+                .active_target()
+                .and_then(|(core, _)| b.prospective_order_usd(core));
+            (eff.theme.clone(), eff.orders.clone(), b.follow, prospective)
         };
         if palette.is_light() {
             theme.bg = rgb3_from_hex(palette.chart_bg);
@@ -75,6 +80,7 @@ impl Render for ChartPanel {
             | self.chart.set_orderbook_only(self.orderbook_only)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
             | self.chart.set_time_axis_visible(self.time_axis_visible)
+            | self.chart.set_prospective_usd(prospective_usd)
             | self.chart.set_follow(follow, now_unix_ms());
         // Режим сравнения: пока активен lock, держим Y-окно якоря (перебивает scale каждый кадр —
         // set_locked_y идемпотентен, без изменений вернёт false). Снятие lock — в set_locked_y.

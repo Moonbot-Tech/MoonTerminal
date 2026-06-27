@@ -25,6 +25,7 @@ impl ChartDataState {
             orderbook_only: false,
             price_axis_pos: crate::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,
+            prospective_usd: None,
             order_highlight: None,
             order_drag_preview: None,
             market_source: None,
@@ -358,11 +359,16 @@ impl ChartDataState {
                         &mut markers,
                     );
                     pr.layers.set_userdata(&zones, &hlines, &segs, &markers);
+                    let quote_usd = self
+                        .market_source
+                        .as_ref()
+                        .and_then(|s| s.quote_usd_rate(pane.core, &pane.market));
                     build_order_labels(
                         &mut pr.order_labels,
                         &core_st.order_lines,
                         &pane.market,
                         &self.orders,
+                        quote_usd,
                     );
                     pr.last_order_lines_rev = core_st.order_lines_rev;
                     pr.last_order_lines_sync_ms = now;
@@ -839,6 +845,7 @@ impl ChartDataState {
             // Эффективная позиция оси (с учётом форс-Hide в режиме метлы) — для рендера подписей.
             pr.price_axis_pos = axis_pos;
             pr.time_axis_visible = self.time_axis_visible;
+            pr.prospective_usd = self.prospective_usd;
             let orderbook_on = self.orderbook_enabled || self.orderbook_only;
             pr.orderbook_enabled = orderbook_on;
             // Стакан выключен (per-окно) → уровни не строим и не грузим (а если были — чистим).
@@ -954,6 +961,7 @@ fn build_order_labels(
     store: &moon_core::session::order_lines::OrderLineStore,
     market: &str,
     style: &OrdersStyle,
+    quote_usd: Option<f64>,
 ) {
     out.clear();
     for o in store.iter_market(market) {
@@ -964,12 +972,17 @@ fn build_order_labels(
         let sell = o.lines[LineKind::Sell as usize].current_price();
         let stop = o.lines[LineKind::Stop as usize].current_price();
         let short = o.is_short;
-        // BUY: размер ордера. Лонг → над линией, шорт → под.
+        // BUY: фактический размер ордера в $-ноционале (size·entry·курс). Лонг → над линией,
+        // шорт → под. Курс неизвестен → fallback на размер в базовой монете (без $).
         if let Some(bp) = buy {
             if o.size > 0.0 && bp > 0.0 {
+                let text = match quote_usd {
+                    Some(rate) if rate > 0.0 => fmt_usd(o.size as f64 * bp as f64 * rate),
+                    _ => fmt_amount(o.size),
+                };
                 out.push(OrderLabel {
                     price: bp,
-                    text: fmt_amount(o.size),
+                    text,
                     above: !short,
                     color: rgb_u32(style.buy.color),
                 });
@@ -1030,6 +1043,11 @@ fn pct_color(v: f32) -> u32 {
 /// Компактное число (база/штуки) с SI-суффиксом K/M/B/T.
 fn fmt_amount(v: f32) -> String {
     moon_core::util::fmt::compact_si(v as f64)
+}
+
+/// $-сумма с SI-суффиксом: 1234 → «$1.23K».
+fn fmt_usd(v: f64) -> String {
+    format!("${}", moon_core::util::fmt::compact_si(v))
 }
 
 fn fmt_pct(v: f32) -> String {

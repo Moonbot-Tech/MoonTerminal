@@ -140,6 +140,19 @@ struct CursorState {
 /// Готовая подпись у ордерной линии (категория E референса): текст + цена линии (Y) +
 /// сторона размещения (над/под линией) + цвет линии. Собирается при синке ордеров
 /// (`sync_orders_from_session`, там под рукой `session`), рисуется в `prepare_text`.
+/// Размещённая (после анти-наложения) подпись: лог. позиция/выравнивание/ширина — чтобы
+/// `sync_readout_params` построил под неё прозрачную плашку-подложку. `solid` — плотная плашка
+/// (курсорные цифры, передний план) против лёгкой (как у угловой подписи монеты).
+#[derive(Clone, Copy)]
+pub(super) struct PlacedLabel {
+    pub x: f32,
+    pub y: f32,
+    pub ax: f32,
+    pub ay: f32,
+    pub w: f32,
+    pub solid: bool,
+}
+
 #[derive(Clone)]
 pub(super) struct OrderLabel {
     /// Цена линии — превращается в Y по `view` каждый кадр.
@@ -212,6 +225,12 @@ struct PaneRender {
     /// Готовые подписи ордерных линий (size/%/qty), пересобираются при изменении ордеров.
     /// Рисуются в `prepare_text`, привязка к Y — по `view` каждый кадр.
     order_labels: Vec<OrderLabel>,
+    /// Прогнозный размер ордера (s1-s6) в USD — рисуется на перекрестии курсора. None = нет
+    /// активного размера/курса. Считается в `ChartPanel::render` (есть `Backend`), копируется сюда.
+    prospective_usd: Option<f64>,
+    /// Размещённые подписи (ордерные + курсорные) этого кадра — `prepare_text` их раскладывает
+    /// (анти-наложение), `sync_readout_params` строит под них плашки-подложки.
+    label_placed: Vec<PlacedLabel>,
     /// Видимые уровни стакана `(price, qty)` — CPU-копия для подписи количества под курсором.
     /// Наполняется при заливке стакана (`prepare`), пусто если стакан выключен.
     orderbook_levels: Vec<(f32, f32)>,
@@ -289,6 +308,8 @@ impl PaneRender {
             last_order_highlight_uid: None,
             last_order_drag_preview: None,
             order_labels: Vec::new(),
+            prospective_usd: None,
+            label_placed: Vec::new(),
             orderbook_levels: Vec::new(),
             epoch_ms: 0.0,
             right_margin_frac: 0.10,
@@ -500,6 +521,9 @@ struct ChartDataState {
     /// Видна ли ось времени (нижние подписи + жёлоб под них), per-окно. Выкл → подписи времени
     /// не рисуются, плот занимает всю высоту. Дефолт — вкл.
     time_axis_visible: bool,
+    /// Прогнозный размер ручного ордера (s1-s6) в USD — для подписи на перекрестии курсора.
+    /// Ставится из `ChartPanel::render` (у него есть `Backend`). None = нет размера/курса.
+    prospective_usd: Option<f64>,
     /// Интерактивная подсветка линии ордера (hover/drag). Это не меняет рыночные данные:
     /// только заставляет редкую пересборку userdata при смене uid.
     order_highlight: Option<(CoreId, u64)>,

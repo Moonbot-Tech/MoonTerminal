@@ -281,6 +281,11 @@ impl RenderState {
             let order_labels = self.panes[idx].order_labels.clone();
             let orderbook_levels = self.panes[idx].orderbook_levels.clone();
             let cached_last_price = self.panes[idx].cached_last_price;
+            let prospective_usd = self.panes[idx].prospective_usd;
+            // Раскладка подписей этого кадра (для плашек в sync_readout_params). Очищаем сразу:
+            // у схлопнутых/неактивных панелей подписей нет, плашки тоже.
+            self.panes[idx].label_placed.clear();
+            let mut placed: Vec<PlacedLabel> = Vec::new();
             let pane_left = pane_bounds[0] / sf;
             let pane_right = (pane_bounds[0] + pane_bounds[2]) / sf;
             let pane_bottom = (pane_bounds[1] + pane_bounds[3]) / sf;
@@ -361,6 +366,45 @@ impl RenderState {
             };
             let label_x = zone_left - READOUT_PAD_X;
 
+            // Подписи ордерных линий (size у buy, % + куплено у sell, % стопа) — отдельный столбик
+            // слева от разделителя, правым краем к нему. Анти-наложение: близкие по цене подписи
+            // расталкиваются вниз по вертикали (как YTextFill в эталоне). Рисуются ДО курсора, чтобы
+            // курсорные цифры были на переднем плане. Каждой записываем место для плашки-подложки.
+            {
+                let mut items: Vec<(f32, f32, &OrderLabel)> = Vec::new();
+                for label in &order_labels {
+                    let y = plot_bottom - (label.price - y_min) * price_to_px;
+                    if y < plot_top - LINE_H || y > plot_bottom + LINE_H {
+                        continue;
+                    }
+                    let w = self.measure_text(ctx, &label.text).width.as_f32();
+                    let dy = if label.above {
+                        y - LINE_H * 0.5 - 1.0
+                    } else {
+                        y + LINE_H * 0.5 + 1.0
+                    };
+                    items.push((dy, w, label));
+                }
+                items.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let gap = LINE_H + 1.0;
+                let mut last_y = f32::NEG_INFINITY;
+                for (dy, w, label) in items.iter_mut() {
+                    if *dy < last_y + gap {
+                        *dy = last_y + gap;
+                    }
+                    last_y = *dy;
+                    self.draw_text(ctx, &label.text, label_x, *dy, 1.0, 0.5, color(label.color))?;
+                    placed.push(PlacedLabel {
+                        x: label_x,
+                        y: *dy,
+                        ax: 1.0,
+                        ay: 0.5,
+                        w: *w,
+                        solid: false,
+                    });
+                }
+            }
+
             let cursor = self.cursor.filter(|cursor| cursor.pane == idx);
             let mut skip_time_label_x = None;
             let mut skip_price_label_y = None;
@@ -411,25 +455,34 @@ impl RenderState {
                     skip_price_label_y = Some(rect_y_range_log(dst, sf));
                 }
 
-                // Подписи у крестовины, прижатые к левому краю зоны стакана (справа):
-                // сверху — количество в стакане на уровне курсора (только при включённом
-                // стакане), снизу — % отклонения курсора от текущей цены.
+                // Подписи у крестовины. Размер ордера ($) — СЛЕВА от разделителя (сторона графика),
+                // прижат правым краем к разделителю, на линии курсора. Объём стакана и % — СПРАВА от
+                // разделителя (в зоне стакана): объём НАД линией, % ПОД линией. Цвет всех трёх единый:
+                // курсор ниже текущей цены → зелёный, выше → красный.
                 if cy_log >= plot_top && cy_log <= plot_bottom {
                     let cursor_price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
-                    if let Some(last) = cached_last_price {
-                        if last > 0.0 {
-                            let pct = (cursor_price - last) / last * 100.0;
-                            self.draw_text(
-                                ctx,
-                                &fmt_pct(pct),
-                                label_x,
-                                cy_log + 2.0,
-                                1.0,
-                                0.0,
-                                pct_hsla(pct),
-                            )?;
-                        }
+                    let cur_col = cached_last_price
+                        .filter(|l| *l > 0.0)
+                        .map(|last| pct_hsla(last - cursor_price))
+                        .unwrap_or(readout);
+                    let right_x = zone_left + READOUT_PAD_X;
+                    // Курсорные цифры — приоритетные, на переднем плане, в столбики НЕ входят
+                    // (рисуются на своём фикс. месте у крестовины), но получают плотную подложку.
+                    // Размер ордера — НАД линией курсора, слева от разделителя, правым краем.
+                    // Без $/K-M, всегда 2 знака после запятой («100.00»).
+                    if let Some(usd) = prospective_usd {
+                        let text = format!("{usd:.2}");
+                        let m = self.draw_text(ctx, &text, label_x, cy_log - 2.0, 1.0, 1.0, cur_col)?;
+                        placed.push(PlacedLabel {
+                            x: label_x,
+                            y: cy_log - 2.0,
+                            ax: 1.0,
+                            ay: 1.0,
+                            w: m.width.as_f32(),
+                            solid: true,
+                        });
                     }
+                    // Объём стакана на уровне курсора — правее разделителя, над линией.
                     if orderbook_enabled && !orderbook_levels.is_empty() {
                         let tol = 6.0 / price_to_px.max(1e-6);
                         let mut best: Option<(f32, f32)> = None;
@@ -440,35 +493,37 @@ impl RenderState {
                             }
                         }
                         if let Some((_, q)) = best {
-                            self.draw_text(
-                                ctx,
-                                &fmt_amount(q),
-                                label_x,
-                                cy_log - 2.0,
-                                1.0,
-                                1.0,
-                                readout,
-                            )?;
+                            let m = self.draw_text(ctx, &fmt_amount(q), right_x, cy_log - 2.0, 0.0, 1.0, cur_col)?;
+                            placed.push(PlacedLabel {
+                                x: right_x,
+                                y: cy_log - 2.0,
+                                ax: 0.0,
+                                ay: 1.0,
+                                w: m.width.as_f32(),
+                                solid: true,
+                            });
+                        }
+                    }
+                    // % отклонения курсора от текущей цены — правее разделителя, под линией.
+                    if let Some(last) = cached_last_price {
+                        if last > 0.0 {
+                            let pct = (cursor_price - last) / last * 100.0;
+                            let m = self.draw_text(ctx, &fmt_pct(pct), right_x, cy_log + 2.0, 0.0, 0.0, cur_col)?;
+                            placed.push(PlacedLabel {
+                                x: right_x,
+                                y: cy_log + 2.0,
+                                ax: 0.0,
+                                ay: 0.0,
+                                w: m.width.as_f32(),
+                                solid: true,
+                            });
                         }
                     }
                 }
             }
 
-            // Подписи ордерных линий (size у buy, % + куплено у sell, % стопа): Y по цене линии,
-            // прижато правым краем к левому краю зоны стакана. Сторону (над/под линией) и цвет
-            // задал сборщик в data_state (по long/short, как в эталоне).
-            for label in &order_labels {
-                let y = plot_bottom - (label.price - y_min) * price_to_px;
-                if y < plot_top || y > plot_bottom {
-                    continue;
-                }
-                let (anchor_y, ay) = if label.above {
-                    (y - 2.0, 1.0)
-                } else {
-                    (y + 2.0, 0.0)
-                };
-                self.draw_text(ctx, &label.text, label_x, anchor_y, 1.0, ay, color(label.color))?;
-            }
+            // Готовая раскладка подписей кадра → плашки-подложки строит sync_readout_params.
+            self.panes[idx].label_placed = placed;
 
             // Прореживание по вертикали: при низком окне «nice»-шаг даёт подписи плотнее строки —
             // рисуем следующую, только если она отстоит от ПРЕДЫДУЩЕЙ нарисованной на высоту

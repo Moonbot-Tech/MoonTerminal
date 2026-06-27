@@ -368,6 +368,22 @@ impl ChartEngine {
         true
     }
 
+    /// Прогнозный размер ручного ордера (s1-s6) в USD — для подписи на перекрестии курсора.
+    /// `true` при изменении (порог против дрожания курса). None = нет размера/курса.
+    pub fn set_prospective_usd(&mut self, usd: Option<f64>) -> bool {
+        let mut data = self.data.borrow_mut();
+        let changed = match (data.prospective_usd, usd) {
+            (Some(a), Some(b)) => (a - b).abs() > a.abs().max(1.0) * 1e-3,
+            (None, None) => false,
+            _ => true,
+        };
+        if changed {
+            data.prospective_usd = usd;
+            data.mark_view_dirty();
+        }
+        changed
+    }
+
     /// Глобальный live-follow из тулбара (Live/Пауза) для единственной панели этого
     /// `ChartEngine`. Реагирует только на смену самого глобального флага (явный клик).
     /// Пан/rejoin отдельной панели живут в её `view.follow`; сюда уже сведённое значение
