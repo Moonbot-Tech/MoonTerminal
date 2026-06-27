@@ -170,7 +170,13 @@ impl Render for ChartPanel {
                 .iter()
                 .map(|(idx, rect, _)| {
                     let zone_w = moon_chart::GLASS_ZONE_PX.min(rect.w * 0.5);
-                    let plot_h = (rect.h - moon_chart::TIME_AXIS_H * ppp).max(1.0);
+                    // Ось времени скрыта → жёлоб под подписи не резервируем, зона до низа слота.
+                    let time_axis_h = if self.time_axis_visible {
+                        moon_chart::TIME_AXIS_H * ppp
+                    } else {
+                        0.0
+                    };
+                    let plot_h = (rect.h - time_axis_h).max(1.0);
                     (
                         *idx,
                         (rect.x + rect.w - zone_w) / ppp,
@@ -231,7 +237,12 @@ impl Render for ChartPanel {
                 if zone_w < ACT_MIN_W {
                     continue;
                 }
-                let top = (rect.y + rect.h) / ppp - moon_chart::TIME_AXIS_H - act_btn_h - 10.0;
+                let time_axis_reserve = if self.time_axis_visible {
+                    moon_chart::TIME_AXIS_H
+                } else {
+                    0.0
+                };
+                let top = (rect.y + rect.h) / ppp - time_axis_reserve - act_btn_h - 10.0;
                 let armed = self.backend.read(cx).is_panic_armed(core, &market);
                 // Видимые кнопки (kind, anchor) в стабильном порядке.
                 let mut vis: Vec<(ActKind, ChartBtnPos)> = Vec::new();
@@ -388,7 +399,11 @@ impl Render for ChartPanel {
                         .inset_0()
                         .pl(px(left_pad))
                         .pr(px(right_pad))
-                        .pb(px(moon_chart::TIME_AXIS_H + 10.0))
+                        .pb(px(if self.time_axis_visible {
+                            moon_chart::TIME_AXIS_H + 10.0
+                        } else {
+                            10.0
+                        }))
                         .flex()
                         .flex_col()
                         .justify_end()
