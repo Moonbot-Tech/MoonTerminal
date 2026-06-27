@@ -358,22 +358,35 @@ impl Render for ChartPanel {
                 if left.is_empty() && center.is_empty() && right.is_empty() {
                     return None;
                 }
+                // Регионы по СОДЕРЖИМОМУ (не flex_1): кнопки держат свою ширину и не режутся, когда
+                // на одном якоре их две (дефолт — обе справа). Якорение L/C/R даёт пара flex-спейсеров
+                // между регионами. Левый отступ = ось цены ТОЛЬКО когда она слева; правый = зона
+                // стакана + жёлоб оси, если она справа (за стаканом).
                 let region = |btns: Vec<AnyElement>| {
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_x_hidden()
                         .flex()
                         .items_center()
                         .gap(px(ACT_GAP))
                         .children(btns)
                 };
+                let left_pad =
+                    if matches!(self.price_axis_pos, crate::chart_persist::PriceAxisPos::Left) {
+                        moon_chart::PRICE_AXIS_W
+                    } else {
+                        0.0
+                    };
+                let right_pad = moon_chart::GLASS_ZONE_PX
+                    + if matches!(self.price_axis_pos, crate::chart_persist::PriceAxisPos::Right) {
+                        moon_chart::PRICE_AXIS_W
+                    } else {
+                        0.0
+                    };
                 Some(
                     div()
                         .absolute()
                         .inset_0()
-                        .pl(px(moon_chart::PRICE_AXIS_W))
-                        .pr(px(moon_chart::GLASS_ZONE_PX))
+                        .pl(px(left_pad))
+                        .pr(px(right_pad))
                         .pb(px(moon_chart::TIME_AXIS_H + 10.0))
                         .flex()
                         .flex_col()
@@ -384,9 +397,11 @@ impl Render for ChartPanel {
                                 .h(px(act_btn_h))
                                 .flex()
                                 .items_center()
-                                .child(region(left).justify_start())
-                                .child(region(center).justify_center())
-                                .child(region(right).justify_end()),
+                                .child(region(left))
+                                .child(div().flex_1())
+                                .child(region(center))
+                                .child(div().flex_1())
+                                .child(region(right)),
                         )
                         .into_any_element(),
                 )

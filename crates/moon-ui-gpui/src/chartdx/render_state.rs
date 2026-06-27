@@ -225,6 +225,11 @@ impl RenderState {
             let plot_w = pr.view.bounds[2] / sf;
             let plot_h = pr.view.bounds[3] / sf;
             let plot_right = plot_left + plot_w;
+            // Сторона оси цен: Hide → плашку курсора-цены не рисуем (нет оси/жёлоба); Right → у
+            // правого края панели (за стаканом). Держим синхронно с text.rs.
+            use crate::chart_persist::PriceAxisPos;
+            let axis_hidden = matches!(pr.price_axis_pos, PriceAxisPos::Hide);
+            let axis_on_right = matches!(pr.price_axis_pos, PriceAxisPos::Right);
 
             // Прозрачная плашка-подложка под угловую подпись (alpha 0.2 — 80% прозрачности).
             // Якорь совпадает с текстом (text.rs): есть стакан → у края панели, нет → у края плота.
@@ -286,7 +291,7 @@ impl RenderState {
                 pr.readout_rects.push(ReadoutRect { dst, bg, border, m });
             }
 
-            if cy_log >= plot_top && cy_log <= plot_bottom {
+            if !axis_hidden && cy_log >= plot_top && cy_log <= plot_bottom {
                 let price_to_px = pr.view.price_to_px / sf;
                 let price_range = plot_h / price_to_px.max(1e-6);
                 let y_min = pr.view.view_price0;
@@ -294,7 +299,11 @@ impl RenderState {
                 let price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
                 let label = format!("{price:.dec$}");
                 let text_w = readout_text_width(&label, pr.readout_price_width);
-                let x = (plot_left - 3.0).max(pane_left + READOUT_INSET + READOUT_PAD_X + text_w);
+                let x = if axis_on_right {
+                    pane_right - 3.0
+                } else {
+                    (plot_left - 3.0).max(pane_left + READOUT_INSET + READOUT_PAD_X + text_w)
+                };
                 let dst = readout_rect_dst(x, cy_log, text_w, 1.0, 0.5, sf);
                 pr.readout_rects.push(ReadoutRect { dst, bg, border, m });
             }
