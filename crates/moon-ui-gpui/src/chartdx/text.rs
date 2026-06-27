@@ -370,6 +370,12 @@ impl RenderState {
             // слева от разделителя, правым краем к нему. Анти-наложение: близкие по цене подписи
             // расталкиваются вниз по вертикали (как YTextFill в эталоне). Рисуются ДО курсора, чтобы
             // курсорные цифры были на переднем плане. Каждой записываем место для плашки-подложки.
+            // Y курсора — освобождаем полосу под курсорными подписями от ордерных (курсор
+            // приоритетен и на переднем плане; иначе ордерный текст просвечивал бы сквозь его плашку).
+            let cursor_cy = self
+                .cursor
+                .filter(|c| c.pane == idx)
+                .map(|c| (self.slot_origin[1] + c.local[1]) / sf);
             {
                 let mut items: Vec<(f32, f32, &OrderLabel)> = Vec::new();
                 for label in &order_labels {
@@ -377,12 +383,17 @@ impl RenderState {
                     if y < plot_top - LINE_H || y > plot_bottom + LINE_H {
                         continue;
                     }
-                    let w = self.measure_text(ctx, &label.text).width.as_f32();
                     let dy = if label.above {
                         y - LINE_H * 0.5 - 1.0
                     } else {
                         y + LINE_H * 0.5 + 1.0
                     };
+                    // Под курсорными цифрами ордерные не рисуем (расчистка полосы: курсорные
+                    // строки занимают примерно ±(LINE_H+2) от линии, плюс пол-строки самой подписи).
+                    if cursor_cy.is_some_and(|cy| (dy - cy).abs() < LINE_H * 1.5 + 3.0) {
+                        continue;
+                    }
+                    let w = self.measure_text(ctx, &label.text).width.as_f32();
                     items.push((dy, w, label));
                 }
                 items.sort_by(|a, b| a.0.total_cmp(&b.0));

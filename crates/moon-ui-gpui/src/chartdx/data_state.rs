@@ -752,6 +752,9 @@ impl ChartDataState {
                     (bid.min(mid - min_half), ask.max(mid + min_half))
                 });
             let last_price = last_price.or(book_mid);
+            // Цена-ориентир для подписи курсора (% выше/ниже): трейды, иначе мид стакана. Без
+            // этого на HIP-рынках без трейдов (но со стаканом) подпись % у курсора пропадала.
+            pr.cached_last_price = last_price;
             let visible_price = union_range(
                 union_range(
                     union_range(tick_price, pr.cached_order_price),
