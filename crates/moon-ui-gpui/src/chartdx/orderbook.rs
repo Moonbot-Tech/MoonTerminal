@@ -10,7 +10,6 @@ use moon_chart::paint::now_unix_ms;
 use moon_core::data::LevelInstance;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 
 use super::gpu::{
     BlitParams, ChartViewGpu, create_alpha_blend, create_dynamic_cb, create_point_sampler,
@@ -293,40 +292,7 @@ impl OrderBookLayer {
     }
 
     fn create_tex(device: &ID3D11Device, tex_w: u32, tex_h: u32) -> BookTex {
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: tex_w,
-            Height: tex_h,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-            CPUAccessFlags: 0,
-            MiscFlags: 0,
-        };
-        let tex = unsafe {
-            let mut o = None;
-            device.CreateTexture2D(&desc, None, Some(&mut o)).unwrap();
-            o.unwrap()
-        };
-        let rtv = unsafe {
-            let mut o = None;
-            device
-                .CreateRenderTargetView(&tex, None, Some(&mut o))
-                .unwrap();
-            o.unwrap()
-        };
-        let srv = unsafe {
-            let mut o = None;
-            device
-                .CreateShaderResourceView(&tex, None, Some(&mut o))
-                .unwrap();
-            o.unwrap()
-        };
+        let (tex, rtv, srv) = super::gpu::create_cache_texture(device, tex_w, tex_h);
         let blit_vs = make_vs(device, BLIT_HLSL, "blit_vertex");
         let blit_fs = make_ps(device, BLIT_HLSL, "blit_fragment");
         let blit_cb = create_dynamic_cb(device, std::mem::size_of::<BlitParams>() as u32);

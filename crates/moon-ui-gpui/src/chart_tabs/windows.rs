@@ -842,28 +842,30 @@ impl DetachedChartHost {
         });
     }
 
-    /// Сменить ориентацию (верт/гор) панели этого окна + persist.
-    fn apply_orientation(
-        &mut self,
-        orientation: crate::chart_persist::StackOrientation,
+    /// Найти спеку этой вкладки в `chart_specs` (по group/num/bucket) и применить `f`; если её
+    /// ещё нет — создать заготовку и применить `f` к ней. Везде далее проставляет `dirty`. Один
+    /// общий апсёрт для всех `apply_*` этого окна (зеркало `ChartTabs::upsert_spec`).
+    fn upsert_spec(
+        &self,
         cx: &mut Context<Self>,
+        num: u32,
+        bucket: &ChartBucket,
+        f: impl FnOnce(&mut chart_persist::ChartTabSpec),
     ) {
-        self.panel
-            .update(cx, |p, c| p.set_orientation(Some(orientation), c));
-        let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
+        let group = self.group.clone();
         self.backend.update(cx, |bk, _| {
             if let Some(s) = bk
                 .chart_specs
                 .iter_mut()
-                .find(|s| s.group == group && s.num == num && s.bucket() == bucket)
+                .find(|s| s.group == group && s.num == num && s.bucket() == *bucket)
             {
-                s.layout_orientation = Some(orientation);
+                f(s);
             } else {
-                bk.chart_specs.push(chart_persist::ChartTabSpec {
+                let mut s = chart_persist::ChartTabSpec {
                     group,
                     num,
                     core: None,
-                    bucket: Some(bucket),
+                    bucket: Some(bucket.clone()),
                     scale: None,
                     detached: None,
                     layout_mode: None,
@@ -872,16 +874,32 @@ impl DetachedChartHost {
                     orderbook_enabled: None,
                     show_zone: None,
                     auto_pin: None,
-                    layout_orientation: Some(orientation),
+                    layout_orientation: None,
                     cancel_buy_pos: None,
                     panic_sell_pos: None,
                     custom_coins: None,
                     custom_label: None,
                     compare_anchor: None,
                     compare_orderbook_only: false,
-                });
+                };
+                f(&mut s);
+                bk.chart_specs.push(s);
             }
             bk.chart_specs_dirty = true;
+        });
+    }
+
+    /// Сменить ориентацию (верт/гор) панели этого окна + persist.
+    fn apply_orientation(
+        &mut self,
+        orientation: crate::chart_persist::StackOrientation,
+        cx: &mut Context<Self>,
+    ) {
+        self.panel
+            .update(cx, |p, c| p.set_orientation(Some(orientation), c));
+        let bucket = self.bucket.clone();
+        self.upsert_spec(cx, self.num, &bucket, move |s| {
+            s.layout_orientation = Some(orientation);
         });
         cx.notify();
     }
@@ -896,40 +914,11 @@ impl DetachedChartHost {
     ) {
         self.panel
             .update(cx, |p, c| p.set_layout(mode, height_fit, height_scroll, c));
-        let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
-        self.backend.update(cx, |bk, _| {
-            if let Some(s) = bk
-                .chart_specs
-                .iter_mut()
-                .find(|s| s.group == group && s.num == num && s.bucket() == bucket)
-            {
-                s.layout_mode = mode;
-                s.layout_height_fit = height_fit;
-                s.layout_height_scroll = height_scroll;
-            } else {
-                bk.chart_specs.push(chart_persist::ChartTabSpec {
-                    group,
-                    num,
-                    core: None,
-                    bucket: Some(bucket),
-                    scale: None,
-                    detached: None,
-                    layout_mode: mode,
-                    layout_height_fit: height_fit,
-                    layout_height_scroll: height_scroll,
-                    orderbook_enabled: None,
-                    show_zone: None,
-                    auto_pin: None,
-                    layout_orientation: None,
-                    cancel_buy_pos: None,
-                    panic_sell_pos: None,
-                    custom_coins: None,
-                    custom_label: None,
-                    compare_anchor: None,
-                    compare_orderbook_only: false,
-                });
-            }
-            bk.chart_specs_dirty = true;
+        let bucket = self.bucket.clone();
+        self.upsert_spec(cx, self.num, &bucket, move |s| {
+            s.layout_mode = mode;
+            s.layout_height_fit = height_fit;
+            s.layout_height_scroll = height_scroll;
         });
         cx.notify();
     }
@@ -938,78 +927,21 @@ impl DetachedChartHost {
     fn apply_orderbook(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.panel
             .update(cx, |p, c| p.set_orderbook_enabled(Some(enabled), c));
-        let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
-        self.backend.update(cx, |bk, _| {
-            if let Some(s) = bk
-                .chart_specs
-                .iter_mut()
-                .find(|s| s.group == group && s.num == num && s.bucket() == bucket)
-            {
-                s.orderbook_enabled = Some(enabled);
-            } else {
-                bk.chart_specs.push(chart_persist::ChartTabSpec {
-                    group,
-                    num,
-                    core: None,
-                    bucket: Some(bucket),
-                    scale: None,
-                    detached: None,
-                    layout_mode: None,
-                    layout_height_fit: None,
-                    layout_height_scroll: None,
-                    orderbook_enabled: Some(enabled),
-                    show_zone: None,
-                    auto_pin: None,
-                    layout_orientation: None,
-                    cancel_buy_pos: None,
-                    panic_sell_pos: None,
-                    custom_coins: None,
-                    custom_label: None,
-                    compare_anchor: None,
-                    compare_orderbook_only: false,
-                });
-            }
-            bk.chart_specs_dirty = true;
-            bk.rebuild_orderbook_wanted();
+        let bucket = self.bucket.clone();
+        self.upsert_spec(cx, self.num, &bucket, move |s| {
+            s.orderbook_enabled = Some(enabled);
         });
+        // Пересобрать набор рынков, которым нужен стакан (мог измениться спрос).
+        self.backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
         cx.notify();
     }
 
     /// Вкл/выкл заливку зоны управления этой вкладки + persist.
     fn apply_show_zone(&mut self, show: bool, cx: &mut Context<Self>) {
         self.panel.update(cx, |p, c| p.set_show_zone(Some(show), c));
-        let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
-        self.backend.update(cx, |bk, _| {
-            if let Some(s) = bk
-                .chart_specs
-                .iter_mut()
-                .find(|s| s.group == group && s.num == num && s.bucket() == bucket)
-            {
-                s.show_zone = Some(show);
-            } else {
-                bk.chart_specs.push(chart_persist::ChartTabSpec {
-                    group,
-                    num,
-                    core: None,
-                    bucket: Some(bucket),
-                    scale: None,
-                    detached: None,
-                    layout_mode: None,
-                    layout_height_fit: None,
-                    layout_height_scroll: None,
-                    orderbook_enabled: None,
-                    show_zone: Some(show),
-                    auto_pin: None,
-                    layout_orientation: None,
-                    cancel_buy_pos: None,
-                    panic_sell_pos: None,
-                    custom_coins: None,
-                    custom_label: None,
-                    compare_anchor: None,
-                    compare_orderbook_only: false,
-                });
-            }
-            bk.chart_specs_dirty = true;
+        let bucket = self.bucket.clone();
+        self.upsert_spec(cx, self.num, &bucket, move |s| {
+            s.show_zone = Some(show);
         });
         cx.notify();
     }
@@ -1017,38 +949,9 @@ impl DetachedChartHost {
     /// Вкл/выкл авто-пин при ордере этой вкладки + persist.
     fn apply_auto_pin(&mut self, on: bool, cx: &mut Context<Self>) {
         self.panel.update(cx, |p, c| p.set_auto_pin(Some(on), c));
-        let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
-        self.backend.update(cx, |bk, _| {
-            if let Some(s) = bk
-                .chart_specs
-                .iter_mut()
-                .find(|s| s.group == group && s.num == num && s.bucket() == bucket)
-            {
-                s.auto_pin = Some(on);
-            } else {
-                bk.chart_specs.push(chart_persist::ChartTabSpec {
-                    group,
-                    num,
-                    core: None,
-                    bucket: Some(bucket),
-                    scale: None,
-                    detached: None,
-                    layout_mode: None,
-                    layout_height_fit: None,
-                    layout_height_scroll: None,
-                    orderbook_enabled: None,
-                    show_zone: None,
-                    auto_pin: Some(on),
-                    layout_orientation: None,
-                    cancel_buy_pos: None,
-                    panic_sell_pos: None,
-                    custom_coins: None,
-                    custom_label: None,
-                    compare_anchor: None,
-                    compare_orderbook_only: false,
-                });
-            }
-            bk.chart_specs_dirty = true;
+        let bucket = self.bucket.clone();
+        self.upsert_spec(cx, self.num, &bucket, move |s| {
+            s.auto_pin = Some(on);
         });
         cx.notify();
     }
@@ -1073,39 +976,10 @@ impl DetachedChartHost {
     ) {
         self.panel
             .update(cx, |p, c| p.set_action_btn_pos(cancel, panic, c));
-        let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
-        self.backend.update(cx, |bk, _| {
-            if let Some(s) = bk
-                .chart_specs
-                .iter_mut()
-                .find(|s| s.group == group && s.num == num && s.bucket() == bucket)
-            {
-                s.cancel_buy_pos = cancel;
-                s.panic_sell_pos = panic;
-            } else {
-                bk.chart_specs.push(chart_persist::ChartTabSpec {
-                    group,
-                    num,
-                    core: None,
-                    bucket: Some(bucket),
-                    scale: None,
-                    detached: None,
-                    layout_mode: None,
-                    layout_height_fit: None,
-                    layout_height_scroll: None,
-                    orderbook_enabled: None,
-                    show_zone: None,
-                    auto_pin: None,
-                    layout_orientation: None,
-                    cancel_buy_pos: cancel,
-                    panic_sell_pos: panic,
-                    custom_coins: None,
-                    custom_label: None,
-                    compare_anchor: None,
-                    compare_orderbook_only: false,
-                });
-            }
-            bk.chart_specs_dirty = true;
+        let bucket = self.bucket.clone();
+        self.upsert_spec(cx, self.num, &bucket, move |s| {
+            s.cancel_buy_pos = cancel;
+            s.panic_sell_pos = panic;
         });
         cx.notify();
     }

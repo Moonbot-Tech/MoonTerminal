@@ -159,7 +159,19 @@ pub fn run(
         if !identity_sent {
             if let Some(info) = client.server_info() {
                 if let Some(code) = info.exchange_code {
-                    let _ = tx.send(FeedMsg::Identity(ExchangeId(code.stable_id())));
+                    // dex_name: непустое только для Hyperliquid HIP-3 фьючей. Входит в
+                    // идентичность, чтобы ядра разных dex НЕ дедуплились на одного
+                    // провайдера с неполным списком рынков (см. ExchangeId).
+                    let dex = info.dex_name.as_deref().unwrap_or("");
+                    let id = ExchangeId::with_dex(code.stable_id(), dex);
+                    log::info!(
+                        "core {} identity: exchange_code={} dex_name={:?} -> {:?}",
+                        server.id,
+                        code.stable_id(),
+                        dex,
+                        id
+                    );
+                    let _ = tx.send(FeedMsg::Identity(id));
                     // Базовая валюта аккаунта — для дефолтов размера ордера в UI (BTC vs USDT).
                     let base = info.base_currency_name.unwrap_or_default();
                     if !base.is_empty() {

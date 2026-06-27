@@ -16,7 +16,9 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use windows::Win32::Graphics::Direct3D::{D3D11_SRV_DIMENSION_BUFFER, ID3DBlob};
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_UNKNOWN;
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
+};
 use windows::core::{Interface, PCSTR};
 
 pub use super::types::{BlitParams, ChartCross, ChartViewGpu};
@@ -204,6 +206,55 @@ pub fn create_premultiplied_alpha_blend(device: &ID3D11Device) -> ID3D11BlendSta
         device.CreateBlendState(&desc, Some(&mut s)).unwrap();
         s.unwrap()
     }
+}
+
+/// Offscreen-кэш слоя (combo/orderbook): BGRA8 texture (RT+SRV) + её RTV и SRV. Слой держит
+/// `tex` живым (его ресурс адресуют RTV/SRV) и блитит SRV каждый кадр, перерисовывая в RTV
+/// только на изменение данных. Дублировался в `combo`/`orderbook` — теперь один источник.
+pub fn create_cache_texture(
+    device: &ID3D11Device,
+    tex_w: u32,
+    tex_h: u32,
+) -> (
+    ID3D11Texture2D,
+    ID3D11RenderTargetView,
+    ID3D11ShaderResourceView,
+) {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: tex_w,
+        Height: tex_h,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let tex = unsafe {
+        let mut o = None;
+        device.CreateTexture2D(&desc, None, Some(&mut o)).unwrap();
+        o.unwrap()
+    };
+    let rtv = unsafe {
+        let mut o = None;
+        device
+            .CreateRenderTargetView(&tex, None, Some(&mut o))
+            .unwrap();
+        o.unwrap()
+    };
+    let srv = unsafe {
+        let mut o = None;
+        device
+            .CreateShaderResourceView(&tex, None, Some(&mut o))
+            .unwrap();
+        o.unwrap()
+    };
+    (tex, rtv, srv)
 }
 
 /// Point-семпл clamp-сэмплер (combo-блит 1:1).

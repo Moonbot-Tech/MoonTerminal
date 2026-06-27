@@ -795,7 +795,7 @@ impl SessionManager {
 }
 
 fn orderbook_kind_for_exchange(ex: ExchangeId) -> OrderBookKind {
-    match ex.0 {
+    match ex.code {
         // Spot exchanges.
         3 | 5 | 7 | 8 | 10 | 12 => OrderBookKind::Spot,
         // Futures/quarterly derivatives.

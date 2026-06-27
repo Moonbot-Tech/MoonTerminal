@@ -115,6 +115,22 @@ impl OrderBookModel {
     pub fn len(&self) -> usize {
         self.raw.len()
     }
+
+    /// Лучшие `(bid, ask)` книги. Если налита одна сторона — её лучшая цена идёт в
+    /// обе позиции (нулевой спред). Пусто/невалид → `None`. `raw` хранит биды (по
+    /// убыванию), затем аски (по возрастанию) → первый `!is_ask` = лучший бид, первый
+    /// `is_ask` = лучший аск. Основа авто-фокуса чарта, когда трейдов ещё нет
+    /// (центр/диапазон по стакану, а не по дефолтному 0).
+    pub fn best_bid_ask(&self) -> Option<(f32, f32)> {
+        let best_bid = self.raw.iter().find(|r| !r.is_ask).map(|r| r.price);
+        let best_ask = self.raw.iter().find(|r| r.is_ask).map(|r| r.price);
+        let (bid, ask) = match (best_bid, best_ask) {
+            (Some(b), Some(a)) => (b, a),
+            (Some(p), None) | (None, Some(p)) => (p, p),
+            (None, None) => return None,
+        };
+        (bid.is_finite() && ask.is_finite() && bid > 0.0 && ask > 0.0).then_some((bid, ask))
+    }
 }
 
 fn level_overlaps(r: &RawLevel, lo: f32, hi: f32) -> bool {

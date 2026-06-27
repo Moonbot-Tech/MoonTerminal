@@ -12,6 +12,16 @@ use moonproto::{MoonClient, NewOrderParams, OrderSide, OrderWorkerStatus, VStopP
 
 use crate::feed::OrderStopKind;
 
+/// Единый лог исхода торгового вызова: `Ok` → `info` с контекстом `ctx`, `Err` → тот же
+/// контекст + `warn` с ошибкой. Контекст совпадает по тексту с прежними per-функция логами,
+/// чтобы грепы по логам не сломались.
+fn report<T, E: std::fmt::Display>(server_id: u64, ctx: impl std::fmt::Display, r: Result<T, E>) {
+    match r {
+        Ok(_) => log::info!("core {server_id} {ctx}"),
+        Err(error) => log::warn!("core {server_id} {ctx} failed: {error}"),
+    }
+}
+
 /// Поставить новый ордер (TNewOrderCommand). `short` — сторона ПОЗИЦИИ
 /// (Long/Short, зеркало `is_short`); `strategy_id=None` шлёт `StratID=0` —
 /// штатный ручной ордер без стратегии. `size` — размер в базовой монете.
@@ -47,33 +57,32 @@ pub(super) fn place_order(
 /// «потянуть за линию». Рантайм троттлит повторы (`replace_sent_time`) и сам
 /// выводит сторону/рынок из локального ордера.
 pub(super) fn move_order(client: &MoonClient, server_id: u64, uid: u64, new_price: f64) {
-    match client.orders().move_order(uid, new_price) {
-        Ok(()) => log::info!("core {server_id} move order {uid} -> {new_price}"),
-        Err(error) => {
-            log::warn!("core {server_id} move order {uid} -> {new_price} failed: {error}")
-        }
-    }
+    report(
+        server_id,
+        format!("move order {uid} -> {new_price}"),
+        client.orders().move_order(uid, new_price),
+    );
 }
 
 /// Отменить ордер ядра по `uid` (TOrderCancelCommand). Рантайм выводит текущий
 /// статус из локального ордера; для pending (OS_None) повторяет replace-then-cancel.
 pub(super) fn cancel_order(client: &MoonClient, server_id: u64, uid: u64) {
-    match client.orders().cancel(uid) {
-        Ok(()) => log::info!("core {server_id} cancel order {uid}"),
-        Err(error) => log::warn!("core {server_id} cancel order {uid} failed: {error}"),
-    }
+    report(
+        server_id,
+        format!("cancel order {uid}"),
+        client.orders().cancel(uid),
+    );
 }
 
 /// «Паник-селл» по рынку (кнопка на чарте): market-level panic sell button semantics.
 /// Транслируется в `orders().switch_panic_sell_by_market`. Рантайм сам применяет тоггл
 /// к ордерам рынка и шлёт нужные пакеты.
 pub(super) fn panic_sell_market(client: &MoonClient, server_id: u64, market: String, on: bool) {
-    match client.orders().switch_panic_sell_by_market(market.clone(), on) {
-        Ok(()) => log::info!("core {server_id} panic sell market {market} on={on}"),
-        Err(error) => {
-            log::warn!("core {server_id} panic sell market {market} on={on} failed: {error}")
-        }
-    }
+    report(
+        server_id,
+        format!("panic sell market {market} on={on}"),
+        client.orders().switch_panic_sell_by_market(market.clone(), on),
+    );
 }
 
 /// Отменить ожидающие buy-ордера рынка («Cancel Buy»). Берём УДЕРЖАННЫЙ снимок, отбираем
@@ -175,10 +184,5 @@ pub(super) fn set_order_stop(
             client.orders().update_vstop(uid, params)
         }
     };
-    match result {
-        Ok(()) => log::info!("core {server_id} set order {uid} {kind:?} -> {on}"),
-        Err(error) => {
-            log::warn!("core {server_id} set order {uid} {kind:?} -> {on} failed: {error}")
-        }
-    }
+    report(server_id, format!("set order {uid} {kind:?} -> {on}"), result);
 }

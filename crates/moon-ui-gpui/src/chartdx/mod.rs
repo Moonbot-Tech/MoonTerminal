@@ -73,6 +73,12 @@ use types::{
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
 
+/// Минимальная полу-ширина видимой полосы авто-фокуса вокруг середины стакана, когда
+/// трейдов нет (доля от цены). Полоса всегда включает лучшие bid/ask, но не уже ±0.5%
+/// → на узком спреде не зумит абсурдно в спред, на широком (HIP-3) показывает обе
+/// стороны. Как только пойдут трейды — диапазон ведут тики.
+const BOOK_FOCUS_HALF_FRAC: f32 = 0.005;
+
 fn union_range(a: Option<(f32, f32)>, b: Option<(f32, f32)>) -> Option<(f32, f32)> {
     match (a, b) {
         (Some((alo, ahi)), Some((blo, bhi))) => Some((alo.min(blo), ahi.max(bhi))),

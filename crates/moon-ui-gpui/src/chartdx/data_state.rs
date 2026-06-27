@@ -690,9 +690,34 @@ impl ChartDataState {
                 pr.cached_last_price
             };
             let tick_price = pr.cached_tick_price;
+            // Якорь авто-фокуса по стакану: лучшие bid/ask. O(1) чтение под коротким
+            // read-lock; полную книгу строим ниже уже по выставленному окну.
+            let book_top = source
+                .with_orderbook_view(pane.core, &pane.market, |data| {
+                    data.and_then(|(book, _)| book.best_bid_ask())
+                });
+            let book_mid = book_top.map(|(bid, ask)| (bid + ask) * 0.5);
+            // Если трейдов нет — центрируемся по стакану: середину книги даём как якорь
+            // центра (fallback для last_price), а видимую полосу строим так, чтобы она
+            // ГАРАНТИРОВАННО включала лучшие bid/ask (широкий спред HIP-3), но была не уже
+            // ±BOOK_FOCUS_HALF (иначе на узком спреде — абсурдный зум-ин). Когда трейды
+            // есть (tick_price.is_some()) — полосу НЕ добавляем: диапазон ведут реальные тики.
+            let book_focus = tick_price
+                .is_none()
+                .then_some(book_top)
+                .flatten()
+                .map(|(bid, ask)| {
+                    let mid = (bid + ask) * 0.5;
+                    let min_half = mid.abs() * BOOK_FOCUS_HALF_FRAC;
+                    (bid.min(mid - min_half), ask.max(mid + min_half))
+                });
+            let last_price = last_price.or(book_mid);
             let visible_price = union_range(
-                union_range(tick_price, pr.cached_order_price),
-                last_price.map(|p| (p, p)),
+                union_range(
+                    union_range(tick_price, pr.cached_order_price),
+                    last_price.map(|p| (p, p)),
+                ),
+                book_focus,
             );
             pane.view.update_y(now, plot_h, visible_price, last_price);
             let area_win = Rect {

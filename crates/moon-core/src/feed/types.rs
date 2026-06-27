@@ -9,11 +9,50 @@ pub enum Side {
 }
 
 /// Идентификатор биржи ядра — байт `ExchangeCode` из moonproto (спот/фьючи — РАЗНЫЕ
-/// коды: Binance=3, FBinance=4, ByBit=7, FBybit=2 …). Ключ дедупа рыночных данных:
-/// ядра с одинаковым `ExchangeId` видят идентичный рынок. Держим как голый байт,
-/// чтобы доменные типы оставались независимыми от moonproto.
+/// коды: Binance=3, FBinance=4, ByBit=7, FBybit=2 …) ПЛЮС дискриминатор HIP-3 dex.
+/// Ключ дедупа рыночных данных: ядра с одинаковым `ExchangeId` видят идентичный
+/// рынок и могут делить одного провайдера. Hyperliquid-фьючи на РАЗНЫХ HIP-3 dex
+/// (`xyz`/`crypto`/…) имеют один и тот же `code`, но РАЗНЫЕ рыночные универсумы —
+/// поэтому в ключ входит хеш `dex_name`: иначе дедуп склеит их на одного провайдера,
+/// чей список рынков неполон (нет `xyz:HOOD` и т.п. → нет цены/стакана/трейдов/поиска).
+/// Держим как примитивы, чтобы доменные типы оставались независимыми от moonproto.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ExchangeId(pub u8);
+pub struct ExchangeId {
+    /// Байт `ExchangeCode` из moonproto.
+    pub code: u8,
+    /// Дискриминатор HIP-3 dex (хеш `dex_name`); `0` — без dex (обычная биржа).
+    pub dex: u32,
+}
+
+impl ExchangeId {
+    /// Биржа без HIP-3 dex (обычные споты/фьючи). `dex = 0`.
+    pub const fn new(code: u8) -> Self {
+        Self { code, dex: 0 }
+    }
+
+    /// Биржа с учётом HIP-3 dex. Пустое имя dex → `dex = 0` (как обычная биржа),
+    /// иначе детерминированный FNV-1a хеш имени (регистр имени НЕ нормализуем —
+    /// `dex_name` приходит из BaseCheck как есть и стабилен в рамках сессии).
+    pub fn with_dex(code: u8, dex_name: &str) -> Self {
+        Self {
+            code,
+            dex: fnv1a32(dex_name.as_bytes()),
+        }
+    }
+}
+
+/// FNV-1a (32 бит). Пустой вход → `0`, чтобы «нет dex» и «dex длины 0» совпадали.
+fn fnv1a32(bytes: &[u8]) -> u32 {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let mut hash: u32 = 0x811c_9dc5;
+    for &b in bytes {
+        hash ^= b as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
 
 /// Один тик (сделка) — семантическая точка графика.
 #[derive(Debug, Clone, Copy)]
