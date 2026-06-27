@@ -105,7 +105,14 @@ impl ChartTabs {
                     AddChartStack::new(backend.clone(), n, bucket.clone(), epoch, theme.clone())
                 });
                 // Восстановить сохранённый масштаб и раскладку этой вкладки (charts.json).
-                let (saved_scale, saved_layout, saved_orderbook, saved_show_zone, saved_auto_pin) = {
+                let (
+                    saved_scale,
+                    saved_layout,
+                    saved_orderbook,
+                    saved_show_zone,
+                    saved_auto_pin,
+                    saved_action_pos,
+                ) = {
                     let specs = &self.backend.read(cx).chart_specs;
                     let spec = specs
                         .iter()
@@ -118,6 +125,7 @@ impl ChartTabs {
                         spec.and_then(|s| s.orderbook_enabled),
                         spec.and_then(|s| s.show_zone),
                         spec.and_then(|s| s.auto_pin),
+                        spec.map_or((None, None), |s| (s.cancel_buy_pos, s.panic_sell_pos)),
                     )
                 };
                 if saved_scale.is_some() {
@@ -137,6 +145,11 @@ impl ChartTabs {
                 }
                 if saved_auto_pin.is_some() {
                     panel.update(cx, |p, pcx| p.set_auto_pin(saved_auto_pin, pcx));
+                }
+                if saved_action_pos.0.is_some() || saved_action_pos.1.is_some() {
+                    panel.update(cx, |p, pcx| {
+                        p.set_action_btn_pos(saved_action_pos.0, saved_action_pos.1, pcx)
+                    });
                 }
                 panel.update(cx, |p, pcx| p.add_coin(core, &market, ttl, pcx));
                 self.add.push((n, bucket.clone(), panel));

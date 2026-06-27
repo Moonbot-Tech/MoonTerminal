@@ -8,11 +8,11 @@ use moon_ui::MoonVirtualListScrollHandle;
 use super::stack::{
     ChartStackEntry, CompareRole, HIGHLIGHT, apply_compare, chart_stack_card,
     handle_compare_broom_requests, handle_compare_lock_requests, render_chart_stack,
-    resolve_layout, set_panels_auto_pin, set_panels_orderbook_enabled, set_panels_scale,
-    set_panels_show_zone,
+    resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin, set_panels_orderbook_enabled,
+    set_panels_scale, set_panels_show_zone,
 };
 use crate::Backend;
-use crate::chart_persist::{StackLayoutMode, StackOrientation};
+use crate::chart_persist::{ChartBtnPos, StackLayoutMode, StackOrientation};
 use crate::panels::ChartPanel;
 use moon_core::config::{ChartBucket, ChartTheme};
 use moon_core::session::CoreId;
@@ -42,6 +42,9 @@ pub(crate) struct AddChartStack {
     auto_pin: Option<bool>,
     /// Ориентация стека (per-окно). None = дефолт (Vertical).
     layout_orientation: Option<StackOrientation>,
+    /// Позиции кнопок Cancel Buy / Panic Sell в зоне чарта (per-окно). None = дефолт (Right).
+    cancel_buy_pos: Option<ChartBtnPos>,
+    panic_sell_pos: Option<ChartBtnPos>,
     /// Подписки на стаканы временно приостановлены (вкладка не в фокусе > 5с). Эффективный
     /// стакан = `orderbook_enabled ∧ !suspended` — не затирает пользовательскую галку «Стакан».
     /// Откреплённые в окно вкладки никогда не suspend (окно само держит спрос).
@@ -84,6 +87,8 @@ impl AddChartStack {
             show_zone: None,
             auto_pin: None,
             layout_orientation: None,
+            cancel_buy_pos: None,
+            panic_sell_pos: None,
             orderbook_suspended: false,
             compare_anchor: None,
             compare_y: None,
@@ -239,6 +244,13 @@ impl AddChartStack {
         if let Some(ap) = self.auto_pin {
             panel.update(cx, |panel, pcx| panel.set_auto_pin(ap, pcx));
         }
+        panel.update(cx, |panel, pcx| {
+            panel.set_action_btn_pos(
+                self.cancel_buy_pos.unwrap_or_default(),
+                self.panic_sell_pos.unwrap_or_default(),
+                pcx,
+            )
+        });
         panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
         self.charts
             .push(ChartStackEntry::new(core, market.to_string(), panel));
@@ -346,6 +358,31 @@ impl AddChartStack {
 
     pub(crate) fn auto_pin(&self) -> Option<bool> {
         self.auto_pin
+    }
+
+    pub(crate) fn action_btn_pos(&self) -> (Option<ChartBtnPos>, Option<ChartBtnPos>) {
+        (self.cancel_buy_pos, self.panic_sell_pos)
+    }
+
+    /// Позиции кнопок Cancel Buy / Panic Sell для всех графиков стека (per-окно).
+    pub(crate) fn set_action_btn_pos(
+        &mut self,
+        cancel: Option<ChartBtnPos>,
+        panic: Option<ChartBtnPos>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.cancel_buy_pos == cancel && self.panic_sell_pos == panic {
+            return;
+        }
+        self.cancel_buy_pos = cancel;
+        self.panic_sell_pos = panic;
+        set_panels_action_btn_pos(
+            &self.charts,
+            cancel.unwrap_or_default(),
+            panic.unwrap_or_default(),
+            cx,
+        );
+        cx.notify();
     }
 
     /// Вкл/выкл авто-пин при ордере для всех графиков стека (per-окно).

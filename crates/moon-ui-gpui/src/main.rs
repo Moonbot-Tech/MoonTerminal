@@ -36,7 +36,7 @@ mod terminal_chrome;
 mod windowing;
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -109,6 +109,8 @@ pub(crate) struct ChartApplyAll {
     pub show_zone: Option<bool>,
     pub auto_pin: Option<bool>,
     pub orientation: Option<chart_persist::StackOrientation>,
+    pub cancel_pos: Option<chart_persist::ChartBtnPos>,
+    pub panic_pos: Option<chart_persist::ChartBtnPos>,
 }
 
 /// Общий backend: живёт в одном `Entity`, дренится таймером, будит окна по notify.
@@ -141,6 +143,9 @@ struct Backend {
     /// Main fullscreen chart target by group. Panels such as Orders use this for
     /// "current market"; AddToChart stacks are deliberately not part of that filter.
     main_chart_targets: HashMap<String, (CoreId, String)>,
+    /// Монеты, открытые в стеке вкладки Main каждой группы (`group → [(ядро, рынок)]`) — то, что
+    /// пользователь открыл на Main. Окно «Ордера» подсвечивает по одной строке на каждую пару.
+    main_open_markets: HashMap<String, Vec<(CoreId, String)>>,
     /// Ручной выбор «активного торгового ядра» в шапке (группа → ядро). Sticky-override:
     /// перекрывает авто-следование за ядром фуллскрин-чарта, пока ядро в группе и юзер не
     /// открыл фуллскрином чарт ДРУГОГО ядра (тогда сбрасывается в авто). См. `active_trade_core`.
@@ -215,6 +220,9 @@ struct Backend {
     /// Оптимистичный локальный выбор fixed-sell слота. `Some(slot)` = горит S1-S6,
     /// `None` = горит основной TP. Без этого клик визуально ждёт echo ClientSettings от ядра.
     sell_slot_local: HashMap<CoreId, Option<usize>>,
+    /// «Паник-селл взведён» по (ядро, рынок) — локальный тоггл кнопки Panic Sell на чарте
+    /// (визуальная подсветка + on/off, без ожидания эха от ядра).
+    panic_armed: HashSet<(CoreId, String)>,
     /// Backend-level notify is only for slow GPUI chrome/status/overlays. High-rate chart
     /// data goes straight into retained chart handles and must not dirty the whole tree.
     backend_dirty_since_notify: bool,
@@ -368,6 +376,27 @@ impl Backend {
             .unwrap_or(fallback)
     }
 
+    /// Взведён ли «паник-селл» по (ядро, рынок) — для подсветки кнопки Panic Sell.
+    fn is_panic_armed(&self, core: CoreId, market: &str) -> bool {
+        self.panic_armed.contains(&(core, market.to_string()))
+    }
+
+    /// Тоггл «паник-селл» по рынку: флипает локальный флаг и шлёт правку ядру. Возвращает
+    /// новое состояние (true = взвели).
+    fn toggle_panic_sell(&mut self, core: CoreId, market: String) -> bool {
+        let key = (core, market.clone());
+        let on = if self.panic_armed.remove(&key) {
+            false
+        } else {
+            self.panic_armed.insert(key);
+            true
+        };
+        if let Err(error) = self.session.panic_sell_market(core, market, on) {
+            log::warn!("panic sell market failed: {error:#}");
+        }
+        on
+    }
+
     fn cancel_buy_for_main_chart(&self, group: &str) -> usize {
         let Some((core, market)) = self.main_chart_target(group) else {
             log::warn!("cancel buy ignored: no open main chart for group={group}");
@@ -461,6 +490,23 @@ impl Backend {
 
     fn main_chart_target(&self, group: &str) -> Option<(CoreId, String)> {
         self.main_chart_targets.get(group).cloned()
+    }
+
+    /// Опубликовать монеты, открытые в стеке Main группы (из `MainChartStack`).
+    fn set_main_open_markets(&mut self, group: &str, markets: Vec<(CoreId, String)>) {
+        if markets.is_empty() {
+            self.main_open_markets.remove(group);
+        } else {
+            self.main_open_markets.insert(group.to_string(), markets);
+        }
+    }
+
+    /// Монеты, открытые в стеке Main группы (для подсветки/сортировки в «Ордерах»).
+    pub(crate) fn main_open_markets(&self, group: &str) -> &[(CoreId, String)] {
+        self.main_open_markets
+            .get(group)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Отметить «активный» ввод в главном окне группы (движение мыши при сфокусированном окне).
@@ -810,6 +856,7 @@ fn main() -> anyhow::Result<()> {
             desired_open_dirty: true,
             last_open_sync: Instant::now() - Duration::from_secs(10),
             main_chart_targets: HashMap::new(),
+            main_open_markets: HashMap::new(),
             trade_core_override: HashMap::new(),
             config: cfg.clone(),
             preview: None,
@@ -843,6 +890,7 @@ fn main() -> anyhow::Result<()> {
             sell_edit_req: None,
             sell_pct_local: HashMap::new(),
             sell_slot_local: HashMap::new(),
+            panic_armed: HashSet::new(),
             backend_dirty_since_notify: false,
             last_backend_notify: None,
             reconnect_request: Vec::new(),

@@ -506,6 +506,15 @@ impl ChartEngine {
         container.pane(0).map(|p| (p.core, p.market.clone()))
     }
 
+    /// Core/market панели по индексу — для оверлей-кнопок чарта (Panic Sell / Cancel Buy),
+    /// привязанных к конкретному слоту.
+    pub fn pane_target(&self, idx: usize) -> Option<(CoreId, String)> {
+        self.container
+            .borrow()
+            .pane(idx)
+            .map(|p| (p.core, p.market.clone()))
+    }
+
     /// Рынок активной (фулскрин/первой) панели — для подписи вкладки.
     pub fn active_market(&self) -> Option<String> {
         self.active_target().map(|(_, market)| market)

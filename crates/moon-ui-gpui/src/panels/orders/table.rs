@@ -2,13 +2,16 @@
 
 use super::*;
 use moon_core::feed::OrderStopKind;
+use moon_core::session::CoreId;
 use moon_ui::{MoonBadge, MoonBadgeSize, MoonBadgeVariant};
 use rust_i18n::t;
+use std::collections::HashSet;
 
 pub(super) fn orders_table(
     rows: Rc<Vec<OrderEntry>>,
     columns: u16,
     state: &Entity<MoonDataTableState>,
+    highlight: Rc<HashSet<(CoreId, u64)>>,
     cx: &Context<OrdersPanel>,
 ) -> impl IntoElement {
     let empty = rows.is_empty();
@@ -16,6 +19,10 @@ pub(super) fn orders_table(
     let view = cx.entity();
     let table_rows = rows.clone();
     let p = MoonPalette::active(cx);
+    // Выделение строки/ячейки кликом нам не нужно (фронт форка ставит его жёстко: `select_row`
+    // выставляет и `selected_cell`) — сбрасываем ВСЕ три поля сразу после клика. `selected(...)`
+    // ниже используем ТОЛЬКО для подсветки монет, открытых в Main.
+    let state_reset = state.clone();
     // Видимые колонки в каноничном порядке — общий список для header и строк. Drag-перестановку
     // (`state.column_order`) применяет сам MoonDataTable: и к шапке, и к ячейкам тела.
     let visible: Rc<Vec<OrdCol>> = Rc::new(
@@ -34,12 +41,20 @@ pub(super) fn orders_table(
         p,
         cx,
         MoonDataTable::new("orders-table", row_count, move |ix, _window, _app| {
-            order_table_row(&table_rows[ix], &view, p, &row_cols)
+            order_table_row(&table_rows[ix], &view, p, &row_cols, &highlight)
         })
         .columns(visible.iter().map(|c| column_def(*c)).collect::<Vec<_>>())
         .state(state)
         .header_height(design::TABLE_HEAD_H)
-        .row_height(design::TABLE_ROW_H),
+        .row_height(design::TABLE_ROW_H)
+        .on_select_row(move |_ix, _window, app| {
+            state_reset.update(app, |s, c| {
+                s.selected_row = None;
+                s.selected_column = None;
+                s.selected_cell = None;
+                c.notify();
+            });
+        }),
     )
 }
 
@@ -100,12 +115,15 @@ fn order_table_row(
     view: &Entity<OrdersPanel>,
     p: MoonPalette,
     cols: &[OrdCol],
+    highlight: &HashSet<(CoreId, u64)>,
 ) -> MoonDataRow {
     MoonDataRow::new(
         cols.iter()
             .map(|c| cell_for(*c, e, view, p))
             .collect::<Vec<_>>(),
     )
+    // Подсветка ОДНОЙ строки на каждую Main-открытую (монета+ядро) — первый её ордер.
+    .selected(highlight.contains(&(e.core, e.row.uid)))
 }
 
 /// Ячейка для одной колонки строки. Порядок ячеек ДОЛЖЕН совпадать с `column_def` по тем

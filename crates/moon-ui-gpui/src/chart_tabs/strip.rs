@@ -280,6 +280,7 @@ impl Render for ChartTabs {
             let orderbook_enabled = self.active_orderbook_enabled(cx);
             let show_zone = self.active_show_zone(cx);
             let auto_pin = self.active_auto_pin(cx);
+            let (cancel_pos, panic_pos) = self.active_action_btn_pos(cx);
             let include_main = matches!(self.active, Tab::Main);
             let is_custom = matches!(self.active, Tab::Custom(..));
             let apply_all_label = if include_main {
@@ -293,6 +294,8 @@ impl Render for ChartTabs {
             let sz_entity = cx.entity();
             let ap_entity = cx.entity();
             let or_entity = cx.entity();
+            let cbp_entity = cx.entity();
+            let psp_entity = cx.entity();
             let hover_entity = cx.entity();
             let size = layout_popup::content_size(cx, is_custom);
             div()
@@ -324,6 +327,8 @@ impl Render for ChartTabs {
                     orderbook_enabled,
                     show_zone,
                     auto_pin,
+                    cancel_pos,
+                    panic_pos,
                     p,
                     cx,
                     move |mode, app| {
@@ -346,6 +351,7 @@ impl Render for ChartTabs {
                             let sz = Some(this.active_show_zone(cx));
                             let ap = Some(this.active_auto_pin(cx));
                             let or = this.active_layout_orientation(cx);
+                            let (cp, pp) = this.active_action_btn_pos(cx);
                             this.apply_layout_to_all(
                                 include_main,
                                 mode,
@@ -356,6 +362,8 @@ impl Render for ChartTabs {
                                 sz,
                                 ap,
                                 or,
+                                Some(cp),
+                                Some(pp),
                                 cx,
                             );
                         });
@@ -380,6 +388,12 @@ impl Render for ChartTabs {
                                 };
                             this.apply_orientation(next, cx);
                         });
+                    },
+                    move |pos, app| {
+                        cbp_entity.update(app, |this, cx| this.apply_cancel_pos(pos, cx));
+                    },
+                    move |pos, app| {
+                        psp_entity.update(app, |this, cx| this.apply_panic_pos(pos, cx));
                     },
                 ))
         });

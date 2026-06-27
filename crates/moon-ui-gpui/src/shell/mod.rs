@@ -21,7 +21,7 @@ use moon_ui::{
     MoonPalette, MoonSliderEvent, MoonSliderState, MoonWindowFrame, PanelView, v_flex,
 };
 
-use moon_core::feed::{ClientSettingsEdit, LevManageEdit};
+use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
 
 use crate::chart_tabs::ChartTabs;
@@ -536,9 +536,10 @@ impl Shell {
         })
         .detach();
         cx.subscribe(lev_slider, |this, _e, ev: &MoonSliderEvent, cx| {
+            // Плечо НЕ применяем на драг (биржевое действие) — только живой фидбэк в поле.
+            // Коммит идёт по кнопке «Применить» в попапе (читает значение из поля).
             if let MoonSliderEvent::Change(v) = ev {
                 let v = v.end();
-                this.commit_lev_edit(LevManageEdit::FixLev(v as i32), cx);
                 this.live_set_field(this.lev_input.clone(), format!("{}", v as i32), cx);
             }
         })
@@ -565,15 +566,9 @@ impl Shell {
             }
         })
         .detach();
-        cx.subscribe(lev_input, |this, inp, ev: &MoonInputEvent, cx| {
-            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
-                return;
-            }
-            if let Ok(v) = inp.read(cx).value().trim().parse::<i32>() {
-                this.commit_lev_edit(LevManageEdit::FixLev(v), cx);
-            }
-        })
-        .detach();
+        // Поле плеча НЕ коммитит само (ни Blur, ни Enter): плечо — биржевое действие, его
+        // отправляет только кнопка «Применить» в попапе. Поле/слайдер — лишь выбор значения.
+        let _ = lev_input;
     }
 
     /// Слой попапа активной метрики тулбара (TP/SL/Lev): сам попап (absolute, под кнопкой) +

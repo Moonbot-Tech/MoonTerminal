@@ -47,6 +47,22 @@ impl StackOrientation {
     }
 }
 
+/// Позиция кнопки рыночного действия (Cancel Buy / Panic Sell) в ЗОНЕ ЧАРТА (не стакана).
+/// `Hide` — не показывать. Дефолт (None в спеке) — `Right`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum ChartBtnPos {
+    Hide,
+    Left,
+    Center,
+    Right,
+}
+
+impl Default for ChartBtnPos {
+    fn default() -> Self {
+        ChartBtnPos::Right
+    }
+}
+
 /// Состояние одной чарт-вкладки. `num == 0` — Main; `num >= 1` — AddToChart-N.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ChartTabSpec {
@@ -90,6 +106,12 @@ pub struct ChartTabSpec {
     /// Ориентация стека (Vertical/Horizontal). None → дефолт (Vertical). Per-окно/вкладка.
     #[serde(default)]
     pub layout_orientation: Option<StackOrientation>,
+    /// Позиция кнопки «Cancel Buy» в зоне чарта. None → дефолт (Right). Per-окно/вкладка.
+    #[serde(default)]
+    pub cancel_buy_pos: Option<ChartBtnPos>,
+    /// Позиция кнопки «Panic Sell» в зоне чарта. None → дефолт (Right). Per-окно/вкладка.
+    #[serde(default)]
+    pub panic_sell_pos: Option<ChartBtnPos>,
     /// Кастомная (мульти-монетная) вкладка из поиска: явный список тикеров `(core, market)`.
     /// `Some` помечает спек как кастомный — на старте вкладка восстанавливается и заполняется
     /// ИМЕННО этими чартами (а не ждёт детект, как обычные AddToChart). None → обычная вкладка.

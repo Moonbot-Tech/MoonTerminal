@@ -13,7 +13,7 @@ use moon_ui::{
     MoonTooltipView, h_flex, v_flex,
 };
 
-use moon_core::feed::ClientSettingsEdit;
+use moon_core::feed::{ClientSettingsEdit, LevManageEdit};
 use moon_core::session::CoreId;
 
 use crate::shell::Shell;
@@ -259,16 +259,44 @@ pub fn metric_popup_content(
                 .label(t!("toolbar.hedge").to_string())
                 .checked(hedge_on)
                 .size(MoonCheckboxSize::Compact)
-                .on_change(move |ch: &bool, _w, app| {
-                    let on = *ch;
+                .on_change({
+                    let backend = backend.clone();
+                    let group = group.clone();
+                    move |ch: &bool, _w, app| {
+                        let on = *ch;
+                        let b = backend.read(app);
+                        let Some(core) = b.active_trade_core(&group) else {
+                            return;
+                        };
+                        if let Err(error) = b.session.set_hedge_mode(core, on) {
+                            log::warn!("set hedge mode failed: {error}");
+                        }
+                    }
+                }),
+        );
+        // Плечо — биржевое действие: применяем ТОЛЬКО по этой кнопке (слайдер/поле лишь
+        // выбирают значение, на драг ничего не шлётся). Значение берём из поля (его живо
+        // обновляет драг слайдера, и в него можно ввести точное число).
+        let input = input.clone();
+        content = content.child(
+            MoonButton::new("toolbar-lev-apply")
+                .label(t!("toolbar.apply").to_string())
+                .variant(MoonButtonVariant::Blue)
+                .size(MoonButtonSize::ToolbarCompact)
+                .full_width()
+                .on_click(move |_, _w, app| {
+                    let Ok(v) = input.read(app).value().trim().parse::<i32>() else {
+                        return;
+                    };
                     let b = backend.read(app);
                     let Some(core) = b.active_trade_core(&group) else {
                         return;
                     };
-                    if let Err(error) = b.session.set_hedge_mode(core, on) {
-                        log::warn!("set hedge mode failed: {error}");
+                    if let Err(error) = b.session.edit_lev_manage(core, LevManageEdit::FixLev(v)) {
+                        log::warn!("apply leverage failed: {error:#}");
                     }
-                }),
+                })
+                .render(),
         );
     }
     content.into_any_element()

@@ -168,6 +168,7 @@ impl ChartTabs {
             main_orderbook,
             main_show_zone,
             main_auto_pin,
+            main_action_pos,
             restore_pending,
         ): (
             Option<f32>,
@@ -175,6 +176,10 @@ impl ChartTabs {
             Option<bool>,
             Option<bool>,
             Option<bool>,
+            (
+                Option<chart_persist::ChartBtnPos>,
+                Option<chart_persist::ChartBtnPos>,
+            ),
             Vec<_>,
         ) = {
             let specs = &backend.read(cx).chart_specs;
@@ -186,6 +191,8 @@ impl ChartTabs {
             let main_orderbook = main_spec.and_then(|s| s.orderbook_enabled);
             let main_show_zone = main_spec.and_then(|s| s.show_zone);
             let main_auto_pin = main_spec.and_then(|s| s.auto_pin);
+            let main_action_pos =
+                main_spec.map_or((None, None), |s| (s.cancel_buy_pos, s.panic_sell_pos));
             let pending = specs
                 .iter()
                 .filter(|s| s.group == group && s.num >= 1 && s.detached.is_some())
@@ -197,6 +204,7 @@ impl ChartTabs {
                 main_orderbook,
                 main_show_zone,
                 main_auto_pin,
+                main_action_pos,
                 pending,
             )
         };
@@ -216,6 +224,11 @@ impl ChartTabs {
         }
         if main_auto_pin.is_some() {
             main.update(cx, |p, pcx| p.set_auto_pin(main_auto_pin, pcx));
+        }
+        if main_action_pos.0.is_some() || main_action_pos.1.is_some() {
+            main.update(cx, |p, pcx| {
+                p.set_action_btn_pos(main_action_pos.0, main_action_pos.1, pcx)
+            });
         }
         cx.observe(&backend, |this, backend, cx| {
             // Запросы «применить ко всем» из выносных окон — до early-return по sig (они sig не меняют).

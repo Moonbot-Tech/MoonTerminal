@@ -686,6 +686,24 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::CancelOrder { uid }, "cancel order")
     }
 
+    /// «Паник-селл» по рынку ядра (кнопка на чарте). `on` — вкл/выкл флаг.
+    pub fn panic_sell_market(&self, core: CoreId, market: String, on: bool) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::PanicSellMarket { market, on },
+            "panic sell market",
+        )
+    }
+
+    /// Отменить ожидающие buy-ордера рынка ядра (кнопка «Cancel Buy»).
+    pub fn cancel_market_buys(&self, core: CoreId, market: String) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::CancelMarketBuys { market },
+            "cancel market buys",
+        )
+    }
+
     /// Включить/выключить стоп-флаг (SL/TS/VStop) ордера ядра по `uid` — клик по ячейке в
     /// таблице «Ордера». feed сохраняет настроенный уровень стопа при повторном включении.
     pub fn set_order_stop(

@@ -177,11 +177,41 @@ impl OrdersPanel {
                 .checked(cur.newest_first)
                 .on_click(move |_, _, app| Self::mutate(&v, app, |s| s.newest_first = true)),
         );
-        let v = view;
-        menu.item(
+        let v = view.clone();
+        menu = menu.item(
             MoonMenuItem::with_key("m-old", t!("orders.sort.old").to_string())
                 .checked(!cur.newest_first)
                 .on_click(move |_, _, app| Self::mutate(&v, app, |s| s.newest_first = false)),
+        );
+        // «Main сверху» — две взаимоисключающие галки + возможность выключить (клик по уже
+        // активной снимает её → Off). Подсветка строк от этого не зависит.
+        let v = view.clone();
+        menu = menu.item(MoonMenuItem::separator()).item(
+            MoonMenuItem::with_key("m-main-all", t!("orders.sort.main_all").to_string())
+                .checked(cur.main_on_top == MainOnTop::AllTicker)
+                .on_click(move |_, _, app| {
+                    Self::mutate(&v, app, |s| {
+                        s.main_on_top = if s.main_on_top == MainOnTop::AllTicker {
+                            MainOnTop::Off
+                        } else {
+                            MainOnTop::AllTicker
+                        };
+                    })
+                }),
+        );
+        let v = view;
+        menu.item(
+            MoonMenuItem::with_key("m-main-hi", t!("orders.sort.main_hi").to_string())
+                .checked(cur.main_on_top == MainOnTop::Highlighted)
+                .on_click(move |_, _, app| {
+                    Self::mutate(&v, app, |s| {
+                        s.main_on_top = if s.main_on_top == MainOnTop::Highlighted {
+                            MainOnTop::Off
+                        } else {
+                            MainOnTop::Highlighted
+                        };
+                    })
+                }),
         )
     }
 }

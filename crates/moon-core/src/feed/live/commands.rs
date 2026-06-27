@@ -300,6 +300,12 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::SetOrderStop { uid, kind, on }) => {
                 trade::set_order_stop(client, server.id, uid, kind, on);
             }
+            Ok(CoreCmd::PanicSellMarket { market, on }) => {
+                trade::panic_sell_market(client, server.id, market, on);
+            }
+            Ok(CoreCmd::CancelMarketBuys { market }) => {
+                trade::cancel_market_buys(client, server.id, &market);
+            }
             Ok(CoreCmd::EditClientSettings(edit)) => {
                 // Правим УДЕРЖАННЫЙ снимок (moonproto хранит последний в SettingsState),
                 // сохраняя tail/blob'ы, и шлём его целиком. Нет снимка → нечего слать.

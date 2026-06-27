@@ -12,6 +12,7 @@
 mod controls;
 mod table;
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::*;
@@ -46,6 +47,8 @@ struct OrdersCacheKey {
     data_sig: u64,
     view: OrdersViewState,
     current: Option<(CoreId, String)>,
+    /// Монеты, открытые в Main группы — их изменение меняет подсветку и порядок строк.
+    main_open: Vec<(CoreId, String)>,
 }
 
 /// Первичный ключ сортировки (тогл-группа в меню).
@@ -70,6 +73,35 @@ impl PrimarySort {
             1 => PrimarySort::SellFirst,
             2 => PrimarySort::BuyFirst,
             _ => PrimarySort::Creation,
+        }
+    }
+}
+
+/// Подъём строк, открытых на Main, наверх списка (per-окно, сохраняется). Две взаимоисключающие
+/// галки в меню сортировки + возможность выключить.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MainOnTop {
+    /// Не поднимать (обычная сортировка).
+    Off,
+    /// Весь тикер по всем ядрам (если монета на Main — наверх идут все её ордера всех ядер).
+    AllTicker,
+    /// Только выделенные строки — по одной на каждую (монета+ядро), что на Main.
+    Highlighted,
+}
+
+impl MainOnTop {
+    fn to_u8(self) -> u8 {
+        match self {
+            MainOnTop::Off => 0,
+            MainOnTop::AllTicker => 1,
+            MainOnTop::Highlighted => 2,
+        }
+    }
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => MainOnTop::AllTicker,
+            2 => MainOnTop::Highlighted,
+            _ => MainOnTop::Off,
         }
     }
 }
@@ -191,6 +223,8 @@ pub(super) struct OrdersViewState {
     pub(super) only_current_market: bool,
     pub(super) primary: PrimarySort,
     pub(super) newest_first: bool,
+    /// Подъём открытых на Main строк наверх (выкл / весь тикер / только выделенные).
+    pub(super) main_on_top: MainOnTop,
     /// Битовая маска видимых колонок (бит = `OrdCol::bit`). Персистится списком ключей.
     pub(super) columns: u16,
 }
@@ -219,6 +253,7 @@ impl Default for OrdersViewState {
             only_current_market: false,
             primary: PrimarySort::Creation,
             newest_first: true,
+            main_on_top: MainOnTop::Highlighted,
             columns: ALL_COLUMNS_MASK,
         }
     }
@@ -262,6 +297,12 @@ pub struct OrdersPanel {
     /// Последний персистнутый порядок колонок — чтобы `observe` не дампил док на каждый
     /// `notify` стейта (выделение/ресайз), а только когда порядок реально сменился.
     col_order_cache: Vec<SharedString>,
+    /// Монеты, открытые в стеке Main этой группы (`(ядро, рынок)`). Используется для сортировки
+    /// (поднять наверх). Обновляется в `rebuild_cache`.
+    main_open: Rc<HashSet<(CoreId, String)>>,
+    /// `(ядро, uid)` ПЕРВОГО ордера каждой Main-открытой пары — ровно эти строки подсвечиваем
+    /// (по одной на пару, а не все ордера монеты). Обновляется в `rebuild_cache`.
+    highlight: Rc<HashSet<(CoreId, u64)>>,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -311,6 +352,8 @@ impl OrdersPanel {
             cached_entries: Rc::new(Vec::new()),
             table_state,
             col_order_cache: Vec::new(),
+            main_open: Rc::new(HashSet::new()),
+            highlight: Rc::new(HashSet::new()),
             dock: None,
             focus: cx.focus_handle(),
         };
@@ -364,6 +407,9 @@ impl OrdersPanel {
                 .only_current_market
                 .then(|| self.current_market(b))
                 .flatten(),
+            // Монеты, открытые в стеке Main (1 фулскрин или несколько в стеке). Подсветим по
+            // ОДНОЙ строке на каждую (монета+ядро); сортировка поднимает их наверх.
+            main_open: b.main_open_markets(&self.group).to_vec(),
         }
     }
 
@@ -409,7 +455,33 @@ impl OrdersPanel {
     fn rebuild_cache(&mut self, b: &Backend) {
         let key = self.cache_key(b);
         self.cached_cores = self.group_cores(b);
-        self.cached_entries = Rc::new(self.build_entries(b, &key.view, &key.current));
+        self.main_open = Rc::new(key.main_open.iter().cloned().collect());
+        // Базовый порядок (первичная + новые/старые).
+        let mut entries = self.build_entries(b, &key.view, &key.current);
+        // Подсветка: ПЕРВАЯ строка каждой Main-открытой (монета+ядро) в базовом порядке — одна
+        // строка на пару (не все ордера монеты).
+        let mut seen: HashSet<(CoreId, String)> = HashSet::new();
+        let mut highlight: HashSet<(CoreId, u64)> = HashSet::new();
+        for e in entries.iter() {
+            let pair = (e.core, e.row.market.clone());
+            if self.main_open.contains(&pair) && seen.insert(pair) {
+                highlight.insert((e.core, e.row.uid));
+            }
+        }
+        // Подъём «Main сверху» — стабильно поверх базового порядка (внутри групп порядок сохранён).
+        match key.view.main_on_top {
+            MainOnTop::Off => {}
+            MainOnTop::Highlighted => {
+                entries.sort_by_key(|e| u8::from(!highlight.contains(&(e.core, e.row.uid))));
+            }
+            MainOnTop::AllTicker => {
+                let markets: HashSet<&str> =
+                    self.main_open.iter().map(|(_, m)| m.as_str()).collect();
+                entries.sort_by_key(|e| u8::from(!markets.contains(e.row.market.as_str())));
+            }
+        }
+        self.highlight = Rc::new(highlight);
+        self.cached_entries = Rc::new(entries);
         self.cache_key = Some(key);
     }
 
@@ -485,6 +557,8 @@ fn primary_key(p: PrimarySort, r: &OrderRow) -> u8 {
     }
 }
 
+/// Базовая сортировка: первичная (SELL/BUY/Creation) + новые/старые. Подъём «Main сверху»
+/// применяется отдельно поверх (стабильно) в `rebuild_cache`.
 fn sort_entries(entries: &mut [OrderEntry], view: &OrdersViewState) {
     entries.sort_by(|a, b| {
         let ka = primary_key(view.primary, &a.row);
@@ -512,6 +586,9 @@ fn view_from_info(info: &PanelInfo) -> OrdersViewState {
         }
         if let Some(o) = j.get("only_current").and_then(|x| x.as_bool()) {
             v.only_current_market = o;
+        }
+        if let Some(m) = j.get("main_on_top").and_then(|x| x.as_u64()) {
+            v.main_on_top = MainOnTop::from_u8(m as u8);
         }
         // Видимые колонки: список ключей → маска. Пустой/пропущенный список или ноль
         // валидных ключей → оставляем дефолт (все видимы), чтобы не показать пустую таблицу.
@@ -581,6 +658,7 @@ impl Panel for OrdersPanel {
                 "kind": self.view.kind.to_u8(),
                 "newest_first": self.view.newest_first,
                 "only_current": self.view.only_current_market,
+                "main_on_top": self.view.main_on_top.to_u8(),
                 // Видимые колонки — списком стабильных ключей (не маской: устойчиво к смене
                 // порядка enum). Отсутствие поля при restore → все колонки видимы.
                 "columns": self
@@ -660,7 +738,14 @@ impl Render for OrdersPanel {
         }
 
         // ── Виртуальная таблица в геометрии HTML-эталона ──
-        let table = table::orders_table(entries, view.columns, &self.table_state, cx);
+        // Подсвечиваем по одной строке на Main-открытую (монета+ядро) — см. table::orders_table.
+        let table = table::orders_table(
+            entries,
+            view.columns,
+            &self.table_state,
+            self.highlight.clone(),
+            cx,
+        );
 
         v_flex()
             .id("orders-panel")

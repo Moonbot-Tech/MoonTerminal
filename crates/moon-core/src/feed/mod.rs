@@ -177,6 +177,14 @@ pub enum CoreCmd {
     /// Переключить hedge-mode аккаунта (dual-side позиции). РЕАЛЬНОЕ действие на бирже
     /// через Engine API (`account().set_hedge_mode`).
     SetHedgeMode(bool),
+    /// «Паник-селл» по рынку (кнопка на чарте). Транслируется в moonproto
+    /// `orders().switch_panic_sell_by_market(market, on)` — market-level panic sell
+    /// button semantics (тоггл panic-sell у ордеров рынка). РЕАЛЬНОЕ действие.
+    PanicSellMarket { market: String, on: bool },
+    /// Отменить ОЖИДАЮЩИЕ buy-ордера рынка (кнопка «Cancel Buy»). feed берёт удержанный
+    /// снимок, отбирает ордера рынка в buy-фазе до исполнения (`OS_None`/`BuySet`) и шлёт
+    /// по каждому `orders().cancel(uid)`. РЕАЛЬНОЕ действие.
+    CancelMarketBuys { market: String },
 }
 
 #[derive(Clone)]

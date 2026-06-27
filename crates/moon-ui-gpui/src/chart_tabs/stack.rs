@@ -69,7 +69,7 @@ const STACK_HEADER_H: f32 = 20.0;
 ///
 /// Важно: body вокруг `ChartPanel` намеренно без `.bg()`. Chart own-pass рисуется через
 /// UnderScene, и любой непрозрачный quad над plot-зоной закроет график. Красим только header,
-/// border, left-accent и отдельный gutter вне plot-зоны.
+/// border и отдельный gutter вне plot-зоны.
 pub(super) fn chart_stack_card(
     id: SharedString,
     label: impl Into<SharedString>,
@@ -102,15 +102,6 @@ pub(super) fn chart_stack_card(
                 .overflow_hidden()
                 .border_1()
                 .border_color(border)
-                .child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(3.0))
-                        .bg(rgb(p.accent)),
-                )
                 .child(
                     h_flex()
                         .absolute()
@@ -217,6 +208,19 @@ pub(super) fn set_panels_auto_pin<S: 'static>(
 ) {
     for e in entries {
         e.panel.update(cx, |p, pcx| p.set_auto_pin(on, pcx));
+    }
+}
+
+/// Применить позиции кнопок рыночных действий (Cancel Buy / Panic Sell) ко всем панелям стека.
+pub(super) fn set_panels_action_btn_pos<S: 'static>(
+    entries: &[ChartStackEntry],
+    cancel: crate::chart_persist::ChartBtnPos,
+    panic: crate::chart_persist::ChartBtnPos,
+    cx: &mut Context<S>,
+) {
+    for e in entries {
+        e.panel
+            .update(cx, |p, pcx| p.set_action_btn_pos(cancel, panic, pcx));
     }
 }
 

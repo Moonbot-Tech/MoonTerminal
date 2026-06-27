@@ -94,3 +94,12 @@ orders.sort.old:
   ru: "Старые первые"
   en: "Oldest first"
   es: "Más antiguos primero"
+# Подъём строк, открытых на Main, наверх (две взаимоисключающие галки + выкл).
+orders.sort.main_all:
+  ru: "Main сверху: весь тикер"
+  en: "Main on top: whole ticker"
+  es: "Main arriba: todo el ticker"
+orders.sort.main_hi:
+  ru: "Main сверху: только выделенные"
+  en: "Main on top: highlighted only"
+  es: "Main arriba: solo resaltados"

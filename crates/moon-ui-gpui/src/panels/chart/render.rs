@@ -12,6 +12,14 @@ use crate::{axes, input};
 
 use super::trade::TradeMouseButton;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};
+use crate::chart_persist::ChartBtnPos;
+
+/// Тип кнопки рыночного действия в оверлее чарта.
+#[derive(Clone, Copy)]
+enum ActKind {
+    CancelBuy,
+    PanicSell,
+}
 
 fn rgb3_from_hex(hex: u32) -> [u8; 3] {
     [
@@ -163,6 +171,207 @@ impl Render for ChartPanel {
                 .collect()
         } else {
             Vec::new()
+        };
+        // Кнопки рыночных действий (Cancel Buy / Panic Sell) — GPUI-оверлей внизу тела графика,
+        // НАД строкой оси времени (OverScene-текст осей рисуется поверх GPUI, в его зону не лезем —
+        // см. docs-internal/POPUP_LAYOUT_TZ.md). Позиция каждой кнопки (Hide/Left/Center/Right) —
+        // из настроек вкладки. Кладём СТРОГО в зону чарта: слева режем ось цены, справа — зону
+        // стакана/управления (даже когда стакан выключен). Не влезает — ужимаем кнопки (текст
+        // обрежется справа overflow_hidden). Список: (kind, x, top, w, h, core, market, armed).
+        const ACT_BTN_W: f32 = 92.0;
+        const ACT_BTN_H: f32 = 26.0;
+        const ACT_GAP: f32 = 8.0;
+        const ACT_MIN_W: f32 = 30.0;
+        let cancel_pos = self.cancel_buy_pos;
+        let panic_pos = self.panic_sell_pos;
+        // Одиночный пейн (фулскрин Main) → кнопки кладём GPUI-раскладкой ниже (`action_overlay`):
+        // GPUI ресайзит их синхронно со слотом. Per-pane позиции из `axis_panes` берут own-pass
+        // геометрию (`data.w/h`), которая обновляется на present-тике и при фулскрин-тогле отстаёт
+        // на кадры — отсюда «прыжок» кнопок. Несколько пейнов (стек/сравнение) → per-pane.
+        let single_pane = !self.orderbook_only
+            && axis_panes.len() == 1
+            && self.chart.pane_target(0).is_some();
+        let mut action_btns: Vec<(ActKind, f32, f32, f32, f32, moon_core::session::CoreId, String, bool)> =
+            Vec::new();
+        if !single_pane && !self.orderbook_only {
+            for (idx, rect, _) in axis_panes.iter() {
+                let Some((core, market)) = self.chart.pane_target(*idx) else {
+                    continue;
+                };
+                let pane_left = rect.x / ppp;
+                let pane_w = rect.w / ppp;
+                // Зона чарта: [ось цены .. начало зоны стакана/управления]. Стакан-зону резервируем
+                // всегда (и при выключенном стакане), как просит ТЗ.
+                let glass_reserve = moon_chart::GLASS_ZONE_PX.min(pane_w * 0.5);
+                let zone_left = pane_left + moon_chart::PRICE_AXIS_W;
+                let zone_right = pane_left + pane_w - glass_reserve;
+                let zone_w = zone_right - zone_left;
+                if zone_w < ACT_MIN_W {
+                    continue;
+                }
+                let top = (rect.y + rect.h) / ppp - moon_chart::TIME_AXIS_H - ACT_BTN_H - 10.0;
+                let armed = self.backend.read(cx).is_panic_armed(core, &market);
+                // Видимые кнопки (kind, anchor) в стабильном порядке.
+                let mut vis: Vec<(ActKind, ChartBtnPos)> = Vec::new();
+                if cancel_pos != ChartBtnPos::Hide {
+                    vis.push((ActKind::CancelBuy, cancel_pos));
+                }
+                if panic_pos != ChartBtnPos::Hide {
+                    vis.push((ActKind::PanicSell, panic_pos));
+                }
+                if vis.is_empty() {
+                    continue;
+                }
+                // Глобальный шринк: ВСЕ кнопки должны помещаться в зону одним рядом — иначе при
+                // разных якорях (лево+право) на узком чарте они бы наложились.
+                let n = vis.len() as f32;
+                let bw = if n * ACT_BTN_W + (n - 1.0) * ACT_GAP > zone_w {
+                    ((zone_w - (n - 1.0) * ACT_GAP) / n).max(ACT_MIN_W)
+                } else {
+                    ACT_BTN_W
+                };
+                let hi = (zone_right - bw).max(zone_left);
+                let anchor_x = |a: ChartBtnPos| -> f32 {
+                    let x = match a {
+                        ChartBtnPos::Left => zone_left,
+                        ChartBtnPos::Center => zone_left + (zone_w - bw) * 0.5,
+                        ChartBtnPos::Right => zone_right - bw,
+                        ChartBtnPos::Hide => zone_left,
+                    };
+                    x.clamp(zone_left, hi)
+                };
+                let order = |a: ChartBtnPos| -> u8 {
+                    match a {
+                        ChartBtnPos::Left => 0,
+                        ChartBtnPos::Center => 1,
+                        ChartBtnPos::Right => 2,
+                        ChartBtnPos::Hide => 0,
+                    }
+                };
+                let mut placed: Vec<(ActKind, f32)> = Vec::new();
+                if vis.len() == 1 {
+                    placed.push((vis[0].0, anchor_x(vis[0].1)));
+                } else if vis[0].1 == vis[1].1 {
+                    // Одинаковый якорь — ряд из двух кнопок у этого якоря.
+                    let total = 2.0 * bw + ACT_GAP;
+                    let start = match vis[0].1 {
+                        ChartBtnPos::Center => zone_left + (zone_w - total) * 0.5,
+                        ChartBtnPos::Right => zone_right - total,
+                        _ => zone_left,
+                    }
+                    .clamp(zone_left, (zone_right - total).max(zone_left));
+                    placed.push((vis[0].0, start));
+                    placed.push((vis[1].0, start + bw + ACT_GAP));
+                } else {
+                    // Разные якоря — слева-направо по порядку якоря, без наложения.
+                    let (mut a, mut b) = (vis[0], vis[1]);
+                    if order(a.1) > order(b.1) {
+                        std::mem::swap(&mut a, &mut b);
+                    }
+                    let xa = anchor_x(a.1);
+                    let xb = anchor_x(b.1).max(xa + bw + ACT_GAP).clamp(zone_left, hi);
+                    placed.push((a.0, xa));
+                    placed.push((b.0, xb));
+                }
+                for (kind, x) in placed {
+                    action_btns.push((kind, x, top, bw, ACT_BTN_H, core, market.clone(), armed));
+                }
+            }
+        }
+        // Оверлей кнопок для ОДИНОЧНОГО пейна — чистая GPUI-раскладка (insets + flex), без
+        // own-pass геометрии, поэтому позиция синхронна со слотом (нет «прыжка» при фулскрине).
+        // Зона чарта = слот минус ось цены (слева), зона стакана/управления (справа), ось времени
+        // (снизу). Три региона = якоря Left/Center/Right.
+        let action_overlay = if single_pane {
+            self.chart.pane_target(0).and_then(|(core, market)| {
+                let armed = self.backend.read(cx).is_panic_armed(core, &market);
+                let backend0 = self.backend.clone();
+                let mk = |kind: ActKind| -> AnyElement {
+                    let backend = backend0.clone();
+                    let market = market.clone();
+                    let (label, variant, selected, id) = match kind {
+                        ActKind::CancelBuy => {
+                            ("Cancel Buy", MoonButtonVariant::Soft, false, "chart-cancelbuy-fs")
+                        }
+                        ActKind::PanicSell => {
+                            ("Panic Sell", MoonButtonVariant::Danger, armed, "chart-panic-fs")
+                        }
+                    };
+                    MoonButton::new(SharedString::from(id))
+                        .label(label)
+                        .size(MoonButtonSize::ToolbarCompact)
+                        .variant(variant)
+                        .selected(selected)
+                        .on_click(move |_, _w, app| match kind {
+                            ActKind::CancelBuy => {
+                                let b = backend.read(app);
+                                if let Err(error) = b.session.cancel_market_buys(core, market.clone())
+                                {
+                                    log::warn!("cancel market buys failed: {error:#}");
+                                }
+                            }
+                            ActKind::PanicSell => {
+                                backend.update(app, |b, cx| {
+                                    b.toggle_panic_sell(core, market.clone());
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .render()
+                        .into_any_element()
+                };
+                let mut left: Vec<AnyElement> = Vec::new();
+                let mut center: Vec<AnyElement> = Vec::new();
+                let mut right: Vec<AnyElement> = Vec::new();
+                for (kind, pos) in [
+                    (ActKind::CancelBuy, cancel_pos),
+                    (ActKind::PanicSell, panic_pos),
+                ] {
+                    match pos {
+                        ChartBtnPos::Left => left.push(mk(kind)),
+                        ChartBtnPos::Center => center.push(mk(kind)),
+                        ChartBtnPos::Right => right.push(mk(kind)),
+                        ChartBtnPos::Hide => {}
+                    }
+                }
+                if left.is_empty() && center.is_empty() && right.is_empty() {
+                    return None;
+                }
+                let region = |btns: Vec<AnyElement>| {
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_x_hidden()
+                        .flex()
+                        .items_center()
+                        .gap(px(ACT_GAP))
+                        .children(btns)
+                };
+                Some(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .pl(px(moon_chart::PRICE_AXIS_W))
+                        .pr(px(moon_chart::GLASS_ZONE_PX))
+                        .pb(px(moon_chart::TIME_AXIS_H + 10.0))
+                        .flex()
+                        .flex_col()
+                        .justify_end()
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(ACT_BTN_H))
+                                .flex()
+                                .items_center()
+                                .child(region(left).justify_start())
+                                .child(region(center).justify_center())
+                                .child(region(right).justify_end()),
+                        )
+                        .into_any_element(),
+                )
+            })
+        } else {
+            None
         };
         let show_empty_logo = axis_panes.is_empty();
         let (slot_w, _) = self.chart.slot_dev_size();
@@ -663,5 +872,59 @@ impl Render for ChartPanel {
                     })
                     .render()
             }))
+            .children(action_btns.into_iter().enumerate().map(
+                |(i, (kind, x, y, w, h, core, market, armed))| {
+                    let backend = self.backend.clone();
+                    // Бренд-термины MoonBot — НЕ локализуем (одинаковы во всех локалях).
+                    let (label, variant, selected, id) = match kind {
+                        ActKind::CancelBuy => (
+                            "Cancel Buy",
+                            MoonButtonVariant::Soft,
+                            false,
+                            format!("chart-cancelbuy-{i}"),
+                        ),
+                        ActKind::PanicSell => (
+                            "Panic Sell",
+                            MoonButtonVariant::Danger,
+                            armed,
+                            format!("chart-panic-{i}"),
+                        ),
+                    };
+                    let btn = MoonButton::new(SharedString::from(id))
+                        .label(label)
+                        .size(MoonButtonSize::ToolbarCompact)
+                        .variant(variant)
+                        .selected(selected)
+                        .full_width()
+                        .on_click(move |_, _w, app| match kind {
+                            ActKind::CancelBuy => {
+                                let b = backend.read(app);
+                                if let Err(error) = b.session.cancel_market_buys(core, market.clone())
+                                {
+                                    log::warn!("cancel market buys failed: {error:#}");
+                                }
+                            }
+                            ActKind::PanicSell => {
+                                backend.update(app, |b, cx| {
+                                    b.toggle_panic_sell(core, market.clone());
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .render();
+                    // Контейнер задаёт ширину для обрезки текста (overflow клипует к bounds по
+                    // ОБЕИМ осям). Высоту берём с запасом (h+4), чтобы низ кнопки не срезался —
+                    // кнопка прижата к верху и целиком внутри.
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top(px(y))
+                        .w(px(w))
+                        .h(px(h + 4.0))
+                        .overflow_x_hidden()
+                        .child(btn)
+                },
+            ))
+            .children(action_overlay)
     }
 }

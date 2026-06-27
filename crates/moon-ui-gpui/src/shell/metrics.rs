@@ -7,7 +7,7 @@ use gpui::*;
 
 use moon_ui::{MoonInputState, MoonSliderEvent, MoonSliderState};
 
-use moon_core::feed::{ClientSettingsEdit, LevManageEdit};
+use moon_core::feed::ClientSettingsEdit;
 
 use crate::{controls, design};
 
@@ -185,17 +185,6 @@ impl Shell {
         };
         if let Err(error) = b.session.edit_client_settings(core, edit) {
             log::warn!("toolbar client settings edit failed: {error:#}");
-        }
-    }
-
-    /// Отправить правку управления плечом активному ядру.
-    pub(super) fn commit_lev_edit(&self, edit: LevManageEdit, cx: &mut Context<Self>) {
-        let b = self.backend.read(cx);
-        let Some(core) = b.active_trade_core(&self.group) else {
-            return;
-        };
-        if let Err(error) = b.session.edit_lev_manage(core, edit) {
-            log::warn!("toolbar lev manage edit failed: {error:#}");
         }
     }
 }

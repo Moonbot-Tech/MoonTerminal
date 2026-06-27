@@ -7,7 +7,7 @@
 use gpui::*;
 
 use super::{AddChartStack, ChartTabs, Tab, layout_popup, stack};
-use crate::chart_persist::{StackLayoutMode, StackOrientation};
+use crate::chart_persist::{ChartBtnPos, StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 
 impl ChartTabs {
@@ -168,6 +168,58 @@ impl ChartTabs {
         v.unwrap_or(false)
     }
 
+    /// Позиции кнопок Cancel Buy / Panic Sell активной вкладки (None → дефолт Right).
+    pub(super) fn active_action_btn_pos(&self, cx: &App) -> (ChartBtnPos, ChartBtnPos) {
+        let (c, pp) = self.active_action_btn_pos_opt(cx);
+        (c.unwrap_or_default(), pp.unwrap_or_default())
+    }
+
+    fn active_action_btn_pos_opt(&self, cx: &App) -> (Option<ChartBtnPos>, Option<ChartBtnPos>) {
+        match &self.active {
+            Tab::Main => self.main.read(cx).action_btn_pos(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .map(|p| p.read(cx).action_btn_pos())
+                .unwrap_or((None, None)),
+        }
+    }
+
+    /// Позиция кнопки Cancel Buy на активной вкладке + persist (Panic Sell не трогаем).
+    pub(super) fn apply_cancel_pos(&mut self, pos: ChartBtnPos, cx: &mut Context<Self>) {
+        let (_, panic) = self.active_action_btn_pos_opt(cx);
+        self.apply_action_pos(Some(pos), panic, cx);
+    }
+
+    /// Позиция кнопки Panic Sell на активной вкладке + persist (Cancel Buy не трогаем).
+    pub(super) fn apply_panic_pos(&mut self, pos: ChartBtnPos, cx: &mut Context<Self>) {
+        let (cancel, _) = self.active_action_btn_pos_opt(cx);
+        self.apply_action_pos(cancel, Some(pos), cx);
+    }
+
+    fn apply_action_pos(
+        &mut self,
+        cancel: Option<ChartBtnPos>,
+        panic: Option<ChartBtnPos>,
+        cx: &mut Context<Self>,
+    ) {
+        match self.active.clone() {
+            Tab::Main => self
+                .main
+                .update(cx, |s, c| s.set_action_btn_pos(cancel, panic, c)),
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(p) = self.active_stack() {
+                    p.update(cx, |s, c| s.set_action_btn_pos(cancel, panic, c));
+                }
+            }
+        }
+        let (num, bucket) = self.active_stack_key();
+        self.upsert_spec(cx, num, &bucket, move |s| {
+            s.cancel_buy_pos = cancel;
+            s.panic_sell_pos = panic;
+        });
+        cx.notify();
+    }
+
     /// Ориентация стека активной вкладки (None → дефолт Vertical).
     pub(super) fn active_layout_orientation(&self, cx: &App) -> Option<StackOrientation> {
         match &self.active {
@@ -309,6 +361,8 @@ impl ChartTabs {
         show_zone: Option<bool>,
         auto_pin: Option<bool>,
         orientation: Option<StackOrientation>,
+        cancel_pos: Option<ChartBtnPos>,
+        panic_pos: Option<ChartBtnPos>,
         cx: &mut Context<Self>,
     ) {
         let ob = orderbook.unwrap_or(true);
@@ -322,6 +376,7 @@ impl ChartTabs {
                 s.set_show_zone(Some(sz), c);
                 s.set_auto_pin(Some(ap), c);
                 s.set_orientation(orientation, c);
+                s.set_action_btn_pos(cancel_pos, panic_pos, c);
             });
             self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| {
                 s.layout_mode = mode;
@@ -332,6 +387,8 @@ impl ChartTabs {
                 s.show_zone = Some(sz);
                 s.auto_pin = Some(ap);
                 s.layout_orientation = orientation;
+                s.cancel_buy_pos = cancel_pos;
+                s.panic_sell_pos = panic_pos;
             });
         }
         // «Чарты» = add-вкладки в стрипе + кастомные + откреплённые в окна (стеки в self.detached).
@@ -350,6 +407,7 @@ impl ChartTabs {
                 s.set_show_zone(Some(sz), c);
                 s.set_auto_pin(Some(ap), c);
                 s.set_orientation(orientation, c);
+                s.set_action_btn_pos(cancel_pos, panic_pos, c);
             });
             self.upsert_spec(cx, num, &bucket, |s| {
                 s.layout_mode = mode;
@@ -360,6 +418,8 @@ impl ChartTabs {
                 s.show_zone = Some(sz);
                 s.auto_pin = Some(ap);
                 s.layout_orientation = orientation;
+                s.cancel_buy_pos = cancel_pos;
+                s.panic_sell_pos = panic_pos;
             });
         }
         self.backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
@@ -387,6 +447,8 @@ impl ChartTabs {
                 r.show_zone,
                 r.auto_pin,
                 r.orientation,
+                r.cancel_pos,
+                r.panic_pos,
                 cx,
             );
         }

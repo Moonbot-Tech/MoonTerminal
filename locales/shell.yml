@@ -100,6 +100,11 @@ toolbar.hedge:
   ru: "Hedge Mode"
   en: "Hedge Mode"
   es: "Hedge Mode"
+# Кнопка применения плеча в попапе (плечо — биржевое действие, шлётся только по ней).
+toolbar.apply:
+  ru: "Применить"
+  en: "Apply"
+  es: "Aplicar"
 
 # --- Чарт-вкладка / откреплённое чарт-окно ---
 chartwin.tab_title:

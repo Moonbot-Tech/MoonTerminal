@@ -96,6 +96,9 @@ pub struct ChartPanel {
     show_zone: bool,
     /// Авто-пин графика при выставлении ордера лонг/шорт (per-окно/вкладка). Дефолт — выкл.
     auto_pin: bool,
+    /// Позиции кнопок рыночных действий в зоне чарта (per-окно/вкладка, из попапа ⚙). Дефолт — Right.
+    cancel_buy_pos: crate::chart_persist::ChartBtnPos,
+    panic_sell_pos: crate::chart_persist::ChartBtnPos,
     /// Номер AddToChart-вкладки (None = Main).
     num: Option<u32>,
     /// Рынки, владельцем которых является именно эта chart panel. Backend держит refcount
@@ -249,6 +252,8 @@ impl ChartPanel {
             orderbook_enabled: true,
             show_zone: true,
             auto_pin: false,
+            cancel_buy_pos: Default::default(),
+            panic_sell_pos: Default::default(),
             num: None,
             registered_markets,
             registered_orderbook,
@@ -342,6 +347,8 @@ impl ChartPanel {
             orderbook_enabled: true,
             show_zone: true,
             auto_pin: false,
+            cancel_buy_pos: Default::default(),
+            panic_sell_pos: Default::default(),
             num: Some(num),
             registered_markets: HashSet::new(),
             registered_orderbook: HashSet::new(),
@@ -458,6 +465,20 @@ impl ChartPanel {
     /// `try_place_order_click` при успешном ордере.
     pub fn set_auto_pin(&mut self, on: bool, _cx: &mut Context<Self>) {
         self.auto_pin = on;
+    }
+
+    /// Позиции кнопок рыночных действий (Cancel Buy / Panic Sell) в зоне чарта (per-окно).
+    pub fn set_action_btn_pos(
+        &mut self,
+        cancel_buy: crate::chart_persist::ChartBtnPos,
+        panic_sell: crate::chart_persist::ChartBtnPos,
+        cx: &mut Context<Self>,
+    ) {
+        if self.cancel_buy_pos != cancel_buy || self.panic_sell_pos != panic_sell {
+            self.cancel_buy_pos = cancel_buy;
+            self.panic_sell_pos = panic_sell;
+            cx.notify();
+        }
     }
 
     /// Доступность режима сравнения (вкладка горизонтальная) — показывать ли кнопку-замок.

@@ -225,6 +225,8 @@ impl ChartTabs {
                     show_zone: None,
                     auto_pin: None,
                     layout_orientation: None,
+                    cancel_buy_pos: None,
+                    panic_sell_pos: None,
                     custom_coins: None,
                     custom_label: None,
                     compare_anchor: None,
@@ -536,10 +538,11 @@ impl DetachedChartHost {
                     s.orderbook_enabled,
                     s.show_zone,
                     s.auto_pin,
+                    (s.cancel_buy_pos, s.panic_sell_pos),
                 )
             })
         });
-        if let Some((m, hf, hs, ob, sz, ap)) = saved {
+        if let Some((m, hf, hs, ob, sz, ap, action_pos)) = saved {
             if m.is_some() || hf.is_some() || hs.is_some() {
                 panel.update(cx, |p, pcx| p.set_layout(m, hf, hs, pcx));
             }
@@ -551,6 +554,11 @@ impl DetachedChartHost {
             }
             if ap.is_some() {
                 panel.update(cx, |p, pcx| p.set_auto_pin(ap, pcx));
+            }
+            if action_pos.0.is_some() || action_pos.1.is_some() {
+                panel.update(cx, |p, pcx| {
+                    p.set_action_btn_pos(action_pos.0, action_pos.1, pcx)
+                });
             }
         }
         let layout_fit_input = cx.new(|cx| MoonInputState::new(window, cx));
@@ -811,6 +819,10 @@ impl DetachedChartHost {
         let show_zone = Some(self.panel.read(cx).show_zone().unwrap_or(true));
         let auto_pin = Some(self.panel.read(cx).auto_pin().unwrap_or(false));
         let orientation = self.panel.read(cx).layout_orientation();
+        let (cancel_pos, panic_pos) = {
+            let (c, pp) = self.panel.read(cx).action_btn_pos();
+            (Some(c.unwrap_or_default()), Some(pp.unwrap_or_default()))
+        };
         self.backend.update(cx, |bk, bcx| {
             bk.chart_apply_all.push(crate::ChartApplyAll {
                 group,
@@ -823,6 +835,8 @@ impl DetachedChartHost {
                 show_zone,
                 auto_pin,
                 orientation,
+                cancel_pos,
+                panic_pos,
             });
             bcx.notify();
         });
@@ -859,6 +873,8 @@ impl DetachedChartHost {
                     show_zone: None,
                     auto_pin: None,
                     layout_orientation: Some(orientation),
+                    cancel_buy_pos: None,
+                    panic_sell_pos: None,
                     custom_coins: None,
                     custom_label: None,
                     compare_anchor: None,
@@ -905,6 +921,8 @@ impl DetachedChartHost {
                     show_zone: None,
                     auto_pin: None,
                     layout_orientation: None,
+                    cancel_buy_pos: None,
+                    panic_sell_pos: None,
                     custom_coins: None,
                     custom_label: None,
                     compare_anchor: None,
@@ -943,6 +961,8 @@ impl DetachedChartHost {
                     show_zone: None,
                     auto_pin: None,
                     layout_orientation: None,
+                    cancel_buy_pos: None,
+                    panic_sell_pos: None,
                     custom_coins: None,
                     custom_label: None,
                     compare_anchor: None,
@@ -981,6 +1001,8 @@ impl DetachedChartHost {
                     show_zone: Some(show),
                     auto_pin: None,
                     layout_orientation: None,
+                    cancel_buy_pos: None,
+                    panic_sell_pos: None,
                     custom_coins: None,
                     custom_label: None,
                     compare_anchor: None,
@@ -1018,6 +1040,65 @@ impl DetachedChartHost {
                     show_zone: None,
                     auto_pin: Some(on),
                     layout_orientation: None,
+                    cancel_buy_pos: None,
+                    panic_sell_pos: None,
+                    custom_coins: None,
+                    custom_label: None,
+                    compare_anchor: None,
+                    compare_orderbook_only: false,
+                });
+            }
+            bk.chart_specs_dirty = true;
+        });
+        cx.notify();
+    }
+
+    /// Позиция кнопки Cancel Buy этого окна + persist (Panic Sell не трогаем).
+    fn apply_cancel_pos(&mut self, pos: chart_persist::ChartBtnPos, cx: &mut Context<Self>) {
+        let (_, panic) = self.panel.read(cx).action_btn_pos();
+        self.apply_action_pos(Some(pos), panic, cx);
+    }
+
+    /// Позиция кнопки Panic Sell этого окна + persist (Cancel Buy не трогаем).
+    fn apply_panic_pos(&mut self, pos: chart_persist::ChartBtnPos, cx: &mut Context<Self>) {
+        let (cancel, _) = self.panel.read(cx).action_btn_pos();
+        self.apply_action_pos(cancel, Some(pos), cx);
+    }
+
+    fn apply_action_pos(
+        &mut self,
+        cancel: Option<chart_persist::ChartBtnPos>,
+        panic: Option<chart_persist::ChartBtnPos>,
+        cx: &mut Context<Self>,
+    ) {
+        self.panel
+            .update(cx, |p, c| p.set_action_btn_pos(cancel, panic, c));
+        let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
+        self.backend.update(cx, |bk, _| {
+            if let Some(s) = bk
+                .chart_specs
+                .iter_mut()
+                .find(|s| s.group == group && s.num == num && s.bucket() == bucket)
+            {
+                s.cancel_buy_pos = cancel;
+                s.panic_sell_pos = panic;
+            } else {
+                bk.chart_specs.push(chart_persist::ChartTabSpec {
+                    group,
+                    num,
+                    core: None,
+                    bucket: Some(bucket),
+                    scale: None,
+                    detached: None,
+                    layout_mode: None,
+                    layout_height_fit: None,
+                    layout_height_scroll: None,
+                    orderbook_enabled: None,
+                    show_zone: None,
+                    auto_pin: None,
+                    layout_orientation: None,
+                    cancel_buy_pos: cancel,
+                    panic_sell_pos: panic,
                     custom_coins: None,
                     custom_label: None,
                     compare_anchor: None,
@@ -1101,6 +1182,10 @@ impl Render for DetachedChartHost {
             let orderbook_enabled = self.panel.read(cx).orderbook_enabled().unwrap_or(true);
             let show_zone = self.panel.read(cx).show_zone().unwrap_or(true);
             let auto_pin = self.panel.read(cx).auto_pin().unwrap_or(false);
+            let (cancel_pos, panic_pos) = {
+                let (c, pp) = self.panel.read(cx).action_btn_pos();
+                (c.unwrap_or_default(), pp.unwrap_or_default())
+            };
             let is_custom = self.is_custom(cx);
             let pick_entity = cx.entity();
             let all_entity = cx.entity();
@@ -1108,6 +1193,8 @@ impl Render for DetachedChartHost {
             let sz_entity = cx.entity();
             let ap_entity = cx.entity();
             let or_entity = cx.entity();
+            let cbp_entity = cx.entity();
+            let psp_entity = cx.entity();
             let hover_entity = cx.entity();
             let size = layout_popup::content_size(cx, is_custom);
             div()
@@ -1139,6 +1226,8 @@ impl Render for DetachedChartHost {
                     orderbook_enabled,
                     show_zone,
                     auto_pin,
+                    cancel_pos,
+                    panic_pos,
                     p,
                     cx,
                     move |mode, app| {
@@ -1185,6 +1274,12 @@ impl Render for DetachedChartHost {
                             };
                             this.apply_orientation(next, cx);
                         });
+                    },
+                    move |pos, app| {
+                        cbp_entity.update(app, |this, cx| this.apply_cancel_pos(pos, cx));
+                    },
+                    move |pos, app| {
+                        psp_entity.update(app, |this, cx| this.apply_panic_pos(pos, cx));
                     },
                 ))
         });

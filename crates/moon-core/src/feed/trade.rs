@@ -8,7 +8,7 @@
 //! `MoonOrders::move_order` (TOrderReplaceCommand, CmdId=6),
 //! `MoonOrders::cancel` (TOrderCancelCommand, CmdId=10).
 
-use moonproto::{MoonClient, NewOrderParams, OrderSide, VStopParams};
+use moonproto::{MoonClient, NewOrderParams, OrderSide, OrderWorkerStatus, VStopParams};
 
 use crate::feed::OrderStopKind;
 
@@ -61,6 +61,48 @@ pub(super) fn cancel_order(client: &MoonClient, server_id: u64, uid: u64) {
     match client.orders().cancel(uid) {
         Ok(()) => log::info!("core {server_id} cancel order {uid}"),
         Err(error) => log::warn!("core {server_id} cancel order {uid} failed: {error}"),
+    }
+}
+
+/// «Паник-селл» по рынку (кнопка на чарте): market-level panic sell button semantics.
+/// Транслируется в `orders().switch_panic_sell_by_market`. Рантайм сам применяет тоггл
+/// к ордерам рынка и шлёт нужные пакеты.
+pub(super) fn panic_sell_market(client: &MoonClient, server_id: u64, market: String, on: bool) {
+    match client.orders().switch_panic_sell_by_market(market.clone(), on) {
+        Ok(()) => log::info!("core {server_id} panic sell market {market} on={on}"),
+        Err(error) => {
+            log::warn!("core {server_id} panic sell market {market} on={on} failed: {error}")
+        }
+    }
+}
+
+/// Отменить ожидающие buy-ордера рынка («Cancel Buy»). Берём УДЕРЖАННЫЙ снимок, отбираем
+/// ордера этого рынка в buy-фазе ДО исполнения (`OS_None` — ещё не на бирже, или `BuySet` —
+/// лимит-бай ждёт налива), не помеченные на отмену, и шлём по каждому `orders().cancel(uid)`.
+/// Исполненные позиции (`BuyDone`/sell-фазы) и терминальные ордера не трогаем.
+pub(super) fn cancel_market_buys(client: &MoonClient, server_id: u64, market: &str) {
+    let Some(snap) = client.snapshot() else {
+        log::warn!("core {server_id} cancel market buys {market}: no snapshot yet");
+        return;
+    };
+    let uids: Vec<u64> = snap
+        .orders()
+        .iter()
+        .filter(|o| {
+            o.market_name == market
+                && !o.pending_cancel
+                && (o.status == OrderWorkerStatus::None || o.status == OrderWorkerStatus::BuySet)
+        })
+        .map(|o| o.uid)
+        .collect();
+    log::info!(
+        "core {server_id} cancel market buys {market}: {} pending",
+        uids.len()
+    );
+    for uid in uids {
+        if let Err(error) = client.orders().cancel(uid) {
+            log::warn!("core {server_id} cancel market buys {market} uid {uid} failed: {error}");
+        }
     }
 }
 
