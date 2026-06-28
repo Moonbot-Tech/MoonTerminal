@@ -37,10 +37,14 @@ lines.knot_size:
   ru: "размер узла"
   en: "knot size"
   es: "tamaño de nudo"
+lines.pending_group:
+  ru: "Выставлен (не исполнен):"
+  en: "Placed (unfilled):"
+  es: "Colocada (no ejecutada):"
 lines.pending_alpha:
-  ru: "прозрачность невыставленного"
-  en: "pending (unfilled) alpha"
-  es: "opacidad pendiente (no ejecutada)"
+  ru: "прозрачность"
+  en: "alpha"
+  es: "opacidad"
 lines.path_title:
   ru: "Путь (трейл / змейка)"
   en: "Path (trail)"

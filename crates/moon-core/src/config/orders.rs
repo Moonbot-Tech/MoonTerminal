@@ -37,6 +37,11 @@ pub struct LineStyle {
     /// (шорт). После исполнения линии рисуются на `active_alpha`. Остальные линии поле
     /// игнорируют (значимо только для `buy`/`buy_short`).
     pub pending_alpha: f32,
+    /// Цвет входной линии ВЫСТАВЛЕННОГО, но ещё не исполненного ордера (fill=0).
+    /// `None` = брать основной `color` (т.е. выставленный = исполненный, только бледнее).
+    /// Значимо только для `buy`/`buy_short`; после фила берётся `color`.
+    #[serde(default)]
+    pub pending_color: Option<[u8; 3]>,
 }
 
 impl Default for LineStyle {
@@ -52,6 +57,7 @@ impl Default for LineStyle {
             knot_size: 3.0,
             dashed: false,
             pending_alpha: 0.65,
+            pending_color: None,
         }
     }
 }
@@ -67,6 +73,16 @@ impl LineStyle {
     fn no_markers(mut self) -> Self {
         self.start_marker = false;
         self.end_marker = false;
+        self
+    }
+    /// Толщина линии (билдер).
+    fn t(mut self, thickness: f32) -> Self {
+        self.thickness = thickness;
+        self
+    }
+    /// Цвет невыставленного (выставлен, не исполнен) — билдер.
+    fn pending(mut self, color: [u8; 3]) -> Self {
+        self.pending_color = Some(color);
         self
     }
 }
@@ -139,38 +155,65 @@ pub struct OrdersStyle {
 }
 
 impl Default for OrdersStyle {
+    /// Дефолт = ТЁМНЫЙ набор пользователя (бейк из его `orders.toml`).
     fn default() -> Self {
-        // Синий/светло-синий/фиолетовый литералами (нет в палитре).
-        const BLUE: [u8; 3] = [0x5a, 0x96, 0xff];
-        const LIGHT_BLUE: [u8; 3] = palette::TP;
-        const PURPLE: [u8; 3] = [0xb4, 0x78, 0xff];
-
         let liq = LineStyle {
             start_marker: false,
             end_marker: false,
             knots: false,
-            thickness: 1.5, // ликвидация — чуть толще остальных линий
-            ..LineStyle::with(palette::RED)
+            thickness: 1.5,
+            ..LineStyle::with([255, 48, 0])
         };
         let pending_cond = LineStyle {
             dashed: true,
-            ..LineStyle::with(palette::TEXT_2)
+            ..LineStyle::with([151, 146, 138])
         };
-        // Шорт-вход по умолчанию — розовый/маджента: явно отличается от оранжевого лонга и от
-        // остальных линий (синий sell / красный stop / зелёный tp / фиолетовый vstop).
-        const SHORT_PINK: [u8; 3] = [0xff, 0x5c, 0x8a];
-        // Шорт-продажа (выход) — светло-серый (как SellShort в reference MoonBot): отличается
-        // от синего лонг-sell.
-        const SELL_SHORT_GRAY: [u8; 3] = [0xc8, 0xc8, 0xc8];
         Self {
-            buy: LineStyle::with(palette::ORANGE),
-            buy_short: LineStyle::with(SHORT_PINK),
-            sell: LineStyle::with(BLUE),
-            sell_short: LineStyle::with(SELL_SHORT_GRAY),
-            stop: LineStyle::with(palette::RED),
-            trailing: LineStyle::with(LIGHT_BLUE).no_markers(),
-            take_profit: LineStyle::with(palette::GREEN).no_markers(),
-            vstop: LineStyle::with(PURPLE).no_markers(),
+            buy: LineStyle::with([255, 179, 71]).t(1.2).pending([255, 217, 61]),
+            buy_short: LineStyle::with([255, 179, 71])
+                .t(1.2)
+                .pending([232, 228, 220]),
+            sell: LineStyle::with([143, 208, 240]).t(1.2),
+            sell_short: LineStyle::with([127, 201, 255]).t(1.2),
+            stop: LineStyle::with([255, 74, 74]).t(1.2),
+            trailing: LineStyle::with([92, 111, 224]).no_markers(),
+            take_profit: LineStyle::with([47, 168, 92]).no_markers(),
+            vstop: LineStyle::with([180, 120, 255]).no_markers(),
+            pending_cond,
+            liq,
+            path: PathStyle::default(),
+            trace_alpha: 0.4,
+            active_alpha: 0.95,
+            closed_alpha: 0.35,
+            pending_dashed: true,
+            max_closed_orders: 500,
+        }
+    }
+}
+
+impl OrdersStyle {
+    /// Дефолт СВЕТЛОГО набора (бейк из `[light]` в `orders.toml` пользователя).
+    fn default_light() -> Self {
+        let liq = LineStyle {
+            start_marker: false,
+            end_marker: false,
+            knots: false,
+            thickness: 1.5,
+            ..LineStyle::with([255, 0, 0])
+        };
+        let pending_cond = LineStyle {
+            dashed: true,
+            ..LineStyle::with([151, 146, 138])
+        };
+        Self {
+            buy: LineStyle::with([0, 0, 0]),
+            buy_short: LineStyle::with([144, 0, 160]),
+            sell: LineStyle::with([0, 0, 255]),
+            sell_short: LineStyle::with([139, 0, 0]),
+            stop: LineStyle::with([255, 74, 74]),
+            trailing: LineStyle::with([0, 0, 128]).no_markers(),
+            take_profit: LineStyle::with([47, 168, 92]).no_markers(),
+            vstop: LineStyle::with([180, 120, 255]).no_markers(),
             pending_cond,
             liq,
             path: PathStyle::default(),
@@ -214,11 +257,10 @@ pub struct OrdersStyleSet {
 
 impl Default for OrdersStyleSet {
     fn default() -> Self {
-        // Светлый набор по умолчанию = тёмный (пользователь правит под себя в Настройках).
-        let d = OrdersStyle::default();
+        // Дефолты = текущие наборы пользователя: тёмный и СВОЙ светлый (бейк из orders.toml).
         Self {
-            light: d.clone(),
-            dark: d,
+            dark: OrdersStyle::default(),
+            light: OrdersStyle::default_light(),
         }
     }
 }

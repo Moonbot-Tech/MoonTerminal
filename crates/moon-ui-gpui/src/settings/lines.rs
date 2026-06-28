@@ -32,6 +32,8 @@ struct LineEd {
     knot_size: Entity<MoonSliderState>,
     /// Прозрачность невыставленного (fill=0) — показывается только у `buy`/`buy_short`.
     pending_alpha: Entity<MoonSliderState>,
+    /// Цвет невыставленного (fill=0) — показывается только у `buy`/`buy_short`.
+    pending_color: Entity<MoonColorPickerState>,
 }
 
 /// Color-picker поля OrdersStyle активной темы (`is_light`) — пишет в draft.orders[тема].
@@ -131,6 +133,14 @@ macro_rules! line_ed {
                 0.0,
                 1.0,
                 0.01,
+            ),
+            pending_color: ord_color(
+                $b,
+                $w,
+                $cx,
+                $il,
+                |o| o.$line.pending_color.unwrap_or(o.$line.color),
+                |o, v| o.$line.pending_color = Some(v),
             ),
         }
     };
@@ -322,13 +332,23 @@ impl SettingsView {
                     .child(slider_row(&t!("lines.thickness"), &ed.thickness, cx)),
             )
             .child(chk(0));
-        // Прозрачность невыставленного (fill=0) — только у входных линий buy/buy_short.
+        // Состояние «выставлен, но не исполнен» (fill=0) — только у входных линий buy/buy_short:
+        // отдельный цвет + прозрачность. Цвет пустой = брать основной цвет линии.
         if pending {
-            col = col.child(slider_row(
-                &t!("lines.pending_alpha"),
-                &ed.pending_alpha,
-                cx,
-            ));
+            col = col
+                .child(
+                    div()
+                        .text_size(crate::design::t_caption(cx))
+                        .text_color(rgb(p.text_soft))
+                        .child(t!("lines.pending_group").to_string()),
+                )
+                .child(
+                    h_flex()
+                        .gap(px(10.0))
+                        .items_center()
+                        .child(MoonColorPicker::new(&ed.pending_color))
+                        .child(slider_row(&t!("lines.pending_alpha"), &ed.pending_alpha, cx)),
+                );
         }
         if markers {
             col = col

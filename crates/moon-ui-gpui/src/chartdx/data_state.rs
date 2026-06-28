@@ -367,7 +367,6 @@ impl ChartDataState {
                         &mut pr.order_labels,
                         &core_st.order_lines,
                         &pane.market,
-                        &self.orders,
                         quote_usd,
                     );
                     pr.last_order_lines_rev = core_st.order_lines_rev;
@@ -963,7 +962,6 @@ fn build_order_labels(
     out: &mut Vec<OrderLabel>,
     store: &moon_core::session::order_lines::OrderLineStore,
     market: &str,
-    style: &OrdersStyle,
     quote_usd: Option<f64>,
 ) {
     out.clear();
@@ -1000,17 +998,12 @@ fn build_order_labels(
                     String::new()
                 };
                 if !text.is_empty() {
-                    // Текст входа = цвету линии входа (buy для лонга / buy_short для шорта).
-                    let entry_col = if short {
-                        rgb_u32(style.buy_short.color)
-                    } else {
-                        rgb_u32(style.buy.color)
-                    };
+                    // Размер входа buy-ордера — ВСЕГДА белый (не цвет линии, не по стороне).
                     out.push(OrderLabel {
                         price: bp,
                         text,
                         above: !short,
-                        color: entry_col,
+                        color: 0xFF_FF_FF,
                     });
                 }
             }

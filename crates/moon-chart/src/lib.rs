@@ -183,7 +183,14 @@ pub fn build_order_geometry(
             let ended = line.off_ms.is_some() || closed;
             let dashed =
                 st.dashed || (idx == LineKind::Buy as usize && ord.pending && style.pending_dashed);
-            let col = rgba(st.color, line_alpha);
+            // Входная линия ВЫСТАВЛЕННОГО (ещё не залит) ордера может иметь свой цвет
+            // (`pending_color`); после фила — основной `color`. Только Buy-линия (вход).
+            let line_color = if idx == LineKind::Buy as usize && ord.fill_pct <= 0.0 {
+                st.pending_color.unwrap_or(st.color)
+            } else {
+                st.color
+            };
+            let col = rgba(line_color, line_alpha);
             let dash = if dashed {
                 SEG_PATTERN_DASH_DOT_DOT
             } else {
@@ -256,7 +263,7 @@ pub fn build_order_geometry(
                 } else {
                     base_trace_alpha
                 };
-                let trace_color = rgba(st.color, trace_alpha);
+                let trace_color = rgba(line_color, trace_alpha);
                 let trace_thickness = if highlighted { 2.0 } else { 1.0 };
                 let trace_dash = if show_light_lines {
                     SEG_PATTERN_SOLID

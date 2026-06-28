@@ -57,7 +57,7 @@ impl Default for ChartTheme {
             grid: [29, 30, 32], // едва заметная сетка
             grid_alpha: 1.0,
             background_opacity: 0.18,
-            label_font_delta: 0.0,
+            label_font_delta: -1.5,
             cross: [76, 54, 29], // приглушённый янтарный
             cross_alpha: 0.5,
             cross_thickness: 1.0,
