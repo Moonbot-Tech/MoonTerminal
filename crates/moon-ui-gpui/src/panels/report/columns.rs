@@ -4,12 +4,12 @@
 use super::*;
 use rust_i18n::t;
 
-pub(super) fn report_columns(vis: &[usize]) -> Vec<MoonDataTableColumn> {
+pub(super) fn report_columns(table: &ReportTable, vis: &[usize]) -> Vec<MoonDataTableColumn> {
     vis.iter()
         .map(|&i| {
-            let col = db::DISPLAY_COLUMNS[i];
-            let column =
-                MoonDataTableColumn::new(col, header_for(col), width_for(col)).sortable(true);
+            let col = table.cols[i].as_str();
+            let column = MoonDataTableColumn::new(col.to_string(), header_for(col), width_for(col))
+                .sortable(true);
             if is_numeric_report_column(col) {
                 column.right()
             } else {
@@ -30,7 +30,7 @@ pub(super) fn report_data_row(
     if let Some(r) = table.rows.get(ri) {
         let core_uid = table.core_uids.get(ri).copied().unwrap_or(0);
         for &i in vis {
-            let cname = table.cols[i];
+            let cname = table.cols[i].as_str();
             let val = r.get(i).unwrap_or(&Value::Null);
             if cname == "coin" {
                 cells.push(coin_cell(ri, val, core_uid, backend, p));
@@ -163,7 +163,8 @@ fn is_numeric_report_column(col: &str) -> bool {
             | "lev"
             | "db_id"
             | "taskid"
-    )
+    ) || col.ends_with("delta")
+        || col.ends_with("ratio")
 }
 
 /// Текст + цвет ячейки по имени колонки и значению (порт `cell`).
@@ -218,38 +219,11 @@ fn value_to_string(v: &Value) -> String {
     }
 }
 
-/// Человекочитаемый заголовок колонки (порт `header_for`).
+/// Заголовок колонки = ИМЯ колонки БД как есть, БЕЗ i18n. Единообразно с
+/// авто-добавленными полями ядра (дельты/dmark/…), нейтрально к языку и сразу
+/// показывает, что реально приходит в отчёт.
 pub(super) fn header_for(col: &str) -> String {
-    match col {
-        "buydate" => t!("report.col.buydate").to_string(),
-        "closedate" => t!("report.col.closedate").to_string(),
-        "sellsetdate" => "Sell set".to_string(),
-        "last_update_at" => t!("report.col.last_update").to_string(),
-        "core_name" => t!("report.col.core").to_string(),
-        "db_id" => "ID".to_string(),
-        "taskid" => "TaskID".to_string(),
-        "exorderid" => "ExOrderID".to_string(),
-        "coin" => t!("report.col.coin").to_string(),
-        "isshort" => t!("report.col.side").to_string(),
-        "quantity" => t!("report.col.quantity").to_string(),
-        "boughtq" => t!("report.col.bought").to_string(),
-        "buyprice" => t!("report.col.buyprice").to_string(),
-        "sellprice" => t!("report.col.sellprice").to_string(),
-        "spentbtc" => t!("report.col.spentbtc").to_string(),
-        "gainedbtc" => t!("report.col.gainedbtc").to_string(),
-        "profitbtc" => t!("report.col.profitbtc").to_string(),
-        "lev" => t!("report.col.lev").to_string(),
-        "strategyid" => "Strat".to_string(),
-        "channelname" => t!("report.col.channel").to_string(),
-        "signaltype" => t!("report.col.signal").to_string(),
-        "fname" => t!("report.col.file").to_string(),
-        "basecurrency" => "BaseCur".to_string(),
-        "emulator" => t!("report.col.emulator").to_string(),
-        "status" => t!("report.col.status").to_string(),
-        "sellreason" => t!("report.col.reason").to_string(),
-        "comment" => t!("report.col.comment").to_string(),
-        other => other.to_string(),
-    }
+    col.to_string()
 }
 
 fn width_for(col: &str) -> f32 {

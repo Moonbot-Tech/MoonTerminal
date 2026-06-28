@@ -113,6 +113,7 @@ pub(super) fn send_close_report(
         status: p.status,
         sellreason: p.sell_reason,
         comment: p.comment,
+        extras: p.all,
         sql,
     });
 }

@@ -9,6 +9,7 @@
 mod columns;
 mod controls;
 
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -58,7 +59,7 @@ fn empty_report_query_result() -> ReportQueryResult {
     ReportQueryResult {
         cores: Vec::new(),
         table: ReportTable {
-            cols: db::DISPLAY_COLUMNS,
+            cols: Vec::new(),
             rows: Vec::new(),
             core_uids: Vec::new(),
         },
@@ -100,8 +101,9 @@ pub struct ReportPanel {
     query_inflight: bool,
     query_seq: u64,
 
-    /// Видимость колонок (параллельно db::DISPLAY_COLUMNS).
-    pub(super) visible: Vec<bool>,
+    /// Видимые колонки — по ИМЕНАМ (а не индексам), чтобы авто-добавленные поля
+    /// ядра не сбивали соответствие. Новая колонка по умолчанию скрыта.
+    pub(super) visible: HashSet<String>,
     table_state: Entity<MoonDataTableState>,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
@@ -125,22 +127,14 @@ impl ReportPanel {
             .as_ref()
             .map(|g| g.load(Ordering::Relaxed))
             .unwrap_or(0);
-        // Видимость колонок: восстанавливаем сохранённый набор (app_meta), иначе дефолт.
-        let visible: Vec<bool> = conn
+        // Видимость колонок: восстанавливаем сохранённый набор имён (app_meta), иначе дефолт.
+        let visible: HashSet<String> = conn
             .as_ref()
             .and_then(db::load_visible)
-            .map(|saved| {
-                db::DISPLAY_COLUMNS
-                    .iter()
-                    .map(|c| saved.iter().any(|s| s == c))
-                    .collect()
-            })
-            .unwrap_or_else(|| {
-                db::DISPLAY_COLUMNS
-                    .iter()
-                    .map(|c| DEFAULT_VISIBLE.contains(c))
-                    .collect()
-            });
+            .map(|saved| saved.into_iter().collect())
+            .unwrap_or_else(|| DEFAULT_VISIBLE.iter().map(|c| c.to_string()).collect());
+        // Стартовый список колонок — сразу из БД, чтобы первая отрисовка/меню были полными.
+        let init_cols = conn.as_ref().map(db::display_columns).unwrap_or_default();
         let (sort_key, sort_desc) = conn
             .as_ref()
             .and_then(db::load_sort)
@@ -188,7 +182,7 @@ impl ReportPanel {
             conn,
             cores,
             table: Rc::new(ReportTable {
-                cols: db::DISPLAY_COLUMNS,
+                cols: init_cols,
                 rows: Vec::new(),
                 core_uids: Vec::new(),
             }),
@@ -284,17 +278,21 @@ impl ReportPanel {
             self.request_requery(cx);
         }
     }
-    /// Переключить видимость колонки и СОХРАНИТЬ набор (app_meta) — переживает рестарт.
-    pub(super) fn toggle_column(&mut self, i: usize, cx: &mut Context<Self>) {
-        if let Some(slot) = self.visible.get_mut(i) {
-            *slot = !*slot;
+    /// Переключить видимость колонки по ИМЕНИ и СОХРАНИТЬ набор (app_meta) — переживает рестарт.
+    pub(super) fn toggle_column(&mut self, name: String, cx: &mut Context<Self>) {
+        if self.visible.contains(name.as_str()) {
+            self.visible.remove(&name);
+        } else {
+            self.visible.insert(name);
         }
         if let Some(conn) = &self.conn {
-            let cols: Vec<&str> = db::DISPLAY_COLUMNS
+            // Сохраняем в порядке колонок таблицы (стабильно для UI).
+            let cols: Vec<&str> = self
+                .table
+                .cols
                 .iter()
-                .enumerate()
-                .filter(|(j, _)| self.visible.get(*j).copied().unwrap_or(false))
-                .map(|(_, c)| *c)
+                .filter(|c| self.visible.contains(c.as_str()))
+                .map(|c| c.as_str())
                 .collect();
             db::save_visible(conn, &cols);
         }
@@ -426,8 +424,13 @@ impl Render for ReportPanel {
             .child(self.columns_menu(cx));
 
         // ── Таблица ──
-        let vis: Vec<usize> = (0..self.table.cols.len())
-            .filter(|i| self.visible.get(*i).copied().unwrap_or(false))
+        let vis: Vec<usize> = self
+            .table
+            .cols
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| self.visible.contains(c.as_str()))
+            .map(|(i, _)| i)
             .collect();
         let table_el: AnyElement = if vis.is_empty() {
             div()
@@ -442,7 +445,7 @@ impl Render for ReportPanel {
             let view = cx.entity();
             let backend = self.backend.clone();
             let table_state = self.table_state.clone();
-            let cols = columns::report_columns(&vis);
+            let cols = columns::report_columns(&self.table, &vis);
             div()
                 .id("rep-table-host")
                 .relative()

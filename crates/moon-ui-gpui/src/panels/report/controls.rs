@@ -85,20 +85,28 @@ impl ReportPanel {
             .items(items)
     }
 
-    /// Попап выбора видимых колонок (чекбоксы).
+    /// Попап выбора видимых колонок (чекбоксы) — по рантайм-списку колонок БД,
+    /// поэтому авто-добавленные поля ядра сразу доступны к показу.
     pub(super) fn columns_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        let visible = self.visible.clone();
-        let items = db::DISPLAY_COLUMNS.iter().enumerate().map(move |(i, c)| {
-            let on = visible.get(i).copied().unwrap_or(false);
-            let view = view.clone();
-            MoonMenuItem::with_key(format!("col-{i}"), header_for(c))
-                .checked(on)
-                .selected(on)
-                .on_click(move |_, _, app| {
-                    view.update(app, |t, c| t.toggle_column(i, c));
-                })
-        });
+        let items: Vec<MoonMenuItem> = self
+            .table
+            .cols
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let on = self.visible.contains(c.as_str());
+                let name = c.clone();
+                let view = view.clone();
+                MoonMenuItem::with_key(format!("col-{i}"), header_for(c))
+                    .checked(on)
+                    .selected(on)
+                    .on_click(move |_, _, app| {
+                        let name = name.clone();
+                        view.update(app, |t, c| t.toggle_column(name, c));
+                    })
+            })
+            .collect();
         MoonDropdown::new("rep-cols")
             .label(format!("{} ▾", t!("report.columns_menu")))
             .trigger_variant(MoonButtonVariant::Soft)

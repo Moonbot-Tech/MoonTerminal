@@ -10,6 +10,8 @@
 //! значению (отбрасываем); Comment может содержать не-ASCII (ключевые слова ищем
 //! ASCII-регистронезависимо по байтам — ASCII-байт не попадает в UTF-8 мультибайт).
 
+use rusqlite::types::Value;
+
 /// Распарсенные поля отчёта (то, что присутствует в конкретном SQL).
 #[derive(Debug, Clone, Default)]
 pub struct ParsedReport {
@@ -30,6 +32,11 @@ pub struct ParsedReport {
     pub close_date: Option<i64>,
     pub sell_reason: Option<String>,
     pub comment: Option<String>,
+    /// ВСЕ пары (lowercase-имя → типизированное значение) из SQL — основа
+    /// универсального passthrough: writer сам заводит недостающие колонки и
+    /// пишет их, не требуя кода под каждое новое поле ядра (MarkPriceDelta, …).
+    /// Имена провалидированы как SQLite-идентификаторы; NULL опущены.
+    pub all: Vec<(String, Value)>,
 }
 
 /// Разбирает report-SQL (insert или update) в [`ParsedReport`].
@@ -40,10 +47,46 @@ pub fn parse_report_sql(sql: &str) -> ParsedReport {
         parse_update(sql)
     };
     let mut out = ParsedReport::default();
-    for (k, v) in pairs {
-        put(&mut out, &k, &v);
+    for (k, v) in &pairs {
+        put(&mut out, k, v);
+        let key = k.trim().to_ascii_lowercase();
+        if valid_ident(&key) {
+            if let Some(val) = classify_value(v) {
+                out.all.push((key, val));
+            }
+        }
     }
     out
+}
+
+/// Литерал SQL → типизированное значение SQLite. Строка в кавычках → TEXT,
+/// целое → INTEGER, дробное → REAL. NULL/неизвестный bareword → None (опускаем).
+fn classify_value(v: &str) -> Option<Value> {
+    let t = v.trim_start();
+    if t.starts_with('\'') {
+        return str_val(v).map(Value::Text);
+    }
+    let tok = t.split_whitespace().next()?; // отсекает хвост `where ID=…`
+    if tok.eq_ignore_ascii_case("null") {
+        return None;
+    }
+    if let Ok(i) = tok.parse::<i64>() {
+        return Some(Value::Integer(i));
+    }
+    if let Ok(f) = tok.parse::<f64>() {
+        return Some(Value::Real(f));
+    }
+    None
+}
+
+/// Валиден ли lowercase-ключ как SQLite-идентификатор (защита от инъекции в
+/// ALTER/UPDATE — имя интерполируется в SQL без кавычек): `[a-z_][a-z0-9_]*`.
+fn valid_ident(name: &str) -> bool {
+    let b = name.as_bytes();
+    !b.is_empty()
+        && (b[0] == b'_' || b[0].is_ascii_lowercase())
+        && b.iter()
+            .all(|&c| c == b'_' || c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
 fn is_insert(sql: &str) -> bool {
@@ -261,5 +304,21 @@ mod tests {
         assert_eq!(p.isshort, Some(true));
         assert_eq!(p.lev, Some(10));
         assert_eq!(p.comment.as_deref(), Some("MoonShot, (S65)"));
+    }
+
+    /// Универсальный passthrough: НЕзнакомые поля (MarkPriceDelta и новые дельты)
+    /// сами попадают в `all` с выведенным типом — без правок кода под каждое поле.
+    #[test]
+    fn unknown_fields_flow_into_all() {
+        let sql = "update Orders set MarkPriceDelta=-1.234, Btc5mDelta=0.5, NewIntField=7, \
+                   SellReason='x' where ID=1";
+        let p = parse_report_sql(sql);
+        let get = |k: &str| p.all.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get("markpricedelta"), Some(Value::Real(-1.234)));
+        assert_eq!(get("btc5mdelta"), Some(Value::Real(0.5)));
+        assert_eq!(get("newintfield"), Some(Value::Integer(7)));
+        assert_eq!(get("sellreason"), Some(Value::Text("x".to_string())));
+        // `where ID=…` хвост не должен стать колонкой.
+        assert!(p.all.iter().all(|(n, _)| n != "id" && !n.contains("where")));
     }
 }

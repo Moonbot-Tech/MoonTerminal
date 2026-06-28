@@ -53,6 +53,10 @@ pub struct ReportRow {
     pub status: Option<i64>,
     pub sellreason: Option<String>,
     pub comment: Option<String>,
+    /// Универсальный passthrough: ВСЕ пары из close-SQL (lowercase-имя →
+    /// значение). Writer сам заводит недостающие колонки и пишет их — новые поля
+    /// ядра (дельты/MarkPriceDelta/…) попадают в отчёт без правок кода.
+    pub extras: Vec<(String, Value)>,
     pub sql: String,
 }
 
@@ -275,6 +279,87 @@ fn insert(conn: &Connection, row: &ReportRow) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Колонки, которыми занимается типизированный `insert` (или служебные PK/мета).
+/// Всё ОСТАЛЬНОЕ из close-SQL идёт через универсальный passthrough `apply_extras`.
+/// `server_id` обязателен в списке: авто-создание такой колонки заставило бы
+/// `init_db` принять таблицу за древнюю схему и УДАЛИТЬ её.
+fn is_passthrough(name: &str) -> bool {
+    const SKIP: &[&str] = &[
+        "core_uid", "core_name", "db_id", "sql", "created_ms", "updated_ms", "id", "server_id",
+        "taskid", "exorderid", "coin", "isshort", "buydate", "sellsetdate", "closedate",
+        "quantity", "buyprice", "sellprice", "spentbtc", "gainedbtc", "profitbtc", "lev",
+        "strategyid", "emulator", "status", "sellreason", "comment",
+    ];
+    !SKIP.contains(&name)
+}
+
+/// Универсальный passthrough: для всех непокрытых типизированным insert полей из
+/// SQL заводит недостающие колонки (`ALTER TABLE … ADD COLUMN`, тип по значению) и
+/// пишет их в уже существующую (после `insert`) строку. `known` — кэш имён колонок
+/// в памяти writer'а, чтобы не дёргать PRAGMA на каждую запись.
+fn apply_extras(
+    conn: &Connection,
+    known: &mut std::collections::HashSet<String>,
+    row: &ReportRow,
+) -> rusqlite::Result<()> {
+    let cols: Vec<&(String, Value)> = row
+        .extras
+        .iter()
+        .filter(|(n, _)| is_passthrough(n))
+        .collect();
+    if cols.is_empty() {
+        return Ok(());
+    }
+    for (name, val) in &cols {
+        if !known.contains(name.as_str()) {
+            let decl = match val {
+                Value::Text(_) => "TEXT",
+                Value::Integer(_) => "INTEGER",
+                _ => "REAL",
+            };
+            // Имя провалидировано как [a-z0-9_] в parse::valid_ident — инъекции нет.
+            conn.execute(
+                &format!("ALTER TABLE closed_sell_reports ADD COLUMN {name} {decl}"),
+                [],
+            )?;
+            known.insert((*name).clone());
+            log::info!("отчёты: авто-колонка «{name}» {decl} (новое поле ядра)");
+        }
+    }
+    let set = cols
+        .iter()
+        .map(|(n, _)| format!("{n}=?"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "UPDATE closed_sell_reports SET {set}, updated_ms=? WHERE core_uid=? AND db_id=?"
+    );
+    let ts = now_ms();
+    let uid = row.core_uid as i64;
+    let mut params: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(cols.len() + 3);
+    for (_, val) in &cols {
+        params.push(val);
+    }
+    params.push(&ts);
+    params.push(&uid);
+    params.push(&row.db_id);
+    conn.execute(&sql, params.as_slice())?;
+    Ok(())
+}
+
+/// Имена колонок таблицы отчётов сейчас (для seed-кэша writer'а и рантайм-display).
+fn table_columns(conn: &Connection) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    if let Ok(mut stmt) = conn.prepare("PRAGMA table_info(closed_sell_reports)") {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) {
+            for n in rows.flatten() {
+                out.insert(n);
+            }
+        }
+    }
+    out
+}
+
 pub fn spawn_writer() -> Option<ReportsHandle> {
     let (tx, rx): (Sender<ReportRow>, Receiver<ReportRow>) = std::sync::mpsc::channel();
     let path = paths::reports_db_path();
@@ -295,8 +380,10 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
         .name("reports-db".into())
         .spawn(move || {
             log::info!("отчёты: writer запущен ({})", path.display());
+            // Кэш известных колонок (растёт по мере авто-добавления новых полей ядра).
+            let mut known = table_columns(&conn);
             while let Ok(row) = rx.recv() {
-                match insert(&conn, &row) {
+                match insert(&conn, &row).and_then(|()| apply_extras(&conn, &mut known, &row)) {
                     Ok(()) => {
                         gen_writer.fetch_add(1, Ordering::Relaxed);
                         log::info!(
@@ -328,8 +415,10 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
 // ============================================================================
 
 /// Результат выборки: имена колонок + строки значений (generic, под все колонки).
+/// `cols` — РАНТАЙМ-список (из `PRAGMA table_info`), поэтому авто-добавленные поля
+/// ядра показываются без правок: известные колонки в каноничном порядке, новые — в хвост.
 pub struct ReportTable {
-    pub cols: &'static [&'static str],
+    pub cols: Vec<String>,
     pub rows: Vec<Vec<Value>>,
     /// `core_uid` каждой строки (параллельно `rows`). Служебная колонка не входит в
     /// `cols`/DISPLAY_COLUMNS, но нужна, чтобы клик по монете в отчёте открыл чарт НА
@@ -427,13 +516,35 @@ pub fn save_visible(conn: &Connection, cols: &[&str]) {
     );
 }
 
-/// Валидируем ключ сортировки против известных колонок (без инъекций).
-fn sort_column(key: &str) -> &'static str {
-    DISPLAY_COLUMNS
+/// Рантайм-список колонок для отображения: известные (`DISPLAY_COLUMNS`) в
+/// каноничном порядке + авто-добавленные поля ядра в хвост (по алфавиту), минус
+/// служебные. Используется и для SELECT, и окном «Отчёт» (заголовки/видимость/меню).
+pub fn display_columns(conn: &Connection) -> Vec<String> {
+    const SERVICE: &[&str] = &["core_uid", "sql", "created_ms", "updated_ms"];
+    let have = table_columns(conn);
+    let mut out: Vec<String> = DISPLAY_COLUMNS
         .iter()
-        .copied()
-        .find(|c| *c == key)
-        .unwrap_or("closedate")
+        .filter(|c| have.contains(**c))
+        .map(|c| (*c).to_string())
+        .collect();
+    let mut extra: Vec<String> = have
+        .iter()
+        .filter(|h| {
+            !SERVICE.contains(&h.as_str()) && !DISPLAY_COLUMNS.contains(&h.as_str())
+        })
+        .cloned()
+        .collect();
+    extra.sort();
+    out.extend(extra);
+    out
+}
+
+/// Валидируем ключ сортировки против рантайм-колонок (без инъекций).
+fn sort_column(cols: &[String], key: &str) -> String {
+    cols.iter()
+        .find(|c| c.as_str() == key)
+        .cloned()
+        .unwrap_or_else(|| "closedate".to_string())
 }
 
 fn build_where(f: &ReportFilter) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
@@ -484,9 +595,10 @@ pub fn query_reports(
     limit: usize,
 ) -> ReportTable {
     let (where_sql, mut params) = build_where(f);
-    let col = sort_column(sort_key);
+    let cols = display_columns(conn);
+    let col = sort_column(&cols, sort_key);
     let dir = if desc { "DESC" } else { "ASC" };
-    let select = DISPLAY_COLUMNS.join(", ");
+    let select = cols.join(", ");
     // `core_uid` тянем первой (служебной) колонкой — в `cols` не попадает, идёт в `core_uids`.
     let sql = format!(
         "SELECT core_uid, {select} FROM closed_sell_reports{where_sql}
@@ -498,7 +610,7 @@ pub fn query_reports(
     let mut rows = Vec::new();
     let mut core_uids = Vec::new();
     if let Ok(mut stmt) = conn.prepare(&sql) {
-        let n = DISPLAY_COLUMNS.len();
+        let n = cols.len();
         if let Ok(mapped) = stmt.query_map(refs.as_slice(), |r| {
             let core_uid = r.get::<_, i64>(0)? as u64;
             let mut v = Vec::with_capacity(n);
@@ -514,7 +626,7 @@ pub fn query_reports(
         }
     }
     ReportTable {
-        cols: DISPLAY_COLUMNS,
+        cols,
         rows,
         core_uids,
     }
