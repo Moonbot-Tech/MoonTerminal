@@ -216,6 +216,13 @@ impl ChartPanel {
                     LineKind::Trailing,
                     LineKind::TakeProfit,
                 ] {
+                    // Вход (Buy, в т.ч. шорт) переставляем ТОЛЬКО пока ордер не исполнен (живой
+                    // входной лимит → move_order = replace). После фила (`fill_pct > 0`) линия
+                    // входа — историческая отметка цены входа: реплейсить нечего, не тянем её.
+                    // Управление залитой позицией идёт через выход (Sell) и стопы.
+                    if kind == LineKind::Buy && order.fill_pct > 0.0 {
+                        continue;
+                    }
                     let Some(price) = order.lines[kind as usize]
                         .current_price()
                         .filter(|p| p.is_finite() && *p > 0.0)
