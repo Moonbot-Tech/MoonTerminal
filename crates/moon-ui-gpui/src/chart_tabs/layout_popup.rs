@@ -140,44 +140,15 @@ fn axis_selector_row(
 pub(super) const MIN_H: u16 = 20;
 pub(super) const MAX_H: u16 = 4000;
 
-/// Размер сценового попапа (логич. px), посчитанный из тех же метрик, что и содержимое.
-/// Вызывающий ставит контейнер в absolute layer и задаёт этот размер.
-pub(super) fn content_size(cx: &App, with_rename: bool) -> Size<Pixels> {
+/// Ширина сценового попапа (логич. px). Высоту НЕ считаем: контейнер сжимается по контенту
+/// (см. `w_full` у корня + отсутствие `.h(...)` у сцены), поэтому пустого места снизу нет.
+/// Ширину держим фиксированной — её определяет сегмент-контрол FIT/SCROLL (2×110) + поля/рамка.
+pub(super) fn content_width(cx: &App, _with_rename: bool) -> Pixels {
     let pad = f32::from(design::ui_px(cx, 8.0));
-    let gap = f32::from(design::ui_px(cx, 8.0)); // зазор между топ-блоками
-    let cap = f32::from(design::t_caption(cx)) + 6.0;
-    let title_h = cap.max(f32::from(design::ui_px(cx, 22.0)));
-    let seg_h = f32::from(design::ui_px(cx, 30.0));
-    let line_h = f32::from(design::ui_px(cx, 30.0));
-    let cb_h = f32::from(design::ui_px(cx, 22.0));
-    let border = 2.0;
-
-    // Метрики рамок-групп — ДОЛЖНЫ совпадать с [`framed`].
-    let fpy = f32::from(design::ui_px(cx, 4.0)); // верт. паддинг рамки (×2)
-    let fg = f32::from(design::ui_px(cx, 4.0)); // зазор заголовок→тело
-    let body_gap = f32::from(design::ui_px(cx, 6.0)); // зазор строк в теле
     let fpx = f32::from(design::ui_px(cx, 6.0)); // гор. паддинг рамки (×2)
+    let border = 2.0;
     let fb = 2.0; // граница рамки
-
-    // Рамка «Вид»: заголовок + (seg + поле высоты + 2-строчный хинт).
-    let frame_view =
-        fb + 2.0 * fpy + cap + fg + seg_h + body_gap + line_h + body_gap + 2.0 * cap;
-    // Рамка «Отображать»: заголовок + 5 чекбоксов (стакан/зона/ось времени/подписи линий/курсора).
-    let frame_display = fb + 2.0 * fpy + cap + fg + 5.0 * cb_h + 4.0 * body_gap;
-
-    // Доп. строка имени (кастомные вкладки).
-    let rename_h = if with_rename { line_h } else { 0.0 };
-
-    // Топ-блоки: заголовок, [имя], рамка Вид, рамка Отображать, автопин, Cancel Buy,
-    // Panic Sell, ось цен.
-    let blocks =
-        title_h + rename_h + frame_view + frame_display + cb_h + cb_h + cb_h + cb_h;
-    let n_blocks: f32 = if with_rename { 8.0 } else { 7.0 };
-    let gaps = (n_blocks - 1.0) * gap;
-
-    let h = border + 2.0 * pad + blocks + gaps + 6.0;
-    let w = 2.0 * 110.0 + 20.0 + 2.0 * pad + border + 2.0 * fpx + fb;
-    size(px(w), px(h))
+    px(2.0 * 110.0 + 20.0 + 2.0 * pad + border + 2.0 * fpx + fb)
 }
 
 fn mode_label(m: StackLayoutMode) -> &'static str {
@@ -440,11 +411,12 @@ where
             )
     });
 
-    // Контент заполняет сценовый popup-контейнер. Фон непрозрачный: если поверх него виден
-    // chart text, это настоящий z-order баг, а не дизайнерская прозрачность.
+    // Контент задаёт ВЫСОТУ сценового контейнера сам (w_full по ширине от `content_size`,
+    // высота — по содержимому). Так нет ручного суммирования высоты и пустого места снизу.
+    // Фон непрозрачный: если поверх него виден chart text, это z-order баг, а не прозрачность.
     v_flex()
         .id(SharedString::from(format!("{id}-popup")))
-        .size_full()
+        .w_full()
         .p(design::ui_px(cx, 8.0))
         .gap(design::ui_px(cx, 8.0))
         .bg(rgb(p.panel_high))

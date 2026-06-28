@@ -305,14 +305,13 @@ impl Render for ChartTabs {
             let ll_entity = cx.entity();
             let cl_entity = cx.entity();
             let hover_entity = cx.entity();
-            let size = layout_popup::content_size(cx, is_custom);
+            let popup_w = layout_popup::content_width(cx, is_custom);
             div()
                 .id("chart-layout-popup-scene")
                 .absolute()
                 .right(px(6.0))
                 .top(px(strip_h + design::ui_value(cx, 4.0)))
-                .w(size.width)
-                .h(size.height)
+                .w(popup_w)
                 .on_mouse_down(MouseButton::Left, |_, _window, app| {
                     app.stop_propagation();
                 })
