@@ -95,8 +95,11 @@ impl Default for PathStyle {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct OrdersStyle {
-    /// Линия цены покупки (buy_price). По умолчанию оранжевый.
+    /// Линия входа ЛОНГ-ордера (buy_price). По умолчанию оранжевый.
     pub buy: LineStyle,
+    /// Линия входа ШОРТ-ордера — отдельный цвет/стиль от лонга (как long/short в MoonBot).
+    /// Применяется к линии входа, кресту и подписи размера, когда ордер шорт.
+    pub buy_short: LineStyle,
     /// Линия цены продажи (sell_price). По умолчанию синий.
     pub sell: LineStyle,
     /// Стоп-лосс. Красный.
@@ -144,8 +147,12 @@ impl Default for OrdersStyle {
             dashed: true,
             ..LineStyle::with(palette::TEXT_2)
         };
+        // Шорт-вход по умолчанию — розовый/маджента: явно отличается от оранжевого лонга и от
+        // остальных линий (синий sell / красный stop / зелёный tp / фиолетовый vstop).
+        const SHORT_PINK: [u8; 3] = [0xff, 0x5c, 0x8a];
         Self {
             buy: LineStyle::with(palette::ORANGE),
+            buy_short: LineStyle::with(SHORT_PINK),
             sell: LineStyle::with(BLUE),
             stop: LineStyle::with(palette::RED),
             trailing: LineStyle::with(LIGHT_BLUE).no_markers(),

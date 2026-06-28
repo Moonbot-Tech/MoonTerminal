@@ -161,6 +161,12 @@ pub fn build_order_geometry(
         };
 
         for (st, idx) in kinds {
+            // Вход шорт-ордера красим отдельным стилем `buy_short` (как long/short в MoonBot).
+            let st = if idx == LineKind::Buy as usize && ord.is_short {
+                &style.buy_short
+            } else {
+                st
+            };
             let line = &ord.lines[idx];
             let ended = line.off_ms.is_some() || closed;
             let dashed =

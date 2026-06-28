@@ -120,6 +120,7 @@ macro_rules! line_ed {
 /// Состояние редактора ордер-линий.
 pub(super) struct Lines {
     buy: LineEd,
+    buy_short: LineEd,
     sell: LineEd,
     stop: LineEd,
     trailing: LineEd,
@@ -142,6 +143,7 @@ pub(super) fn build(
 ) -> Lines {
     Lines {
         buy: line_ed!(backend, window, cx, buy),
+        buy_short: line_ed!(backend, window, cx, buy_short),
         sell: line_ed!(backend, window, cx, sell),
         stop: line_ed!(backend, window, cx, stop),
         trailing: line_ed!(backend, window, cx, trailing),
@@ -354,6 +356,39 @@ impl SettingsView {
                         t!("lines.knots").to_string(),
                         |o| o.buy.knots,
                         |o, v| o.buy.knots = v,
+                    ),
+                ],
+            ))
+            .child(self.line_section(
+                cx,
+                "buy-short",
+                "Buy (short)",
+                &l.buy_short,
+                true,
+                &[
+                    (
+                        "buyshort-d",
+                        t!("lines.dashed").to_string(),
+                        |o| o.buy_short.dashed,
+                        |o, v| o.buy_short.dashed = v,
+                    ),
+                    (
+                        "buyshort-s",
+                        t!("lines.start_cross").to_string(),
+                        |o| o.buy_short.start_marker,
+                        |o, v| o.buy_short.start_marker = v,
+                    ),
+                    (
+                        "buyshort-e",
+                        t!("lines.end_cross").to_string(),
+                        |o| o.buy_short.end_marker,
+                        |o, v| o.buy_short.end_marker = v,
+                    ),
+                    (
+                        "buyshort-k",
+                        t!("lines.knots").to_string(),
+                        |o| o.buy_short.knots,
+                        |o, v| o.buy_short.knots = v,
                     ),
                 ],
             ))
