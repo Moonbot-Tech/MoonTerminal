@@ -6,6 +6,7 @@ use std::time::Duration;
 use gpui::*;
 
 use moon_core::config::MouseGestureBinding;
+use moon_core::feed::OrderLinePriceKind;
 use moon_core::session::CoreId;
 use moon_core::session::order_lines::LineKind;
 
@@ -205,7 +206,16 @@ impl ChartPanel {
                 .into_iter()
                 .filter(|order| order.closed_ms.is_none())
             {
-                for kind in [LineKind::Buy, LineKind::Sell] {
+                // Перетаскиваемые виды линий: вход/выход (move_order) + SL/Trailing/TakeProfit
+                // (update_stops по абсолютной цене). VStop (объёмный) и pending-условие НЕ тянем
+                // — у них нет ценового уровня, который ставится перетаскиванием.
+                for kind in [
+                    LineKind::Buy,
+                    LineKind::Sell,
+                    LineKind::Stop,
+                    LineKind::Trailing,
+                    LineKind::TakeProfit,
+                ] {
                     let Some(price) = order.lines[kind as usize]
                         .current_price()
                         .filter(|p| p.is_finite() && *p > 0.0)
@@ -329,25 +339,41 @@ impl ChartPanel {
         if (drag.current_price - drag.start_price).abs() <= eps {
             return true;
         }
+        // Вход/выход (Buy/Sell) переставляются как ордер (move_order). Стоп-линии
+        // (Stop/Trailing/TakeProfit) — задают цену стопа/тейка через update_stops
+        // (SL/Trailing → ФИКСИРОВАННЫЙ стоп по цене). Другие виды до drag не доходят
+        // (хит-тест их не ловит), но на всякий случай трактуем как move_order.
+        let stop_kind = match drag.kind {
+            LineKind::Stop => Some(OrderLinePriceKind::StopLoss),
+            LineKind::Trailing => Some(OrderLinePriceKind::Trailing),
+            LineKind::TakeProfit => Some(OrderLinePriceKind::TakeProfit),
+            _ => None,
+        };
         self.backend.update(cx, |b, _| {
-            match b
-                .session
-                .move_order(drag.core, drag.uid, drag.current_price)
-            {
+            let result = match stop_kind {
+                Some(kind) => {
+                    b.session
+                        .move_order_stop_price(drag.core, drag.uid, kind, drag.current_price)
+                }
+                None => b.session.move_order(drag.core, drag.uid, drag.current_price),
+            };
+            match result {
                 Ok(()) => {
                     log::info!(
-                        "manual chart move_order: core={} uid={} price={:.8}",
+                        "manual chart move line: core={} uid={} kind={:?} price={:.8}",
                         drag.core,
                         drag.uid,
+                        stop_kind,
                         drag.current_price
                     );
                     true
                 }
                 Err(err) => {
                     log::warn!(
-                        "manual chart move_order failed: core={} uid={} price={:.8}: {err:#}",
+                        "manual chart move line failed: core={} uid={} kind={:?} price={:.8}: {err:#}",
                         drag.core,
                         drag.uid,
+                        stop_kind,
                         drag.current_price
                     );
                     false

@@ -10,7 +10,7 @@
 
 use moonproto::{MoonClient, NewOrderParams, OrderSide, OrderWorkerStatus, VStopParams};
 
-use crate::feed::OrderStopKind;
+use crate::feed::{OrderLinePriceKind, OrderStopKind};
 
 /// Единый лог исхода торгового вызова: `Ok` → `info` с контекстом `ctx`, `Err` → тот же
 /// контекст + `warn` с ошибкой. Контекст совпадает по тексту с прежними per-функция логами,
@@ -185,4 +185,40 @@ pub(super) fn set_order_stop(
         }
     };
     report(server_id, format!("set order {uid} {kind:?} -> {on}"), result);
+}
+
+/// Передвинуть цену стоп/тейк-линии ордера (перетаскивание линии на чарте) на абсолютную
+/// `price`. SL/TS ставим ФИКСИРОВАННЫМ стопом по цене (`with_stop_loss_fixed`/
+/// `with_trailing_fixed`, сохраняя текущий spread), take-profit — `with_take_profit_price`.
+/// Остальные стопы ордера сохраняем (билдеры StopSettings трогают только свою группу полей).
+/// Рантайм сам гейтит отправку (send-if-changed) против живой модели.
+pub(super) fn move_order_stop_price(
+    client: &MoonClient,
+    server_id: u64,
+    uid: u64,
+    kind: OrderLinePriceKind,
+    price: f64,
+) {
+    if !(price.is_finite() && price > 0.0) {
+        return;
+    }
+    let Some(snap) = client.snapshot() else {
+        log::warn!("core {server_id} move order stop price {uid} {kind:?}: no snapshot yet");
+        return;
+    };
+    let Some(o) = snap.orders().iter().find(|o| o.uid == uid) else {
+        log::warn!("core {server_id} move order stop price {uid} {kind:?}: order not tracked");
+        return;
+    };
+    let stops = o.stops;
+    let next = match kind {
+        OrderLinePriceKind::StopLoss => stops.with_stop_loss_fixed(price, stops.stop_loss_spread()),
+        OrderLinePriceKind::Trailing => stops.with_trailing_fixed(price, stops.trailing_spread()),
+        OrderLinePriceKind::TakeProfit => stops.with_take_profit_price(price),
+    };
+    report(
+        server_id,
+        format!("move order stop price {uid} {kind:?} -> {price}"),
+        client.orders().update_stops(uid, next),
+    );
 }

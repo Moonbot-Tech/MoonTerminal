@@ -96,6 +96,7 @@ impl ChartEngine {
                 c
             },
             cursor_thickness: theme.cross_thickness.max(1.0),
+            label_font_delta: theme.label_font_delta,
             pixel_scale: 1.0,
             #[cfg(windows)]
             scissor_rs: None,
@@ -244,9 +245,11 @@ impl ChartEngine {
         if self.theme != theme {
             let mut cursor_color = rgb4(theme.cross);
             cursor_color[3] = theme.cross_alpha;
-            self.state
-                .borrow_mut()
-                .set_cursor_style(cursor_color, theme.cross_thickness);
+            {
+                let mut st = self.state.borrow_mut();
+                st.set_cursor_style(cursor_color, theme.cross_thickness);
+                st.label_font_delta = theme.label_font_delta;
+            }
             self.theme = theme;
             let mut data = self.data.borrow_mut();
             data.theme = self.theme.clone();

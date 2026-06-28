@@ -63,7 +63,9 @@ impl Render for ChartPanel {
                 .chart
                 .active_target()
                 .and_then(|(core, _)| b.prospective_order_usd(core));
-            (eff.theme.clone(), eff.orders.clone(), b.follow, prospective)
+            // Набор стилей линий — по активной теме (светлая/тёмная).
+            let orders = eff.orders.get(palette.is_light()).clone();
+            (eff.theme.clone(), orders, b.follow, prospective)
         };
         if palette.is_light() {
             theme.bg = rgb3_from_hex(palette.chart_bg);
@@ -441,11 +443,13 @@ impl Render for ChartPanel {
             .overflow_hidden()
             .relative()
             .track_focus(&self.focus)
-            .when(self.order_drag.is_some(), |this| this.cursor_grabbing())
-            .when(
-                self.order_drag.is_none() && self.order_hover.is_some(),
-                |this| this.cursor_grab(),
-            )
+            // Над перетаскиваемой линией ордера (ховер ИЛИ активный drag) — вертикальная
+            // стрелка «вверх-вниз»: линию двигают только по цене (Y), это сразу читается как
+            // «можно тянуть». Отдельный grab/grabbing не используем — ns-resize точнее
+            // отражает одномерную (вертикальную) природу перетаскивания.
+            .when(self.order_drag.is_some() || self.order_hover.is_some(), |this| {
+                this.cursor_ns_resize()
+            })
             .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, window, cx| {
                 if cx.has_active_drag() {
                     return;

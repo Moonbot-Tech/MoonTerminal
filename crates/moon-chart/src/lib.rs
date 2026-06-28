@@ -16,9 +16,6 @@ const SEG_PATTERN_DASH_DOT_DOT: f32 = 1.0;
 const SEG_PATTERN_DOT: f32 = 2.0;
 /// MoonBot: `ShowLightLines := T.RangeT > 0.02`, где RangeT — Delphi days.
 const MB_TRACE_LIGHT_RANGE_MS: f32 = 0.02 * 86_400_000.0;
-/// Множитель прозрачности линий ВЫСТАВЛЕННОГО, но ещё не исполненного ордера (вход не залит):
-/// рисуем тусклее активного, как в MoonBot (после исполнения линия становится ярче).
-const PENDING_ALPHA_MUL: f32 = 0.7;
 
 pub mod axes;
 pub mod container;
@@ -109,7 +106,14 @@ pub fn build_order_geometry(
         let alpha = if closed {
             style.closed_alpha
         } else if ord.fill_pct <= 0.0 {
-            style.active_alpha * PENDING_ALPHA_MUL
+            // Выставлен, но не залит → прозрачность настраивается на входной линии ордера
+            // по его стороне: `buy` (лонг) либо `buy_short` (шорт). После исполнения — ярче
+            // (`active_alpha`).
+            if ord.is_short {
+                style.buy_short.pending_alpha
+            } else {
+                style.buy.pending_alpha
+            }
         } else {
             style.active_alpha
         };
@@ -161,9 +165,12 @@ pub fn build_order_geometry(
         };
 
         for (st, idx) in kinds {
-            // Вход шорт-ордера красим отдельным стилем `buy_short` (как long/short в MoonBot).
-            let st = if idx == LineKind::Buy as usize && ord.is_short {
+            // Шорт-ордер красим вход/выход отдельными стилями (как long/short в MoonBot:
+            // BuyShort/SellShort): Buy → `buy_short`, Sell → `sell_short`.
+            let st = if ord.is_short && idx == LineKind::Buy as usize {
                 &style.buy_short
+            } else if ord.is_short && idx == LineKind::Sell as usize {
+                &style.sell_short
             } else {
                 st
             };

@@ -27,7 +27,7 @@ use crate::chartdx::ChartEngine;
 use crate::{Backend, input};
 use moon_chart::container::ContainerKind;
 use moon_chart::paint::now_unix_ms;
-use moon_core::config::{ChartBucket, ChartTheme, OrdersStyle};
+use moon_core::config::{ChartBucket, ChartTheme, OrdersStyleSet};
 use moon_core::session::CoreId;
 
 use trade::{OrderDrag, OrderHoverKey};
@@ -67,7 +67,7 @@ const DEBUG_HISTORY_FILL_SPAN_MS: i64 = 3_600_000;
 #[derive(Clone, PartialEq)]
 struct ChartSettingsSig {
     theme: ChartTheme,
-    orders: OrdersStyle,
+    orders: OrdersStyleSet,
     follow: bool,
 }
 

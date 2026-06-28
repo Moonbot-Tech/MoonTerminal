@@ -37,7 +37,7 @@ pub use hotkeys::{
 };
 pub use lang::Language;
 pub use layout::{DetachedLayout, GeomRect, GroupLayout, WindowLayout};
-pub use orders::{LineStyle, OrdersStyle};
+pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use secrets::Secret;
 pub use servers::{ChartBucket, FeedFlags, ServerConfig};
 pub use schema::UiThemeMode;
@@ -86,8 +86,8 @@ pub struct AppConfig {
     pub hotkeys: HotkeysConfig,
     /// Тема оформления чарта (отдельный переносимый theme.toml).
     pub theme: ChartTheme,
-    /// Стиль линий ордеров (отдельный переносимый orders.toml).
-    pub orders: OrdersStyle,
+    /// Стили линий ордеров per-theme (тёмная/светлая) — отдельный переносимый orders.toml.
+    pub orders: OrdersStyleSet,
     /// Рантайм-флаг (НЕ сериализуется): конфиг загружен из версии < `COREID_UID_VERSION`,
     /// где `charts.json` хранил позиционные CoreId. UI на старте один раз перепривяжет их
     /// к стабильным uid (см. `chart_persist::remap_core_ids`). Дефолт false.
@@ -106,7 +106,7 @@ impl AppConfig {
         // Тема и стиль линий ордеров — отдельные переносимые файлы, грузятся
         // независимо от серверов/групп.
         let theme = ChartTheme::load();
-        let orders = OrdersStyle::load();
+        let orders = OrdersStyleSet::load();
         if let Some(cfg) = Self::load_plaintext_env(theme.clone(), orders.clone())? {
             return Ok(cfg);
         }
@@ -204,7 +204,10 @@ impl AppConfig {
         })
     }
 
-    fn load_plaintext_env(theme: ChartTheme, orders: OrdersStyle) -> anyhow::Result<Option<Self>> {
+    fn load_plaintext_env(
+        theme: ChartTheme,
+        orders: OrdersStyleSet,
+    ) -> anyhow::Result<Option<Self>> {
         if std::env::var_os("MOON_CONFIG_PLAINTEXT").is_none() {
             return Ok(None);
         }

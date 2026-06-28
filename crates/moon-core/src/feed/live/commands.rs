@@ -300,6 +300,9 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::SetOrderStop { uid, kind, on }) => {
                 trade::set_order_stop(client, server.id, uid, kind, on);
             }
+            Ok(CoreCmd::MoveOrderStopPrice { uid, kind, price }) => {
+                trade::move_order_stop_price(client, server.id, uid, kind, price);
+            }
             Ok(CoreCmd::PanicSellMarket { market, on }) => {
                 trade::panic_sell_market(client, server.id, market, on);
             }

@@ -26,7 +26,7 @@ use crate::data::OrderBookModel;
 use crate::db::ReportTx;
 use crate::feed::{
     self, ClientSettingsEdit, ConnStatus, CoreCmd, ExchangeId, FeedHandle, FeedMsg, FeedWakeTx,
-    LevManageEdit, NewStrategySpec, OrderStopKind, WalletKind,
+    LevManageEdit, NewStrategySpec, OrderLinePriceKind, OrderStopKind, WalletKind,
 };
 use crate::market::{MarketDataMode, MarketDataSource, MarketStore, SharedMarketStore};
 
@@ -717,6 +717,26 @@ impl SessionManager {
             core,
             CoreCmd::SetOrderStop { uid, kind, on },
             "set order stop",
+        )
+    }
+
+    /// Передвинуть цену стоп/тейк-линии ордера ядра по `uid` (перетаскивание линии на чарте)
+    /// на абсолютную `price`. SL/TS ставятся ФИКСИРОВАННЫМ стопом по цене, take-profit —
+    /// абсолютной ценой; остальные стопы ордера сохраняются. `price` должен быть положительным.
+    pub fn move_order_stop_price(
+        &self,
+        core: CoreId,
+        uid: u64,
+        kind: OrderLinePriceKind,
+        price: f64,
+    ) -> Result<()> {
+        if !(price > 0.0) {
+            return Ok(());
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::MoveOrderStopPrice { uid, kind, price },
+            "move order stop price",
         )
     }
 

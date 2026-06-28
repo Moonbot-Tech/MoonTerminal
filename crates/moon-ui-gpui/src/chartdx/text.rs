@@ -161,6 +161,61 @@ impl RenderState {
         )
     }
 
+    /// Кегль подписей ордер-линий и курсора = база `FONT_SIZE` + поправка из темы (слайдер
+    /// Настроек). Зажат в разумные границы, чтобы не сломать раскладку.
+    fn label_font_px(&self) -> f32 {
+        (FONT_SIZE + self.label_font_delta).clamp(6.0, 40.0)
+    }
+
+    /// `draw_text`, но кеглем подписей ордер-линий (`label_font_px`). Высота строки = кегль+4.
+    fn draw_label_text(
+        &mut self,
+        ctx: &mut GpuCanvasTextContext<'_>,
+        text: &str,
+        x: f32,
+        y: f32,
+        ax: f32,
+        ay: f32,
+        color: Hsla,
+    ) -> anyhow::Result<GpuCanvasTextMetrics> {
+        let fp = self.label_font_px();
+        if self.text_run_cursor >= self.text_runs.len() {
+            self.text_runs.push(GpuCanvasTextRun::default());
+        }
+        let run = &mut self.text_runs[self.text_run_cursor];
+        self.text_run_cursor += 1;
+        run.draw_aligned(
+            ctx,
+            point(px(x), px(y)),
+            text,
+            gpui::font(crate::design::mono()),
+            px(fp),
+            px(fp + 4.0),
+            color,
+            ax,
+            ay,
+        )
+    }
+
+    /// `measure_text`, но кеглем подписей ордер-линий (`label_font_px`).
+    fn measure_label_text(
+        &mut self,
+        ctx: &GpuCanvasTextContext<'_>,
+        text: &str,
+    ) -> GpuCanvasTextMetrics {
+        let fp = self.label_font_px();
+        if self.text_run_cursor >= self.text_runs.len() {
+            self.text_runs.push(GpuCanvasTextRun::default());
+        }
+        self.text_runs[self.text_run_cursor].measure(
+            ctx,
+            text,
+            gpui::font(crate::design::mono()),
+            px(fp),
+            px(fp + 4.0),
+        )
+    }
+
     fn draw_firetest_text(
         &mut self,
         ctx: &mut GpuCanvasTextContext<'_>,
@@ -374,29 +429,31 @@ impl RenderState {
             // курсорные цифры приоритетны и рисуются ПОЗЖЕ (поверх), поэтому читаются сверху, а
             // ордерная цифра остаётся видна вокруг/за ними.
             {
+                // Высота строки подписей зависит от их кегля (настраивается слайдером темы).
+                let label_line_h = self.label_font_px() + 4.0;
                 let mut items: Vec<(f32, f32, &OrderLabel)> = Vec::new();
                 for label in &order_labels {
                     let y = plot_bottom - (label.price - y_min) * price_to_px;
-                    if y < plot_top - LINE_H || y > plot_bottom + LINE_H {
+                    if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
                         continue;
                     }
                     let dy = if label.above {
-                        y - LINE_H * 0.5 - 1.0
+                        y - label_line_h * 0.5 - 1.0
                     } else {
-                        y + LINE_H * 0.5 + 1.0
+                        y + label_line_h * 0.5 + 1.0
                     };
-                    let w = self.measure_text(ctx, &label.text).width.as_f32();
+                    let w = self.measure_label_text(ctx, &label.text).width.as_f32();
                     items.push((dy, w, label));
                 }
                 items.sort_by(|a, b| a.0.total_cmp(&b.0));
-                let gap = LINE_H + 1.0;
+                let gap = label_line_h + 1.0;
                 let mut last_y = f32::NEG_INFINITY;
                 for (dy, w, label) in items.iter_mut() {
                     if *dy < last_y + gap {
                         *dy = last_y + gap;
                     }
                     last_y = *dy;
-                    self.draw_text(ctx, &label.text, label_x, *dy, 1.0, 0.5, color(label.color))?;
+                    self.draw_label_text(ctx, &label.text, label_x, *dy, 1.0, 0.5, color(label.color))?;
                     placed.push(PlacedLabel {
                         x: label_x,
                         y: *dy,
@@ -419,7 +476,7 @@ impl RenderState {
                 if cx_log >= plot_left && cx_log <= plot_right {
                     let unix = left_unix + (cx_log - plot_left) as f64 / time_to_px as f64;
                     let label = fmt_clock(unix, tz_offset_sec, true);
-                    let metrics = self.measure_text(ctx, &label);
+                    let metrics = self.measure_label_text(ctx, &label);
                     let width = metrics.width.as_f32();
                     if (self.panes[idx].readout_time_width - width).abs() > 0.25 {
                         self.panes[idx].readout_time_width = width;
@@ -433,14 +490,14 @@ impl RenderState {
                     );
                     let y = pane_bottom - 1.0;
                     let dst = readout_rect_dst(x, y, metrics, 0.5, 1.0, sf);
-                    self.draw_text(ctx, &label, x, y, 0.5, 1.0, readout)?;
+                    self.draw_label_text(ctx, &label, x, y, 0.5, 1.0, readout)?;
                     skip_time_label_x = Some(rect_x_range_log(dst, sf));
                 }
 
                 if !axis_hidden && cy_log >= plot_top && cy_log <= plot_bottom {
                     let price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
                     let label = format!("{price:.dec$}");
-                    let metrics = self.measure_text(ctx, &label);
+                    let metrics = self.measure_label_text(ctx, &label);
                     let width = metrics.width.as_f32();
                     if (self.panes[idx].readout_price_width - width).abs() > 0.25 {
                         self.panes[idx].readout_price_width = width;
@@ -454,7 +511,7 @@ impl RenderState {
                             .max(pane_left + READOUT_INSET + READOUT_PAD_X + metrics.width.as_f32())
                     };
                     let dst = readout_rect_dst(x, cy_log, metrics, 1.0, 0.5, sf);
-                    self.draw_text(ctx, &label, x, cy_log, 1.0, 0.5, readout)?;
+                    self.draw_label_text(ctx, &label, x, cy_log, 1.0, 0.5, readout)?;
                     skip_price_label_y = Some(rect_y_range_log(dst, sf));
                 }
 
@@ -475,7 +532,7 @@ impl RenderState {
                     // Без $/K-M, всегда 2 знака после запятой («100.00»).
                     if let Some(usd) = prospective_usd {
                         let text = format!("{usd:.2}");
-                        let m = self.draw_text(ctx, &text, label_x, cy_log - 2.0, 1.0, 1.0, cur_col)?;
+                        let m = self.draw_label_text(ctx, &text, label_x, cy_log - 2.0, 1.0, 1.0, cur_col)?;
                         placed.push(PlacedLabel {
                             x: label_x,
                             y: cy_log - 2.0,
@@ -496,7 +553,7 @@ impl RenderState {
                             }
                         }
                         if let Some((_, q)) = best {
-                            let m = self.draw_text(ctx, &fmt_amount(q), right_x, cy_log - 2.0, 0.0, 1.0, cur_col)?;
+                            let m = self.draw_label_text(ctx, &fmt_amount(q), right_x, cy_log - 2.0, 0.0, 1.0, cur_col)?;
                             placed.push(PlacedLabel {
                                 x: right_x,
                                 y: cy_log - 2.0,
@@ -511,7 +568,7 @@ impl RenderState {
                     if let Some(last) = cached_last_price {
                         if last > 0.0 {
                             let pct = (cursor_price - last) / last * 100.0;
-                            let m = self.draw_text(ctx, &fmt_pct(pct), right_x, cy_log + 2.0, 0.0, 0.0, cur_col)?;
+                            let m = self.draw_label_text(ctx, &fmt_pct(pct), right_x, cy_log + 2.0, 0.0, 0.0, cur_col)?;
                             placed.push(PlacedLabel {
                                 x: right_x,
                                 y: cy_log + 2.0,

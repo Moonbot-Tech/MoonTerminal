@@ -13,6 +13,7 @@ use moon_core::config::{AppConfig, ChartTheme, UiThemeMode};
 /// Состояние редактора темы: по entity на каждое поле.
 pub(super) struct Iface {
     ui_font_delta: Entity<MoonSliderState>,
+    label_font_delta: Entity<MoonSliderState>,
     bg: Entity<MoonColorPickerState>,
     grid: Entity<MoonColorPickerState>,
     grid_alpha: Entity<MoonSliderState>,
@@ -108,6 +109,15 @@ pub(super) fn build(
             -2.0,
             6.0,
             1.0,
+        ),
+        label_font_delta: num_field(
+            backend,
+            cx,
+            |t| t.label_font_delta,
+            |t, v| t.label_font_delta = v,
+            -4.0,
+            12.0,
+            0.5,
         ),
         bg: color_field(backend, window, cx, |t| t.bg, |t, v| t.bg = v),
         grid: color_field(backend, window, cx, |t| t.grid, |t, v| t.grid = v),
@@ -205,6 +215,11 @@ impl SettingsView {
             // UI: шрифты и масштаб
             .child(section(&t!("iface.sec_font"), p, cx))
             .child(slider_row(&t!("iface.font_delta"), &i.ui_font_delta, cx))
+            .child(slider_row(
+                &t!("iface.label_font_delta"),
+                &i.label_font_delta,
+                cx,
+            ))
             .child(separator(p, cx))
             // График: фон и сетка
             .child(section(&t!("iface.sec_chart"), p, cx))

@@ -32,6 +32,11 @@ pub struct LineStyle {
     pub knot_size: f32,
     /// Базовый пунктир линии (например, pending-условие).
     pub dashed: bool,
+    /// Прозрачность линий ВЫСТАВЛЕННОГО, но ещё не исполненного ордера (fill=0), 0..1.
+    /// Применяется на уровне ордера по его входной линии: `buy` (лонг) или `buy_short`
+    /// (шорт). После исполнения линии рисуются на `active_alpha`. Остальные линии поле
+    /// игнорируют (значимо только для `buy`/`buy_short`).
+    pub pending_alpha: f32,
 }
 
 impl Default for LineStyle {
@@ -46,6 +51,7 @@ impl Default for LineStyle {
             knots: true,
             knot_size: 3.0,
             dashed: false,
+            pending_alpha: 0.65,
         }
     }
 }
@@ -100,8 +106,11 @@ pub struct OrdersStyle {
     /// Линия входа ШОРТ-ордера — отдельный цвет/стиль от лонга (как long/short в MoonBot).
     /// Применяется к линии входа, кресту и подписи размера, когда ордер шорт.
     pub buy_short: LineStyle,
-    /// Линия цены продажи (sell_price). По умолчанию синий.
+    /// Линия цены продажи (sell_price) ЛОНГ-ордера. По умолчанию синий.
     pub sell: LineStyle,
+    /// Линия цены продажи ШОРТ-ордера — отдельный цвет/стиль от лонга (как long/short в
+    /// MoonBot: BuyShort/SellShort). Применяется к sell-линии, когда ордер шорт.
+    pub sell_short: LineStyle,
     /// Стоп-лосс. Красный.
     pub stop: LineStyle,
     /// Трейлинг-стоп. Светло-синий.
@@ -150,10 +159,14 @@ impl Default for OrdersStyle {
         // Шорт-вход по умолчанию — розовый/маджента: явно отличается от оранжевого лонга и от
         // остальных линий (синий sell / красный stop / зелёный tp / фиолетовый vstop).
         const SHORT_PINK: [u8; 3] = [0xff, 0x5c, 0x8a];
+        // Шорт-продажа (выход) — светло-серый (как SellShort в reference MoonBot): отличается
+        // от синего лонг-sell.
+        const SELL_SHORT_GRAY: [u8; 3] = [0xc8, 0xc8, 0xc8];
         Self {
             buy: LineStyle::with(palette::ORANGE),
             buy_short: LineStyle::with(SHORT_PINK),
             sell: LineStyle::with(BLUE),
+            sell_short: LineStyle::with(SELL_SHORT_GRAY),
             stop: LineStyle::with(palette::RED),
             trailing: LineStyle::with(LIGHT_BLUE).no_markers(),
             take_profit: LineStyle::with(palette::GREEN).no_markers(),
@@ -185,6 +198,67 @@ impl OrdersStyle {
     }
 
     /// Записать orders.toml (открытый человекочитаемый TOML — можно делиться).
+    pub fn save(&self) -> anyhow::Result<()> {
+        super::toml_io::save(&paths::orders_path(), self, "orders.toml")
+    }
+}
+
+/// Стили линий ОТДЕЛЬНО для тёмной и светлой темы (per-theme). Хранится в одном `orders.toml`
+/// двумя таблицами `[dark]` / `[light]`. Активный набор выбирается по текущей теме приложения.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct OrdersStyleSet {
+    pub dark: OrdersStyle,
+    pub light: OrdersStyle,
+}
+
+impl Default for OrdersStyleSet {
+    fn default() -> Self {
+        // Светлый набор по умолчанию = тёмный (пользователь правит под себя в Настройках).
+        let d = OrdersStyle::default();
+        Self {
+            light: d.clone(),
+            dark: d,
+        }
+    }
+}
+
+impl OrdersStyleSet {
+    /// Набор для активной темы: `light=true` → светлый, иначе тёмный.
+    pub fn get(&self, light: bool) -> &OrdersStyle {
+        if light { &self.light } else { &self.dark }
+    }
+    pub fn get_mut(&mut self, light: bool) -> &mut OrdersStyle {
+        if light { &mut self.light } else { &mut self.dark }
+    }
+
+    /// Прочитать `orders.toml`. Новый формат — таблицы `[dark]`/`[light]`. СТАРЫЙ плоский
+    /// `OrdersStyle` (без них) мигрируем в ОБА набора и сразу пере-сохраняем. Нет файла → дефолт
+    /// + досейв; битый → дефолт (не падаем).
+    pub fn load() -> Self {
+        let path = paths::orders_path();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            let def = Self::default();
+            let _ = def.save();
+            return def;
+        };
+        // Новый формат: присутствует таблица темы.
+        if text.contains("[dark") || text.contains("[light") {
+            return toml::from_str(&text).unwrap_or_else(|e| {
+                log::warn!("orders.toml повреждён ({e}); беру дефолт");
+                Self::default()
+            });
+        }
+        // Старый плоский файл → один и тот же стиль в оба набора + миграция формата на диск.
+        let flat: OrdersStyle = toml::from_str(&text).unwrap_or_default();
+        let set = Self {
+            light: flat.clone(),
+            dark: flat,
+        };
+        let _ = set.save();
+        set
+    }
+
     pub fn save(&self) -> anyhow::Result<()> {
         super::toml_io::save(&paths::orders_path(), self, "orders.toml")
     }

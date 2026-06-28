@@ -83,6 +83,18 @@ pub enum OrderStopKind {
     VStop,
 }
 
+/// Какую цену задаёт перетаскивание стоп/тейк-линии ордера на чарте. VStop (объёмный)
+/// и pending-условие сюда не входят — у них нет ценового уровня, который тянут мышью.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrderLinePriceKind {
+    /// Стоп-лосс (`SL`) — фиксированная цена.
+    StopLoss,
+    /// Трейлинг-стоп (`TS`) — фиксированная цена.
+    Trailing,
+    /// Take-Profit — абсолютная цена.
+    TakeProfit,
+}
+
 /// Команды координатора → backend ядра. Задают рыночную РОЛЬ ядра.
 #[derive(Debug, Clone)]
 pub enum CoreCmd {
@@ -167,6 +179,14 @@ pub enum CoreCmd {
         uid: u64,
         kind: OrderStopKind,
         on: bool,
+    },
+    /// Передвинуть цену стоп/тейк-линии ордера перетаскиванием на чарте. feed читает
+    /// удержанный снимок ордера, ставит ФИКСИРОВАННЫЙ стоп (SL/TS) либо take-profit по
+    /// абсолютной цене, СОХРАНЯЯ остальные стопы, и шлёт `orders().update_stops`.
+    MoveOrderStopPrice {
+        uid: u64,
+        kind: OrderLinePriceKind,
+        price: f64,
     },
     /// Точечная правка `ClientSettings` (TP/SL/выбор sell-пресета) из тулбара. feed берёт
     /// УДЕРЖАННЫЙ снимок настроек, патчит его хелпером и шлёт целиком (`settings().send`).

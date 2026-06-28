@@ -20,6 +20,9 @@ pub struct ChartTheme {
     pub grid_alpha: f32,
     /// Непрозрачность фото-подложки 0..1 (0 — выключить).
     pub background_opacity: f32,
+    /// Поправка к кеглю подписей ордер-линий И курсора на чарте (px, +/- от базы 11.5).
+    /// Слайдер в Настройках/Интерфейс. На подписи осей и угловой тикер НЕ влияет.
+    pub label_font_delta: f32,
 
     // --- График: перекрестие ---
     /// Цвет перекрестия (sRGB).
@@ -54,6 +57,7 @@ impl Default for ChartTheme {
             grid: [29, 30, 32], // едва заметная сетка
             grid_alpha: 1.0,
             background_opacity: 0.18,
+            label_font_delta: 0.0,
             cross: [76, 54, 29], // приглушённый янтарный
             cross_alpha: 0.5,
             cross_thickness: 1.0,

@@ -22,6 +22,10 @@ iface.font_delta:
   ru: "Прибавка к размеру шрифта"
   en: "Font size increase"
   es: "Aumento del tamaño de fuente"
+iface.label_font_delta:
+  ru: "Размер подписей линий и курсора (чарт)"
+  en: "Order-line & cursor label size (chart)"
+  es: "Tamaño de etiquetas de líneas y cursor (gráfico)"
 iface.sec_chart:
   ru: "График: фон и сетка"
   en: "Chart: background & grid"

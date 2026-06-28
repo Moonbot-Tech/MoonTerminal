@@ -399,6 +399,9 @@ struct RenderState {
     cursor: Option<CursorState>,
     cursor_color: [f32; 4],
     cursor_thickness: f32,
+    /// Поправка кегля подписей ордер-линий и курсора (px) — из `ChartTheme.label_font_delta`.
+    /// Применяется к столбцу подписей линий и к курсорному ридауту в `text.rs`.
+    label_font_delta: f32,
     pixel_scale: f32,
     /// Scissor-растеризатор own-pass (lazy, пересоздаётся на смене device): клипует слои к
     /// зоне панели, чтобы стакан/ордера (позиционируются по ЦЕНЕ) не лезли за плот на тулбар/шкалы.
