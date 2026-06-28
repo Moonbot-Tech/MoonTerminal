@@ -128,10 +128,14 @@ impl DetachedChartHost {
                     (s.cancel_buy_pos, s.panic_sell_pos),
                     s.price_axis_pos,
                     s.time_axis_visible,
+                    s.line_labels,
+                    s.cursor_labels,
                 )
             })
         });
-        if let Some((m, hf, hs, ob, sz, ap, action_pos, axis_pos, time_axis)) = saved {
+        if let Some((m, hf, hs, ob, sz, ap, action_pos, axis_pos, time_axis, line_labels, cursor_labels)) =
+            saved
+        {
             if m.is_some() || hf.is_some() || hs.is_some() {
                 panel.update(cx, |p, pcx| p.set_layout(m, hf, hs, pcx));
             }
@@ -154,6 +158,12 @@ impl DetachedChartHost {
             }
             if time_axis.is_some() {
                 panel.update(cx, |p, pcx| p.set_time_axis_visible(time_axis, pcx));
+            }
+            if line_labels.is_some() {
+                panel.update(cx, |p, pcx| p.set_line_labels(line_labels, pcx));
+            }
+            if cursor_labels.is_some() {
+                panel.update(cx, |p, pcx| p.set_cursor_labels(cursor_labels, pcx));
             }
         }
         let layout_fit_input = cx.new(|cx| MoonInputState::new(window, cx));
@@ -420,6 +430,8 @@ impl DetachedChartHost {
         };
         let price_axis_pos = Some(self.panel.read(cx).price_axis_pos().unwrap_or_default());
         let time_axis_visible = Some(self.panel.read(cx).time_axis_visible().unwrap_or(true));
+        let line_labels = Some(self.panel.read(cx).line_labels().unwrap_or(true));
+        let cursor_labels = Some(self.panel.read(cx).cursor_labels().unwrap_or(true));
         self.backend.update(cx, |bk, bcx| {
             bk.chart_apply_all.push(crate::ChartApplyAll {
                 group,
@@ -436,6 +448,8 @@ impl DetachedChartHost {
                 panic_pos,
                 price_axis_pos,
                 time_axis_visible,
+                line_labels,
+                cursor_labels,
             });
             bcx.notify();
         });
@@ -575,6 +589,27 @@ impl DetachedChartHost {
         cx.notify();
     }
 
+    /// Видимость подписей у линий этого окна + persist.
+    fn apply_line_labels(&mut self, show: bool, cx: &mut Context<Self>) {
+        self.panel.update(cx, |p, c| p.set_line_labels(Some(show), c));
+        let bucket = self.bucket.clone();
+        self.upsert_spec(cx, self.num, &bucket, move |s| {
+            s.line_labels = Some(show);
+        });
+        cx.notify();
+    }
+
+    /// Видимость подписей у перекрестия этого окна + persist.
+    fn apply_cursor_labels(&mut self, show: bool, cx: &mut Context<Self>) {
+        self.panel
+            .update(cx, |p, c| p.set_cursor_labels(Some(show), c));
+        let bucket = self.bucket.clone();
+        self.upsert_spec(cx, self.num, &bucket, move |s| {
+            s.cursor_labels = Some(show);
+        });
+        cx.notify();
+    }
+
     fn persist_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
         // У восстановленного окна сохранение задержано до `persist_armed`: не даём стартовому
         // авто-размещению GPUI/Win32 перезаписать сохранённую позицию DPI-мусором.
@@ -653,6 +688,8 @@ impl Render for DetachedChartHost {
             };
             let price_axis_pos = self.panel.read(cx).price_axis_pos().unwrap_or_default();
             let time_axis_visible = self.panel.read(cx).time_axis_visible().unwrap_or(true);
+            let line_labels = self.panel.read(cx).line_labels().unwrap_or(true);
+            let cursor_labels = self.panel.read(cx).cursor_labels().unwrap_or(true);
             let is_custom = self.is_custom(cx);
             let pick_entity = cx.entity();
             let all_entity = cx.entity();
@@ -664,6 +701,8 @@ impl Render for DetachedChartHost {
             let psp_entity = cx.entity();
             let pap_entity = cx.entity();
             let tav_entity = cx.entity();
+            let ll_entity = cx.entity();
+            let cl_entity = cx.entity();
             let hover_entity = cx.entity();
             let size = layout_popup::content_size(cx, is_custom);
             div()
@@ -699,6 +738,8 @@ impl Render for DetachedChartHost {
                     panic_pos,
                     price_axis_pos,
                     time_axis_visible,
+                    line_labels,
+                    cursor_labels,
                     p,
                     cx,
                     move |mode, app| {
@@ -757,6 +798,12 @@ impl Render for DetachedChartHost {
                     },
                     move |checked, app| {
                         tav_entity.update(app, |this, cx| this.apply_time_axis_visible(checked, cx));
+                    },
+                    move |checked, app| {
+                        ll_entity.update(app, |this, cx| this.apply_line_labels(checked, cx));
+                    },
+                    move |checked, app| {
+                        cl_entity.update(app, |this, cx| this.apply_cursor_labels(checked, cx));
                     },
                 ))
         });

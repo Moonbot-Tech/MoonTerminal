@@ -105,6 +105,10 @@ pub struct ChartPanel {
     /// Видна ли ось времени (per-окно/вкладка, из попапа ⚙). Применяется в render
     /// (`set_time_axis_visible` движка) и в раскладке/хит-тесте (высота плота). Дефолт — вкл.
     time_axis_visible: bool,
+    /// Показывать подписи у линий ордеров (per-окно/вкладка, попап ⚙). Дефолт — вкл.
+    line_labels: bool,
+    /// Показывать подписи у перекрестия (курсорный ридаут). Дефолт — вкл.
+    cursor_labels: bool,
     /// Номер AddToChart-вкладки (None = Main).
     num: Option<u32>,
     /// Рынки, владельцем которых является именно эта chart panel. Backend держит refcount
@@ -262,6 +266,8 @@ impl ChartPanel {
             panic_sell_pos: Default::default(),
             price_axis_pos: Default::default(),
             time_axis_visible: true,
+            line_labels: true,
+            cursor_labels: true,
             num: None,
             registered_markets,
             registered_orderbook,
@@ -359,6 +365,8 @@ impl ChartPanel {
             panic_sell_pos: Default::default(),
             price_axis_pos: Default::default(),
             time_axis_visible: true,
+            line_labels: true,
+            cursor_labels: true,
             num: Some(num),
             registered_markets: HashSet::new(),
             registered_orderbook: HashSet::new(),
@@ -557,6 +565,26 @@ impl ChartPanel {
     pub fn set_time_axis_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         if self.time_axis_visible != visible {
             self.time_axis_visible = visible;
+            self.view_dirty = true;
+            cx.notify();
+        }
+    }
+
+    /// Показывать подписи у линий ордеров (per-окно/вкладка). Применяется в render через
+    /// `set_line_labels` движка. На раскладку не влияет (только видимость текста).
+    pub fn set_line_labels(&mut self, show: bool, cx: &mut Context<Self>) {
+        if self.line_labels != show {
+            self.line_labels = show;
+            self.view_dirty = true;
+            cx.notify();
+        }
+    }
+
+    /// Показывать подписи у перекрестия (курсорный ридаут). Применяется в render через
+    /// `set_cursor_labels` движка.
+    pub fn set_cursor_labels(&mut self, show: bool, cx: &mut Context<Self>) {
+        if self.cursor_labels != show {
+            self.cursor_labels = show;
             self.view_dirty = true;
             cx.notify();
         }

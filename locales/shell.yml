@@ -121,6 +121,14 @@ chart.layout.title:
   ru: "Раскладка вкладки"
   en: "Tab layout"
   es: "Disposición de pestaña"
+chart.layout.frame_view:
+  ru: "Вид"
+  en: "View"
+  es: "Vista"
+chart.layout.frame_display:
+  ru: "Отображать"
+  en: "Display"
+  es: "Mostrar"
 chart.layout.height_fit:
   ru: "Высота Fit"
   en: "Fit height"
@@ -157,6 +165,14 @@ chart.layout.show_zone:
   ru: "Отображать зону разделения"
   en: "Show split zone"
   es: "Mostrar zona de división"
+chart.layout.line_labels:
+  ru: "Подписи у линий"
+  en: "Line labels"
+  es: "Etiquetas de líneas"
+chart.layout.cursor_labels:
+  ru: "Подпись у перекрестия"
+  en: "Crosshair label"
+  es: "Etiqueta del cursor"
 chart.layout.auto_pin:
   ru: "Авто-пин при выставлении ордера"
   en: "Auto-pin on order"

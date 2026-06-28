@@ -282,6 +282,62 @@ impl ChartTabs {
         cx.notify();
     }
 
+    /// Видимость подписей у линий активной вкладки (None → дефолт вкл).
+    pub(super) fn active_line_labels(&self, cx: &App) -> bool {
+        let v = match &self.active {
+            Tab::Main => self.main.read(cx).line_labels(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => {
+                self.add_stack(*n, b).and_then(|p| p.read(cx).line_labels())
+            }
+        };
+        v.unwrap_or(true)
+    }
+
+    /// Видимость подписей у линий на АКТИВНОЙ вкладке + persist.
+    pub(super) fn apply_line_labels(&mut self, show: bool, cx: &mut Context<Self>) {
+        match self.active.clone() {
+            Tab::Main => self.main.update(cx, |s, c| s.set_line_labels(Some(show), c)),
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(p) = self.active_stack() {
+                    p.update(cx, |s, c| s.set_line_labels(Some(show), c));
+                }
+            }
+        }
+        let (num, bucket) = self.active_stack_key();
+        self.upsert_spec(cx, num, &bucket, move |s| {
+            s.line_labels = Some(show);
+        });
+        cx.notify();
+    }
+
+    /// Видимость подписей у перекрестия активной вкладки (None → дефолт вкл).
+    pub(super) fn active_cursor_labels(&self, cx: &App) -> bool {
+        let v = match &self.active {
+            Tab::Main => self.main.read(cx).cursor_labels(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .and_then(|p| p.read(cx).cursor_labels()),
+        };
+        v.unwrap_or(true)
+    }
+
+    /// Видимость подписей у перекрестия на АКТИВНОЙ вкладке + persist.
+    pub(super) fn apply_cursor_labels(&mut self, show: bool, cx: &mut Context<Self>) {
+        match self.active.clone() {
+            Tab::Main => self.main.update(cx, |s, c| s.set_cursor_labels(Some(show), c)),
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(p) = self.active_stack() {
+                    p.update(cx, |s, c| s.set_cursor_labels(Some(show), c));
+                }
+            }
+        }
+        let (num, bucket) = self.active_stack_key();
+        self.upsert_spec(cx, num, &bucket, move |s| {
+            s.cursor_labels = Some(show);
+        });
+        cx.notify();
+    }
+
     /// Ориентация стека активной вкладки (None → дефолт Vertical).
     pub(super) fn active_layout_orientation(&self, cx: &App) -> Option<StackOrientation> {
         match &self.active {
@@ -427,6 +483,8 @@ impl ChartTabs {
         panic_pos: Option<ChartBtnPos>,
         price_axis_pos: Option<crate::chart_persist::PriceAxisPos>,
         time_axis_visible: Option<bool>,
+        line_labels: Option<bool>,
+        cursor_labels: Option<bool>,
         cx: &mut Context<Self>,
     ) {
         let ob = orderbook.unwrap_or(true);
@@ -434,6 +492,8 @@ impl ChartTabs {
         let ap = auto_pin.unwrap_or(false);
         let axis = price_axis_pos.unwrap_or_default();
         let time_axis = time_axis_visible.unwrap_or(true);
+        let lbl = line_labels.unwrap_or(true);
+        let curl = cursor_labels.unwrap_or(true);
         if include_main {
             self.main.update(cx, |s, c| {
                 s.set_layout(mode, height_fit, height_scroll, c);
@@ -445,6 +505,8 @@ impl ChartTabs {
                 s.set_action_btn_pos(cancel_pos, panic_pos, c);
                 s.set_price_axis_pos(Some(axis), c);
                 s.set_time_axis_visible(Some(time_axis), c);
+                s.set_line_labels(Some(lbl), c);
+                s.set_cursor_labels(Some(curl), c);
             });
             self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| {
                 s.layout_mode = mode;
@@ -459,6 +521,8 @@ impl ChartTabs {
                 s.panic_sell_pos = panic_pos;
                 s.price_axis_pos = Some(axis);
                 s.time_axis_visible = Some(time_axis);
+                s.line_labels = Some(lbl);
+                s.cursor_labels = Some(curl);
             });
         }
         // «Чарты» = add-вкладки в стрипе + кастомные + откреплённые в окна (стеки в self.detached).
@@ -480,6 +544,8 @@ impl ChartTabs {
                 s.set_action_btn_pos(cancel_pos, panic_pos, c);
                 s.set_price_axis_pos(Some(axis), c);
                 s.set_time_axis_visible(Some(time_axis), c);
+                s.set_line_labels(Some(lbl), c);
+                s.set_cursor_labels(Some(curl), c);
             });
             self.upsert_spec(cx, num, &bucket, |s| {
                 s.layout_mode = mode;
@@ -494,6 +560,8 @@ impl ChartTabs {
                 s.panic_sell_pos = panic_pos;
                 s.price_axis_pos = Some(axis);
                 s.time_axis_visible = Some(time_axis);
+                s.line_labels = Some(lbl);
+                s.cursor_labels = Some(curl);
             });
         }
         self.backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
@@ -525,6 +593,8 @@ impl ChartTabs {
                 r.panic_pos,
                 r.price_axis_pos,
                 r.time_axis_visible,
+                r.line_labels,
+                r.cursor_labels,
                 cx,
             );
         }

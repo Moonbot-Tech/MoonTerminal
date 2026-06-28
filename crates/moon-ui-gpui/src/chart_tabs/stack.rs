@@ -246,6 +246,28 @@ pub(super) fn set_panels_time_axis_visible<S: 'static>(
     }
 }
 
+/// Применить видимость подписей у линий ко всем панелям стека.
+pub(super) fn set_panels_line_labels<S: 'static>(
+    entries: &[ChartStackEntry],
+    show: bool,
+    cx: &mut Context<S>,
+) {
+    for e in entries {
+        e.panel.update(cx, |p, pcx| p.set_line_labels(show, pcx));
+    }
+}
+
+/// Применить видимость подписей у перекрестия ко всем панелям стека.
+pub(super) fn set_panels_cursor_labels<S: 'static>(
+    entries: &[ChartStackEntry],
+    show: bool,
+    cx: &mut Context<S>,
+) {
+    for e in entries {
+        e.panel.update(cx, |p, pcx| p.set_cursor_labels(show, pcx));
+    }
+}
+
 /// Обработать клики по замку (режим сравнения): забрать pending у всех панелей. Если кликнули —
 /// переключить якорь: повторный клик по текущему якорю снимает сравнение; иначе назначить новый
 /// якорь и переставить его в индекс 0 (крайний левый). Возвращает true при изменении якоря/порядка.

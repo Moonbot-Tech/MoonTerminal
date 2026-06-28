@@ -428,7 +428,8 @@ impl RenderState {
             // Ордерные подписи рисуются ВСЕГДА (под курсорными они не вырезаются, а просвечивают):
             // курсорные цифры приоритетны и рисуются ПОЗЖЕ (поверх), поэтому читаются сверху, а
             // ордерная цифра остаётся видна вокруг/за ними.
-            {
+            // Per-вкладка галка «подписи у линий» (попап ⚙). Выкл → столбец не строим.
+            if self.line_labels {
                 // Высота строки подписей зависит от их кегля (настраивается слайдером темы).
                 let label_line_h = self.label_font_px() + 4.0;
                 let mut items: Vec<(f32, f32, &OrderLabel)> = Vec::new();
@@ -465,7 +466,11 @@ impl RenderState {
                 }
             }
 
-            let cursor = self.cursor.filter(|cursor| cursor.pane == idx);
+            // Per-вкладка галка «подпись у перекрестия» (попап ⚙). Выкл → курсорный ридаут не рисуем.
+            let cursor = self
+                .cursor
+                .filter(|cursor| cursor.pane == idx)
+                .filter(|_| self.cursor_labels);
             let mut skip_time_label_x = None;
             let mut skip_price_label_y = None;
 

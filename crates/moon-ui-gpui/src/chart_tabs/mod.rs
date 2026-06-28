@@ -172,6 +172,8 @@ impl ChartTabs {
             main_action_pos,
             main_axis_pos,
             main_time_axis,
+            main_line_labels,
+            main_cursor_labels,
             restore_pending,
         ): (
             Option<f32>,
@@ -184,6 +186,8 @@ impl ChartTabs {
                 Option<chart_persist::ChartBtnPos>,
             ),
             Option<chart_persist::PriceAxisPos>,
+            Option<bool>,
+            Option<bool>,
             Option<bool>,
             Vec<_>,
         ) = {
@@ -200,6 +204,8 @@ impl ChartTabs {
                 main_spec.map_or((None, None), |s| (s.cancel_buy_pos, s.panic_sell_pos));
             let main_axis_pos = main_spec.and_then(|s| s.price_axis_pos);
             let main_time_axis = main_spec.and_then(|s| s.time_axis_visible);
+            let main_line_labels = main_spec.and_then(|s| s.line_labels);
+            let main_cursor_labels = main_spec.and_then(|s| s.cursor_labels);
             let pending = specs
                 .iter()
                 .filter(|s| s.group == group && s.num >= 1 && s.detached.is_some())
@@ -214,6 +220,8 @@ impl ChartTabs {
                 main_action_pos,
                 main_axis_pos,
                 main_time_axis,
+                main_line_labels,
+                main_cursor_labels,
                 pending,
             )
         };
@@ -244,6 +252,12 @@ impl ChartTabs {
         }
         if main_time_axis.is_some() {
             main.update(cx, |p, pcx| p.set_time_axis_visible(main_time_axis, pcx));
+        }
+        if main_line_labels.is_some() {
+            main.update(cx, |p, pcx| p.set_line_labels(main_line_labels, pcx));
+        }
+        if main_cursor_labels.is_some() {
+            main.update(cx, |p, pcx| p.set_cursor_labels(main_cursor_labels, pcx));
         }
         cx.observe(&backend, |this, backend, cx| {
             // Запросы «применить ко всем» из выносных окон — до early-return по sig (они sig не меняют).

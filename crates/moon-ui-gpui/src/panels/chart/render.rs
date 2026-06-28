@@ -82,6 +82,8 @@ impl Render for ChartPanel {
             | self.chart.set_orderbook_only(self.orderbook_only)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
             | self.chart.set_time_axis_visible(self.time_axis_visible)
+            | self.chart.set_line_labels(self.line_labels)
+            | self.chart.set_cursor_labels(self.cursor_labels)
             | self.chart.set_prospective_usd(prospective_usd)
             | self.chart.set_follow(follow, now_unix_ms());
         // Режим сравнения: пока активен lock, держим Y-окно якоря (перебивает scale каждый кадр —

@@ -144,43 +144,39 @@ pub(super) const MAX_H: u16 = 4000;
 /// Вызывающий ставит контейнер в absolute layer и задаёт этот размер.
 pub(super) fn content_size(cx: &App, with_rename: bool) -> Size<Pixels> {
     let pad = f32::from(design::ui_px(cx, 8.0));
-    let gap = f32::from(design::ui_px(cx, 8.0));
+    let gap = f32::from(design::ui_px(cx, 8.0)); // зазор между топ-блоками
     let cap = f32::from(design::t_caption(cx)) + 6.0;
     let title_h = cap.max(f32::from(design::ui_px(cx, 22.0)));
     let seg_h = f32::from(design::ui_px(cx, 30.0));
     let line_h = f32::from(design::ui_px(cx, 30.0));
     let cb_h = f32::from(design::ui_px(cx, 22.0));
     let border = 2.0;
-    // Доп. строка имени (для кастомных вкладок): инпут + зазор.
-    let rename_h = if with_rename { line_h + gap } else { 0.0 };
-    let h = border
-        + 2.0 * pad
-        + title_h
-        + gap
-        + rename_h
-        + seg_h
-        + gap
-        + line_h
-        + gap
-        + 2.0 * cap
-        + gap
-        + cb_h
-        + gap
-        + cb_h
-        + gap
-        + cb_h
-        // + чекбокс «Ось времени».
-        + gap
-        + cb_h
-        // + 2 строки селекторов позиции кнопок (Cancel Buy / Panic Sell) + строка оси цен.
-        + gap
-        + cb_h
-        + gap
-        + cb_h
-        + gap
-        + cb_h
-        + 6.0;
-    let w = 2.0 * 110.0 + 20.0 + 2.0 * pad + border;
+
+    // Метрики рамок-групп — ДОЛЖНЫ совпадать с [`framed`].
+    let fpy = f32::from(design::ui_px(cx, 4.0)); // верт. паддинг рамки (×2)
+    let fg = f32::from(design::ui_px(cx, 4.0)); // зазор заголовок→тело
+    let body_gap = f32::from(design::ui_px(cx, 6.0)); // зазор строк в теле
+    let fpx = f32::from(design::ui_px(cx, 6.0)); // гор. паддинг рамки (×2)
+    let fb = 2.0; // граница рамки
+
+    // Рамка «Вид»: заголовок + (seg + поле высоты + 2-строчный хинт).
+    let frame_view =
+        fb + 2.0 * fpy + cap + fg + seg_h + body_gap + line_h + body_gap + 2.0 * cap;
+    // Рамка «Отображать»: заголовок + 5 чекбоксов (стакан/зона/ось времени/подписи линий/курсора).
+    let frame_display = fb + 2.0 * fpy + cap + fg + 5.0 * cb_h + 4.0 * body_gap;
+
+    // Доп. строка имени (кастомные вкладки).
+    let rename_h = if with_rename { line_h } else { 0.0 };
+
+    // Топ-блоки: заголовок, [имя], рамка Вид, рамка Отображать, автопин, Cancel Buy,
+    // Panic Sell, ось цен.
+    let blocks =
+        title_h + rename_h + frame_view + frame_display + cb_h + cb_h + cb_h + cb_h;
+    let n_blocks: f32 = if with_rename { 8.0 } else { 7.0 };
+    let gaps = (n_blocks - 1.0) * gap;
+
+    let h = border + 2.0 * pad + blocks + gaps + 6.0;
+    let w = 2.0 * 110.0 + 20.0 + 2.0 * pad + border + 2.0 * fpx + fb;
     size(px(w), px(h))
 }
 
@@ -191,11 +187,31 @@ fn mode_label(m: StackLayoutMode) -> &'static str {
     }
 }
 
+/// Рамка-группа: тонкая граница + заголовок-капшен сверху, содержимое внутри. Метрики
+/// (паддинги/зазоры/граница) ДОЛЖНЫ совпадать с расчётом высоты в [`content_size`].
+fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl IntoElement {
+    v_flex()
+        .w_full()
+        .gap(design::ui_px(cx, 4.0))
+        .px(design::ui_px(cx, 6.0))
+        .py(design::ui_px(cx, 4.0))
+        .border_1()
+        .border_color(rgb(p.border))
+        .rounded(design::ui_px(cx, 4.0))
+        .child(
+            div()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .child(title),
+        )
+        .child(body)
+}
+
 /// Маленькое окошко настроек раскладки. Показывает поле высоты ТОЛЬКО для текущего режима.
 /// `height_fit_input`/`height_scroll_input` — раздельные поля (подписку на Blur/Enter держит
 /// вызывающий). `on_pick_mode` вызывается при выборе режима. Позиционируется вызывающим.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O>(
+pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2>(
     id: &str,
     current: StackLayoutMode,
     orientation: StackOrientation,
@@ -209,6 +225,8 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O>(
     panic_sell_pos: ChartBtnPos,
     price_axis_pos: PriceAxisPos,
     time_axis_visible: bool,
+    line_labels: bool,
+    cursor_labels: bool,
     p: MoonPalette,
     cx: &App,
     on_pick_mode: F,
@@ -222,6 +240,8 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O>(
     on_pick_panic_pos: M,
     on_pick_price_axis: N,
     on_toggle_time_axis: O,
+    on_toggle_line_labels: P2,
+    on_toggle_cursor_labels: Q2,
 ) -> AnyElement
 where
     F: Fn(StackLayoutMode, &mut App) + 'static,
@@ -234,6 +254,8 @@ where
     M: Fn(ChartBtnPos, &mut App) + 'static,
     N: Fn(PriceAxisPos, &mut App) + 'static,
     O: Fn(bool, &mut App) + 'static,
+    P2: Fn(bool, &mut App) + 'static,
+    Q2: Fn(bool, &mut App) + 'static,
 {
     let horizontal = orientation.is_horizontal();
     let sel = POPUP_MODES.iter().position(|m| *m == current).unwrap_or(0);
@@ -330,6 +352,20 @@ where
         .checked(time_axis_visible)
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_time_axis(*ch, app));
+
+    // Чекбокс «Подписи у линий» — вкл/выкл цифры у ордер-линий (размер/%/стоп).
+    let line_labels_cb = MoonCheckbox::new(SharedString::from(format!("{id}-line-labels")))
+        .label(t!("chart.layout.line_labels").to_string())
+        .checked(line_labels)
+        .size(MoonCheckboxSize::Compact)
+        .on_change(move |ch: &bool, _w, app| on_toggle_line_labels(*ch, app));
+
+    // Чекбокс «Подпись у перекрестия» — вкл/выкл курсорный ридаут (время/цена/%/объём/размер).
+    let cursor_labels_cb = MoonCheckbox::new(SharedString::from(format!("{id}-cursor-labels")))
+        .label(t!("chart.layout.cursor_labels").to_string())
+        .checked(cursor_labels)
+        .size(MoonCheckboxSize::Compact)
+        .on_change(move |ch: &bool, _w, app| on_toggle_cursor_labels(*ch, app));
 
     // Селекторы позиции кнопок Cancel Buy / Panic Sell в зоне чарта (— L C R). Названия кнопок —
     // бренд-термины MoonBot, НЕ переводим.
@@ -430,13 +466,36 @@ where
                 .child(apply_all_btn),
         )
         .children(rename_row)
-        .child(seg)
-        .child(height_line)
-        .child(hint_block)
-        .child(orderbook_cb)
-        .child(show_zone_cb)
+        // Рамка «Вид»: режим FIT/SCROLL + поле высоты активного режима + описание под ним.
+        .child(framed(
+            t!("chart.layout.frame_view").to_string(),
+            p,
+            cx,
+            v_flex()
+                .w_full()
+                .gap(design::ui_px(cx, 6.0))
+                .child(seg)
+                .child(height_line)
+                .child(hint_block)
+                .into_any_element(),
+        ))
+        // Рамка «Отображать»: галки видимости (стакан / зона разделения / ось времени).
+        .child(framed(
+            t!("chart.layout.frame_display").to_string(),
+            p,
+            cx,
+            v_flex()
+                .w_full()
+                .gap(design::ui_px(cx, 6.0))
+                .child(orderbook_cb)
+                .child(show_zone_cb)
+                .child(time_axis_cb)
+                .child(line_labels_cb)
+                .child(cursor_labels_cb)
+                .into_any_element(),
+        ))
+        // Остальное (как было): авто-пин + позиции кнопок + ось цен.
         .child(auto_pin_cb)
-        .child(time_axis_cb)
         .child(cancel_pos_row)
         .child(panic_pos_row)
         .child(price_axis_row)

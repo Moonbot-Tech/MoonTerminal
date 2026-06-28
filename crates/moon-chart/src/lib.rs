@@ -145,15 +145,20 @@ pub fn build_order_geometry(
             }
         }
 
-        // Ликвидация — непрерывная горизонталь без маркеров.
-        if let Some(p) = ord.liq {
-            let s = &style.liq;
-            hlines.push(LineInstance {
-                price: p,
-                color: rgba(s.color, line_alpha),
-                style: if s.dashed { 1.0 } else { 0.0 },
-                thickness: s.thickness * highlight_thickness_mul,
-            });
+        // Ликвидация — непрерывная горизонталь без маркеров. Рисуем ТОЛЬКО у активного
+        // (не закрытого) ордера: закрыли позицию → ордер закрыт → ликвидации больше нет.
+        // Иначе линия «висела» бы после закрытия (closed-ордер держит последний `liq` и
+        // ещё какое-то время остаётся в наборе отрисовки на closed_alpha).
+        if !closed {
+            if let Some(p) = ord.liq {
+                let s = &style.liq;
+                hlines.push(LineInstance {
+                    price: p,
+                    color: rgba(s.color, line_alpha),
+                    style: if s.dashed { 1.0 } else { 0.0 },
+                    thickness: s.thickness * highlight_thickness_mul,
+                });
+            }
         }
 
         let path = &style.path;

@@ -283,6 +283,8 @@ impl Render for ChartTabs {
             let (cancel_pos, panic_pos) = self.active_action_btn_pos(cx);
             let price_axis_pos = self.active_price_axis_pos(cx);
             let time_axis_visible = self.active_time_axis_visible(cx);
+            let line_labels = self.active_line_labels(cx);
+            let cursor_labels = self.active_cursor_labels(cx);
             let include_main = matches!(self.active, Tab::Main);
             let is_custom = matches!(self.active, Tab::Custom(..));
             let apply_all_label = if include_main {
@@ -300,6 +302,8 @@ impl Render for ChartTabs {
             let psp_entity = cx.entity();
             let pap_entity = cx.entity();
             let tav_entity = cx.entity();
+            let ll_entity = cx.entity();
+            let cl_entity = cx.entity();
             let hover_entity = cx.entity();
             let size = layout_popup::content_size(cx, is_custom);
             div()
@@ -335,6 +339,8 @@ impl Render for ChartTabs {
                     panic_pos,
                     price_axis_pos,
                     time_axis_visible,
+                    line_labels,
+                    cursor_labels,
                     p,
                     cx,
                     move |mode, app| {
@@ -360,6 +366,8 @@ impl Render for ChartTabs {
                             let (cp, pp) = this.active_action_btn_pos(cx);
                             let pax = this.active_price_axis_pos(cx);
                             let tax = this.active_time_axis_visible(cx);
+                            let ll = this.active_line_labels(cx);
+                            let cl = this.active_cursor_labels(cx);
                             this.apply_layout_to_all(
                                 include_main,
                                 mode,
@@ -374,6 +382,8 @@ impl Render for ChartTabs {
                                 Some(pp),
                                 Some(pax),
                                 Some(tax),
+                                Some(ll),
+                                Some(cl),
                                 cx,
                             );
                         });
@@ -410,6 +420,12 @@ impl Render for ChartTabs {
                     },
                     move |checked, app| {
                         tav_entity.update(app, |this, cx| this.apply_time_axis_visible(checked, cx));
+                    },
+                    move |checked, app| {
+                        ll_entity.update(app, |this, cx| this.apply_line_labels(checked, cx));
+                    },
+                    move |checked, app| {
+                        cl_entity.update(app, |this, cx| this.apply_cursor_labels(checked, cx));
                     },
                 ))
         });

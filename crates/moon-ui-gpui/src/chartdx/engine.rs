@@ -97,6 +97,8 @@ impl ChartEngine {
             },
             cursor_thickness: theme.cross_thickness.max(1.0),
             label_font_delta: theme.label_font_delta,
+            line_labels: true,
+            cursor_labels: true,
             pixel_scale: 1.0,
             #[cfg(windows)]
             scissor_rs: None,
@@ -368,6 +370,28 @@ impl ChartEngine {
         }
         data.time_axis_visible = visible;
         data.mark_view_dirty();
+        true
+    }
+
+    /// Показывать подписи у линий ордеров (per-вкладка). `true` при изменении.
+    pub fn set_line_labels(&mut self, show: bool) -> bool {
+        let mut st = self.state.borrow_mut();
+        if st.line_labels == show {
+            return false;
+        }
+        st.line_labels = show;
+        st.needs_present = true;
+        true
+    }
+
+    /// Показывать подписи у перекрестия (курсорный ридаут). `true` при изменении.
+    pub fn set_cursor_labels(&mut self, show: bool) -> bool {
+        let mut st = self.state.borrow_mut();
+        if st.cursor_labels == show {
+            return false;
+        }
+        st.cursor_labels = show;
+        st.needs_present = true;
         true
     }
 

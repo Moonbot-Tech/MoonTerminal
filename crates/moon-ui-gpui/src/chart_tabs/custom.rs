@@ -255,6 +255,8 @@ impl ChartTabs {
             bool,
             Option<crate::chart_persist::PriceAxisPos>,
             Option<bool>,
+            Option<bool>,
+            Option<bool>,
         )> = {
             let all = &self.backend.read(cx).chart_specs;
             all.iter()
@@ -276,6 +278,8 @@ impl ChartTabs {
                             s.compare_orderbook_only,
                             s.price_axis_pos,
                             s.time_axis_visible,
+                            s.line_labels,
+                            s.cursor_labels,
                         )
                     })
                 })
@@ -296,6 +300,8 @@ impl ChartTabs {
             broom,
             axis_pos,
             time_axis,
+            line_labels,
+            cursor_labels,
         ) in specs
         {
             let stack = cx.new(|_| {
@@ -328,6 +334,12 @@ impl ChartTabs {
                 }
                 if time_axis.is_some() {
                     s.set_time_axis_visible(time_axis, c);
+                }
+                if line_labels.is_some() {
+                    s.set_line_labels(line_labels, c);
+                }
+                if cursor_labels.is_some() {
+                    s.set_cursor_labels(cursor_labels, c);
                 }
                 for (core, market) in &coins {
                     s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);

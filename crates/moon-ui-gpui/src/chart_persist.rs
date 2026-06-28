@@ -150,6 +150,12 @@ pub struct ChartTabSpec {
     /// Per-окно/вкладка. Выкл = подписи времени не рисуются, плот занимает всю высоту.
     #[serde(default)]
     pub time_axis_visible: Option<bool>,
+    /// Показывать подписи у линий ордеров. None → дефолт (вкл). Per-окно/вкладка.
+    #[serde(default)]
+    pub line_labels: Option<bool>,
+    /// Показывать подписи у перекрестия (курсорный ридаут). None → дефолт (вкл). Per-окно/вкладка.
+    #[serde(default)]
+    pub cursor_labels: Option<bool>,
 }
 
 impl ChartTabSpec {
@@ -178,6 +184,8 @@ impl ChartTabSpec {
             compare_orderbook_only: false,
             price_axis_pos: None,
             time_axis_visible: None,
+            line_labels: None,
+            cursor_labels: None,
         }
     }
 

@@ -7,9 +7,9 @@ use moon_ui::MoonVirtualListScrollHandle;
 
 use super::stack::{
     ChartStackEntry, HIGHLIGHT, apply_setting, chart_stack_card, compare_role, render_chart_stack,
-    resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin, set_panels_orderbook_enabled,
-    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
-    set_panels_time_axis_visible, sync_compare,
+    resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin, set_panels_cursor_labels,
+    set_panels_line_labels, set_panels_orderbook_enabled, set_panels_price_axis_pos,
+    set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible, sync_compare,
 };
 use crate::Backend;
 use crate::chart_persist::{ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation};
@@ -49,6 +49,10 @@ pub(crate) struct AddChartStack {
     price_axis_pos: Option<PriceAxisPos>,
     /// Видимость оси времени для графиков стека (per-окно). None = дефолт (вкл).
     time_axis_visible: Option<bool>,
+    /// Видимость подписей у линий для графиков стека (per-окно). None = дефолт (вкл).
+    line_labels: Option<bool>,
+    /// Видимость подписей у перекрестия для графиков стека (per-окно). None = дефолт (вкл).
+    cursor_labels: Option<bool>,
     /// Подписки на стаканы временно приостановлены (вкладка не в фокусе > 5с). Эффективный
     /// стакан = `orderbook_enabled ∧ !suspended` — не затирает пользовательскую галку «Стакан».
     /// Откреплённые в окно вкладки никогда не suspend (окно само держит спрос).
@@ -95,6 +99,8 @@ impl AddChartStack {
             panic_sell_pos: None,
             price_axis_pos: None,
             time_axis_visible: None,
+            line_labels: None,
+            cursor_labels: None,
             orderbook_suspended: false,
             compare_anchor: None,
             compare_y: None,
@@ -229,6 +235,12 @@ impl AddChartStack {
         });
         panel.update(cx, |panel, pcx| {
             panel.set_time_axis_visible(self.time_axis_visible.unwrap_or(true), pcx)
+        });
+        panel.update(cx, |panel, pcx| {
+            panel.set_line_labels(self.line_labels.unwrap_or(true), pcx)
+        });
+        panel.update(cx, |panel, pcx| {
+            panel.set_cursor_labels(self.cursor_labels.unwrap_or(true), pcx)
         });
         panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
         self.charts
@@ -377,6 +389,28 @@ impl AddChartStack {
     pub(crate) fn set_time_axis_visible(&mut self, visible: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.time_axis_visible, visible, &self.charts, cx, |c, cx| {
             set_panels_time_axis_visible(c, visible.unwrap_or(true), cx)
+        });
+    }
+
+    pub(crate) fn line_labels(&self) -> Option<bool> {
+        self.line_labels
+    }
+
+    /// Видимость подписей у линий для всех графиков стека (per-окно).
+    pub(crate) fn set_line_labels(&mut self, show: Option<bool>, cx: &mut Context<Self>) {
+        apply_setting(&mut self.line_labels, show, &self.charts, cx, |c, cx| {
+            set_panels_line_labels(c, show.unwrap_or(true), cx)
+        });
+    }
+
+    pub(crate) fn cursor_labels(&self) -> Option<bool> {
+        self.cursor_labels
+    }
+
+    /// Видимость подписей у перекрестия для всех графиков стека (per-окно).
+    pub(crate) fn set_cursor_labels(&mut self, show: Option<bool>, cx: &mut Context<Self>) {
+        apply_setting(&mut self.cursor_labels, show, &self.charts, cx, |c, cx| {
+            set_panels_cursor_labels(c, show.unwrap_or(true), cx)
         });
     }
 
