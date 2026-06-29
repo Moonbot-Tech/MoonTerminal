@@ -102,27 +102,35 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
         .map(|s| moon_core::symbol::resolve_quote(&s.market))
         .unwrap_or_default();
     let upper = coin.to_ascii_uppercase();
-    // Уже полный рынок (кончается на quote ядра) → берём как есть.
-    let already_full = !quote.is_empty() && upper.len() > quote.len() && upper.ends_with(&quote);
+    // Уже полный рынок: кончается на quote ядра ИЛИ содержит dex-префикс HIP-3 (`xyz:BIRD`) →
+    // берём как есть (достраивать quote нельзя — HL/HIP-3 не несут суффикса в имени).
+    let already_full =
+        coin.contains(':') || (!quote.is_empty() && upper.len() > quote.len() && upper.ends_with(&quote));
     let candidate = if already_full || quote.is_empty() {
         coin.to_string()
     } else {
         format!("{coin}{quote}")
     };
     // Если снимок ядра доступен — подтверждаем кандидата по юниверсу, иначе ищем рынок,
-    // чья база совпадает с монетой (на случай префиксов вроде `1000PEPEUSDT`).
+    // чья база совпадает с монетой (префиксы вроде `1000PEPEUSDT` и dex-перпы `xyz:BIRD`).
     let universe = b.session.market_source().search_markets(core, coin, 32);
     if universe.is_empty() || universe.iter().any(|m| m == &candidate) {
         return candidate;
     }
     universe
         .iter()
-        .find(|m| {
-            let q = moon_core::symbol::resolve_quote(m);
-            moon_core::symbol::base_symbol(m, &q) == coin
-        })
+        .find(|m| market_base_coin(m).eq_ignore_ascii_case(coin))
         .cloned()
         .unwrap_or(candidate)
+}
+
+/// Базовая монета рынка для сопоставления с сохранённой в отчёте: срезаем HIP-3 dex-префикс
+/// (`xyz:BIRD` → `BIRD`), затем quote-суффикс (`BIRDUSDC` → `BIRD`). Без среза префикса
+/// dex-перпы не находились (в отчёте «BIRD», реальный рынок «xyz:BIRD») → монета не открывалась.
+fn market_base_coin(m: &str) -> &str {
+    let after_dex = m.rsplit(':').next().unwrap_or(m);
+    let quote = moon_core::symbol::resolve_quote(after_dex);
+    moon_core::symbol::base_symbol(after_dex, &quote)
 }
 
 fn report_data_cell(col: &str, val: &Value, p: MoonPalette) -> MoonDataCell {

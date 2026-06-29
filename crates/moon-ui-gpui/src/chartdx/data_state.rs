@@ -1086,13 +1086,34 @@ fn pct_color(v: f32) -> u32 {
 }
 
 /// Компактное число (база/штуки) с SI-суффиксом K/M/B/T.
+/// Размер ордера: SI-суффикс (K/M/B/T) + ДО 2 знаков дробной части (сотые, если есть),
+/// без хвостовых нулей. Не использует общий `compact_si` (тот для десятков даёт до 3 знаков
+/// — «49.744»). 50 → «50»; 49.744 → «49.74»; 1234 → «1.23K»; 49744 → «49.74K».
+fn fmt_size_2dp(v: f64) -> String {
+    let a = v.abs();
+    let (n, suffix) = if a >= 1e12 {
+        (v / 1e12, "T")
+    } else if a >= 1e9 {
+        (v / 1e9, "B")
+    } else if a >= 1e6 {
+        (v / 1e6, "M")
+    } else if a >= 1e3 {
+        (v / 1e3, "K")
+    } else {
+        (v, "")
+    };
+    let s = format!("{n:.2}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    format!("{s}{suffix}")
+}
+
 fn fmt_amount(v: f32) -> String {
-    moon_core::util::fmt::compact_si(v as f64)
+    fmt_size_2dp(v as f64)
 }
 
 /// $-сумма с SI-суффиксом: 1234 → «$1.23K».
 fn fmt_usd(v: f64) -> String {
-    format!("${}", moon_core::util::fmt::compact_si(v))
+    format!("${}", fmt_size_2dp(v))
 }
 
 fn fmt_pct(v: f32) -> String {
