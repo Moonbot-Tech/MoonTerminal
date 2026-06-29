@@ -121,45 +121,12 @@ impl ChartPanel {
         let Some(price) = self.price_at_pane_y(pane, pos.1) else {
             return false;
         };
-        // ДИАГ (env MOON_ORDER_LINE_DIAG=1): вид В МОМЕНТ КЛИКА (render_center/range) и куда по
-        // экрану ложится цена (rel_y). Сравнив с видом на кадре отрисовки, поймём, на сколько
-        // уехал Y-масштаб (симптом «линия выше клика»).
-        if std::env::var_os("MOON_ORDER_LINE_DIAG").is_some() {
-            if let Some((c, r)) = self.chart.with_container(|cont| {
-                cont.pane(pane)
-                    .map(|p| (p.view.render_center, p.view.render_range))
-            }) {
-                let rel = if r > 0.0 { 0.5 - (price as f32 - c) / r } else { f32::NAN };
-                let cy = pos.1;
-                log::info!(
-                    "order-click-diag pane={pane} click_y={cy:.1} price={price:.4} render_center={c:.4} render_range={r:.4} rel_y={rel:.3}"
-                );
-            }
-        }
         let Some((core, market)) = self
             .chart
             .with_container(|container| container.target(pane))
         else {
             return false;
         };
-        // ДИАГ (env MOON_ORDER_LINE_DIAG=1): «смотрю одно — торгую другое» под dedup. Логируем
-        // ЯДРО-ЦЕЛЬ ордера, отправляемую цену и bid/ask ОТОБРАЖАЕМОГО стакана (он resolved через
-        // core_provider — может быть ДРУГОЕ ядро/биржа). Если sent_price выше отображаемого ask —
-        // клик был выше рынка; если отображаемый ask ≠ реальному аску ядра в логе бота — рассинхрон
-        // ядра данных и ядра ордера.
-        if std::env::var_os("MOON_ORDER_LINE_DIAG").is_some() {
-            let book = self
-                .backend
-                .read(cx)
-                .session
-                .market_source()
-                .with_orderbook_view(core, &market, |d| {
-                    d.and_then(|(book, _)| book.best_bid_ask())
-                });
-            log::info!(
-                "order-send-diag order_core={core} market={market} sent_price={price:.4} displayed_book_bid_ask={book:?}"
-            );
-        }
 
         let placed = self.backend.update(cx, |b, _| {
             let cfg = b.preview.as_ref().unwrap_or(&b.config);

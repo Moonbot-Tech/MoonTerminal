@@ -275,13 +275,19 @@ fn build_order_row(
 
     let mkt = snap.markets().price(&o.market_name);
     let last = mkt.as_ref().map(|p| p.p_last as f32).unwrap_or(0.0);
-    // Цена входа для линии входа и расчёта стоп/тейк-уровней. `o.buy_price` — это
-    // ЖЕЛАЕМАЯ/реплейс-цена (по модели moonproto: «Desired/local buy replace price»): ПОСЛЕ
-    // исполнения ядро кладёт туда производное (выше реального бая → линия «прыгает вверх»).
-    // Реальный вход исполненного ордера = факт биржевой ноги `buy_order.actual_price`. Пока
-    // ордер НЕ залит (fill=0) — входа ещё нет, берём цену выставленного лимита (`buy_price`).
-    let entry = if fill_pct > 0.0 && o.buy_order.actual_price > 0.0 {
-        o.buy_order.actual_price
+    // Цена входа для линии входа и расчёта стоп/тейк-уровней.
+    // ВАЖНО (баг «линия выше реального бая»): ПОСЛЕ исполнения ядро кладёт в `buy_price` И в
+    // `buy_order.actual_price` цену БЕЗУБЫТКА (= реальный филл + комиссия круга ≈ +0.1%), а не
+    // сырой вход. Реальная цена входа исполненного ордера = средняя цена ПОЗИЦИИ (`pos_price`,
+    // с биржи, без надбавки). Пока ордер НЕ залит (fill=0) — позиции ещё нет, берём цену
+    // выставленного лимита (`buy_price`).
+    let pos_price = snap
+        .markets()
+        .get(&o.market_name)
+        .map(|h| h.balance_position().pos_price)
+        .unwrap_or(0.0);
+    let entry = if fill_pct > 0.0 && pos_price > 0.0 {
+        pos_price
     } else {
         o.buy_price
     };
@@ -366,21 +372,7 @@ fn build_order_row(
         is_moon_shot: o.is_moon_shot,
         corridor_price_down: o.corridor_price_down,
         corridor_price_up: o.corridor_price_up,
-        buy_trace: {
-            let bt = o.buy_trace_line.as_ref().and_then(order_trace);
-            // ДИАГНОСТИКА (env MOON_ORDER_LINE_DIAG=1): линия входа рисуется по ПОСЛЕДНЕЙ точке
-            // трассы (`current_price`), а ставится по `buy_price`. Если они расходятся — линия
-            // уезжает от места клика. Логируем расхождение, чтобы померить, а не гадать.
-            if std::env::var_os("MOON_ORDER_LINE_DIAG").is_some() {
-                let last = bt.as_ref().and_then(|t| t.points.last()).map(|p| p.price);
-                let delta = last.map(|l| (l - o.buy_price as f32) / o.buy_price.max(1e-9) as f32 * 100.0);
-                log::info!(
-                    "order-line-diag uid={} status={} fill={:.1} buy_price_raw={:.6} actual_buy={:.6} entry_used={:.6} buy_trace_last={:?} delta%={:?} sell_price={:.6}",
-                    o.uid, o.status.name(), fill_pct, o.buy_price, o.buy_order.actual_price, entry, last, delta, o.sell_price
-                );
-            }
-            bt
-        },
+        buy_trace: o.buy_trace_line.as_ref().and_then(order_trace),
         sell_trace: o.sell_trace_line.as_ref().and_then(order_trace),
     }
 }

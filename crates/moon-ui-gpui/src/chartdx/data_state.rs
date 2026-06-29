@@ -762,24 +762,6 @@ impl ChartDataState {
                 book_focus,
             );
             pane.view.update_y(now, plot_h, visible_price, last_price);
-            // ДИАГ (env MOON_ORDER_LINE_DIAG=1): вид на КАДРЕ ОТРИСОВКИ — сравнить с
-            // order-click-diag (вид в момент клика). Если render_center/range уехали — линия
-            // (по верной цене) визуально съезжает от курсора. Троттлим ~1/сек.
-            if std::env::var_os("MOON_ORDER_LINE_DIAG").is_some()
-                && chart_market_diag_due(format!("view:{}:{}", pane.core, pane.market))
-            {
-                log::info!(
-                    "order-view-diag pane={} market={} render_center={:.4} render_range={:.4} \
-                     visible={:?} last_price={:?} plot_h={:.1}",
-                    idx,
-                    pane.market,
-                    pane.view.render_center,
-                    pane.view.render_range,
-                    visible_price,
-                    last_price,
-                    plot_h,
-                );
-            }
             let area_win = Rect {
                 x: self.origin.0 + chart_area.x,
                 y: self.origin.1 + chart_area.y,
