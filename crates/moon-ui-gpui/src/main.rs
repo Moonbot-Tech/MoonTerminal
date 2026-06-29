@@ -19,6 +19,7 @@ mod chart_persist;
 mod chart_tabs;
 mod chartdx;
 mod controls;
+mod crash;
 mod debug_window;
 mod design;
 mod detached;
@@ -771,6 +772,12 @@ fn main() -> anyhow::Result<()> {
     if firetest_config.is_some() {
         diag::force_enable();
     }
+
+    // Нативные краши (access violation в DirectX/GPUI-форке, напр. present по протухшему
+    // дескриптору окна при реконнекте) идут МИМО Rust-паник-хука — процесс умирает молча,
+    // `panic.log` пуст. Ставим SEH-фильтр верхнего уровня, чтобы такой краш тоже попал в
+    // `panic.log` с кодом/адресом/бэктрейсом. Раньше всего — до создания окон.
+    crash::install_native_handler();
 
     // Паник-хук: GUI-приложение без консоли → stderr с сообщением паники теряется (и при
     // panic=abort это выглядит как нативный краш 0xc0000409 в ucrtbase). Пишем место+сообщение

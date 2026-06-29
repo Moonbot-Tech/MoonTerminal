@@ -617,6 +617,14 @@ impl Render for ChartPanel {
                         None
                     };
                     this.sync_native_cursor();
+                    // ПКМ по линии ордера → контекстное меню (Cancel / Join sells / Split).
+                    // Приоритетнее постановки/зума: на линии всегда открываем меню. Гасим и
+                    // последующий ПКМ-up (флаг), чтобы родитель не вышел из фулскрина и т.п.
+                    if within && this.try_open_order_menu(pos, e.position, window, cx) {
+                        this.suppress_rmb_up = true;
+                        cx.stop_propagation();
+                        return;
+                    }
                     if within
                         && this.try_place_order_click(
                             TradeMouseButton::Right,
@@ -656,6 +664,13 @@ impl Render for ChartPanel {
             .on_mouse_up(
                 MouseButton::Right,
                 cx.listener(|this, e: &MouseUpEvent, window, cx| {
+                    // ПКМ-down открыл меню ордера → гасим парный up (и не пускаем его к родителю,
+                    // который иначе вышел бы из фулскрина Main-стека).
+                    if this.suppress_rmb_up {
+                        this.suppress_rmb_up = false;
+                        cx.stop_propagation();
+                        return;
+                    }
                     if this.num.is_none() && this.window_pos_in_glass_zone(e.position) {
                         return;
                     }

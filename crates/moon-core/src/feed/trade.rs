@@ -8,7 +8,9 @@
 //! `MoonOrders::move_order` (TOrderReplaceCommand, CmdId=6),
 //! `MoonOrders::cancel` (TOrderCancelCommand, CmdId=10).
 
-use moonproto::{MoonClient, NewOrderParams, OrderSide, OrderWorkerStatus, VStopParams};
+use moonproto::{
+    MoonClient, NewOrderParams, OrderSide, OrderWorkerStatus, SplitOrderParams, VStopParams,
+};
 
 use crate::feed::{OrderLinePriceKind, OrderStopKind};
 
@@ -113,6 +115,31 @@ pub(super) fn cancel_market_buys(client: &MoonClient, server_id: u64, market: &s
             log::warn!("core {server_id} cancel market buys {market} uid {uid} failed: {error}");
         }
     }
+}
+
+/// «Join all sells» (ПКМ по линии sell): объединить sell-ордера рынка. `short` — сторона
+/// ПОЗИЦИИ (зеркало `is_short`), задаёт `OrderSide`. Транслируется в `trade().join_orders`.
+pub(super) fn join_sells(client: &MoonClient, server_id: u64, market: String, short: bool) {
+    let side = if short {
+        OrderSide::Short
+    } else {
+        OrderSide::Long
+    };
+    report(
+        server_id,
+        format!("join sells {market} short={short}"),
+        client.trade().join_orders(market, side),
+    );
+}
+
+/// «Split order» (ПКМ по линии sell): разбить выбранный sell-ордер рынка на `parts` частей.
+/// Транслируется в `trade().split_order(SplitOrderParams::new(market, parts))`.
+pub(super) fn split_order(client: &MoonClient, server_id: u64, market: String, parts: i32) {
+    report(
+        server_id,
+        format!("split order {market} parts={parts}"),
+        client.trade().split_order(SplitOrderParams::new(market, parts)),
+    );
 }
 
 /// Включить/выключить стоп-флаг (SL/TS/VStop) ордера по `uid`. Берём УДЕРЖАННЫЙ снимок

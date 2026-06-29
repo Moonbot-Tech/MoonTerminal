@@ -12,14 +12,18 @@ const READOUT_INSET: f32 = 2.0;
 
 #[cfg(windows)]
 fn bounds_clip(bounds: [f32; 4], res: [f32; 2]) -> [f32; 4] {
+    // ВАЖНО: clamp(min, max) паникует при min > max. При вырожденных границах панели
+    // (нулевая ширина / панель упёрта в правый/нижний край) `l` может равняться res,
+    // тогда `l + 1.0 > res` и clamp(min>max) убивал бы кадр (баг: f32 clamp min=1681
+    // max=1680 при ресайзе/реконнекте). Поэтому верхнюю границу берём как max(res, l+1).
     let l = bounds[0].floor().clamp(0.0, res[0].max(1.0));
     let t = bounds[1].floor().clamp(0.0, res[1].max(1.0));
     let r = (bounds[0] + bounds[2])
         .ceil()
-        .clamp(l + 1.0, res[0].max(1.0));
+        .clamp(l + 1.0, res[0].max(l + 1.0));
     let b = (bounds[1] + bounds[3])
         .ceil()
-        .clamp(t + 1.0, res[1].max(1.0));
+        .clamp(t + 1.0, res[1].max(t + 1.0));
     [l, t, r, b]
 }
 

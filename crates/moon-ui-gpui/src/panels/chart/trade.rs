@@ -5,12 +5,18 @@ use std::time::Duration;
 
 use gpui::*;
 
+use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonWindowExt as _};
+use rust_i18n::t;
+
 use moon_core::config::MouseGestureBinding;
 use moon_core::feed::OrderLinePriceKind;
 use moon_core::session::CoreId;
 use moon_core::session::order_lines::LineKind;
 
 use super::ChartPanel;
+
+/// На сколько частей делит «Split order» (ПКМ по линии sell). MoonBot по умолчанию — на 2.
+const SPLIT_PARTS: i32 = 2;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum TradeMouseButton {
@@ -40,6 +46,10 @@ struct OrderHit {
     kind: LineKind,
     pane: usize,
     price: f32,
+    /// Рынок ордера (для join/split — они per-market в moonproto).
+    market: String,
+    /// Сторона позиции ордера (для выбора `OrderSide` в join).
+    short: bool,
 }
 
 impl ChartPanel {
@@ -111,12 +121,45 @@ impl ChartPanel {
         let Some(price) = self.price_at_pane_y(pane, pos.1) else {
             return false;
         };
+        // ДИАГ (env MOON_ORDER_LINE_DIAG=1): вид В МОМЕНТ КЛИКА (render_center/range) и куда по
+        // экрану ложится цена (rel_y). Сравнив с видом на кадре отрисовки, поймём, на сколько
+        // уехал Y-масштаб (симптом «линия выше клика»).
+        if std::env::var_os("MOON_ORDER_LINE_DIAG").is_some() {
+            if let Some((c, r)) = self.chart.with_container(|cont| {
+                cont.pane(pane)
+                    .map(|p| (p.view.render_center, p.view.render_range))
+            }) {
+                let rel = if r > 0.0 { 0.5 - (price as f32 - c) / r } else { f32::NAN };
+                let cy = pos.1;
+                log::info!(
+                    "order-click-diag pane={pane} click_y={cy:.1} price={price:.4} render_center={c:.4} render_range={r:.4} rel_y={rel:.3}"
+                );
+            }
+        }
         let Some((core, market)) = self
             .chart
             .with_container(|container| container.target(pane))
         else {
             return false;
         };
+        // ДИАГ (env MOON_ORDER_LINE_DIAG=1): «смотрю одно — торгую другое» под dedup. Логируем
+        // ЯДРО-ЦЕЛЬ ордера, отправляемую цену и bid/ask ОТОБРАЖАЕМОГО стакана (он resolved через
+        // core_provider — может быть ДРУГОЕ ядро/биржа). Если sent_price выше отображаемого ask —
+        // клик был выше рынка; если отображаемый ask ≠ реальному аску ядра в логе бота — рассинхрон
+        // ядра данных и ядра ордера.
+        if std::env::var_os("MOON_ORDER_LINE_DIAG").is_some() {
+            let book = self
+                .backend
+                .read(cx)
+                .session
+                .market_source()
+                .with_orderbook_view(core, &market, |d| {
+                    d.and_then(|(book, _)| book.best_bid_ask())
+                });
+            log::info!(
+                "order-send-diag order_core={core} market={market} sent_price={price:.4} displayed_book_bid_ask={book:?}"
+            );
+        }
 
         let placed = self.backend.update(cx, |b, _| {
             let cfg = b.preview.as_ref().unwrap_or(&b.config);
@@ -198,7 +241,7 @@ impl ChartPanel {
             return None;
         }
         let threshold = (6.0 * self.last_ppp).max(6.0);
-        let mut best: Option<(u64, LineKind, f32, f32)> = None;
+        let mut best: Option<(u64, LineKind, f32, bool, f32)> = None;
         if let Some(core_data) = self.backend.read(cx).session.store().core(core) {
             for order in core_data
                 .order_lines
@@ -232,21 +275,88 @@ impl ChartPanel {
                     let rel_y = 0.5 - (price - center) / range;
                     let y = plot.y + rel_y * plot.h;
                     let dist = (y - pos.1).abs();
-                    if dist <= threshold && best.is_none_or(|(_, _, _, best_dist)| dist < best_dist)
+                    if dist <= threshold
+                        && best.is_none_or(|(_, _, _, _, best_dist)| dist < best_dist)
                     {
-                        best = Some((order.uid, kind, price, dist));
+                        best = Some((order.uid, kind, price, order.is_short, dist));
                     }
                 }
             }
         }
-        let (uid, kind, price, _) = best?;
+        let (uid, kind, price, short, _) = best?;
         Some(OrderHit {
             core,
             uid,
             kind,
             pane,
             price,
+            market,
+            short,
         })
+    }
+
+    /// ПКМ по линии ордера → контекстное меню. Buy/Buy short → «Cancel» (этого ордера).
+    /// Sell/Sell short → «Join all sells» + «Split order» (per-market в moonproto).
+    /// Возвращает `true`, если меню открыто (вызывающий гасит дальнейшую обработку ПКМ).
+    pub(super) fn try_open_order_menu(
+        &mut self,
+        local_pos: (f32, f32),
+        menu_pos: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // Меню — ТОЛЬКО когда курсор уже в состоянии перетаскивания линии (наведён на линию
+        // ордера, `order_hover` активен и курсор сменился). В прочих позициях ПКМ работает
+        // как обычно (зум / возврат из фулскрина) — меню не зовём.
+        if self.order_hover.is_none() {
+            return false;
+        }
+        let Some(hit) = self.hit_order_line(local_pos, cx) else {
+            return false;
+        };
+        let backend = self.backend.clone();
+        let (core, uid, market, short) = (hit.core, hit.uid, hit.market, hit.short);
+        let items: Vec<MoonMenuItem> = match hit.kind {
+            LineKind::Buy => vec![
+                MoonMenuItem::with_key("order-cancel", t!("chart.order_menu.cancel").to_string())
+                    .on_click(move |_, window, app| {
+                        window.close_context_menu(app);
+                        backend.update(app, |b, _| {
+                            let _ = b.session.cancel_order(core, uid);
+                        });
+                    }),
+            ],
+            LineKind::Sell => {
+                let backend_split = backend.clone();
+                let market_split = market.clone();
+                vec![
+                    MoonMenuItem::with_key(
+                        "order-join-sells",
+                        t!("chart.order_menu.join_sells").to_string(),
+                    )
+                    .on_click(move |_, window, app| {
+                        window.close_context_menu(app);
+                        backend.update(app, |b, _| {
+                            let _ = b.session.join_sells(core, market.clone(), short);
+                        });
+                    }),
+                    MoonMenuItem::with_key(
+                        "order-split",
+                        t!("chart.order_menu.split").to_string(),
+                    )
+                    .on_click(move |_, window, app| {
+                        window.close_context_menu(app);
+                        backend_split.update(app, |b, _| {
+                            let _ = b.session.split_order(core, market_split.clone(), SPLIT_PARTS);
+                        });
+                    }),
+                ]
+            }
+            _ => return false,
+        };
+        window.open_moon_context_menu(cx, "chart-order-menu", menu_pos, items, 170.0);
+        cx.notify();
+        true
     }
 
     pub(super) fn set_order_interaction(

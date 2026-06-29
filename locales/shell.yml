@@ -117,6 +117,18 @@ chartwin.clear:
   es: "Cerrar ventana (quitar todos los gráficos)"
 
 # --- Попап настроек раскладки чарт-вкладки (Fit/Scroll + раздельные высоты) ---
+chart.order_menu.cancel:
+  ru: "Cancel"
+  en: "Cancel"
+  es: "Cancel"
+chart.order_menu.join_sells:
+  ru: "Join all sells"
+  en: "Join all sells"
+  es: "Join all sells"
+chart.order_menu.split:
+  ru: "Split order"
+  en: "Split order"
+  es: "Split order"
 chart.layout.title:
   ru: "Раскладка вкладки"
   en: "Tab layout"

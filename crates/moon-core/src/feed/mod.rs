@@ -205,6 +205,12 @@ pub enum CoreCmd {
     /// снимок, отбирает ордера рынка в buy-фазе до исполнения (`OS_None`/`BuySet`) и шлёт
     /// по каждому `orders().cancel(uid)`. РЕАЛЬНОЕ действие.
     CancelMarketBuys { market: String },
+    /// «Join all sells» (ПКМ по линии sell): объединить sell-ордера рынка по стороне позиции.
+    /// Транслируется в moonproto `trade().join_orders(market, side)`. РЕАЛЬНОЕ действие.
+    JoinSells { market: String, short: bool },
+    /// «Split order» (ПКМ по линии sell): разбить выбранный sell-ордер рынка на `parts` частей.
+    /// Транслируется в moonproto `trade().split_order(SplitOrderParams::new(market, parts))`.
+    SplitOrder { market: String, parts: i32 },
 }
 
 #[derive(Clone)]

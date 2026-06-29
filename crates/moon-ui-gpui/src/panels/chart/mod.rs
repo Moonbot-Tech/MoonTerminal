@@ -165,6 +165,9 @@ pub struct ChartPanel {
     auto_live_timer_armed: bool,
     order_drag: Option<OrderDrag>,
     order_hover: Option<OrderHoverKey>,
+    /// ПКМ-down открыл контекстное меню ордера → следующий ПКМ-up НЕ должен сработать
+    /// (иначе родитель Main-стека воспримет его как «возврат из фулскрина» и т.п.).
+    suppress_rmb_up: bool,
     /// Момент последнего закрытия pane крестиком (×). Быстрое закрытие нескольких графиков
     /// подряд создаёт у GPUI двойной клик на том же экранном месте; после того как график
     /// уезжает, второй клик попадал бы на стакан и засчитывался как дабл-клик → ордер. Гасим
@@ -292,6 +295,7 @@ impl ChartPanel {
             auto_live_timer_armed: false,
             order_drag: None,
             order_hover: None,
+            suppress_rmb_up: false,
             last_pane_close: None,
             focus: cx.focus_handle(),
         }
@@ -391,6 +395,7 @@ impl ChartPanel {
             auto_live_timer_armed: false,
             order_drag: None,
             order_hover: None,
+            suppress_rmb_up: false,
             last_pane_close: None,
             focus: cx.focus_handle(),
         }

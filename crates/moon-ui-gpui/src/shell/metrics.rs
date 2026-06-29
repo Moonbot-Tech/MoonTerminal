@@ -42,7 +42,7 @@ impl Shell {
         let s = cx.new(|_| {
             MoonSliderState::new()
                 .min(0.0)
-                .max(controls::TP_FINE_MAX)
+                .max(controls::TP_FINE_CAP)
                 .step(0.01)
                 .default_value(0.0)
         });
@@ -112,8 +112,8 @@ impl Shell {
                 self.tp_input.update(cx, |st, c| {
                     st.set_value(controls::fmt_field2(val), window, c)
                 });
-                // Нижний (файн) слайдер 0..2: ставим на текущий TP в этом диапазоне.
-                let fine = val.clamp(0.0, controls::TP_FINE_MAX);
+                // Нижний (файн) слайдер 0..1.99: ставим на текущий TP в этом диапазоне.
+                let fine = val.clamp(0.0, controls::TP_FINE_CAP);
                 self.tp_fine_slider
                     .update(cx, |st, c| st.set_value(fine, window, c));
             }

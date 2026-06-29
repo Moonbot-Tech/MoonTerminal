@@ -704,6 +704,22 @@ impl SessionManager {
         )
     }
 
+    /// «Join all sells» (ПКМ по линии sell): объединить sell-ордера рынка по стороне `short`.
+    pub fn join_sells(&self, core: CoreId, market: String, short: bool) -> Result<()> {
+        if market.is_empty() {
+            return Ok(());
+        }
+        self.send_core_cmd(core, CoreCmd::JoinSells { market, short }, "join sells")
+    }
+
+    /// «Split order» (ПКМ по линии sell): разбить выбранный sell-ордер рынка на `parts` частей.
+    pub fn split_order(&self, core: CoreId, market: String, parts: i32) -> Result<()> {
+        if market.is_empty() || parts < 2 {
+            return Ok(());
+        }
+        self.send_core_cmd(core, CoreCmd::SplitOrder { market, parts }, "split order")
+    }
+
     /// Включить/выключить стоп-флаг (SL/TS/VStop) ордера ядра по `uid` — клик по ячейке в
     /// таблице «Ордера». feed сохраняет настроенный уровень стопа при повторном включении.
     pub fn set_order_stop(

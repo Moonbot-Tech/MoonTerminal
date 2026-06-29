@@ -7,7 +7,10 @@ use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use gpui::*;
-use moon_ui::{MoonPalette, Panel, PanelEvent, PanelState, h_flex, v_flex};
+use moon_ui::{
+    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonText, Panel, PanelEvent,
+    PanelState, h_flex, rgba_from, v_flex,
+};
 use rust_i18n::t;
 
 use crate::{Backend, design};
@@ -25,17 +28,6 @@ struct DetectItem {
     color: [u8; 3],
     born_ms: f64,
     ttl_ms: f64,
-}
-
-/// Линейная смесь двух sRGB-цветов (порт egui `theme::lerp_color`).
-fn lerp_u8(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
-    let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    [f(a[0], b[0]), f(a[1], b[1]), f(a[2], b[2])]
-}
-
-/// Яркость цвета (для инверсии цвета таймера на светлом глоу), порт egui-логики.
-fn luminance(c: [u8; 3]) -> f32 {
-    0.299 * c[0] as f32 + 0.587 * c[1] as f32 + 0.114 * c[2] as f32
 }
 
 pub struct DetectsPanel {
@@ -252,25 +244,10 @@ impl Render for DetectsPanel {
         // Новые сверху.
         for (i, it) in self.items.iter().enumerate().rev() {
             let secs = ((it.ttl_ms - (now - it.born_ms)) / 1000.0).ceil().max(0.0) as u32;
-            // Меш-градиент кнопки (порт egui `detect_button`): верх = LIFT, низ = смесь
-            // LIFT + цвет ядра. В покое доля 0.55, на ховере 0.80 (ярче). Цвет таймера
-            // инвертируем по яркости низа (тёмный на светлом глоу), чтобы не сливался.
-            let top = design::u32_to_rgb(p.panel);
-            let top_hover = design::u32_to_rgb(p.panel_high);
-            let bottom = lerp_u8(top, it.color, 0.55);
-            let bottom_hover = lerp_u8(top_hover, it.color, 0.80);
-            let grad = |top: [u8; 3], bot: [u8; 3]| {
-                linear_gradient(
-                    180.0,
-                    linear_color_stop(rgb(design::rgb_to_u32(top)), 0.0),
-                    linear_color_stop(rgb(design::rgb_to_u32(bot)), 1.0),
-                )
-            };
-            let secs_color = if luminance(bottom) > 140.0 {
-                rgb(0x141416)
-            } else {
-                rgb(p.text)
-            };
+            // Карточка = soft-тинт цветом ядра (порт визуала egui `detect_button` на Moon-
+            // примитивы — без ручного градиента/lerp/luminance, см. РефакторUI «Блокер 10»).
+            // Цвет ядра идёт прямо в `rgba_from` (фон/рамка) и в `MoonBadge` имени ядра.
+            let color = design::rgb_to_u32(it.color);
             let (core, market) = (it.core, it.market.clone());
             col = col.child(
                 div()
@@ -282,27 +259,51 @@ impl Render for DetectsPanel {
                     .cursor_pointer()
                     .rounded(design::ui_px(cx, 4.0))
                     .border_1()
-                    .border_color(rgb(p.border))
-                    .bg(grad(top, bottom))
+                    .border_color(rgba_from(color, 0.32))
+                    .bg(rgba_from(color, 0.12))
                     .hover(|s| {
-                        s.border_color(rgb(p.amber))
-                            .bg(grad(top_hover, bottom_hover))
+                        s.border_color(rgba_from(color, 0.6))
+                            .bg(rgba_from(color, 0.2))
                     })
                     // Токен крупно сверху-слева; нижняя строка — таймер слева, ядро справа.
                     .child(
                         v_flex()
                             .size_full()
                             .justify_between()
-                            .child(div().text_color(rgb(p.text)).child(it.base.clone()))
+                            .child(
+                                MoonText::new(it.base.clone())
+                                    .color(p.text)
+                                    .font_size(13.0)
+                                    .line_height(16.0)
+                                    .weight(600.0)
+                                    .mono(true)
+                                    .uppercase(false)
+                                    .render(),
+                            )
                             .child(
                                 h_flex()
                                     .w_full()
                                     .justify_between()
                                     .items_end()
-                                    .text_size(design::t_body(cx))
-                                    .text_color(secs_color)
-                                    .child(div().child(format!("{secs}s")))
-                                    .child(div().child(it.core_name.clone())),
+                                    .child(
+                                        MoonText::new(format!("{secs}s"))
+                                            .color(p.text_muted)
+                                            .font_size(10.0)
+                                            .line_height(12.0)
+                                            .mono(true)
+                                            .uppercase(false)
+                                            .render(),
+                                    )
+                                    .child(
+                                        MoonBadge::new(it.core_name.clone())
+                                            .variant(MoonBadgeVariant::Soft)
+                                            .size(MoonBadgeSize::Status)
+                                            .bg_color(color)
+                                            .text_color(color)
+                                            .border_color(color)
+                                            .border_alpha(0.4)
+                                            .mono(true),
+                                    ),
                             ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
