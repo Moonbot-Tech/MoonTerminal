@@ -121,8 +121,14 @@ pub struct OrderRow {
     pub is_short: bool,
     /// Размер входной ноги (buy для long / sell для short), в базовой валюте.
     pub size: f64,
+    /// SL/TS включены НА САМОМ ОРДЕРЕ (per-order `StopSettings`). Это то, что тогается кликом.
     pub sl_on: bool,
     pub ts_on: bool,
+    /// SL/TS включены НА УРОВНЕ ЯДРА (ClientSettings: `price_drop_level`/`trailing_drop` > 0).
+    /// Фолбэк-индикатор для колонок SL/TS: если per-order выкл, но ядро их применяет — показываем
+    /// «унаследовано» (ордер защищён настройкой ядра, хотя свой per-order флаг не выставлен).
+    pub sl_strat: bool,
+    pub ts_strat: bool,
     pub vstop_on: bool,
     /// Цена входа (buy_price).
     pub buy_price: f64,

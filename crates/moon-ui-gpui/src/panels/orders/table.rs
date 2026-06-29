@@ -146,9 +146,9 @@ fn cell_for(
         OrdCol::Status => MoonDataCell::element(status_cell(r, p)),
         OrdCol::Token => MoonDataCell::element(token_cell(e, view, p)),
         OrdCol::Size => MoonDataCell::text(num(r.size)),
-        OrdCol::Sl => flag_toggle_cell(e, view, OrderStopKind::StopLoss, r.sl_on, p),
-        OrdCol::Ts => flag_toggle_cell(e, view, OrderStopKind::Trailing, r.ts_on, p),
-        OrdCol::Vstop => flag_toggle_cell(e, view, OrderStopKind::VStop, r.vstop_on, p),
+        OrdCol::Sl => flag_toggle_cell(e, view, OrderStopKind::StopLoss, r.sl_on, r.sl_strat, p),
+        OrdCol::Ts => flag_toggle_cell(e, view, OrderStopKind::Trailing, r.ts_on, r.ts_strat, p),
+        OrdCol::Vstop => flag_toggle_cell(e, view, OrderStopKind::VStop, r.vstop_on, false, p),
         OrdCol::Buy => MoonDataCell::text(num(r.buy_price)),
         OrdCol::CurP => MoonDataCell::text(num(r.price as f64)),
         OrdCol::Fill => MoonDataCell::text(format!("{:.0}%", r.fill_pct)).tone(MoonTone::Muted),
@@ -296,14 +296,19 @@ fn tp_cell(r: &OrderRow) -> MoonDataCell {
     }
 }
 
-/// Кликабельный флаг стопа (SL/TS/Vstop): ON — зелёным, OFF — тускло. Клик шлёт ядру
-/// `set_order_stop` (включить/выключить ИНВЕРСИЕЙ текущего флага) для ЭТОГО ордера —
-/// уровень стопа сохраняется feed-слоем при повторном включении.
+/// Кликабельный флаг стопа (SL/TS/Vstop). Три состояния:
+/// • per-order вкл → «ON» зелёным (явный стоп ордера);
+/// • per-order выкл, но включено на ЯДРЕ (`strat_on`) → «ON» синим (унаследовано: ордер защищён
+///   настройкой ядра, хотя свой флаг не выставлен) — иначе вводило в заблуждение «OFF»;
+/// • иначе → «OFF» тускло.
+/// Клик ВСЕГДА тогает per-order флаг (`set_order_stop` инверсией per-order), уровень стопа
+/// сохраняется feed-слоем при повторном включении.
 fn flag_toggle_cell(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,
     kind: OrderStopKind,
     on: bool,
+    strat_on: bool,
     p: MoonPalette,
 ) -> MoonDataCell {
     let core = e.core;
@@ -311,6 +316,8 @@ fn flag_toggle_cell(
     let view = view.clone();
     let (label, tone) = if on {
         ("ON", MoonTone::Positive)
+    } else if strat_on {
+        ("ON", MoonTone::Info)
     } else {
         ("OFF", MoonTone::Muted)
     };
