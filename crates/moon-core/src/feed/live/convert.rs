@@ -342,16 +342,21 @@ fn build_order_row(
     let pending = o.pending_buy_cond_price.is_some();
     let filled = fill_pct > 0.0;
     let create_time_ms = moon_time_to_unix_millis_f64(o.buy_order.create_time());
-    // Фолбэк-индикатор: SL/TS ядра (ClientSettings) применяются ко всем его позициям, даже если
-    // у самого ордера per-order флаг не выставлен. Колонки SL/TS показывают это как «унаследовано»,
-    // чтобы не вводить в заблуждение («выкл», хотя на ядре включено). price_drop_level/trailing_drop
-    // > 0 = включено в основной панели ядра.
-    let (sl_strat, ts_strat) = snap
-        .settings()
-        .client_settings
-        .as_ref()
-        .map(|c| (c.price_drop_level > 0.0, c.trailing_drop > 0.0))
-        .unwrap_or((false, false));
+    // Фолбэк-индикатор: SL/TS/VStop включены в СТРАТЕГИИ ордера (поля снимка стратегии
+    // `UseStopLoss`/`UseTrailing`/`UseBV_SV_Stop`). Колонки показывают это как «унаследовано»,
+    // если per-order флаг не выставлен — иначе вводило в заблуждение («выкл», хотя стратегия их
+    // применяет). Нет снимка стратегии (не синкнута / strat_id=0) → false.
+    let (sl_strat, ts_strat, vstop_strat) = snap
+        .strats()
+        .snapshot(o.strat_id)
+        .map(|s| {
+            (
+                s.field_bool_or_false("UseStopLoss"),
+                s.field_bool_or_false("UseTrailing"),
+                s.field_bool_or_false("UseBV_SV_Stop"),
+            )
+        })
+        .unwrap_or((false, false, false));
     OrderRow {
         market: o.market_name.clone(),
         is_short: o.is_short,
@@ -360,6 +365,7 @@ fn build_order_row(
         ts_on: o.stops.trailing_enabled(),
         sl_strat,
         ts_strat,
+        vstop_strat,
         vstop_on: o.vstop_on,
         buy_price: entry,
         sell_price: o.sell_price,

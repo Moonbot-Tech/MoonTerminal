@@ -470,6 +470,7 @@ mod tests {
             ts_on: false,
             sl_strat: false,
             ts_strat: false,
+            vstop_strat: false,
             vstop_on: false,
             buy_price: 60_000.0,
             sell_price: 0.0,

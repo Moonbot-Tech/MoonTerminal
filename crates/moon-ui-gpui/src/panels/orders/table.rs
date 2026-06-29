@@ -148,7 +148,7 @@ fn cell_for(
         OrdCol::Size => MoonDataCell::text(num(r.size)),
         OrdCol::Sl => flag_toggle_cell(e, view, OrderStopKind::StopLoss, r.sl_on, r.sl_strat, p),
         OrdCol::Ts => flag_toggle_cell(e, view, OrderStopKind::Trailing, r.ts_on, r.ts_strat, p),
-        OrdCol::Vstop => flag_toggle_cell(e, view, OrderStopKind::VStop, r.vstop_on, false, p),
+        OrdCol::Vstop => flag_toggle_cell(e, view, OrderStopKind::VStop, r.vstop_on, r.vstop_strat, p),
         OrdCol::Buy => MoonDataCell::text(num(r.buy_price)),
         OrdCol::CurP => MoonDataCell::text(num(r.price as f64)),
         OrdCol::Fill => MoonDataCell::text(format!("{:.0}%", r.fill_pct)).tone(MoonTone::Muted),
