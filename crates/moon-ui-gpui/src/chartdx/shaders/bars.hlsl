@@ -55,11 +55,16 @@ BarOut bars_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
 
     float base = cv_bounds.y + cv_bounds.w;
     float y_price = base - (lv.price - cv_view_price0) * cv_price_to_px;
-    // fill: строим по двум округлённым краям-ценам → полосы стыкуются без 1px-швов.
+    // fill: один край — собственная цена уровня, второй — цена соседа (price+span). У соседней
+    // полосы общий шов считается из ДРУГОГО f32-выражения (его price vs наш price+span); при
+    // больших ценах (микро-токены) + зуме round() этих чуть разных f32 даёт РАЗНЫЙ пиксель →
+    // 1px чёрная щель на шве. Поэтому расширяем каждую полосу до ЦЕЛЫХ пикселей (floor/ceil):
+    // соседние полосы тогда перекрываются на стыке, шов исчезает (заливка непрозрачна — overlap
+    // невиден). Порт moon-chart/shaders/glass.wgsl — там та же правка.
     float inner = lv.price + lv.span;
     float y_inner = base - (inner - cv_view_price0) * cv_price_to_px;
-    float top = round(min(y_price, y_inner));
-    float bot = round(max(y_price, y_inner));
+    float top = floor(min(y_price, y_inner));
+    float bot = ceil(max(y_price, y_inner));
     if (bot - top < 1.0) {
         bot = top + 1.0;
     }
