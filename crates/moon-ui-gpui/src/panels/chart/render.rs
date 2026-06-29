@@ -536,6 +536,11 @@ impl Render for ChartPanel {
                         cx.stop_propagation();
                         return;
                     }
+                    // Раздельные зоны: в зоне управления (стакан/резерв-полоса) ЛКМ — только
+                    // торговля; обычную навигацию чарта (пан, дабл-клик «на Main») здесь не пускаем.
+                    if this.window_pos_in_control_zone(e.position, cx) {
+                        return;
+                    }
                     // На AddToChart-вкладках дабл-клик по ЧАРТУ → открыть монету на Main (fullscreen).
                     let allow_to_main = this.num.is_some();
                     let fb = this.chart.slot_dev_width();
@@ -637,7 +642,9 @@ impl Render for ChartPanel {
                         cx.stop_propagation();
                         return;
                     }
-                    if this.num.is_none() && this.window_pos_in_glass_zone(e.position) {
+                    // Раздельные зоны: в зоне управления ПКМ — только торговля/меню ордеров;
+                    // обычный ПКМ-пан/зум чарта подавляем (а тоггл fullscreen — в main_stack.rs).
+                    if this.window_pos_in_control_zone(e.position, cx) {
                         return;
                     }
                     let fb = this.chart.slot_dev_width();
@@ -671,7 +678,7 @@ impl Render for ChartPanel {
                         cx.stop_propagation();
                         return;
                     }
-                    if this.num.is_none() && this.window_pos_in_glass_zone(e.position) {
+                    if this.window_pos_in_control_zone(e.position, cx) {
                         return;
                     }
                     let sf = window.scale_factor();

@@ -46,6 +46,22 @@ impl ChartPanel {
         })
     }
 
+    /// Окно-позиция в ЗОНЕ УПРАВЛЕНИЯ при включённых раздельных зонах: стакан (если виден)
+    /// или резерв-полоса справа (если стакан скрыт) — то же `control_zone_rect`, что и для
+    /// постановки ордеров. В этой зоне работает ТОЛЬКО торговля (постановка/перетаскивание/
+    /// меню ордеров + хоткеи); обычную навигацию чарта (пан/зум, дабл-клик «на Main», ПКМ-тоггл
+    /// fullscreen) здесь подавляем. Вне режима раздельных зон (`separate_zones=false` на Main) —
+    /// всегда false: поведение чарта прежнее.
+    pub(crate) fn window_pos_in_control_zone(&self, pos: Point<Pixels>, cx: &App) -> bool {
+        if !self.separate_zones(cx) {
+            return false;
+        }
+        let Some((local, within)) = self.chart_local(pos) else {
+            return false;
+        };
+        within && self.glass_pane_at(local).is_some()
+    }
+
     /// Позиция внутри любой pane-области панели, включая glass/orderbook-зону.
     /// Main stack использует это для ПКМ fullscreen ↔ stack: зона стакана не является
     /// отдельным UI-исключением, пока такая настройка явно не вынесена в UI.

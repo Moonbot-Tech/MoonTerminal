@@ -643,6 +643,13 @@ impl MarketDataSource {
     /// USDT-котировка → 1; BTC-котировка → курс BTC/USDT. `None` — неизвестен.
     pub fn quote_usd_rate(&self, core: CoreId, market: &str) -> Option<f64> {
         let quote = crate::symbol::resolve_quote(market);
+        if quote.is_empty() {
+            // HL/HIP-3 dex-перпы именуются как «xyz:BIRD» (dex-префикс + монета) — котировка
+            // (USDC) в имени НЕ присутствует, поэтому суффикс-парсер её не находит. Но эти рынки
+            // котируются в USDC (USD-стейбл, курс ≈1). Без этого `quote_usd` был None и подпись
+            // размера падала в количество монет (показывала qty «11.8» вместо $-номинала «$50»).
+            return Some(1.0);
+        }
         self.currency_usd_rate(core, &quote)
     }
 

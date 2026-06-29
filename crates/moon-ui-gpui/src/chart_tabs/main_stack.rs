@@ -621,10 +621,12 @@ impl MainChartStack {
         .on_mouse_up(
             MouseButton::Right,
             move |event: &MouseUpEvent, _window, app| {
-                // Возврат из фулскрина — короткий ПКМ по области панели, включая стакан.
-                // RMB-drag цены остаётся зумом/scale-жестом и не переключает stack.
+                // Возврат из фулскрина — короткий ПКМ по области панели. В зоне управления
+                // (стакан/резерв-полоса в режиме раздельных зон) ПКМ — только торговля, поэтому
+                // тоггл там НЕ срабатывает. RMB-drag цены остаётся зумом и не переключает stack.
                 let panel = panel_for_event.read(app);
                 if panel.window_pos_allows_main_stack_toggle(event.position)
+                    && !panel.window_pos_in_control_zone(event.position, app)
                     && !panel.rmb_was_moved()
                 {
                     entity.update(app, |this, cx| this.toggle_from_chart(ix, cx));
