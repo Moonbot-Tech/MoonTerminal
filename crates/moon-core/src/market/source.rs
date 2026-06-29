@@ -135,11 +135,13 @@ impl std::fmt::Display for LatestPriceError {
 #[derive(Default)]
 pub struct ChartHistoryCursor {
     trades: Option<SeqRingCursor>,
+    liquidations: Option<SeqRingCursor>,
     last_prices: Option<SeqRingCursor>,
     mark_prices: Option<SeqRingCursor>,
     last_price: Option<f32>,
     trade_rows: Vec<TradeHistoryRow>,
     scan_trade_rows: Vec<TradeHistoryRow>,
+    liq_rows: Vec<TradeHistoryRow>,
     last_price_rows: Vec<LastPricePoint>,
     mark_price_rows: Vec<MarkPricePoint>,
 }
@@ -147,11 +149,13 @@ pub struct ChartHistoryCursor {
 impl ChartHistoryCursor {
     pub fn reset(&mut self) {
         self.trades = None;
+        self.liquidations = None;
         self.last_prices = None;
         self.mark_prices = None;
         self.last_price = None;
         self.trade_rows.clear();
         self.scan_trade_rows.clear();
+        self.liq_rows.clear();
         self.last_price_rows.clear();
         self.mark_price_rows.clear();
     }
@@ -160,6 +164,10 @@ impl ChartHistoryCursor {
 #[derive(Default)]
 pub struct ChartHistoryBuffers {
     pub ticks: Vec<Tick>,
+    /// Трейды ликвидаций (отдельный ring `readers.liquidations`). На reset — полный видимый
+    /// диапазон; иначе — только новые строки (живой край), как `ticks`. Сторона есть (знак qty),
+    /// но рисуются единым цветом — рендер тегирует их `side=2`.
+    pub liquidations: Vec<Tick>,
     pub last_points: Vec<PricePoint>,
     pub mark_points: Vec<PricePoint>,
 }
@@ -167,6 +175,7 @@ pub struct ChartHistoryBuffers {
 impl ChartHistoryBuffers {
     fn clear(&mut self) {
         self.ticks.clear();
+        self.liquidations.clear();
         self.last_points.clear();
         self.mark_points.clear();
     }
@@ -767,6 +776,31 @@ impl MarketDataSource {
         } else {
             cursor.trades = None;
             cursor.last_price = None;
+        }
+
+        // Трейды ликвидаций — отдельный ring того же типа. Синхронны с combo: на полном
+        // reset combo (или первом проходе) перечитываем весь видимый диапазон, иначе тянем
+        // только новый живой край. Рендер тегирует их единым цветом (side=2).
+        if let Some(reader) = readers.liquidations {
+            let reset = read.combo_reset || cursor.liquidations.is_none();
+            if reset {
+                reader.copy_time_range(from_time, to_time, reader.capacity(), &mut cursor.liq_rows);
+                cursor.liquidations = Some(reader.cursor_from_now());
+            } else if let Some(cur) = cursor.liquidations.as_mut() {
+                let meta = reader.drain_new_bounded(cur, reader.capacity(), &mut cursor.liq_rows);
+                if meta.clipped {
+                    reader.copy_time_range(
+                        from_time,
+                        to_time,
+                        reader.capacity(),
+                        &mut cursor.liq_rows,
+                    );
+                    cursor.liquidations = Some(reader.cursor_from_now());
+                }
+            }
+            rows_to_ticks(&cursor.liq_rows, &mut out.liquidations);
+        } else {
+            cursor.liquidations = None;
         }
 
         if let Some(reader) = readers.last_prices {

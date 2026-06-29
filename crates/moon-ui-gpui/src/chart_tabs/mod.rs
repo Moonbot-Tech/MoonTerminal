@@ -167,6 +167,7 @@ impl ChartTabs {
             main_scale,
             main_layout,
             main_orderbook,
+            main_liquidations,
             main_show_zone,
             main_auto_pin,
             main_action_pos,
@@ -178,6 +179,7 @@ impl ChartTabs {
         ): (
             Option<f32>,
             (Option<StackLayoutMode>, Option<u16>, Option<u16>),
+            Option<bool>,
             Option<bool>,
             Option<bool>,
             Option<bool>,
@@ -198,6 +200,7 @@ impl ChartTabs {
                 (s.layout_mode, s.layout_height_fit, s.layout_height_scroll)
             });
             let main_orderbook = main_spec.and_then(|s| s.orderbook_enabled);
+            let main_liquidations = main_spec.and_then(|s| s.liquidations_enabled);
             let main_show_zone = main_spec.and_then(|s| s.show_zone);
             let main_auto_pin = main_spec.and_then(|s| s.auto_pin);
             let main_action_pos =
@@ -215,6 +218,7 @@ impl ChartTabs {
                 main_scale,
                 main_layout,
                 main_orderbook,
+                main_liquidations,
                 main_show_zone,
                 main_auto_pin,
                 main_action_pos,
@@ -235,6 +239,9 @@ impl ChartTabs {
         }
         if main_orderbook.is_some() {
             main.update(cx, |p, pcx| p.set_orderbook_enabled(main_orderbook, pcx));
+        }
+        if main_liquidations.is_some() {
+            main.update(cx, |p, pcx| p.set_liquidations_enabled(main_liquidations, pcx));
         }
         if main_show_zone.is_some() {
             main.update(cx, |p, pcx| p.set_show_zone(main_show_zone, pcx));

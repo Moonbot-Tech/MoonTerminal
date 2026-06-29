@@ -557,10 +557,10 @@ impl ComboLayer {
             if c.time_rel < time_left || c.time_rel > time_right || c.qty <= 0.0 {
                 continue;
             }
-            if c.side == 0 {
-                buy = buy.max(c.qty);
-            } else {
-                sell = sell.max(c.qty);
+            match c.side {
+                0 => buy = buy.max(c.qty),
+                1 => sell = sell.max(c.qty),
+                _ => {} // side>=2 (ликвидации) без volume-баров → вне масштаба
             }
         }
         (buy, sell)

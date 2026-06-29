@@ -91,6 +91,9 @@ pub struct ChartPanel {
     /// Показывать ли стакан на графиках этой панели (per-окно, из настроек вкладки). Применяется
     /// в render (`set_orderbook_enabled` движка). Дефолт — вкл.
     orderbook_enabled: bool,
+    /// Рисовать ли трейды ликвидаций на графиках этой панели (per-окно/вкладка, попап ⚙).
+    /// Применяется в render (`set_liquidations_enabled` движка). Дефолт — вкл.
+    liquidations_enabled: bool,
     /// Показывать ли тусклую заливку зоны управления при раздельных зонах и СКРЫТОМ стакане
     /// (per-окно/вкладка, из настроек попапа ⚙). Применяется в render. Дефолт — вкл.
     show_zone: bool,
@@ -263,6 +266,7 @@ impl ChartPanel {
             market,
             scale: None,
             orderbook_enabled: true,
+            liquidations_enabled: true,
             show_zone: true,
             auto_pin: false,
             cancel_buy_pos: Default::default(),
@@ -363,6 +367,7 @@ impl ChartPanel {
             market: None,
             scale: None,
             orderbook_enabled: true,
+            liquidations_enabled: true,
             show_zone: true,
             auto_pin: false,
             cancel_buy_pos: Default::default(),
@@ -471,6 +476,16 @@ impl ChartPanel {
             self.orderbook_enabled = enabled;
             self.view_dirty = true;
             self.sync_orderbook_refs(cx);
+            cx.notify();
+        }
+    }
+
+    /// Вкл/выкл трейды ликвидаций (per-окно). Применяется в render через `set_liquidations_enabled`
+    /// движка (смена флага форсит combo reset — кресты ликвидаций добавляются/убираются).
+    pub fn set_liquidations_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.liquidations_enabled != enabled {
+            self.liquidations_enabled = enabled;
+            self.view_dirty = true;
             cx.notify();
         }
     }

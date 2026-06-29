@@ -278,6 +278,7 @@ impl Render for ChartTabs {
                 .active_layout_orientation(cx)
                 .unwrap_or(crate::chart_persist::StackOrientation::Vertical);
             let orderbook_enabled = self.active_orderbook_enabled(cx);
+            let liquidations_enabled = self.active_liquidations_enabled(cx);
             let show_zone = self.active_show_zone(cx);
             let auto_pin = self.active_auto_pin(cx);
             let (cancel_pos, panic_pos) = self.active_action_btn_pos(cx);
@@ -295,6 +296,7 @@ impl Render for ChartTabs {
             let pick_entity = cx.entity();
             let all_entity = cx.entity();
             let ob_entity = cx.entity();
+            let liq_entity = cx.entity();
             let sz_entity = cx.entity();
             let ap_entity = cx.entity();
             let or_entity = cx.entity();
@@ -332,6 +334,7 @@ impl Render for ChartTabs {
                     &self.layout_fit_input,
                     &self.layout_scroll_input,
                     orderbook_enabled,
+                    liquidations_enabled,
                     show_zone,
                     auto_pin,
                     cancel_pos,
@@ -359,6 +362,7 @@ impl Render for ChartTabs {
                             // Копируем ВСЕ настройки активной вкладки: + масштаб + стакан + ориентация.
                             let scale = this.active_scale_value(cx);
                             let ob = Some(this.active_orderbook_enabled(cx));
+                            let liq = Some(this.active_liquidations_enabled(cx));
                             let sz = Some(this.active_show_zone(cx));
                             let ap = Some(this.active_auto_pin(cx));
                             let or = this.active_layout_orientation(cx);
@@ -374,6 +378,7 @@ impl Render for ChartTabs {
                                 hs,
                                 scale,
                                 ob,
+                                liq,
                                 sz,
                                 ap,
                                 or,
@@ -389,6 +394,9 @@ impl Render for ChartTabs {
                     },
                     move |checked, app| {
                         ob_entity.update(app, |this, cx| this.apply_orderbook(checked, cx));
+                    },
+                    move |checked, app| {
+                        liq_entity.update(app, |this, cx| this.apply_liquidations(checked, cx));
                     },
                     move |checked, app| {
                         sz_entity.update(app, |this, cx| this.apply_show_zone(checked, cx));

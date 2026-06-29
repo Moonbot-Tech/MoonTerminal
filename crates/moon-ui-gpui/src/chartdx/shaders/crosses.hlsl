@@ -21,7 +21,7 @@ cbuffer ChartView : register(b0) {
 struct Cross {
     float time_rel;
     float price;
-    uint  side; // 0 buy / 1 sell
+    uint  side; // 0 buy / 1 sell / 2 liquidation
     float qty;
 };
 
@@ -88,7 +88,8 @@ float4 crosses_fragment(CrossOut i) : SV_Target {
     // чтобы buy-трейд и bid-книга были одного зелёного. sRGB напрямую (таргет UNORM, см. grid.hlsl).
     float3 buy  = float3(0.18431, 0.65882, 0.36078); // #2FA85C palette GREEN
     float3 sell = float3(1.0,     0.55686, 0.35294); // #FF8E5A palette ORANGE
-    float3 rgb = (i.side == 0u) ? buy : sell;
+    float3 liq  = float3(1.0,     1.0,     0.0);     // #FFFF00 liquidation (ярко-жёлтый)
+    float3 rgb = (i.side == 0u) ? buy : ((i.side == 1u) ? sell : liq);
     return float4(rgb, 1.0);
 }
 
@@ -102,7 +103,8 @@ VolumeOut volume_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     VolumeOut o;
 
     float sx = cv_bounds.x + (c.time_rel - cv_view_time0) * cv_time_to_px;
-    if (sx < cv_bounds.x - 2.0 || sx > cv_bounds.x + cv_bounds.z + 2.0 || c.qty <= 0.0) {
+    // side>=2 (ликвидации) не рисуют volume-бар — отсекаем из этого прохода.
+    if (sx < cv_bounds.x - 2.0 || sx > cv_bounds.x + cv_bounds.z + 2.0 || c.qty <= 0.0 || c.side >= 2u) {
         o.pos = float4(2.0, 2.0, 0.0, 1.0);
         o.side = 0u;
         return o;

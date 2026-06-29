@@ -123,6 +123,7 @@ impl DetachedChartHost {
                     s.layout_height_fit,
                     s.layout_height_scroll,
                     s.orderbook_enabled,
+                    s.liquidations_enabled,
                     s.show_zone,
                     s.auto_pin,
                     (s.cancel_buy_pos, s.panic_sell_pos),
@@ -133,14 +134,29 @@ impl DetachedChartHost {
                 )
             })
         });
-        if let Some((m, hf, hs, ob, sz, ap, action_pos, axis_pos, time_axis, line_labels, cursor_labels)) =
-            saved
+        if let Some((
+            m,
+            hf,
+            hs,
+            ob,
+            liq,
+            sz,
+            ap,
+            action_pos,
+            axis_pos,
+            time_axis,
+            line_labels,
+            cursor_labels,
+        )) = saved
         {
             if m.is_some() || hf.is_some() || hs.is_some() {
                 panel.update(cx, |p, pcx| p.set_layout(m, hf, hs, pcx));
             }
             if ob.is_some() {
                 panel.update(cx, |p, pcx| p.set_orderbook_enabled(ob, pcx));
+            }
+            if liq.is_some() {
+                panel.update(cx, |p, pcx| p.set_liquidations_enabled(liq, pcx));
             }
             if sz.is_some() {
                 panel.update(cx, |p, pcx| p.set_show_zone(sz, pcx));
@@ -421,6 +437,7 @@ impl DetachedChartHost {
         // Копируем ВСЕ настройки этого окна: + масштаб + галку стакана.
         let scale = self.panel.read(cx).scale();
         let orderbook = Some(self.panel.read(cx).orderbook_enabled().unwrap_or(true));
+        let liquidations = Some(self.panel.read(cx).liquidations_enabled().unwrap_or(true));
         let show_zone = Some(self.panel.read(cx).show_zone().unwrap_or(true));
         let auto_pin = Some(self.panel.read(cx).auto_pin().unwrap_or(false));
         let orientation = self.panel.read(cx).layout_orientation();
@@ -441,6 +458,7 @@ impl DetachedChartHost {
                 height_scroll,
                 scale,
                 orderbook,
+                liquidations,
                 show_zone,
                 auto_pin,
                 orientation,
@@ -516,6 +534,17 @@ impl DetachedChartHost {
         });
         // Пересобрать набор рынков, которым нужен стакан (мог измениться спрос).
         self.backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
+        cx.notify();
+    }
+
+    /// Вкл/выкл трейды ликвидаций этой вкладки + persist.
+    fn apply_liquidations(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.panel
+            .update(cx, |p, c| p.set_liquidations_enabled(Some(enabled), c));
+        let bucket = self.bucket.clone();
+        self.upsert_spec(cx, self.num, &bucket, move |s| {
+            s.liquidations_enabled = Some(enabled);
+        });
         cx.notify();
     }
 
@@ -680,6 +709,7 @@ impl Render for DetachedChartHost {
                 .layout_orientation()
                 .unwrap_or(crate::chart_persist::StackOrientation::Vertical);
             let orderbook_enabled = self.panel.read(cx).orderbook_enabled().unwrap_or(true);
+            let liquidations_enabled = self.panel.read(cx).liquidations_enabled().unwrap_or(true);
             let show_zone = self.panel.read(cx).show_zone().unwrap_or(true);
             let auto_pin = self.panel.read(cx).auto_pin().unwrap_or(false);
             let (cancel_pos, panic_pos) = {
@@ -694,6 +724,7 @@ impl Render for DetachedChartHost {
             let pick_entity = cx.entity();
             let all_entity = cx.entity();
             let ob_entity = cx.entity();
+            let liq_entity = cx.entity();
             let sz_entity = cx.entity();
             let ap_entity = cx.entity();
             let or_entity = cx.entity();
@@ -731,6 +762,7 @@ impl Render for DetachedChartHost {
                     &self.layout_fit_input,
                     &self.layout_scroll_input,
                     orderbook_enabled,
+                    liquidations_enabled,
                     show_zone,
                     auto_pin,
                     cancel_pos,
@@ -764,6 +796,9 @@ impl Render for DetachedChartHost {
                     },
                     move |checked, app| {
                         ob_entity.update(app, |this, cx| this.apply_orderbook(checked, cx));
+                    },
+                    move |checked, app| {
+                        liq_entity.update(app, |this, cx| this.apply_liquidations(checked, cx));
                     },
                     move |checked, app| {
                         sz_entity.update(app, |this, cx| this.apply_show_zone(checked, cx));

@@ -22,6 +22,7 @@ impl ChartDataState {
             origin: (0.0, 0.0),
             scene_visible: false,
             orderbook_enabled: true,
+            liquidations_enabled: true,
             orderbook_only: false,
             price_axis_pos: crate::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,
@@ -554,8 +555,12 @@ impl ChartDataState {
                 history_source_sig = mix_sig(history_source_sig, revs.meta);
             }
             let history_source_changed = history_source_sig != pr.source_history_sig;
+            // Смена галки «Ликвидации» → перезалить combo (добавить/убрать кресты ликвидаций).
+            let liq_toggle_changed = pr.liquidations_enabled != self.liquidations_enabled;
+            pr.liquidations_enabled = self.liquidations_enabled;
             let force_history_reset = device_lost
                 || source_generation_changed
+                || liq_toggle_changed
                 || pr.resident_left_rel.is_nan()
                 || history_from < pr.resident_left_rel
                 || (!pane.view.follow && scan_price);
@@ -657,6 +662,20 @@ impl ChartDataState {
                         pr.cross_upload.len() as u64,
                     );
                     pr.layers.append_combo(&pr.cross_upload);
+                    pr.gpu_prepare_dirty = true;
+                    pixels_changed = true;
+                }
+                // Кресты ТРЕЙДОВ ЛИКВИДАЦИЙ (side=2) — в то же combo-кольцо, отдельным append
+                // (порядок в кольце не влияет на позицию: шейдер ставит по time_rel). На combo_reset
+                // источник отдал полный видимый диапазон, иначе — только новый живой край. Гейт
+                // per-панель: выкл → не добавляем (а смена флага форсит reset выше, убирая старые).
+                if pr.liquidations_enabled && !pr.history_buffers.liquidations.is_empty() {
+                    fill_liq_upload(
+                        &pr.history_buffers.liquidations,
+                        pane.view.epoch_ms,
+                        &mut pr.liq_upload,
+                    );
+                    pr.layers.append_combo(&pr.liq_upload);
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }

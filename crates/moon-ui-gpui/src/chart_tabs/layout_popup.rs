@@ -182,7 +182,7 @@ fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl Int
 /// `height_fit_input`/`height_scroll_input` — раздельные поля (подписку на Blur/Enter держит
 /// вызывающий). `on_pick_mode` вызывается при выборе режима. Позиционируется вызывающим.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2>(
+pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2, R2>(
     id: &str,
     current: StackLayoutMode,
     orientation: StackOrientation,
@@ -190,6 +190,7 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2>(
     height_fit_input: &Entity<MoonInputState>,
     height_scroll_input: &Entity<MoonInputState>,
     orderbook_enabled: bool,
+    liquidations_enabled: bool,
     show_zone: bool,
     auto_pin: bool,
     cancel_buy_pos: ChartBtnPos,
@@ -204,6 +205,7 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2>(
     apply_all_label: String,
     on_apply_all: G,
     on_toggle_orderbook: H,
+    on_toggle_liquidations: R2,
     on_toggle_show_zone: I,
     on_toggle_auto_pin: J,
     on_toggle_orientation: K,
@@ -227,6 +229,7 @@ where
     O: Fn(bool, &mut App) + 'static,
     P2: Fn(bool, &mut App) + 'static,
     Q2: Fn(bool, &mut App) + 'static,
+    R2: Fn(bool, &mut App) + 'static,
 {
     let horizontal = orientation.is_horizontal();
     let sel = POPUP_MODES.iter().position(|m| *m == current).unwrap_or(0);
@@ -302,6 +305,13 @@ where
         .checked(orderbook_enabled)
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_orderbook(*ch, app));
+
+    // Чекбокс «Ликвидации» — вкл/выкл кресты трейдов ликвидаций на графиках вкладки.
+    let liquidations_cb = MoonCheckbox::new(SharedString::from(format!("{id}-liquidations")))
+        .label(t!("chart.layout.liquidations").to_string())
+        .checked(liquidations_enabled)
+        .size(MoonCheckboxSize::Compact)
+        .on_change(move |ch: &bool, _w, app| on_toggle_liquidations(*ch, app));
 
     // Чекбокс «Отображать зону разделения» — тусклая заливка зоны ордеров при скрытом стакане.
     let show_zone_cb = MoonCheckbox::new(SharedString::from(format!("{id}-show-zone")))
@@ -460,6 +470,7 @@ where
                 .w_full()
                 .gap(design::ui_px(cx, 6.0))
                 .child(orderbook_cb)
+                .child(liquidations_cb)
                 .child(show_zone_cb)
                 .child(time_axis_cb)
                 .child(line_labels_cb)

@@ -146,6 +146,17 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
+    /// Трейды ликвидаций рисуются на активной вкладке (None → дефолт вкл).
+    pub(super) fn active_liquidations_enabled(&self, cx: &App) -> bool {
+        let v = match &self.active {
+            Tab::Main => self.main.read(cx).liquidations_enabled(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .and_then(|p| p.read(cx).liquidations_enabled()),
+        };
+        v.unwrap_or(true)
+    }
+
     /// Заливка зоны управления включена на активной вкладке (None → дефолт вкл).
     pub(super) fn active_show_zone(&self, cx: &App) -> bool {
         let v = match &self.active {
@@ -379,6 +390,25 @@ impl ChartTabs {
         cx.notify();
     }
 
+    /// Вкл/выкл трейды ликвидаций на АКТИВНОЙ вкладке + persist.
+    pub(super) fn apply_liquidations(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        match self.active.clone() {
+            Tab::Main => self
+                .main
+                .update(cx, |s, c| s.set_liquidations_enabled(Some(enabled), c)),
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(p) = self.active_stack() {
+                    p.update(cx, |s, c| s.set_liquidations_enabled(Some(enabled), c));
+                }
+            }
+        }
+        let (num, bucket) = self.active_stack_key();
+        self.upsert_spec(cx, num, &bucket, move |s| {
+            s.liquidations_enabled = Some(enabled);
+        });
+        cx.notify();
+    }
+
     /// Вкл/выкл заливку зоны управления на АКТИВНОЙ вкладке + persist.
     pub(super) fn apply_show_zone(&mut self, show: bool, cx: &mut Context<Self>) {
         match self.active.clone() {
@@ -476,6 +506,7 @@ impl ChartTabs {
         height_scroll: Option<u16>,
         scale: Option<f32>,
         orderbook: Option<bool>,
+        liquidations: Option<bool>,
         show_zone: Option<bool>,
         auto_pin: Option<bool>,
         orientation: Option<StackOrientation>,
@@ -488,6 +519,7 @@ impl ChartTabs {
         cx: &mut Context<Self>,
     ) {
         let ob = orderbook.unwrap_or(true);
+        let liq = liquidations.unwrap_or(true);
         let sz = show_zone.unwrap_or(true);
         let ap = auto_pin.unwrap_or(false);
         let axis = price_axis_pos.unwrap_or_default();
@@ -499,6 +531,7 @@ impl ChartTabs {
                 s.set_layout(mode, height_fit, height_scroll, c);
                 s.set_scale(scale, c);
                 s.set_orderbook_enabled(Some(ob), c);
+                s.set_liquidations_enabled(Some(liq), c);
                 s.set_show_zone(Some(sz), c);
                 s.set_auto_pin(Some(ap), c);
                 s.set_orientation(orientation, c);
@@ -514,6 +547,7 @@ impl ChartTabs {
                 s.layout_height_scroll = height_scroll;
                 s.scale = scale;
                 s.orderbook_enabled = Some(ob);
+                s.liquidations_enabled = Some(liq);
                 s.show_zone = Some(sz);
                 s.auto_pin = Some(ap);
                 s.layout_orientation = orientation;
@@ -538,6 +572,7 @@ impl ChartTabs {
                 s.set_layout(mode, height_fit, height_scroll, c);
                 s.set_scale(scale, c);
                 s.set_orderbook_enabled(Some(ob), c);
+                s.set_liquidations_enabled(Some(liq), c);
                 s.set_show_zone(Some(sz), c);
                 s.set_auto_pin(Some(ap), c);
                 s.set_orientation(orientation, c);
@@ -553,6 +588,7 @@ impl ChartTabs {
                 s.layout_height_scroll = height_scroll;
                 s.scale = scale;
                 s.orderbook_enabled = Some(ob);
+                s.liquidations_enabled = Some(liq);
                 s.show_zone = Some(sz);
                 s.auto_pin = Some(ap);
                 s.layout_orientation = orientation;
@@ -586,6 +622,7 @@ impl ChartTabs {
                 r.height_scroll,
                 r.scale,
                 r.orderbook,
+                r.liquidations,
                 r.show_zone,
                 r.auto_pin,
                 r.orientation,

@@ -79,6 +79,7 @@ impl Render for ChartPanel {
             | self.chart.set_orders(orders_style)
             | self.chart.set_scale(self.scale)
             | self.chart.set_orderbook_enabled(self.orderbook_enabled)
+            | self.chart.set_liquidations_enabled(self.liquidations_enabled)
             | self.chart.set_orderbook_only(self.orderbook_only)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
             | self.chart.set_time_axis_visible(self.time_axis_visible)

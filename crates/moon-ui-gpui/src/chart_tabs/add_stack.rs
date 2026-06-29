@@ -2,14 +2,18 @@
 //! на каждый график. Вынесено из `chart_tabs` как самостоятельная вью-модель; общий рендер
 //! стека — в [`super::stack`]. Используется и полоской вкладок, и выносными окнами ([`super::windows`]).
 
+use std::time::{Duration, Instant};
+
 use gpui::*;
 use moon_ui::MoonVirtualListScrollHandle;
 
 use super::stack::{
-    ChartStackEntry, HIGHLIGHT, apply_setting, chart_stack_card, compare_role, render_chart_stack,
-    resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin, set_panels_cursor_labels,
-    set_panels_line_labels, set_panels_orderbook_enabled, set_panels_price_axis_pos,
-    set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible, sync_compare,
+    COMPACT_STABLE, ChartStackEntry, HIGHLIGHT, apply_setting, chart_stack_card, compare_role,
+    render_chart_stack, resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin,
+    set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
+    set_panels_orderbook_enabled,
+    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible,
+    sync_compare,
 };
 use crate::Backend;
 use crate::chart_persist::{ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation};
@@ -36,6 +40,8 @@ pub(crate) struct AddChartStack {
     layout_height_scroll: Option<u16>,
     /// Показывать ли стакан на графиках вкладки (per-окно). None = дефолт (вкл).
     orderbook_enabled: Option<bool>,
+    /// Рисовать ли трейды ликвидаций (per-окно). None = дефолт (вкл).
+    liquidations_enabled: Option<bool>,
     /// Показывать ли заливку зоны управления (per-окно). None = дефолт (вкл).
     show_zone: Option<bool>,
     /// Авто-пин графика при выставлении ордера (per-окно). None = дефолт (выкл).
@@ -68,6 +74,12 @@ pub(crate) struct AddChartStack {
     /// сохраняется под следующий детект). У КАСТОМНЫХ вкладок = false: закрыл график → слот
     /// удаляется сразу, соседи перераспределяются по раскладке.
     hold_vacated: bool,
+    /// Момент последнего изменения числа открытых графиков (появился/исчез/реюз слота). Debounce
+    /// для COMPRESS-компакции: пустые `vacated`-слоты схлопываются, только когда с этого момента
+    /// прошло `COMPACT_STABLE` (число графиков стабильно). См. `compact_vacated_if_stable`.
+    last_count_change: Instant,
+    /// Армирован ли ~1Гц таймер debounce-компакции COMPRESS (self-rearming, как idle-таймер Main).
+    compact_timer_armed: bool,
     /// Скролл-хэндл вертикального MoonVirtualList (scroll-режим стека).
     scroll: MoonVirtualListScrollHandle,
 }
@@ -92,6 +104,7 @@ impl AddChartStack {
             layout_height_fit: None,
             layout_height_scroll: None,
             orderbook_enabled: None,
+            liquidations_enabled: None,
             show_zone: None,
             auto_pin: None,
             layout_orientation: None,
@@ -106,7 +119,61 @@ impl AddChartStack {
             compare_y: None,
             compare_orderbook_only: false,
             hold_vacated: true,
+            last_count_change: Instant::now(),
+            compact_timer_armed: false,
             scroll: MoonVirtualListScrollHandle::new(),
+        }
+    }
+
+    /// Отметить изменение числа открытых графиков (появился/исчез/реюз слота) → перезапустить
+    /// debounce-таймер COMPRESS-компакции (5с стабильности до схлопывания пустых слотов).
+    fn touch_count_change(&mut self) {
+        self.last_count_change = Instant::now();
+    }
+
+    /// Армировать (если ещё нет) ~1Гц таймер debounce-компакции COMPRESS. Тикает, пока есть
+    /// графики; сам пере-армится в колбэке. Зовётся из render и `add_coin` (идемпотентно).
+    /// Образец — `MainChartStack::arm_idle_timer`.
+    fn arm_compact_timer(&mut self, cx: &mut Context<Self>) {
+        if self.compact_timer_armed || self.charts.is_empty() {
+            return;
+        }
+        self.compact_timer_armed = true;
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(Duration::from_secs(1)).await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    this.compact_timer_armed = false;
+                    this.compact_vacated_if_stable(cx);
+                    this.arm_compact_timer(cx);
+                })
+                .is_ok()
+            });
+        })
+        .detach();
+    }
+
+    /// COMPRESS: если число открытых графиков стабильно `COMPACT_STABLE` (никто не появился и не
+    /// исчез) и есть придержанные пустые слоты — убрать их, чтобы оставшиеся графики растянулись
+    /// на освободившееся место. В других режимах / на кастомных вкладках — no-op.
+    fn compact_vacated_if_stable(&mut self, cx: &mut Context<Self>) {
+        let (_, compress, _) = resolve_layout(
+            self.layout_mode,
+            self.layout_height_fit,
+            self.layout_height_scroll,
+        );
+        if !compress
+            || !self.hold_vacated
+            || self.last_count_change.elapsed() < COMPACT_STABLE
+        {
+            return;
+        }
+        let before = self.charts.len();
+        self.charts.retain(|e| !e.vacated);
+        if self.charts.len() != before {
+            self.sync_compare(cx);
+            cx.notify();
         }
     }
 
@@ -170,7 +237,8 @@ impl AddChartStack {
         {
             if self.charts[i].vacated {
                 self.charts[i].vacated = false;
-                self.charts[i].arrived_at = std::time::Instant::now();
+                self.charts[i].arrived_at = Instant::now();
+                self.touch_count_change(); // график снова открыт → сброс debounce
             }
             let panel = self.charts[i].panel.clone();
             panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
@@ -184,8 +252,9 @@ impl AddChartStack {
             if let Some(i) = self.charts.iter().position(|e| e.vacated) {
                 self.charts[i].core = core;
                 self.charts[i].market = market.to_string();
-                self.charts[i].arrived_at = std::time::Instant::now();
+                self.charts[i].arrived_at = Instant::now();
                 self.charts[i].vacated = false;
+                self.touch_count_change(); // новый график занял пустой слот → сброс debounce
                 let panel = self.charts[i].panel.clone();
                 panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
                 cx.notify();
@@ -242,9 +311,14 @@ impl AddChartStack {
         panel.update(cx, |panel, pcx| {
             panel.set_cursor_labels(self.cursor_labels.unwrap_or(true), pcx)
         });
+        panel.update(cx, |panel, pcx| {
+            panel.set_liquidations_enabled(self.liquidations_enabled.unwrap_or(true), pcx)
+        });
         panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
         self.charts
             .push(ChartStackEntry::new(core, market.to_string(), panel));
+        self.touch_count_change(); // появился новый график → сброс debounce
+        self.arm_compact_timer(cx); // запустить таймер компакции (если ещё не армирован)
         // Новый тикер: в режиме сравнения сразу получает eligible + общее Y-окно якоря.
         self.sync_compare(cx);
         cx.notify();
@@ -278,6 +352,11 @@ impl AddChartStack {
         if !self.charts.is_empty() && self.charts.iter().all(|e| e.vacated) {
             self.charts.clear();
             changed = true;
+        }
+        if changed {
+            // График исчез (слот стал пустым) — число открытых изменилось → сброс debounce:
+            // придержанные пустые слоты схлопнутся только после 5с стабильности.
+            self.touch_count_change();
         }
         changed
     }
@@ -414,6 +493,21 @@ impl AddChartStack {
         });
     }
 
+    pub(crate) fn liquidations_enabled(&self) -> Option<bool> {
+        self.liquidations_enabled
+    }
+
+    /// Вкл/выкл трейды ликвидаций для всех графиков стека (per-окно).
+    pub(crate) fn set_liquidations_enabled(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
+        apply_setting(
+            &mut self.liquidations_enabled,
+            enabled,
+            &self.charts,
+            cx,
+            |c, cx| set_panels_liquidations(c, enabled.unwrap_or(true), cx),
+        );
+    }
+
     /// Вкл/выкл авто-пин при ордере для всех графиков стека (per-окно).
     pub(crate) fn set_auto_pin(&mut self, on: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.auto_pin, on, &self.charts, cx, |c, cx| {
@@ -516,6 +610,8 @@ impl AddChartStack {
 
 impl Render for AddChartStack {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Запустить (если надо) debounce-таймер COMPRESS-компакции — идемпотентно, дёшево.
+        self.arm_compact_timer(cx);
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
             // Непрозрачный фон: в выносном окне Root=NoFill и own-pass нет → без фона

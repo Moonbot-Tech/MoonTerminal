@@ -339,6 +339,17 @@ impl ChartEngine {
         true
     }
 
+    /// Вкл/выкл трейды ликвидаций для всех панелей движка (per-окно). `true` при изменении.
+    pub fn set_liquidations_enabled(&mut self, enabled: bool) -> bool {
+        let mut data = self.data.borrow_mut();
+        if data.liquidations_enabled == enabled {
+            return false;
+        }
+        data.liquidations_enabled = enabled;
+        data.mark_view_dirty();
+        true
+    }
+
     /// Режим «только стакан» (метла в сравнении): чарт+ось цен скрыты, стакан на всю ширину.
     /// Возвращает `true` при изменении.
     pub fn set_orderbook_only(&mut self, only: bool) -> bool {

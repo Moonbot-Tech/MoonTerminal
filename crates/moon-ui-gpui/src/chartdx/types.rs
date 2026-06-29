@@ -34,6 +34,20 @@ pub fn fill_cross_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross
     }));
 }
 
+/// Заполнить буфер GPU-крестов ТРЕЙДОВ ЛИКВИДАЦИЙ из тиков. Сторона есть (знак qty), но все
+/// рисуются единым цветом → тегируем `side = 2` (шейдер выбирает liq-цвет, volume-проход их
+/// пропускает). Геометрия креста та же, что у обычных трейдов.
+pub fn fill_liq_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross>) {
+    out.clear();
+    out.reserve(ticks.len());
+    out.extend(ticks.iter().map(|t| ChartCross {
+        time_rel: (t.time_ms - epoch_ms) as f32,
+        price: t.price,
+        side: 2,
+        qty: t.qty.max(0.0),
+    }));
+}
+
 /// Заполнить буфер точек ценовой линии (last/mark) из `PricePoint`, отбрасывая неконечные.
 pub fn fill_price_upload(points: &[PricePoint], epoch_ms: f64, out: &mut Vec<PriceLinePoint>) {
     out.clear();
@@ -95,10 +109,10 @@ pub fn cross_volume_max<'a>(crosses: impl IntoIterator<Item = &'a ChartCross>) -
     let mut buy = 1e-6f32;
     let mut sell = 1e-6f32;
     for c in crosses {
-        if c.side == 0 {
-            buy = buy.max(c.qty);
-        } else {
-            sell = sell.max(c.qty);
+        match c.side {
+            0 => buy = buy.max(c.qty),
+            1 => sell = sell.max(c.qty),
+            _ => {} // side>=2 (ликвидации) не имеют volume-баров → не влияют на масштаб
         }
     }
     (buy, sell)
@@ -108,10 +122,10 @@ pub fn cross_volume_max<'a>(crosses: impl IntoIterator<Item = &'a ChartCross>) -
 pub fn update_cross_volume_max(max: &mut (f32, f32), data: &[ChartCross]) -> bool {
     let before = *max;
     for c in data {
-        if c.side == 0 {
-            max.0 = max.0.max(c.qty);
-        } else {
-            max.1 = max.1.max(c.qty);
+        match c.side {
+            0 => max.0 = max.0.max(c.qty),
+            1 => max.1 = max.1.max(c.qty),
+            _ => {} // side>=2 (ликвидации) не учитываются в volume-масштабе
         }
     }
     before != *max
@@ -126,7 +140,7 @@ pub fn ranges_touch_volume_max(
     for &(start, count) in ranges {
         let end = start.saturating_add(count).min(crosses.len());
         for c in &crosses[start.min(end)..end] {
-            if (c.side == 0 && c.qty >= volume_max.0) || (c.side != 0 && c.qty >= volume_max.1) {
+            if (c.side == 0 && c.qty >= volume_max.0) || (c.side == 1 && c.qty >= volume_max.1) {
                 return true;
             }
         }

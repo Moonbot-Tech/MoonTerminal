@@ -107,6 +107,7 @@ pub(crate) struct ChartApplyAll {
     /// Копируем ВСЕ настройки вкладки-источника: масштаб цены + галка стакана.
     pub scale: Option<f32>,
     pub orderbook: Option<bool>,
+    pub liquidations: Option<bool>,
     pub show_zone: Option<bool>,
     pub auto_pin: Option<bool>,
     pub orientation: Option<chart_persist::StackOrientation>,

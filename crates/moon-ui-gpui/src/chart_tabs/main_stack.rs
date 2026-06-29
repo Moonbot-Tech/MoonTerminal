@@ -10,7 +10,8 @@ use moon_ui::{MoonPalette, MoonVirtualListScrollHandle};
 use super::stack::{
     ChartStackEntry, apply_setting, chart_stack_card, compare_role, render_chart_stack,
     resolve_layout, retain_nonempty_panels, set_panels_action_btn_pos, set_panels_auto_pin,
-    set_panels_cursor_labels, set_panels_line_labels, set_panels_orderbook_enabled,
+    set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
+    set_panels_orderbook_enabled,
     set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible,
     sync_compare,
 };
@@ -41,6 +42,8 @@ pub(crate) struct MainChartStack {
     layout_height_scroll: Option<u16>,
     /// Показывать ли стакан на графиках вкладки (per-окно). None = дефолт (вкл).
     orderbook_enabled: Option<bool>,
+    /// Рисовать ли трейды ликвидаций (per-окно). None = дефолт (вкл).
+    liquidations_enabled: Option<bool>,
     /// Показывать ли заливку зоны управления (per-окно). None = дефолт (вкл).
     show_zone: Option<bool>,
     /// Авто-пин графика при выставлении ордера (per-окно). None = дефолт (выкл).
@@ -92,6 +95,7 @@ impl MainChartStack {
             layout_height_fit: None,
             layout_height_scroll: None,
             orderbook_enabled: None,
+            liquidations_enabled: None,
             show_zone: None,
             auto_pin: None,
             layout_orientation: None,
@@ -142,6 +146,9 @@ impl MainChartStack {
         }
         if let Some(en) = self.orderbook_enabled {
             panel.update(cx, |panel, pcx| panel.set_orderbook_enabled(en, pcx));
+        }
+        if let Some(en) = self.liquidations_enabled {
+            panel.update(cx, |panel, pcx| panel.set_liquidations_enabled(en, pcx));
         }
         if let Some(sz) = self.show_zone {
             panel.update(cx, |panel, pcx| panel.set_show_zone(sz, pcx));
@@ -290,11 +297,21 @@ impl MainChartStack {
         let ttl = Duration::from_secs(secs as u64);
         let last_input = self.backend.read(cx).main_input_at(&self.group);
         let now = Instant::now();
+        // Запиненный график (●) не закрываем по неактивности — как и TTL (`prune_ttl`) его
+        // пропускает. Флаги собираем заранее (read панели через cx), затем фильтруем.
+        let pinned: Vec<bool> = self
+            .charts
+            .iter()
+            .map(|e| e.panel.read(cx).is_pinned())
+            .collect();
         let expired: Vec<usize> = self
             .charts
             .iter()
             .enumerate()
-            .filter(|(_, e)| {
+            .filter(|(ix, e)| {
+                if pinned[*ix] {
+                    return false;
+                }
                 let base = match last_input {
                     Some(t) => t.max(e.arrived_at),
                     None => e.arrived_at,
@@ -378,6 +395,17 @@ impl MainChartStack {
     pub(crate) fn set_orderbook_enabled(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.orderbook_enabled, enabled, &self.charts, cx, |c, cx| {
             set_panels_orderbook_enabled(c, enabled.unwrap_or(true), cx)
+        });
+    }
+
+    pub(crate) fn liquidations_enabled(&self) -> Option<bool> {
+        self.liquidations_enabled
+    }
+
+    /// Вкл/выкл трейды ликвидаций для всех графиков стека (per-окно).
+    pub(crate) fn set_liquidations_enabled(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
+        apply_setting(&mut self.liquidations_enabled, enabled, &self.charts, cx, |c, cx| {
+            set_panels_liquidations(c, enabled.unwrap_or(true), cx)
         });
     }
 

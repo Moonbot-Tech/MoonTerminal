@@ -68,7 +68,7 @@ use backend::PlatformLayers;
 use pane::{Container, ContainerKind};
 use types::{
     BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams, GridParams, ReadoutRect,
-    cover_uv, fill_cross_upload, fill_price_upload, rgb4,
+    cover_uv, fill_cross_upload, fill_liq_upload, fill_price_upload, rgb4,
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
@@ -190,6 +190,8 @@ struct PaneRender {
     /// Last provider generation seen by this pane. Changed generation means source replacement.
     source_generation: u64,
     cross_upload: Vec<ChartCross>,
+    /// Буфер крестов ТРЕЙДОВ ЛИКВИДАЦИЙ (side=2) для аплоада в то же combo-кольцо.
+    liq_upload: Vec<ChartCross>,
     last_line_upload: Vec<PriceLinePoint>,
     mark_line_upload: Vec<PriceLinePoint>,
     combo_cross_capacity: usize,
@@ -253,6 +255,9 @@ struct PaneRender {
     active: bool,
     /// Стакан включён на этой панели (per-окно). Выкл → не рисуем стекло и угловую подпись.
     orderbook_enabled: bool,
+    /// Трейды ликвидаций рисуются на этой панели (per-окно). Выкл → кресты ликвидаций не
+    /// добавляются в combo. Смена флага форсит combo reset (перезалив без/с ликвидациями).
+    liquidations_enabled: bool,
     /// Режим «только стакан» этой панели (чарт+ось цен скрыты, стакан на всю ширину).
     orderbook_only: bool,
     /// Положение оси цен (Left/Right/Hide) — определяет, с какой стороны рисуются подписи оси
@@ -286,6 +291,7 @@ impl PaneRender {
             source_history_sig: u64::MAX,
             source_generation: u64::MAX,
             cross_upload: Vec::new(),
+            liq_upload: Vec::new(),
             last_line_upload: Vec::new(),
             mark_line_upload: Vec::new(),
             combo_cross_capacity: 0,
@@ -321,6 +327,7 @@ impl PaneRender {
             cached_order_price: None,
             active: false,
             orderbook_enabled: true,
+            liquidations_enabled: true,
             orderbook_only: false,
             price_axis_pos: crate::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,
@@ -521,6 +528,9 @@ struct ChartDataState {
     /// Показывать ли стакан (per-окно/панель). Выкл → glass_w=0, уровни не строятся, подпись не
     /// рисуется. Применяется ко всем панелям этого движка.
     orderbook_enabled: bool,
+    /// Рисовать ли трейды ликвидаций (per-окно/панель). Выкл → кресты ликвидаций не добавляются
+    /// в combo. Применяется ко всем панелям этого движка.
+    liquidations_enabled: bool,
     /// Режим «только стакан» (кнопка-метла в сравнении): чарт и ось цен скрыты, стакан на всю
     /// ширину. Применяется ко всем панелям этого движка (у соседей якоря).
     orderbook_only: bool,

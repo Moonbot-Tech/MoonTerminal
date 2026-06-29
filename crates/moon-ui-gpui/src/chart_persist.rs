@@ -112,6 +112,9 @@ pub struct ChartTabSpec {
     /// хочет ни одно другое окно.
     #[serde(default)]
     pub orderbook_enabled: Option<bool>,
+    /// Рисовать ли трейды ликвидаций на графиках этой вкладки. None → дефолт (вкл). Per-окно/вкладка.
+    #[serde(default)]
+    pub liquidations_enabled: Option<bool>,
     /// Показывать ли заливку зоны управления при раздельных зонах и скрытом стакане. None →
     /// дефолт (вкл). Per-окно/вкладка, как `orderbook_enabled`.
     #[serde(default)]
@@ -173,6 +176,7 @@ impl ChartTabSpec {
             layout_height_fit: None,
             layout_height_scroll: None,
             orderbook_enabled: None,
+            liquidations_enabled: None,
             show_zone: None,
             auto_pin: None,
             layout_orientation: None,

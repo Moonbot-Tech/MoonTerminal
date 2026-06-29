@@ -62,6 +62,11 @@ pub(super) enum CompareRole {
 /// Длительность подсветки рамки только что появившегося графика (пульс).
 pub(super) const HIGHLIGHT: Duration = Duration::from_millis(2600);
 
+/// Пауза стабильности числа открытых графиков, после которой COMPRESS схлопывает придержанные
+/// пустые слоты — оставшиеся графики растягиваются на освободившееся место. Сбрасывается любым
+/// появлением/исчезновением графика (см. `AddChartStack::touch_count_change`).
+pub(super) const COMPACT_STABLE: Duration = Duration::from_millis(5000);
+
 const STACK_GUTTER: f32 = 8.0;
 const STACK_HEADER_H: f32 = 20.0;
 
@@ -254,6 +259,18 @@ pub(super) fn set_panels_line_labels<S: 'static>(
 ) {
     for e in entries {
         e.panel.update(cx, |p, pcx| p.set_line_labels(show, pcx));
+    }
+}
+
+/// Применить вкл/выкл трейдов ликвидаций ко всем панелям стека.
+pub(super) fn set_panels_liquidations<S: 'static>(
+    entries: &[ChartStackEntry],
+    enabled: bool,
+    cx: &mut Context<S>,
+) {
+    for e in entries {
+        e.panel
+            .update(cx, |p, pcx| p.set_liquidations_enabled(enabled, pcx));
     }
 }
 

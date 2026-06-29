@@ -173,6 +173,10 @@ chart.layout.orderbook:
   ru: "Стакан"
   en: "Order book"
   es: "Libro de órdenes"
+chart.layout.liquidations:
+  ru: "Ликвидации"
+  en: "Liquidations"
+  es: "Liquidaciones"
 chart.layout.show_zone:
   ru: "Отображать зону разделения"
   en: "Show split zone"
