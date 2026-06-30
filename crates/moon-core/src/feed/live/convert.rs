@@ -271,7 +271,7 @@ fn build_order_row(
         o.sell_order.quantity,
         o.sell_order.quantity_remaining,
     );
-    let size = if bs.abs() >= ss.abs() { bs } else { ss };
+    let raw_size = if bs.abs() >= ss.abs() { bs } else { ss };
 
     let mkt = snap.markets().price(&o.market_name);
     let last = mkt.as_ref().map(|p| p.p_last as f32).unwrap_or(0.0);
@@ -281,17 +281,30 @@ fn build_order_row(
     // сырой вход. Реальная цена входа исполненного ордера = средняя цена ПОЗИЦИИ (`pos_price`,
     // с биржи, без надбавки). Пока ордер НЕ залит (fill=0) — позиции ещё нет, берём цену
     // выставленного лимита (`buy_price`).
-    let pos_price = snap
-        .markets()
-        .get(&o.market_name)
-        .map(|h| h.balance_position().pos_price)
-        .unwrap_or(0.0);
+    let mkt_snapshot = snap.markets().get(&o.market_name).map(|h| h.snapshot());
+    let pos_price = mkt_snapshot.as_ref().map(|m| m.pos_price).unwrap_or(0.0);
+    let contract_size = mkt_snapshot
+        .as_ref()
+        .map(|m| m.contract_size())
+        .unwrap_or(1.0);
     let entry = if fill_pct > 0.0 && pos_price > 0.0 {
         pos_price
     } else {
         o.buy_price
     };
     let valid_entry = entry.is_finite() && entry > 0.0;
+
+    // Coin-margined (inverse) фьючи отдают количество в КОНТРАКТАХ, а не в базовой монете
+    // (`contract_size != 1`; номинал контракта фиксирован в quote/USD — напр. BTCUSD = $100,
+    // прочие *USD = $10). Реальный размер в монете = контракты × contract_size / цена_входа.
+    // После этого и подпись размера (монеты), и её USD-нотионал (монеты × цена = контракты × cs)
+    // считаются верно по общей формуле. `contract_size == 1` → linear/спот, size уже в монете.
+    // (futures_type/валюты у coin-margined приходят пустыми — надёжен только contract_size.)
+    let size = if contract_size != 1.0 && contract_size > 0.0 && valid_entry {
+        raw_size * contract_size / entry
+    } else {
+        raw_size
+    };
     let fin = |v: f64| (v.is_finite() && v > 0.0).then_some(v);
     let pct_stop = |level: f64| {
         if o.is_short {
