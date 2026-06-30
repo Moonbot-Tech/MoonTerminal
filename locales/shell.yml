@@ -100,11 +100,131 @@ toolbar.hedge:
   ru: "Hedge Mode"
   en: "Hedge Mode"
   es: "Hedge Mode"
+# Чекбокс «Стоп-маркет» в SL-попапе: продавать по стопу рыночным ордером, а не стоп-лимитом.
+toolbar.stop_market:
+  ru: "Стоп-маркет"
+  en: "Stop market"
+  es: "Stop market"
 # Кнопка применения плеча в попапе (плечо — биржевое действие, шлётся только по ней).
 toolbar.apply:
   ru: "Применить"
   en: "Apply"
   es: "Aplicar"
+
+# --- Попап настроек ядра (кнопка ⚙ рядом с селектором ядра) ---
+core_settings.title:
+  ru: "Настройки ядра"
+  en: "Core settings"
+  es: "Ajustes del núcleo"
+core_settings.no_core:
+  ru: "Нет активного ядра"
+  en: "No active core"
+  es: "Sin núcleo activo"
+core_settings.restart:
+  ru: "Старт / Рестарт"
+  en: "Start / Restart"
+  es: "Iniciar / Reiniciar"
+core_settings.emu:
+  ru: "Эмулятор"
+  en: "Emulator"
+  es: "Emulador"
+core_settings.emu_on:
+  ru: "РЕЖИМ ЭМУЛЯТОРА ВКЛЮЧЁН"
+  en: "EMULATOR MODE ENABLED"
+  es: "MODO EMULADOR ACTIVADO"
+core_settings.frame_defaults:
+  ru: "Поведение по умолчанию"
+  en: "Default behaviour"
+  es: "Comportamiento por defecto"
+core_settings.stop_market:
+  ru: "Стоп-маркет"
+  en: "Stop market"
+  es: "Stop market"
+core_settings.panic_drop:
+  ru: "Паник селл при падении цены"
+  en: "Panic sell on price drop"
+  es: "Venta de pánico al caer el precio"
+# Тултип галок «вкл/выкл» у параметров «галка+слайдер+поле» (паника/глоб-TP/трейлинг).
+core_settings.toggle_tip:
+  ru: "Включить / выключить"
+  en: "Enable / disable"
+  es: "Activar / desactivar"
+core_settings.global_tp:
+  ru: "Глобальный тейк-профит"
+  en: "Global take profit"
+  es: "Take profit global"
+core_settings.trailing:
+  ru: "Трейлинг"
+  en: "Trailing"
+  es: "Trailing"
+core_settings.vstop:
+  ru: "V-Stop (падение объёма BID)"
+  en: "V-Stop (BID volume drop)"
+  es: "V-Stop (caída de volumen BID)"
+core_settings.frame_risks:
+  ru: "Ограничение рисков"
+  en: "Risk limits"
+  es: "Límites de riesgo"
+core_settings.blacklist:
+  ru: "Чёрный список"
+  en: "Blacklist"
+  es: "Lista negra"
+core_settings.exclude_delta:
+  ru: "Исключить из дельт"
+  en: "Exclude from deltas"
+  es: "Excluir de deltas"
+core_settings.buy_iceberg:
+  ru: "Айсберг покупки"
+  en: "Buy iceberg"
+  es: "Iceberg de compra"
+core_settings.sell_iceberg:
+  ru: "Айсберг продажи"
+  en: "Sell iceberg"
+  es: "Iceberg de venta"
+core_settings.frame_leverage:
+  ru: "Плечо / маржа"
+  en: "Leverage / margin"
+  es: "Apalancamiento / margen"
+core_settings.auto_max_order:
+  ru: "Авто макс. ордер"
+  en: "Auto max order"
+  es: "Orden máx. auto"
+core_settings.auto_lev_up:
+  ru: "Авто повышение плеча"
+  en: "Auto leverage up"
+  es: "Subida auto de apalancamiento"
+core_settings.isolated:
+  ru: "Изолированная маржа"
+  en: "Isolated margin"
+  es: "Margen aislado"
+core_settings.cross:
+  ru: "Кросс-маржа"
+  en: "Cross margin"
+  es: "Margen cruzado"
+core_settings.tlg_report:
+  ru: "Отчёт в Telegram"
+  en: "Telegram report"
+  es: "Informe a Telegram"
+core_settings.frame_actions:
+  ru: "Действия"
+  en: "Actions"
+  es: "Acciones"
+core_settings.reset_session:
+  ru: "Сброс сессии"
+  en: "Reset session"
+  es: "Reiniciar sesión"
+core_settings.reset_all:
+  ru: "Сброс всего"
+  en: "Reset all"
+  es: "Reiniciar todo"
+core_settings.cancel_all:
+  ru: "Отменить все ордера"
+  en: "Cancel all orders"
+  es: "Cancelar todas las órdenes"
+core_settings.cancel_all_confirm:
+  ru: "Точно? Отменить все"
+  en: "Sure? Cancel all"
+  es: "¿Seguro? Cancelar todo"
 
 # --- Чарт-вкладка / откреплённое чарт-окно ---
 chartwin.tab_title:

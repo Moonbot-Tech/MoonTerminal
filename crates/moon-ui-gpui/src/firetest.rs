@@ -861,7 +861,7 @@ impl Runtime {
         let place_submit_ms = now_unix_ms_i64();
         backend
             .session
-            .place_order(core, market.clone(), false, price, size, None)
+            .place_order(core, market.clone(), false, price, size, None, None, None)
             .map_err(|error| format!("order_cancel_lag place order failed: {error:#}"))?;
         firetest_info(&format!(
             "[firetest] order_cancel_lag place core={core} market={market} price={price:.8} size={size:.8} quote_size={} latest_price={latest_price:.8}",

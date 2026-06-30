@@ -15,9 +15,16 @@ use rust_i18n::t;
 
 use moon_core::feed::ConnStatus;
 
+use crate::shell::Shell;
 use crate::{Backend, design, settings, strategies};
 
-pub fn header(group: &str, backend: Entity<Backend>, p: MoonPalette, cx: &App) -> impl IntoElement {
+pub fn header(
+    group: &str,
+    backend: Entity<Backend>,
+    shell: Entity<Shell>,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
     // Баланс/PnL активного торгового ядра группы (серверные значения в USDT). Нет ядра/данных
     // → нули. «Real» = серверный pnl_usdt; Session/Unreal пока заглушки.
     let (free_usdt, total_usdt, pnl_usdt, risk_pct) = {
@@ -58,9 +65,11 @@ pub fn header(group: &str, backend: Entity<Backend>, p: MoonPalette, cx: &App) -
         .child(
             h_flex()
                 .flex_none()
-                .gap(design::ui_px(cx, 10.0))
+                .gap(design::ui_px(cx, 8.0))
                 .items_center()
                 .child(core_selector(group, &backend, p, cx))
+                .child(runtime_dots(group, &backend, p, cx))
+                .child(core_gear_button(shell, p, cx))
                 .child(balance_label(free_usdt, total_usdt, p, cx)),
         )
         .child(
@@ -346,6 +355,51 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
                 .render(),
         )
         .into_any_element()
+}
+
+/// Два индикатора-кругляша состояния рантайма активного ядра (рядом с селектором): запущен ли
+/// рынок-рантайм (`is_started`) и активен ли авто-детект (`auto_detect_active`; выкл = passive).
+/// Зелёный = вкл; серый = выкл; для passive при запущенном ядре — янтарный (работает, но не детектит).
+fn runtime_dots(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl IntoElement {
+    let rt = {
+        let b = backend.read(cx);
+        b.active_trade_core(group)
+            .and_then(|c| b.session.store().core(c))
+            .and_then(|d| d.runtime_state)
+    };
+    let started = rt.map(|r| r.is_started).unwrap_or(false);
+    let auto = rt.map(|r| r.auto_detect_active).unwrap_or(false);
+    let started_color = if started {
+        positive_text(p)
+    } else {
+        p.text_muted
+    };
+    // Авто-детект: зелёный=активен; если ядро запущено, но passive → янтарный; иначе серый.
+    let auto_color = if auto {
+        positive_text(p)
+    } else if started {
+        p.amber
+    } else {
+        p.text_muted
+    };
+    h_flex()
+        .gap(design::ui_px(cx, 4.0))
+        .items_center()
+        .child(design::status_dot(started_color, cx))
+        .child(design::status_dot(auto_color, cx))
+}
+
+/// Кнопка ⚙ настроек ядра (тоггл попапа). Тот же визуал, что правая шестерёнка (Panel/Action),
+/// но открывает overlay-попап Shell, а не окно настроек терминала.
+fn core_gear_button(shell: Entity<Shell>, _p: MoonPalette, _cx: &App) -> impl IntoElement {
+    MoonButton::new("core-gear")
+        .label("⚙")
+        .size(MoonButtonSize::Action)
+        .variant(MoonButtonVariant::Panel)
+        .on_click(move |_, window, cx| {
+            shell.update(cx, |s, cx| s.toggle_core_settings_popup(window, cx));
+        })
+        .render()
 }
 
 fn balance_label(free_usdt: f64, total_usdt: f64, p: MoonPalette, cx: &App) -> impl IntoElement {

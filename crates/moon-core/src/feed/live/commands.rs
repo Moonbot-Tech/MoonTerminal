@@ -49,6 +49,7 @@ pub(super) fn drain_commands(
     wanted: &mut Vec<String>,
     wanted_orderbook: &mut Vec<String>,
     force_market_sample: &mut bool,
+    pending_manual_stops: &mut Vec<trade::PendingManualStops>,
 ) -> bool {
     loop {
         match cmd_rx.try_recv() {
@@ -288,8 +289,20 @@ pub(super) fn drain_commands(
                 price,
                 size,
                 strategy_id,
+                tp_price,
+                sl_price,
             }) => {
+                // Для РУЧНОГО ордера (без стратегии) фиксируем текущие uid'ы рынка ДО постановки,
+                // затем ставим ордер и кладём pending с УЖЕ посчитанными в UI ценами селл/стопа —
+                // дослыается в `apply_pending_manual_stops` из run-цикла, когда придёт новый uid.
+                let pending = strategy_id
+                    .is_none()
+                    .then(|| trade::prepare_manual_stops(client, &market, short, tp_price, sl_price))
+                    .flatten();
                 trade::place_order(client, server.id, market, short, price, size, strategy_id);
+                if let Some(p) = pending {
+                    pending_manual_stops.push(p);
+                }
             }
             Ok(CoreCmd::MoveOrder { uid, new_price }) => {
                 trade::move_order(client, server.id, uid, new_price);
@@ -363,6 +376,63 @@ pub(super) fn drain_commands(
                     Err(error) => {
                         log::warn!("core {} set hedge mode -> {on} failed: {error}", server.id)
                     }
+                }
+            }
+            Ok(CoreCmd::RestartNow) => {
+                // Старт/рестарт рантайма; итог придёт событием RuntimeStateUpdated → стор.
+                if let Err(error) = client.settings().restart_now() {
+                    log::warn!("core {} restart_now failed: {error}", server.id);
+                } else {
+                    log::info!("core {} restart_now sent", server.id);
+                }
+            }
+            Ok(CoreCmd::ResetProfit(kind)) => {
+                let proto_kind = match kind {
+                    crate::feed::ResetProfitKind::Session => {
+                        moonproto::ResetProfitKind::CurrentProfit
+                    }
+                    crate::feed::ResetProfitKind::All => moonproto::ResetProfitKind::AllProfit,
+                };
+                if let Err(error) = client.settings().reset_profit(proto_kind) {
+                    log::warn!("core {} reset_profit({kind:?}) failed: {error}", server.id);
+                } else {
+                    log::info!("core {} reset_profit({kind:?}) sent", server.id);
+                }
+            }
+            Ok(CoreCmd::CancelAllOrders) => {
+                // РЕАЛЬНОЕ действие на бирже. Тикет игнорируем — итог придёт снимком ордеров.
+                match client.account().cancel_all_orders() {
+                    Ok(_ticket) => log::info!("core {} cancel_all_orders sent", server.id),
+                    Err(error) => {
+                        log::warn!("core {} cancel_all_orders failed: {error}", server.id)
+                    }
+                }
+            }
+            Ok(CoreCmd::SetBlacklist { on, text }) => {
+                // Патчим удержанный снимок настроек (флаг + текст ЧС) и шлём целиком.
+                match client
+                    .snapshot()
+                    .and_then(|s| s.settings().client_settings.clone())
+                {
+                    Some(mut settings) => {
+                        settings.use_coins_black_list = on;
+                        settings.coins_black_list_text = text;
+                        if let Err(error) = client.settings().send(settings) {
+                            log::warn!("core {} set blacklist failed: {error}", server.id);
+                        }
+                    }
+                    None => log::warn!("core {} set blacklist ignored: no snapshot yet", server.id),
+                }
+            }
+            Ok(CoreCmd::SetExcludeBlacklistedDelta(on)) => {
+                if let Err(error) = client
+                    .settings()
+                    .set_exclude_blacklisted_markets_from_exchange_delta(on)
+                {
+                    log::warn!(
+                        "core {} set exclude blacklisted delta failed: {error}",
+                        server.id
+                    );
                 }
             }
             Err(TryRecvError::Empty) => return false,

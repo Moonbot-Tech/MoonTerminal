@@ -483,6 +483,11 @@ pub struct ClientSettings {
     pub sell_iceberg: bool,
     pub sign_orders: bool,
     pub use_stop_market: bool,
+    /// V-Stop по умолчанию: уровень падения объёма BID, % (`vol_drop_level`, целое).
+    pub vol_drop_level: i32,
+    /// Чёрный список монет: включён (`use_coins_black_list`) + текст списка (`coins_black_list_text`).
+    pub use_blacklist: bool,
+    pub blacklist_text: String,
     /// 6 fixed-sell пресетов как видимые проценты (кнопки S1-S6).
     pub fixed_sell_pcts: [f64; 6],
     /// Выбранный fixed-sell слот, 1..=6 (`selected_fixed_sell_slot`).
@@ -532,6 +537,34 @@ pub enum ClientSettingsEdit {
     EngageMainTakeProfit,
     /// Значение fixed-sell пресета: слот 1..=6, видимый процент (колесо/инлайн-правка S-кнопки).
     SetFixedSellPct { slot: usize, pct: f64 },
+    /// Стоп-маркет вместо стоп-лимита (`use_stop_market`).
+    UseStopMarket(bool),
+    /// Паника при падении цены (`panic_if_price_drop`).
+    PanicIfPriceDrop(bool),
+    /// Глобальный тейк-профит: вкл + значение, % (`use_g_take_profit`/`g_take_profit`).
+    GlobalTakeProfit { on: bool, pct: f64 },
+    /// Трейлинг-стоп, % (`trailing_drop`).
+    TrailingDrop(f32),
+    /// Айсберг ордеров покупки (`buy_iceberg`).
+    BuyIceberg(bool),
+    /// Айсберг ордеров продажи (`sell_iceberg`).
+    SellIceberg(bool),
+    /// Подпись ордеров (`sign_orders`).
+    SignOrders(bool),
+    /// Режим эмулятора ядра (`emu_mode`).
+    EmuMode(bool),
+    /// V-Stop по умолчанию: уровень падения объёма BID, % (`vol_drop_level`, целое).
+    VolDropLevel(i32),
+}
+
+/// Какой счётчик прибыли сбрасывать (moonproto `ResetProfitKind`). Кнопки «Сессия»/«Всё время»
+/// в попапе настроек ядра.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResetProfitKind {
+    /// Текущая торговая сессия.
+    Session,
+    /// Всё накопленное время.
+    All,
 }
 
 /// Точечная правка управления плечом (moonproto `LevManage`). Применяется к удержанному
@@ -540,6 +573,16 @@ pub enum ClientSettingsEdit {
 pub enum LevManageEdit {
     /// Зафиксировать целевое плечо: `auto_fix_lev=true` + `fix_lev=n`.
     FixLev(i32),
+    /// Авто максимальный размер ордера (`auto_max_order`).
+    AutoMaxOrder(bool),
+    /// Авто повышение плеча (`auto_lev_up`).
+    AutoLevUp(bool),
+    /// Изолированная маржа (`auto_isolated`; взаимоисключающа с кросс).
+    AutoIsolated(bool),
+    /// Кросс-маржа (`auto_cross`; взаимоисключающа с изолированной).
+    AutoCross(bool),
+    /// Отчёт в Telegram (`tlg_report`).
+    TlgReport(bool),
 }
 
 /// Статус соединения с ядром.

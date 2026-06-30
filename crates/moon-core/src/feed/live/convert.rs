@@ -93,6 +93,9 @@ pub(super) fn client_settings_from_proto(c: &moonproto::ClientSettingsCommand) -
         sell_iceberg: c.sell_iceberg,
         sign_orders: c.sign_orders,
         use_stop_market: c.use_stop_market,
+        vol_drop_level: c.vol_drop_level,
+        use_blacklist: c.use_coins_black_list,
+        blacklist_text: c.coins_black_list_text.clone(),
         fixed_sell_pcts,
         fixed_sell_slot: c.selected_fixed_sell_slot(),
     }
@@ -176,6 +179,19 @@ pub(super) fn apply_client_settings_edit(
             };
             s.set_fixed_sell_preset_price(slot, price);
         }
+        // Дефолты поведения ядра (попап настроек ядра): прямые pub-поля снимка.
+        ClientSettingsEdit::UseStopMarket(on) => s.use_stop_market = on,
+        ClientSettingsEdit::PanicIfPriceDrop(on) => s.panic_if_price_drop = on,
+        ClientSettingsEdit::GlobalTakeProfit { on, pct } => {
+            s.use_g_take_profit = on;
+            s.g_take_profit = pct;
+        }
+        ClientSettingsEdit::TrailingDrop(pct) => s.trailing_drop = pct,
+        ClientSettingsEdit::BuyIceberg(on) => s.buy_iceberg = on,
+        ClientSettingsEdit::SellIceberg(on) => s.sell_iceberg = on,
+        ClientSettingsEdit::SignOrders(on) => s.sign_orders = on,
+        ClientSettingsEdit::EmuMode(on) => s.emu_mode = on,
+        ClientSettingsEdit::VolDropLevel(n) => s.vol_drop_level = n,
     }
 }
 
@@ -185,6 +201,22 @@ pub(super) fn apply_lev_manage_edit(l: &mut moonproto::LevManage, edit: LevManag
             l.auto_fix_lev = true;
             l.fix_lev = n;
         }
+        LevManageEdit::AutoMaxOrder(on) => l.auto_max_order = on,
+        LevManageEdit::AutoLevUp(on) => l.auto_lev_up = on,
+        // Режим маржи — взаимоисключающие флаги: включение одного гасит другой.
+        LevManageEdit::AutoIsolated(on) => {
+            l.auto_isolated = on;
+            if on {
+                l.auto_cross = false;
+            }
+        }
+        LevManageEdit::AutoCross(on) => {
+            l.auto_cross = on;
+            if on {
+                l.auto_isolated = false;
+            }
+        }
+        LevManageEdit::TlgReport(on) => l.tlg_report = on,
     }
 }
 

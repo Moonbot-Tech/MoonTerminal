@@ -9,8 +9,8 @@ use rust_i18n::t;
 use moon_ui::{
     MoonAccent, MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonCheckboxSize, MoonDropdown, MoonInput, MoonInputState, MoonMenuItem, MoonMenuSize,
-    MoonPalette, MoonSegmentItem, MoonSegmentedControl, MoonSlider, MoonSliderState,
-    MoonTooltipView, h_flex, v_flex,
+    MoonPalette, MoonSegmentItem, MoonSegmentedControl, MoonSlider, MoonSliderState, MoonToggle,
+    MoonToggleLabelSide, MoonToggleSize, MoonTooltipView, h_flex, v_flex,
 };
 
 use moon_core::feed::{ClientSettingsEdit, LevManageEdit};
@@ -121,6 +121,7 @@ const SCALES: [(&str, Option<f32>); 6] = [
 
 /// Кнопка-триггер торговой метрики. Клик открывает/закрывает её попап в `Shell`
 /// (overlay со слайдером/полем; закрытие — как у попапа раскладки чарта).
+#[allow(clippy::too_many_arguments)]
 fn metric_button(
     metric: TradeMetric,
     value_str: String,
@@ -128,13 +129,16 @@ fn metric_button(
     width: f32,
     open: bool,
     engaged: bool,
+    show_label: bool,
+    enabled: bool,
     shell: Entity<Shell>,
     p: MoonPalette,
 ) -> impl IntoElement {
     // «Горит» = попап открыт ИЛИ метрика задействована (для TP — fixed_sell выключен). Так TP
     // и S-слоты дают взаимоисключающую подсветку: либо горит TP, либо один S-слот.
-    let lit = open || engaged;
-    MoonButton::new(metric.id())
+    // Неактивная кнопка (SL при выключенном тогле) не горит.
+    let lit = enabled && (open || engaged);
+    let mut btn = MoonButton::new(metric.id())
         .width(width)
         .variant(if lit {
             MoonButtonVariant::Blue
@@ -143,16 +147,42 @@ fn metric_button(
         })
         .size(MoonButtonSize::ToolbarCompact)
         .selected(lit)
-        .segment(
+        .disabled(!enabled);
+    // Подпись метрики («SL»/«TP»/«Lev») — опционально: у SL она вынесена на тогл.
+    if show_label {
+        btn = btn.segment(
             MoonButtonSegment::new(metric.label())
                 .color(p.text_muted)
                 .weight(400.0),
-        )
-        .text_segment(value_str, color, 500.0)
+        );
+    }
+    btn.text_segment(value_str, color, 500.0)
         .on_click(move |_, window, app| {
             shell.update(app, |this, cx| this.toggle_metric_popup(metric, window, cx));
         })
         .render()
+}
+
+/// Тогл включения стоп-лосса (`panic_if_price_drop`) слева от кнопки SL. Подпись «SL» вынесена
+/// сюда из кнопки; выкл → кнопка SL неактивна (значение/попап только при включённом тогле).
+fn sl_toggle(on: bool, backend: Entity<Backend>, group: String) -> impl IntoElement {
+    MoonToggle::new("toolbar-sl-toggle")
+        .label("SL")
+        .label_side(MoonToggleLabelSide::Left)
+        .checked(on)
+        .size(MoonToggleSize::Compact)
+        .on_change(move |ch: &bool, _w, app| {
+            let v = *ch;
+            let b = backend.read(app);
+            if let Some(core) = b.active_trade_core(&group) {
+                if let Err(e) = b
+                    .session
+                    .edit_client_settings(core, ClientSettingsEdit::PanicIfPriceDrop(v))
+                {
+                    log::warn!("sl toggle failed: {e:#}");
+                }
+            }
+        })
 }
 
 /// Контент попапа метрики (overlay-бокс со своим фоном/рамкой): заголовок + слайдер + поле;
@@ -254,6 +284,39 @@ pub fn metric_popup_content(
                     .disabled(!fine_enabled)
                     .height(18.0),
             );
+    }
+
+    if matches!(metric, TradeMetric::Sl) {
+        // Стоп-маркет: при срабатывании стопа продавать РЫНОЧНЫМ ордером, а не стоп-лимитом
+        // (`use_stop_market`). Перенесён сюда из попапа настроек ядра.
+        let stop_market_on = {
+            let b = backend.read(cx);
+            b.active_trade_core(group)
+                .and_then(|c| b.session.store().core(c))
+                .and_then(|d| d.client_settings.as_ref())
+                .map(|s| s.use_stop_market)
+                .unwrap_or(false)
+        };
+        let backend = backend.clone();
+        let group = group.to_string();
+        content = content.child(
+            MoonCheckbox::new("toolbar-stop-market")
+                .label(t!("toolbar.stop_market").to_string())
+                .checked(stop_market_on)
+                .size(MoonCheckboxSize::Compact)
+                .on_change(move |ch: &bool, _w, app| {
+                    let on = *ch;
+                    let b = backend.read(app);
+                    if let Some(core) = b.active_trade_core(&group) {
+                        if let Err(error) = b
+                            .session
+                            .edit_client_settings(core, ClientSettingsEdit::UseStopMarket(on))
+                        {
+                            log::warn!("stop market toggle failed: {error}");
+                        }
+                    }
+                }),
+        );
     }
 
     if matches!(metric, TradeMetric::Lev) {
@@ -753,6 +816,7 @@ pub fn toolbar(
         tp_str,
         tp_engaged,
         sl_str,
+        sl_on,
         lev_str,
         sell_pcts,
         sell_slot,
@@ -786,6 +850,9 @@ pub fn toolbar(
         let sl_str = cs
             .map(|s| format!("{}%", fmt_field2_signed(s.stop_loss_pct)))
             .unwrap_or_else(|| "—".to_string());
+        // Включён ли стоп-лосс (`panic_if_price_drop`) — управляется тоглом рядом с кнопкой SL;
+        // когда выкл, кнопка SL неактивна.
+        let sl_on = cs.map(|s| s.panic_if_price_drop).unwrap_or(false);
         // Накладываем оптимистичный локальный кэш поверх значений ядра (живой sell-дисплей).
         let sell_pcts = focus_core.zip(cs).map(|(core, s)| {
             let arr: [f64; 6] =
@@ -813,6 +880,7 @@ pub fn toolbar(
             tp_str,
             tp_engaged,
             sl_str,
+            sl_on,
             lev_str,
             sell_pcts,
             sell_slot,
@@ -843,6 +911,8 @@ pub fn toolbar(
             74.6,
             open_metric == Some(TradeMetric::Tp),
             tp_engaged,
+            true,
+            true,
             shell.clone(),
             p,
         ))
@@ -858,13 +928,17 @@ pub fn toolbar(
             focus_core,
         ))
         .child(divider(p))
+        // Стоп-лосс: тогл вкл/выкл (`panic_if_price_drop`) + кнопка только со значением+попапом.
+        .child(sl_toggle(sl_on, backend.clone(), group.to_string()))
         .child(metric_button(
             TradeMetric::Sl,
             sl_str,
             sl_color,
-            74.6,
+            58.0,
             open_metric == Some(TradeMetric::Sl),
             false,
+            false,
+            sl_on,
             shell.clone(),
             p,
         ))
@@ -875,6 +949,8 @@ pub fn toolbar(
             61.6,
             open_metric == Some(TradeMetric::Lev),
             false,
+            true,
+            true,
             shell.clone(),
             p,
         ))

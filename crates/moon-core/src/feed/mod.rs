@@ -164,6 +164,11 @@ pub enum CoreCmd {
         price: f64,
         size: f64,
         strategy_id: Option<u64>,
+        /// Абсолютные цены селл/стопа ручного ордера, ПОСЧИТАННЫЕ В UI по экранным значениям
+        /// (с оптимистичными оверлеями — то, что реально видит пользователь). feed дослыает их
+        /// `update_stops` новому ордеру (см. feed::trade). `None` — не дослыать соответствующий стоп.
+        tp_price: Option<f64>,
+        sl_price: Option<f64>,
     },
     /// Переставить (move/replace) существующий ордер ядра по `uid` на новую цену —
     /// «потянуть за линию». Транслируется в moonproto `orders().move_order`.
@@ -211,6 +216,20 @@ pub enum CoreCmd {
     /// «Split order» (ПКМ по линии sell): разбить выбранный sell-ордер рынка на `parts` частей.
     /// Транслируется в moonproto `trade().split_order(SplitOrderParams::new(market, parts))`.
     SplitOrder { market: String, parts: i32 },
+    /// Старт/рестарт рантайма ядра (попап настроек ядра). moonproto `settings().restart_now()`:
+    /// старт рынка-рантайма + выход из passive + старт отмеченных стратегий. Стопа в протоколе нет.
+    RestartNow,
+    /// Сброс счётчика прибыли ядра (сессия / всё время). moonproto `settings().reset_profit`.
+    ResetProfit(ResetProfitKind),
+    /// Отменить ВСЕ ордера ядра (попап настроек ядра, с подтверждением в UI). РЕАЛЬНОЕ действие
+    /// на бирже — moonproto `account().cancel_all_orders()`.
+    CancelAllOrders,
+    /// Чёрный список монет: вкл/выкл + текст списка. feed патчит удержанный снимок настроек
+    /// (`use_coins_black_list`/`coins_black_list_text`) и шлёт его целиком.
+    SetBlacklist { on: bool, text: String },
+    /// Локально (Active Lib): исключать монеты из ЧС при расчёте рыночной дельты. Не wire-поле
+    /// настроек — moonproto `settings().set_exclude_blacklisted_markets_from_exchange_delta`.
+    SetExcludeBlacklistedDelta(bool),
 }
 
 #[derive(Clone)]

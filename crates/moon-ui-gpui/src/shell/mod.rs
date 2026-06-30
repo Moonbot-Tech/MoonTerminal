@@ -7,6 +7,7 @@
 //! - [`docks`] — отцепление/возврат панелей и персист геометрии ОС-окна;
 //! - [`status_bar`] — нижняя строка состояния (соединение/лицензия/диагностика).
 
+mod core_settings;
 mod docks;
 mod metrics;
 mod status_bar;
@@ -27,7 +28,7 @@ use moon_core::session::CoreId;
 use crate::chart_tabs::ChartTabs;
 use crate::dock_persist::DOCK_VERSION;
 use crate::panels::{AssetsView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel};
-use crate::{Backend, controls, design, panels, terminal_chrome};
+use crate::{Backend, controls, core_settings_popup, design, panels, terminal_chrome};
 
 /// Оболочка одной группы (= одно ОС-окно): header + единый `DockArea` + статус.
 /// Весь контент — Dock-панели (чарт=center, детекты/ордер=right, нижние вкладки=
@@ -77,6 +78,17 @@ pub(crate) struct Shell {
     tp_input: Entity<MoonInputState>,
     sl_input: Entity<MoonInputState>,
     lev_input: Entity<MoonInputState>,
+    /// Слайдеры попапа настроек ядра: паника (= price_drop_level), глобальный TP, трейлинг, V-Stop.
+    /// Границы фиксированы (CORE_*_BOUNDS); сидируются при открытии. Коммит — подписками в `new`.
+    gtp_slider: Entity<MoonSliderState>,
+    trailing_slider: Entity<MoonSliderState>,
+    vstop_slider: Entity<MoonSliderState>,
+    /// Числовые поля попапа настроек ядра: глобальный TP, %, трейлинг, %, V-Stop (целое %) и
+    /// текст чёрного списка. Сидируются при открытии, коммит — подписками в `new` (Blur/Enter).
+    gtp_input: Entity<MoonInputState>,
+    trailing_input: Entity<MoonInputState>,
+    vstop_input: Entity<MoonInputState>,
+    blacklist_input: Entity<MoonInputState>,
     /// Какой попап метрики тулбара открыт (TP/SL/Lev). Overlay рисуется поверх дока, закрытие
     /// по клику вне (dismiss-слой), уводу мыши или повторному клику по кнопке. None = закрыт.
     open_metric_popup: Option<controls::TradeMetric>,
@@ -91,6 +103,13 @@ pub(crate) struct Shell {
     /// «активность» (`Backend::note_main_input`) ТОЛЬКО когда окно активно: иначе движение
     /// мыши над неактивным окном не должно сбрасывать таймер. Ставится observe_window_activation.
     window_active: bool,
+    /// Открыт ли попап настроек ядра (кнопка ⚙ рядом с селектором). Overlay поверх дока,
+    /// закрытие по клику вне (dismiss-слой), уводу мыши или повторному клику по кнопке.
+    core_settings_open: bool,
+    /// Был ли курсор уже над попапом настроек ядра (авто-выход по уводу только после захода).
+    core_settings_hovered: bool,
+    /// Стадия подтверждения «Отменить все ордера»: первый клик ставит флаг, второй — шлёт.
+    core_settings_cancel_confirm: bool,
 }
 
 impl Shell {
@@ -371,6 +390,13 @@ impl Shell {
         let tp_input = cx.new(|cx| MoonInputState::new(window, cx));
         let sl_input = cx.new(|cx| MoonInputState::new(window, cx));
         let lev_input = cx.new(|cx| MoonInputState::new(window, cx));
+        let gtp_slider = mk_slider(cx, core_settings_popup::CORE_GTP_BOUNDS, 0.5);
+        let trailing_slider = mk_slider(cx, core_settings_popup::CORE_TRAILING_BOUNDS, -0.1);
+        let vstop_slider = mk_slider(cx, core_settings_popup::CORE_VSTOP_BOUNDS, 0.0);
+        let gtp_input = cx.new(|cx| MoonInputState::new(window, cx));
+        let trailing_input = cx.new(|cx| MoonInputState::new(window, cx));
+        let vstop_input = cx.new(|cx| MoonInputState::new(window, cx));
+        let blacklist_input = cx.new(|cx| MoonInputState::new(window, cx));
 
         // Слайдеры/поля метрик: на изменение шлём правку активному ядру и держим numeric-поле
         // попапа в синхроне. Вынесено в `wire_metric_subscriptions` — в `new` это ~80 строк
@@ -385,6 +411,96 @@ impl Shell {
             &sl_input,
             &lev_input,
         );
+
+        // Поля попапа настроек ядра: коммит по Blur/Enter. Порог паники = `price_drop_level`
+        // Глобальный TP пишем как `GlobalTakeProfit { on: true, pct }` (поле подразумевает
+        // включённый глоб-TP); трейлинг — `TrailingDrop`. Пустой/нечисловой ввод — игнор.
+        cx.subscribe(&gtp_input, |this, inp, ev: &MoonInputEvent, cx| {
+            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                return;
+            }
+            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
+                this.commit_client_edit(
+                    ClientSettingsEdit::GlobalTakeProfit { on: true, pct: v },
+                    cx,
+                );
+            }
+        })
+        .detach();
+        cx.subscribe(&trailing_input, |this, inp, ev: &MoonInputEvent, cx| {
+            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                return;
+            }
+            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f32>() {
+                this.commit_client_edit(ClientSettingsEdit::TrailingDrop(v), cx);
+            }
+        })
+        .detach();
+
+        // Слайдеры попапа настроек ядра: на изменение шлём правку активному ядру и живо обновляем
+        // соответствующее поле (как у метрик-попапов тулбара).
+        cx.subscribe(&gtp_slider, |this, _e, ev: &MoonSliderEvent, cx| {
+            if let MoonSliderEvent::Change(v) = ev {
+                let v = v.end();
+                this.commit_client_edit(
+                    ClientSettingsEdit::GlobalTakeProfit {
+                        on: true,
+                        pct: v as f64,
+                    },
+                    cx,
+                );
+                this.live_set_field(this.gtp_input.clone(), controls::fmt_field2(v), cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&trailing_slider, |this, _e, ev: &MoonSliderEvent, cx| {
+            if let MoonSliderEvent::Change(v) = ev {
+                let v = v.end();
+                this.commit_client_edit(ClientSettingsEdit::TrailingDrop(v), cx);
+                this.live_set_field(this.trailing_input.clone(), controls::fmt_field2_signed(v), cx);
+            }
+        })
+        .detach();
+        // V-Stop (vol_drop_level, целое %): слайдер → правка + целочисленное поле.
+        cx.subscribe(&vstop_slider, |this, _e, ev: &MoonSliderEvent, cx| {
+            if let MoonSliderEvent::Change(v) = ev {
+                let n = v.end().round() as i32;
+                this.commit_client_edit(ClientSettingsEdit::VolDropLevel(n), cx);
+                this.live_set_field(this.vstop_input.clone(), format!("{n}"), cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&vstop_input, |this, inp, ev: &MoonInputEvent, cx| {
+            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                return;
+            }
+            if let Ok(n) = inp.read(cx).value().trim().parse::<i32>() {
+                this.commit_client_edit(ClientSettingsEdit::VolDropLevel(n), cx);
+            }
+        })
+        .detach();
+        // Текст чёрного списка: коммит по Blur/Enter. Флаг вкл берём текущий у активного ядра.
+        cx.subscribe(&blacklist_input, |this, inp, ev: &MoonInputEvent, cx| {
+            if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                return;
+            }
+            let text = inp.read(cx).value().to_string();
+            let b = this.backend.read(cx);
+            let Some(core) = b.active_trade_core(&this.group) else {
+                return;
+            };
+            let on = b
+                .session
+                .store()
+                .core(core)
+                .and_then(|d| d.client_settings.as_ref())
+                .map(|s| s.use_blacklist)
+                .unwrap_or(false);
+            if let Err(error) = b.session.set_blacklist(core, on, text) {
+                log::warn!("set blacklist text failed: {error:#}");
+            }
+        })
+        .detach();
 
         // Фокус корня окна для хоткеев (см. поле `focus`). Фокусируем сразу, чтобы F-клавиши
         // работали даже при пустом Main (когда фокусировать в доке нечего).
@@ -414,10 +530,20 @@ impl Shell {
             tp_input,
             sl_input,
             lev_input,
+            gtp_slider,
+            trailing_slider,
+            vstop_slider,
+            gtp_input,
+            trailing_input,
+            vstop_input,
+            blacklist_input,
             open_metric_popup: None,
             metric_popup_hovered: false,
             focus,
             window_active: true,
+            core_settings_open: false,
+            core_settings_hovered: false,
+            core_settings_cancel_confirm: false,
         }
     }
 
@@ -737,6 +863,10 @@ impl Render for Shell {
         // (stop_propagation), клик вне или увод мыши — закрывает.
         let (metric_overlay, metric_dismiss) = self.metric_popup_layers(p, cx);
 
+        // Overlay-попап настроек ядра (кнопка ⚙ в шапке): тот же механизм — бокс под кнопкой +
+        // dismiss-слой.
+        let (core_settings_overlay, core_settings_dismiss) = self.core_settings_popup_layers(p, cx);
+
         // Активность Main для авто-закрытия по неактивности: ОКОННЫЙ слушатель ловит ВСЕ
         // движения мыши, в т.ч. над виджетами/панелями/чартом, которые блокируют hitbox
         // корня (там gated `.on_mouse_move` молчал — отсюда «график закрылся, хотя мышь
@@ -776,6 +906,7 @@ impl Render for Shell {
             .child(terminal_chrome::header(
                 &self.group,
                 self.backend.clone(),
+                cx.entity(),
                 p,
                 cx,
             ))
@@ -822,5 +953,8 @@ impl Render for Shell {
             // Попап метрики поверх всего: dismiss-слой (ловит клик вне) под самим попапом.
             .children(metric_dismiss)
             .children(metric_overlay)
+            // Попап настроек ядра поверх всего (тот же порядок: dismiss под попапом).
+            .children(core_settings_dismiss)
+            .children(core_settings_overlay)
     }
 }

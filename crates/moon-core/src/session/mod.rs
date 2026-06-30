@@ -26,7 +26,7 @@ use crate::data::OrderBookModel;
 use crate::db::ReportTx;
 use crate::feed::{
     self, ClientSettingsEdit, ConnStatus, CoreCmd, ExchangeId, FeedHandle, FeedMsg, FeedWakeTx,
-    LevManageEdit, NewStrategySpec, OrderLinePriceKind, OrderStopKind, WalletKind,
+    LevManageEdit, NewStrategySpec, OrderLinePriceKind, OrderStopKind, ResetProfitKind, WalletKind,
 };
 use crate::market::{MarketDataMode, MarketDataSource, MarketStore, SharedMarketStore};
 
@@ -647,6 +647,7 @@ impl SessionManager {
     /// Поставить ордер вручную на рынке `market` ядра (ручная торговля). `short` —
     /// сторона позиции (Long/Short); `strategy_id=None` → `StratID=0` (ордер без
     /// стратегии). `price`/`size` должны быть положительными, иначе no-op.
+    #[allow(clippy::too_many_arguments)]
     pub fn place_order(
         &self,
         core: CoreId,
@@ -655,6 +656,8 @@ impl SessionManager {
         price: f64,
         size: f64,
         strategy_id: Option<u64>,
+        tp_price: Option<f64>,
+        sl_price: Option<f64>,
     ) -> Result<()> {
         if market.is_empty() || !(price > 0.0) || !(size > 0.0) {
             return Ok(());
@@ -667,6 +670,8 @@ impl SessionManager {
                 price,
                 size,
                 strategy_id,
+                tp_price,
+                sl_price,
             },
             "place order",
         )
@@ -774,6 +779,35 @@ impl SessionManager {
     /// Переключить hedge-mode аккаунта ядра (dual-side позиции). Реальное действие на бирже.
     pub fn set_hedge_mode(&self, core: CoreId, on: bool) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::SetHedgeMode(on), "set hedge mode")
+    }
+
+    /// Старт/рестарт рантайма ядра (попап настроек ядра).
+    pub fn restart_now(&self, core: CoreId) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::RestartNow, "restart now")
+    }
+
+    /// Сброс счётчика прибыли ядра (сессия / всё время).
+    pub fn reset_profit(&self, core: CoreId, kind: ResetProfitKind) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::ResetProfit(kind), "reset profit")
+    }
+
+    /// Отменить все ордера ядра (реальное биржевое действие).
+    pub fn cancel_all_orders(&self, core: CoreId) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::CancelAllOrders, "cancel all orders")
+    }
+
+    /// Чёрный список монет ядра: вкл/выкл + текст списка.
+    pub fn set_blacklist(&self, core: CoreId, on: bool, text: String) -> Result<()> {
+        self.send_core_cmd(core, CoreCmd::SetBlacklist { on, text }, "set blacklist")
+    }
+
+    /// Исключать монеты ЧС из рыночной дельты (локально в Active Lib ядра).
+    pub fn set_exclude_blacklisted_delta(&self, core: CoreId, on: bool) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::SetExcludeBlacklistedDelta(on),
+            "set exclude blacklisted delta",
+        )
     }
 
     /// Read-only доступ к аккаунтному плану (статусы/ордера/детекты/стратегии).

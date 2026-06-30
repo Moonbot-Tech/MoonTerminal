@@ -103,9 +103,13 @@ impl ChartPanel {
     ) -> bool {
         // Дебаунс после закрытия графика (×): не ставим ордер ~600мс, иначе быстрый второй
         // клик «закрыть» попадает на стакан уехавшего графика и засчитывается как дабл-клик.
+        // Локальный гард (эта панель) + ГЛОБАЛЬНЫЙ (любая панель закрылась только что): при
+        // закрытии нескольких графиков подряд добор дабл-клика уезжает на соседнюю панель —
+        // отдельный `ChartPanel`/entity, чей локальный дебаунс пуст, поэтому проверяем общий.
         if self
             .last_pane_close
             .is_some_and(|t| t.elapsed() < Duration::from_millis(600))
+            || self.backend.read(cx).chart_close_guard_active()
         {
             return false;
         }
@@ -151,13 +155,16 @@ impl ChartPanel {
                 return false;
             };
             let size = b.manual_order_size(core);
+            // Цены селл/стопа считаем ЗДЕСЬ, по экранным значениям (с оптимистичными оверлеями —
+            // активный S-слот / поле TP / тогл SL), а не в feed (там снимок ядра отстаёт от экрана).
+            let (tp_price, sl_price) = b.manual_order_exit_prices(core, price, short);
             match b
                 .session
-                .place_order(core, market.clone(), short, price, size, None)
+                .place_order(core, market.clone(), short, price, size, None, tp_price, sl_price)
             {
                 Ok(()) => {
                     log::info!(
-                        "manual chart order: core={core} market={market} side={} price={price:.8} size={size}",
+                        "manual chart order: core={core} market={market} side={} price={price:.8} size={size} tp={tp_price:?} sl={sl_price:?}",
                         if short { "short" } else { "long" }
                     );
                     true
