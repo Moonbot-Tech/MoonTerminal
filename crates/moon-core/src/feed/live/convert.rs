@@ -358,11 +358,16 @@ fn build_order_row(
             None
         }
     };
-    let stop_loss = stop(
-        o.stops.stop_loss_enabled(),
-        o.stops.stop_loss_fixed(),
-        o.stops.stop_loss_level(),
-    );
+    // Стоп-лосс приходит из снапшота ЖИВОГО ордера как РАЗРЕШЁННАЯ цена срабатывания в `sl_level`
+    // (точно как `take_profit` — абсолютная цена), а НЕ как процент. Флаг `sl_fixed` в снимке
+    // живого ордера НЕ означает «уровень в процентах» (проверено по логам ядра: `sl_fixed=false`,
+    // а `sl_level` ≈ ent*(1−X%) — это цена). Поэтому рисуем линию прямо по цене, без перевода из
+    // процента. (Трейлинг — иначе: его `ts_level` это % дистанции, см. `stop()` ниже.)
+    let stop_loss = o
+        .stops
+        .stop_loss_enabled()
+        .then(|| fin(o.stops.stop_loss_level()))
+        .flatten();
     let trailing = stop(
         o.stops.trailing_enabled(),
         o.stops.trailing_fixed(),

@@ -49,7 +49,6 @@ pub(super) fn drain_commands(
     wanted: &mut Vec<String>,
     wanted_orderbook: &mut Vec<String>,
     force_market_sample: &mut bool,
-    pending_manual_stops: &mut Vec<trade::PendingManualStops>,
 ) -> bool {
     loop {
         match cmd_rx.try_recv() {
@@ -289,20 +288,10 @@ pub(super) fn drain_commands(
                 price,
                 size,
                 strategy_id,
-                tp_price,
-                sl_price,
             }) => {
-                // Для РУЧНОГО ордера (без стратегии) фиксируем текущие uid'ы рынка ДО постановки,
-                // затем ставим ордер и кладём pending с УЖЕ посчитанными в UI ценами селл/стопа —
-                // дослыается в `apply_pending_manual_stops` из run-цикла, когда придёт новый uid.
-                let pending = strategy_id
-                    .is_none()
-                    .then(|| trade::prepare_manual_stops(client, &market, short, tp_price, sl_price))
-                    .flatten();
+                // Селл/стоп новому ордеру ставит САМО ЯДРО из ClientSettings (ROE). Терминал не
+                // переставляет — показываем то, что прислало ядро.
                 trade::place_order(client, server.id, market, short, price, size, strategy_id);
-                if let Some(p) = pending {
-                    pending_manual_stops.push(p);
-                }
             }
             Ok(CoreCmd::MoveOrder { uid, new_price }) => {
                 trade::move_order(client, server.id, uid, new_price);

@@ -16,7 +16,6 @@ mod render;
 mod trade;
 
 use std::collections::HashSet;
-use std::time::Instant;
 
 use gpui::*;
 use moon_ui::{MoonBackgroundPolicy, Panel, PanelEvent};
@@ -171,11 +170,6 @@ pub struct ChartPanel {
     /// ПКМ-down открыл контекстное меню ордера → следующий ПКМ-up НЕ должен сработать
     /// (иначе родитель Main-стека воспримет его как «возврат из фулскрина» и т.п.).
     suppress_rmb_up: bool,
-    /// Момент последнего закрытия pane крестиком (×). Быстрое закрытие нескольких графиков
-    /// подряд создаёт у GPUI двойной клик на том же экранном месте; после того как график
-    /// уезжает, второй клик попадал бы на стакан и засчитывался как дабл-клик → ордер. Гасим
-    /// постановку ордера на ~600мс после закрытия. См. `try_place_order_click`.
-    last_pane_close: Option<Instant>,
     focus: FocusHandle,
 }
 
@@ -300,7 +294,6 @@ impl ChartPanel {
             order_drag: None,
             order_hover: None,
             suppress_rmb_up: false,
-            last_pane_close: None,
             focus: cx.focus_handle(),
         }
     }
@@ -401,7 +394,6 @@ impl ChartPanel {
             order_drag: None,
             order_hover: None,
             suppress_rmb_up: false,
-            last_pane_close: None,
             focus: cx.focus_handle(),
         }
     }
@@ -659,14 +651,6 @@ impl ChartPanel {
         let Some((core, market)) = self.chart.remove_pane(idx) else {
             return;
         };
-        // Гасим постановку ордера сразу после закрытия (защита от дабл-клика по стакану при
-        // быстром закрытии нескольких графиков подряд — кнопка × уезжает, второй клик попал бы
-        // на стакан). Локальный гард — для этой же панели; ГЛОБАЛЬНЫЙ (`note_chart_close`) — для
-        // случая, когда добор дабл-клика «уезжает» на СОСЕДНЮЮ панель (свой entity), у которой
-        // локальный дебаунс пуст: каждая монета — отдельный `ChartPanel`, и без общего гарда там
-        // ставился ордер.
-        self.last_pane_close = Some(Instant::now());
-        self.backend.update(cx, |b, _| b.note_chart_close());
         self.view_dirty = true;
         if !self.chart.uses_market(core, &market) {
             self.release_market_ref(core, &market, cx);

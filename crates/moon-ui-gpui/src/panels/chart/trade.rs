@@ -1,7 +1,6 @@
 //! Ручная торговля на чарте: постановка ордера кликом по жесту, хит-тест линий ордеров,
 //! подсветка/перетаскивание линий (move_order) и нативный курсор. Вынесено из `chart.rs`.
 
-use std::time::Duration;
 
 use gpui::*;
 
@@ -101,18 +100,6 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
-        // Дебаунс после закрытия графика (×): не ставим ордер ~600мс, иначе быстрый второй
-        // клик «закрыть» попадает на стакан уехавшего графика и засчитывается как дабл-клик.
-        // Локальный гард (эта панель) + ГЛОБАЛЬНЫЙ (любая панель закрылась только что): при
-        // закрытии нескольких графиков подряд добор дабл-клика уезжает на соседнюю панель —
-        // отдельный `ChartPanel`/entity, чей локальный дебаунс пуст, поэтому проверяем общий.
-        if self
-            .last_pane_close
-            .is_some_and(|t| t.elapsed() < Duration::from_millis(600))
-            || self.backend.read(cx).chart_close_guard_active()
-        {
-            return false;
-        }
         // Раздельные зоны: ордер ставим только в стакане; иначе — по любой pane-области графика.
         let pane = if self.separate_zones(cx) {
             self.glass_pane_at(pos)
@@ -155,16 +142,12 @@ impl ChartPanel {
                 return false;
             };
             let size = b.manual_order_size(core);
-            // Цены селл/стопа считаем ЗДЕСЬ, по экранным значениям (с оптимистичными оверлеями —
-            // активный S-слот / поле TP / тогл SL), а не в feed (там снимок ядра отстаёт от экрана).
-            let (tp_price, sl_price) = b.manual_order_exit_prices(core, price, short);
-            match b
-                .session
-                .place_order(core, market.clone(), short, price, size, None, tp_price, sl_price)
-            {
+            // Селл/стоп новому ордеру ставит САМО ЯДРО из своих ClientSettings (ROE). Терминал
+            // ничего не переставляет — показываем то, что прислало ядро.
+            match b.session.place_order(core, market.clone(), short, price, size, None) {
                 Ok(()) => {
                     log::info!(
-                        "manual chart order: core={core} market={market} side={} price={price:.8} size={size} tp={tp_price:?} sl={sl_price:?}",
+                        "manual chart order: core={core} market={market} side={} price={price:.8} size={size}",
                         if short { "short" } else { "long" }
                     );
                     true
@@ -430,42 +413,50 @@ impl ChartPanel {
         if (drag.current_price - drag.start_price).abs() <= eps {
             return true;
         }
-        // Вход/выход (Buy/Sell) переставляются как ордер (move_order). Стоп-линии
-        // (Stop/Trailing/TakeProfit) — задают цену стопа/тейка через update_stops
-        // (SL/Trailing → ФИКСИРОВАННЫЙ стоп по цене). Другие виды до drag не доходят
-        // (хит-тест их не ловит), но на всякий случай трактуем как move_order.
-        let stop_kind = match drag.kind {
-            LineKind::Stop => Some(OrderLinePriceKind::StopLoss),
-            LineKind::Trailing => Some(OrderLinePriceKind::Trailing),
-            LineKind::TakeProfit => Some(OrderLinePriceKind::TakeProfit),
-            _ => None,
-        };
+        // Семантика линий при перетаскивании (как в MoonBot):
+        // - Buy/Sell (вход/выход) → `move_order` = replace СВОЕЙ ноги ордера (ядро делает
+        //   cancel+new: для селла в стакане новый кросс-лимит исполняется маркетом). Так нет
+        //   орфана (отдельный DoSellOrder оставлял резерв-лимит висеть → опасно).
+        // - Stop/Trailing/TakeProfit → `update_stops` фиксированной ценой.
         self.backend.update(cx, |b, _| {
-            let result = match stop_kind {
-                Some(kind) => {
-                    b.session
-                        .move_order_stop_price(drag.core, drag.uid, kind, drag.current_price)
-                }
-                None => b.session.move_order(drag.core, drag.uid, drag.current_price),
+            let price = drag.current_price;
+            let result = match drag.kind {
+                LineKind::Stop => b.session.move_order_stop_price(
+                    drag.core,
+                    drag.uid,
+                    OrderLinePriceKind::StopLoss,
+                    price,
+                ),
+                LineKind::Trailing => b.session.move_order_stop_price(
+                    drag.core,
+                    drag.uid,
+                    OrderLinePriceKind::Trailing,
+                    price,
+                ),
+                LineKind::TakeProfit => b.session.move_order_stop_price(
+                    drag.core,
+                    drag.uid,
+                    OrderLinePriceKind::TakeProfit,
+                    price,
+                ),
+                _ => b.session.move_order(drag.core, drag.uid, price),
             };
             match result {
                 Ok(()) => {
                     log::info!(
-                        "manual chart move line: core={} uid={} kind={:?} price={:.8}",
+                        "manual chart move line: core={} uid={} kind={:?} price={price:.8}",
                         drag.core,
                         drag.uid,
-                        stop_kind,
-                        drag.current_price
+                        drag.kind,
                     );
                     true
                 }
                 Err(err) => {
                     log::warn!(
-                        "manual chart move line failed: core={} uid={} kind={:?} price={:.8}: {err:#}",
+                        "manual chart move line failed: core={} uid={} kind={:?} price={price:.8}: {err:#}",
                         drag.core,
                         drag.uid,
-                        stop_kind,
-                        drag.current_price
+                        drag.kind,
                     );
                     false
                 }

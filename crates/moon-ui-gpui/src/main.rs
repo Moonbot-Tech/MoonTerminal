@@ -120,10 +120,6 @@ pub(crate) struct ChartApplyAll {
     pub cursor_labels: Option<bool>,
 }
 
-/// Окно анти-мисклика после закрытия графика крестиком: столько НЕ ставим ордер по чарту
-/// (общий гард для всех панелей, [`Backend::chart_close_guard_active`]).
-pub(crate) const CHART_CLOSE_GUARD: std::time::Duration = std::time::Duration::from_millis(600);
-
 /// Общий backend: живёт в одном `Entity`, дренится таймером, будит окна по notify.
 struct Backend {
     session: SessionManager,
@@ -281,11 +277,6 @@ struct Backend {
     /// флага (локальное действие Active Lib), поэтому храним выбор сами; дефолт — выкл.
     exclude_bl_delta: std::collections::HashMap<CoreId, bool>,
     /// Время последнего закрытия графика крестиком — ГЛОБАЛЬНО (общее для всех панелей).
-    /// Анти-мисклик: при закрытии нескольких графиков подряд второй клик дабл-клика «уезжает»
-    /// на СОСЕДНЮЮ панель (свой `ChartPanel`/entity), чей локальный дебаунс пуст → ставился
-    /// ордер. Глобальный гард на Backend (он один на все панели) гасит постановку независимо от
-    /// того, на какую панель попал добор. См. `note_chart_close`/`chart_close_guard_active`.
-    last_chart_close: Option<std::time::Instant>,
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
     debug_window: Option<WindowHandle<Root>>,
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
@@ -329,50 +320,6 @@ impl Backend {
     pub(crate) fn manual_order_size(&self, core: CoreId) -> f64 {
         let (sizes, sel) = self.manual_order_size_state(core);
         sizes[sel]
-    }
-
-    /// Абсолютные цены выхода ручного ордера (селл/стоп) от цены входа `entry` по ЭКРАННЫМ
-    /// значениям активного ядра (с оптимистичными оверлеями — то, что реально видит пользователь):
-    /// селл% = активный S-слот (fixed-sell) ИЛИ «свой» TP кнопки (`take_profit_main_pct`); стоп% =
-    /// `stop_loss_pct` при включённом тогле SL (`panic_if_price_drop`). Лонг: `entry·(1+знак%/100)`,
-    /// шорт — зеркально. Возвращает `(tp_price, sl_price)`; элемент `None` — не дослыать.
-    pub(crate) fn manual_order_exit_prices(
-        &self,
-        core: CoreId,
-        entry: f64,
-        short: bool,
-    ) -> (Option<f64>, Option<f64>) {
-        if !(entry.is_finite() && entry > 0.0) {
-            return (None, None);
-        }
-        let Some(cs) = self
-            .session
-            .store()
-            .core(core)
-            .and_then(|d| d.client_settings.as_ref())
-        else {
-            return (None, None);
-        };
-        let dir = if short { -1.0 } else { 1.0 };
-        // Селл%: активный S-слот (оптимистично) → его %, иначе «свой» TP кнопки.
-        let sell_pct = if self.fixed_sell_mode_with(core, cs.fixed_sell_mode) {
-            let slot1 = self
-                .fixed_sell_slot_with(core, Some(cs.fixed_sell_slot))
-                .unwrap_or(cs.fixed_sell_slot);
-            let ix = slot1.saturating_sub(1).min(5);
-            self.fixed_sell_pct_with(core, ix, cs.fixed_sell_pcts[ix])
-        } else {
-            cs.take_profit_main_pct
-        };
-        let tp_price =
-            (sell_pct.is_finite() && sell_pct > 0.0).then(|| entry * (1.0 + dir * sell_pct / 100.0));
-        let sl_price = if cs.panic_if_price_drop {
-            let lvl = cs.stop_loss_pct as f64; // знаковый (обычно отрицательный = ниже входа)
-            (lvl.is_finite() && lvl != 0.0).then(|| entry * (1.0 + dir * lvl / 100.0))
-        } else {
-            None
-        };
-        (tp_price, sl_price)
     }
 
     /// Прогнозный размер ручного ордера (s1-s6 активного ядра) в USD: размер в базовой валюте
@@ -598,12 +545,6 @@ impl Backend {
         self.last_main_input.get(group).copied()
     }
 
-    /// Отметить закрытие графика крестиком (ГЛОБАЛЬНО). Зовётся из `ChartPanel::remove_pane`
-    /// ЛЮБОЙ панели; гасит постановку ордера на всех панелях на `CHART_CLOSE_GUARD`.
-    pub(crate) fn note_chart_close(&mut self) {
-        self.last_chart_close = Some(std::time::Instant::now());
-    }
-
     /// Локальный тоггл «исключить ЧС из дельт» активного ядра (см. поле `exclude_bl_delta`).
     pub(crate) fn exclude_bl_delta(&self, core: CoreId) -> bool {
         self.exclude_bl_delta.get(&core).copied().unwrap_or(false)
@@ -612,12 +553,6 @@ impl Backend {
     /// Запомнить выбор «исключить ЧС из дельт» для ядра (отправку команды делает вызывающий).
     pub(crate) fn set_exclude_bl_delta(&mut self, core: CoreId, on: bool) {
         self.exclude_bl_delta.insert(core, on);
-    }
-
-    /// Активен ли анти-мисклик-гард после недавнего закрытия графика (общий для всех панелей).
-    pub(crate) fn chart_close_guard_active(&self) -> bool {
-        self.last_chart_close
-            .is_some_and(|t| t.elapsed() < CHART_CLOSE_GUARD)
     }
 
     /// Авто-закрытие Main по неактивности, сек (config; 0 = выключено).
@@ -1012,7 +947,6 @@ fn main() -> anyhow::Result<()> {
             detached_chart_windows: Vec::new(),
             last_main_input: std::collections::HashMap::new(),
             exclude_bl_delta: std::collections::HashMap::new(),
-            last_chart_close: None,
             #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
             debug_window: None,
             #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]

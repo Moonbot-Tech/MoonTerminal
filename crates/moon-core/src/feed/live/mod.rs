@@ -138,9 +138,6 @@ pub fn run(
     let mut events = Vec::new();
     let mut lifecycle_events = Vec::new();
     let mut force_market_sample = false;
-    // Отложенная простановка селл/стопа ручным ордерам (по экранным настройкам), пока их
-    // серверный uid не появился в снимке. См. feed::trade::{prepare,apply}_manual_stops.
-    let mut pending_manual_stops: Vec<crate::feed::trade::PendingManualStops> = Vec::new();
 
     loop {
         // Команды роли от координатора (полное желаемое состояние, не дельта).
@@ -153,7 +150,6 @@ pub fn run(
             &mut wanted,
             &mut wanted_orderbook,
             &mut force_market_sample,
-            &mut pending_manual_stops,
         ) {
             return Ok(());
         }
@@ -266,9 +262,6 @@ pub fn run(
         events.clear();
         event_queue.drain_events_into(&mut events);
         let had_domain_event = !events.is_empty();
-
-        // Дослать селл/стоп ручным ордерам, чьи серверные uid уже появились в свежем снимке.
-        crate::feed::trade::apply_pending_manual_stops(&client, server.id, &mut pending_manual_stops);
         let has_order_line_event = events.iter().any(|ev| {
             matches!(
                 ev,

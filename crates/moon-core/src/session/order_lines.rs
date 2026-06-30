@@ -18,7 +18,7 @@ use crate::util::now_unix_ms;
 pub const TRACED_KINDS: usize = 7;
 
 /// Индексы видов в `RetainedOrder::lines` (совпадают с порядком стилей).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LineKind {
     Buy = 0,
     Sell = 1,

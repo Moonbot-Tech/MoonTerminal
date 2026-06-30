@@ -647,7 +647,6 @@ impl SessionManager {
     /// Поставить ордер вручную на рынке `market` ядра (ручная торговля). `short` —
     /// сторона позиции (Long/Short); `strategy_id=None` → `StratID=0` (ордер без
     /// стратегии). `price`/`size` должны быть положительными, иначе no-op.
-    #[allow(clippy::too_many_arguments)]
     pub fn place_order(
         &self,
         core: CoreId,
@@ -656,8 +655,6 @@ impl SessionManager {
         price: f64,
         size: f64,
         strategy_id: Option<u64>,
-        tp_price: Option<f64>,
-        sl_price: Option<f64>,
     ) -> Result<()> {
         if market.is_empty() || !(price > 0.0) || !(size > 0.0) {
             return Ok(());
@@ -670,8 +667,6 @@ impl SessionManager {
                 price,
                 size,
                 strategy_id,
-                tp_price,
-                sl_price,
             },
             "place order",
         )
