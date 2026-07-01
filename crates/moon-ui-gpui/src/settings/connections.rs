@@ -8,14 +8,14 @@ use std::sync::Arc;
 
 use gpui::*;
 use moon_ui::{
-    h_flex, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
-    MoonColorPicker, MoonColorPickerState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
-    MoonMenuItem, MoonMenuSize, MoonPalette, MoonSelect, MoonTooltipView, StyledExt,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonColorPicker,
+    MoonColorPickerState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
+    MoonMenuSize, MoonPalette, MoonSelect, MoonTooltipView, StyledExt, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use super::SettingsView;
-use crate::{design, Backend};
+use crate::{Backend, design};
 use moon_core::config::{AppConfig, FeedFlags, GroupConfig, Secret, ServerConfig};
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;

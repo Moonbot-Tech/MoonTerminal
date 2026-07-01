@@ -1033,23 +1033,19 @@ fn build_order_labels(
         };
         let line_forced =
             |kind: LineKind| preview.is_some_and(|(_, preview_kind, _)| preview_kind == kind);
-        let mut push = |price: f32,
-                        text: String,
-                        above: bool,
-                        color: u32,
-                        priority: u8,
-                        force: bool| {
-            if price.is_finite() && price > 0.0 && !text.is_empty() {
-                out.push(OrderLabel {
-                    price,
-                    text,
-                    above,
-                    color,
-                    priority,
-                    force,
-                });
-            }
-        };
+        let mut push =
+            |price: f32, text: String, above: bool, color: u32, priority: u8, force: bool| {
+                if price.is_finite() && price > 0.0 && !text.is_empty() {
+                    out.push(OrderLabel {
+                        price,
+                        text,
+                        above,
+                        color,
+                        priority,
+                        force,
+                    });
+                }
+            };
         let buy = line_price(LineKind::Buy);
         let sell = line_price(LineKind::Sell);
         let stop = line_price(LineKind::Stop);

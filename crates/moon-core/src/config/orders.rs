@@ -182,9 +182,7 @@ impl Default for OrdersStyle {
             sell: LineStyle::with([127, 201, 255]).t(2.0),
             sell_short: LineStyle::with([211, 211, 211]).t(2.0),
             stop: LineStyle::with([255, 127, 80]).t(2.0),
-            trailing: LineStyle::with([100, 149, 237])
-                .t(2.0)
-                .no_markers(),
+            trailing: LineStyle::with([100, 149, 237]).t(2.0).no_markers(),
             take_profit: LineStyle::with([47, 168, 92]).no_markers(),
             vstop: LineStyle::with([180, 120, 255]).no_markers(),
             pending_cond,
@@ -218,12 +216,8 @@ impl OrdersStyle {
             ..PathStyle::default()
         };
         Self {
-            buy: LineStyle::with([0, 0, 0])
-                .t(2.0)
-                .pending([176, 0, 0]),
-            buy_short: LineStyle::with([139, 0, 139])
-                .t(2.0)
-                .pending([176, 0, 0]),
+            buy: LineStyle::with([0, 0, 0]).t(2.0).pending([176, 0, 0]),
+            buy_short: LineStyle::with([139, 0, 139]).t(2.0).pending([176, 0, 0]),
             sell: LineStyle::with([0, 0, 255]).t(2.0),
             sell_short: LineStyle::with([128, 0, 0]).t(2.0),
             stop: LineStyle::with([255, 0, 0]).t(2.0),

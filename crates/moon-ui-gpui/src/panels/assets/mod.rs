@@ -29,7 +29,7 @@ use moon_ui::{
 use crate::Backend;
 use crate::design;
 use crate::panels::{RenderGate, num};
-use moon_core::feed::{AssetRow, ResetProfitKind, TransferAssetRow, WalletKind};
+use moon_core::feed::{AssetRow, TransferAssetRow, WalletKind};
 use moon_core::session::CoreId;
 use rust_i18n::t;
 

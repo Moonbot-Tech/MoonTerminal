@@ -18,14 +18,6 @@ assets.cores_count:
   ru: "Ядра (%{n})"
   en: "Cores (%{n})"
   es: "Núcleos (%{n})"
-assets.reset_session:
-  ru: "Сброс сессии"
-  en: "Reset session"
-  es: "Reiniciar sesión"
-assets.reset_all:
-  ru: "Сброс всего"
-  en: "Reset all"
-  es: "Reiniciar todo"
 assets.no_cores:
   ru: "нет ядер"
   en: "no cores"

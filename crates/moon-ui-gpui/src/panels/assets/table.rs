@@ -80,6 +80,8 @@ impl AssetsView {
         let collapsed = self.plates_collapsed;
         let arrow = if collapsed { "▸" } else { "▾" };
 
+        // Этот PnL — read-only серверный Markets.FTotalPNL/total_pnl. Delphi ResetProfit
+        // сбрасывает RepForm-счётчики отчёта, не это значение, поэтому кнопок сброса тут нет.
         let header = h_flex()
             .id("assets-plates-bar")
             .w_full()
@@ -88,8 +90,7 @@ impl AssetsView {
             .gap_2()
             .px_2()
             .py_1()
-            // Кликабельная только зона сворачивания (стрелка + подпись) — чтобы клики по
-            // кнопкам сброса не тоглили полосу.
+            // Кликабельная только зона сворачивания (стрелка + подпись).
             .child(
                 h_flex()
                     .id("assets-plates-toggle")
@@ -126,21 +127,7 @@ impl AssetsView {
                     .text_size(design::t_body(cx))
                     .text_color(rgb(pnl_tone))
                     .child(format!("PnL {}", money(total_pnl))),
-            )
-            // Сброс прибыли ПО ВСЕМ ядрам охвата (сессия / всё время) — кликабельные
-            // div-«кнопки» (MoonButton в этом контексте не ловил клик), как рабочий тоггл.
-            .child(self.reset_btn(
-                "assets-reset-session",
-                t!("assets.reset_session").to_string(),
-                ResetProfitKind::Session,
-                cx,
-            ))
-            .child(self.reset_btn(
-                "assets-reset-all",
-                t!("assets.reset_all").to_string(),
-                ResetProfitKind::All,
-                cx,
-            ));
+            );
 
         // Свёрнуто → секция = только строка-шапка (flex_none, таблица держит натуральную
         // высоту, ниже пусто). Развёрнуто → секция забирает ОСТАТОК места под таблицей
@@ -164,45 +151,6 @@ impl AssetsView {
             );
         }
         section
-    }
-
-    /// Кликабельная div-«кнопка» сброса прибыли по всем ядрам охвата (сессия/всё).
-    fn reset_btn(
-        &self,
-        id: &'static str,
-        label: String,
-        kind: ResetProfitKind,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
-        h_flex()
-            .id(id)
-            .flex_none()
-            .px(design::ui_px(cx, 6.0))
-            .py(px(2.0))
-            .rounded(px(4.0))
-            .border_1()
-            .border_color(rgb(p.border))
-            .bg(rgb(p.shell_high))
-            .cursor_pointer()
-            .text_size(design::t_caption(cx))
-            .text_color(rgb(p.text_soft))
-            .hover(|s| s.bg(rgb(p.panel)).text_color(rgb(p.text)))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.reset_all_cores(kind, cx);
-                cx.notify();
-            }))
-            .child(label)
-    }
-
-    /// Сбросить счётчик прибыли (сессия/всё) по ВСЕМ ядрам текущего охвата.
-    fn reset_all_cores(&self, kind: ResetProfitKind, cx: &App) {
-        let session = &self.backend.read(cx).session;
-        for a in self.cached_aggs.iter() {
-            if let Err(e) = session.reset_profit(a.id, kind) {
-                log::warn!("assets reset_profit({kind:?}) core {}: {e:#}", a.id);
-            }
-        }
     }
 
     /// Одна карточка ядра фикс. ширины (`CORE_CARD_W`): имя сверху, «итого + PnL» снизу.

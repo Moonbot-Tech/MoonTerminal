@@ -317,12 +317,7 @@ impl LogPanel {
     /// Детекты). Ядро строки: источник `Core` → это ядро; `Aggregate` → сервер из `target`;
     /// `Local` → первое ядро группы, где такая монета есть. Базу (`SPK`) резолвим в рыночное
     /// имя через market-поиск ядра (истина), не угадываем суффикс.
-    pub(super) fn open_coin_chart(
-        &mut self,
-        base: String,
-        target: String,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn open_coin_chart(&mut self, base: String, target: String, cx: &mut Context<Self>) {
         let resolved = {
             let b = self.backend.read(cx);
             let ms = b.session.market_source();
@@ -393,9 +388,9 @@ impl LogPanel {
         match self.raw_lines.last() {
             None => self.raw_lines = fresh,
             Some(last) => {
-                let boundary = fresh.iter().rposition(|l| {
-                    l.ts == last.ts && l.msg == last.msg && l.target == last.target
-                });
+                let boundary = fresh
+                    .iter()
+                    .rposition(|l| l.ts == last.ts && l.msg == last.msg && l.target == last.target);
                 match boundary {
                     Some(pos) => self.raw_lines.extend(fresh.into_iter().skip(pos + 1)),
                     None => self.raw_lines.extend(fresh),

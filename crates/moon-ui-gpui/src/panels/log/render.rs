@@ -123,7 +123,8 @@ const CONN_KW: [&str; 8] = [
 /// Лог ядра идёт уровнем Info → тяжесть смотрим по тексту.
 pub(super) fn classify(line: &LogLine) -> Class {
     let lower = line.msg.to_lowercase();
-    if lower.contains("window not found") || lower.contains("недопустимый дескриптор окна") {
+    if lower.contains("window not found") || lower.contains("недопустимый дескриптор окна")
+    {
         return Class {
             sev: Sev::Noise,
             cat: Cat::None,
@@ -359,11 +360,13 @@ fn message_spans(
         }
     }
     if coin.is_none() && matches.is_empty() {
-        return vec![div()
-            .flex_none()
-            .text_color(rgb(base))
-            .child(flat.to_string())
-            .into_any_element()];
+        return vec![
+            div()
+                .flex_none()
+                .text_color(rgb(base))
+                .child(flat.to_string())
+                .into_any_element(),
+        ];
     }
     let span = |text: &str, seg: Seg| -> AnyElement {
         match seg {
@@ -456,10 +459,22 @@ pub(super) fn log_row(
             .child(v.time.clone()),
     );
     if let Some((tag, col)) = badge(v.sev, p) {
-        row = row.child(div().flex_none().font_bold().text_color(rgb(col)).child(tag));
+        row = row.child(
+            div()
+                .flex_none()
+                .font_bold()
+                .text_color(rgb(col))
+                .child(tag),
+        );
     }
     if let Some((tag, col)) = cat_badge(v.cat, p) {
-        row = row.child(div().flex_none().font_bold().text_color(rgb(col)).child(tag));
+        row = row.child(
+            div()
+                .flex_none()
+                .font_bold()
+                .text_color(rgb(col))
+                .child(tag),
+        );
     }
     if !v.target.is_empty() {
         row = row.child(
@@ -490,7 +505,14 @@ pub(super) fn log_row(
             .flex_1()
             .min_w_0()
             .overflow_hidden()
-            .children(message_spans(&v.flat, base, &coin_range, query, coin_click, p)),
+            .children(message_spans(
+                &v.flat,
+                base,
+                &coin_range,
+                query,
+                coin_click,
+                p,
+            )),
     )
     .on_mouse_down(MouseButton::Right, move |_ev, _w, app| {
         app.write_to_clipboard(ClipboardItem::new_string(copy.clone()));

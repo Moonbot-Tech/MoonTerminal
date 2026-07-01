@@ -586,7 +586,11 @@ impl RenderState {
                     let cur_col = cached_last_price
                         .filter(|l| *l > 0.0)
                         .map(|last| {
-                            pct_hsla(last - cursor_price, self.label_positive, self.label_negative)
+                            pct_hsla(
+                                last - cursor_price,
+                                self.label_positive,
+                                self.label_negative,
+                            )
                         })
                         .unwrap_or(readout);
                     let right_x = zone_left + READOUT_PAD_X;

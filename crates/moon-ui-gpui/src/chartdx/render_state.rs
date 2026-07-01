@@ -297,11 +297,7 @@ impl RenderState {
                 let dst = readout_rect_dst(pl.x, pl.y, pl.w, pl.ax, pl.ay, sf);
                 // solid → плотная курсорная плашка; иначе → полу-плотная ордерная (просвечивает,
                 // младшая «заходит под» старшую при наложении).
-                let pbg = if pl.solid {
-                    bg
-                } else {
-                    self.readout_order_bg
-                };
+                let pbg = if pl.solid { bg } else { self.readout_order_bg };
                 pr.readout_rects.push(ReadoutRect {
                     dst,
                     bg: pbg,
