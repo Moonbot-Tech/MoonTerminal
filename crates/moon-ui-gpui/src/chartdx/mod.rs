@@ -143,7 +143,7 @@ struct CursorState {
 /// Размещённая (после анти-наложения) подпись: лог. позиция/выравнивание/ширина — чтобы
 /// `sync_readout_params` построил под неё прозрачную плашку-подложку. `solid` — плотная плашка
 /// (курсорные цифры, передний план) против лёгкой (как у угловой подписи монеты).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) struct PlacedLabel {
     pub x: f32,
     pub y: f32,
@@ -152,6 +152,16 @@ pub(super) struct PlacedLabel {
     pub w: f32,
     pub solid: bool,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum OrderLabelRole {
+    /// Короткая основная подпись MoonBot: номер ордера / PnL% / стоп-%.
+    Primary,
+    /// Длинная подпись размера/остатка. Участвует в YTextFill-анти-overlap.
+    Caption,
+}
+
+pub(super) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;
 
 #[derive(Clone)]
 pub(super) struct OrderLabel {
@@ -162,6 +172,17 @@ pub(super) struct OrderLabel {
     pub above: bool,
     /// Цвет линии (0xRRGGBB) — подпись красится в него же.
     pub color: u32,
+    /// MoonBot-смысл подписи: primary рисуем у линии всегда, caption пропускаем при overlap.
+    pub role: OrderLabelRole,
+    /// Drag/hover label надо рисовать поверх и не давить overlap-ом.
+    pub force: bool,
+}
+
+#[derive(Clone)]
+pub(super) struct OrderBookLabel {
+    /// Sell-line price; the label is drawn in the orderbook zone at this Y.
+    pub price: f32,
+    pub short: bool,
 }
 
 /// GPU-состояние одной панели для `gpu_canvas` callbacks — отделено от логики `Container`,
@@ -208,6 +229,9 @@ struct PaneRender {
     last_book_hi: f32,
     /// Последняя ревизия ордеров, по которой залит userdata-буфер.
     last_order_lines_rev: u64,
+    /// Последняя сигнатура order zones. Зоны входят в base-cache под сетку; линии и трассы
+    /// рисуются overlay. Поэтому смена zones должна инвалидировать base, а hover/drag линий - нет.
+    last_order_zone_sig: u64,
     /// Локальное время, когда userdata-буфер был пересобран из `order_lines_rev`.
     last_order_lines_sync_ms: f64,
     /// Ревизия order userdata, которая ждёт ближайшего GPU prepare.
@@ -227,15 +251,18 @@ struct PaneRender {
     /// Готовые подписи ордерных линий (size/%/qty), пересобираются при изменении ордеров.
     /// Рисуются в `prepare_text`, привязка к Y — по `view` каждый кадр.
     order_labels: Vec<OrderLabel>,
+    /// Подписи объёма стакана у sell-линий (MoonBot `LastSellOrderPriceVol`): цель берём из
+    /// ордера, фактический объём считаем из текущей CPU-копии стакана.
+    orderbook_labels: Vec<OrderBookLabel>,
     /// Прогнозный размер ордера (s1-s6) в USD — рисуется на перекрестии курсора. None = нет
     /// активного размера/курса. Считается в `ChartPanel::render` (есть `Backend`), копируется сюда.
     prospective_usd: Option<f64>,
     /// Размещённые подписи (ордерные + курсорные) этого кадра — `prepare_text` их раскладывает
     /// (анти-наложение), `sync_readout_params` строит под них плашки-подложки.
     label_placed: Vec<PlacedLabel>,
-    /// Видимые уровни стакана `(price, qty)` — CPU-копия для подписи количества под курсором.
+    /// Видимые уровни стакана — CPU-копия для подписи количества под курсором и у sell-линий.
     /// Наполняется при заливке стакана (`prepare`), пусто если стакан выключен.
-    orderbook_levels: Vec<(f32, f32)>,
+    orderbook_levels: Vec<moon_core::data::BookDepthPoint>,
     /// Камера X для own-pass: эпоха времени, поле справа (доля «будущего»), флаг follow и
     /// последняя КВАНТОВАННАЯ пиксель-позиция правого края. Callback двигает камеру по этим
     /// полям на каждый present (vblank, целопиксельно) — живой скролл без отдельного таймера.
@@ -305,6 +332,7 @@ impl PaneRender {
             last_book_lo: f32::NAN,
             last_book_hi: f32::NAN,
             last_order_lines_rev: u64::MAX,
+            last_order_zone_sig: 0,
             last_order_lines_sync_ms: 0.0,
             pending_order_gpu_rev: None,
             last_order_gpu_rev: u64::MAX,
@@ -314,6 +342,7 @@ impl PaneRender {
             last_order_highlight_uid: None,
             last_order_drag_preview: None,
             order_labels: Vec::new(),
+            orderbook_labels: Vec::new(),
             prospective_usd: None,
             label_placed: Vec::new(),
             orderbook_levels: Vec::new(),
@@ -406,6 +435,16 @@ struct RenderState {
     cursor: Option<CursorState>,
     cursor_color: [f32; 4],
     cursor_thickness: f32,
+    readout_bg: [f32; 4],
+    readout_soft_bg: [f32; 4],
+    readout_border: [f32; 4],
+    readout_border_px: f32,
+    label_positive: u32,
+    label_negative: u32,
+    label_neutral: u32,
+    axis_label: u32,
+    caption_label: u32,
+    readout_label: u32,
     /// Поправка кегля подписей ордер-линий и курсора (px) — из `ChartTheme.label_font_delta`.
     /// Применяется к столбцу подписей линий и к курсорному ридауту в `text.rs`.
     label_font_delta: f32,

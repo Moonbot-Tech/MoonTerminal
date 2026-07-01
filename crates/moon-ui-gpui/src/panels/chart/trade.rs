@@ -1,7 +1,6 @@
 //! Ручная торговля на чарте: постановка ордера кликом по жесту, хит-тест линий ордеров,
 //! подсветка/перетаскивание линий (move_order) и нативный курсор. Вынесено из `chart.rs`.
 
-
 use gpui::*;
 
 use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonWindowExt as _};
@@ -202,8 +201,7 @@ impl ChartPanel {
         if let Some(core_data) = self.backend.read(cx).session.store().core(core) {
             for order in core_data
                 .order_lines
-                .market_draw_orders(&market, 0)
-                .into_iter()
+                .iter_market(&market)
                 .filter(|order| order.closed_ms.is_none())
             {
                 // Перетаскиваемые виды линий: вход/выход (move_order) + SL/Trailing/TakeProfit
@@ -297,16 +295,15 @@ impl ChartPanel {
                             let _ = b.session.join_sells(core, market.clone(), short);
                         });
                     }),
-                    MoonMenuItem::with_key(
-                        "order-split",
-                        t!("chart.order_menu.split").to_string(),
-                    )
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        backend_split.update(app, |b, _| {
-                            let _ = b.session.split_order(core, market_split.clone(), SPLIT_PARTS);
-                        });
-                    }),
+                    MoonMenuItem::with_key("order-split", t!("chart.order_menu.split").to_string())
+                        .on_click(move |_, window, app| {
+                            window.close_context_menu(app);
+                            backend_split.update(app, |b, _| {
+                                let _ =
+                                    b.session
+                                        .split_order(core, market_split.clone(), SPLIT_PARTS);
+                            });
+                        }),
                 ]
             }
             _ => return false,

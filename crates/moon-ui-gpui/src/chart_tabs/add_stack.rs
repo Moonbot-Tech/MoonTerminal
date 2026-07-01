@@ -2,6 +2,7 @@
 //! на каждый график. Вынесено из `chart_tabs` как самостоятельная вью-модель; общий рендер
 //! стека — в [`super::stack`]. Используется и полоской вкладок, и выносными окнами ([`super::windows`]).
 
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -11,9 +12,8 @@ use super::stack::{
     COMPACT_STABLE, ChartStackEntry, HIGHLIGHT, apply_setting, chart_stack_card, compare_role,
     render_chart_stack, resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin,
     set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
-    set_panels_orderbook_enabled,
-    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible,
-    sync_compare,
+    set_panels_orderbook_enabled, set_panels_price_axis_pos, set_panels_scale,
+    set_panels_show_zone, set_panels_time_axis_visible, sync_compare,
 };
 use crate::Backend;
 use crate::chart_persist::{ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation};
@@ -163,10 +163,7 @@ impl AddChartStack {
             self.layout_height_fit,
             self.layout_height_scroll,
         );
-        if !compress
-            || !self.hold_vacated
-            || self.last_count_change.elapsed() < COMPACT_STABLE
-        {
+        if !compress || !self.hold_vacated || self.last_count_change.elapsed() < COMPACT_STABLE {
             return;
         }
         let before = self.charts.len();
@@ -466,9 +463,13 @@ impl AddChartStack {
 
     /// Видимость оси времени для всех графиков стека (per-окно).
     pub(crate) fn set_time_axis_visible(&mut self, visible: Option<bool>, cx: &mut Context<Self>) {
-        apply_setting(&mut self.time_axis_visible, visible, &self.charts, cx, |c, cx| {
-            set_panels_time_axis_visible(c, visible.unwrap_or(true), cx)
-        });
+        apply_setting(
+            &mut self.time_axis_visible,
+            visible,
+            &self.charts,
+            cx,
+            |c, cx| set_panels_time_axis_visible(c, visible.unwrap_or(true), cx),
+        );
     }
 
     pub(crate) fn line_labels(&self) -> Option<bool> {
@@ -498,7 +499,11 @@ impl AddChartStack {
     }
 
     /// Вкл/выкл трейды ликвидаций для всех графиков стека (per-окно).
-    pub(crate) fn set_liquidations_enabled(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
+    pub(crate) fn set_liquidations_enabled(
+        &mut self,
+        enabled: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
         apply_setting(
             &mut self.liquidations_enabled,
             enabled,
@@ -597,6 +602,15 @@ impl AddChartStack {
         }
     }
 
+    fn sync_stack_visible_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        for (ix, entry) in self.charts.iter().enumerate() {
+            let visible = !entry.vacated && range.contains(&ix);
+            entry
+                .panel
+                .update(cx, |panel, _| panel.set_scene_visible(visible));
+        }
+    }
+
     pub(crate) fn close_all_panes(&mut self, cx: &mut Context<Self>) {
         for entry in &self.charts {
             entry
@@ -649,6 +663,9 @@ impl Render for AddChartStack {
             .is_horizontal();
         let entity = cx.entity();
         let p = palette;
+        let on_visible_range = cx.processor(|this, range: Range<usize>, _window, cx| {
+            this.sync_stack_visible_range(range, cx);
+        });
         render_chart_stack(
             &base_id,
             self,
@@ -738,6 +755,7 @@ impl Render for AddChartStack {
                 tile.children(highlight).into_any_element()
             },
             |s, ix| compare_role(&s.charts, &s.compare_anchor, s.compare_orderbook_only, ix),
+            Some(Box::new(on_visible_range)),
         )
     }
 }

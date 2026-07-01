@@ -23,6 +23,22 @@ pub struct LevelInstance {
     pub kind: f32,
 }
 
+/// CPU-представление видимого уровня стакана для текстовых подписей. GPU-инстансы несут
+/// только геометрию/нормированную длину, а подписи должны знать сторону и реальный объём.
+#[derive(Clone, Copy, Debug)]
+pub struct BookDepthPoint {
+    pub price: f32,
+    /// Индивидуальный объём уровня в базовой монете.
+    pub qty: f32,
+    /// Кумулятивный объём от спреда до этого уровня в базовой монете.
+    pub cum_qty: f32,
+    /// Индивидуальный ноционал уровня (`qty * price`) — как `Quantity * Rate` в MoonBot.
+    pub notional: f32,
+    /// Кумулятивный ноционал от спреда до этого уровня.
+    pub cum_notional: f32,
+    pub is_ask: bool,
+}
+
 /// Сырой уровень книги (от окна не зависит): геометрия + объёмы. `len_norm`
 /// считается позже в `build_instances` под видимое окно конкретной панели.
 #[derive(Clone, Copy)]
@@ -33,8 +49,12 @@ struct RawLevel {
     span: f32,
     /// Индивидуальный объём уровня (для отдельной линии уровня).
     qty: f32,
+    /// Индивидуальный ноционал уровня (`qty * price`).
+    notional: f32,
     /// Кумулятив от спреда до этого уровня (для полосы глубины).
     cum: f32,
+    /// Кумулятивный ноционал от спреда до этого уровня.
+    cum_notional: f32,
     is_ask: bool,
 }
 
@@ -111,14 +131,20 @@ impl OrderBookModel {
         }
     }
 
-    /// Видимые в окне `[lo, hi]` уровни как `(price, cum)` — КУМУЛЯТИВНЫЙ объём от спреда до
-    /// уровня (глубина), а не индивидуальный объём точки. Для CPU-подписи количества в стакане
-    /// под курсором: GPU-инстансы объём не несут, а `raw` приватен — копию снимает этот метод.
-    pub fn collect_visible_cum(&self, lo: f32, hi: f32, out: &mut Vec<(f32, f32)>) {
+    /// Видимые в окне `[lo, hi]` уровни для CPU-подписей в стакане. Это не отдельное хранилище
+    /// истории, а снимок того же book-model, из которого строятся GPU-инстансы.
+    pub fn collect_visible_depth(&self, lo: f32, hi: f32, out: &mut Vec<BookDepthPoint>) {
         out.clear();
         for r in &self.raw {
             if level_overlaps(r, lo, hi) {
-                out.push((r.price, r.cum));
+                out.push(BookDepthPoint {
+                    price: r.price,
+                    qty: r.qty,
+                    cum_qty: r.cum,
+                    notional: r.notional,
+                    cum_notional: r.cum_notional,
+                    is_ask: r.is_ask,
+                });
             }
         }
     }
@@ -153,9 +179,12 @@ fn level_overlaps(r: &RawLevel, lo: f32, hi: f32) -> bool {
 fn push_side(out: &mut Vec<RawLevel>, levels: &[crate::feed::Level], is_ask: bool) {
     let n = levels.len();
     let mut cum = 0.0_f32;
+    let mut cum_notional = 0.0_f32;
     for i in 0..n {
         let l = levels[i];
         cum += l.qty;
+        let notional = l.qty * l.price;
+        cum_notional += notional;
         // Signed-delta края: лучший уровень уходит вглубь книги, остальные
         // стыкуются обратно к соседу со стороны спреда. Так bid/ask не
         // перекрываются в спреде, а глубина остаётся непрерывной.
@@ -189,7 +218,9 @@ fn push_side(out: &mut Vec<RawLevel>, levels: &[crate::feed::Level], is_ask: boo
             price: l.price,
             span,
             qty: l.qty,
+            notional,
             cum,
+            cum_notional,
             is_ask,
         });
     }

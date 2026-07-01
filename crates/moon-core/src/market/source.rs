@@ -461,7 +461,11 @@ impl MarketDataSource {
                 let book = snapshot
                     .order_book(market, orderbook_kind)
                     .map(|b| (orderbook_kind, b))
-                    .or_else(|| snapshot.order_book(market, other_kind).map(|b| (other_kind, b)));
+                    .or_else(|| {
+                        snapshot
+                            .order_book(market, other_kind)
+                            .map(|b| (other_kind, b))
+                    });
                 if let Some((used_kind, book)) = book {
                     has_book_snapshot = true;
                     book_kind_used = Some(used_kind);
@@ -640,7 +644,10 @@ impl MarketDataSource {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
             let provider = inner.core_provider.get(&core).copied()?;
-            inner.clients.get(&provider).and_then(SharedMoonClient::get)?
+            inner
+                .clients
+                .get(&provider)
+                .and_then(SharedMoonClient::get)?
         };
         let snapshot = client.snapshot_versioned()?;
         let market = format!("{}USDT", currency.to_ascii_uppercase());

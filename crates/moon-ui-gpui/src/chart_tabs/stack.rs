@@ -2,6 +2,7 @@
 //! хелперы масштаба/очистки и 3-режимная раскладка (FIT/SCROLL/COMPRESS), параметризованная
 //! фабрикой плитки. Нюансы Main (fullscreen / active / ПКМ-возврат) остаются в `MainChartStack`.
 
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -69,6 +70,8 @@ pub(super) const COMPACT_STABLE: Duration = Duration::from_millis(5000);
 
 const STACK_GUTTER: f32 = 8.0;
 const STACK_HEADER_H: f32 = 20.0;
+
+type VisibleRangeHandler = Box<dyn Fn(Range<usize>, &mut Window, &mut App)>;
 
 /// Визуальная оболочка одного chart-host в stack-режиме.
 ///
@@ -247,7 +250,8 @@ pub(super) fn set_panels_time_axis_visible<S: 'static>(
     cx: &mut Context<S>,
 ) {
     for e in entries {
-        e.panel.update(cx, |p, pcx| p.set_time_axis_visible(visible, pcx));
+        e.panel
+            .update(cx, |p, pcx| p.set_time_axis_visible(visible, pcx));
     }
 }
 
@@ -501,6 +505,7 @@ pub(super) fn render_chart_stack<S, P, T, R>(
     panel_at: P,
     tile: T,
     role: R,
+    on_visible_range: Option<VisibleRangeHandler>,
 ) -> AnyElement
 where
     S: Render + 'static,
@@ -593,6 +598,11 @@ where
         .border(false)
         .radius(0.0)
         .scrollbar_visibility(MoonScrollbarVisibility::Hover);
+        let list = if let Some(on_visible_range) = on_visible_range {
+            list.on_visible_range(on_visible_range)
+        } else {
+            list
+        };
         return div()
             .id(format!("{base_id}-scroll"))
             .relative()

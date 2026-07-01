@@ -68,6 +68,7 @@ impl Render for ChartPanel {
             (eff.theme.clone(), orders, b.follow, prospective)
         };
         if palette.is_light() {
+            theme.apply_light_defaults();
             theme.bg = rgb3_from_hex(palette.chart_bg);
             theme.grid = rgb3_from_hex(palette.row_line);
             theme.grid_alpha = theme.grid_alpha.clamp(0.0, 1.0);
@@ -79,7 +80,9 @@ impl Render for ChartPanel {
             | self.chart.set_orders(orders_style)
             | self.chart.set_scale(self.scale)
             | self.chart.set_orderbook_enabled(self.orderbook_enabled)
-            | self.chart.set_liquidations_enabled(self.liquidations_enabled)
+            | self
+                .chart
+                .set_liquidations_enabled(self.liquidations_enabled)
             | self.chart.set_orderbook_only(self.orderbook_only)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
             | self.chart.set_time_axis_visible(self.time_axis_visible)
@@ -129,8 +132,10 @@ impl Render for ChartPanel {
         // (idx, pinned, left_px, top_px). PRICE_AXIS_W — логическая ширина оси (rect в девайс-px).
         // Кнопки (пин/замок/метла) у ЛЕВОГО края плота → сдвиг на ось нужен ТОЛЬКО когда ось слева.
         // При оси справа/скрытой (и в режиме метлы) плот начинается у края слота → сдвига нет.
-        let axis_off = if matches!(self.price_axis_pos, crate::chart_persist::PriceAxisPos::Left)
-            && !self.orderbook_only
+        let axis_off = if matches!(
+            self.price_axis_pos,
+            crate::chart_persist::PriceAxisPos::Left
+        ) && !self.orderbook_only
         {
             moon_chart::PRICE_AXIS_W
         } else {
@@ -220,11 +225,18 @@ impl Render for ChartPanel {
         // GPUI ресайзит их синхронно со слотом. Per-pane позиции из `axis_panes` берут own-pass
         // геометрию (`data.w/h`), которая обновляется на present-тике и при фулскрин-тогле отстаёт
         // на кадры — отсюда «прыжок» кнопок. Несколько пейнов (стек/сравнение) → per-pane.
-        let single_pane = !self.orderbook_only
-            && axis_panes.len() == 1
-            && self.chart.pane_target(0).is_some();
-        let mut action_btns: Vec<(ActKind, f32, f32, f32, f32, moon_core::session::CoreId, String, bool)> =
-            Vec::new();
+        let single_pane =
+            !self.orderbook_only && axis_panes.len() == 1 && self.chart.pane_target(0).is_some();
+        let mut action_btns: Vec<(
+            ActKind,
+            f32,
+            f32,
+            f32,
+            f32,
+            moon_core::session::CoreId,
+            String,
+            bool,
+        )> = Vec::new();
         if !single_pane && !self.orderbook_only {
             for (idx, rect, _) in axis_panes.iter() {
                 let Some((core, market)) = self.chart.pane_target(*idx) else {
@@ -236,12 +248,14 @@ impl Render for ChartPanel {
                 // всегда (и при выключенном стакане), как просит ТЗ. Жёлоб оси режем с той стороны,
                 // где она стоит: слева (axis_off) или справа за стаканом (доп. резерв справа).
                 let glass_reserve = moon_chart::GLASS_ZONE_PX.min(pane_w * 0.5);
-                let right_axis_reserve =
-                    if matches!(self.price_axis_pos, crate::chart_persist::PriceAxisPos::Right) {
-                        moon_chart::PRICE_AXIS_W
-                    } else {
-                        0.0
-                    };
+                let right_axis_reserve = if matches!(
+                    self.price_axis_pos,
+                    crate::chart_persist::PriceAxisPos::Right
+                ) {
+                    moon_chart::PRICE_AXIS_W
+                } else {
+                    0.0
+                };
                 let zone_left = pane_left + axis_off;
                 let zone_right = pane_left + pane_w - glass_reserve - right_axis_reserve;
                 let zone_w = zone_right - zone_left;
@@ -334,12 +348,18 @@ impl Render for ChartPanel {
                     let backend = backend0.clone();
                     let market = market.clone();
                     let (label, variant, selected, id) = match kind {
-                        ActKind::CancelBuy => {
-                            ("Cancel Buy", MoonButtonVariant::Soft, false, "chart-cancelbuy-fs")
-                        }
-                        ActKind::PanicSell => {
-                            ("Panic Sell", MoonButtonVariant::Danger, armed, "chart-panic-fs")
-                        }
+                        ActKind::CancelBuy => (
+                            "Cancel Buy",
+                            MoonButtonVariant::Soft,
+                            false,
+                            "chart-cancelbuy-fs",
+                        ),
+                        ActKind::PanicSell => (
+                            "Panic Sell",
+                            MoonButtonVariant::Danger,
+                            armed,
+                            "chart-panic-fs",
+                        ),
                     };
                     MoonButton::new(SharedString::from(id))
                         .label(label)
@@ -349,7 +369,8 @@ impl Render for ChartPanel {
                         .on_click(move |_, _w, app| match kind {
                             ActKind::CancelBuy => {
                                 let b = backend.read(app);
-                                if let Err(error) = b.session.cancel_market_buys(core, market.clone())
+                                if let Err(error) =
+                                    b.session.cancel_market_buys(core, market.clone())
                                 {
                                     log::warn!("cancel market buys failed: {error:#}");
                                 }
@@ -386,20 +407,21 @@ impl Render for ChartPanel {
                 // между регионами. Левый отступ = ось цены ТОЛЬКО когда она слева; правый = зона
                 // стакана + жёлоб оси, если она справа (за стаканом).
                 let region = |btns: Vec<AnyElement>| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(ACT_GAP))
-                        .children(btns)
+                    div().flex().items_center().gap(px(ACT_GAP)).children(btns)
                 };
-                let left_pad =
-                    if matches!(self.price_axis_pos, crate::chart_persist::PriceAxisPos::Left) {
-                        moon_chart::PRICE_AXIS_W
-                    } else {
-                        0.0
-                    };
+                let left_pad = if matches!(
+                    self.price_axis_pos,
+                    crate::chart_persist::PriceAxisPos::Left
+                ) {
+                    moon_chart::PRICE_AXIS_W
+                } else {
+                    0.0
+                };
                 let right_pad = moon_chart::GLASS_ZONE_PX
-                    + if matches!(self.price_axis_pos, crate::chart_persist::PriceAxisPos::Right) {
+                    + if matches!(
+                        self.price_axis_pos,
+                        crate::chart_persist::PriceAxisPos::Right
+                    ) {
                         moon_chart::PRICE_AXIS_W
                     } else {
                         0.0
@@ -450,9 +472,10 @@ impl Render for ChartPanel {
             // стрелка «вверх-вниз»: линию двигают только по цене (Y), это сразу читается как
             // «можно тянуть». Отдельный grab/grabbing не используем — ns-resize точнее
             // отражает одномерную (вертикальную) природу перетаскивания.
-            .when(self.order_drag.is_some() || self.order_hover.is_some(), |this| {
-                this.cursor_ns_resize()
-            })
+            .when(
+                self.order_drag.is_some() || self.order_hover.is_some(),
+                |this| this.cursor_ns_resize(),
+            )
             .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, window, cx| {
                 if cx.has_active_drag() {
                     return;
@@ -640,6 +663,7 @@ impl Render for ChartPanel {
                             cx,
                         )
                     {
+                        this.suppress_rmb_up = true;
                         cx.stop_propagation();
                         return;
                     }
@@ -986,7 +1010,8 @@ impl Render for ChartPanel {
                         .on_click(move |_, _w, app| match kind {
                             ActKind::CancelBuy => {
                                 let b = backend.read(app);
-                                if let Err(error) = b.session.cancel_market_buys(core, market.clone())
+                                if let Err(error) =
+                                    b.session.cancel_market_buys(core, market.clone())
                                 {
                                     log::warn!("cancel market buys failed: {error:#}");
                                 }

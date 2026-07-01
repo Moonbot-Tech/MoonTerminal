@@ -146,9 +146,11 @@ fn param_row(
                 .gap(design::ui_px(cx, 6.0))
                 .child(checkbox)
                 .child(
-                    div()
-                        .flex_1()
-                        .child(MoonSlider::new(slider).id(slider_id.to_string()).height(18.0)),
+                    div().flex_1().child(
+                        MoonSlider::new(slider)
+                            .id(slider_id.to_string())
+                            .height(18.0),
+                    ),
                 )
                 .child(
                     div().w(px(56.0)).child(
@@ -240,7 +242,14 @@ pub fn core_settings_content(
     let header_row = v_flex()
         .w_full()
         .gap(design::ui_px(cx, 6.0))
-        .child(h_flex().w_full().items_center().gap(design::ui_px(cx, 8.0)).child(restart_btn).child(emu_check))
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(design::ui_px(cx, 8.0))
+                .child(restart_btn)
+                .child(emu_check),
+        )
         // Заметная плашка-предупреждение, когда включён режим эмулятора.
         .when(cs.emu_mode, |this| {
             this.child(
@@ -273,10 +282,10 @@ pub fn core_settings_content(
                 let on = *ch;
                 let b = backend.read(app);
                 if let Some(core) = b.active_trade_core(&group) {
-                    if let Err(e) = b
-                        .session
-                        .edit_client_settings(core, ClientSettingsEdit::GlobalTakeProfit { on, pct })
-                    {
+                    if let Err(e) = b.session.edit_client_settings(
+                        core,
+                        ClientSettingsEdit::GlobalTakeProfit { on, pct },
+                    ) {
                         log::warn!("global tp toggle failed: {e:#}");
                     }
                 }
@@ -301,11 +310,7 @@ pub fn core_settings_content(
                         cur
                     } else {
                         let s = slider.read(app).value().end();
-                        if s.abs() > 1e-6 {
-                            s
-                        } else {
-                            -1.0
-                        }
+                        if s.abs() > 1e-6 { s } else { -1.0 }
                     }
                 } else {
                     0.0
@@ -340,19 +345,16 @@ pub fn core_settings_content(
                         cur
                     } else {
                         let s = slider.read(app).value().end().round() as i32;
-                        if s != 0 {
-                            s
-                        } else {
-                            -2
-                        }
+                        if s != 0 { s } else { -2 }
                     }
                 } else {
                     0
                 };
                 let b = backend.read(app);
                 if let Some(core) = b.active_trade_core(&group) {
-                    if let Err(e) =
-                        b.session.edit_client_settings(core, ClientSettingsEdit::VolDropLevel(n))
+                    if let Err(e) = b
+                        .session
+                        .edit_client_settings(core, ClientSettingsEdit::VolDropLevel(n))
                     {
                         log::warn!("vstop toggle failed: {e:#}");
                     }
@@ -456,7 +458,10 @@ pub fn core_settings_content(
                 let core = backend.read(app).active_trade_core(&group);
                 if let Some(core) = core {
                     backend.update(app, |bk, _| bk.set_exclude_bl_delta(core, on));
-                    if let Err(e) = backend.read(app).session.set_exclude_blacklisted_delta(core, on)
+                    if let Err(e) = backend
+                        .read(app)
+                        .session
+                        .set_exclude_blacklisted_delta(core, on)
                     {
                         log::warn!("exclude delta failed: {e:#}");
                     }
@@ -560,7 +565,9 @@ pub fn core_settings_content(
             .label(t!("core_settings.reset_session").to_string())
             .size(MoonButtonSize::Action)
             .variant(MoonButtonVariant::Soft)
-            .on_click(move |_, _w, app| reset_profit(&backend, &group, ResetProfitKind::Session, app))
+            .on_click(move |_, _w, app| {
+                reset_profit(&backend, &group, ResetProfitKind::Session, app)
+            })
             .render()
     };
     let reset_all = {

@@ -457,7 +457,11 @@ impl Shell {
             if let MoonSliderEvent::Change(v) = ev {
                 let v = v.end();
                 this.commit_client_edit(ClientSettingsEdit::TrailingDrop(v), cx);
-                this.live_set_field(this.trailing_input.clone(), controls::fmt_field2_signed(v), cx);
+                this.live_set_field(
+                    this.trailing_input.clone(),
+                    controls::fmt_field2_signed(v),
+                    cx,
+                );
             }
         })
         .detach();

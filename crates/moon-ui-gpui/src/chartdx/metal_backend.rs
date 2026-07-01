@@ -20,8 +20,8 @@ use super::types::{
     BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams, DEFAULT_VOLUME_ALPHA,
     GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu, append_cross_ring,
     cross_append_ranges, cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring,
-    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, seg_of, update_cross_volume_max,
-    zone_of,
+    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, seg_of,
+    update_cross_volume_max, zone_of,
 };
 
 const SHADER: &str = include_str!("shaders/chart_native.metal");
@@ -569,6 +569,7 @@ impl MetalLayers {
             self.draw_cached_combo(device, encoder, view);
         }
         encoder.set_scissor_rect(bounds_scissor(pane_bounds, gpu.width(), gpu.height()));
+        self.draw_user_layers(encoder);
         self.draw_cursor_layer(encoder, cursor_params, readout_rects);
         Ok(())
     }
@@ -583,6 +584,13 @@ impl MetalLayers {
         encoder.set_fragment_sampler_state(0, Some(pipelines.sampler.as_ref()));
         draw(encoder, &pipelines.background, 6, 1);
 
+        if !self.zones.is_empty() {
+            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
+            set_uniform(encoder, 0, self.view_uniform.buffer());
+            set_storage(encoder, 1, self.zone_buffer.buffer());
+            draw(encoder, &pipelines.zone, 6, self.zones.len() as u64);
+        }
+
         crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
         set_uniform(encoder, 0, self.grid_uniform.buffer());
         draw(encoder, &pipelines.grid, 6, 1);
@@ -596,13 +604,11 @@ impl MetalLayers {
         if !self.levels.is_empty() {
             draw(encoder, &pipelines.book_bars, 6, self.levels.len() as u64);
         }
+    }
 
+    fn draw_user_layers(&self, encoder: &RenderCommandEncoderRef) {
+        let pipelines = self.pipelines.as_ref().unwrap();
         set_uniform(encoder, 0, self.view_uniform.buffer());
-        if !self.zones.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
-            set_storage(encoder, 1, self.zone_buffer.buffer());
-            draw(encoder, &pipelines.zone, 6, self.zones.len() as u64);
-        }
         if !self.hlines.is_empty() {
             crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_storage(encoder, 1, self.hline_buffer.buffer());

@@ -229,9 +229,7 @@ impl ChartTabs {
             // в спеке), обычная — как Add.
             let (is_custom, custom_label) = {
                 let specs = &self.backend.read(cx).chart_specs;
-                let spec = specs
-                    .iter()
-                    .find(|s| s.matches(&self.group, n, &bucket));
+                let spec = specs.iter().find(|s| s.matches(&self.group, n, &bucket));
                 (
                     spec.is_some_and(|s| s.custom_coins.is_some()),
                     spec.and_then(|s| s.custom_label.clone()),
@@ -278,9 +276,7 @@ impl ChartTabs {
         for (num, bucket, scale) in items {
             let (cur, exists) = {
                 let specs = &self.backend.read(cx).chart_specs;
-                let found = specs
-                    .iter()
-                    .find(|s| s.matches(&self.group, num, &bucket));
+                let found = specs.iter().find(|s| s.matches(&self.group, num, &bucket));
                 (found.and_then(|s| s.scale), found.is_some())
             };
             if cur != scale && (scale.is_some() || exists) {

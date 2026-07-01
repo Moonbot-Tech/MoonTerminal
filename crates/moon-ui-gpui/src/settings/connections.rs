@@ -8,14 +8,14 @@ use std::sync::Arc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonColorPicker,
-    MoonColorPickerState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
-    MoonMenuSize, MoonPalette, MoonSelect, MoonTooltipView, StyledExt, h_flex, v_flex,
+    h_flex, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    MoonColorPicker, MoonColorPickerState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
+    MoonMenuItem, MoonMenuSize, MoonPalette, MoonSelect, MoonTooltipView, StyledExt,
 };
 use rust_i18n::t;
 
 use super::SettingsView;
-use crate::{Backend, design};
+use crate::{design, Backend};
 use moon_core::config::{AppConfig, FeedFlags, GroupConfig, Secret, ServerConfig};
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
@@ -248,7 +248,7 @@ impl SettingsView {
 
     /// Добавить сервер в draft (id = max+1) в указанную группу и пересобрать editor-стейты.
     fn add_server(&mut self, group: String, window: &mut Window, cx: &mut Context<Self>) {
-        let default_color = design::u32_to_rgb(MoonPalette::active(cx).amber);
+        let default_color = design::u32_to_rgb(MoonPalette::active(cx).accent);
         self.backend.update(cx, |b, bcx| {
             if let Some(p) = b.preview.as_mut() {
                 let next = p.servers.iter().map(|s| s.id).max().unwrap_or(0) + 1;

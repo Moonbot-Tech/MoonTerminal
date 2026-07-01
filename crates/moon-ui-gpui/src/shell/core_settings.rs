@@ -13,7 +13,11 @@ use super::Shell;
 impl Shell {
     /// Открыть/закрыть попап настроек ядра (клик по ⚙). При открытии сидирует числовые поля
     /// (глоб-TP / трейлинг) значением активного ядра и сбрасывает стадию подтверждения.
-    pub(crate) fn toggle_core_settings_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_core_settings_popup(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.core_settings_open {
             self.core_settings_open = false;
         } else {
@@ -70,8 +74,9 @@ impl Shell {
                     c,
                 )
             });
-            self.trailing_input
-                .update(cx, |st, c| st.set_value(format!("{trailing:.2}"), window, c));
+            self.trailing_input.update(cx, |st, c| {
+                st.set_value(format!("{trailing:.2}"), window, c)
+            });
         }
         if vstop != 0 {
             self.vstop_slider.update(cx, |st, c| {

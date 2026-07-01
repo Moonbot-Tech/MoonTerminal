@@ -38,9 +38,9 @@ pub use hotkeys::{
 pub use lang::Language;
 pub use layout::{DetachedLayout, GeomRect, GroupLayout, WindowLayout};
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
+pub use schema::UiThemeMode;
 pub use secrets::Secret;
 pub use servers::{ChartBucket, FeedFlags, ServerConfig};
-pub use schema::UiThemeMode;
 pub use theme::ChartTheme;
 
 use std::collections::HashSet;

@@ -38,9 +38,7 @@ unsafe extern "system" fn native_exception_filter(
         if let Some(rec) = unsafe { info.ExceptionRecord.as_ref() } {
             let code = rec.ExceptionCode.0 as u32;
             let addr = rec.ExceptionAddress as usize;
-            body.push_str(&format!(
-                "code=0x{code:08X} at instruction 0x{addr:016X}"
-            ));
+            body.push_str(&format!("code=0x{code:08X} at instruction 0x{addr:016X}"));
             // Для access violation первые два параметра — тип (0=чтение,1=запись,8=DEP)
             // и адрес недоступной памяти.
             if code == STATUS_ACCESS_VIOLATION && rec.NumberParameters >= 2 {

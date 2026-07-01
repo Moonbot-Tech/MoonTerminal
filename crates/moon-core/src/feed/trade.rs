@@ -83,7 +83,9 @@ pub(super) fn panic_sell_market(client: &MoonClient, server_id: u64, market: Str
     report(
         server_id,
         format!("panic sell market {market} on={on}"),
-        client.orders().switch_panic_sell_by_market(market.clone(), on),
+        client
+            .orders()
+            .switch_panic_sell_by_market(market.clone(), on),
     );
 }
 
@@ -138,7 +140,9 @@ pub(super) fn split_order(client: &MoonClient, server_id: u64, market: String, p
     report(
         server_id,
         format!("split order {market} parts={parts}"),
-        client.trade().split_order(SplitOrderParams::new(market, parts)),
+        client
+            .trade()
+            .split_order(SplitOrderParams::new(market, parts)),
     );
 }
 
@@ -211,7 +215,11 @@ pub(super) fn set_order_stop(
             client.orders().update_vstop(uid, params)
         }
     };
-    report(server_id, format!("set order {uid} {kind:?} -> {on}"), result);
+    report(
+        server_id,
+        format!("set order {uid} {kind:?} -> {on}"),
+        result,
+    );
 }
 
 /// Передвинуть цену стоп/тейк-линии ордера (перетаскивание линии на чарте) на абсолютную

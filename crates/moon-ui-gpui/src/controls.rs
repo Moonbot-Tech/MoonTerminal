@@ -971,22 +971,33 @@ pub fn toolbar(
     // Масштаб переехал в полоску чарт-вкладок (рядом с ⚙) и теперь per-вкладочный —
     // см. controls::scale_dropdown_for_tabs / chart_tabs::ChartTabs::pick_active_scale.
 
+    let live_tone = if follow {
+        if p.is_light() { p.green_text } else { p.green }
+    } else {
+        p.text_muted
+    };
+    let live_label = if follow {
+        t!("toolbar.live").to_string()
+    } else {
+        t!("toolbar.pause").to_string()
+    };
     let backend = backend.clone();
     row.child(
         MoonButton::new("live")
-            .width(54.0)
-            .variant(if follow {
-                MoonButtonVariant::Green
-            } else {
-                MoonButtonVariant::Soft
-            })
+            .width(62.0)
+            .variant(MoonButtonVariant::Soft)
             .size(MoonButtonSize::ToolbarCompact)
-            .selected(follow)
-            .label(if follow {
-                t!("toolbar.live").to_string()
-            } else {
-                t!("toolbar.pause").to_string()
-            })
+            .segment(
+                MoonButtonSegment::new("●")
+                    .color(live_tone)
+                    .font_size(8.0)
+                    .weight(700.0),
+            )
+            .segment(
+                MoonButtonSegment::new(live_label)
+                    .color(live_tone)
+                    .weight(500.0),
+            )
             .on_click(move |_, _, cx| {
                 backend.update(cx, |b, bcx| {
                     b.follow = !b.follow;

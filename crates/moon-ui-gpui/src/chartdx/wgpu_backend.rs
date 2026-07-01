@@ -12,8 +12,8 @@ use super::types::{
     BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams, DEFAULT_VOLUME_ALPHA,
     GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu, append_cross_ring,
     cross_append_ranges, cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring,
-    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, seg_of, update_cross_volume_max,
-    zone_of,
+    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, seg_of,
+    update_cross_volume_max, zone_of,
 };
 
 const BACKGROUND_SHADER: &str = include_str!("shaders/native_background.wgsl");
@@ -628,6 +628,7 @@ impl WgpuLayers {
         }
         let sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
         pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
+        self.draw_user_layers(pass);
         self.draw_cursor_layer(pass, cursor_params, readout_rects);
         Ok(())
     }
@@ -637,6 +638,16 @@ impl WgpuLayers {
         let binds = self.prepared_binds.as_ref().unwrap();
         crate::diag::bump(&crate::diag::CHART_BG_DRAW);
         draw_pipeline(pass, &pipelines.background, &binds.bg, 6, 1);
+        if !self.zones.is_empty() {
+            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
+            draw_pipeline(
+                pass,
+                &pipelines.zone,
+                &binds.zone,
+                6,
+                self.zones.len() as u32,
+            );
+        }
         crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
         draw_pipeline(pass, &pipelines.grid, &binds.grid, 6, 1);
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
@@ -650,16 +661,11 @@ impl WgpuLayers {
                 self.levels.len() as u32,
             );
         }
-        if !self.zones.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
-            draw_pipeline(
-                pass,
-                &pipelines.zone,
-                &binds.zone,
-                6,
-                self.zones.len() as u32,
-            );
-        }
+    }
+
+    fn draw_user_layers(&self, pass: &mut wgpu::RenderPass<'_>) {
+        let pipelines = self.pipelines.as_ref().unwrap();
+        let binds = self.prepared_binds.as_ref().unwrap();
         if !self.hlines.is_empty() {
             crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(

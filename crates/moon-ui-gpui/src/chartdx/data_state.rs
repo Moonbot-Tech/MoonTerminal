@@ -4,6 +4,18 @@
 
 use super::*;
 
+fn hash_order_zones(zones: &[moon_chart::layers::ZoneInstance]) -> u64 {
+    let mut h = 0x9E37_79B9_7F4A_7C15u64 ^ zones.len() as u64;
+    for z in zones {
+        h = h.rotate_left(5) ^ z.price0.to_bits() as u64;
+        h = h.rotate_left(7) ^ z.price1.to_bits() as u64;
+        for c in z.color {
+            h = h.rotate_left(11) ^ c.to_bits() as u64;
+        }
+    }
+    h
+}
+
 impl ChartDataState {
     pub(super) fn new(
         container: Rc<RefCell<Container>>,
@@ -128,7 +140,6 @@ impl ChartDataState {
             pr.gpu_prepare_dirty = true;
         }
         st.needs_present = true;
-        st.base_dirty = true;
         true
     }
 
@@ -273,11 +284,13 @@ impl ChartDataState {
         let mut st = self.render.borrow_mut();
         let mut container = self.container.borrow_mut();
         let mut pixels_changed = false;
+        let mut base_changed = false;
         // Смена числа панелей (в т.ч. удаление последней монеты → пусто) обязана пометить
         // base_dirty: иначе base-кэш продолжит блитить СТАРЫЙ чарт сквозь пустой слот (логотип
         // прозрачный). Зеркалит проверку в sync_from_market_source.
         if st.panes.len() != container.pane_count() {
             pixels_changed = true;
+            base_changed = true;
         }
         st.panes
             .resize_with(container.pane_count(), PaneRender::new);
@@ -292,6 +305,7 @@ impl ChartDataState {
                 pr.core = Some(pane.core);
                 pr.market = pane.market.clone();
                 pixels_changed = true;
+                base_changed = true;
             }
             // Имя ядра для угловой подписи: резолвим тут — только здесь под рукой `session`.
             // Меняется редко (смена ядра панели), поэтому флагаем present лишь при изменении.
@@ -359,6 +373,11 @@ impl ChartDataState {
                         &mut segs,
                         &mut markers,
                     );
+                    let zone_sig = hash_order_zones(&zones);
+                    if pr.last_order_zone_sig != zone_sig {
+                        pr.last_order_zone_sig = zone_sig;
+                        base_changed = true;
+                    }
                     pr.layers.set_userdata(&zones, &hlines, &segs, &markers);
                     let quote_usd = self
                         .market_source
@@ -366,9 +385,12 @@ impl ChartDataState {
                         .and_then(|s| s.quote_usd_rate(pane.core, &pane.market));
                     build_order_labels(
                         &mut pr.order_labels,
+                        &mut pr.orderbook_labels,
                         &core_st.order_lines,
                         &pane.market,
+                        &self.theme,
                         quote_usd,
+                        drag_preview,
                     );
                     pr.last_order_lines_rev = core_st.order_lines_rev;
                     pr.last_order_lines_sync_ms = now;
@@ -379,8 +401,13 @@ impl ChartDataState {
                     pixels_changed = true;
                 }
             } else if force || pr.last_order_lines_rev != u64::MAX {
+                if pr.last_order_zone_sig != 0 {
+                    pr.last_order_zone_sig = 0;
+                    base_changed = true;
+                }
                 pr.layers.set_userdata(&[], &[], &[], &[]);
                 pr.order_labels.clear();
+                pr.orderbook_labels.clear();
                 pr.last_order_lines_rev = u64::MAX;
                 pr.last_order_lines_sync_ms = now;
                 pr.pending_order_gpu_rev = Some(u64::MAX);
@@ -392,7 +419,7 @@ impl ChartDataState {
             pr.last_device_gen = device_gen;
         }
 
-        if pixels_changed {
+        if base_changed {
             st.base_dirty = true;
         }
         if pixels_changed {
@@ -750,25 +777,25 @@ impl ChartDataState {
             let tick_price = pr.cached_tick_price;
             // Якорь авто-фокуса по стакану: лучшие bid/ask. O(1) чтение под коротким
             // read-lock; полную книгу строим ниже уже по выставленному окну.
-            let book_top = source
-                .with_orderbook_view(pane.core, &pane.market, |data| {
-                    data.and_then(|(book, _)| book.best_bid_ask())
-                });
+            let book_top = source.with_orderbook_view(pane.core, &pane.market, |data| {
+                data.and_then(|(book, _)| book.best_bid_ask())
+            });
             let book_mid = book_top.map(|(bid, ask)| (bid + ask) * 0.5);
             // Если трейдов нет — центрируемся по стакану: середину книги даём как якорь
             // центра (fallback для last_price), а видимую полосу строим так, чтобы она
             // ГАРАНТИРОВАННО включала лучшие bid/ask (широкий спред HIP-3), но была не уже
             // ±BOOK_FOCUS_HALF (иначе на узком спреде — абсурдный зум-ин). Когда трейды
             // есть (tick_price.is_some()) — полосу НЕ добавляем: диапазон ведут реальные тики.
-            let book_focus = tick_price
-                .is_none()
-                .then_some(book_top)
-                .flatten()
-                .map(|(bid, ask)| {
-                    let mid = (bid + ask) * 0.5;
-                    let min_half = mid.abs() * BOOK_FOCUS_HALF_FRAC;
-                    (bid.min(mid - min_half), ask.max(mid + min_half))
-                });
+            let book_focus =
+                tick_price
+                    .is_none()
+                    .then_some(book_top)
+                    .flatten()
+                    .map(|(bid, ask)| {
+                        let mid = (bid + ask) * 0.5;
+                        let min_half = mid.abs() * BOOK_FOCUS_HALF_FRAC;
+                        (bid.min(mid - min_half), ask.max(mid + min_half))
+                    });
             let last_price = last_price.or(book_mid);
             // Цена-ориентир для подписи курсора (% выше/ниже): трейды, иначе мид стакана. Без
             // этого на HIP-рынках без трейдов (но со стаканом) подпись % у курсора пропадала.
@@ -853,7 +880,12 @@ impl ChartDataState {
                 book_bg: rgb4(self.theme.book_bg),
                 bid: rgb4(self.theme.book_bid),
                 ask: rgb4(self.theme.book_ask),
-                level: [self.theme.book_level_alpha.clamp(0.0, 1.0), 1.5, 0.0, 0.0],
+                level: [
+                    self.theme.book_level_alpha.clamp(0.0, 1.0),
+                    self.theme.book_level_width.max(0.0),
+                    0.0,
+                    0.0,
+                ],
             };
             if pr.book_style != next_book_style {
                 pr.book_style = next_book_style;
@@ -897,9 +929,9 @@ impl ChartDataState {
                             book.build_instances(lo, hi, &mut levels);
                             diag_levels_len = Some(levels.len());
                             pr.layers.set_orderbook(levels);
-                            // CPU-копия (price, cum) видимых уровней — для подписи накопленного
-                            // количества в стакане под курсором (GPU-инстансы объём не несут).
-                            book.collect_visible_cum(lo, hi, &mut pr.orderbook_levels);
+                            // CPU-копия видимой книги — для подписей объёма в стакане:
+                            // cursor volume и MoonBot-style sell-line depth label.
+                            book.collect_visible_depth(lo, hi, &mut pr.orderbook_levels);
                             pr.last_book_rev = book_rev;
                             pr.last_book_lo = lo;
                             pr.last_book_hi = hi;
@@ -979,92 +1011,152 @@ impl ChartDataState {
 /// Только открытые ордера (закрытые/исполненные не подписываем).
 fn build_order_labels(
     out: &mut Vec<OrderLabel>,
+    book_out: &mut Vec<OrderBookLabel>,
     store: &moon_core::session::order_lines::OrderLineStore,
     market: &str,
+    theme: &ChartTheme,
     quote_usd: Option<f64>,
+    drag_preview: Option<(u64, LineKind, f32)>,
 ) {
     out.clear();
-    for o in store.iter_market(market) {
-        if o.closed_ms.is_some() {
-            continue;
-        }
-        let buy = o.lines[LineKind::Buy as usize].current_price();
-        let sell = o.lines[LineKind::Sell as usize].current_price();
-        let stop = o.lines[LineKind::Stop as usize].current_price();
+    book_out.clear();
+    let mut orders: Vec<_> = store
+        .iter_market(market)
+        .filter(|o| o.closed_ms.is_none())
+        .collect();
+    orders.sort_by_key(|o| o.seq);
+    for o in orders {
+        let preview = drag_preview
+            .filter(|(uid, _, price)| *uid == o.uid && price.is_finite() && *price > 0.0);
+        let line_price = |kind: LineKind| {
+            preview
+                .filter(|(_, preview_kind, _)| *preview_kind == kind)
+                .map(|(_, _, price)| price)
+                .or_else(|| o.lines[kind as usize].current_price())
+        };
+        let line_forced =
+            |kind: LineKind| preview.is_some_and(|(_, preview_kind, _)| preview_kind == kind);
+        let mut push = |price: f32,
+                        text: String,
+                        above: bool,
+                        color: u32,
+                        role: OrderLabelRole,
+                        force: bool| {
+            if price.is_finite() && price > 0.0 && !text.is_empty() {
+                out.push(OrderLabel {
+                    price,
+                    text,
+                    above,
+                    color,
+                    role,
+                    force,
+                });
+            }
+        };
+        let buy = line_price(LineKind::Buy);
+        let sell = line_price(LineKind::Sell);
+        let stop = line_price(LineKind::Stop);
         let short = o.is_short;
         // Порядковый номер ордера на чарте — на основной подписи каждой линии (buy/sell/stop),
         // чтобы связать линии одного ордера: «$X [10]», «-5% [10]», стоп «-3% [10]».
         let tag = if o.chart_num > 0 {
-            format!(" [{}]", o.chart_num)
+            format!("[{}]", o.chart_num)
         } else {
             String::new()
         };
+        let with_tag = |text: String| {
+            if tag.is_empty() {
+                text
+            } else {
+                format!("{text} {tag}")
+            }
+        };
         // BUY (линия входа): пока ордер ОЖИДАЕТ (не исполнен, fill=0) — показываем размер в
-        // $-ноционале + номер. Как только ИСПОЛНЕН — на линии входа остаётся только номер [N]
-        // (размер ушёл в позицию, на входе метка), как в MoonBot. Лонг → над линией, шорт → под.
+        // $-ноционале как caption. Номер [N] — отдельная primary-подпись, как в MoonBot:
+        // короткое имя линии рисуется всегда, длинный размер проходит через YTextFill.
         if let Some(bp) = buy {
-            if bp > 0.0 {
-                let executed = o.fill_pct > 0.0;
-                let text = if executed {
-                    tag.trim_start().to_string()
-                } else if o.size > 0.0 {
-                    let amount = match quote_usd {
-                        Some(rate) if rate > 0.0 => fmt_usd(o.size as f64 * bp as f64 * rate),
-                        _ => fmt_amount(o.size),
-                    };
-                    format!("{amount}{tag}")
-                } else {
-                    String::new()
+            let forced = line_forced(LineKind::Buy);
+            if !tag.is_empty() {
+                push(
+                    bp,
+                    tag.clone(),
+                    !short,
+                    ORDER_LABEL_NEUTRAL,
+                    OrderLabelRole::Primary,
+                    forced,
+                );
+            }
+            if o.fill_pct <= 0.0 && o.size > 0.0 {
+                let amount = match quote_usd {
+                    Some(rate) if rate > 0.0 => fmt_usd(o.size as f64 * bp as f64 * rate),
+                    _ => fmt_amount(o.size),
                 };
-                if !text.is_empty() {
-                    // Размер входа buy-ордера — ВСЕГДА белый (не цвет линии, не по стороне).
-                    out.push(OrderLabel {
-                        price: bp,
-                        text,
-                        above: !short,
-                        color: 0xFF_FF_FF,
-                    });
-                }
+                // Размер входа buy-ордера — ВСЕГДА белый (не цвет линии, не по стороне).
+                push(
+                    bp,
+                    amount,
+                    !short,
+                    ORDER_LABEL_NEUTRAL,
+                    OrderLabelRole::Caption,
+                    forced,
+                );
             }
         }
         // SELL: профит-% от цены входа (знаковый цвет) + РАЗМЕР на продажу в $-ноционале
-        // (size·цена_продажи·курс) на противоположной стороне линии — как в MoonBot. Это тот же
-        // размер ордера, но оценённый по цене продажи (отсюда лёгкое отличие от buy-ноционала).
+        // (remaining·цена_продажи·курс) на противоположной стороне линии — как в MoonBot:
+        // процент primary рисуется всегда, остаток caption проходит через YTextFill.
         if let Some(sp) = sell {
+            let forced = line_forced(LineKind::Sell);
+            if sp.is_finite() && sp > 0.0 {
+                book_out.push(OrderBookLabel { price: sp, short });
+            }
             if let Some(bp) = buy {
                 if bp > 0.0 {
                     let pct = signed_pct(sp, bp, short);
-                    out.push(OrderLabel {
-                        price: sp,
-                        text: format!("{}{tag}", fmt_pct(pct)),
-                        above: short,
-                        color: pct_color(pct),
-                    });
+                    push(
+                        sp,
+                        with_tag(fmt_pct(pct)),
+                        short,
+                        pct_color(theme, pct),
+                        OrderLabelRole::Primary,
+                        forced,
+                    );
                 }
             }
-            if o.size > 0.0 && sp > 0.0 {
+            let remaining = if o.remaining_size > 0.0 {
+                o.remaining_size
+            } else {
+                o.size
+            };
+            if remaining > 0.0 && sp > 0.0 {
                 let amount = match quote_usd {
-                    Some(rate) if rate > 0.0 => fmt_usd(o.size as f64 * sp as f64 * rate),
-                    _ => fmt_amount(o.size),
+                    Some(rate) if rate > 0.0 => fmt_usd(remaining as f64 * sp as f64 * rate),
+                    _ => fmt_amount(remaining),
                 };
-                out.push(OrderLabel {
-                    price: sp,
-                    text: amount,
-                    above: !short,
-                    color: side_color(short),
-                });
+                push(
+                    sp,
+                    amount,
+                    !short,
+                    side_color(theme, short),
+                    OrderLabelRole::Caption,
+                    forced,
+                );
             }
         }
-        // STOP: % стопа от цены покупки. Шорт → сверху, лонг → снизу. Знаковый цвет.
+        // STOP: % стопа от цены покупки. Шорт → сверху, лонг → снизу. Primary без YTextFill,
+        // как Delphi-блок stop-loss label.
         if let (Some(stp), Some(bp)) = (stop, buy) {
             if bp > 0.0 {
+                let forced = line_forced(LineKind::Stop);
                 let pct = signed_pct(stp, bp, short);
-                out.push(OrderLabel {
-                    price: stp,
-                    text: format!("{}{tag}", fmt_pct(pct)),
-                    above: short,
-                    color: pct_color(pct),
-                });
+                push(
+                    stp,
+                    with_tag(fmt_pct(pct)),
+                    short,
+                    pct_color(theme, pct),
+                    OrderLabelRole::Primary,
+                    forced,
+                );
             }
         }
     }
@@ -1079,28 +1171,24 @@ fn rgb_u32(c: [u8; 3]) -> u32 {
 /// для шорта sell ниже входа → «+», стоп выше входа → «−».
 fn signed_pct(level: f32, entry: f32, short: bool) -> f32 {
     let raw = (level - entry) / entry * 100.0;
+    if short { -raw } else { raw }
+}
+
+/// Цвет подписи размера по стороне ордера: лонг → positive, шорт → negative.
+fn side_color(theme: &ChartTheme, short: bool) -> u32 {
     if short {
-        -raw
+        rgb_u32(theme.label_negative)
     } else {
-        raw
+        rgb_u32(theme.label_positive)
     }
 }
 
-/// Цвет подписи размера по стороне ордера: лонг → зелёный, шорт → красный (палитра ядра).
-fn side_color(short: bool) -> u32 {
-    if short {
-        rgb_u32(moon_core::palette::RED)
-    } else {
-        rgb_u32(moon_core::palette::GREEN)
-    }
-}
-
-/// Цвет знакового процента: плюс → зелёный, минус → красный (палитра ядра).
-fn pct_color(v: f32) -> u32 {
+/// Цвет знакового процента: плюс → positive, минус → negative.
+fn pct_color(theme: &ChartTheme, v: f32) -> u32 {
     if v >= 0.0 {
-        rgb_u32(moon_core::palette::GREEN)
+        rgb_u32(theme.label_positive)
     } else {
-        rgb_u32(moon_core::palette::RED)
+        rgb_u32(theme.label_negative)
     }
 }
 

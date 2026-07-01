@@ -45,7 +45,10 @@ fn pos_selector_row(
     cx: &App,
     on_pick: impl Fn(ChartBtnPos, &mut App) + 'static,
 ) -> impl IntoElement {
-    let sel = BTN_POSITIONS.iter().position(|x| *x == current).unwrap_or(3);
+    let sel = BTN_POSITIONS
+        .iter()
+        .position(|x| *x == current)
+        .unwrap_or(3);
     let items: Vec<MoonSegmentItem> = BTN_POSITIONS
         .iter()
         .enumerate()
@@ -101,7 +104,10 @@ fn axis_selector_row(
     cx: &App,
     on_pick: impl Fn(PriceAxisPos, &mut App) + 'static,
 ) -> impl IntoElement {
-    let sel = AXIS_POSITIONS.iter().position(|x| *x == current).unwrap_or(1);
+    let sel = AXIS_POSITIONS
+        .iter()
+        .position(|x| *x == current)
+        .unwrap_or(1);
     let items: Vec<MoonSegmentItem> = AXIS_POSITIONS
         .iter()
         .enumerate()

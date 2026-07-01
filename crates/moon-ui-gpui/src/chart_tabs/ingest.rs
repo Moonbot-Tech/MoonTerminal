@@ -109,27 +109,37 @@ impl ChartTabs {
                     saved_scale,
                     saved_layout,
                     saved_orderbook,
+                    saved_liquidations,
                     saved_show_zone,
                     saved_auto_pin,
+                    saved_orientation,
                     saved_action_pos,
                     saved_axis_pos,
                     saved_time_axis,
+                    saved_line_labels,
+                    saved_cursor_labels,
+                    saved_compare,
                 ) = {
                     let specs = &self.backend.read(cx).chart_specs;
-                    let spec = specs
-                        .iter()
-                        .find(|s| s.matches(&self.group, n, &bucket));
+                    let spec = specs.iter().find(|s| s.matches(&self.group, n, &bucket));
                     (
                         spec.and_then(|s| s.scale),
                         spec.map_or((None, None, None), |s| {
                             (s.layout_mode, s.layout_height_fit, s.layout_height_scroll)
                         }),
                         spec.and_then(|s| s.orderbook_enabled),
+                        spec.and_then(|s| s.liquidations_enabled),
                         spec.and_then(|s| s.show_zone),
                         spec.and_then(|s| s.auto_pin),
+                        spec.and_then(|s| s.layout_orientation),
                         spec.map_or((None, None), |s| (s.cancel_buy_pos, s.panic_sell_pos)),
                         spec.and_then(|s| s.price_axis_pos),
                         spec.and_then(|s| s.time_axis_visible),
+                        spec.and_then(|s| s.line_labels),
+                        spec.and_then(|s| s.cursor_labels),
+                        spec.map_or((None, false), |s| {
+                            (s.compare_anchor.clone(), s.compare_orderbook_only)
+                        }),
                     )
                 };
                 if saved_scale.is_some() {
@@ -144,11 +154,19 @@ impl ChartTabs {
                 if saved_orderbook.is_some() {
                     panel.update(cx, |p, pcx| p.set_orderbook_enabled(saved_orderbook, pcx));
                 }
+                if saved_liquidations.is_some() {
+                    panel.update(cx, |p, pcx| {
+                        p.set_liquidations_enabled(saved_liquidations, pcx)
+                    });
+                }
                 if saved_show_zone.is_some() {
                     panel.update(cx, |p, pcx| p.set_show_zone(saved_show_zone, pcx));
                 }
                 if saved_auto_pin.is_some() {
                     panel.update(cx, |p, pcx| p.set_auto_pin(saved_auto_pin, pcx));
+                }
+                if saved_orientation.is_some() {
+                    panel.update(cx, |p, pcx| p.set_orientation(saved_orientation, pcx));
                 }
                 if saved_action_pos.0.is_some() || saved_action_pos.1.is_some() {
                     panel.update(cx, |p, pcx| {
@@ -160,6 +178,17 @@ impl ChartTabs {
                 }
                 if saved_time_axis.is_some() {
                     panel.update(cx, |p, pcx| p.set_time_axis_visible(saved_time_axis, pcx));
+                }
+                if saved_line_labels.is_some() {
+                    panel.update(cx, |p, pcx| p.set_line_labels(saved_line_labels, pcx));
+                }
+                if saved_cursor_labels.is_some() {
+                    panel.update(cx, |p, pcx| p.set_cursor_labels(saved_cursor_labels, pcx));
+                }
+                if saved_compare.0.is_some() || saved_compare.1 {
+                    panel.update(cx, |p, pcx| {
+                        p.restore_compare(saved_compare.0.clone(), saved_compare.1, pcx)
+                    });
                 }
                 panel.update(cx, |p, pcx| p.add_coin(core, &market, ttl, pcx));
                 self.add.push((n, bucket.clone(), panel));

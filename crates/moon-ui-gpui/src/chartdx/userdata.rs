@@ -141,16 +141,15 @@ impl UserDataLayer {
         }
     }
 
-    /// Рисует ордера поверх данных. `view` — тот же chart_area-трансформ, что у combo
-    /// (линии тянутся в зону стакана; scissor не ставим — как у движка друга).
-    pub fn render(
+    /// Рисует зоны ордеров: это фоновые диапазоны, поэтому их надо класть под сетку.
+    pub fn render_zones(
         &mut self,
         view: &ChartViewGpu,
         context: &ID3D11DeviceContext,
         rtv: &ID3D11RenderTargetView,
         gpu: &RawGpuAccess,
     ) {
-        if self.zone_count == 0 && self.hl_count == 0 && self.seg_count == 0 && self.mk_count == 0 {
+        if self.zone_count == 0 {
             return;
         }
         let Some(pipe) = self.pipe.as_ref() else {
@@ -164,13 +163,36 @@ impl UserDataLayer {
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             context.VSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
-            // Зоны → горизонтали (вход/стоп/liq) → отрезки (лестница) → маркеры (поверх).
-            if self.zone_count > 0 {
-                context.VSSetShaderResources(1, Some(&[Some(pipe.zone_srv.clone())]));
-                context.VSSetShader(&pipe.zone_vs, None);
-                context.PSSetShader(&pipe.zone_ps, None);
-                context.DrawInstanced(6, self.zone_count, 0, 0);
-            }
+            context.VSSetShaderResources(1, Some(&[Some(pipe.zone_srv.clone())]));
+            context.VSSetShader(&pipe.zone_vs, None);
+            context.PSSetShader(&pipe.zone_ps, None);
+            context.DrawInstanced(6, self.zone_count, 0, 0);
+        }
+    }
+
+    /// Рисует ордерные линии/трассы/маркеры поверх сетки. `view` — тот же chart_area-трансформ,
+    /// что у combo (линии тянутся в зону стакана; scissor ставит вызывающий).
+    pub fn render_lines(
+        &mut self,
+        view: &ChartViewGpu,
+        context: &ID3D11DeviceContext,
+        rtv: &ID3D11RenderTargetView,
+        gpu: &RawGpuAccess,
+    ) {
+        if self.hl_count == 0 && self.seg_count == 0 && self.mk_count == 0 {
+            return;
+        }
+        let Some(pipe) = self.pipe.as_ref() else {
+            return;
+        };
+        update_dynamic(context, &pipe.view_cb, &[*view]);
+        let vp = full_viewport(gpu);
+        unsafe {
+            context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+            context.RSSetViewports(Some(&[vp]));
+            context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context.VSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
+            context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
             if self.hl_count > 0 {
                 context.VSSetShaderResources(1, Some(&[Some(pipe.hl_srv.clone())]));
                 context.VSSetShader(&pipe.hl_vs, None);

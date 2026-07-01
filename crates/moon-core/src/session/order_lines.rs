@@ -85,13 +85,6 @@ impl LineTrace {
     /// (для линии входа = создание ордера; для стопов = момент фила). Возвращает
     /// true при изменении (новая ступень / выключение) — для бампа ревизии стора.
     fn update(&mut self, price: Option<f32>, start_ms: f64, now_ms: f64) -> bool {
-        let had_server = !self.server_points.is_empty() || self.tmp_point.is_some();
-        if had_server {
-            self.server_points.clear();
-            self.tmp_point = None;
-            self.server_stop_price = None;
-            self.server_stop_time_ms = None;
-        }
         match price {
             Some(p) if p.is_finite() && p > 0.0 => {
                 let was_off = self.off_ms.take().is_some();
@@ -106,7 +99,7 @@ impl LineTrace {
                             self.steps.push((now_ms, p));
                             true
                         } else {
-                            was_off || had_server
+                            was_off
                         }
                     }
                 }
@@ -116,7 +109,7 @@ impl LineTrace {
                     self.off_ms = Some(now_ms);
                     true
                 } else {
-                    had_server
+                    false
                 }
             }
         }
@@ -124,7 +117,17 @@ impl LineTrace {
 
     fn update_server(&mut self, trace: Option<&OrderTrace>) -> bool {
         let Some(trace) = trace else {
-            return false;
+            let changed = !self.server_points.is_empty()
+                || self.tmp_point.is_some()
+                || self.server_stop_price.is_some()
+                || self.server_stop_time_ms.is_some();
+            if changed {
+                self.server_points.clear();
+                self.tmp_point = None;
+                self.server_stop_price = None;
+                self.server_stop_time_ms = None;
+            }
+            return changed;
         };
         let points: Vec<(f64, f32)> = trace.points.iter().map(|p| (p.time_ms, p.price)).collect();
         let tmp = trace.tmp_point.map(|p| (p.time_ms, p.price));
@@ -133,23 +136,18 @@ impl LineTrace {
         let changed = self.server_points != points
             || self.tmp_point != tmp
             || self.server_stop_price != stop_price
-            || self.server_stop_time_ms != stop_time
-            || self.off_ms.is_some();
+            || self.server_stop_time_ms != stop_time;
         if changed {
             self.server_points = points;
             self.tmp_point = tmp;
             self.server_stop_price = stop_price;
             self.server_stop_time_ms = stop_time;
-            self.off_ms = None;
         }
         changed
     }
 
     pub fn current_price(&self) -> Option<f32> {
-        self.server_points
-            .last()
-            .map(|(_, p)| *p)
-            .or_else(|| self.steps.last().map(|(_, p)| *p))
+        self.steps.last().map(|(_, p)| *p)
     }
 }
 
@@ -162,6 +160,8 @@ pub struct RetainedOrder {
     pub is_short: bool,
     /// Размер входной ноги ордера (в базовой валюте) — для подписи размера у buy-линии.
     pub size: f32,
+    /// Остаток выходной ноги (в базовой валюте) — для подписи sell-линии.
+    pub remaining_size: f32,
     /// Заполнение входной ноги, % (0..100) — для подписи «куплено» (qty = size·fill/100).
     pub fill_pct: f32,
     /// Порядковый номер ордера НА ЧАРТЕ (per-market): присваивается при создании, растёт пока на
@@ -204,6 +204,7 @@ impl RetainedOrder {
             market: r.market.clone(),
             is_short: r.is_short,
             size: r.size as f32,
+            remaining_size: r.remaining_size as f32,
             fill_pct: r.fill_pct,
             chart_num: 0,
             pending: r.pending,
@@ -260,7 +261,9 @@ impl OrderLineStore {
             let mut used: HashMap<String, HashSet<u32>> = HashMap::new();
             for o in self.orders.values() {
                 if o.closed_ms.is_none() && o.chart_num > 0 {
-                    used.entry(o.market.clone()).or_default().insert(o.chart_num);
+                    used.entry(o.market.clone())
+                        .or_default()
+                        .insert(o.chart_num);
                 }
             }
             let mut fresh: Vec<&OrderRow> = rows
@@ -309,10 +312,13 @@ impl OrderLineStore {
             // (fill ползёт по мере исполнения → подпись «куплено» должна обновляться),
             // с порогом против float-дрожания.
             let new_size = r.size as f32;
+            let new_remaining_size = r.remaining_size as f32;
             if (order.size - new_size).abs() > price_eps(new_size)
+                || (order.remaining_size - new_remaining_size).abs() > price_eps(new_remaining_size)
                 || (order.fill_pct - r.fill_pct).abs() > 0.01
             {
                 order.size = new_size;
+                order.remaining_size = new_remaining_size;
                 order.fill_pct = r.fill_pct;
                 changed = true;
             }
@@ -341,18 +347,14 @@ impl OrderLineStore {
             let go = |show: bool, v: Option<f64>| if show { v.map(|x| x as f32) } else { None };
             // (значение, время первой ступени) по видам.
             changed |= order.lines[LineKind::Buy as usize].update_server(r.buy_trace.as_ref());
-            if r.buy_trace.is_none() {
-                changed |= order.lines[LineKind::Buy as usize].update(
-                    g(true, r.buy_price),
-                    order.create_ms,
-                    now_ms,
-                );
-            }
+            changed |= order.lines[LineKind::Buy as usize].update(
+                g(true, r.buy_price),
+                order.create_ms,
+                now_ms,
+            );
             changed |= order.lines[LineKind::Sell as usize].update_server(r.sell_trace.as_ref());
-            if r.sell_trace.is_none() {
-                changed |=
-                    order.lines[LineKind::Sell as usize].update(g(f, r.sell_price), now_ms, now_ms);
-            }
+            changed |=
+                order.lines[LineKind::Sell as usize].update(g(f, r.sell_price), now_ms, now_ms);
 
             let vals: [(Option<f32>, f64, usize); TRACED_KINDS - 2] = [
                 (go(f, r.stop_loss), now_ms, LineKind::Stop as usize),
@@ -537,6 +539,7 @@ mod tests {
             market: "BTCUSDT".into(),
             is_short: false,
             size: 0.01,
+            remaining_size: 0.01,
             sl_on: false,
             ts_on: false,
             sl_strat: false,

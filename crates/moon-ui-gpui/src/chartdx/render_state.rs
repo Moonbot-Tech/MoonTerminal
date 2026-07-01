@@ -57,15 +57,6 @@ fn clamp_anchor(value: f32, min: f32, max: f32) -> f32 {
     }
 }
 
-fn hex_rgba(hex: u32, alpha: f32) -> [f32; 4] {
-    [
-        ((hex >> 16) & 0xff) as f32 / 255.0,
-        ((hex >> 8) & 0xff) as f32 / 255.0,
-        (hex & 0xff) as f32 / 255.0,
-        alpha.clamp(0.0, 1.0),
-    ]
-}
-
 fn sync_readout_resolution(rects: &mut [ReadoutRect], res: [f32; 2]) {
     let w = res[0].max(1.0);
     let h = res[1].max(1.0);
@@ -130,6 +121,28 @@ impl RenderState {
             if self.cursor.is_some() {
                 self.needs_present = true;
             }
+        }
+    }
+
+    pub(super) fn set_readout_style(
+        &mut self,
+        bg: [f32; 4],
+        soft_bg: [f32; 4],
+        border: [f32; 4],
+        border_px: f32,
+    ) {
+        let border_px = border_px.max(0.0);
+        if self.readout_bg != bg
+            || self.readout_soft_bg != soft_bg
+            || self.readout_border != border
+            || (self.readout_border_px - border_px).abs() > 0.001
+        {
+            self.readout_bg = bg;
+            self.readout_soft_bg = soft_bg;
+            self.readout_border = border;
+            self.readout_border_px = border_px;
+            self.sync_readout_params();
+            self.needs_present = true;
         }
     }
 
@@ -207,9 +220,9 @@ impl RenderState {
 
     pub(super) fn sync_readout_params(&mut self) {
         let sf = self.pixel_scale.max(0.1);
-        let bg = hex_rgba(self.ui_palette.chart_bg, 0.96);
-        let border = bg;
-        let border_px = 0.0;
+        let bg = self.readout_bg;
+        let border = self.readout_border;
+        let border_px = self.readout_border_px;
         let m = [border_px, 1.0, 1.0, 0.0];
         let tz_offset_sec = crate::axes::local_offset_sec();
         let cursor = self.cursor;
@@ -256,11 +269,10 @@ impl RenderState {
                         (pr.caption_w + pad_l + pad_r) * sf,
                         (lines as f32 * super::text::LINE_H + pad_y * 2.0) * sf,
                     ];
-                    let cap_bg = hex_rgba(self.ui_palette.chart_bg, 0.2);
                     pr.readout_rects.push(ReadoutRect {
                         dst,
-                        bg: cap_bg,
-                        border: cap_bg,
+                        bg: self.readout_soft_bg,
+                        border,
                         m,
                     });
                 }
@@ -278,14 +290,17 @@ impl RenderState {
             // курсорных — они приоритетные, на переднем плане. Строим ДО гейта по курсору — ордерные
             // подписи видны и без курсора.
             let placed = std::mem::take(&mut pr.label_placed);
-            let light = hex_rgba(self.ui_palette.chart_bg, 0.2);
             for pl in &placed {
                 let dst = readout_rect_dst(pl.x, pl.y, pl.w, pl.ax, pl.ay, sf);
-                let pbg = if pl.solid { bg } else { light };
+                let pbg = if pl.solid {
+                    bg
+                } else {
+                    self.readout_soft_bg
+                };
                 pr.readout_rects.push(ReadoutRect {
                     dst,
                     bg: pbg,
-                    border: pbg,
+                    border,
                     m,
                 });
             }
@@ -632,7 +647,9 @@ impl RenderState {
                     if !pr.active {
                         continue;
                     }
+                    let mut view = pr.view;
                     let mut cursor_params = pr.cursor_params;
+                    view.resolution = res;
                     cursor_params.resolution = res;
                     sync_readout_resolution(&mut pr.readout_rects, res);
                     let pane_clip = bounds_clip(pr.pane_bounds, res);
@@ -644,6 +661,8 @@ impl RenderState {
                         pane_clip[2],
                         pane_clip[3],
                     );
+                    pr.layers
+                        .render_userdata_lines_d3d(&view, &context, &rtv, gpu);
                     pr.layers.render_cursor_d3d(
                         &cursor_params,
                         &pr.readout_rects,

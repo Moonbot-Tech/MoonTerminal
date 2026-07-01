@@ -360,7 +360,12 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
 /// Два индикатора-кругляша состояния рантайма активного ядра (рядом с селектором): запущен ли
 /// рынок-рантайм (`is_started`) и активен ли авто-детект (`auto_detect_active`; выкл = passive).
 /// Зелёный = вкл; серый = выкл; для passive при запущенном ядре — янтарный (работает, но не детектит).
-fn runtime_dots(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl IntoElement {
+fn runtime_dots(
+    group: &str,
+    backend: &Entity<Backend>,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
     let rt = {
         let b = backend.read(cx);
         b.active_trade_core(group)

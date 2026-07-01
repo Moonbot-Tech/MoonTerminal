@@ -332,10 +332,34 @@ fn build_order_row(
     // После этого и подпись размера (монеты), и её USD-нотионал (монеты × цена = контракты × cs)
     // считаются верно по общей формуле. `contract_size == 1` → linear/спот, size уже в монете.
     // (futures_type/валюты у coin-margined приходят пустыми — надёжен только contract_size.)
-    let size = if contract_size != 1.0 && contract_size > 0.0 && valid_entry {
-        raw_size * contract_size / entry
+    let convert_contract_qty = |qty: f64, price: f64| {
+        if contract_size != 1.0 && contract_size > 0.0 && price.is_finite() && price > 0.0 {
+            qty * contract_size / price
+        } else {
+            qty
+        }
+    };
+    let size = if valid_entry {
+        convert_contract_qty(raw_size, entry)
     } else {
         raw_size
+    };
+    let sell_remaining_raw = if o.sell_order.quantity_remaining != 0.0 {
+        o.sell_order.quantity_remaining
+    } else if ss != 0.0 {
+        ss
+    } else {
+        raw_size
+    };
+    let remaining_price = if o.sell_price.is_finite() && o.sell_price > 0.0 {
+        o.sell_price
+    } else {
+        entry
+    };
+    let remaining_size = if sell_remaining_raw.is_finite() && sell_remaining_raw > 0.0 {
+        convert_contract_qty(sell_remaining_raw, remaining_price)
+    } else {
+        size
     };
     let fin = |v: f64| (v.is_finite() && v > 0.0).then_some(v);
     let pct_stop = |level: f64| {
@@ -411,6 +435,7 @@ fn build_order_row(
         market: o.market_name.clone(),
         is_short: o.is_short,
         size,
+        remaining_size,
         sl_on: o.stops.stop_loss_enabled(),
         ts_on: o.stops.trailing_enabled(),
         sl_strat,

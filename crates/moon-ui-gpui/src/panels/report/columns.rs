@@ -104,8 +104,8 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
     let upper = coin.to_ascii_uppercase();
     // Уже полный рынок: кончается на quote ядра ИЛИ содержит dex-префикс HIP-3 (`xyz:BIRD`) →
     // берём как есть (достраивать quote нельзя — HL/HIP-3 не несут суффикса в имени).
-    let already_full =
-        coin.contains(':') || (!quote.is_empty() && upper.len() > quote.len() && upper.ends_with(&quote));
+    let already_full = coin.contains(':')
+        || (!quote.is_empty() && upper.len() > quote.len() && upper.ends_with(&quote));
     let candidate = if already_full || quote.is_empty() {
         coin.to_string()
     } else {

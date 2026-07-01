@@ -121,6 +121,9 @@ pub struct OrderRow {
     pub is_short: bool,
     /// Размер входной ноги (buy для long / sell для short), в базовой валюте.
     pub size: f64,
+    /// Остаток выходной ноги, в базовой валюте. Для подписи sell-линии на чарте:
+    /// MoonBot показывает именно QuantityRemaining, а не исходный размер входа.
+    pub remaining_size: f64,
     /// SL/TS включены НА САМОМ ОРДЕРЕ (per-order `StopSettings`). Это то, что тогается кликом.
     pub sl_on: bool,
     pub ts_on: bool,

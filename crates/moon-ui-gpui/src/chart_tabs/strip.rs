@@ -426,7 +426,8 @@ impl Render for ChartTabs {
                         pap_entity.update(app, |this, cx| this.apply_price_axis_pos(pos, cx));
                     },
                     move |checked, app| {
-                        tav_entity.update(app, |this, cx| this.apply_time_axis_visible(checked, cx));
+                        tav_entity
+                            .update(app, |this, cx| this.apply_time_axis_visible(checked, cx));
                     },
                     move |checked, app| {
                         ll_entity.update(app, |this, cx| this.apply_line_labels(checked, cx));

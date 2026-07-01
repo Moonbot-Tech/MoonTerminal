@@ -24,16 +24,6 @@ fn color(hex: u32) -> Hsla {
     gpui::rgb(hex).into()
 }
 
-fn mix_hex(a: u32, b: u32, t: f32) -> u32 {
-    let t = t.clamp(0.0, 1.0);
-    let mix = |shift| {
-        let av = ((a >> shift) & 0xff_u32) as f32;
-        let bv = ((b >> shift) & 0xff_u32) as f32;
-        (av + (bv - av) * t).round() as u32
-    };
-    (mix(16) << 16) | (mix(8) << 8) | mix(0)
-}
-
 fn local_offset_sec() -> i64 {
     crate::axes::local_offset_sec()
 }
@@ -78,18 +68,27 @@ fn fmt_amount(v: f32) -> String {
     moon_core::util::fmt::compact_si(v as f64)
 }
 
-fn rgb3(c: [u8; 3]) -> u32 {
-    ((c[0] as u32) << 16) | ((c[1] as u32) << 8) | c[2] as u32
+fn sell_book_notional(levels: &[moon_core::data::BookDepthPoint], price: f32, short: bool) -> f32 {
+    let mut sum = 0.0_f32;
+    for level in levels {
+        if short {
+            // MoonBot: short sell-line volume uses buy glass above sell price.
+            if !level.is_ask && level.price > price {
+                sum += level.notional;
+            }
+        } else {
+            // MoonBot: long sell-line volume uses sell glass below sell price.
+            if level.is_ask && level.price < price {
+                sum += level.notional;
+            }
+        }
+    }
+    sum
 }
 
-/// Цвет знакового процента: плюс → зелёный, минус → красный (палитра ядра).
-fn pct_hsla(v: f32) -> Hsla {
-    let c = if v >= 0.0 {
-        moon_core::palette::GREEN
-    } else {
-        moon_core::palette::RED
-    };
-    color(rgb3(c))
+/// Цвет знакового процента: плюс → positive, минус → negative из текущей chart theme.
+fn pct_hsla(v: f32, positive: u32, negative: u32) -> Hsla {
+    color(if v >= 0.0 { positive } else { negative })
 }
 
 fn clamp_anchor(value: f32, min: f32, max: f32) -> f32 {
@@ -294,11 +293,11 @@ impl RenderState {
     ) -> anyhow::Result<()> {
         self.text_run_cursor = 0;
         let sf = ctx.scale_factor().max(0.1);
-        let palette = self.ui_palette;
-        let ink = color(palette.text_soft);
-        let readout = color(mix_hex(palette.text_soft, palette.text, 0.45));
-        // Угловая подпись — светлым шрифтом (самый яркий текст палитры), без подложки.
-        let caption_fg = color(palette.text);
+        let ink = color(self.axis_label);
+        let readout = color(self.readout_label);
+        let label_neutral = color(self.label_neutral);
+        // Угловая подпись — отдельный цвет chart theme, без подложки.
+        let caption_fg = color(self.caption_label);
         let tz_offset_sec = local_offset_sec();
         let mut firetest_text_drawn = false;
         let mut readout_metrics_changed = false;
@@ -334,12 +333,13 @@ impl RenderState {
             // Снимаем подписи ордеров / уровни стакана / last в локали ДО первого `draw_text`
             // (он берёт `&mut self`, поэтому держать заём `self.panes[idx]` нельзя).
             let order_labels = self.panes[idx].order_labels.clone();
+            let orderbook_labels = self.panes[idx].orderbook_labels.clone();
             let orderbook_levels = self.panes[idx].orderbook_levels.clone();
             let cached_last_price = self.panes[idx].cached_last_price;
             let prospective_usd = self.panes[idx].prospective_usd;
-            // Раскладка подписей этого кадра (для плашек в sync_readout_params). Очищаем сразу:
-            // у схлопнутых/неактивных панелей подписей нет, плашки тоже.
-            self.panes[idx].label_placed.clear();
+            // Раскладка подписей этого кадра (для плашек в sync_readout_params). Старую держим для
+            // сравнения: при зуме меняется Y, и подложки должны переехать вместе с текстом.
+            let previous_placed = std::mem::take(&mut self.panes[idx].label_placed);
             let mut placed: Vec<PlacedLabel> = Vec::new();
             let pane_left = pane_bounds[0] / sf;
             let pane_right = (pane_bounds[0] + pane_bounds[2]) / sf;
@@ -392,6 +392,10 @@ impl RenderState {
 
             // Дальше — оси/курсор/сетка, только для нормального (не схлопнутого) чарта.
             if plot_w < 60.0 || plot_h < 60.0 || view.price_to_px <= 0.0 {
+                if previous_placed != placed {
+                    self.panes[idx].label_placed = placed;
+                    readout_metrics_changed = true;
+                }
                 continue;
             }
 
@@ -403,6 +407,9 @@ impl RenderState {
             let price_to_px = view.price_to_px / sf;
             let price_range = plot_h / price_to_px.max(1e-6);
             let y_min = view.view_price0;
+            let line_y = |price: f32| -> f32 {
+                ((plot_bottom * sf) - (price - y_min) * view.price_to_px).round() / sf
+            };
             let top_price = y_min + price_range;
             let interval = nice_interval(price_range.max(1e-9), 8.0);
             let dec = price_decimals(y_min + price_range * 0.5);
@@ -421,10 +428,11 @@ impl RenderState {
             };
             let label_x = zone_left - READOUT_PAD_X;
 
-            // Подписи ордерных линий (size у buy, % + куплено у sell, % стопа) — отдельный столбик
-            // слева от разделителя, правым краем к нему. Анти-наложение: близкие по цене подписи
-            // расталкиваются вниз по вертикали (как YTextFill в эталоне). Рисуются ДО курсора, чтобы
-            // курсорные цифры были на переднем плане. Каждой записываем место для плашки-подложки.
+            // Подписи ордерных линий — отдельный столбик слева от разделителя, правым краем к нему.
+            // MoonBot-модель: primary (номер/%/stop%) рисуется у своей линии всегда; caption
+            // (размер/остаток) проверяет YTextFill-бакет в 3px и пропускается при overlap.
+            // Никакого сдвига подписи вниз: оторванная от линии подпись хуже, чем пропущенная.
+            // Drag/force подписи рисуем последними и не давим overlap-ом, как MovingTextS в Delphi.
             // Ордерные подписи рисуются ВСЕГДА (под курсорными они не вырезаются, а просвечивают):
             // курсорные цифры приоритетны и рисуются ПОЗЖЕ (поверх), поэтому читаются сверху, а
             // ордерная цифра остаётся видна вокруг/за ними.
@@ -432,35 +440,105 @@ impl RenderState {
             if self.line_labels {
                 // Высота строки подписей зависит от их кегля (настраивается слайдером темы).
                 let label_line_h = self.label_font_px() + 4.0;
-                let mut items: Vec<(f32, f32, &OrderLabel)> = Vec::new();
+                let mut y_text_fill = vec![false; (plot_h / 3.0).round().max(1.0) as usize + 2];
+                let mut force_items: Vec<(f32, f32, f32, &OrderLabel)> = Vec::new();
                 for label in &order_labels {
-                    let y = plot_bottom - (label.price - y_min) * price_to_px;
+                    let y = line_y(label.price);
                     if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
                         continue;
                     }
-                    let dy = if label.above {
-                        y - label_line_h * 0.5 - 1.0
+                    let (dy, ay, top, bottom) = if label.above {
+                        let dy = y - 1.0;
+                        (dy, 1.0, dy - label_line_h, dy)
                     } else {
-                        y + label_line_h * 0.5 + 1.0
+                        let dy = y + 1.0;
+                        (dy, 0.0, dy, dy + label_line_h)
                     };
                     let w = self.measure_label_text(ctx, &label.text).width.as_f32();
-                    items.push((dy, w, label));
-                }
-                items.sort_by(|a, b| a.0.total_cmp(&b.0));
-                let gap = label_line_h + 1.0;
-                let mut last_y = f32::NEG_INFINITY;
-                for (dy, w, label) in items.iter_mut() {
-                    if *dy < last_y + gap {
-                        *dy = last_y + gap;
+                    let bucket_min = ((top - plot_top) / 3.0)
+                        .floor()
+                        .clamp(0.0, (y_text_fill.len() - 1) as f32)
+                        as usize;
+                    let bucket_max = ((bottom - plot_top) / 3.0)
+                        .ceil()
+                        .clamp(0.0, (y_text_fill.len() - 1) as f32)
+                        as usize;
+                    let is_caption = matches!(label.role, OrderLabelRole::Caption);
+                    let blocked = is_caption
+                        && !label.force
+                        && y_text_fill[bucket_min..=bucket_max].iter().any(|v| *v);
+                    if is_caption && !label.force && !blocked {
+                        for slot in &mut y_text_fill[bucket_min..=bucket_max] {
+                            *slot = true;
+                        }
                     }
-                    last_y = *dy;
-                    self.draw_label_text(ctx, &label.text, label_x, *dy, 1.0, 0.5, color(label.color))?;
+                    if blocked {
+                        continue;
+                    }
+                    if label.force {
+                        force_items.push((dy, ay, w, label));
+                        continue;
+                    }
+                    let fg = if label.color == ORDER_LABEL_NEUTRAL {
+                        label_neutral
+                    } else {
+                        color(label.color)
+                    };
+                    self.draw_label_text(ctx, &label.text, label_x, dy, 1.0, ay, fg)?;
                     placed.push(PlacedLabel {
                         x: label_x,
-                        y: *dy,
+                        y: dy,
                         ax: 1.0,
-                        ay: 0.5,
-                        w: *w,
+                        ay,
+                        w,
+                        solid: false,
+                    });
+                }
+                for (dy, ay, w, label) in force_items {
+                    let fg = if label.color == ORDER_LABEL_NEUTRAL {
+                        label_neutral
+                    } else {
+                        color(label.color)
+                    };
+                    self.draw_label_text(ctx, &label.text, label_x, dy, 1.0, ay, fg)?;
+                    placed.push(PlacedLabel {
+                        x: label_x,
+                        y: dy,
+                        ax: 1.0,
+                        ay,
+                        w,
+                        solid: false,
+                    });
+                }
+            }
+
+            // MoonBot `LastSellOrderPriceVol`: отдельная подпись глубины стакана у sell-линии.
+            // Это НЕ текст ордера, а сумма book notional до цены закрытия:
+            // long → ask ниже sell, short → bid выше sell. Рисуем в зоне стакана; курсорный
+            // readout ниже идёт поверх неё, если пользователь навёлся в ту же точку.
+            if orderbook_enabled && self.line_labels && !orderbook_levels.is_empty() {
+                let right_x = zone_left + READOUT_PAD_X;
+                let label_line_h = self.label_font_px() + 4.0;
+                for label in &orderbook_labels {
+                    let y = line_y(label.price);
+                    if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
+                        continue;
+                    }
+                    let q = sell_book_notional(&orderbook_levels, label.price, label.short);
+                    let text = fmt_amount(q);
+                    let col = if q <= 1e-6 {
+                        color(self.label_positive)
+                    } else {
+                        color(self.label_negative)
+                    };
+                    let dy = y - 2.0;
+                    let m = self.draw_label_text(ctx, &text, right_x, dy, 0.0, 1.0, col)?;
+                    placed.push(PlacedLabel {
+                        x: right_x,
+                        y: dy,
+                        ax: 0.0,
+                        ay: 1.0,
+                        w: m.width.as_f32(),
                         solid: false,
                     });
                 }
@@ -528,7 +606,9 @@ impl RenderState {
                     let cursor_price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
                     let cur_col = cached_last_price
                         .filter(|l| *l > 0.0)
-                        .map(|last| pct_hsla(last - cursor_price))
+                        .map(|last| {
+                            pct_hsla(last - cursor_price, self.label_positive, self.label_negative)
+                        })
                         .unwrap_or(readout);
                     let right_x = zone_left + READOUT_PAD_X;
                     // Курсорные цифры — приоритетные, на переднем плане, в столбики НЕ входят
@@ -537,7 +617,15 @@ impl RenderState {
                     // Без $/K-M, всегда 2 знака после запятой («100.00»).
                     if let Some(usd) = prospective_usd {
                         let text = format!("{usd:.2}");
-                        let m = self.draw_label_text(ctx, &text, label_x, cy_log - 2.0, 1.0, 1.0, cur_col)?;
+                        let m = self.draw_label_text(
+                            ctx,
+                            &text,
+                            label_x,
+                            cy_log - 2.0,
+                            1.0,
+                            1.0,
+                            cur_col,
+                        )?;
                         placed.push(PlacedLabel {
                             x: label_x,
                             y: cy_log - 2.0,
@@ -551,14 +639,22 @@ impl RenderState {
                     if orderbook_enabled && !orderbook_levels.is_empty() {
                         let tol = 6.0 / price_to_px.max(1e-6);
                         let mut best: Option<(f32, f32)> = None;
-                        for (lp, q) in &orderbook_levels {
-                            let d = (lp - cursor_price).abs();
+                        for level in &orderbook_levels {
+                            let d = (level.price - cursor_price).abs();
                             if d <= tol && best.is_none_or(|(bd, _)| d < bd) {
-                                best = Some((d, *q));
+                                best = Some((d, level.cum_notional));
                             }
                         }
                         if let Some((_, q)) = best {
-                            let m = self.draw_label_text(ctx, &fmt_amount(q), right_x, cy_log - 2.0, 0.0, 1.0, cur_col)?;
+                            let m = self.draw_label_text(
+                                ctx,
+                                &fmt_amount(q),
+                                right_x,
+                                cy_log - 2.0,
+                                0.0,
+                                1.0,
+                                cur_col,
+                            )?;
                             placed.push(PlacedLabel {
                                 x: right_x,
                                 y: cy_log - 2.0,
@@ -573,7 +669,15 @@ impl RenderState {
                     if let Some(last) = cached_last_price {
                         if last > 0.0 {
                             let pct = (cursor_price - last) / last * 100.0;
-                            let m = self.draw_label_text(ctx, &fmt_pct(pct), right_x, cy_log + 2.0, 0.0, 0.0, cur_col)?;
+                            let m = self.draw_label_text(
+                                ctx,
+                                &fmt_pct(pct),
+                                right_x,
+                                cy_log + 2.0,
+                                0.0,
+                                0.0,
+                                cur_col,
+                            )?;
                             placed.push(PlacedLabel {
                                 x: right_x,
                                 y: cy_log + 2.0,
@@ -588,7 +692,14 @@ impl RenderState {
             }
 
             // Готовая раскладка подписей кадра → плашки-подложки строит sync_readout_params.
-            self.panes[idx].label_placed = placed;
+            // При зуме Y меняется даже если текст/ширина прежние, поэтому сравниваем раскладку:
+            // иначе подложки остаются на старой цене и визуально «висят в воздухе».
+            if previous_placed != placed {
+                self.panes[idx].label_placed = placed;
+                readout_metrics_changed = true;
+            } else {
+                self.panes[idx].label_placed = previous_placed;
+            }
 
             // Прореживание по вертикали: при низком окне «nice»-шаг даёт подписи плотнее строки —
             // рисуем следующую, только если она отстоит от ПРЕДЫДУЩЕЙ нарисованной на высоту
@@ -598,7 +709,7 @@ impl RenderState {
             let mut p = (y_min / interval).ceil() * interval;
             let mut guard = 0;
             while !axis_hidden && p <= top_price && guard < 256 {
-                let y = plot_bottom - (p - y_min) * price_to_px;
+                let y = line_y(p);
                 let overlaps_readout = skip_price_label_y
                     .is_some_and(|(top, bottom)| y >= top - 1.0 && y <= bottom + 1.0);
                 if y >= plot_top - 1.0

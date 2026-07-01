@@ -145,15 +145,26 @@ pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
     let r = LOGO_GLOW_VIEW_W * 0.5;
     let logo_x = (LOGO_GLOW_VIEW_W - LOGO_SRC_W) * 0.5;
     let logo_y = (LOGO_GLOW_VIEW_H - LOGO_SRC_H) * 0.5;
-    let aura_alpha = if p.is_light() { 0.5 } else { 1.0 };
+    let (aura_0_color, aura_1_color, aura_2_color, aura_0, aura_1, aura_2) = if p.is_light() {
+        (
+            "#BFF5C9",
+            "#AEEFC1",
+            "#98E8B2",
+            0.30 * 0.5 / 3.0,
+            0.19 * 0.5 / 3.0,
+            0.07 * 0.5 / 3.0,
+        )
+    } else {
+        ("#00BCFF", "#1A76FF", "#0A5CFF", 0.30, 0.19, 0.07)
+    };
     let svg = format!(
         r##"<svg width="{view_w}" height="{view_h}" viewBox="0 0 {view_w} {view_h}" fill="none" xmlns="http://www.w3.org/2000/svg">
 <defs>
   <radialGradient id="moonbot_aura" cx="50%" cy="50%" r="50%">
-    <stop offset="0%" stop-color="#00BCFF" stop-opacity="{aura_0:.3}"/>
-    <stop offset="34%" stop-color="#1A76FF" stop-opacity="{aura_1:.3}"/>
-    <stop offset="68%" stop-color="#0A5CFF" stop-opacity="{aura_2:.3}"/>
-    <stop offset="100%" stop-color="#0A5CFF" stop-opacity="0"/>
+    <stop offset="0%" stop-color="{aura_0_color}" stop-opacity="{aura_0:.3}"/>
+    <stop offset="34%" stop-color="{aura_1_color}" stop-opacity="{aura_1:.3}"/>
+    <stop offset="68%" stop-color="{aura_2_color}" stop-opacity="{aura_2:.3}"/>
+    <stop offset="100%" stop-color="{aura_2_color}" stop-opacity="0"/>
   </radialGradient>
 </defs>
 <circle cx="{cx}" cy="{cy}" r="{r}" fill="url(#moonbot_aura)"/>
@@ -166,9 +177,12 @@ pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
         r = r,
         logo_x = logo_x,
         logo_y = logo_y,
-        aura_0 = 0.30 * aura_alpha,
-        aura_1 = 0.19 * aura_alpha,
-        aura_2 = 0.07 * aura_alpha,
+        aura_0_color = aura_0_color,
+        aura_1_color = aura_1_color,
+        aura_2_color = aura_2_color,
+        aura_0 = aura_0,
+        aura_1 = aura_1,
+        aura_2 = aura_2,
         paths = paths,
     );
     let frame_w = width * (LOGO_GLOW_VIEW_W / 199.0);

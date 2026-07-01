@@ -155,35 +155,43 @@ pub struct OrdersStyle {
 }
 
 impl Default for OrdersStyle {
-    /// Дефолт = ТЁМНЫЙ набор пользователя (бейк из его `orders.toml`).
+    /// Дефолт = тёмный набор MoonBot.
     fn default() -> Self {
         let liq = LineStyle {
             start_marker: false,
             end_marker: false,
             knots: false,
-            thickness: 1.5,
-            ..LineStyle::with([255, 48, 0])
+            thickness: 2.0,
+            ..LineStyle::with([255, 69, 0])
         };
         let pending_cond = LineStyle {
             dashed: true,
-            ..LineStyle::with([151, 146, 138])
+            ..LineStyle::with([255, 106, 0]).t(2.0)
+        };
+        let path = PathStyle {
+            color: [211, 211, 211],
+            ..PathStyle::default()
         };
         Self {
-            buy: LineStyle::with([255, 179, 71]).t(1.2).pending([255, 217, 61]),
-            buy_short: LineStyle::with([255, 179, 71])
-                .t(1.2)
-                .pending([232, 228, 220]),
-            sell: LineStyle::with([143, 208, 240]).t(1.2),
-            sell_short: LineStyle::with([127, 201, 255]).t(1.2),
-            stop: LineStyle::with([255, 74, 74]).t(1.2),
-            trailing: LineStyle::with([92, 111, 224]).no_markers(),
+            buy: LineStyle::with([210, 105, 30])
+                .t(2.0)
+                .pending([255, 106, 0]),
+            buy_short: LineStyle::with([176, 196, 222])
+                .t(2.0)
+                .pending([255, 106, 0]),
+            sell: LineStyle::with([127, 201, 255]).t(2.0),
+            sell_short: LineStyle::with([211, 211, 211]).t(2.0),
+            stop: LineStyle::with([255, 127, 80]).t(2.0),
+            trailing: LineStyle::with([100, 149, 237])
+                .t(2.0)
+                .no_markers(),
             take_profit: LineStyle::with([47, 168, 92]).no_markers(),
             vstop: LineStyle::with([180, 120, 255]).no_markers(),
             pending_cond,
             liq,
-            path: PathStyle::default(),
-            trace_alpha: 0.4,
-            active_alpha: 0.95,
+            path,
+            trace_alpha: 1.0,
+            active_alpha: 1.0,
             closed_alpha: 0.35,
             pending_dashed: true,
             max_closed_orders: 500,
@@ -192,33 +200,41 @@ impl Default for OrdersStyle {
 }
 
 impl OrdersStyle {
-    /// Дефолт СВЕТЛОГО набора (бейк из `[light]` в `orders.toml` пользователя).
+    /// Дефолт светлого набора MoonBot.
     fn default_light() -> Self {
         let liq = LineStyle {
             start_marker: false,
             end_marker: false,
             knots: false,
-            thickness: 1.5,
+            thickness: 2.0,
             ..LineStyle::with([255, 0, 0])
         };
         let pending_cond = LineStyle {
             dashed: true,
-            ..LineStyle::with([151, 146, 138])
+            ..LineStyle::with([176, 0, 0]).t(2.0)
+        };
+        let path = PathStyle {
+            color: [0, 0, 0],
+            ..PathStyle::default()
         };
         Self {
-            buy: LineStyle::with([0, 0, 0]),
-            buy_short: LineStyle::with([144, 0, 160]),
-            sell: LineStyle::with([0, 0, 255]),
-            sell_short: LineStyle::with([139, 0, 0]),
-            stop: LineStyle::with([255, 74, 74]),
-            trailing: LineStyle::with([0, 0, 128]).no_markers(),
+            buy: LineStyle::with([0, 0, 0])
+                .t(2.0)
+                .pending([176, 0, 0]),
+            buy_short: LineStyle::with([139, 0, 139])
+                .t(2.0)
+                .pending([176, 0, 0]),
+            sell: LineStyle::with([0, 0, 255]).t(2.0),
+            sell_short: LineStyle::with([128, 0, 0]).t(2.0),
+            stop: LineStyle::with([255, 0, 0]).t(2.0),
+            trailing: LineStyle::with([0, 0, 139]).t(2.0).no_markers(),
             take_profit: LineStyle::with([47, 168, 92]).no_markers(),
             vstop: LineStyle::with([180, 120, 255]).no_markers(),
             pending_cond,
             liq,
-            path: PathStyle::default(),
-            trace_alpha: 0.4,
-            active_alpha: 0.95,
+            path,
+            trace_alpha: 1.0,
+            active_alpha: 1.0,
             closed_alpha: 0.35,
             pending_dashed: true,
             max_closed_orders: 500,
@@ -268,10 +284,18 @@ impl Default for OrdersStyleSet {
 impl OrdersStyleSet {
     /// Набор для активной темы: `light=true` → светлый, иначе тёмный.
     pub fn get(&self, light: bool) -> &OrdersStyle {
-        if light { &self.light } else { &self.dark }
+        if light {
+            &self.light
+        } else {
+            &self.dark
+        }
     }
     pub fn get_mut(&mut self, light: bool) -> &mut OrdersStyle {
-        if light { &mut self.light } else { &mut self.dark }
+        if light {
+            &mut self.light
+        } else {
+            &mut self.dark
+        }
     }
 
     /// Прочитать `orders.toml`. Новый формат — таблицы `[dark]`/`[light]`. СТАРЫЙ плоский
@@ -284,17 +308,25 @@ impl OrdersStyleSet {
             let _ = def.save();
             return def;
         };
-        // Новый формат: присутствует таблица темы.
+        // Новый формат: присутствует таблица темы. Ранние dev-сборки мигрировали старый плоский
+        // orders.toml в `[dark]` и `[light]` одинаково; на светлой теме это делало линии почти
+        // невидимыми. Если видим такой клон, оставляем dark как пользовательский набор, а light
+        // переводим на светлый дефолт.
         if text.contains("[dark") || text.contains("[light") {
-            return toml::from_str(&text).unwrap_or_else(|e| {
+            let mut set: Self = toml::from_str(&text).unwrap_or_else(|e| {
                 log::warn!("orders.toml повреждён ({e}); беру дефолт");
                 Self::default()
             });
+            if set.light == set.dark {
+                set.light = OrdersStyle::default_light();
+                let _ = set.save();
+            }
+            return set;
         }
-        // Старый плоский файл → один и тот же стиль в оба набора + миграция формата на диск.
+        // Старый плоский файл → тёмный набор берём из файла, светлый — из своего дефолта.
         let flat: OrdersStyle = toml::from_str(&text).unwrap_or_default();
         let set = Self {
-            light: flat.clone(),
+            light: OrdersStyle::default_light(),
             dark: flat,
         };
         let _ = set.save();

@@ -83,7 +83,14 @@ fn ord_slider(
 macro_rules! line_ed {
     ($b:expr, $w:expr, $cx:expr, $il:expr, $line:ident) => {
         LineEd {
-            color: ord_color($b, $w, $cx, $il, |o| o.$line.color, |o, v| o.$line.color = v),
+            color: ord_color(
+                $b,
+                $w,
+                $cx,
+                $il,
+                |o| o.$line.color,
+                |o, v| o.$line.color = v,
+            ),
             thickness: ord_slider(
                 $b,
                 $cx,
@@ -347,7 +354,11 @@ impl SettingsView {
                         .gap(px(10.0))
                         .items_center()
                         .child(MoonColorPicker::new(&ed.pending_color))
-                        .child(slider_row(&t!("lines.pending_alpha"), &ed.pending_alpha, cx)),
+                        .child(slider_row(
+                            &t!("lines.pending_alpha"),
+                            &ed.pending_alpha,
+                            cx,
+                        )),
                 );
         }
         if markers {

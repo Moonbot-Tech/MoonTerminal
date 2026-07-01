@@ -262,6 +262,7 @@ impl PlatformLayers {
         crate::diag::bump(&crate::diag::CHART_BG_DRAW);
         self.background
             .render(background_params, device, context, rtv, gpu);
+        self.userdata.render_zones(view, context, rtv, gpu);
         crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
         self.grid.render(grid_params, device, context, rtv, gpu);
         crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
@@ -269,11 +270,21 @@ impl PlatformLayers {
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
         self.orderbook
             .render(orderbook_view, context, rtv, gpu, panel_clip);
-        crate::diag::bump(&crate::diag::CHART_USER_DRAW);
-        self.userdata.render(view, context, rtv, gpu);
         if self.combo.has_data() {
             super::gpu::debug_dump_rtv_once(device, context, rtv);
         }
+    }
+
+    #[cfg(windows)]
+    pub fn render_userdata_lines_d3d(
+        &mut self,
+        view: &ChartViewGpu,
+        context: &ID3D11DeviceContext,
+        rtv: &ID3D11RenderTargetView,
+        gpu: &gpui::RawGpuAccess,
+    ) {
+        crate::diag::bump(&crate::diag::CHART_USER_DRAW);
+        self.userdata.render_lines(view, context, rtv, gpu);
     }
 
     #[cfg(windows)]

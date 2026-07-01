@@ -2,6 +2,7 @@
 //! fullscreen, ПКМ по области панели графика разворачивает весь stack. Вынесено из `chart_tabs` как
 //! самостоятельная вью-модель; общий рендер стека — в [`super::stack`].
 
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -11,9 +12,8 @@ use super::stack::{
     ChartStackEntry, apply_setting, chart_stack_card, compare_role, render_chart_stack,
     resolve_layout, retain_nonempty_panels, set_panels_action_btn_pos, set_panels_auto_pin,
     set_panels_cursor_labels, set_panels_line_labels, set_panels_liquidations,
-    set_panels_orderbook_enabled,
-    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible,
-    sync_compare,
+    set_panels_orderbook_enabled, set_panels_price_axis_pos, set_panels_scale,
+    set_panels_show_zone, set_panels_time_axis_visible, sync_compare,
 };
 use crate::Backend;
 use crate::chart_persist::{ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation};
@@ -393,9 +393,13 @@ impl MainChartStack {
 
     /// Вкл/выкл стакан для всех графиков стека (per-окно).
     pub(crate) fn set_orderbook_enabled(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
-        apply_setting(&mut self.orderbook_enabled, enabled, &self.charts, cx, |c, cx| {
-            set_panels_orderbook_enabled(c, enabled.unwrap_or(true), cx)
-        });
+        apply_setting(
+            &mut self.orderbook_enabled,
+            enabled,
+            &self.charts,
+            cx,
+            |c, cx| set_panels_orderbook_enabled(c, enabled.unwrap_or(true), cx),
+        );
     }
 
     pub(crate) fn liquidations_enabled(&self) -> Option<bool> {
@@ -403,10 +407,18 @@ impl MainChartStack {
     }
 
     /// Вкл/выкл трейды ликвидаций для всех графиков стека (per-окно).
-    pub(crate) fn set_liquidations_enabled(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
-        apply_setting(&mut self.liquidations_enabled, enabled, &self.charts, cx, |c, cx| {
-            set_panels_liquidations(c, enabled.unwrap_or(true), cx)
-        });
+    pub(crate) fn set_liquidations_enabled(
+        &mut self,
+        enabled: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        apply_setting(
+            &mut self.liquidations_enabled,
+            enabled,
+            &self.charts,
+            cx,
+            |c, cx| set_panels_liquidations(c, enabled.unwrap_or(true), cx),
+        );
     }
 
     pub(crate) fn show_zone(&self) -> Option<bool> {
@@ -445,9 +457,13 @@ impl MainChartStack {
 
     /// Видимость оси времени для всех графиков стека (per-окно).
     pub(crate) fn set_time_axis_visible(&mut self, visible: Option<bool>, cx: &mut Context<Self>) {
-        apply_setting(&mut self.time_axis_visible, visible, &self.charts, cx, |c, cx| {
-            set_panels_time_axis_visible(c, visible.unwrap_or(true), cx)
-        });
+        apply_setting(
+            &mut self.time_axis_visible,
+            visible,
+            &self.charts,
+            cx,
+            |c, cx| set_panels_time_axis_visible(c, visible.unwrap_or(true), cx),
+        );
     }
 
     pub(crate) fn line_labels(&self) -> Option<bool> {
@@ -568,6 +584,19 @@ impl MainChartStack {
             let stack_scroll = self.show_stack;
             entry.panel.update(cx, |panel, _| {
                 panel.set_main_stack_scroll(stack_scroll);
+                panel.set_scene_visible(visible);
+            });
+        }
+    }
+
+    fn sync_stack_visible_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        if !self.show_stack {
+            return;
+        }
+        for (ix, entry) in self.charts.iter().enumerate() {
+            let visible = range.contains(&ix);
+            entry.panel.update(cx, |panel, _| {
+                panel.set_main_stack_scroll(true);
                 panel.set_scene_visible(visible);
             });
         }
@@ -750,6 +779,9 @@ impl Render for MainChartStack {
             .is_horizontal();
         let entity = cx.entity();
         let p = palette;
+        let on_visible_range = cx.processor(|this, range: Range<usize>, _window, cx| {
+            this.sync_stack_visible_range(range, cx);
+        });
         render_chart_stack(
             &base_id,
             self,
@@ -769,6 +801,7 @@ impl Render for MainChartStack {
                 .into_any_element()
             },
             |s, ix| compare_role(&s.charts, &s.compare_anchor, s.compare_orderbook_only, ix),
+            Some(Box::new(on_visible_range)),
         )
     }
 }

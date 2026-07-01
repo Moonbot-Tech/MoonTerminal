@@ -257,9 +257,11 @@ impl DetachedChartHost {
     /// Это окно — откреплённая кастомная вкладка? (спек с `custom_coins`).
     fn is_custom(&self, cx: &App) -> bool {
         let (group, num, bucket) = (&self.group, self.num, &self.bucket);
-        self.backend.read(cx).chart_specs.iter().any(|s| {
-            s.matches(group, num, bucket) && s.custom_coins.is_some()
-        })
+        self.backend
+            .read(cx)
+            .chart_specs
+            .iter()
+            .any(|s| s.matches(group, num, bucket) && s.custom_coins.is_some())
     }
 
     /// Переименовать кастомную вкладку этого окна (поле имени в попапе ⚙): пишем `custom_label`
@@ -311,9 +313,9 @@ impl DetachedChartHost {
         let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
         let is_custom = {
             let specs = &self.backend.read(cx).chart_specs;
-            specs.iter().any(|s| {
-                s.matches(&group, num, &bucket) && s.custom_coins.is_some()
-            })
+            specs
+                .iter()
+                .any(|s| s.matches(&group, num, &bucket) && s.custom_coins.is_some())
         };
         if !is_custom {
             return;
@@ -620,7 +622,8 @@ impl DetachedChartHost {
 
     /// Видимость подписей у линий этого окна + persist.
     fn apply_line_labels(&mut self, show: bool, cx: &mut Context<Self>) {
-        self.panel.update(cx, |p, c| p.set_line_labels(Some(show), c));
+        self.panel
+            .update(cx, |p, c| p.set_line_labels(Some(show), c));
         let bucket = self.bucket.clone();
         self.upsert_spec(cx, self.num, &bucket, move |s| {
             s.line_labels = Some(show);
@@ -831,7 +834,8 @@ impl Render for DetachedChartHost {
                         pap_entity.update(app, |this, cx| this.apply_price_axis_pos(pos, cx));
                     },
                     move |checked, app| {
-                        tav_entity.update(app, |this, cx| this.apply_time_axis_visible(checked, cx));
+                        tav_entity
+                            .update(app, |this, cx| this.apply_time_axis_visible(checked, cx));
                     },
                     move |checked, app| {
                         ll_entity.update(app, |this, cx| this.apply_line_labels(checked, cx));

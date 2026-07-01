@@ -8,6 +8,12 @@ fn hex3(rgb: [u8; 3]) -> u32 {
     ((rgb[0] as u32) << 16) | ((rgb[1] as u32) << 8) | rgb[2] as u32
 }
 
+fn rgba3(rgb: [u8; 3], alpha: f32) -> [f32; 4] {
+    let mut out = rgb4(rgb);
+    out[3] = alpha.clamp(0.0, 1.0);
+    out
+}
+
 fn initial_palette_from_theme(theme: &ChartTheme) -> moon_ui::MoonPalette {
     let base = moon_ui::MoonPalette::default();
     let panel = hex3(theme.panel_bg);
@@ -96,6 +102,16 @@ impl ChartEngine {
                 c
             },
             cursor_thickness: theme.cross_thickness.max(1.0),
+            readout_bg: rgba3(theme.bg, theme.readout_bg_alpha),
+            readout_soft_bg: rgba3(theme.bg, theme.readout_soft_bg_alpha),
+            readout_border: rgba3(theme.bg, theme.readout_border_alpha),
+            readout_border_px: theme.readout_border_px.max(0.0),
+            label_positive: hex3(theme.label_positive),
+            label_negative: hex3(theme.label_negative),
+            label_neutral: hex3(theme.label_neutral),
+            axis_label: hex3(theme.axis_label),
+            caption_label: hex3(theme.caption_label),
+            readout_label: hex3(theme.readout_label),
             label_font_delta: theme.label_font_delta,
             line_labels: true,
             cursor_labels: true,
@@ -250,6 +266,18 @@ impl ChartEngine {
             {
                 let mut st = self.state.borrow_mut();
                 st.set_cursor_style(cursor_color, theme.cross_thickness);
+                st.set_readout_style(
+                    rgba3(theme.bg, theme.readout_bg_alpha),
+                    rgba3(theme.bg, theme.readout_soft_bg_alpha),
+                    rgba3(theme.bg, theme.readout_border_alpha),
+                    theme.readout_border_px,
+                );
+                st.label_positive = hex3(theme.label_positive);
+                st.label_negative = hex3(theme.label_negative);
+                st.label_neutral = hex3(theme.label_neutral);
+                st.axis_label = hex3(theme.axis_label);
+                st.caption_label = hex3(theme.caption_label);
+                st.readout_label = hex3(theme.readout_label);
                 st.label_font_delta = theme.label_font_delta;
             }
             self.theme = theme;

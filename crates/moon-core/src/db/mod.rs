@@ -285,10 +285,33 @@ fn insert(conn: &Connection, row: &ReportRow) -> rusqlite::Result<()> {
 /// `init_db` принять таблицу за древнюю схему и УДАЛИТЬ её.
 fn is_passthrough(name: &str) -> bool {
     const SKIP: &[&str] = &[
-        "core_uid", "core_name", "db_id", "sql", "created_ms", "updated_ms", "id", "server_id",
-        "taskid", "exorderid", "coin", "isshort", "buydate", "sellsetdate", "closedate",
-        "quantity", "buyprice", "sellprice", "spentbtc", "gainedbtc", "profitbtc", "lev",
-        "strategyid", "emulator", "status", "sellreason", "comment",
+        "core_uid",
+        "core_name",
+        "db_id",
+        "sql",
+        "created_ms",
+        "updated_ms",
+        "id",
+        "server_id",
+        "taskid",
+        "exorderid",
+        "coin",
+        "isshort",
+        "buydate",
+        "sellsetdate",
+        "closedate",
+        "quantity",
+        "buyprice",
+        "sellprice",
+        "spentbtc",
+        "gainedbtc",
+        "profitbtc",
+        "lev",
+        "strategyid",
+        "emulator",
+        "status",
+        "sellreason",
+        "comment",
     ];
     !SKIP.contains(&name)
 }
@@ -331,9 +354,8 @@ fn apply_extras(
         .map(|(n, _)| format!("{n}=?"))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!(
-        "UPDATE closed_sell_reports SET {set}, updated_ms=? WHERE core_uid=? AND db_id=?"
-    );
+    let sql =
+        format!("UPDATE closed_sell_reports SET {set}, updated_ms=? WHERE core_uid=? AND db_id=?");
     let ts = now_ms();
     let uid = row.core_uid as i64;
     let mut params: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(cols.len() + 3);
@@ -529,9 +551,7 @@ pub fn display_columns(conn: &Connection) -> Vec<String> {
         .collect();
     let mut extra: Vec<String> = have
         .iter()
-        .filter(|h| {
-            !SERVICE.contains(&h.as_str()) && !DISPLAY_COLUMNS.contains(&h.as_str())
-        })
+        .filter(|h| !SERVICE.contains(&h.as_str()) && !DISPLAY_COLUMNS.contains(&h.as_str()))
         .cloned()
         .collect();
     extra.sort();

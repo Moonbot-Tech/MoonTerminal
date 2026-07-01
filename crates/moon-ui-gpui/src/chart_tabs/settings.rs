@@ -249,7 +249,9 @@ impl ChartTabs {
         cx: &mut Context<Self>,
     ) {
         match self.active.clone() {
-            Tab::Main => self.main.update(cx, |s, c| s.set_price_axis_pos(Some(pos), c)),
+            Tab::Main => self
+                .main
+                .update(cx, |s, c| s.set_price_axis_pos(Some(pos), c)),
             Tab::Add(..) | Tab::Custom(..) => {
                 if let Some(p) = self.active_stack() {
                     p.update(cx, |s, c| s.set_price_axis_pos(Some(pos), c));
@@ -307,7 +309,9 @@ impl ChartTabs {
     /// Видимость подписей у линий на АКТИВНОЙ вкладке + persist.
     pub(super) fn apply_line_labels(&mut self, show: bool, cx: &mut Context<Self>) {
         match self.active.clone() {
-            Tab::Main => self.main.update(cx, |s, c| s.set_line_labels(Some(show), c)),
+            Tab::Main => self
+                .main
+                .update(cx, |s, c| s.set_line_labels(Some(show), c)),
             Tab::Add(..) | Tab::Custom(..) => {
                 if let Some(p) = self.active_stack() {
                     p.update(cx, |s, c| s.set_line_labels(Some(show), c));
@@ -335,7 +339,9 @@ impl ChartTabs {
     /// Видимость подписей у перекрестия на АКТИВНОЙ вкладке + persist.
     pub(super) fn apply_cursor_labels(&mut self, show: bool, cx: &mut Context<Self>) {
         match self.active.clone() {
-            Tab::Main => self.main.update(cx, |s, c| s.set_cursor_labels(Some(show), c)),
+            Tab::Main => self
+                .main
+                .update(cx, |s, c| s.set_cursor_labels(Some(show), c)),
             Tab::Add(..) | Tab::Custom(..) => {
                 if let Some(p) = self.active_stack() {
                     p.update(cx, |s, c| s.set_cursor_labels(Some(show), c));

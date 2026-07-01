@@ -401,21 +401,30 @@ impl Backend {
 
     /// Взведён ли «паник-селл» по (ядро, рынок) — для подсветки кнопки Panic Sell.
     fn is_panic_armed(&self, core: CoreId, market: &str) -> bool {
+        let snapshot_armed = self.session.store().core(core).is_some_and(|data| {
+            data.order_lines
+                .iter_market(market)
+                .any(|order| order.closed_ms.is_none() && order.panic_sell)
+        });
+        if snapshot_armed {
+            return true;
+        }
         self.panic_armed.contains(&(core, market.to_string()))
     }
 
-    /// Тоггл «паник-селл» по рынку: флипает локальный флаг и шлёт правку ядру. Возвращает
-    /// новое состояние (true = взвели).
+    /// Тоггл «паник-селл» по рынку: текущее состояние берём из снапшота ордеров, локальный флаг —
+    /// только optimistic echo до прихода следующего апдейта ядра.
     fn toggle_panic_sell(&mut self, core: CoreId, market: String) -> bool {
         let key = (core, market.clone());
-        let on = if self.panic_armed.remove(&key) {
-            false
-        } else {
-            self.panic_armed.insert(key);
-            true
-        };
+        let on = !self.is_panic_armed(core, &market);
         if let Err(error) = self.session.panic_sell_market(core, market, on) {
             log::warn!("panic sell market failed: {error:#}");
+            return !on;
+        }
+        if on {
+            self.panic_armed.insert(key);
+        } else {
+            self.panic_armed.remove(&key);
         }
         on
     }
@@ -429,37 +438,16 @@ impl Backend {
     }
 
     fn cancel_buy_orders(&self, core: CoreId, market: &str) -> usize {
-        let Some(data) = self.session.store().core(core) else {
-            log::warn!("cancel buy ignored: core={core} has no store");
-            return 0;
-        };
-
-        let uids: Vec<u64> = data
-            .orders
-            .iter()
-            .filter(|order| {
-                // MoonBot DoCancel = CancelAllBuys(market) + CancelPendings(market).
-                order.market == market
-                    && !order.job_is_done
-                    && ((!order.is_short && order.fill_pct < 99.95) || order.pending)
-            })
-            .map(|order| order.uid)
-            .collect();
-
-        for uid in &uids {
-            if let Err(err) = self.session.cancel_order(core, *uid) {
-                log::warn!("cancel buy failed: core={core} market={market} uid={uid}: {err:#}");
+        match self.session.cancel_market_buys(core, market.to_string()) {
+            Ok(()) => {
+                log::info!("cancel buy: requested market buys for core={core} market={market}");
+                1
+            }
+            Err(err) => {
+                log::warn!("cancel buy failed: core={core} market={market}: {err:#}");
+                0
             }
         }
-        if uids.is_empty() {
-            log::info!("cancel buy: no active buy orders for core={core} market={market}");
-        } else {
-            log::info!(
-                "cancel buy: requested {} orders for core={core} market={market}",
-                uids.len()
-            );
-        }
-        uids.len()
     }
 
     fn register_chart_consumer(&mut self, chart: ChartDataHandle) {
@@ -1024,6 +1012,13 @@ fn main() -> anyhow::Result<()> {
             moon_core::detect_diag::line("[quit] on_app_quit → сохраняю charts.json");
             app_quit_backend.update(cx, |b, _| {
                 b.quitting = true;
+                if b.config_dirty {
+                    if let Err(e) = b.config.save() {
+                        log::warn!("config save (quit) failed: {e}");
+                    } else {
+                        b.config_dirty = false;
+                    }
+                }
                 chart_persist::save_all(&b.chart_specs);
             });
             async move {}

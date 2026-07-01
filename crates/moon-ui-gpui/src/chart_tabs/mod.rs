@@ -241,7 +241,9 @@ impl ChartTabs {
             main.update(cx, |p, pcx| p.set_orderbook_enabled(main_orderbook, pcx));
         }
         if main_liquidations.is_some() {
-            main.update(cx, |p, pcx| p.set_liquidations_enabled(main_liquidations, pcx));
+            main.update(cx, |p, pcx| {
+                p.set_liquidations_enabled(main_liquidations, pcx)
+            });
         }
         if main_show_zone.is_some() {
             main.update(cx, |p, pcx| p.set_show_zone(main_show_zone, pcx));
@@ -623,10 +625,7 @@ fn chart_pane_label(
     // а не сырой номер «100000-…». Узнаём по наличию custom_coins в спеке.
     {
         let specs = &backend.read(cx).chart_specs;
-        if let Some(s) = specs
-            .iter()
-            .find(|s| s.matches(group, n, bucket))
-        {
+        if let Some(s) = specs.iter().find(|s| s.matches(group, n, bucket)) {
             if s.custom_coins.is_some() {
                 return s.custom_label.clone().unwrap_or_else(|| {
                     t!("chart.tab.custom", n = n - CUSTOM_NUM_BASE + 1).to_string()

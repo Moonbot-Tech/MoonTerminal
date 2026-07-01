@@ -16,6 +16,8 @@ const SEG_PATTERN_DASH_DOT_DOT: f32 = 1.0;
 const SEG_PATTERN_DOT: f32 = 2.0;
 /// MoonBot: `ShowLightLines := T.RangeT > 0.02`, где RangeT — Delphi days.
 const MB_TRACE_LIGHT_RANGE_MS: f32 = 0.02 * 86_400_000.0;
+/// MoonBot draws MoonShot area with fixed 0.15 opacity, independent from order line alpha.
+const MB_MOONSHOT_ZONE_ALPHA: f32 = 0.15;
 
 pub mod axes;
 pub mod container;
@@ -133,7 +135,7 @@ pub fn build_order_geometry(
                 push_zone(
                     ord.corridor_price_down,
                     ord.corridor_price_up,
-                    rgba(style.take_profit.color, alpha * 0.14),
+                    rgba(style.take_profit.color, MB_MOONSHOT_ZONE_ALPHA),
                 );
             }
             if ord.panic_sell {
@@ -201,57 +203,14 @@ pub fn build_order_geometry(
                 .filter(|(_, kind, _)| *kind as usize == idx)
                 .map(|(_, _, price)| price);
 
-            let has_server_trace = !line.server_points.is_empty();
-            let points: &[(f64, f32)] = if has_server_trace {
-                &line.server_points
-            } else {
-                &line.steps
-            };
-            let n = points.len();
-            if n == 0 {
-                if let Some(preview_price) = preview_price {
-                    let start_t = ord.create_ms;
-                    segs.push(SegInstance {
-                        t0_rel: to_rel(start_t),
-                        p0: preview_price,
-                        t1_rel: edge_rel,
-                        p1: preview_price,
-                        thickness,
-                        pattern: dash,
-                        extend: 1.0,
-                        color: col,
-                    });
-                    if st.start_marker {
-                        markers.push(MarkerInstance {
-                            t_rel: to_rel(start_t),
-                            price: preview_price,
-                            size: st.marker_size * highlight_marker_mul,
-                            thickness: st.marker_thickness * highlight_thickness_mul,
-                            shape: 0.0,
-                            color: col,
-                        });
-                    }
-                }
-                continue;
-            }
-            // Линия завершена, если выключена сама или закрыт ордер. У активной
-            // (незавершённой) линии КОНЦА НЕТ — она тянется до правого края plot
-            // (через стакан), без креста конца. У завершённой конец = off/close время.
-            let line_end = line.off_ms.unwrap_or(order_end);
-
-            let start_t = points[0].0;
-            // Текущая цена — последняя ступень. Основная линия ПРЯМАЯ на текущей цене
-            // от начала до конца (вся переезжает при перестановке).
-            let cur_p = preview_price.unwrap_or(points[n - 1].1);
-            let t0_rel = to_rel(start_t);
-            // Активная линия — до правого края (edge_rel, через стакан); завершённая —
-            // до своего времени конца.
-            let t1_rel = if ended { to_rel(line_end) } else { edge_rel };
-
+            let trace_points = &line.server_points;
+            let has_server_trace = !trace_points.is_empty();
             if has_server_trace {
                 // MoonProtoBeta уже хранит points в том же формате, что Delphi
                 // TOrderLine.SetPointTrade: anchor + группы по 3 точки. Рисуем
                 // именно как TOrderLine.DrawInternal, а не как обычную polyline.
+                // ВАЖНО: это отдельная серверная трасса. Она не подменяет live-цену
+                // рабочей линии ордера ниже.
                 let show_light_lines = (right_rel - left_rel) > MB_TRACE_LIGHT_RANGE_MS;
                 let base_trace_alpha = if highlighted {
                     style.trace_alpha.max(0.7)
@@ -278,11 +237,11 @@ pub fn build_order_geometry(
                 let valid_trace_point = |(t, p): (f64, f32)| t > 1.0 && p.is_finite() && p > 0.0;
 
                 let mut k = 0;
-                while k + 3 < n {
-                    let p0 = points[k];
-                    let p1 = points[k + 1];
-                    let p2 = points[k + 2];
-                    let p3 = points[k + 3];
+                while k + 3 < trace_points.len() {
+                    let p0 = trace_points[k];
+                    let p1 = trace_points[k + 1];
+                    let p2 = trace_points[k + 2];
+                    let p3 = trace_points[k + 3];
                     if valid_trace_point(p0) && valid_trace_point(p1) {
                         let a = to_rel(p0.0);
                         let b = to_rel(p1.0);
@@ -332,7 +291,7 @@ pub fn build_order_geometry(
 
                 if !ended {
                     if let (Some(&(last_t, last_p)), Some((tmp_t, tmp_p))) =
-                        (points.last(), line.tmp_point)
+                        (trace_points.last(), line.tmp_point)
                     {
                         if valid_trace_point((last_t, last_p)) && valid_trace_point((tmp_t, tmp_p))
                         {
@@ -353,7 +312,7 @@ pub fn build_order_geometry(
                 if let (Some(stop_price), Some(stop_time_ms), Some(&(start_time, _))) = (
                     line.server_stop_price,
                     line.server_stop_time_ms,
-                    points.first(),
+                    trace_points.first(),
                 ) {
                     if start_time > 1.0
                         && stop_time_ms > 1.0
@@ -372,7 +331,51 @@ pub fn build_order_geometry(
                         });
                     }
                 }
-            } else if path.show && n > 1 {
+            }
+
+            let points = &line.steps;
+            let n = points.len();
+            if n == 0 {
+                if let Some(preview_price) = preview_price {
+                    let start_t = ord.create_ms;
+                    segs.push(SegInstance {
+                        t0_rel: to_rel(start_t),
+                        p0: preview_price,
+                        t1_rel: edge_rel,
+                        p1: preview_price,
+                        thickness,
+                        pattern: dash,
+                        extend: 1.0,
+                        color: col,
+                    });
+                    if st.start_marker {
+                        markers.push(MarkerInstance {
+                            t_rel: to_rel(start_t),
+                            price: preview_price,
+                            size: st.marker_size * highlight_marker_mul,
+                            thickness: st.marker_thickness * highlight_thickness_mul,
+                            shape: 0.0,
+                            color: col,
+                        });
+                    }
+                }
+                continue;
+            }
+            // Линия завершена, если выключена сама или закрыт ордер. У активной
+            // (незавершённой) линии КОНЦА НЕТ — она тянется до правого края plot
+            // (через стакан), без креста конца. У завершённой конец = off/close время.
+            let line_end = line.off_ms.unwrap_or(order_end);
+
+            let start_t = points[0].0;
+            // Текущая цена — последняя live-ступень. Основная линия ПРЯМАЯ на текущей цене
+            // от начала до конца (вся переезжает при перестановке).
+            let cur_p = preview_price.unwrap_or(points[n - 1].1);
+            let t0_rel = to_rel(start_t);
+            // Активная линия — до правого края (edge_rel, через стакан); завершённая —
+            // до своего времени конца.
+            let t1_rel = if ended { to_rel(line_end) } else { edge_rel };
+
+            if !has_server_trace && path.show && n > 1 {
                 for i in 0..n {
                     let (t, p) = points[i];
                     let seg_end_t = if i + 1 < n { points[i + 1].0 } else { line_end };
@@ -466,6 +469,7 @@ mod tests {
             market: "BTCUSDT".into(),
             is_short: false,
             size: 0.01,
+            remaining_size: 0.01,
             sl_on: false,
             ts_on: false,
             sl_strat: false,
@@ -530,6 +534,47 @@ mod tests {
     }
 
     #[test]
+    fn moonshot_zone_keeps_moonbot_fixed_opacity() {
+        let mut row = test_order_with_buy_trace();
+        row.is_moon_shot = true;
+        row.corridor_price_down = 59_000.0;
+        row.corridor_price_up = 61_000.0;
+        row.fill_pct = 0.0;
+
+        let mut store = OrderLineStore::default();
+        assert!(store.update(&[row]));
+
+        let mut zones = Vec::new();
+        let mut hlines = Vec::new();
+        let mut segs = Vec::new();
+        let mut markers = Vec::new();
+        build_order_geometry(
+            &store,
+            "BTCUSDT",
+            &OrdersStyle::default(),
+            None,
+            None,
+            0.0,
+            3_000.0,
+            0.0,
+            10_000.0,
+            10_000.0,
+            &mut zones,
+            &mut hlines,
+            &mut segs,
+            &mut markers,
+        );
+
+        assert_eq!(zones.len(), 1);
+        assert!(near(zones[0].price0, 59_000.0));
+        assert!(near(zones[0].price1, 61_000.0));
+        assert!(
+            near(zones[0].color[3], MB_MOONSHOT_ZONE_ALPHA),
+            "MoonShot area opacity must not inherit pending order line alpha"
+        );
+    }
+
+    #[test]
     fn server_trace_is_separate_from_active_order_line() {
         let mut store = OrderLineStore::default();
         assert!(store.update(&[test_order_with_buy_trace()]));
@@ -558,11 +603,11 @@ mod tests {
         assert!(
             segs.iter().any(|s| {
                 near(s.extend, 1.0)
-                    && near(s.p0, 61_000.0)
-                    && near(s.p1, 61_000.0)
+                    && near(s.p0, 60_000.0)
+                    && near(s.p1, 60_000.0)
                     && near(s.t0_rel, 1_000.0)
             }),
-            "active order line must stay a straight current-price segment"
+            "active order line must stay a straight live-price segment"
         );
         assert!(
             segs.iter().any(|s| {
