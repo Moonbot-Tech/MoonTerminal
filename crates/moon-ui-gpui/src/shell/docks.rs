@@ -69,14 +69,9 @@ impl Shell {
         let handle = self.window_handle;
         cx.defer(move |app| {
             let _ = handle.update(app, move |_, window, app| {
-                if panel_name == "Assets" {
-                    crate::panels::open_assets_window(
-                        backend.clone(),
-                        Some(window.window_handle()),
-                        app,
-                    );
-                    return;
-                }
+                // Assets отцепляется как обычная панель (per-group окно + удаление вкладки +
+                // репин при закрытии). Глобальное окно «все ядра» открывается отдельно —
+                // кнопкой «⧉» в тулбаре панели, не даблкликом.
                 if !detached::supports_panel(&panel_name) {
                     return;
                 }

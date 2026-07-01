@@ -3,7 +3,7 @@
 //! GPUI view tree on every mouse move.
 
 use gpui::{GpuCanvasTextMetrics, Hsla, point, px};
-use moon_chart::axes::{fmt_clock, nice_interval, price_decimals};
+use moon_chart::axes::{fmt_clock, price_decimals};
 
 use super::*;
 
@@ -12,6 +12,9 @@ pub(super) const LINE_H: f32 = FONT_SIZE + 4.0;
 const READOUT_PAD_X: f32 = 5.0;
 const READOUT_PAD_Y: f32 = 2.5;
 const READOUT_INSET: f32 = 2.0;
+// Отступ подписи ордер-линии от самой линии (px). Достаточный, чтобы плашка (её низ/верх =
+// dy ± READOUT_PAD_Y) не накрывала линию: GAP > READOUT_PAD_Y.
+const LABEL_LINE_GAP: f32 = 4.0;
 // Угловая подпись (имя ядра + тикер). Якорь правым краем: есть стакан → у края панели (над
 // стаканом, слева от ✕ закрытия); нет стакана → у края плота (в области графика). Инсет 20px
 // освобождает крайние ~18px под ✕. pub(super): render_state строит по ним прозрачную плашку.
@@ -410,8 +413,6 @@ impl RenderState {
             let line_y = |price: f32| -> f32 {
                 ((plot_bottom * sf) - (price - y_min) * view.price_to_px).round() / sf
             };
-            let top_price = y_min + price_range;
-            let interval = nice_interval(price_range.max(1e-9), 8.0);
             let dec = price_decimals(y_min + price_range * 0.5);
             let time_to_px = (view.time_to_px / sf).max(1e-6);
             let window_ms = plot_w as f64 / time_to_px as f64;
@@ -429,52 +430,30 @@ impl RenderState {
             let label_x = zone_left - READOUT_PAD_X;
 
             // Подписи ордерных линий — отдельный столбик слева от разделителя, правым краем к нему.
-            // MoonBot-модель: primary (номер/%/stop%) рисуется у своей линии всегда; caption
-            // (размер/остаток) проверяет YTextFill-бакет в 3px и пропускается при overlap.
-            // Никакого сдвига подписи вниз: оторванная от линии подпись хуже, чем пропущенная.
-            // Drag/force подписи рисуем последними и не давим overlap-ом, как MovingTextS в Delphi.
-            // Ордерные подписи рисуются ВСЕГДА (под курсорными они не вырезаются, а просвечивают):
-            // курсорные цифры приоритетны и рисуются ПОЗЖЕ (поверх), поэтому читаются сверху, а
-            // ордерная цифра остаётся видна вокруг/за ними.
+            // Рисуем ВСЕ подписи (не прячем при наложении): порядок = приоритет ПО ВОЗРАСТАНИЮ,
+            // поэтому старшая (SELL/STOP > BUY) рисуется ПОСЛЕДНЕЙ — её текст и полу-плотная плашка
+            // ложатся ПОВЕРХ младшей, а младшая просвечивает сквозь плашку (~15%) → «заходит под»,
+            // не исчезает. Подпись отстоит от линии на LABEL_LINE_GAP, чтобы плашка не накрыла саму
+            // линию ордера. `force` (drag/hover) рисуем в самом конце — поверх всего.
             // Per-вкладка галка «подписи у линий» (попап ⚙). Выкл → столбец не строим.
             if self.line_labels {
                 // Высота строки подписей зависит от их кегля (настраивается слайдером темы).
                 let label_line_h = self.label_font_px() + 4.0;
-                let mut y_text_fill = vec![false; (plot_h / 3.0).round().max(1.0) as usize + 2];
+                let mut ord: Vec<usize> = (0..order_labels.len()).collect();
+                ord.sort_by(|&a, &b| order_labels[a].priority.cmp(&order_labels[b].priority));
                 let mut force_items: Vec<(f32, f32, f32, &OrderLabel)> = Vec::new();
-                for label in &order_labels {
+                for &li in &ord {
+                    let label = &order_labels[li];
                     let y = line_y(label.price);
                     if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
                         continue;
                     }
-                    let (dy, ay, top, bottom) = if label.above {
-                        let dy = y - 1.0;
-                        (dy, 1.0, dy - label_line_h, dy)
+                    let (dy, ay) = if label.above {
+                        (y - LABEL_LINE_GAP, 1.0)
                     } else {
-                        let dy = y + 1.0;
-                        (dy, 0.0, dy, dy + label_line_h)
+                        (y + LABEL_LINE_GAP, 0.0)
                     };
                     let w = self.measure_label_text(ctx, &label.text).width.as_f32();
-                    let bucket_min = ((top - plot_top) / 3.0)
-                        .floor()
-                        .clamp(0.0, (y_text_fill.len() - 1) as f32)
-                        as usize;
-                    let bucket_max = ((bottom - plot_top) / 3.0)
-                        .ceil()
-                        .clamp(0.0, (y_text_fill.len() - 1) as f32)
-                        as usize;
-                    let is_caption = matches!(label.role, OrderLabelRole::Caption);
-                    let blocked = is_caption
-                        && !label.force
-                        && y_text_fill[bucket_min..=bucket_max].iter().any(|v| *v);
-                    if is_caption && !label.force && !blocked {
-                        for slot in &mut y_text_fill[bucket_min..=bucket_max] {
-                            *slot = true;
-                        }
-                    }
-                    if blocked {
-                        continue;
-                    }
                     if label.force {
                         force_items.push((dy, ay, w, label));
                         continue;
@@ -701,15 +680,21 @@ impl RenderState {
                 self.panes[idx].label_placed = previous_placed;
             }
 
-            // Прореживание по вертикали: при низком окне «nice»-шаг даёт подписи плотнее строки —
-            // рисуем следующую, только если она отстоит от ПРЕДЫДУЩЕЙ нарисованной на высоту
-            // строки (иначе пропуск → «через одну»). last_y идёт сверху вниз (p растёт → y ↓).
+            // Подписи цены: на фикс. долях высоты — совпадают со СТАТИЧНЫМИ горизонталями сетки
+            // (модель MoonBot: сетка стоит, едут только подписи). Цена НЕкруглая — показываем ту,
+            // что попала на линию (как ось времени показывает некруглые метки на фикс. вертикалях).
+            // Рисуем внутренние линии (края у рамки плота не подписываем). Пропуск подписи, если
+            // она перекрыта курсорным ридаутом.
             let min_v_gap = LINE_H;
             let mut last_y = f32::INFINITY;
-            let mut p = (y_min / interval).ceil() * interval;
-            let mut guard = 0;
-            while !axis_hidden && p <= top_price && guard < 256 {
-                let y = line_y(p);
+            let n_horiz = GRID_N_HORIZ as i32;
+            for k in 1..n_horiz {
+                if axis_hidden {
+                    break;
+                }
+                let frac = k as f32 / GRID_N_HORIZ;
+                let y = (plot_top + frac * plot_h).round();
+                let price = y_min + (plot_bottom - y) / price_to_px.max(1e-6);
                 let overlaps_readout = skip_price_label_y
                     .is_some_and(|(top, bottom)| y >= top - 1.0 && y <= bottom + 1.0);
                 if y >= plot_top - 1.0
@@ -717,12 +702,10 @@ impl RenderState {
                     && !overlaps_readout
                     && (last_y - y).abs() >= min_v_gap
                 {
-                    let label = format!("{p:.dec$}");
+                    let label = format!("{price:.dec$}");
                     self.draw_text(ctx, &label, axis_label_x, y, 1.0, 0.5, ink)?;
                     last_y = y;
                 }
-                p += interval;
-                guard += 1;
             }
 
             let div_sec = window_ms / 1000.0 / 6.0;

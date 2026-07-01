@@ -289,7 +289,7 @@ pub fn spawn(
                 .into(),
             "Assets" => cx
                 .new(|cx| {
-                    AssetsView::restored_group(backend.clone(), spec.group.clone(), window, cx)
+                    AssetsView::detached_group(backend.clone(), spec.group.clone(), window, cx)
                 })
                 .into(),
             _ => cx

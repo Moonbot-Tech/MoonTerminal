@@ -106,3 +106,7 @@ log.count:
   ru: "%{shown} из %{total}"
   en: "%{shown} of %{total}"
   es: "%{shown} de %{total}"
+log.follow_tail:
+  ru: "Live"
+  en: "Live"
+  es: "Live"

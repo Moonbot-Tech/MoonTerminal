@@ -1,16 +1,16 @@
-// Сетка чарта own-pass: СТАТИЧНЫЕ вертикали (фикс. X-деления) + горизонтали по цене.
-// Процедурно в одном fullscreen-проходе над chart_area (1 drawcall, без instance-буфера).
-// Вертикали — фикс. пиксельные доли ширины (модель MoonBot: НЕ привязаны к круглым меткам
-// времени, едут только подписи). Горизонтали — на кратных `price_interval` (совпадают с
-// подписями цены). Рисуется ПОД крестами/данными в нашем own-pass.
+// Сетка чарта own-pass: СТАТИЧНАЯ — фикс. X- и Y-деления экрана. Процедурно в одном
+// fullscreen-проходе над chart_area (1 drawcall, без instance-буфера).
+// Вертикали — фикс. пиксельные доли ширины, горизонтали — фикс. доли высоты (модель MoonBot:
+// сетка НЕ привязана к круглым меткам времени/цены и НЕ едет при зуме/пане — едут только
+// подписи, они и показывают некруглые время/цену на фикс. линиях). ПОД крестами/данными.
 
 cbuffer GridParams : register(b0) {
     float4 g_bounds;       // ox, oy, w, h — chart_area (px окна)
     float2 g_resolution;   // w, h backbuffer (px)
-    float  g_n_vert;       // число вертикальных делений (фикс.)
-    float  g_price_to_px;  // пикселей на единицу цены
-    float  g_view_price0;  // цена у НИЗА bounds
-    float  g_price_interval; // шаг цены для горизонталей (== nice_interval подписей)
+    float  g_n_vert;       // число вертикальных делений ширины (фикс.)
+    float  g_n_horiz;      // число горизонтальных делений высоты (фикс.)
+    float  g_pad0;         // зарезервировано (0)
+    float  g_pad1;         // зарезервировано (0)
     float  g_grid_alpha;   // видимость сетки 0..1 (тема)
     float  g_bg_alpha;     // 1 = grid сам красит фон, 0 = фон уже нарисован Background-слоем
     float4 g_bg;           // фон чарта (sRGB)
@@ -58,14 +58,11 @@ float4 grid_fragment(GridOut i) : SV_Target {
         hit = true;
     }
 
-    // Горизонтали: на кратных price_interval (совпадают с подписями цены). Цена в пикселе:
-    // price = view_price0 + (низ bounds - y)/price_to_px.
-    if (g_price_interval > 1e-12 && g_price_to_px > 1e-9) {
-        float price = g_view_price0 + (g_bounds.y + g_bounds.w - i.px.y) / g_price_to_px;
-        float k = price / g_price_interval;
-        if (abs(k - round(k)) * g_price_interval * g_price_to_px < GRID_LINE_HALF_PX) {
-            hit = true;
-        }
+    // Горизонтали: фикс. деления высоты (статичны — НЕ зависят от цены).
+    float step_y = g_bounds.w / max(g_n_horiz, 1.0);
+    float local_y = i.px.y - g_bounds.y;
+    if (abs(local_y - round(local_y / step_y) * step_y) < GRID_LINE_HALF_PX) {
+        hit = true;
     }
 
     float alpha = hit ? 1.0 : saturate(g_bg_alpha);

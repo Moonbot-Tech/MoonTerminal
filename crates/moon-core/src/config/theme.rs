@@ -59,8 +59,11 @@ pub struct ChartTheme {
     pub readout_label: [u8; 3],
     /// Alpha плотной плашки cursor/readout.
     pub readout_bg_alpha: f32,
-    /// Alpha лёгкой плашки подписей ордеров/угловой подписи.
+    /// Alpha лёгкой плашки угловой подписи (имя ядра/тикер).
     pub readout_soft_bg_alpha: f32,
+    /// Alpha плашки подписей ордер-линий. Полу-плотная: выглядит непрозрачной, но при наложении
+    /// плашка старшей подписи ложится на младшую (та просвечивает → «заходит под», не исчезает).
+    pub line_label_bg_alpha: f32,
     /// Alpha обводки плашки readout.
     pub readout_border_alpha: f32,
     /// Толщина обводки readout, px. 0 = без обводки.
@@ -78,7 +81,7 @@ impl Default for ChartTheme {
     fn default() -> Self {
         Self {
             bg: [30, 30, 30],
-            grid: [54, 54, 54],
+            grid: [40, 40, 40],
             grid_alpha: 1.0,
             background_opacity: 0.18,
             label_font_delta: -1.5,
@@ -98,6 +101,7 @@ impl Default for ChartTheme {
             readout_label: [211, 211, 211],
             readout_bg_alpha: 0.96,
             readout_soft_bg_alpha: 0.20,
+            line_label_bg_alpha: 0.85,
             readout_border_alpha: 0.0,
             readout_border_px: 0.0,
             panel_bg: [24, 25, 27],
@@ -125,6 +129,7 @@ impl ChartTheme {
         self.readout_label = [0, 0, 0];
         self.readout_bg_alpha = 0.96;
         self.readout_soft_bg_alpha = 0.20;
+        self.line_label_bg_alpha = 0.85;
         self.readout_border_alpha = 0.0;
         self.readout_border_px = 0.0;
     }

@@ -848,13 +848,10 @@ impl ChartDataState {
             let next_grid_params = GridParams {
                 bounds: pr.view.bounds,
                 resolution: res,
-                n_vert: 6.0,
-                price_to_px: pr.view.price_to_px,
-                view_price0: pr.view.view_price0,
-                price_interval: moon_chart::axes::nice_interval(
-                    pane.view.render_range.max(1e-9),
-                    8.0,
-                ),
+                n_vert: GRID_N_VERT,
+                n_horiz: GRID_N_HORIZ,
+                _pad0: 0.0,
+                _pad1: 0.0,
                 grid_alpha: self.theme.grid_alpha,
                 bg_alpha: if background_opacity > 0.0 { 0.0 } else { 1.0 },
                 bg: rgb4(self.theme.bg),
@@ -1040,7 +1037,7 @@ fn build_order_labels(
                         text: String,
                         above: bool,
                         color: u32,
-                        role: OrderLabelRole,
+                        priority: u8,
                         force: bool| {
             if price.is_finite() && price > 0.0 && !text.is_empty() {
                 out.push(OrderLabel {
@@ -1048,7 +1045,7 @@ fn build_order_labels(
                     text,
                     above,
                     color,
-                    role,
+                    priority,
                     force,
                 });
             }
@@ -1071,36 +1068,21 @@ fn build_order_labels(
                 format!("{text} {tag}")
             }
         };
-        // BUY (линия входа): пока ордер ОЖИДАЕТ (не исполнен, fill=0) — показываем размер в
-        // $-ноционале как caption. Номер [N] — отдельная primary-подпись, как в MoonBot:
-        // короткое имя линии рисуется всегда, длинный размер проходит через YTextFill.
+        // BUY (линия входа): ожидающий ордер (fill=0) → «размер [N]» ОДНОЙ строкой, чтобы номер
+        // и размер не наложились друг на друга на одной стороне линии; исполненный → только [N].
+        // Размер входа — ВСЕГДА белый (не цвет линии, не по стороне).
         if let Some(bp) = buy {
             let forced = line_forced(LineKind::Buy);
-            if !tag.is_empty() {
-                push(
-                    bp,
-                    tag.clone(),
-                    !short,
-                    ORDER_LABEL_NEUTRAL,
-                    OrderLabelRole::Primary,
-                    forced,
-                );
-            }
-            if o.fill_pct <= 0.0 && o.size > 0.0 {
+            let text = if o.fill_pct <= 0.0 && o.size > 0.0 {
                 let amount = match quote_usd {
                     Some(rate) if rate > 0.0 => fmt_usd(o.size as f64 * bp as f64 * rate),
                     _ => fmt_amount(o.size),
                 };
-                // Размер входа buy-ордера — ВСЕГДА белый (не цвет линии, не по стороне).
-                push(
-                    bp,
-                    amount,
-                    !short,
-                    ORDER_LABEL_NEUTRAL,
-                    OrderLabelRole::Caption,
-                    forced,
-                );
-            }
+                with_tag(amount)
+            } else {
+                tag.clone()
+            };
+            push(bp, text, !short, ORDER_LABEL_NEUTRAL, PRIO_BUY, forced);
         }
         // SELL: профит-% от цены входа (знаковый цвет) + РАЗМЕР на продажу в $-ноционале
         // (remaining·цена_продажи·курс) на противоположной стороне линии — как в MoonBot:
@@ -1118,7 +1100,7 @@ fn build_order_labels(
                         with_tag(fmt_pct(pct)),
                         short,
                         pct_color(theme, pct),
-                        OrderLabelRole::Primary,
+                        PRIO_SELL_PCT,
                         forced,
                     );
                 }
@@ -1138,7 +1120,7 @@ fn build_order_labels(
                     amount,
                     !short,
                     side_color(theme, short),
-                    OrderLabelRole::Caption,
+                    PRIO_SELL_SIZE,
                     forced,
                 );
             }
@@ -1154,7 +1136,7 @@ fn build_order_labels(
                     with_tag(fmt_pct(pct)),
                     short,
                     pct_color(theme, pct),
-                    OrderLabelRole::Primary,
+                    PRIO_STOP_PCT,
                     forced,
                 );
             }

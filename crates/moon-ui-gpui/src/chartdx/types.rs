@@ -301,10 +301,14 @@ impl Default for BackgroundParams {
 pub struct GridParams {
     pub bounds: [f32; 4],
     pub resolution: [f32; 2],
+    /// Число вертикальных делений ширины (статичны, НЕ зависят от времени).
     pub n_vert: f32,
-    pub price_to_px: f32,
-    pub view_price0: f32,
-    pub price_interval: f32,
+    /// Число горизонтальных делений высоты (статичны, НЕ зависят от цены).
+    pub n_horiz: f32,
+    /// Зарезервировано (было price_to_px/view_price0). Держим 0, чтобы статичная сетка не
+    /// инвалидировалась на каждом сдвиге цены.
+    pub _pad0: f32,
+    pub _pad1: f32,
     pub grid_alpha: f32,
     pub bg_alpha: f32,
     pub bg: [f32; 4],

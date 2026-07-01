@@ -2,9 +2,9 @@ struct GridParams {
     bounds: vec4<f32>,
     resolution: vec2<f32>,
     n_vert: f32,
-    price_to_px: f32,
-    view_price0: f32,
-    price_interval: f32,
+    n_horiz: f32,
+    pad0: f32,
+    pad1: f32,
     grid_alpha: f32,
     bg_alpha: f32,
     bg: vec4<f32>,
@@ -49,12 +49,10 @@ fn grid_fragment(in: GridOut) -> @location(0) vec4<f32> {
     if abs(local_x - round(local_x / step_x) * step_x) < GRID_LINE_HALF_PX {
         hit = true;
     }
-    if gp.price_interval > 1e-12 && gp.price_to_px > 1e-9 {
-        let price = gp.view_price0 + (gp.bounds.y + gp.bounds.w - in.px.y) / gp.price_to_px;
-        let k = price / gp.price_interval;
-        if abs(k - round(k)) * gp.price_interval * gp.price_to_px < GRID_LINE_HALF_PX {
-            hit = true;
-        }
+    let step_y = gp.bounds.w / max(gp.n_horiz, 1.0);
+    let local_y = in.px.y - gp.bounds.y;
+    if abs(local_y - round(local_y / step_y) * step_y) < GRID_LINE_HALF_PX {
+        hit = true;
     }
     let alpha = select(clamp(gp.bg_alpha, 0.0, 1.0), 1.0, hit);
     return vec4<f32>(select(bg, grid_col, hit), alpha);

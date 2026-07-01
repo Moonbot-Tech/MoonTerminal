@@ -128,17 +128,20 @@ impl RenderState {
         &mut self,
         bg: [f32; 4],
         soft_bg: [f32; 4],
+        order_bg: [f32; 4],
         border: [f32; 4],
         border_px: f32,
     ) {
         let border_px = border_px.max(0.0);
         if self.readout_bg != bg
             || self.readout_soft_bg != soft_bg
+            || self.readout_order_bg != order_bg
             || self.readout_border != border
             || (self.readout_border_px - border_px).abs() > 0.001
         {
             self.readout_bg = bg;
             self.readout_soft_bg = soft_bg;
+            self.readout_order_bg = order_bg;
             self.readout_border = border;
             self.readout_border_px = border_px;
             self.sync_readout_params();
@@ -292,10 +295,12 @@ impl RenderState {
             let placed = std::mem::take(&mut pr.label_placed);
             for pl in &placed {
                 let dst = readout_rect_dst(pl.x, pl.y, pl.w, pl.ax, pl.ay, sf);
+                // solid → плотная курсорная плашка; иначе → полу-плотная ордерная (просвечивает,
+                // младшая «заходит под» старшую при наложении).
                 let pbg = if pl.solid {
                     bg
                 } else {
-                    self.readout_soft_bg
+                    self.readout_order_bg
                 };
                 pr.readout_rects.push(ReadoutRect {
                     dst,

@@ -104,6 +104,7 @@ impl ChartEngine {
             cursor_thickness: theme.cross_thickness.max(1.0),
             readout_bg: rgba3(theme.bg, theme.readout_bg_alpha),
             readout_soft_bg: rgba3(theme.bg, theme.readout_soft_bg_alpha),
+            readout_order_bg: rgba3(theme.bg, theme.line_label_bg_alpha),
             readout_border: rgba3(theme.bg, theme.readout_border_alpha),
             readout_border_px: theme.readout_border_px.max(0.0),
             label_positive: hex3(theme.label_positive),
@@ -269,6 +270,7 @@ impl ChartEngine {
                 st.set_readout_style(
                     rgba3(theme.bg, theme.readout_bg_alpha),
                     rgba3(theme.bg, theme.readout_soft_bg_alpha),
+                    rgba3(theme.bg, theme.line_label_bg_alpha),
                     rgba3(theme.bg, theme.readout_border_alpha),
                     theme.readout_border_px,
                 );

@@ -153,15 +153,19 @@ pub(super) struct PlacedLabel {
     pub solid: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum OrderLabelRole {
-    /// Короткая основная подпись MoonBot: номер ордера / PnL% / стоп-%.
-    Primary,
-    /// Длинная подпись размера/остатка. Участвует в YTextFill-анти-overlap.
-    Caption,
-}
-
 pub(super) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;
+
+// Плотность СТАТИЧНОЙ сетки: фикс. деления ширины/высоты (модель MoonBot — сетка стоит, едут
+// только подписи). И вертикали (время), и горизонтали (цена) на фикс. экранных долях.
+pub(super) const GRID_N_VERT: f32 = 60.0;
+pub(super) const GRID_N_HORIZ: f32 = 6.0;
+
+// Приоритеты подписей ордерных линий при наложении (выше = размещается раньше, перекрывает).
+// SELL/STOP (актуальное для позиции: PnL%/стоп-%) перекрывают BUY (вход/размер).
+pub(super) const PRIO_BUY: u8 = 10;
+pub(super) const PRIO_SELL_SIZE: u8 = 20;
+pub(super) const PRIO_SELL_PCT: u8 = 30;
+pub(super) const PRIO_STOP_PCT: u8 = 40;
 
 #[derive(Clone)]
 pub(super) struct OrderLabel {
@@ -172,8 +176,9 @@ pub(super) struct OrderLabel {
     pub above: bool,
     /// Цвет линии (0xRRGGBB) — подпись красится в него же.
     pub color: u32,
-    /// MoonBot-смысл подписи: primary рисуем у линии всегда, caption пропускаем при overlap.
-    pub role: OrderLabelRole,
+    /// Приоритет при наложении: подпись с бОльшим значением размещается раньше, резервирует
+    /// вертикальный бакет и перекрывает младшие (те прячутся). SELL/STOP > BUY.
+    pub priority: u8,
     /// Drag/hover label надо рисовать поверх и не давить overlap-ом.
     pub force: bool,
 }
@@ -437,6 +442,7 @@ struct RenderState {
     cursor_thickness: f32,
     readout_bg: [f32; 4],
     readout_soft_bg: [f32; 4],
+    readout_order_bg: [f32; 4],
     readout_border: [f32; 4],
     readout_border_px: f32,
     label_positive: u32,

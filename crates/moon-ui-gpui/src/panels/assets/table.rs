@@ -5,24 +5,30 @@ use super::*;
 use moon_ui::{MoonNotification, MoonWindowExt as _};
 use rust_i18n::t;
 
+/// Ширина карточки ядра в полосе (`core_strip`). Фиксирована → карточки при переносе
+/// выстраиваются ровной сеткой (равная ширина = ровные колонки, без «лесенки»).
+const CORE_CARD_W: f32 = 148.0;
+
+/// Цвет знаковой величины (PnL): зелёный/красный/приглушённый.
+fn tone(v: f64, p: MoonPalette) -> u32 {
+    if v > 0.0 {
+        p.green
+    } else if v < 0.0 {
+        p.red
+    } else {
+        p.text_muted
+    }
+}
+
 impl AssetsView {
-    /// Верхняя панель управления: счётчик, галка «показать всё», итоги (Σ стоимость / Σ PnL).
+    /// Верхняя строка над таблицей позиций: счётчик строк, галка «показать всё», Σ стоимость.
     pub(super) fn controls(
         &self,
         count: usize,
         total_value: f64,
-        total_pnl: f64,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        let pnl_tone = if total_pnl > 0.0 {
-            p.green
-        } else if total_pnl < 0.0 {
-            p.red
-        } else {
-            p.text_muted
-        };
-
         h_flex()
             .w_full()
             .flex_none()
@@ -57,48 +63,181 @@ impl AssetsView {
                     .text_color(rgb(p.text_soft))
                     .child(format!("Σ {}", money(total_value))),
             )
+    }
+
+    /// Сворачиваемая полоса ядер внизу: строка-шапка (кол-во ядер + Σ баланс + Σ PnL +
+    /// стрелка ▾/▸), под ней — сетка карточек с вертикальным скроллом. Свёрнуто = только
+    /// строка-итог (карточки скрыты, «не мешают»). Клик по шапке тогает.
+    pub(super) fn core_strip(
+        &self,
+        aggs: &[CoreAgg],
+        total_pnl: f64,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let total_balance: f64 = aggs.iter().map(|a| a.total).sum();
+        let pnl_tone = tone(total_pnl, p);
+        let collapsed = self.plates_collapsed;
+        let arrow = if collapsed { "▸" } else { "▾" };
+
+        let header = h_flex()
+            .id("assets-plates-bar")
+            .w_full()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            // Кликабельная только зона сворачивания (стрелка + подпись) — чтобы клики по
+            // кнопкам сброса не тоглили полосу.
+            .child(
+                h_flex()
+                    .id("assets-plates-toggle")
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(p.text)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.plates_collapsed = !this.plates_collapsed;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_muted))
+                            .child(arrow),
+                    )
+                    .child(
+                        div()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_soft))
+                            .child(t!("assets.cores_count", n = aggs.len()).to_string()),
+                    ),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(p.text_soft))
+                    .child(format!("Σ {}", money(total_balance))),
+            )
             .child(
                 div()
                     .text_size(design::t_body(cx))
                     .text_color(rgb(pnl_tone))
                     .child(format!("PnL {}", money(total_pnl))),
             )
-    }
+            // Сброс прибыли ПО ВСЕМ ядрам охвата (сессия / всё время) — кликабельные
+            // div-«кнопки» (MoonButton в этом контексте не ловил клик), как рабочий тоггл.
+            .child(self.reset_btn(
+                "assets-reset-session",
+                t!("assets.reset_session").to_string(),
+                ResetProfitKind::Session,
+                cx,
+            ))
+            .child(self.reset_btn(
+                "assets-reset-all",
+                t!("assets.reset_all").to_string(),
+                ResetProfitKind::All,
+                cx,
+            ));
 
-    /// Полоса ядер (горизонтальная, с переносом): по ядру — имя + баланс в USDT (округлён).
-    pub(super) fn core_strip(&self, aggs: &[CoreAgg], cx: &Context<Self>) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
-        let mut row = h_flex()
-            .w_full()
-            .flex_none()
-            .flex_wrap()
-            .gap_2()
-            .px_2()
-            .py_1();
-        for a in aggs {
-            row = row.child(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .py(px(2.0))
-                    .rounded(px(4.0))
-                    .bg(rgb(p.shell_high))
-                    .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text))
-                            .child(a.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_soft))
-                            .child(money(a.total)),
-                    ),
+        // Свёрнуто → секция = только строка-шапка (flex_none, таблица держит натуральную
+        // высоту, ниже пусто). Развёрнуто → секция забирает ОСТАТОК места под таблицей
+        // (flex_1), а сетка карточек скроллится внутри — плашки НЕ давят таблицу в 0.
+        let mut section = v_flex().w_full().child(header);
+        if collapsed {
+            section = section.flex_none();
+        } else {
+            let mut grid = h_flex().w_full().flex_wrap().gap_2().px_2().py_1();
+            for a in aggs {
+                grid = grid.child(self.core_card(a, cx));
+            }
+            section = section.flex_1().min_h(px(0.0)).child(
+                div()
+                    .id("assets-plates-scroll")
+                    .w_full()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .child(grid),
             );
         }
-        row
+        section
+    }
+
+    /// Кликабельная div-«кнопка» сброса прибыли по всем ядрам охвата (сессия/всё).
+    fn reset_btn(
+        &self,
+        id: &'static str,
+        label: String,
+        kind: ResetProfitKind,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        h_flex()
+            .id(id)
+            .flex_none()
+            .px(design::ui_px(cx, 6.0))
+            .py(px(2.0))
+            .rounded(px(4.0))
+            .border_1()
+            .border_color(rgb(p.border))
+            .bg(rgb(p.shell_high))
+            .cursor_pointer()
+            .text_size(design::t_caption(cx))
+            .text_color(rgb(p.text_soft))
+            .hover(|s| s.bg(rgb(p.panel)).text_color(rgb(p.text)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.reset_all_cores(kind, cx);
+                cx.notify();
+            }))
+            .child(label)
+    }
+
+    /// Сбросить счётчик прибыли (сессия/всё) по ВСЕМ ядрам текущего охвата.
+    fn reset_all_cores(&self, kind: ResetProfitKind, cx: &App) {
+        let session = &self.backend.read(cx).session;
+        for a in self.cached_aggs.iter() {
+            if let Err(e) = session.reset_profit(a.id, kind) {
+                log::warn!("assets reset_profit({kind:?}) core {}: {e:#}", a.id);
+            }
+        }
+    }
+
+    /// Одна карточка ядра фикс. ширины (`CORE_CARD_W`): имя сверху, «итого + PnL» снизу.
+    /// Равная ширина → при переносе карточки ложатся ровными колонками.
+    fn core_card(&self, a: &CoreAgg, cx: &Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        v_flex()
+            .w(design::ui_px(cx, CORE_CARD_W))
+            .flex_none()
+            .gap(px(1.0))
+            .px(design::ui_px(cx, 8.0))
+            .py(design::ui_px(cx, 4.0))
+            .rounded(px(4.0))
+            .bg(rgb(p.shell_high))
+            .border_1()
+            .border_color(rgb(p.border))
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(p.text))
+                    .child(a.name.clone()),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .text_size(design::t_body(cx))
+                    .child(div().text_color(rgb(p.text_soft)).child(money(a.total)))
+                    .child(div().text_color(rgb(tone(a.pnl, p))).child(money(a.pnl))),
+            )
     }
 
     /// Нижняя секция: слева список ядер (имя + свободно/итого, выбор), справа —

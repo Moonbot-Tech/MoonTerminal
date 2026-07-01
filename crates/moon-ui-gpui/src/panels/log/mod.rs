@@ -31,6 +31,10 @@ use moon_core::session::{CoreId, CoreStore};
 const VIEW_LIMIT: usize = 5000;
 /// Сколько строк берём с каждого ядра при сборке агрегата.
 const AGG_PER_CORE: usize = 2000;
+/// Потолок буфера в режиме паузы (листаем): пока не в Live, старые строки не удаляем, а
+/// дописываем новые сверх VIEW_LIMIT — чтобы позиция скролла не «съезжала». До этого
+/// потолка. При возврате в Live обрезаем обратно к VIEW_LIMIT.
+const PAUSED_CAP: usize = 20_000;
 
 /// Источник лога.
 #[derive(Clone, PartialEq)]
@@ -60,6 +64,8 @@ pub struct LogPanel {
     pub(super) source: LogSource,
     pub(super) file: LogFile,
     errors_only: bool,
+    /// Фильтр по монете (клик по тикеру в строке). None — без фильтра.
+    coin_filter: Option<String>,
     query: Entity<MoonInputState>,
     /// Кэш загруженного файла — чтобы не читать диск каждый кадр.
     loaded_name: Option<String>,
@@ -70,8 +76,18 @@ pub struct LogPanel {
     /// Нефильтрованные строки текущего источника/file. Обновляются вне render.
     raw_lines: Vec<LogLine>,
     /// Отфильтрованные строки текущего кадра (читает рендер списка по индексу).
-    lines: Vec<LogLine>,
+    /// Классификация/монета посчитаны заранее в `apply_filter`, не на кадре.
+    lines: Vec<render::LineView>,
     total: usize,
+    /// «Live»: намерение пользователя держаться у хвоста. Ручной выключатель —
+    /// отжатая вручную кнопка не вернётся к Live сама (только ручным нажатием).
+    live: bool,
+    /// Авто-пауза Live: пользователь скроллит. Ставится по колесу, снимается таймером
+    /// через 5 c после последнего скролла. Пока true — к низу не прыгаем.
+    scroll_pause: bool,
+    /// Поколение скролла — гейт для отложенного авто-возврата (новый скролл отменяет
+    /// прошлый таймер: 5 c считаются от ПОСЛЕДНЕГО скролла).
+    scroll_gen: u64,
     scroll: MoonVirtualListScrollHandle,
     /// Сигнатура лога прошлого кадра — чтобы НЕ пересобирать лог каждые 100мс
     /// (gather клонирует до 5000 строк; на холостом ходу это лишняя нагрузка).
@@ -112,6 +128,7 @@ impl LogPanel {
             source: LogSource::Aggregate,
             file: LogFile::Live,
             errors_only: true,
+            coin_filter: None,
             query,
             loaded_name: None,
             loaded_lines: Vec::new(),
@@ -120,6 +137,9 @@ impl LogPanel {
             raw_lines: Vec::new(),
             lines: Vec::new(),
             total: 0,
+            live: true,
+            scroll_pause: false,
+            scroll_gen: 0,
             scroll: MoonVirtualListScrollHandle::new(),
             last_sig: 0,
             dock: None,
@@ -206,19 +226,144 @@ impl LogPanel {
     fn apply_filter(&mut self, cx: &App) {
         let query = self.query.read(cx).value().trim().to_lowercase();
         let errors_only = self.errors_only;
+        let coin = self.coin_filter.as_deref().map(str::to_lowercase);
         self.total = self.raw_lines.len();
-        let previous_len = self.lines.len();
+        // Базы монет со всего буфера — чтобы подсветить голые тикеры (`SPK`), встреченные
+        // где-то в рыночной форме (`USDT-SPK`). Один проход до сборки строк.
+        let known = render::collect_coin_bases(&self.raw_lines);
+        // Классификацию/монету считаем ОДИН раз здесь (не на кадре): парсинг текста
+        // дорог, а рендер строки вызывается каждый кадр для каждой видимой строки.
         self.lines = self
             .raw_lines
             .iter()
-            .filter(|l| !errors_only || l.is_errorish())
-            .filter(|l| query.is_empty() || l.msg.to_lowercase().contains(&query))
-            .cloned()
+            .filter(|l| {
+                query.is_empty()
+                    || l.msg.to_lowercase().contains(&query)
+                    || l.target.to_lowercase().contains(&query)
+            })
+            .filter(|l| {
+                coin.as_ref()
+                    .is_none_or(|c| l.msg.to_lowercase().contains(c))
+            })
+            .filter_map(|l| {
+                let cl = render::classify(l);
+                if errors_only && !render::is_error(cl.sev) {
+                    return None;
+                }
+                Some(render::LineView::from_parts(l, cl, &known))
+            })
             .collect();
-        if previous_len != self.lines.len() && !self.lines.is_empty() {
+        if self.following() && !self.lines.is_empty() {
             self.scroll
                 .scroll_to_item(self.lines.len() - 1, ScrollStrategy::Bottom);
         }
+    }
+
+    /// Тейлим ли сейчас (эффективный Live): включён и не на скролл-паузе.
+    fn following(&self) -> bool {
+        self.live && !self.scroll_pause
+    }
+
+    /// Вернуться в Live: снять паузу, включить, перечитать свежий хвост из кольца и
+    /// прыгнуть вниз (reload_rows → apply_filter сам прыгает, т.к. following() снова true).
+    fn resume_live(&mut self, cx: &mut Context<Self>) {
+        self.scroll_pause = false;
+        self.live = true;
+        let backend = self.backend.clone();
+        self.last_sig = render::log_sig(backend.read(cx), &self.group);
+        self.reload_rows(backend.read(cx), cx);
+    }
+
+    /// Пользователь крутанул колесо над списком. В режиме Live это отжимает кнопку
+    /// (пауза тейлинга) и заводит таймер авто-возврата на 5 c после ПОСЛЕДНЕГО скролла.
+    /// Если Live отжат вручную — скролл ничего не меняет.
+    fn on_user_scroll(&mut self, cx: &mut Context<Self>) {
+        if !self.live {
+            return;
+        }
+        self.scroll_gen = self.scroll_gen.wrapping_add(1);
+        let want_gen = self.scroll_gen;
+        if !self.scroll_pause {
+            self.scroll_pause = true;
+            cx.notify(); // кнопка визуально отжимается
+        }
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            executor.timer(std::time::Duration::from_secs(5)).await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |t, cx| {
+                    // Таймер ещё актуален (не было нового скролла) и Live не отжали вручную.
+                    if t.scroll_gen == want_gen && t.live && t.scroll_pause {
+                        t.resume_live(cx);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            });
+        })
+        .detach();
+    }
+
+    /// Установить/снять фильтр по монете (клик по тикеру в строке).
+    pub(super) fn set_coin_filter(&mut self, coin: Option<String>, cx: &mut Context<Self>) {
+        if self.coin_filter != coin {
+            self.coin_filter = coin;
+            self.apply_filter(cx);
+            cx.notify();
+        }
+    }
+
+    /// ПКМ по монете: открыть её график на Main (через `Backend.open_request`, как Ордера/
+    /// Детекты). Ядро строки: источник `Core` → это ядро; `Aggregate` → сервер из `target`;
+    /// `Local` → первое ядро группы, где такая монета есть. Базу (`SPK`) резолвим в рыночное
+    /// имя через market-поиск ядра (истина), не угадываем суффикс.
+    pub(super) fn open_coin_chart(
+        &mut self,
+        base: String,
+        target: String,
+        cx: &mut Context<Self>,
+    ) {
+        let resolved = {
+            let b = self.backend.read(cx);
+            let ms = b.session.market_source();
+            let core = match &self.source {
+                LogSource::Core(id) => Some(*id),
+                LogSource::Aggregate => b
+                    .config
+                    .servers
+                    .iter()
+                    .find(|s| s.name == target)
+                    .map(|s| s.id),
+                LogSource::Local => None,
+            };
+            let scoped = !self.group.is_empty();
+            let candidates: Vec<CoreId> = match core {
+                Some(id) => vec![id],
+                None => b
+                    .config
+                    .servers
+                    .iter()
+                    .filter(|s| !scoped || s.group == self.group)
+                    .map(|s| s.id)
+                    .collect(),
+            };
+            candidates.into_iter().find_map(|id| {
+                ms.search_markets(id, &base, 1)
+                    .into_iter()
+                    .next()
+                    .map(|market| (id, market))
+            })
+        };
+        let Some((core, market)) = resolved else {
+            return; // рынок для монеты не нашёлся на ядре — молча ничего не делаем
+        };
+        self.backend.update(cx, |b, bcx| {
+            b.open_request = Some((core, market));
+            b.open_request_rev = b.open_request_rev.wrapping_add(1);
+            // Открыть монету, но окно Main не поднимать (как в Ордерах/Детектах).
+            b.open_request_activate = false;
+            bcx.notify();
+        });
     }
 
     fn reload_rows(&mut self, b: &Backend, cx: &App) {
@@ -228,8 +373,46 @@ impl LogPanel {
             let label = self.file_label(&sources);
             self.refresh_available_files(&label);
         }
-        self.raw_lines = self.gather(b.session.store(), &sources);
+        let fresh = self.gather(b.session.store(), &sources);
+        if self.following() {
+            // Live: свежий хвост (кольцо уже обрезано до VIEW_LIMIT).
+            self.raw_lines = fresh;
+        } else {
+            // Пауза (листаем): дописываем только новые строки в конец, старые не трогаем —
+            // позиция скролла не сдвигается. Лимит VIEW_LIMIT снят до PAUSED_CAP.
+            self.merge_paused(fresh);
+        }
         self.apply_filter(cx);
+    }
+
+    /// Слить свежий снимок в `raw_lines` в режиме паузы: найти в свежем нашу последнюю
+    /// строку (по времени+тексту+источнику) и дописать всё, что после неё. Нет совпадения
+    /// (паузу держали дольше, чем кольцо, > VIEW_LIMIT новых) → дописываем весь снимок
+    /// (возможен разрыв — редкий край). Сверху обрезаем до PAUSED_CAP.
+    fn merge_paused(&mut self, fresh: Vec<LogLine>) {
+        match self.raw_lines.last() {
+            None => self.raw_lines = fresh,
+            Some(last) => {
+                let boundary = fresh.iter().rposition(|l| {
+                    l.ts == last.ts && l.msg == last.msg && l.target == last.target
+                });
+                match boundary {
+                    Some(pos) => self.raw_lines.extend(fresh.into_iter().skip(pos + 1)),
+                    None => self.raw_lines.extend(fresh),
+                }
+            }
+        }
+        if self.raw_lines.len() > PAUSED_CAP {
+            let drop = self.raw_lines.len() - PAUSED_CAP;
+            self.raw_lines.drain(0..drop);
+        }
+    }
+
+    /// Явный выбор источника/файла → всегда к Live (иначе merge_paused слил бы чужой лог).
+    fn reset_to_live(&mut self) {
+        self.live = true;
+        self.scroll_pause = false;
+        self.scroll_gen = self.scroll_gen.wrapping_add(1);
     }
 
     pub(super) fn set_source(&mut self, s: LogSource, cx: &mut Context<Self>) {
@@ -240,6 +423,7 @@ impl LogPanel {
             self.loaded_name = None;
             self.available_files_label = None;
             self.available_files.clear();
+            self.reset_to_live();
             let backend = self.backend.clone();
             self.reload_rows(backend.read(cx), cx);
             cx.notify();
@@ -248,6 +432,7 @@ impl LogPanel {
     pub(super) fn set_file(&mut self, f: LogFile, cx: &mut Context<Self>) {
         if self.file != f {
             self.file = f;
+            self.reset_to_live();
             let backend = self.backend.clone();
             self.reload_rows(backend.read(cx), cx);
             cx.notify();
@@ -349,11 +534,46 @@ impl Render for LogPanel {
                     })),
             )
             .child(
+                MoonCheckbox::new("log-live")
+                    .label(t!("log.follow_tail").to_string())
+                    .checked(self.following())
+                    .size(MoonCheckboxSize::Compact)
+                    .on_change(cx.listener(|t, ch: &bool, _, cx| {
+                        // Ручное нажатие отменяет отложенный авто-возврат.
+                        t.scroll_gen = t.scroll_gen.wrapping_add(1);
+                        if *ch {
+                            t.resume_live(cx); // вернуться к живому хвосту
+                        } else {
+                            // Отжали вручную — заморозить, сама к Live не вернётся.
+                            t.live = false;
+                            t.scroll_pause = false;
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
                 div()
                     .text_size(crate::design::t_body(cx))
                     .text_color(rgb(p.text_muted))
                     .child(t!("log.count", shown = self.lines.len(), total = total).to_string()),
             );
+        // Чип активного фильтра монеты (клик снимает).
+        if let Some(coin) = self.coin_filter.clone() {
+            controls = controls.child(
+                div()
+                    .id("log-coin-chip")
+                    .flex_none()
+                    .cursor_pointer()
+                    .px_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(p.blue))
+                    .text_size(crate::design::t_body(cx))
+                    .text_color(rgb(p.blue))
+                    .child(format!("{coin} ✕"))
+                    .on_click(cx.listener(|t, _, _, cx| t.set_coin_filter(None, cx))),
+            );
+        }
 
         // ── Список (виртуализирован, к низу) ──
         let weak = cx.entity().downgrade();
@@ -374,6 +594,7 @@ impl Render for LogPanel {
                 .into_any_element()
         } else {
             let scroll = self.scroll.clone();
+            let query = self.query.read(cx).value().trim().to_lowercase();
             let list_el = MoonVirtualList::new(
                 "log-virtual-rows",
                 self.lines.len(),
@@ -384,7 +605,7 @@ impl Render for LogPanel {
                             e.read(app)
                                 .lines
                                 .get(ix)
-                                .map(|line| render::log_row(line, p, app))
+                                .map(|line| render::log_row(line, &query, &weak, p, app))
                         })
                         .unwrap_or_else(|| div().into_any_element())
                 },
@@ -399,6 +620,10 @@ impl Render for LogPanel {
                 .w_full()
                 .min_h_0()
                 .child(list_el)
+                // Скролл колесом над списком → пауза Live + таймер авто-возврата.
+                .on_scroll_wheel(cx.listener(|t, _e: &ScrollWheelEvent, _w, cx| {
+                    t.on_user_scroll(cx);
+                }))
                 .into_any_element()
         };
 

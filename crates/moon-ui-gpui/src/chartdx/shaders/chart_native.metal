@@ -30,9 +30,9 @@ struct GridParams {
     float4 bounds;
     float2 resolution;
     float n_vert;
-    float price_to_px;
-    float view_price0;
-    float price_interval;
+    float n_horiz;
+    float pad0;
+    float pad1;
     float grid_alpha;
     float bg_alpha;
     float4 bg;
@@ -148,11 +148,9 @@ fragment float4 grid_fragment(GridOut in [[stage_in]], constant GridParams& gp [
     float step_x = gp.bounds.z / max(gp.n_vert, 1.0);
     float local_x = in.px.x - gp.bounds.x;
     if (abs(local_x - round(local_x / step_x) * step_x) < GRID_LINE_HALF_PX) hit = true;
-    if (gp.price_interval > 1e-12 && gp.price_to_px > 1e-9) {
-        float price = gp.view_price0 + (gp.bounds.y + gp.bounds.w - in.px.y) / gp.price_to_px;
-        float k = price / gp.price_interval;
-        if (abs(k - round(k)) * gp.price_interval * gp.price_to_px < GRID_LINE_HALF_PX) hit = true;
-    }
+    float step_y = gp.bounds.w / max(gp.n_horiz, 1.0);
+    float local_y = in.px.y - gp.bounds.y;
+    if (abs(local_y - round(local_y / step_y) * step_y) < GRID_LINE_HALF_PX) hit = true;
     float alpha = hit ? 1.0 : saturate(gp.bg_alpha);
     return float4(hit ? grid_col : bg, alpha);
 }

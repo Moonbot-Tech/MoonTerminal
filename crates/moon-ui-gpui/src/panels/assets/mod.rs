@@ -29,7 +29,7 @@ use moon_ui::{
 use crate::Backend;
 use crate::design;
 use crate::panels::{RenderGate, num};
-use moon_core::feed::{AssetRow, TransferAssetRow, WalletKind};
+use moon_core::feed::{AssetRow, ResetProfitKind, TransferAssetRow, WalletKind};
 use moon_core::session::CoreId;
 use rust_i18n::t;
 
@@ -65,6 +65,8 @@ pub(super) struct CoreAgg {
     pub(super) free: f64,
     /// Итоговый баланс в USDT (btc_full * курс, с нереализ. PnL).
     pub(super) total: f64,
+    /// PnL ядра в USDT (серверный, значение шапки «PnL»).
+    pub(super) pnl: f64,
 }
 
 #[derive(Clone)]
@@ -115,13 +117,19 @@ pub(super) fn kind_label(row: &AssetRow) -> String {
 pub struct AssetsView {
     pub(super) backend: Entity<Backend>,
     scope: AssetsScope,
-    /// true = вид живёт в отдельном ОС-окне (рисует свой титлбар/контролы и контейнеры
-    /// переноса); false = dock-вкладка (только таблица позиций).
+    /// true = вид рисует СВОЮ рамку ОС-окна (титлбар + системные контролы) и персистит
+    /// свою геометрию. Глобальное окно = true; откреп-окно (рамку даёт `DetachedWindow`)
+    /// и dock-вкладка = false.
     windowed: bool,
+    /// Показывать нижние контейнеры переноса (список ядер + Спот/Фьючи/Квартальные).
+    /// true в любом отдельном окне (глобальном/откреплённом), false во вкладке дока.
+    show_wallets: bool,
     /// Выбранное ядро для нижних контейнеров кошельков.
     pub(super) selected_core: Option<CoreId>,
     /// Показывать ВСЁ (иначе только балансы >1 USDT с известной ценой).
     pub(super) show_all: bool,
+    /// Свёрнута ли полоса плашек ядер (свёрнуто = только строка-итог Σ баланс/PnL).
+    pub(super) plates_collapsed: bool,
     /// Открытый диалог переноса (количество) + поле ввода. Тип `PendingTransfer`
     /// приватен для `wallets`, поэтому поле тоже приватное (доступно потомкам модуля).
     pending_transfer: Option<PendingTransfer>,
@@ -145,6 +153,7 @@ impl AssetsView {
         backend: Entity<Backend>,
         scope: AssetsScope,
         windowed: bool,
+        show_wallets: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -184,8 +193,10 @@ impl AssetsView {
             backend,
             scope,
             windowed,
+            show_wallets,
             selected_core: None,
             show_all: false,
+            plates_collapsed: true,
             pending_transfer: None,
             transfer_input: None,
             gate: RenderGate::default(),
@@ -223,7 +234,18 @@ impl AssetsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new(backend, AssetsScope::Group(group), false, window, cx)
+        Self::new(backend, AssetsScope::Group(group), false, false, window, cx)
+    }
+
+    /// Контент откреплённого окна (`DetachedWindow` даёт рамку) — ядра группы + нижние
+    /// контейнеры переноса, но без собственной рамки/персиста геометрии.
+    pub fn detached_group(
+        backend: Entity<Backend>,
+        group: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new(backend, AssetsScope::Group(group), false, true, window, cx)
     }
 
     /// Ядра охвата (id, имя): группа → ядра группы; глобально → все подключённые.
@@ -286,16 +308,19 @@ impl AssetsView {
             .map(|(id, name)| {
                 let mut free = 0.0;
                 let mut total = 0.0;
+                let mut pnl = 0.0;
                 if let Some(cd) = store.core(id) {
                     // USDT-баланс уже посчитан на ядре с учётом базовой валюты.
                     free = cd.assets.global.free_usdt;
                     total = cd.assets.global.total_usdt;
+                    pnl = cd.assets.global.pnl_usdt;
                 }
                 CoreAgg {
                     id,
                     name,
                     free,
                     total,
+                    pnl,
                 }
             })
             .collect()
@@ -446,17 +471,25 @@ impl Render for AssetsView {
         let windowed = self.windowed;
 
         let count = entries.len();
+        // Натуральная высота таблицы = шапка + строки (пусто → 0). Ограничивает max_h
+        // обёртки, чтобы таблица росла под контент, а не тянулась на всю панель.
+        let table_natural_h = if count == 0 {
+            0.0
+        } else {
+            design::TABLE_HEAD_H + count as f32 * design::TABLE_ROW_H
+        };
         let total_value = self.cached_total_value;
         let total_pnl = self.cached_total_pnl;
 
         let aggs = self.cached_aggs.clone();
-        let controls = self.controls(count, total_value, total_pnl, cx);
-        let core_strip = self.core_strip(&aggs, cx);
-        // Контейнеры переноса (список ядер + кошельки) — только в отдельном ОКНЕ; во
-        // вкладке показываем позиции/балансы по всем ядрам охвата (таблица на всю ширину).
+        let controls = self.controls(count, total_value, cx);
+        let plates = self.core_strip(&aggs, total_pnl, cx);
+        // Контейнеры переноса (список ядер + кошельки) — в отдельном ОКНЕ (глобальном или
+        // откреплённом); во вкладке дока показываем только позиции/балансы (таблица шире).
         let wallets = self.cached_wallets.clone();
-        let tree_section =
-            windowed.then(|| self.bottom(&cores, &aggs, &wallets, cx).into_any_element());
+        let tree_section = self
+            .show_wallets
+            .then(|| self.bottom(&cores, &aggs, &wallets, cx).into_any_element());
         let table = table::assets_table("assets-table", entries, cx);
 
         // Ширина окна для хит-оверлея титлбара (drag/resize/контролы) — как у «Стратегий».
@@ -478,9 +511,21 @@ impl Render for AssetsView {
             .bg(rgb(p.table_body))
             .when(windowed, |this| this.child(assets_header(p, cx)))
             .child(controls)
-            .child(core_strip)
             .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
-            .child(table)
+            // Таблица позиций РЕЗЕРВИРУЕТ высоту по содержимому: пусто → 0 (полностью
+            // схлопнута), N строк → высота под N строк. Высота-basis (`.h`, а НЕ `flex_1`)
+            // → плашки не могут ужать её при разворачивании: она уступает (скроллится
+            // внутри) только если строк реально не влезает по высоте панели.
+            .child(
+                v_flex()
+                    .h(px(table_natural_h))
+                    .min_h(px(0.0))
+                    .w_full()
+                    .overflow_hidden()
+                    .child(table),
+            )
+            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
+            .child(plates)
             .children(tree_section);
         if windowed {
             root = root.child(
@@ -566,7 +611,7 @@ pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut A
     let b = backend.clone();
     if let Ok(handle) = cx.open_window(opts, move |window, cx| {
         crate::windowing::configure_shell_clear_color(window, cx);
-        let view = cx.new(|cx| AssetsView::new(b, AssetsScope::All, true, window, cx));
+        let view = cx.new(|cx| AssetsView::new(b, AssetsScope::All, true, true, window, cx));
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     }) {
         backend.update(cx, |bk, _| bk.assets_window = Some(handle));
