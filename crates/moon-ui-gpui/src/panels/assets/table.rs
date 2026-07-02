@@ -9,17 +9,6 @@ use rust_i18n::t;
 /// выстраиваются ровной сеткой (равная ширина = ровные колонки, без «лесенки»).
 const CORE_CARD_W: f32 = 148.0;
 
-/// Цвет знаковой величины (PnL): зелёный/красный/приглушённый.
-fn tone(v: f64, p: MoonPalette) -> u32 {
-    if v > 0.0 {
-        p.green
-    } else if v < 0.0 {
-        p.red
-    } else {
-        p.text_muted
-    }
-}
-
 impl AssetsView {
     /// Верхняя строка над таблицей позиций: счётчик строк, галка «показать всё», Σ стоимость.
     pub(super) fn controls(
@@ -65,23 +54,16 @@ impl AssetsView {
             )
     }
 
-    /// Сворачиваемая полоса ядер внизу: строка-шапка (кол-во ядер + Σ баланс + Σ PnL +
-    /// стрелка ▾/▸), под ней — сетка карточек с вертикальным скроллом. Свёрнуто = только
-    /// строка-итог (карточки скрыты, «не мешают»). Клик по шапке тогает.
-    pub(super) fn core_strip(
-        &self,
-        aggs: &[CoreAgg],
-        total_pnl: f64,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+    /// Сворачиваемая полоса ядер внизу: строка-шапка (кол-во ядер + Σ баланс + стрелка ▾/▸),
+    /// под ней — сетка карточек с вертикальным скроллом. Свёрнуто = только строка-итог
+    /// (карточки скрыты, «не мешают»). Клик по шапке тогает. PnL здесь не показываем
+    /// (серверный Markets.FTotalPNL решили не выносить в Активы — только балансы).
+    pub(super) fn core_strip(&self, aggs: &[CoreAgg], cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let total_balance: f64 = aggs.iter().map(|a| a.total).sum();
-        let pnl_tone = tone(total_pnl, p);
         let collapsed = self.plates_collapsed;
         let arrow = if collapsed { "▸" } else { "▾" };
 
-        // Этот PnL — read-only серверный Markets.FTotalPNL/total_pnl. Delphi ResetProfit
-        // сбрасывает RepForm-счётчики отчёта, не это значение, поэтому кнопок сброса тут нет.
         let header = h_flex()
             .id("assets-plates-bar")
             .w_full()
@@ -121,12 +103,6 @@ impl AssetsView {
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_soft))
                     .child(format!("Σ {}", money(total_balance))),
-            )
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(pnl_tone))
-                    .child(format!("PnL {}", money(total_pnl))),
             );
 
         // Свёрнуто → секция = только строка-шапка (flex_none, таблица держит натуральную
@@ -153,39 +129,32 @@ impl AssetsView {
         section
     }
 
-    /// Одна карточка ядра фикс. ширины (`CORE_CARD_W`): имя сверху, «итого + PnL» снизу.
-    /// Равная ширина → при переносе карточки ложатся ровными колонками.
+    /// Одна карточка ядра фикс. ширины (`CORE_CARD_W`), в одну строку: имя слева, итоговый
+    /// баланс справа (PnL убран). Равная ширина → при переносе карточки ложатся ровными колонками.
     fn core_card(&self, a: &CoreAgg, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        v_flex()
+        h_flex()
             .w(design::ui_px(cx, CORE_CARD_W))
             .flex_none()
-            .gap(px(1.0))
+            .items_center()
+            .justify_between()
+            .gap_2()
             .px(design::ui_px(cx, 8.0))
             .py(design::ui_px(cx, 4.0))
             .rounded(px(4.0))
             .bg(rgb(p.shell_high))
             .border_1()
             .border_color(rgb(p.border))
+            .text_size(design::t_body(cx))
             .child(
                 div()
-                    .w_full()
+                    .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(design::t_body(cx))
                     .text_color(rgb(p.text))
                     .child(a.name.clone()),
             )
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .text_size(design::t_body(cx))
-                    .child(div().text_color(rgb(p.text_soft)).child(money(a.total)))
-                    .child(div().text_color(rgb(tone(a.pnl, p))).child(money(a.pnl))),
-            )
+            .child(div().text_color(rgb(p.text_soft)).child(money(a.total)))
     }
 
     /// Нижняя секция: слева список ядер (имя + свободно/итого, выбор), справа —

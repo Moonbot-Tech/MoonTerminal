@@ -15,7 +15,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use moon_core::feed::{ClientSettingsEdit, LevManageEdit, ResetProfitKind, RuntimeState};
+use moon_core::feed::{ClientSettingsEdit, LevManageEdit, RuntimeState};
 
 use crate::{Backend, design};
 
@@ -600,28 +600,10 @@ pub fn core_settings_content(
     );
 
     // ── Рамка «Действия» ─────────────────────────────────────────────────
-    let reset_session = {
-        let backend = backend.clone();
-        let group = group.to_string();
-        MoonButton::new("core-reset-session")
-            .label(t!("core_settings.reset_session").to_string())
-            .size(MoonButtonSize::Action)
-            .variant(MoonButtonVariant::Soft)
-            .on_click(move |_, _w, app| {
-                reset_profit(&backend, &group, ResetProfitKind::Session, app)
-            })
-            .render()
-    };
-    let reset_all = {
-        let backend = backend.clone();
-        let group = group.to_string();
-        MoonButton::new("core-reset-all")
-            .label(t!("core_settings.reset_all").to_string())
-            .size(MoonButtonSize::Action)
-            .variant(MoonButtonVariant::Soft)
-            .on_click(move |_, _w, app| reset_profit(&backend, &group, ResetProfitKind::All, app))
-            .render()
-    };
+    // Кнопки «Сброс сессии»/«Сброс всего» убраны: TResetProfitCommand сбрасывает серверные
+    // счётчики RepForm, которые клиенту не транслируются — эффект в терминале не виден
+    // (см. docs-internal/PROTO_REQUEST_PROFIT_AND_STOP_DEFAULTS.md). Вернуть, когда протокол
+    // начнёт отдавать счётчики.
     let cancel_all = MoonButton::new("core-cancel-all")
         .label(if cancel_confirm {
             t!("core_settings.cancel_all_confirm").to_string()
@@ -641,13 +623,6 @@ pub fn core_settings_content(
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 6.0))
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(div().flex_1().child(reset_session))
-                    .child(div().flex_1().child(reset_all)),
-            )
             .child(cancel_all)
             .into_any_element(),
     );
@@ -702,12 +677,3 @@ fn runtime_status(rt: Option<RuntimeState>, p: MoonPalette, cx: &App) -> impl In
         ))
 }
 
-/// Сброс прибыли активного ядра (без подтверждения).
-fn reset_profit(backend: &Entity<Backend>, group: &str, kind: ResetProfitKind, app: &mut App) {
-    let b = backend.read(app);
-    if let Some(core) = b.active_trade_core(group) {
-        if let Err(e) = b.session.reset_profit(core, kind) {
-            log::warn!("reset_profit failed: {e:#}");
-        }
-    }
-}

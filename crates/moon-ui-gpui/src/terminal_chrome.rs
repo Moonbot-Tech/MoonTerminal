@@ -57,19 +57,9 @@ pub fn header(
                 .child(core_gear_button(shell, p, cx))
                 .child(balance_label(free_usdt, total_usdt, p, cx)),
         )
-        .child(
-            MoonWindowFrame::main("terminal-header-metrics-drag", 0.0)
-                .drag_handle()
-                .flex()
-                .gap(design::ui_px(cx, 10.0))
-                .items_center()
-                .min_w_0()
-                .overflow_hidden()
-                // Профит за сессию: сервер (moonproto) НЕ отдаёт отдельного session-значения
-                // (есть только общий total_pnl) — оставляем метрику заглушкой «—», пока нет
-                // источника. Real/Unreal/Risk из шапки убраны.
-                .child(metric("Session", "—", p.text_muted, p, cx)),
-        )
+        // Метрики Session/Real/Unreal/Risk из шапки убраны: сервер (moonproto) не отдаёт
+        // session-профита (см. docs-internal/PROTO_REQUEST_PROFIT_AND_STOP_DEFAULTS.md),
+        // а остальное решили не показывать. Остался только баланс у селектора ядра.
         .child(
             MoonWindowFrame::main("terminal-header-spacer-drag", 0.0)
                 .drag_handle()
@@ -122,34 +112,6 @@ fn positive_text(p: MoonPalette) -> u32 {
 
 fn danger_text(p: MoonPalette) -> u32 {
     if p.is_light() { p.red_text } else { p.red }
-}
-
-fn metric(
-    label: &'static str,
-    value: impl Into<SharedString>,
-    color: u32,
-    p: MoonPalette,
-    cx: &App,
-) -> impl IntoElement {
-    let value: SharedString = value.into();
-    h_flex()
-        .h(design::fit_h_px(cx, 22.0, 13.0, 4.5))
-        .gap(design::ui_px(cx, 5.0))
-        .font_family(design::mono())
-        .text_size(design::t_body(cx))
-        .child(
-            div()
-                .text_size(design::t_caption(cx))
-                .font_family(design::ui_font())
-                .text_color(rgb(p.text_muted))
-                .child(label),
-        )
-        .child(
-            div()
-                .text_color(rgb(color))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(value),
-        )
 }
 
 /// Селектор «активного торгового ядра» группы. Список ядер группы; текущий выбор =

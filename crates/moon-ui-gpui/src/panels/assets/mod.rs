@@ -67,8 +67,6 @@ pub(super) struct CoreAgg {
     pub(super) free: f64,
     /// Итоговый баланс в USDT (btc_full * курс, с нереализ. PnL).
     pub(super) total: f64,
-    /// PnL ядра в USDT (серверный, значение шапки «PnL»).
-    pub(super) pnl: f64,
 }
 
 #[derive(Clone)]
@@ -145,7 +143,6 @@ pub struct AssetsView {
     cached_wallet_key: Option<(Option<CoreId>, u64, bool)>,
     cached_wallets: Rc<Vec<WalletColumnSnapshot>>,
     cached_total_value: f64,
-    cached_total_pnl: f64,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -209,7 +206,6 @@ impl AssetsView {
             cached_wallet_key: None,
             cached_wallets: Rc::new(Vec::new()),
             cached_total_value: 0.0,
-            cached_total_pnl: 0.0,
             dock: None,
             focus: cx.focus_handle(),
         };
@@ -311,19 +307,16 @@ impl AssetsView {
             .map(|(id, name)| {
                 let mut free = 0.0;
                 let mut total = 0.0;
-                let mut pnl = 0.0;
                 if let Some(cd) = store.core(id) {
                     // USDT-баланс уже посчитан на ядре с учётом базовой валюты.
                     free = cd.assets.global.free_usdt;
                     total = cd.assets.global.total_usdt;
-                    pnl = cd.assets.global.pnl_usdt;
                 }
                 CoreAgg {
                     id,
                     name,
                     free,
                     total,
-                    pnl,
                 }
             })
             .collect()
@@ -344,12 +337,6 @@ impl AssetsView {
         self.cached_aggs = Rc::new(self.per_core(b));
         self.rebuild_wallet_cache(b);
         self.cached_total_value = self.cached_entries.iter().map(|e| e.value).sum();
-        self.cached_total_pnl = self
-            .cached_cores
-            .iter()
-            .filter_map(|(id, _)| b.session.store().core(*id))
-            .map(|cd| cd.assets.global.pnl_usdt)
-            .sum();
         self.cache_sig = Some((sig, self.show_all));
     }
 
@@ -482,11 +469,10 @@ impl Render for AssetsView {
             design::TABLE_HEAD_H + count as f32 * design::TABLE_ROW_H
         };
         let total_value = self.cached_total_value;
-        let total_pnl = self.cached_total_pnl;
 
         let aggs = self.cached_aggs.clone();
         let controls = self.controls(count, total_value, cx);
-        let plates = self.core_strip(&aggs, total_pnl, cx);
+        let plates = self.core_strip(&aggs, cx);
         // Контейнеры переноса (список ядер + кошельки) — в отдельном ОКНЕ (глобальном или
         // откреплённом); во вкладке дока показываем только позиции/балансы (таблица шире).
         let wallets = self.cached_wallets.clone();

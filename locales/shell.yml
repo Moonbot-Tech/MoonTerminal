@@ -217,14 +217,6 @@ core_settings.frame_actions:
   ru: "Действия"
   en: "Actions"
   es: "Acciones"
-core_settings.reset_session:
-  ru: "Сброс сессии"
-  en: "Reset session"
-  es: "Reiniciar sesión"
-core_settings.reset_all:
-  ru: "Сброс всего"
-  en: "Reset all"
-  es: "Reiniciar todo"
 core_settings.cancel_all:
   ru: "Отменить все ордера"
   en: "Cancel all orders"
