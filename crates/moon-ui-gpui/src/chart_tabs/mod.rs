@@ -280,6 +280,7 @@ impl ChartTabs {
             #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
             this.drain_debug_fill_main_chart(cx);
             this.handle_open_request(cx);
+            this.handle_open_compare_request(cx);
             this.ingest(cx);
             this.drain_chart_repin(cx);
             this.sync_active_scale(cx);
@@ -426,6 +427,35 @@ impl ChartTabs {
             self.sync_active_scale(cx);
             self.sync_main_chart_target(cx);
             self.persist_scales(cx);
+        }
+    }
+
+    /// ПКМ по детекту: «открыть в новой кастомной вкладке в режиме сравнения». Дренаж
+    /// зеркалит `handle_open_request` (compare-and-take, чтобы чужая группа не съела запрос).
+    fn handle_open_compare_request(&mut self, cx: &mut Context<Self>) {
+        let pending = {
+            let b = self.backend.read(cx);
+            b.open_compare_request
+                .as_ref()
+                .cloned()
+                .filter(|(core, _)| core_belongs_to_group(b, self.group.as_str(), *core))
+        };
+        let Some((pending_core, pending_market)) = pending else {
+            return;
+        };
+        let req = self.backend.update(cx, |b, _| {
+            if b.open_compare_request
+                .as_ref()
+                .is_some_and(|(core, market)| *core == pending_core && market == &pending_market)
+            {
+                b.open_compare_request.take()
+            } else {
+                None
+            }
+        });
+        if let Some((core, market)) = req {
+            self.open_compare_tab(core, market, cx);
+            self.last_sig = chart_tabs_sig(self.backend.read(cx), self.group.as_str());
         }
     }
 

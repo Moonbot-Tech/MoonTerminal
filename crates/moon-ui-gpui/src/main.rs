@@ -175,6 +175,12 @@ struct Backend {
     /// по чарту (открытие монеты на Main); клики Ордеров/Детектов открывают без подъёма окна.
     /// Ставится одновременно с каждым `open_request`, чтобы не рассинхронилось.
     open_request_activate: bool,
+    /// Запрос «открыть монету в новой кастомной вкладке в режиме сравнения» (ПКМ по
+    /// детекту): якорь = монета детекта + та же монета с других ядер группы (дедуп по
+    /// бирже), замок+метла. Читает ChartTabs группы (см. `open_compare_tab`).
+    open_compare_request: Option<(CoreId, String)>,
+    /// Ревизия `open_compare_request` — будит ChartTabs через сигнатуру (как `open_request_rev`).
+    open_compare_request_rev: u64,
     /// Диагностический автозапуск графика для runtime-счётчиков. Off по умолчанию;
     /// включается только env `MOON_RENDER_DIAG_OPEN_FIRST_MARKET`.
     diag_open_first_market: bool,
@@ -954,6 +960,8 @@ fn main() -> anyhow::Result<()> {
             open_request: None,
             open_request_rev: 0,
             open_request_activate: false,
+            open_compare_request: None,
+            open_compare_request_rev: 0,
             diag_open_first_market: std::env::var_os("MOON_RENDER_DIAG_OPEN_FIRST_MARKET")
                 .is_some(),
             diag_open_done: false,

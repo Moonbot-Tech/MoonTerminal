@@ -118,6 +118,99 @@ impl ChartTabs {
         cx.notify();
     }
 
+    /// ПКМ по детекту: открыть монету в НОВОЙ кастомной вкладке в режиме сравнения.
+    /// Якорь = монета детекта; к ней добавляется ТА ЖЕ монета (точное имя рынка) с других
+    /// ядер группы БЕЗ повторов по бирже — дедуп по ядру-провайдеру рыночных данных (как в
+    /// скринере), берётся первое ядро по списку сессий. Вкладка получает имя монеты,
+    /// горизонтальную ориентацию (сравнение работает только в ней), замок на якоре и метлу
+    /// (соседи — «только стакан»). Повторный ПКМ по той же монете фокусирует уже созданную
+    /// вкладку (по имени), не плодя дубли.
+    pub(super) fn open_compare_tab(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+        let quote = moon_core::symbol::resolve_quote(&market);
+        let label = moon_core::symbol::base_symbol(&market, &quote).to_string();
+        // Вкладка с именем этой монеты уже есть → просто перейти на неё.
+        if let Some((n, b)) = self
+            .custom
+            .iter()
+            .find(|(n, _, _)| self.custom_label(*n) == label)
+            .map(|(n, b, _)| (*n, b.clone()))
+        {
+            self.active = Tab::Custom(n, b);
+            self.sync_active_scale(cx);
+            self.sync_inactive_chart_visibility(cx);
+            self.refresh_orderbook_gates(cx);
+            self.sync_main_chart_target(cx);
+            cx.notify();
+            return;
+        }
+        // Собрать ту же монету с других ядер группы: точное совпадение имени рынка, по
+        // одному ядру на биржу (провайдер якоря уже занят). Ядро без провайдера (нет
+        // снимка рынков) пропускаем — проверить наличие монеты всё равно нечем.
+        let coins: Vec<(CoreId, String)> = {
+            let b = self.backend.read(cx);
+            let ms = b.session.market_source();
+            let mut used = std::collections::HashSet::new();
+            used.insert(ms.provider_of(core));
+            let mut out = vec![(core, market.clone())];
+            for s in b.session.sessions().iter().filter(|s| s.group == self.group) {
+                if s.id == core {
+                    continue;
+                }
+                let provider = ms.provider_of(s.id);
+                if provider.is_none() || used.contains(&provider) {
+                    continue;
+                }
+                if ms
+                    .search_markets(s.id, &market, coin_search::COIN_SEARCH_LIMIT)
+                    .iter()
+                    .any(|m| m == &market)
+                {
+                    used.insert(provider);
+                    out.push((s.id, market.clone()));
+                }
+            }
+            out
+        };
+        let num = self.next_custom_num;
+        self.next_custom_num += 1;
+        let bucket = ChartBucket::Shared;
+        let stack = cx.new(|_| {
+            AddChartStack::new(
+                self.backend.clone(),
+                num,
+                bucket.clone(),
+                self.epoch,
+                self.theme.clone(),
+            )
+        });
+        let anchor = (core, market);
+        stack.update(cx, |s, c| {
+            s.set_hold_vacated(false);
+            s.set_orientation(Some(StackOrientation::Horizontal), c);
+            // Якорь добавляется первым → он и так слева.
+            for (core, market) in &coins {
+                s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);
+            }
+            s.pin_all(c);
+            // Замок на якоре + метла: соседи показывают только стакан.
+            s.restore_compare(Some(anchor.clone()), true, c);
+        });
+        self.custom.push((num, bucket.clone(), stack.clone()));
+        self.custom_labels.insert(num, label.clone());
+        self.active = Tab::Custom(num, bucket.clone());
+        self.persist_custom(cx, num, &bucket, &coins, &label);
+        self.upsert_spec(cx, num, &bucket, move |s| {
+            s.compare_anchor = Some(anchor);
+            s.compare_orderbook_only = true;
+        });
+        self.watch_custom_stack(num, &bucket, &stack, cx);
+        self.sync_active_scale(cx);
+        self.sync_inactive_chart_visibility(cx);
+        self.refresh_orderbook_gates(cx);
+        self.sync_main_chart_target(cx);
+        cx.notify();
+    }
+
     /// Метка кастомной вкладки (имя пользователя или дефолт «Набор N»).
     pub(super) fn custom_label(&self, n: u32) -> String {
         self.custom_labels

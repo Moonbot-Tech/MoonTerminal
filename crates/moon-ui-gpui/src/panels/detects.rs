@@ -202,6 +202,21 @@ impl DetectsPanel {
         self.arm_prune_timer(cx);
         cx.notify();
     }
+
+    /// ПКМ: открыть монету в НОВОЙ кастомной вкладке в режиме сравнения — якорь = монета
+    /// детекта + та же монета (точное имя) с других ядер группы без повторов по бирже,
+    /// замок+метла. Запрос в Backend, читает ChartTabs группы (`open_compare_tab`).
+    fn open_compare(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+        self.items
+            .retain(|it| !(it.core == core && it.market == market));
+        self.backend.update(cx, |b, bcx| {
+            b.open_compare_request = Some((core, market.clone()));
+            b.open_compare_request_rev = b.open_compare_request_rev.wrapping_add(1);
+            bcx.notify();
+        });
+        self.arm_prune_timer(cx);
+        cx.notify();
+    }
 }
 
 fn detects_sig(b: &Backend, group: &str) -> u64 {
@@ -249,6 +264,7 @@ impl Render for DetectsPanel {
             // Цвет ядра идёт прямо в `rgba_from` (фон/рамка) и в `MoonBadge` имени ядра.
             let color = design::rgb_to_u32(it.color);
             let (core, market) = (it.core, it.market.clone());
+            let market_rmb = it.market.clone();
             col = col.child(
                 div()
                     .id(SharedString::from(format!("det-{i}")))
@@ -308,7 +324,15 @@ impl Render for DetectsPanel {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.open(core, market.clone(), cx);
-                    })),
+                    }))
+                    // ПКМ — открыть в новой кастомной вкладке в режиме сравнения (замок+метла).
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, _, _, cx| {
+                            this.open_compare(core, market_rmb.clone(), cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
             );
         }
         col

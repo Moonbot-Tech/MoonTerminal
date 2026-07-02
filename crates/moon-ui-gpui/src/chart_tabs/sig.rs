@@ -15,6 +15,13 @@ pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
     } else {
         0
     };
+    if b
+        .open_compare_request
+        .as_ref()
+        .is_some_and(|(core, _)| core_belongs_to_group(b, group, *core))
+    {
+        sig = sig.wrapping_mul(31).wrapping_add(b.open_compare_request_rev);
+    }
     sig = sig
         .wrapping_mul(31)
         .wrapping_add(u64::from(b.config.charts_split_by_core));

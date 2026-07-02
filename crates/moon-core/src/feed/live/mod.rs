@@ -291,6 +291,35 @@ pub fn run(
                 )
             )
         });
+        // Судьба bulk-снимка 5м-свечей (авто-запрос moonproto после subscribe_all_trades):
+        // от него живут свечные величины retained-истории (H.vol/72h скринера). Провал
+        // иначе полностью беззвучен (никто событие не слушал). Учти известный баг
+        // moonproto: снимок может молча выброситься уже ПОСЛЕ Ready из-за таймзоны
+        // сервера — см. docs-internal/MOONPROTO_BUG_CANDLES_SNAPSHOT_TZ.md.
+        for ev in &events {
+            match ev {
+                Event::CandlesSnapshot(moonproto::state::CandlesSnapshotEvent::Ready {
+                    summary,
+                    ..
+                }) => {
+                    log::debug!(
+                        "core {} candles snapshot ready: markets {}/{} candles {}/{}",
+                        server.id,
+                        summary.retained_markets,
+                        summary.received_markets,
+                        summary.retained_candles,
+                        summary.received_candles
+                    );
+                }
+                Event::CandlesSnapshot(moonproto::state::CandlesSnapshotEvent::Failed {
+                    error,
+                    ..
+                }) => {
+                    log::warn!("core {} candles snapshot failed: {error}", server.id);
+                }
+                _ => {}
+            }
+        }
         let license_state = settings_event_snapshot(
             &events,
             &client,
