@@ -15,7 +15,17 @@ pub struct ChartGhostCursor {
 impl ChartGhostCursor {
     pub fn set_price(&self, price: Option<f64>) {
         if let Some(state) = self.state.upgrade() {
-            state.borrow_mut().set_ghost_price(price.map(|p| p as f32));
+            let mut state = state.borrow_mut();
+            // Цена пришла → мышь сейчас над ДРУГИМ чартом вкладки, у этого не может быть
+            // реального курсора. Если он остался («зависшее» перекрестие: hover-out панели
+            // съеден stop_propagation соседа в fast-path mouse move), гасим — иначе призрак
+            // не включится (реальный курсор приоритетнее в sync_cursor_params/text.rs).
+            // Идемпотентно (у чистых панелей курсор и так None). При price=None НЕ трогаем:
+            // мышь могла только что прийти СЮДА, и реальный курсор здесь легитимен.
+            if price.is_some() {
+                state.set_cursor(None);
+            }
+            state.set_ghost_price(price.map(|p| p as f32));
         }
     }
 }
