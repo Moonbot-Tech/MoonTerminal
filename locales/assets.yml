@@ -26,6 +26,10 @@ assets.empty:
   ru: "нет активов"
   en: "no assets"
   es: "sin activos"
+assets.section_positions:
+  ru: "Позиции"
+  en: "Positions"
+  es: "Posiciones"
 
 # --- Колонки таблицы активов ---
 assets.col.core:

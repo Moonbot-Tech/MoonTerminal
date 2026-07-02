@@ -10,7 +10,8 @@ use rust_i18n::t;
 const CORE_CARD_W: f32 = 148.0;
 
 impl AssetsView {
-    /// Верхняя строка над таблицей позиций: счётчик строк, галка «показать всё», Σ стоимость.
+    /// Шапка секции «Позиции» (над таблицей): стрелка сворачивания + подпись, счётчик строк,
+    /// галка «показать всё», Σ стоимость. Один визуальный образец для всех трёх секций окна.
     pub(super) fn controls(
         &self,
         count: usize,
@@ -18,6 +19,7 @@ impl AssetsView {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
+        let arrow = if self.positions_collapsed { "▸" } else { "▾" };
         h_flex()
             .w_full()
             .flex_none()
@@ -25,6 +27,30 @@ impl AssetsView {
             .items_center()
             .px_2()
             .py_1()
+            .child(
+                h_flex()
+                    .id("assets-positions-toggle")
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(p.text)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.positions_collapsed = !this.positions_collapsed;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_muted))
+                            .child(arrow),
+                    )
+                    .child(
+                        div()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_soft))
+                            .child(t!("assets.section_positions").to_string()),
+                    ),
+            )
             .child(
                 div()
                     .text_size(design::t_body(cx))
@@ -116,7 +142,10 @@ impl AssetsView {
             for a in aggs {
                 grid = grid.child(self.core_card(a, cx));
             }
-            section = section.flex_1().min_h(px(0.0)).child(
+            // min_h: развёрнутая секция ГАРАНТИРОВАННО показывает хотя бы ~2 ряда карточек,
+            // отжимая соседей (таблица сверху сжимается, кошельки ниже делят flex-остаток) —
+            // раньше flex_1 без минимума схлопывался в 0 под фикс. низом.
+            section = section.flex_1().min_h(px(88.0)).child(
                 div()
                     .id("assets-plates-scroll")
                     .w_full()
@@ -157,8 +186,10 @@ impl AssetsView {
             .child(div().text_color(rgb(p.text_soft)).child(money(a.total)))
     }
 
-    /// Нижняя секция: слева список ядер (имя + свободно/итого, выбор), справа —
-    /// 3 контейнера кошельков выбранного ядра с переносом.
+    /// Секция «Кошельки»: шапка (стрелка + подпись + ↻ refresh), контент — 4 одинаковых
+    /// вертикальных контейнера: список ядер (выбор) + Спот/Фьючерсы/Квартальные с переносом.
+    /// Как и остальные секции — сворачиваемая, развёрнутая делит высоту (никаких фикс. 380px:
+    /// раньше низ не двигался и прятал под собой развёрнутые плашки ядер).
     pub(super) fn bottom(
         &self,
         cores: &[(CoreId, String)],
@@ -172,6 +203,69 @@ impl AssetsView {
             .selected_core
             .filter(|c| cores.iter().any(|(id, _)| id == c))
             .or_else(|| cores.first().map(|(id, _)| *id));
+
+        // ── Шапка секции (в стиле шапок «Позиции»/«Ядра») ──
+        let collapsed = self.wallets_collapsed;
+        let arrow = if collapsed { "▸" } else { "▾" };
+        let mut header = h_flex()
+            .id("assets-wallets-bar")
+            .w_full()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .border_t_1()
+            .border_color(rgb(p.border))
+            .child(
+                h_flex()
+                    .id("assets-wallets-toggle")
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(p.text)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.wallets_collapsed = !this.wallets_collapsed;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_muted))
+                            .child(arrow),
+                    )
+                    .child(
+                        div()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_soft))
+                            .child(t!("assets.wallets_hint").to_string()),
+                    ),
+            )
+            .child(div().flex_1());
+        if let Some(core) = selected {
+            header = header.child(
+                MoonButton::new("assets-refresh-transfer")
+                    .ghost()
+                    .size(MoonButtonSize::Micro)
+                    .label("↻")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Err(error) =
+                            this.backend.read(cx).session.refresh_transfer_assets(core)
+                        {
+                            log::warn!("assets refresh failed for core {core}: {error}");
+                            window
+                                .push_notification(MoonNotification::error(error.to_string()), cx);
+                        }
+                        let backend = this.backend.clone();
+                        this.rebuild_cache(backend.read(cx));
+                        cx.notify();
+                    }))
+                    .render(),
+            );
+        }
+        if collapsed {
+            return v_flex().w_full().flex_none().child(header);
+        }
 
         // ── Левая колонка: список ядер (имя + свободно/итого USDT) ──
         let mut list = v_flex().w_full().gap_0();
@@ -223,6 +317,8 @@ impl AssetsView {
             list = list.child(item);
         }
 
+        // Левый контейнер оформлен КАК колонки кошельков (та же плашка-заголовок shell_high)
+        // — «4 одинаковых вертикальных контейнера».
         let left = v_flex()
             .w(px(240.0))
             .h_full()
@@ -232,10 +328,13 @@ impl AssetsView {
             .child(
                 div()
                     .w_full()
-                    .px(design::ui_px(cx, 8.0))
-                    .py(design::ui_px(cx, 4.0))
+                    .flex_none()
+                    .px(design::ui_px(cx, 6.0))
+                    .py(design::ui_px(cx, 3.0))
+                    .bg(rgb(p.shell_high))
                     .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_muted))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(p.text_soft))
                     .child(t!("assets.cores_free_total").to_string()),
             )
             .child(
@@ -243,6 +342,7 @@ impl AssetsView {
                     .id("asset-core-list")
                     .flex_1()
                     .w_full()
+                    .min_h(px(0.0))
                     .overflow_y_scroll()
                     .child(list),
             );
@@ -257,14 +357,22 @@ impl AssetsView {
                 .into_any_element(),
         };
 
-        h_flex()
+        // Развёрнутая секция: flex-доля с минимумом видимости (заголовки колонок + пара строк).
+        v_flex()
             .w_full()
-            .h(px(380.0))
-            .flex_none()
-            .border_t_1()
-            .border_color(rgb(p.border))
-            .child(left)
-            .child(div().flex_1().h_full().min_w_0().child(right))
+            .flex_1()
+            .min_h(px(160.0))
+            .child(header)
+            .child(
+                h_flex()
+                    .w_full()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .border_t_1()
+                    .border_color(rgb(p.border))
+                    .child(left)
+                    .child(div().flex_1().h_full().min_w_0().child(right)),
+            )
     }
 }
 

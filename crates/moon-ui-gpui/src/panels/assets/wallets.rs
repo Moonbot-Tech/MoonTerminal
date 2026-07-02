@@ -51,60 +51,19 @@ impl Render for AssetDragPreview {
 }
 
 impl AssetsView {
-    /// Секция кошельков ядра: заголовок (+ ↻ refresh) и 3 контейнера в ряд.
+    /// 3 контейнера кошельков ядра в ряд. Шапка секции (подпись + ↻ refresh) живёт уровнем
+    /// выше — в `bottom()` (общий образец сворачиваемых секций окна).
     pub(super) fn wallets_section(
         &self,
         core: CoreId,
         wallets: &[WalletColumnSnapshot],
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
-        v_flex()
-            .w_full()
-            .h_full()
-            .child(
-                h_flex()
-                    .w_full()
-                    .flex_none()
-                    .items_center()
-                    .justify_between()
-                    .px(design::ui_px(cx, 8.0))
-                    .py(design::ui_px(cx, 4.0))
-                    .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_muted))
-                            .child(t!("assets.wallets_hint").to_string()),
-                    )
-                    .child(
-                        MoonButton::new("assets-refresh-transfer")
-                            .ghost()
-                            .size(MoonButtonSize::Micro)
-                            .label("↻")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if let Err(error) =
-                                    this.backend.read(cx).session.refresh_transfer_assets(core)
-                                {
-                                    log::warn!("assets refresh failed for core {core}: {error}");
-                                    window.push_notification(
-                                        MoonNotification::error(error.to_string()),
-                                        cx,
-                                    );
-                                }
-                                let backend = this.backend.clone();
-                                this.rebuild_cache(backend.read(cx));
-                                cx.notify();
-                            }))
-                            .render(),
-                    ),
-            )
-            .child(
-                h_flex().w_full().flex_1().min_h(px(0.0)).children(
-                    wallets
-                        .iter()
-                        .map(|snapshot| self.wallet_column(core, snapshot, cx)),
-                ),
-            )
+        h_flex().w_full().h_full().min_h(px(0.0)).children(
+            wallets
+                .iter()
+                .map(|snapshot| self.wallet_column(core, snapshot, cx)),
+        )
     }
 
     /// Один контейнер кошелька (Спот/Фьючерсы/Квартальные): монеты (draggable) и

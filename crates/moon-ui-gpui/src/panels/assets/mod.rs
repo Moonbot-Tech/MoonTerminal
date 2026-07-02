@@ -128,8 +128,12 @@ pub struct AssetsView {
     pub(super) selected_core: Option<CoreId>,
     /// Показывать ВСЁ (иначе только балансы >1 USDT с известной ценой).
     pub(super) show_all: bool,
-    /// Свёрнута ли полоса плашек ядер (свёрнуто = только строка-итог Σ баланс/PnL).
+    /// Свёрнута ли секция позиций/балансов (таблица сверху).
+    pub(super) positions_collapsed: bool,
+    /// Свёрнута ли полоса плашек ядер (свёрнуто = только строка-итог Σ баланс).
     pub(super) plates_collapsed: bool,
+    /// Свёрнута ли секция кошельков (список ядер + Спот/Фьючерсы/Квартальные).
+    pub(super) wallets_collapsed: bool,
     /// Открытый диалог переноса (количество) + поле ввода. Тип `PendingTransfer`
     /// приватен для `wallets`, поэтому поле тоже приватное (доступно потомкам модуля).
     pending_transfer: Option<PendingTransfer>,
@@ -195,7 +199,9 @@ impl AssetsView {
             show_wallets,
             selected_core: None,
             show_all: false,
+            positions_collapsed: false,
             plates_collapsed: true,
+            wallets_collapsed: false,
             pending_transfer: None,
             transfer_input: None,
             gate: RenderGate::default(),
@@ -470,6 +476,11 @@ impl Render for AssetsView {
         };
         let total_value = self.cached_total_value;
 
+        // ── Три ОДИНАКОВЫЕ сворачиваемые горизонтальные секции ──────────────────────
+        // 1 «Позиции» (таблица), 2 «Ядра» (плашки), 3 «Кошельки» (только в отдельном окне).
+        // У каждой шапка-строка со стрелкой; развёрнутые секции ДЕЛЯТ высоту и двигают
+        // друг друга (никаких жёстких this-не-сожмёшь высот — прежние фикс. 380px низа
+        // прятали развёрнутые плашки под собой).
         let aggs = self.cached_aggs.clone();
         let controls = self.controls(count, total_value, cx);
         let plates = self.core_strip(&aggs, cx);
@@ -500,19 +511,21 @@ impl Render for AssetsView {
             .bg(rgb(p.table_body))
             .when(windowed, |this| this.child(assets_header(p, cx)))
             .child(controls)
-            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
-            // Таблица позиций РЕЗЕРВИРУЕТ высоту по содержимому: пусто → 0 (полностью
-            // схлопнута), N строк → высота под N строк. Высота-basis (`.h`, а НЕ `flex_1`)
-            // → плашки не могут ужать её при разворачивании: она уступает (скроллится
-            // внутри) только если строк реально не влезает по высоте панели.
-            .child(
+            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
+        // Таблица позиций (контент секции 1): высота-basis по содержимому (пусто → 0,
+        // N строк → под N строк), при нехватке места СЖИМАЕТСЯ (скролл внутри) — уступая
+        // развёрнутым секциям ниже.
+        if !self.positions_collapsed {
+            root = root.child(
                 v_flex()
                     .h(px(table_natural_h))
                     .min_h(px(0.0))
                     .w_full()
                     .overflow_hidden()
                     .child(table),
-            )
+            );
+        }
+        root = root
             .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
             .child(plates)
             .children(tree_section);
