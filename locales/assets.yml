@@ -65,6 +65,16 @@ assets.col.kind:
   en: "Market"
   es: "Mercado"
 
+# --- Кнопки действий у позиции ---
+assets.market_sell:
+  ru: "Market sell"
+  en: "Market sell"
+  es: "Venta mercado"
+assets.order:
+  ru: "Order"
+  en: "Order"
+  es: "Orden"
+
 # --- Кошельки (перенос монет между контейнерами) ---
 assets.wallets_hint:
   ru: "Кошельки · перетащи монету между контейнерами"

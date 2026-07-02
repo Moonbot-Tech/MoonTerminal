@@ -120,6 +120,14 @@ core_settings.no_core:
   ru: "Нет активного ядра"
   en: "No active core"
   es: "Sin núcleo activo"
+core_settings.runtime_started:
+  ru: "Запущен"
+  en: "Started"
+  es: "Iniciado"
+core_settings.runtime_auto:
+  ru: "Автодетект"
+  en: "Auto-detect"
+  es: "Autodetección"
 core_settings.restart:
   ru: "Старт / Рестарт"
   en: "Start / Restart"

@@ -15,7 +15,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use moon_core::feed::{ClientSettingsEdit, LevManageEdit, ResetProfitKind};
+use moon_core::feed::{ClientSettingsEdit, LevManageEdit, ResetProfitKind, RuntimeState};
 
 use crate::{Backend, design};
 
@@ -186,6 +186,9 @@ pub fn core_settings_content(
     let cd = core.and_then(|c| b.session.store().core(c));
     let cs = cd.and_then(|d| d.client_settings.clone());
     let lm = cd.and_then(|d| d.lev_manage.clone());
+    // Состояние рантайма активного ядра — 2 точки (запущен / авто-детект), перенесены сюда из
+    // шапки (рядом с кнопкой ⚙ было тесно и без подписей). Здесь подписаны.
+    let rt = cd.and_then(|d| d.runtime_state);
 
     let root = v_flex()
         .id("core-settings-popup")
@@ -196,10 +199,18 @@ pub fn core_settings_content(
         .border_1()
         .border_color(rgb(p.border))
         .child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text_muted))
-                .child(t!("core_settings.title").to_string()),
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(design::ui_px(cx, 8.0))
+                .child(
+                    div()
+                        .text_size(design::t_caption(cx))
+                        .text_color(rgb(p.text_muted))
+                        .child(t!("core_settings.title").to_string()),
+                )
+                .child(div().flex_1())
+                .child(runtime_status(rt, p, cx)),
         );
 
     // Нет ядра/снимка настроек — заглушка.
@@ -616,6 +627,48 @@ pub fn core_settings_content(
         .child(leverage)
         .child(actions)
         .into_any_element()
+}
+
+/// Две подписанные точки состояния рантайма активного ядра: «Запущен» (`is_started`) и
+/// «Автодетект» (`auto_detect_active`). Зелёный = вкл; запущен-но-passive автодетект → янтарный;
+/// иначе серый. Перенесено из шапки (были без подписей рядом с ⚙).
+fn runtime_status(rt: Option<RuntimeState>, p: MoonPalette, cx: &App) -> impl IntoElement {
+    let ok = if p.is_light() { p.green_text } else { p.green };
+    let started = rt.map(|r| r.is_started).unwrap_or(false);
+    let auto = rt.map(|r| r.auto_detect_active).unwrap_or(false);
+    let started_color = if started { ok } else { p.text_muted };
+    let auto_color = if auto {
+        ok
+    } else if started {
+        p.amber
+    } else {
+        p.text_muted
+    };
+    let labeled = |color: u32, label: String, cx: &App| {
+        h_flex()
+            .items_center()
+            .gap(design::ui_px(cx, 4.0))
+            .child(design::status_dot(color, cx))
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_soft))
+                    .child(label),
+            )
+    };
+    h_flex()
+        .items_center()
+        .gap(design::ui_px(cx, 10.0))
+        .child(labeled(
+            started_color,
+            t!("core_settings.runtime_started").to_string(),
+            cx,
+        ))
+        .child(labeled(
+            auto_color,
+            t!("core_settings.runtime_auto").to_string(),
+            cx,
+        ))
 }
 
 /// Сброс прибыли активного ядра (без подтверждения).

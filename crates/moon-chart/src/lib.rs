@@ -172,6 +172,12 @@ pub fn build_order_geometry(
         };
 
         for (st, idx) in kinds {
+            // После закрытия ордера (исполнен/отменён) на графике остаются ТОЛЬКО вход/выход
+            // (Buy/Sell) полупрозрачными (`closed_alpha`). Стоп/трейлинг/встоп/ТП/pending-линии
+            // и их серверные трассы у закрытого ордера убираем.
+            if closed && idx != LineKind::Buy as usize && idx != LineKind::Sell as usize {
+                continue;
+            }
             // Шорт-ордер красим вход/выход отдельными стилями (как long/short в MoonBot:
             // BuyShort/SellShort): Buy → `buy_short`, Sell → `sell_short`.
             let st = if ord.is_short && idx == LineKind::Buy as usize {

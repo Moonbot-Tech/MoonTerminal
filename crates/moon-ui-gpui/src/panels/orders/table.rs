@@ -298,11 +298,9 @@ fn tp_cell(r: &OrderRow) -> MoonDataCell {
     }
 }
 
-/// Кликабельный флаг стопа (SL/TS/Vstop). Три состояния:
-/// • per-order вкл → «ON» зелёным (явный стоп ордера);
-/// • per-order выкл, но включено на ЯДРЕ (`strat_on`) → «ON» синим (унаследовано: ордер защищён
-///   настройкой ядра, хотя свой флаг не выставлен) — иначе вводило в заблуждение «OFF»;
-/// • иначе → «OFF» тускло.
+/// Кликабельный флаг стопа (SL/TS/Vstop). «ON» зелёным — стоп действует (per-order флаг ИЛИ
+/// унаследован от стратегии ордера); «OFF» — для SL красным (позиция без стоп-лосса — риск),
+/// для TS/Vstop тускло.
 /// Клик ВСЕГДА тогает per-order флаг (`set_order_stop` инверсией per-order), уровень стопа
 /// сохраняется feed-слоем при повторном включении.
 fn flag_toggle_cell(
@@ -316,10 +314,10 @@ fn flag_toggle_cell(
     let core = e.core;
     let uid = e.row.uid;
     let view = view.clone();
-    let (label, tone) = if on {
+    let (label, tone) = if on || strat_on {
         ("ON", MoonTone::Positive)
-    } else if strat_on {
-        ("ON", MoonTone::Info)
+    } else if kind == OrderStopKind::StopLoss {
+        ("OFF", MoonTone::Danger)
     } else {
         ("OFF", MoonTone::Muted)
     };

@@ -416,21 +416,33 @@ fn build_order_row(
     let pending = o.pending_buy_cond_price.is_some();
     let filled = fill_pct > 0.0;
     let create_time_ms = moon_time_to_unix_millis_f64(o.buy_order.create_time());
-    // Фолбэк-индикатор: SL/TS/VStop включены в СТРАТЕГИИ ордера (поля снимка стратегии
-    // `UseStopLoss`/`UseTrailing`/`UseBV_SV_Stop`). Колонки показывают это как «унаследовано»,
-    // если per-order флаг не выставлен — иначе вводило в заблуждение («выкл», хотя стратегия их
-    // применяет). Нет снимка стратегии (не синкнута / strat_id=0) → false.
-    let (sl_strat, ts_strat, vstop_strat) = snap
-        .strats()
-        .snapshot(o.strat_id)
-        .map(|s| {
-            (
-                s.field_bool_or_false("UseStopLoss"),
-                s.field_bool_or_false("UseTrailing"),
-                s.field_bool_or_false("UseBV_SV_Stop"),
-            )
-        })
-        .unwrap_or((false, false, false));
+    // Фолбэк-индикатор: SL/TS/VStop включены в СТРАТЕГИИ ордера (по `strat_id`), если
+    // per-order флаг не выставлен. Имена полей — Delphi-имена MoonBot (подтверждены строками
+    // MoonBot.exe): `UseStopLoss`/`UseTrailing`/`UseBV_SV_Stop`.
+    // ВАЖНО: сериализатор стратегий (Delphi и moonproto зеркально) НЕ передаёт поля, значение
+    // которых равно ДЕФОЛТУ СХЕМЫ (writer skips schema defaults). Отсутствующее поле в снимке
+    // значит «= дефолт схемы», а НЕ «выключено» — поэтому читаем с фолбэком на
+    // `StrategySchema.field(name).default_value`. Нет снимка стратегии (strat_id=0 /
+    // не синкнута) → false.
+    let strat_snapshot = snap.strats().snapshot(o.strat_id);
+    let strat_schema = snap.strats().strategy_schema();
+    let strat_flag = |name: &str| -> bool {
+        let Some(s) = strat_snapshot else {
+            return false;
+        };
+        if let Some(v) = s.fields.get_bool(name) {
+            return v;
+        }
+        strat_schema
+            .and_then(|sc| sc.field(name))
+            .and_then(|f| f.default_value.as_ref())
+            .is_some_and(|v| matches!(v, moonproto::FieldValue::Bool(true)))
+    };
+    let (sl_strat, ts_strat, vstop_strat) = (
+        strat_flag("UseStopLoss"),
+        strat_flag("UseTrailing"),
+        strat_flag("UseBV_SV_Stop"),
+    );
     OrderRow {
         market: o.market_name.clone(),
         is_short: o.is_short,

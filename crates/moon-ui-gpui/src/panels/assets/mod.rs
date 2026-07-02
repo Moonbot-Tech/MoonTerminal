@@ -50,6 +50,8 @@ enum AssetsScope {
 /// Строка таблицы активов с привязкой к ядру + посчитанная USDT-стоимость.
 #[derive(Clone)]
 pub(super) struct AssetEntry {
+    /// Ядро строки (для клика по тикеру → открыть чарт на Main и торговых кнопок).
+    pub(super) core: CoreId,
     pub(super) core_name: String,
     pub(super) row: AssetRow,
     /// Текущая стоимость в USDT.
@@ -290,6 +292,7 @@ impl AssetsView {
                     continue;
                 }
                 out.push(AssetEntry {
+                    core: id,
                     core_name: name.clone(),
                     row: row.clone(),
                     value,
