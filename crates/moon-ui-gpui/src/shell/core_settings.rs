@@ -24,6 +24,7 @@ impl Shell {
             self.core_settings_open = true;
             self.core_settings_hovered = false;
             self.core_settings_cancel_confirm = false;
+            self.core_settings_bl_expanded = false;
             self.seed_core_settings_popup(window, cx);
         }
         cx.notify();
@@ -57,10 +58,11 @@ impl Shell {
             }
         };
         let clamp = |v: f32, (lo, hi, _): (f32, f32, f32)| v.clamp(lo, hi);
-        // ВАЖНО: трейлинг/V-Stop НЕ имеют отдельного флага вкл/выкл на проводе (выкл = значение 0).
-        // Если на ядре значение 0 (выключено) — НЕ перетираем слайдер/поле нулём, а оставляем
-        // последнее показанное значение (как MoonBot: галка снята, но число видно/помнится).
-        // Так пользователь видит и может вернуть прежнее значение. Сидируем только при ненулевом.
+        // ВАЖНО: трейлинг/V-Stop НЕ имеют отдельного флага вкл/выкл на проводе (выкл = значение 0,
+        // ядро «прежнее» число не хранит — как Delphi MoonBot, который помнит его только в СВОЁМ
+        // UI: `TrailingDropOld`). Если на ядре 0 (выключено) — НЕ перетираем слайдер/поле нулём,
+        // а оставляем последнее показанное значение. Пустое поле при выключенном стопе — честное
+        // состояние: на ядре значения нет (НЕ подставляем дефолт, чтобы не врать о состоянии ядра).
         self.gtp_slider.update(cx, |st, c| {
             st.set_value(clamp(gtp, core_settings_popup::CORE_GTP_BOUNDS), window, c)
         });
@@ -90,7 +92,28 @@ impl Shell {
                 .update(cx, |st, c| st.set_value(format!("{vstop}"), window, c));
         }
         self.blacklist_input
+            .update(cx, |st, c| st.set_value(bl_text.clone(), window, c));
+        self.blacklist_area
             .update(cx, |st, c| st.set_value(bl_text, window, c));
+    }
+
+    /// Закоммитить текст чёрного списка монет активному ядру (флаг вкл — текущий у ядра).
+    /// Общая точка для подписок Blur/Enter обоих полей (строка + textarea) и тогла «…».
+    pub(super) fn commit_blacklist_text(&self, text: String, cx: &Context<Self>) {
+        let b = self.backend.read(cx);
+        let Some(core) = b.active_trade_core(&self.group) else {
+            return;
+        };
+        let on = b
+            .session
+            .store()
+            .core(core)
+            .and_then(|d| d.client_settings.as_ref())
+            .map(|s| s.use_blacklist)
+            .unwrap_or(false);
+        if let Err(error) = b.session.set_blacklist(core, on, text) {
+            log::warn!("set blacklist text failed: {error:#}");
+        }
     }
 
     /// Клик по «Отменить все ордера»: первый клик — подтверждение, второй — реальная отмена.
@@ -131,6 +154,7 @@ impl Shell {
             return (None, None);
         }
         let view = cx.entity();
+        let toggle_view = view.clone();
         let content = core_settings_popup::core_settings_content(
             &self.gtp_slider,
             &self.trailing_slider,
@@ -139,12 +163,35 @@ impl Shell {
             &self.trailing_input,
             &self.vstop_input,
             &self.blacklist_input,
+            &self.blacklist_area,
+            self.core_settings_bl_expanded,
             self.core_settings_cancel_confirm,
             &self.backend,
             &self.group,
             p,
             cx,
             move |app| view.update(app, |this, cx| this.core_settings_cancel_all_click(cx)),
+            move |window, app| {
+                toggle_view.update(app, |this, cx| {
+                    let expanding = !this.core_settings_bl_expanded;
+                    this.core_settings_bl_expanded = expanding;
+                    // Текст синкается между однострочным полем и multi-line редактором:
+                    // стейты РАЗНЫЕ намеренно (textarea необратимо портит single-line стейт).
+                    if expanding {
+                        let text = this.blacklist_input.read(cx).value().to_string();
+                        this.blacklist_area
+                            .update(cx, |st, c| st.set_value(text, window, c));
+                    } else {
+                        let text = this.blacklist_area.read(cx).value().to_string();
+                        this.blacklist_input
+                            .update(cx, |st, c| st.set_value(text.clone(), window, c));
+                        // Сворачивание = завершение правки: коммитим (Blur textarea при
+                        // подмене элемента может не прийти).
+                        this.commit_blacklist_text(text, cx);
+                    }
+                    cx.notify();
+                })
+            },
         );
         let (left, top) = self.core_settings_popup_pos(cx);
         let overlay = div()

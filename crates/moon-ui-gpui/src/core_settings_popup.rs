@@ -10,8 +10,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInput,
-    MoonInputState, MoonPalette, MoonSlider, MoonSliderState, MoonTooltipView, h_flex, rgba_from,
-    v_flex,
+    MoonInputState, MoonPalette, MoonSlider, MoonSliderState, MoonTextArea, MoonTooltipView,
+    h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -174,12 +174,15 @@ pub fn core_settings_content(
     trailing_input: &Entity<MoonInputState>,
     vstop_input: &Entity<MoonInputState>,
     blacklist_input: &Entity<MoonInputState>,
+    blacklist_area: &Entity<MoonInputState>,
+    blacklist_expanded: bool,
     cancel_confirm: bool,
     backend: &Entity<Backend>,
     group: &str,
     p: MoonPalette,
     cx: &App,
     on_cancel_all: impl Fn(&mut App) + 'static,
+    on_toggle_blacklist: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let b = backend.read(cx);
     let core = b.active_trade_core(group);
@@ -228,8 +231,10 @@ pub fn core_settings_content(
     let restart_btn = {
         let backend = backend.clone();
         let group = group.to_string();
+        // Action-кнопка (Size::Small) идёт с pad_x=0 — фон ровно по тексту. Пробелы в label —
+        // единственный способ дать паре пикселей полей без правки форка (у MoonButton нет pad_x).
         MoonButton::new("core-restart")
-            .label(t!("core_settings.restart").to_string())
+            .label(format!(" {} ", t!("core_settings.restart")))
             .size(MoonButtonSize::Action)
             .variant(MoonButtonVariant::Blue)
             .on_click(move |_, _w, app| {
@@ -259,6 +264,7 @@ pub fn core_settings_content(
                 .items_center()
                 .gap(design::ui_px(cx, 8.0))
                 .child(restart_btn)
+                .child(div().flex_1())
                 .child(emu_check),
         )
         // Заметная плашка-предупреждение, когда включён режим эмулятора.
@@ -479,6 +485,36 @@ pub fn core_settings_content(
                 }
             })
     };
+    // Кнопка «…» — развернуть/свернуть поле списка монет. Свёрнуто поле в одну строку
+    // (длинный список прячется), развёрнуто — многострочный редактор фикс. высоты со
+    // скроллом (не растягивает попап).
+    let bl_expand_btn = MoonButton::new("core-bl-expand")
+        .label("…")
+        .size(MoonButtonSize::Micro)
+        .variant(MoonButtonVariant::Soft)
+        .selected(blacklist_expanded)
+        .on_click(move |_, w, app| on_toggle_blacklist(w, app))
+        .render();
+    // Свёрнуто — однострочный MoonInput (длинный хвост списка скрыт, поле НЕ растягивается).
+    // Развёрнуто — MoonTextArea на ОТДЕЛЬНОМ multi-line стейте `blacklist_area` (общий стейт
+    // нельзя: textarea необратимо переводит его в multi-line, и однострочное поле после
+    // сворачивания рендерится узкой полоской). Текст между стейтами синкает Shell в тогле «…»;
+    // коммит Blur/Enter подписан на оба. `submit_on_enter` — Enter коммитит, а не вставляет
+    // перенос (список монет — одна строка).
+    // NB: высота textarea только дефолтная Normal (~3 строки со скроллом) —
+    // `MoonTextAreaSize::Custom` не реэкспортирован из moonui (см. FORK_BUGS).
+    let bl_field: AnyElement = if blacklist_expanded {
+        MoonTextArea::new("core-bl-area")
+            .state(blacklist_area)
+            .submit_on_enter(true)
+            .mono(true)
+            .into_any_element()
+    } else {
+        MoonInput::new("core-bl-text")
+            .state(blacklist_input)
+            .small()
+            .into_any_element()
+    };
     let risks = framed(
         t!("core_settings.frame_risks").to_string(),
         p,
@@ -493,15 +529,10 @@ pub fn core_settings_content(
                     .gap(design::ui_px(cx, 8.0))
                     .child(bl_check)
                     .child(div().flex_1())
-                    .child(exclude_check),
+                    .child(bl_expand_btn),
             )
-            .child(
-                div().w_full().child(
-                    MoonInput::new("core-bl-text")
-                        .state(blacklist_input)
-                        .small(),
-                ),
-            )
+            .child(div().w_full().child(bl_field))
+            .child(exclude_check)
             .into_any_element(),
     );
 

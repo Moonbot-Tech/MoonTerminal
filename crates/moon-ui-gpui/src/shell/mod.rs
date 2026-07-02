@@ -89,6 +89,10 @@ pub(crate) struct Shell {
     trailing_input: Entity<MoonInputState>,
     vstop_input: Entity<MoonInputState>,
     blacklist_input: Entity<MoonInputState>,
+    /// Отдельный multi-line стейт развёрнутого редактора чёрного списка (кнопка «…»).
+    /// НЕ общий с `blacklist_input`: textarea необратимо переводит стейт в multi-line
+    /// (single-line поле после этого рендерится узкой полоской). Текст синкается в тогле.
+    blacklist_area: Entity<MoonInputState>,
     /// Какой попап метрики тулбара открыт (TP/SL/Lev). Overlay рисуется поверх дока, закрытие
     /// по клику вне (dismiss-слой), уводу мыши или повторному клику по кнопке. None = закрыт.
     open_metric_popup: Option<controls::TradeMetric>,
@@ -110,6 +114,9 @@ pub(crate) struct Shell {
     core_settings_hovered: bool,
     /// Стадия подтверждения «Отменить все ордера»: первый клик ставит флаг, второй — шлёт.
     core_settings_cancel_confirm: bool,
+    /// Развёрнуто ли поле чёрного списка монет в попапе настроек ядра (кнопка «…»):
+    /// свёрнуто — одна строка, развёрнуто — многострочный редактор фикс. высоты.
+    core_settings_bl_expanded: bool,
 }
 
 impl Shell {
@@ -397,6 +404,9 @@ impl Shell {
         let trailing_input = cx.new(|cx| MoonInputState::new(window, cx));
         let vstop_input = cx.new(|cx| MoonInputState::new(window, cx));
         let blacklist_input = cx.new(|cx| MoonInputState::new(window, cx));
+        // Multi-line от рождения; Enter коммитит (submit), а не вставляет перенос строки.
+        let blacklist_area =
+            cx.new(|cx| MoonInputState::new(window, cx).multi_line(true).submit_on_enter(true));
 
         // Слайдеры/поля метрик: на изменение шлём правку активному ядру и держим numeric-поле
         // попапа в синхроне. Вынесено в `wire_metric_subscriptions` — в `new` это ~80 строк
@@ -483,26 +493,21 @@ impl Shell {
             }
         })
         .detach();
-        // Текст чёрного списка: коммит по Blur/Enter. Флаг вкл берём текущий у активного ядра.
-        cx.subscribe(&blacklist_input, |this, inp, ev: &MoonInputEvent, cx| {
+        // Текст чёрного списка: коммит по Blur/Enter (одна логика для однострочного поля и
+        // развёрнутого multi-line редактора). Флаг вкл берём текущий у активного ядра.
+        let commit_bl = |this: &mut Self, inp: Entity<MoonInputState>, ev: &MoonInputEvent, cx: &mut Context<Self>| {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
             }
             let text = inp.read(cx).value().to_string();
-            let b = this.backend.read(cx);
-            let Some(core) = b.active_trade_core(&this.group) else {
-                return;
-            };
-            let on = b
-                .session
-                .store()
-                .core(core)
-                .and_then(|d| d.client_settings.as_ref())
-                .map(|s| s.use_blacklist)
-                .unwrap_or(false);
-            if let Err(error) = b.session.set_blacklist(core, on, text) {
-                log::warn!("set blacklist text failed: {error:#}");
-            }
+            this.commit_blacklist_text(text, cx);
+        };
+        cx.subscribe(&blacklist_input, move |this, inp, ev: &MoonInputEvent, cx| {
+            commit_bl(this, inp, ev, cx)
+        })
+        .detach();
+        cx.subscribe(&blacklist_area, move |this, inp, ev: &MoonInputEvent, cx| {
+            commit_bl(this, inp, ev, cx)
         })
         .detach();
 
@@ -541,6 +546,7 @@ impl Shell {
             trailing_input,
             vstop_input,
             blacklist_input,
+            blacklist_area,
             open_metric_popup: None,
             metric_popup_hovered: false,
             focus,
@@ -548,6 +554,7 @@ impl Shell {
             core_settings_open: false,
             core_settings_hovered: false,
             core_settings_cancel_confirm: false,
+            core_settings_bl_expanded: false,
         }
     }
 
