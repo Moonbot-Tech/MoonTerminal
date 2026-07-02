@@ -63,7 +63,8 @@ fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<Core
 }
 
 /// Результаты поиска монеты для вкладки: `(ядро, market, имя сервера)`.
-pub(super) fn search(
+/// `pub(crate)`: реюз тикером курса в шапке (bucket=None → все ядра группы).
+pub(crate) fn search(
     b: &Backend,
     group: &str,
     bucket: Option<&ChartBucket>,
@@ -96,7 +97,7 @@ pub(super) fn search(
 /// клик по чекбоксу = `on_toggle` (накопить выбор); кнопка снизу = `on_open_new` (создать вкладку
 /// из выбранных). `selected` — текущий набор отмеченных монет (для подсветки чекбоксов).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_popup<F, G, H>(
+pub(crate) fn render_popup<F, G, H>(
     id: &'static str,
     results: Vec<(CoreId, String, String)>,
     selected: &HashSet<(CoreId, String)>,

@@ -192,6 +192,9 @@ struct Backend {
     /// (дебаунс через дренаж-таймер). Порт egui WindowLayout/layout.toml.
     layout: WindowLayout,
     layout_dirty: bool,
+    /// Кэш ДЕФОЛТНОГО источника тикера шапки (нет сохранённого выбора): (ядро, рынок).
+    /// Резолвится лениво при первом успешном поиске BTCUSDT/UBTCUSDC; не персистится.
+    header_ticker_cache: Option<(CoreId, String)>,
     /// Раскладка доков (группа → DockAreaState) — load на старте, save по
     /// DockEvent::LayoutChanged (дебаунс тем же таймером). Пишется в docks.json.
     dock_states: HashMap<String, DockAreaState>,
@@ -581,6 +584,64 @@ impl Backend {
         self.trade_core_override.insert(group.to_string(), core);
     }
 
+    /// Источник тикера курса в шапке: сохранённый выбор (layout, по стабильному uid ядра),
+    /// если ядро ещё подключено; иначе дефолт — первое подключённое ядро + BTCUSDT
+    /// (на Hyperliquid-подобных юниверсах — UBTCUSDC, иначе первый результат поиска «BTC»).
+    /// Дефолт кэшируется (`header_ticker_cache`), НЕ персистится — персист только ручного выбора.
+    fn header_ticker(&mut self) -> Option<(CoreId, String)> {
+        if let Some(sel) = &self.layout.header_ticker {
+            let core = self
+                .config
+                .servers
+                .iter()
+                .find(|s| s.uid == sel.core_uid)
+                .map(|s| s.id);
+            if let Some(core) = core {
+                if self.session.sessions().iter().any(|s| s.id == core) {
+                    return Some((core, sel.market.clone()));
+                }
+            }
+        }
+        if let Some(cached) = &self.header_ticker_cache {
+            return Some(cached.clone());
+        }
+        let core = self.session.sessions().first().map(|s| s.id)?;
+        let ms = self.session.market_source();
+        let market = ["BTCUSDT", "UBTCUSDC"]
+            .iter()
+            .find(|cand| {
+                ms.search_markets(core, cand, 2)
+                    .iter()
+                    .any(|m| m == *cand)
+            })
+            .map(|c| c.to_string())
+            .or_else(|| ms.search_markets(core, "BTC", 1).into_iter().next())?;
+        self.header_ticker_cache = Some((core, market.clone()));
+        Some((core, market))
+    }
+
+    /// Записать выбор тикера шапки (клик в попапе поиска) + персист в layout по uid ядра.
+    fn set_header_ticker(&mut self, core: CoreId, market: String) {
+        let Some(uid) = self
+            .config
+            .servers
+            .iter()
+            .find(|s| s.id == core)
+            .map(|s| s.uid)
+        else {
+            return;
+        };
+        let sel = moon_core::config::layout::HeaderTicker {
+            core_uid: uid,
+            market: market.clone(),
+        };
+        if self.layout.header_ticker.as_ref() != Some(&sel) {
+            self.layout.header_ticker = Some(sel);
+            self.layout_dirty = true;
+        }
+        self.header_ticker_cache = Some((core, market));
+    }
+
     /// Ядра группы (id, имя) для селектора в шапке. Порядок — как в конфиге/сессиях.
     fn group_cores(&self, group: &str) -> Vec<(CoreId, String)> {
         self.session
@@ -905,6 +966,7 @@ fn main() -> anyhow::Result<()> {
             debug_main_chart_handles: HashMap::new(),
             layout: layout.clone(),
             layout_dirty: false,
+            header_ticker_cache: None,
             dock_states,
             dock_dirty: false,
             price_scale: None,

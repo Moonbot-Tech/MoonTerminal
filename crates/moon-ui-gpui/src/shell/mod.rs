@@ -11,6 +11,7 @@ mod core_settings;
 mod docks;
 mod metrics;
 mod status_bar;
+mod ticker;
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -107,16 +108,20 @@ pub(crate) struct Shell {
     /// «активность» (`Backend::note_main_input`) ТОЛЬКО когда окно активно: иначе движение
     /// мыши над неактивным окном не должно сбрасывать таймер. Ставится observe_window_activation.
     window_active: bool,
-    /// Открыт ли попап настроек ядра (кнопка ⚙ рядом с селектором). Overlay поверх дока,
-    /// закрытие по клику вне (dismiss-слой), уводу мыши или повторному клику по кнопке.
+    /// Открыт ли попап настроек ядра (MoonPopover у кнопки ⚙; контролируемый open —
+    /// закрытие по клику вне делает сам popover, открытие сидирует поля).
     core_settings_open: bool,
-    /// Был ли курсор уже над попапом настроек ядра (авто-выход по уводу только после захода).
-    core_settings_hovered: bool,
     /// Стадия подтверждения «Отменить все ордера»: первый клик ставит флаг, второй — шлёт.
     core_settings_cancel_confirm: bool,
     /// Развёрнуто ли поле чёрного списка монет в попапе настроек ядра (кнопка «…»):
     /// свёрнуто — одна строка, развёрнуто — многострочный редактор фикс. высоты.
     core_settings_bl_expanded: bool,
+    /// Открыт ли попап выбора источника тикера курса (клик по «1 BTC = …» в шапке).
+    ticker_popup_open: bool,
+    /// Был ли курсор уже над попапом тикера (авто-выход по уводу только после захода).
+    ticker_popup_hovered: bool,
+    /// Поле поиска монеты в попапе тикера (список «BTC - Bybit1» строится по значению).
+    ticker_input: Entity<MoonInputState>,
 }
 
 impl Shell {
@@ -407,6 +412,14 @@ impl Shell {
         // Multi-line от рождения; Enter коммитит (submit), а не вставляет перенос строки.
         let blacklist_area =
             cx.new(|cx| MoonInputState::new(window, cx).multi_line(true).submit_on_enter(true));
+        let ticker_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("BTC…"));
+        // Ввод в поиске тикера — только перерисовать попап (список считается в layers).
+        cx.subscribe(&ticker_input, |_this, _inp, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
 
         // Слайдеры/поля метрик: на изменение шлём правку активному ядру и держим numeric-поле
         // попапа в синхроне. Вынесено в `wire_metric_subscriptions` — в `new` это ~80 строк
@@ -552,9 +565,11 @@ impl Shell {
             focus,
             window_active: true,
             core_settings_open: false,
-            core_settings_hovered: false,
             core_settings_cancel_confirm: false,
             core_settings_bl_expanded: false,
+            ticker_popup_open: false,
+            ticker_popup_hovered: false,
+            ticker_input,
         }
     }
 
@@ -874,9 +889,16 @@ impl Render for Shell {
         // (stop_propagation), клик вне или увод мыши — закрывает.
         let (metric_overlay, metric_dismiss) = self.metric_popup_layers(p, cx);
 
-        // Overlay-попап настроек ядра (кнопка ⚙ в шапке): тот же механизм — бокс под кнопкой +
-        // dismiss-слой.
-        let (core_settings_overlay, core_settings_dismiss) = self.core_settings_popup_layers(p, cx);
+        // Попап настроек ядра — MoonPopover у кнопки ⚙ (контролируемый open в Shell):
+        // контент строим только при открытом попапе, позиционирование к кнопке — от popover.
+        let core_settings_content = self
+            .core_settings_open
+            .then(|| self.core_settings_popup_content(p, cx));
+
+        // Тикер курса в шапке: источник (ядро+рынок) резолвится в Backend (мутирует кэш дефолта
+        // → нужен update, поэтому здесь, а не в &App-функции header). Попап выбора — свой слой.
+        let ticker_sel = self.backend.update(cx, |b, _| b.header_ticker());
+        let (ticker_overlay, ticker_dismiss) = self.ticker_popup_layers(p, cx);
 
         // Активность Main для авто-закрытия по неактивности: ОКОННЫЙ слушатель ловит ВСЕ
         // движения мыши, в т.ч. над виджетами/панелями/чартом, которые блокируют hitbox
@@ -918,6 +940,9 @@ impl Render for Shell {
                 &self.group,
                 self.backend.clone(),
                 cx.entity(),
+                ticker_sel,
+                self.core_settings_open,
+                core_settings_content,
                 p,
                 cx,
             ))
@@ -964,8 +989,8 @@ impl Render for Shell {
             // Попап метрики поверх всего: dismiss-слой (ловит клик вне) под самим попапом.
             .children(metric_dismiss)
             .children(metric_overlay)
-            // Попап настроек ядра поверх всего (тот же порядок: dismiss под попапом).
-            .children(core_settings_dismiss)
-            .children(core_settings_overlay)
+            // Попап выбора источника тикера курса (клик по «1 BTC = …» в шапке).
+            .children(ticker_dismiss)
+            .children(ticker_overlay)
     }
 }

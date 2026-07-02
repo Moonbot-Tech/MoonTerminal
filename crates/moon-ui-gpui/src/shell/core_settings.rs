@@ -6,36 +6,30 @@ use gpui::*;
 
 use moon_ui::MoonPalette;
 
-use crate::{core_settings_popup, design};
+use crate::core_settings_popup;
 
 use super::Shell;
 
 impl Shell {
-    /// Открыть/закрыть попап настроек ядра (клик по ⚙). При открытии сидирует числовые поля
-    /// (глоб-TP / трейлинг) значением активного ядра и сбрасывает стадию подтверждения.
-    pub(crate) fn toggle_core_settings_popup(
+    /// Смена открытости попапа настроек ядра (`MoonPopover.on_open_change` у кнопки ⚙).
+    /// При открытии сидирует числовые поля (глоб-TP / трейлинг) значением активного ядра
+    /// и сбрасывает стадию подтверждения.
+    pub(crate) fn set_core_settings_open(
         &mut self,
+        open: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.core_settings_open {
-            self.core_settings_open = false;
-        } else {
-            self.core_settings_open = true;
-            self.core_settings_hovered = false;
-            self.core_settings_cancel_confirm = false;
+        if self.core_settings_open == open {
+            return;
+        }
+        self.core_settings_open = open;
+        self.core_settings_cancel_confirm = false;
+        if open {
             self.core_settings_bl_expanded = false;
             self.seed_core_settings_popup(window, cx);
         }
         cx.notify();
-    }
-
-    pub(super) fn close_core_settings_popup(&mut self, cx: &mut Context<Self>) {
-        if self.core_settings_open {
-            self.core_settings_open = false;
-            self.core_settings_cancel_confirm = false;
-            cx.notify();
-        }
     }
 
     /// Засеять слайдеры+поля паники (price_drop_level) / глоб-TP / трейлинга значениями ядра.
@@ -133,26 +127,14 @@ impl Shell {
         cx.notify();
     }
 
-    /// Левый/верхний отступ overlay-попапа настроек ядра: под кнопкой ⚙ (после бренда и
-    /// селектора в шапке). Координаты приблизительные (как у `metric_popup_pos`) — при
-    /// необходимости подогнать. Top = высота шапки.
-    fn core_settings_popup_pos(&self, cx: &App) -> (Pixels, Pixels) {
-        let left = f32::from(design::ui_px(cx, design::titlebar_leading_inset()))
-            + f32::from(design::ui_px(cx, 8.0));
-        let header_h = f32::from(design::fit_h_px(cx, design::HEADER_TOP_H, 14.0, 9.0));
-        (px(left), px(header_h))
-    }
-
-    /// Слой попапа настроек ядра: сам попап (absolute, под ⚙) + полноэкранный dismiss-слой.
-    /// Возвращает `(попап, dismiss)` — оба `None`, если попап закрыт. Зеркало `metric_popup_layers`.
-    pub(super) fn core_settings_popup_layers(
+    /// Контент попапа настроек ядра для `MoonPopover` у кнопки ⚙ (позиционируется к кнопке
+    /// самим popover'ом — прежние захардкоженные координаты absolute-оверлея уехали, когда
+    /// в шапку добавился тикер). Строится только при открытом попапе.
+    pub(super) fn core_settings_popup_content(
         &self,
         p: MoonPalette,
         cx: &mut Context<Self>,
-    ) -> (Option<AnyElement>, Option<AnyElement>) {
-        if !self.core_settings_open {
-            return (None, None);
-        }
+    ) -> AnyElement {
         let view = cx.entity();
         let toggle_view = view.clone();
         let content = core_settings_popup::core_settings_content(
@@ -193,36 +175,6 @@ impl Shell {
                 })
             },
         );
-        let (left, top) = self.core_settings_popup_pos(cx);
-        let overlay = div()
-            .id("core-settings-popup-box")
-            .absolute()
-            .left(left)
-            .top(top)
-            // Клик/драг внутри не закрывает (иначе нельзя возиться с полями).
-            .on_mouse_down(MouseButton::Left, |_, _w, app| app.stop_propagation())
-            // Авто-выход по уводу мыши, но не во время drag (как у метрик-попапа).
-            .on_hover(cx.listener(|this, hovered: &bool, _w, cx| {
-                if *hovered {
-                    this.core_settings_hovered = true;
-                } else if this.core_settings_hovered && !cx.has_active_drag() {
-                    this.close_core_settings_popup(cx);
-                }
-            }))
-            .child(content)
-            .into_any_element();
-        let dismiss = div()
-            .id("core-settings-popup-dismiss")
-            .absolute()
-            .inset_0()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _ev, _w, cx| {
-                    this.close_core_settings_popup(cx);
-                    cx.stop_propagation();
-                }),
-            )
-            .into_any_element();
-        (Some(overlay), Some(dismiss))
+        content
     }
 }

@@ -91,6 +91,18 @@ pub struct WindowLayout {
     /// Геометрия окна «Настройки» (отдельное окно) — чтобы открывалось на прежнем месте.
     #[serde(default)]
     pub settings_window: Option<GeomRect>,
+    /// Тикер курса в шапке (слева после логотипа): выбранные ядро+рынок. `None` = дефолт
+    /// (первое подключённое ядро; BTCUSDT, на Hyperliquid-подобных — UBTCUSDC).
+    #[serde(default)]
+    pub header_ticker: Option<HeaderTicker>,
+}
+
+/// Выбор источника тикера курса в шапке. Ядро храним по стабильному `uid` сервера
+/// (переживает переупорядочивание конфига), рынок — каноничным именем ядра.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeaderTicker {
+    pub core_uid: u64,
+    pub market: String,
 }
 
 impl WindowLayout {

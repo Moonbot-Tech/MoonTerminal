@@ -30,6 +30,15 @@ header.no_cores:
   ru: "нет ядер"
   en: "no cores"
   es: "sin núcleos"
+# Тикер курса в шапке (слева после логотипа).
+header.ticker_tip:
+  ru: "Курс и дельты за 1ч / 24ч. Клик — выбрать монету и ядро"
+  en: "Price and 1h / 24h deltas. Click to pick coin and core"
+  es: "Precio y deltas 1h / 24h. Clic para elegir moneda y núcleo"
+header.ticker_pick:
+  ru: "Монета тикера (поиск по ядрам)"
+  en: "Ticker coin (search across cores)"
+  es: "Moneda del ticker (búsqueda por núcleos)"
 
 # --- Тулбар ---
 toolbar.size:

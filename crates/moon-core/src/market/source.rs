@@ -111,6 +111,14 @@ impl MarketRevisions {
     }
 }
 
+/// Снимок курса рынка для тикера шапки: последняя цена + знаковые дельты, %.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MarketTickerReadout {
+    pub last: f64,
+    pub delta_1h_pct: f64,
+    pub delta_24h_pct: f64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LatestPriceError {
     NoProvider,
@@ -667,6 +675,33 @@ impl MarketDataSource {
             return Some(1.0);
         }
         self.currency_usd_rate(core, &quote)
+    }
+
+    /// Последняя цена + знаковые дельты рынка за 1ч/24ч, % (moonproto `MarketDeltaState`:
+    /// `coin_1h_delta`/`coin_24h_delta` — отклонение цены от удержанного среднего, как
+    /// MoonBot Coin1hDelta). Для тикера курса в шапке (и будущего скринера).
+    /// `None` — нет провайдера/снимка/рынка.
+    pub fn market_ticker(&self, core: CoreId, market: &str) -> Option<MarketTickerReadout> {
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied()?;
+            inner
+                .clients
+                .get(&provider)
+                .and_then(SharedMoonClient::get)?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        let last = snapshot
+            .markets()
+            .price(market)
+            .map(|p| p.p_last)
+            .filter(|p| p.is_finite() && *p > 0.0)?;
+        let delta = snapshot.markets().delta_state(market).unwrap_or_default();
+        Some(MarketTickerReadout {
+            last,
+            delta_1h_pct: delta.coin_1h_delta,
+            delta_24h_pct: delta.coin_24h_delta,
+        })
     }
 
     /// Search the provider's market universe for a terminal coin-search box.

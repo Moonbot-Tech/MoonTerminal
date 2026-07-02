@@ -19,7 +19,7 @@ use crate::session::CoreId;
 
 pub use source::{
     ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, LatestPriceError, MarketDataSource,
-    MarketRevisions,
+    MarketRevisions, MarketTickerReadout,
 };
 
 /// Shared market buffer owned by moon-core, not by a GPUI entity. Live feeds only wake

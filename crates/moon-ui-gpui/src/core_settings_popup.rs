@@ -193,14 +193,12 @@ pub fn core_settings_content(
     // шапки (рядом с кнопкой ⚙ было тесно и без подписей). Здесь подписаны.
     let rt = cd.and_then(|d| d.runtime_state);
 
+    // Фон/рамку/внешний паддинг даёт MoonPopover (хостится у кнопки ⚙ в шапке) — здесь
+    // только контент фикс. ширины.
     let root = v_flex()
         .id("core-settings-popup")
         .w(px(248.0))
-        .p(design::ui_px(cx, 8.0))
         .gap(design::ui_px(cx, 8.0))
-        .bg(rgb(p.panel_high))
-        .border_1()
-        .border_color(rgb(p.border))
         .child(
             h_flex()
                 .w_full()

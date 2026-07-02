@@ -7,9 +7,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill, MoonSelectorSegment,
-    MoonTag, MoonWindowFrame, h_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill,
+    MoonSelectorSegment, MoonTag, MoonWindowFrame, h_flex,
 };
 use rust_i18n::t;
 
@@ -22,6 +22,9 @@ pub fn header(
     group: &str,
     backend: Entity<Backend>,
     shell: Entity<Shell>,
+    ticker_sel: Option<(moon_core::session::CoreId, String)>,
+    core_settings_open: bool,
+    core_settings_content: Option<AnyElement>,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
@@ -46,6 +49,8 @@ pub fn header(
                 .flex_none()
                 .h_full(),
         )
+        // Тикер курса (настраиваемый): «1 BTC = 61 333$ +0.1% +2.0%» (дельты 1ч/24ч с ядра).
+        .child(ticker_readout(ticker_sel, &backend, shell.clone(), p, cx))
         // Селектор активного ядра (на месте бывшего названия монеты) + баланс. Интерактивные →
         // НЕ drag-зона (иначе клик по селектору таскал бы окно). Монету (`group · market`) убрали.
         .child(
@@ -54,7 +59,11 @@ pub fn header(
                 .gap(design::ui_px(cx, 8.0))
                 .items_center()
                 .child(core_selector(group, &backend, p, cx))
-                .child(core_gear_button(shell, p, cx))
+                .child(core_gear_button(
+                    shell,
+                    core_settings_open,
+                    core_settings_content,
+                ))
                 .child(balance_label(free_usdt, total_usdt, p, cx)),
         )
         // Метрики Session/Real/Unreal/Risk из шапки убраны: сервер (moonproto) не отдаёт
@@ -75,26 +84,24 @@ pub fn header(
                 .child(header_action(
                     "strategies",
                     t!("toolbar.strategies").to_string(),
+                    "icons/bot.svg",
                     {
                         let backend = backend.clone();
                         move |_, window, cx| {
                             strategies::open(backend.clone(), Some(window.window_handle()), cx)
                         }
                     },
-                    p,
-                    cx,
                 ))
                 .child(header_action(
                     "gear",
-                    "⚙",
+                    t!("shell.settings_btn").to_string(),
+                    "icons/settings.svg",
                     {
                         let backend = backend.clone();
                         move |_, window, cx| {
                             settings::open(backend.clone(), Some(window.window_handle()), cx)
                         }
                     },
-                    p,
-                    cx,
                 ))
                 .when(design::show_custom_window_controls(), |this| {
                     this.child(
@@ -104,6 +111,111 @@ pub fn header(
                     )
                 }),
         )
+}
+
+/// Тикер курса в шапке: «1 BTC = 61 333$ +0.1% +2.0%». Цена и знаковые дельты за 1ч/24ч —
+/// с ядра (`MarketDataSource::market_ticker`, moonproto Coin1hDelta/Coin24hDelta). Клик —
+/// попап выбора ядра+монеты (хостится Shell); выбор персистится (layout, uid ядра).
+fn ticker_readout(
+    sel: Option<(moon_core::session::CoreId, String)>,
+    backend: &Entity<Backend>,
+    shell: Entity<Shell>,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    let data = sel.as_ref().and_then(|(core, market)| {
+        let b = backend.read(cx);
+        let t = b.session.market_source().market_ticker(*core, market)?;
+        Some((market.clone(), t))
+    });
+    let base = sel
+        .as_ref()
+        .map(|(_, market)| {
+            let quote = moon_core::symbol::resolve_quote(market);
+            moon_core::symbol::base_symbol(market, &quote).to_string()
+        })
+        .unwrap_or_else(|| "BTC".to_string());
+    let delta_span = |v: f64| {
+        let color = if v < 0.0 { danger_text(p) } else { positive_text(p) };
+        div()
+            .text_color(rgb(color))
+            .child(format!("{v:+.1}%"))
+            .into_any_element()
+    };
+    let mut row = h_flex()
+        .id("header-ticker")
+        .flex_none()
+        .items_center()
+        .gap(design::ui_px(cx, 5.0))
+        .font_family(design::mono())
+        .text_size(design::t_body(cx))
+        .cursor_pointer()
+        .child(
+            div()
+                .text_color(rgb(p.text_soft))
+                .child(format!("1 {base} =")),
+        );
+    match data {
+        Some((_, t)) => {
+            row = row
+                .child(
+                    div()
+                        .text_color(rgb(p.text))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(fmt_ticker_price(t.last)),
+                )
+                .child(delta_span(t.delta_1h_pct))
+                .child(delta_span(t.delta_24h_pct));
+        }
+        None => {
+            row = row.child(div().text_color(rgb(p.text_muted)).child("—"));
+        }
+    }
+    let backend = backend.clone();
+    row.tooltip(|_w, cx| {
+        cx.new(|_| moon_ui::MoonTooltipView::new(t!("header.ticker_tip").to_string()))
+            .into()
+    })
+    // Клик — открыть чарт монеты тикера на Main (как клик по тикеру в Ордерах/Активах);
+    // дабл-клик — попап выбора монеты/ядра. При дабл-клике первый клик успевает открыть
+    // чарт — безобидно (окно не поднимаем, activate=false).
+    .on_click(move |ev: &ClickEvent, window, cx| {
+        if ev.click_count() >= 2 {
+            shell.update(cx, |s, cx| s.toggle_ticker_popup(window, cx));
+            return;
+        }
+        let Some((core, market)) = sel.clone() else {
+            // Источник не разрезолвлен (нет ядра/рынка) — открывать нечего, ведём в попап.
+            shell.update(cx, |s, cx| s.toggle_ticker_popup(window, cx));
+            return;
+        };
+        backend.update(cx, |b, bcx| {
+            b.open_request = Some((core, market));
+            b.open_request_rev = b.open_request_rev.wrapping_add(1);
+            b.open_request_activate = false;
+            bcx.notify();
+        });
+    })
+}
+
+/// Цена тикера: тысячи с пробелом и «$» в конце; дробная часть по величине
+/// (≥1000 → целое, ≥1 → 2 знака, иначе 4 значащих).
+fn fmt_ticker_price(v: f64) -> String {
+    if v >= 1000.0 {
+        let s = format!("{v:.0}");
+        let mut out = String::with_capacity(s.len() + s.len() / 3 + 1);
+        for (i, ch) in s.chars().enumerate() {
+            if i > 0 && (s.len() - i) % 3 == 0 {
+                out.push(' ');
+            }
+            out.push(ch);
+        }
+        format!("{out}$")
+    } else if v >= 1.0 {
+        format!("{v:.2}$")
+    } else {
+        format!("{v:.4}$")
+    }
 }
 
 fn positive_text(p: MoonPalette) -> u32 {
@@ -208,17 +320,31 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         .into_any_element()
 }
 
-/// Кнопка ⚙ настроек ядра (тоггл попапа). Тот же визуал, что правая шестерёнка (Panel/Action),
-/// но открывает overlay-попап Shell, а не окно настроек терминала.
-fn core_gear_button(shell: Entity<Shell>, _p: MoonPalette, _cx: &App) -> impl IntoElement {
-    MoonButton::new("core-gear")
-        .label("⚙")
-        .size(MoonButtonSize::Action)
-        .variant(MoonButtonVariant::Panel)
-        .on_click(move |_, window, cx| {
-            shell.update(cx, |s, cx| s.toggle_core_settings_popup(window, cx));
+/// Кнопка ⚙ настроек ядра + попап настроек (MoonPopover, позиционируется к кнопке —
+/// прежний absolute-оверлей с захардкоженными координатами уезжал при изменении состава
+/// шапки). Open контролирует Shell (`set_core_settings_open`: сидирует поля при открытии);
+/// закрытие по клику вне — сам popover. Кнопка icon-only → квадрат с полями вокруг иконки.
+fn core_gear_button(
+    shell: Entity<Shell>,
+    open: bool,
+    content: Option<AnyElement>,
+) -> impl IntoElement {
+    MoonPopover::new("core-gear-popover")
+        .placement(MoonPopoverPlacement::BottomStart)
+        // 248 (контент) + 2×6 паддинг попапа + 2 рамка.
+        .width(262.0)
+        .open(open)
+        .on_open_change(move |open, window, cx| {
+            shell.update(cx, |s, cx| s.set_core_settings_open(open, window, cx));
         })
-        .render()
+        .trigger(
+            MoonButton::new("core-gear")
+                .leading_icon(MoonButtonIconSlot::new("icons/settings-2.svg"))
+                .size(MoonButtonSize::Action)
+                .variant(MoonButtonVariant::Panel)
+                .render(),
+        )
+        .content(content.unwrap_or_else(|| div().into_any_element()))
 }
 
 fn balance_label(free_usdt: f64, total_usdt: f64, p: MoonPalette, cx: &App) -> impl IntoElement {
@@ -241,16 +367,19 @@ fn balance_label(free_usdt: f64, total_usdt: f64, p: MoonPalette, cx: &App) -> i
         )
 }
 
+/// Кнопка-действие шапки: иконка + подпись. Пробелы вокруг подписи — поля по краям
+/// (Action-кнопка идёт с pad_x=0, фон ровно по контенту; API паддинга у MoonButton нет).
 fn header_action(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
+    icon: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    _p: MoonPalette,
-    _cx: &App,
 ) -> impl IntoElement {
     let id: SharedString = id.into();
+    let label: SharedString = label.into();
     MoonButton::new(id)
-        .label(label)
+        .leading_icon(MoonButtonIconSlot::new(icon))
+        .label(format!(" {label} "))
         .size(MoonButtonSize::Action)
         .variant(MoonButtonVariant::Panel)
         .on_click(on_click)

@@ -8,7 +8,8 @@
 //! `DetachedChartHost`) — в [`windows`].
 
 mod add_stack;
-mod coin_search;
+// pub(crate): `search`/`render_popup` реюзает тикер курса в шапке (shell/ticker.rs).
+pub(crate) mod coin_search;
 mod custom;
 mod detached_host;
 mod ingest;
