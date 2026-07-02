@@ -6,6 +6,7 @@
 //! механизм покрывает оба режима: в dedup один провайдер на биржу, в per-core каждое
 //! ядро провайдер самому себе (см. `MarketDataMode`).
 
+mod screener;
 mod source;
 
 use std::collections::HashMap;
@@ -17,6 +18,7 @@ use crate::data::OrderBookModel;
 use crate::feed::{OrderBook, Tick};
 use crate::session::CoreId;
 
+pub use screener::ScreenerRow;
 pub use source::{
     ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, LatestPriceError, MarketDataSource,
     MarketRevisions, MarketTickerReadout,

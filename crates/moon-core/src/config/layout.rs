@@ -91,6 +91,12 @@ pub struct WindowLayout {
     /// Геометрия окна «Настройки» (отдельное окно) — чтобы открывалось на прежнем месте.
     #[serde(default)]
     pub settings_window: Option<GeomRect>,
+    /// Геометрия окна «Скринер» (singleton) — чтобы открывалось на прежнем месте.
+    #[serde(default)]
+    pub screener_window: Option<GeomRect>,
+    /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
+    #[serde(default)]
+    pub screener_columns: Option<Vec<String>>,
     /// Тикер курса в шапке (слева после логотипа): выбранные ядро+рынок. `None` = дефолт
     /// (первое подключённое ядро; BTCUSDT, на Hyperliquid-подобных — UBTCUSDC).
     #[serde(default)]

@@ -18,7 +18,7 @@ mod orders;
 mod report;
 mod stub;
 
-pub(crate) use common::{RadioMark, RenderGate, detach_button, num, radio_items};
+pub(crate) use common::{RadioMark, RenderGate, data_table_host, detach_button, num, radio_items};
 
 pub use assets::{AssetsView, open as open_assets_window};
 pub use chart::ChartPanel;

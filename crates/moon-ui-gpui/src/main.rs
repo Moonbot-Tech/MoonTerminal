@@ -31,6 +31,7 @@ mod group_window;
 mod icons;
 mod input;
 mod panels;
+mod screener;
 mod settings;
 mod shell;
 mod strategies;
@@ -251,6 +252,8 @@ struct Backend {
     strategies_window: Option<WindowHandle<Root>>,
     /// Глобальное окно «Активы» (singleton, все ядра) — дедуп/фокус.
     assets_window: Option<WindowHandle<Root>>,
+    /// Окно «Скринер» (singleton, все биржи с дедупом по провайдеру) — дедуп/фокус.
+    screener_window: Option<WindowHandle<Root>>,
     /// Built-in debug scenario runner (`--debug-script chart-smoke`). None in normal app runs.
     firetest: Option<firetest::Runtime>,
     /// Откреплённые dock-панели (какая панель, из какой группы, геометрия окна) — load
@@ -988,6 +991,7 @@ fn main() -> anyhow::Result<()> {
             settings_window: None,
             strategies_window: None,
             assets_window: None,
+            screener_window: None,
             firetest: firetest_config.clone().map(firetest::Runtime::new),
             detached,
             detached_dirty: false,

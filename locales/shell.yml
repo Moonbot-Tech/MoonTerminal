@@ -82,6 +82,10 @@ toolbar.strategies:
   ru: "Стратегии"
   en: "Strategies"
   es: "Estrategias"
+toolbar.screener:
+  ru: "Скринер"
+  en: "Screener"
+  es: "Screener"
 # Заголовки попапов торговых метрик (слайдер + поле ввода).
 toolbar.tp_title:
   ru: "Тейк-профит"

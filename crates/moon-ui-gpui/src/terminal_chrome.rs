@@ -16,7 +16,7 @@ use rust_i18n::t;
 use moon_core::feed::ConnStatus;
 
 use crate::shell::Shell;
-use crate::{Backend, design, settings, strategies};
+use crate::{Backend, design, screener, settings, strategies};
 
 pub fn header(
     group: &str,
@@ -91,6 +91,21 @@ pub fn header(
                             strategies::open(backend.clone(), Some(window.window_handle()), cx)
                         }
                     },
+                    p,
+                    cx,
+                ))
+                .child(header_action(
+                    "screener",
+                    t!("toolbar.screener").to_string(),
+                    "icons/chart-pie.svg",
+                    {
+                        let backend = backend.clone();
+                        move |_, window, cx| {
+                            screener::open(backend.clone(), Some(window.window_handle()), cx)
+                        }
+                    },
+                    p,
+                    cx,
                 ))
                 .child(header_action(
                     "gear",
@@ -102,6 +117,8 @@ pub fn header(
                             settings::open(backend.clone(), Some(window.window_handle()), cx)
                         }
                     },
+                    p,
+                    cx,
                 ))
                 .when(design::show_custom_window_controls(), |this| {
                     this.child(
@@ -367,21 +384,43 @@ fn balance_label(free_usdt: f64, total_usdt: f64, p: MoonPalette, cx: &App) -> i
         )
 }
 
-/// Кнопка-действие шапки: иконка + подпись. Пробелы вокруг подписи — поля по краям
-/// (Action-кнопка идёт с pad_x=0, фон ровно по контенту; API паддинга у MoonButton нет).
+/// Кнопка-действие шапки: иконка + подпись с нормальными полями по краям.
+/// НЕ MoonButton: у Action-размера захардкожен `pad_x = 0` (фон ровно по контенту),
+/// API паддинга у MoonButton нет, а leading_icon всегда первая — левое поле до иконки
+/// сделать нечем (записано в FORK_BUGS). Чип повторяет визуал `MoonButtonVariant::Panel`
+/// (bg `shell_high`, рамка `border`, текст `text`) с геометрией Action (высота 26).
 fn header_action(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     icon: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    p: MoonPalette,
+    cx: &App,
 ) -> impl IntoElement {
     let id: SharedString = id.into();
     let label: SharedString = label.into();
-    MoonButton::new(id)
-        .leading_icon(MoonButtonIconSlot::new(icon))
-        .label(format!(" {label} "))
-        .size(MoonButtonSize::Action)
-        .variant(MoonButtonVariant::Panel)
+    h_flex()
+        .id(id)
+        .h(design::ui_px(cx, 26.0))
+        .px(design::ui_px(cx, 8.0))
+        .gap(design::ui_px(cx, 6.0))
+        .items_center()
+        .rounded(design::ui_px(cx, 4.0))
+        .bg(rgb(p.shell_high))
+        .border_1()
+        .border_color(rgb(p.border))
+        .text_color(rgb(p.text))
+        .text_size(design::t_body(cx))
+        .cursor_pointer()
+        .hover(|s| s.bg(rgb(p.panel_high)))
         .on_click(on_click)
-        .render()
+        .child(
+            svg()
+                .w(design::ui_px(cx, 12.0))
+                .h(design::ui_px(cx, 12.0))
+                .flex_none()
+                .text_color(rgb(p.text_soft))
+                .path(icon),
+        )
+        .child(label)
 }

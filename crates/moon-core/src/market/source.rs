@@ -679,6 +679,25 @@ impl MarketDataSource {
 
     /// Последняя цена + знаковые дельты рынка за 1ч/24ч, % (moonproto `MarketDeltaState`:
     /// `coin_1h_delta`/`coin_24h_delta` — отклонение цены от удержанного среднего, как
+    /// Ядро-провайдер рыночных данных consumer-ядра — дедуп-ключ биржи: у
+    /// ядер одной биржи провайдер общий. Скринер группирует ядра по нему,
+    /// чтобы монеты не дублировались.
+    pub fn provider_of(&self, core: CoreId) -> Option<CoreId> {
+        self.inner
+            .read()
+            .expect("market source poisoned")
+            .core_provider
+            .get(&core)
+            .copied()
+    }
+
+    /// Живой MoonProto-клиент КОНКРЕТНОГО ядра (не его провайдера) — для
+    /// аккаунтных полей, которые персональны для ядра (скринер).
+    pub(crate) fn core_client(&self, core: CoreId) -> Option<std::sync::Arc<moonproto::MoonClient>> {
+        let inner = self.inner.read().expect("market source poisoned");
+        inner.clients.get(&core).and_then(SharedMoonClient::get)
+    }
+
     /// MoonBot Coin1hDelta). Для тикера курса в шапке (и будущего скринера).
     /// `None` — нет провайдера/снимка/рынка.
     pub fn market_ticker(&self, core: CoreId, market: &str) -> Option<MarketTickerReadout> {

@@ -1,0 +1,24 @@
+# Окно «Скринер» (таблица монет как в MoonBot).
+# Заголовки колонок (Vol./ASK/Funding/…) — отраслевые токены MoonBot, НЕ переводим (в коде).
+_version: 2
+
+screener.window_title:
+  ru: "MoonTerminal — Скринер"
+  en: "MoonTerminal — Screener"
+  es: "MoonTerminal — Screener"
+screener.empty:
+  ru: "Нет рыночных данных — подключите ядро"
+  en: "No market data — connect a core"
+  es: "Sin datos de mercado — conecte un núcleo"
+screener.coins:
+  ru: "монет"
+  en: "coins"
+  es: "monedas"
+screener.all_cores:
+  ru: "Все ядра"
+  en: "All cores"
+  es: "Todos los núcleos"
+screener.columns:
+  ru: "Колонки"
+  en: "Columns"
+  es: "Columnas"
