@@ -154,6 +154,10 @@ pub struct ChartPanel {
     compare_broom_pending: bool,
     /// Режим метлы включён на вкладке (для подсветки кнопки-метлы на якоре). Ставит стек.
     compare_broom_on: bool,
+    /// Призрачные перекрестия СОСЕДЕЙ compare-вкладки: при активном замке стек раздаёт каждой
+    /// панели weak-хэндлы движков остальных; на mouse-move шлём им цену под курсором — мимо
+    /// GPUI-notify (сосед сам взводит present). Пусто = сравнение неактивно.
+    ghost_peers: Vec<crate::chartdx::ChartGhostCursor>,
     view_dirty: bool,
     last_adaptive_notify_ms: f64,
     /// Последний scale_factor окна (ставится в render). Нужен data prepare path, у которого
@@ -286,6 +290,7 @@ impl ChartPanel {
             orderbook_only: false,
             compare_broom_pending: false,
             compare_broom_on: false,
+            ghost_peers: Vec::new(),
             view_dirty: true,
             last_adaptive_notify_ms: 0.0,
             last_ppp: 1.0,
@@ -386,6 +391,7 @@ impl ChartPanel {
             orderbook_only: false,
             compare_broom_pending: false,
             compare_broom_on: false,
+            ghost_peers: Vec::new(),
             view_dirty: true,
             last_adaptive_notify_ms: 0.0,
             last_ppp: 1.0,
@@ -608,6 +614,32 @@ impl ChartPanel {
             self.compare_broom_on = on;
             cx.notify();
         }
+    }
+
+    /// Weak-хэндл призрачного перекрестия движка этой панели (для раздачи соседям стеком).
+    pub fn ghost_cursor_handle(&self) -> crate::chartdx::ChartGhostCursor {
+        self.chart.ghost_cursor()
+    }
+
+    /// Раздать/забрать список соседей compare-вкладки (ставит стек в `apply_compare`).
+    /// Пустой список = сравнение неактивно: гасим и свой призрак (мог остаться от соседа).
+    /// Без notify — это плумбинг мимо GPUI-дерева, как и сам курсор.
+    pub fn set_ghost_peers(&mut self, peers: Vec<crate::chartdx::ChartGhostCursor>) {
+        if peers.is_empty() && !self.ghost_peers.is_empty() {
+            self.chart.clear_ghost_cursor();
+        }
+        self.ghost_peers = peers;
+    }
+
+    /// Last этой панели (якорь сравнения отдаёт его стеку для дельт соседей в метле).
+    pub fn last_price(&self) -> Option<f64> {
+        self.chart.last_price()
+    }
+
+    /// Last якоря compare-вкладки → крупная дельта под угловой подписью в метле. Ставит стек;
+    /// без notify — движок сам взводит present по смене значения.
+    pub fn set_compare_ref_price(&mut self, price: Option<f64>) {
+        self.chart.set_compare_ref_price(price);
     }
 
     /// Текущее Y-окно `(center, range)` (для стека — окно якоря). None если нет панелей.

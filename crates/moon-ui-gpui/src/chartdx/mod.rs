@@ -20,6 +20,7 @@ pub mod combo;
 pub mod cursor;
 mod data_state;
 mod engine;
+pub use engine::ChartGhostCursor;
 #[cfg(windows)]
 pub mod gpu;
 #[cfg(windows)]
@@ -205,6 +206,11 @@ struct PaneRender {
     /// Изменённая ширина (лог. px) самой широкой строки угловой подписи — `prepare_text` её
     /// замеряет, `sync_readout_params` строит по ней прозрачную плашку-подложку. 0 = подписи нет.
     caption_w: f32,
+    /// Размеры (лог. px) строки дельты от якоря compare-вкладки под угловой подписью (метла):
+    /// крупный «+0.12%» отличия last этой биржи от якоря. 0 = строки нет. Замеряет
+    /// `prepare_text`, плашку расширяет `sync_readout_params`.
+    caption_delta_w: f32,
+    caption_delta_h: f32,
     view: ChartViewGpu,
     layers: PlatformLayers,
     background_params: BackgroundParams,
@@ -319,6 +325,8 @@ impl PaneRender {
             market: String::new(),
             core_name: String::new(),
             caption_w: 0.0,
+            caption_delta_w: 0.0,
+            caption_delta_h: 0.0,
             view: ChartViewGpu::default(),
             layers: PlatformLayers::new(),
             background_params: BackgroundParams::default(),
@@ -450,6 +458,15 @@ struct RenderState {
     /// device-px слота, а own-pass рисует в координатах окна.
     slot_origin: [f32; 2],
     cursor: Option<CursorState>,
+    /// Цена «призрачного» перекрестия compare-режима: панель БЕЗ реального курсора рисует
+    /// горизонталь на этой цене (свой Y-маппинг) + объём стакана/% в `text.rs`. Пишется
+    /// наведённым соседом по вкладке через `ChartGhostCursor` — мимо GPUI-notify, как и
+    /// реальный курсор.
+    ghost_price: Option<f32>,
+    /// Last-цена ЯКОРЯ compare-вкладки (замочек) — опора крупной дельты «+0.12%» под угловой
+    /// подписью в метле. Приносит стек (`apply_compare`) на каждом observe; None = не в
+    /// сравнении / этот чарт сам якорь.
+    compare_ref_price: Option<f32>,
     cursor_color: [f32; 4],
     cursor_thickness: f32,
     readout_bg: [f32; 4],

@@ -992,7 +992,7 @@ impl ChartDataState {
         let prev_cursor_params: Vec<CursorParams> =
             st.panes.iter().map(|pr| pr.cursor_params).collect();
         st.sync_cursor_params();
-        let cursor_changed = st.cursor.is_some()
+        let cursor_changed = (st.cursor.is_some() || st.ghost_price.is_some())
             && st
                 .panes
                 .iter()

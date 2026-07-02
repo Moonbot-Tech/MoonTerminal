@@ -370,10 +370,19 @@ pub(super) fn apply_compare<S: 'static>(
                 p.set_locked_y(None, c);
                 p.set_orderbook_only(false, c);
                 p.set_compare_broom_on(false, c);
+                // Сравнение неактивно → соседей нет; заодно гасится свой призрак.
+                p.set_ghost_peers(Vec::new());
+                p.set_compare_ref_price(None);
             });
         }
         return;
     }
+    // Призрачное перекрестие «сквозь все чарты»: каждой панели — weak-хэндлы движков ОСТАЛЬНЫХ.
+    // Наведённая панель шлёт им цену под курсором на mouse-move (см. sync_native_cursor).
+    let ghosts: Vec<crate::chartdx::ChartGhostCursor> = entries
+        .iter()
+        .map(|e| e.panel.read(cx).ghost_cursor_handle())
+        .collect();
     let key = key.unwrap();
     // Ведущее окно — текущее окно ЯКОРЯ (стабильно в пределах цикла observe → сходимость).
     // Якорь НЕ лочим: он остаётся в своём режиме (масштаб вкладки/авто/пан), а соседи копируют
@@ -383,8 +392,20 @@ pub(super) fn apply_compare<S: 'static>(
         .find(|e| e.core == key.0 && e.market == key.1)
         .and_then(|e| e.panel.read(cx).y_window());
     *shared = window;
-    for e in entries {
+    // Last якоря для крупной дельты «+0.12%» соседей в метле (рисуется только у панелей в
+    // режиме «только стакан» — гейт на стороне text.rs по pr.orderbook_only).
+    let ref_price = entries
+        .iter()
+        .find(|e| e.core == key.0 && e.market == key.1)
+        .and_then(|e| e.panel.read(cx).last_price());
+    for (ix, e) in entries.iter().enumerate() {
         let is_anchor = e.core == key.0 && e.market == key.1;
+        let peers: Vec<crate::chartdx::ChartGhostCursor> = ghosts
+            .iter()
+            .enumerate()
+            .filter(|(gx, _)| *gx != ix)
+            .map(|(_, g)| g.clone())
+            .collect();
         e.panel.update(cx, |p, c| {
             p.set_compare_eligible(true, c);
             p.set_compare_anchor(is_anchor, c);
@@ -393,6 +414,8 @@ pub(super) fn apply_compare<S: 'static>(
             // Метла: «только стакан» у соседей; якорь полноценный, на нём горит кнопка-метла.
             p.set_orderbook_only(!is_anchor && orderbook_only, c);
             p.set_compare_broom_on(is_anchor && orderbook_only, c);
+            p.set_ghost_peers(peers);
+            p.set_compare_ref_price(if is_anchor { None } else { ref_price });
         });
     }
 }

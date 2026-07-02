@@ -4,6 +4,22 @@
 
 use super::*;
 
+/// Weak-хэндл «призрачного» перекрестия чужого движка (compare-режим). Наведённая панель
+/// держит по хэндлу на каждого соседа вкладки и на mouse-move пишет им цену под курсором —
+/// сосед рисует горизонталь + объём/% своими данными. Мимо GPUI-notify (как реальный курсор).
+#[derive(Clone)]
+pub struct ChartGhostCursor {
+    state: std::rc::Weak<RefCell<RenderState>>,
+}
+
+impl ChartGhostCursor {
+    pub fn set_price(&self, price: Option<f64>) {
+        if let Some(state) = self.state.upgrade() {
+            state.borrow_mut().set_ghost_price(price.map(|p| p as f32));
+        }
+    }
+}
+
 fn hex3(rgb: [u8; 3]) -> u32 {
     ((rgb[0] as u32) << 16) | ((rgb[1] as u32) << 8) | rgb[2] as u32
 }
@@ -96,6 +112,8 @@ impl ChartEngine {
             ui_palette: initial_palette_from_theme(&theme),
             slot_origin: [0.0, 0.0],
             cursor: None,
+            ghost_price: None,
+            compare_ref_price: None,
             cursor_color: {
                 let mut c = rgb4(theme.cross);
                 c[3] = theme.cross_alpha;
@@ -233,6 +251,39 @@ impl ChartEngine {
                 pane,
                 local: [x, y],
             }))
+    }
+
+    /// Weak-хэндл призрачного перекрестия compare-режима: сосед по вкладке пишет сюда цену
+    /// под своим курсором (мимо GPUI-notify), движок сам взводит present. Weak — чтобы список
+    /// соседей у панелей не продлевал жизнь закрытым чартам.
+    pub fn ghost_cursor(&self) -> ChartGhostCursor {
+        ChartGhostCursor {
+            state: Rc::downgrade(&self.state),
+        }
+    }
+
+    /// Убрать призрачное перекрестие своего движка (выход из compare-режима).
+    pub fn clear_ghost_cursor(&mut self) {
+        self.state.borrow_mut().set_ghost_price(None);
+    }
+
+    /// Last-цена якоря compare-вкладки — опора крупной дельты под угловой подписью в метле.
+    /// None = не в сравнении / сам якорь. Приносит стек на каждом observe.
+    pub fn set_compare_ref_price(&mut self, price: Option<f64>) -> bool {
+        self.state
+            .borrow_mut()
+            .set_compare_ref_price(price.map(|p| p as f32))
+    }
+
+    /// Last-цена первой активной панели движка (якорь отдаёт её стеку для дельт соседей).
+    pub fn last_price(&self) -> Option<f64> {
+        self.state
+            .borrow()
+            .panes
+            .iter()
+            .find(|p| p.active)
+            .and_then(|p| p.cached_last_price)
+            .map(f64::from)
     }
 
     /// Sync only account/order overlays that still live in `SessionManager`.

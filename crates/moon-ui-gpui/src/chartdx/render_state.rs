@@ -170,6 +170,30 @@ impl RenderState {
         true
     }
 
+    /// Цена призрачного перекрестия compare-режима (пишет наведённый сосед по вкладке).
+    /// Смена цены сама взводит present — continuous-present соседям не нужен.
+    pub(super) fn set_ghost_price(&mut self, price: Option<f32>) -> bool {
+        if self.ghost_price.map(f32::to_bits) == price.map(f32::to_bits) {
+            return false;
+        }
+        crate::diag::bump(&crate::diag::CHART_GHOST_UPDATE);
+        self.ghost_price = price;
+        self.sync_cursor_params();
+        self.needs_present = true;
+        true
+    }
+
+    /// Last якоря compare-вкладки для крупной дельты под угловой подписью (метла). Смена
+    /// значения взводит present — дельта обновляется и когда тикает только якорь.
+    pub(super) fn set_compare_ref_price(&mut self, price: Option<f32>) -> bool {
+        if self.compare_ref_price.map(f32::to_bits) == price.map(f32::to_bits) {
+            return false;
+        }
+        self.compare_ref_price = price;
+        self.needs_present = true;
+        true
+    }
+
     pub(super) fn set_firetest_force_present(&mut self, enabled: bool) -> bool {
         if self.firetest_force_present == enabled {
             return false;
@@ -205,6 +229,24 @@ impl RenderState {
                         self.slot_origin[1] + cursor.local[1],
                     ];
                     params.enabled = 1.0;
+                } else if let Some(price) = self.ghost_price {
+                    // Призрак compare-режима: горизонталь на цене соседа, СВОИМ Y-маппингом.
+                    // X за границами → cursor.hlsl сам гасит вертикаль (bounds-check), а
+                    // горизонталь живёт своей проверкой Y (цена ушла из окна → линии нет).
+                    // У схлопнутого чарта метлы валиден вид стакана (высота/окно те же).
+                    let v = if pr.view.price_to_px > 0.0 {
+                        &pr.view
+                    } else {
+                        &pr.orderbook_view
+                    };
+                    if v.price_to_px > 0.0 {
+                        let bottom = v.bounds[1] + v.bounds[3];
+                        let y = bottom - (price - v.view_price0) * v.price_to_px;
+                        if y.is_finite() {
+                            params.cursor = [-1.0e6, y];
+                            params.enabled = 1.0;
+                        }
+                    }
                 }
             }
             #[cfg(not(windows))]
@@ -255,9 +297,13 @@ impl RenderState {
             // Якорь совпадает с текстом (text.rs): есть стакан → у края панели, нет → у края плота.
             // Рисуем ДО гейта `plot_w<60` — иначе в режиме «только стакан» (чарт схлопнут) подложки
             // под подписью не было (как сейчас у соседей с метлой).
-            if pr.caption_w > 0.0 {
+            if pr.caption_w > 0.0 || pr.caption_delta_w > 0.0 {
                 let lines = (!pr.core_name.is_empty()) as u32 + (!pr.market.is_empty()) as u32;
-                if lines > 0 {
+                // Строка дельты от якоря (метла) — под подписью, на той же плашке: ширина по
+                // максимуму строк, высота + её замеренная высота (см. prepare_text).
+                let cap_w = pr.caption_w.max(pr.caption_delta_w);
+                let cap_h = lines as f32 * super::text::LINE_H + pr.caption_delta_h;
+                if cap_h > 0.0 {
                     let right_edge = if pr.orderbook_enabled {
                         pane_right
                     } else {
@@ -267,10 +313,10 @@ impl RenderState {
                     let cap_y = plot_top + super::text::CAPTION_PAD_Y;
                     let (pad_l, pad_r, pad_y) = (5.0_f32, 3.0_f32, 2.0_f32);
                     let dst = [
-                        (cap_x - pr.caption_w - pad_l) * sf,
+                        (cap_x - cap_w - pad_l) * sf,
                         (cap_y - pad_y) * sf,
-                        (pr.caption_w + pad_l + pad_r) * sf,
-                        (lines as f32 * super::text::LINE_H + pad_y * 2.0) * sf,
+                        (cap_w + pad_l + pad_r) * sf,
+                        (cap_h + pad_y * 2.0) * sf,
                     ];
                     pr.readout_rects.push(ReadoutRect {
                         dst,
@@ -281,17 +327,11 @@ impl RenderState {
                 }
             }
 
-            // Дальше — курсорные плашки/оси, только для нормального (не схлопнутого) чарта.
-            if plot_w < 60.0 || plot_h < 60.0 || pr.view.price_to_px <= 0.0 {
-                continue;
-            }
-
-            let plot_bottom = plot_top + plot_h;
-
             // Плашки-подложки под подписи ордеров/курсора (раскладку дал `prepare_text`). Лёгкая
             // плашка (как угловая подпись монеты, alpha 0.2) для ордерных; плотная (alpha 0.96) для
             // курсорных — они приоритетные, на переднем плане. Строим ДО гейта по курсору — ордерные
-            // подписи видны и без курсора.
+            // подписи видны и без курсора. И ДО гейта «схлопнутого» чарта: у соседа в метле
+            // (только стакан) призрак compare-режима кладёт сюда объём/% — им нужна подложка.
             let placed = std::mem::take(&mut pr.label_placed);
             for pl in &placed {
                 let dst = readout_rect_dst(pl.x, pl.y, pl.w, pl.h, pl.ax, pl.ay, sf);
@@ -306,6 +346,13 @@ impl RenderState {
                 });
             }
             pr.label_placed = placed;
+
+            // Дальше — курсорные плашки/оси, только для нормального (не схлопнутого) чарта.
+            if plot_w < 60.0 || plot_h < 60.0 || pr.view.price_to_px <= 0.0 {
+                continue;
+            }
+
+            let plot_bottom = plot_top + plot_h;
 
             let Some(cursor) = cursor.filter(|c| c.pane == idx) else {
                 continue;

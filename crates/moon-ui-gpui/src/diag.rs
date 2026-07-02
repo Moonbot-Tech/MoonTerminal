@@ -75,6 +75,9 @@ diag_counters!(
     CHART_MOUSE_MOVE_ENTITY => "chart_mouse_move_entity",
     CHART_MOUSE_FAST_STOP => "chart_mouse_fast_stop",
     CHART_CURSOR_UPDATE => "chart_cursor_update",
+    // Призрак перекрестия compare-режима: сколько раз/с соседям реально переписали цену
+    // (каждая запись = их present). Сравнивать с chart_cursor_update наведённого чарта.
+    CHART_GHOST_UPDATE => "chart_ghost_update",
     FIRETEST_MOUSE_SENT => "firetest_mouse_sent",
     FIRETEST_MOUSE_POST_FAIL => "firetest_mouse_post_fail",
     FIRETEST_TEXT_DRAW => "firetest_text_draw",

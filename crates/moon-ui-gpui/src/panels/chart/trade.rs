@@ -466,6 +466,15 @@ impl ChartPanel {
             .input
             .cursor
             .and_then(|(x, y)| self.input.hovered_pane.map(|pane| (pane, x, y)));
+        // Compare-режим (замок): транслируем ЦЕНУ под курсором соседям вкладки — каждый рисует
+        // призрачную горизонталь + свои объём/% собственным Y-маппингом. Мимо GPUI-notify:
+        // сосед сам взводит present по смене цены. Уход курсора (None) гасит призраки.
+        if !self.ghost_peers.is_empty() {
+            let price = cursor.and_then(|(pane, _x, y)| self.price_at_pane_y(pane, y));
+            for peer in &self.ghost_peers {
+                peer.set_price(price);
+            }
+        }
         self.chart.set_cursor(cursor)
     }
 }

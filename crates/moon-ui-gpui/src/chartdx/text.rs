@@ -61,6 +61,13 @@ fn rect_y_range_log(dst: [f32; 4], scale: f32) -> (f32, f32) {
     (t, t + dst[3] / scale)
 }
 
+/// Отступ курсорных подписей (размер/объём/%) от горизонтали перекрестия: плашка подписи
+/// (текст ± `READOUT_PAD_Y`) не должна накрывать саму линию — иначе видимый «разрыв» курсора.
+/// Учитывает толщину креста (device px → лог.) с запасом 1px.
+fn cursor_label_gap(cursor_thickness_dev: f32, sf: f32) -> f32 {
+    LABEL_LINE_GAP.max(READOUT_PAD_Y + cursor_thickness_dev / sf.max(0.1) * 0.5 + 1.0)
+}
+
 /// «+1.25%» — знаковый процент для подписей курсора (отклонение от текущей цены).
 fn fmt_pct(v: f32) -> String {
     format!("{v:+.2}%")
@@ -115,6 +122,37 @@ fn draw_text_run(
         gpui::font(crate::design::mono()),
         px(FONT_SIZE),
         px(LINE_H),
+        color,
+        ax,
+        ay,
+    )
+}
+
+/// `draw_text_run` с произвольным кеглем (высота строки = кегль+4) — крупная дельта от якоря
+/// в метле. Кегль передаётся снаружи (масштабируется слайдером через `label_font_px`).
+#[allow(clippy::too_many_arguments)]
+fn draw_sized_text_run(
+    runs: &mut Vec<GpuCanvasTextRun>,
+    cursor: &mut usize,
+    ctx: &mut GpuCanvasTextContext<'_>,
+    text: &str,
+    size: f32,
+    x: f32,
+    y: f32,
+    ax: f32,
+    ay: f32,
+    color: Hsla,
+) -> anyhow::Result<GpuCanvasTextMetrics> {
+    ensure_text_run(runs, *cursor);
+    let run = &mut runs[*cursor];
+    *cursor += 1;
+    run.draw_aligned(
+        ctx,
+        point(px(x), px(y)),
+        text,
+        gpui::font(crate::design::mono()),
+        px(size),
+        px(size + 4.0),
         color,
         ax,
         ay,
@@ -283,6 +321,33 @@ impl RenderState {
         measure_text_run(&mut self.text_runs, self.text_run_cursor, ctx, text)
     }
 
+    /// `draw_text` с произвольным кеглем — крупная дельта от якоря в метле.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_sized_text(
+        &mut self,
+        ctx: &mut GpuCanvasTextContext<'_>,
+        text: &str,
+        size: f32,
+        x: f32,
+        y: f32,
+        ax: f32,
+        ay: f32,
+        color: Hsla,
+    ) -> anyhow::Result<GpuCanvasTextMetrics> {
+        draw_sized_text_run(
+            &mut self.text_runs,
+            &mut self.text_run_cursor,
+            ctx,
+            text,
+            size,
+            x,
+            y,
+            ax,
+            ay,
+            color,
+        )
+    }
+
     /// Кегль подписей ордер-линий и курсора = база `FONT_SIZE` + поправка из темы (слайдер
     /// Настроек). Зажат в разумные границы, чтобы не сломать раскладку.
     fn label_font_px(&self) -> f32 {
@@ -401,6 +466,107 @@ impl RenderState {
         Ok(())
     }
 
+    /// Призрак перекрестия compare-режима: у панели БЕЗ реального курсора рисуем на цене
+    /// `ghost_price` ТОЛЬКО объём стакана на уровне (над линией) и % от текущей цены (под
+    /// линией) — время/цену-на-оси/размер ордера не дублируем (решение пользователя).
+    /// Работает и на схлопнутом чарте метлы: маппинг цена→Y берём из вида стакана, когда
+    /// чарт-вид схлопнут (высота и ценовое окно у них совпадают). Сама линия — cursor.hlsl
+    /// (см. `sync_cursor_params`, призрак с X за границами).
+    fn draw_ghost_cursor_labels(
+        &mut self,
+        ctx: &mut GpuCanvasTextContext<'_>,
+        idx: usize,
+        sf: f32,
+        placed: &mut Vec<PlacedLabel>,
+    ) -> anyhow::Result<()> {
+        let Some(price) = self.ghost_price else {
+            return Ok(());
+        };
+        if !self.cursor_labels || self.cursor.is_some_and(|c| c.pane == idx) {
+            return Ok(());
+        }
+        let (view, orderbook_view, pane_bounds, orderbook_enabled, cached_last_price) = {
+            let pr = &self.panes[idx];
+            (
+                pr.view,
+                pr.orderbook_view,
+                pr.pane_bounds,
+                pr.orderbook_enabled,
+                pr.cached_last_price,
+            )
+        };
+        // Тот же порог «нормального» чарта, что и у основного курсорного блока (plot_w>=60).
+        let v = if view.price_to_px > 0.0 && view.bounds[2] / sf >= 60.0 {
+            view
+        } else {
+            orderbook_view
+        };
+        if v.price_to_px <= 0.0 {
+            return Ok(());
+        }
+        let price_to_px = v.price_to_px / sf;
+        let top = v.bounds[1] / sf;
+        let bottom = top + v.bounds[3] / sf;
+        let cy = bottom - (price - v.view_price0) * price_to_px;
+        if !(cy >= top && cy <= bottom) {
+            return Ok(());
+        }
+        // Якорь X — как у реального курсора: правее разделителя (левый край стакана; в метле
+        // стакан на всю ширину → левый край панели). Без стакана — левый край зоны управления.
+        let pane_left = pane_bounds[0] / sf;
+        let pane_right = (pane_bounds[0] + pane_bounds[2]) / sf;
+        let zone_left = if orderbook_enabled {
+            orderbook_view.bounds[0] / sf
+        } else {
+            let zone_w = moon_chart::GLASS_ZONE_PX.min((pane_right - pane_left) * 0.5);
+            pane_right - zone_w
+        };
+        let right_x = zone_left + READOUT_PAD_X;
+        // Зазор от линии: плашка подписи не должна резать горизонталь (см. cursor_label_gap).
+        let gap = cursor_label_gap(self.cursor_thickness, sf);
+        let cur_col = cached_last_price
+            .filter(|l| *l > 0.0)
+            .map(|last| pct_hsla(last - price, self.label_positive, self.label_negative))
+            .unwrap_or(color(self.readout_label));
+        // Объём стакана на уровне призрака — над линией.
+        if orderbook_enabled && !self.panes[idx].orderbook_levels.is_empty() {
+            let tol = 6.0 / price_to_px.max(1e-6);
+            if let Some(q) =
+                nearest_orderbook_notional(&self.panes[idx].orderbook_levels, price, tol)
+            {
+                let m =
+                    self.draw_label_text(ctx, &fmt_amount(q), right_x, cy - gap, 0.0, 1.0, cur_col)?;
+                placed.push(PlacedLabel {
+                    x: right_x,
+                    y: cy - gap,
+                    ax: 0.0,
+                    ay: 1.0,
+                    w: m.width.as_f32(),
+                    h: m.line_height.as_f32(),
+                    solid: true,
+                });
+            }
+        }
+        // % отклонения призрака от ТЕКУЩЕЙ цены этого чарта — под линией.
+        if let Some(last) = cached_last_price {
+            if last > 0.0 {
+                let pct = (price - last) / last * 100.0;
+                let m =
+                    self.draw_label_text(ctx, &fmt_pct(pct), right_x, cy + gap, 0.0, 0.0, cur_col)?;
+                placed.push(PlacedLabel {
+                    x: right_x,
+                    y: cy + gap,
+                    ax: 0.0,
+                    ay: 0.0,
+                    w: m.width.as_f32(),
+                    h: m.line_height.as_f32(),
+                    solid: true,
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn prepare_text(
         &mut self,
         ctx: &mut GpuCanvasTextContext<'_>,
@@ -484,23 +650,69 @@ impl RenderState {
                 let cap_x = right_edge - CAPTION_PAD_X;
                 let cap_y = plot_top + CAPTION_PAD_Y;
                 let mut cap_w = 0.0_f32;
+                let mut lines = 0u32;
                 if !core_name.is_empty() {
                     cap_w = cap_w.max(self.measure_text(ctx, &core_name).width.as_f32());
                     self.draw_text(ctx, &core_name, cap_x, cap_y, 1.0, 0.0, caption_fg)?;
+                    lines += 1;
                 }
                 let ticker = moon_core::symbol::display_pair(&market);
                 if !ticker.is_empty() {
                     cap_w = cap_w.max(self.measure_text(ctx, &ticker).width.as_f32());
                     self.draw_text(ctx, &ticker, cap_x, cap_y + LINE_H, 1.0, 0.0, caption_fg)?;
+                    lines += 1;
                 }
                 if (self.panes[idx].caption_w - cap_w).abs() > 0.25 {
                     self.panes[idx].caption_w = cap_w;
+                    readout_metrics_changed = true;
+                }
+                // Метла: отличие last ЭТОЙ биржи от якоря (замочек) — крупно, под подписью,
+                // знак и цвет ±. Данные обеих сторон живые: свой last — из пейна, last якоря
+                // приносит стек (`set_compare_ref_price` в apply_compare) на каждом observe.
+                let (delta_w, delta_h) = {
+                    let (ob_only, own_last) = {
+                        let pr = &self.panes[idx];
+                        (pr.orderbook_only, pr.cached_last_price)
+                    };
+                    let pct = self
+                        .compare_ref_price
+                        .filter(|_| ob_only)
+                        .zip(own_last)
+                        .filter(|(r, l)| *r > 0.0 && *l > 0.0)
+                        .map(|(r, l)| (l - r) / r * 100.0);
+                    if let Some(pct) = pct {
+                        let text = fmt_pct(pct);
+                        let col = pct_hsla(pct, self.label_positive, self.label_negative);
+                        let size = self.label_font_px() * 1.7;
+                        let m = self.draw_sized_text(
+                            ctx,
+                            &text,
+                            size,
+                            cap_x,
+                            cap_y + lines as f32 * LINE_H + 2.0,
+                            1.0,
+                            0.0,
+                            col,
+                        )?;
+                        (m.width.as_f32(), m.line_height.as_f32() + 2.0)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                };
+                if (self.panes[idx].caption_delta_w - delta_w).abs() > 0.25
+                    || (self.panes[idx].caption_delta_h - delta_h).abs() > 0.25
+                {
+                    self.panes[idx].caption_delta_w = delta_w;
+                    self.panes[idx].caption_delta_h = delta_h;
                     readout_metrics_changed = true;
                 }
             }
 
             // Дальше — оси/курсор/сетка, только для нормального (не схлопнутого) чарта.
             if plot_w < 60.0 || plot_h < 60.0 || view.price_to_px <= 0.0 {
+                // Призрак compare-режима живёт и на схлопнутом чарте метлы (только стакан):
+                // объём/% рисуем по виду стакана, линию даёт cursor.hlsl.
+                self.draw_ghost_cursor_labels(ctx, idx, sf, &mut placed)?;
                 if previous_placed != placed {
                     self.panes[idx].label_placed = placed;
                     readout_metrics_changed = true;
@@ -746,6 +958,8 @@ impl RenderState {
                         })
                         .unwrap_or(readout);
                     let right_x = zone_left + READOUT_PAD_X;
+                    // Зазор от линии: плашка подписи не должна резать горизонталь перекрестия.
+                    let gap = cursor_label_gap(self.cursor_thickness, sf);
                     // Курсорные цифры — приоритетные, на переднем плане, в столбики НЕ входят
                     // (рисуются на своём фикс. месте у крестовины), но получают плотную подложку.
                     // Размер ордера — НАД линией курсора, слева от разделителя, правым краем.
@@ -756,14 +970,14 @@ impl RenderState {
                             ctx,
                             &text,
                             label_x,
-                            cy_log - 2.0,
+                            cy_log - gap,
                             1.0,
                             1.0,
                             cur_col,
                         )?;
                         placed.push(PlacedLabel {
                             x: label_x,
-                            y: cy_log - 2.0,
+                            y: cy_log - gap,
                             ax: 1.0,
                             ay: 1.0,
                             w: m.width.as_f32(),
@@ -783,14 +997,14 @@ impl RenderState {
                                 ctx,
                                 &fmt_amount(q),
                                 right_x,
-                                cy_log - 2.0,
+                                cy_log - gap,
                                 0.0,
                                 1.0,
                                 cur_col,
                             )?;
                             placed.push(PlacedLabel {
                                 x: right_x,
-                                y: cy_log - 2.0,
+                                y: cy_log - gap,
                                 ax: 0.0,
                                 ay: 1.0,
                                 w: m.width.as_f32(),
@@ -807,14 +1021,14 @@ impl RenderState {
                                 ctx,
                                 &fmt_pct(pct),
                                 right_x,
-                                cy_log + 2.0,
+                                cy_log + gap,
                                 0.0,
                                 0.0,
                                 cur_col,
                             )?;
                             placed.push(PlacedLabel {
                                 x: right_x,
-                                y: cy_log + 2.0,
+                                y: cy_log + gap,
                                 ax: 0.0,
                                 ay: 0.0,
                                 w: m.width.as_f32(),
@@ -824,6 +1038,10 @@ impl RenderState {
                         }
                     }
                 }
+            } else {
+                // Нет реального курсора на панели → призрак compare-режима (объём/% на цене
+                // соседа). При реальном курсоре призрак не рисуем — хелпер сам проверяет.
+                self.draw_ghost_cursor_labels(ctx, idx, sf, &mut placed)?;
             }
 
             // Готовая раскладка подписей кадра → плашки-подложки строит sync_readout_params.
