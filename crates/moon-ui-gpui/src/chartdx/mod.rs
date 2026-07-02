@@ -150,6 +150,7 @@ pub(super) struct PlacedLabel {
     pub ax: f32,
     pub ay: f32,
     pub w: f32,
+    pub h: f32,
     pub solid: bool,
 }
 
@@ -176,8 +177,8 @@ pub(super) struct OrderLabel {
     pub above: bool,
     /// Цвет линии (0xRRGGBB) — подпись красится в него же.
     pub color: u32,
-    /// Приоритет при наложении: подпись с бОльшим значением размещается раньше, резервирует
-    /// вертикальный бакет и перекрывает младшие (те прячутся). SELL/STOP > BUY.
+    /// Приоритет draw-order-а при пересечении: младшие рисуются раньше, старшие поверх.
+    /// Настоящий MoonBot-style Y-bucket для secondary captions пока должен жить отдельным pass-ом.
     pub priority: u8,
     /// Drag/hover label надо рисовать поверх и не давить overlap-ом.
     pub force: bool,
@@ -188,6 +189,9 @@ pub(super) struct OrderBookLabel {
     /// Sell-line price; the label is drawn in the orderbook zone at this Y.
     pub price: f32,
     pub short: bool,
+    /// Cached notional for this sell-line depth label. Recomputed when order labels or
+    /// the orderbook CPU snapshot changes; text frames only format and draw it.
+    pub notional: f32,
 }
 
 /// GPU-состояние одной панели для `gpu_canvas` callbacks — отделено от логики `Container`,
@@ -208,7 +212,9 @@ struct PaneRender {
     cursor_params: CursorParams,
     readout_rects: Vec<ReadoutRect>,
     readout_time_width: f32,
+    readout_time_line_h: f32,
     readout_price_width: f32,
+    readout_price_line_h: f32,
     history_cursor: ChartHistoryCursor,
     history_buffers: ChartHistoryBuffers,
     /// Last source slice signature used to decide if retained chart history must be read.
@@ -256,6 +262,9 @@ struct PaneRender {
     /// Готовые подписи ордерных линий (size/%/qty), пересобираются при изменении ордеров.
     /// Рисуются в `prepare_text`, привязка к Y — по `view` каждый кадр.
     order_labels: Vec<OrderLabel>,
+    /// Stable priority order for `order_labels`, rebuilt together with order labels.
+    /// Cursor-only text frames must not allocate/sort it again.
+    order_label_order: Vec<usize>,
     /// Подписи объёма стакана у sell-линий (MoonBot `LastSellOrderPriceVol`): цель берём из
     /// ордера, фактический объём считаем из текущей CPU-копии стакана.
     orderbook_labels: Vec<OrderBookLabel>,
@@ -317,7 +326,9 @@ impl PaneRender {
             cursor_params: CursorParams::default(),
             readout_rects: Vec::new(),
             readout_time_width: 0.0,
+            readout_time_line_h: 0.0,
             readout_price_width: 0.0,
+            readout_price_line_h: 0.0,
             history_cursor: ChartHistoryCursor::default(),
             history_buffers: ChartHistoryBuffers::default(),
             source_history_sig: u64::MAX,
@@ -347,6 +358,7 @@ impl PaneRender {
             last_order_highlight_uid: None,
             last_order_drag_preview: None,
             order_labels: Vec::new(),
+            order_label_order: Vec::new(),
             orderbook_labels: Vec::new(),
             prospective_usd: None,
             label_placed: Vec::new(),

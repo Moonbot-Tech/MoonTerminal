@@ -71,24 +71,6 @@ fn fmt_amount(v: f32) -> String {
     moon_core::util::fmt::compact_si(v as f64)
 }
 
-fn sell_book_notional(levels: &[moon_core::data::BookDepthPoint], price: f32, short: bool) -> f32 {
-    let mut sum = 0.0_f32;
-    for level in levels {
-        if short {
-            // MoonBot: short sell-line volume uses buy glass above sell price.
-            if !level.is_ask && level.price > price {
-                sum += level.notional;
-            }
-        } else {
-            // MoonBot: long sell-line volume uses sell glass below sell price.
-            if level.is_ask && level.price < price {
-                sum += level.notional;
-            }
-        }
-    }
-    sum
-}
-
 /// Цвет знакового процента: плюс → positive, минус → negative из текущей chart theme.
 fn pct_hsla(v: f32, positive: u32, negative: u32) -> Hsla {
     color(if v >= 0.0 { positive } else { negative })
@@ -100,6 +82,158 @@ fn clamp_anchor(value: f32, min: f32, max: f32) -> f32 {
     } else {
         (min + max) * 0.5
     }
+}
+
+fn label_font_px(label_font_delta: f32) -> f32 {
+    (FONT_SIZE + label_font_delta).clamp(6.0, 40.0)
+}
+
+fn ensure_text_run(runs: &mut Vec<GpuCanvasTextRun>, cursor: usize) {
+    if cursor >= runs.len() {
+        runs.push(GpuCanvasTextRun::default());
+    }
+}
+
+fn draw_text_run(
+    runs: &mut Vec<GpuCanvasTextRun>,
+    cursor: &mut usize,
+    ctx: &mut GpuCanvasTextContext<'_>,
+    text: &str,
+    x: f32,
+    y: f32,
+    ax: f32,
+    ay: f32,
+    color: Hsla,
+) -> anyhow::Result<GpuCanvasTextMetrics> {
+    ensure_text_run(runs, *cursor);
+    let run = &mut runs[*cursor];
+    *cursor += 1;
+    run.draw_aligned(
+        ctx,
+        point(px(x), px(y)),
+        text,
+        gpui::font(crate::design::mono()),
+        px(FONT_SIZE),
+        px(LINE_H),
+        color,
+        ax,
+        ay,
+    )
+}
+
+fn measure_text_run(
+    runs: &mut Vec<GpuCanvasTextRun>,
+    cursor: usize,
+    ctx: &GpuCanvasTextContext<'_>,
+    text: &str,
+) -> GpuCanvasTextMetrics {
+    ensure_text_run(runs, cursor);
+    runs[cursor].measure(
+        ctx,
+        text,
+        gpui::font(crate::design::mono()),
+        px(FONT_SIZE),
+        px(LINE_H),
+    )
+}
+
+fn draw_label_text_run(
+    runs: &mut Vec<GpuCanvasTextRun>,
+    cursor: &mut usize,
+    ctx: &mut GpuCanvasTextContext<'_>,
+    label_font_delta: f32,
+    text: &str,
+    x: f32,
+    y: f32,
+    ax: f32,
+    ay: f32,
+    color: Hsla,
+) -> anyhow::Result<GpuCanvasTextMetrics> {
+    let fp = label_font_px(label_font_delta);
+    ensure_text_run(runs, *cursor);
+    let run = &mut runs[*cursor];
+    *cursor += 1;
+    run.draw_aligned(
+        ctx,
+        point(px(x), px(y)),
+        text,
+        gpui::font(crate::design::mono()),
+        px(fp),
+        px(fp + 4.0),
+        color,
+        ax,
+        ay,
+    )
+}
+
+fn measure_label_text_run(
+    runs: &mut Vec<GpuCanvasTextRun>,
+    cursor: usize,
+    ctx: &GpuCanvasTextContext<'_>,
+    label_font_delta: f32,
+    text: &str,
+) -> GpuCanvasTextMetrics {
+    let fp = label_font_px(label_font_delta);
+    ensure_text_run(runs, cursor);
+    runs[cursor].measure(
+        ctx,
+        text,
+        gpui::font(crate::design::mono()),
+        px(fp),
+        px(fp + 4.0),
+    )
+}
+
+fn nearest_orderbook_notional(
+    levels: &[moon_core::data::BookDepthPoint],
+    price: f32,
+    tol: f32,
+) -> Option<f32> {
+    fn consider(
+        best: &mut Option<(f32, f32)>,
+        level: Option<&moon_core::data::BookDepthPoint>,
+        price: f32,
+        tol: f32,
+    ) {
+        if let Some(level) = level {
+            let d = (level.price - price).abs();
+            if d <= tol && best.is_none_or(|(bd, _)| d < bd) {
+                *best = Some((d, level.cum_notional));
+            }
+        }
+    }
+
+    let split = levels.partition_point(|level| !level.is_ask);
+    let bids = &levels[..split];
+    let asks = &levels[split..];
+    let mut best = None;
+
+    if !bids.is_empty() {
+        let mut lo = 0;
+        let mut hi = bids.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if bids[mid].price > price {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        consider(&mut best, bids.get(lo), price, tol);
+        if lo > 0 {
+            consider(&mut best, bids.get(lo - 1), price, tol);
+        }
+    }
+
+    if !asks.is_empty() {
+        let ix = asks.partition_point(|level| level.price < price);
+        consider(&mut best, asks.get(ix), price, tol);
+        if ix > 0 {
+            consider(&mut best, asks.get(ix - 1), price, tol);
+        }
+    }
+
+    best.map(|(_, q)| q)
 }
 
 impl RenderState {
@@ -132,41 +266,27 @@ impl RenderState {
         ay: f32,
         color: Hsla,
     ) -> anyhow::Result<GpuCanvasTextMetrics> {
-        if self.text_run_cursor >= self.text_runs.len() {
-            self.text_runs.push(GpuCanvasTextRun::default());
-        }
-        let run = &mut self.text_runs[self.text_run_cursor];
-        self.text_run_cursor += 1;
-        run.draw_aligned(
+        draw_text_run(
+            &mut self.text_runs,
+            &mut self.text_run_cursor,
             ctx,
-            point(px(x), px(y)),
             text,
-            gpui::font(crate::design::mono()),
-            px(FONT_SIZE),
-            px(LINE_H),
-            color,
+            x,
+            y,
             ax,
             ay,
+            color,
         )
     }
 
     fn measure_text(&mut self, ctx: &GpuCanvasTextContext<'_>, text: &str) -> GpuCanvasTextMetrics {
-        if self.text_run_cursor >= self.text_runs.len() {
-            self.text_runs.push(GpuCanvasTextRun::default());
-        }
-        self.text_runs[self.text_run_cursor].measure(
-            ctx,
-            text,
-            gpui::font(crate::design::mono()),
-            px(FONT_SIZE),
-            px(LINE_H),
-        )
+        measure_text_run(&mut self.text_runs, self.text_run_cursor, ctx, text)
     }
 
     /// Кегль подписей ордер-линий и курсора = база `FONT_SIZE` + поправка из темы (слайдер
     /// Настроек). Зажат в разумные границы, чтобы не сломать раскладку.
     fn label_font_px(&self) -> f32 {
-        (FONT_SIZE + self.label_font_delta).clamp(6.0, 40.0)
+        label_font_px(self.label_font_delta)
     }
 
     /// `draw_text`, но кеглем подписей ордер-линий (`label_font_px`). Высота строки = кегль+4.
@@ -180,22 +300,17 @@ impl RenderState {
         ay: f32,
         color: Hsla,
     ) -> anyhow::Result<GpuCanvasTextMetrics> {
-        let fp = self.label_font_px();
-        if self.text_run_cursor >= self.text_runs.len() {
-            self.text_runs.push(GpuCanvasTextRun::default());
-        }
-        let run = &mut self.text_runs[self.text_run_cursor];
-        self.text_run_cursor += 1;
-        run.draw_aligned(
+        draw_label_text_run(
+            &mut self.text_runs,
+            &mut self.text_run_cursor,
             ctx,
-            point(px(x), px(y)),
+            self.label_font_delta,
             text,
-            gpui::font(crate::design::mono()),
-            px(fp),
-            px(fp + 4.0),
-            color,
+            x,
+            y,
             ax,
             ay,
+            color,
         )
     }
 
@@ -205,16 +320,12 @@ impl RenderState {
         ctx: &GpuCanvasTextContext<'_>,
         text: &str,
     ) -> GpuCanvasTextMetrics {
-        let fp = self.label_font_px();
-        if self.text_run_cursor >= self.text_runs.len() {
-            self.text_runs.push(GpuCanvasTextRun::default());
-        }
-        self.text_runs[self.text_run_cursor].measure(
+        measure_label_text_run(
+            &mut self.text_runs,
+            self.text_run_cursor,
             ctx,
+            self.label_font_delta,
             text,
-            gpui::font(crate::design::mono()),
-            px(fp),
-            px(fp + 4.0),
         )
     }
 
@@ -333,11 +444,6 @@ impl RenderState {
             if !active {
                 continue;
             }
-            // Снимаем подписи ордеров / уровни стакана / last в локали ДО первого `draw_text`
-            // (он берёт `&mut self`, поэтому держать заём `self.panes[idx]` нельзя).
-            let order_labels = self.panes[idx].order_labels.clone();
-            let orderbook_labels = self.panes[idx].orderbook_labels.clone();
-            let orderbook_levels = self.panes[idx].orderbook_levels.clone();
             let cached_last_price = self.panes[idx].cached_last_price;
             let prospective_usd = self.panes[idx].prospective_usd;
             // Раскладка подписей этого кадра (для плашек в sync_readout_params). Старую держим для
@@ -439,10 +545,12 @@ impl RenderState {
             if self.line_labels {
                 // Высота строки подписей зависит от их кегля (настраивается слайдером темы).
                 let label_line_h = self.label_font_px() + 4.0;
-                let mut ord: Vec<usize> = (0..order_labels.len()).collect();
-                ord.sort_by(|&a, &b| order_labels[a].priority.cmp(&order_labels[b].priority));
-                let mut force_items: Vec<(f32, f32, f32, &OrderLabel)> = Vec::new();
-                for &li in &ord {
+                let mut force_items: Vec<(f32, f32, &OrderLabel)> = Vec::new();
+                for &li in &self.panes[idx].order_label_order {
+                    let order_labels = &self.panes[idx].order_labels;
+                    if li >= order_labels.len() {
+                        continue;
+                    }
                     let label = &order_labels[li];
                     let y = line_y(label.price);
                     if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
@@ -453,9 +561,8 @@ impl RenderState {
                     } else {
                         (y + LABEL_LINE_GAP, 0.0)
                     };
-                    let w = self.measure_label_text(ctx, &label.text).width.as_f32();
                     if label.force {
-                        force_items.push((dy, ay, w, label));
+                        force_items.push((dy, ay, label));
                         continue;
                     }
                     let fg = if label.color == ORDER_LABEL_NEUTRAL {
@@ -463,29 +570,53 @@ impl RenderState {
                     } else {
                         color(label.color)
                     };
-                    self.draw_label_text(ctx, &label.text, label_x, dy, 1.0, ay, fg)?;
+                    let m = draw_label_text_run(
+                        &mut self.text_runs,
+                        &mut self.text_run_cursor,
+                        ctx,
+                        self.label_font_delta,
+                        &label.text,
+                        label_x,
+                        dy,
+                        1.0,
+                        ay,
+                        fg,
+                    )?;
                     placed.push(PlacedLabel {
                         x: label_x,
                         y: dy,
                         ax: 1.0,
                         ay,
-                        w,
+                        w: m.width.as_f32(),
+                        h: m.line_height.as_f32(),
                         solid: false,
                     });
                 }
-                for (dy, ay, w, label) in force_items {
+                for (dy, ay, label) in force_items {
                     let fg = if label.color == ORDER_LABEL_NEUTRAL {
                         label_neutral
                     } else {
                         color(label.color)
                     };
-                    self.draw_label_text(ctx, &label.text, label_x, dy, 1.0, ay, fg)?;
+                    let m = draw_label_text_run(
+                        &mut self.text_runs,
+                        &mut self.text_run_cursor,
+                        ctx,
+                        self.label_font_delta,
+                        &label.text,
+                        label_x,
+                        dy,
+                        1.0,
+                        ay,
+                        fg,
+                    )?;
                     placed.push(PlacedLabel {
                         x: label_x,
                         y: dy,
                         ax: 1.0,
                         ay,
-                        w,
+                        w: m.width.as_f32(),
+                        h: m.line_height.as_f32(),
                         solid: false,
                     });
                 }
@@ -495,15 +626,16 @@ impl RenderState {
             // Это НЕ текст ордера, а сумма book notional до цены закрытия:
             // long → ask ниже sell, short → bid выше sell. Рисуем в зоне стакана; курсорный
             // readout ниже идёт поверх неё, если пользователь навёлся в ту же точку.
-            if orderbook_enabled && self.line_labels && !orderbook_levels.is_empty() {
+            if orderbook_enabled && self.line_labels && !self.panes[idx].orderbook_levels.is_empty()
+            {
                 let right_x = zone_left + READOUT_PAD_X;
                 let label_line_h = self.label_font_px() + 4.0;
-                for label in &orderbook_labels {
+                for label in &self.panes[idx].orderbook_labels {
                     let y = line_y(label.price);
                     if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
                         continue;
                     }
-                    let q = sell_book_notional(&orderbook_levels, label.price, label.short);
+                    let q = label.notional;
                     let text = fmt_amount(q);
                     let col = if q <= 1e-6 {
                         color(self.label_positive)
@@ -511,13 +643,25 @@ impl RenderState {
                         color(self.label_negative)
                     };
                     let dy = y - 2.0;
-                    let m = self.draw_label_text(ctx, &text, right_x, dy, 0.0, 1.0, col)?;
+                    let m = draw_label_text_run(
+                        &mut self.text_runs,
+                        &mut self.text_run_cursor,
+                        ctx,
+                        self.label_font_delta,
+                        &text,
+                        right_x,
+                        dy,
+                        0.0,
+                        1.0,
+                        col,
+                    )?;
                     placed.push(PlacedLabel {
                         x: right_x,
                         y: dy,
                         ax: 0.0,
                         ay: 1.0,
                         w: m.width.as_f32(),
+                        h: m.line_height.as_f32(),
                         solid: false,
                     });
                 }
@@ -540,8 +684,12 @@ impl RenderState {
                     let label = fmt_clock(unix, tz_offset_sec, true);
                     let metrics = self.measure_label_text(ctx, &label);
                     let width = metrics.width.as_f32();
-                    if (self.panes[idx].readout_time_width - width).abs() > 0.25 {
+                    let line_h = metrics.line_height.as_f32();
+                    if (self.panes[idx].readout_time_width - width).abs() > 0.25
+                        || (self.panes[idx].readout_time_line_h - line_h).abs() > 0.25
+                    {
                         self.panes[idx].readout_time_width = width;
+                        self.panes[idx].readout_time_line_h = line_h;
                         readout_metrics_changed = true;
                     }
                     let half_w = metrics.width.as_f32() * 0.5;
@@ -561,8 +709,12 @@ impl RenderState {
                     let label = format!("{price:.dec$}");
                     let metrics = self.measure_label_text(ctx, &label);
                     let width = metrics.width.as_f32();
-                    if (self.panes[idx].readout_price_width - width).abs() > 0.25 {
+                    let line_h = metrics.line_height.as_f32();
+                    if (self.panes[idx].readout_price_width - width).abs() > 0.25
+                        || (self.panes[idx].readout_price_line_h - line_h).abs() > 0.25
+                    {
                         self.panes[idx].readout_price_width = width;
+                        self.panes[idx].readout_price_line_h = line_h;
                         readout_metrics_changed = true;
                     }
                     // Right → плашка у правого края панели (за стаканом); Left → у левого жёлоба.
@@ -615,20 +767,18 @@ impl RenderState {
                             ax: 1.0,
                             ay: 1.0,
                             w: m.width.as_f32(),
+                            h: m.line_height.as_f32(),
                             solid: true,
                         });
                     }
                     // Объём стакана на уровне курсора — правее разделителя, над линией.
-                    if orderbook_enabled && !orderbook_levels.is_empty() {
+                    if orderbook_enabled && !self.panes[idx].orderbook_levels.is_empty() {
                         let tol = 6.0 / price_to_px.max(1e-6);
-                        let mut best: Option<(f32, f32)> = None;
-                        for level in &orderbook_levels {
-                            let d = (level.price - cursor_price).abs();
-                            if d <= tol && best.is_none_or(|(bd, _)| d < bd) {
-                                best = Some((d, level.cum_notional));
-                            }
-                        }
-                        if let Some((_, q)) = best {
+                        if let Some(q) = nearest_orderbook_notional(
+                            &self.panes[idx].orderbook_levels,
+                            cursor_price,
+                            tol,
+                        ) {
                             let m = self.draw_label_text(
                                 ctx,
                                 &fmt_amount(q),
@@ -644,6 +794,7 @@ impl RenderState {
                                 ax: 0.0,
                                 ay: 1.0,
                                 w: m.width.as_f32(),
+                                h: m.line_height.as_f32(),
                                 solid: true,
                             });
                         }
@@ -667,6 +818,7 @@ impl RenderState {
                                 ax: 0.0,
                                 ay: 0.0,
                                 w: m.width.as_f32(),
+                                h: m.line_height.as_f32(),
                                 solid: true,
                             });
                         }

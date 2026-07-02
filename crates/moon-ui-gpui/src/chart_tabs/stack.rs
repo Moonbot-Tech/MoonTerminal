@@ -509,7 +509,7 @@ pub(super) fn render_chart_stack<S, P, T, R>(
 ) -> AnyElement
 where
     S: Render + 'static,
-    P: Fn(&S, usize) -> Option<Entity<ChartPanel>> + Copy + 'static,
+    P: Fn(&S, usize) -> Option<Entity<ChartPanel>> + Clone + 'static,
     // tile(s, ix, panel, size, flex, min_w, horizontal, border, ent)
     //   flex=true:  size → max_w, min_w → min_w (якорь-stretch).
     //   flex=false: size → фикс. ширина БЕЗ сжатия (SCROLL переполняет → скролл).
@@ -524,10 +524,10 @@ where
             Rgba,
             Entity<S>,
         ) -> AnyElement
-        + Copy
+        + Clone
         + 'static,
     // Роль слота в режиме метлы (Anchor берёт свою ширину, Follower — стакан). Normal = обычный.
-    R: Fn(&S, usize) -> CompareRole + Copy + 'static,
+    R: Fn(&S, usize) -> CompareRole + Clone + 'static,
 {
     if scroll && !compress {
         if horizontal {
@@ -568,6 +568,8 @@ where
         // Вертикальный SCROLL: фикс. высота, виртуальный список со скроллбаром. Плитку строим через
         // weak-entity (фабрика `MoonVirtualList` отдаёт `App`, а не `Context`).
         let weak = entity.downgrade();
+        let panel_at_v = panel_at.clone();
+        let tile_v = tile.clone();
         let list = MoonVirtualList::new(
             format!("{base_id}-vlist"),
             count,
@@ -577,10 +579,10 @@ where
                     return div().into_any_element();
                 };
                 let s = ent.read(app);
-                let Some(panel) = panel_at(s, ix) else {
+                let Some(panel) = panel_at_v(s, ix) else {
                     return div().into_any_element();
                 };
-                tile(
+                tile_v(
                     s,
                     ix,
                     panel,

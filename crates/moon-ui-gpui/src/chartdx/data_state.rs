@@ -392,6 +392,11 @@ impl ChartDataState {
                         quote_usd,
                         drag_preview,
                     );
+                    rebuild_order_label_order(&mut pr.order_label_order, &pr.order_labels);
+                    refresh_orderbook_label_notionals(
+                        &mut pr.orderbook_labels,
+                        &pr.orderbook_levels,
+                    );
                     pr.last_order_lines_rev = core_st.order_lines_rev;
                     pr.last_order_lines_sync_ms = now;
                     pr.pending_order_gpu_rev = Some(core_st.order_lines_rev);
@@ -407,6 +412,7 @@ impl ChartDataState {
                 }
                 pr.layers.set_userdata(&[], &[], &[], &[]);
                 pr.order_labels.clear();
+                pr.order_label_order.clear();
                 pr.orderbook_labels.clear();
                 pr.last_order_lines_rev = u64::MAX;
                 pr.last_order_lines_sync_ms = now;
@@ -929,6 +935,10 @@ impl ChartDataState {
                             // CPU-копия видимой книги — для подписей объёма в стакане:
                             // cursor volume и MoonBot-style sell-line depth label.
                             book.collect_visible_depth(lo, hi, &mut pr.orderbook_levels);
+                            refresh_orderbook_label_notionals(
+                                &mut pr.orderbook_labels,
+                                &pr.orderbook_levels,
+                            );
                             pr.last_book_rev = book_rev;
                             pr.last_book_lo = lo;
                             pr.last_book_hi = hi;
@@ -1086,7 +1096,11 @@ fn build_order_labels(
         if let Some(sp) = sell {
             let forced = line_forced(LineKind::Sell);
             if sp.is_finite() && sp > 0.0 {
-                book_out.push(OrderBookLabel { price: sp, short });
+                book_out.push(OrderBookLabel {
+                    price: sp,
+                    short,
+                    notional: 0.0,
+                });
             }
             if let Some(bp) = buy {
                 if bp > 0.0 {
@@ -1194,6 +1208,39 @@ fn fmt_size_2dp(v: f64) -> String {
 
 fn fmt_amount(v: f32) -> String {
     fmt_size_2dp(v as f64)
+}
+
+fn sell_book_notional(levels: &[moon_core::data::BookDepthPoint], price: f32, short: bool) -> f32 {
+    let mut sum = 0.0_f32;
+    for level in levels {
+        if short {
+            // MoonBot: short sell-line volume uses buy glass above sell price.
+            if !level.is_ask && level.price > price {
+                sum += level.notional;
+            }
+        } else {
+            // MoonBot: long sell-line volume uses sell glass below sell price.
+            if level.is_ask && level.price < price {
+                sum += level.notional;
+            }
+        }
+    }
+    sum
+}
+
+fn rebuild_order_label_order(order: &mut Vec<usize>, labels: &[OrderLabel]) {
+    order.clear();
+    order.extend(0..labels.len());
+    order.sort_by_key(|&ix| labels[ix].priority);
+}
+
+fn refresh_orderbook_label_notionals(
+    labels: &mut [OrderBookLabel],
+    levels: &[moon_core::data::BookDepthPoint],
+) {
+    for label in labels {
+        label.notional = sell_book_notional(levels, label.price, label.short);
+    }
 }
 
 /// $-сумма с SI-суффиксом: 1234 → «$1.23K».

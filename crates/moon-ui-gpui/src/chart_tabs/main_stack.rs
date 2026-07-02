@@ -201,6 +201,7 @@ impl MainChartStack {
             self.show_stack = false;
             self.sync_visibility(cx);
             self.sync_backend_active(cx);
+            self.arm_idle_timer(cx);
             cx.notify();
             return;
         }
@@ -213,6 +214,7 @@ impl MainChartStack {
         self.sync_backend_active(cx);
         // Новый чарт: в режиме сравнения сразу получает eligible + общее Y-окно.
         self.sync_compare(cx);
+        self.arm_idle_timer(cx);
         cx.notify();
     }
 
@@ -239,7 +241,8 @@ impl MainChartStack {
 
     /// Армировать (если ещё нет) one-shot таймер авто-закрытия по неактивности. Тикает ~1 Гц,
     /// пока фича включена (config `main_idle_close_secs` > 0) и есть графики; сам пере-армится
-    /// в колбэке. Зовётся из render — поэтому стартует и при включении фичи на лету.
+    /// в колбэке. Запускается из событий открытия/фокуса графика и из timer callback,
+    /// не из render.
     fn arm_idle_timer(&mut self, cx: &mut Context<Self>) {
         if self.idle_timer_armed
             || self.charts.is_empty()
@@ -727,8 +730,6 @@ impl MainChartStack {
 
 impl Render for MainChartStack {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Запустить (если надо) таймер авто-закрытия по неактивности — идемпотентно, дёшево.
-        self.arm_idle_timer(cx);
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
             return div()

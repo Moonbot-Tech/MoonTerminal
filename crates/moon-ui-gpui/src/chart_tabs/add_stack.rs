@@ -132,7 +132,8 @@ impl AddChartStack {
     }
 
     /// Армировать (если ещё нет) ~1Гц таймер debounce-компакции COMPRESS. Тикает, пока есть
-    /// графики; сам пере-армится в колбэке. Зовётся из render и `add_coin` (идемпотентно).
+    /// графики; сам пере-армится в колбэке. Запускается событиями изменения состава/режима,
+    /// не из render.
     /// Образец — `MainChartStack::arm_idle_timer`.
     fn arm_compact_timer(&mut self, cx: &mut Context<Self>) {
         if self.compact_timer_armed || self.charts.is_empty() {
@@ -573,6 +574,8 @@ impl AddChartStack {
         let (_, compress, _) = resolve_layout(mode, height_fit, height_scroll);
         if !compress {
             self.charts.retain(|e| !e.vacated);
+        } else {
+            self.arm_compact_timer(cx);
         }
         cx.notify();
     }
@@ -602,9 +605,18 @@ impl AddChartStack {
         }
     }
 
-    fn sync_stack_visible_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+    fn sync_stack_visible_ordered(
+        &mut self,
+        range: Range<usize>,
+        render_order: &[usize],
+        cx: &mut Context<Self>,
+    ) {
         for (ix, entry) in self.charts.iter().enumerate() {
-            let visible = !entry.vacated && range.contains(&ix);
+            let visible = !entry.vacated
+                && render_order
+                    .iter()
+                    .enumerate()
+                    .any(|(display_ix, real_ix)| *real_ix == ix && range.contains(&display_ix));
             entry
                 .panel
                 .update(cx, |panel, _| panel.set_scene_visible(visible));
@@ -624,8 +636,6 @@ impl AddChartStack {
 
 impl Render for AddChartStack {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Запустить (если надо) debounce-таймер COMPRESS-компакции — идемпотентно, дёшево.
-        self.arm_compact_timer(cx);
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
             // Непрозрачный фон: в выносном окне Root=NoFill и own-pass нет → без фона
@@ -648,10 +658,11 @@ impl Render for AddChartStack {
             self.layout_height_fit,
             self.layout_height_scroll,
         );
-        // Запиненные наверх кластером — ТОЛЬКО НЕ в COMPRESS (там слоты позиционно стабильны,
-        // сортировка их бы двигала). В FIT-stretch/Scroll пин поднимает график к запиненным.
+        // Запиненные наверх кластером — ТОЛЬКО НЕ в COMPRESS (там слоты позиционно стабильны).
+        // Это read-only render order: сам `self.charts` не мутируем из render.
+        let mut render_order: Vec<usize> = (0..self.charts.len()).collect();
         if !compress {
-            self.charts.sort_by_key(|e| !e.panel.read(cx).is_pinned());
+            render_order.sort_by_key(|&ix| !self.charts[ix].panel.read(cx).is_pinned());
         }
         let count = self.charts.len();
         let border = rgb(palette.border);
@@ -663,8 +674,12 @@ impl Render for AddChartStack {
             .is_horizontal();
         let entity = cx.entity();
         let p = palette;
-        let on_visible_range = cx.processor(|this, range: Range<usize>, _window, cx| {
-            this.sync_stack_visible_range(range, cx);
+        let visible_order = render_order.clone();
+        let panel_order = render_order.clone();
+        let tile_order = render_order.clone();
+        let role_order = render_order;
+        let on_visible_range = cx.processor(move |this, range: Range<usize>, _window, cx| {
+            this.sync_stack_visible_ordered(range, &visible_order, cx);
         });
         render_chart_stack(
             &base_id,
@@ -678,14 +693,18 @@ impl Render for AddChartStack {
             &self.scroll,
             border,
             // Пустой (держащийся) COMPRESS-слот → None: render покажет прозрачную плашку.
-            |s, ix| {
+            move |s, ix| {
+                let Some(&real_ix) = panel_order.get(ix) else {
+                    return None;
+                };
                 s.charts
-                    .get(ix)
+                    .get(real_ix)
                     .filter(|e| !e.vacated)
                     .map(|e| e.panel.clone())
             },
             move |s, ix, panel, size, flex, min_w, horizontal, border, _ent| {
-                let (id, label, fresh) = match s.charts.get(ix) {
+                let real_ix = tile_order.get(ix).copied().unwrap_or(ix);
+                let (id, label, fresh) = match s.charts.get(real_ix) {
                     Some(e) => (
                         format!("add-chart-stack-tile-{}-{}-{}", s.num, e.core, e.market),
                         e.market.clone(),
@@ -754,7 +773,15 @@ impl Render for AddChartStack {
                 });
                 tile.children(highlight).into_any_element()
             },
-            |s, ix| compare_role(&s.charts, &s.compare_anchor, s.compare_orderbook_only, ix),
+            move |s, ix| {
+                let real_ix = role_order.get(ix).copied().unwrap_or(ix);
+                compare_role(
+                    &s.charts,
+                    &s.compare_anchor,
+                    s.compare_orderbook_only,
+                    real_ix,
+                )
+            },
             Some(Box::new(on_visible_range)),
         )
     }

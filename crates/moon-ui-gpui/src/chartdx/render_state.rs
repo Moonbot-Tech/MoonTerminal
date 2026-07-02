@@ -5,7 +5,6 @@
 use super::*;
 
 const READOUT_FALLBACK_FONT_W: f32 = 8.5;
-const READOUT_LINE_H: f32 = 15.5;
 const READOUT_PAD_X: f32 = 5.0;
 const READOUT_PAD_Y: f32 = 2.5;
 const READOUT_INSET: f32 = 2.0;
@@ -35,17 +34,18 @@ fn readout_rect_dst(
     anchor_x: f32,
     anchor_y: f32,
     text_w: f32,
+    line_h: f32,
     ax: f32,
     ay: f32,
     scale: f32,
 ) -> [f32; 4] {
     let x = anchor_x - text_w * ax - READOUT_PAD_X;
-    let y = anchor_y - READOUT_LINE_H * ay - READOUT_PAD_Y;
+    let y = anchor_y - line_h * ay - READOUT_PAD_Y;
     [
         x * scale,
         y * scale,
         (text_w + READOUT_PAD_X * 2.0) * scale,
-        (READOUT_LINE_H + READOUT_PAD_Y * 2.0) * scale,
+        (line_h + READOUT_PAD_Y * 2.0) * scale,
     ]
 }
 
@@ -294,7 +294,7 @@ impl RenderState {
             // подписи видны и без курсора.
             let placed = std::mem::take(&mut pr.label_placed);
             for pl in &placed {
-                let dst = readout_rect_dst(pl.x, pl.y, pl.w, pl.ax, pl.ay, sf);
+                let dst = readout_rect_dst(pl.x, pl.y, pl.w, pl.h, pl.ax, pl.ay, sf);
                 // solid → плотная курсорная плашка; иначе → полу-плотная ордерная (просвечивает,
                 // младшая «заходит под» старшую при наложении).
                 let pbg = if pl.solid { bg } else { self.readout_order_bg };
@@ -319,13 +319,14 @@ impl RenderState {
                 let unix = left_unix + (cx_log - plot_left) as f64 / time_to_px as f64;
                 let label = moon_chart::axes::fmt_clock(unix, tz_offset_sec, true);
                 let text_w = readout_text_width(&label, pr.readout_time_width);
+                let line_h = pr.readout_time_line_h.max(1.0);
                 let half_w = text_w * 0.5;
                 let x = clamp_anchor(
                     cx_log,
                     plot_left + half_w + READOUT_PAD_X + READOUT_INSET,
                     plot_right - half_w - READOUT_PAD_X - READOUT_INSET,
                 );
-                let dst = readout_rect_dst(x, pane_bottom - 1.0, text_w, 0.5, 1.0, sf);
+                let dst = readout_rect_dst(x, pane_bottom - 1.0, text_w, line_h, 0.5, 1.0, sf);
                 pr.readout_rects.push(ReadoutRect { dst, bg, border, m });
             }
 
@@ -337,12 +338,13 @@ impl RenderState {
                 let price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
                 let label = format!("{price:.dec$}");
                 let text_w = readout_text_width(&label, pr.readout_price_width);
+                let line_h = pr.readout_price_line_h.max(1.0);
                 let x = if axis_on_right {
                     pane_right - 3.0
                 } else {
                     (plot_left - 3.0).max(pane_left + READOUT_INSET + READOUT_PAD_X + text_w)
                 };
-                let dst = readout_rect_dst(x, cy_log, text_w, 1.0, 0.5, sf);
+                let dst = readout_rect_dst(x, cy_log, text_w, line_h, 1.0, 0.5, sf);
                 pr.readout_rects.push(ReadoutRect { dst, bg, border, m });
             }
         }
