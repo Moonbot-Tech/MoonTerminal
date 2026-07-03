@@ -776,6 +776,15 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::SetHedgeMode(on), "set hedge mode")
     }
 
+    /// Установить плечо рынка ядра (Engine API). Реальное действие на бирже.
+    pub fn set_leverage(&self, core: CoreId, market: String, leverage: i32) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::SetLeverage { market, leverage },
+            "set leverage",
+        )
+    }
+
     /// Старт/рестарт рантайма ядра (попап настроек ядра).
     pub fn restart_now(&self, core: CoreId) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::RestartNow, "restart now")

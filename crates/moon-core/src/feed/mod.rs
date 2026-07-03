@@ -197,6 +197,10 @@ pub enum CoreCmd {
     /// Переключить hedge-mode аккаунта (dual-side позиции). РЕАЛЬНОЕ действие на бирже
     /// через Engine API (`account().set_hedge_mode`).
     SetHedgeMode(bool),
+    /// Установить плечо КОНКРЕТНОГО рынка (кнопка «Применить» у Lev в тулбаре). РЕАЛЬНОЕ
+    /// действие на бирже через Engine API (`account().set_leverage`); новое значение
+    /// вернётся balance-пушем рынка (`leverage_x`) и обновит карту плеч в ассетах.
+    SetLeverage { market: String, leverage: i32 },
     /// «Паник-селл» по рынку (кнопка на чарте). Транслируется в moonproto
     /// `orders().switch_panic_sell_by_market(market, on)` — market-level panic sell
     /// button semantics (тоггл panic-sell у ордеров рынка). РЕАЛЬНОЕ действие.

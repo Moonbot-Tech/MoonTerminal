@@ -367,6 +367,19 @@ pub(super) fn drain_commands(
                     }
                 }
             }
+            Ok(CoreCmd::SetLeverage { market, leverage }) => {
+                // РЕАЛЬНОЕ действие на бирже (Engine API). Тикет игнорируем — новое плечо
+                // придёт balance-пушем рынка (leverage_x) и обновит карту плеч в ассетах.
+                match client.account().set_leverage(&market, leverage) {
+                    Ok(_ticket) => {
+                        log::info!("core {} set leverage {market} -> {leverage}x", server.id)
+                    }
+                    Err(error) => log::warn!(
+                        "core {} set leverage {market} -> {leverage}x failed: {error}",
+                        server.id
+                    ),
+                }
+            }
             Ok(CoreCmd::RestartNow) => {
                 // Старт/рестарт рантайма; итог придёт событием RuntimeStateUpdated → стор.
                 if let Err(error) = client.settings().restart_now() {

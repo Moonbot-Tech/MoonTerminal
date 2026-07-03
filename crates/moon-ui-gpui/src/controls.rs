@@ -13,7 +13,7 @@ use moon_ui::{
     MoonToggleLabelSide, MoonToggleSize, MoonTooltipView, h_flex, v_flex,
 };
 
-use moon_core::feed::{ClientSettingsEdit, LevManageEdit};
+use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
 
 use crate::shell::Shell;
@@ -344,7 +344,9 @@ pub fn metric_popup_content(
         );
         // Плечо — биржевое действие: применяем ТОЛЬКО по этой кнопке (слайдер/поле лишь
         // выбирают значение, на драг ничего не шлётся). Значение берём из поля (его живо
-        // обновляет драг слайдера, и в него можно ввести точное число).
+        // обновляет драг слайдера, и в него можно ввести точное число). Шлём per-market
+        // Engine `set_leverage` для монеты main-чарта (той, чьё плечо и показываем) — НЕ
+        // глобальный LevManage-снапшот: его ядро не присылает, и правка молча терялась.
         let input = input.clone();
         content = content.child(
             MoonButton::new("toolbar-lev-apply")
@@ -360,7 +362,10 @@ pub fn metric_popup_content(
                     let Some(core) = b.active_trade_core(&group) else {
                         return;
                     };
-                    if let Err(error) = b.session.edit_lev_manage(core, LevManageEdit::FixLev(v)) {
+                    let Some((_, market)) = b.main_chart_target(&group) else {
+                        return;
+                    };
+                    if let Err(error) = b.session.set_leverage(core, market, v) {
                         log::warn!("apply leverage failed: {error:#}");
                     }
                 })
