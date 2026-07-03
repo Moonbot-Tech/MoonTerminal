@@ -125,7 +125,14 @@ pub(super) fn build_assets(
             (coin, m.base_currency.clone(), listed)
         });
         let rate = quote_to_usdt(markets, &quote);
-        let value_usdt = bp.asset_balance.abs() * price.p_last * rate;
+        // Стоимость — от ПОЛНОГО остатка (free + замороженное в открытых ордерах): спот-монета,
+        // целиком висящая в sell-ордере, имеет free=0 и иначе проваливается под фильтр пыли UI.
+        let qty_for_value = if bp.asset_balance_full.abs() > bp.asset_balance.abs() {
+            bp.asset_balance_full
+        } else {
+            bp.asset_balance
+        };
+        let value_usdt = qty_for_value.abs() * price.p_last * rate;
         rows.push(AssetRow {
             market,
             coin,

@@ -96,6 +96,14 @@ impl AssetsView {
                 free: a.amount,
             };
             let preview_label: SharedString = format!("{} {}", a.currency, num(a.amount)).into();
+            // Формат строки — 1:1 с MoonBot Transfer: `МОНЕТА свободно / всего (стоимость$)`,
+            // всё слева в строку; стоимость считается по `total`, цена неизвестна → `(?$)`.
+            let qty_txt = format!("{} / {}", num(a.amount), num(a.total));
+            let value_txt = if a.value_usdt > 0.0 {
+                format!("({}$)", num(a.value_usdt))
+            } else {
+                "(?$)".to_string()
+            };
             list = list.child(
                 div()
                     .id(SharedString::from(format!(
@@ -120,21 +128,14 @@ impl AssetsView {
                         div()
                             .flex_none()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(p.blue))
                             .child(a.currency.clone()),
                     )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(rgb(p.text_muted))
-                            .child(num(a.amount)),
-                    )
+                    .child(div().flex_none().text_color(rgb(p.text_muted)).child(qty_txt))
                     .child(
                         div()
                             .flex_none()
                             .text_color(rgb(p.text_soft))
-                            .child(money(a.value_usdt)),
+                            .child(value_txt),
                     )
                     .on_drag(drag, move |_d, _pos, _w, cx| {
                         cx.new(|_| AssetDragPreview {
@@ -160,6 +161,8 @@ impl AssetsView {
                     .text_size(design::t_body(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(p.text_soft))
+                    // Заголовок по центру, как у групп Spot/Futures/Quarterly в MoonBot.
+                    .text_center()
                     .child(format!("{} ({})", kind.label(), snapshot.total_count)),
             )
             .child(

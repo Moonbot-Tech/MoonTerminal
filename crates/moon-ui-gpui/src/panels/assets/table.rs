@@ -382,7 +382,7 @@ fn assets_columns() -> Vec<MoonDataTableColumn> {
     vec![
         MoonDataTableColumn::new("core", t!("assets.col.core").to_string(), 90.0),
         MoonDataTableColumn::new("coin", t!("assets.col.coin").to_string(), 70.0),
-        numeric("qty", t!("assets.col.qty").to_string(), 90.0),
+        numeric("qty", t!("assets.col.qty").to_string(), 120.0),
         numeric("price", t!("assets.col.price").to_string(), 84.0),
         numeric("value", t!("assets.col.value").to_string(), 92.0),
         numeric("pos", t!("assets.col.pos").to_string(), 80.0),
@@ -441,11 +441,18 @@ fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette) -> Moon
     } else {
         String::new()
     };
+    // Кол-во: свободный остаток; если часть заморожена в открытых ордерах (спот) —
+    // `свободно / всего`, чтобы монета в sell-ордере не выглядела нулевой.
+    let qty = if r.qty_full.abs() > r.qty.abs() {
+        format!("{} / {}", num(r.qty), num(r.qty_full))
+    } else {
+        num(r.qty)
+    };
     MoonDataRow::new([
         MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
         // Тикер кликабелен → открыть чарт монеты на Main НА ЯДРЕ строки (как в Ордерах/Отчёте).
         MoonDataCell::element(coin_cell(e, view, p)),
-        MoonDataCell::text(num(r.qty)),
+        MoonDataCell::text(qty),
         MoonDataCell::text(num(r.price)),
         MoonDataCell::text(money(e.value)),
         MoonDataCell::text(pos),
