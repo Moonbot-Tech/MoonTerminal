@@ -13,13 +13,14 @@ use std::collections::HashMap;
 use moon_ui::{
     DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonInput,
     MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, Panel, PanelEvent, PanelState,
-    h_flex, rgba_from, v_flex,
+    h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use moon_core::figures::FigureKind;
 use moon_core::session::CoreId;
 
+use crate::design::moon;
 use crate::panels::{RadioMark, radio_items};
 use crate::{Backend, design};
 
@@ -29,10 +30,6 @@ const ALERTS_KIND: u8 = 22;
 
 /// Единая высота контролов нижней панели (px) — чтобы степперы/выпадашки/поле стояли ровно.
 const CTRL_H: f32 = 26.0;
-
-fn moon(hex: u32) -> Hsla {
-    rgba_from(hex, 1.0)
-}
 
 #[derive(Clone)]
 struct Row {

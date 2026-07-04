@@ -11,8 +11,8 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search, layout_popup};
-use crate::chart_persist::StackLayoutMode;
+use super::common::{self, LayoutPopupHost};
+use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search};
 use crate::design;
 
 impl Render for ChartTabs {
@@ -206,8 +206,6 @@ impl Render for ChartTabs {
         // кластер выносим на уровень v_flex (ниже): overflow_hidden полоски не срежет выпадашку.
         let coin_popup = self.coin_popup_open.then(|| {
             let results = self.coin_results(cx);
-            let view = cx.entity();
-            let input = self.coin_input.clone();
             let view_toggle = cx.entity();
             let view_open = cx.entity();
             coin_search::render_popup(
@@ -217,13 +215,7 @@ impl Render for ChartTabs {
                 true,
                 p_strip,
                 cx,
-                move |core, market, window, app| {
-                    view.update(app, |this, cx| this.open_coin_on_active(core, market, cx));
-                    input.update(app, |inp, c| {
-                        inp.set_value(SharedString::default(), window, c)
-                    });
-                    view.update(app, |this, cx| this.clear_coin_search(cx));
-                },
+                common::coin_pick_handler(cx),
                 move |core, market, app| {
                     view_toggle.update(app, |this, cx| this.toggle_coin_selected(core, market, cx));
                 },
@@ -249,15 +241,11 @@ impl Render for ChartTabs {
             .children(coin_popup);
         // Слой-перехватчик клика вне списка монеты (закрыть). Ниже кластера в z-порядке.
         let coin_dismiss = self.coin_popup_open.then(|| {
-            let entity = cx.entity();
             div()
                 .id("tabs-coin-dismiss")
                 .absolute()
                 .inset_0()
-                .on_mouse_down(MouseButton::Left, move |_, _w, app| {
-                    entity.update(app, |this, cx| this.clear_coin_search(cx));
-                    app.stop_propagation();
-                })
+                .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx))
         });
 
         let fig_tools = self.render_fig_tools(cx);
@@ -274,183 +262,21 @@ impl Render for ChartTabs {
                 .children(gather_btn)
                 .child(settings_btn),
         );
-        let layout_popup = self.layout_popup_open.then(|| {
-            let p = MoonPalette::active(cx);
-            let mode = self.active_layout_mode(cx).unwrap_or(StackLayoutMode::Fit);
-            let orientation = self
-                .active_layout_orientation(cx)
-                .unwrap_or(crate::chart_persist::StackOrientation::Vertical);
-            let orderbook_enabled = self.active_orderbook_enabled(cx);
-            let liquidations_enabled = self.active_liquidations_enabled(cx);
-            let show_zone = self.active_show_zone(cx);
-            let auto_pin = self.active_auto_pin(cx);
-            let (cancel_pos, panic_pos) = self.active_action_btn_pos(cx);
-            let price_axis_pos = self.active_price_axis_pos(cx);
-            let time_axis_visible = self.active_time_axis_visible(cx);
-            let line_labels = self.active_line_labels(cx);
-            let cursor_labels = self.active_cursor_labels(cx);
-            let include_main = matches!(self.active, Tab::Main);
-            let is_custom = matches!(self.active, Tab::Custom(..));
-            let apply_all_label = if include_main {
-                t!("chart.layout.apply_all_windows").to_string()
-            } else {
-                t!("chart.layout.apply_all_charts").to_string()
-            };
-            let pick_entity = cx.entity();
-            let all_entity = cx.entity();
-            let ob_entity = cx.entity();
-            let liq_entity = cx.entity();
-            let sz_entity = cx.entity();
-            let ap_entity = cx.entity();
-            let or_entity = cx.entity();
-            let cbp_entity = cx.entity();
-            let psp_entity = cx.entity();
-            let pap_entity = cx.entity();
-            let tav_entity = cx.entity();
-            let ll_entity = cx.entity();
-            let cl_entity = cx.entity();
-            let hover_entity = cx.entity();
-            let popup_w = layout_popup::content_width(cx, is_custom);
-            div()
-                .id("chart-layout-popup-scene")
-                .absolute()
-                .right(px(6.0))
-                .top(px(strip_h + design::ui_value(cx, 4.0)))
-                .w(popup_w)
-                .on_mouse_down(MouseButton::Left, |_, _window, app| {
-                    app.stop_propagation();
-                })
-                .on_hover(move |hovered, _window, app| {
-                    hover_entity.update(app, |this, cx| {
-                        if *hovered {
-                            this.layout_popup_hovered = true;
-                        } else if this.layout_popup_hovered {
-                            this.close_layout_popup(true, cx);
-                        }
-                    });
-                })
-                .child(layout_popup::render_layout_popup(
-                    "chart-layout",
-                    mode,
-                    orientation,
-                    is_custom.then_some(&self.custom_name_input),
-                    &self.layout_fit_input,
-                    &self.layout_scroll_input,
-                    orderbook_enabled,
-                    liquidations_enabled,
-                    show_zone,
-                    auto_pin,
-                    cancel_pos,
-                    panic_pos,
-                    price_axis_pos,
-                    time_axis_visible,
-                    line_labels,
-                    cursor_labels,
-                    p,
-                    cx,
-                    move |mode, app| {
-                        pick_entity.update(app, |this, cx| {
-                            let hf = this.read_layout_height(StackLayoutMode::Fit, cx);
-                            let hs = this.read_layout_height(StackLayoutMode::Scroll, cx);
-                            this.apply_layout(Some(mode), hf, hs, cx);
-                        });
-                    },
-                    apply_all_label,
-                    move |app| {
-                        all_entity.update(app, |this, cx| {
-                            let hf = this.read_layout_height(StackLayoutMode::Fit, cx);
-                            let hs = this.read_layout_height(StackLayoutMode::Scroll, cx);
-                            let mode =
-                                Some(this.active_layout_mode(cx).unwrap_or(StackLayoutMode::Fit));
-                            // Копируем ВСЕ настройки активной вкладки: + масштаб + стакан + ориентация.
-                            let scale = this.active_scale_value(cx);
-                            let ob = Some(this.active_orderbook_enabled(cx));
-                            let liq = Some(this.active_liquidations_enabled(cx));
-                            let sz = Some(this.active_show_zone(cx));
-                            let ap = Some(this.active_auto_pin(cx));
-                            let or = this.active_layout_orientation(cx);
-                            let (cp, pp) = this.active_action_btn_pos(cx);
-                            let pax = this.active_price_axis_pos(cx);
-                            let tax = this.active_time_axis_visible(cx);
-                            let ll = this.active_line_labels(cx);
-                            let cl = this.active_cursor_labels(cx);
-                            this.apply_layout_to_all(
-                                include_main,
-                                mode,
-                                hf,
-                                hs,
-                                scale,
-                                ob,
-                                liq,
-                                sz,
-                                ap,
-                                or,
-                                Some(cp),
-                                Some(pp),
-                                Some(pax),
-                                Some(tax),
-                                Some(ll),
-                                Some(cl),
-                                cx,
-                            );
-                        });
-                    },
-                    move |checked, app| {
-                        ob_entity.update(app, |this, cx| this.apply_orderbook(checked, cx));
-                    },
-                    move |checked, app| {
-                        liq_entity.update(app, |this, cx| this.apply_liquidations(checked, cx));
-                    },
-                    move |checked, app| {
-                        sz_entity.update(app, |this, cx| this.apply_show_zone(checked, cx));
-                    },
-                    move |checked, app| {
-                        ap_entity.update(app, |this, cx| this.apply_auto_pin(checked, cx));
-                    },
-                    move |app| {
-                        or_entity.update(app, |this, cx| {
-                            // Тоггл: текущая → противоположная.
-                            use crate::chart_persist::StackOrientation as O;
-                            let next =
-                                match this.active_layout_orientation(cx).unwrap_or(O::Vertical) {
-                                    O::Vertical => O::Horizontal,
-                                    O::Horizontal => O::Vertical,
-                                };
-                            this.apply_orientation(next, cx);
-                        });
-                    },
-                    move |pos, app| {
-                        cbp_entity.update(app, |this, cx| this.apply_cancel_pos(pos, cx));
-                    },
-                    move |pos, app| {
-                        psp_entity.update(app, |this, cx| this.apply_panic_pos(pos, cx));
-                    },
-                    move |pos, app| {
-                        pap_entity.update(app, |this, cx| this.apply_price_axis_pos(pos, cx));
-                    },
-                    move |checked, app| {
-                        tav_entity
-                            .update(app, |this, cx| this.apply_time_axis_visible(checked, cx));
-                    },
-                    move |checked, app| {
-                        ll_entity.update(app, |this, cx| this.apply_line_labels(checked, cx));
-                    },
-                    move |checked, app| {
-                        cl_entity.update(app, |this, cx| this.apply_cursor_labels(checked, cx));
-                    },
-                ))
-        });
-        let layout_dismiss = self.layout_popup_open.then(|| {
-            let entity = cx.entity();
-            div()
-                .id("chart-layout-popup-dismiss")
-                .absolute()
-                .inset_0()
-                .on_mouse_down(MouseButton::Left, move |_, _window, app| {
-                    entity.update(app, |this, cx| this.close_layout_popup(true, cx));
-                    app.stop_propagation();
-                })
-        });
+        // Попап раскладки ⚙ активной вкладки + слой-дисмиссер: общий оверлей с выносными
+        // окнами (все колбэки — через LayoutPopupHost, см. chart_tabs/common.rs).
+        let apply_all_label = if matches!(self.active, Tab::Main) {
+            t!("chart.layout.apply_all_windows").to_string()
+        } else {
+            t!("chart.layout.apply_all_charts").to_string()
+        };
+        let layout_popup = common::layout_popup_overlay(
+            self,
+            "chart-layout",
+            px(strip_h + design::ui_value(cx, 4.0)),
+            apply_all_label,
+            cx,
+        );
+        let layout_dismiss = common::layout_popup_dismiss(self, "chart-layout", cx);
 
         v_flex()
             .size_full()

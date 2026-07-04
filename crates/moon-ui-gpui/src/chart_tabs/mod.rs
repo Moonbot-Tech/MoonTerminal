@@ -10,6 +10,7 @@
 mod add_stack;
 // pub(crate): `search`/`render_popup` реюзает тикер курса в шапке (shell/ticker.rs).
 pub(crate) mod coin_search;
+mod common;
 mod custom;
 mod detached_host;
 mod fig_tools;
@@ -25,6 +26,7 @@ mod windows;
 use std::collections::HashMap;
 
 pub(crate) use add_stack::AddChartStack;
+use common::LayoutPopupHost;
 pub(crate) use main_stack::MainChartStack;
 use sig::{chart_tabs_sig, core_belongs_to_group};
 

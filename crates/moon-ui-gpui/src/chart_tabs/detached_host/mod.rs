@@ -1,16 +1,20 @@
 //! Хост-вид ОС-окна откреплённой чарт-вкладки (`DetachedChartHost`): шапка (поиск монеты +
 //! масштаб + попап раскладки ⚙ + «закрыть все графики») над панелью чарт-стека. Сам пишет
 //! геометрию окна и per-tab настройки в `charts.json` и просит репин по закрытию. Жизненный
-//! цикл самого окна (создание/восстановление/репин) живёт в `windows.rs` (`impl ChartTabs`).
+//! цикл самого окна (создание/восстановление/репин) живёт в `windows.rs` (`impl ChartTabs`);
+//! общая логика попапа ⚙/поиска монеты — трейты [`super::common`] (реализации внизу).
 
 use gpui::*;
 use moon_ui::{MoonInputEvent, MoonInputState};
 use rust_i18n::t;
 use std::time::Duration;
 
-use super::{AddChartStack, chart_pane_label, coin_search, layout_popup};
+use super::common::{
+    CoinPopupHost, LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting,
+};
+use super::{AddChartStack, chart_pane_label, coin_search};
 use crate::Backend;
-use crate::chart_persist::{self, StackLayoutMode};
+use crate::chart_persist::{self, StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
@@ -292,17 +296,6 @@ impl DetachedChartHost {
         )
     }
 
-    /// Открыть выбранную монету в стеке этого окна.
-    fn open_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
-        self.panel.update(cx, |p, c| {
-            p.add_coin(core, &market, coin_search::MANUAL_COIN_TTL_MS, c)
-        });
-        // Если это окно — откреплённая КАСТОМНАЯ вкладка, держим её список тикеров в charts.json
-        // синхронным (добавили монету в окне → попадёт в персист и переживёт рестарт).
-        self.persist_custom_coins_if_any(cx);
-        cx.notify();
-    }
-
     /// Если спек этого окна — кастомная вкладка (`custom_coins.is_some()`), переписать её тикеры
     /// из текущего состава панели — ТОЛЬКО при изменении (observe-колбэк зовётся часто). Для
     /// обычных AddToChart-окон — no-op.
@@ -340,12 +333,6 @@ impl DetachedChartHost {
         });
     }
 
-    fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
-        self.coin_query.clear();
-        self.coin_popup_open = false;
-        cx.notify();
-    }
-
     /// Текущая per-tab раскладка панели этого окна: `(mode, height_fit, height_scroll)`.
     fn panel_layout(&self, cx: &App) -> (Option<StackLayoutMode>, Option<u16>, Option<u16>) {
         let p = self.panel.read(cx);
@@ -354,289 +341,6 @@ impl DetachedChartHost {
             p.layout_height_fit(),
             p.layout_height_scroll(),
         )
-    }
-
-    /// Открыть/закрыть in-scene popup раскладки этой вкладки.
-    fn toggle_layout_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.layout_popup_open {
-            self.close_layout_popup(true, cx);
-        } else {
-            self.seed_layout_popup_inputs(window, cx);
-            self.layout_popup_open = true;
-            self.layout_popup_hovered = false;
-            cx.notify();
-        }
-    }
-
-    fn seed_layout_popup_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
-        // Эффективные значения вместо пустоты при None (Fit→0, Scroll→дефолт) — иначе после
-        // рестарта поля высоты пустые, без цифр.
-        let (_, hf, hs) = self.panel_layout(cx);
-        let fit = hf.unwrap_or(0).to_string();
-        let scroll = hs
-            .unwrap_or(super::stack::DEFAULT_SCROLL_HEIGHT)
-            .to_string();
-        self.layout_fit_input
-            .update(cx, |input, c| input.set_value(fit, window, c));
-        self.layout_scroll_input
-            .update(cx, |input, c| input.set_value(scroll, window, c));
-        // Имя кастомной вкладки — для поля переименования.
-        if self.is_custom(cx) {
-            let name = chart_pane_label(&self.backend, &self.group, self.num, &self.bucket, cx);
-            self.custom_name_input
-                .update(cx, |input, c| input.set_value(name, window, c));
-        }
-    }
-
-    fn read_layout_height(&self, mode: StackLayoutMode, cx: &App) -> Option<u16> {
-        let (_, fit_fallback, scroll_fallback) = self.panel_layout(cx);
-        let (input, fallback) = match mode {
-            StackLayoutMode::Fit => (&self.layout_fit_input, fit_fallback),
-            StackLayoutMode::Scroll => (&self.layout_scroll_input, scroll_fallback),
-        };
-        let value = input.read(cx).value().to_string();
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        trimmed
-            .parse::<u16>()
-            .ok()
-            .map(|raw| layout_popup::clamp_height(mode, raw))
-            .or(fallback)
-    }
-
-    fn commit_layout_popup(&mut self, cx: &mut Context<Self>) {
-        let (mode, _, _) = self.panel_layout(cx);
-        let hf = self.read_layout_height(StackLayoutMode::Fit, cx);
-        let hs = self.read_layout_height(StackLayoutMode::Scroll, cx);
-        self.apply_layout(Some(mode.unwrap_or(StackLayoutMode::Fit)), hf, hs, cx);
-    }
-
-    fn close_layout_popup(&mut self, commit: bool, cx: &mut Context<Self>) {
-        if !self.layout_popup_open {
-            return;
-        }
-        if commit {
-            self.commit_layout_popup(cx);
-        }
-        self.layout_popup_open = false;
-        self.layout_popup_hovered = false;
-        cx.notify();
-    }
-
-    fn apply_layout_to_all_charts(
-        &mut self,
-        mode: Option<StackLayoutMode>,
-        height_fit: Option<u16>,
-        height_scroll: Option<u16>,
-        cx: &mut Context<Self>,
-    ) {
-        let group = self.group.clone();
-        // Копируем ВСЕ настройки этого окна: + масштаб + галку стакана.
-        let scale = self.panel.read(cx).scale();
-        let orderbook = Some(self.panel.read(cx).orderbook_enabled().unwrap_or(true));
-        let liquidations = Some(self.panel.read(cx).liquidations_enabled().unwrap_or(true));
-        let show_zone = Some(self.panel.read(cx).show_zone().unwrap_or(true));
-        let auto_pin = Some(self.panel.read(cx).auto_pin().unwrap_or(false));
-        let orientation = self.panel.read(cx).layout_orientation();
-        let (cancel_pos, panic_pos) = {
-            let (c, pp) = self.panel.read(cx).action_btn_pos();
-            (Some(c.unwrap_or_default()), Some(pp.unwrap_or_default()))
-        };
-        let price_axis_pos = Some(self.panel.read(cx).price_axis_pos().unwrap_or_default());
-        let time_axis_visible = Some(self.panel.read(cx).time_axis_visible().unwrap_or(true));
-        let line_labels = Some(self.panel.read(cx).line_labels().unwrap_or(true));
-        let cursor_labels = Some(self.panel.read(cx).cursor_labels().unwrap_or(true));
-        self.backend.update(cx, |bk, bcx| {
-            bk.chart_apply_all.push(crate::ChartApplyAll {
-                group,
-                include_main: false,
-                mode,
-                height_fit,
-                height_scroll,
-                scale,
-                orderbook,
-                liquidations,
-                show_zone,
-                auto_pin,
-                orientation,
-                cancel_pos,
-                panic_pos,
-                price_axis_pos,
-                time_axis_visible,
-                line_labels,
-                cursor_labels,
-            });
-            bcx.notify();
-        });
-    }
-
-    /// Найти спеку этой вкладки в `chart_specs` (по group/num/bucket) и применить `f`; если её
-    /// ещё нет — создать заготовку и применить `f` к ней. Везде далее проставляет `dirty`. Один
-    /// общий апсёрт для всех `apply_*` этого окна (зеркало `ChartTabs::upsert_spec`).
-    fn upsert_spec(
-        &self,
-        cx: &mut Context<Self>,
-        num: u32,
-        bucket: &ChartBucket,
-        f: impl FnOnce(&mut chart_persist::ChartTabSpec),
-    ) {
-        let group = self.group.clone();
-        self.backend.update(cx, |bk, _| {
-            chart_persist::upsert(&mut bk.chart_specs, &group, num, bucket, f);
-            bk.chart_specs_dirty = true;
-        });
-    }
-
-    /// Сменить ориентацию (верт/гор) панели этого окна + persist.
-    fn apply_orientation(
-        &mut self,
-        orientation: crate::chart_persist::StackOrientation,
-        cx: &mut Context<Self>,
-    ) {
-        self.panel
-            .update(cx, |p, c| p.set_orientation(Some(orientation), c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.layout_orientation = Some(orientation);
-        });
-        cx.notify();
-    }
-
-    /// Применить раскладку к панели вкладки и сохранить в charts.json.
-    fn apply_layout(
-        &mut self,
-        mode: Option<StackLayoutMode>,
-        height_fit: Option<u16>,
-        height_scroll: Option<u16>,
-        cx: &mut Context<Self>,
-    ) {
-        self.panel
-            .update(cx, |p, c| p.set_layout(mode, height_fit, height_scroll, c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.layout_mode = mode;
-            s.layout_height_fit = height_fit;
-            s.layout_height_scroll = height_scroll;
-        });
-        cx.notify();
-    }
-
-    /// Вкл/выкл стакан этой вкладки + persist + пересбор набора рынков, которым нужен стакан.
-    fn apply_orderbook(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.panel
-            .update(cx, |p, c| p.set_orderbook_enabled(Some(enabled), c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.orderbook_enabled = Some(enabled);
-        });
-        // Пересобрать набор рынков, которым нужен стакан (мог измениться спрос).
-        self.backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
-        cx.notify();
-    }
-
-    /// Вкл/выкл трейды ликвидаций этой вкладки + persist.
-    fn apply_liquidations(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.panel
-            .update(cx, |p, c| p.set_liquidations_enabled(Some(enabled), c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.liquidations_enabled = Some(enabled);
-        });
-        cx.notify();
-    }
-
-    /// Вкл/выкл заливку зоны управления этой вкладки + persist.
-    fn apply_show_zone(&mut self, show: bool, cx: &mut Context<Self>) {
-        self.panel.update(cx, |p, c| p.set_show_zone(Some(show), c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.show_zone = Some(show);
-        });
-        cx.notify();
-    }
-
-    /// Вкл/выкл авто-пин при ордере этой вкладки + persist.
-    fn apply_auto_pin(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.panel.update(cx, |p, c| p.set_auto_pin(Some(on), c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.auto_pin = Some(on);
-        });
-        cx.notify();
-    }
-
-    /// Позиция кнопки Cancel Buy этого окна + persist (Panic Sell не трогаем).
-    fn apply_cancel_pos(&mut self, pos: chart_persist::ChartBtnPos, cx: &mut Context<Self>) {
-        let (_, panic) = self.panel.read(cx).action_btn_pos();
-        self.apply_action_pos(Some(pos), panic, cx);
-    }
-
-    /// Позиция кнопки Panic Sell этого окна + persist (Cancel Buy не трогаем).
-    fn apply_panic_pos(&mut self, pos: chart_persist::ChartBtnPos, cx: &mut Context<Self>) {
-        let (cancel, _) = self.panel.read(cx).action_btn_pos();
-        self.apply_action_pos(cancel, Some(pos), cx);
-    }
-
-    fn apply_action_pos(
-        &mut self,
-        cancel: Option<chart_persist::ChartBtnPos>,
-        panic: Option<chart_persist::ChartBtnPos>,
-        cx: &mut Context<Self>,
-    ) {
-        self.panel
-            .update(cx, |p, c| p.set_action_btn_pos(cancel, panic, c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.cancel_buy_pos = cancel;
-            s.panic_sell_pos = panic;
-        });
-        cx.notify();
-    }
-
-    /// Положение оси цен этого окна + persist.
-    fn apply_price_axis_pos(&mut self, pos: chart_persist::PriceAxisPos, cx: &mut Context<Self>) {
-        self.panel
-            .update(cx, |p, c| p.set_price_axis_pos(Some(pos), c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.price_axis_pos = Some(pos);
-        });
-        cx.notify();
-    }
-
-    /// Видимость оси времени этого окна + persist.
-    fn apply_time_axis_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
-        self.panel
-            .update(cx, |p, c| p.set_time_axis_visible(Some(visible), c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.time_axis_visible = Some(visible);
-        });
-        cx.notify();
-    }
-
-    /// Видимость подписей у линий этого окна + persist.
-    fn apply_line_labels(&mut self, show: bool, cx: &mut Context<Self>) {
-        self.panel
-            .update(cx, |p, c| p.set_line_labels(Some(show), c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.line_labels = Some(show);
-        });
-        cx.notify();
-    }
-
-    /// Видимость подписей у перекрестия этого окна + persist.
-    fn apply_cursor_labels(&mut self, show: bool, cx: &mut Context<Self>) {
-        self.panel
-            .update(cx, |p, c| p.set_cursor_labels(Some(show), c));
-        let bucket = self.bucket.clone();
-        self.upsert_spec(cx, self.num, &bucket, move |s| {
-            s.cursor_labels = Some(show);
-        });
-        cx.notify();
     }
 
     fn persist_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -674,5 +378,155 @@ impl DetachedChartHost {
             "[geom] n={num} bucket={bucket:?} → x={} y={} w={} h={} (spec_found={found})",
             geom.x, geom.y, geom.w, geom.h
         ));
+    }
+}
+
+/// Хозяин попапа ⚙ со стороны выносного окна: цель = ЕДИНСТВЕННАЯ панель окна, ключ персиста —
+/// фиксированные (num, bucket) окна. Общая логика попапа/применений — default-методы трейта.
+impl LayoutPopupHost for DetachedChartHost {
+    fn popup_open(&self) -> bool {
+        self.layout_popup_open
+    }
+    fn set_popup_open(&mut self, open: bool) {
+        self.layout_popup_open = open;
+    }
+    fn popup_hovered(&self) -> bool {
+        self.layout_popup_hovered
+    }
+    fn set_popup_hovered(&mut self, hovered: bool) {
+        self.layout_popup_hovered = hovered;
+    }
+    fn fit_input(&self) -> &Entity<MoonInputState> {
+        &self.layout_fit_input
+    }
+    fn scroll_input(&self) -> &Entity<MoonInputState> {
+        &self.layout_scroll_input
+    }
+    fn rename_input(&self) -> &Entity<MoonInputState> {
+        &self.custom_name_input
+    }
+    fn backend(&self) -> &Entity<Backend> {
+        &self.backend
+    }
+    fn spec_group(&self) -> &str {
+        &self.group
+    }
+    fn spec_key(&self) -> (u32, ChartBucket) {
+        (self.num, self.bucket.clone())
+    }
+    fn current_layout(&self, cx: &App) -> (Option<StackLayoutMode>, Option<u16>, Option<u16>) {
+        self.panel_layout(cx)
+    }
+    fn current_orientation(&self, cx: &App) -> Option<StackOrientation> {
+        self.panel.read(cx).layout_orientation()
+    }
+    fn action_btn_pos_opt(
+        &self,
+        cx: &App,
+    ) -> (
+        Option<chart_persist::ChartBtnPos>,
+        Option<chart_persist::ChartBtnPos>,
+    ) {
+        self.panel.read(cx).action_btn_pos()
+    }
+    fn layout_popup_snapshot(&self, cx: &App) -> LayoutPopupSnapshot {
+        let p = self.panel.read(cx);
+        let (cancel_pos, panic_pos) = p.action_btn_pos();
+        LayoutPopupSnapshot {
+            mode: p.layout_mode().unwrap_or(StackLayoutMode::Fit),
+            orientation: p.layout_orientation().unwrap_or(StackOrientation::Vertical),
+            orderbook: p.orderbook_enabled().unwrap_or(true),
+            liquidations: p.liquidations_enabled().unwrap_or(true),
+            show_zone: p.show_zone().unwrap_or(true),
+            auto_pin: p.auto_pin().unwrap_or(false),
+            cancel_pos: cancel_pos.unwrap_or_default(),
+            panic_pos: panic_pos.unwrap_or_default(),
+            price_axis_pos: p.price_axis_pos().unwrap_or_default(),
+            time_axis: p.time_axis_visible().unwrap_or(true),
+            line_labels: p.line_labels().unwrap_or(true),
+            cursor_labels: p.cursor_labels().unwrap_or(true),
+        }
+    }
+    fn popup_is_custom(&self, cx: &App) -> bool {
+        self.is_custom(cx)
+    }
+    /// Имя кастомной вкладки — для поля переименования (только если окно держит Custom-вкладку).
+    fn seed_rename_input(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_custom(cx) {
+            let name = chart_pane_label(&self.backend, &self.group, self.num, &self.bucket, cx);
+            self.custom_name_input
+                .update(cx, |input, c| input.set_value(name, window, c));
+        }
+    }
+    fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>) {
+        self.panel.update(cx, |s, c| set_stack_setting!(s, c, v));
+    }
+    /// «Ко всем» из окна: у хоста нет доступа к стекам группы → шлём запрос через Backend
+    /// (`ChartApplyAll`, дренится полоской вкладок). Копируем ВСЕ настройки этого окна:
+    /// + масштаб + галку стакана. Main не трогаем (include_main=false).
+    fn apply_all_from_popup(&mut self, cx: &mut Context<Self>) {
+        let (mode, _, _) = self.panel_layout(cx);
+        let mode = Some(mode.unwrap_or(StackLayoutMode::Fit));
+        let height_fit = self.read_layout_height(StackLayoutMode::Fit, cx);
+        let height_scroll = self.read_layout_height(StackLayoutMode::Scroll, cx);
+        let group = self.group.clone();
+        let scale = self.panel.read(cx).scale();
+        let orderbook = Some(self.panel.read(cx).orderbook_enabled().unwrap_or(true));
+        let liquidations = Some(self.panel.read(cx).liquidations_enabled().unwrap_or(true));
+        let show_zone = Some(self.panel.read(cx).show_zone().unwrap_or(true));
+        let auto_pin = Some(self.panel.read(cx).auto_pin().unwrap_or(false));
+        let orientation = self.panel.read(cx).layout_orientation();
+        let (cancel_pos, panic_pos) = {
+            let (c, pp) = self.panel.read(cx).action_btn_pos();
+            (Some(c.unwrap_or_default()), Some(pp.unwrap_or_default()))
+        };
+        let price_axis_pos = Some(self.panel.read(cx).price_axis_pos().unwrap_or_default());
+        let time_axis_visible = Some(self.panel.read(cx).time_axis_visible().unwrap_or(true));
+        let line_labels = Some(self.panel.read(cx).line_labels().unwrap_or(true));
+        let cursor_labels = Some(self.panel.read(cx).cursor_labels().unwrap_or(true));
+        self.backend.update(cx, |bk, bcx| {
+            bk.chart_apply_all.push(crate::ChartApplyAll {
+                group,
+                include_main: false,
+                mode,
+                height_fit,
+                height_scroll,
+                scale,
+                orderbook,
+                liquidations,
+                show_zone,
+                auto_pin,
+                orientation,
+                cancel_pos,
+                panic_pos,
+                price_axis_pos,
+                time_axis_visible,
+                line_labels,
+                cursor_labels,
+            });
+            bcx.notify();
+        });
+    }
+}
+
+/// Поиск монеты в шапке окна: выбранная монета открывается в стеке ЭТОГО окна; для откреплённой
+/// кастомной вкладки состав тикеров тут же пере-персистится.
+impl CoinPopupHost for DetachedChartHost {
+    fn coin_input(&self) -> &Entity<MoonInputState> {
+        &self.coin_input
+    }
+    fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
+        self.coin_query.clear();
+        self.coin_popup_open = false;
+        cx.notify();
+    }
+    fn open_picked_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+        self.panel.update(cx, |p, c| {
+            p.add_coin(core, &market, coin_search::MANUAL_COIN_TTL_MS, c)
+        });
+        // Если это окно — откреплённая КАСТОМНАЯ вкладка, держим её список тикеров в charts.json
+        // синхронным (добавили монету в окне → попадёт в персист и переживёт рестарт).
+        self.persist_custom_coins_if_any(cx);
+        cx.notify();
     }
 }

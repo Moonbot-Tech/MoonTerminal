@@ -84,18 +84,22 @@ impl MarketDataSource {
         inner.provider_orderbook_kind.insert(core, kind);
     }
 
+    /// Общая часть `reset_market`/`drop_market`: сброс курсора истории + bump всех
+    /// ревизий рынка; возвращает store для финального вызова.
+    fn invalidate_market(&self, provider: CoreId, market: &str) -> SharedMarketStore {
+        let mut inner = self.inner.write().expect("market source poisoned");
+        inner.cursors.remove(&(provider, market.to_string()));
+        bump_market_revisions(
+            &mut inner.market_revisions,
+            provider,
+            market,
+            MarketDirtyFlags::ALL,
+        );
+        inner.store.clone()
+    }
+
     pub fn reset_market(&self, provider: CoreId, market: &str) {
-        let store = {
-            let mut inner = self.inner.write().expect("market source poisoned");
-            inner.cursors.remove(&(provider, market.to_string()));
-            bump_market_revisions(
-                &mut inner.market_revisions,
-                provider,
-                market,
-                MarketDirtyFlags::ALL,
-            );
-            inner.store.clone()
-        };
+        let store = self.invalidate_market(provider, market);
         market_diag(format!("reset_market provider={provider} market={market}"));
         store
             .write()
@@ -104,17 +108,7 @@ impl MarketDataSource {
     }
 
     pub fn drop_market(&self, provider: CoreId, market: &str) {
-        let store = {
-            let mut inner = self.inner.write().expect("market source poisoned");
-            inner.cursors.remove(&(provider, market.to_string()));
-            bump_market_revisions(
-                &mut inner.market_revisions,
-                provider,
-                market,
-                MarketDirtyFlags::ALL,
-            );
-            inner.store.clone()
-        };
+        let store = self.invalidate_market(provider, market);
         store
             .write()
             .expect("market store poisoned")

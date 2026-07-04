@@ -5,8 +5,8 @@ use crate::feed::SharedMoonClient;
 use crate::session::CoreId;
 
 use super::{
-    drain_price_line, last_rows_to_points, mark_rows_to_points, moon_time_from_rel_ms,
-    rows_to_ticks, trade_price_range, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead,
+    drain_price_line, moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks,
+    trade_price_range, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead,
     LatestPriceError, MarketDataSource, MarketRevisions, MarketTickerReadout,
 };
 
@@ -339,7 +339,7 @@ impl MarketDataSource {
                 &mut cursor.last_price_rows,
                 &mut out.last_points,
                 &mut read,
-                last_rows_to_points,
+                price_rows_to_points,
             );
         } else {
             cursor.last_prices = None;
@@ -355,7 +355,7 @@ impl MarketDataSource {
                 &mut cursor.mark_price_rows,
                 &mut out.mark_points,
                 &mut read,
-                mark_rows_to_points,
+                price_rows_to_points,
             );
         } else {
             cursor.mark_prices = None;

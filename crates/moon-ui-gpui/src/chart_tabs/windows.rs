@@ -188,6 +188,7 @@ impl ChartTabs {
     }
 
     /// Найти/создать спеку вкладки (group/num/bucket), применить мутатор, пометить dirty.
+    /// Тонкая обёртка над общим [`super::common::upsert_spec`] (один код с выносными окнами).
     pub(super) fn upsert_spec(
         &self,
         cx: &mut Context<Self>,
@@ -195,11 +196,7 @@ impl ChartTabs {
         bucket: &ChartBucket,
         f: impl FnOnce(&mut chart_persist::ChartTabSpec),
     ) {
-        let group = self.group.clone();
-        self.backend.update(cx, |b, _| {
-            chart_persist::upsert(&mut b.chart_specs, &group, num, bucket, f);
-            b.chart_specs_dirty = true;
-        });
+        super::common::upsert_spec(&self.backend, &self.group, num, bucket, cx, f);
     }
 
     /// Дренаж репина откреп-вкладок: хост закрыли (пользователь) → панель detached→add, спека

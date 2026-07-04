@@ -28,9 +28,10 @@ use moon_ui::{
     MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonCheckboxSize, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
     MoonMenuSize, MoonPalette, MoonTextArea, MoonTextAreaEvent, MoonTextAreaState, MoonTone,
-    MoonTreeState, MoonWindowFrame, Root, h_flex, rgba_from, v_flex,
+    MoonTreeState, MoonWindowFrame, Root, h_flex, v_flex,
 };
 
+use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
 use moon_core::feed::{SchemaField, SchemaFieldUi, SchemaSection, StrategyRow};
 use moon_core::session::{CoreId, CoreStore};
@@ -44,14 +45,6 @@ pub type Key = (CoreId, u64);
 type FieldEditKey = (CoreId, u64, String);
 
 const STRATEGIES_HEADER_H: f32 = 32.0;
-
-fn moon(hex: u32) -> Hsla {
-    rgba_from(hex, 1.0)
-}
-
-fn moon_alpha(hex: u32, alpha: f32) -> Hsla {
-    rgba_from(hex, alpha)
-}
 
 /// Состояние окна «Стратегии» (порт egui `StrategiesState` + рендер 4 панелей).
 pub struct StrategiesView {

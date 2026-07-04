@@ -2,7 +2,7 @@
 //! сортировка и рендер строки (`MoonDataRow`/ячейки). Вынесено вербатим из `mod.rs`.
 
 use gpui::*;
-use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonText, MoonTone, rgba_from};
+use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonText, MoonTone};
 
 use moon_core::market::ScreenerRow;
 use moon_core::session::CoreId;
@@ -11,13 +11,7 @@ use crate::panels::num;
 
 use super::view::ScreenerView;
 
-pub(super) fn moon(hex: u32) -> Hsla {
-    rgba_from(hex, 1.0)
-}
-
-pub(super) fn moon_alpha(hex: u32, alpha: f32) -> Hsla {
-    rgba_from(hex, alpha)
-}
+pub(super) use crate::design::{moon, moon_alpha};
 
 /// Схема колонки: (ключ, заголовок, ширина, числовая/вправо).
 pub(super) type ColDef = (&'static str, &'static str, f32, bool);

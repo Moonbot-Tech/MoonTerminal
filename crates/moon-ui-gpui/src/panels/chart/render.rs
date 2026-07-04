@@ -21,6 +21,42 @@ enum ActKind {
     PanicSell,
 }
 
+/// Кнопка Cancel Buy / Panic Sell — общий конструктор per-pane ветки и
+/// fullscreen-оверлея (label/variant/on_click идентичны; вызывающие добавляют
+/// только id и `.full_width()`). Бренд-термины MoonBot — НЕ локализуем.
+fn action_button(
+    kind: ActKind,
+    id: SharedString,
+    armed: bool,
+    backend: Entity<crate::Backend>,
+    core: moon_core::session::CoreId,
+    market: String,
+) -> MoonButton {
+    let (label, variant, selected) = match kind {
+        ActKind::CancelBuy => ("Cancel Buy", MoonButtonVariant::Soft, false),
+        ActKind::PanicSell => ("Panic Sell", MoonButtonVariant::Danger, armed),
+    };
+    MoonButton::new(id)
+        .label(label)
+        .size(MoonButtonSize::Micro)
+        .variant(variant)
+        .selected(selected)
+        .on_click(move |_, _w, app| match kind {
+            ActKind::CancelBuy => {
+                let b = backend.read(app);
+                if let Err(error) = b.session.cancel_market_buys(core, market.clone()) {
+                    log::warn!("cancel market buys failed: {error:#}");
+                }
+            }
+            ActKind::PanicSell => {
+                backend.update(app, |b, cx| {
+                    b.toggle_panic_sell(core, market.clone());
+                    cx.notify();
+                });
+            }
+        })
+}
+
 fn rgb3_from_hex(hex: u32) -> [u8; 3] {
     [
         ((hex >> 16) & 0xFF) as u8,
@@ -345,45 +381,20 @@ impl Render for ChartPanel {
                 let armed = self.backend.read(cx).is_panic_armed(core, &market);
                 let backend0 = self.backend.clone();
                 let mk = |kind: ActKind| -> AnyElement {
-                    let backend = backend0.clone();
-                    let market = market.clone();
-                    let (label, variant, selected, id) = match kind {
-                        ActKind::CancelBuy => (
-                            "Cancel Buy",
-                            MoonButtonVariant::Soft,
-                            false,
-                            "chart-cancelbuy-fs",
-                        ),
-                        ActKind::PanicSell => (
-                            "Panic Sell",
-                            MoonButtonVariant::Danger,
-                            armed,
-                            "chart-panic-fs",
-                        ),
+                    let id = match kind {
+                        ActKind::CancelBuy => "chart-cancelbuy-fs",
+                        ActKind::PanicSell => "chart-panic-fs",
                     };
-                    MoonButton::new(SharedString::from(id))
-                        .label(label)
-                        .size(MoonButtonSize::Micro)
-                        .variant(variant)
-                        .selected(selected)
-                        .on_click(move |_, _w, app| match kind {
-                            ActKind::CancelBuy => {
-                                let b = backend.read(app);
-                                if let Err(error) =
-                                    b.session.cancel_market_buys(core, market.clone())
-                                {
-                                    log::warn!("cancel market buys failed: {error:#}");
-                                }
-                            }
-                            ActKind::PanicSell => {
-                                backend.update(app, |b, cx| {
-                                    b.toggle_panic_sell(core, market.clone());
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .render()
-                        .into_any_element()
+                    action_button(
+                        kind,
+                        SharedString::from(id),
+                        armed,
+                        backend0.clone(),
+                        core,
+                        market.clone(),
+                    )
+                    .render()
+                    .into_any_element()
                 };
                 let mut left: Vec<AnyElement> = Vec::new();
                 let mut center: Vec<AnyElement> = Vec::new();
@@ -613,45 +624,20 @@ impl Render for ChartPanel {
             }))
             .children(action_btns.into_iter().enumerate().map(
                 |(i, (kind, x, y, w, h, core, market, armed))| {
-                    let backend = self.backend.clone();
-                    // Бренд-термины MoonBot — НЕ локализуем (одинаковы во всех локалях).
-                    let (label, variant, selected, id) = match kind {
-                        ActKind::CancelBuy => (
-                            "Cancel Buy",
-                            MoonButtonVariant::Soft,
-                            false,
-                            format!("chart-cancelbuy-{i}"),
-                        ),
-                        ActKind::PanicSell => (
-                            "Panic Sell",
-                            MoonButtonVariant::Danger,
-                            armed,
-                            format!("chart-panic-{i}"),
-                        ),
+                    let id = match kind {
+                        ActKind::CancelBuy => format!("chart-cancelbuy-{i}"),
+                        ActKind::PanicSell => format!("chart-panic-{i}"),
                     };
-                    let btn = MoonButton::new(SharedString::from(id))
-                        .label(label)
-                        .size(MoonButtonSize::Micro)
-                        .variant(variant)
-                        .selected(selected)
-                        .full_width()
-                        .on_click(move |_, _w, app| match kind {
-                            ActKind::CancelBuy => {
-                                let b = backend.read(app);
-                                if let Err(error) =
-                                    b.session.cancel_market_buys(core, market.clone())
-                                {
-                                    log::warn!("cancel market buys failed: {error:#}");
-                                }
-                            }
-                            ActKind::PanicSell => {
-                                backend.update(app, |b, cx| {
-                                    b.toggle_panic_sell(core, market.clone());
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .render();
+                    let btn = action_button(
+                        kind,
+                        SharedString::from(id),
+                        armed,
+                        self.backend.clone(),
+                        core,
+                        market,
+                    )
+                    .full_width()
+                    .render();
                     // Контейнер задаёт ширину для обрезки текста (overflow клипует к bounds по
                     // ОБЕИМ осям). Высоту берём с запасом (h+4), чтобы низ кнопки не срезался —
                     // кнопка прижата к верху и целиком внутри.

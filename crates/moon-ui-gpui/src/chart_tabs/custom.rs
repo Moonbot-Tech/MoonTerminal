@@ -7,10 +7,12 @@ use std::time::Duration;
 use gpui::*;
 use rust_i18n::t;
 
+use super::common::CoinPopupHost;
 use super::{AddChartStack, CUSTOM_NUM_BASE, ChartTabs, Tab, coin_search};
 use crate::chart_persist::{StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
+use moon_ui::MoonInputState;
 
 impl ChartTabs {
     /// bucket-а). Кастомная вкладка собирает монеты с разных ядер → ищем по всей группе.
@@ -501,10 +503,21 @@ impl ChartTabs {
         }
     }
 
+}
+
+/// Поиск монеты в полоске вкладок: выбранная монета открывается на АКТИВНОЙ вкладке
+/// (Main → fullscreen-чарт; Add/Custom → её стек). Обвязка попапа — [`super::common`].
+impl CoinPopupHost for ChartTabs {
+    fn coin_input(&self) -> &Entity<MoonInputState> {
+        &self.coin_input
+    }
     /// Очистить поле монеты и закрыть список (после выбора / по клику вне).
-    pub(super) fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
+    fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();
         self.coin_popup_open = false;
         cx.notify();
+    }
+    fn open_picked_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+        self.open_coin_on_active(core, market, cx);
     }
 }

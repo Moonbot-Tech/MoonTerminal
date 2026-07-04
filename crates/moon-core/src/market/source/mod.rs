@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use moonproto::state::{
-    LastPricePoint, MarkPricePoint, OrderBookKind, SeqRingCursor, SeqRingReader, SeqRingTimedRow,
-    TradeHistoryRow,
+    LastPricePoint, MarkPricePoint, OrderBookKind, SeqRingCursor, SeqRingPriceRow, SeqRingReader,
+    SeqRingTimedRow, TradeHistoryRow,
 };
 use moonproto::MoonTime;
 
@@ -281,21 +281,21 @@ fn rows_to_ticks(rows: &[TradeHistoryRow], out: &mut Vec<Tick>) {
     }));
 }
 
-fn last_rows_to_points(rows: &[LastPricePoint], out: &mut Vec<PricePoint>) {
+/// Общий конвертер строк last/mark price-line → точки чарта: тела были идентичны,
+/// оба типа отдают время через `SeqRingTimedRow`, цену — вырожденным диапазоном
+/// `SeqRingPriceRow` (`(p, p)`, `None` у этих строк не бывает).
+fn price_rows_to_points<R: SeqRingTimedRow + SeqRingPriceRow>(
+    rows: &[R],
+    out: &mut Vec<PricePoint>,
+) {
     out.clear();
     out.reserve(rows.len());
-    out.extend(rows.iter().map(|p| PricePoint {
-        time_ms: p.unix_millis() as f64,
-        price: p.price(),
-    }));
-}
-
-fn mark_rows_to_points(rows: &[MarkPricePoint], out: &mut Vec<PricePoint>) {
-    out.clear();
-    out.reserve(rows.len());
-    out.extend(rows.iter().map(|p| PricePoint {
-        time_ms: p.unix_millis() as f64,
-        price: p.price(),
+    out.extend(rows.iter().filter_map(|p| {
+        let (price, _) = p.seq_ring_price_range()?;
+        Some(PricePoint {
+            time_ms: p.seq_ring_time_ms() as f64,
+            price,
+        })
     }));
 }
 

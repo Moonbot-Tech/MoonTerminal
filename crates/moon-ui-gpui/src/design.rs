@@ -4,7 +4,7 @@
 //! no terminal logic, no chart renderer state.
 
 use gpui::*;
-use moon_ui::{MoonMetrics, MoonPalette, MoonTheme};
+use moon_ui::{MoonMetrics, MoonPalette, MoonTheme, rgba_from};
 use std::sync::Arc;
 
 const M: MoonMetrics = MoonMetrics::TERMINAL;
@@ -46,6 +46,18 @@ const LOGO_GLOW_VIEW_H: f32 = LOGO_SRC_W * 1.2;
 
 pub fn solid(hex: u32) -> Rgba {
     rgb(hex)
+}
+
+/// Hex-токен палитры (`0xRRGGBB`) → непрозрачный `Hsla`. Единый хелпер: до
+/// рефактора дублировался в `screener/table.rs`, `panels/alerts.rs` и
+/// `strategies/mod.rs`.
+pub fn moon(hex: u32) -> Hsla {
+    rgba_from(hex, 1.0)
+}
+
+/// То же, но с альфой.
+pub fn moon_alpha(hex: u32, alpha: f32) -> Hsla {
+    rgba_from(hex, alpha)
 }
 
 /// Палитра/конфиг хранят цвета как `[u8; 3]`; GPUI-API берёт `0xRRGGBB`. Единый

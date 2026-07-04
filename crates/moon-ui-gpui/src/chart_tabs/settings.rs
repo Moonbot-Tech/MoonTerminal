@@ -1,87 +1,19 @@
-//! `ChartTabs`: УПРАВЛЕНИЕ per-вкладочными настройками (контроллер). Открытие/засев/коммит/
-//! закрытие попапа ⚙, геттеры текущих настроек активной вкладки (`active_*`: раскладка/
-//! ориентация/стакан/зона/авто-пин/масштаб) и их применение к активной вкладке и ко всем
-//! стекам/окнам группы (`apply_*`). НЕ путать с [`super::layout_popup`] — там ОТРИСОВКА самого
-//! попапа (свободные функции), здесь — логика `ChartTabs` за ним. Вынесено из `mod.rs`.
+//! `ChartTabs`: per-вкладочные настройки (контроллер). Геттеры текущих настроек активной
+//! вкладки (`active_*`: раскладка/ориентация/стакан/зона/авто-пин/масштаб), применение ко всем
+//! стекам/окнам группы (`apply_layout_to_all` + дренаж запросов выносных окон) и реализация
+//! [`LayoutPopupHost`] — общая логика попапа ⚙ и одиночных применений (`apply_tab_setting`)
+//! живёт в [`super::common`], отрисовка попапа — в [`super::layout_popup`].
 
 use gpui::*;
 
-use super::{AddChartStack, ChartTabs, Tab, layout_popup, stack};
+use super::common::{LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting};
+use super::{AddChartStack, ChartTabs, Tab};
+use crate::Backend;
 use crate::chart_persist::{ChartBtnPos, StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
+use moon_ui::MoonInputState;
 
 impl ChartTabs {
-    /// Открыть/закрыть in-scene popup настроек раскладки активной вкладки.
-    pub(super) fn toggle_layout_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.layout_popup_open {
-            self.close_layout_popup(true, cx);
-        } else {
-            self.seed_layout_popup_inputs(window, cx);
-            self.layout_popup_open = true;
-            self.layout_popup_hovered = false;
-            cx.notify();
-        }
-    }
-
-    pub(super) fn seed_layout_popup_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
-        // Показываем ЭФФЕКТИВНЫЕ значения (а не пусто при None): Fit→0 (растянуть), Scroll→дефолт.
-        // Иначе после рестарта у неустановленных высот поле было пустым, без цифр.
-        let fit = self.active_layout_height_fit(cx).unwrap_or(0).to_string();
-        let scroll = self
-            .active_layout_height_scroll(cx)
-            .unwrap_or(stack::DEFAULT_SCROLL_HEIGHT)
-            .to_string();
-        self.layout_fit_input
-            .update(cx, |input, c| input.set_value(fit, window, c));
-        self.layout_scroll_input
-            .update(cx, |input, c| input.set_value(scroll, window, c));
-        // Имя кастомной вкладки — для поля переименования в попапе.
-        if let Tab::Custom(n, _) = &self.active {
-            let name = self.custom_label(*n);
-            self.custom_name_input
-                .update(cx, |input, c| input.set_value(name, window, c));
-        }
-    }
-
-    pub(super) fn read_layout_height(&self, mode: StackLayoutMode, cx: &App) -> Option<u16> {
-        let (input, fallback) = match mode {
-            StackLayoutMode::Fit => (&self.layout_fit_input, self.active_layout_height_fit(cx)),
-            StackLayoutMode::Scroll => (
-                &self.layout_scroll_input,
-                self.active_layout_height_scroll(cx),
-            ),
-        };
-        let value = input.read(cx).value().to_string();
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        trimmed
-            .parse::<u16>()
-            .ok()
-            .map(|raw| layout_popup::clamp_height(mode, raw))
-            .or(fallback)
-    }
-
-    pub(super) fn commit_layout_popup(&mut self, cx: &mut Context<Self>) {
-        let hf = self.read_layout_height(StackLayoutMode::Fit, cx);
-        let hs = self.read_layout_height(StackLayoutMode::Scroll, cx);
-        let mode = Some(self.active_layout_mode(cx).unwrap_or(StackLayoutMode::Fit));
-        self.apply_layout(mode, hf, hs, cx);
-    }
-
-    pub(super) fn close_layout_popup(&mut self, commit: bool, cx: &mut Context<Self>) {
-        if !self.layout_popup_open {
-            return;
-        }
-        if commit {
-            self.commit_layout_popup(cx);
-        }
-        self.layout_popup_open = false;
-        self.layout_popup_hovered = false;
-        cx.notify();
-    }
-
     /// Ключ персиста активной вкладки: Main → (0, Shared); AddToChart/Custom → (num, bucket).
     /// (Для Custom персист всё равно пропускается — см. `persist_active`.)
     pub(super) fn active_stack_key(&self) -> (u32, ChartBucket) {
@@ -195,42 +127,6 @@ impl ChartTabs {
         }
     }
 
-    /// Позиция кнопки Cancel Buy на активной вкладке + persist (Panic Sell не трогаем).
-    pub(super) fn apply_cancel_pos(&mut self, pos: ChartBtnPos, cx: &mut Context<Self>) {
-        let (_, panic) = self.active_action_btn_pos_opt(cx);
-        self.apply_action_pos(Some(pos), panic, cx);
-    }
-
-    /// Позиция кнопки Panic Sell на активной вкладке + persist (Cancel Buy не трогаем).
-    pub(super) fn apply_panic_pos(&mut self, pos: ChartBtnPos, cx: &mut Context<Self>) {
-        let (cancel, _) = self.active_action_btn_pos_opt(cx);
-        self.apply_action_pos(cancel, Some(pos), cx);
-    }
-
-    fn apply_action_pos(
-        &mut self,
-        cancel: Option<ChartBtnPos>,
-        panic: Option<ChartBtnPos>,
-        cx: &mut Context<Self>,
-    ) {
-        match self.active.clone() {
-            Tab::Main => self
-                .main
-                .update(cx, |s, c| s.set_action_btn_pos(cancel, panic, c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_action_btn_pos(cancel, panic, c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.cancel_buy_pos = cancel;
-            s.panic_sell_pos = panic;
-        });
-        cx.notify();
-    }
-
     /// Положение оси цен активной вкладки (None → дефолт Left).
     pub(super) fn active_price_axis_pos(&self, cx: &App) -> crate::chart_persist::PriceAxisPos {
         let v = match &self.active {
@@ -240,29 +136,6 @@ impl ChartTabs {
                 .and_then(|p| p.read(cx).price_axis_pos()),
         };
         v.unwrap_or_default()
-    }
-
-    /// Положение оси цен на АКТИВНОЙ вкладке + persist.
-    pub(super) fn apply_price_axis_pos(
-        &mut self,
-        pos: crate::chart_persist::PriceAxisPos,
-        cx: &mut Context<Self>,
-    ) {
-        match self.active.clone() {
-            Tab::Main => self
-                .main
-                .update(cx, |s, c| s.set_price_axis_pos(Some(pos), c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_price_axis_pos(Some(pos), c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.price_axis_pos = Some(pos);
-        });
-        cx.notify();
     }
 
     /// Видимость оси времени активной вкладки (None → дефолт вкл).
@@ -276,25 +149,6 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
-    /// Видимость оси времени на АКТИВНОЙ вкладке + persist.
-    pub(super) fn apply_time_axis_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
-        match self.active.clone() {
-            Tab::Main => self
-                .main
-                .update(cx, |s, c| s.set_time_axis_visible(Some(visible), c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_time_axis_visible(Some(visible), c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.time_axis_visible = Some(visible);
-        });
-        cx.notify();
-    }
-
     /// Видимость подписей у линий активной вкладки (None → дефолт вкл).
     pub(super) fn active_line_labels(&self, cx: &App) -> bool {
         let v = match &self.active {
@@ -306,25 +160,6 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
-    /// Видимость подписей у линий на АКТИВНОЙ вкладке + persist.
-    pub(super) fn apply_line_labels(&mut self, show: bool, cx: &mut Context<Self>) {
-        match self.active.clone() {
-            Tab::Main => self
-                .main
-                .update(cx, |s, c| s.set_line_labels(Some(show), c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_line_labels(Some(show), c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.line_labels = Some(show);
-        });
-        cx.notify();
-    }
-
     /// Видимость подписей у перекрестия активной вкладки (None → дефолт вкл).
     pub(super) fn active_cursor_labels(&self, cx: &App) -> bool {
         let v = match &self.active {
@@ -334,25 +169,6 @@ impl ChartTabs {
                 .and_then(|p| p.read(cx).cursor_labels()),
         };
         v.unwrap_or(true)
-    }
-
-    /// Видимость подписей у перекрестия на АКТИВНОЙ вкладке + persist.
-    pub(super) fn apply_cursor_labels(&mut self, show: bool, cx: &mut Context<Self>) {
-        match self.active.clone() {
-            Tab::Main => self
-                .main
-                .update(cx, |s, c| s.set_cursor_labels(Some(show), c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_cursor_labels(Some(show), c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.cursor_labels = Some(show);
-        });
-        cx.notify();
     }
 
     /// Ориентация стека активной вкладки (None → дефолт Vertical).
@@ -373,131 +189,6 @@ impl ChartTabs {
                 self.add_stack(*n, b).and_then(|p| p.read(cx).scale())
             }
         }
-    }
-
-    /// Вкл/выкл стакан на АКТИВНОЙ вкладке + persist.
-    pub(super) fn apply_orderbook(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        match self.active.clone() {
-            Tab::Main => self
-                .main
-                .update(cx, |s, c| s.set_orderbook_enabled(Some(enabled), c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_orderbook_enabled(Some(enabled), c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.orderbook_enabled = Some(enabled);
-        });
-        // Stage 2: пересобрать набор рынков, которым нужен стакан (мог измениться спрос).
-        self.backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
-        cx.notify();
-    }
-
-    /// Вкл/выкл трейды ликвидаций на АКТИВНОЙ вкладке + persist.
-    pub(super) fn apply_liquidations(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        match self.active.clone() {
-            Tab::Main => self
-                .main
-                .update(cx, |s, c| s.set_liquidations_enabled(Some(enabled), c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_liquidations_enabled(Some(enabled), c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.liquidations_enabled = Some(enabled);
-        });
-        cx.notify();
-    }
-
-    /// Вкл/выкл заливку зоны управления на АКТИВНОЙ вкладке + persist.
-    pub(super) fn apply_show_zone(&mut self, show: bool, cx: &mut Context<Self>) {
-        match self.active.clone() {
-            Tab::Main => self.main.update(cx, |s, c| s.set_show_zone(Some(show), c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_show_zone(Some(show), c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.show_zone = Some(show);
-        });
-        cx.notify();
-    }
-
-    /// Вкл/выкл авто-пин при ордере на АКТИВНОЙ вкладке + persist.
-    pub(super) fn apply_auto_pin(&mut self, on: bool, cx: &mut Context<Self>) {
-        match self.active.clone() {
-            Tab::Main => self.main.update(cx, |s, c| s.set_auto_pin(Some(on), c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_auto_pin(Some(on), c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.auto_pin = Some(on);
-        });
-        cx.notify();
-    }
-
-    /// Сменить ориентацию (верт/гор) на АКТИВНОЙ вкладке + persist. Тоггл из попапа ⚙.
-    pub(super) fn apply_orientation(
-        &mut self,
-        orientation: StackOrientation,
-        cx: &mut Context<Self>,
-    ) {
-        match self.active.clone() {
-            Tab::Main => self
-                .main
-                .update(cx, |s, c| s.set_orientation(Some(orientation), c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_orientation(Some(orientation), c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.layout_orientation = Some(orientation);
-        });
-        cx.notify();
-    }
-
-    /// Применить раскладку (режим + раздельные высоты Fit/Scroll) к АКТИВНОЙ вкладке и
-    /// сохранить в charts.json.
-    pub(super) fn apply_layout(
-        &mut self,
-        mode: Option<StackLayoutMode>,
-        height_fit: Option<u16>,
-        height_scroll: Option<u16>,
-        cx: &mut Context<Self>,
-    ) {
-        match self.active.clone() {
-            Tab::Main => self
-                .main
-                .update(cx, |s, c| s.set_layout(mode, height_fit, height_scroll, c)),
-            Tab::Add(..) | Tab::Custom(..) => {
-                if let Some(p) = self.active_stack() {
-                    p.update(cx, |s, c| s.set_layout(mode, height_fit, height_scroll, c));
-                }
-            }
-        }
-        let (num, bucket) = self.active_stack_key();
-        self.upsert_spec(cx, num, &bucket, move |s| {
-            s.layout_mode = mode;
-            s.layout_height_fit = height_fit;
-            s.layout_height_scroll = height_scroll;
-        });
-        cx.notify();
     }
 
     /// Применить ВСЕ настройки вкладки-источника ко ВСЕМ стекам группы: режим+высоты раскладки,
@@ -641,5 +332,131 @@ impl ChartTabs {
                 cx,
             );
         }
+    }
+}
+
+/// Хозяин попапа ⚙ со стороны полоски вкладок: цель = АКТИВНАЯ вкладка (Main или Add/Custom-стек),
+/// ключ персиста — `active_stack_key`. Общая логика попапа/применений — default-методы трейта.
+impl LayoutPopupHost for ChartTabs {
+    fn popup_open(&self) -> bool {
+        self.layout_popup_open
+    }
+    fn set_popup_open(&mut self, open: bool) {
+        self.layout_popup_open = open;
+    }
+    fn popup_hovered(&self) -> bool {
+        self.layout_popup_hovered
+    }
+    fn set_popup_hovered(&mut self, hovered: bool) {
+        self.layout_popup_hovered = hovered;
+    }
+    fn fit_input(&self) -> &Entity<MoonInputState> {
+        &self.layout_fit_input
+    }
+    fn scroll_input(&self) -> &Entity<MoonInputState> {
+        &self.layout_scroll_input
+    }
+    fn rename_input(&self) -> &Entity<MoonInputState> {
+        &self.custom_name_input
+    }
+    fn backend(&self) -> &Entity<Backend> {
+        &self.backend
+    }
+    fn spec_group(&self) -> &str {
+        &self.group
+    }
+    fn spec_key(&self) -> (u32, ChartBucket) {
+        self.active_stack_key()
+    }
+    fn current_layout(&self, cx: &App) -> (Option<StackLayoutMode>, Option<u16>, Option<u16>) {
+        (
+            self.active_layout_mode(cx),
+            self.active_layout_height_fit(cx),
+            self.active_layout_height_scroll(cx),
+        )
+    }
+    fn current_orientation(&self, cx: &App) -> Option<StackOrientation> {
+        self.active_layout_orientation(cx)
+    }
+    fn action_btn_pos_opt(&self, cx: &App) -> (Option<ChartBtnPos>, Option<ChartBtnPos>) {
+        self.active_action_btn_pos_opt(cx)
+    }
+    fn layout_popup_snapshot(&self, cx: &App) -> LayoutPopupSnapshot {
+        let (cancel_pos, panic_pos) = self.active_action_btn_pos(cx);
+        LayoutPopupSnapshot {
+            mode: self.active_layout_mode(cx).unwrap_or(StackLayoutMode::Fit),
+            orientation: self
+                .active_layout_orientation(cx)
+                .unwrap_or(StackOrientation::Vertical),
+            orderbook: self.active_orderbook_enabled(cx),
+            liquidations: self.active_liquidations_enabled(cx),
+            show_zone: self.active_show_zone(cx),
+            auto_pin: self.active_auto_pin(cx),
+            cancel_pos,
+            panic_pos,
+            price_axis_pos: self.active_price_axis_pos(cx),
+            time_axis: self.active_time_axis_visible(cx),
+            line_labels: self.active_line_labels(cx),
+            cursor_labels: self.active_cursor_labels(cx),
+        }
+    }
+    fn popup_is_custom(&self, _cx: &App) -> bool {
+        self.active_is_custom()
+    }
+    /// Имя кастомной вкладки — для поля переименования в попапе (только Custom).
+    fn seed_rename_input(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Tab::Custom(n, _) = &self.active {
+            let name = self.custom_label(*n);
+            self.custom_name_input
+                .update(cx, |input, c| input.set_value(name, window, c));
+        }
+    }
+    fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>) {
+        match self.active.clone() {
+            Tab::Main => self.main.update(cx, |s, c| set_stack_setting!(s, c, v)),
+            Tab::Add(..) | Tab::Custom(..) => {
+                if let Some(p) = self.active_stack() {
+                    p.update(cx, |s, c| set_stack_setting!(s, c, v));
+                }
+            }
+        }
+    }
+    /// «Ко всем» из попапа полоски: копируем ВСЕ настройки активной вкладки (+масштаб+стакан+
+    /// ориентация) ко всем стекам группы напрямую. `include_main` — попап открыт на Main.
+    fn apply_all_from_popup(&mut self, cx: &mut Context<Self>) {
+        let include_main = matches!(self.active, Tab::Main);
+        let hf = self.read_layout_height(StackLayoutMode::Fit, cx);
+        let hs = self.read_layout_height(StackLayoutMode::Scroll, cx);
+        let mode = Some(self.active_layout_mode(cx).unwrap_or(StackLayoutMode::Fit));
+        let scale = self.active_scale_value(cx);
+        let ob = Some(self.active_orderbook_enabled(cx));
+        let liq = Some(self.active_liquidations_enabled(cx));
+        let sz = Some(self.active_show_zone(cx));
+        let ap = Some(self.active_auto_pin(cx));
+        let or = self.active_layout_orientation(cx);
+        let (cp, pp) = self.active_action_btn_pos(cx);
+        let pax = self.active_price_axis_pos(cx);
+        let tax = self.active_time_axis_visible(cx);
+        let ll = self.active_line_labels(cx);
+        let cl = self.active_cursor_labels(cx);
+        self.apply_layout_to_all(
+            include_main,
+            mode,
+            hf,
+            hs,
+            scale,
+            ob,
+            liq,
+            sz,
+            ap,
+            or,
+            Some(cp),
+            Some(pp),
+            Some(pax),
+            Some(tax),
+            Some(ll),
+            Some(cl),
+            cx,
+        );
     }
 }

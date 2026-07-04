@@ -68,7 +68,8 @@ fn cursor_label_gap(cursor_thickness_dev: f32, sf: f32) -> f32 {
 }
 
 /// «+1.25%» — знаковый процент для подписей курсора (отклонение от текущей цены).
-fn fmt_pct(v: f32) -> String {
+/// Общий и для подписей ордер-линий (`data_state::orders`).
+pub(in crate::chartdx) fn fmt_pct(v: f32) -> String {
     format!("{v:+.2}%")
 }
 
