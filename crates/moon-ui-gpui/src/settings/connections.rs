@@ -266,6 +266,7 @@ impl SettingsView {
                     synthetic: false,
                     chart_bundle: String::new(),
                     order_sizes: None,
+                    default_alert_strategy: 0,
                 });
                 sync_groups_from_servers(p);
                 bcx.notify();

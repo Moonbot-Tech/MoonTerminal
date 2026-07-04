@@ -8,6 +8,7 @@
 //! Используется GPUI-оболочкой `moonterminal` (зависит от core, не наоборот). Старая
 //! egui-оболочка `moon-terminal` удалена.
 
+pub mod alert_blob;
 pub mod applog;
 pub mod config;
 pub mod data;

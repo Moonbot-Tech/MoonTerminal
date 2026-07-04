@@ -494,11 +494,14 @@ pub fn run(
                 ));
             }
         }
-        if server.feed.detects || (server.feed.reports && reports.is_some()) || want_log {
+        // Алерт-фаеры (`DETECT_KIND_ALERT`) приходят Event::Detect: чтобы они работали
+        // при включённых АЛЕРТАХ даже без общего потока детектов — заходим и по feed.alerts.
+        let want_detects = server.feed.detects || server.feed.alerts;
+        if want_detects || (server.feed.reports && reports.is_some()) || want_log {
             let mut detects: Vec<DetectRow> = Vec::new();
             let mut logs: Vec<CoreLogLine> = Vec::new();
-            // Снимок для полей стратегии-источника детекта (SoundAlert/KeepAlert).
-            let detect_snap = server.feed.detects.then(|| client.snapshot()).flatten();
+            // Снимок для полей стратегии-источника детекта (SoundAlert/KeepAlert/звук).
+            let detect_snap = want_detects.then(|| client.snapshot()).flatten();
             for ev in &events {
                 match ev {
                     Event::ServerLog(l) if want_log => {
@@ -513,7 +516,9 @@ pub fn run(
                             msg: l.msg.clone(),
                         });
                     }
-                    Event::Detect(d) if server.feed.detects => {
+                    Event::Detect(d)
+                        if server.feed.detects || (server.feed.alerts && d.is_alert_fire()) =>
+                    {
                         let params = detect_snap
                             .as_ref()
                             .and_then(|s| s.strats().snapshot(d.strategy_id))
@@ -528,6 +533,8 @@ pub fn run(
                             keep_alert_secs: params.keep_alert_secs,
                             add_to_chart: params.add_to_chart,
                             keep_in_chart_secs: params.keep_in_chart_secs,
+                            sound_name: params.sound_name,
+                            is_alert: d.is_alert_fire(),
                         });
                     }
                     Event::ClosedSellOrderReport(r) if server.feed.reports => {

@@ -146,6 +146,7 @@ impl Shell {
             &self.vstop_input,
             &self.blacklist_input,
             &self.blacklist_area,
+            &self.def_strategy_input,
             self.core_settings_bl_expanded,
             self.core_settings_cancel_confirm,
             &self.backend,

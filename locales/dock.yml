@@ -23,6 +23,10 @@ dock.tab.detects:
   ru: "Детекты"
   en: "Detects"
   es: "Detecciones"
+dock.tab.alerts:
+  ru: "Алерты"
+  en: "Alerts"
+  es: "Alertas"
 dock.todo.assets:
   ru: "Активы: канал балансов ядра пока не подключён"
   en: "Assets: core balance feed not wired yet"

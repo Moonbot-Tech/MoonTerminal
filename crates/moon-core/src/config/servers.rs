@@ -104,6 +104,11 @@ pub struct ServerConfig {
     /// значений buy-size НЕТ (только sell-пресеты ClientSettings) — это локальный конфиг.
     #[serde(default)]
     pub order_sizes: Option<[f64; 6]>,
+    /// Стратегия алертов по умолчанию (Def Strategy): id стратегии вида «Alerts» этого
+    /// ядра, автоназначаемый новому алерту при постановке галки Alert. 0 = без.
+    /// Локальный конфиг терминала (протокол дефолт-стратегию ядра не отдаёт).
+    #[serde(default)]
+    pub default_alert_strategy: u64,
 }
 
 /// Ключ чарт-вкладки AddToChart внутри группы — куда сводить графики ядра.

@@ -1,12 +1,12 @@
-//! Интеракция слоя рисования фигур на панели чарта: режим-карандаш (узлы ЛКМ,
-//! превью за курсором), hover/выделение/драг узлов и тела, удаление. Инструмент
-//! (`Backend::fig_tool`) и выделение (`Backend::fig_selected`) глобальны —
-//! тогглятся хоткеями в Shell; здесь — работа мыши на конкретной панели.
-//!
-//! ПКМ не используем (занят ордерами): создание — режим-карандаш, управление —
-//! клик-выделение + драг + хоткей удаления.
+//! Интеракция слоя рисования фигур на панели чарта: режим-карандаш (Ctrl+ЛКМ рисует),
+//! hover/выделение/драг узлов и тела, контекст-меню по ПКМ (Alert/Удалить). Инструмент
+//! (`Backend::fig_tool`), режим (`fig_draw_mode`) и выделение (`fig_selected`) глобальны.
+//! Всё работает ТОЛЬКО в области чарта (не в зоне стакана — там свои кнопки).
 
-use gpui::Context;
+use gpui::{Context, Pixels, Point, Window};
+use rust_i18n::t;
+
+use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonWindowExt as _};
 
 use moon_core::figures::{FigNode, Figure, FigureKind, FigureTool};
 use moon_core::session::CoreId;
@@ -16,9 +16,6 @@ use crate::chartdx::FigureVisual;
 
 /// Порог хит-теста линии, px (до умножения на ppp), как у ордер-линий.
 const HIT_PX: f32 = 6.0;
-/// Дефолтный стиль новой фигуры (пока нет тулбара стиля): янтарный, 1.5 px.
-const DEFAULT_COLOR: [u8; 4] = [255, 191, 64, 255];
-const DEFAULT_THICKNESS: f32 = 1.5;
 
 /// Фигура в процессе рисования на этой панели.
 pub(super) struct FigDraft {
@@ -26,6 +23,10 @@ pub(super) struct FigDraft {
     pub core: CoreId,
     pub market: String,
     pub tool: FigureTool,
+    /// Стиль (цвет/толщина/пунктир) — снимок `Backend::fig_style` на начало рисования.
+    pub color: [u8; 4],
+    pub thickness: f32,
+    pub kind: moon_core::figures::LineKind,
     /// Первый узел (второй — курсор). Для канала после второго клика — Some(b) в `base_b`.
     pub first: Option<FigNode>,
     /// Канал: зафиксированный базовый отрезок (стадия растяжки ширины).
@@ -39,6 +40,7 @@ pub(super) struct FigDrag {
     pub core: CoreId,
     pub market: String,
     pub id: u64,
+    pub pane: usize,
     pub grab: FigGrab,
     /// Смещение точки захвата от опорного узла (чтобы фигура не «прыгала» под курсор).
     pub grab_off_price: f64,
@@ -48,10 +50,12 @@ pub(super) struct FigDrag {
 /// Что именно тащим.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum FigGrab {
+    /// Первый узел (a) / первая цена канала.
     NodeA,
+    /// Второй узел (b) / вторая цена канала.
     NodeB,
-    /// Узел ширины канала.
-    Width,
+    /// Третий узел (c) треугольника.
+    NodeC,
     /// Всё тело (сдвиг по цене и времени).
     Body,
 }
@@ -140,9 +144,18 @@ impl ChartPanel {
             .with_container(|c| c.pane(pane).map(|p| (p.core, p.market.clone())))
     }
 
-    /// ЛКМ-down. true = клик съеден слоем фигур (режим рисования или захват фигуры).
-    pub(super) fn try_fig_click(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
-        let tool = self.backend.read(cx).fig_tool;
+    /// ЛКМ-down. true = клик съеден слоем фигур. Работает ТОЛЬКО в режиме рисования
+    /// (карандаш нажат): `ctrl` зажат → рисуем `fig_tool`; без Ctrl → выделяем/двигаем
+    /// существующую фигуру. Вне режима — фигуры не трогаем (клик идёт в торговлю/чарт).
+    pub(super) fn try_fig_click(
+        &mut self,
+        pos: (f32, f32),
+        ctrl: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.backend.read(cx).fig_draw_mode {
+            return false;
+        }
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return false;
         };
@@ -153,12 +166,14 @@ impl ChartPanel {
         let Some(map) = self.fig_map(pane) else {
             return false;
         };
-        let node = map.node_at(pos);
-        if let Some(tool) = tool {
+        if ctrl {
+            let tool = self.backend.read(cx).fig_tool;
+            let node = map.node_at(pos);
             self.fig_draw_click(pane, tool, node, cx);
             return true;
         }
-        // Вне режима: захват узла/тела фигуры или выделение.
+        // Без Ctrl: захват узла/тела фигуры или выделение (пусто → клик не съеден,
+        // работает пан).
         self.try_fig_grab(pane, pos, &map, cx)
     }
 
@@ -173,6 +188,7 @@ impl ChartPanel {
         let Some((core, market)) = self.fig_pane_key(pane) else {
             return;
         };
+        let style = self.backend.read(cx).fig_style;
         // Начатый на другой панели драфт сбрасываем — рисуем там, где кликнули.
         if self
             .fig_draft
@@ -182,48 +198,64 @@ impl ChartPanel {
             self.fig_draft = None;
         }
         let finished: Option<FigureKind> = match (&mut self.fig_draft, tool) {
+            // Один клик — сразу готово.
             (_, FigureTool::HLine) => Some(FigureKind::HLine { price: node.price }),
+            // Первый клик любого многоточечного инструмента — заводим драфт.
             (None, _) => {
                 self.fig_draft = Some(FigDraft {
                     pane,
                     core,
                     market: market.clone(),
                     tool,
+                    color: style.color,
+                    thickness: style.thickness,
+                    kind: style.kind,
                     first: Some(node),
                     base_b: None,
                     cursor: node,
                 });
                 None
             }
+            // Отрезок: второй клик завершает.
             (Some(d), FigureTool::Segment) => {
                 let a = d.first.take().unwrap_or(node);
                 Some(FigureKind::Segment { a, b: node })
             }
+            // Канал: 2 клика по ЦЕНАМ (время не важно) — горизонтальный коридор.
             (Some(d), FigureTool::Channel) => {
+                let a = d.first.take().unwrap_or(node);
+                Some(FigureKind::Channel {
+                    price1: a.price,
+                    price2: node.price,
+                })
+            }
+            // Треугольник: 3 клика (a, b, c).
+            (Some(d), FigureTool::Triangle) => {
                 if d.base_b.is_none() {
-                    // Второй клик: фиксируем базовый отрезок, дальше растяжка ширины.
+                    // Второй клик — вторая вершина; ждём третью.
                     d.base_b = Some(node);
                     d.cursor = node;
                     None
                 } else {
                     let a = d.first.unwrap_or(node);
                     let b = d.base_b.unwrap();
-                    // Ширина = вертикальное отклонение курсора от базовой линии в точке клика.
-                    let dprice = node.price - price_on_line(a, b, node.time_ms);
-                    Some(FigureKind::Channel { a, b, dprice })
+                    Some(FigureKind::Triangle { a, b, c: node })
                 }
             }
         };
         if let Some(kind) = finished {
             self.fig_draft = None;
+            let style = self.backend.read(cx).fig_style;
             let fig = Figure {
                 id: 0,
                 kind,
-                color: DEFAULT_COLOR,
-                thickness: DEFAULT_THICKNESS,
-                dashed: false,
+                color: style.color,
+                thickness: style.thickness,
+                line_kind: style.kind,
                 created_ms: moon_core::util::now_unix_ms_i64(),
                 alert: false,
+                strategy_id: 0,
+                from_server: false,
             };
             let id = self
                 .backend
@@ -273,6 +305,7 @@ impl ChartPanel {
                         core,
                         market,
                         id: sel_id,
+                        pane,
                         grab,
                         grab_off_price: off_p,
                         grab_off_time: off_t,
@@ -314,6 +347,7 @@ impl ChartPanel {
             core,
             market,
             id,
+            pane,
             grab: FigGrab::Body,
             grab_off_price: off_p,
             grab_off_time: off_t,
@@ -330,15 +364,16 @@ impl ChartPanel {
         pressed_left: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        // Инструмент сняли (Esc) — гасим драфт.
-        if self.backend.read(cx).fig_tool.is_none() && self.fig_draft.is_some() {
+        // Режим рисования выключили (Esc/кнопка) — гасим драфт.
+        if !self.backend.read(cx).fig_draw_mode && self.fig_draft.is_some() {
             self.fig_draft = None;
             self.sync_fig_visual(cx);
         }
         if !within {
             return false;
         }
-        // Активный драг фигуры: правим стор на месте.
+        // Активный драг фигуры: правим стор на месте + принудительная пересборка (как
+        // ордер-драг: force=true), иначе линия «догоняет» рывками только на тиках данных.
         if pressed_left {
             if let Some(drag) = &self.fig_drag {
                 let pane = self.input.pane_at(pos.0, pos.1);
@@ -349,8 +384,8 @@ impl ChartPanel {
                     time_ms: map.time_at_x(pos.0) - drag.grab_off_time,
                     price: map.price_at_y(pos.1) - drag.grab_off_price,
                 };
-                let (core, market, id, grab) =
-                    (drag.core, drag.market.clone(), drag.id, drag.grab);
+                let (core, market, id, grab, dpane) =
+                    (drag.core, drag.market.clone(), drag.id, drag.grab, drag.pane);
                 let edited = self.backend.read(cx).figures.borrow_mut().edit(
                     core,
                     &market,
@@ -358,11 +393,13 @@ impl ChartPanel {
                     |fig| apply_drag(fig, grab, target),
                 );
                 if edited {
-                    // Стор правится мимо GPUI-notify — пересобираем userdata сразу,
-                    // иначе драг «догоняет» только на тиках данных.
                     self.fig_resync(cx);
                     cx.notify();
                 }
+                // Курсор-перекрестие ведём за мышью, как при драге ордера.
+                self.input.cursor = Some(pos);
+                self.input.hovered_pane = Some(dpane);
+                self.sync_native_cursor();
                 return true;
             }
             return false;
@@ -383,8 +420,8 @@ impl ChartPanel {
                 }
             }
         }
-        // Hover фигуры (только вне режима рисования).
-        let hover = if self.backend.read(cx).fig_tool.is_none() {
+        // Hover фигуры (в режиме рисования — чтобы видеть, что выделишь/потянешь).
+        let hover = if self.backend.read(cx).fig_draw_mode {
             self.fig_hit_at(pos, cx)
         } else {
             None
@@ -420,18 +457,91 @@ impl ChartPanel {
         best.map(|(id, _)| id)
     }
 
-    /// Mouse-up: завершить драг фигуры. true = ап съеден.
-    pub(super) fn finish_fig_drag(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.fig_drag.take().is_none() {
+    /// ПКМ по фигуре (только в режиме рисования, только в области чарта) → контекст-меню
+    /// «Alert / Удалить». true = меню открыто (вызывающий гасит fullscreen-тоггл). В зоне
+    /// стакана и вне режима возвращает false → ПКМ работает как обычно.
+    pub(super) fn try_open_figure_menu(
+        &mut self,
+        local_pos: (f32, f32),
+        menu_pos: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.backend.read(cx).fig_draw_mode {
             return false;
         }
+        // fig_hit_at сам исключает зону стакана (glass_pane_at).
+        let Some(id) = self.fig_hit_at(local_pos, cx) else {
+            return false;
+        };
+        let Some(pane) = self.input.pane_at(local_pos.0, local_pos.1) else {
+            return false;
+        };
+        let Some((core, market)) = self.fig_pane_key(pane) else {
+            return false;
+        };
+        let armed = self
+            .backend
+            .read(cx)
+            .figures
+            .borrow()
+            .get(core, &market, id)
+            .map(|f| f.alert)
+            .unwrap_or(false);
+        // ПКМ по фигуре её выделяет (и показывает узлы).
+        self.backend.update(cx, |b, bcx| {
+            b.fig_selected = Some((core, market.clone(), id));
+            bcx.notify();
+        });
+        self.sync_fig_visual(cx);
+        let alert_label = if armed {
+            t!("chart.fig_menu.alert_off")
+        } else {
+            t!("chart.fig_menu.alert_on")
+        }
+        .to_string();
+        let backend_alert = self.backend.clone();
+        let backend_del = self.backend.clone();
+        let market_del = market.clone();
+        let items: Vec<MoonMenuItem> = vec![
+            MoonMenuItem::with_key("fig-alert", alert_label).on_click(move |_, window, app| {
+                window.close_context_menu(app);
+                backend_alert.update(app, |b, _| {
+                    b.toggle_selected_figure_alert();
+                });
+            }),
+            MoonMenuItem::with_key("fig-delete", t!("chart.fig_menu.delete").to_string()).on_click(
+                move |_, window, app| {
+                    window.close_context_menu(app);
+                    backend_del.update(app, |b, _| {
+                        b.remove_figure(core, &market_del, id);
+                    });
+                },
+            ),
+        ];
+        window.open_moon_context_menu(cx, "chart-fig-menu", menu_pos, items, 160.0);
+        cx.notify();
+        true
+    }
+
+    /// Mouse-up: завершить драг фигуры. true = ап съеден. Если фигура заармлена —
+    /// шлём свежий blob в ядро (координаты изменились).
+    pub(super) fn finish_fig_drag(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(drag) = self.fig_drag.take() else {
+            return false;
+        };
+        self.backend.update(cx, |b, _| {
+            b.reupsert_figure_alert(drag.core, &drag.market, drag.id);
+        });
         self.sync_fig_visual(cx);
         true
     }
 
-    /// Прокинуть интерактив фигур в движок (превью/hover/выделение).
+    /// Прокинуть интерактив фигур в движок (режим/превью/hover/выделение). Зовётся на
+    /// мышь-событиях И на observe бэкенда (тоггл карандаша сразу скрывает/показывает слой).
     pub(super) fn sync_fig_visual(&mut self, cx: &mut Context<Self>) {
         let b = self.backend.read(cx);
+        let draw_mode = b.fig_draw_mode;
         let key = self
             .fig_draft
             .as_ref()
@@ -453,6 +563,7 @@ impl ChartPanel {
             .filter(|(c, m, _)| key.as_ref().is_some_and(|(kc, km)| kc == c && km == m))
             .map(|(_, _, id)| *id);
         let visual = FigureVisual {
+            draw_mode,
             key,
             draft,
             hovered: self.fig_hover,
@@ -468,19 +579,11 @@ impl ChartPanel {
     }
 
     /// Немедленная пересборка userdata (фигуры едут вместе с ордерными слоями).
+    /// `force=true` как у ордер-драга — иначе гейт пропускает часть кадров и драг рвётся.
     fn fig_resync(&mut self, cx: &Context<Self>) {
         let b = self.backend.read(cx);
-        self.chart.sync_orders_if_visible(&b.session, false);
+        self.chart.sync_orders_if_visible(&b.session, true);
     }
-}
-
-/// Цена базовой линии (a,b) в точке времени t (линейная интерполяция/экстраполяция).
-fn price_on_line(a: FigNode, b: FigNode, t_ms: f64) -> f64 {
-    let dt = b.time_ms - a.time_ms;
-    if dt.abs() < 1.0 {
-        return a.price;
-    }
-    a.price + (b.price - a.price) * ((t_ms - a.time_ms) / dt)
 }
 
 /// Превью-фигура из драфта (то, что рисуем за курсором).
@@ -490,22 +593,30 @@ fn draft_preview(d: &FigDraft) -> Option<Figure> {
             price: d.cursor.price,
         },
         (FigureTool::Segment, Some(a), _) => FigureKind::Segment { a, b: d.cursor },
-        (FigureTool::Channel, Some(a), None) => FigureKind::Segment { a, b: d.cursor },
-        (FigureTool::Channel, Some(a), Some(b)) => FigureKind::Channel {
+        // Канал: превью = 2 горизонтали (первая цена + цена курсора).
+        (FigureTool::Channel, Some(a), _) => FigureKind::Channel {
+            price1: a.price,
+            price2: d.cursor.price,
+        },
+        // Треугольник: после 1-го клика — ребро a→курсор; после 2-го — треугольник.
+        (FigureTool::Triangle, Some(a), None) => FigureKind::Segment { a, b: d.cursor },
+        (FigureTool::Triangle, Some(a), Some(b)) => FigureKind::Triangle {
             a,
             b,
-            dprice: d.cursor.price - price_on_line(a, b, d.cursor.time_ms),
+            c: d.cursor,
         },
         _ => return None,
     };
     Some(Figure {
         id: 0,
         kind,
-        color: DEFAULT_COLOR,
-        thickness: DEFAULT_THICKNESS,
-        dashed: false,
+        color: d.color,
+        thickness: d.thickness,
+        line_kind: d.kind,
         created_ms: 0,
         alert: false,
+        strategy_id: 0,
+        from_server: false,
     })
 }
 
@@ -514,17 +625,21 @@ fn hit_body(fig: &Figure, pos: (f32, f32), map: &Map) -> f32 {
     match &fig.kind {
         FigureKind::HLine { price } => (pos.1 - map.y_of_price(*price)).abs(),
         FigureKind::Segment { a, b } => seg_dist(pos, node_px(a, map), node_px(b, map)),
-        FigureKind::Channel { a, b, dprice } => {
-            let d1 = seg_dist(pos, node_px(a, map), node_px(b, map));
-            let a2 = shifted(a, *dprice);
-            let b2 = shifted(b, *dprice);
-            let d2 = seg_dist(pos, node_px(&a2, map), node_px(&b2, map));
-            d1.min(d2)
+        FigureKind::Triangle { a, b, c } => {
+            let (pa, pb, pc) = (node_px(a, map), node_px(b, map), node_px(c, map));
+            seg_dist(pos, pa, pb)
+                .min(seg_dist(pos, pb, pc))
+                .min(seg_dist(pos, pc, pa))
+        }
+        FigureKind::Channel { price1, price2 } => {
+            (pos.1 - map.y_of_price(*price1))
+                .abs()
+                .min((pos.1 - map.y_of_price(*price2)).abs())
         }
     }
 }
 
-/// Узел фигуры под курсором (для драга у выделенной).
+/// Узел/линия фигуры под курсором (для драга у выделенной).
 fn hit_node(fig: &Figure, pos: (f32, f32), map: &Map, threshold: f32) -> Option<FigGrab> {
     let near = |n: &FigNode| {
         let p = node_px(n, map);
@@ -541,17 +656,25 @@ fn hit_node(fig: &Figure, pos: (f32, f32), map: &Map, threshold: f32) -> Option<
                 None
             }
         }
-        FigureKind::Channel { a, b, dprice } => {
-            let mid = FigNode {
-                time_ms: (a.time_ms + b.time_ms) * 0.5,
-                price: (a.price + b.price) * 0.5 + dprice,
-            };
+        FigureKind::Triangle { a, b, c } => {
             if near(a) {
                 Some(FigGrab::NodeA)
             } else if near(b) {
                 Some(FigGrab::NodeB)
-            } else if near(&mid) {
-                Some(FigGrab::Width)
+            } else if near(c) {
+                Some(FigGrab::NodeC)
+            } else {
+                None
+            }
+        }
+        // Канал: цепляемся за БЛИЖАЙШУЮ горизонталь по Y (свой узел-маркер не рисуем).
+        FigureKind::Channel { price1, price2 } => {
+            let d1 = (pos.1 - map.y_of_price(*price1)).abs();
+            let d2 = (pos.1 - map.y_of_price(*price2)).abs();
+            if d1 <= threshold && d1 <= d2 {
+                Some(FigGrab::NodeA)
+            } else if d2 <= threshold {
+                Some(FigGrab::NodeB)
             } else {
                 None
             }
@@ -563,41 +686,35 @@ fn node_px(n: &FigNode, map: &Map) -> (f32, f32) {
     (map.x_of_time(n.time_ms), map.y_of_price(n.price))
 }
 
-fn shifted(n: &FigNode, dprice: f64) -> FigNode {
-    FigNode {
-        time_ms: n.time_ms,
-        price: n.price + dprice,
-    }
-}
-
 /// Смещение точки захвата от опорного узла (grab-offset): драг не телепортирует фигуру.
+/// Возвращает `(price_off, time_off)`. У горизонтали/канала время не используется (0).
 fn grab_offset(fig: &Figure, grab: FigGrab, map: &Map, pos: (f32, f32)) -> (f64, f64) {
     let cur = FigNode {
         time_ms: map.time_at_x(pos.0),
         price: map.price_at_y(pos.1),
     };
+    // Опорная цена по типу+захвату; время опоры = время курсора (сдвиг времени 0),
+    // кроме узлов отрезка/треугольника, где нужна реальная точка.
     let anchor = match (&fig.kind, grab) {
-        (FigureKind::HLine { price }, _) => FigNode {
-            time_ms: cur.time_ms,
-            price: *price,
-        },
+        (FigureKind::HLine { price }, _) => (*price, cur.time_ms),
+        (FigureKind::Channel { price1, .. }, FigGrab::NodeA)
+        | (FigureKind::Channel { price1, .. }, FigGrab::Body) => (*price1, cur.time_ms),
+        (FigureKind::Channel { price2, .. }, FigGrab::NodeB) => (*price2, cur.time_ms),
+        (FigureKind::Channel { price1, .. }, FigGrab::NodeC) => (*price1, cur.time_ms),
         (FigureKind::Segment { a, .. }, FigGrab::NodeA)
-        | (FigureKind::Channel { a, .. }, FigGrab::NodeA) => *a,
+        | (FigureKind::Triangle { a, .. }, FigGrab::NodeA)
+        | (FigureKind::Segment { a, .. }, FigGrab::Body)
+        | (FigureKind::Triangle { a, .. }, FigGrab::Body) => (a.price, a.time_ms),
         (FigureKind::Segment { b, .. }, FigGrab::NodeB)
-        | (FigureKind::Channel { b, .. }, FigGrab::NodeB) => *b,
-        (FigureKind::Channel { a, b, dprice }, FigGrab::Width) => FigNode {
-            time_ms: (a.time_ms + b.time_ms) * 0.5,
-            price: (a.price + b.price) * 0.5 + dprice,
-        },
-        (FigureKind::Segment { a, .. }, FigGrab::Body)
-        | (FigureKind::Channel { a, .. }, FigGrab::Body) => *a,
-        // Width у Segment не бывает (hit_node не возвращает) — берём курсор (нулевой сдвиг).
-        (FigureKind::Segment { .. }, FigGrab::Width) => cur,
+        | (FigureKind::Triangle { b, .. }, FigGrab::NodeB) => (b.price, b.time_ms),
+        (FigureKind::Triangle { c, .. }, FigGrab::NodeC) => (c.price, c.time_ms),
+        // Недостижимые сочетания (NodeC у отрезка/канала-NodeC уже покрыт) — курсор.
+        (FigureKind::Segment { .. }, FigGrab::NodeC) => (cur.price, cur.time_ms),
     };
-    (cur.price - anchor.price, cur.time_ms - anchor.time_ms)
+    (cur.price - anchor.0, cur.time_ms - anchor.1)
 }
 
-/// Применить драг к фигуре. `target` — новая позиция опорного узла.
+/// Применить драг к фигуре. `target` — новая позиция опорного узла/цены.
 fn apply_drag(fig: &mut Figure, grab: FigGrab, target: FigNode) -> bool {
     match (&mut fig.kind, grab) {
         (FigureKind::HLine { price }, _) => {
@@ -606,30 +723,47 @@ fn apply_drag(fig: &mut Figure, grab: FigGrab, target: FigNode) -> bool {
             }
             *price = target.price;
         }
+        (FigureKind::Channel { price1, .. }, FigGrab::NodeA) => {
+            if *price1 == target.price {
+                return false;
+            }
+            *price1 = target.price;
+        }
+        (FigureKind::Channel { price2, .. }, FigGrab::NodeB) => {
+            if *price2 == target.price {
+                return false;
+            }
+            *price2 = target.price;
+        }
+        (FigureKind::Channel { price1, price2 }, FigGrab::Body) => {
+            let dp = target.price - *price1;
+            if dp == 0.0 {
+                return false;
+            }
+            *price1 += dp;
+            *price2 += dp;
+        }
         (FigureKind::Segment { a, .. }, FigGrab::NodeA)
-        | (FigureKind::Channel { a, .. }, FigGrab::NodeA) => {
+        | (FigureKind::Triangle { a, .. }, FigGrab::NodeA) => {
             if *a == target {
                 return false;
             }
             *a = target;
         }
         (FigureKind::Segment { b, .. }, FigGrab::NodeB)
-        | (FigureKind::Channel { b, .. }, FigGrab::NodeB) => {
+        | (FigureKind::Triangle { b, .. }, FigGrab::NodeB) => {
             if *b == target {
                 return false;
             }
             *b = target;
         }
-        (FigureKind::Channel { a, b, dprice }, FigGrab::Width) => {
-            let mid_price = (a.price + b.price) * 0.5;
-            let new_dp = target.price - mid_price;
-            if *dprice == new_dp {
+        (FigureKind::Triangle { c, .. }, FigGrab::NodeC) => {
+            if *c == target {
                 return false;
             }
-            *dprice = new_dp;
+            *c = target;
         }
-        (FigureKind::Segment { a, b }, FigGrab::Body)
-        | (FigureKind::Channel { a, b, .. }, FigGrab::Body) => {
+        (FigureKind::Segment { a, b }, FigGrab::Body) => {
             let (dp, dt) = (target.price - a.price, target.time_ms - a.time_ms);
             if dp == 0.0 && dt == 0.0 {
                 return false;
@@ -639,8 +773,19 @@ fn apply_drag(fig: &mut Figure, grab: FigGrab, target: FigNode) -> bool {
             b.price += dp;
             b.time_ms += dt;
         }
-        // Width у Segment не бывает (hit_node не возвращает).
-        (FigureKind::Segment { .. }, FigGrab::Width) => return false,
+        (FigureKind::Triangle { a, b, c }, FigGrab::Body) => {
+            let (dp, dt) = (target.price - a.price, target.time_ms - a.time_ms);
+            if dp == 0.0 && dt == 0.0 {
+                return false;
+            }
+            for n in [a, b, c] {
+                n.price += dp;
+                n.time_ms += dt;
+            }
+        }
+        // Недостижимо: NodeC у отрезка/канала.
+        (FigureKind::Segment { .. }, FigGrab::NodeC)
+        | (FigureKind::Channel { .. }, FigGrab::NodeC) => return false,
     }
     true
 }

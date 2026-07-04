@@ -1,17 +1,47 @@
 //! Геометрия пользовательских фигур чарта (слой рисования): фигуры из
 //! `moon_core::figures` → инстансы линий own-pass. ДОБАВЛЯЕТ в буферы (не чистит):
 //! зовётся после `build_order_geometry`, фигуры едут теми же userdata-слоями.
+//!
+//! Визуальный язык (чтобы фигуры не путались с ордер-линиями и было видно состояние):
+//! - обычная фигура — ТОНКИЙ ПУНКТИР;
+//! - заармленная (alert) — ЖИРНЫЙ ПУНКТИР (видно, что «боевая»);
+//! - под курсором / выделенная — СПЛОШНАЯ ТОЛСТАЯ + яркая (резко «оживает»),
+//!   у выделенной ещё узелки-квадраты на точках, а у горизонтали — ручка-маркер.
 
-use moon_core::figures::{FigNode, Figure, FigureKind};
+use moon_core::figures::{FigNode, Figure, FigureKind, LineKind};
 
 use crate::layers::{LineInstance, MarkerInstance, SegInstance};
 
-/// Полупрозрачность обычной (не выделенной) фигуры.
-const FIG_ALPHA: f32 = 0.9;
-/// Подсветка hover/selected: множитель толщины.
-const FIG_HOVER_THICKNESS: f32 = 1.6;
-/// Размер узелка выделенной фигуры, px.
-const FIG_KNOT_SIZE: f32 = 4.0;
+/// Полупрозрачность спокойной (не активной) фигуры.
+const FIG_IDLE_ALPHA: f32 = 0.85;
+/// Множитель толщины активной (hover/selected) фигуры и заармленной.
+const FIG_ACTIVE_THICKNESS: f32 = 1.9;
+const FIG_ARMED_THICKNESS: f32 = 2.2;
+/// Размер узелка/ручки выделенной фигуры, px.
+const FIG_KNOT_SIZE: f32 = 4.5;
+const SEG_PATTERN_SOLID: f32 = 0.0;
+const SEG_PATTERN_DASH: f32 = 1.0; // DashDotDot в шейдере — ближайший «штрих»
+const SEG_PATTERN_DOT: f32 = 2.0;
+
+/// Паттерн отрезка (шейдер: 0 solid / 1 dashdotdot / 2 dot) по виду линии MoonBot.
+/// Штриховых вариантов в шейдере меньше пяти → Dash/DashDot/DashDotDot дают один штрих.
+fn seg_pattern(kind: LineKind) -> f32 {
+    match kind {
+        LineKind::Solid => SEG_PATTERN_SOLID,
+        LineKind::Dot => SEG_PATTERN_DOT,
+        _ => SEG_PATTERN_DASH,
+    }
+}
+
+/// Как рисуется конкретная фигура в этом кадре.
+struct FigStyle {
+    color: [f32; 4],
+    thickness: f32,
+    /// Вид линии (или Solid при hover/выделении).
+    line_kind: LineKind,
+    /// Рисовать узелки/ручку (выделенная).
+    knots: bool,
+}
 
 fn rgba(c: [u8; 4], alpha_mul: f32) -> [f32; 4] {
     [
@@ -22,9 +52,8 @@ fn rgba(c: [u8; 4], alpha_mul: f32) -> [f32; 4] {
     ]
 }
 
-/// Собирает геометрию фигур чарта. `draft` — фигура в процессе рисования
-/// (превью за курсором, рисуем пунктиром); `hovered`/`selected` — подсветка и
-/// узелки редактирования.
+/// Собирает геометрию фигур чарта. `draft` — превью рисуемой фигуры; `hovered`/
+/// `selected` подсвечиваются (у выделенной отрезка/канала — узлы на концах для драга).
 pub fn build_figure_geometry(
     figures: &[Figure],
     draft: Option<&Figure>,
@@ -36,65 +65,103 @@ pub fn build_figure_geometry(
     markers: &mut Vec<MarkerInstance>,
 ) {
     for fig in figures {
-        let hot = hovered == Some(fig.id) || selected == Some(fig.id);
-        push_figure(fig, hot, false, epoch_ms, hlines, segs);
-        if selected == Some(fig.id) {
-            push_knots(fig, epoch_ms, markers);
+        let is_sel = selected == Some(fig.id);
+        let is_hot = is_sel || hovered == Some(fig.id);
+        let style = fig_style(fig, is_hot, is_sel);
+        push_figure(fig, &style, epoch_ms, hlines, segs);
+        if style.knots {
+            push_knots(fig, style.color, epoch_ms, markers);
         }
     }
     if let Some(d) = draft {
-        // Превью рисуемой фигуры: всегда пунктир, без узелков.
-        push_figure(d, true, true, epoch_ms, hlines, segs);
+        // Превью рисуемой фигуры: ярче и толще, базовый вид линии — из стиля.
+        let style = FigStyle {
+            color: rgba(d.color, 1.0),
+            thickness: d.thickness * FIG_ACTIVE_THICKNESS,
+            line_kind: d.line_kind,
+            knots: false,
+        };
+        push_figure(d, &style, epoch_ms, hlines, segs);
+    }
+}
+
+/// Стиль фигуры по состоянию:
+/// - спокойная — тонкий базовый вид (Solid/Dash из `fig.dashed`);
+/// - под курсором/выделенная — толстая СПЛОШНАЯ (резко «оживает»), + узлы у выделенной;
+/// - заармленная (alert) — толстая, базовый вид (толщина = «боевой» индикатор).
+fn fig_style(fig: &Figure, is_hot: bool, is_selected: bool) -> FigStyle {
+    if is_hot {
+        FigStyle {
+            color: rgba(fig.color, 1.0),
+            thickness: fig.thickness * FIG_ACTIVE_THICKNESS,
+            line_kind: LineKind::Solid,
+            knots: is_selected,
+        }
+    } else if fig.alert {
+        FigStyle {
+            color: rgba(fig.color, 1.0),
+            thickness: fig.thickness * FIG_ARMED_THICKNESS,
+            line_kind: fig.line_kind,
+            knots: false,
+        }
+    } else {
+        FigStyle {
+            color: rgba(fig.color, FIG_IDLE_ALPHA),
+            thickness: fig.thickness,
+            line_kind: fig.line_kind,
+            knots: false,
+        }
     }
 }
 
 fn push_figure(
     fig: &Figure,
-    hot: bool,
-    force_dashed: bool,
+    style: &FigStyle,
     epoch_ms: f64,
     hlines: &mut Vec<LineInstance>,
     segs: &mut Vec<SegInstance>,
 ) {
-    let alpha = if hot { 1.0 } else { FIG_ALPHA };
-    let color = rgba(fig.color, alpha);
-    let thickness = if hot {
-        fig.thickness * FIG_HOVER_THICKNESS
-    } else {
-        fig.thickness
-    };
-    let dashed = fig.dashed || force_dashed;
     let to_rel = |t_ms: f64| (t_ms - epoch_ms) as f32;
+    let pattern = seg_pattern(style.line_kind);
     let mut push_seg = |a: &FigNode, b: &FigNode, dp: f64| {
         segs.push(SegInstance {
             t0_rel: to_rel(a.time_ms),
             p0: (a.price + dp) as f32,
             t1_rel: to_rel(b.time_ms),
             p1: (b.price + dp) as f32,
-            thickness,
-            pattern: if dashed { 2.0 } else { 0.0 },
+            thickness: style.thickness,
+            pattern,
             extend: 0.0,
-            color,
+            color: style.color,
+        });
+    };
+    let mut push_hline = |price: f64| {
+        hlines.push(LineInstance {
+            price: price as f32,
+            color: style.color,
+            style: if style.line_kind.is_solid() { 0.0 } else { 1.0 },
+            thickness: style.thickness,
         });
     };
     match &fig.kind {
-        FigureKind::HLine { price } => hlines.push(LineInstance {
-            price: *price as f32,
-            color,
-            style: if dashed { 1.0 } else { 0.0 },
-            thickness,
-        }),
+        FigureKind::HLine { price } => push_hline(*price),
         FigureKind::Segment { a, b } => push_seg(a, b, 0.0),
-        FigureKind::Channel { a, b, dprice } => {
+        FigureKind::Triangle { a, b, c } => {
+            // Три ребра: a-b, b-c, c-a.
             push_seg(a, b, 0.0);
-            push_seg(a, b, *dprice);
+            push_seg(b, c, 0.0);
+            push_seg(c, a, 0.0);
+        }
+        FigureKind::Channel { price1, price2 } => {
+            push_hline(*price1);
+            push_hline(*price2);
         }
     }
 }
 
-/// Узелки редактирования по узлам выделенной фигуры.
-fn push_knots(fig: &Figure, epoch_ms: f64, markers: &mut Vec<MarkerInstance>) {
-    let color = rgba(fig.color, 1.0);
+/// Узлы редактирования выделенной фигуры (концы отрезка/канала — за них тянут).
+/// У горизонтали узлов нет: её тянут за любое место (наведи → толстая → драг).
+fn push_knots(fig: &Figure, color: [f32; 4], epoch_ms: f64, markers: &mut Vec<MarkerInstance>) {
     let to_rel = |t_ms: f64| (t_ms - epoch_ms) as f32;
     let mut knot = |t_rel: f32, price: f64| {
         markers.push(MarkerInstance {
@@ -107,21 +174,16 @@ fn push_knots(fig: &Figure, epoch_ms: f64, markers: &mut Vec<MarkerInstance>) {
         });
     };
     match &fig.kind {
-        // Узел горизонтали ставим на «сейчас»-край не зная его: у горизонтали
-        // узелков нет — она редактируется драгом всей линии.
-        FigureKind::HLine { .. } => {}
+        // У горизонтали и канала узлов нет — их тянут за линию (наведи → толстая → драг).
+        FigureKind::HLine { .. } | FigureKind::Channel { .. } => {}
         FigureKind::Segment { a, b } => {
             knot(to_rel(a.time_ms), a.price);
             knot(to_rel(b.time_ms), b.price);
         }
-        FigureKind::Channel { a, b, dprice } => {
+        FigureKind::Triangle { a, b, c } => {
             knot(to_rel(a.time_ms), a.price);
             knot(to_rel(b.time_ms), b.price);
-            // Узел ширины канала — на середине второй линии.
-            knot(
-                to_rel((a.time_ms + b.time_ms) * 0.5),
-                (a.price + b.price) * 0.5 + dprice,
-            );
+            knot(to_rel(c.time_ms), c.price);
         }
     }
 }

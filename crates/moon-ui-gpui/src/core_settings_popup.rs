@@ -16,8 +16,101 @@ use moon_ui::{
 use rust_i18n::t;
 
 use moon_core::feed::{ClientSettingsEdit, LevManageEdit, RuntimeState};
+use moon_core::session::CoreId;
 
 use crate::{Backend, design};
+
+/// Ordinal вида стратегии «Alerts» (moonproto `StrategyKindId::ALERTS = 22`).
+const ALERTS_KIND: u8 = 22;
+
+/// Ряд «Стратегия алертов по умолчанию» (Def Strategy) активного ядра: выпадашка
+/// стратегий вида «Alerts» ЭТОГО ядра. Выбор пишет `Backend::default_alert_strategy[core]`,
+/// который применяется к новому алерту при постановке галки Alert.
+fn def_alert_strategy_row(
+    core: Option<CoreId>,
+    filter_input: &Entity<MoonInputState>,
+    backend: &Entity<Backend>,
+    p: MoonPalette,
+    cx: &App,
+) -> Option<AnyElement> {
+    let core = core?;
+    let b = backend.read(cx);
+    let cur = b.alert_def_strategy(core);
+    let filter = filter_input.read(cx).value().trim().to_lowercase();
+    // Стратегии вида «Alerts» этого ядра, отфильтрованные по поиску. «—» (без стратегии)
+    // всегда первым и не фильтруется.
+    let mut options: Vec<(u64, String)> = vec![(0u64, "—".to_string())];
+    options.extend(
+        b.session
+            .store()
+            .core(core)?
+            .strategies
+            .iter()
+            .filter(|s| s.kind_ordinal == ALERTS_KIND)
+            .filter(|s| filter.is_empty() || s.name.to_lowercase().contains(&filter))
+            .map(|s| (s.id, s.name.clone())),
+    );
+    // Инлайн (не MoonDropdown): вложенное меню-оверлей внутри MoonPopover ловится попапом
+    // как «клик снаружи» и закрывает его до выбора. Поиск + скролл фикс. высоты держат
+    // список компактным даже при сотнях стратегий; клики — часть контента попапа.
+    let mut list = v_flex().w_full().gap(design::ui_px(cx, 2.0));
+    for (id, name) in options {
+        let selected = id == cur;
+        let backend2 = backend.clone();
+        list = list.child(
+            h_flex()
+                .id(SharedString::from(format!("def-strat-{id}")))
+                .w_full()
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .px(design::ui_px(cx, 6.0))
+                .py(design::ui_px(cx, 3.0))
+                .rounded(design::ui_px(cx, 4.0))
+                .cursor_pointer()
+                .when(selected, |e| e.bg(rgba_from(p.accent, 0.16)))
+                .hover(|e| e.bg(rgba_from(p.text, 0.06)))
+                .child(
+                    div()
+                        .w(design::ui_px(cx, 12.0))
+                        .text_color(rgb(p.accent))
+                        .child(if selected { "✓" } else { "" }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_color(rgb(if selected { p.text } else { p.text_soft }))
+                        .child(name),
+                )
+                .on_click(move |_, _w, app| {
+                    backend2.update(app, |bk, bcx| {
+                        bk.set_alert_def_strategy(core, id);
+                        bcx.notify();
+                    });
+                }),
+        );
+    }
+    Some(
+        v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 4.0))
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_muted))
+                    .child(t!("core_settings.def_strategy").to_string()),
+            )
+            .child(MoonInput::new("core-def-strategy-filter").state(filter_input).small())
+            .child(
+                div()
+                    .id("core-def-strategy-list")
+                    .w_full()
+                    .max_h(design::ui_px(cx, 150.0))
+                    .overflow_y_scroll()
+                    .child(list),
+            )
+            .into_any_element(),
+    )
+}
 
 /// Границы слайдеров параметров «галка + слайдер + поле» (min, max, шаг).
 /// ТП-глоб = g_take_profit (плюс), трейлинг = trailing_drop (минус). Стоп-лосс вынесен в тулбар.
@@ -175,6 +268,7 @@ pub fn core_settings_content(
     vstop_input: &Entity<MoonInputState>,
     blacklist_input: &Entity<MoonInputState>,
     blacklist_area: &Entity<MoonInputState>,
+    def_strategy_input: &Entity<MoonInputState>,
     blacklist_expanded: bool,
     cancel_confirm: bool,
     backend: &Entity<Backend>,
@@ -621,6 +715,7 @@ pub fn core_settings_content(
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 6.0))
+            .children(def_alert_strategy_row(core, def_strategy_input, backend, p, cx))
             .child(cancel_all)
             .into_any_element(),
     );

@@ -12,6 +12,7 @@ mod add_stack;
 pub(crate) mod coin_search;
 mod custom;
 mod detached_host;
+mod fig_tools;
 mod ingest;
 mod layout_popup;
 mod main_stack;
@@ -112,6 +113,9 @@ pub struct ChartTabs {
     /// и restore detached окон должны жить вне `render()`.
     window_handle: AnyWindowHandle,
     focus: FocusHandle,
+    /// Открыт ли попап стиля карандаша (ПКМ по кнопке-карандашу): выбор инструмента,
+    /// цвета, толщины, непрозрачности, Solid/Dash. См. `fig_tools`.
+    fig_style_popup_open: bool,
     /// In-scene попап настроек раскладки активной вкладки (кнопка ⚙). Popup должен жить
     /// в обычной GPUI scene: chart text находится ниже scene, поэтому отдельное ОС-окно не нужно.
     layout_popup_open: bool,
@@ -368,6 +372,7 @@ impl ChartTabs {
             restore_pending,
             window_handle: window.window_handle(),
             focus: cx.focus_handle(),
+            fig_style_popup_open: false,
             layout_popup_open: false,
             layout_popup_hovered: false,
             layout_fit_input,

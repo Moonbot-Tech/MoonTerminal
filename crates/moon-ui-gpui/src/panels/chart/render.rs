@@ -542,11 +542,13 @@ impl Render for ChartPanel {
                         None
                     };
                     this.sync_native_cursor();
-                    // Слой рисования фигур: режим-карандаш ставит узлы, вне режима клик
-                    // хватает узел/тело фигуры (выделение+драг). Идёт ДО торговли: без
-                    // модификаторов торговые жесты по умолчанию не заняты, а в зоне
-                    // управления фигуры не перехватывают (см. try_fig_click).
-                    if within && e.click_count <= 1 && this.try_fig_click(pos, cx) {
+                    // Слой рисования фигур (только в режиме карандаша): Ctrl+ЛКМ рисует,
+                    // простой ЛКМ выделяет/двигает существующую. Вне режима try_fig_click
+                    // сразу отдаёт false → клик идёт в торговлю/навигацию.
+                    if within
+                        && e.click_count <= 1
+                        && this.try_fig_click(pos, e.modifiers.control, cx)
+                    {
                         cx.notify();
                         cx.stop_propagation();
                         return;
@@ -660,6 +662,13 @@ impl Render for ChartPanel {
                         None
                     };
                     this.sync_native_cursor();
+                    // ПКМ по нарисованной фигуре (в режиме карандаша) → меню Alert/Удалить.
+                    // Приоритетнее всего; suppress_rmb_up гасит парный up → фулскрин НЕ рвётся.
+                    if within && this.try_open_figure_menu(pos, e.position, window, cx) {
+                        this.suppress_rmb_up = true;
+                        cx.stop_propagation();
+                        return;
+                    }
                     // ПКМ по линии ордера → контекстное меню (Cancel / Join sells / Split).
                     // Приоритетнее постановки/зума: на линии всегда открываем меню. Гасим и
                     // последующий ПКМ-up (флаг), чтобы родитель не вышел из фулскрина и т.п.

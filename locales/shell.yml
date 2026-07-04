@@ -230,6 +230,10 @@ core_settings.frame_actions:
   ru: "Действия"
   en: "Actions"
   es: "Acciones"
+core_settings.def_strategy:
+  ru: "Стратегия алертов"
+  en: "Alert strategy"
+  es: "Estrategia de alerta"
 core_settings.cancel_all:
   ru: "Отменить все ордера"
   en: "Cancel all orders"
@@ -429,3 +433,79 @@ shell.engine_action.reload_order_book:
   ru: "Перезагрузка стакана"
   en: "Order book reload"
   es: "Recarga del libro de órdenes"
+
+# --- Контекст-меню нарисованной фигуры (ПКМ в режиме карандаша) ---
+chart.fig_menu.alert_on:
+  ru: "Alert: включить"
+  en: "Alert: on"
+  es: "Alerta: activar"
+chart.fig_menu.alert_off:
+  ru: "Alert: выключить"
+  en: "Alert: off"
+  es: "Alerta: desactivar"
+chart.fig_menu.delete:
+  ru: "Удалить фигуру"
+  en: "Delete figure"
+  es: "Eliminar figura"
+
+# --- Окно «Алерты» ---
+alerts.window_title:
+  ru: "Алерты"
+  en: "Alerts"
+  es: "Alertas"
+alerts.col.core:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+alerts.col.coin:
+  ru: "Монета"
+  en: "Coin"
+  es: "Moneda"
+alerts.col.figure:
+  ru: "Фигура"
+  en: "Figure"
+  es: "Figura"
+alerts.col.price:
+  ru: "Цена"
+  en: "Price"
+  es: "Precio"
+alerts.col.time:
+  ru: "Время"
+  en: "Time"
+  es: "Hora"
+alerts.col.strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+alerts.clear:
+  ru: "Убрать"
+  en: "Clear"
+  es: "Quitar"
+alerts.duration:
+  ru: "Длительность, сек"
+  en: "Duration, sec"
+  es: "Duración, seg"
+alerts.repeat:
+  ru: "Повторять звук"
+  en: "Repeat sound"
+  es: "Repetir sonido"
+alerts.sound:
+  ru: "Выбор звука"
+  en: "Sound"
+  es: "Sonido"
+alerts.fig.hline:
+  ru: "Горизонталь"
+  en: "Price Line"
+  es: "Línea de precio"
+alerts.fig.line:
+  ru: "Линия"
+  en: "Line"
+  es: "Línea"
+alerts.fig.triangle:
+  ru: "Треугольник"
+  en: "Triangle"
+  es: "Triángulo"
+alerts.fig.channel:
+  ru: "Канал"
+  en: "Channel"
+  es: "Canal"

@@ -18,14 +18,15 @@ use moon_core::config::paths;
 
 use crate::Backend;
 use crate::chart_tabs::ChartTabs;
-use crate::panels::{AssetsView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel};
+use crate::panels::{AlertsPanel, AssetsView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel};
 use moon_core::session::CoreId;
 
 /// Версия схемы раскладки доков. Поднимаем при несовместимом изменении структуры
 /// панелей → старый `docks.json` игнорируется (откат к дефолтной раскладке).
 /// v2: убрана панель «Order» (кнопки BUY/SELL справа от чарта) — старые раскладки
 /// с ней давали бы «missing panel»-заглушку, поэтому сбрасываем их к дефолту.
-pub const DOCK_VERSION: usize = 2;
+/// v3: добавлена нижняя вкладка «Алерты» — сброс раскладки, чтобы она появилась.
+pub const DOCK_VERSION: usize = 3;
 
 /// Карта раскладок: группа → состояние её `DockArea`.
 pub type DockMap = HashMap<String, DockAreaState>;
@@ -139,6 +140,15 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
             let group = group_of(info);
             let backend = backend.clone();
             Rc::new(cx.new(|cx| ReportPanel::new(backend, group, window, cx)))
+        });
+    }
+    // Алерты: группа из state; нужен `window` (поле фильтра — InputState).
+    {
+        let backend = backend.clone();
+        register_panel(cx, "Alerts", move |_s, info, window, cx| {
+            let group = group_of(info);
+            let backend = backend.clone();
+            Rc::new(cx.new(|cx| AlertsPanel::new(backend, group, window, cx)))
         });
     }
 }

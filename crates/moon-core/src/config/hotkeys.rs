@@ -212,11 +212,16 @@ pub struct HotkeysConfig {
     pub draw_hline: String,
     #[serde(default = "default_draw_segment")]
     pub draw_segment: String,
+    #[serde(default = "default_draw_triangle")]
+    pub draw_triangle: String,
     #[serde(default = "default_draw_channel")]
     pub draw_channel: String,
     /// Удалить выделенную фигуру.
     #[serde(default = "default_fig_delete")]
     pub fig_delete: String,
+    /// Тоггл галки «Alert» у выделенной фигуры (заармить/разоружить chart-алерт).
+    #[serde(default = "default_fig_alert")]
+    pub fig_alert: String,
 
     /// Живой MoonBot-путь MultiOrders: поставить long по стакану.
     #[serde(default = "default_left_double")]
@@ -290,8 +295,10 @@ impl Default for HotkeysConfig {
             broadcast: String::new(),
             draw_hline: default_draw_hline(),
             draw_segment: default_draw_segment(),
+            draw_triangle: default_draw_triangle(),
             draw_channel: default_draw_channel(),
             fig_delete: default_fig_delete(),
+            fig_alert: default_fig_alert(),
             buy_set_click: default_left_double(),
             short_set_click: MouseGestureBinding::None,
             pending_long_click: MouseGestureBinding::None,
@@ -329,12 +336,20 @@ fn default_draw_segment() -> String {
     "ctrl-l".into()
 }
 
+fn default_draw_triangle() -> String {
+    "ctrl-t".into()
+}
+
 fn default_draw_channel() -> String {
     "ctrl-k".into()
 }
 
 fn default_fig_delete() -> String {
     "delete".into()
+}
+
+fn default_fig_alert() -> String {
+    "ctrl-b".into()
 }
 
 fn default_make_shot() -> String {

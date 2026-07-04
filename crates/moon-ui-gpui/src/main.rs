@@ -16,6 +16,7 @@
 
 mod axes;
 mod chart_persist;
+mod detect_sound;
 mod chart_tabs;
 mod chartdx;
 mod controls;
@@ -26,6 +27,7 @@ mod design;
 mod detached;
 mod diag;
 mod dock_persist;
+mod figures_backend;
 mod firetest;
 mod group_window;
 mod icons;
@@ -33,6 +35,7 @@ mod input;
 mod panels;
 mod screener;
 mod settings;
+mod sound;
 mod shell;
 mod strategies;
 mod terminal_chrome;
@@ -305,12 +308,25 @@ struct Backend {
     /// всех панелей (Rc клонится в движки чартов). Персист figures.json, дебаунс-сейв
     /// коорд-тиком по `dirty` стора.
     figures: std::rc::Rc<std::cell::RefCell<moon_core::figures::FigureStore>>,
-    /// Активный инструмент режима рисования (карандаш). None = режим выключен.
-    /// Тоггл хоткеями (Shell::on_hotkey); панели чартов читают при кликах.
-    fig_tool: Option<moon_core::figures::FigureTool>,
+    /// Режим рисования включён (кнопка-карандаш нажата, ДЕФОЛТ — вкл). В нём: Ctrl+ЛКМ
+    /// рисует фигуру `fig_tool`, простой ЛКМ выделяет/двигает существующую. Выкл — фигуры
+    /// СКРЫТЫ и заморожены, чарт работает как обычно.
+    fig_draw_mode: bool,
+    /// Выбранный инструмент рисования (что рисует Ctrl+ЛКМ). Выбор в попапе карандаша.
+    fig_tool: moon_core::figures::FigureTool,
+    /// Стиль новых фигур (цвет/толщина/пунктир) — правится в попапе карандаша.
+    fig_style: moon_core::figures::DrawStyle,
     /// Выделенная фигура (ядро, монета, id) — одна на приложение: подсветка+узлы на
-    /// чарте, хоткей удаления работает по ней из Shell.
+    /// чарте, хоткеи удаления/алерта работают по ней из Shell.
     fig_selected: Option<(CoreId, String, u64)>,
+    /// Последняя виденная суммарная ревизия серверных chart-алертов (гейт реконсиляции
+    /// remote-фигур в дренаж-пути).
+    last_chart_alerts_activity: u64,
+    /// Курсор последнего проигранного детекта по ядру (звук детектов/алертов).
+    last_detect_seq: std::collections::HashMap<CoreId, u64>,
+    /// Звук по умолчанию для срабатывания алерта без стратегии («Выбор звука» в панели
+    /// «Алерты»). Стем wav; см. `sound`/`detect_sound`.
+    default_alert_sound: String,
     /// Конфиг изменён в памяти и ждёт дебаунс-сейва (правка размеров ордера колесом мыши —
     /// часто; на диск пишем раз за дренаж-тик). Дренаж зовёт `config.save()` и сбрасывает.
     config_dirty: bool,
@@ -1048,8 +1064,13 @@ fn main() -> anyhow::Result<()> {
             figures: std::rc::Rc::new(std::cell::RefCell::new(
                 moon_core::figures::FigureStore::load(),
             )),
-            fig_tool: None,
+            fig_draw_mode: true,
+            fig_tool: moon_core::figures::FigureTool::HLine,
+            fig_style: moon_core::figures::DrawStyle::default(),
             fig_selected: None,
+            last_chart_alerts_activity: 0,
+            last_detect_seq: std::collections::HashMap::new(),
+            default_alert_sound: "ding1".to_string(),
             config_dirty: false,
             quitting: false,
         });
@@ -1161,6 +1182,16 @@ fn main() -> anyhow::Result<()> {
                         if !drain.any {
                             return;
                         }
+                        // Серверный набор chart-алертов изменился → пере-декодировать
+                        // remote-фигуры (алерты, созданные в ядре/MoonBot). Гейт по activity,
+                        // чтобы не декодить blob'ы на каждый ui_state-тик.
+                        let alerts_activity = b.session.store().chart_alerts_activity();
+                        if alerts_activity != b.last_chart_alerts_activity {
+                            b.last_chart_alerts_activity = alerts_activity;
+                            b.sync_remote_alerts();
+                        }
+                        // Звук детектов/алертов ядер (по новым детектам со звуком).
+                        b.play_detect_sounds();
                         if drain.order_lines_data {
                             let chart_consumers = b.live_chart_consumers();
                             for chart in chart_consumers {

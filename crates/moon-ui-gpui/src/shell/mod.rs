@@ -94,6 +94,9 @@ pub(crate) struct Shell {
     /// НЕ общий с `blacklist_input`: textarea необратимо переводит стейт в multi-line
     /// (single-line поле после этого рендерится узкой полоской). Текст синкается в тогле.
     blacklist_area: Entity<MoonInputState>,
+    /// Поле поиска стратегии в списке «Стратегия алертов» попапа настроек ядра (сотни
+    /// стратегий → фильтр + скролл; выпадашка внутри поповера ловится как клик-вне).
+    def_strategy_input: Entity<MoonInputState>,
     /// Какой попап метрики тулбара открыт (TP/SL/Lev). Overlay рисуется поверх дока, закрытие
     /// по клику вне (dismiss-слой), уводу мыши или повторному клику по кнопке. None = закрыт.
     open_metric_popup: Option<controls::TradeMetric>,
@@ -206,6 +209,11 @@ impl Shell {
                 bottom_tabs.push(Rc::new(
                     cx.new(|cx| ReportPanel::new(backend.clone(), group.clone(), window, cx)),
                 ));
+            }
+            if !detached_set.contains("Alerts") {
+                bottom_tabs.push(Rc::new(cx.new(|cx| {
+                    crate::panels::AlertsPanel::new(backend.clone(), group.clone(), window, cx)
+                })));
             }
 
             // ВСЁ — в center-сплите: размеры панелей меняются split-handle'ами,
@@ -410,6 +418,15 @@ impl Shell {
         let trailing_input = cx.new(|cx| MoonInputState::new(window, cx));
         let vstop_input = cx.new(|cx| MoonInputState::new(window, cx));
         let blacklist_input = cx.new(|cx| MoonInputState::new(window, cx));
+        let def_strategy_input =
+            cx.new(|cx| MoonInputState::new(window, cx).placeholder("поиск…"));
+        // Ввод в поле поиска стратегии → перерисовать попап (пере-фильтровать список).
+        cx.subscribe(&def_strategy_input, |_this, _, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
         // Multi-line от рождения; Enter коммитит (submit), а не вставляет перенос строки.
         let blacklist_area =
             cx.new(|cx| MoonInputState::new(window, cx).multi_line(true).submit_on_enter(true));
@@ -561,6 +578,7 @@ impl Shell {
             vstop_input,
             blacklist_input,
             blacklist_area,
+            def_strategy_input,
             open_metric_popup: None,
             metric_popup_hovered: false,
             focus,
@@ -844,7 +862,7 @@ impl Shell {
         let handled = self.backend.update(cx, |b, bcx| {
             // Фаза 1 (только чтение cfg): какой хоткей совпал. Сравниваем нажатую
             // клавишу с каждым настроенным сочетанием (gpui Keystroke).
-            let (size_ix, sell_ix, is_cancel, fig_tool, is_fig_delete, is_escape) = {
+            let (size_ix, sell_ix, is_cancel, fig_tool, is_fig_delete, is_escape, is_fig_alert) = {
                 let cfg = b.preview.as_ref().unwrap_or(&b.config);
                 // Сравниваем ТОЛЬКО modifiers+key: event на Windows несёт ещё и
                 // key_char (напечатанный символ), которого у Keystroke::parse нет —
@@ -866,6 +884,8 @@ impl Shell {
                     Some(FigureTool::HLine)
                 } else if pressed(&cfg.hotkeys.draw_segment) {
                     Some(FigureTool::Segment)
+                } else if pressed(&cfg.hotkeys.draw_triangle) {
+                    Some(FigureTool::Triangle)
                 } else if pressed(&cfg.hotkeys.draw_channel) {
                     Some(FigureTool::Channel)
                 } else {
@@ -878,27 +898,34 @@ impl Shell {
                     fig_tool,
                     pressed(&cfg.hotkeys.fig_delete),
                     ev.keystroke.key == "escape" && ev.keystroke.modifiers == Modifiers::default(),
+                    pressed(&cfg.hotkeys.fig_alert),
                 )
             };
-            // Слой рисования: тоггл инструмента (повтор = выкл), Esc выключает режим,
-            // fig_delete удаляет выделенную фигуру. Идёт до торговых веток.
+            // Слой рисования: хоткей инструмента выбирает его И включает режим-карандаш
+            // (повтор того же инструмента в активном режиме — выключает). Esc выключает
+            // режим. fig_delete/fig_alert работают по выделенной фигуре. До торговых веток.
             if let Some(tool) = fig_tool {
-                b.fig_tool = if b.fig_tool == Some(tool) {
-                    None
+                if b.fig_draw_mode && b.fig_tool == tool {
+                    b.fig_draw_mode = false;
                 } else {
-                    Some(tool)
-                };
+                    b.fig_tool = tool;
+                    b.fig_draw_mode = true;
+                }
                 bcx.notify();
                 return true;
             }
-            if is_escape && b.fig_tool.is_some() {
-                b.fig_tool = None;
+            if is_escape && b.fig_draw_mode {
+                b.fig_draw_mode = false;
+                bcx.notify();
+                return true;
+            }
+            if is_fig_alert && b.toggle_selected_figure_alert() {
                 bcx.notify();
                 return true;
             }
             if is_fig_delete {
-                if let Some((core, market, id)) = b.fig_selected.take() {
-                    b.figures.borrow_mut().remove(core, &market, id);
+                if let Some((core, market, id)) = b.fig_selected.clone() {
+                    b.remove_figure(core, &market, id);
                     bcx.notify();
                     return true;
                 }

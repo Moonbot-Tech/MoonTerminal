@@ -229,6 +229,17 @@ pub enum CoreCmd {
     /// Локально (Active Lib): исключать монеты из ЧС при расчёте рыночной дельты. Не wire-поле
     /// настроек — moonproto `settings().set_exclude_blacklisted_markets_from_exchange_delta`.
     SetExcludeBlacklistedDelta(bool),
+    /// Заармить/обновить chart-алерт (нарисованную фигуру с галкой «Alert») на рынке ядра.
+    /// `blob` — сериализованный `TChartObject` (см. `alert_blob`). moonproto
+    /// `chart_alerts().upsert(market, obj_uid, blob)`. Сервер авторитетен; ответ вернётся
+    /// `Event::ChartAlert::Upserted`.
+    ChartAlertUpsert {
+        market: String,
+        obj_uid: u64,
+        blob: Vec<u8>,
+    },
+    /// Разоружить/удалить chart-алерт по `obj_uid`. moonproto `chart_alerts().delete`.
+    ChartAlertDelete { market: String, obj_uid: u64 },
 }
 
 #[derive(Clone)]

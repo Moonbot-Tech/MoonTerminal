@@ -48,8 +48,10 @@ enum HotkeySlot {
     Broadcast,
     DrawHline,
     DrawSegment,
+    DrawTriangle,
     DrawChannel,
     FigDelete,
+    FigAlert,
 }
 
 #[derive(Clone, Copy)]
@@ -252,6 +254,13 @@ impl SettingsView {
                         cx,
                     ),
                     self.hotkey_row(
+                        t!("hotkeys.draw_triangle").to_string(),
+                        t!("hotkeys.draw_triangle_hint").to_string(),
+                        HotkeySlot::DrawTriangle,
+                        &hotkeys,
+                        cx,
+                    ),
+                    self.hotkey_row(
                         t!("hotkeys.draw_channel").to_string(),
                         t!("hotkeys.draw_channel_hint").to_string(),
                         HotkeySlot::DrawChannel,
@@ -262,6 +271,13 @@ impl SettingsView {
                         t!("hotkeys.fig_delete").to_string(),
                         t!("hotkeys.fig_delete_hint").to_string(),
                         HotkeySlot::FigDelete,
+                        &hotkeys,
+                        cx,
+                    ),
+                    self.hotkey_row(
+                        t!("hotkeys.fig_alert").to_string(),
+                        t!("hotkeys.fig_alert_hint").to_string(),
+                        HotkeySlot::FigAlert,
                         &hotkeys,
                         cx,
                     ),
@@ -747,8 +763,10 @@ macro_rules! hotkey_field {
             HotkeySlot::Broadcast => $($brw)+ $hotkeys.broadcast,
             HotkeySlot::DrawHline => $($brw)+ $hotkeys.draw_hline,
             HotkeySlot::DrawSegment => $($brw)+ $hotkeys.draw_segment,
+            HotkeySlot::DrawTriangle => $($brw)+ $hotkeys.draw_triangle,
             HotkeySlot::DrawChannel => $($brw)+ $hotkeys.draw_channel,
             HotkeySlot::FigDelete => $($brw)+ $hotkeys.fig_delete,
+            HotkeySlot::FigAlert => $($brw)+ $hotkeys.fig_alert,
         }
     };
 }
@@ -899,7 +917,9 @@ fn slot_id(slot: HotkeySlot) -> String {
         HotkeySlot::Broadcast => "broadcast".into(),
         HotkeySlot::DrawHline => "draw-hline".into(),
         HotkeySlot::DrawSegment => "draw-segment".into(),
+        HotkeySlot::DrawTriangle => "draw-triangle".into(),
         HotkeySlot::DrawChannel => "draw-channel".into(),
         HotkeySlot::FigDelete => "fig-delete".into(),
+        HotkeySlot::FigAlert => "fig-alert".into(),
     }
 }

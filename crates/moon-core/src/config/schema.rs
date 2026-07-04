@@ -121,6 +121,9 @@ pub struct ServerMeta {
     /// дефолт по базе ядра (см. `ServerConfig::order_sizes`).
     #[serde(default)]
     pub order_sizes: Option<[f64; 6]>,
+    /// Стратегия алертов по умолчанию (id вида «Alerts»), см. `ServerConfig::default_alert_strategy`.
+    #[serde(default)]
+    pub default_alert_strategy: u64,
 }
 
 #[derive(Default, Serialize, Deserialize)]

@@ -84,13 +84,14 @@ fn panel_title(name: &str) -> String {
         "Assets" => t!("dock.tab.assets").to_string(),
         "Log" => t!("dock.tab.log").to_string(),
         "Report" => t!("dock.tab.report").to_string(),
+        "Alerts" => t!("dock.tab.alerts").to_string(),
         _ => t!("dock.tab.generic").to_string(),
     }
 }
 
 /// True for panels that can be moved into a detached OS window.
 pub fn supports_panel(name: &str) -> bool {
-    matches!(name, "Orders" | "Assets" | "Log" | "Report")
+    matches!(name, "Orders" | "Assets" | "Log" | "Report" | "Alerts")
 }
 
 /// Свежий экземпляр dock-панели по `panel_name` как `Rc<dyn PanelView>` — для репина
@@ -115,6 +116,9 @@ pub fn build_panel(
             ),
             "Assets" => Rc::new(cx.new(|cx| {
                 AssetsView::restored_group(backend.clone(), group.to_string(), window, cx)
+            })),
+            "Alerts" => Rc::new(cx.new(|cx| {
+                crate::panels::AlertsPanel::new(backend.clone(), group.to_string(), window, cx)
             })),
             _ => return None,
         };
@@ -294,6 +298,11 @@ pub fn spawn(
             "Assets" => cx
                 .new(|cx| {
                     AssetsView::detached_group(backend.clone(), spec.group.clone(), window, cx)
+                })
+                .into(),
+            "Alerts" => cx
+                .new(|cx| {
+                    crate::panels::AlertsPanel::new(backend.clone(), spec.group.clone(), window, cx)
                 })
                 .into(),
             _ => cx

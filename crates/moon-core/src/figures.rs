@@ -21,15 +21,19 @@ pub struct FigNode {
     pub price: f64,
 }
 
-/// Вид фигуры. MVP: горизонталь / отрезок / канал; Fibo и треугольник — следом.
+/// Вид фигуры. Соответствие типам blob `TChartObject` MoonBot: HLine=1, Segment=2,
+/// Triangle=4, Channel=5 (Fibo=3 пока не поддержан). Треугольник = 3 вершины;
+/// канал MoonBot = ДВЕ ГОРИЗОНТАЛЬНЫЕ цены (ценовой коридор), без времени.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FigureKind {
     /// Горизонтальная линия на цене (бесконечная по времени).
     HLine { price: f64 },
     /// Отрезок между двумя узлами.
     Segment { a: FigNode, b: FigNode },
-    /// Параллельный канал: базовый отрезок + смещение цены второй линии.
-    Channel { a: FigNode, b: FigNode, dprice: f64 },
+    /// Треугольник по трём вершинам (как △ в MoonBot, тип 4).
+    Triangle { a: FigNode, b: FigNode, c: FigNode },
+    /// Горизонтальный канал: две цены (как канал MoonBot, тип 5).
+    Channel { price1: f64, price2: f64 },
 }
 
 impl FigureKind {
@@ -38,6 +42,7 @@ impl FigureKind {
         match self {
             FigureKind::HLine { .. } => "Горизонталь",
             FigureKind::Segment { .. } => "Линия",
+            FigureKind::Triangle { .. } => "Треугольник",
             FigureKind::Channel { .. } => "Канал",
         }
     }
@@ -46,7 +51,8 @@ impl FigureKind {
     pub fn anchor_price(&self) -> f64 {
         match self {
             FigureKind::HLine { price } => *price,
-            FigureKind::Segment { a, .. } | FigureKind::Channel { a, .. } => a.price,
+            FigureKind::Channel { price1, .. } => *price1,
+            FigureKind::Segment { a, .. } | FigureKind::Triangle { a, .. } => a.price,
         }
     }
 }
@@ -62,22 +68,111 @@ pub struct Figure {
     pub color: [u8; 4],
     /// Толщина, px (до масштабирования ppp).
     pub thickness: f32,
-    /// Пунктир (Kind=Dash MoonBot).
-    pub dashed: bool,
+    /// Вид линии (Solid/Dash/Dot/DashDot/DashDotDot), в blob @13.
+    #[serde(default)]
+    pub line_kind: LineKind,
     /// Unix ms создания (колонка Time списка алертов).
     pub created_ms: i64,
-    /// Галка «Alert»: фигура отправлена ядру как chart-алерт (этап 2+; пока
-    /// только персистится).
+    /// Галка «Alert»: фигура отправлена ядру как chart-алерт.
     pub alert: bool,
+    /// Привязанная стратегия (id вида «Alerts»); 0 = без стратегии. Уходит в blob (@32).
+    #[serde(default)]
+    pub strategy_id: u64,
+    /// Фигура ПРИШЛА ИЗ ЯДРА (алерт, нарисованный в MoonBot): декодирована из
+    /// серверного blob'а, а не нарисована у нас. Такие НЕ персистятся (управляет
+    /// сервер) и удаляются, когда сервер их снимает; но их можно выделять/двигать —
+    /// правка ре-апсертится в ядро. Не сериализуется (загруженные всегда локальные).
+    #[serde(default, skip)]
+    pub from_server: bool,
 }
 
 /// Инструмент режима рисования (какую фигуру ставит карандаш). Глобален для
-/// приложения (тоггл хоткеем), живёт в Backend UI.
+/// приложения (выбор в попапе карандаша), живёт в Backend UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FigureTool {
     HLine,
     Segment,
+    Triangle,
     Channel,
+}
+
+/// Стиль линии (соответствует «Kind» MoonBot и Delphi `TPenStyle` в blob @13):
+/// Solid=0, Dash=1, Dot=2, DashDot=3, DashDotDot=4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LineKind {
+    Solid,
+    #[default]
+    Dash,
+    Dot,
+    DashDot,
+    DashDotDot,
+}
+
+impl LineKind {
+    pub const ALL: [LineKind; 5] = [
+        LineKind::Solid,
+        LineKind::Dash,
+        LineKind::Dot,
+        LineKind::DashDot,
+        LineKind::DashDotDot,
+    ];
+
+    /// TPenStyle (значение @13 в blob).
+    pub fn to_pen(self) -> u32 {
+        match self {
+            LineKind::Solid => 0,
+            LineKind::Dash => 1,
+            LineKind::Dot => 2,
+            LineKind::DashDot => 3,
+            LineKind::DashDotDot => 4,
+        }
+    }
+
+    pub fn from_pen(v: u32) -> Self {
+        match v {
+            0 => LineKind::Solid,
+            2 => LineKind::Dot,
+            3 => LineKind::DashDot,
+            4 => LineKind::DashDotDot,
+            _ => LineKind::Dash,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LineKind::Solid => "Solid",
+            LineKind::Dash => "Dash",
+            LineKind::Dot => "Dot",
+            LineKind::DashDot => "DashDot",
+            LineKind::DashDotDot => "DashDotDot",
+        }
+    }
+
+    /// Сплошная ли (для рендера горизонталей: LineInstance.style 0/1).
+    pub fn is_solid(self) -> bool {
+        self == LineKind::Solid
+    }
+}
+
+/// Текущий стиль рисования (цвет/толщина/вид линии) — применяется к НОВЫМ фигурам,
+/// правится в попапе карандаша. Живёт в Backend UI.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DrawStyle {
+    /// RGBA; `a` — «Opacity» из попапа.
+    pub color: [u8; 4],
+    pub thickness: f32,
+    pub kind: LineKind,
+}
+
+impl Default for DrawStyle {
+    fn default() -> Self {
+        // Голубой (отличать от ордер-линий), 1 px, пунктир (Dash).
+        Self {
+            color: [64, 196, 255, 255],
+            thickness: 1.0,
+            kind: LineKind::Dash,
+        }
+    }
 }
 
 /// Ключ набора фигур: чарт конкретного ядра и монеты.
@@ -88,6 +183,9 @@ pub type FigureKey = (CoreId, String);
 /// (дебаунс-сейв коорд-тиком, как config/docks).
 #[derive(Debug, Default)]
 pub struct FigureStore {
+    /// Все фигуры чартов: локальные (`from_server=false`, персистятся) + серверные
+    /// алерты из MoonBot (`from_server=true`, управляет сервер). И те, и другие
+    /// одинаково выделяются/двигаются/удаляются.
     by_key: HashMap<FigureKey, Vec<Figure>>,
     next_id: u64,
     /// Растёт при любой правке — data_state чарта перечитывает набор по ней.
@@ -108,14 +206,46 @@ impl FigureStore {
             .unwrap_or(&[])
     }
 
+    /// Реконсиляция серверных алерт-фигур (созданных в ядре/MoonBot) в общий набор.
+    /// `server` — свежий полный набор `from_server`-фигур из декодированных blob'ов.
+    /// Локальные (`from_server=false`) не трогаем; наши уже заармленные (id совпал с
+    /// локальным) — не дублируем. Зовётся только при изменении серверного набора
+    /// (гейт по activity), поэтому rev бампаем безусловно.
+    pub fn set_server_figures(&mut self, server: HashMap<FigureKey, Vec<Figure>>) {
+        for figs in self.by_key.values_mut() {
+            figs.retain(|f| !f.from_server);
+        }
+        for (key, figs) in server {
+            let entry = self.by_key.entry(key).or_default();
+            for f in figs {
+                if entry.iter().any(|e| e.id == f.id && !e.from_server) {
+                    continue;
+                }
+                entry.push(f);
+            }
+        }
+        self.by_key.retain(|_, v| !v.is_empty());
+        self.rev = self.rev.wrapping_add(1);
+    }
+
+    /// Все фигуры-алерты для окна «Алерты»: `(core, market, &Figure)`.
+    pub fn all_alerts(&self) -> impl Iterator<Item = (CoreId, &str, &Figure)> + '_ {
+        self.by_key.iter().flat_map(|((c, m), v)| {
+            v.iter()
+                .filter(|f| f.alert)
+                .map(move |f| (*c, m.as_str(), f))
+        })
+    }
+
     pub fn get(&self, core: CoreId, market: &str, id: u64) -> Option<&Figure> {
         self.figures(core, market).iter().find(|f| f.id == id)
     }
 
-    /// Добавляет фигуру, возвращает её id.
+    /// Добавляет ЛОКАЛЬНУЮ фигуру, возвращает её id.
     pub fn add(&mut self, core: CoreId, market: &str, mut fig: Figure) -> u64 {
         self.next_id += 1;
         fig.id = self.next_id;
+        fig.from_server = false;
         let id = fig.id;
         self.by_key
             .entry((core, market.to_string()))
@@ -198,15 +328,20 @@ impl FigureStore {
         store
     }
 
-    /// Сохранение в `figures.json` (не фатально). Сбрасывает `dirty`.
+    /// Сохранение в `figures.json` (не фатально). Сбрасывает `dirty`. Серверные
+    /// (`from_server`) алерты НЕ персистятся — ими управляет ядро.
     pub fn save(&mut self) {
         let list: Vec<PersistEntry> = self
             .by_key
             .iter()
-            .map(|((core, market), figures)| PersistEntry {
-                core: *core,
-                market: market.clone(),
-                figures: figures.clone(),
+            .filter_map(|((core, market), figures)| {
+                let figures: Vec<Figure> =
+                    figures.iter().filter(|f| !f.from_server).cloned().collect();
+                (!figures.is_empty()).then(|| PersistEntry {
+                    core: *core,
+                    market: market.clone(),
+                    figures,
+                })
             })
             .collect();
         match serde_json::to_string_pretty(&list) {

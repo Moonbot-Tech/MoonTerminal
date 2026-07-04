@@ -282,6 +282,30 @@ pub(super) fn drain_commands(
                 }
                 log::info!("core {} convert dust", server.id);
             }
+            Ok(CoreCmd::ChartAlertUpsert {
+                market,
+                obj_uid,
+                blob,
+            }) => {
+                if let Err(error) = client.chart_alerts().upsert(market.clone(), obj_uid, blob) {
+                    log::warn!(
+                        "core {} chart alert upsert {market} uid={obj_uid} failed: {error}",
+                        server.id
+                    );
+                } else {
+                    log::info!("core {} chart alert upsert {market} uid={obj_uid}", server.id);
+                }
+            }
+            Ok(CoreCmd::ChartAlertDelete { market, obj_uid }) => {
+                if let Err(error) = client.chart_alerts().delete(market.clone(), obj_uid) {
+                    log::warn!(
+                        "core {} chart alert delete {market} uid={obj_uid} failed: {error}",
+                        server.id
+                    );
+                } else {
+                    log::info!("core {} chart alert delete {market} uid={obj_uid}", server.id);
+                }
+            }
             Ok(CoreCmd::PlaceOrder {
                 market,
                 short,

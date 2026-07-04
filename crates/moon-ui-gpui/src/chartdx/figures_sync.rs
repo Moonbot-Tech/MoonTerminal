@@ -16,6 +16,8 @@ use super::ChartDataState;
 /// hover, выделение). Любая смена бампает `rev` → пересборка userdata.
 #[derive(Default, Clone, PartialEq)]
 pub(crate) struct FigureVisual {
+    /// Режим рисования (карандаш). Фигуры видны/интерактивны ТОЛЬКО когда он включён.
+    pub draw_mode: bool,
     /// Чарт (ядро+монета), к которому относится интерактив. Панель-движок может
     /// держать СТЕК панелей разных монет — превью/подсветка применяются только
     /// к панели с этим ключом.
@@ -65,7 +67,8 @@ impl ChartDataState {
         if sig == u64::MAX { 0 } else { sig }
     }
 
-    /// Добавить геометрию фигур панели (ядро+монета) в userdata-буферы.
+    /// Добавить геометрию фигур панели (ядро+монета) в userdata-буферы. Фигуры видны
+    /// ТОЛЬКО в режиме рисования (карандаш) — иначе слой не строим вовсе.
     pub(super) fn append_figure_geometry(
         &self,
         core: CoreId,
@@ -75,10 +78,14 @@ impl ChartDataState {
         segs: &mut Vec<moon_chart::layers::SegInstance>,
         markers: &mut Vec<moon_chart::layers::MarkerInstance>,
     ) {
+        if !self.figure_visual.draw_mode {
+            return;
+        }
         let Some(store) = self.figures.as_ref() else {
             return;
         };
         let store = store.borrow();
+        // Локальные + серверные (from_server) — единый набор, все интерактивны.
         let figures = store.figures(core, market);
         // Интерактив (превью/hover/выделение) — только для панели своего ключа:
         // в стеке панелей разных монет draft рисуется лишь там, где курсор.

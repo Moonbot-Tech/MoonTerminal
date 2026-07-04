@@ -54,6 +54,7 @@ pub fn from_legacy_enc() -> anyhow::Result<AppConfig> {
             synthetic: false,
             chart_bundle: String::new(),
             order_sizes: None,
+            default_alert_strategy: 0,
         })
         .collect();
     Ok(AppConfig {
@@ -96,6 +97,7 @@ pub fn from_legacy_toml() -> anyhow::Result<AppConfig> {
             synthetic: false,
             chart_bundle: String::new(),
             order_sizes: None,
+            default_alert_strategy: 0,
         }],
         groups: Vec::new(),
         language: super::Language::default(),

@@ -190,6 +190,9 @@ impl ChartPanel {
             let b = self.backend.read(cx);
             self.chart.sync_orders_if_visible(&b.session, false);
         }
+        // Режим карандаша/выделение меняются в шапке (strip)/хоткеями — их состояние
+        // приходит сюда только через observe бэкенда; прокидываем в движок фигур.
+        self.sync_fig_visual(cx);
         self.clear_settled_order_drag_preview(cx) && self.apply_order_visual(cx)
     }
 

@@ -116,7 +116,9 @@ impl DetectsPanel {
             }
             self.last_seq.insert(id, fresh[0].seq);
             for det in fresh.iter().rev() {
-                if !det.sound_alert || det.add_to_chart > 0 {
+                // Показываем детекты со звук-алертом И срабатывания алертов (даже без
+                // стратегии); AddToChart-детекты уходят в чарт-вкладки, не сюда.
+                if (!det.sound_alert && !det.is_alert) || det.add_to_chart > 0 {
                     continue;
                 }
                 let ttl = (det.keep_alert_secs.max(1) as f64) * 1000.0;

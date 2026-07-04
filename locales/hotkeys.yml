@@ -411,8 +411,8 @@ hotkeys.group.draw:
   en: "Drawing"
   es: "Dibujo"
 hotkeys.group.draw_hint:
-  ru: "Фигуры на чарте: хоткей включает инструмент (повтор или Esc — выключает), ЛКМ ставит узлы. Клик по фигуре вне режима — выделение, драг узлов/тела — правка."
-  en: "Chart figures: hotkey toggles the tool (again or Esc turns it off), LMB places nodes. Clicking a figure outside the mode selects it; drag nodes/body to edit."
+  ru: "Фигуры на чарте (как карандаш MoonBot). Хоткей выбирает инструмент и включает режим рисования (повтор/Esc — выкл). В режиме: Ctrl+ЛКМ рисует, простой ЛКМ выделяет/двигает фигуру. Кнопка-карандаш в полоске вкладок: ЛКМ — режим, ПКМ — стиль (цвет/толщина/Solid-Dash)."
+  en: "Chart figures (MoonBot-style pencil). Hotkey selects the tool and enters draw mode (again/Esc turns it off). In draw mode: Ctrl+LMB draws, plain LMB selects/moves a figure. Pencil button in the tab strip: LMB — mode, RMB — style (color/thickness/Solid-Dash)."
   es: "Figuras en el gráfico: la tecla activa la herramienta (repetir o Esc la desactiva), clic izquierdo coloca nodos. Clic en una figura fuera del modo la selecciona; arrastre nodos/cuerpo para editar."
 hotkeys.draw_hline:
   ru: "Горизонтальная линия"
@@ -430,14 +430,22 @@ hotkeys.draw_segment_hint:
   ru: "Инструмент: два клика — начало и конец линии."
   en: "Tool: two clicks — line start and end."
   es: "Herramienta: dos clics — inicio y fin de la línea."
+hotkeys.draw_triangle:
+  ru: "Треугольник"
+  en: "Triangle"
+  es: "Triángulo"
+hotkeys.draw_triangle_hint:
+  ru: "Инструмент: три клика — три вершины треугольника (△ MoonBot)."
+  en: "Tool: three clicks — the triangle's three vertices (MoonBot △)."
+  es: "Herramienta: tres clics — los tres vértices del triángulo (△ MoonBot)."
 hotkeys.draw_channel:
   ru: "Параллельный канал"
   en: "Parallel channel"
   es: "Canal paralelo"
 hotkeys.draw_channel_hint:
-  ru: "Инструмент: два клика — базовая линия, третий — ширина канала."
-  en: "Tool: two clicks — base line, third — channel width."
-  es: "Herramienta: dos clics — línea base, tercero — ancho del canal."
+  ru: "Инструмент: два клика по ценам — горизонтальный канал (коридор, как канал MoonBot)."
+  en: "Tool: two clicks at prices — a horizontal channel (band, like MoonBot channel)."
+  es: "Herramienta: dos clics en precios — un canal horizontal (banda, como el canal de MoonBot)."
 hotkeys.fig_delete:
   ru: "Удалить выделенную фигуру"
   en: "Delete selected figure"
@@ -446,3 +454,11 @@ hotkeys.fig_delete_hint:
   ru: "Удаляет фигуру, выделенную кликом на чарте."
   en: "Deletes the figure selected by clicking on the chart."
   es: "Elimina la figura seleccionada con un clic en el gráfico."
+hotkeys.fig_alert:
+  ru: "Alert на выделенной фигуре"
+  en: "Alert on selected figure"
+  es: "Alerta en la figura seleccionada"
+hotkeys.fig_alert_hint:
+  ru: "Заармить/разоружить chart-алерт по выделенной фигуре (ядро следит за пересечением цены)."
+  en: "Arm/disarm a chart alert on the selected figure (the core watches for a price cross)."
+  es: "Armar/desarmar una alerta de gráfico en la figura seleccionada (el núcleo vigila el cruce de precio)."

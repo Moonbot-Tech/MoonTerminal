@@ -17,6 +17,31 @@ pub(super) struct AlertParams {
     /// Номер чарта-вкладки (0 = не добавлять).
     pub add_to_chart: u32,
     pub keep_in_chart_secs: u32,
+    /// Имя звука (стем wav: BABYTOY/ding1/…), если стратегия его задаёт. `None` —
+    /// звука нет. Извлекаем сканом строковых полей: имя поля звука в схеме
+    /// нестабильно, зато его ЗНАЧЕНИЕ совпадает со стемом файла.
+    pub sound_name: Option<String>,
+}
+
+/// Стемы вшитых звуков (нижний регистр) — для распознавания поля звука стратегии.
+/// Держим здесь (moon-core), т.к. извлечение идёт в feed-слое; список — зеркало
+/// `moon-ui-gpui::sound::SOUNDS`.
+const SOUND_STEMS: &[&str] = &[
+    "alarm", "babytoy", "bark", "comegetsome", "cork", "ding1", "ding2", "error", "fatality",
+    "gold", "hallo", "letsrock", "milord", "pfiff", "ringin", "ringout", "turnon", "yes_mast",
+];
+
+/// Ищет в полях стратегии значение-строку, совпадающее со стемом звука.
+fn sound_name_of(s: &StrategySnapshot) -> Option<String> {
+    for (_, v) in s.fields.iter() {
+        if let FieldValue::String(val) = v {
+            let low = val.trim().to_ascii_lowercase();
+            if !low.is_empty() && SOUND_STEMS.contains(&low.as_str()) {
+                return Some(low);
+            }
+        }
+    }
+    None
 }
 
 /// Целочисленное значение поля стратегии (AddToChart/KeepInChart/KeepAlert) —
@@ -42,6 +67,7 @@ pub(super) fn alert_params(s: &StrategySnapshot) -> AlertParams {
         keep_alert_secs: field_secs_or(s, "KeepAlert", 60),
         add_to_chart: field_secs_or(s, "AddToChart", 0),
         keep_in_chart_secs: field_secs_or(s, "KeepInChart", 60),
+        sound_name: sound_name_of(s),
     }
 }
 

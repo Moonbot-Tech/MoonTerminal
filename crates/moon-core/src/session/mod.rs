@@ -652,6 +652,41 @@ impl SessionManager {
         )
     }
 
+    /// Заармить/обновить chart-алерт (фигура с галкой «Alert») на рынке ядра.
+    /// `blob` — сериализованный `TChartObject`; `obj_uid` — стабильный id фигуры.
+    pub fn chart_alert_upsert(
+        &self,
+        core: CoreId,
+        market: String,
+        obj_uid: u64,
+        blob: Vec<u8>,
+    ) -> Result<()> {
+        if market.is_empty() || obj_uid == 0 || blob.is_empty() {
+            return Ok(());
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::ChartAlertUpsert {
+                market,
+                obj_uid,
+                blob,
+            },
+            "chart alert upsert",
+        )
+    }
+
+    /// Разоружить/удалить chart-алерт по `obj_uid`.
+    pub fn chart_alert_delete(&self, core: CoreId, market: String, obj_uid: u64) -> Result<()> {
+        if market.is_empty() || obj_uid == 0 {
+            return Ok(());
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::ChartAlertDelete { market, obj_uid },
+            "chart alert delete",
+        )
+    }
+
     /// Запросить свежий список transfer-активов ядра (по всем кошелькам).
     pub fn refresh_transfer_assets(&self, core: CoreId) -> Result<()> {
         self.send_core_cmd(

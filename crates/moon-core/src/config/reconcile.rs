@@ -122,6 +122,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile) -> Merged {
                 synthetic: false,
                 chart_bundle: m.map(|m| m.chart_bundle.clone()).unwrap_or_default(),
                 order_sizes: m.and_then(|m| m.order_sizes),
+                default_alert_strategy: m.map(|m| m.default_alert_strategy).unwrap_or(0),
             }
         })
         .collect();
@@ -211,6 +212,7 @@ pub fn split(
                 color: s.color,
                 chart_bundle: s.chart_bundle.clone(),
                 order_sizes: s.order_sizes,
+                default_alert_strategy: s.default_alert_strategy,
             })
             .collect(),
     };

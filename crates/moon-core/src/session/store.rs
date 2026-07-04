@@ -313,6 +313,19 @@ impl CoreStore {
         self.cores.iter().map(|(id, d)| (*id, d.status.clone()))
     }
 
+    /// Итератор по ядрам (id, данные) — для реконсиляции chart-алертов и т.п.
+    pub fn cores(&self) -> impl Iterator<Item = (CoreId, &CoreData)> + '_ {
+        self.cores.iter().map(|(id, d)| (*id, d))
+    }
+
+    /// Суммарная ревизия chart-алертов всех ядер — дёшево ловит «серверный набор
+    /// алертов изменился хоть у какого-то ядра» (гейт реконсиляции remote-фигур).
+    pub fn chart_alerts_activity(&self) -> u64 {
+        self.cores
+            .values()
+            .fold(0u64, |a, c| a.wrapping_add(c.chart_alerts_rev))
+    }
+
     /// Суммарная ревизия лога всех ядер — дёшево ловит «появились новые строки лога
     /// хоть у какого-то ядра» (App форсит кадр окнам с активной вкладкой «Лог»).
     pub fn log_activity(&self) -> u64 {

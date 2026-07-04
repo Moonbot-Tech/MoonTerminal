@@ -262,6 +262,7 @@ impl AppConfig {
                 synthetic: false,
                 chart_bundle: String::new(),
                 order_sizes: None,
+                default_alert_strategy: 0,
             }],
             groups: Vec::new(),
             language: Language::default(),
@@ -358,6 +359,7 @@ impl AppConfig {
             .map(|s| ServerConfig {
                 chart_bundle: String::new(),
                 order_sizes: None,
+                default_alert_strategy: 0,
                 ..s.clone()
             })
             .collect();
