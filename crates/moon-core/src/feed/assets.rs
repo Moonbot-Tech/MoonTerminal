@@ -86,6 +86,7 @@ pub(super) fn build_assets(
     markets: &MarketsState,
     balances: &BalancesState,
     base_currency: &str,
+    futures_account: bool,
 ) -> AssetsSnapshot {
     let mut rows = Vec::new();
     let mut leverage = std::collections::HashMap::new();
@@ -133,6 +134,9 @@ pub(super) fn build_assets(
             bp.asset_balance
         };
         let value_usdt = qty_for_value.abs() * price.p_last * rate;
+        // min_lot_size ядра уже в котируемой валюте: max(step, min_qty)·цена и min_notional.
+        let min_lot_usd = price.min_lot_size * rate;
+        let is_quote_asset = coin.eq_ignore_ascii_case(base_currency.trim());
         rows.push(AssetRow {
             market,
             coin,
@@ -142,6 +146,8 @@ pub(super) fn build_assets(
             qty_full: bp.asset_balance_full,
             price: price.p_last,
             value_usdt,
+            min_lot_usd,
+            is_quote_asset,
             mark_price: price.mark_price,
             pos_size: bp.pos_size,
             pos_price: bp.pos_price,
@@ -169,6 +175,7 @@ pub(super) fn build_assets(
     AssetsSnapshot {
         rows,
         global,
+        futures_account,
         leverage,
     }
 }

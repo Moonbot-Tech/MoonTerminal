@@ -289,7 +289,21 @@ impl AssetsView {
             let Some(cd) = store.core(id) else { continue };
             for row in &cd.assets.rows {
                 let value = row.value_usdt;
-                let keep = self.show_all || value > 1.0 || row.pos_size != 0.0;
+                // Видимость (правила MoonBot): фьюч-ядра (вкл. CoinM) — ТОЛЬКО открытые
+                // позиции (балансы там котируемые, не купленные монеты); спот — все
+                // купленные монеты, КРОМЕ котируемой валюты аккаунта (USDT и т.п.) и
+                // остатков дешевле минимального лота рынка (непродаваемая пыль; лот
+                // неизвестен → старый порог 1$). «Показать всё» снимает фильтры.
+                let is_position = row.pos_size != 0.0;
+                let spot_coin_visible = !cd.assets.futures_account && !row.is_quote_asset && {
+                    let min_lot = if row.min_lot_usd > 0.0 {
+                        row.min_lot_usd
+                    } else {
+                        1.0
+                    };
+                    value >= min_lot
+                };
+                let keep = self.show_all || is_position || spot_coin_visible;
                 if !keep {
                     continue;
                 }

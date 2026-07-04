@@ -230,6 +230,49 @@ pub struct CoreLogLine {
     pub msg: String,
 }
 
+/// Какое Engine-действие подтвердило/отклонило ядро (`Event::EngineAction`).
+/// Декаплено от moonproto: UI форматирует текст тоста сам.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EngineActionKind {
+    CancelAllOrders,
+    SetLeverage {
+        market: String,
+        leverage: i32,
+    },
+    SetHedgeMode {
+        on: bool,
+    },
+    ChangePositionType {
+        market: String,
+    },
+    ConvertDust,
+    ConfirmRiskLimit {
+        market: String,
+    },
+    SetMaMode {
+        on: bool,
+    },
+    TransferAsset {
+        asset: String,
+        qty: f64,
+        from: WalletKind,
+        to: WalletKind,
+    },
+    ReloadOrderBook,
+}
+
+/// Результат асинхронного Engine-действия ядра. Приходит и при обрыве связи
+/// (`success=false`, «disconnected») — тост «не дошло» не теряется.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EngineActionResult {
+    pub kind: EngineActionKind,
+    pub success: bool,
+    /// Код ошибки биржи/ядра (0, если нет).
+    pub error_code: i32,
+    /// Текст ошибки (пуст при успехе).
+    pub error_msg: String,
+}
+
 /// Одна стратегия ядра (для окна стратегий). Декаплено от moonproto.
 #[derive(Debug, Clone)]
 pub struct StrategyRow {
@@ -360,6 +403,12 @@ pub struct AssetRow {
     /// Текущая стоимость баланса монеты в USDT (qty * price * курс quote/USDT).
     /// Считается на ядре через `base_currency_price`. 0 = курс неизвестен.
     pub value_usdt: f64,
+    /// Стоимость минимального лота рынка в USDT (`MarketPrice::min_lot_size` × курс
+    /// quote/USDT). Балансы дешевле — непродаваемая пыль, UI их прячет. 0 = неизвестно.
+    pub min_lot_usd: f64,
+    /// Монета строки — котируемая валюта аккаунта (USDT у USDT-ботов): её баланс —
+    /// не «купленная монета», UI прячет такую строку из таблицы активов.
+    pub is_quote_asset: bool,
     /// Mark-цена (для фьюч; 0 если нет).
     pub mark_price: f64,
     /// Размер позиции (pos_size).
@@ -406,6 +455,10 @@ pub struct GlobalBalanceRow {
 pub struct AssetsSnapshot {
     pub rows: Vec<AssetRow>,
     pub global: GlobalBalanceRow,
+    /// Ядро торгует фьючами (бит FUTURES из `exchange_type_mask` BaseCheck; CoinM тоже).
+    /// На фьюч-ядрах таблица активов показывает ТОЛЬКО открытые позиции — балансы там
+    /// котируемые (USDT/монеты маржи), а не купленные активы.
+    pub futures_account: bool,
     /// Плечо по рынку (`leverage_x`) — per-core, для ЛЮБОГО отслеживаемого рынка (не только с
     /// позицией): тулбар Lev читает её для монеты main-чарта. Не включаем рынки без account-
     /// данных (там ядро сбрасывает leverage_x в 1) — их плечо неизвестно, показываем «—».
@@ -696,4 +749,7 @@ pub enum FeedMsg {
     RuntimeState(RuntimeState),
     /// Hedge-mode аккаунта ядра (dual-side позиции вкл/выкл). Шлётся при `HedgeModeUpdated`.
     HedgeMode(bool),
+    /// Пачка результатов Engine-действий (плечо/hedge/cancel-all/перенос/…) за тик
+    /// дренажа событий. UI показывает их тостами в активном окне.
+    EngineActions(Vec<EngineActionResult>),
 }

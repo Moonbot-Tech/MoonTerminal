@@ -296,8 +296,23 @@ pub fn run(
         // иначе полностью беззвучен (никто событие не слушал). Учти известный баг
         // moonproto: снимок может молча выброситься уже ПОСЛЕ Ready из-за таймзоны
         // сервера — см. docs-internal/MOONPROTO_BUG_CANDLES_SNAPSHOT_TZ.md.
+        // Результаты Engine-действий (плечо/hedge/cancel-all/перенос/…) — в UI тостами.
+        // Приходят и при обрыве (`success=false`), так что «не дошло» тоже видно.
+        let mut engine_actions: Vec<crate::feed::EngineActionResult> = Vec::new();
         for ev in &events {
             match ev {
+                Event::EngineAction(e) => {
+                    if !e.success {
+                        log::warn!(
+                            "core {} engine action failed: {:?} code={} msg={}",
+                            server.id,
+                            e.kind,
+                            e.error_code,
+                            e.error_msg
+                        );
+                    }
+                    engine_actions.push(convert::engine_action_result(e));
+                }
                 Event::CandlesSnapshot(moonproto::state::CandlesSnapshotEvent::Ready {
                     summary,
                     ..
@@ -319,6 +334,9 @@ pub fn run(
                 }
                 _ => {}
             }
+        }
+        if !engine_actions.is_empty() && tx.send(FeedMsg::EngineActions(engine_actions)).is_err() {
+            break;
         }
         let license_state = settings_event_snapshot(
             &events,
@@ -618,12 +636,18 @@ pub fn run(
             last_assets = Instant::now();
             if let Some(snap) = client.snapshot() {
                 // Базовая валюта аккаунта (USDT/BTC/…) — нужна для корректного пересчёта
-                // `btc_balance_*` (исторически в базовой валюте) в USDT.
-                let base = client
-                    .server_info()
-                    .and_then(|i| i.base_currency_name)
+                // `btc_balance_*` (исторически в базовой валюте) в USDT. Оттуда же —
+                // фьючность ядра (маска BaseCheck): фьюч-активы UI режет до позиций.
+                let info = client.server_info();
+                let base = info
+                    .as_ref()
+                    .and_then(|i| i.base_currency_name.clone())
                     .unwrap_or_default();
-                let assets = build_assets(snap.markets(), snap.balances(), &base);
+                let futures_account = info
+                    .as_ref()
+                    .is_some_and(|i| i.supports(moonproto::ExchangeTypeMask::FUTURES));
+                let assets =
+                    build_assets(snap.markets(), snap.balances(), &base, futures_account);
                 if tx.send(FeedMsg::Assets(assets)).is_err() {
                     break;
                 }

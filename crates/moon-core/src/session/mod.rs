@@ -25,8 +25,9 @@ use crate::config::{AppConfig, ServerConfig};
 use crate::data::OrderBookModel;
 use crate::db::ReportTx;
 use crate::feed::{
-    self, ClientSettingsEdit, ConnStatus, CoreCmd, ExchangeId, FeedHandle, FeedMsg, FeedWakeTx,
-    LevManageEdit, NewStrategySpec, OrderLinePriceKind, OrderStopKind, ResetProfitKind, WalletKind,
+    self, ClientSettingsEdit, ConnStatus, CoreCmd, EngineActionResult, ExchangeId, FeedHandle,
+    FeedMsg, FeedWakeTx, LevManageEdit, NewStrategySpec, OrderLinePriceKind, OrderStopKind,
+    ResetProfitKind, WalletKind,
 };
 use crate::market::{MarketDataMode, MarketDataSource, MarketStore, SharedMarketStore};
 
@@ -424,6 +425,21 @@ impl SessionManager {
 
     /// Снимок статусов подключения всех ядер (id → статус) — для бейджей в окне
     /// Настроек. Владеющая копия, чтобы не держать заём на сессию.
+    /// Забирает накопленные результаты Engine-действий всех ядер: (имя ядра, результат).
+    /// Очереди дренируются — зовёт только Shell АКТИВНОГО окна, чтобы каждый тост
+    /// показался ровно один раз (активно максимум одно ОС-окно).
+    pub fn take_engine_action_toasts(&mut self) -> Vec<(String, EngineActionResult)> {
+        let mut out = Vec::new();
+        for sess in &self.sessions {
+            if let Some(core) = self.store.core_mut(sess.id) {
+                for r in core.take_engine_actions() {
+                    out.push((sess.name.clone(), r));
+                }
+            }
+        }
+        out
+    }
+
     pub fn status_map(&self) -> HashMap<CoreId, ConnStatus> {
         self.store.statuses().collect()
     }

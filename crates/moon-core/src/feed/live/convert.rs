@@ -9,8 +9,8 @@ use moonproto::{Event, MoonClient};
 use crate::feed::report::{OrderIndex, OrderMeta};
 use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
-    ClientSettings, ClientSettingsEdit, LevManageEdit, LevManageState, LicenseState, OrderRow,
-    OrderTrace, OrderTracePoint, RuntimeState,
+    ClientSettings, ClientSettingsEdit, EngineActionKind, EngineActionResult, LevManageEdit,
+    LevManageState, LicenseState, OrderRow, OrderTrace, OrderTracePoint, RuntimeState, WalletKind,
 };
 
 fn trace_point(p: OrderTraceChartPoint) -> OrderTracePoint {
@@ -514,4 +514,55 @@ pub(super) fn build_order_rows(
     }
 
     order_rows
+}
+
+/// moonproto `ExchangeKind` → кошелёк домена (обратно к `assets::to_exchange_kind`).
+fn wallet_kind_from_proto(k: moonproto::state::ExchangeKind) -> WalletKind {
+    match k {
+        moonproto::state::ExchangeKind::Spot => WalletKind::Spot,
+        moonproto::state::ExchangeKind::Futures => WalletKind::Futures,
+        moonproto::state::ExchangeKind::Quarterly => WalletKind::Quarterly,
+    }
+}
+
+/// Проекция `Event::EngineAction` → терминальный результат для тостов UI.
+pub(super) fn engine_action_result(e: &moonproto::EngineActionEvent) -> EngineActionResult {
+    use moonproto::EngineActionKind as K;
+    let kind = match &e.kind {
+        K::CancelAllOrders => EngineActionKind::CancelAllOrders,
+        K::SetLeverage {
+            market,
+            new_leverage,
+        } => EngineActionKind::SetLeverage {
+            market: market.clone(),
+            leverage: *new_leverage,
+        },
+        K::SetHedgeMode { hedge_mode } => EngineActionKind::SetHedgeMode { on: *hedge_mode },
+        K::ChangePositionType { market, .. } => EngineActionKind::ChangePositionType {
+            market: market.clone(),
+        },
+        K::ConvertDustBnb => EngineActionKind::ConvertDust,
+        K::ConfirmRiskLimit { market } => EngineActionKind::ConfirmRiskLimit {
+            market: market.clone(),
+        },
+        K::SetMaMode { ma_mode } => EngineActionKind::SetMaMode { on: *ma_mode },
+        K::TransferAsset {
+            asset,
+            qty,
+            from,
+            to,
+        } => EngineActionKind::TransferAsset {
+            asset: asset.clone(),
+            qty: *qty,
+            from: wallet_kind_from_proto(*from),
+            to: wallet_kind_from_proto(*to),
+        },
+        K::ReloadOrderBook => EngineActionKind::ReloadOrderBook,
+    };
+    EngineActionResult {
+        kind,
+        success: e.success,
+        error_code: e.error_code,
+        error_msg: e.error_msg.clone(),
+    }
 }

@@ -243,6 +243,7 @@ impl Shell {
             this.drain_order_size_edit_request(cx);
             this.drain_sell_edit_request(cx);
             this.drain_repin_requests(cx);
+            this.drain_engine_action_toasts(cx);
             let now = Instant::now();
             // Follow/Live и Scale меняются по КЛИКУ юзера — отражаем мгновенно,
             // мимо 250мс-троттла.
@@ -598,6 +599,45 @@ impl Shell {
                     st.set_value(value, window, cx);
                     st.focus(window, cx);
                 });
+            });
+        });
+    }
+
+    /// Тосты результатов Engine-действий (плечо/hedge/cancel-all/перенос/…).
+    /// Очередь общая в CoreStore; забирает её только Shell АКТИВНОГО окна — иначе
+    /// тот же тост показали бы все окна-группы (наблюдают один Backend). Пока ни
+    /// одно окно не активно, результаты копятся в очереди (кап в CoreData) и
+    /// всплывут на ближайшем notify после активации.
+    fn drain_engine_action_toasts(&mut self, cx: &mut Context<Self>) {
+        if !self.window_active {
+            return;
+        }
+        let toasts = self
+            .backend
+            .update(cx, |b, _| b.session.take_engine_action_toasts());
+        if toasts.is_empty() {
+            return;
+        }
+        let handle = self.window_handle;
+        cx.defer(move |app| {
+            let _ = handle.update(app, move |_, window, app| {
+                use moon_ui::MoonWindowExt as _;
+                for (core, r) in toasts {
+                    let action = engine_action_label(&r.kind);
+                    let note = if r.success {
+                        moon_ui::MoonNotification::success(action)
+                            .title(rust_i18n::t!("shell.engine_toast.ok", core = core).to_string())
+                    } else {
+                        let mut err = r.error_msg.clone();
+                        if err.is_empty() {
+                            err = format!("code {}", r.error_code);
+                        }
+                        moon_ui::MoonNotification::error(format!("{action}: {err}"))
+                            .title(rust_i18n::t!("shell.engine_toast.fail", core = core).to_string())
+                            .autohide(false)
+                    };
+                    window.push_notification(note, app);
+                }
             });
         });
     }
@@ -990,5 +1030,43 @@ impl Render for Shell {
             // Попап выбора источника тикера курса (клик по «1 BTC = …» в шапке).
             .children(ticker_dismiss)
             .children(ticker_overlay)
+    }
+}
+
+/// Человекочитаемая подпись Engine-действия для тоста (что именно подтвердило/
+/// отклонило ядро). Кошельки — через `WalletKind::label()`, как в дереве Активов.
+fn engine_action_label(kind: &moon_core::feed::EngineActionKind) -> String {
+    use moon_core::feed::EngineActionKind as K;
+    use rust_i18n::t;
+    match kind {
+        K::CancelAllOrders => t!("shell.engine_action.cancel_all").to_string(),
+        K::SetLeverage { market, leverage } => {
+            t!("shell.engine_action.set_leverage", market = market, lev = leverage).to_string()
+        }
+        K::SetHedgeMode { on: true } => t!("shell.engine_action.hedge_on").to_string(),
+        K::SetHedgeMode { on: false } => t!("shell.engine_action.hedge_off").to_string(),
+        K::ChangePositionType { market } => {
+            t!("shell.engine_action.change_position_type", market = market).to_string()
+        }
+        K::ConvertDust => t!("shell.engine_action.convert_dust").to_string(),
+        K::ConfirmRiskLimit { market } => {
+            t!("shell.engine_action.confirm_risk_limit", market = market).to_string()
+        }
+        K::SetMaMode { on: true } => t!("shell.engine_action.ma_on").to_string(),
+        K::SetMaMode { on: false } => t!("shell.engine_action.ma_off").to_string(),
+        K::TransferAsset {
+            asset,
+            qty,
+            from,
+            to,
+        } => t!(
+            "shell.engine_action.transfer",
+            qty = controls::fmt_adaptive(*qty),
+            asset = asset,
+            from = from.label(),
+            to = to.label()
+        )
+        .to_string(),
+        K::ReloadOrderBook => t!("shell.engine_action.reload_order_book").to_string(),
     }
 }

@@ -375,3 +375,57 @@ chart.tab.rename:
   ru: "Имя"
   en: "Name"
   es: "Nombre"
+
+# --- Тосты результатов Engine-действий (плечо/hedge/cancel-all/перенос/…) ---
+shell.engine_toast.ok:
+  ru: "%{core}: выполнено"
+  en: "%{core}: done"
+  es: "%{core}: hecho"
+shell.engine_toast.fail:
+  ru: "%{core}: ошибка"
+  en: "%{core}: error"
+  es: "%{core}: error"
+shell.engine_action.cancel_all:
+  ru: "Отмена всех ордеров"
+  en: "Cancel all orders"
+  es: "Cancelar todas las órdenes"
+shell.engine_action.set_leverage:
+  ru: "Плечо %{market} ×%{lev}"
+  en: "Leverage %{market} ×%{lev}"
+  es: "Apalancamiento %{market} ×%{lev}"
+shell.engine_action.hedge_on:
+  ru: "Hedge-режим: вкл"
+  en: "Hedge mode: on"
+  es: "Modo hedge: act"
+shell.engine_action.hedge_off:
+  ru: "Hedge-режим: выкл"
+  en: "Hedge mode: off"
+  es: "Modo hedge: des"
+shell.engine_action.change_position_type:
+  ru: "Смена типа позиции %{market}"
+  en: "Position type change %{market}"
+  es: "Cambio de tipo de posición %{market}"
+shell.engine_action.convert_dust:
+  ru: "Конверсия пыли в BNB"
+  en: "Convert dust to BNB"
+  es: "Convertir polvo a BNB"
+shell.engine_action.confirm_risk_limit:
+  ru: "Подтверждение риск-лимита %{market}"
+  en: "Risk limit confirmation %{market}"
+  es: "Confirmación de límite de riesgo %{market}"
+shell.engine_action.ma_on:
+  ru: "MA-режим: вкл"
+  en: "MA mode: on"
+  es: "Modo MA: act"
+shell.engine_action.ma_off:
+  ru: "MA-режим: выкл"
+  en: "MA mode: off"
+  es: "Modo MA: des"
+shell.engine_action.transfer:
+  ru: "Перенос %{qty} %{asset}: %{from} → %{to}"
+  en: "Transfer %{qty} %{asset}: %{from} → %{to}"
+  es: "Transferencia %{qty} %{asset}: %{from} → %{to}"
+shell.engine_action.reload_order_book:
+  ru: "Перезагрузка стакана"
+  en: "Order book reload"
+  es: "Recarga del libro de órdenes"

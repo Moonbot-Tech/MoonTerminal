@@ -9,8 +9,9 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::applog::LogLine;
 use crate::feed::{
-    AssetsSnapshot, ClientSettings, ConnStatus, DetectRow, FeedMsg, LevManageState, LicenseState,
-    OrderRow, RuntimeState, StrategyRow, StrategySchemaModel, TransferAssetsSnapshot,
+    AssetsSnapshot, ClientSettings, ConnStatus, DetectRow, EngineActionResult, FeedMsg,
+    LevManageState, LicenseState, OrderRow, RuntimeState, StrategyRow, StrategySchemaModel,
+    TransferAssetsSnapshot,
 };
 use crate::session::order_lines::OrderLineStore;
 use crate::util::now_unix_ms_i64;
@@ -21,6 +22,10 @@ const MAX_DETECTS: usize = 2000;
 /// Сколько последних строк серверного лога держим в памяти на ядро (для живого
 /// просмотра/поиска). История глубже — в файлах logs/<дата>_<ядро>.log.
 const MAX_LOG: usize = 5000;
+
+/// Кап очереди недоставленных тостов Engine-действий (копятся, пока ни одно окно
+/// не активно; потребитель — Shell активного окна).
+const MAX_ENGINE_ACTIONS: usize = 64;
 
 pub type CoreId = u64;
 
@@ -50,6 +55,9 @@ pub struct CoreData {
     pub runtime_state: Option<RuntimeState>,
     /// Hedge-mode аккаунта (dual-side позиции). None, пока ядро не ответило.
     pub hedge_mode: Option<bool>,
+    /// Непоказанные результаты Engine-действий (для тостов). Дренируется Shell'ом
+    /// активного окна через [`CoreData::take_engine_actions`].
+    engine_actions: VecDeque<EngineActionResult>,
     /// Последние строки серверного лога ядра (кольцо, обрезается до MAX_LOG).
     pub log: VecDeque<LogLine>,
     /// Сырые строки серверного лога с временем приёма терминалом. Нужны diagnostic/FireTest
@@ -90,6 +98,7 @@ impl CoreData {
             lev_manage: None,
             runtime_state: None,
             hedge_mode: None,
+            engine_actions: VecDeque::new(),
             log: VecDeque::new(),
             server_log_raw: VecDeque::new(),
             orders_table_rev: 0,
@@ -113,6 +122,12 @@ impl CoreData {
     pub fn log_snapshot(&self, max: usize) -> Vec<LogLine> {
         let start = self.log.len().saturating_sub(max);
         self.log.iter().skip(start).cloned().collect()
+    }
+
+    /// Забирает накопленные результаты Engine-действий (очередь дренируется:
+    /// потребитель один — Shell активного окна, тосты показываются один раз).
+    pub fn take_engine_actions(&mut self) -> Vec<EngineActionResult> {
+        self.engine_actions.drain(..).collect()
     }
 
     /// Снимок сырых строк серверного лога (старые→новые) для diagnostic замеров.
@@ -210,6 +225,12 @@ impl CoreData {
                 if self.hedge_mode != Some(on) {
                     self.hedge_mode = Some(on);
                     self.hedge_mode_rev = self.hedge_mode_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::EngineActions(results) => {
+                self.engine_actions.extend(results);
+                while self.engine_actions.len() > MAX_ENGINE_ACTIONS {
+                    self.engine_actions.pop_front();
                 }
             }
             FeedMsg::ServerLog(lines) => {
