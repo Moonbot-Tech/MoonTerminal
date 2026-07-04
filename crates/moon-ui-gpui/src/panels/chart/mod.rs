@@ -10,6 +10,7 @@
 //! геометрия и хит-тест — [`geom`]; рефкаунт рынков и таймеры TTL/auto-live — [`refs`];
 //! ручная торговля (ордера/drag) — [`trade`]; `impl Render` — [`render`].
 
+mod figures;
 mod geom;
 mod refs;
 mod render;
@@ -173,6 +174,10 @@ pub struct ChartPanel {
     order_drag: Option<OrderDrag>,
     pending_order_drag: Option<PendingOrderDrag>,
     order_hover: Option<OrderHoverKey>,
+    /// Слой рисования фигур: драфт (режим-карандаш), hover и драг фигуры этой панели.
+    fig_draft: Option<figures::FigDraft>,
+    fig_hover: Option<u64>,
+    fig_drag: Option<figures::FigDrag>,
     /// ПКМ-down открыл контекстное меню ордера → следующий ПКМ-up НЕ должен сработать
     /// (иначе родитель Main-стека воспримет его как «возврат из фулскрина» и т.п.).
     suppress_rmb_up: bool,
@@ -208,6 +213,7 @@ impl ChartPanel {
     ) -> Self {
         let mut chart = ChartEngine::new(epoch, theme);
         chart.set_market_source(Some(backend.read(cx).session.market_source()));
+        chart.set_figures_store(backend.read(cx).figures.clone());
         let market_ref_epoch = backend.read(cx).chart_market_refs_epoch;
         let mut market = None;
         let mut registered_markets = HashSet::new();
@@ -319,6 +325,9 @@ impl ChartPanel {
             order_drag: None,
             pending_order_drag: None,
             order_hover: None,
+            fig_draft: None,
+            fig_hover: None,
+            fig_drag: None,
             suppress_rmb_up: false,
             focus: cx.focus_handle(),
         }
@@ -340,6 +349,7 @@ impl ChartPanel {
     ) -> Self {
         let mut chart = ChartEngine::new_kind(epoch, theme, ContainerKind::Chart { num, bucket });
         chart.set_market_source(Some(backend.read(cx).session.market_source()));
+        chart.set_figures_store(backend.read(cx).figures.clone());
         let market_ref_epoch = backend.read(cx).chart_market_refs_epoch;
         let settings_sig = {
             let b = backend.read(cx);
@@ -427,6 +437,9 @@ impl ChartPanel {
             order_drag: None,
             pending_order_drag: None,
             order_hover: None,
+            fig_draft: None,
+            fig_hover: None,
+            fig_drag: None,
             suppress_rmb_up: false,
             focus: cx.focus_handle(),
         }

@@ -126,6 +126,11 @@ pub fn charts_path() -> PathBuf {
     cfg_dir().join("charts.json")
 }
 
+/// Пользовательские фигуры чарта (слой рисования; ключ = ядро+монета) — JSON.
+pub fn figures_path() -> PathBuf {
+    cfg_dir().join("figures.json")
+}
+
 /// SQLite-БД с отчётами по закрытым ордерам (`ClosedSellOrderReport`).
 pub fn reports_db_path() -> PathBuf {
     data_dir().join("reports.sqlite")

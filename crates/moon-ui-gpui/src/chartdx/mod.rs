@@ -20,6 +20,8 @@ pub mod combo;
 pub mod cursor;
 mod data_state;
 mod engine;
+mod figures_sync;
+pub(crate) use figures_sync::FigureVisual;
 pub use engine::ChartGhostCursor;
 #[cfg(windows)]
 pub mod gpu;
@@ -265,6 +267,8 @@ struct PaneRender {
     last_order_highlight_uid: Option<u64>,
     /// Последний preview drag, который был зашит в userdata.
     last_order_drag_preview: Option<(u64, LineKind, u32)>,
+    /// Сигнатура фигур (стор+интерактив), зашитая в userdata. u64::MAX = грязно.
+    last_figures_sig: u64,
     /// Готовые подписи ордерных линий (size/%/qty), пересобираются при изменении ордеров.
     /// Рисуются в `prepare_text`, привязка к Y — по `view` каждый кадр.
     order_labels: Vec<OrderLabel>,
@@ -365,6 +369,7 @@ impl PaneRender {
             last_order_present_ms: 0.0,
             last_order_highlight_uid: None,
             last_order_drag_preview: None,
+            last_figures_sig: u64::MAX,
             order_labels: Vec::new(),
             order_label_order: Vec::new(),
             orderbook_labels: Vec::new(),
@@ -622,6 +627,11 @@ struct ChartDataState {
     order_highlight: Option<(CoreId, u64)>,
     /// Локальная preview-цена линии при drag. Ядру команда уходит только на mouse-up.
     order_drag_preview: Option<(CoreId, u64, LineKind, f32)>,
+    /// Общий стор пользовательских фигур (Rc Backend'а; см. `figures_sync`).
+    figures: Option<std::rc::Rc<std::cell::RefCell<moon_core::figures::FigureStore>>>,
+    /// Интерактив фигур этой панели (превью рисования/hover/выделение) + его rev.
+    figure_visual: figures_sync::FigureVisual,
+    figure_visual_rev: u64,
     market_source: Option<MarketDataSource>,
     last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,

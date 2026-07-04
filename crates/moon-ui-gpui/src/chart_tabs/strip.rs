@@ -260,12 +260,64 @@ impl Render for ChartTabs {
                 })
         });
 
-        // Правый кластер полосы вкладок: [монета] [масштаб] [▦?] [⚙]. ⚙ держим у правого края
-        // (right≈6px) — попап раскладки якорится именно к нему (right(6) ниже).
+        // Инструменты рисования фигур (карандаш): тогглы ─ ╱ ∥. Дублируют хоткеи
+        // (Ctrl+H/L/K) и показывают активный инструмент; клик по активному выключает.
+        let fig_tool = self.backend.read(cx).fig_tool;
+        let fig_btn = |id: &'static str,
+                       label: &'static str,
+                       tool: moon_core::figures::FigureTool,
+                       backend: Entity<crate::Backend>| {
+            let on = fig_tool == Some(tool);
+            MoonButton::new(id)
+                .label(label)
+                .size(MoonButtonSize::Micro)
+                .variant(if on {
+                    MoonButtonVariant::Blue
+                } else {
+                    MoonButtonVariant::Ghost
+                })
+                .selected(on)
+                .on_click(move |_, _w, app| {
+                    backend.update(app, |b, bcx| {
+                        b.fig_tool = if b.fig_tool == Some(tool) {
+                            None
+                        } else {
+                            Some(tool)
+                        };
+                        bcx.notify();
+                    });
+                })
+                .render()
+        };
+        let fig_tools = h_flex()
+            .items_center()
+            .gap(px(2.0))
+            .child(fig_btn(
+                "fig-tool-hline",
+                "─",
+                moon_core::figures::FigureTool::HLine,
+                self.backend.clone(),
+            ))
+            .child(fig_btn(
+                "fig-tool-segment",
+                "╱",
+                moon_core::figures::FigureTool::Segment,
+                self.backend.clone(),
+            ))
+            .child(fig_btn(
+                "fig-tool-channel",
+                "∥",
+                moon_core::figures::FigureTool::Channel,
+                self.backend.clone(),
+            ));
+
+        // Правый кластер полосы вкладок: [фигуры] [монета] [масштаб] [▦?] [⚙]. ⚙ держим у
+        // правого края (right≈6px) — попап раскладки якорится именно к нему (right(6) ниже).
         let right_cluster = div().absolute().right(px(6.0)).top(px(4.0)).child(
             h_flex()
                 .items_center()
                 .gap(px(4.0))
+                .child(fig_tools)
                 .child(coin_search_el)
                 .child(scale_dropdown)
                 .children(gather_btn)

@@ -46,6 +46,10 @@ enum HotkeySlot {
     SwitchFigure,
     FitSells,
     Broadcast,
+    DrawHline,
+    DrawSegment,
+    DrawChannel,
+    FigDelete,
 }
 
 #[derive(Clone, Copy)]
@@ -222,6 +226,42 @@ impl SettingsView {
                         t!("hotkeys.scale_minus").to_string(),
                         t!("hotkeys.scale_minus_hint").to_string(),
                         HotkeySlot::ScaleMinus,
+                        &hotkeys,
+                        cx,
+                    ),
+                ],
+            ))
+            .child(hotkey_group(
+                &t!("hotkeys.group.draw"),
+                &t!("hotkeys.group.draw_hint"),
+                p,
+                cx,
+                [
+                    self.hotkey_row(
+                        t!("hotkeys.draw_hline").to_string(),
+                        t!("hotkeys.draw_hline_hint").to_string(),
+                        HotkeySlot::DrawHline,
+                        &hotkeys,
+                        cx,
+                    ),
+                    self.hotkey_row(
+                        t!("hotkeys.draw_segment").to_string(),
+                        t!("hotkeys.draw_segment_hint").to_string(),
+                        HotkeySlot::DrawSegment,
+                        &hotkeys,
+                        cx,
+                    ),
+                    self.hotkey_row(
+                        t!("hotkeys.draw_channel").to_string(),
+                        t!("hotkeys.draw_channel_hint").to_string(),
+                        HotkeySlot::DrawChannel,
+                        &hotkeys,
+                        cx,
+                    ),
+                    self.hotkey_row(
+                        t!("hotkeys.fig_delete").to_string(),
+                        t!("hotkeys.fig_delete_hint").to_string(),
+                        HotkeySlot::FigDelete,
                         &hotkeys,
                         cx,
                     ),
@@ -705,6 +745,10 @@ macro_rules! hotkey_field {
             HotkeySlot::SwitchFigure => $($brw)+ $hotkeys.switch_figure,
             HotkeySlot::FitSells => $($brw)+ $hotkeys.fit_sells,
             HotkeySlot::Broadcast => $($brw)+ $hotkeys.broadcast,
+            HotkeySlot::DrawHline => $($brw)+ $hotkeys.draw_hline,
+            HotkeySlot::DrawSegment => $($brw)+ $hotkeys.draw_segment,
+            HotkeySlot::DrawChannel => $($brw)+ $hotkeys.draw_channel,
+            HotkeySlot::FigDelete => $($brw)+ $hotkeys.fig_delete,
         }
     };
 }
@@ -853,5 +897,9 @@ fn slot_id(slot: HotkeySlot) -> String {
         HotkeySlot::SwitchFigure => "switch-figure".into(),
         HotkeySlot::FitSells => "fit-sells".into(),
         HotkeySlot::Broadcast => "broadcast".into(),
+        HotkeySlot::DrawHline => "draw-hline".into(),
+        HotkeySlot::DrawSegment => "draw-segment".into(),
+        HotkeySlot::DrawChannel => "draw-channel".into(),
+        HotkeySlot::FigDelete => "fig-delete".into(),
     }
 }

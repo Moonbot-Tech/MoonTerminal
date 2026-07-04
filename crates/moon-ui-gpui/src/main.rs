@@ -301,6 +301,16 @@ struct Backend {
     /// Дебаунс-сейв делает дренаж по `chart_specs_dirty`. См. `chart_persist`.
     chart_specs: Vec<chart_persist::ChartTabSpec>,
     chart_specs_dirty: bool,
+    /// Пользовательские фигуры чарта (слой рисования; ключ = ядро+монета) — общий стор
+    /// всех панелей (Rc клонится в движки чартов). Персист figures.json, дебаунс-сейв
+    /// коорд-тиком по `dirty` стора.
+    figures: std::rc::Rc<std::cell::RefCell<moon_core::figures::FigureStore>>,
+    /// Активный инструмент режима рисования (карандаш). None = режим выключен.
+    /// Тоггл хоткеями (Shell::on_hotkey); панели чартов читают при кликах.
+    fig_tool: Option<moon_core::figures::FigureTool>,
+    /// Выделенная фигура (ядро, монета, id) — одна на приложение: подсветка+узлы на
+    /// чарте, хоткей удаления работает по ней из Shell.
+    fig_selected: Option<(CoreId, String, u64)>,
     /// Конфиг изменён в памяти и ждёт дебаунс-сейва (правка размеров ордера колесом мыши —
     /// часто; на диск пишем раз за дренаж-тик). Дренаж зовёт `config.save()` и сбрасывает.
     config_dirty: bool,
@@ -1035,6 +1045,11 @@ fn main() -> anyhow::Result<()> {
             chart_consumers: Vec::new(),
             chart_specs,
             chart_specs_dirty: false,
+            figures: std::rc::Rc::new(std::cell::RefCell::new(
+                moon_core::figures::FigureStore::load(),
+            )),
+            fig_tool: None,
+            fig_selected: None,
             config_dirty: false,
             quitting: false,
         });
@@ -1199,6 +1214,9 @@ fn main() -> anyhow::Result<()> {
                         if b.chart_specs_dirty {
                             chart_persist::save_all(&b.chart_specs);
                             b.chart_specs_dirty = false;
+                        }
+                        if b.figures.borrow().dirty {
+                            b.figures.borrow_mut().save();
                         }
                         if b.config_dirty {
                             // Дебаунс-сейв конфига (правка размеров колесом мыши пишет в память

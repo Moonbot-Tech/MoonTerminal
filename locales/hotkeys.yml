@@ -404,3 +404,45 @@ hotkeys.manual_strategy_hint:
   ru: "Запуск ручной стратегии %{n}, если она настроена."
   en: "Run manual strategy %{n} when configured."
   es: "Ejecuta estrategia manual %{n} si está configurada."
+
+# --- Слой рисования фигур (карандаш) ---
+hotkeys.group.draw:
+  ru: "Рисование"
+  en: "Drawing"
+  es: "Dibujo"
+hotkeys.group.draw_hint:
+  ru: "Фигуры на чарте: хоткей включает инструмент (повтор или Esc — выключает), ЛКМ ставит узлы. Клик по фигуре вне режима — выделение, драг узлов/тела — правка."
+  en: "Chart figures: hotkey toggles the tool (again or Esc turns it off), LMB places nodes. Clicking a figure outside the mode selects it; drag nodes/body to edit."
+  es: "Figuras en el gráfico: la tecla activa la herramienta (repetir o Esc la desactiva), clic izquierdo coloca nodos. Clic en una figura fuera del modo la selecciona; arrastre nodos/cuerpo para editar."
+hotkeys.draw_hline:
+  ru: "Горизонтальная линия"
+  en: "Horizontal line"
+  es: "Línea horizontal"
+hotkeys.draw_hline_hint:
+  ru: "Инструмент: один клик ставит горизонталь на цене курсора."
+  en: "Tool: one click places a horizontal line at the cursor price."
+  es: "Herramienta: un clic coloca una horizontal en el precio del cursor."
+hotkeys.draw_segment:
+  ru: "Линия (отрезок)"
+  en: "Line (segment)"
+  es: "Línea (segmento)"
+hotkeys.draw_segment_hint:
+  ru: "Инструмент: два клика — начало и конец линии."
+  en: "Tool: two clicks — line start and end."
+  es: "Herramienta: dos clics — inicio y fin de la línea."
+hotkeys.draw_channel:
+  ru: "Параллельный канал"
+  en: "Parallel channel"
+  es: "Canal paralelo"
+hotkeys.draw_channel_hint:
+  ru: "Инструмент: два клика — базовая линия, третий — ширина канала."
+  en: "Tool: two clicks — base line, third — channel width."
+  es: "Herramienta: dos clics — línea base, tercero — ancho del canal."
+hotkeys.fig_delete:
+  ru: "Удалить выделенную фигуру"
+  en: "Delete selected figure"
+  es: "Eliminar figura seleccionada"
+hotkeys.fig_delete_hint:
+  ru: "Удаляет фигуру, выделенную кликом на чарте."
+  en: "Deletes the figure selected by clicking on the chart."
+  es: "Elimina la figura seleccionada con un clic en el gráfico."

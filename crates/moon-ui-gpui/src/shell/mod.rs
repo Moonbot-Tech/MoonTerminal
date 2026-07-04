@@ -844,16 +844,65 @@ impl Shell {
         let handled = self.backend.update(cx, |b, bcx| {
             // Фаза 1 (только чтение cfg): какой хоткей совпал. Сравниваем нажатую
             // клавишу с каждым настроенным сочетанием (gpui Keystroke).
-            let (size_ix, sell_ix, is_cancel) = {
+            let (size_ix, sell_ix, is_cancel, fig_tool, is_fig_delete, is_escape) = {
                 let cfg = b.preview.as_ref().unwrap_or(&b.config);
+                // Сравниваем ТОЛЬКО modifiers+key: event на Windows несёт ещё и
+                // key_char (напечатанный символ), которого у Keystroke::parse нет —
+                // полное `==` из-за этого никогда не совпадает для буквенных клавиш
+                // (F-клавиши работали случайно: у них key_char=None с обеих сторон).
                 let pressed = |raw: &str| {
                     let raw = raw.trim();
-                    !raw.is_empty() && matches!(Keystroke::parse(raw), Ok(k) if k == ev.keystroke)
+                    !raw.is_empty()
+                        && matches!(
+                            Keystroke::parse(raw),
+                            Ok(k) if k.modifiers == ev.keystroke.modifiers
+                                && k.key == ev.keystroke.key
+                        )
                 };
                 let size_ix = cfg.hotkeys.order_size.iter().position(|r| pressed(r));
                 let sell_ix = cfg.hotkeys.sell_preset.iter().position(|r| pressed(r));
-                (size_ix, sell_ix, pressed(&cfg.hotkeys.cancel_buy))
+                use moon_core::figures::FigureTool;
+                let fig_tool = if pressed(&cfg.hotkeys.draw_hline) {
+                    Some(FigureTool::HLine)
+                } else if pressed(&cfg.hotkeys.draw_segment) {
+                    Some(FigureTool::Segment)
+                } else if pressed(&cfg.hotkeys.draw_channel) {
+                    Some(FigureTool::Channel)
+                } else {
+                    None
+                };
+                (
+                    size_ix,
+                    sell_ix,
+                    pressed(&cfg.hotkeys.cancel_buy),
+                    fig_tool,
+                    pressed(&cfg.hotkeys.fig_delete),
+                    ev.keystroke.key == "escape" && ev.keystroke.modifiers == Modifiers::default(),
+                )
             };
+            // Слой рисования: тоггл инструмента (повтор = выкл), Esc выключает режим,
+            // fig_delete удаляет выделенную фигуру. Идёт до торговых веток.
+            if let Some(tool) = fig_tool {
+                b.fig_tool = if b.fig_tool == Some(tool) {
+                    None
+                } else {
+                    Some(tool)
+                };
+                bcx.notify();
+                return true;
+            }
+            if is_escape && b.fig_tool.is_some() {
+                b.fig_tool = None;
+                bcx.notify();
+                return true;
+            }
+            if is_fig_delete {
+                if let Some((core, market, id)) = b.fig_selected.take() {
+                    b.figures.borrow_mut().remove(core, &market, id);
+                    bcx.notify();
+                    return true;
+                }
+            }
             // Фаза 2 (мутация): F1-F6 = выбрать пресет размера активного ядра; S1-S6 =
             // задействовать fixed-sell слот (гасит TP); cancel_buy — отмена покупок Main.
             if let Some(i) = size_ix {

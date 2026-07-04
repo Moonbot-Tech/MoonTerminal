@@ -14,6 +14,7 @@ pub mod data;
 pub mod db;
 pub mod detect_diag;
 pub mod feed;
+pub mod figures;
 pub mod market;
 pub mod metrics;
 pub mod palette;

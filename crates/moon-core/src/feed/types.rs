@@ -230,6 +230,26 @@ pub struct CoreLogLine {
     pub msg: String,
 }
 
+/// Один chart-алерт, принятый ядром (`Event::ChartAlert::Upserted`). Алерт в
+/// MoonBot — это нарисованная на чарте фигура (линия/канал/фибо/…) с галкой
+/// «Alert»; `blob` — её непрозрачный бинарь `TChartObject.Save()`. Терминал
+/// хранит blob как есть: он нужен для повторного `upsert` (вкл/выкл алерта)
+/// и для реверса формата (этап 0). Декаплено от moonproto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChartAlertRow {
+    pub market: String,
+    pub obj_uid: u64,
+    pub blob: Vec<u8>,
+}
+
+/// Изменение авторитетного набора chart-алертов ядра (сервер владеет набором;
+/// после реконнекта терминал запрашивает полный снапшот).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChartAlertUpdate {
+    Upserted(ChartAlertRow),
+    Deleted { market: String, obj_uid: u64 },
+}
+
 /// Какое Engine-действие подтвердило/отклонило ядро (`Event::EngineAction`).
 /// Декаплено от moonproto: UI форматирует текст тоста сам.
 #[derive(Debug, Clone, PartialEq)]
@@ -754,4 +774,6 @@ pub enum FeedMsg {
     /// Пачка результатов Engine-действий (плечо/hedge/cancel-all/перенос/…) за тик
     /// дренажа событий. UI показывает их тостами в активном окне.
     EngineActions(Vec<EngineActionResult>),
+    /// Пачка изменений chart-алертов ядра за тик дренажа (гейт `feed.alerts`).
+    ChartAlerts(Vec<ChartAlertUpdate>),
 }

@@ -41,6 +41,9 @@ impl ChartDataState {
             prospective_usd: None,
             order_highlight: None,
             order_drag_preview: None,
+            figures: None,
+            figure_visual: super::figures_sync::FigureVisual::default(),
+            figure_visual_rev: 0,
             market_source: None,
             last_frame_tick_at: None,
             present_rate_candidate_hz: 0.0,
@@ -349,10 +352,12 @@ impl ChartDataState {
                     });
                 let drag_preview_sig =
                     drag_preview.map(|(uid, kind, price)| (uid, kind, price.to_bits()));
+                let figures_sig = self.figures_sig();
                 if force
                     || pr.last_order_lines_rev != core_st.order_lines_rev
                     || pr.last_order_highlight_uid != highlight_uid
                     || pr.last_order_drag_preview != drag_preview_sig
+                    || pr.last_figures_sig != figures_sig
                 {
                     let mut hlines = Vec::new();
                     let mut segs = Vec::new();
@@ -370,6 +375,16 @@ impl ChartDataState {
                         f32::INFINITY,
                         0.0,
                         &mut zones,
+                        &mut hlines,
+                        &mut segs,
+                        &mut markers,
+                    );
+                    // Пользовательские фигуры (слой рисования) — теми же userdata-слоями,
+                    // ПОСЛЕ ордеров (рисуются поверх их зон, под маркерами курсора).
+                    self.append_figure_geometry(
+                        pane.core,
+                        &pane.market,
+                        pane.view.epoch_ms,
                         &mut hlines,
                         &mut segs,
                         &mut markers,
@@ -403,6 +418,7 @@ impl ChartDataState {
                     pr.pending_order_gpu_rev = Some(core_st.order_lines_rev);
                     pr.last_order_highlight_uid = highlight_uid;
                     pr.last_order_drag_preview = drag_preview_sig;
+                    pr.last_figures_sig = figures_sig;
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }

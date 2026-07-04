@@ -9,9 +9,9 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::applog::LogLine;
 use crate::feed::{
-    AssetsSnapshot, ClientSettings, ConnStatus, DetectRow, EngineActionResult, FeedMsg,
-    LevManageState, LicenseState, OrderRow, RuntimeState, StrategyRow, StrategySchemaModel,
-    TransferAssetsSnapshot,
+    AssetsSnapshot, ChartAlertUpdate, ClientSettings, ConnStatus, DetectRow, EngineActionResult,
+    FeedMsg, LevManageState, LicenseState, OrderRow, RuntimeState, StrategyRow,
+    StrategySchemaModel, TransferAssetsSnapshot,
 };
 use crate::session::order_lines::OrderLineStore;
 use crate::util::now_unix_ms_i64;
@@ -58,6 +58,11 @@ pub struct CoreData {
     /// Непоказанные результаты Engine-действий (для тостов). Дренируется Shell'ом
     /// активного окна через [`CoreData::take_engine_actions`].
     engine_actions: VecDeque<EngineActionResult>,
+    /// Авторитетные chart-алерты ядра: (market, obj_uid) → blob (`TChartObject.Save()`,
+    /// непрозрачный). Набор ведёт сервер; после реконнекта фид запрашивает снапшот,
+    /// который приходит теми же Upserted (перезапись по ключу). Blob нужен для
+    /// re-upsert (вкл/выкл алерта) и реверса формата.
+    pub chart_alerts: HashMap<(String, u64), Vec<u8>>,
     /// Последние строки серверного лога ядра (кольцо, обрезается до MAX_LOG).
     pub log: VecDeque<LogLine>,
     /// Сырые строки серверного лога с временем приёма терминалом. Нужны diagnostic/FireTest
@@ -80,6 +85,7 @@ pub struct CoreData {
     pub runtime_state_rev: u64,
     pub hedge_mode_rev: u64,
     pub log_rev: u64,
+    pub chart_alerts_rev: u64,
 }
 
 impl CoreData {
@@ -99,6 +105,7 @@ impl CoreData {
             runtime_state: None,
             hedge_mode: None,
             engine_actions: VecDeque::new(),
+            chart_alerts: HashMap::new(),
             log: VecDeque::new(),
             server_log_raw: VecDeque::new(),
             orders_table_rev: 0,
@@ -115,6 +122,7 @@ impl CoreData {
             runtime_state_rev: 0,
             hedge_mode_rev: 0,
             log_rev: 0,
+            chart_alerts_rev: 0,
         }
     }
 
@@ -232,6 +240,20 @@ impl CoreData {
                 while self.engine_actions.len() > MAX_ENGINE_ACTIONS {
                     self.engine_actions.pop_front();
                 }
+            }
+            FeedMsg::ChartAlerts(updates) => {
+                for u in updates {
+                    match u {
+                        ChartAlertUpdate::Upserted(row) => {
+                            self.chart_alerts
+                                .insert((row.market, row.obj_uid), row.blob);
+                        }
+                        ChartAlertUpdate::Deleted { market, obj_uid } => {
+                            self.chart_alerts.remove(&(market, obj_uid));
+                        }
+                    }
+                }
+                self.chart_alerts_rev = self.chart_alerts_rev.wrapping_add(1);
             }
             FeedMsg::ServerLog(lines) => {
                 if !lines.is_empty() {

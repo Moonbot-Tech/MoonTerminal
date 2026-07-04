@@ -249,6 +249,16 @@ pub fn run(
                 if let Err(error) = client.account().refresh_hedge_mode() {
                     log::warn!("core {} request hedge mode failed: {error}", server.id);
                 }
+                // Chart-алерты авторитетны на ядре: после init/reconnect просим полный
+                // снапшот (без него локальный набор может отстать от сервера).
+                if server.feed.alerts {
+                    if let Err(error) = client.chart_alerts().request_snapshot() {
+                        log::warn!(
+                            "core {} request chart alerts snapshot failed: {error}",
+                            server.id
+                        );
+                    }
+                }
             }
         }
         // Терминальный отказ старта → наружу как Err: пусть app-level цикл пересоздаст
@@ -299,8 +309,48 @@ pub fn run(
         // Результаты Engine-действий (плечо/hedge/cancel-all/перенос/…) — в UI тостами.
         // Приходят и при обрыве (`success=false`), так что «не дошло» тоже видно.
         let mut engine_actions: Vec<crate::feed::EngineActionResult> = Vec::new();
+        // Chart-алерты (фигуры с галкой Alert): авторитетный набор ядра.
+        let mut chart_alerts: Vec<crate::feed::ChartAlertUpdate> = Vec::new();
         for ev in &events {
             match ev {
+                Event::ChartAlert(ev) if server.feed.alerts => {
+                    // Этап реверса blob (TChartObject.Save): полный hex в лог — алерты
+                    // создаются руками и их единицы, объём лога не проблема.
+                    match ev {
+                        moonproto::ChartAlertEvent::Upserted(obj) => {
+                            log::info!(
+                                "core {} chart alert upserted: {} uid={} blob[{}]={}",
+                                server.id,
+                                obj.market_name,
+                                obj.obj_uid,
+                                obj.blob.len(),
+                                hex_dump(&obj.blob)
+                            );
+                            chart_alerts.push(crate::feed::ChartAlertUpdate::Upserted(
+                                crate::feed::ChartAlertRow {
+                                    market: obj.market_name.clone(),
+                                    obj_uid: obj.obj_uid,
+                                    blob: obj.blob.clone(),
+                                },
+                            ));
+                        }
+                        moonproto::ChartAlertEvent::Deleted {
+                            market_name,
+                            obj_uid,
+                        } => {
+                            log::info!(
+                                "core {} chart alert deleted: {} uid={}",
+                                server.id,
+                                market_name,
+                                obj_uid
+                            );
+                            chart_alerts.push(crate::feed::ChartAlertUpdate::Deleted {
+                                market: market_name.clone(),
+                                obj_uid: *obj_uid,
+                            });
+                        }
+                    }
+                }
                 Event::EngineAction(e) => {
                     if !e.success {
                         log::warn!(
@@ -336,6 +386,9 @@ pub fn run(
             }
         }
         if !engine_actions.is_empty() && tx.send(FeedMsg::EngineActions(engine_actions)).is_err() {
+            break;
+        }
+        if !chart_alerts.is_empty() && tx.send(FeedMsg::ChartAlerts(chart_alerts)).is_err() {
             break;
         }
         let license_state = settings_event_snapshot(
@@ -704,4 +757,15 @@ pub fn run(
 
     let _ = client.disconnect();
     Ok(())
+}
+
+/// Hex-строка байт (без разделителей) — дамп blob chart-алертов для реверса
+/// формата `TChartObject.Save()` (см. docs-internal, этап 0 алертов).
+fn hex_dump(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }

@@ -23,6 +23,8 @@ pub mod axes;
 pub mod container;
 // `data` / market-source models live in moon-core. Ре-экспорт под прежним путём.
 pub use moon_core::data;
+pub mod figures;
+pub use figures::build_figure_geometry;
 pub mod layers;
 pub mod paint;
 pub mod view;

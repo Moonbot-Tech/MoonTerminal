@@ -206,6 +206,18 @@ pub struct HotkeysConfig {
     #[serde(default)]
     pub broadcast: String,
 
+    /// Слой рисования фигур (карандаш): тоггл инструментов. Повторное нажатие того же
+    /// хоткея (или Esc) выключает режим. Дефолты на Ctrl (Alt-сочетания Windows перехватывает под меню окна — до обработчика не доходят, только системный звук).
+    #[serde(default = "default_draw_hline")]
+    pub draw_hline: String,
+    #[serde(default = "default_draw_segment")]
+    pub draw_segment: String,
+    #[serde(default = "default_draw_channel")]
+    pub draw_channel: String,
+    /// Удалить выделенную фигуру.
+    #[serde(default = "default_fig_delete")]
+    pub fig_delete: String,
+
     /// Живой MoonBot-путь MultiOrders: поставить long по стакану.
     #[serde(default = "default_left_double")]
     pub buy_set_click: MouseGestureBinding,
@@ -276,6 +288,10 @@ impl Default for HotkeysConfig {
             switch_figure: default_switch_figure(),
             fit_sells: default_fit_sells(),
             broadcast: String::new(),
+            draw_hline: default_draw_hline(),
+            draw_segment: default_draw_segment(),
+            draw_channel: default_draw_channel(),
+            fig_delete: default_fig_delete(),
             buy_set_click: default_left_double(),
             short_set_click: MouseGestureBinding::None,
             pending_long_click: MouseGestureBinding::None,
@@ -303,6 +319,22 @@ fn default_sell_preset_keys() -> [String; SELL_PRESET_KEYS] {
 
 fn default_manual_strategy_keys() -> [String; MANUAL_STRATEGY_KEYS] {
     std::array::from_fn(|_| String::new())
+}
+
+fn default_draw_hline() -> String {
+    "ctrl-h".into()
+}
+
+fn default_draw_segment() -> String {
+    "ctrl-l".into()
+}
+
+fn default_draw_channel() -> String {
+    "ctrl-k".into()
+}
+
+fn default_fig_delete() -> String {
+    "delete".into()
 }
 
 fn default_make_shot() -> String {

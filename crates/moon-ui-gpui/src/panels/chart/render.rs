@@ -542,6 +542,15 @@ impl Render for ChartPanel {
                         None
                     };
                     this.sync_native_cursor();
+                    // Слой рисования фигур: режим-карандаш ставит узлы, вне режима клик
+                    // хватает узел/тело фигуры (выделение+драг). Идёт ДО торговли: без
+                    // модификаторов торговые жесты по умолчанию не заняты, а в зоне
+                    // управления фигуры не перехватывают (см. try_fig_click).
+                    if within && e.click_count <= 1 && this.try_fig_click(pos, cx) {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
                     if within
                         && this.try_place_order_click(
                             TradeMouseButton::Left,
@@ -602,6 +611,11 @@ impl Render for ChartPanel {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _e: &MouseUpEvent, window, cx| {
+                    if this.finish_fig_drag(cx) {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
                     if this.finish_order_drag(cx) {
                         this.sync_native_cursor();
                         cx.notify();
@@ -784,6 +798,8 @@ impl Render for ChartPanel {
                     if cursor_changed && this.sync_native_cursor() {
                         crate::diag::bump(&crate::diag::CHART_CURSOR_UPDATE);
                     }
+                    // Фигуры: превью драфта за курсором + hover-подсветка.
+                    this.update_fig_pointer(pos, within, false, cx);
                     let order_hover_changed = if within {
                         this.sync_order_hover(pos, cx)
                     } else {
@@ -804,6 +820,11 @@ impl Render for ChartPanel {
                     e.pressed_button == Some(MouseButton::Left),
                     e.pressed_button == Some(MouseButton::Right),
                 );
+                if this.fig_drag.is_some() {
+                    this.update_fig_pointer(pos, within, true, cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.order_drag.is_some() {
                     this.update_order_drag(pos, cx);
                     cx.stop_propagation();

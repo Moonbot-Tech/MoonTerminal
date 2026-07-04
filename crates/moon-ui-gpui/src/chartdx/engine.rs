@@ -379,6 +379,19 @@ impl ChartEngine {
             .set_order_visual(highlight, drag_preview)
     }
 
+    /// Подключить общий стор пользовательских фигур (Rc Backend'а; при создании панели).
+    pub fn set_figures_store(
+        &mut self,
+        store: std::rc::Rc<RefCell<moon_core::figures::FigureStore>>,
+    ) {
+        self.data.borrow_mut().set_figures_store(store);
+    }
+
+    /// Интерактив фигур (превью рисования/hover/выделение) этой панели.
+    pub(crate) fn set_figure_visual(&mut self, visual: super::figures_sync::FigureVisual) -> bool {
+        self.data.borrow_mut().set_figure_visual(visual)
+    }
+
     /// Масштаб цены (Y) ко ВСЕМ панелям. None=Авто. Запоминается в контейнере.
     pub fn set_scale(&mut self, pct: Option<f32>) -> bool {
         if self.scale == pct {
