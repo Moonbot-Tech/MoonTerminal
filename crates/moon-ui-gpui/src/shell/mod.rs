@@ -281,6 +281,22 @@ impl Shell {
         })
         .detach();
 
+        // Тик часов шапки: раз в секунду будим Shell-рендер, чтобы «HH:MM:SS» шли даже в
+        // простое (backend-notify гейтится наличием данных → без этого часы бы замирали).
+        // Один таймер на окно; 1 Гц ≤ штатного троттла статус-бара (4 Гц) — дёшево. Останов —
+        // по смерти сущности (окно закрыто).
+        cx.spawn(async move |this, cx| {
+            loop {
+                let executor = cx.update(|cx| cx.background_executor().clone());
+                executor.timer(std::time::Duration::from_secs(1)).await;
+                let alive = cx.update(|cx| this.update(cx, |_this, cx| cx.notify()).is_ok());
+                if !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         // Любое изменение раскладки доков (drag/split/resize/detach) → дамп в backend,
         // сохранение дебаунсит дренаж-таймер (docks.json). Порт персиста раскладки.
         cx.subscribe(&dock, |this, dock, event: &DockEvent, cx| {

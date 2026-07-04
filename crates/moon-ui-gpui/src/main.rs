@@ -19,6 +19,7 @@ mod chart_persist;
 mod detect_sound;
 mod chart_tabs;
 mod chartdx;
+mod clock;
 mod controls;
 mod core_settings_popup;
 mod crash;
@@ -691,6 +692,19 @@ impl Backend {
         };
         if self.layout.header_ticker.as_ref() != Some(&sel) {
             self.layout.header_ticker = Some(sel);
+            self.layout_dirty = true;
+        }
+    }
+
+    /// Смещение часов шапки (минуты от UTC). Дефолт 0 = UTC.
+    fn header_clock_offset_min(&self) -> i32 {
+        self.layout.header_clock_offset_min
+    }
+
+    /// Записать смещение часов шапки (клик в попапе выбора пояса) + персист в layout.
+    fn set_header_clock_offset_min(&mut self, off_min: i32) {
+        if self.layout.header_clock_offset_min != off_min {
+            self.layout.header_clock_offset_min = off_min;
             self.layout_dirty = true;
         }
     }

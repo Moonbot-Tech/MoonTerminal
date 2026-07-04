@@ -120,6 +120,8 @@ pub fn header(
                     p,
                     cx,
                 ))
+                // Часы UTC(±пояс) в правом углу; клик — попап выбора пояса.
+                .child(crate::clock::header_clock(&backend, p, cx))
                 .when(design::show_custom_window_controls(), |this| {
                     this.child(
                         MoonWindowFrame::main("terminal-header-controls", 0.0)

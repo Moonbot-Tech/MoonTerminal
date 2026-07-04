@@ -39,6 +39,11 @@ header.ticker_pick:
   ru: "Монета тикера (поиск по ядрам)"
   en: "Ticker coin (search across cores)"
   es: "Moneda del ticker (búsqueda por núcleos)"
+# Часы в правом углу шапки.
+header.clock_tip:
+  ru: "Часы (UTC). Клик — выбрать пояс; совпал с системным — метка скрыта"
+  en: "Clock (UTC). Click to pick a zone; matches system → label hidden"
+  es: "Reloj (UTC). Clic para elegir zona; igual al sistema → etiqueta oculta"
 
 # --- Тулбар ---
 toolbar.size:
