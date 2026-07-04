@@ -24,7 +24,8 @@ pub fn read_servers() -> anyhow::Result<ServersFile> {
 /// Зашифровать и записать servers.enc.
 pub fn write_servers(sf: &ServersFile) -> anyhow::Result<()> {
     let enc = crypto::encrypt(toml::to_string(sf)?.as_bytes())?;
-    std::fs::write(paths::servers_path(), enc).context("запись servers.enc")?;
+    super::toml_io::write_atomic(&paths::servers_path(), &enc, "servers.enc")
+        .context("запись servers.enc")?;
     Ok(())
 }
 

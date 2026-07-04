@@ -65,7 +65,11 @@ pub fn load_all() -> Vec<DetachedSpec> {
 pub fn save_all(list: &[DetachedSpec]) {
     match serde_json::to_string_pretty(list) {
         Ok(s) => {
-            if let Err(e) = std::fs::write(paths::detached_path(), s) {
+            if let Err(e) = moon_core::config::write_file_atomic(
+                &paths::detached_path(),
+                s.as_bytes(),
+                "detached.json",
+            ) {
                 log::warn!("не записал detached.json: {e}");
             }
         }

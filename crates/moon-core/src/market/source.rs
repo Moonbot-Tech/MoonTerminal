@@ -55,12 +55,16 @@ fn bump_generation(revisions: &mut HashMap<CoreId, u64>, provider: CoreId) {
 }
 
 fn bump_market_revisions(
-    revisions: &mut HashMap<(CoreId, String), MarketRevisionCounters>,
+    revisions: &mut HashMap<CoreId, HashMap<String, MarketRevisionCounters>>,
     provider: CoreId,
     market: &str,
     flags: MarketDirtyFlags,
 ) {
-    let entry = revisions.entry((provider, market.to_string())).or_default();
+    let entry = revisions
+        .entry(provider)
+        .or_default()
+        .entry(market.to_string())
+        .or_default();
     if flags.contains(MarketDirtyFlags::HISTORY) {
         entry.history = entry.history.wrapping_add(1);
     }
@@ -210,7 +214,7 @@ struct MarketDataSourceInner {
     core_provider: HashMap<CoreId, CoreId>,
     provider_orderbook_kind: HashMap<CoreId, OrderBookKind>,
     cursors: HashMap<(CoreId, String), MarketPullCursor>,
-    market_revisions: HashMap<(CoreId, String), MarketRevisionCounters>,
+    market_revisions: HashMap<CoreId, HashMap<String, MarketRevisionCounters>>,
     provider_generations: HashMap<CoreId, u64>,
     started_at: Instant,
 }
@@ -267,9 +271,7 @@ impl MarketDataSource {
         let mut inner = self.inner.write().expect("market source poisoned");
         inner.clients.remove(&core);
         inner.cursors.retain(|(provider, _), _| *provider != core);
-        inner
-            .market_revisions
-            .retain(|(provider, _), _| *provider != core);
+        inner.market_revisions.remove(&core);
         inner.provider_orderbook_kind.remove(&core);
         inner.core_provider.remove(&core);
         bump_generation(&mut inner.provider_generations, core);
@@ -285,7 +287,7 @@ impl MarketDataSource {
             .retain(|(provider, _), _| active_providers.contains(provider));
         inner
             .market_revisions
-            .retain(|(provider, _), _| active_providers.contains(provider));
+            .retain(|provider, _| active_providers.contains(provider));
         inner
             .provider_orderbook_kind
             .retain(|provider, _| active_providers.contains(provider));
@@ -339,6 +341,7 @@ impl MarketDataSource {
             inner.cursors.retain(|(p, _), _| *p != provider);
             bump_generation(&mut inner.provider_generations, provider);
             inner.provider_orderbook_kind.remove(&provider);
+            inner.market_revisions.remove(&provider);
             inner.store.clone()
         };
         store
@@ -440,7 +443,8 @@ impl MarketDataSource {
             }
             book_dirty_revision = inner
                 .market_revisions
-                .get(&key)
+                .get(&provider)
+                .and_then(|markets| markets.get(market))
                 .map(|revs| revs.book)
                 .unwrap_or(0);
             let cursor = inner.cursors.entry(key).or_default();
@@ -574,7 +578,8 @@ impl MarketDataSource {
             .unwrap_or(0);
         let counters = inner
             .market_revisions
-            .get(&(provider, market.to_string()))
+            .get(&provider)
+            .and_then(|markets| markets.get(market))
             .copied()
             .unwrap_or_default();
         Some(MarketRevisions {

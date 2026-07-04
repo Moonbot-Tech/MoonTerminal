@@ -14,9 +14,8 @@ use windows::Win32::Graphics::Direct3D11::*;
 
 use super::gpu::{
     BlitParams, ChartCross, ChartViewGpu, create_alpha_blend, create_dynamic_cb,
-    create_point_sampler, create_premultiplied_alpha_blend, create_srv, create_srv_range,
-    create_structured, device_changed, full_viewport, ring_write_no_overwrite, set_scissor_rect,
-    update_dynamic,
+    create_point_sampler, create_premultiplied_alpha_blend, create_srv, create_structured,
+    device_changed, full_viewport, ring_write_no_overwrite, set_scissor_rect, update_dynamic,
 };
 use super::types::{
     DEFAULT_VOLUME_ALPHA, append_cross_ring, cross_volume_max, evicted_cross_ranges,
@@ -75,6 +74,14 @@ struct ComboTex {
     valid: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct VolumeScaleKey {
+    data_generation: u64,
+    bake_t0_bits: u32,
+    tex_w_bits: u32,
+    time_to_px_bits: u32,
+}
+
 pub struct ComboLayer {
     pipe: Option<CrossPipe>,
     tex: Option<ComboTex>,
@@ -98,6 +105,8 @@ pub struct ComboLayer {
     volume_buy_max: f32,
     volume_sell_max: f32,
     volume_scale_dirty: bool,
+    volume_data_generation: u64,
+    volume_window_cache: Option<(VolumeScaleKey, (f32, f32))>,
 }
 
 impl ComboLayer {
@@ -122,6 +131,8 @@ impl ComboLayer {
             volume_buy_max: 1e-6,
             volume_sell_max: 1e-6,
             volume_scale_dirty: false,
+            volume_data_generation: 0,
+            volume_window_cache: None,
         }
     }
 
@@ -154,6 +165,8 @@ impl ComboLayer {
         self.last_line_count = 0;
         self.mark_line_count = 0;
         self.pending_append.clear();
+        self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
+        self.volume_window_cache = None;
     }
 
     /// Полная перезаливка набора тиков (reload истории монеты). Сбрасывает append.
@@ -171,9 +184,6 @@ impl ComboLayer {
 
     pub fn set_price_lines(&mut self, last: &[PriceLinePoint], mark: &[PriceLinePoint]) {
         self.pending_lines = Some((last.to_vec(), mark.to_vec()));
-        if let Some(tex) = self.tex.as_mut() {
-            tex.valid = false;
-        }
     }
 
     /// Prepare phase: uploads pending data and bakes/extends the offscreen combo texture.
@@ -198,6 +208,8 @@ impl ComboLayer {
             self.resident_count = 0;
             self.last_line_count = 0;
             self.mark_line_count = 0;
+            self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
+            self.volume_window_cache = None;
             self.device_gen = self.device_gen.wrapping_add(1);
         }
         if self.pipe.is_none() {
@@ -225,10 +237,13 @@ impl ComboLayer {
         gpu: &RawGpuAccess,
         panel_clip: [f32; 4],
     ) {
-        if self.count == 0 {
+        if self.count == 0 && self.last_line_count <= 1 && self.mark_line_count <= 1 {
             return;
         }
-        self.blit_combo(view, context, rtv, gpu, panel_clip);
+        if self.count > 0 {
+            self.blit_combo(view, context, rtv, gpu, panel_clip);
+        }
+        self.draw_price_lines_to_backbuffer(view, context, rtv, gpu, panel_clip);
     }
 
     /// Combo: инкрементальный bake новых тиков в текстуру.
@@ -254,9 +269,6 @@ impl ComboLayer {
         if need_new {
             self.tex = Some(Self::create_tex(device, tex_w, tex_h));
         }
-        let pipe = self.pipe.as_ref().unwrap();
-        let last_line_count = self.last_line_count;
-        let mark_line_count = self.mark_line_count;
         let ttp = view.time_to_px;
         let tex_ref = self.tex.as_ref().unwrap();
         let transform_changed = tex_ref.last_time_to_px != view.time_to_px
@@ -272,6 +284,7 @@ impl ComboLayer {
             tex_ref.bake_t0
         };
         let (buy_max, sell_max) = self.volume_scale_for_bake_window(bake_t0, tex_w as f32, ttp);
+        let pipe = self.pipe.as_ref().unwrap();
         let tex = self.tex.as_mut().unwrap();
         if transform_changed {
             tex.valid = false;
@@ -294,6 +307,7 @@ impl ComboLayer {
             price_to_px: view.price_to_px,
             view_price0: view.view_price0,
             marker_half: view.marker_half,
+            // crosses.hlsl: combo-pass first-instance offset into the resident ring buffer.
             pad: 0.0,
             volume_buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
             volume_sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
@@ -327,7 +341,6 @@ impl ComboLayer {
                 context.VSSetShader(&pipe.volume_vs, None);
                 context.PSSetShader(&pipe.volume_ps, None);
                 context.DrawInstanced(6, self.count, 0, 0);
-                Self::draw_price_lines(context, pipe, last_line_count, mark_line_count);
                 context.VSSetShader(&pipe.cross_vs, None);
                 context.PSSetShader(&pipe.cross_ps, None);
                 context.DrawInstanced(6, self.count, 0, 0);
@@ -353,8 +366,10 @@ impl ComboLayer {
                     if rc == 0 {
                         continue;
                     }
-                    let srv_r = create_srv_range(device, &pipe.buffer, rf, rc);
-                    context.VSSetShaderResources(1, Some(&[Some(srv_r)]));
+                    let mut run_view = bake_view;
+                    run_view.pad = rf as f32;
+                    update_dynamic(context, &pipe.view_cb, &[run_view]);
+                    context.VSSetShaderResources(1, Some(&[Some(pipe.srv.clone())]));
                     context.VSSetShader(&pipe.volume_vs, None);
                     context.PSSetShader(&pipe.volume_ps, None);
                     context.DrawInstanced(6, rc, 0, 0);
@@ -425,6 +440,40 @@ impl ComboLayer {
         }
     }
 
+    fn draw_price_lines_to_backbuffer(
+        &self,
+        view: &ChartViewGpu,
+        context: &ID3D11DeviceContext,
+        rtv: &ID3D11RenderTargetView,
+        gpu: &RawGpuAccess,
+        panel_clip: [f32; 4],
+    ) {
+        if self.last_line_count <= 1 && self.mark_line_count <= 1 {
+            return;
+        }
+        let Some(pipe) = self.pipe.as_ref() else {
+            return;
+        };
+        update_dynamic(context, &pipe.view_cb, std::slice::from_ref(view));
+        let vp = full_viewport(gpu);
+        unsafe {
+            context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+            context.RSSetViewports(Some(&[vp]));
+            set_scissor_rect(
+                context,
+                panel_clip[0],
+                panel_clip[1],
+                panel_clip[2],
+                panel_clip[3],
+            );
+            context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context.VSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
+            context.PSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
+            context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
+            Self::draw_price_lines(context, pipe, self.last_line_count, self.mark_line_count);
+        }
+    }
+
     fn apply_uploads(&mut self, context: &ID3D11DeviceContext) {
         let (tick_buffer, last_line_buf, mark_line_buf) = {
             let pipe = self.pipe.as_ref().unwrap();
@@ -464,6 +513,8 @@ impl ComboLayer {
             }
             self.recalc_volume_scale();
             self.volume_scale_dirty = true;
+            self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
+            self.volume_window_cache = None;
         }
         if !self.pending_append.is_empty() {
             let data = std::mem::take(&mut self.pending_append);
@@ -505,6 +556,8 @@ impl ComboLayer {
             if before_scale != (self.volume_buy_max, self.volume_sell_max) {
                 self.volume_scale_dirty = true;
             }
+            self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
+            self.volume_window_cache = None;
             if full_reset || evicted_any {
                 if let Some(tex) = self.tex.as_mut() {
                     tex.valid = false;
@@ -527,13 +580,24 @@ impl ComboLayer {
     }
 
     fn volume_scale_for_bake_window(
-        &self,
+        &mut self,
         bake_t0: f32,
         tex_w: f32,
         time_to_px: f32,
     ) -> (f32, f32) {
         if !(time_to_px > 1e-9) || self.resident_count == 0 {
             return (1e-6, 1e-6);
+        }
+        let key = VolumeScaleKey {
+            data_generation: self.volume_data_generation,
+            bake_t0_bits: bake_t0.to_bits(),
+            tex_w_bits: tex_w.to_bits(),
+            time_to_px_bits: time_to_px.to_bits(),
+        };
+        if let Some((cached_key, cached)) = self.volume_window_cache {
+            if cached_key == key {
+                return cached;
+            }
         }
         let time_left = bake_t0 - 2.0 / time_to_px;
         let time_right = bake_t0 + (tex_w + 2.0) / time_to_px;
@@ -563,7 +627,9 @@ impl ComboLayer {
                 _ => {} // side>=2 (ликвидации) без volume-баров → вне масштаба
             }
         }
-        (buy, sell)
+        let out = (buy, sell);
+        self.volume_window_cache = Some((key, out));
+        out
     }
 
     fn draw_price_lines(

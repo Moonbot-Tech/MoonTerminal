@@ -120,8 +120,12 @@ pub struct SessionManager {
 pub struct DrainStats {
     /// At least one feed message was applied to session state.
     pub any: bool,
-    /// Data visible to chart GPU state changed: market ticks/book/price-lines or order lines.
-    pub chart_data: bool,
+    /// Retained market data changed. Visible charts pull this from `gpu_canvas.frame()`;
+    /// this flag must not trigger account/order overlay sync.
+    pub market_data: bool,
+    /// Account/order overlays changed. These still live in `CoreStore` and need a narrow
+    /// sync into visible chart userdata.
+    pub order_lines_data: bool,
     /// Slow GPUI chrome/account state changed and the Backend entity should be notified.
     pub ui_state: bool,
 }
@@ -324,14 +328,14 @@ impl SessionManager {
                     FeedMsg::MarketDataChanged(markets) => {
                         if !markets.is_empty() {
                             self.market_source.mark_dirty(sess.id, &markets);
-                            stats.chart_data = true;
+                            stats.market_data = true;
                         }
                     }
                     FeedMsg::Orders(orders) => {
                         if let Some(core) = self.store.core_mut(sess.id) {
                             let before = core.order_lines_rev;
                             core.apply(FeedMsg::Orders(orders));
-                            stats.chart_data |= core.order_lines_rev != before;
+                            stats.order_lines_data |= core.order_lines_rev != before;
                             stats.ui_state = true;
                         }
                     }
@@ -339,7 +343,9 @@ impl SessionManager {
                         if let Some(core) = self.store.core_mut(sess.id) {
                             let before = core.order_lines_rev;
                             core.apply(FeedMsg::OrderLines(orders));
-                            stats.chart_data |= core.order_lines_rev != before;
+                            let changed = core.order_lines_rev != before;
+                            stats.order_lines_data |= changed;
+                            stats.ui_state |= changed;
                         }
                     }
                     other => {

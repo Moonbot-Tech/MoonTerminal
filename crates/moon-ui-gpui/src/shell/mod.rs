@@ -29,7 +29,7 @@ use moon_core::session::CoreId;
 use crate::chart_tabs::ChartTabs;
 use crate::dock_persist::DOCK_VERSION;
 use crate::panels::{AssetsView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel};
-use crate::{Backend, controls, core_settings_popup, design, panels, terminal_chrome};
+use crate::{Backend, controls, core_settings_popup, design, terminal_chrome};
 
 /// Оболочка одной группы (= одно ОС-окно): header + единый `DockArea` + статус.
 /// Весь контент — Dock-панели (чарт=center, детекты/ордер=right, нижние вкладки=
@@ -855,7 +855,6 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::SHELL_RENDER);
-        let _order_count = panels::count_orders(self.backend.read(cx), &self.group);
 
         // Header-данные (рынок/цена/conn). Чарт/ввод/оси — в ChartPanel.
         // FPS рендера (сглаженный) — диагностика статус-бара (порт host.fps).
@@ -895,9 +894,8 @@ impl Render for Shell {
             .core_settings_open
             .then(|| self.core_settings_popup_content(p, cx));
 
-        // Тикер курса в шапке: источник (ядро+рынок) резолвится в Backend (мутирует кэш дефолта
-        // → нужен update, поэтому здесь, а не в &App-функции header). Попап выбора — свой слой.
-        let ticker_sel = self.backend.update(cx, |b, _| b.header_ticker());
+        // Тикер курса в шапке: сохранённый выбор или read-only дефолт. Render не мутирует backend.
+        let ticker_sel = self.backend.read(cx).header_ticker();
         let (ticker_overlay, ticker_dismiss) = self.ticker_popup_layers(p, cx);
 
         // Активность Main для авто-закрытия по неактивности: ОКОННЫЙ слушатель ловит ВСЕ

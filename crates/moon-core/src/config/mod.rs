@@ -44,8 +44,15 @@ pub use servers::{ChartBucket, FeedFlags, ServerConfig};
 pub use theme::ChartTheme;
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::market::MarketDataMode;
+
+/// Атомарная запись пользовательского файла конфигурации/раскладки: временный sibling + rename.
+/// Используется и для TOML, и для JSON-персиста UI.
+pub fn write_file_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
+    toml_io::write_atomic(path, bytes, label)
+}
 
 /// Рантайм-конфиг (смерженный из двух файлов).
 #[derive(Clone, Debug, Default)]

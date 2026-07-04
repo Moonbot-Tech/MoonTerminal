@@ -518,6 +518,15 @@ impl OrderLineStore {
             active: order.closed_ms.is_none(),
         })
     }
+
+    /// Текущая цена конкретной линии ордера. Нужна UI только для сверки optimistic-preview:
+    /// после drag держим новую цену визуально, пока ядро не прислало echo той же цены.
+    pub fn current_line_price(&self, uid: u64, kind: LineKind) -> Option<f32> {
+        let order = self.orders.get(&uid)?;
+        order.lines
+            .get(kind as usize)
+            .and_then(LineTrace::current_price)
+    }
 }
 
 fn explicit_close_reason(row: &OrderRow) -> OrderCloseReason {

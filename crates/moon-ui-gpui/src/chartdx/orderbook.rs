@@ -5,8 +5,9 @@
 //! смене уровней/Y-трансформа, НЕ каждый кадр: на статике и mouse-move стакан = дешёвый
 //! блит готовой текстуры, а не повторная отрисовка сотен баров инстансами 240 раз/с.
 
+use std::time::{Duration, Instant};
+
 use gpui::RawGpuAccess;
-use moon_chart::paint::now_unix_ms;
 use moon_core::data::LevelInstance;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::*;
@@ -55,8 +56,8 @@ struct BookTex {
     baked: bool,
     /// Входы сменились с прошлого bake → нужен ре-bake (троттлится 200мс).
     dirty: bool,
-    /// Время прошлого bake (unix мс) — троттл ре-bake до ~5 Гц (MoonBot bmGlass: 200мс).
-    last_bake_ms: f64,
+    /// Время прошлого bake — троттл re-bake до ~5 Гц (MoonBot bmGlass: 200мс).
+    last_bake_at: Option<Instant>,
 }
 
 pub struct OrderBookLayer {
@@ -148,11 +149,14 @@ impl OrderBookLayer {
         // BAKE: фон+бары в текстуру (texture-local view). Book data may be throttled, but
         // camera/price-transform changes from user pan/zoom must bake immediately; otherwise
         // the chart moves while the glass layer visibly lags behind.
-        let now_ms = now_unix_ms();
+        let now = Instant::now();
         let transform_changed = tex.last_price_to_px != view.price_to_px
             || tex.last_view_price0 != view.view_price0
             || tex.last_style != *style;
-        let book_data_due = tex.dirty && now_ms - tex.last_bake_ms >= 200.0;
+        let book_data_due = tex.dirty
+            && tex
+                .last_bake_at
+                .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(200));
         if !tex.baked || transform_changed || book_data_due {
             crate::diag::bump(&crate::diag::CHART_BOOK_BAKE);
             // bake-view: зона = весь битмап [0,0,tex_w,tex_h], Y-трансформ тот же.
@@ -208,7 +212,7 @@ impl OrderBookLayer {
             tex.last_style = *style;
             tex.baked = true;
             tex.dirty = false;
-            tex.last_bake_ms = now_ms;
+            tex.last_bake_at = Some(now);
         }
     }
 
@@ -310,7 +314,7 @@ impl OrderBookLayer {
             last_style: BookStyle::default(),
             baked: false,
             dirty: false,
-            last_bake_ms: 0.0,
+            last_bake_at: None,
         }
     }
 }

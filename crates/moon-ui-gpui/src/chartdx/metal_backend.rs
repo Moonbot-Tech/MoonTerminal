@@ -474,10 +474,6 @@ impl MetalLayers {
         self.last_line = tail_vec(last, self.price_line_capacity);
         self.mark_line = tail_vec(mark, self.price_line_capacity);
         self.price_line_buffers_dirty = true;
-        if let Some(tex) = self.combo_texture.as_mut() {
-            tex.valid = false;
-        }
-        self.combo_dirty_ranges.clear();
     }
 
     pub fn set_orderbook(&mut self, levels: Vec<LevelInstance>) {
@@ -568,6 +564,7 @@ impl MetalLayers {
             self.draw_base_layers(encoder);
             self.draw_cached_combo(device, encoder, view);
         }
+        self.draw_price_lines_layer(encoder);
         encoder.set_scissor_rect(bounds_scissor(pane_bounds, gpu.width(), gpu.height()));
         self.draw_user_layers(encoder);
         self.draw_cursor_layer(encoder, cursor_params, readout_rects);
@@ -678,7 +675,7 @@ impl MetalLayers {
         pixel_format: MTLPixelFormat,
         view: &ChartViewGpu,
     ) -> bool {
-        if self.cross_count == 0 && self.last_line.len() <= 1 && self.mark_line.len() <= 1 {
+        if self.cross_count == 0 {
             return false;
         }
         let bw = view.bounds[2];
@@ -753,7 +750,6 @@ impl MetalLayers {
                 encoder,
                 bake_view,
                 &self.crosses[..cross_count],
-                true,
             ));
             let tex = self.combo_texture.as_mut().unwrap();
             tex.bake_t0 = bake_t0;
@@ -778,7 +774,6 @@ impl MetalLayers {
                         encoder,
                         bake_view,
                         &self.crosses[start..end],
-                        false,
                     ));
                 }
             }
@@ -795,7 +790,6 @@ impl MetalLayers {
         encoder: &RenderCommandEncoderRef,
         view: ChartViewGpu,
         crosses: &[ChartCross],
-        include_price_lines: bool,
     ) -> Vec<metal::Buffer> {
         let pipelines = self.pipelines.as_ref().unwrap();
         let mut keepalive = Vec::new();
@@ -810,32 +804,6 @@ impl MetalLayers {
             crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
             draw(encoder, &pipelines.volume, 6, crosses.len() as u64);
         }
-        if include_price_lines && self.last_line.len() > 1 {
-            let last_line_buffer =
-                snapshot_buffer(device, "moon_chart_combo_last_line", &self.last_line);
-            crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
-            set_storage(encoder, 1, last_line_buffer.as_ref());
-            draw(
-                encoder,
-                &pipelines.price_last,
-                6,
-                (self.last_line.len() - 1) as u64,
-            );
-            keepalive.push(last_line_buffer);
-        }
-        if include_price_lines && self.mark_line.len() > 1 {
-            let mark_line_buffer =
-                snapshot_buffer(device, "moon_chart_combo_mark_line", &self.mark_line);
-            crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
-            set_storage(encoder, 1, mark_line_buffer.as_ref());
-            draw(
-                encoder,
-                &pipelines.price_mark,
-                6,
-                (self.mark_line.len() - 1) as u64,
-            );
-            keepalive.push(mark_line_buffer);
-        }
         if !crosses.is_empty() {
             let cross_buffer = cross_buffer.as_ref().unwrap();
             set_storage(encoder, 1, cross_buffer.as_ref());
@@ -846,6 +814,31 @@ impl MetalLayers {
             keepalive.push(cross_buffer);
         }
         keepalive
+    }
+
+    fn draw_price_lines_layer(&self, encoder: &RenderCommandEncoderRef) {
+        let pipelines = self.pipelines.as_ref().unwrap();
+        set_uniform(encoder, 0, self.view_uniform.buffer());
+        if self.last_line.len() > 1 {
+            crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
+            set_storage(encoder, 1, self.last_line_buffer.buffer());
+            draw(
+                encoder,
+                &pipelines.price_last,
+                6,
+                (self.last_line.len() - 1) as u64,
+            );
+        }
+        if self.mark_line.len() > 1 {
+            crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
+            set_storage(encoder, 1, self.mark_line_buffer.buffer());
+            draw(
+                encoder,
+                &pipelines.price_mark,
+                6,
+                (self.mark_line.len() - 1) as u64,
+            );
+        }
     }
 
     fn draw_cached_combo(

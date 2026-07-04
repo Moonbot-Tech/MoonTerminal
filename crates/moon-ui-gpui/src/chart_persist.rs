@@ -286,7 +286,11 @@ pub fn save_all(list: &[ChartTabSpec]) {
     ));
     match serde_json::to_string_pretty(list) {
         Ok(s) => {
-            if let Err(e) = std::fs::write(paths::charts_path(), s) {
+            if let Err(e) = moon_core::config::write_file_atomic(
+                &paths::charts_path(),
+                s.as_bytes(),
+                "charts.json",
+            ) {
                 log::warn!("не записал charts.json: {e}");
             }
         }

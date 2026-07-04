@@ -407,15 +407,3 @@ fn token_cell(
             });
         })
 }
-
-/// Открытые ордера всех ядер группы — для статус-бара Shell (число ордеров).
-pub fn count_orders(b: &Backend, group: &str) -> usize {
-    let store = b.session.store();
-    b.session
-        .sessions()
-        .iter()
-        .filter(|s| s.group == group)
-        .filter_map(|s| store.core(s.id))
-        .map(|c| c.orders.len())
-        .sum()
-}

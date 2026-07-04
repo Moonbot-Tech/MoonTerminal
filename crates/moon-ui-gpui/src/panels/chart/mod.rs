@@ -16,6 +16,7 @@ mod render;
 mod trade;
 
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use gpui::*;
 use moon_ui::{MoonBackgroundPolicy, Panel, PanelEvent};
@@ -29,7 +30,7 @@ use moon_chart::paint::now_unix_ms;
 use moon_core::config::{ChartBucket, ChartTheme, OrdersStyleSet};
 use moon_core::session::CoreId;
 
-use trade::{OrderDrag, OrderHoverKey};
+use trade::{OrderDrag, OrderHoverKey, PendingOrderDrag};
 
 #[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW};
@@ -159,7 +160,7 @@ pub struct ChartPanel {
     /// GPUI-notify (сосед сам взводит present). Пусто = сравнение неактивно.
     ghost_peers: Vec<crate::chartdx::ChartGhostCursor>,
     view_dirty: bool,
-    last_adaptive_notify_ms: f64,
+    last_adaptive_notify_at: Option<Instant>,
     /// Последний scale_factor окна (ставится в render). Нужен data prepare path, у которого
     /// нет window — DPI меняется редко, между сменами берём запомненный.
     last_ppp: f32,
@@ -170,6 +171,7 @@ pub struct ChartPanel {
     /// покое не тикает (камеру двигает own-pass), поэтому возврат нужен по таймеру.
     auto_live_timer_armed: bool,
     order_drag: Option<OrderDrag>,
+    pending_order_drag: Option<PendingOrderDrag>,
     order_hover: Option<OrderHoverKey>,
     /// ПКМ-down открыл контекстное меню ордера → следующий ПКМ-up НЕ должен сработать
     /// (иначе родитель Main-стека воспримет его как «возврат из фулскрина» и т.п.).
@@ -178,6 +180,14 @@ pub struct ChartPanel {
 }
 
 impl ChartPanel {
+    fn sync_orders_from_backend_notify(&mut self, cx: &mut Context<Self>) -> bool {
+        {
+            let b = self.backend.read(cx);
+            self.chart.sync_orders_if_visible(&b.session, false);
+        }
+        self.clear_settled_order_drag_preview(cx) && self.apply_order_visual(cx)
+    }
+
     pub fn new(
         backend: Entity<Backend>,
         focus_open: Option<(CoreId, String)>,
@@ -222,7 +232,7 @@ impl ChartPanel {
         // Time-based TTL панелей обслуживает локальный one-shot timer, не backend data observe.
         cx.observe(&backend, |this, backend, cx| {
             crate::diag::bump(&crate::diag::CHART_OBS_FIRE);
-            let now = now_unix_ms();
+            let now = Instant::now();
             let (sig, settings_sig) = {
                 let b = backend.read(cx);
                 (
@@ -236,16 +246,26 @@ impl ChartPanel {
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
+            if this.sync_orders_from_backend_notify(cx) {
+                crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
+                cx.notify();
+            }
             this.data_sig = sig;
             // Троттл notify. Данные gpu_canvas рисует сам по present (форк), notify нужен лишь
             // для GPUI-оверлея осей, а он идёт top-down → дёргает Orders. Поэтому ≤4 Гц для
             // fast (≥250мс) и ≤1 Гц для addto. Частые GPU data/state обновляет
             // gpu_canvas.frame() без GPUI dirty; notify здесь только для редкого текста осей.
-            let floor = if this.fast { 250.0 } else { 1000.0 };
-            if sig != this.last_axis_notify_data_sig && now - this.last_adaptive_notify_ms >= floor
-            {
+            let floor = if this.fast {
+                Duration::from_millis(250)
+            } else {
+                Duration::from_millis(1_000)
+            };
+            let notify_due = this
+                .last_adaptive_notify_at
+                .is_none_or(|last| now.duration_since(last) >= floor);
+            if sig != this.last_axis_notify_data_sig && notify_due {
                 this.last_axis_notify_data_sig = sig;
-                this.last_adaptive_notify_ms = now;
+                this.last_adaptive_notify_at = Some(now);
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
@@ -292,11 +312,12 @@ impl ChartPanel {
             compare_broom_on: false,
             ghost_peers: Vec::new(),
             view_dirty: true,
-            last_adaptive_notify_ms: 0.0,
+            last_adaptive_notify_at: None,
             last_ppp: 1.0,
             ttl_timer_armed: false,
             auto_live_timer_armed: false,
             order_drag: None,
+            pending_order_drag: None,
             order_hover: None,
             suppress_rmb_up: false,
             focus: cx.focus_handle(),
@@ -325,7 +346,7 @@ impl ChartPanel {
             chart_settings_sig(&b)
         };
         cx.observe(&backend, |this, backend, cx| {
-            let now = now_unix_ms();
+            let now = Instant::now();
             let (sig, settings_sig) = {
                 let b = backend.read(cx);
                 (
@@ -339,14 +360,20 @@ impl ChartPanel {
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
+            if this.sync_orders_from_backend_notify(cx) {
+                crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
+                cx.notify();
+            }
             this.data_sig = sig;
             // AddToChart — фоновый график: notify (а с ним top-down перерисовка Orders)
             // ≤1 Гц. Частые GPU data/state обновляет gpu_canvas.frame() без notify;
             // time-based prune делает локальный TTL timer.
-            if sig != this.last_axis_notify_data_sig && now - this.last_adaptive_notify_ms >= 1000.0
-            {
+            let notify_due = this
+                .last_adaptive_notify_at
+                .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(1_000));
+            if sig != this.last_axis_notify_data_sig && notify_due {
                 this.last_axis_notify_data_sig = sig;
-                this.last_adaptive_notify_ms = now;
+                this.last_adaptive_notify_at = Some(now);
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
@@ -393,11 +420,12 @@ impl ChartPanel {
             compare_broom_on: false,
             ghost_peers: Vec::new(),
             view_dirty: true,
-            last_adaptive_notify_ms: 0.0,
+            last_adaptive_notify_at: None,
             last_ppp: 1.0,
             ttl_timer_armed: false,
             auto_live_timer_armed: false,
             order_drag: None,
+            pending_order_drag: None,
             order_hover: None,
             suppress_rmb_up: false,
             focus: cx.focus_handle(),
@@ -453,9 +481,14 @@ impl ChartPanel {
         if !self.scene_visible {
             return;
         }
-        let b = self.backend.read(cx);
-        self.data_sig = self.chart.notify_signature(&b.session);
-        self.chart.sync_orders_if_visible(&b.session, force);
+        {
+            let b = self.backend.read(cx);
+            self.data_sig = self.chart.notify_signature(&b.session);
+            self.chart.sync_orders_if_visible(&b.session, force);
+        }
+        if self.clear_settled_order_drag_preview(cx) && self.apply_order_visual(cx) {
+            cx.notify();
+        }
     }
 
     /// Поставить масштаб ЭТОЙ вкладки (None=Авто). Применяется в render через `set_scale` движка.

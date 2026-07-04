@@ -45,7 +45,11 @@ pub fn load_all() -> DockMap {
 pub fn save_all(map: &DockMap) {
     match serde_json::to_string_pretty(map) {
         Ok(s) => {
-            if let Err(e) = std::fs::write(paths::docks_path(), s) {
+            if let Err(e) = moon_core::config::write_file_atomic(
+                &paths::docks_path(),
+                s.as_bytes(),
+                "docks.json",
+            ) {
                 log::warn!("не записал docks.json: {e}");
             }
         }

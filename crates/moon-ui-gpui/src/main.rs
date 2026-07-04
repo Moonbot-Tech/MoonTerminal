@@ -201,7 +201,8 @@ struct Backend {
     layout_dirty: bool,
     /// Кэш ДЕФОЛТНОГО источника тикера шапки (нет сохранённого выбора): (ядро, рынок).
     /// Резолвится лениво при первом успешном поиске BTCUSDT/UBTCUSDC; не персистится.
-    header_ticker_cache: Option<(CoreId, String)>,
+    header_ticker_default: Option<(CoreId, String)>,
+    last_header_ticker_refresh: Option<Instant>,
     /// Раскладка доков (группа → DockAreaState) — load на старте, save по
     /// DockEvent::LayoutChanged (дебаунс тем же таймером). Пишется в docks.json.
     dock_states: HashMap<String, DockAreaState>,
@@ -593,11 +594,41 @@ impl Backend {
         self.trade_core_override.insert(group.to_string(), core);
     }
 
+    fn refresh_header_ticker_default(&mut self, force: bool) {
+        if self.layout.header_ticker.is_some() {
+            return;
+        }
+        if let Some((core, _)) = &self.header_ticker_default {
+            if self.session.sessions().iter().any(|s| s.id == *core) {
+                return;
+            }
+        }
+        let now = Instant::now();
+        if !force
+            && self
+                .last_header_ticker_refresh
+                .is_some_and(|last| now.duration_since(last) < Duration::from_secs(1))
+        {
+            return;
+        }
+        self.last_header_ticker_refresh = Some(now);
+        let Some(core) = self.session.sessions().first().map(|s| s.id) else {
+            self.header_ticker_default = None;
+            return;
+        };
+        let ms = self.session.market_source();
+        let market = ["BTCUSDT", "UBTCUSDC"]
+            .iter()
+            .find(|cand| ms.search_markets(core, cand, 2).iter().any(|m| m == *cand))
+            .map(|c| c.to_string())
+            .or_else(|| ms.search_markets(core, "BTC", 1).into_iter().next());
+        self.header_ticker_default = market.map(|market| (core, market));
+    }
+
     /// Источник тикера курса в шапке: сохранённый выбор (layout, по стабильному uid ядра),
-    /// если ядро ещё подключено; иначе дефолт — первое подключённое ядро + BTCUSDT
-    /// (на Hyperliquid-подобных юниверсах — UBTCUSDC, иначе первый результат поиска «BTC»).
-    /// Дефолт кэшируется (`header_ticker_cache`), НЕ персистится — персист только ручного выбора.
-    fn header_ticker(&mut self) -> Option<(CoreId, String)> {
+    /// если ядро ещё подключено; иначе готовый дефолтный кэш. Render не ищет рынки и не
+    /// мутирует backend.
+    fn header_ticker(&self) -> Option<(CoreId, String)> {
         if let Some(sel) = &self.layout.header_ticker {
             let core = self
                 .config
@@ -611,22 +642,10 @@ impl Backend {
                 }
             }
         }
-        if let Some(cached) = &self.header_ticker_cache {
-            return Some(cached.clone());
-        }
-        let core = self.session.sessions().first().map(|s| s.id)?;
-        let ms = self.session.market_source();
-        let market = ["BTCUSDT", "UBTCUSDC"]
-            .iter()
-            .find(|cand| {
-                ms.search_markets(core, cand, 2)
-                    .iter()
-                    .any(|m| m == *cand)
-            })
-            .map(|c| c.to_string())
-            .or_else(|| ms.search_markets(core, "BTC", 1).into_iter().next())?;
-        self.header_ticker_cache = Some((core, market.clone()));
-        Some((core, market))
+        self.header_ticker_default
+            .as_ref()
+            .filter(|(core, _)| self.session.sessions().iter().any(|s| s.id == *core))
+            .cloned()
     }
 
     /// Записать выбор тикера шапки (клик в попапе поиска) + персист в layout по uid ядра.
@@ -648,7 +667,6 @@ impl Backend {
             self.layout.header_ticker = Some(sel);
             self.layout_dirty = true;
         }
-        self.header_ticker_cache = Some((core, market));
     }
 
     /// Ядра группы (id, имя) для селектора в шапке. Порядок — как в конфиге/сессиях.
@@ -977,7 +995,8 @@ fn main() -> anyhow::Result<()> {
             debug_main_chart_handles: HashMap::new(),
             layout: layout.clone(),
             layout_dirty: false,
-            header_ticker_cache: None,
+            header_ticker_default: None,
+            last_header_ticker_refresh: None,
             dock_states,
             dock_dirty: false,
             price_scale: None,
@@ -1019,6 +1038,7 @@ fn main() -> anyhow::Result<()> {
             config_dirty: false,
             quitting: false,
         });
+        backend.update(cx, |b, _| b.refresh_header_ticker_default(true));
 
         // Фабрики панелей для восстановления раскладки доков (PanelRegistry — глобален).
         dock_persist::register_panels(cx, backend.clone(), epoch);
@@ -1126,12 +1146,10 @@ fn main() -> anyhow::Result<()> {
                         if !drain.any {
                             return;
                         }
-                        if drain.chart_data {
-                            if drain.ui_state {
-                                let chart_consumers = b.live_chart_consumers();
-                                for chart in chart_consumers {
-                                    chart.sync_orders_if_visible(&b.session, false);
-                                }
+                        if drain.order_lines_data {
+                            let chart_consumers = b.live_chart_consumers();
+                            for chart in chart_consumers {
+                                chart.sync_orders_if_visible(&b.session, false);
                             }
                         }
                         if drain.ui_state {
@@ -1156,6 +1174,7 @@ fn main() -> anyhow::Result<()> {
                 cx.update(|cx| {
                     let (show_reqs, open_debug_10) = coord_backend.update(cx, |b, cx| {
                         b.maybe_diag_open_first_market(cx);
+                        b.refresh_header_ticker_default(false);
                         b.sync_open_markets_if_due();
                         b.snap = b.metrics.sample(Instant::now());
                         crate::firetest::tick_backend(b, cx);

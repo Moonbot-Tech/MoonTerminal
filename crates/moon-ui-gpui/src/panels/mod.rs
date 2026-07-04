@@ -24,6 +24,6 @@ pub use assets::{AssetsView, open as open_assets_window};
 pub use chart::ChartPanel;
 pub use detects::DetectsPanel;
 pub use log::LogPanel;
-pub use orders::{OrdersPanel, count_orders};
+pub use orders::OrdersPanel;
 pub use report::ReportPanel;
 pub use stub::StubPanel;

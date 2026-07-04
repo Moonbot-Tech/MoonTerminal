@@ -31,8 +31,6 @@ use moon_core::feed::OrderRow;
 use moon_core::session::CoreId;
 use moon_core::symbol;
 
-pub use table::count_orders;
-
 /// Одна строка таблицы ордеров с привязкой к ядру-источнику (порт `OrderEntry`).
 #[derive(Clone)]
 pub(super) struct OrderEntry {

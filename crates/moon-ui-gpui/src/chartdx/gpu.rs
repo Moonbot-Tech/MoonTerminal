@@ -14,11 +14,9 @@ use std::{
 use gpui::RawGpuAccess;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
-use windows::Win32::Graphics::Direct3D::{D3D11_SRV_DIMENSION_BUFFER, ID3DBlob};
+use windows::Win32::Graphics::Direct3D::ID3DBlob;
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
-};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::core::{Interface, PCSTR};
 
 pub use super::types::{BlitParams, ChartCross, ChartViewGpu};
@@ -119,34 +117,6 @@ pub fn create_srv(device: &ID3D11Device, buffer: &ID3D11Buffer) -> ID3D11ShaderR
         let mut v = None;
         device
             .CreateShaderResourceView(buffer, None, Some(&mut v))
-            .unwrap();
-        v.unwrap()
-    }
-}
-
-/// Ranged SRV над структурным буфером [first, first+count) — для инкрементального bake combo.
-pub fn create_srv_range(
-    device: &ID3D11Device,
-    buffer: &ID3D11Buffer,
-    first: u32,
-    count: u32,
-) -> ID3D11ShaderResourceView {
-    let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
-        Format: DXGI_FORMAT_UNKNOWN,
-        ViewDimension: D3D11_SRV_DIMENSION_BUFFER,
-        Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
-            Buffer: D3D11_BUFFER_SRV {
-                Anonymous1: D3D11_BUFFER_SRV_0 {
-                    FirstElement: first,
-                },
-                Anonymous2: D3D11_BUFFER_SRV_1 { NumElements: count },
-            },
-        },
-    };
-    unsafe {
-        let mut v = None;
-        device
-            .CreateShaderResourceView(buffer, Some(&desc), Some(&mut v))
             .unwrap();
         v.unwrap()
     }

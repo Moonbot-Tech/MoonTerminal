@@ -11,7 +11,7 @@ cbuffer ChartView : register(b0) {
     float  cv_price_to_px;
     float  cv_view_price0;
     float  cv_marker_half; // 3.5 для 7×7
-    float  cv_pad;
+    float  cv_instance_offset; // combo bake: first item in resident ring buffer
     float  cv_volume_buy_inv;
     float  cv_volume_sell_inv;
     float  cv_volume_alpha;
@@ -27,6 +27,10 @@ struct Cross {
 
 StructuredBuffer<Cross> crosses : register(t1);
 
+Cross combo_cross(uint iid) {
+    return crosses[(uint)round(cv_instance_offset) + iid];
+}
+
 struct CrossOut {
     float4 pos : SV_Position;
     float2 uv  : TEXCOORD0;
@@ -39,7 +43,7 @@ static const float2 CORNERS[6] = {
 };
 
 CrossOut crosses_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
-    Cross c = crosses[iid];
+    Cross c = combo_cross(iid);
     CrossOut o;
 
     // семантика → экранные пиксели (привязка к левому/нижнему краю области чарта)
@@ -99,7 +103,7 @@ struct VolumeOut {
 };
 
 VolumeOut volume_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
-    Cross c = crosses[iid];
+    Cross c = combo_cross(iid);
     VolumeOut o;
 
     float sx = cv_bounds.x + (c.time_rel - cv_view_time0) * cv_time_to_px;

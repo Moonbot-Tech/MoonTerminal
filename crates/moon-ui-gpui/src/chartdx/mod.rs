@@ -440,9 +440,9 @@ struct RenderState {
     /// Scene pixels changed since the optional DX11 cursor-restore cache was built.
     /// Live-scroll draws directly and invalidates that cache; cursor-only frames may rebuild it once.
     base_dirty: bool,
-    last_present_ms: f64,
-    target_present_interval_ms: f64,
-    camera_shift_window_start_ms: f64,
+    last_present_at: Option<Instant>,
+    target_present_interval: Duration,
+    camera_shift_window_start: Option<Instant>,
     camera_shift_count: u32,
     camera_shift_hz: f32,
     last_gpu_prepare_generation: u64,
@@ -584,7 +584,7 @@ impl ChartDataHandle {
     pub fn camera_shift_hz(&self) -> Option<f32> {
         let inner = self.inner.upgrade()?;
         let render = inner.borrow().render.clone();
-        Some(render.borrow_mut().camera_shift_hz(now_unix_ms()))
+        Some(render.borrow_mut().camera_shift_hz())
     }
 }
 
@@ -623,7 +623,7 @@ struct ChartDataState {
     /// Локальная preview-цена линии при drag. Ядру команда уходит только на mouse-up.
     order_drag_preview: Option<(CoreId, u64, LineKind, f32)>,
     market_source: Option<MarketDataSource>,
-    last_frame_tick_ms: f64,
+    last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,
     present_rate_candidate_hits: u8,
     last_ppp: f32,

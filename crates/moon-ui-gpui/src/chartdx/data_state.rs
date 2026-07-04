@@ -42,7 +42,7 @@ impl ChartDataState {
             order_highlight: None,
             order_drag_preview: None,
             market_source: None,
-            last_frame_tick_ms: 0.0,
+            last_frame_tick_at: None,
             present_rate_candidate_hz: 0.0,
             present_rate_candidate_hits: 0,
             last_ppp: 1.0,
@@ -189,8 +189,10 @@ impl ChartDataState {
         // лага probe→notify→render→present (1–2 кадра): иначе при рефлоу стека освободившийся/
         // сдвинутый слот кадр-два мигал clear'ом окна.
         self.apply_slot_geometry(&info);
-        let now_ms = now_unix_ms();
-        if self.observe_present_rate(now_ms) {
+        if !info.presentable || info.bounds.is_empty() {
+            return self.render.borrow_mut().frame(info);
+        }
+        if self.observe_present_rate(Instant::now()) {
             if let Some(source) = self.market_source.clone() {
                 crate::diag::bump(&crate::diag::CHART_PREPARE);
                 self.sync_from_market_source(&source, None);
@@ -204,12 +206,11 @@ impl ChartDataState {
         self.render.borrow_mut().frame(info)
     }
 
-    pub(super) fn observe_present_rate(&mut self, now_ms: f64) -> bool {
-        let prev_tick_ms = std::mem::replace(&mut self.last_frame_tick_ms, now_ms);
-        if prev_tick_ms <= 0.0 {
+    pub(super) fn observe_present_rate(&mut self, now: Instant) -> bool {
+        let Some(prev_tick) = self.last_frame_tick_at.replace(now) else {
             return false;
-        }
-        let dt_ms = now_ms - prev_tick_ms;
+        };
+        let dt_ms = now.duration_since(prev_tick).as_secs_f64() * 1000.0;
         if !(2.0..=40.0).contains(&dt_ms) {
             self.present_rate_candidate_hits = 0;
             return false;

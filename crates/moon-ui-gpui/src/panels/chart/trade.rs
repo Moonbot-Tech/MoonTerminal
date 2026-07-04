@@ -2,6 +2,7 @@
 //! подсветка/перетаскивание линий (move_order) и нативный курсор. Вынесено из `chart.rs`.
 
 use gpui::*;
+use std::time::{Duration, Instant};
 
 use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonWindowExt as _};
 use rust_i18n::t;
@@ -15,6 +16,7 @@ use super::ChartPanel;
 
 /// На сколько частей делит «Split order» (ПКМ по линии sell). MoonBot по умолчанию — на 2.
 const SPLIT_PARTS: i32 = 2;
+const ORDER_DRAG_PREVIEW_HOLD: Duration = Duration::from_millis(3_000);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum TradeMouseButton {
@@ -30,6 +32,15 @@ pub(super) struct OrderDrag {
     pane: usize,
     start_price: f64,
     current_price: f64,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PendingOrderDrag {
+    core: CoreId,
+    uid: u64,
+    kind: LineKind,
+    price: f32,
+    started: Instant,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -330,13 +341,66 @@ impl ChartPanel {
         let drag_preview = self
             .order_drag
             .as_ref()
-            .map(|drag| (drag.core, drag.uid, drag.kind, drag.current_price as f32));
+            .map(|drag| (drag.core, drag.uid, drag.kind, drag.current_price as f32))
+            .or_else(|| {
+                self.pending_order_drag
+                    .map(|pending| (pending.core, pending.uid, pending.kind, pending.price))
+            });
         if self.chart.set_order_visual(highlight, drag_preview) {
             self.sync_orders_if_visible(cx, true);
             true
         } else {
             false
         }
+    }
+
+    pub(super) fn clear_settled_order_drag_preview(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(pending) = self.pending_order_drag else {
+            return false;
+        };
+        if pending.started.elapsed() >= ORDER_DRAG_PREVIEW_HOLD {
+            self.pending_order_drag = None;
+            return true;
+        }
+
+        let mut settled = false;
+        {
+            let b = self.backend.read(cx);
+            if let Some(core_st) = b.session.store().core(pending.core) {
+                match core_st.order_lines.order_state(pending.uid) {
+                    Some(state) if state.active => {
+                        if let Some(price) = core_st
+                            .order_lines
+                            .current_line_price(pending.uid, pending.kind)
+                        {
+                            let eps = pending.price.abs() * 1e-5 + 1e-8;
+                            settled = (price - pending.price).abs() <= eps;
+                        }
+                    }
+                    Some(_) | None => settled = true,
+                }
+            }
+        }
+        if settled {
+            self.pending_order_drag = None;
+        }
+        settled
+    }
+
+    fn arm_order_drag_preview_timeout(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(ORDER_DRAG_PREVIEW_HOLD).await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    if this.clear_settled_order_drag_preview(cx) && this.apply_order_visual(cx) {
+                        cx.notify();
+                    }
+                })
+                .is_ok()
+            });
+        })
+        .detach();
     }
 
     pub(super) fn sync_order_hover(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
@@ -405,17 +469,26 @@ impl ChartPanel {
         let Some(drag) = self.order_drag.take() else {
             return false;
         };
-        self.apply_order_visual(cx);
         let eps = drag.start_price.abs() * 1e-8 + 1e-8;
         if (drag.current_price - drag.start_price).abs() <= eps {
+            self.apply_order_visual(cx);
             return true;
         }
+        self.pending_order_drag = Some(PendingOrderDrag {
+            core: drag.core,
+            uid: drag.uid,
+            kind: drag.kind,
+            price: drag.current_price as f32,
+            started: Instant::now(),
+        });
+        self.apply_order_visual(cx);
+        self.arm_order_drag_preview_timeout(cx);
         // Семантика линий при перетаскивании (как в MoonBot):
         // - Buy/Sell (вход/выход) → `move_order` = replace СВОЕЙ ноги ордера (ядро делает
         //   cancel+new: для селла в стакане новый кросс-лимит исполняется маркетом). Так нет
         //   орфана (отдельный DoSellOrder оставлял резерв-лимит висеть → опасно).
         // - Stop/Trailing/TakeProfit → `update_stops` фиксированной ценой.
-        self.backend.update(cx, |b, _| {
+        let sent = self.backend.update(cx, |b, _| {
             let price = drag.current_price;
             let result = match drag.kind {
                 LineKind::Stop => b.session.move_order_stop_price(
@@ -458,7 +531,12 @@ impl ChartPanel {
                     false
                 }
             }
-        })
+        });
+        if !sent {
+            self.pending_order_drag = None;
+            self.apply_order_visual(cx);
+        }
+        sent
     }
 
     pub(super) fn sync_native_cursor(&mut self) -> bool {

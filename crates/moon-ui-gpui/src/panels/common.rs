@@ -2,6 +2,8 @@
 //! (повторялся в Orders/Assets) и числовой форматтер `num`. Каждая панель живёт в
 //! своей папке (`orders/`, `assets/`, `report/`, `log/`); сюда вынесено лишь ОБЩЕЕ.
 
+use std::time::{Duration, Instant};
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{DockArea, MoonButton, MoonButtonSize, MoonMenuItem, MoonPalette};
@@ -98,7 +100,7 @@ pub(crate) fn data_table_host(
 pub(crate) struct RenderGate {
     last_sig: u64,
     last_sec: u64,
-    last_notify_ms: f64,
+    last_notify_at: Option<Instant>,
 }
 
 impl RenderGate {
@@ -107,10 +109,14 @@ impl RenderGate {
     pub(crate) fn should_notify(&mut self, sig: u64, now_ms: f64) -> bool {
         let sec = (now_ms as u64) / 1000;
         let changed = sig != self.last_sig || sec != self.last_sec;
-        if changed && now_ms - self.last_notify_ms >= 250.0 {
+        let now = Instant::now();
+        let due = self
+            .last_notify_at
+            .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(250));
+        if changed && due {
             self.last_sig = sig;
             self.last_sec = sec;
-            self.last_notify_ms = now_ms;
+            self.last_notify_at = Some(now);
             true
         } else {
             false

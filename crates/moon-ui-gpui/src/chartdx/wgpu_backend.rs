@@ -533,10 +533,6 @@ impl WgpuLayers {
         self.last_line = tail_vec(last, self.price_line_capacity);
         self.mark_line = tail_vec(mark, self.price_line_capacity);
         self.price_line_buffers_dirty = true;
-        if let Some(tex) = self.combo_texture.as_mut() {
-            tex.valid = false;
-        }
-        self.combo_dirty_ranges.clear();
     }
 
     pub fn set_orderbook(&mut self, levels: Vec<LevelInstance>) {
@@ -626,6 +622,7 @@ impl WgpuLayers {
             self.draw_base_layers(pass);
             self.draw_cached_combo(device, queue, pass, view);
         }
+        self.draw_price_lines_layer(pass);
         let sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
         pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
         self.draw_user_layers(pass);
@@ -749,7 +746,7 @@ impl WgpuLayers {
         format: wgpu::TextureFormat,
         view: &ChartViewGpu,
     ) -> bool {
-        if self.cross_count == 0 && self.last_line.len() <= 1 && self.mark_line.len() <= 1 {
+        if self.cross_count == 0 {
             return false;
         }
         let bw = view.bounds[2];
@@ -819,22 +816,12 @@ impl WgpuLayers {
             });
             pass.set_scissor_rect(0, 0, tex_w, tex_h);
             if need_full {
-                self.draw_combo_layers(
-                    device,
-                    queue,
-                    &mut pass,
-                    bake_view,
-                    0,
-                    self.cross_count,
-                    true,
-                );
+                self.draw_combo_layers(device, queue, &mut pass, bake_view, 0, self.cross_count);
             } else {
                 let ranges = std::mem::take(&mut self.combo_dirty_ranges);
                 for (start, count) in ranges {
                     if count > 0 {
-                        self.draw_combo_layers(
-                            device, queue, &mut pass, bake_view, start, count, false,
-                        );
+                        self.draw_combo_layers(device, queue, &mut pass, bake_view, start, count);
                     }
                 }
             }
@@ -862,7 +849,6 @@ impl WgpuLayers {
         view: ChartViewGpu,
         start: usize,
         count: usize,
-        include_price_lines: bool,
     ) {
         let recreated = self.combo_view_uniform.write(
             device,
@@ -881,7 +867,16 @@ impl WgpuLayers {
             crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
             draw_pipeline_range(pass, &pipelines.volume, &binds.cross, 6, start, count);
         }
-        if include_price_lines && self.last_line.len() > 1 {
+        if count > 0 {
+            crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
+            draw_pipeline_range(pass, &pipelines.crosses, &binds.cross, 6, start, count);
+        }
+    }
+
+    fn draw_price_lines_layer(&self, pass: &mut wgpu::RenderPass<'_>) {
+        let pipelines = self.pipelines.as_ref().unwrap();
+        let binds = self.prepared_binds.as_ref().unwrap();
+        if self.last_line.len() > 1 {
             crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
             draw_pipeline(
                 pass,
@@ -891,7 +886,7 @@ impl WgpuLayers {
                 (self.last_line.len() - 1) as u32,
             );
         }
-        if include_price_lines && self.mark_line.len() > 1 {
+        if self.mark_line.len() > 1 {
             crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
             draw_pipeline(
                 pass,
@@ -900,10 +895,6 @@ impl WgpuLayers {
                 6,
                 (self.mark_line.len() - 1) as u32,
             );
-        }
-        if count > 0 {
-            crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
-            draw_pipeline_range(pass, &pipelines.crosses, &binds.cross, 6, start, count);
         }
     }
 
@@ -1405,13 +1396,13 @@ impl WgpuLayers {
         let last_bind = self.bind_view_storage(
             device,
             &pipelines.view_storage_layout,
-            &self.combo_view_uniform,
+            &self.view_uniform,
             &self.last_line_buffer,
         );
         let mark_bind = self.bind_view_storage(
             device,
             &pipelines.view_storage_layout,
-            &self.combo_view_uniform,
+            &self.view_uniform,
             &self.mark_line_buffer,
         );
         let book_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {

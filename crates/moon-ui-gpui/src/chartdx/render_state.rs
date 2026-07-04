@@ -69,34 +69,34 @@ fn sync_readout_resolution(rects: &mut [ReadoutRect], res: [f32; 2]) {
 impl RenderState {
     pub(super) fn set_target_present_rate_hz(&mut self, hz: f32) {
         let hz = hz.clamp(1.0, 240.0);
-        self.target_present_interval_ms = 1000.0 / hz as f64;
+        self.target_present_interval = Duration::from_secs_f64(1.0 / hz as f64);
     }
 
-    pub(super) fn record_camera_shift(&mut self, now_ms: f64) {
-        if self.camera_shift_window_start_ms <= 0.0 {
-            self.camera_shift_window_start_ms = now_ms;
+    pub(super) fn record_camera_shift(&mut self, now: Instant) {
+        if self.camera_shift_window_start.is_none() {
+            self.camera_shift_window_start = Some(now);
         }
         self.camera_shift_count = self.camera_shift_count.saturating_add(1);
-        self.update_camera_shift_hz(now_ms);
+        self.update_camera_shift_hz(now);
     }
 
-    pub(super) fn camera_shift_hz(&mut self, now_ms: f64) -> f32 {
-        self.update_camera_shift_hz(now_ms);
+    pub(super) fn camera_shift_hz(&mut self) -> f32 {
+        self.update_camera_shift_hz(Instant::now());
         self.camera_shift_hz
     }
 
-    pub(super) fn update_camera_shift_hz(&mut self, now_ms: f64) {
-        if self.camera_shift_window_start_ms <= 0.0 {
-            self.camera_shift_window_start_ms = now_ms;
+    pub(super) fn update_camera_shift_hz(&mut self, now: Instant) {
+        let Some(start) = self.camera_shift_window_start else {
+            self.camera_shift_window_start = Some(now);
+            return;
+        };
+        let elapsed = now.duration_since(start);
+        if elapsed < Duration::from_secs(1) {
             return;
         }
-        let elapsed = now_ms - self.camera_shift_window_start_ms;
-        if elapsed < 1000.0 {
-            return;
-        }
-        self.camera_shift_hz = self.camera_shift_count as f32 * 1000.0 / elapsed.max(1.0) as f32;
+        self.camera_shift_hz = self.camera_shift_count as f32 / elapsed.as_secs_f32().max(1e-3);
         self.camera_shift_count = 0;
-        self.camera_shift_window_start_ms = now_ms;
+        self.camera_shift_window_start = Some(now);
     }
 
     pub(super) fn set_slot_origin(&mut self, x: f32, y: f32) {
@@ -405,12 +405,14 @@ impl RenderState {
         }
 
         let now_ms = now_unix_ms();
+        let now = Instant::now();
         let mut wants_present = std::mem::take(&mut self.needs_present);
         if self.firetest_force_present {
             wants_present = true;
         }
-        let cap_due = self.last_present_ms <= 0.0
-            || now_ms - self.last_present_ms >= self.target_present_interval_ms;
+        let cap_due = self
+            .last_present_at
+            .is_none_or(|last| now.duration_since(last) >= self.target_present_interval);
         let mut camera_moved = false;
         for pr in &mut self.panes {
             if pr.active && (wants_present || cap_due) && pr.advance_camera(now_ms) {
@@ -421,11 +423,11 @@ impl RenderState {
             }
         }
         if camera_moved {
-            self.record_camera_shift(now_ms);
+            self.record_camera_shift(now);
         }
 
         if wants_present {
-            self.last_present_ms = now_ms;
+            self.last_present_at = Some(now);
             crate::diag::bump(&crate::diag::CHART_FRAME_REQUEST);
             GpuFrameDecision::RequestPresent
         } else {
