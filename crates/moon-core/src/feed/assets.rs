@@ -20,18 +20,20 @@ fn is_stable(q: &str) -> bool {
 
 /// Курс котировочной валюты `quote` в USDT (для USDT≈1, для BTC≈курс BTC/USDT).
 /// Берём штатный `base_currency_price` ядра; fallback — 1 для стейблов, иначе 0.
+///
+/// ПУСТОЙ `quote` = USD-деноминированный контракт (Binance COIN-M: `BTCUSD_PERP`,
+/// `ETHUSD_260925` — котируются в USD, маржа в самой монете). Курс USD≈USDT=1, иначе
+/// `p_last` (уже цена монеты в USD) домножился бы на 0 и стоимость схлопнулась в ноль.
 fn quote_to_usdt(markets: &MarketsState, quote: &str) -> f64 {
+    let q = quote.to_ascii_uppercase();
+    if quote.trim().is_empty() {
+        return 1.0;
+    }
     markets
         .base_currency_price(quote)
         .map(|b| b.last_price)
         .filter(|r| *r > 0.0)
-        .unwrap_or_else(|| {
-            if is_stable(&quote.to_ascii_uppercase()) {
-                1.0
-            } else {
-                0.0
-            }
-        })
+        .unwrap_or_else(|| if is_stable(&q) { 1.0 } else { 0.0 })
 }
 
 /// Курс базовой валюты аккаунта (`base`) в USDT. Для USDT/стейблов = 1; иначе ищем
@@ -90,6 +92,13 @@ pub(super) fn build_assets(
 ) -> AssetsSnapshot {
     let mut rows = Vec::new();
     let mut leverage = std::collections::HashMap::new();
+    // COIN-M / квартальные: кошелёк деноминирован в самой монете (BTC/ETH/…), а не в
+    // USDT, и ОДИН и тот же баланс монеты дублируется биржей на все её контракты
+    // (PERP + все экспирации). Считаем эквити как Σ по УНИКАЛЬНЫМ монетам (дедуп),
+    // иначе BTC учтётся трижды. `_full` = полный кошелёк, обычный = свободно.
+    let mut seen_coin_wallet: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut coin_wallet_full_usdt = 0.0f64;
+    let mut coin_wallet_free_usdt = 0.0f64;
     for h in markets.iter() {
         let bp = h.balance_position();
         let lev = h.with(|m| m.leverage_x);
@@ -134,6 +143,15 @@ pub(super) fn build_assets(
             bp.asset_balance
         };
         let value_usdt = qty_for_value.abs() * price.p_last * rate;
+        // Дедуп монетных кошельков (COIN-M): суммируем стоимость КАЖДОЙ монеты один раз,
+        // независимо от числа её контрактов. Учитываем только реальный баланс монеты
+        // (asset_balance*), но НЕ чисто позиционные строки (pos без баланса — там монеты
+        // на кошельке нет, это дериватив на USDT-марже).
+        let has_coin_balance = bp.asset_balance != 0.0 || bp.asset_balance_full != 0.0;
+        if has_coin_balance && seen_coin_wallet.insert(coin.clone()) {
+            coin_wallet_full_usdt += value_usdt;
+            coin_wallet_free_usdt += bp.asset_balance.abs() * price.p_last * rate;
+        }
         // min_lot_size ядра уже в котируемой валюте: max(step, min_qty)·цена и min_notional.
         let min_lot_usd = price.min_lot_size * rate;
         let is_quote_asset = coin.eq_ignore_ascii_case(base_currency.trim());
@@ -194,14 +212,33 @@ pub(super) fn build_assets(
     // `btc_balance_*` исторически в БАЗОВОЙ валюте аккаунта (для USDT-бота это уже USDT,
     // курс=1; для BTC-бота — BTC, курс=BTCUSDT). Курс берём по базовой валюте сервера.
     let rate = base_rate(markets, base_currency);
+    // Итог/свободно из global. ФОЛБЭК на `btc_total`, когда `btc_full` не заполнен: у
+    // некоторых спот-аккаунтов (напр. Binance spot USDC) биржа не отдаёт «full», и весь
+    // баланс лежит в «available» (`btc_total`) — иначе карта ядра показывала бы 0.
+    let global_full = if g.btc_balance_full.abs() > 1e-9 {
+        g.btc_balance_full
+    } else {
+        g.btc_balance_total
+    };
+    let global_total_usdt = global_full * rate;
+    let global_free_usdt = g.btc_balance_total * rate;
+    // COIN-M: global в USDT-эквиваленте бесполезен (деноминирован в монете, курс не тот),
+    // но кошельки монет мы уже просуммировали с дедупом. Если global почти нулевой, а
+    // монетные кошельки есть — берём их (это и есть эквити квартального/COIN-M аккаунта).
+    let coin_margined = global_total_usdt.abs() < 1.0 && coin_wallet_full_usdt > 1.0;
+    let (total_usdt, free_usdt) = if coin_margined {
+        (coin_wallet_full_usdt, coin_wallet_free_usdt)
+    } else {
+        (global_total_usdt, global_free_usdt)
+    };
     let global = GlobalBalanceRow {
         btc_total: g.btc_balance_total,
         btc_locked: g.btc_balance_locked,
         btc_full: g.btc_balance_full,
         special_coin: g.special_coin_balance,
         total_pnl: g.total_pnl,
-        free_usdt: g.btc_balance_total * rate,
-        total_usdt: g.btc_balance_full * rate,
+        free_usdt,
+        total_usdt,
         pnl_usdt: g.total_pnl * rate,
     };
     AssetsSnapshot {
