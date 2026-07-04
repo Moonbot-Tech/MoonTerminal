@@ -355,8 +355,12 @@ impl AssetsView {
                         continue;
                     }
                     seen_coin.insert(coin_up);
-                    let row = wallet_asset_row(w, &quote, is_quote);
-                    let market_exists = cd.assets.markets.contains(&row.market);
+                    // Реальное имя рынка из каталога ядра (форматы бирж разные). Нет рынка →
+                    // фолбэк-конкатенация для отображения, но market_exists=false (Sell скрыт).
+                    let resolved = resolve_market(&cd.assets.markets, &w.currency, &quote);
+                    let market_exists = resolved.is_some();
+                    let market = resolved.unwrap_or_else(|| format!("{}{}", w.currency, quote));
+                    let row = wallet_asset_row(w, &quote, is_quote, market);
                     out.push(AssetEntry {
                         core: id,
                         core_name: name.clone(),
@@ -486,17 +490,33 @@ impl AssetsView {
     }
 }
 
+/// Реальное имя рынка `<coin>/<quote>` из каталога ядра. Форматы бирж разные: Binance/Bitget
+/// — конкатенация (`BTCUSDC`), Gate — с подчёркиванием (`SOVRN_USDT`). Возвращаем найденное
+/// имя (для Market Sell / клика по тикеру) или `None`, если рынка нет.
+fn resolve_market(markets: &std::collections::HashSet<String>, coin: &str, quote: &str) -> Option<String> {
+    let concat = format!("{coin}{quote}");
+    if markets.contains(&concat) {
+        return Some(concat);
+    }
+    let under = format!("{coin}_{quote}");
+    if markets.contains(&under) {
+        return Some(under);
+    }
+    None
+}
+
 /// Синтетическая `AssetRow` из спотового кошелька (`transfer_assets`) — для монет, которых
-/// нет в per-market балансах (Bitget и т.п.). Рынок собираем как `<coin><quote>` (для клика
-/// по тикеру и Market Sell); цену выводим из стоимости. Позиции/PnL нет (чистый спот-баланс).
-fn wallet_asset_row(w: &TransferAssetRow, quote: &str, is_quote: bool) -> AssetRow {
+/// нет в per-market балансах (Bitget и т.п.). `market` — реальное имя рынка из каталога
+/// (или фолбэк-конкатенация, если рынка нет — кнопка Sell всё равно скрыта). Цену выводим
+/// из стоимости. Позиции/PnL нет (чистый спот-баланс).
+fn wallet_asset_row(w: &TransferAssetRow, quote: &str, is_quote: bool, market: String) -> AssetRow {
     let price = if w.total.abs() > 0.0 {
         w.value_usdt / w.total
     } else {
         0.0
     };
     AssetRow {
-        market: format!("{}{}", w.currency, quote),
+        market,
         coin: w.currency.clone(),
         quote: quote.to_string(),
         listed: 1, // spot
