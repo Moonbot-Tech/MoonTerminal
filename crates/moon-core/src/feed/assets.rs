@@ -3,7 +3,7 @@
 //! внутри feed-слоя; стор/UI получают только доменные структуры.
 
 use moonproto::state::{BalancesState, ExchangeKind, MarketsState, TransferAssetsState};
-use moonproto::BaseCurrency;
+use moonproto::{BaseCurrency, OrderType};
 
 use super::{
     AssetRow, AssetsSnapshot, GlobalBalanceRow, TransferAssetRow, TransferAssetsSnapshot,
@@ -137,6 +137,40 @@ pub(super) fn build_assets(
         // min_lot_size ядра уже в котируемой валюте: max(step, min_qty)·цена и min_notional.
         let min_lot_usd = price.min_lot_size * rate;
         let is_quote_asset = coin.eq_ignore_ascii_case(base_currency.trim());
+        // ЖИВОЙ PnL позиции: (цена − вход) × размер × направление, в котируемой → USDT.
+        // Марк-цена (фьючи) точнее для PnL; нет марка — mid. Ноги хеджа приоритетнее
+        // нетто-позиции. Серверные total_profit_* НЕ используем для позиций: они
+        // накопленные за период и замерзают между balance-пушами.
+        let mark = if price.mark_price > 0.0 {
+            price.mark_price
+        } else {
+            price.p_last
+        };
+        let mut live_pnl = 0.0;
+        let mut have_position_pnl = false;
+        if mark > 0.0 {
+            if bp.long_pos_size != 0.0 && bp.long_pos_price > 0.0 {
+                live_pnl += (mark - bp.long_pos_price) * bp.long_pos_size.abs();
+                have_position_pnl = true;
+            }
+            if bp.short_pos_size != 0.0 && bp.short_pos_price > 0.0 {
+                live_pnl += (bp.short_pos_price - mark) * bp.short_pos_size.abs();
+                have_position_pnl = true;
+            }
+            if !have_position_pnl && bp.pos_size != 0.0 && bp.pos_price > 0.0 {
+                let short = bp.pos_size < 0.0 || bp.pos_dir == OrderType::Sell;
+                let dir = if short { -1.0 } else { 1.0 };
+                live_pnl = (mark - bp.pos_price) * bp.pos_size.abs() * dir;
+                have_position_pnl = true;
+            }
+        }
+        let pnl_usdt = if have_position_pnl {
+            live_pnl * rate
+        } else {
+            // Нет позиции/цены входа (спот-баланс без pos-данных) — серверный накопленный
+            // профит рынка (в котируемой валюте) как fallback.
+            (bp.total_profit_b + bp.total_profit_l + bp.total_profit_s) * rate
+        };
         rows.push(AssetRow {
             market,
             coin,
@@ -153,9 +187,7 @@ pub(super) fn build_assets(
             pos_price: bp.pos_price,
             liq_price: bp.liq_price,
             leverage: lev,
-            profit_b: bp.total_profit_b,
-            profit_l: bp.total_profit_l,
-            profit_s: bp.total_profit_s,
+            pnl_usdt,
         });
     }
     let g = balances.global();

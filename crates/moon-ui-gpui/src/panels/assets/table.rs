@@ -422,7 +422,8 @@ pub(super) fn assets_table(
 
 fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette) -> MoonDataRow {
     let r = &e.row;
-    let pnl = r.profit_b + r.profit_l + r.profit_s;
+    // Живой нереализованный PnL позиции (цена − вход, в USDT) — считается на ядре.
+    let pnl = r.pnl_usdt;
     let pnl_tone = if pnl > 0.0 {
         MoonTone::Positive
     } else if pnl < 0.0 {
