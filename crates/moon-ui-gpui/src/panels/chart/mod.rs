@@ -8,12 +8,14 @@
 //!
 //! По функционалу разнесено: состояние/жизненный цикл/конструкторы/трейты — здесь;
 //! геометрия и хит-тест — [`geom`]; рефкаунт рынков и таймеры TTL/auto-live — [`refs`];
-//! ручная торговля (ордера/drag) — [`trade`]; `impl Render` — [`render`].
+//! ручная торговля (ордера/drag) — [`trade`]; `impl Render` — [`render`]; обработчики
+//! ввода слота (колесо/мышь/ховер) — [`render_input`].
 
 mod figures;
 mod geom;
 mod refs;
 mod render;
+mod render_input;
 mod trade;
 
 use std::collections::HashSet;
