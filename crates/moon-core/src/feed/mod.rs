@@ -205,6 +205,14 @@ pub enum CoreCmd {
     /// `orders().switch_panic_sell_by_market(market, on)` — market-level panic sell
     /// button semantics (тоггл panic-sell у ордеров рынка). РЕАЛЬНОЕ действие.
     PanicSellMarket { market: String, on: bool },
+    /// Закрыть ПОЗИЦИЮ рынка ПО МАРКЕТУ (кнопка «Market sell» в Активах у строки с позицией).
+    /// moonproto `trade().close_position(ClosePositionParams{market, market_sell:true})`
+    /// (`TDoClosePositionCommand`). РЕАЛЬНОЕ действие на бирже.
+    MarketSellPosition { market: String },
+    /// Продать СПОТ-ТОКЕН рынка ПО МАРКЕТУ (кнопка «Market sell» в Активах у строки-холдинга).
+    /// moonproto `trade().sell_order(SellOrderParams{market, price:0=маркет, size})`
+    /// (`TDoSellOrderCommand`). РЕАЛЬНОЕ действие на бирже.
+    MarketSellToken { market: String, size: f64 },
     /// Отменить ОЖИДАЮЩИЕ buy-ордера рынка (кнопка «Cancel Buy»). feed берёт удержанный
     /// снимок, отбирает ордера рынка в buy-фазе до исполнения (`OS_None`/`BuySet`) и шлёт
     /// по каждому `orders().cancel(uid)`. РЕАЛЬНОЕ действие.

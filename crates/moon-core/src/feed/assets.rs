@@ -92,6 +92,10 @@ pub(super) fn build_assets(
 ) -> AssetsSnapshot {
     let mut rows = Vec::new();
     let mut leverage = std::collections::HashMap::new();
+    // Каталог имён рынков ядра — для гейта кнопки «Market sell» в UI (продать монету можно
+    // лишь если рынок `<coin><quote>` существует).
+    let market_names: std::collections::HashSet<String> =
+        markets.iter().map(|h| h.name().to_string()).collect();
     // COIN-M / квартальные: кошелёк деноминирован в самой монете (BTC/ETH/…), а не в
     // USDT, и ОДИН и тот же баланс монеты дублируется биржей на все её контракты
     // (PERP + все экспирации). Считаем эквити как Σ по УНИКАЛЬНЫМ монетам (дедуп),
@@ -246,6 +250,7 @@ pub(super) fn build_assets(
         global,
         futures_account,
         base_currency: base_currency.trim().to_string(),
+        markets: market_names,
         leverage,
     }
 }

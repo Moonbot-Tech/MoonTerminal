@@ -752,6 +752,25 @@ impl SessionManager {
         )
     }
 
+    /// Закрыть позицию рынка ядра ПО МАРКЕТУ (кнопка «Market sell» у строки с позицией).
+    pub fn market_sell_position(&self, core: CoreId, market: String) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::MarketSellPosition { market },
+            "market sell position",
+        )
+    }
+
+    /// Продать спот-токен рынка ядра ПО МАРКЕТУ (кнопка «Market sell» у строки-холдинга).
+    /// `size` — количество в базовой монете (обычно полный остаток).
+    pub fn market_sell_token(&self, core: CoreId, market: String, size: f64) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::MarketSellToken { market, size },
+            "market sell token",
+        )
+    }
+
     /// Отменить ожидающие buy-ордера рынка ядра (кнопка «Cancel Buy»).
     pub fn cancel_market_buys(&self, core: CoreId, market: String) -> Result<()> {
         self.send_core_cmd(

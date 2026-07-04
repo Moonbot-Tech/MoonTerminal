@@ -513,9 +513,15 @@ fn actions_cell(
     is_position: bool,
 ) -> MoonDataCell {
     // Продаваемо: открытая позиция ЛИБО спот-баланс монеты (есть что продать по рынку).
-    // Кнопки прячем только у пустого рынка (нечего открывать/продавать).
-    let sellable = is_position || e.row.qty_full.abs() > 0.0 || e.row.qty.abs() > 0.0;
-    if !sellable || e.row.market.is_empty() {
+    // Кнопку показываем ТОЛЬКО если рынок `<coin><quote>` реально существует у ядра
+    // (иначе продавать негде — напр. USDT на USDC-аккаунте: рынка USDTUSDC нет).
+    let size = if e.row.qty.abs() > 0.0 {
+        e.row.qty.abs()
+    } else {
+        e.row.qty_full.abs()
+    };
+    let sellable = is_position || size > 0.0;
+    if !sellable || e.row.market.is_empty() || !e.market_exists {
         return MoonDataCell::text(String::new());
     }
     let core = e.core;
@@ -538,9 +544,13 @@ fn actions_cell(
                 .on_click(move |_, _w, app| {
                     view_ms.update(app, |this, cx| {
                         let b = this.backend.read(cx);
-                        if let Err(err) =
-                            b.session.panic_sell_market(core, market_ms.clone(), true)
-                        {
+                        // Позиция → закрыть по маркету; спот-токен → продать остаток по маркету.
+                        let res = if is_position {
+                            b.session.market_sell_position(core, market_ms.clone())
+                        } else {
+                            b.session.market_sell_token(core, market_ms.clone(), size)
+                        };
+                        if let Err(err) = res {
                             log::warn!("assets market sell {market_ms} failed: {err:#}");
                         }
                         cx.notify();

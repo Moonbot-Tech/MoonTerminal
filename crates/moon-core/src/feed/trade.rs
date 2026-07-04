@@ -9,7 +9,8 @@
 //! `MoonOrders::cancel` (TOrderCancelCommand, CmdId=10).
 
 use moonproto::{
-    MoonClient, NewOrderParams, OrderSide, OrderWorkerStatus, SplitOrderParams, VStopParams,
+    ClosePositionParams, MoonClient, NewOrderParams, OrderSide, OrderWorkerStatus, SellOrderParams,
+    SplitOrderParams, VStopParams,
 };
 
 use crate::feed::{OrderLinePriceKind, OrderStopKind};
@@ -86,6 +87,30 @@ pub(super) fn panic_sell_market(client: &MoonClient, server_id: u64, market: Str
         client
             .orders()
             .switch_panic_sell_by_market(market.clone(), on),
+    );
+}
+
+/// Закрыть ПОЗИЦИЮ рынка по маркету (`TDoClosePositionCommand`, market_sell=true) — кнопка
+/// «Market sell» в Активах у строки с открытой позицией. Рантайм сам определяет сторону.
+pub(super) fn market_sell_position(client: &MoonClient, server_id: u64, market: String) {
+    report(
+        server_id,
+        format!("market close position {market}"),
+        client
+            .trade()
+            .close_position(ClosePositionParams::new(market)),
+    );
+}
+
+/// Продать СПОТ-ТОКЕН рынка по маркету (`TDoSellOrderCommand`) — кнопка «Market sell» в
+/// Активах у строки-холдинга. `price=0` = рыночный ордер; `size` — количество в базовой монете.
+pub(super) fn market_sell_token(client: &MoonClient, server_id: u64, market: String, size: f64) {
+    report(
+        server_id,
+        format!("market sell token {market} size={size}"),
+        client
+            .trade()
+            .sell_order(SellOrderParams::new(market, 0.0, size)),
     );
 }
 

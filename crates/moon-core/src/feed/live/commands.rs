@@ -332,6 +332,12 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::PanicSellMarket { market, on }) => {
                 trade::panic_sell_market(client, server.id, market, on);
             }
+            Ok(CoreCmd::MarketSellPosition { market }) => {
+                trade::market_sell_position(client, server.id, market);
+            }
+            Ok(CoreCmd::MarketSellToken { market, size }) => {
+                trade::market_sell_token(client, server.id, market, size);
+            }
             Ok(CoreCmd::CancelMarketBuys { market }) => {
                 trade::cancel_market_buys(client, server.id, &market);
             }

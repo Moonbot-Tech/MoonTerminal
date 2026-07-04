@@ -56,6 +56,9 @@ pub(super) struct AssetEntry {
     pub(super) row: AssetRow,
     /// Текущая стоимость в USDT.
     pub(super) value: f64,
+    /// Рынок строки (`row.market`) реально существует у ядра — гейт кнопки «Market sell»
+    /// (у синтетических кошельковых строк рынка `<coin><quote>` может не быть, напр. USDTUSDC).
+    pub(super) market_exists: bool,
 }
 
 /// Подытог по ядру: баланс свободно/итого в USDT (для полосы ядер и левого списка).
@@ -317,6 +320,7 @@ impl AssetsView {
                 out.push(AssetEntry {
                     core: id,
                     core_name: name.clone(),
+                    market_exists: cd.assets.markets.contains(&row.market),
                     row: row.clone(),
                     value,
                 });
@@ -351,10 +355,13 @@ impl AssetsView {
                         continue;
                     }
                     seen_coin.insert(coin_up);
+                    let row = wallet_asset_row(w, &quote, is_quote);
+                    let market_exists = cd.assets.markets.contains(&row.market);
                     out.push(AssetEntry {
                         core: id,
                         core_name: name.clone(),
-                        row: wallet_asset_row(w, &quote, is_quote),
+                        market_exists,
+                        row,
                         value: w.value_usdt,
                     });
                 }
