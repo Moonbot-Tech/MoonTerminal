@@ -245,6 +245,7 @@ pub(super) fn build_assets(
         rows,
         global,
         futures_account,
+        base_currency: base_currency.trim().to_string(),
         leverage,
     }
 }

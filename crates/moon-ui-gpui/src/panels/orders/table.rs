@@ -209,18 +209,21 @@ fn status_cell(r: &OrderRow, p: MoonPalette) -> impl IntoElement + 'static {
 
 /// Локальная оценка нереализованного PnL по исполненной части позиции:
 /// `(mark − entry) · filled_qty · dir`. Серверного PnL в `OrderRow` нет (как и в
-/// «Активах» — считаем сами). `None`, если позиции нет (нет исполнения) или входные
-/// цены не выставлены. Для шорта вход — `sell_price`, для лонга — `buy_price`.
+/// «Активах» — считаем сами). `None`, если позиции нет (нет исполнения) или входная
+/// цена не выставлена.
+///
+/// Вход = `buy_price` для ОБОИХ направлений. У MoonBot входная нога всегда `buy_order`
+/// (фазы «Buy*»=вход / «Sell*»=выход) — и у лонга, и у шорта; после филла ядро кладёт
+/// в `buy_price` среднюю цену позиции (`pos_price`, ровно то, что берут «Активы»).
+/// `sell_price` — это ВЫХОДНАЯ нога/цель (для шорта — цель профита НИЖЕ входа), брать её
+/// как «вход» шорта было багом: PnL считался от цены выхода, а не входа, и расходился с
+/// «Активами» (напр. VELVET: −3.96 от sell_price против ≈0 от pos_price).
 fn order_pnl(r: &OrderRow) -> Option<f64> {
     let filled_qty = r.size * (r.fill_pct as f64) / 100.0;
     if filled_qty <= 0.0 {
         return None;
     }
-    let entry = if r.is_short {
-        r.sell_price
-    } else {
-        r.buy_price
-    };
+    let entry = r.buy_price;
     let mark = r.price as f64;
     if entry <= 0.0 || mark <= 0.0 {
         return None;
@@ -252,16 +255,13 @@ fn pnl_cell(r: &OrderRow) -> MoonDataCell {
 
 /// PnL в процентах от входа: направленное движение цены `(mark − entry)/entry · dir · 100`.
 /// `None` по тем же условиям, что и [`order_pnl`] (нет исполнения / нет входной цены).
+/// Вход = `buy_price` для обоих направлений (см. [`order_pnl`]).
 fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
     let filled_qty = r.size * (r.fill_pct as f64) / 100.0;
     if filled_qty <= 0.0 {
         return None;
     }
-    let entry = if r.is_short {
-        r.sell_price
-    } else {
-        r.buy_price
-    };
+    let entry = r.buy_price;
     let mark = r.price as f64;
     if entry <= 0.0 || mark <= 0.0 {
         return None;

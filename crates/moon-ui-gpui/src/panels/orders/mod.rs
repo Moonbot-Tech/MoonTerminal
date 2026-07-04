@@ -250,9 +250,12 @@ impl Default for OrdersViewState {
     fn default() -> Self {
         Self {
             source: OrdersSource::All,
-            kind: OrderKind::All,
+            // По умолчанию — только РЕАЛЬНЫЕ ордера (без эмулятора) и SELL (позиции в работе)
+            // сверху: первым делом видно, что открыто/продаётся. Пользователь может сменить
+            // в меню сортировки/типа — выбор персистится в docks.json.
+            kind: OrderKind::Real,
             only_current_market: false,
-            primary: PrimarySort::Creation,
+            primary: PrimarySort::SellFirst,
             newest_first: true,
             main_on_top: MainOnTop::Highlighted,
             columns: ALL_COLUMNS_MASK,

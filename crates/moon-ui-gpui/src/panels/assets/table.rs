@@ -512,7 +512,10 @@ fn actions_cell(
     _p: MoonPalette,
     is_position: bool,
 ) -> MoonDataCell {
-    if !is_position || e.row.market.is_empty() {
+    // Продаваемо: открытая позиция ЛИБО спот-баланс монеты (есть что продать по рынку).
+    // Кнопки прячем только у пустого рынка (нечего открывать/продавать).
+    let sellable = is_position || e.row.qty_full.abs() > 0.0 || e.row.qty.abs() > 0.0;
+    if !sellable || e.row.market.is_empty() {
         return MoonDataCell::text(String::new());
     }
     let core = e.core;

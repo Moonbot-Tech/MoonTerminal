@@ -215,14 +215,17 @@ impl AssetsView {
             dock: None,
             focus: cx.focus_handle(),
         };
-        // Выбрать первое ядро охвата и запросить его transfer-активы для контейнеров.
-        let first = this
+        // Запросить transfer-активы у ВСЕХ ядер охвата: спотовые кошельки нужны не только
+        // выбранному ядру (нижние контейнеры), но и таблице сверху — часть бирж (Bitget)
+        // отдаёт купленные монеты ТОЛЬКО через transfer_assets, не в per-market балансах.
+        let cores: Vec<CoreId> = this
             .scope_cores(this.backend.read(cx))
-            .first()
-            .map(|(id, _)| *id);
-        if let Some(core) = first {
-            this.selected_core = Some(core);
-            if let Err(error) = this.backend.read(cx).session.refresh_transfer_assets(core) {
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        this.selected_core = cores.first().copied();
+        for core in &cores {
+            if let Err(error) = this.backend.read(cx).session.refresh_transfer_assets(*core) {
                 log::warn!("assets initial refresh failed for core {core}: {error}");
             }
         }
@@ -287,6 +290,9 @@ impl AssetsView {
         let mut out = Vec::new();
         for (id, name) in self.scope_cores(b) {
             let Some(cd) = store.core(id) else { continue };
+            // Монеты, уже показанные из per-market строк — чтобы не задублировать их
+            // спотовым кошельком (`transfer_assets`) ниже.
+            let mut seen_coin: std::collections::HashSet<String> = std::collections::HashSet::new();
             for row in &cd.assets.rows {
                 let value = row.value_usdt;
                 // Видимость (правила MoonBot): фьюч-ядра (вкл. CoinM) — ТОЛЬКО открытые
@@ -307,6 +313,7 @@ impl AssetsView {
                 if !keep {
                     continue;
                 }
+                seen_coin.insert(row.coin.to_ascii_uppercase());
                 out.push(AssetEntry {
                     core: id,
                     core_name: name.clone(),
@@ -314,9 +321,58 @@ impl AssetsView {
                     value,
                 });
             }
+            // Спот-холдинги из КОШЕЛЬКА (`transfer_assets`). У части бирж (Bitget и др.)
+            // купленные монеты НЕ привязаны к per-market балансам (`assets.rows` пуст) —
+            // они приходят только сюда. Показываем их как продаваемые спот-строки (как в
+            // MoonBot: BGB/MAPO с кнопкой Market Sell). Только для СПОТ-аккаунтов, без
+            // котируемой валюты и пыли; дедуп против уже показанных монет.
+            if !cd.assets.futures_account {
+                // Квота аккаунта = base_currency ядра (BaseCheck): у ядра, торгующего в
+                // BTCUSDC/ETHUSDC, это USDC. Её баланс в кошельке — кэш, не купленная монета,
+                // прячем (как делает ядро для per-market через is_quote_asset). Фолбэк на
+                // квоту из конфига, если base_currency пуст (старый сервер).
+                let quote = {
+                    let base = cd.assets.base_currency.trim();
+                    if base.is_empty() {
+                        self.core_quote(b, id)
+                    } else {
+                        base.to_string()
+                    }
+                };
+                let quote_up = quote.to_ascii_uppercase();
+                for w in &cd.transfer_assets.spot {
+                    let coin_up = w.currency.to_ascii_uppercase();
+                    if seen_coin.contains(&coin_up) {
+                        continue;
+                    }
+                    let is_quote = coin_up == quote_up;
+                    let keep = self.show_all || (!is_quote && w.value_usdt >= 1.0);
+                    if !keep {
+                        continue;
+                    }
+                    seen_coin.insert(coin_up);
+                    out.push(AssetEntry {
+                        core: id,
+                        core_name: name.clone(),
+                        row: wallet_asset_row(w, &quote, is_quote),
+                        value: w.value_usdt,
+                    });
+                }
+            }
         }
         sort_by_value(&mut out);
         out
+    }
+
+    /// Котируемая валюта ядра (из его `market` в конфиге) — для сборки спотовых строк
+    /// кошелька: символ рынка `<coin><quote>` и определение «это сама квота».
+    fn core_quote(&self, b: &Backend, core: CoreId) -> String {
+        b.config
+            .servers
+            .iter()
+            .find(|sv| sv.id == core)
+            .map(|sv| moon_core::symbol::resolve_quote(&sv.market))
+            .unwrap_or_else(|| "USDT".to_string())
     }
 
     /// Балансы по каждому ядру охвата (свободно/итого в USDT, посчитаны на ядре).
@@ -353,11 +409,27 @@ impl AssetsView {
             self.cached_wallet_key = None;
         }
         self.cached_cores = cores;
+        self.request_missing_transfers(b);
         self.cached_entries = Rc::new(self.collect(b));
         self.cached_aggs = Rc::new(self.per_core(b));
         self.rebuild_wallet_cache(b);
         self.cached_total_value = self.cached_entries.iter().map(|e| e.value).sum();
         self.cache_sig = Some((sig, self.show_all));
+    }
+
+    /// Дозапрос transfer-активов для ядер охвата, которые ещё НЕ прислали ни одного снимка
+    /// (`transfer_rev == 0`). На старте ядра ещё не подключены и разовый запрос из `new()`
+    /// уходит впустую — здесь ретраим (гейт rebuild ~1 Гц), пока ядро не ответит; после
+    /// первого снимка (rev>0) запрос прекращается, даже если спот-кошелёк пуст. Нужно
+    /// таблице сверху: часть бирж (Bitget) отдаёт купленные монеты только через transfer.
+    fn request_missing_transfers(&self, b: &Backend) {
+        let store = b.session.store();
+        for (id, _) in &self.cached_cores {
+            let rev = store.core(*id).map(|cd| cd.transfer_rev).unwrap_or(0);
+            if rev == 0 {
+                let _ = b.session.refresh_transfer_assets(*id);
+            }
+        }
     }
 
     fn wallet_cache_key(&self, b: &Backend) -> (Option<CoreId>, u64, bool) {
@@ -404,6 +476,35 @@ impl AssetsView {
         }
         self.cached_wallets = Rc::new(snapshots);
         self.cached_wallet_key = Some(key);
+    }
+}
+
+/// Синтетическая `AssetRow` из спотового кошелька (`transfer_assets`) — для монет, которых
+/// нет в per-market балансах (Bitget и т.п.). Рынок собираем как `<coin><quote>` (для клика
+/// по тикеру и Market Sell); цену выводим из стоимости. Позиции/PnL нет (чистый спот-баланс).
+fn wallet_asset_row(w: &TransferAssetRow, quote: &str, is_quote: bool) -> AssetRow {
+    let price = if w.total.abs() > 0.0 {
+        w.value_usdt / w.total
+    } else {
+        0.0
+    };
+    AssetRow {
+        market: format!("{}{}", w.currency, quote),
+        coin: w.currency.clone(),
+        quote: quote.to_string(),
+        listed: 1, // spot
+        qty: w.amount,
+        qty_full: w.total,
+        price,
+        value_usdt: w.value_usdt,
+        min_lot_usd: 0.0,
+        is_quote_asset: is_quote,
+        mark_price: 0.0,
+        pos_size: 0.0,
+        pos_price: 0.0,
+        liq_price: 0.0,
+        leverage: 0,
+        pnl_usdt: 0.0,
     }
 }
 
