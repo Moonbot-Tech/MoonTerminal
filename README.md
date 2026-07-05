@@ -6,49 +6,37 @@
 
 # MoonTerminal
 
-Development repository for the Moonbot cross-platform trading terminal.
+<p align="center">
+  <b>Русский</b> · <a href="README.en.md">English</a>
+</p>
 
-MoonTerminal is not a finished product yet. This repository is the active desktop terminal
-workspace: GPUI shell, MoonUI integration, MoonProto live feed, chart rendering, debug tooling,
-and platform work for Windows, macOS, and Linux.
+Репозиторий разработки кроссплатформенного торгового терминала для Moonbot kernel.
 
+MoonTerminal ещё не готовый продукт. Это рабочее пространство активной разработки десктопного
+терминала: оболочка на GPUI, интеграция MoonUI, живой поток данных MoonProto, рендеринг графиков,
+отладочный инструментарий и платформенная работа под Windows, macOS и Linux.
+
+<p align="center">
+  <img src="assets/img/screenshot-main.png" alt="Главное окно MoonTerminal" width="900">
+</p>
 ---
 
-## Repository Status
 
-- Active development branch: `main`.
-- Runtime/UI dependency: [`Moonbot-Tech/MoonUI`](https://github.com/Moonbot-Tech/MoonUI).
-- Protocol/client dependency: [`Moonbot-Tech/MoonProtoBeta`](https://github.com/Moonbot-Tech/MoonProtoBeta).
-- `Cargo.lock` is intentionally ignored during this development phase.
-
-The terminal currently tracks rolling Git heads for MoonUI and MoonProtoBeta. A fresh checkout
-builds against the current public state of those repositories. Existing checkouts can refresh
-their local lock with:
-
-```bash
-make update-moon-ui
-```
-
-For stabilization or release branches we can switch to pinned revisions/tags; `main` is kept
-rolling to make terminal/component/protocol development move together.
-
----
-
-## Clone
+## Клонирование
 
 ```bash
 git clone https://github.com/Moonbot-Tech/MoonTerminal.git
 cd MoonTerminal
 ```
 
-## Windows Build
+## Сборка под Windows
 
-Requirements:
+Требования:
 
 - Git
-- Rust via `rustup`
-- Visual Studio 2022 Build Tools with the C++ toolchain and Windows SDK
-- Optional: `make`
+- Rust через `rustup`
+- Visual Studio 2022 Build Tools с C++-тулчейном и Windows SDK
+- Опционально: `make`
 
 PowerShell:
 
@@ -56,28 +44,28 @@ PowerShell:
 cargo build -p moon-ui-gpui --bin moonterminal --target x86_64-pc-windows-msvc
 ```
 
-Debug executable:
+Отладочный исполняемый файл:
 
 ```text
 target\x86_64-pc-windows-msvc\debug\moonterminal.exe
 ```
 
-## macOS Build
+## Сборка под macOS
 
-Requirements:
+Требования:
 
-- Xcode or a working Metal toolchain
-- Rust via `rustup`
+- Xcode или рабочий Metal-тулчейн
+- Rust через `rustup`
 
 ```bash
 cargo build -p moon-ui-gpui --bin moonterminal
 ```
 
-For canonical Metal validation see [docs/MAC_LINUX_BUILD.md](docs/MAC_LINUX_BUILD.md).
+Каноничная проверка Metal — см. [docs/MAC_LINUX_BUILD.md](docs/MAC_LINUX_BUILD.md).
 
-## Linux Build
+## Сборка под Linux
 
-Ubuntu/Debian baseline:
+Базовый набор для Ubuntu/Debian:
 
 ```bash
 sudo apt update && sudo apt install -y git build-essential pkg-config \
@@ -88,94 +76,45 @@ sudo apt update && sudo apt install -y git build-essential pkg-config \
 cargo build -p moon-ui-gpui --bin moonterminal
 ```
 
-Linux encrypted config uses Secret Service in the user GUI/DBus session. Details:
-[docs/MAC_LINUX_BUILD.md](docs/MAC_LINUX_BUILD.md).
+Шифрованный конфиг под Linux использует Secret Service в пользовательской GUI/DBus-сессии.
+Подробности: [docs/MAC_LINUX_BUILD.md](docs/MAC_LINUX_BUILD.md).
 
 ---
 
-## Common Commands
+## Основные команды
 
-| Command | Purpose |
+| Команда | Назначение |
 |---|---|
-| `make run` | build and run debug terminal |
-| `make build` | debug build |
-| `make release` | release build |
-| `make check` | type check |
-| `make update-moon-ui` | refresh local ignored `Cargo.lock` for rolling Git dependencies |
+| `make run` | собрать и запустить отладочный терминал |
+| `make build` | отладочная сборка |
+| `make release` | релизная сборка |
+| `make check` | проверка типов |
+| `make update-moon-ui` | обновить локальный игнорируемый `Cargo.lock` для «плавающих» Git-зависимостей |
 
-The Makefile selects the MSVC target on Windows and the native target on macOS/Linux.
+Makefile выбирает MSVC-таргет на Windows и нативный таргет на macOS/Linux.
 
 ---
 
-## Local MoonUI Development
+## Конфигурация
 
-Keep sibling checkouts:
+Серверы настраиваются в интерфейсе приложения:
 
 ```text
-workspace/
-  MoonTerminal/
-  MoonUI/
-  MoonProtoBeta/
+Настройки -> Подключения
 ```
+Настройка подключений по каждому ядру.
 
-Use ignored `MoonTerminal/.cargo/config.toml` for local source replacement:
+<p align="center">
+  <img src="assets/img/screenshot-settings-connections.png" alt="Настройки — подключения / ядра MoonBot" width="640">
+</p>
 
-```toml
-[patch."https://github.com/Moonbot-Tech/MoonUI"]
-moon-gpui = { path = "../MoonUI/crates/moon-gpui" }
-moon-gpui-platform = { path = "../MoonUI/crates/moon-gpui-platform" }
-moon-ui = { path = "../MoonUI/crates/moon-ui" }
-
-[patch."https://github.com/Moonbot-Tech/MoonProtoBeta"]
-moonproto = { path = "../MoonProtoBeta" }
-```
-
-Use `[patch]`, not Cargo top-level `paths`: the local checkout must replace the same Git source
-without changing dependency shape. Do not commit `.cargo/config.toml`.
+Рантайм-конфиг лежит рядом с исполняемым файлом. Учётные данные серверов хранятся в шифрованном
+конфиге через защищённое хранилище/кейринг ОС, где он доступен. Локальные конфиг-файлы и логи
+игнорируются Git.
 
 ---
 
-## FireTest
-
-FireTest is the built-in debug scenario runner for catching expensive UI/chart regressions.
-
-Windows example:
-
-```powershell
-Remove-Item -ErrorAction SilentlyContinue firetest.log, render_diag.log, panic.log
-.\target\x86_64-pc-windows-msvc\debug\moonterminal.exe --debug-script chart-smoke
-Get-Content -Encoding UTF8 firetest.log | Select-Object -Last 40
-```
-
-Success requires an explicit `FIRETEST PASS` in `firetest.log`. See
-[docs/FIRETEST.md](docs/FIRETEST.md).
-
----
-
-## Configuration
-
-Servers are configured in the application UI:
-
-```text
-Settings -> Connections
-```
-
-Runtime config lives next to the executable. Server credentials are stored in encrypted config
-using the OS secure storage/keyring where available. Local config files and logs are ignored by
-Git.
-
----
-
-## Structure
-
-```text
-crates/
-  moon-core      feed, session, market data, config, report storage
-  moon-chart     chart view math: time/price scale, pan/zoom, axes, order geometry
-  moon-ui-gpui   executable: GPUI shell, panels, windows, chartdx integration
-```
-
-Useful docs:
+Полезные доки:
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/FIRETEST.md](docs/FIRETEST.md)
@@ -185,5 +124,5 @@ Useful docs:
 ---
 
 <p align="center">
-  Moonbot / Advanced terminal for cryptocurrency trading / <a href="https://moonbot.pro">moonbot.pro</a>
+  Moonbot / Продвинутый терминал для торговли криптовалютой / <a href="https://moonbot.pro">moonbot.pro</a>
 </p>
