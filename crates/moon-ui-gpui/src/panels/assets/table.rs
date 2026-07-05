@@ -5,9 +5,6 @@ use super::*;
 use moon_ui::{MoonButtonVariant, MoonNotification, MoonText, MoonWindowExt as _};
 use rust_i18n::t;
 
-/// Ширина карточки ядра в полосе (`core_strip`). Фиксирована → карточки при переносе
-/// выстраиваются ровной сеткой (равная ширина = ровные колонки, без «лесенки»).
-const CORE_CARD_W: f32 = 148.0;
 
 impl AssetsView {
     /// Шапка секции «Позиции» (над таблицей): стрелка сворачивания + подпись, счётчик строк,
@@ -78,112 +75,6 @@ impl AssetsView {
                     .text_color(rgb(p.text_soft))
                     .child(format!("Σ {}", money(total_value))),
             )
-    }
-
-    /// Сворачиваемая полоса ядер внизу: строка-шапка (кол-во ядер + Σ баланс + стрелка ▾/▸),
-    /// под ней — сетка карточек с вертикальным скроллом. Свёрнуто = только строка-итог
-    /// (карточки скрыты, «не мешают»). Клик по шапке тогает. PnL здесь не показываем
-    /// (серверный Markets.FTotalPNL решили не выносить в Активы — только балансы).
-    pub(super) fn core_strip(&self, aggs: &[CoreAgg], cx: &Context<Self>) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
-        let total_balance: f64 = aggs.iter().map(|a| a.total).sum();
-        let collapsed = self.plates_collapsed;
-        let arrow = if collapsed { "▸" } else { "▾" };
-
-        let header = h_flex()
-            .id("assets-plates-bar")
-            .w_full()
-            .flex_none()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
-            // Кликабельная только зона сворачивания (стрелка + подпись).
-            .child(
-                h_flex()
-                    .id("assets-plates-toggle")
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(p.text)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.plates_collapsed = !this.plates_collapsed;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_muted))
-                            .child(arrow),
-                    )
-                    .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_soft))
-                            .child(t!("assets.cores_count", n = aggs.len()).to_string()),
-                    ),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(format!("Σ {}", money(total_balance))),
-            );
-
-        // Свёрнуто → секция = только строка-шапка (flex_none, таблица держит натуральную
-        // высоту, ниже пусто). Развёрнуто → секция забирает ОСТАТОК места под таблицей
-        // (flex_1), а сетка карточек скроллится внутри — плашки НЕ давят таблицу в 0.
-        let mut section = v_flex().w_full().child(header);
-        if collapsed {
-            section = section.flex_none();
-        } else {
-            let mut grid = h_flex().w_full().flex_wrap().gap_2().px_2().py_1();
-            for a in aggs {
-                grid = grid.child(self.core_card(a, cx));
-            }
-            // min_h: развёрнутая секция ГАРАНТИРОВАННО показывает хотя бы ~2 ряда карточек,
-            // отжимая соседей (таблица сверху сжимается, кошельки ниже делят flex-остаток) —
-            // раньше flex_1 без минимума схлопывался в 0 под фикс. низом.
-            section = section.flex_1().min_h(px(88.0)).child(
-                div()
-                    .id("assets-plates-scroll")
-                    .w_full()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .child(grid),
-            );
-        }
-        section
-    }
-
-    /// Одна карточка ядра фикс. ширины (`CORE_CARD_W`), в одну строку: имя слева, итоговый
-    /// баланс справа (PnL убран). Равная ширина → при переносе карточки ложатся ровными колонками.
-    fn core_card(&self, a: &CoreAgg, cx: &Context<Self>) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
-        h_flex()
-            .w(design::ui_px(cx, CORE_CARD_W))
-            .flex_none()
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .px(design::ui_px(cx, 8.0))
-            .py(design::ui_px(cx, 4.0))
-            .rounded(px(4.0))
-            .bg(rgb(p.shell_high))
-            .border_1()
-            .border_color(rgb(p.border))
-            .text_size(design::t_body(cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(p.text))
-                    .child(a.name.clone()),
-            )
-            .child(div().text_color(rgb(p.text_soft)).child(money(a.total)))
     }
 
     /// Секция «Кошельки»: шапка (стрелка + подпись + ↻ refresh), контент — 4 одинаковых
@@ -422,11 +313,15 @@ fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette) -> Moon
     let is_position = r.pos_size != 0.0;
     // Кол-во/Сумма: спот — свободный остаток (выставленное на продажу исключено, оно
     // в «Ордерах») и его стоимость; фьюч-позиция — остаток позиции и её стоимость
-    // (размер × цена рынка; котируемая у фьючей — USD-стейбл).
+    // (размер × цена рынка; котируемая у фьючей — USD-стейбл). Кол-во — ограниченная
+    // точность по величине (`fmt::qty`: макс. тысячные, мин. десятые), не adaptive.
     let (qty, sum) = if is_position {
-        (num(r.pos_size), money(r.pos_size.abs() * r.price))
+        (
+            moon_core::util::fmt::qty(r.pos_size),
+            money(r.pos_size.abs() * r.price),
+        )
     } else {
-        (num(r.qty), money(e.value))
+        (moon_core::util::fmt::qty(r.qty), money(e.value))
     };
     MoonDataRow::new([
         MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),

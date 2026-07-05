@@ -61,11 +61,10 @@ pub(super) struct AssetEntry {
     pub(super) market_exists: bool,
 }
 
-/// Подытог по ядру: баланс свободно/итого в USDT (для полосы ядер и левого списка).
+/// Подытог по ядру: баланс свободно/итого в USDT (для левого списка ядер у «Кошельков»).
 #[derive(Clone)]
 pub(super) struct CoreAgg {
     pub(super) id: CoreId,
-    pub(super) name: String,
     /// Свободный баланс в USDT (btc_total * курс).
     pub(super) free: f64,
     /// Итоговый баланс в USDT (btc_full * курс, с нереализ. PnL).
@@ -92,11 +91,11 @@ fn group_thousands(int: &str) -> String {
     out
 }
 
-/// Денежный формат USDT: тысячи через пробел, 1 знак после запятой (через `,`),
-/// знак `$` в конце. Пример: `1 111,1$`.
+/// Денежный формат USDT: тысячи через пробел, дробная через `,`, знак `$` в конце.
+/// Точность — максимум сотые, минимум десятые (`fmt::usd`): `1 111,24$` / `1 111,0$`.
 pub(super) fn money(v: f64) -> String {
     let neg = v < 0.0;
-    let s = format!("{:.1}", v.abs()); // "1111.1"
+    let s = moon_core::util::fmt::usd(v.abs()); // "1111.24" / "1111.0"
     let (int, frac) = s.split_once('.').unwrap_or((s.as_str(), "0"));
     format!(
         "{}{},{frac}$",
@@ -122,8 +121,6 @@ pub struct AssetsView {
     pub(super) show_all: bool,
     /// Свёрнута ли секция позиций/балансов (таблица сверху).
     pub(super) positions_collapsed: bool,
-    /// Свёрнута ли полоса плашек ядер (свёрнуто = только строка-итог Σ баланс).
-    pub(super) plates_collapsed: bool,
     /// Свёрнута ли секция кошельков (список ядер + Спот/Фьючерсы/Квартальные).
     pub(super) wallets_collapsed: bool,
     /// Открытый диалог переноса (количество) + поле ввода. Тип `PendingTransfer`
@@ -192,7 +189,6 @@ impl AssetsView {
             selected_core: None,
             show_all: false,
             positions_collapsed: false,
-            plates_collapsed: true,
             wallets_collapsed: false,
             pending_transfer: None,
             transfer_input: None,
@@ -427,7 +423,7 @@ impl AssetsView {
         let store = b.session.store();
         self.scope_cores(b)
             .into_iter()
-            .map(|(id, name)| {
+            .map(|(id, _name)| {
                 let mut free = 0.0;
                 let mut total = 0.0;
                 if let Some(cd) = store.core(id) {
@@ -435,12 +431,7 @@ impl AssetsView {
                     free = cd.assets.global.free_usdt;
                     total = cd.assets.global.total_usdt;
                 }
-                CoreAgg {
-                    id,
-                    name,
-                    free,
-                    total,
-                }
+                CoreAgg { id, free, total }
             })
             .collect()
     }
@@ -664,14 +655,11 @@ impl Render for AssetsView {
         };
         let total_value = self.cached_total_value;
 
-        // ── Три ОДИНАКОВЫЕ сворачиваемые горизонтальные секции ──────────────────────
-        // 1 «Позиции» (таблица), 2 «Ядра» (плашки), 3 «Кошельки» (только в отдельном окне).
-        // У каждой шапка-строка со стрелкой; развёрнутые секции ДЕЛЯТ высоту и двигают
-        // друг друга (никаких жёстких this-не-сожмёшь высот — прежние фикс. 380px низа
-        // прятали развёрнутые плашки под собой).
+        // ── Две сворачиваемые горизонтальные секции ─────────────────────────────────
+        // 1 «Позиции» (таблица), 2 «Кошельки» (только в отдельном окне). Секции «Ядра»
+        // (плашки) больше НЕТ — балансы ядер видны в списке слева у «Кошельков».
         let aggs = self.cached_aggs.clone();
         let controls = self.controls(count, total_value, cx);
-        let plates = self.core_strip(&aggs, cx);
         // Контейнеры переноса (список ядер + кошельки) — в отдельном ОКНЕ (глобальном или
         // откреплённом); во вкладке дока показываем только позиции/балансы (таблица шире).
         let wallets = self.cached_wallets.clone();
@@ -715,7 +703,6 @@ impl Render for AssetsView {
         }
         root = root
             .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
-            .child(plates)
             .children(tree_section);
         if windowed {
             root = root.child(

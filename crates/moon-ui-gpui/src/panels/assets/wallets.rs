@@ -95,12 +95,16 @@ impl AssetsView {
                 from: kind,
                 free: a.amount,
             };
-            let preview_label: SharedString = format!("{} {}", a.currency, num(a.amount)).into();
+            let fmt_qty = moon_core::util::fmt::qty;
+            let preview_label: SharedString =
+                format!("{} {}", a.currency, fmt_qty(a.amount)).into();
             // Формат строки — 1:1 с MoonBot Transfer: `МОНЕТА свободно / всего (стоимость$)`,
             // всё слева в строку; стоимость считается по `total`, цена неизвестна → `(?$)`.
-            let qty_txt = format!("{} / {}", num(a.amount), num(a.total));
+            // Точность ограничена: кол-во — `fmt::qty` (макс. тысячные), доллары —
+            // `fmt::usd` (макс. сотые), не adaptive-простыни.
+            let qty_txt = format!("{} / {}", fmt_qty(a.amount), fmt_qty(a.total));
             let value_txt = if a.value_usdt > 0.0 {
-                format!("({}$)", num(a.value_usdt))
+                format!("({}$)", moon_core::util::fmt::usd(a.value_usdt))
             } else {
                 "(?$)".to_string()
             };
