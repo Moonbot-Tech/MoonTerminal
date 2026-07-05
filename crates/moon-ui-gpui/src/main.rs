@@ -25,6 +25,7 @@ mod detect_sound;
 mod chart_tabs;
 mod chartdx;
 mod clock;
+mod coin_icons;
 mod controls;
 mod core_settings_popup;
 mod crash;

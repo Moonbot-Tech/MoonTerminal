@@ -48,6 +48,36 @@ impl DetachedSpec {
             h: 520,
         }
     }
+
+    /// Спека с ПОСЛЕДНЕЙ запомненной геометрией этой панели (`layout.detached_geom` —
+    /// память переживает возврат в док): повторное открепление встаёт на прежнее
+    /// место/размер. Нет памяти → дефолтный каскад.
+    pub fn with_saved_geom(
+        backend: &Entity<crate::Backend>,
+        app: &App,
+        group: String,
+        panel: String,
+    ) -> Self {
+        let mut spec = Self::new(group, panel);
+        if let Some(g) = backend
+            .read(app)
+            .layout
+            .detached_geom
+            .get(&geom_key(&spec.group, &spec.panel))
+        {
+            spec.x = g.x;
+            spec.y = g.y;
+            spec.w = g.w;
+            spec.h = g.h;
+        }
+        spec
+    }
+}
+
+/// Ключ памяти геометрии открепления в `layout.detached_geom`. Префикс `panel:`
+/// отделяет ключи GPUI dock-панелей от легаси-ключей egui (`g:<idx>`/`o:<idx>:<группа>`).
+fn geom_key(group: &str, panel: &str) -> String {
+    format!("panel:{group}/{panel}")
 }
 
 /// Загрузить список откреплённых из `detached.json` (нет/битый → пусто).
@@ -184,6 +214,27 @@ impl DetachedWindow {
                     s.h = geom.3;
                     bk.detached_dirty = true;
                 }
+            }
+            // Память геометрии НЕЗАВИСИМО от спеки: спека удаляется при возврате панели
+            // в док, а память остаётся — повторное открепление встанет на прежнее место.
+            let key = geom_key(&group, &panel);
+            let changed = bk
+                .layout
+                .detached_geom
+                .get(&key)
+                .map(|g| (g.x, g.y, g.w, g.h) != geom)
+                .unwrap_or(true);
+            if changed {
+                bk.layout.detached_geom.insert(
+                    key,
+                    moon_core::config::layout::GeomRect {
+                        x: geom.0,
+                        y: geom.1,
+                        w: geom.2,
+                        h: geom.3,
+                    },
+                );
+                bk.layout_dirty = true;
             }
         });
     }

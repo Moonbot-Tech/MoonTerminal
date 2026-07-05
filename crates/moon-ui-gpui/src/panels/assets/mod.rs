@@ -105,17 +105,6 @@ pub(super) fn money(v: f64) -> String {
     )
 }
 
-/// Человекочитаемая категория рынка: listed-байт + quote.
-pub(super) fn kind_label(row: &AssetRow) -> String {
-    let k = match row.listed {
-        1 => "spot",
-        2 => "fut",
-        3 => "both",
-        _ => "?",
-    };
-    format!("{k}·{}", row.quote)
-}
-
 /// Окно/панель «Активы».
 pub struct AssetsView {
     pub(super) backend: Entity<Backend>,
@@ -296,22 +285,48 @@ impl AssetsView {
             // Монеты, уже показанные из per-market строк — чтобы не задублировать их
             // спотовым кошельком (`transfer_assets`) ниже.
             let mut seen_coin: std::collections::HashSet<String> = std::collections::HashSet::new();
+            // Кол-во, УЖЕ выставленное на закрытие позиции («в работе»): Σ остатка выходной
+            // ноги реальных незавершённых ордеров рынка, чей выход выставлен (executed).
+            // Это количество из «Активов» исключаем — оно торгуется и видно в «Ордерах»
+            // (спот-аналог — свободный vs полный баланс — уже учтён на ядре).
+            let mut on_close: std::collections::HashMap<&str, f64> =
+                std::collections::HashMap::new();
+            for o in &cd.orders {
+                if o.emulator || o.job_is_done || !super::orders::executed(o) {
+                    continue;
+                }
+                if o.remaining_size > 0.0 {
+                    *on_close.entry(o.market.as_str()).or_default() += o.remaining_size;
+                }
+            }
             for row in &cd.assets.rows {
+                let mut row = row.clone();
+                // Вычесть из позиции выставленное на закрытие; позиция целиком в ордерах →
+                // строка исчезает. PnL масштабируем на оставшуюся долю (линейный по размеру).
+                let closing = on_close.get(row.market.as_str()).copied().unwrap_or(0.0);
+                if !self.show_all && closing > 0.0 && row.pos_size != 0.0 {
+                    let full = row.pos_size.abs();
+                    let remaining = (full - closing).max(0.0);
+                    row.pnl_usdt *= remaining / full;
+                    row.pos_size = remaining * row.pos_size.signum();
+                }
                 let value = row.value_usdt;
                 // Видимость (правила MoonBot): фьюч-ядра (вкл. CoinM) — ТОЛЬКО открытые
                 // позиции (балансы там котируемые, не купленные монеты); спот — все
                 // купленные монеты, КРОМЕ котируемой валюты аккаунта (USDT и т.п.) и
                 // остатков дешевле минимального лота рынка (непродаваемая пыль; лот
                 // неизвестен → старый порог 1$). «Показать всё» снимает фильтры.
-                let is_position = row.pos_size != 0.0;
-                let spot_coin_visible = !cd.assets.futures_account && !row.is_quote_asset && {
-                    let min_lot = if row.min_lot_usd > 0.0 {
-                        row.min_lot_usd
-                    } else {
-                        1.0
-                    };
-                    value >= min_lot
+                // Позиция-пыль (хвост округления после вычета «в работе» / частичного
+                // закрытия, дешевле минимального лота — её не продать) — не позиция.
+                let min_lot = if row.min_lot_usd > 0.0 {
+                    row.min_lot_usd
+                } else {
+                    1.0
                 };
+                let is_position =
+                    row.pos_size != 0.0 && row.pos_size.abs() * row.price >= min_lot;
+                let spot_coin_visible =
+                    !cd.assets.futures_account && !row.is_quote_asset && value >= min_lot;
                 let keep = self.show_all || is_position || spot_coin_visible;
                 if !keep {
                     continue;
@@ -321,7 +336,7 @@ impl AssetsView {
                     core: id,
                     core_name: name.clone(),
                     market_exists: cd.assets.markets.contains(&row.market),
-                    row: row.clone(),
+                    row,
                     value,
                 });
             }
@@ -350,7 +365,15 @@ impl AssetsView {
                         continue;
                     }
                     let is_quote = coin_up == quote_up;
-                    let keep = self.show_all || (!is_quote && w.value_usdt >= 1.0);
+                    // Стоимость — только СВОБОДНОГО остатка (`amount`): выставленное на
+                    // продажу (total − amount) из «Активов» исключаем, как и в per-market
+                    // строках. `value_usdt` кошелька посчитан от total → масштабируем.
+                    let free_value = if w.total.abs() > 0.0 {
+                        w.value_usdt * (w.amount / w.total)
+                    } else {
+                        0.0
+                    };
+                    let keep = self.show_all || (!is_quote && free_value >= 1.0);
                     if !keep {
                         continue;
                     }
@@ -360,13 +383,13 @@ impl AssetsView {
                     let resolved = resolve_market(&cd.assets.markets, &w.currency, &quote);
                     let market_exists = resolved.is_some();
                     let market = resolved.unwrap_or_else(|| format!("{}{}", w.currency, quote));
-                    let row = wallet_asset_row(w, &quote, is_quote, market);
+                    let row = wallet_asset_row(w, &quote, is_quote, market, free_value);
                     out.push(AssetEntry {
                         core: id,
                         core_name: name.clone(),
                         market_exists,
                         row,
-                        value: w.value_usdt,
+                        value: free_value,
                     });
                 }
             }
@@ -509,7 +532,13 @@ fn resolve_market(markets: &std::collections::HashSet<String>, coin: &str, quote
 /// нет в per-market балансах (Bitget и т.п.). `market` — реальное имя рынка из каталога
 /// (или фолбэк-конкатенация, если рынка нет — кнопка Sell всё равно скрыта). Цену выводим
 /// из стоимости. Позиции/PnL нет (чистый спот-баланс).
-fn wallet_asset_row(w: &TransferAssetRow, quote: &str, is_quote: bool, market: String) -> AssetRow {
+fn wallet_asset_row(
+    w: &TransferAssetRow,
+    quote: &str,
+    is_quote: bool,
+    market: String,
+    free_value: f64,
+) -> AssetRow {
     let price = if w.total.abs() > 0.0 {
         w.value_usdt / w.total
     } else {
@@ -523,7 +552,8 @@ fn wallet_asset_row(w: &TransferAssetRow, quote: &str, is_quote: bool, market: S
         qty: w.amount,
         qty_full: w.total,
         price,
-        value_usdt: w.value_usdt,
+        // Стоимость свободного остатка (без выставленного на продажу) — как в per-market.
+        value_usdt: free_value,
         min_lot_usd: 0.0,
         is_quote_asset: is_quote,
         mark_price: 0.0,

@@ -376,20 +376,17 @@ impl AssetsView {
     }
 }
 
+/// Колонки — 1:1 с окном Assets MoonBot: монета, количество, сумма в $, две кнопки.
+/// Плюс «Ядро» слева: у MoonBot окно per-core, наше — общее на все ядра охвата.
 fn assets_columns() -> Vec<MoonDataTableColumn> {
     let numeric =
         |key: &'static str, title: String, w: f32| MoonDataTableColumn::new(key, title, w).right();
     vec![
         MoonDataTableColumn::new("core", t!("assets.col.core").to_string(), 90.0),
-        MoonDataTableColumn::new("coin", t!("assets.col.coin").to_string(), 70.0),
-        numeric("qty", t!("assets.col.qty").to_string(), 120.0),
-        numeric("price", t!("assets.col.price").to_string(), 84.0),
-        numeric("value", t!("assets.col.value").to_string(), 92.0),
-        numeric("pos", t!("assets.col.pos").to_string(), 80.0),
-        numeric("pos_price", t!("assets.col.pos_price").to_string(), 84.0),
-        numeric("profit", t!("assets.col.profit").to_string(), 86.0),
-        MoonDataTableColumn::new("kind", t!("assets.col.kind").to_string(), 80.0),
-        // Кнопки Market sell / Order — только у строк с открытой позицией.
+        MoonDataTableColumn::new("coin", t!("assets.col.coin").to_string(), 80.0),
+        numeric("qty", t!("assets.col.qty").to_string(), 130.0),
+        numeric("value", t!("assets.col.value").to_string(), 110.0),
+        // Кнопки Market sell / Order.
         MoonDataTableColumn::new("actions", String::new(), 170.0),
     ]
 }
@@ -422,44 +419,21 @@ pub(super) fn assets_table(
 
 fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette) -> MoonDataRow {
     let r = &e.row;
-    // Живой нереализованный PnL позиции (цена − вход, в USDT) — считается на ядре.
-    let pnl = r.pnl_usdt;
-    let pnl_tone = if pnl > 0.0 {
-        MoonTone::Positive
-    } else if pnl < 0.0 {
-        MoonTone::Danger
-    } else {
-        MoonTone::Muted
-    };
     let is_position = r.pos_size != 0.0;
-    let pos = if is_position {
-        num(r.pos_size)
+    // Кол-во/Сумма: спот — свободный остаток (выставленное на продажу исключено, оно
+    // в «Ордерах») и его стоимость; фьюч-позиция — остаток позиции и её стоимость
+    // (размер × цена рынка; котируемая у фьючей — USD-стейбл).
+    let (qty, sum) = if is_position {
+        (num(r.pos_size), money(r.pos_size.abs() * r.price))
     } else {
-        String::new()
-    };
-    let pos_price = if is_position {
-        num(r.pos_price)
-    } else {
-        String::new()
-    };
-    // Кол-во: свободный остаток; если часть заморожена в открытых ордерах (спот) —
-    // `свободно / всего`, чтобы монета в sell-ордере не выглядела нулевой.
-    let qty = if r.qty_full.abs() > r.qty.abs() {
-        format!("{} / {}", num(r.qty), num(r.qty_full))
-    } else {
-        num(r.qty)
+        (num(r.qty), money(e.value))
     };
     MoonDataRow::new([
         MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
         // Тикер кликабелен → открыть чарт монеты на Main НА ЯДРЕ строки (как в Ордерах/Отчёте).
         MoonDataCell::element(coin_cell(e, view, p)),
         MoonDataCell::text(qty),
-        MoonDataCell::text(num(r.price)),
-        MoonDataCell::text(money(e.value)),
-        MoonDataCell::text(pos),
-        MoonDataCell::text(pos_price),
-        MoonDataCell::text(money(pnl)).tone(pnl_tone),
-        MoonDataCell::text(kind_label(r)).tone(MoonTone::Muted),
+        MoonDataCell::text(sum),
         actions_cell(e, view, p, is_position),
     ])
 }
@@ -471,13 +445,20 @@ fn coin_cell(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette) -> impl 
     let core = e.core;
     let market = e.row.market.clone();
     let view = view.clone();
+    // Значок монеты (assets/coins). Нет значка → тикер без иконки (без пустого места:
+    // тут колонка узкая, выравнивание держит сама таблица).
+    let icon = crate::coin_icons::coin_icon(&coin);
     div()
         .id(SharedString::from(format!("asset-coin-{core}-{}", e.row.market)))
         .w_full()
         .h_full()
         .flex()
         .items_center()
+        .gap_1()
         .cursor_pointer()
+        .when_some(icon, |el, tex| {
+            el.child(img(tex).w(px(14.0)).h(px(14.0)).flex_none())
+        })
         .child(
             MoonText::new(coin)
                 .color(MoonTone::Accent.color(p))

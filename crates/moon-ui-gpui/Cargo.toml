@@ -26,6 +26,9 @@ moon-core = { path = "../moon-core" }
 moon-chart = { path = "../moon-chart" }
 image = "0.25"
 bytemuck = { version = "1", features = ["derive"] }
+# Вшитый набор значков монет (assets/coins) — чтобы иконки ехали в сборку без
+# отдельной папки рядом с exe; диск остаётся приоритетом (докинуть без пересборки).
+include_dir = "0.7"
 
 # Canonical Moon UI source: standalone GPUI runtime + Moon components.
 # Local development overrides this Git source through untracked `.cargo/config.toml`.

@@ -138,7 +138,8 @@ pub fn detach_button(
         .size(MoonButtonSize::Action)
         .label("⧉")
         .on_click(move |_, window, app| {
-            let spec = DetachedSpec::new(group.clone(), name.to_string());
+            let spec =
+                DetachedSpec::with_saved_geom(&backend, app, group.clone(), name.to_string());
             if let Err(err) =
                 crate::detached::spawn(app, &backend, &spec, Some(window.window_handle()))
             {

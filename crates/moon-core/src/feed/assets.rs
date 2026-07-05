@@ -56,19 +56,35 @@ fn base_rate(markets: &MarketsState, base: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Стоимость `qty` монеты `currency` в USDT через рынок `<currency>USDT`
-/// (стейбл — как есть). 0 = курс неизвестен.
+/// Стоимость `qty` монеты `currency` в USDT (стейбл — как есть). Курс: рынок
+/// `<CUR>USDT`, затем `<CUR>USDC` (≈USD), затем ЛЮБОЙ USD-деноминированный рынок
+/// монеты по префиксу `<CUR>USD` — на COIN-M/квартальных ядрах рынков `<CUR>USDT`
+/// НЕТ, но цена контрактов `BTCUSD_PERP`/`BTCUSD_260925` уже в USD (иначе весь
+/// квартальный кошелёк оценивался бы в 0 и прятался фильтром пыли). 0 = неизвестно.
 fn coin_to_usdt(markets: &MarketsState, currency: &str, qty: f64) -> f64 {
     let cur = currency.to_ascii_uppercase();
     if is_stable(&cur) {
         return qty;
     }
-    markets
+    let px = markets
         .price(&format!("{cur}USDT"))
         .map(|p| p.p_last)
         .filter(|x| *x > 0.0)
-        .map(|px| qty * px)
-        .unwrap_or(0.0)
+        .or_else(|| {
+            markets
+                .price(&format!("{cur}USDC"))
+                .map(|p| p.p_last)
+                .filter(|x| *x > 0.0)
+        })
+        .or_else(|| {
+            let prefix = format!("{cur}USD");
+            markets
+                .iter()
+                .filter(|h| h.name().starts_with(&prefix))
+                .map(|h| h.price().p_last)
+                .find(|x| *x > 0.0)
+        });
+    px.map(|px| qty * px).unwrap_or(0.0)
 }
 
 /// Кошелёк домена → moonproto `ExchangeKind`.
@@ -139,21 +155,24 @@ pub(super) fn build_assets(
             (coin, m.base_currency.clone(), listed)
         });
         let rate = quote_to_usdt(markets, &quote);
-        // Стоимость — от ПОЛНОГО остатка (free + замороженное в открытых ордерах): спот-монета,
-        // целиком висящая в sell-ордере, имеет free=0 и иначе проваливается под фильтр пыли UI.
-        let qty_for_value = if bp.asset_balance_full.abs() > bp.asset_balance.abs() {
+        // Стоимость СТРОКИ — только от СВОБОДНОГО остатка (asset_balance): количество,
+        // уже выставленное на продажу (заморожено в открытых sell-ордерах, full − free),
+        // из «Активов» ИСКЛЮЧАЕТСЯ — оно торгуется и видно в «Ордерах». Монета целиком
+        // в ордерах → value 0 → строку скроет фильтр пыли UI.
+        let value_usdt = bp.asset_balance.abs() * price.p_last * rate;
+        // Дедуп монетных кошельков (COIN-M): суммируем стоимость КАЖДОЙ монеты один раз,
+        // независимо от числа её контрактов. Здесь эквити АККАУНТА — считаем от ПОЛНОГО
+        // остатка (в отличие от строк таблицы). Учитываем только реальный баланс монеты
+        // (asset_balance*), но НЕ чисто позиционные строки (pos без баланса — там монеты
+        // на кошельке нет, это дериватив на USDT-марже).
+        let qty_full_for_equity = if bp.asset_balance_full.abs() > bp.asset_balance.abs() {
             bp.asset_balance_full
         } else {
             bp.asset_balance
         };
-        let value_usdt = qty_for_value.abs() * price.p_last * rate;
-        // Дедуп монетных кошельков (COIN-M): суммируем стоимость КАЖДОЙ монеты один раз,
-        // независимо от числа её контрактов. Учитываем только реальный баланс монеты
-        // (asset_balance*), но НЕ чисто позиционные строки (pos без баланса — там монеты
-        // на кошельке нет, это дериватив на USDT-марже).
         let has_coin_balance = bp.asset_balance != 0.0 || bp.asset_balance_full != 0.0;
         if has_coin_balance && seen_coin_wallet.insert(coin.clone()) {
-            coin_wallet_full_usdt += value_usdt;
+            coin_wallet_full_usdt += qty_full_for_equity.abs() * price.p_last * rate;
             coin_wallet_free_usdt += bp.asset_balance.abs() * price.p_last * rate;
         }
         // min_lot_size ядра уже в котируемой валюте: max(step, min_qty)·цена и min_notional.

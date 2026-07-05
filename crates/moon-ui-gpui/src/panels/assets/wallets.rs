@@ -104,6 +104,17 @@ impl AssetsView {
             } else {
                 "(?$)".to_string()
             };
+            // Значок монеты (32×32 PNG из assets/coins) — как в MoonBot Transfer. Нет
+            // значка → пустая ячейка той же ширины, чтобы тикеры оставались выровнены.
+            let icon_side = design::ui_px(cx, 16.0);
+            let icon: AnyElement = match crate::coin_icons::coin_icon(&a.currency) {
+                Some(tex) => img(tex)
+                    .w(icon_side)
+                    .h(icon_side)
+                    .flex_none()
+                    .into_any_element(),
+                None => div().w(icon_side).h(icon_side).flex_none().into_any_element(),
+            };
             list = list.child(
                 div()
                     .id(SharedString::from(format!(
@@ -124,6 +135,7 @@ impl AssetsView {
                     .hover(|s| s.bg(rgba(0x3b82f626)).border_color(rgb(p.blue)))
                     .border_1()
                     .border_color(rgba(0x00000000))
+                    .child(icon)
                     .child(
                         div()
                             .flex_none()

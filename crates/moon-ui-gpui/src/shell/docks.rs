@@ -75,7 +75,12 @@ impl Shell {
                 if !detached::supports_panel(&panel_name) {
                     return;
                 }
-                let spec = detached::DetachedSpec::new(group.clone(), panel_name.clone());
+                let spec = detached::DetachedSpec::with_saved_geom(
+                    &backend,
+                    app,
+                    group.clone(),
+                    panel_name.clone(),
+                );
                 if backend
                     .read(app)
                     .detached
