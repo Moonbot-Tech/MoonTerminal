@@ -144,7 +144,6 @@ impl OrderKind {
 pub(super) enum OrdCol {
     Core,
     Side,
-    Status,
     Token,
     Size,
     Sl,
@@ -155,15 +154,13 @@ pub(super) enum OrdCol {
     Fill,
     Pnl,
     PnlPct,
-    Tp,
     Strat,
 }
 
 impl OrdCol {
-    pub(super) const ALL: [OrdCol; 15] = [
+    pub(super) const ALL: [OrdCol; 13] = [
         OrdCol::Core,
         OrdCol::Side,
-        OrdCol::Status,
         OrdCol::Token,
         OrdCol::Size,
         OrdCol::Sl,
@@ -174,7 +171,6 @@ impl OrdCol {
         OrdCol::Fill,
         OrdCol::Pnl,
         OrdCol::PnlPct,
-        OrdCol::Tp,
         OrdCol::Strat,
     ];
 
@@ -183,7 +179,6 @@ impl OrdCol {
         match self {
             OrdCol::Core => "core",
             OrdCol::Side => "side",
-            OrdCol::Status => "status",
             OrdCol::Token => "token",
             OrdCol::Size => "size",
             OrdCol::Sl => "sl",
@@ -194,7 +189,6 @@ impl OrdCol {
             OrdCol::Fill => "fill",
             OrdCol::Pnl => "pnl",
             OrdCol::PnlPct => "pnl.pct",
-            OrdCol::Tp => "tp",
             OrdCol::Strat => "strat",
         }
     }

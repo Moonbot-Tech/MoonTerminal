@@ -3,7 +3,6 @@
 use super::*;
 use moon_core::feed::OrderStopKind;
 use moon_core::session::CoreId;
-use moon_ui::{MoonBadge, MoonBadgeSize, MoonBadgeVariant};
 use rust_i18n::t;
 use std::collections::HashSet;
 
@@ -67,7 +66,6 @@ pub(super) fn col_title(col: OrdCol) -> String {
         OrdCol::Side => t!("orders.col.side").to_string(),
         OrdCol::Token => t!("orders.col.token").to_string(),
         OrdCol::CurP => t!("orders.col.price").to_string(),
-        OrdCol::Status => "Status".to_string(),
         OrdCol::Size => "Size".to_string(),
         OrdCol::Sl => "SL".to_string(),
         OrdCol::Ts => "TS".to_string(),
@@ -76,7 +74,6 @@ pub(super) fn col_title(col: OrdCol) -> String {
         OrdCol::Fill => "Fill".to_string(),
         OrdCol::Pnl => "PNL".to_string(),
         OrdCol::PnlPct => "PNL %".to_string(),
-        OrdCol::Tp => "TP".to_string(),
         OrdCol::Strat => "Strat".to_string(),
     }
 }
@@ -88,7 +85,6 @@ fn column_def(col: OrdCol) -> MoonDataTableColumn {
     match col {
         OrdCol::Core => MoonDataTableColumn::new("core", title, 90.0),
         OrdCol::Side => MoonDataTableColumn::new("side", title, 82.0),
-        OrdCol::Status => MoonDataTableColumn::new("status", title, 76.0),
         OrdCol::Token => numeric_column("token", title, 70.0),
         OrdCol::Size => numeric_column("size", title, 70.0),
         OrdCol::Sl => MoonDataTableColumn::new("sl", title, 46.0),
@@ -99,7 +95,6 @@ fn column_def(col: OrdCol) -> MoonDataTableColumn {
         OrdCol::Fill => numeric_column("fill", title, 56.0),
         OrdCol::Pnl => numeric_column("pnl", title, 72.0),
         OrdCol::PnlPct => numeric_column("pnl.pct", title, 64.0),
-        OrdCol::Tp => numeric_column("tp", title, 80.0),
         OrdCol::Strat => numeric_column("strat", title, 90.0),
     }
 }
@@ -143,7 +138,6 @@ fn cell_for(
             let (side, tone) = side_label(r);
             MoonDataCell::text(side).tone(tone).weight(500.0)
         }
-        OrdCol::Status => MoonDataCell::element(status_cell(r, p)),
         OrdCol::Token => MoonDataCell::element(token_cell(e, view, p)),
         OrdCol::Size => MoonDataCell::text(num(r.size)),
         OrdCol::Sl => flag_toggle_cell(e, view, OrderStopKind::StopLoss, r.sl_on, r.sl_strat, p),
@@ -156,7 +150,6 @@ fn cell_for(
         OrdCol::Fill => MoonDataCell::text(format!("{:.0}%", r.fill_pct)).tone(MoonTone::Muted),
         OrdCol::Pnl => pnl_cell(r),
         OrdCol::PnlPct => pnl_pct_cell(r),
-        OrdCol::Tp => tp_cell(r),
         OrdCol::Strat => MoonDataCell::text(r.strat.clone()).tone(MoonTone::Muted),
     }
 }
@@ -181,30 +174,6 @@ fn side_label(r: &OrderRow) -> (String, MoonTone) {
         side.to_string()
     };
     (side, tone)
-}
-
-/// Статус ордера (baseline status-badge): `filled` — исполнен (серый), `pending` —
-/// ждёт условие (амбер), `live` — рабочий/частично исполнен (зелёный).
-fn order_status(r: &OrderRow) -> (&'static str, MoonTone) {
-    if r.fill_pct >= 99.95 {
-        ("filled", MoonTone::Muted)
-    } else if r.pending {
-        ("pending", MoonTone::Warning)
-    } else {
-        ("live", MoonTone::Positive)
-    }
-}
-
-/// Ячейка статуса — `MoonBadge` Outline/Status (пилюля как в `5Badges`/`8tablecells`).
-fn status_cell(r: &OrderRow, p: MoonPalette) -> impl IntoElement + 'static {
-    let (label, tone) = order_status(r);
-    div().h_full().flex().items_center().child(
-        MoonBadge::new(label)
-            .tone(tone)
-            .variant(MoonBadgeVariant::Outline)
-            .size(MoonBadgeSize::Status)
-            .render_with_palette(p),
-    )
 }
 
 /// Локальная оценка нереализованного PnL по исполненной части позиции:
@@ -287,14 +256,6 @@ fn pnl_pct_cell(r: &OrderRow) -> MoonDataCell {
             MoonDataCell::text(text).tone(tone).weight(500.0)
         }
         None => MoonDataCell::text("–").tone(MoonTone::Muted),
-    }
-}
-
-/// TP-ячейка: take-profit синим (`Info`/tp trader-cell), `–` если не выставлен.
-fn tp_cell(r: &OrderRow) -> MoonDataCell {
-    match r.take_profit {
-        Some(v) if v > 0.0 => MoonDataCell::text(num(v)).tone(MoonTone::Info),
-        _ => MoonDataCell::text("–").tone(MoonTone::Muted),
     }
 }
 
