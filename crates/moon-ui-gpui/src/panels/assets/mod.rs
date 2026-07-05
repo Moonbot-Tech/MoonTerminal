@@ -365,11 +365,27 @@ impl AssetsView {
                         continue;
                     }
                     let is_quote = coin_up == quote_up;
-                    // Стоимость — только СВОБОДНОГО остатка (`amount`): выставленное на
-                    // продажу (total − amount) из «Активов» исключаем, как и в per-market
-                    // строках. `value_usdt` кошелька посчитан от total → масштабируем.
+                    // Реальное имя рынка из каталога ядра (форматы бирж разные) — нужно ДО
+                    // фильтра: по нему вычитаем «в работе». Нет рынка → фолбэк-конкатенация
+                    // для отображения, но market_exists=false (Sell скрыт).
+                    let resolved = resolve_market(&cd.assets.markets, &w.currency, &quote);
+                    // Выставленное на продажу исключаем и здесь: transfer-снимок кошелька
+                    // обновляется только по запросу и НЕ видит заморозку в свежих ордерах
+                    // (`amount` остаётся полным) — вычитаем остаток sell-ордеров рынка.
+                    let closing = if self.show_all {
+                        0.0
+                    } else {
+                        resolved
+                            .as_deref()
+                            .and_then(|m| on_close.get(m))
+                            .copied()
+                            .unwrap_or(0.0)
+                    };
+                    let qty_free = (w.amount - closing).max(0.0);
+                    // Стоимость — только СВОБОДНОГО остатка. `value_usdt` кошелька посчитан
+                    // от total → масштабируем.
                     let free_value = if w.total.abs() > 0.0 {
-                        w.value_usdt * (w.amount / w.total)
+                        w.value_usdt * (qty_free / w.total)
                     } else {
                         0.0
                     };
@@ -378,12 +394,9 @@ impl AssetsView {
                         continue;
                     }
                     seen_coin.insert(coin_up);
-                    // Реальное имя рынка из каталога ядра (форматы бирж разные). Нет рынка →
-                    // фолбэк-конкатенация для отображения, но market_exists=false (Sell скрыт).
-                    let resolved = resolve_market(&cd.assets.markets, &w.currency, &quote);
                     let market_exists = resolved.is_some();
                     let market = resolved.unwrap_or_else(|| format!("{}{}", w.currency, quote));
-                    let row = wallet_asset_row(w, &quote, is_quote, market, free_value);
+                    let row = wallet_asset_row(w, &quote, is_quote, market, free_value, qty_free);
                     out.push(AssetEntry {
                         core: id,
                         core_name: name.clone(),
@@ -538,6 +551,7 @@ fn wallet_asset_row(
     is_quote: bool,
     market: String,
     free_value: f64,
+    qty_free: f64,
 ) -> AssetRow {
     let price = if w.total.abs() > 0.0 {
         w.value_usdt / w.total
@@ -549,7 +563,9 @@ fn wallet_asset_row(
         coin: w.currency.clone(),
         quote: quote.to_string(),
         listed: 1, // spot
-        qty: w.amount,
+        // Свободный остаток БЕЗ выставленного на продажу (остаток sell-ордеров вычтен
+        // вызывающим — transfer-снимок сам заморозку не видит).
+        qty: qty_free,
         qty_full: w.total,
         price,
         // Стоимость свободного остатка (без выставленного на продажу) — как в per-market.
