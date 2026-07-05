@@ -15,42 +15,69 @@
 
 PKG := -p moon-ui-gpui --bin moonterminal
 
+# cargo может быть не в PATH (частый случай на macOS: он в ~/.cargo/bin, но Terminal
+# не подхватывает ~/.cargo/env). Ищем в PATH, иначе берём дефолтный путь rustup.
+CARGO := $(shell command -v cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
+
 ifeq ($(OS),Windows_NT)
   TARGET := --target x86_64-pc-windows-msvc
   BIN := target\x86_64-pc-windows-msvc\debug\moonterminal.exe
+  RELEASE_BIN := target\x86_64-pc-windows-msvc\release\moonterminal.exe
 else
   TARGET :=
   BIN := target/debug/moonterminal
+  RELEASE_BIN := target/release/moonterminal
 endif
 
-.PHONY: run build release check fmt clean update-moon-ui update-forks help
+# macOS: после сборки подписываем бинарь СТАБИЛЬНОЙ самоподписанной подписью. Иначе
+# ad-hoc подпись меняется каждую сборку, и macOS Keychain (в нём лежит ключ шифрования
+# конфига, крейт keyring/apple-native) при каждом запуске заново требует пароль.
+# См. scripts/macos-sign.sh. На Windows/Linux — no-op (этой проблемы там нет).
+ifeq ($(OS),Windows_NT)
+  SIGN = @echo ">> codesign: пропуск (Windows)"
+else ifeq ($(shell uname -s),Darwin)
+  SIGN = ./scripts/macos-sign.sh
+else
+  SIGN = @true
+endif
+
+.PHONY: run build release check fmt clean update-moon-ui update-forks codesign-setup help
 
 help:
-	@echo "make run | build | release | check | fmt | clean | update-moon-ui"
+	@echo "make run | build | release | check | fmt | clean | codesign-setup | update-moon-ui"
 	@echo "bin: $(BIN)"
 
-run:
-	cargo run $(PKG) $(TARGET)
+# macOS: один раз создать самоподписанный code-signing сертификат (иначе он создастся
+# автоматически при первой сборке). На других ОС скрипт сам делает no-op.
+codesign-setup:
+	./scripts/macos-codesign-setup.sh
+
+# run зависит от build → запускается уже ПОДПИСАННЫЙ бинарь (не свежий unsigned из
+# `cargo run`), поэтому Keychain не спрашивает пароль повторно.
+run: build
+	$(BIN)
 
 build:
-	cargo build $(PKG) $(TARGET)
+	$(CARGO) build $(PKG) $(TARGET)
+	$(SIGN) "$(BIN)"
 
 release:
-	cargo build --release $(PKG) $(TARGET)
+	$(CARGO) build --release $(PKG) $(TARGET)
+	$(SIGN) "$(RELEASE_BIN)"
 
 check:
-	cargo check $(PKG) $(TARGET)
+	$(CARGO) check $(PKG) $(TARGET)
 
 fmt:
-	cargo fmt
+	$(CARGO) fmt
 
 clean:
-	cargo clean
+	$(CARGO) clean
 
 # Cargo.lock локальный и не коммитится. Fresh checkout резолвит текущий MoonUI master.
 # В уже собранной рабочей копии этот target обновляет локальный lock до HEAD зависимостей.
 update-moon-ui:
-	cargo update
+	$(CARGO) update
 	@echo ">> Локальный Cargo.lock обновлён. Теперь: make build"
 
 # Backward-compatible alias for old local scripts.

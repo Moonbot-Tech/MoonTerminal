@@ -124,10 +124,10 @@ impl Shell {
     }
 
     pub(super) fn persist_group_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let (bounds, maximized) = match window.window_bounds() {
-            WindowBounds::Windowed(bounds) => (Some(bounds), false),
-            WindowBounds::Maximized(bounds) => (Some(bounds), true),
-            WindowBounds::Fullscreen(bounds) => (Some(bounds), false),
+        let (bounds, maximized, fullscreen) = match window.window_bounds() {
+            WindowBounds::Windowed(bounds) => (Some(bounds), false, false),
+            WindowBounds::Maximized(bounds) => (Some(bounds), true, false),
+            WindowBounds::Fullscreen(bounds) => (Some(bounds), false, true),
         };
         let Some(bounds) = bounds else {
             return;
@@ -138,6 +138,7 @@ impl Shell {
             w: f32::from(bounds.size.width) as u32,
             h: f32::from(bounds.size.height) as u32,
             maximized,
+            fullscreen,
             collapsed: false,
             tab: 0,
             dock_h: 220.0,
@@ -158,6 +159,7 @@ impl Shell {
                         || old.w != layout.w
                         || old.h != layout.h
                         || old.maximized != layout.maximized
+                        || old.fullscreen != layout.fullscreen
                 })
                 .unwrap_or(true);
             if changed {

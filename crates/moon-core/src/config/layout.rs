@@ -20,6 +20,11 @@ pub struct GroupLayout {
     pub h: u32,
     #[serde(default)]
     pub maximized: bool,
+    /// macOS «на весь экран» (WindowBounds::Fullscreen). Отдельно от `maximized`:
+    /// зелёная кнопка на macOS даёт Fullscreen, а не Maximized, и его надо
+    /// восстанавливать своим вариантом, иначе окно откроется обычным.
+    #[serde(default)]
+    pub fullscreen: bool,
     #[serde(default)]
     pub collapsed: bool,
     /// Индекс активной вкладки дока (см. `DockTab::idx`).

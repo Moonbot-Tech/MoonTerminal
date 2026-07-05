@@ -144,14 +144,22 @@ impl ChartView {
         }
         let present_hz = present_hz.max(1.0);
         let default_px_per_ms = Self::phase_clean_default_px_per_ms(area_w, present_hz);
-        let phase_changed = (area_w - self.last_phase_area_w).abs() >= 0.5
-            || (present_hz - self.last_phase_present_hz).abs() >= 0.5;
+        let area_changed = (area_w - self.last_phase_area_w).abs() >= 0.5;
+        let present_changed = (present_hz - self.last_phase_present_hz).abs() >= 0.5;
+        let phase_changed = area_changed || present_changed;
         if phase_changed || self.x_init_pending {
             self.phase_default_px_per_ms = default_px_per_ms;
             self.last_phase_area_w = area_w;
             self.last_phase_present_hz = present_hz;
         }
-        if !self.x_init_pending && !(self.x_default_scale && phase_changed) {
+        // Видимый масштаб пересчитываем только на инициализации или при изменении ШИРИНЫ
+        // (resize) — НЕ на изменение одной лишь present_hz. На старте она детектится и
+        // сходится 60→реальная (ProMotion 120 Гц); пересчёт px_per_ms на каждом шаге
+        // сходимости дёргал ось времени (крестики/линии) — own-pass камера (advance_camera)
+        // и sync на переходных кадрах брали разный масштаб. После первого зума
+        // (x_default_scale=false) дёрганье пропадало. Фазовую чистоту на 120 Гц держит
+        // целочисленное округление камеры, поэтому «60-Гц-дефолтный» масштаб визуально ок.
+        if !self.x_init_pending && !(self.x_default_scale && area_changed) {
             return;
         }
         self.px_per_ms = default_px_per_ms;

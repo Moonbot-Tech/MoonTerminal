@@ -71,7 +71,9 @@ pub(crate) fn spawn_group_window(
         .into_iter()
         .find(|d| d.bounds().contains(&origin))
         .map(|d| d.id());
-    let window_bounds = if saved.map(|g| g.maximized).unwrap_or(false) {
+    let window_bounds = if saved.map(|g| g.fullscreen).unwrap_or(false) {
+        WindowBounds::Fullscreen(win_bounds)
+    } else if saved.map(|g| g.maximized).unwrap_or(false) {
         WindowBounds::Maximized(win_bounds)
     } else {
         WindowBounds::Windowed(win_bounds)

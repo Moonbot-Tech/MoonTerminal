@@ -1,4 +1,4 @@
-//! Интеракция слоя рисования фигур на панели чарта: режим-карандаш (Ctrl+ЛКМ рисует),
+//! Интеракция слоя рисования фигур на панели чарта: режим-карандаш (⌘/Ctrl+ЛКМ рисует),
 //! hover/выделение/драг узлов и тела, контекст-меню по ПКМ (Alert/Удалить). Инструмент
 //! (`Backend::fig_tool`), режим (`fig_draw_mode`) и выделение (`fig_selected`) глобальны.
 //! Всё работает ТОЛЬКО в области чарта (не в зоне стакана — там свои кнопки).
@@ -145,12 +145,13 @@ impl ChartPanel {
     }
 
     /// ЛКМ-down. true = клик съеден слоем фигур. Работает ТОЛЬКО в режиме рисования
-    /// (карандаш нажат): `ctrl` зажат → рисуем `fig_tool`; без Ctrl → выделяем/двигаем
+    /// (карандаш нажат): `draw_mod` зажат → рисуем `fig_tool`; без него → выделяем/двигаем
     /// существующую фигуру. Вне режима — фигуры не трогаем (клик идёт в торговлю/чарт).
+    /// `draw_mod` — вторичный модификатор (⌘ на macOS, Ctrl на Windows/Linux).
     pub(super) fn try_fig_click(
         &mut self,
         pos: (f32, f32),
-        ctrl: bool,
+        draw_mod: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         if !self.backend.read(cx).fig_draw_mode {
@@ -166,13 +167,13 @@ impl ChartPanel {
         let Some(map) = self.fig_map(pane) else {
             return false;
         };
-        if ctrl {
+        if draw_mod {
             let tool = self.backend.read(cx).fig_tool;
             let node = map.node_at(pos);
             self.fig_draw_click(pane, tool, node, cx);
             return true;
         }
-        // Без Ctrl: захват узла/тела фигуры или выделение (пусто → клик не съеден,
+        // Без модификатора: захват узла/тела фигуры или выделение (пусто → клик не съеден,
         // работает пан).
         self.try_fig_grab(pane, pos, &map, cx)
     }

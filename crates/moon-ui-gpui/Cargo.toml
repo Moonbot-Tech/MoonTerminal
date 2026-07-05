@@ -30,7 +30,10 @@ bytemuck = { version = "1", features = ["derive"] }
 # Canonical Moon UI source: standalone GPUI runtime + Moon components.
 # Local development overrides this Git source through untracked `.cargo/config.toml`.
 gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
-gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master", features = ["font-kit"] }
+# runtime_shaders: compile Metal shaders at runtime via the OS Metal framework
+# instead of the `metal` CLI (ships only with full Xcode). Lets the build work with
+# just Command Line Tools on macOS; no-op on Windows/Linux.
+gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master", features = ["font-kit", "runtime_shaders"] }
 moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
 
 anyhow = "1"

@@ -19,8 +19,8 @@ use std::ffi::c_void;
 use super::types::{
     BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams, DEFAULT_VOLUME_ALPHA,
     GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu, append_cross_ring,
-    cross_append_ranges, cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring,
-    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, seg_of,
+    cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring,
+    ranges_touch_volume_max, reset_cross_ring, seg_of,
     update_cross_volume_max, zone_of,
 };
 
@@ -434,7 +434,6 @@ impl MetalLayers {
         let full_reset = data.len() >= self.combo_capacity;
         let evicted_ranges =
             evicted_cross_ranges(old_head, old_count, self.combo_capacity, data.len());
-        let evicted_any = ranges_have_entries(&evicted_ranges);
         let evicted_scale_max =
             ranges_touch_volume_max(&self.crosses, &evicted_ranges, before_scale);
         append_cross_ring(
@@ -454,20 +453,18 @@ impl MetalLayers {
             self.update_volume_scale(data);
         }
         self.combo_buffers_dirty = true;
-        if full_reset || evicted_any || before_scale != (self.volume_buy_max, self.volume_sell_max)
-        {
-            if let Some(tex) = self.combo_texture.as_mut() {
-                tex.valid = false;
-            }
-            self.combo_dirty_ranges.clear();
-        } else {
-            let appended = data.len().min(self.combo_capacity);
-            for (start, count) in cross_append_ranges(old_head, appended, self.combo_capacity) {
-                if count > 0 {
-                    self.combo_dirty_ranges.push((start, count));
-                }
-            }
+        // Всегда FULL-bake combo-текстуры при изменении крестиков. Инкрементальный
+        // partial-bake (combo_dirty_ranges) на Metal хрупкий: комбо печётся при фикс.
+        // `bake_t0`, а композитится со смещением (view_time0 − bake_t0). На кадрах
+        // перерисовки (движение мыши) это давало временный горизонтальный сдвиг ВСЕГО
+        // слоя крестиков «на пару секунд назад», пока следующий full-bake не выровняет
+        // bake_t0. Full-bake перепекает буфер линейно [0..count] и заново берёт bake_t0
+        // от текущего вида — корректно и дёшево (cross_count мал).
+        // См. docs/macos-trade-crosses-fix.md (ветка fix/macos-trade-crosses).
+        if let Some(tex) = self.combo_texture.as_mut() {
+            tex.valid = false;
         }
+        self.combo_dirty_ranges.clear();
     }
 
     pub fn set_price_lines(&mut self, last: &[PriceLinePoint], mark: &[PriceLinePoint]) {

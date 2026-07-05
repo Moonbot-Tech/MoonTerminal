@@ -40,9 +40,12 @@ pub(super) fn scroll_wheel(
             }
         }
     }
-    let dy = match e.delta {
-        ScrollDelta::Lines(p) => p.y,
-        ScrollDelta::Pixels(p) => f32::from(p.y) / 40.0,
+    // Lines — дискретное колесо мыши (Windows): ±1/±3 за щелчок. Pixels — точный ввод
+    // (тачпад/Magic Mouse на macOS): непрерывный поток с инерцией. Их нельзя мешать в
+    // одну величину — передаём `precise`, чтобы input.wheel зумил их по-разному.
+    let (dy, precise) = match e.delta {
+        ScrollDelta::Lines(p) => (p.y, false),
+        ScrollDelta::Pixels(p) => (f32::from(p.y), true),
     };
     this.input.last_ptr = pos;
     this.input.cursor = if within { Some(pos) } else { None };
@@ -52,7 +55,7 @@ pub(super) fn scroll_wheel(
     let changed = {
         let input = &mut this.input;
         this.chart.with_container_mut(|container| {
-            input.wheel(dy, e.modifiers.shift, within, container, fb, sf)
+            input.wheel(dy, precise, e.modifiers.shift, within, container, fb, sf)
         })
     };
     if changed {
@@ -86,12 +89,14 @@ pub(super) fn mouse_down_left(
         None
     };
     this.sync_native_cursor();
-    // Слой рисования фигур (только в режиме карандаша): Ctrl+ЛКМ рисует,
+    // Слой рисования фигур (только в режиме карандаша): secondary+ЛКМ рисует,
     // простой ЛКМ выделяет/двигает существующую. Вне режима try_fig_click
     // сразу отдаёт false → клик идёт в торговлю/навигацию.
+    // secondary() = ⌘ на macOS, Ctrl на Windows/Linux. На macOS именно Ctrl нельзя:
+    // ОС превращает Ctrl+ЛКМ в правый клик, поэтому событие рисования не доходит.
     if within
         && e.click_count <= 1
-        && this.try_fig_click(pos, e.modifiers.control, cx)
+        && this.try_fig_click(pos, e.modifiers.secondary(), cx)
     {
         cx.notify();
         cx.stop_propagation();

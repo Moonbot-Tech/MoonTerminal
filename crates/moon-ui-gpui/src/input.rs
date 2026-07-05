@@ -18,6 +18,10 @@ pub enum Btn {
 }
 
 const WHEEL_THRESHOLD: f32 = 100.0;
+/// Точный ввод (тачпад macOS): плавный зум 2^(px/этой_величины). Удвоение/деление
+/// масштаба на ~300 px прокрутки. Заменяет дискретный порог, который на непрерывных
+/// пиксельных дельтах с инерцией давал взрывной зум и дрожание оси.
+const WHEEL_PX_PER_2X: f32 = 300.0;
 const ANCHOR_BREAK_PCT: f32 = 0.10;
 const RMB_ZOOM_START_PX: f32 = 4.0;
 
@@ -120,6 +124,7 @@ impl ChartInput {
     pub fn wheel(
         &mut self,
         dy: f32,
+        precise: bool,
         shift: bool,
         gate_ok: bool,
         container: &mut Container,
@@ -137,8 +142,19 @@ impl ChartInput {
         let now = now_unix_ms();
         if let Some(view) = self.hovered_view_mut(container) {
             if shift {
-                view.pan_x_px(-dy.signum() * 60.0, now, plot_w);
+                // Пан по X. Точный ввод (Pixels) — на реальные пиксели жеста; дискретное
+                // колесо (Lines) — фиксированный шаг 60 px за щелчок.
+                let dx = if precise { -dy } else { -dy.signum() * 60.0 };
+                view.pan_x_px(dx, now, plot_w);
+            } else if precise {
+                // Точный ввод (тачпад macOS): плавный ПРОПОРЦИОНАЛЬНЫЙ зум по величине
+                // жеста, без порога-аккумулятора — иначе поток пиксельных дельт с инерцией
+                // пересекает порог много раз подряд и даёт взрывной зум/дрожание оси.
+                self.wheel_accum = 0.0;
+                let factor = 2f32.powf(dy / WHEEL_PX_PER_2X);
+                view.zoom_x_at(factor, plot_w, cursor_x, now);
             } else {
+                // Дискретное колесо мыши (Windows): накапливаем и шагаем 2×/0.5× по порогу.
                 self.wheel_accum += dy * 40.0;
                 if self.wheel_accum.abs() < WHEEL_THRESHOLD {
                     return false;
