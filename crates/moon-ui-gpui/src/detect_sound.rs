@@ -35,18 +35,28 @@ impl Backend {
             // Самый свежий из новых детектов, который должен звучать: звук стратегии,
             // либо дефолт для срабатывания алерта БЕЗ стратегии (detects: старые→новые).
             let default_sound = &self.default_alert_sound;
+            // Звучат ТОЛЬКО срабатывания алертов (is_alert): звук — из стратегии алерта,
+            // иначе дефолтный. Обычные детекты НЕ пикают — их SoundAlert гейтит только
+            // кнопку в панели детектов (см. AlertParams), не звук.
             let sound = data.detects.iter().rev().take_while(|d| d.seq > last).find_map(|d| {
-                if let Some(n) = &d.sound_name {
-                    Some(n.clone())
-                } else if d.is_alert {
-                    Some(default_sound.clone())
-                } else {
-                    None
+                if !d.is_alert {
+                    return None;
                 }
+                Some(
+                    d.sound_name
+                        .clone()
+                        .unwrap_or_else(|| default_sound.clone()),
+                )
             });
             self.last_detect_seq.insert(core, cur_max);
             if let Some(name) = sound {
+                moon_core::detect_diag::line(&format!("[sound] core={core} play={name}"));
                 crate::sound::play(&name);
+            } else {
+                moon_core::detect_diag::line(&format!(
+                    "[sound] core={core} silent: {} new detects, среди них нет алертов",
+                    cur_max.saturating_sub(last)
+                ));
             }
         }
     }

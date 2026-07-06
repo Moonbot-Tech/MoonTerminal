@@ -216,6 +216,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
             price_scale: None,
             price_scale_group: None,
             price_scale_rev: 0,
+            switch_charts_group: None,
+            switch_charts_rev: 0,
             follow: true,
             order_size_sel: HashMap::new(),
             order_size_rev: 0,

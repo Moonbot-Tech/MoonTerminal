@@ -28,6 +28,9 @@ pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
     if b.price_scale_group.as_deref() == Some(group) {
         sig = sig.wrapping_mul(31).wrapping_add(b.price_scale_rev);
     }
+    if b.switch_charts_group.as_deref() == Some(group) {
+        sig = sig.wrapping_mul(31).wrapping_add(b.switch_charts_rev);
+    }
     for (g, n, bucket) in &b.chart_repin_request {
         if g == group {
             sig = sig

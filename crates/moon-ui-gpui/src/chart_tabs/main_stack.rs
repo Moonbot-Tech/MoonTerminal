@@ -191,6 +191,23 @@ impl MainChartStack {
         )
     }
 
+    /// Хоткей `switch_charts`: перевести fullscreen на СЛЕДУЮЩИЙ чарт стека по кругу. Меньше
+    /// двух графиков — переключать нечего. Разворачивает fullscreen (гасит режим «весь stack»),
+    /// как обычный фокус графика, и синхронит активный таргет группы (торговые хоткеи идут на него).
+    pub(crate) fn cycle_active(&mut self, cx: &mut Context<Self>) {
+        if self.charts.len() < 2 {
+            return;
+        }
+        let cur = self.active.unwrap_or(0);
+        let next = (cur + 1) % self.charts.len();
+        self.active = Some(next);
+        self.show_stack = false;
+        self.sync_visibility(cx);
+        self.sync_backend_active(cx);
+        self.arm_idle_timer(cx);
+        cx.notify();
+    }
+
     pub(super) fn open_or_focus(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
         if let Some(ix) = self
             .charts

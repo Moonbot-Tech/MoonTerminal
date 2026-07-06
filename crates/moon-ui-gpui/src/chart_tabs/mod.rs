@@ -108,6 +108,9 @@ pub struct ChartTabs {
     /// Последняя виденная `price_scale_rev` тулбара — применяем масштаб к АКТИВНОЙ панели
     /// только когда rev вырос (юзер выбрал), иначе синхроним показ масштаба активной вкладки.
     last_scale_rev: u64,
+    /// Последняя виденная `switch_charts_rev` — листаем активный чарт Main-стека только на
+    /// РОСТ rev, адресованный нашей группе (хоткей `switch_charts`), одноразово.
+    last_switch_charts_rev: u64,
     /// Откреп-вкладки на восстановление при загрузке (из charts.json): создаём их пустыми и
     /// открываем окна на ПЕРВОМ render (не в конструкторе окна группы — нельзя вложенно).
     restore_pending: Vec<(u32, ChartBucket, chart_persist::WinGeom, Option<f32>)>,
@@ -290,6 +293,7 @@ impl ChartTabs {
             this.ingest(cx);
             this.drain_chart_repin(cx);
             this.sync_active_scale(cx);
+            this.sync_switch_charts(cx);
             this.sync_main_chart_target(cx);
             this.sync_seen_for_active(cx);
             this.persist_scales(cx);
@@ -371,6 +375,7 @@ impl ChartTabs {
             add_seq: HashMap::new(),
             last_sig: initial_sig,
             last_scale_rev: 0,
+            last_switch_charts_rev: 0,
             restore_pending,
             window_handle: window.window_handle(),
             focus: cx.focus_handle(),
@@ -634,6 +639,27 @@ impl ChartTabs {
                 b.price_scale = cur;
             }
         });
+    }
+
+    /// Хоткей `switch_charts`: на РОСТ `switch_charts_rev`, адресованного нашей группе, листаем
+    /// активный чарт Main-стека на следующий. Виденную rev продвигаем всегда (чужой бамп не
+    /// должен «догнать» нас позже). Работает по Main-стеку (fullscreen активный чарт); кастомные
+    /// AddToChart-вкладки — тайловый список без единого активного, там переключать нечего.
+    fn sync_switch_charts(&mut self, cx: &mut Context<Self>) {
+        let (rev, ours) = {
+            let b = self.backend.read(cx);
+            (
+                b.switch_charts_rev,
+                b.switch_charts_group.as_deref() == Some(&self.group),
+            )
+        };
+        if rev == self.last_switch_charts_rev {
+            return;
+        }
+        self.last_switch_charts_rev = rev;
+        if ours {
+            self.main.update(cx, |s, scx| s.cycle_active(scx));
+        }
     }
 }
 

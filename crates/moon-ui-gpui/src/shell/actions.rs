@@ -126,6 +126,16 @@ impl Shell {
                 });
                 true
             }
+            // Переключить активный (fullscreen) чарт Main-стека группы на следующий — через
+            // rev-механизм этой группы (её ChartTabs слушает backend и листает свой стек), как
+            // масштаб. Отдельный от scale rev, чтобы зум и переключение не мешали друг другу.
+            HotkeyAction::SwitchCharts => {
+                self.backend.update(cx, |b, _| {
+                    b.switch_charts_group = Some(group.clone());
+                    b.switch_charts_rev = b.switch_charts_rev.wrapping_add(1);
+                });
+                true
+            }
             // Ручной ордер по цене под курсором: ставит чарт под мышью (`hovered_chart`) —
             // цену знает только он. Работает независимо от того, какое окно в фокусе.
             HotkeyAction::NewLong | HotkeyAction::NewShort => {

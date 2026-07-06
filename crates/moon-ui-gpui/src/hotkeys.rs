@@ -47,6 +47,11 @@ pub enum HotkeyAction {
     NewShort,
     /// Выбрать/тогать инструмент рисования (слой фигур — глобальное состояние).
     FigTool(FigureTool),
+    /// Переключить инструмент рисования на следующий по кругу (+вкл режим рисования).
+    SwitchFigure,
+    /// Переключить активный (fullscreen) чарт Main-стека окна на следующий. Исполняет
+    /// вызывающее окно (свой стек у каждого) — как масштаб.
+    SwitchCharts,
     /// Удалить выделенную фигуру.
     FigDelete,
     /// Тоггл chart-алерта выделенной фигуры.
@@ -92,6 +97,9 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     }
     if p(&hk.draw_channel) {
         return Some(A::FigTool(FigureTool::Channel));
+    }
+    if p(&hk.switch_figure) {
+        return Some(A::SwitchFigure);
     }
     if p(&hk.fig_delete) {
         return Some(A::FigDelete);
@@ -144,19 +152,20 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     if p(&hk.new_short) {
         return Some(A::NewShort);
     }
+    if p(&hk.switch_charts) {
+        return Some(A::SwitchCharts);
+    }
 
     // Распознаём остальные назначенные действия, но backend-путь пока не подключён.
     // make_shot ставит moon-shot — в moonproto нет команды постановки его по цене (это
     // strategy-тип ордера), поэтому отложен; прочие ждут своих команд/семантики.
-    const TODO: [(&str, fn(&HotkeysConfig) -> &str); 16] = [
+    const TODO: [(&str, fn(&HotkeysConfig) -> &str); 14] = [
         ("reload_book", |h| &h.reload_book),
         ("reload_chart", |h| &h.reload_chart),
         ("make_shot", |h| &h.make_shot),
         ("make_shot_bot", |h| &h.make_shot_bot),
         ("spy_mode", |h| &h.spy_mode),
         ("show_charts", |h| &h.show_charts),
-        ("switch_charts", |h| &h.switch_charts),
-        ("switch_figure", |h| &h.switch_figure),
         ("fit_sells", |h| &h.fit_sells),
         ("broadcast", |h| &h.broadcast),
         ("shift_buy_up", |h| &h.shift_buy_up),
@@ -197,6 +206,14 @@ pub fn apply(
                 b.fig_tool = tool;
                 b.fig_draw_mode = true;
             }
+            bcx.notify();
+            true
+        }
+        A::SwitchFigure => {
+            // Листаем инструмент по кругу и держим режим рисования включённым (как «смена
+            // фигуры» в MoonBot). Повтор хоткея → следующий инструмент; выход — Esc/повтор его же.
+            b.fig_tool = b.fig_tool.next();
+            b.fig_draw_mode = true;
             bcx.notify();
             true
         }
@@ -297,9 +314,10 @@ pub fn apply(
             }
             None => false,
         },
-        // Масштаб и постановка по курсору — забота вызывающего окна: масштаб свой у каждого
-        // окна, а цену ордера знает только чарт под курсором (`Backend::hovered_chart`).
-        A::ScalePlus | A::ScaleMinus | A::NewLong | A::NewShort => false,
+        // Масштаб, постановка по курсору и переключение активного чарта — забота вызывающего
+        // окна: масштаб/активный чарт свои у каждого окна (rev-механизм группы), а цену ордера
+        // знает только чарт под курсором (`Backend::hovered_chart`).
+        A::ScalePlus | A::ScaleMinus | A::NewLong | A::NewShort | A::SwitchCharts => false,
         A::Todo(name) => {
             log::debug!("hotkey '{name}' распознан, но backend-путь ещё не подключён");
             true

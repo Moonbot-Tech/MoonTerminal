@@ -96,6 +96,22 @@ pub enum FigureTool {
     Channel,
 }
 
+impl FigureTool {
+    /// Все инструменты по порядку (для циклического переключения хоткеем «смена фигуры»).
+    pub const ALL: [FigureTool; 4] = [
+        FigureTool::HLine,
+        FigureTool::Segment,
+        FigureTool::Triangle,
+        FigureTool::Channel,
+    ];
+
+    /// Следующий инструмент по кругу — хоткей `switch_figure` листает HLine→Segment→…→HLine.
+    pub fn next(self) -> FigureTool {
+        let i = Self::ALL.iter().position(|&t| t == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+}
+
 /// Стиль линии (соответствует «Kind» MoonBot и Delphi `TPenStyle` в blob @13):
 /// Solid=0, Dash=1, Dot=2, DashDot=3, DashDotDot=4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

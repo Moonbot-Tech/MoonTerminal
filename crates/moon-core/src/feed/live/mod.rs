@@ -502,6 +502,9 @@ pub fn run(
             let mut logs: Vec<CoreLogLine> = Vec::new();
             // Снимок для полей стратегии-источника детекта (SoundAlert/KeepAlert/звук).
             let detect_snap = want_detects.then(|| client.snapshot()).flatten();
+            // Схема стратегий — для фолбэка на default_value: поля, равные дефолту
+            // схемы, сервер не шлёт (в т.ч. звук/SoundAlert).
+            let detect_schema = detect_snap.as_ref().and_then(|s| s.strats().strategy_schema());
             for ev in &events {
                 match ev {
                     Event::ServerLog(l) if want_log => {
@@ -519,11 +522,21 @@ pub fn run(
                     Event::Detect(d)
                         if server.feed.detects || (server.feed.alerts && d.is_alert_fire()) =>
                     {
-                        let params = detect_snap
+                        let strat = detect_snap
                             .as_ref()
-                            .and_then(|s| s.strats().snapshot(d.strategy_id))
-                            .map(alert_params)
+                            .and_then(|s| s.strats().snapshot(d.strategy_id));
+                        let params = strat
+                            .map(|st| alert_params(st, detect_schema))
                             .unwrap_or_default();
+                        crate::detect_diag::line(&format!(
+                            "[feed] detect market={} strat_id={} strat_found={} sound_alert={} sound={:?} is_alert={}",
+                            d.market_name,
+                            d.strategy_id,
+                            strat.is_some(),
+                            params.sound_alert,
+                            params.sound_name,
+                            d.is_alert_fire(),
+                        ));
                         detect_seq += 1;
                         detects.push(DetectRow {
                             seq: detect_seq,

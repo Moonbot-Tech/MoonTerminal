@@ -31,17 +31,47 @@ const SOUND_STEMS: &[&str] = &[
     "gold", "hallo", "letsrock", "milord", "pfiff", "ringin", "ringout", "turnon", "yes_mast",
 ];
 
+/// Нормализует значение поля к стему звука: трим/нижний регистр + срез расширения
+/// (MoonBot хранит имя и как «BABYTOY», и как «BABYTOY.wav»). Не звук → None.
+fn sound_stem(val: &str) -> Option<String> {
+    let low = val.trim().to_ascii_lowercase();
+    let stem = low.strip_suffix(".wav").unwrap_or(&low);
+    SOUND_STEMS.contains(&stem).then(|| stem.to_string())
+}
+
 /// Ищет в полях стратегии значение-строку, совпадающее со стемом звука.
 fn sound_name_of(s: &StrategySnapshot) -> Option<String> {
     for (_, v) in s.fields.iter() {
         if let FieldValue::String(val) = v {
-            let low = val.trim().to_ascii_lowercase();
-            if !low.is_empty() && SOUND_STEMS.contains(&low.as_str()) {
-                return Some(low);
+            if let Some(stem) = sound_stem(val) {
+                return Some(stem);
             }
         }
     }
     None
+}
+
+/// Алерт-дефолты из СХЕМЫ для вида стратегии: (SoundAlert, звук). Сервер НЕ шлёт
+/// поля, значение которых равно дефолту схемы (та же грабля, что у остальных полей
+/// стратегий) — стратегия с ДЕФОЛТНЫМ звуком приходит вовсе без поля звука, и скан
+/// снапшота его не видит. Достаём из default_value полей схемы этого вида.
+fn schema_alert_defaults(schema: &StrategySchema, s: &StrategySnapshot) -> (Option<bool>, Option<String>) {
+    let mut sound_alert = None;
+    let mut sound = None;
+    for sec in schema.editor_sections_for_strategy_kind(s.kind()) {
+        for f in &sec.fields {
+            match (f.name.as_str(), f.default_value.as_ref()) {
+                ("SoundAlert", Some(FieldValue::Bool(b))) => sound_alert = Some(*b),
+                (_, Some(FieldValue::String(sv))) => {
+                    if sound.is_none() {
+                        sound = sound_stem(sv);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (sound_alert, sound)
 }
 
 /// Целочисленное значение поля стратегии (AddToChart/KeepInChart/KeepAlert) —
@@ -61,13 +91,26 @@ fn field_secs_or(s: &StrategySnapshot, name: &str, default: u32) -> u32 {
     }
 }
 
-pub(super) fn alert_params(s: &StrategySnapshot) -> AlertParams {
+pub(super) fn alert_params(s: &StrategySnapshot, schema: Option<&StrategySchema>) -> AlertParams {
+    let (def_sound_alert, def_sound) = schema
+        .map(|sc| schema_alert_defaults(sc, s))
+        .unwrap_or((None, None));
+    // SoundAlert: поле в снапшоте есть → его значение; отсутствует → это значит
+    // «равно дефолту схемы» (сервер такие не шлёт) → берём дефолт схемы.
+    let sound_alert = if s.fields.get("SoundAlert").is_some() {
+        s.field_bool_or_false("SoundAlert")
+    } else {
+        def_sound_alert.unwrap_or(false)
+    };
+    // Звук: явное поле снапшота; иначе при включённом SoundAlert — дефолт схемы
+    // (поле-звук со значением = дефолту тоже не шлётся).
+    let sound_name = sound_name_of(s).or(if sound_alert { def_sound } else { None });
     AlertParams {
-        sound_alert: s.field_bool_or_false("SoundAlert"),
+        sound_alert,
         keep_alert_secs: field_secs_or(s, "KeepAlert", 60),
         add_to_chart: field_secs_or(s, "AddToChart", 0),
         keep_in_chart_secs: field_secs_or(s, "KeepInChart", 60),
-        sound_name: sound_name_of(s),
+        sound_name,
     }
 }
 
