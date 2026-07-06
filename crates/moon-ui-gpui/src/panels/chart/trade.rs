@@ -110,6 +110,14 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
+        // Анти-ордер дебаунс: только что закрыли график крестиком → второй клик даблклика
+        // по «×» ОС засчитывает как даблклик уже по новому фулскрин-графику. Клики постановки
+        // в окне подавления игнорируем (иначе случайный ордер при быстром закрытии вкладок).
+        if moon_chart::paint::now_unix_ms() - self.last_pane_close_ms
+            < super::ORDER_SUPPRESS_MS
+        {
+            return false;
+        }
         // Сторона ордера — из мышиного жеста конфига (buy_set/short_set). Не наш жест → не ордер.
         let short = {
             let b = self.backend.read(cx);

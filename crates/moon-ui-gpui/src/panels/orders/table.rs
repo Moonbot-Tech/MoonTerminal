@@ -187,18 +187,32 @@ fn side_label(r: &OrderRow) -> (String, MoonTone) {
 /// `sell_price` — это ВЫХОДНАЯ нога/цель (для шорта — цель профита НИЖЕ входа), брать её
 /// как «вход» шорта было багом: PnL считался от цены выхода, а не входа, и расходился с
 /// «Активами» (напр. VELVET: −3.96 от sell_price против ≈0 от pos_price).
+/// Количество в позиции для расчёта PnL. В позиции (вход исполнен ЛИБО активна выходная
+/// нога — ордер продажи из удерживаемого актива, где `fill_pct=0`) берём остаток выходной
+/// ноги (`remaining_size`), иначе исполненную часть входа (`size·fill_pct`). `None` — нет
+/// позиции (гейтил `fill_pct=0` для listing-sell/MoonHook → PnL показывался «–»).
+fn position_qty(r: &OrderRow) -> Option<f64> {
+    let qty = if r.filled {
+        if r.remaining_size > 0.0 {
+            r.remaining_size
+        } else {
+            r.size
+        }
+    } else {
+        r.size * (r.fill_pct as f64) / 100.0
+    };
+    (qty > 0.0).then_some(qty)
+}
+
 fn order_pnl(r: &OrderRow) -> Option<f64> {
-    let filled_qty = r.size * (r.fill_pct as f64) / 100.0;
-    if filled_qty <= 0.0 {
-        return None;
-    }
+    let qty = position_qty(r)?;
     let entry = r.buy_price;
     let mark = r.price as f64;
     if entry <= 0.0 || mark <= 0.0 {
         return None;
     }
     let dir = if r.is_short { -1.0 } else { 1.0 };
-    Some((mark - entry) * filled_qty * dir)
+    Some((mark - entry) * qty * dir)
 }
 
 /// PnL-ячейка: colored delta (зелёный/красный, со знаком), `–` если позиции нет.
@@ -226,10 +240,7 @@ fn pnl_cell(r: &OrderRow) -> MoonDataCell {
 /// `None` по тем же условиям, что и [`order_pnl`] (нет исполнения / нет входной цены).
 /// Вход = `buy_price` для обоих направлений (см. [`order_pnl`]).
 fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
-    let filled_qty = r.size * (r.fill_pct as f64) / 100.0;
-    if filled_qty <= 0.0 {
-        return None;
-    }
+    position_qty(r)?; // тот же гейт «в позиции», что и у order_pnl
     let entry = r.buy_price;
     let mark = r.price as f64;
     if entry <= 0.0 || mark <= 0.0 {

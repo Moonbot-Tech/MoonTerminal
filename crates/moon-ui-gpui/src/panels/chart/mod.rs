@@ -183,8 +183,17 @@ pub struct ChartPanel {
     /// ПКМ-down открыл контекстное меню ордера → следующий ПКМ-up НЕ должен сработать
     /// (иначе родитель Main-стека воспримет его как «возврат из фулскрина» и т.п.).
     suppress_rmb_up: bool,
+    /// Время (unix ms) последнего закрытия пейна кнопкой «×». Анти-ордер дебаунс: при
+    /// закрытии фулскрин-графика на его место встаёт следующий, и второй быстрый клик по
+    /// «×» ОС засчитывает как даблклик уже по новому чарту → случайный ордер. Клики
+    /// постановки в течение `ORDER_SUPPRESS_MS` после закрытия игнорируем. 0 = давно.
+    last_pane_close_ms: f64,
     focus: FocusHandle,
 }
+
+/// Окно подавления постановки ордера после закрытия пейна (мс). ≥ OS double-click time,
+/// чтобы поймать второй клик даблклика по «×», прилетевший уже на новый фулскрин-график.
+const ORDER_SUPPRESS_MS: f64 = 500.0;
 
 impl ChartPanel {
     fn sync_orders_from_backend_notify(&mut self, cx: &mut Context<Self>) -> bool {
@@ -335,6 +344,7 @@ impl ChartPanel {
             fig_hover: None,
             fig_drag: None,
             suppress_rmb_up: false,
+            last_pane_close_ms: 0.0,
             focus: cx.focus_handle(),
         }
     }
@@ -447,6 +457,7 @@ impl ChartPanel {
             fig_hover: None,
             fig_drag: None,
             suppress_rmb_up: false,
+            last_pane_close_ms: 0.0,
             focus: cx.focus_handle(),
         }
     }
@@ -735,6 +746,9 @@ impl ChartPanel {
         let Some((core, market)) = self.chart.remove_pane(idx) else {
             return;
         };
+        // Анти-ордер дебаунс: закрыли график → следующий встаёт фулскрином, второй клик
+        // даблклика по «×» не должен поставить ордер на него.
+        self.last_pane_close_ms = moon_chart::paint::now_unix_ms();
         self.view_dirty = true;
         if !self.chart.uses_market(core, &market) {
             self.release_market_ref(core, &market, cx);

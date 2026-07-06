@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use moonproto::state::{Order, OrderTraceChartPoint, OrderTraceLine};
-use moonproto::{Event, MoonClient};
+use moonproto::{Event, MoonClient, OrderWorkerStatus};
 
 use crate::feed::report::{OrderIndex, OrderMeta};
 use crate::feed::strategies::strat_kind_name;
@@ -319,7 +319,27 @@ fn build_order_row(
         .as_ref()
         .map(|m| m.contract_size())
         .unwrap_or(1.0);
+    // «В позиции» = держим позицию, для которой считаем PnL и рисуем линии. Сигнал —
+    // авторитетная ФАЗА воркера (moonproto), а не подгляд в `sell_order.quantity`:
+    // - `fill_pct > 0` — есть хоть какой-то филл ВХОДНОЙ ноги (buy_order). Покрывает ВСЁ с
+    //   buy-ногой: частичный вход (BuySet, filling), BuyDone, и вход шорта (у шорта вход
+    //   тоже в buy_order). Частично исполненный вход — позиция уже частично держится, PnL
+    //   на этой части корректен (кол-во берём от остатка выходной ноги).
+    // - `status == SellSet` — выход/тейк ВЫСТАВЛЕН. Единственный случай, который упускает
+    //   fill_pct — продажа из уже удерживаемого спот-актива (listing-sell/MoonHook): buy-ноги
+    //   нет → fill_pct=0, но ордер именно в фазе Sell. НЕ триггерим на BuySet (вход ещё
+    //   ждёт, fill_pct=0 → позиции нет) — до первого филла PnL/линий нет, как и должно.
+    // Sell-линия дополнительно гейтится `sell_price > 0` ниже, так что «нарисовать sell рано»
+    // невозможно: пока ядро не выставило sell-цену, линии выхода нет даже при in_position.
+    let in_position = fill_pct > 0.0 || o.status == OrderWorkerStatus::SellSet;
     let entry = if fill_pct > 0.0 && pos_price > 0.0 {
+        pos_price
+    } else if o.buy_price.is_finite() && o.buy_price > 0.0 {
+        o.buy_price
+    } else if in_position && pos_price > 0.0 {
+        // Sell из удерживаемого актива (listing-sell/MoonHook): входа через бота не было →
+        // `buy_price=0`. Цена входа = средняя цена позиции (как показывает MoonBot «Buy»).
+        // Без этого линия входа (`g(true, buy_price)`) и PnL не рисовались.
         pos_price
     } else {
         o.buy_price
@@ -414,7 +434,10 @@ fn build_order_row(
         fin(v).or_else(|| fin(bp.liq_price))
     });
     let pending = o.pending_buy_cond_price.is_some();
-    let filled = fill_pct > 0.0;
+    // `filled` (позиция держится, гейт sell-линии/стопов/TP/liq и PnL) = `in_position`
+    // (см. определение выше: fill_pct>0 либо фаза SellSet). Без этого продажа из удерживаемого
+    // актива (fill_pct=0) не показывала ни линий, ни PnL, хотя в MoonBot всё есть.
+    let filled = in_position;
     let create_time_ms = moon_time_to_unix_millis_f64(o.buy_order.create_time());
     // Фолбэк-индикатор: SL/TS/VStop включены в СТРАТЕГИИ ордера (по `strat_id`), если
     // per-order флаг не выставлен. Имена полей — Delphi-имена MoonBot (подтверждены строками
