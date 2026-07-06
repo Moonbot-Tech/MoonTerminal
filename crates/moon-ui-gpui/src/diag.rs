@@ -94,7 +94,8 @@ diag_counters!(
     ASSETS_RENDER => "assets_render",
     // Ребилд скринера (полный проход по всем рынкам): >0 = окно скринера открыто.
     SCREENER_REBUILD => "screener_rebuild",
-    // Проход play_detect_sounds по детектам всех ядер (каждое пробуждение дренажа).
+    // Реальные сканы детектов ядра в play_detect_sounds (после гейта по detects_rev).
+    // До гейта = частота пробуждений дренажа (~250/с), после — только на новые детекты.
     DETECT_SCAN => "detect_scan",
     // sync_orders_from_backend_notify в observe чарт-панелей (× число открытых чартов).
     CHART_ORDER_SYNC => "chart_order_sync",

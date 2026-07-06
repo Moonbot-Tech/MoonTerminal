@@ -689,10 +689,18 @@ pub fn run(
             }
         }
 
-        // Активы ядра (окно «Активы»): по domain event, не чаще ~1 Гц. Цены живут от
-        // рынка, поэтому снимок шлём целиком каждую секунду (UI гейтит перерисовку
-        // секундным ведром по assets_rev). Transfer-активы — лишь при смене revision.
-        if had_domain_event && last_assets.elapsed() >= Duration::from_secs(1) {
+        // Активы ядра (окно «Активы»): по domain event, не чаще ~1 Гц при живом окне.
+        // Без окна снапшот всё равно нужен (баланс шапки, метрика плеча читают
+        // global/leverage), но полный ребилд по всем рынкам ×N ядер каждую секунду —
+        // лишний фон; сбавляем до 1 раза в 5 с. Цены живут от рынка, поэтому снимок
+        // шлём целиком (UI гейтит перерисовку секундным ведром по assets_rev).
+        // Transfer-активы — лишь при смене revision.
+        let assets_every = if crate::feed::assets_view_active() {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_secs(5)
+        };
+        if had_domain_event && last_assets.elapsed() >= assets_every {
             last_assets = Instant::now();
             if let Some(snap) = client.snapshot() {
                 // Базовая валюта аккаунта (USDT/BTC/…) — нужна для корректного пересчёта

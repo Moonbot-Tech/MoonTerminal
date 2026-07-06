@@ -24,6 +24,32 @@ use crate::market::SharedMarketStore;
 pub type FeedRx = Receiver<FeedMsg>;
 pub type FeedWakeTx = Sender<()>;
 
+/// Метка «окно "Активы" недавно рендерилось» (unix ms). Штампует UI из рендера
+/// AssetsView; feed-потоки по ней выбирают темп полного `build_assets`: 1 Гц при
+/// живом окне, 5 с без него (снапшот всё равно нужен всегда — баланс шапки и
+/// метрика плеча читают `assets.global`/`assets.leverage`). Метка self-healing:
+/// окно закрыли/спрятали → рендеров нет → штамп стареет → медленный темп; сигнал
+/// «закрылось» не нужен. Глобальная, т.к. окно «Активы» одно на процесс.
+static ASSETS_VIEW_RENDER_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn unix_ms_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Отметить рендер окна «Активы» (зовёт UI). Видимое окно рендерится ≥1 Гц
+/// (RenderGate панели), так что метка остаётся свежей, пока окно на экране.
+pub fn note_assets_view_render() {
+    ASSETS_VIEW_RENDER_MS.store(unix_ms_now(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Окно «Активы» рендерилось в последние ~3 с → его снапшот стоит обновлять часто.
+pub(crate) fn assets_view_active() -> bool {
+    unix_ms_now() - ASSETS_VIEW_RENDER_MS.load(std::sync::atomic::Ordering::Relaxed) < 3_000
+}
+
 #[derive(Clone, Default)]
 pub struct SharedMoonClient {
     inner: Arc<RwLock<Option<Arc<MoonClient>>>>,

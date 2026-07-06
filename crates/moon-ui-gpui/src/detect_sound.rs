@@ -10,9 +10,17 @@ impl Backend {
     /// Курсор `last_detect_seq` защищает от повторов и от «залпа» на старте (первый
     /// визит ядра только сидирует курсор, без проигрывания).
     pub(crate) fn play_detect_sounds(&mut self) {
-        crate::diag::bump(&crate::diag::DETECT_SCAN);
         for (core, data) in self.session.store().cores() {
-            let cur_max = data.detects.iter().map(|d| d.seq).max().unwrap_or(0);
+            // Гейт по ревизии: дренаж будит нас сотнями раз/с, детекты меняются редко.
+            // Без изменений — не трогаем список вообще.
+            if self.last_detect_rev.get(&core) == Some(&data.detects_rev) {
+                continue;
+            }
+            self.last_detect_rev.insert(core, data.detects_rev);
+            crate::diag::bump(&crate::diag::DETECT_SCAN);
+            // seq — клиентский монотонный счётчик, детекты пушатся по возрастанию →
+            // максимум всегда в хвосте, полный проход не нужен.
+            let cur_max = data.detects.back().map(|d| d.seq).unwrap_or(0);
             let last = match self.last_detect_seq.get(&core) {
                 Some(v) => *v,
                 None => {

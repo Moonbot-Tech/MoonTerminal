@@ -386,14 +386,33 @@ impl RenderState {
                 // курсор ниже текущей цены → зелёный, выше → красный.
                 if cy_log >= plot_top && cy_log <= plot_bottom {
                     let cursor_price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
-                    let cur_col = cached_last_price
-                        .filter(|l| *l > 0.0)
-                        .map(|last| {
-                            pct_hsla(
-                                last - cursor_price,
-                                self.label_positive,
-                                self.label_negative,
-                            )
+                    // Опора % и цвета курсора — БЛИЖНЯЯ сторона стакана, НЕ last (как в MoonBot):
+                    // курсор ниже цены → лучший бид, выше → лучший аск. Расстояние считается от
+                    // цены исполнения на своей стороне книги — поэтому для лонга/шорта опора разная
+                    // (спред сдвигает %). Нет стакана/цены → фолбэк на last (прежнее поведение).
+                    let cursor_ref = cached_last_price.filter(|l| *l > 0.0).map(|last| {
+                        let levels = &self.panes[idx].orderbook_levels;
+                        let best_bid = levels
+                            .iter()
+                            .filter(|l| !l.is_ask)
+                            .map(|l| l.price)
+                            .fold(f32::NEG_INFINITY, f32::max);
+                        let best_ask = levels
+                            .iter()
+                            .filter(|l| l.is_ask)
+                            .map(|l| l.price)
+                            .fold(f32::INFINITY, f32::min);
+                        if cursor_price >= last {
+                            if best_ask.is_finite() { best_ask } else { last }
+                        } else if best_bid.is_finite() {
+                            best_bid
+                        } else {
+                            last
+                        }
+                    });
+                    let cur_col = cursor_ref
+                        .map(|r| {
+                            pct_hsla(r - cursor_price, self.label_positive, self.label_negative)
                         })
                         .unwrap_or(readout);
                     let right_x = zone_left + READOUT_PAD_X;
@@ -452,10 +471,11 @@ impl RenderState {
                             });
                         }
                     }
-                    // % отклонения курсора от текущей цены — правее разделителя, под линией.
-                    if let Some(last) = cached_last_price {
-                        if last > 0.0 {
-                            let pct = (cursor_price - last) / last * 100.0;
+                    // % отклонения курсора от опоры (ближняя сторона стакана) — правее
+                    // разделителя, под линией.
+                    if let Some(r) = cursor_ref {
+                        if r > 0.0 {
+                            let pct = (cursor_price - r) / r * 100.0;
                             let m = self.draw_label_text(
                                 ctx,
                                 &fmt_pct(pct),

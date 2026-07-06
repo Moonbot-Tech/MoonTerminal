@@ -259,6 +259,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             fig_selected: None,
             last_chart_alerts_activity: 0,
             last_detect_seq: std::collections::HashMap::new(),
+            last_detect_rev: std::collections::HashMap::new(),
             default_alert_sound: "ding1".to_string(),
             config_dirty: false,
             quitting: false,

@@ -297,6 +297,10 @@ struct Backend {
     last_chart_alerts_activity: u64,
     /// Курсор последнего проигранного детекта по ядру (звук детектов/алертов).
     last_detect_seq: std::collections::HashMap<CoreId, u64>,
+    /// Последняя виденная `detects_rev` по ядру — гейт `play_detect_sounds`: дренаж будит
+    /// сотни раз/с, а детекты меняются редко; без гейта скан списка (до 2000/ядро) шёл бы
+    /// на каждое пробуждение.
+    last_detect_rev: std::collections::HashMap<CoreId, u64>,
     /// Звук по умолчанию для срабатывания алерта без стратегии («Выбор звука» в панели
     /// «Алерты»). Стем wav; см. `sound`/`detect_sound`.
     default_alert_sound: String,

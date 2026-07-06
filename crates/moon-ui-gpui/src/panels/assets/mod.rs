@@ -641,6 +641,9 @@ impl Panel for AssetsView {
 impl Render for AssetsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::ASSETS_RENDER);
+        // Метка живости окна для feed-потоков: пока панель на экране (рендер ≥1 Гц от
+        // RenderGate), build_assets идёт 1 Гц; без рендеров метка стареет → 1 раз в 5 с.
+        moon_core::feed::note_assets_view_render();
         let cores = self.cached_cores.clone();
         let entries = self.cached_entries.clone();
         let p = MoonPalette::active(cx);
