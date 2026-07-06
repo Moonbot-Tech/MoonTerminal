@@ -139,6 +139,7 @@ impl ScreenerView {
 
     /// Пересобрать строки: сбор по группам ядер → оверлей ордеров → фильтры → сортировка.
     fn rebuild(&mut self, cx: &mut Context<Self>) {
+        crate::diag::bump(&crate::diag::SCREENER_REBUILD);
         let coin_filter = self.coin_input.read(cx).value().trim().to_uppercase();
         let min_vol = parse_vol(self.dvol_input.read(cx).value().trim());
 

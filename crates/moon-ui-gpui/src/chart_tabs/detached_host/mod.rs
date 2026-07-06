@@ -59,6 +59,10 @@ pub(super) struct DetachedChartHost {
     coin_query: String,
     /// Открыт ли список совпадений монеты.
     coin_popup_open: bool,
+    /// Фокус корня окна — чтобы хоткеи (`on_key_down`) ловились, когда ничего другого не
+    /// сфокусировано. Фокусируем на создании; клик в поле монеты уводит фокус, но клавиши
+    /// всплывают обратно к корню. Пока только Scale +/− (масштаб панели окна).
+    focus: FocusHandle,
 }
 
 impl DetachedChartHost {
@@ -235,6 +239,10 @@ impl DetachedChartHost {
             }
         })
         .detach();
+        // Фокус корня для хоткеев (масштаб): фокусируем сразу, чтобы Scale +/− работали
+        // без предварительного клика в тело окна.
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
         Self {
             panel,
             backend,
@@ -252,6 +260,70 @@ impl DetachedChartHost {
             coin_input,
             coin_query: String::new(),
             coin_popup_open: false,
+            focus,
+        }
+    }
+
+    /// Однозначная торговая цель окна откреплённого чарта: залоченный якорь сравнения либо
+    /// единственная монета окна. Многопанельное окно без якоря → `None` (цель неоднозначна,
+    /// торговые хоткеи пропускаем — не угадываем рынок).
+    fn window_target(&self, cx: &App) -> Option<(CoreId, String)> {
+        let p = self.panel.read(cx);
+        if let Some(anchor) = p.compare_anchor() {
+            return Some(anchor);
+        }
+        let mut coins = p.coins(cx);
+        if coins.len() == 1 {
+            return coins.pop();
+        }
+        None
+    }
+
+    /// Хоткей окна откреплённого чарта через ЕДИНЫЙ распознаватель [`crate::hotkeys`].
+    /// Масштаб — свой у панели этого окна (применяем напрямую, rev-механизм групп не при
+    /// чём). Торговые/фигурные действия — через общий `apply` относительно цели ЭТОГО окна
+    /// (`window_target`); фигуры — глобальное состояние, работают всегда.
+    fn on_hotkey(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        use crate::hotkeys::HotkeyAction;
+        let action = {
+            let b = self.backend.read(cx);
+            crate::hotkeys::resolve(ev, &b.preview.as_ref().unwrap_or(&b.config).hotkeys)
+        };
+        let Some(action) = action else {
+            return;
+        };
+        let handled = match action {
+            HotkeyAction::ScalePlus | HotkeyAction::ScaleMinus => {
+                let zoom_in = matches!(action, HotkeyAction::ScalePlus);
+                let next = crate::controls::step_scale(self.panel.read(cx).scale(), zoom_in);
+                self.panel.update(cx, |st, scx| st.set_scale(next, scx));
+                cx.notify();
+                true
+            }
+            // Ручной ордер по цене под курсором — через чарт под мышью (`hovered_chart`).
+            HotkeyAction::NewLong | HotkeyAction::NewShort => {
+                let short = matches!(action, HotkeyAction::NewShort);
+                let chart = self
+                    .backend
+                    .read(cx)
+                    .hovered_chart
+                    .clone()
+                    .and_then(|w| w.upgrade());
+                match chart {
+                    Some(chart) => chart.update(cx, |p, pcx| p.place_order_at_cursor(short, pcx)),
+                    None => false,
+                }
+            }
+            other => {
+                let target = self.window_target(cx);
+                let active_core = target.as_ref().map(|(c, _)| *c);
+                self.backend.update(cx, |b, bcx| {
+                    crate::hotkeys::apply(other, b, bcx, target.clone(), active_core)
+                })
+            }
+        };
+        if handled {
+            cx.stop_propagation();
         }
     }
 

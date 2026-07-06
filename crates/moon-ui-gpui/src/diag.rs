@@ -82,6 +82,24 @@ diag_counters!(
     FIRETEST_MOUSE_POST_FAIL => "firetest_mouse_post_fail",
     FIRETEST_TEXT_DRAW => "firetest_text_draw",
     FIRETEST_TEXT_COLD => "firetest_text_cold",
+    // Расследование фонового CPU (2026-07): счётчики «кто просыпается без изменившегося
+    // входа». Hz каждого = частота срабатывания; вместе с контекстом строки (cpu/окна/чарты)
+    // видно, ЧТО было открыто и ЧТО тикало в момент роста CPU.
+    // 1Гц-таймер часов шапки: Hz ≈ числу открытых Shell-окон (по таймеру на окно).
+    CLOCK_NOTIFY => "clock_notify",
+    // Снапшоты «Активов», собранные feed-потоками (дельта assets_rev по всем ядрам).
+    // assets_apply > 0 при закрытом окне Активов = работа без потребителя.
+    ASSETS_APPLY => "assets_apply",
+    // Рендер окна «Активы»: >0 = окно открыто и перерисовывается.
+    ASSETS_RENDER => "assets_render",
+    // Ребилд скринера (полный проход по всем рынкам): >0 = окно скринера открыто.
+    SCREENER_REBUILD => "screener_rebuild",
+    // Проход play_detect_sounds по детектам всех ядер (каждое пробуждение дренажа).
+    DETECT_SCAN => "detect_scan",
+    // sync_orders_from_backend_notify в observe чарт-панелей (× число открытых чартов).
+    CHART_ORDER_SYNC => "chart_order_sync",
+    // Самопере-армящийся 1Гц таймер компакции чарт-стека (× число стеков с графиками).
+    COMPACT_TICK => "compact_tick",
 );
 
 #[derive(Clone, Debug)]
@@ -173,9 +191,15 @@ pub fn format_sample(elapsed_ms: f64, sample: &[DiagRate]) -> String {
     line
 }
 
-pub fn write_sample(elapsed_ms: f64, sample: &[DiagRate]) {
+/// `ctx` — контекст момента (cpu процесса/системы, число окон/чартов): пишется в начало
+/// строки, чтобы по логу было видно, что было открыто и сколько CPU это стоило.
+pub fn write_sample(elapsed_ms: f64, sample: &[DiagRate], ctx: &str) {
     use std::io::Write;
-    let line = format_sample(elapsed_ms, sample);
+    let mut line = format_sample(elapsed_ms, sample);
+    if !ctx.is_empty() {
+        let head_end = line.find(']').map(|i| i + 1).unwrap_or(0);
+        line.insert_str(head_end, &format!(" {ctx}"));
+    }
     log::info!("{line}");
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)

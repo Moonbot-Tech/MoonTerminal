@@ -450,6 +450,18 @@ pub(super) fn hover(
     _window: &mut Window,
     _cx: &mut Context<ChartPanel>,
 ) {
+    // Отметить/снять «чарт под курсором» для курсор-зависимых хоткеев (new_long/new_short).
+    // Enter/leave — редкое событие (не на каждый пиксель), backend без notify → без рендера.
+    let self_id = _cx.entity_id();
+    let weak = _cx.entity().downgrade();
+    let hov = *hovered;
+    this.backend.update(_cx, |b, _| {
+        if hov {
+            b.hovered_chart = Some(weak);
+        } else if b.hovered_chart.as_ref().map(|w| w.entity_id()) == Some(self_id) {
+            b.hovered_chart = None;
+        }
+    });
     if !*hovered {
         let had_order_drag = this.order_drag.take().is_some();
         let had_order_hover = this.order_hover.take().is_some();

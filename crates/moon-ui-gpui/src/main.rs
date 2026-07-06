@@ -37,6 +37,7 @@ mod dock_persist;
 mod figures_backend;
 mod firetest;
 mod group_window;
+mod hotkeys;
 mod icons;
 mod input;
 mod panels;
@@ -287,6 +288,10 @@ struct Backend {
     /// Выделенная фигура (ядро, монета, id) — одна на приложение: подсветка+узлы на
     /// чарте, хоткеи удаления/алерта работают по ней из Shell.
     fig_selected: Option<(CoreId, String, u64)>,
+    /// Чарт-панель ПОД КУРСОРОМ (одна на приложение) — ставится/снимается на её `on_hover`
+    /// (enter/leave, редко). Курсор-зависимые хоткеи (new_long/new_short) через неё ставят
+    /// ордер по цене под мышью, не завися от фокуса. Weak: панель может исчезнуть.
+    hovered_chart: Option<WeakEntity<crate::panels::ChartPanel>>,
     /// Последняя виденная суммарная ревизия серверных chart-алертов (гейт реконсиляции
     /// remote-фигур в дренаж-пути).
     last_chart_alerts_activity: u64,

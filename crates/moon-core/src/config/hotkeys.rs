@@ -328,20 +328,24 @@ fn default_manual_strategy_keys() -> [String; MANUAL_STRATEGY_KEYS] {
     std::array::from_fn(|_| String::new())
 }
 
+// Дефолты с модификатором используют `secondary-` — gpui `Keystroke::parse` резолвит его
+// в Ctrl на Windows/Linux и в Cmd на macOS (на этапе компиляции). Поведение на Windows не
+// меняется (было `ctrl-`), а на Mac хоткеи становятся Cmd-* как в маковской конвенции / MB.
+// Клавиши без модификатора (F-клавиши, delete) остаются как есть.
 fn default_draw_hline() -> String {
-    "ctrl-h".into()
+    "secondary-h".into()
 }
 
 fn default_draw_segment() -> String {
-    "ctrl-l".into()
+    "secondary-l".into()
 }
 
 fn default_draw_triangle() -> String {
-    "ctrl-t".into()
+    "secondary-t".into()
 }
 
 fn default_draw_channel() -> String {
-    "ctrl-k".into()
+    "secondary-k".into()
 }
 
 fn default_fig_delete() -> String {
@@ -349,35 +353,35 @@ fn default_fig_delete() -> String {
 }
 
 fn default_fig_alert() -> String {
-    "ctrl-b".into()
+    "secondary-b".into()
 }
 
 fn default_make_shot() -> String {
-    "ctrl-f10".into()
+    "secondary-f10".into()
 }
 
 fn default_make_shot_bot() -> String {
-    "ctrl-f12".into()
+    "secondary-f12".into()
 }
 
 fn default_reload_chart() -> String {
-    "ctrl-r".into()
+    "secondary-r".into()
 }
 
 fn default_scale_plus() -> String {
-    "ctrl-q".into()
+    "secondary-q".into()
 }
 
 fn default_scale_minus() -> String {
-    "ctrl-w".into()
+    "secondary-w".into()
 }
 
 fn default_sell_plus() -> String {
-    "ctrl-1".into()
+    "secondary-1".into()
 }
 
 fn default_sell_minus() -> String {
-    "ctrl-2".into()
+    "secondary-2".into()
 }
 
 fn default_spy_mode() -> String {
@@ -389,19 +393,19 @@ fn default_show_charts() -> String {
 }
 
 fn default_switch_figure() -> String {
-    "ctrl-f".into()
+    "secondary-f".into()
 }
 
 fn default_fit_sells() -> String {
-    "ctrl-s".into()
+    "secondary-s".into()
 }
 
 fn default_panic_sell_one() -> String {
-    "ctrl-f1".into()
+    "secondary-f1".into()
 }
 
 fn default_cancel_all_buys() -> String {
-    "ctrl-delete".into()
+    "secondary-delete".into()
 }
 
 fn default_left_double() -> MouseGestureBinding {

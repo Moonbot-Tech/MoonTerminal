@@ -3,8 +3,6 @@
 
 use gpui::*;
 
-use moon_core::feed::ClientSettingsEdit;
-
 use super::Shell;
 use crate::controls;
 
@@ -99,114 +97,56 @@ impl Shell {
         });
     }
 
-    /// Обработка хоткея корня окна: F1-F6 = выбрать пресет размера активного ядра; S1-S6 =
-    /// задействовать fixed-sell слот (гасит TP); cancel_buy — отмена покупок Main. Гасит событие,
-    /// если хоткей совпал.
+    /// Обработка хоткея корня окна группы через ЕДИНЫЙ распознаватель [`crate::hotkeys`].
+    /// Таргет торговых действий — рынок фуллскрин-чарта группы (`main_chart_target`),
+    /// активное ядро — `active_trade_core`. Масштаб идёт через rev-механизм группы (свой,
+    /// не через `apply`). Гасит событие, если хоткей совпал.
     pub(super) fn on_hotkey(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        use crate::hotkeys::HotkeyAction;
+        let action = {
+            let b = self.backend.read(cx);
+            let hk = &b.preview.as_ref().unwrap_or(&b.config).hotkeys;
+            crate::hotkeys::resolve(ev, hk)
+        };
+        let Some(action) = action else {
+            return;
+        };
         let group = self.group.clone();
-        let handled = self.backend.update(cx, |b, bcx| {
-            // Фаза 1 (только чтение cfg): какой хоткей совпал. Сравниваем нажатую
-            // клавишу с каждым настроенным сочетанием (gpui Keystroke).
-            let (size_ix, sell_ix, is_cancel, fig_tool, is_fig_delete, is_escape, is_fig_alert) = {
-                let cfg = b.preview.as_ref().unwrap_or(&b.config);
-                // Сравниваем ТОЛЬКО modifiers+key: event на Windows несёт ещё и
-                // key_char (напечатанный символ), которого у Keystroke::parse нет —
-                // полное `==` из-за этого никогда не совпадает для буквенных клавиш
-                // (F-клавиши работали случайно: у них key_char=None с обеих сторон).
-                let pressed = |raw: &str| {
-                    let raw = raw.trim();
-                    !raw.is_empty()
-                        && matches!(
-                            Keystroke::parse(raw),
-                            Ok(k) if k.modifiers == ev.keystroke.modifiers
-                                && k.key == ev.keystroke.key
-                        )
-                };
-                let size_ix = cfg.hotkeys.order_size.iter().position(|r| pressed(r));
-                let sell_ix = cfg.hotkeys.sell_preset.iter().position(|r| pressed(r));
-                use moon_core::figures::FigureTool;
-                let fig_tool = if pressed(&cfg.hotkeys.draw_hline) {
-                    Some(FigureTool::HLine)
-                } else if pressed(&cfg.hotkeys.draw_segment) {
-                    Some(FigureTool::Segment)
-                } else if pressed(&cfg.hotkeys.draw_triangle) {
-                    Some(FigureTool::Triangle)
-                } else if pressed(&cfg.hotkeys.draw_channel) {
-                    Some(FigureTool::Channel)
-                } else {
-                    None
-                };
-                (
-                    size_ix,
-                    sell_ix,
-                    pressed(&cfg.hotkeys.cancel_buy),
-                    fig_tool,
-                    pressed(&cfg.hotkeys.fig_delete),
-                    ev.keystroke.key == "escape" && ev.keystroke.modifiers == Modifiers::default(),
-                    pressed(&cfg.hotkeys.fig_alert),
-                )
-            };
-            // Слой рисования: хоткей инструмента выбирает его И включает режим-карандаш
-            // (повтор того же инструмента в активном режиме — выключает). Esc выключает
-            // режим. fig_delete/fig_alert работают по выделенной фигуре. До торговых веток.
-            if let Some(tool) = fig_tool {
-                if b.fig_draw_mode && b.fig_tool == tool {
-                    b.fig_draw_mode = false;
-                } else {
-                    b.fig_tool = tool;
-                    b.fig_draw_mode = true;
-                }
-                bcx.notify();
-                return true;
-            }
-            if is_escape && b.fig_draw_mode {
-                b.fig_draw_mode = false;
-                bcx.notify();
-                return true;
-            }
-            if is_fig_alert && b.toggle_selected_figure_alert() {
-                bcx.notify();
-                return true;
-            }
-            if is_fig_delete {
-                if let Some((core, market, id)) = b.fig_selected.clone() {
-                    b.remove_figure(core, &market, id);
-                    bcx.notify();
-                    return true;
-                }
-            }
-            // Фаза 2 (мутация): F1-F6 = выбрать пресет размера активного ядра; S1-S6 =
-            // задействовать fixed-sell слот (гасит TP); cancel_buy — отмена покупок Main.
-            if let Some(i) = size_ix {
-                match b.active_trade_core(&group) {
-                    Some(core) => {
-                        b.order_size_sel.insert(core, i);
-                        b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                        bcx.notify();
-                        true
-                    }
-                    None => false,
-                }
-            } else if let Some(i) = sell_ix {
-                match b.active_trade_core(&group) {
-                    Some(core) => {
-                        if let Err(error) = b.session.edit_client_settings(
-                            core,
-                            ClientSettingsEdit::SelectFixedSellSlot(i + 1),
-                        ) {
-                            log::warn!("hotkey select fixed-sell slot failed: {error}");
-                        }
-                        true
-                    }
-                    None => false,
-                }
-            } else if is_cancel {
-                b.cancel_buy_for_main_chart(&group);
+        let handled = match action {
+            // Масштаб Y активной вкладки группы: листаем ступень и командуем ИМЕННО этой
+            // группе (price_scale_group=group) — её ChartTabs применит к активной панели
+            // (sig.rs сворачивает rev только для своей группы).
+            HotkeyAction::ScalePlus | HotkeyAction::ScaleMinus => {
+                let zoom_in = matches!(action, HotkeyAction::ScalePlus);
+                self.backend.update(cx, |b, _| {
+                    let next = crate::controls::step_scale(b.price_scale, zoom_in);
+                    b.price_scale = next;
+                    b.price_scale_group = Some(group.clone());
+                    b.price_scale_rev = b.price_scale_rev.wrapping_add(1);
+                });
                 true
-            } else {
-                false
             }
-        });
+            // Ручной ордер по цене под курсором: ставит чарт под мышью (`hovered_chart`) —
+            // цену знает только он. Работает независимо от того, какое окно в фокусе.
+            HotkeyAction::NewLong | HotkeyAction::NewShort => {
+                let short = matches!(action, HotkeyAction::NewShort);
+                let chart = self
+                    .backend
+                    .read(cx)
+                    .hovered_chart
+                    .clone()
+                    .and_then(|w| w.upgrade());
+                match chart {
+                    Some(chart) => chart.update(cx, |p, pcx| p.place_order_at_cursor(short, pcx)),
+                    None => false,
+                }
+            }
+            other => self.backend.update(cx, |b, bcx| {
+                let target = b.main_chart_target(&group);
+                let active_core = b.active_trade_core(&group);
+                crate::hotkeys::apply(other, b, bcx, target, active_core)
+            }),
+        };
         if handled {
             cx.stop_propagation();
         }

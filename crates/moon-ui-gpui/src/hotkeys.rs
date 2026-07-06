@@ -1,0 +1,308 @@
+//! Единый распознаватель+исполнитель хоткеев для ВСЕХ окон (главное окно группы,
+//! выносные окна чартов). Раньше матчинг клавиш жил россыпью `pressed()` только в
+//! `Shell::on_hotkey`, из-за чего половина настроенных хоткеев в рантайме не работала,
+//! а выносные окна не ловили ничего. Теперь одно место:
+//!
+//! - [`resolve`] превращает нажатие + конфиг в семантическое [`HotkeyAction`]
+//!   (сравнение `modifiers`+`key`, НЕ полный `==Keystroke` — см. [[keystroke-eq-pitfall]]);
+//! - [`apply`] исполняет действие относительно ПЕРЕДАННОГО таргета (активное ядро / рынок
+//!   активного чарта окна) — так каждое окно работает со своим контекстом. Масштаб (`Scale`)
+//!   `apply` не трогает: он свой у каждого окна (rev-механизм группы vs панель выносного окна),
+//!   поэтому вызывающий обрабатывает его сам.
+//!
+//! Кросс-платформенность: дефолты хранятся как `secondary-*` (gpui резолвит в Ctrl на
+//! Windows/Linux и Cmd на macOS), так что назначения из коробки работают на обеих ОС.
+
+use gpui::{Context, KeyDownEvent, Keystroke, Modifiers};
+use moon_core::config::HotkeysConfig;
+use moon_core::feed::ClientSettingsEdit;
+use moon_core::figures::FigureTool;
+use moon_core::session::CoreId;
+
+use crate::Backend;
+
+/// Семантическое действие хоткея (независимо от конкретной клавиши в конфиге).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HotkeyAction {
+    /// Выбрать пресет размера ордера F1-F6 активного ядра.
+    OrderSize(usize),
+    /// Задействовать fixed-sell слот S1-S6 (гасит TP).
+    SellPreset(usize),
+    /// Отменить ожидающие buy-ордера рынка активного чарта.
+    CancelBuy,
+    /// Отменить ВСЕ ожидающие buy-ордера активного ядра (по всем рынкам).
+    CancelAllBuys,
+    /// Тоггл «паник-селл» по рынку активного чарта.
+    PanicSell,
+    /// Немедленно закрыть позицию рынка активного чарта по рынку (market sell).
+    PanicSellOne,
+    /// Объединить sell-ордера рынка активного чарта (по стороне позиции).
+    JoinSells,
+    /// Разбить sell-ордер рынка активного чарта на части.
+    SplitOrder,
+    /// Поставить ручной ордер по цене ПОД КУРСОРОМ на чарте (long/short). Исполняет
+    /// вызывающее окно через чарт под курсором (`Backend::hovered_chart`) — цену знает
+    /// только сам чарт (пиксель Y → цена пейна).
+    NewLong,
+    NewShort,
+    /// Выбрать/тогать инструмент рисования (слой фигур — глобальное состояние).
+    FigTool(FigureTool),
+    /// Удалить выделенную фигуру.
+    FigDelete,
+    /// Тоггл chart-алерта выделенной фигуры.
+    FigAlert,
+    /// Выйти из режима рисования (Esc).
+    ExitDraw,
+    /// Масштаб Y — зум внутрь. Исполняет вызывающее окно (свой у каждого).
+    ScalePlus,
+    /// Масштаб Y — зум наружу. Исполняет вызывающее окно.
+    ScaleMinus,
+    /// Действие распознано в конфиге, но backend-путь ещё не подключён. Единый механизм
+    /// «знает» клавишу (глотает её + debug-лог), реализация — отдельными задачами.
+    Todo(&'static str),
+}
+
+/// Нажатая клавиша совпала с сочетанием `raw` из конфига. Сравниваем ТОЛЬКО
+/// `modifiers`+`key`: событие на Windows несёт ещё `key_char`, которого у распарсенного
+/// `Keystroke` нет → полный `==` для Ctrl+буква никогда не совпадал.
+fn pressed(raw: &str, ev: &KeyDownEvent) -> bool {
+    let raw = raw.trim();
+    !raw.is_empty()
+        && matches!(
+            Keystroke::parse(raw),
+            Ok(k) if k.modifiers == ev.keystroke.modifiers && k.key == ev.keystroke.key
+        )
+}
+
+/// Распознать нажатие как действие по конфигу хоткеев. `None` — не наш хоткей.
+/// Порядок веток = приоритет (фигуры/масштаб раньше торговых).
+pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
+    use HotkeyAction as A;
+    let p = |raw: &str| pressed(raw, ev);
+
+    // Слой рисования — до торговых веток.
+    if p(&hk.draw_hline) {
+        return Some(A::FigTool(FigureTool::HLine));
+    }
+    if p(&hk.draw_segment) {
+        return Some(A::FigTool(FigureTool::Segment));
+    }
+    if p(&hk.draw_triangle) {
+        return Some(A::FigTool(FigureTool::Triangle));
+    }
+    if p(&hk.draw_channel) {
+        return Some(A::FigTool(FigureTool::Channel));
+    }
+    if p(&hk.fig_delete) {
+        return Some(A::FigDelete);
+    }
+    if p(&hk.fig_alert) {
+        return Some(A::FigAlert);
+    }
+    if ev.keystroke.key == "escape" && ev.keystroke.modifiers == Modifiers::default() {
+        return Some(A::ExitDraw);
+    }
+
+    // Масштаб.
+    if p(&hk.scale_plus) {
+        return Some(A::ScalePlus);
+    }
+    if p(&hk.scale_minus) {
+        return Some(A::ScaleMinus);
+    }
+
+    // Размеры / sell-пресеты.
+    if let Some(i) = hk.order_size.iter().position(|r| p(r)) {
+        return Some(A::OrderSize(i));
+    }
+    if let Some(i) = hk.sell_preset.iter().position(|r| p(r)) {
+        return Some(A::SellPreset(i));
+    }
+
+    // Управление ордерами рынка активного чарта.
+    if p(&hk.cancel_buy) {
+        return Some(A::CancelBuy);
+    }
+    if p(&hk.cancel_all_buys) {
+        return Some(A::CancelAllBuys);
+    }
+    if p(&hk.panic_sell) {
+        return Some(A::PanicSell);
+    }
+    if p(&hk.panic_sell_one) {
+        return Some(A::PanicSellOne);
+    }
+    if p(&hk.join_sells) {
+        return Some(A::JoinSells);
+    }
+    if p(&hk.split_order) || p(&hk.split_order_x) {
+        return Some(A::SplitOrder);
+    }
+    if p(&hk.new_long) {
+        return Some(A::NewLong);
+    }
+    if p(&hk.new_short) {
+        return Some(A::NewShort);
+    }
+
+    // Распознаём остальные назначенные действия, но backend-путь пока не подключён.
+    // make_shot ставит moon-shot — в moonproto нет команды постановки его по цене (это
+    // strategy-тип ордера), поэтому отложен; прочие ждут своих команд/семантики.
+    const TODO: [(&str, fn(&HotkeysConfig) -> &str); 16] = [
+        ("reload_book", |h| &h.reload_book),
+        ("reload_chart", |h| &h.reload_chart),
+        ("make_shot", |h| &h.make_shot),
+        ("make_shot_bot", |h| &h.make_shot_bot),
+        ("spy_mode", |h| &h.spy_mode),
+        ("show_charts", |h| &h.show_charts),
+        ("switch_charts", |h| &h.switch_charts),
+        ("switch_figure", |h| &h.switch_figure),
+        ("fit_sells", |h| &h.fit_sells),
+        ("broadcast", |h| &h.broadcast),
+        ("shift_buy_up", |h| &h.shift_buy_up),
+        ("shift_buy_down", |h| &h.shift_buy_down),
+        ("shift_sell_up", |h| &h.shift_sell_up),
+        ("shift_sell_down", |h| &h.shift_sell_down),
+        ("sell_plus", |h| &h.sell_plus),
+        ("sell_minus", |h| &h.sell_minus),
+    ];
+    for (name, field) in TODO {
+        if p(field(hk)) {
+            return Some(A::Todo(name));
+        }
+    }
+    if hk.manual_strategy.iter().any(|r| p(r)) {
+        return Some(A::Todo("manual_strategy"));
+    }
+    None
+}
+
+/// Исполнить действие (кроме масштаба — его окно делает само). `target` — рынок активного
+/// чарта окна (`(ядро, рынок)`); `active_core` — активное торговое ядро окна. Возвращает
+/// `true`, если действие обработано (клавишу надо погасить). `Scale*` возвращает `false`.
+pub fn apply(
+    action: HotkeyAction,
+    b: &mut Backend,
+    bcx: &mut Context<Backend>,
+    target: Option<(CoreId, String)>,
+    active_core: Option<CoreId>,
+) -> bool {
+    use HotkeyAction as A;
+    match action {
+        A::FigTool(tool) => {
+            // Повтор того же инструмента в активном режиме — выключает; иначе выбирает + вкл.
+            if b.fig_draw_mode && b.fig_tool == tool {
+                b.fig_draw_mode = false;
+            } else {
+                b.fig_tool = tool;
+                b.fig_draw_mode = true;
+            }
+            bcx.notify();
+            true
+        }
+        A::ExitDraw => {
+            if b.fig_draw_mode {
+                b.fig_draw_mode = false;
+                bcx.notify();
+                true
+            } else {
+                false
+            }
+        }
+        A::FigAlert => {
+            if b.toggle_selected_figure_alert() {
+                bcx.notify();
+                true
+            } else {
+                false
+            }
+        }
+        A::FigDelete => {
+            if let Some((core, market, id)) = b.fig_selected.clone() {
+                b.remove_figure(core, &market, id);
+                bcx.notify();
+                true
+            } else {
+                false
+            }
+        }
+        A::OrderSize(i) => match active_core {
+            Some(core) => {
+                b.order_size_sel.insert(core, i);
+                b.order_size_rev = b.order_size_rev.wrapping_add(1);
+                bcx.notify();
+                true
+            }
+            None => false,
+        },
+        A::SellPreset(i) => match active_core {
+            Some(core) => {
+                if let Err(error) = b
+                    .session
+                    .edit_client_settings(core, ClientSettingsEdit::SelectFixedSellSlot(i + 1))
+                {
+                    log::warn!("hotkey select fixed-sell slot failed: {error}");
+                }
+                true
+            }
+            None => false,
+        },
+        A::CancelBuy => match target {
+            Some((core, market)) => {
+                b.cancel_buy_orders(core, &market);
+                true
+            }
+            None => false,
+        },
+        A::CancelAllBuys => match active_core {
+            Some(core) => {
+                b.cancel_all_buys_for_core(core);
+                true
+            }
+            None => false,
+        },
+        A::PanicSell => match target {
+            Some((core, market)) => {
+                b.toggle_panic_sell(core, market);
+                bcx.notify();
+                true
+            }
+            None => false,
+        },
+        A::PanicSellOne => match target {
+            Some((core, market)) => {
+                if let Err(error) = b.session.market_sell_position(core, market) {
+                    log::warn!("hotkey market sell position failed: {error}");
+                }
+                true
+            }
+            None => false,
+        },
+        A::JoinSells => match target {
+            Some((core, market)) => {
+                let short = b.market_position_short(core, &market);
+                if let Err(error) = b.session.join_sells(core, market, short) {
+                    log::warn!("hotkey join sells failed: {error}");
+                }
+                true
+            }
+            None => false,
+        },
+        A::SplitOrder => match target {
+            Some((core, market)) => {
+                if let Err(error) = b.session.split_order(core, market, 2) {
+                    log::warn!("hotkey split order failed: {error}");
+                }
+                true
+            }
+            None => false,
+        },
+        // Масштаб и постановка по курсору — забота вызывающего окна: масштаб свой у каждого
+        // окна, а цену ордера знает только чарт под курсором (`Backend::hovered_chart`).
+        A::ScalePlus | A::ScaleMinus | A::NewLong | A::NewShort => false,
+        A::Todo(name) => {
+            log::debug!("hotkey '{name}' распознан, но backend-путь ещё не подключён");
+            true
+        }
+    }
+}

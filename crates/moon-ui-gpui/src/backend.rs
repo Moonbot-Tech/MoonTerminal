@@ -148,12 +148,39 @@ impl Backend {
         on
     }
 
-    pub(crate) fn cancel_buy_for_main_chart(&self, group: &str) -> usize {
-        let Some((core, market)) = self.main_chart_target(group) else {
-            log::warn!("cancel buy ignored: no open main chart for group={group}");
-            return 0;
-        };
-        self.cancel_buy_orders(core, &market)
+    /// Отменить ожидающие buy-ордера по ВСЕМ рынкам ядра (хоткей «cancel all buys»). Берём
+    /// удержанный снимок ордеров, отбираем рынки с pending buy (не шорт, не исполнен, не
+    /// закрыт) и шлём по каждому `cancel_market_buys`. Возвращает число задействованных рынков.
+    pub(crate) fn cancel_all_buys_for_core(&self, core: CoreId) -> usize {
+        let markets: Vec<String> = self
+            .session
+            .store()
+            .core(core)
+            .map(|cd| {
+                let mut set = std::collections::BTreeSet::new();
+                for o in &cd.orders {
+                    if !o.is_short && o.pending && !o.job_is_done {
+                        set.insert(o.market.clone());
+                    }
+                }
+                set.into_iter().collect()
+            })
+            .unwrap_or_default();
+        let mut n = 0;
+        for m in markets {
+            n += self.cancel_buy_orders(core, &m);
+        }
+        n
+    }
+
+    /// Сторона позиции рынка (для join_sells): true = short. Берём из удержанного снимка
+    /// ордеров рынка (первый ордер рынка), иначе — long по умолчанию.
+    pub(crate) fn market_position_short(&self, core: CoreId, market: &str) -> bool {
+        self.session
+            .store()
+            .core(core)
+            .and_then(|cd| cd.orders.iter().find(|o| o.market == market).map(|o| o.is_short))
+            .unwrap_or(false)
     }
 
     pub(crate) fn cancel_buy_orders(&self, core: CoreId, market: &str) -> usize {

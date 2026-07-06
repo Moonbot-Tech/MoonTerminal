@@ -27,6 +27,33 @@ fn scale_label(scale: Option<f32>) -> &'static str {
         .unwrap_or("Авто")
 }
 
+/// Следующая ступень масштаба для хоткеев Scale +/− (единый источник порядка — `SCALES`:
+/// Авто → 50% → 20% → 10% → 5% → 2%, индекс растёт = зум ВНУТРЬ). `zoom_in=true` (Scale +)
+/// идёт к меньшему проценту, `false` (Scale −) — наружу к «Авто». По краям клампится (без
+/// wrap). Текущее значение матчится точно; кастомное (после перетаскивания) сводится к
+/// ближайшей числовой ступени.
+pub(crate) fn step_scale(current: Option<f32>, zoom_in: bool) -> Option<f32> {
+    let idx = SCALES
+        .iter()
+        .position(|(_, v)| *v == current)
+        .unwrap_or_else(|| match current {
+            None => 0,
+            Some(cur) => SCALES
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (_, v))| v.map(|v| (i, (v - cur).abs())))
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+                .unwrap_or(0),
+        });
+    let next = if zoom_in {
+        (idx + 1).min(SCALES.len() - 1)
+    } else {
+        idx.saturating_sub(1)
+    };
+    SCALES[next].1
+}
+
 /// Дропдаун масштаба для полоски чарт-вкладок главного окна: применяет масштаб ТОЛЬКО к
 /// АКТИВНОЙ вкладке (Main или конкретный AddToChart), не трогая другие вкладки/окна, и
 /// сохраняет (per-вкладочный масштаб). Стоит рядом с кнопкой ⚙ настроек раскладки.

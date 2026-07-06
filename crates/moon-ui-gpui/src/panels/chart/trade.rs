@@ -110,6 +110,43 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
+        // Сторона ордера — из мышиного жеста конфига (buy_set/short_set). Не наш жест → не ордер.
+        let short = {
+            let b = self.backend.read(cx);
+            let cfg = b.preview.as_ref().unwrap_or(&b.config);
+            if Self::gesture_matches(cfg.hotkeys.buy_set_click, button, modifiers, click_count) {
+                Some(false)
+            } else if Self::gesture_matches(
+                cfg.hotkeys.short_set_click,
+                button,
+                modifiers,
+                click_count,
+            ) {
+                Some(true)
+            } else {
+                None
+            }
+        };
+        let Some(short) = short else {
+            return false;
+        };
+        self.place_order_at_pos(pos, short, cx)
+    }
+
+    /// Поставить ручной ордер по цене под КУРСОРОМ (хоткей new_long/new_short). Цену знает
+    /// только чарт (пиксель Y → цена пейна), поэтому постановка живёт здесь, а не в общем
+    /// диспетчере хоткеев. Нет курсора над пейном → ничего не делаем.
+    pub(crate) fn place_order_at_cursor(&mut self, short: bool, cx: &mut Context<Self>) -> bool {
+        match self.input.cursor {
+            Some(pos) => self.place_order_at_pos(pos, short, cx),
+            None => false,
+        }
+    }
+
+    /// Поставить ручной ордер стороны `short` по позиции `pos` (пиксель слота): pane →
+    /// цена → таргет (ядро, рынок) → `place_order` с размером из настроек ядра. Общий путь
+    /// клика мышью и курсор-хоткея.
+    fn place_order_at_pos(&mut self, pos: (f32, f32), short: bool, cx: &mut Context<Self>) -> bool {
         // Раздельные зоны: ордер ставим только в стакане; иначе — по любой pane-области графика.
         let pane = if self.separate_zones(cx) {
             self.glass_pane_at(pos)
@@ -130,27 +167,6 @@ impl ChartPanel {
         };
 
         let placed = self.backend.update(cx, |b, _| {
-            let cfg = b.preview.as_ref().unwrap_or(&b.config);
-            let short = if Self::gesture_matches(
-                cfg.hotkeys.buy_set_click,
-                button,
-                modifiers,
-                click_count,
-            ) {
-                Some(false)
-            } else if Self::gesture_matches(
-                cfg.hotkeys.short_set_click,
-                button,
-                modifiers,
-                click_count,
-            ) {
-                Some(true)
-            } else {
-                None
-            };
-            let Some(short) = short else {
-                return false;
-            };
             let size = b.manual_order_size(core);
             // Селл/стоп новому ордеру ставит САМО ЯДРО из своих ClientSettings (ROE). Терминал
             // ничего не переставляет — показываем то, что прислало ядро.

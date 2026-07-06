@@ -88,6 +88,11 @@ impl Render for DetachedChartHost {
         v_flex()
             .size_full()
             .relative()
+            // Фокусируемый корень + ловля хоткеев окна (единый диспетчер).
+            .track_focus(&self.focus)
+            .on_key_down(
+                cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_hotkey(ev, cx)),
+            )
             .child(
                 h_flex()
                     .h(design::fit_h_px(cx, 34.0, 13.0, 10.5))

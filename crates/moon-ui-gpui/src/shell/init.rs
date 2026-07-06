@@ -183,7 +183,13 @@ impl Shell {
             loop {
                 let executor = cx.update(|cx| cx.background_executor().clone());
                 executor.timer(std::time::Duration::from_secs(1)).await;
-                let alive = cx.update(|cx| this.update(cx, |_this, cx| cx.notify()).is_ok());
+                let alive = cx.update(|cx| {
+                    this.update(cx, |_this, cx| {
+                        crate::diag::bump(&crate::diag::CLOCK_NOTIFY);
+                        cx.notify();
+                    })
+                    .is_ok()
+                });
                 if !alive {
                     break;
                 }

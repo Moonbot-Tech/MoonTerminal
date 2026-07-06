@@ -188,6 +188,7 @@ pub struct ChartPanel {
 
 impl ChartPanel {
     fn sync_orders_from_backend_notify(&mut self, cx: &mut Context<Self>) -> bool {
+        crate::diag::bump(&crate::diag::CHART_ORDER_SYNC);
         {
             let b = self.backend.read(cx);
             self.chart.sync_orders_if_visible(&b.session, false);

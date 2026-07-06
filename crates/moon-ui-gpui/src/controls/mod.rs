@@ -18,7 +18,7 @@ mod toolbar;
 
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use metric::{TradeMetric, metric_popup_content};
-pub(crate) use scale::{scale_dropdown_for_add_stack, scale_dropdown_for_tabs};
+pub(crate) use scale::{scale_dropdown_for_add_stack, scale_dropdown_for_tabs, step_scale};
 pub use toolbar::toolbar;
 
 use crate::design;

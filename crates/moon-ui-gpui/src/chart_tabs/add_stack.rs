@@ -145,6 +145,7 @@ impl AddChartStack {
             executor.timer(Duration::from_secs(1)).await;
             let _ = cx.update(|cx| {
                 this.update(cx, |this, cx| {
+                    crate::diag::bump(&crate::diag::COMPACT_TICK);
                     this.compact_timer_armed = false;
                     this.compact_vacated_if_stable(cx);
                     this.arm_compact_timer(cx);

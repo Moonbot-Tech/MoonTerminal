@@ -640,6 +640,7 @@ impl Panel for AssetsView {
 
 impl Render for AssetsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::ASSETS_RENDER);
         let cores = self.cached_cores.clone();
         let entries = self.cached_entries.clone();
         let p = MoonPalette::active(cx);

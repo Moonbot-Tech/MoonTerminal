@@ -10,6 +10,7 @@ impl Backend {
     /// Курсор `last_detect_seq` защищает от повторов и от «залпа» на старте (первый
     /// визит ядра только сидирует курсор, без проигрывания).
     pub(crate) fn play_detect_sounds(&mut self) {
+        crate::diag::bump(&crate::diag::DETECT_SCAN);
         for (core, data) in self.session.store().cores() {
             let cur_max = data.detects.iter().map(|d| d.seq).max().unwrap_or(0);
             let last = match self.last_detect_seq.get(&core) {

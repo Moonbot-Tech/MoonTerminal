@@ -234,6 +234,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             assets_window: None,
             screener_window: None,
             firetest: firetest_config.clone().map(firetest::Runtime::new),
+            hovered_chart: None,
             detached,
             detached_dirty: false,
             repin_request: Vec::new(),
@@ -403,6 +404,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
         cx.spawn(async move |cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let mut last_report = Instant::now();
+            // Сумма assets_rev по всем ядрам на прошлом сэмпле — для дельты assets_apply.
+            let mut last_assets_rev_sum: u64 = 0;
             loop {
                 executor.timer(Duration::from_millis(100)).await;
                 cx.update(|cx| {
@@ -478,8 +481,41 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 if last_report.elapsed().as_millis() >= 1000 {
                     let ms = last_report.elapsed().as_secs_f64() * 1000.0;
                     last_report = Instant::now();
+                    // Контекст момента для строки диагностики: CPU процесса/системы, число
+                    // окон и открытых чарт-панелей + дельта assets_rev (снапшоты «Активов»,
+                    // собранные feed-потоками за интервал — работа идёт и без открытого окна).
+                    // Считаем ДО take_sample, чтобы assets_apply попал в этот же сэмпл.
+                    let ctx = if crate::diag::is_enabled() {
+                        cx.update(|cx| {
+                            let windows = cx.windows().len();
+                            coord_backend.update(cx, |b, _| {
+                                let charts = b.live_chart_consumers().len();
+                                let rev_sum: u64 = b
+                                    .session
+                                    .store()
+                                    .cores()
+                                    .map(|(_, d)| d.assets_rev)
+                                    .sum();
+                                // Ядро могло переподключиться (rev обнулился) — тогда дельта
+                                // не определена, берём сумму заново без бампа.
+                                if rev_sum >= last_assets_rev_sum {
+                                    crate::diag::bump_by(
+                                        &crate::diag::ASSETS_APPLY,
+                                        rev_sum - last_assets_rev_sum,
+                                    );
+                                }
+                                last_assets_rev_sum = rev_sum;
+                                format!(
+                                    "cpu={:.1} sys={:.1} windows={} charts={}",
+                                    b.snap.cpu_process, b.snap.cpu_system, windows, charts
+                                )
+                            })
+                        })
+                    } else {
+                        String::new()
+                    };
                     if let Some(sample) = crate::diag::take_sample(ms) {
-                        crate::diag::write_sample(ms, &sample);
+                        crate::diag::write_sample(ms, &sample, &ctx);
                         cx.update(|cx| {
                             coord_backend.update(cx, |b, _| {
                                 crate::firetest::record_diag_sample(b, ms, &sample);

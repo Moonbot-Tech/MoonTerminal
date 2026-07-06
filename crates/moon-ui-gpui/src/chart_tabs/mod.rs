@@ -608,21 +608,32 @@ impl ChartTabs {
     }
 
     fn sync_active_scale(&mut self, cx: &mut Context<Self>) {
-        let (rev, want) = {
+        let (rev, want, ours) = {
             let b = self.backend.read(cx);
-            (b.price_scale_rev, b.price_scale)
+            (
+                b.price_scale_rev,
+                b.price_scale,
+                b.price_scale_group.as_deref() == Some(&self.group),
+            )
         };
+        // Команда «применить масштаб» (дропдаун-«ко всем» / хоткей Scale +/−) на РОСТ rev.
+        // Применяем ТОЛЬКО если бамп адресован нашей группе — иначе хоткей другой группы
+        // менял бы масштаб наших вкладок. Виденную rev продвигаем в любом случае, чтобы
+        // чужой бамп не «догнал» нас позже (last_scale_rev не залипает на старом).
         if rev != self.last_scale_rev {
             self.last_scale_rev = rev;
-            self.set_active_scale(want, cx);
-        } else {
-            let cur = self.active_scale(cx);
-            self.backend.update(cx, |b, _| {
-                if b.price_scale != cur {
-                    b.price_scale = cur;
-                }
-            });
+            if ours {
+                self.set_active_scale(want, cx);
+                return;
+            }
         }
+        // Иначе синхроним ПОКАЗ масштаба активной вкладки обратно в backend (подпись тулбара).
+        let cur = self.active_scale(cx);
+        self.backend.update(cx, |b, _| {
+            if b.price_scale != cur {
+                b.price_scale = cur;
+            }
+        });
     }
 }
 
