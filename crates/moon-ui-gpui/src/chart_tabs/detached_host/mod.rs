@@ -584,9 +584,6 @@ impl LayoutPopupHost for DetachedChartHost {
 /// Поиск монеты в шапке окна: выбранная монета открывается в стеке ЭТОГО окна; для откреплённой
 /// кастомной вкладки состав тикеров тут же пере-персистится.
 impl CoinPopupHost for DetachedChartHost {
-    fn coin_input(&self) -> &Entity<MoonInputState> {
-        &self.coin_input
-    }
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();
         self.coin_popup_open = false;

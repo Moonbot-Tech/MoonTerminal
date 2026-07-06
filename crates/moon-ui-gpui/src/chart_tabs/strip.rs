@@ -215,7 +215,7 @@ impl Render for ChartTabs {
                 true,
                 p_strip,
                 cx,
-                common::coin_pick_handler(cx),
+                common::coin_pick_handler(cx, self.coin_input.clone()),
                 move |core, market, app| {
                     view_toggle.update(app, |this, cx| this.toggle_coin_selected(core, market, cx));
                 },

@@ -423,7 +423,7 @@ pub(super) fn refresh_orderbook_label_notionals(
     labels: &mut [OrderBookLabel],
     levels: &[moon_core::data::BookDepthPoint],
 ) {
-    for label in labels {
+    for label in labels.iter_mut() {
         label.notional = sell_book_notional(levels, label.price, label.short);
     }
 }

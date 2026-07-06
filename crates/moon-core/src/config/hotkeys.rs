@@ -328,24 +328,25 @@ fn default_manual_strategy_keys() -> [String; MANUAL_STRATEGY_KEYS] {
     std::array::from_fn(|_| String::new())
 }
 
-// Дефолты с модификатором используют `secondary-` — gpui `Keystroke::parse` резолвит его
-// в Ctrl на Windows/Linux и в Cmd на macOS (на этапе компиляции). Поведение на Windows не
-// меняется (было `ctrl-`), а на Mac хоткеи становятся Cmd-* как в маковской конвенции / MB.
-// Клавиши без модификатора (F-клавиши, delete) остаются как есть.
+// Клавиатурные дефолты — буквальный `ctrl-` на ОБЕИХ платформах (паритет с MoonBot: на маке
+// управление тоже через Ctrl). На маке физический Control для клавиатурных хоткеев доходит
+// нормально (в отличие от Ctrl+ЛКМ, который ОС превращает в правый клик — поэтому мышиный
+// жест РИСОВАНИЯ остаётся на `secondary()`/Cmd, это отдельный код, не дефолт хоткея).
+// Клавиши без модификатора (F-клавиши, delete) — как есть.
 fn default_draw_hline() -> String {
-    "secondary-h".into()
+    "ctrl-h".into()
 }
 
 fn default_draw_segment() -> String {
-    "secondary-l".into()
+    "ctrl-l".into()
 }
 
 fn default_draw_triangle() -> String {
-    "secondary-t".into()
+    "ctrl-t".into()
 }
 
 fn default_draw_channel() -> String {
-    "secondary-k".into()
+    "ctrl-k".into()
 }
 
 fn default_fig_delete() -> String {
@@ -353,35 +354,35 @@ fn default_fig_delete() -> String {
 }
 
 fn default_fig_alert() -> String {
-    "secondary-b".into()
+    "ctrl-b".into()
 }
 
 fn default_make_shot() -> String {
-    "secondary-f10".into()
+    "ctrl-f10".into()
 }
 
 fn default_make_shot_bot() -> String {
-    "secondary-f12".into()
+    "ctrl-f12".into()
 }
 
 fn default_reload_chart() -> String {
-    "secondary-r".into()
+    "ctrl-r".into()
 }
 
 fn default_scale_plus() -> String {
-    "secondary-q".into()
+    "ctrl-q".into()
 }
 
 fn default_scale_minus() -> String {
-    "secondary-w".into()
+    "ctrl-w".into()
 }
 
 fn default_sell_plus() -> String {
-    "secondary-1".into()
+    "ctrl-1".into()
 }
 
 fn default_sell_minus() -> String {
-    "secondary-2".into()
+    "ctrl-2".into()
 }
 
 fn default_spy_mode() -> String {
@@ -393,19 +394,19 @@ fn default_show_charts() -> String {
 }
 
 fn default_switch_figure() -> String {
-    "secondary-f".into()
+    "ctrl-f".into()
 }
 
 fn default_fit_sells() -> String {
-    "secondary-s".into()
+    "ctrl-s".into()
 }
 
 fn default_panic_sell_one() -> String {
-    "secondary-f1".into()
+    "ctrl-f1".into()
 }
 
 fn default_cancel_all_buys() -> String {
-    "secondary-delete".into()
+    "ctrl-delete".into()
 }
 
 fn default_left_double() -> MouseGestureBinding {

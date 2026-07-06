@@ -8,5 +8,5 @@ use super::*;
 // state — жизненный цикл/сигнатуры/frame; orders — синк ордеров и подписи линий;
 // market — синк рыночных данных (история/стакан/авто-Y).
 mod market;
-mod orders;
+pub(crate) mod orders;
 mod state;

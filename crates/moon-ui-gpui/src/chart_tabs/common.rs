@@ -448,7 +448,6 @@ pub(super) fn layout_popup_dismiss<T: LayoutPopupHost>(
 /// выбранную монету и как чистить поле/попап. Общая обвязка — [`coin_pick_handler`] /
 /// [`coin_dismiss_handler`]; сам рендер списка — [`super::coin_search::render_popup`].
 pub(super) trait CoinPopupHost: Sized + 'static {
-    fn coin_input(&self) -> &Entity<MoonInputState>;
     /// Очистить поле монеты и закрыть список (после выбора / по клику вне).
     fn clear_coin_search(&mut self, cx: &mut Context<Self>);
     /// Открыть выбранную монету на цели хозяина (активная вкладка / стек окна).
@@ -458,9 +457,13 @@ pub(super) trait CoinPopupHost: Sized + 'static {
 /// Обработчик выбора монеты из списка: открыть → очистить поле → закрыть попап.
 pub(super) fn coin_pick_handler<T: CoinPopupHost>(
     cx: &Context<T>,
+    input: Entity<MoonInputState>,
 ) -> impl Fn(CoreId, String, &mut Window, &mut App) + Clone + 'static {
+    // ВАЖНО: НЕ читаем `cx.entity().read(cx)` здесь — этот хелпер вызывается во ВРЕМЯ
+    // рендера хоста (ChartTabs/DetachedChartHost), который уже занят как `&mut self` →
+    // `read` даёт панику «cannot read … while it is already being updated» (краш при
+    // открытии поиска монет). `coin_input` берём параметром у вызывающего (у него `&self`).
     let view = cx.entity();
-    let input = view.read(cx).coin_input().clone();
     move |core, market, window, app| {
         view.update(app, |this, cx| this.open_picked_coin(core, market, cx));
         input.update(app, |inp, c| {

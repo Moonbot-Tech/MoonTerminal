@@ -64,7 +64,7 @@ impl Render for DetachedChartHost {
                 false,
                 p,
                 cx,
-                common::coin_pick_handler(cx),
+                common::coin_pick_handler(cx, self.coin_input.clone()),
                 |_core, _market, _app| {},
                 |_app| {},
             )
