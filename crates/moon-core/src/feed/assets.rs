@@ -155,11 +155,16 @@ pub(super) fn build_assets(
             (coin, m.base_currency.clone(), listed)
         });
         let rate = quote_to_usdt(markets, &quote);
-        // Стоимость СТРОКИ — только от СВОБОДНОГО остатка (asset_balance): количество,
-        // уже выставленное на продажу (заморожено в открытых sell-ордерах, full − free),
-        // из «Активов» ИСКЛЮЧАЕТСЯ — оно торгуется и видно в «Ордерах». Монета целиком
-        // в ордерах → value 0 → строку скроет фильтр пыли UI.
-        let value_usdt = bp.asset_balance.abs() * price.p_last * rate;
+        // Стоимость СТРОКИ — от ПОЛНОГО удерживаемого баланса (free + заблокировано в открытых
+        // sell-ордерах), как MoonBot: открытая поза держит всё количество в TP-ордерах (free≈0),
+        // но это по-прежнему наш актив — прятать его нельзя (иначе строка с value 0 уходит под
+        // фильтр пыли). `_full` может быть не заполнен биржей → берём max(full, free).
+        let held_qty = if bp.asset_balance_full.abs() > bp.asset_balance.abs() {
+            bp.asset_balance_full
+        } else {
+            bp.asset_balance
+        };
+        let value_usdt = held_qty.abs() * price.p_last * rate;
         // Дедуп монетных кошельков (COIN-M): суммируем стоимость КАЖДОЙ монеты один раз,
         // независимо от числа её контрактов. Здесь эквити АККАУНТА — считаем от ПОЛНОГО
         // остатка (в отличие от строк таблицы). Учитываем только реальный баланс монеты
@@ -212,6 +217,19 @@ pub(super) fn build_assets(
             // профит рынка (в котируемой валюте) как fallback.
             (bp.total_profit_b + bp.total_profit_l + bp.total_profit_s) * rate
         };
+        // Размер/цена позиции строки: нетто `pos_size`, а если ядро держит ноги РАЗДЕЛЬНО
+        // (hedge-режим либо сервер кладёт шорт в `short_pos_size`, а нетто = 0) — берём нетто
+        // ног (шорт отрицательный). Иначе реальный фьючер-шорт с `pos_size=0` не проходит
+        // `is_position` в UI и пропадает из «Активов» (баланса монеты у деривати­ва нет).
+        let (pos_size, pos_price) = if bp.pos_size != 0.0 {
+            (bp.pos_size, bp.pos_price)
+        } else if bp.short_pos_size.abs() > bp.long_pos_size.abs() {
+            (-bp.short_pos_size.abs(), bp.short_pos_price)
+        } else if bp.long_pos_size != 0.0 {
+            (bp.long_pos_size.abs(), bp.long_pos_price)
+        } else {
+            (bp.pos_size, bp.pos_price)
+        };
         rows.push(AssetRow {
             market,
             coin,
@@ -224,8 +242,8 @@ pub(super) fn build_assets(
             min_lot_usd,
             is_quote_asset,
             mark_price: price.mark_price,
-            pos_size: bp.pos_size,
-            pos_price: bp.pos_price,
+            pos_size,
+            pos_price,
             liq_price: bp.liq_price,
             leverage: lev,
             pnl_usdt,

@@ -278,34 +278,30 @@ impl AssetsView {
         let mut out = Vec::new();
         for (id, name) in self.scope_cores(b) {
             let Some(cd) = store.core(id) else { continue };
+            // ДИАГ (env MOON_ASSETS_DIAG): что реально пришло в balance_position ядра —
+            // есть ли строка для рынка позиции и её поля. Показывает, скрыта ли поза
+            // фильтром или её вообще нет в balance_position (тогда причина в источнике).
+            if std::env::var_os("MOON_ASSETS_DIAG").is_some() {
+                log::error!(
+                    "[assets_diag] core={name} futures_acc={} rows={}",
+                    cd.assets.futures_account,
+                    cd.assets.rows.len()
+                );
+                for r in &cd.assets.rows {
+                    log::error!(
+                        "[assets_diag]   market={} coin={} pos_size={} qty={} qty_full={} value={:.2} min_lot={:.2} price={}",
+                        r.market, r.coin, r.pos_size, r.qty, r.qty_full, r.value_usdt, r.min_lot_usd, r.price
+                    );
+                }
+            }
             // Монеты, уже показанные из per-market строк — чтобы не задублировать их
             // спотовым кошельком (`transfer_assets`) ниже.
             let mut seen_coin: std::collections::HashSet<String> = std::collections::HashSet::new();
-            // Кол-во, УЖЕ выставленное на закрытие позиции («в работе»): Σ остатка выходной
-            // ноги реальных незавершённых ордеров рынка, чей выход выставлен (executed).
-            // Это количество из «Активов» исключаем — оно торгуется и видно в «Ордерах»
-            // (спот-аналог — свободный vs полный баланс — уже учтён на ядре).
-            let mut on_close: std::collections::HashMap<&str, f64> =
-                std::collections::HashMap::new();
-            for o in &cd.orders {
-                if o.emulator || o.job_is_done || !super::orders::executed(o) {
-                    continue;
-                }
-                if o.remaining_size > 0.0 {
-                    *on_close.entry(o.market.as_str()).or_default() += o.remaining_size;
-                }
-            }
             for row in &cd.assets.rows {
-                let mut row = row.clone();
-                // Вычесть из позиции выставленное на закрытие; позиция целиком в ордерах →
-                // строка исчезает. PnL масштабируем на оставшуюся долю (линейный по размеру).
-                let closing = on_close.get(row.market.as_str()).copied().unwrap_or(0.0);
-                if !self.show_all && closing > 0.0 && row.pos_size != 0.0 {
-                    let full = row.pos_size.abs();
-                    let remaining = (full - closing).max(0.0);
-                    row.pnl_usdt *= remaining / full;
-                    row.pos_size = remaining * row.pos_size.signum();
-                }
+                let row = row.clone();
+                // Открытую позу показываем ЦЕЛИКОМ (как MoonBot): выставленное на закрытие
+                // (sell/TP-ордера) из размера НЕ вычитаем — иначе поза, весь размер которой
+                // висит в ордерах, обнуляется и пропадает из «Активов», хотя на чарте есть.
                 let value = row.value_usdt;
                 // Видимость (правила MoonBot): фьюч-ядра (вкл. CoinM) — ТОЛЬКО открытые
                 // позиции (балансы там котируемые, не купленные монеты); спот — все
@@ -365,40 +361,27 @@ impl AssetsView {
                     // фильтра: по нему вычитаем «в работе». Нет рынка → фолбэк-конкатенация
                     // для отображения, но market_exists=false (Sell скрыт).
                     let resolved = resolve_market(&cd.assets.markets, &w.currency, &quote);
-                    // Выставленное на продажу исключаем и здесь: transfer-снимок кошелька
-                    // обновляется только по запросу и НЕ видит заморозку в свежих ордерах
-                    // (`amount` остаётся полным) — вычитаем остаток sell-ордеров рынка.
-                    let closing = if self.show_all {
-                        0.0
-                    } else {
-                        resolved
-                            .as_deref()
-                            .and_then(|m| on_close.get(m))
-                            .copied()
-                            .unwrap_or(0.0)
-                    };
-                    let qty_free = (w.amount - closing).max(0.0);
-                    // Стоимость — только СВОБОДНОГО остатка. `value_usdt` кошелька посчитан
-                    // от total → масштабируем.
-                    let free_value = if w.total.abs() > 0.0 {
-                        w.value_usdt * (qty_free / w.total)
-                    } else {
-                        0.0
-                    };
-                    let keep = self.show_all || (!is_quote && free_value >= 1.0);
+                    // ПОЛНЫЙ удерживаемый остаток кошелька (как MoonBot): `total` = полный баланс
+                    // (free + заблокированное в ордерах), `amount` = свободное. Выставленное на
+                    // продажу НЕ вычитаем — открытую спот-позу, всё количество которой висит в
+                    // TP-ордерах, показываем целиком (иначе строка с ~0 уходит под фильтр пыли).
+                    // `value_usdt` кошелька уже посчитан от `total`.
+                    let held_qty = w.total;
+                    let held_value = w.value_usdt;
+                    let keep = self.show_all || (!is_quote && held_value >= 1.0);
                     if !keep {
                         continue;
                     }
                     seen_coin.insert(coin_up);
                     let market_exists = resolved.is_some();
                     let market = resolved.unwrap_or_else(|| format!("{}{}", w.currency, quote));
-                    let row = wallet_asset_row(w, &quote, is_quote, market, free_value, qty_free);
+                    let row = wallet_asset_row(w, &quote, is_quote, market, held_value, held_qty);
                     out.push(AssetEntry {
                         core: id,
                         core_name: name.clone(),
                         market_exists,
                         row,
-                        value: free_value,
+                        value: held_value,
                     });
                 }
             }

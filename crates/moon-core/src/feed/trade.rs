@@ -98,7 +98,10 @@ pub(super) fn market_sell_position(client: &MoonClient, server_id: u64, market: 
         format!("market close position {market}"),
         client
             .trade()
-            .close_position(ClosePositionParams::new(market)),
+            // `::new()`/`limit_orders()` = ЛИМИТНОЕ закрытие (market_sell=false) — лимитка могла
+            // не исполниться, из-за чего «Market sell» не срабатывал. Кнопка обязана закрывать
+            // ПО МАРКЕТУ → `market_order()` (market_sell=true). Сторону рантайм определит сам.
+            .close_position(ClosePositionParams::market_order(market)),
     );
 }
 

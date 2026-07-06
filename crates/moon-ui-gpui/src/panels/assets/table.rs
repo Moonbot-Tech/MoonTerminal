@@ -311,17 +311,23 @@ pub(super) fn assets_table(
 fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette) -> MoonDataRow {
     let r = &e.row;
     let is_position = r.pos_size != 0.0;
-    // Кол-во/Сумма: спот — свободный остаток (выставленное на продажу исключено, оно
-    // в «Ордерах») и его стоимость; фьюч-позиция — остаток позиции и её стоимость
-    // (размер × цена рынка; котируемая у фьючей — USD-стейбл). Кол-во — ограниченная
-    // точность по величине (`fmt::qty`: макс. тысячные, мин. десятые), не adaptive.
+    // Кол-во/Сумма: спот — ПОЛНЫЙ удерживаемый остаток (free + заблокированное в открытых
+    // sell-ордерах), как MoonBot — открытую позу с TP-ордерами показываем целиком, а не
+    // «свободно≈0»; фьюч-позиция — остаток позиции и её стоимость (размер × цена рынка;
+    // котируемая у фьючей — USD-стейбл). Кол-во — ограниченная точность по величине
+    // (`fmt::qty`: макс. тысячные, мин. десятые), не adaptive.
     let (qty, sum) = if is_position {
         (
             moon_core::util::fmt::qty(r.pos_size),
             money(r.pos_size.abs() * r.price),
         )
     } else {
-        (moon_core::util::fmt::qty(r.qty), money(e.value))
+        let held = if r.qty_full.abs() > r.qty.abs() {
+            r.qty_full
+        } else {
+            r.qty
+        };
+        (moon_core::util::fmt::qty(held), money(e.value))
     };
     MoonDataRow::new([
         MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
