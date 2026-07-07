@@ -70,6 +70,10 @@ assets.col.kind:
   es: "Mercado"
 
 # --- Кнопки действий у позиции ---
+assets.open_global_hint:
+  ru: "Открыть Активы отдельным окном (все ядра)"
+  en: "Open Assets in a separate window (all cores)"
+  es: "Abrir Activos en ventana aparte (todos los núcleos)"
 assets.market_sell:
   ru: "Market sell"
   en: "Market sell"

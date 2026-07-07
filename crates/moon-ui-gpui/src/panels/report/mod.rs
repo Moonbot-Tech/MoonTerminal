@@ -105,6 +105,8 @@ pub struct ReportPanel {
     /// ядра не сбивали соответствие. Новая колонка по умолчанию скрыта.
     pub(super) visible: HashSet<String>,
     table_state: Entity<MoonDataTableState>,
+    /// Id хранилища ширин колонок с контекстом (`report-table:dock`/`:win`) — свои ширины на режим.
+    widths_id: String,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -139,10 +141,18 @@ impl ReportPanel {
             .as_ref()
             .and_then(db::load_sort)
             .unwrap_or_else(|| ("buydate".to_string(), true));
+        let widths_id = crate::table_persist::ctx_id("report-table", false);
+        let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| MoonDataTableState::new());
         table_state.update(cx, |state, _| {
             state.set_sort(sort_key.clone(), !sort_desc);
+            state.column_widths = saved_widths;
         });
+        // Ресайз колонки мутирует state → сохраняем ширины (универсальный сейвер).
+        cx.observe(&table_state, |this, state, cx| {
+            crate::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
+        })
+        .detach();
 
         let coin = cx.new(|cx| {
             MoonInputState::new(window, cx).placeholder(t!("report.filter.coin_ph").to_string())
@@ -199,11 +209,55 @@ impl ReportPanel {
             query_seq: 0,
             visible,
             table_state,
+            widths_id,
             dock: None,
             focus: cx.focus_handle(),
         };
+        // Per-контекст набор полей (единый дескриптор) перекрывает загруженный из app_meta набор,
+        // если сохранён для этого режима; иначе app_meta-набор остаётся как миграционный сид.
+        this.apply_ctx_columns(cx);
         this.schedule_requery(cx);
         this
+    }
+
+    /// Пометить панель как открытую в ОТКРЕПЛЁННОМ окне (из `detached::spawn`): контекст ширин
+    /// → `:win`, пере-засев из набора этого режима. Своя раскладка ширин у вкладки и у окна.
+    pub(crate) fn mark_table_detached(&mut self, cx: &mut Context<Self>) {
+        self.widths_id = crate::table_persist::ctx_id("report-table", true);
+        let saved = crate::table_persist::saved(self.backend.read(cx), &self.widths_id);
+        self.table_state.update(cx, |s, c| {
+            s.column_widths = saved;
+            c.notify();
+        });
+        self.apply_ctx_columns(cx);
+        cx.notify();
+    }
+
+    /// Применить сохранённый per-контекст набор видимых колонок (`table_visible_columns` по
+    /// `widths_id`), если он есть. Единый дескриптор полей: набор различается на режим (`:dock`
+    /// vs `:win`). Пустой набор → оставляем текущий (иначе показали бы пустую таблицу).
+    fn apply_ctx_columns(&mut self, cx: &App) {
+        if let Some(keys) = crate::table_persist::visible(self.backend.read(cx), &self.widths_id) {
+            let set: HashSet<String> = keys.into_iter().collect();
+            if !set.is_empty() {
+                self.visible = set;
+            }
+        }
+    }
+
+    /// Сохранить текущий набор видимых колонок в per-контекст хранилище (`widths_id`) в порядке
+    /// колонок таблицы. Зовётся из [`Self::toggle_column`].
+    fn save_ctx_columns(&self, cx: &mut App) {
+        let keys: Vec<String> = self
+            .table
+            .cols
+            .iter()
+            .filter(|c| self.visible.contains(c.as_str()))
+            .map(|c| c.to_string())
+            .collect();
+        if !keys.is_empty() {
+            crate::table_persist::set_visible(&self.backend, &self.widths_id, keys, cx);
+        }
     }
 
     fn filter(&self, cx: &App) -> ReportFilter {
@@ -296,6 +350,8 @@ impl ReportPanel {
                 .collect();
             db::save_visible(conn, &cols);
         }
+        // Единый per-контекст дескриптор полей (свой набор на :dock/:win).
+        self.save_ctx_columns(cx);
         cx.notify();
     }
     fn set_report_sort(&mut self, col: &str, sort_desc: bool, cx: &mut Context<Self>) {
@@ -349,12 +405,15 @@ impl Panel for ReportPanel {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
-        Some(vec![crate::panels::detach_button(
-            "Report",
-            self.group.clone(),
-            self.backend.clone(),
-            self.dock.clone(),
-        )])
+        Some(vec![
+            crate::table_persist::reset_button("report-reset-widths", &self.table_state),
+            crate::panels::detach_button(
+                "Report",
+                self.group.clone(),
+                self.backend.clone(),
+                self.dock.clone(),
+            ),
+        ])
     }
 }
 

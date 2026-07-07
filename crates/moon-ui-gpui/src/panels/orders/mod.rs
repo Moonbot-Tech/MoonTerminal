@@ -295,6 +295,9 @@ pub struct OrdersPanel {
     /// Последний персистнутый порядок колонок — чтобы `observe` не дампил док на каждый
     /// `notify` стейта (выделение/ресайз), а только когда порядок реально сменился.
     col_order_cache: Vec<SharedString>,
+    /// Id хранилища ширин колонок с контекстом (`orders-table:dock`/`:win`). В доке = `:dock`,
+    /// в откреплённом окне переключается на `:win` (`mark_table_detached`) — свои ширины на режим.
+    widths_id: String,
     /// Монеты, открытые в стеке Main этой группы (`(ядро, рынок)`). Используется для сортировки
     /// (поднять наверх). Обновляется в `rebuild_cache`.
     main_open: Rc<HashSet<(CoreId, String)>>,
@@ -330,8 +333,16 @@ impl OrdersPanel {
         // Перестановка/ресайз колонок мутирует `table_state` и шлёт `notify`. Ловим его и,
         // если СПИСОК ПОРЯДКА сменился, дампим док (персист в `docks.json`). Дамп читает эту
         // же панель → откладываем через `cx.defer`, вне текущего borrow (как в `mutate`).
-        let table_state = cx.new(|_| MoonDataTableState::new());
+        let widths_id = crate::table_persist::ctx_id("orders-table", false);
+        let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
+        let table_state = cx.new(|_| {
+            let mut s = MoonDataTableState::new();
+            s.column_widths = saved_widths;
+            s
+        });
         cx.observe(&table_state, |this, state, cx| {
+            // Ресайз колонки мутирует `table_state` → сохраняем ширины (универсальный сейвер).
+            crate::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
             let cur = state.read(cx).column_order.clone();
             if cur != this.col_order_cache {
                 this.col_order_cache = cur;
@@ -349,12 +360,14 @@ impl OrdersPanel {
             cached_cores: Vec::new(),
             cached_entries: Rc::new(Vec::new()),
             table_state,
+            widths_id,
             col_order_cache: Vec::new(),
             main_open: Rc::new(HashSet::new()),
             highlight: Rc::new(HashSet::new()),
             dock: None,
             focus: cx.focus_handle(),
         };
+        this.apply_ctx_columns(cx);
         let backend_for_initial_cache = this.backend.clone();
         this.rebuild_cache(backend_for_initial_cache.read(cx));
         this
@@ -495,6 +508,10 @@ impl OrdersPanel {
     ) -> Self {
         let mut this = Self::new(backend, group, window, cx);
         this.view = view_from_info(info);
+        // Per-контекст набор полей (единый дескриптор) ПЕРЕКРЫВАЕТ старый docks.json-набор:
+        // если пользователь настроил колонки в новом хранилище — оно и выигрывает; иначе остаётся
+        // docks.json-набор как миграционный сид (перепишется в universal при первом тогле).
+        this.apply_ctx_columns(cx);
         // Порядок колонок (drag) персистится отдельно от `view` (это не Copy-список).
         let order = column_order_from_info(info);
         if !order.is_empty() {
@@ -502,6 +519,51 @@ impl OrdersPanel {
             this.table_state.update(cx, |s, _| s.column_order = order);
         }
         this
+    }
+
+    /// Пометить панель как открытую в ОТКРЕПЛЁННОМ окне (зовётся из `detached::spawn` сразу
+    /// после создания): переключает контекст хранилища ширин/полей на `:win` и пере-засеивает
+    /// ширины И набор видимых колонок из сохранённого набора этого режима. Так у докнутой вкладки
+    /// и раскрытого окна свои ширины и свои поля.
+    pub(crate) fn mark_table_detached(&mut self, cx: &mut Context<Self>) {
+        self.widths_id = crate::table_persist::ctx_id("orders-table", true);
+        let saved = crate::table_persist::saved(self.backend.read(cx), &self.widths_id);
+        self.table_state.update(cx, |s, c| {
+            s.column_widths = saved;
+            c.notify();
+        });
+        self.apply_ctx_columns(cx);
+        let backend = self.backend.clone();
+        self.rebuild_cache(backend.read(cx));
+        cx.notify();
+    }
+
+    /// Применить сохранённый per-контекст набор видимых колонок (`table_visible_columns` по
+    /// `widths_id`), если он есть. Единый дескриптор полей: набор различается на режим (докнутая
+    /// вкладка `:dock` vs откреплённое окно `:win`). Пустая/битая запись (0 валидных ключей) →
+    /// оставляем текущий вид (иначе показали бы пустую таблицу).
+    fn apply_ctx_columns(&mut self, cx: &App) {
+        if let Some(keys) = crate::table_persist::visible(self.backend.read(cx), &self.widths_id) {
+            let mask = keys
+                .iter()
+                .filter_map(|k| OrdCol::from_key(k))
+                .fold(0u16, |m, c| m | c.bit());
+            if mask != 0 {
+                self.view.columns = mask;
+            }
+        }
+    }
+
+    /// Сохранить текущий набор видимых колонок в per-контекст хранилище (`widths_id`). Зовётся из
+    /// [`Self::mutate`] при изменении маски видимости.
+    fn save_ctx_columns(&self, cx: &mut App) {
+        let keys: Vec<String> = self
+            .view
+            .visible_columns()
+            .iter()
+            .map(|c| c.key().to_string())
+            .collect();
+        crate::table_persist::set_visible(&self.backend, &self.widths_id, keys, cx);
     }
 
     /// Единая точка изменения состояния вида: применяет `f`, и ЕСЛИ вид изменился —
@@ -513,9 +575,14 @@ impl OrdersPanel {
             let mut next = this.view;
             f(&mut next);
             if next != this.view {
+                let cols_changed = next.columns != this.view.columns;
                 this.view = next;
                 let backend = this.backend.clone();
                 this.rebuild_cache(backend.read(cx));
+                // Смена набора видимых колонок → персист в единый per-контекст дескриптор.
+                if cols_changed {
+                    this.save_ctx_columns(cx);
+                }
                 cx.notify();
                 true
             } else {
@@ -690,12 +757,15 @@ impl Panel for OrdersPanel {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
-        Some(vec![crate::panels::detach_button(
-            "Orders",
-            self.group.clone(),
-            self.backend.clone(),
-            self.dock.clone(),
-        )])
+        Some(vec![
+            crate::table_persist::reset_button("orders-reset-widths", &self.table_state),
+            crate::panels::detach_button(
+                "Orders",
+                self.group.clone(),
+                self.backend.clone(),
+                self.dock.clone(),
+            ),
+        ])
     }
 }
 

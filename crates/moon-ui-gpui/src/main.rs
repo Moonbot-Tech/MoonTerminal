@@ -47,6 +47,7 @@ mod sound;
 mod shell;
 mod startup;
 mod strategies;
+mod table_persist;
 mod terminal_chrome;
 mod windowing;
 

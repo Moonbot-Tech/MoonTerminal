@@ -137,6 +137,7 @@ pub fn detach_button(
         .ghost()
         .size(MoonButtonSize::Action)
         .label("⧉")
+        .tooltip(rust_i18n::t!("dock.detach_hint").to_string())
         .on_click(move |_, window, app| {
             let spec =
                 DetachedSpec::with_saved_geom(&backend, app, group.clone(), name.to_string());

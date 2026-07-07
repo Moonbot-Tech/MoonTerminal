@@ -337,15 +337,22 @@ pub fn spawn(
     app.open_window(opts, move |window, cx| {
         crate::windowing::configure_shell_clear_color(window, cx);
         let content: AnyView = match spec.panel.as_str() {
-            "Orders" => cx
-                .new(|cx| OrdersPanel::new(backend.clone(), spec.group.clone(), window, cx))
-                .into(),
+            "Orders" => {
+                let p =
+                    cx.new(|cx| OrdersPanel::new(backend.clone(), spec.group.clone(), window, cx));
+                // Открепление = контекст `:win` для ширин таблицы (своя раскладка на окно).
+                p.update(cx, |this, cx| this.mark_table_detached(cx));
+                p.into()
+            }
             "Log" => cx
                 .new(|cx| LogPanel::new(backend.clone(), spec.group.clone(), window, cx))
                 .into(),
-            "Report" => cx
-                .new(|cx| ReportPanel::new(backend.clone(), spec.group.clone(), window, cx))
-                .into(),
+            "Report" => {
+                let p =
+                    cx.new(|cx| ReportPanel::new(backend.clone(), spec.group.clone(), window, cx));
+                p.update(cx, |this, cx| this.mark_table_detached(cx));
+                p.into()
+            }
             "Assets" => cx
                 .new(|cx| {
                     AssetsView::detached_group(backend.clone(), spec.group.clone(), window, cx)

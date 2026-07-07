@@ -67,12 +67,22 @@ impl ScreenerView {
             .detach();
         }
 
+        // Скринер всегда отдельное окно → контекст ширин фиксированный `:win`.
+        let widths_id = crate::table_persist::ctx_id("screener-table", true);
+        let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.sort_column = Some("vol24".into());
             s.sort_ascending = false;
+            s.column_widths = saved_widths;
             s
         });
+        // Ресайз колонки мутирует state → сохраняем ширины (универсальный сейвер).
+        let widths_id_obs = widths_id.clone();
+        cx.observe(&table_state, move |this, state, cx| {
+            crate::table_persist::persist(&this.backend, &widths_id_obs, &state, cx);
+        })
+        .detach();
 
         // Живые данные: рынки обновляются пакетами каждую секунду, гейт держит
         // перестройку на 1 Гц (секундное ведро; сигнатура не нужна — таблица
@@ -101,9 +111,12 @@ impl ScreenerView {
         })
         .detach();
 
-        // Видимые колонки из layout: None = все (дефолт). Неизвестные ключи
-        // отбрасываем (колонку могли переименовать/удалить между версиями).
-        let visible_cols: HashSet<String> = match &backend.read(cx).layout.screener_columns {
+        // Видимые колонки: единый per-контекст дескриптор (`table_visible_columns` по
+        // `screener-table:win`) — приоритетный источник; при его отсутствии мигрируем со старого
+        // `screener_columns`. Неизвестные ключи отбрасываем (колонку могли переименовать/удалить).
+        let saved_cols = crate::table_persist::visible(backend.read(cx), &widths_id)
+            .or_else(|| backend.read(cx).layout.screener_columns.clone());
+        let visible_cols: HashSet<String> = match saved_cols {
             Some(list) => {
                 let set: HashSet<String> = list
                     .iter()
@@ -243,12 +256,11 @@ impl ScreenerView {
             .filter(|c| self.visible_cols.contains(c.0))
             .map(|c| c.0.to_string())
             .collect();
-        self.backend.update(cx, |b, _| {
-            // Все колонки видимы → сбрасываем на дефолт (None), чтобы новые
-            // колонки будущих версий не оказались скрыты старым списком.
-            b.layout.screener_columns = (list.len() != COLS.len()).then_some(list);
-            b.layout_dirty = true;
-        });
+        // Единый per-контекст дескриптор полей (`screener-table:win`). Скринер всегда окно,
+        // потому контекст один; храним явный список видимых ключей (в т.ч. когда видимы все —
+        // список полный), устаревший `screener_columns` больше не пишем (мигрируем при чтении).
+        let id = crate::table_persist::ctx_id("screener-table", true);
+        crate::table_persist::set_visible(&self.backend, &id, list, cx);
         cx.notify();
     }
 

@@ -22,8 +22,9 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     DockArea, MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonCheckbox, MoonCheckboxSize,
-    MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonInput, MoonInputState,
-    MoonPalette, MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, h_flex, v_flex,
+    MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonInput,
+    MoonInputState, MoonPalette, MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root,
+    h_flex, v_flex,
 };
 
 use crate::Backend;
@@ -136,6 +137,12 @@ pub struct AssetsView {
     cached_wallet_key: Option<(Option<CoreId>, u64, bool)>,
     cached_wallets: Rc<Vec<WalletColumnSnapshot>>,
     cached_total_value: f64,
+    /// Состояние таблицы позиций (ширины/сортировка колонок) — своё, чтобы ширины
+    /// персистились через [`crate::table_persist`].
+    table_state: Entity<MoonDataTableState>,
+    /// Id хранилища ширин с контекстом: dock-вкладка = `assets-table:dock`, отдельное/откреп.
+    /// окно (`show_wallets`) = `:win`. Свои ширины на режим.
+    widths_id: String,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -181,6 +188,21 @@ impl AssetsView {
             .detach();
         }
 
+        // Контекст ширин: отдельное/откреплённое окно (есть контейнеры кошельков) = `:win`,
+        // dock-вкладка = `:dock`. Свои сохранённые ширины на каждый режим.
+        let widths_id = crate::table_persist::ctx_id("assets-table", show_wallets);
+        let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
+        let table_state = cx.new(|_| {
+            let mut s = MoonDataTableState::new();
+            s.column_widths = saved_widths;
+            s
+        });
+        // Ресайз колонки мутирует state → сохраняем ширины (универсальный сейвер).
+        cx.observe(&table_state, |this, state, cx| {
+            crate::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
+        })
+        .detach();
+
         let mut this = Self {
             backend,
             scope,
@@ -200,6 +222,8 @@ impl AssetsView {
             cached_wallet_key: None,
             cached_wallets: Rc::new(Vec::new()),
             cached_total_value: 0.0,
+            table_state,
+            widths_id,
             dock: None,
             focus: cx.focus_handle(),
         };
@@ -608,10 +632,12 @@ impl Panel for AssetsView {
     ) -> Option<Vec<AnyElement>> {
         let backend = self.backend.clone();
         Some(vec![
+            crate::table_persist::reset_button("assets-reset-widths", &self.table_state),
             MoonButton::new("assets-open-global")
                 .ghost()
                 .size(MoonButtonSize::Action)
                 .label("⧉")
+                .tooltip(t!("assets.open_global_hint").to_string())
                 .on_click(move |_, window, app| {
                     open(backend.clone(), Some(window.window_handle()), app);
                 })
@@ -653,7 +679,7 @@ impl Render for AssetsView {
         let tree_section = self
             .show_wallets
             .then(|| self.bottom(&cores, &aggs, &wallets, cx).into_any_element());
-        let table = table::assets_table("assets-table", entries, cx);
+        let table = table::assets_table("assets-table", entries, &self.table_state, cx);
 
         // Ширина окна для хит-оверлея титлбара (drag/resize/контролы) — как у «Стратегий».
         let chrome_width = match window.window_bounds() {

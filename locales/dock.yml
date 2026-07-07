@@ -47,6 +47,10 @@ dock.tab.dblclick_hint:
   ru: "двойной клик по вкладке — открепить / вернуть"
   en: "double-click a tab to detach / re-dock it"
   es: "doble clic en una pestaña para separar / reacoplar"
+dock.detach_hint:
+  ru: "Открепить в отдельное окно"
+  en: "Detach into a separate window"
+  es: "Separar en una ventana"
 dock.tab.hint_docked:
   ru: "Клик — выбрать · двойной клик или перетаскивание — открепить в окно"
   en: "Click to select · double-click or drag to pop out into a window"

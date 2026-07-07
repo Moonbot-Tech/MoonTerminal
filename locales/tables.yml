@@ -1,0 +1,7 @@
+# Общие подписи таблиц (MoonDataTable): сброс ширин колонок и т.п.
+_version: 2
+
+tables.reset_widths:
+  ru: "Сбросить ширины колонок (авто)"
+  en: "Reset column widths (auto)"
+  es: "Restablecer anchos de columna (auto)"

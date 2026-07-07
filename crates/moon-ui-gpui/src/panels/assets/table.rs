@@ -285,6 +285,7 @@ fn assets_columns() -> Vec<MoonDataTableColumn> {
 pub(super) fn assets_table(
     id: &'static str,
     rows: Rc<Vec<AssetEntry>>,
+    state: &Entity<MoonDataTableState>,
     cx: &Context<AssetsView>,
 ) -> impl IntoElement {
     let empty = rows.is_empty();
@@ -303,6 +304,7 @@ pub(super) fn assets_table(
             assets_row(&table_rows[ix], &view, p)
         })
         .columns(assets_columns())
+        .state(state)
         .header_height(design::TABLE_HEAD_H)
         .row_height(design::TABLE_ROW_H),
     )
