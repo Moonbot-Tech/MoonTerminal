@@ -4,9 +4,10 @@
 
 use gpui::*;
 
-use moon_ui::{DockArea, DockPlacement};
+use moon_ui::{DockArea, DockPlacement, DockSplitPlacement, PanelInfo, PanelState};
 
 use moon_core::config::GroupLayout;
+use moon_core::config::layout::DockSplitSlot;
 
 use crate::{Backend, detached};
 
@@ -51,7 +52,16 @@ impl Shell {
         cx.defer(move |app| {
             let _ = handle.update(app, move |_, window, app| {
                 for panel_name in repins {
-                    restore_panel_to_home_tabs(&dock, &backend, &group, &panel_name, window, app);
+                    // Возврат из ОКНА — на запомненное место (в т.ч. в сплит).
+                    restore_panel_to_home_tabs(
+                        &dock,
+                        &backend,
+                        &group,
+                        &panel_name,
+                        true,
+                        window,
+                        app,
+                    );
                     backend.update(app, |b, _| {
                         b.detached
                             .retain(|s| !(s.group == group && s.panel == panel_name));
@@ -89,6 +99,44 @@ impl Shell {
                 {
                     return;
                 }
+                // Запоминаем размещение панели в доке ДО удаления — чтобы возврат встал на то же
+                // место. Split-лист (рядом с соседом) → сплит-слот; иначе вкладка → индекс. Хранилища
+                // взаимоисключающи (панель либо там, либо там) — второе чистим. None → не трогаем.
+                let key = format!("{group}:{panel_name}");
+                match captured_slot(&dock, &panel_name, app) {
+                    Some(DockSlot::Split {
+                        siblings,
+                        slot_panels,
+                        index,
+                        placement,
+                        size,
+                        sibling_size,
+                    }) => {
+                        backend.update(app, |b, _| {
+                            b.layout.dock_split_slot.insert(
+                                key.clone(),
+                                DockSplitSlot {
+                                    siblings,
+                                    slot_panels,
+                                    index,
+                                    placement,
+                                    size,
+                                    sibling_size,
+                                },
+                            );
+                            b.layout.dock_tab_index.remove(&key);
+                            b.layout_dirty = true;
+                        });
+                    }
+                    Some(DockSlot::Tab(ix)) => {
+                        backend.update(app, |b, _| {
+                            b.layout.dock_tab_index.insert(key.clone(), ix);
+                            b.layout.dock_split_slot.remove(&key);
+                            b.layout_dirty = true;
+                        });
+                    }
+                    None => {}
+                }
                 let owner = window.window_handle();
                 if let Err(err) = detached::spawn(app, &backend, &spec, Some(owner)) {
                     log::warn!(
@@ -123,7 +171,23 @@ impl Shell {
         let handle = self.window_handle;
         cx.defer(move |app| {
             let _ = handle.update(app, move |_, window, app| {
-                restore_panel_to_home_tabs(&dock, &backend, &group, &panel_name, window, app);
+                // × на ДОКНУТОЙ панели = сброс размещения: убрать из сплита и вернуть ПРОСТО
+                // вкладкой в линию (её место). Чистим split-слот, чтобы не восстановился сплитом.
+                let key = format!("{group}:{panel_name}");
+                backend.update(app, |b, _| {
+                    if b.layout.dock_split_slot.remove(&key).is_some() {
+                        b.layout_dirty = true;
+                    }
+                });
+                restore_panel_to_home_tabs(
+                    &dock,
+                    &backend,
+                    &group,
+                    &panel_name,
+                    false,
+                    window,
+                    app,
+                );
             });
         });
     }
@@ -180,17 +244,175 @@ fn restore_panel_to_home_tabs(
     backend: &Entity<Backend>,
     group: &str,
     panel_name: &str,
+    prefer_split: bool,
     window: &mut Window,
     app: &mut App,
 ) {
     let Some(panel) = detached::build_panel(panel_name, group, backend, window, app) else {
         return;
     };
-    let ix = dock_home_priority(panel_name);
+    let key = format!("{group}:{panel_name}");
+    // Приоритет размещения при возврате:
+    //   1) split-слот — вернуть РЯДОМ с соседом сплитом (если сосед сейчас в доке) — ТОЛЬКО когда
+    //      `prefer_split` (возврат из окна); × на докнутой панели (prefer_split=false) сбрасывает
+    //      в линию вкладок;
+    //   2) запомненный индекс вкладки — в домашнюю tab-полосу на то же место;
+    //   3) каноничный priority.
+    // `insert_*` клампят индекс/находят соседа сами; при промахе (1) падаем в (2)/(3) тем же
+    // `panel` (в beside/into_home передаём clone, оригинал держим на фолбэк).
+    let split = prefer_split
+        .then(|| backend.read(app).layout.dock_split_slot.get(&key).cloned())
+        .flatten();
+    let tab_ix = backend.read(app).layout.dock_tab_index.get(&key).copied();
     dock.update(app, |area, cx| {
         area.remove_panel_by_name(panel_name, window, cx);
+        if let Some(slot) = &split {
+            let placement = match slot.placement {
+                1 => DockSplitPlacement::Right,
+                2 => DockSplitPlacement::Top,
+                3 => DockSplitPlacement::Bottom,
+                _ => DockSplitPlacement::Left,
+            };
+            // 0.0 = flex → None (без фиксированного размера слота).
+            let panel_size = (slot.size > 0.0).then_some(slot.size);
+            let sibling_size = (slot.sibling_size > 0.0).then_some(slot.sibling_size);
+            let anchors: Vec<&str> = slot.siblings.iter().map(|s| s.as_str()).collect();
+            let slot_panels: Vec<&str> = slot.slot_panels.iter().map(|s| s.as_str()).collect();
+            if !anchors.is_empty()
+                && area.insert_panel_beside_sibling(
+                    panel.clone(),
+                    &anchors,
+                    &slot_panels,
+                    slot.index,
+                    placement,
+                    panel_size,
+                    sibling_size,
+                    window,
+                    cx,
+                )
+            {
+                return;
+            }
+        }
+        let ix = tab_ix.unwrap_or_else(|| dock_home_priority(panel_name));
         if !area.insert_panel_into_home_tabs(panel.clone(), ix, &DOCK_TAB_ORDER, window, cx) {
             area.add_panel(panel, DockPlacement::Bottom, None, window, cx);
         }
     });
+}
+
+/// Запомненное размещение панели в доке (для восстановления при возврате).
+enum DockSlot {
+    /// Панель была вкладкой в tab-полосе — на позиции `ix`.
+    Tab(usize),
+    /// Панель была ОТДЕЛЬНЫМ листом в сплите. `siblings` — соседи-якоря (для поиска сплита),
+    /// `slot_panels` — панели соседнего слота (обернуть целиком при схлопе), `index` — её позиция
+    /// в сплите, `placement` — сторона, `size`/`sibling_size` — пиксельные размеры слотов (0.0 =
+    /// flex) для восстановления пропорции.
+    Split {
+        siblings: Vec<String>,
+        slot_panels: Vec<String>,
+        index: usize,
+        placement: u8,
+        size: f32,
+        sibling_size: f32,
+    },
+}
+
+/// Размещение панели `panel_name` в доке (обходя дамп). Split-лист (одиночная панель прямо в
+/// сплите) → [`DockSlot::Split`] с соседом и стороной; вкладка → [`DockSlot::Tab`] с индексом;
+/// `None`, если не нашли. Обход по всем зонам, первое совпадение.
+fn captured_slot(dock: &Entity<DockArea>, panel_name: &str, app: &mut App) -> Option<DockSlot> {
+    /// Первое имя панели-листа в поддереве (для якоря-соседа).
+    fn first_panel_name(node: &PanelState) -> Option<String> {
+        if matches!(node.info, PanelInfo::Panel(_)) && !node.panel_name.is_empty() {
+            return Some(node.panel_name.clone());
+        }
+        node.children.iter().find_map(first_panel_name)
+    }
+    /// Все имена панелей-листьев в поддереве (панели соседнего слота — обернуть целиком).
+    fn collect_panel_names(node: &PanelState, out: &mut Vec<String>) {
+        if matches!(node.info, PanelInfo::Panel(_)) && !node.panel_name.is_empty() {
+            out.push(node.panel_name.clone());
+        }
+        for c in &node.children {
+            collect_panel_names(c, out);
+        }
+    }
+    fn walk(node: &PanelState, target: &str) -> Option<DockSlot> {
+        match &node.info {
+            PanelInfo::Tabs { .. } => {
+                if let Some(ix) = node.children.iter().position(|c| c.panel_name == target) {
+                    return Some(DockSlot::Tab(ix));
+                }
+            }
+            PanelInfo::Stack { axis, sizes } => {
+                // Панель = отдельный лист прямо в сплите (не вложена в Tabs) → сплит-слот.
+                for (i, child) in node.children.iter().enumerate() {
+                    let is_leaf_target =
+                        child.panel_name == target && matches!(child.info, PanelInfo::Panel(_));
+                    if is_leaf_target {
+                        let horizontal = *axis == 0;
+                        // Сосед — соседний слот; сторона панели относительно него (для схлопа 2→1).
+                        let (sib_ix, target_after) = if i > 0 { (i - 1, true) } else { (i + 1, false) };
+                        let placement = match (horizontal, target_after) {
+                            (true, true) => 1,   // справа от соседа
+                            (true, false) => 0,  // слева
+                            (false, true) => 3,  // снизу
+                            (false, false) => 2, // сверху
+                        };
+                        // Все соседи по сплиту — якоря для поиска сплита при возврате.
+                        let siblings: Vec<String> = node
+                            .children
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, _)| *j != i)
+                            .filter_map(|(_, c)| first_panel_name(c))
+                            .collect();
+                        if siblings.is_empty() {
+                            return None;
+                        }
+                        // Панели СОСЕДНЕГО слота целиком (слот мог быть вложенным сплитом).
+                        let mut slot_panels = Vec::new();
+                        if let Some(sib) = node.children.get(sib_ix) {
+                            collect_panel_names(sib, &mut slot_panels);
+                        }
+                        // Пиксельные размеры слотов (0.0 = flex) — вернуть прежнюю пропорцию.
+                        let size = sizes.get(i).copied().unwrap_or(0.0);
+                        let sibling_size = sizes.get(sib_ix).copied().unwrap_or(0.0);
+                        return Some(DockSlot::Split {
+                            siblings,
+                            slot_panels,
+                            index: i,
+                            placement,
+                            size,
+                            sibling_size,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+        node.children.iter().find_map(|c| walk(c, target))
+    }
+    let state = dock.update(app, |area, cx| area.dump(cx));
+    walk(&state.center, panel_name)
+        .or_else(|| {
+            state
+                .bottom_dock
+                .as_ref()
+                .and_then(|d| walk(&d.panel, panel_name))
+        })
+        .or_else(|| {
+            state
+                .left_dock
+                .as_ref()
+                .and_then(|d| walk(&d.panel, panel_name))
+        })
+        .or_else(|| {
+            state
+                .right_dock
+                .as_ref()
+                .and_then(|d| walk(&d.panel, panel_name))
+        })
 }
