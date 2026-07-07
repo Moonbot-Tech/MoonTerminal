@@ -557,11 +557,14 @@ impl Render for ChartPanel {
             .children(close_btns.into_iter().map(|(idx, right, top)| {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-close-{idx}")))
-                    .label("×")
+                    // Крестик ярче и жирнее (было приглушённый ghost-fg text_muted@0.78):
+                    // `text_segment` задаёт цвет (полный `text`) и вес (700). Подложка/ховер — как
+                    // у Ghost (прозрачно по умолчанию, лёгкий фон на наведении).
+                    .text_segment("×", palette.text, 700.0)
                     .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
-                    // Крупнее (было 15×15) — чтобы не мискликнуть мимо на стакан при быстром
-                    // закрытии нескольких графиков подряд.
+                    // 22×22 — чтобы не мискликнуть мимо на стакан при быстром закрытии нескольких
+                    // графиков подряд.
                     .bounds(MoonRect::new(right - 26.0, top + 3.0, 22.0, 22.0))
                     .on_click(move |_, _w, app| {
                         entity.update(app, |this, cx| this.remove_pane(idx, cx));

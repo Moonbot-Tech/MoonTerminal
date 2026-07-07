@@ -28,9 +28,14 @@ pub fn is_usd_stable(currency: &str) -> bool {
 
 /// Базовая монета: срезает `quote` с конца `sym` (если совпал). `quote` пуст или
 /// не подошёл → возвращаем символ как есть.
+///
+/// Gate и подобные биржи разделяют символ подчёркиванием (`VANRY_USDT`, `1INCH_USDT`):
+/// после среза `USDT` остаётся хвостовой разделитель `VANRY_` — убираем его (`_`/`-`/`/`),
+/// иначе в таблицах токен показывается как «VANRY_».
 pub fn base_symbol<'a>(sym: &'a str, quote: &str) -> &'a str {
     if !quote.is_empty() && sym.len() > quote.len() && sym.to_ascii_uppercase().ends_with(quote) {
-        &sym[..sym.len() - quote.len()]
+        let base = &sym[..sym.len() - quote.len()];
+        base.trim_end_matches(|c| c == '_' || c == '-' || c == '/')
     } else {
         sym
     }
