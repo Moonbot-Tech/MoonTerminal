@@ -74,6 +74,14 @@ assets.market_sell:
   ru: "Market sell"
   en: "Market sell"
   es: "Venta mercado"
+assets.market_sell_confirm:
+  ru: "Продажа по маркету"
+  en: "Market sell"
+  es: "Venta a mercado"
+assets.market_sell_q:
+  ru: "Точно продать %{coin} по маркету?"
+  en: "Really market-sell %{coin}?"
+  es: "¿Vender %{coin} a mercado?"
 assets.order:
   ru: "Order"
   en: "Order"

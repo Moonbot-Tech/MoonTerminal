@@ -11,6 +11,10 @@ dialogs.yes:
   ru: "Да"
   en: "Yes"
   es: "Sí"
+dialogs.no:
+  ru: "Нет"
+  en: "No"
+  es: "No"
 dialogs.create:
   ru: "Создать"
   en: "Create"

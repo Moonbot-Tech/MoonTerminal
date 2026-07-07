@@ -412,6 +412,7 @@ fn actions_cell(
     let order_id = SharedString::from(format!("asset-order-{core}-{market}"));
     let view_ms = view.clone();
     let market_ms = market.clone();
+    let coin_ms = e.row.coin.clone();
     let el = h_flex()
         .w_full()
         .h_full()
@@ -423,20 +424,19 @@ fn actions_cell(
                 .label(t!("assets.market_sell").to_string())
                 .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Danger)
-                .on_click(move |_, _w, app| {
-                    view_ms.update(app, |this, cx| {
-                        let b = this.backend.read(cx);
-                        // Позиция → закрыть по маркету; спот-токен → продать остаток по маркету.
-                        let res = if is_position {
-                            b.session.market_sell_position(core, market_ms.clone())
-                        } else {
-                            b.session.market_sell_token(core, market_ms.clone(), size)
-                        };
-                        if let Err(err) = res {
-                            log::warn!("assets market sell {market_ms} failed: {err:#}");
-                        }
-                        cx.notify();
-                    });
+                .on_click(move |_, window, app| {
+                    // Спрашиваем подтверждение (да/нет) ДО закрытия по маркету — необратимое
+                    // действие, легко нажать случайно. Сама продажа — в кнопке «Да» диалога.
+                    open_market_sell_confirm(
+                        view_ms.clone(),
+                        core,
+                        market_ms.clone(),
+                        is_position,
+                        size,
+                        coin_ms.clone(),
+                        window,
+                        app,
+                    );
                 })
                 .render(),
         )
@@ -452,4 +452,93 @@ fn actions_cell(
                 .render(),
         );
     MoonDataCell::element(el)
+}
+
+/// Модалка подтверждения «Market sell» (да/нет). Само закрытие по маркету исполняется только
+/// по кнопке «Да» — позиция закрывается `market_sell_position`, спот-остаток `market_sell_token`.
+/// Открывается прямо из клика кнопки (у `MoonButton::on_click` под рукой `&mut App`).
+#[allow(clippy::too_many_arguments)]
+fn open_market_sell_confirm(
+    view: Entity<AssetsView>,
+    core: CoreId,
+    market: String,
+    is_position: bool,
+    size: f64,
+    coin: String,
+    window: &mut Window,
+    app: &mut App,
+) {
+    window.open_unique_moon_dialog("assets-market-sell-confirm", app, move |dialog, _window, cx| {
+        let p = MoonPalette::active(cx);
+        let confirm_view = view.clone();
+        let market_c = market.clone();
+        let question = t!("assets.market_sell_q", coin = coin.clone()).to_string();
+        dialog
+            .w(px(320.0))
+            .close_button(true)
+            .overlay(true)
+            .overlay_closable(true)
+            .bg(rgb(p.shell_high))
+            .border_color(rgb(p.border))
+            .rounded(px(8.0))
+            .text_color(rgb(p.text))
+            .header(
+                div()
+                    .w_full()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(rgb(p.border))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("assets.market_sell_confirm").to_string()),
+            )
+            .content(move |content, _window, cx| {
+                let p = MoonPalette::active(cx);
+                content.child(
+                    div()
+                        .font_family(design::mono())
+                        .text_size(design::t_body(cx))
+                        .text_color(rgb(p.text))
+                        .child(question.clone()),
+                )
+            })
+            .footer(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .justify_end()
+                    .child(
+                        MoonButton::new("assets-msell-no")
+                            .outline()
+                            .size(MoonButtonSize::Action)
+                            .label(format!("  {}  ", t!("dialogs.no")))
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                            })
+                            .render(),
+                    )
+                    .child(
+                        MoonButton::new("assets-msell-yes")
+                            .size(MoonButtonSize::Action)
+                            .variant(MoonButtonVariant::Danger)
+                            .label(format!("  {}  ", t!("dialogs.yes")))
+                            .on_click(move |_, window, cx| {
+                                confirm_view.update(cx, |this, cx| {
+                                    let b = this.backend.read(cx);
+                                    // Позиция → закрыть по маркету; спот-токен → продать остаток.
+                                    let res = if is_position {
+                                        b.session.market_sell_position(core, market_c.clone())
+                                    } else {
+                                        b.session.market_sell_token(core, market_c.clone(), size)
+                                    };
+                                    if let Err(err) = res {
+                                        log::warn!("assets market sell {market_c} failed: {err:#}");
+                                    }
+                                    cx.notify();
+                                });
+                                window.close_dialog(cx);
+                            })
+                            .render(),
+                    ),
+            )
+    });
 }

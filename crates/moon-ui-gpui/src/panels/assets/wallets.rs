@@ -283,7 +283,7 @@ impl AssetsView {
                             MoonButton::new("transfer-cancel")
                                 .outline()
                                 .size(MoonButtonSize::Action)
-                                .label(t!("dialogs.cancel").to_string())
+                                .label(format!("  {}  ", t!("dialogs.cancel")))
                                 .on_click(move |_, window, cx| {
                                     footer_cancel_view
                                         .update(cx, |this, cx| this.close_transfer_dialog(cx));
@@ -295,7 +295,7 @@ impl AssetsView {
                             MoonButton::new("transfer-confirm")
                                 .primary()
                                 .size(MoonButtonSize::Action)
-                                .label(t!("assets.transfer_btn").to_string())
+                                .label(format!("  {}  ", t!("assets.transfer_btn")))
                                 .on_click(move |_, window, cx| {
                                     match footer_confirm_view
                                         .update(cx, |this, cx| this.confirm_transfer(cx))
