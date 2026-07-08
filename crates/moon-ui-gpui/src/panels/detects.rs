@@ -304,21 +304,26 @@ impl Render for DetectsPanel {
                             // бейдж типа справа — `flex_none`, поэтому длинное имя не
                             // выталкивает бейдж за рамку, а обрезается перед ним.
                             .child({
-                                // Код+цвет бейджа типа из конфига (под активную тему);
-                                // при включённой опции — обводка по направлению (short/long).
-                                let code = badges.code(it.kind).to_string();
-                                let bcol = design::rgb_to_u32(badges.color(it.kind, is_light));
-                                let mut badge = MoonBadge::new(code)
-                                    .variant(MoonBadgeVariant::Soft)
-                                    .size(MoonBadgeSize::Tiny)
-                                    .bg_color(bcol)
-                                    .text_color(bcol)
-                                    .mono(true);
-                                if badges.mark_direction {
-                                    let ocol =
-                                        design::rgb_to_u32(badges.outline(it.is_short, is_light));
-                                    badge = badge.border_color(ocol).border_alpha(0.9);
-                                }
+                                // Бейдж типа: код (long/short по направлению) + цвет из
+                                // конфига под тему; обводка — пер-строка (цвета long/short).
+                                // Неактивный тип — бейдж не рисуем.
+                                let type_badge = badges.active(it.kind).then(|| {
+                                    let code = badges.code(it.kind, it.is_short).to_string();
+                                    let bcol = design::rgb_to_u32(badges.color(it.kind, is_light));
+                                    let mut badge = MoonBadge::new(code)
+                                        .variant(MoonBadgeVariant::Soft)
+                                        .size(MoonBadgeSize::Tiny)
+                                        .bg_color(bcol)
+                                        .text_color(bcol)
+                                        .mono(true);
+                                    if let Some(oc) =
+                                        badges.outline_color(it.kind, it.is_short, is_light)
+                                    {
+                                        let ocol = design::rgb_to_u32(oc);
+                                        badge = badge.border_color(ocol).border_alpha(0.9);
+                                    }
+                                    badge
+                                });
                                 h_flex()
                                     .w_full()
                                     .items_center()
@@ -334,21 +339,23 @@ impl Render for DetectsPanel {
                                                 .uppercase(false),
                                         ),
                                     )
-                                    .child(div().flex_none().child(badge))
+                                    .child(div().flex_none().children(type_badge))
                             })
                             .child(
                                 h_flex()
                                     .w_full()
                                     .justify_between()
                                     .items_end()
+                                    // Секунды приподняты на пару px от низа карточки.
                                     .child(
-                                        MoonText::new(format!("{secs}s"))
-                                            .color(p.text_muted)
-                                            .font_size(9.0)
-                                            .line_height(11.0)
-                                            .mono(true)
-                                            .uppercase(false)
-                                            .render(),
+                                        div().mb(px(2.0)).child(
+                                            MoonText::new(format!("{secs}s"))
+                                                .color(p.text_muted)
+                                                .font_size(9.0)
+                                                .line_height(11.0)
+                                                .mono(true)
+                                                .uppercase(false),
+                                        ),
                                     )
                                     .child(
                                         MoonBadge::new(it.core_name.clone())

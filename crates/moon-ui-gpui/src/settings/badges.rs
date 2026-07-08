@@ -1,11 +1,13 @@
-//! Вкладка «Бейджи» — код+цвет бейджа по видам стратегий (типам детектов) + опция
-//! «помечать направление (isShort) обводкой». Правки идут в draft (живое превью в
-//! строке), «Сохранить» пишет отдельный переносимый `badges.json`. Цвета — РАЗДЕЛЬНО
-//! под активную тему (как «Линии»/«Ордера»); список растёт кнопкой «Добавить тип».
+//! Вкладка «Бейджи» — код+цвет бейджа по видам стратегий (типам детектов). Каждая
+//! строка: галка «активность» (рисовать ли бейдж), код (long; при галке «различать
+//! L/S» рядом появляется код short), цвет (раздельно под тему), и галка «обводка»
+//! пер-строка (при включении — цвета обводки long/short). Правки идут в draft (живое
+//! превью), «Сохранить» пишет переносимый `badges.json`.
 //!
 //! Состояние редактора — [`BadgesEd`]; строки пересобираются при add/del (свежие
 //! индексы в подписках), как вкладка «Подключения».
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonCheckboxSize,
@@ -14,16 +16,19 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{SettingsView, color_row, separator};
+use super::{SettingsView, separator};
 use crate::{design, Backend};
 use moon_core::config::{BadgeEntry, UiThemeMode};
 
-/// Редактор одной строки бейджа: поля ввода + пикер цвета активной темы.
+/// Редактор одной строки бейджа: поля ввода + пикеры цвета активной темы.
 pub(super) struct BadgeRowEd {
     ordinal: Entity<MoonInputState>,
     name: Entity<MoonInputState>,
     code: Entity<MoonInputState>,
+    code_short: Entity<MoonInputState>,
     color: Entity<MoonColorPickerState>,
+    outline_long: Entity<MoonColorPickerState>,
+    outline_short: Entity<MoonColorPickerState>,
 }
 
 /// Состояние редактора вкладки «Бейджи».
@@ -31,8 +36,6 @@ pub(super) struct BadgesEd {
     /// Тема, набор цветов которой сейчас редактируется (по активной теме приложения).
     is_light: bool,
     rows: Vec<BadgeRowEd>,
-    short_color: Entity<MoonColorPickerState>,
-    long_color: Entity<MoonColorPickerState>,
 }
 
 /// TextInput, привязанный к полю записи `badges.entries[idx]` (пишет в draft).
@@ -61,30 +64,30 @@ fn badge_input(
     st
 }
 
-/// Color-picker цвета бейджа `badges.entries[idx]` под активную тему (пишет в draft).
-fn badge_color(
+/// Color-picker поля записи `badges.entries[idx]` (get/set над `BadgeEntry`, пишет в draft).
+fn entry_color(
     backend: &Entity<Backend>,
     window: &mut Window,
     cx: &mut Context<SettingsView>,
     idx: usize,
-    is_light: bool,
+    get: impl Fn(&BadgeEntry) -> [u8; 3] + Copy + 'static,
+    set: impl Fn(&mut BadgeEntry, [u8; 3]) + 'static,
 ) -> Entity<MoonColorPickerState> {
     let init = {
         let b = backend.read(cx);
-        let bcfg = &b.preview.as_ref().unwrap_or(&b.config).badges;
-        bcfg.entries
+        b.preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .badges
+            .entries
             .get(idx)
-            .map(|e| e.color(is_light))
+            .map(get)
             .unwrap_or([0x97, 0x92, 0x8A])
     };
-    super::draft_color(window, cx, init, move |p, c| {
+    super::draft_color(window, cx, init, move |p, cc| {
         if let Some(e) = p.badges.entries.get_mut(idx) {
-            if e.color(is_light) != c {
-                if is_light {
-                    e.color_light = c;
-                } else {
-                    e.color_dark = c;
-                }
+            if get(e) != cc {
+                set(e, cc);
                 return true;
             }
         }
@@ -119,50 +122,70 @@ pub(super) fn build(
                 }
             }),
             name: badge_input(window, cx, idx, e.name.clone(), |e, v| e.name = v),
-            // Код — максимум 3 символа (не обязательно буквы): обрезаем по символам.
             code: badge_input(window, cx, idx, e.code.clone(), |e, v| {
                 e.code = v.chars().take(3).collect();
             }),
-            color: badge_color(backend, window, cx, idx, is_light),
+            code_short: badge_input(window, cx, idx, e.code_short.clone(), |e, v| {
+                e.code_short = v.chars().take(3).collect();
+            }),
+            color: entry_color(
+                backend,
+                window,
+                cx,
+                idx,
+                move |e| e.color(is_light),
+                move |e, cc| {
+                    if is_light {
+                        e.color_light = cc;
+                    } else {
+                        e.color_dark = cc;
+                    }
+                },
+            ),
+            outline_long: entry_color(
+                backend,
+                window,
+                cx,
+                idx,
+                move |e| {
+                    if is_light {
+                        e.outline_long_light
+                    } else {
+                        e.outline_long_dark
+                    }
+                },
+                move |e, cc| {
+                    if is_light {
+                        e.outline_long_light = cc;
+                    } else {
+                        e.outline_long_dark = cc;
+                    }
+                },
+            ),
+            outline_short: entry_color(
+                backend,
+                window,
+                cx,
+                idx,
+                move |e| {
+                    if is_light {
+                        e.outline_short_light
+                    } else {
+                        e.outline_short_dark
+                    }
+                },
+                move |e, cc| {
+                    if is_light {
+                        e.outline_short_light = cc;
+                    } else {
+                        e.outline_short_dark = cc;
+                    }
+                },
+            ),
         })
         .collect();
 
-    let (short_init, long_init) = {
-        let b = backend.read(cx);
-        let bcfg = &b.preview.as_ref().unwrap_or(&b.config).badges;
-        (bcfg.outline(true, is_light), bcfg.outline(false, is_light))
-    };
-    let short_color = super::draft_color(window, cx, short_init, move |p, c| {
-        if p.badges.outline(true, is_light) != c {
-            if is_light {
-                p.badges.short_outline_light = c;
-            } else {
-                p.badges.short_outline_dark = c;
-            }
-            true
-        } else {
-            false
-        }
-    });
-    let long_color = super::draft_color(window, cx, long_init, move |p, c| {
-        if p.badges.outline(false, is_light) != c {
-            if is_light {
-                p.badges.long_outline_light = c;
-            } else {
-                p.badges.long_outline_dark = c;
-            }
-            true
-        } else {
-            false
-        }
-    });
-
-    BadgesEd {
-        is_light,
-        rows,
-        short_color,
-        long_color,
-    }
+    BadgesEd { is_light, rows }
 }
 
 impl SettingsView {
@@ -185,6 +208,7 @@ impl SettingsView {
                     code: "???".to_string(),
                     color_dark: default_color,
                     color_light: default_color,
+                    ..BadgeEntry::default()
                 });
                 bcx.notify();
             }
@@ -207,56 +231,145 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Строка редактора бейджа: ordinal · имя · код · цвет · превью · удалить.
+    /// Строка редактора бейджа (карточка): line1 = ordinal·имя·актив·код(·L/S·код-short)·
+    /// цвет·превью·удалить; line2 = обводка (галка + цвета long/short при включении).
     fn badge_row(&self, cx: &Context<Self>, idx: usize, row: &BadgeRowEd) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
         let is_light = self.badges.is_light;
-        // Превью-бейдж из живого draft (код+цвет активной темы).
-        let (code, color) = {
+        let (active, distinguish, outline, code, color) = {
             let b = self.backend.read(cx);
             let bcfg = &b.preview.as_ref().unwrap_or(&b.config).badges;
             bcfg.entries
                 .get(idx)
-                .map(|e| (e.code.clone(), e.color(is_light)))
-                .unwrap_or_else(|| ("UNK".to_string(), [0x97, 0x92, 0x8A]))
+                .map(|e| {
+                    (
+                        e.active,
+                        e.distinguish_dir,
+                        e.outline,
+                        e.code.clone(),
+                        e.color(is_light),
+                    )
+                })
+                .unwrap_or((true, false, false, "UNK".to_string(), [0x97, 0x92, 0x8A]))
         };
-        let color = design::rgb_to_u32(color);
-        h_flex()
-            .w_full()
-            .gap_1()
+        let bcol = design::rgb_to_u32(color);
+
+        let active_chk = self
+            .draft_checkbox(
+                cx,
+                SharedString::from(format!("badge-active-{idx}")),
+                active,
+                move |p, v| {
+                    if let Some(e) = p.badges.entries.get_mut(idx) {
+                        if e.active != v {
+                            e.active = v;
+                            return true;
+                        }
+                    }
+                    false
+                },
+            )
+            .label(t!("badges.col_active").to_string())
+            .size(MoonCheckboxSize::Compact);
+
+        let distinguish_chk = self
+            .draft_checkbox(
+                cx,
+                SharedString::from(format!("badge-dist-{idx}")),
+                distinguish,
+                move |p, v| {
+                    if let Some(e) = p.badges.entries.get_mut(idx) {
+                        if e.distinguish_dir != v {
+                            e.distinguish_dir = v;
+                            return true;
+                        }
+                    }
+                    false
+                },
+            )
+            .label(t!("badges.distinguish").to_string())
+            .size(MoonCheckboxSize::Compact);
+
+        let outline_chk = self
+            .draft_checkbox(
+                cx,
+                SharedString::from(format!("badge-outline-{idx}")),
+                outline,
+                move |p, v| {
+                    if let Some(e) = p.badges.entries.get_mut(idx) {
+                        if e.outline != v {
+                            e.outline = v;
+                            return true;
+                        }
+                    }
+                    false
+                },
+            )
+            .label(t!("badges.use_outline").to_string())
+            .size(MoonCheckboxSize::Compact);
+
+        // Всё в ОДНУ строку. Пикеры цвета — `flex_none` в натуральную ширину (128px,
+        // фикс форка), поэтому больше не налезают на соседний бейдж. Цвета обводки
+        // (L=long, S=short) появляются справа при включённой галке «Обводка».
+        let cap = |t: &str| {
+            div()
+                .flex_none()
+                .text_color(rgba_from(p.text_soft, 1.0))
+                .child(t.to_string())
+        };
+        let row_el = h_flex()
+            .gap(px(6.0))
             .items_center()
-            .py_0p5()
             .child(
-                div().w(px(58.0)).child(
+                div().flex_none().w(px(42.0)).child(
                     MoonInput::new(SharedString::from(format!("badge-ord-{idx}")))
                         .state(&row.ordinal)
                         .small(),
                 ),
             )
             .child(
-                div().w(px(160.0)).child(
+                div().flex_none().w(px(120.0)).child(
                     MoonInput::new(SharedString::from(format!("badge-name-{idx}")))
                         .state(&row.name)
                         .small(),
                 ),
             )
+            .child(active_chk)
             .child(
-                div().w(px(64.0)).child(
+                div().flex_none().w(px(44.0)).child(
                     MoonInput::new(SharedString::from(format!("badge-code-{idx}")))
                         .state(&row.code)
                         .small(),
                 ),
             )
-            .child(div().w(px(110.0)).child(MoonColorPicker::new(&row.color)))
+            .child(distinguish_chk)
+            .when(distinguish, |el| {
+                el.child(
+                    div().flex_none().w(px(44.0)).child(
+                        MoonInput::new(SharedString::from(format!("badge-codeshort-{idx}")))
+                            .state(&row.code_short)
+                            .small(),
+                    ),
+                )
+            })
+            .child(div().flex_none().child(MoonColorPicker::new(&row.color)))
             .child(
-                div().w(px(56.0)).flex().justify_center().child(
+                div().flex_none().w(px(42.0)).flex().justify_center().child(
                     MoonBadge::new(code)
                         .variant(MoonBadgeVariant::Soft)
                         .size(MoonBadgeSize::Status)
-                        .bg_color(color)
-                        .text_color(color)
+                        .bg_color(bcol)
+                        .text_color(bcol)
                         .mono(true),
                 ),
             )
+            .child(outline_chk)
+            .when(outline, |el| {
+                el.child(cap("L"))
+                    .child(div().flex_none().child(MoonColorPicker::new(&row.outline_long)))
+                    .child(cap("S"))
+                    .child(div().flex_none().child(MoonColorPicker::new(&row.outline_short)))
+            })
             .child(
                 MoonButton::new(SharedString::from(format!("badge-del-{idx}")))
                     .danger()
@@ -265,34 +378,25 @@ impl SettingsView {
                     .label("x")
                     .on_click(cx.listener(move |this, _, w, cx| this.delete_badge(idx, w, cx)))
                     .render(),
-            )
+            );
+
+        // Без `w_full` — карточка обжимает содержимое (ширина рамки зависит от строки:
+        // с включённой обводкой строка шире). Список выше выравнивает по левому краю.
+        div()
+            .px_1()
+            .py_0p5()
+            .rounded(design::ui_px(cx, 4.0))
+            .border_1()
+            .border_color(rgba_from(p.border, 1.0))
+            .child(row_el)
     }
 
-    /// Вкладка «Бейджи»: список видов (ordinal·имя·код·цвет·превью) + «Добавить», затем
-    /// блок «Направление» (галка обводки + цвета short/long активной темы).
+    /// Вкладка «Бейджи»: список видов (карточка на вид) + кнопка «Добавить тип».
     pub(super) fn badges_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        let mark_init = {
-            let b = self.backend.read(cx);
-            b.preview
-                .as_ref()
-                .unwrap_or(&b.config)
-                .badges
-                .mark_direction
-        };
-        // Шапка колонок.
-        let header = h_flex()
-            .w_full()
-            .gap_1()
-            .text_size(design::t_caption(cx))
-            .text_color(rgba_from(p.text_soft, 1.0))
-            .child(div().w(px(58.0)).child(t!("badges.col_type").to_string()))
-            .child(div().w(px(160.0)).child(t!("badges.col_name").to_string()))
-            .child(div().w(px(64.0)).child(t!("badges.col_code").to_string()))
-            .child(div().w(px(110.0)).child(t!("badges.col_color").to_string()));
-
         let mut col = v_flex()
             .w_full()
+            .items_start()
             .gap_1()
             .child(div().font_bold().child(t!("badges.title").to_string()))
             .child(
@@ -300,51 +404,19 @@ impl SettingsView {
                     .text_size(design::t_caption(cx))
                     .text_color(rgba_from(p.text_soft, 1.0))
                     .child(t!("badges.theme_hint").to_string()),
-            )
-            .child(header);
+            );
         for (idx, row) in self.badges.rows.iter().enumerate() {
             col = col.child(self.badge_row(cx, idx, row));
         }
-        col.child(
+        col.child(separator(p, cx)).child(
             div().mt_1().child(
                 MoonButton::new("badge-add")
                     .small()
-                    .width(140.0)
+                    .width(150.0)
                     .label(t!("badges.add").to_string())
                     .on_click(cx.listener(|this, _, w, cx| this.add_badge(w, cx)))
                     .render(),
             ),
         )
-        .child(separator(p, cx))
-        .child(
-            div()
-                .mt_1()
-                .font_bold()
-                .child(t!("badges.direction_group").to_string()),
-        )
-        .child(
-            self.draft_checkbox(cx, "badge-mark-dir", mark_init, |p, v| {
-                if p.badges.mark_direction != v {
-                    p.badges.mark_direction = v;
-                    true
-                } else {
-                    false
-                }
-            })
-            .label(t!("badges.mark_direction").to_string())
-            .size(MoonCheckboxSize::Compact),
-        )
-        .child(color_row(
-            &t!("badges.short_outline"),
-            &self.badges.short_color,
-            p,
-            cx,
-        ))
-        .child(color_row(
-            &t!("badges.long_outline"),
-            &self.badges.long_color,
-            p,
-            cx,
-        ))
     }
 }

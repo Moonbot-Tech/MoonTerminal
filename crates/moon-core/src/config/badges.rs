@@ -1,8 +1,9 @@
 //! Бейджи типов детектов — переносимый JSON-файл `badges.json` (по образцу
 //! `orders.toml`/`figures.json`). Для каждого вида стратегии (`StrategyKind`
-//! ordinal) задаём короткий код (≤3 символа, не обязательно буквы) и цвет
-//! РАЗДЕЛЬНО под тёмную/светлую тему. Плюс глобальная опция «помечать направление
-//! (isShort) обводкой» с настраиваемыми цветами short/long на тему.
+//! ordinal) задаём: рисовать ли бейдж (`active`), короткий код (≤3 символа, не
+//! обязательно буквы) РАЗДЕЛЬНО под long/short (если включено `distinguish_dir`) и
+//! цвет РАЗДЕЛЬНО под тёмную/светлую тему. Обводка — ПЕР-СТРОКА: галка `outline` +
+//! свои цвета long/short на тему.
 //!
 //! Список видов растёт со временем — новые добавляются в UI по ordinal-номеру;
 //! ненастроенные виды в рантайме падают на нейтральный код `UNK`.
@@ -21,8 +22,13 @@ const fn c(hex: u32) -> [u8; 3] {
 const MUTED_DARK: [u8; 3] = c(0x97928A);
 const MUTED_LIGHT: [u8; 3] = c(0x4F5B68);
 
-/// Один бейдж типа детекта: код + цвет на каждую тему. Код и имя общие для обеих
-/// тем — под тему различается только цвет.
+// Дефолтные цвета обводки направления (long = зелёный, short = красный) на тему.
+const OUT_LONG_DARK: [u8; 3] = c(0x2FA85C);
+const OUT_LONG_LIGHT: [u8; 3] = c(0x168A49);
+const OUT_SHORT_DARK: [u8; 3] = c(0xFF4A4A);
+const OUT_SHORT_LIGHT: [u8; 3] = c(0xD92D3A);
+
+/// Один бейдж типа детекта.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct BadgeEntry {
@@ -30,12 +36,24 @@ pub struct BadgeEntry {
     pub ordinal: u8,
     /// Человекочитаемое имя вида (для UI-строки настроек).
     pub name: String,
-    /// Короткий код на бейдже — ≤3 символа (обрезается в UI), не обязательно буквы.
+    /// Рисовать бейдж для этого типа детекта. Выкл = бейдж не показываем.
+    pub active: bool,
+    /// Код бейджа (для лонга и для обоих направлений, если `distinguish_dir=false`). ≤3.
     pub code: String,
+    /// Различать код по направлению: при true у шорта свой код `code_short`.
+    pub distinguish_dir: bool,
+    /// Код бейджа для ШОРТА (используется только при `distinguish_dir`). ≤3.
+    pub code_short: String,
     /// Цвет бейджа в тёмной теме.
     pub color_dark: [u8; 3],
     /// Цвет бейджа в светлой теме.
     pub color_light: [u8; 3],
+    /// Рисовать обводку бейджа (пер-строка). При true — цвета обводки по направлению.
+    pub outline: bool,
+    pub outline_long_dark: [u8; 3],
+    pub outline_long_light: [u8; 3],
+    pub outline_short_dark: [u8; 3],
+    pub outline_short_light: [u8; 3],
 }
 
 impl Default for BadgeEntry {
@@ -43,15 +61,23 @@ impl Default for BadgeEntry {
         Self {
             ordinal: 0,
             name: String::new(),
+            active: true,
             code: "UNK".to_string(),
+            distinguish_dir: false,
+            code_short: String::new(),
             color_dark: MUTED_DARK,
             color_light: MUTED_LIGHT,
+            outline: false,
+            outline_long_dark: OUT_LONG_DARK,
+            outline_long_light: OUT_LONG_LIGHT,
+            outline_short_dark: OUT_SHORT_DARK,
+            outline_short_light: OUT_SHORT_LIGHT,
         }
     }
 }
 
 impl BadgeEntry {
-    /// Цвет под активную тему.
+    /// Цвет бейджа под активную тему.
     pub fn color(&self, is_light: bool) -> [u8; 3] {
         if is_light {
             self.color_light
@@ -59,20 +85,37 @@ impl BadgeEntry {
             self.color_dark
         }
     }
+
+    /// Код бейджа под направление: при `distinguish_dir` и шорте — `code_short`
+    /// (если он непустой), иначе основной `code`.
+    pub fn code_for(&self, is_short: bool) -> &str {
+        if self.distinguish_dir && is_short && !self.code_short.is_empty() {
+            &self.code_short
+        } else {
+            &self.code
+        }
+    }
+
+    /// Цвет обводки под направление и тему (если обводка включена).
+    pub fn outline_color(&self, is_short: bool, is_light: bool) -> Option<[u8; 3]> {
+        if !self.outline {
+            return None;
+        }
+        Some(match (is_short, is_light) {
+            (true, false) => self.outline_short_dark,
+            (true, true) => self.outline_short_light,
+            (false, false) => self.outline_long_dark,
+            (false, true) => self.outline_long_light,
+        })
+    }
 }
 
 /// Конфиг бейджей детектов (переносимый `badges.json`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct BadgesConfig {
-    /// Записи по видам стратегий (ordinal → код/цвета).
+    /// Записи по видам стратегий (ordinal → код/цвета/обводка).
     pub entries: Vec<BadgeEntry>,
-    /// Помечать направление стратегии (isShort) цветной обводкой бейджа.
-    pub mark_direction: bool,
-    pub short_outline_dark: [u8; 3],
-    pub short_outline_light: [u8; 3],
-    pub long_outline_dark: [u8; 3],
-    pub long_outline_light: [u8; 3],
 }
 
 /// Дефолтные 24 вида: `(ordinal, имя, код, цвет_тёмн, цвет_светл)`. Цвета — из
@@ -125,14 +168,9 @@ impl Default for BadgesConfig {
                     code: code.to_string(),
                     color_dark: c(cd),
                     color_light: c(cl),
+                    ..BadgeEntry::default()
                 })
                 .collect(),
-            mark_direction: false,
-            // short = red, long = green (из палитры), под каждую тему.
-            short_outline_dark: c(0xFF4A4A),
-            short_outline_light: c(0xD92D3A),
-            long_outline_dark: c(0x2FA85C),
-            long_outline_light: c(0x168A49),
         }
     }
 }
@@ -176,9 +214,14 @@ impl BadgesConfig {
         self.entries.iter().find(|e| e.ordinal == ordinal)
     }
 
-    /// Код бейджа для вида (фолбэк `UNK`).
-    pub fn code(&self, ordinal: u8) -> &str {
-        self.entry(ordinal).map(|e| e.code.as_str()).unwrap_or("UNK")
+    /// Рисовать ли бейдж для вида (ненастроенный вид → да, покажем UNK).
+    pub fn active(&self, ordinal: u8) -> bool {
+        self.entry(ordinal).map(|e| e.active).unwrap_or(true)
+    }
+
+    /// Код бейджа для вида под направление (фолбэк `UNK`).
+    pub fn code(&self, ordinal: u8, is_short: bool) -> &str {
+        self.entry(ordinal).map(|e| e.code_for(is_short)).unwrap_or("UNK")
     }
 
     /// Цвет бейджа для вида под активную тему (фолбэк — нейтраль).
@@ -190,13 +233,8 @@ impl BadgesConfig {
         })
     }
 
-    /// Цвет обводки направления под активную тему.
-    pub fn outline(&self, is_short: bool, is_light: bool) -> [u8; 3] {
-        match (is_short, is_light) {
-            (true, false) => self.short_outline_dark,
-            (true, true) => self.short_outline_light,
-            (false, false) => self.long_outline_dark,
-            (false, true) => self.long_outline_light,
-        }
+    /// Цвет обводки бейджа под направление/тему (None = обводки нет).
+    pub fn outline_color(&self, ordinal: u8, is_short: bool, is_light: bool) -> Option<[u8; 3]> {
+        self.entry(ordinal).and_then(|e| e.outline_color(is_short, is_light))
     }
 }

@@ -73,6 +73,26 @@ badges.col_color:
   ru: "Цвет"
   en: "Color"
   es: "Color"
+badges.col_active:
+  ru: "вкл"
+  en: "on"
+  es: "act"
+badges.distinguish:
+  ru: "L/S"
+  en: "L/S"
+  es: "L/S"
+badges.use_outline:
+  ru: "Обводка"
+  en: "Outline"
+  es: "Borde"
+badges.outline_long:
+  ru: "long"
+  en: "long"
+  es: "long"
+badges.outline_short:
+  ru: "short"
+  en: "short"
+  es: "short"
 badges.add:
   ru: "Добавить тип"
   en: "Add type"
