@@ -639,7 +639,13 @@ impl Panel for AssetsView {
                 .label("⧉")
                 .tooltip(t!("assets.open_global_hint").to_string())
                 .on_click(move |_, window, app| {
-                    open(backend.clone(), Some(window.window_handle()), app);
+                    let owner_display = window.display(app).map(|d| d.id());
+                    open(
+                        backend.clone(),
+                        Some(window.window_handle()),
+                        owner_display,
+                        app,
+                    );
                 })
                 .render()
                 .into_any_element(),
@@ -763,7 +769,12 @@ fn assets_header(p: MoonPalette, cx: &App) -> impl IntoElement {
 
 /// Открыть глобальное окно «Активы» (tool/secondary singleton, все ядра).
 /// Дедуп — в `Backend.assets_window`.
-pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut App) {
+pub fn open(
+    backend: Entity<Backend>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    cx: &mut App,
+) {
     // Уже открыто → сфокусировать.
     if let Some(handle) = backend.read(cx).assets_window {
         if handle
@@ -784,13 +795,13 @@ pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut A
             size: size(px(g.w as f32), px(g.h as f32)),
         },
     );
-    let display_id = saved.and_then(|g| {
-        let origin = point(px(g.x as f32), px(g.y as f32));
-        cx.displays()
-            .into_iter()
-            .find(|d| d.bounds().contains(&origin))
-            .map(|d| d.id())
-    });
+    // Мультимонитор: монитор по сохранённой точке (не-мак) либо от владельца.
+    let display_id = crate::windowing::saved_or_owner_display_id(
+        saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
+        owner,
+        owner_display,
+        cx,
+    );
     let mut opts = crate::windowing::tool_window_options(
         t!("assets.window_title").to_string(),
         WindowBounds::Windowed(bounds),
@@ -805,5 +816,6 @@ pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut A
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     }) {
         backend.update(cx, |bk, _| bk.assets_window = Some(handle));
+        crate::windowing::activate_new_window(handle.into(), cx);
     }
 }

@@ -61,15 +61,25 @@ pub(crate) fn spawn_group_window(
             size: size(px(1280.0), px(720.0)),
         },
     };
-    // Монитор по сохранённому origin — чтобы окно открылось на ТОМ дисплее, с которого
-    // снимали bounds. Без display_id GPUI восстанавливает по scale primary-монитора, и на
+    // Монитор — по сохранённому uuid дисплея (стабилен между запусками; на macOS x/y
+    // относительны своему экрану, contains-детект по ним бессмыслен). Фолбэк для старых
+    // layout без uuid — монитор, содержащий сохранённый origin (глобальные координаты,
+    // не-мак). Без display_id GPUI восстанавливает по scale primary-монитора, и на
     // мониторе с другим DPI окно открывается смещённым/сжатым. MoonUI GPUI берёт scale
     // целевого display ТОЛЬКО когда display_id задан. Round-trip как у detached-окон.
     let origin = win_bounds.origin;
-    let display_id = cx
-        .displays()
-        .into_iter()
-        .find(|d| d.bounds().contains(&origin))
+    let saved_uuid = saved.and_then(|g| g.display_uuid.as_deref());
+    let display_id = saved_uuid
+        .and_then(|u| {
+            cx.displays()
+                .into_iter()
+                .find(|d| d.uuid().ok().is_some_and(|du| du.to_string() == u))
+        })
+        .or_else(|| {
+            cx.displays()
+                .into_iter()
+                .find(|d| d.bounds().contains(&origin))
+        })
         .map(|d| d.id());
     let window_bounds = if saved.map(|g| g.fullscreen).unwrap_or(false) {
         WindowBounds::Fullscreen(win_bounds)

@@ -153,8 +153,8 @@ pub struct SettingsFile {
     #[serde(default = "default_chart_stack_height")]
     pub chart_stack_height: u16,
     /// Раздельные зоны управления: true = ставить ордера и двигать линии ТОЛЬКО в зоне стакана;
-    /// false = по всей области графика. Дефолт false.
-    #[serde(default)]
+    /// false = по всей области графика. Дефолт true.
+    #[serde(default = "servers::default_true")]
     pub separate_control_zones: bool,
     /// Авто-закрытие графиков Main при неактивности окна, сек. 0 = выключено. Дефолт 0.
     #[serde(default)]

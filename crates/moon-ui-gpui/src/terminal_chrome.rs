@@ -88,7 +88,13 @@ pub fn header(
                     {
                         let backend = backend.clone();
                         move |_, window, cx| {
-                            strategies::open(backend.clone(), Some(window.window_handle()), cx)
+                            let owner_display = window.display(cx).map(|d| d.id());
+                            strategies::open(
+                                backend.clone(),
+                                Some(window.window_handle()),
+                                owner_display,
+                                cx,
+                            )
                         }
                     },
                     p,
@@ -101,7 +107,13 @@ pub fn header(
                     {
                         let backend = backend.clone();
                         move |_, window, cx| {
-                            screener::open(backend.clone(), Some(window.window_handle()), cx)
+                            let owner_display = window.display(cx).map(|d| d.id());
+                            screener::open(
+                                backend.clone(),
+                                Some(window.window_handle()),
+                                owner_display,
+                                cx,
+                            )
                         }
                     },
                     p,
@@ -114,7 +126,13 @@ pub fn header(
                     {
                         let backend = backend.clone();
                         move |_, window, cx| {
-                            settings::open(backend.clone(), Some(window.window_handle()), cx)
+                            let owner_display = window.display(cx).map(|d| d.id());
+                            settings::open(
+                                backend.clone(),
+                                Some(window.window_handle()),
+                                owner_display,
+                                cx,
+                            )
                         }
                     },
                     p,

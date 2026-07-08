@@ -326,10 +326,14 @@ pub fn spawn(
         origin: point(px(spec.x as f32), px(spec.y as f32)),
         size: size(px(spec.w as f32), px(spec.h as f32)),
     };
+    // Мультимонитор: монитор по сохранённой точке (не-мак) либо от окна-владельца —
+    // иначе окно создаётся на primary (особенно macOS, где x/y относительны экрану).
+    let display_id =
+        crate::windowing::saved_or_owner_display_id(Some(bounds.origin), owner, None, app);
     let opts = crate::windowing::detached_panel_window_options(
         format!("{} — MoonTerminal", panel_title(&spec.panel)),
         WindowBounds::Windowed(bounds),
-        None,
+        display_id,
         owner,
     );
     let backend = backend.clone();

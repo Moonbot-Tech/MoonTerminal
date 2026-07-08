@@ -342,6 +342,24 @@ pub(crate) fn run() -> anyhow::Result<()> {
                     }
                 }
                 chart_persist::save_all(&b.chart_specs);
+                // Флаш дебаунс-персиста: 100мс-тик мог не успеть после последнего изменения.
+                // Особенно detached.json: «вернул панель в док → сразу закрыл» иначе оставляет
+                // протухшую запись, и панель на старте восстанавливалась отдельным окном.
+                if b.layout_dirty {
+                    b.layout.save();
+                    b.layout_dirty = false;
+                }
+                if b.dock_dirty {
+                    dock_persist::save_all(&b.dock_states);
+                    b.dock_dirty = false;
+                }
+                if b.detached_dirty {
+                    detached::save_all(&b.detached);
+                    b.detached_dirty = false;
+                }
+                if b.figures.borrow().dirty {
+                    b.figures.borrow_mut().save();
+                }
             });
             async move {}
         })
@@ -545,8 +563,55 @@ pub(crate) fn run() -> anyhow::Result<()> {
         // Восстановить окна откреплённых панелей (панель уже не в доке — она была убрана
         // при откреплении, и dock_persist сохранил док без неё). Порт egui-восстановления
         // detached на старте.
-        let specs = backend.read(cx).detached.clone();
+        //
+        // ДЕДУП с доком: docks.json и detached.json пишутся независимо (дебаунс), и запись
+        // detached может протухнуть (репин панели в док + быстрый выход). Раньше такая
+        // панель восстанавливалась ДВАЖДЫ — вкладкой в доке И отдельным окном. Панель,
+        // уже присутствующую в восстановимом доке своей группы, не спавним и чистим спеку.
+        let (specs, docked) = {
+            let b = backend.read(cx);
+            let mut docked: std::collections::HashSet<(String, String)> =
+                std::collections::HashSet::new();
+            fn collect(node: &moon_ui::PanelState, out: &mut Vec<String>) {
+                if matches!(node.info, moon_ui::PanelInfo::Panel(_)) && !node.panel_name.is_empty()
+                {
+                    out.push(node.panel_name.clone());
+                }
+                for c in &node.children {
+                    collect(c, out);
+                }
+            }
+            for (group, state) in &b.dock_states {
+                // Док с несовпадающей версией на старте игнорируется (shell/init.rs) →
+                // панели из него НЕ восстановятся, дедупить по нему нельзя.
+                if state.version != Some(dock_persist::DOCK_VERSION) {
+                    continue;
+                }
+                let mut names = Vec::new();
+                collect(&state.center, &mut names);
+                for d in [&state.left_dock, &state.right_dock, &state.bottom_dock]
+                    .into_iter()
+                    .flatten()
+                {
+                    collect(&d.panel, &mut names);
+                }
+                for n in names {
+                    docked.insert((group.clone(), n));
+                }
+            }
+            (b.detached.clone(), docked)
+        };
+        let mut dropped_stale = false;
         for spec in &specs {
+            if docked.contains(&(spec.group.clone(), spec.panel.clone())) {
+                log::warn!(
+                    "skip detached restore: панель уже в доке (протухшая запись) group={} panel={}",
+                    spec.group,
+                    spec.panel
+                );
+                dropped_stale = true;
+                continue;
+            }
             if let Err(err) = detached::spawn(cx, &backend, spec, None) {
                 log::warn!(
                     "restore detached panel failed group={} panel={}: {err:#}",
@@ -554,6 +619,13 @@ pub(crate) fn run() -> anyhow::Result<()> {
                     spec.panel
                 );
             }
+        }
+        if dropped_stale {
+            backend.update(cx, |b, _| {
+                b.detached
+                    .retain(|s| !docked.contains(&(s.group.clone(), s.panel.clone())));
+                b.detached_dirty = true;
+            });
         }
     });
     Ok(())

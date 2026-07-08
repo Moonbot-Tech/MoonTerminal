@@ -94,9 +94,11 @@ pub(super) fn mouse_down_left(
     // сразу отдаёт false → клик идёт в торговлю/навигацию.
     // secondary() = ⌘ на macOS, Ctrl на Windows/Linux. На macOS именно Ctrl нельзя:
     // ОС превращает Ctrl+ЛКМ в правый клик, поэтому событие рисования не доходит.
+    // Активный драфт = продолжение рисования: следующие клики завершают фигуру и
+    // БЕЗ модификатора (держать ⌘/Ctrl нужно только на первом клике).
     if within
         && e.click_count <= 1
-        && this.try_fig_click(pos, e.modifiers.secondary(), cx)
+        && this.try_fig_click(pos, e.modifiers.secondary() || this.fig_draft.is_some(), cx)
     {
         cx.notify();
         cx.stop_propagation();
@@ -162,10 +164,19 @@ pub(super) fn mouse_down_left(
 /// ЛКМ up: завершение drag фигуры/ордера/навигации (тело `on_mouse_up(Left)`).
 pub(super) fn mouse_up_left(
     this: &mut ChartPanel,
-    _e: &MouseUpEvent,
+    e: &MouseUpEvent,
     window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
+    // Drag-release рисования: «⌘/Ctrl+нажал — потянул — отпустил» завершает фигуру
+    // (отрезок/канал) без второго клика; клик на месте — не жест, ждём второго клика.
+    if let Some((pos, _)) = this.chart_local(e.position) {
+        if this.try_fig_release(pos, cx) {
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+    }
     if this.finish_fig_drag(cx) {
         cx.notify();
         cx.stop_propagation();

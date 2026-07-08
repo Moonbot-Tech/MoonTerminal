@@ -178,6 +178,9 @@ pub struct ChartPanel {
     order_hover: Option<OrderHoverKey>,
     /// Слой рисования фигур: драфт (режим-карандаш), hover и драг фигуры этой панели.
     fig_draft: Option<figures::FigDraft>,
+    /// Экранная точка последней постановки узла драфта — отличить клик от протяжки:
+    /// отпускание кнопки заметно дальше неё завершает фигуру (drag-release жест).
+    fig_draw_down: Option<(f32, f32)>,
     fig_hover: Option<u64>,
     fig_drag: Option<figures::FigDrag>,
     /// ПКМ-down открыл контекстное меню ордера → следующий ПКМ-up НЕ должен сработать
@@ -341,6 +344,7 @@ impl ChartPanel {
             pending_order_drag: None,
             order_hover: None,
             fig_draft: None,
+            fig_draw_down: None,
             fig_hover: None,
             fig_drag: None,
             suppress_rmb_up: false,
@@ -454,6 +458,7 @@ impl ChartPanel {
             pending_order_drag: None,
             order_hover: None,
             fig_draft: None,
+            fig_draw_down: None,
             fig_hover: None,
             fig_drag: None,
             suppress_rmb_up: false,

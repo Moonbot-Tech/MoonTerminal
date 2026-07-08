@@ -640,9 +640,9 @@ impl Runtime {
     fn request_tool_windows_open(&self, cx: &mut Context<Backend>) {
         let backend_entity = cx.entity();
         cx.defer(move |cx| {
-            crate::settings::open(backend_entity.clone(), None, cx);
-            crate::strategies::open(backend_entity.clone(), None, cx);
-            crate::panels::open_assets_window(backend_entity, None, cx);
+            crate::settings::open(backend_entity.clone(), None, None, cx);
+            crate::strategies::open(backend_entity.clone(), None, None, cx);
+            crate::panels::open_assets_window(backend_entity, None, None, cx);
         });
         firetest_info("[firetest] tool_windows_open deferred=settings,strategies,assets");
     }

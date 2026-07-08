@@ -171,6 +171,8 @@ impl ChartPanel {
             let tool = self.backend.read(cx).fig_tool;
             let node = map.node_at(pos);
             self.fig_draw_click(pane, tool, node, cx);
+            // Точка постановки узла — для drag-release жеста (см. try_fig_release).
+            self.fig_draw_down = self.fig_draft.is_some().then_some(pos);
             return true;
         }
         // Без модификатора: захват узла/тела фигуры или выделение (пусто → клик не съеден,
@@ -271,6 +273,33 @@ impl ChartPanel {
             });
         }
         self.sync_fig_visual(cx);
+    }
+
+    /// Завершение фигуры жестом «нажал-потянул-отпустил»: если драфт активен и кнопку
+    /// отпустили заметно дальше точки постановки узла — считаем отпускание вторым кликом
+    /// (для треугольника — очередным). Простое отпускание на месте клика — не жест:
+    /// ждём следующего клика (классический click-click тоже работает). true = съедено.
+    pub(super) fn try_fig_release(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
+        let Some(d) = self.fig_draft.as_ref() else {
+            return false;
+        };
+        let Some(down) = self.fig_draw_down else {
+            return false;
+        };
+        let dist = ((pos.0 - down.0).powi(2) + (pos.1 - down.1).powi(2)).sqrt();
+        // Порог протяжки: больше hit-порога, чтобы дрожание клика не завершало фигуру.
+        let threshold = 2.0 * HIT_PX * self.last_ppp.max(1.0);
+        if dist < threshold {
+            return false;
+        }
+        let (pane, tool) = (d.pane, d.tool);
+        let Some(map) = self.fig_map(pane) else {
+            return false;
+        };
+        let node = map.node_at(pos);
+        self.fig_draw_click(pane, tool, node, cx);
+        self.fig_draw_down = self.fig_draft.is_some().then_some(pos);
+        true
     }
 
     /// Захват фигуры вне режима рисования: узлы (у выделенной), затем тело ближайшей.

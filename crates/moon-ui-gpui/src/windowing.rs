@@ -207,6 +207,52 @@ fn owned_window_options(
     options
 }
 
+/// Монитор, на котором сейчас находится окно-владелец (`Window::display`). Для tool/detached
+/// окон: открываться на том же дисплее, что и окно группы, из которого их открыли.
+pub(crate) fn owner_display_id(owner: Option<AnyWindowHandle>, cx: &mut App) -> Option<DisplayId> {
+    owner?
+        .update(cx, |_, window, cx| window.display(cx).map(|d| d.id()))
+        .ok()
+        .flatten()
+}
+
+/// display_id для вторичного окна с сохранённой геометрией. На macOS координаты окна
+/// per-display-ОТНОСИТЕЛЬНЫЕ (`MacWindow::bounds` считает от своего экрана) — детект
+/// «какой монитор содержит точку» по ним бессмыслен и всегда попадает в primary, поэтому
+/// там берём монитор окна-владельца. На прочих ОС координаты глобальные: сначала детект
+/// по сохранённой точке, фолбэк — монитор владельца.
+///
+/// `owner_display` — дисплей владельца, снятый В ТОЧКЕ ВЫЗОВА (`window.display(cx)`).
+/// Обязателен, когда вызов идёт из обработчика события окна-владельца: его слот в
+/// `cx.windows` в этот момент взят, и `owner.update()` (фолбэк) вернёт Err.
+pub(crate) fn saved_or_owner_display_id(
+    saved_origin: Option<Point<Pixels>>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    cx: &mut App,
+) -> Option<DisplayId> {
+    if cfg!(not(target_os = "macos")) {
+        if let Some(origin) = saved_origin {
+            if let Some(d) = cx
+                .displays()
+                .into_iter()
+                .find(|d| d.bounds().contains(&origin))
+            {
+                return Some(d.id());
+            }
+        }
+    }
+    owner_display.or_else(|| owner_display_id(owner, cx))
+}
+
+/// Явно активировать СВЕЖЕСОЗДАННОЕ окно. На macOS owned (child) окно, созданное на другом
+/// дисплее, без явного activate всплывает только при следующей активации приложения —
+/// клик N+1 показывал окно клика N. Вызывать только для окон, открытых кликом пользователя
+/// (на bulk-restore при старте активация каждого окна крала бы фокус).
+pub(crate) fn activate_new_window(handle: AnyWindowHandle, cx: &mut App) {
+    let _ = handle.update(cx, |_, window, _| window.activate_window());
+}
+
 /// Геометрия окна в логич. px `(x, y, w, h)` — `None`, если окно НЕ в обычном (Windowed)
 /// состоянии (свёрнуто/во весь экран). Единая точка приведения f32→i32/u32 для персиста
 /// откреп-окон: одинаковая выборка жила в `detached.rs` и `chart_tabs::windows`.

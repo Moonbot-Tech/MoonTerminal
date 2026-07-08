@@ -334,7 +334,12 @@ fn settings_sig(b: &Backend) -> u64 {
 /// Открыть окно настроек (отдельное ОС-окно). Заводит draft = копия config (его
 /// правят вкладки, чарт показывает его живьём). Повторный клик при уже открытом
 /// окне игнорируем (draft уже есть) — иначе два окна делили бы один draft.
-pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut App) {
+pub fn open(
+    backend: Entity<Backend>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    cx: &mut App,
+) {
     if let Some(handle) = backend.read(cx).settings_window {
         if handle
             .update(cx, |_, window, _| window.activate_window())
@@ -364,14 +369,13 @@ pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut A
         },
     );
     // Мультимонитор: без display_id окно создаётся на primary и при bounds вне него gpui
-    // откатывается на дефолт — ищем монитор, содержащий сохранённую точку.
-    let display_id = saved.and_then(|g| {
-        let origin = point(px(g.x as f32), px(g.y as f32));
-        cx.displays()
-            .into_iter()
-            .find(|d| d.bounds().contains(&origin))
-            .map(|d| d.id())
-    });
+    // откатывается на дефолт — монитор по сохранённой точке (не-мак) либо от владельца.
+    let display_id = crate::windowing::saved_or_owner_display_id(
+        saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
+        owner,
+        owner_display,
+        cx,
+    );
     let mut opts = crate::windowing::tool_window_options(
         t!("settings.window_title").to_string(),
         WindowBounds::Windowed(bounds),
@@ -387,6 +391,7 @@ pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut A
     }) {
         Ok(handle) => {
             backend.update(cx, |b, _| b.settings_window = Some(handle));
+            crate::windowing::activate_new_window(handle.into(), cx);
         }
         Err(_) => {
             backend.update(cx, |b, cx| {

@@ -532,7 +532,12 @@ fn screener_header(p: MoonPalette, cx: &App) -> impl IntoElement {
 }
 
 /// Открыть окно «Скринер» (tool-окно, singleton). Дедуп/фокус — в `Backend`.
-pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut App) {
+pub fn open(
+    backend: Entity<Backend>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    cx: &mut App,
+) {
     // Уже открыто → сфокусировать.
     if let Some(handle) = backend.read(cx).screener_window {
         if handle
@@ -553,14 +558,13 @@ pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut A
             size: size(px(g.w as f32), px(g.h as f32)),
         },
     );
-    // Мультимонитор: без display_id окно создаётся на primary.
-    let display_id = saved.and_then(|g| {
-        let origin = point(px(g.x as f32), px(g.y as f32));
-        cx.displays()
-            .into_iter()
-            .find(|d| d.bounds().contains(&origin))
-            .map(|d| d.id())
-    });
+    // Мультимонитор: монитор по сохранённой точке (не-мак) либо от владельца.
+    let display_id = crate::windowing::saved_or_owner_display_id(
+        saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
+        owner,
+        owner_display,
+        cx,
+    );
     let mut opts = crate::windowing::tool_window_options(
         t!("screener.window_title").to_string(),
         WindowBounds::Windowed(bounds),
@@ -575,5 +579,6 @@ pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut A
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     }) {
         backend.update(cx, |bk, _| bk.screener_window = Some(handle));
+        crate::windowing::activate_new_window(handle.into(), cx);
     }
 }

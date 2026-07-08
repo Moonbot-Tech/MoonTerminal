@@ -73,7 +73,7 @@ pub struct AppConfig {
     pub charts_stack_compress: bool,
     /// Скролл-стек: высота одного графика (лог. px). Дефолт 360.
     pub chart_stack_height: u16,
-    /// Раздельные зоны управления: ордера/линии только в зоне стакана (settings.toml). Дефолт false.
+    /// Раздельные зоны управления: ордера/линии только в зоне стакана (settings.toml). Дефолт true.
     pub separate_control_zones: bool,
     /// Авто-закрытие графиков Main при неактивности окна, сек (settings.toml). 0 = выключено.
     /// Неактивность = окно не в фокусе ЛИБО в фокусе, но мышь не двигается. Каждый график
@@ -281,7 +281,7 @@ impl AppConfig {
             charts_stack_scroll: false,
             charts_stack_compress: false,
             chart_stack_height: schema::default_chart_stack_height(),
-            separate_control_zones: false,
+            separate_control_zones: true,
             main_idle_close_secs: 0,
             log_to_file: true,
             log_retention_days: servers::default_log_retention_days(),

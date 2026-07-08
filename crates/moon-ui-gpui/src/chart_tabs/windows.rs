@@ -107,14 +107,18 @@ impl ChartTabs {
     ) -> bool {
         // КРИТИЧНО для мультимонитора: без display_id окно создаётся на PRIMARY, и если
         // сохранённые bounds вне primary — gpui откатывается на default_bounds() (центр + дефолт-
-        // размер). Поэтому ищем монитор, СОДЕРЖАЩИЙ сохранённую точку, и передаём его display_id —
-        // тогда bounds валидны для него и окно встаёт точно (см. retrieve_window_placement).
+        // размер). Монитор — по сохранённой точке (не-мак; тогда bounds валидны для него и окно
+        // встаёт точно, см. retrieve_window_placement) либо от окна группы-владельца (macOS:
+        // координаты относительны своему экрану, по точке монитор не определить).
         let origin = point(px(geom.x as f32), px(geom.y as f32));
-        let display_id = cx
-            .displays()
-            .into_iter()
-            .find(|d| d.bounds().contains(&origin))
-            .map(|d| d.id());
+        let owner = self
+            .backend
+            .read(cx)
+            .group_windows
+            .get(&self.group)
+            .copied()
+            .map(Into::into);
+        let display_id = crate::windowing::saved_or_owner_display_id(Some(origin), owner, None, cx);
         let mut opts = crate::windowing::detached_chart_window_options(
             format!(
                 "MoonTerminal — {}",

@@ -201,6 +201,12 @@ impl Shell {
         let Some(bounds) = bounds else {
             return;
         };
+        // Монитор окна — по стабильному uuid: на macOS x/y относительны своему экрану и
+        // восстановить дисплей по ним нельзя (см. GroupLayout::display_uuid).
+        let display_uuid = window
+            .display(cx)
+            .and_then(|d| d.uuid().ok())
+            .map(|u| u.to_string());
         let layout = GroupLayout {
             x: f32::from(bounds.origin.x) as i32,
             y: f32::from(bounds.origin.y) as i32,
@@ -215,6 +221,7 @@ impl Shell {
             orders_newest_first: true,
             orders_only_current: false,
             orders_kind: 0,
+            display_uuid,
         };
         let group = self.group.clone();
         self.backend.update(cx, |backend, _| {
@@ -229,6 +236,7 @@ impl Shell {
                         || old.h != layout.h
                         || old.maximized != layout.maximized
                         || old.fullscreen != layout.fullscreen
+                        || old.display_uuid != layout.display_uuid
                 })
                 .unwrap_or(true);
             if changed {

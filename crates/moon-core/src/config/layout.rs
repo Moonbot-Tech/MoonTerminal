@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::paths;
 
 /// Геометрия+состояние окна группы (ключ карты — имя группы).
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GroupLayout {
     /// Внешняя позиция окна (физ. пиксели десктопа).
     pub x: i32,
@@ -45,6 +45,11 @@ pub struct GroupLayout {
     /// Фильтр типа ордеров: 0=все, 1=реальные, 2=эмуляторные.
     #[serde(default)]
     pub orders_kind: u8,
+    /// UUID монитора окна (`PlatformDisplay::uuid`), строкой. На macOS координаты окна
+    /// per-display-относительные — восстановить монитор по x/y нельзя, только по uuid;
+    /// contains-детект по точке остаётся фолбэком для старых layout без поля.
+    #[serde(default)]
+    pub display_uuid: Option<String>,
 }
 
 fn def_true() -> bool {

@@ -763,7 +763,12 @@ fn strategies_header(p: MoonPalette, cx: &App) -> impl IntoElement {
 }
 
 /// Открыть окно «Стратегии» (tool/secondary окно). Дедуп окон — в `Backend`.
-pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut App) {
+pub fn open(
+    backend: Entity<Backend>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    cx: &mut App,
+) {
     // Уже открыто → сфокусировать.
     if let Some(handle) = backend.read(cx).strategies_window {
         if handle
@@ -787,14 +792,13 @@ pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut A
         },
     );
     // Мультимонитор: без display_id окно создаётся на primary и при bounds вне него gpui
-    // откатывается на дефолт — ищем монитор, содержащий сохранённую точку.
-    let display_id = saved.and_then(|g| {
-        let origin = point(px(g.x as f32), px(g.y as f32));
-        cx.displays()
-            .into_iter()
-            .find(|d| d.bounds().contains(&origin))
-            .map(|d| d.id())
-    });
+    // откатывается на дефолт — монитор по сохранённой точке (не-мак) либо от владельца.
+    let display_id = crate::windowing::saved_or_owner_display_id(
+        saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
+        owner,
+        owner_display,
+        cx,
+    );
     let mut opts = crate::windowing::tool_window_options(
         t!("strat.window_title").to_string(),
         WindowBounds::Windowed(bounds),
@@ -809,5 +813,6 @@ pub fn open(backend: Entity<Backend>, owner: Option<AnyWindowHandle>, cx: &mut A
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     }) {
         backend.update(cx, |bk, _| bk.strategies_window = Some(handle));
+        crate::windowing::activate_new_window(handle.into(), cx);
     }
 }
