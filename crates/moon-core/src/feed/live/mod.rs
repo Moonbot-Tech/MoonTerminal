@@ -617,8 +617,13 @@ pub fn run(
                 let Some(snap) = client.snapshot() else {
                     continue;
                 };
-                let order_rows =
-                    build_order_rows(&snap, &events, server.feed.reports, &mut orders_index);
+                let order_rows = build_order_rows(
+                    server.id,
+                    &snap,
+                    &events,
+                    server.feed.reports,
+                    &mut orders_index,
+                );
                 if orders_table_due {
                     last_orders = Instant::now();
                     orders_table_pending = false;

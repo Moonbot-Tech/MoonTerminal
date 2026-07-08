@@ -11,6 +11,7 @@ pub(super) fn orders_table(
     columns: u16,
     state: &Entity<MoonDataTableState>,
     highlight: Rc<HashSet<(CoreId, u64)>>,
+    stop_overlay: Rc<std::collections::HashMap<(CoreId, u64, u8), bool>>,
     cx: &Context<OrdersPanel>,
 ) -> impl IntoElement {
     let empty = rows.is_empty();
@@ -40,7 +41,14 @@ pub(super) fn orders_table(
         p,
         cx,
         MoonDataTable::new("orders-table", row_count, move |ix, _window, _app| {
-            order_table_row(&table_rows[ix], &view, p, &row_cols, &highlight)
+            order_table_row(
+                &table_rows[ix],
+                &view,
+                p,
+                &row_cols,
+                &highlight,
+                &stop_overlay,
+            )
         })
         .columns(visible.iter().map(|c| column_def(*c)).collect::<Vec<_>>())
         .state(state)
@@ -113,14 +121,24 @@ fn order_table_row(
     p: MoonPalette,
     cols: &[OrdCol],
     highlight: &HashSet<(CoreId, u64)>,
+    stop_overlay: &std::collections::HashMap<(CoreId, u64, u8), bool>,
 ) -> MoonDataRow {
     MoonDataRow::new(
         cols.iter()
-            .map(|c| cell_for(*c, e, view, p))
+            .map(|c| cell_for(*c, e, view, p, stop_overlay))
             .collect::<Vec<_>>(),
     )
     // Подсветка ОДНОЙ строки на каждую Main-открытую (монета+ядро) — первый её ордер.
     .selected(highlight.contains(&(e.core, e.row.uid)))
+}
+
+/// Тег вида стопа для ключей оверлея (синхронно с feed-слоем: SL=0, TS=1, VStop=2).
+pub(super) fn stop_tag(kind: OrderStopKind) -> u8 {
+    match kind {
+        OrderStopKind::StopLoss => 0,
+        OrderStopKind::Trailing => 1,
+        OrderStopKind::VStop => 2,
+    }
 }
 
 /// Ячейка для одной колонки строки. Порядок ячеек ДОЛЖЕН совпадать с `column_def` по тем
@@ -130,8 +148,16 @@ fn cell_for(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,
     p: MoonPalette,
+    stop_overlay: &std::collections::HashMap<(CoreId, u64, u8), bool>,
 ) -> MoonDataCell {
     let r = &e.row;
+    // Оптимистичный тогл: свежий клик (<3с) рисуется сразу, не дожидаясь строк от feed.
+    let flag = |kind: OrderStopKind, baked: bool| -> bool {
+        stop_overlay
+            .get(&(e.core, r.uid, stop_tag(kind)))
+            .copied()
+            .unwrap_or(baked)
+    };
     match col {
         OrdCol::Core => MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
         OrdCol::Side => {
@@ -140,11 +166,27 @@ fn cell_for(
         }
         OrdCol::Token => MoonDataCell::element(token_cell(e, view, p)),
         OrdCol::Size => MoonDataCell::text(num(r.size)),
-        OrdCol::Sl => flag_toggle_cell(e, view, OrderStopKind::StopLoss, r.sl_on, r.sl_strat, p),
-        OrdCol::Ts => flag_toggle_cell(e, view, OrderStopKind::Trailing, r.ts_on, r.ts_strat, p),
-        OrdCol::Vstop => {
-            flag_toggle_cell(e, view, OrderStopKind::VStop, r.vstop_on, r.vstop_strat, p)
-        }
+        OrdCol::Sl => flag_toggle_cell(
+            e,
+            view,
+            OrderStopKind::StopLoss,
+            flag(OrderStopKind::StopLoss, r.sl_on),
+            p,
+        ),
+        OrdCol::Ts => flag_toggle_cell(
+            e,
+            view,
+            OrderStopKind::Trailing,
+            flag(OrderStopKind::Trailing, r.ts_on),
+            p,
+        ),
+        OrdCol::Vstop => flag_toggle_cell(
+            e,
+            view,
+            OrderStopKind::VStop,
+            flag(OrderStopKind::VStop, r.vstop_on),
+            p,
+        ),
         OrdCol::Buy => MoonDataCell::text(num(r.buy_price)),
         OrdCol::CurP => MoonDataCell::text(num(r.price as f64)),
         OrdCol::Fill => MoonDataCell::text(format!("{:.0}%", r.fill_pct)).tone(MoonTone::Muted),
@@ -270,23 +312,24 @@ fn pnl_pct_cell(r: &OrderRow) -> MoonDataCell {
     }
 }
 
-/// Кликабельный флаг стопа (SL/TS/Vstop). «ON» зелёным — стоп действует (per-order флаг ИЛИ
-/// унаследован от стратегии ордера); «OFF» — для SL красным (позиция без стоп-лосса — риск),
-/// для TS/Vstop тускло.
-/// Клик ВСЕГДА тогает per-order флаг (`set_order_stop` инверсией per-order), уровень стопа
-/// сохраняется feed-слоем при повторном включении.
+/// Кликабельный флаг стопа (SL/TS/Vstop) — ЭФФЕКТИВНОЕ положение («сработает ли»).
+/// `on` уже вычислен feed-слоем (convert.rs) по модели MoonBot: явный override терминала →
+/// иначе `per-order флаг ИЛИ стоп стратегии` (у ордера может не быть своего стопа — тогда
+/// действует стратегийный, на проводе per-order поля пустые). «ON» зелёным; «OFF» — для SL
+/// красным (позиция без стоп-лосса — риск), для TS/Vstop тускло.
+/// Клик тогает эффективное состояние (`set_order_stop` инверсией), уровень стопа
+/// восстанавливается feed-слоем (память/стратегия/дефолт) при повторном включении.
 fn flag_toggle_cell(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,
     kind: OrderStopKind,
     on: bool,
-    strat_on: bool,
     p: MoonPalette,
 ) -> MoonDataCell {
     let core = e.core;
     let uid = e.row.uid;
     let view = view.clone();
-    let (label, tone) = if on || strat_on {
+    let (label, tone) = if on {
         ("ON", MoonTone::Positive)
     } else if kind == OrderStopKind::StopLoss {
         ("OFF", MoonTone::Danger)
@@ -321,6 +364,10 @@ fn flag_toggle_cell(
                 !on
             );
             view.update(app, |this, cx| {
+                // Оптимизм: рисуем целевое состояние сразу; истина сервера (строки от
+                // feed) перекроет оверлей при расхождении (запись живёт ≤3с).
+                this.stop_overlay
+                    .insert((core, uid, stop_tag(kind)), (!on, std::time::Instant::now()));
                 this.backend.update(cx, |b, _| {
                     if let Err(err) = b.session.set_order_stop(core, uid, kind, !on) {
                         log::warn!(

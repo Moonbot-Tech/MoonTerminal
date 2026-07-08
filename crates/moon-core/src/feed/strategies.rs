@@ -277,3 +277,61 @@ pub(super) fn strat_kind_name(ordinal: u8) -> &'static str {
         _ => "?",
     }
 }
+
+/// Булево поле стратегии ордера с фолбэком на дефолт схемы. Сериализатор стратегий
+/// (Delphi и moonproto зеркально) НЕ передаёт поля со значением, равным дефолту схемы —
+/// отсутствующее поле значит «= дефолт», а не «false». Нет снапшота стратегии → false.
+pub(super) fn strat_field_bool(
+    snap: &moonproto::MoonStateSnapshot,
+    strat_id: u64,
+    name: &str,
+) -> bool {
+    let Some(s) = snap.strats().snapshot(strat_id) else {
+        return false;
+    };
+    if let Some(v) = s.fields.get_bool(name) {
+        return v;
+    }
+    snap.strats()
+        .strategy_schema()
+        .and_then(|sc| sc.field(name))
+        .and_then(|f| f.default_value.as_ref())
+        .is_some_and(|v| matches!(v, FieldValue::Bool(true)))
+}
+
+/// Числовое поле стратегии ордера с фолбэком на дефолт схемы (см. [`strat_field_bool`]).
+pub(super) fn strat_field_double(
+    snap: &moonproto::MoonStateSnapshot,
+    strat_id: u64,
+    name: &str,
+) -> Option<f64> {
+    let s = snap.strats().snapshot(strat_id)?;
+    if let Some(v) = s.fields.get_double(name) {
+        return Some(v);
+    }
+    snap.strats()
+        .strategy_schema()
+        .and_then(|sc| sc.field(name))
+        .and_then(|f| f.default_value.as_ref())
+        .and_then(|v| match v {
+            FieldValue::Double(d) => Some(*d),
+            FieldValue::Int32(i) => Some(f64::from(*i)),
+            FieldValue::Int64(i) => Some(*i as f64),
+            _ => None,
+        })
+}
+
+/// Эффективная стратегия ордера: своя (`strat_id != 0`) либо «ручная стратегия» из настроек
+/// ядра (`use_manual_strategy` → `manual_strategy_id`) — ручные ордера MB ведутся по ней.
+/// 0 = стратегии нет вовсе (стопы ручного ордера — из дефолтов ClientSettings).
+pub(super) fn effective_strat_id(snap: &moonproto::MoonStateSnapshot, strat_id: u64) -> u64 {
+    if strat_id != 0 {
+        return strat_id;
+    }
+    snap.settings()
+        .client_settings
+        .as_ref()
+        .filter(|c| c.use_manual_strategy)
+        .map(|c| c.manual_strategy_id)
+        .unwrap_or(0)
+}

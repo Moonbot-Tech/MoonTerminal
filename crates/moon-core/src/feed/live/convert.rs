@@ -237,6 +237,7 @@ fn order_trace(line: &OrderTraceLine) -> Option<OrderTrace> {
 }
 
 fn build_order_row(
+    server_id: u64,
     snap: &moonproto::MoonStateSnapshot,
     o: &Order,
     remember_reports: bool,
@@ -447,7 +448,11 @@ fn build_order_row(
     // значит «= дефолт схемы», а НЕ «выключено» — поэтому читаем с фолбэком на
     // `StrategySchema.field(name).default_value`. Нет снимка стратегии (strat_id=0 /
     // не синкнута) → false.
-    let strat_snapshot = snap.strats().snapshot(o.strat_id);
+    // Эффективная стратегия: своя ЛИБО «ручная стратегия» настроек ядра (ручные ордера
+    // strat_id=0 ведутся по ней). Совсем без стратегии — дефолтные стопы ClientSettings
+    // (SL: price_drop_level, TS: trailing_drop, VStop: vol_drop_level; >0 = включён).
+    let eff_strat_id = crate::feed::strategies::effective_strat_id(snap, o.strat_id);
+    let strat_snapshot = snap.strats().snapshot(eff_strat_id);
     let strat_schema = snap.strats().strategy_schema();
     let strat_flag = |name: &str| -> bool {
         let Some(s) = strat_snapshot else {
@@ -461,22 +466,55 @@ fn build_order_row(
             .and_then(|f| f.default_value.as_ref())
             .is_some_and(|v| matches!(v, moonproto::FieldValue::Bool(true)))
     };
-    let (sl_strat, ts_strat, vstop_strat) = (
-        strat_flag("UseStopLoss"),
-        strat_flag("UseTrailing"),
-        strat_flag("UseBV_SV_Stop"),
-    );
+    let (sl_strat, ts_strat, vstop_strat) = if strat_snapshot.is_some() {
+        (
+            strat_flag("UseStopLoss"),
+            strat_flag("UseTrailing"),
+            strat_flag("UseBV_SV_Stop"),
+        )
+    } else if o.strat_id == 0 {
+        // Проценты «падения» в настройках ядра ОТРИЦАТЕЛЬНЫЕ (напр. price_drop_level
+        // = -1.1 → SL 1.1%); включён = ненулевое значение, не «> 0».
+        snap.settings()
+            .client_settings
+            .as_ref()
+            .map(|c| {
+                (
+                    c.price_drop_level != 0.0,
+                    c.trailing_drop != 0.0,
+                    c.vol_drop_level != 0,
+                )
+            })
+            .unwrap_or((false, false, false))
+    } else {
+        (false, false, false)
+    };
+    // ЭФФЕКТИВНЫЕ флаги стопов («сработает ли», модель MoonBot): per-order стопа у ордера
+    // может НЕ БЫТЬ — тогда действует стоп СТРАТЕГИИ (на проводе per-order поля пустые).
+    // Явный override терминала (клик в таблице) главнее обоих: провод не отличает
+    // «выключен» от «не задан», и без override флаг стратегии маскировал бы наш OFF.
+    let stop_eff = |kind: crate::feed::OrderStopKind, wire: bool, strat: bool| -> bool {
+        crate::feed::trade::stop_override(server_id, o.uid, kind, wire).unwrap_or(wire || strat)
+    };
     OrderRow {
         market: o.market_name.clone(),
         is_short: o.is_short,
         size,
         remaining_size,
-        sl_on: o.stops.stop_loss_enabled(),
-        ts_on: o.stops.trailing_enabled(),
+        sl_on: stop_eff(
+            crate::feed::OrderStopKind::StopLoss,
+            o.stops.stop_loss_enabled(),
+            sl_strat,
+        ),
+        ts_on: stop_eff(
+            crate::feed::OrderStopKind::Trailing,
+            o.stops.trailing_enabled(),
+            ts_strat,
+        ),
         sl_strat,
         ts_strat,
         vstop_strat,
-        vstop_on: o.vstop_on,
+        vstop_on: stop_eff(crate::feed::OrderStopKind::VStop, o.vstop_on, vstop_strat),
         buy_price: entry,
         sell_price: o.sell_price,
         create_time_ms,
@@ -506,6 +544,7 @@ fn build_order_row(
 }
 
 pub(super) fn build_order_rows(
+    server_id: u64,
     snap: &moonproto::MoonStateSnapshot,
     events: &[Event],
     remember_reports: bool,
@@ -513,7 +552,13 @@ pub(super) fn build_order_rows(
 ) -> Vec<OrderRow> {
     let mut order_rows = Vec::new();
     for o in snap.orders().iter() {
-        order_rows.push(build_order_row(snap, o, remember_reports, orders_index));
+        order_rows.push(build_order_row(
+            server_id,
+            snap,
+            o,
+            remember_reports,
+            orders_index,
+        ));
     }
 
     // Snapshot is the live view. Terminal statuses can be removed from that view
@@ -528,7 +573,7 @@ pub(super) fn build_order_rows(
         let Some(order) = order_event.order() else {
             continue;
         };
-        let row = build_order_row(snap, order, remember_reports, orders_index);
+        let row = build_order_row(server_id, snap, order, remember_reports, orders_index);
         if let Some(existing) = order_rows.iter_mut().find(|r| r.uid == row.uid) {
             *existing = row;
         } else {

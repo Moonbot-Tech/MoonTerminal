@@ -14,6 +14,7 @@ mod table;
 
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui::*;
 use moon_ui::{
@@ -304,6 +305,11 @@ pub struct OrdersPanel {
     /// `(ядро, uid)` ПЕРВОГО ордера каждой Main-открытой пары — ровно эти строки подсвечиваем
     /// (по одной на пару, а не все ордера монеты). Обновляется в `rebuild_cache`.
     highlight: Rc<HashSet<(CoreId, u64)>>,
+    /// Оптимистичная отрисовка тоглов SL/TS/Vstop: клик СРАЗУ рисует целевое состояние, не
+    /// дожидаясь пересборки строк от feed (та едет по ордер-событиям). Ключ (ядро, uid,
+    /// stop_tag) → (целевой флаг, момент клика). Запись живёт ≤3с — дальше истина сервера
+    /// (строки) главнее; сходятся обычно за тик, т.к. feed держит одноимённый override.
+    pub(super) stop_overlay: std::collections::HashMap<(CoreId, u64, u8), (bool, Instant)>,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -364,6 +370,7 @@ impl OrdersPanel {
             col_order_cache: Vec::new(),
             main_open: Rc::new(HashSet::new()),
             highlight: Rc::new(HashSet::new()),
+            stop_overlay: std::collections::HashMap::new(),
             dock: None,
             focus: cx.focus_handle(),
         };
@@ -807,11 +814,21 @@ impl Render for OrdersPanel {
 
         // ── Виртуальная таблица в геометрии HTML-эталона ──
         // Подсвечиваем по одной строке на Main-открытую (монета+ядро) — см. table::orders_table.
+        // Оптимистичные тоглы стопов: снимок живых (<3с) записей для ячеек SL/TS/Vstop.
+        self.stop_overlay
+            .retain(|_, (_, t)| t.elapsed() < Duration::from_secs(3));
+        let stop_overlay: Rc<std::collections::HashMap<(CoreId, u64, u8), bool>> = Rc::new(
+            self.stop_overlay
+                .iter()
+                .map(|(k, (v, _))| (*k, *v))
+                .collect(),
+        );
         let table = table::orders_table(
             entries,
             view.columns,
             &self.table_state,
             self.highlight.clone(),
+            stop_overlay,
             cx,
         );
 
