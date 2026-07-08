@@ -35,18 +35,23 @@ impl Backend {
             // Самый свежий из новых детектов, который должен звучать: звук стратегии,
             // либо дефолт для срабатывания алерта БЕЗ стратегии (detects: старые→новые).
             let default_sound = &self.default_alert_sound;
-            // Звучат ТОЛЬКО срабатывания алертов (is_alert): звук — из стратегии алерта,
-            // иначе дефолтный. Обычные детекты НЕ пикают — их SoundAlert гейтит только
-            // кнопку в панели детектов (см. AlertParams), не звук.
+            // Пикают детекты с `SoundAlert=Yes` (флаг = «играть звук» в MoonBot) И
+            // срабатывания алертов (is_alert). Играем ИМЕННО заданный стратегией звук
+            // (`sound_name`); `None` = SoundKind=NONE → детект молчит (find_map идёт к
+            // следующему). Дефолт — только для алерт-файра БЕЗ стратегии. За тик берём один
+            // самый свежий звучащий (новые→старые), чтобы залп не пикал десятки раз.
             let sound = data.detects.iter().rev().take_while(|d| d.seq > last).find_map(|d| {
-                if !d.is_alert {
+                // Гейт: пикают только is_alert-файры и детекты с SoundAlert=Yes.
+                if !d.is_alert && !d.sound_alert {
                     return None;
                 }
-                Some(
-                    d.sound_name
-                        .clone()
-                        .unwrap_or_else(|| default_sound.clone()),
-                )
+                match &d.sound_name {
+                    Some(name) => Some(name.clone()),
+                    // Алерт-файр без снимка стратегии — дефолтный звук; обычный детект с
+                    // SoundKind=NONE — молчит (не даём дефолт).
+                    None if d.is_alert => Some(default_sound.clone()),
+                    None => None,
+                }
             });
             self.last_detect_seq.insert(core, cur_max);
             if let Some(name) = sound {
@@ -54,7 +59,7 @@ impl Backend {
                 crate::sound::play(&name);
             } else {
                 moon_core::detect_diag::line(&format!(
-                    "[sound] core={core} silent: {} new detects, среди них нет алертов",
+                    "[sound] core={core} silent: {} new detects, среди них нет is_alert/SoundAlert",
                     cur_max.saturating_sub(last)
                 ));
             }

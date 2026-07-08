@@ -51,6 +51,22 @@ fn sound_name_of(s: &StrategySnapshot) -> Option<String> {
     None
 }
 
+/// Явно выбран «нет звука»: поле про звук (SoundKind/…) со значением `NONE`. Такой
+/// детект МОЛЧИТ и НЕ падает на дефолтный звук. Привязка к полю с «sound» в имени —
+/// чтобы случайное значение «none» в другом поле не заглушило звук.
+fn sound_is_none(s: &StrategySnapshot) -> bool {
+    for (name, v) in s.fields.iter() {
+        if let FieldValue::String(val) = v {
+            if val.trim().eq_ignore_ascii_case("none")
+                && name.to_string().to_ascii_lowercase().contains("sound")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Алерт-дефолты из СХЕМЫ для вида стратегии: (SoundAlert, звук). Сервер НЕ шлёт
 /// поля, значение которых равно дефолту схемы (та же грабля, что у остальных полей
 /// стратегий) — стратегия с ДЕФОЛТНЫМ звуком приходит вовсе без поля звука, и скан
@@ -102,9 +118,19 @@ pub(super) fn alert_params(s: &StrategySnapshot, schema: Option<&StrategySchema>
     } else {
         def_sound_alert.unwrap_or(false)
     };
-    // Звук: явное поле снапшота; иначе при включённом SoundAlert — дефолт схемы
-    // (поле-звук со значением = дефолту тоже не шлётся).
-    let sound_name = sound_name_of(s).or(if sound_alert { def_sound } else { None });
+    // Звук стратегии: играем ИМЕННО тот, что задан.
+    //  • явный стем в снапшоте → он;
+    //  • SoundKind=NONE → тишина (НЕ дефолт);
+    //  • поля-звука нет (= равно дефолту схемы) → дефолт схемы при включённом SoundAlert.
+    let sound_name = if let Some(n) = sound_name_of(s) {
+        Some(n)
+    } else if sound_is_none(s) {
+        None
+    } else if sound_alert {
+        def_sound
+    } else {
+        None
+    };
     AlertParams {
         sound_alert,
         keep_alert_secs: field_secs_or(s, "KeepAlert", 60),
