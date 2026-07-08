@@ -88,6 +88,8 @@ pub fn run(
                 keep_in_chart_secs: 31_536_000,
                 sound_name: None,
                 is_alert: false,
+                kind: 0,
+                is_short: false,
             });
             seq += 1;
         }

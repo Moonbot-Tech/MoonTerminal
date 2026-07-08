@@ -14,6 +14,7 @@
 //! - `reconcile` — слияние файлов ↔ рантайм + стабильные uid;
 //! - `migrate`   — одноразовые миграции со старых форматов.
 
+pub mod badges;
 pub mod crypto;
 pub mod groups;
 pub mod hotkeys;
@@ -31,6 +32,7 @@ mod schema;
 mod store;
 mod toml_io;
 
+pub use badges::{BadgeEntry, BadgesConfig};
 pub use groups::GroupConfig;
 pub use hotkeys::{
     HotkeysConfig, MouseGestureBinding, MANUAL_STRATEGY_KEYS, ORDER_SIZE_KEYS, SELL_PRESET_KEYS,
@@ -95,6 +97,8 @@ pub struct AppConfig {
     pub theme: ChartTheme,
     /// Стили линий ордеров per-theme (тёмная/светлая) — отдельный переносимый orders.toml.
     pub orders: OrdersStyleSet,
+    /// Бейджи типов детектов (код+цвета по видам, на тему) — отдельный переносимый badges.json.
+    pub badges: BadgesConfig,
     /// Рантайм-флаг (НЕ сериализуется): конфиг загружен из версии < `COREID_UID_VERSION`,
     /// где `charts.json` хранил позиционные CoreId. UI на старте один раз перепривяжет их
     /// к стабильным uid (см. `chart_persist::remap_core_ids`). Дефолт false.
@@ -114,7 +118,8 @@ impl AppConfig {
         // независимо от серверов/групп.
         let theme = ChartTheme::load();
         let orders = OrdersStyleSet::load();
-        if let Some(cfg) = Self::load_plaintext_env(theme.clone(), orders.clone())? {
+        let badges = BadgesConfig::load();
+        if let Some(cfg) = Self::load_plaintext_env(theme.clone(), orders.clone(), badges.clone())? {
             return Ok(cfg);
         }
         if paths::servers_path().exists() {
@@ -141,6 +146,7 @@ impl AppConfig {
                 hotkeys: merged.hotkeys,
                 theme,
                 orders,
+                badges,
                 chart_core_remap_needed: merged.chart_core_remap_needed,
             };
             log::info!(
@@ -163,6 +169,7 @@ impl AppConfig {
             let mut cfg = migrate::from_legacy_enc()?;
             cfg.theme = theme;
             cfg.orders = orders;
+            cfg.badges = badges.clone();
             cfg.charts_split_by_core = true;
             cfg.chart_stack_height = schema::default_chart_stack_height();
             cfg.log_to_file = true;
@@ -180,6 +187,7 @@ impl AppConfig {
             let mut cfg = migrate::from_legacy_toml()?;
             cfg.theme = theme;
             cfg.orders = orders;
+            cfg.badges = badges.clone();
             cfg.charts_split_by_core = true;
             cfg.chart_stack_height = schema::default_chart_stack_height();
             cfg.log_to_file = true;
@@ -198,6 +206,7 @@ impl AppConfig {
         Ok(Self {
             theme,
             orders,
+            badges,
             charts_split_by_core: true, // дефолт — отдельная вкладка на ядро
             chart_stack_height: schema::default_chart_stack_height(),
             log_to_file: true,
@@ -214,6 +223,7 @@ impl AppConfig {
     fn load_plaintext_env(
         theme: ChartTheme,
         orders: OrdersStyleSet,
+        badges: BadgesConfig,
     ) -> anyhow::Result<Option<Self>> {
         if std::env::var_os("MOON_CONFIG_PLAINTEXT").is_none() {
             return Ok(None);
@@ -282,6 +292,7 @@ impl AppConfig {
             hotkeys: HotkeysConfig::default(),
             theme,
             orders,
+            badges,
             chart_core_remap_needed: false,
         }))
     }
@@ -313,9 +324,11 @@ impl AppConfig {
         );
         store::write_servers(&sf)?;
         store::write_settings(&meta)?;
-        // Тема и стиль линий — в свои переносимые файлы, независимо от settings.toml.
+        // Тема, стиль линий и бейджи детектов — в свои переносимые файлы, независимо
+        // от settings.toml.
         self.theme.save()?;
         self.orders.save()?;
+        self.badges.save();
         Ok(())
     }
 

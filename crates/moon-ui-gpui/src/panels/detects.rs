@@ -26,6 +26,10 @@ struct DetectItem {
     /// Подпись кнопки — монета без quote подключения (`ADAUSDT` → `ADA`).
     base: String,
     color: [u8; 3],
+    /// Ordinal вида стратегии-источника (`DetectRow.kind`) — для бейджа типа детекта.
+    kind: u8,
+    /// Направление стратегии-источника (`DetectRow.is_short`) — для обводки бейджа.
+    is_short: bool,
     born_ms: f64,
     ttl_ms: f64,
 }
@@ -130,6 +134,8 @@ impl DetectsPanel {
                     it.born_ms = det.time_ms;
                     it.ttl_ms = ttl;
                     it.color = color;
+                    it.kind = det.kind;
+                    it.is_short = det.is_short;
                     changed = true;
                 } else {
                     self.items.push_back(DetectItem {
@@ -138,6 +144,8 @@ impl DetectsPanel {
                         market: det.market.clone(),
                         base: moon_core::symbol::base_symbol(&det.market, &quote).to_string(),
                         color,
+                        kind: det.kind,
+                        is_short: det.is_short,
                         born_ms: det.time_ms,
                         ttl_ms: ttl,
                     });
@@ -251,6 +259,10 @@ impl Panel for DetectsPanel {
 impl Render for DetectsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
+        let is_light = p.is_light();
+        // Настройки бейджей (код/цвет по видам + обводка направления) — из конфига,
+        // под активную тему. Клон дешёвый (≤пара десятков записей), лента редко рендерится.
+        let badges = self.backend.read(cx).config.badges.clone();
         let now = now_unix_ms();
         let mut col = v_flex()
             .id("detects")
@@ -288,16 +300,42 @@ impl Render for DetectsPanel {
                         v_flex()
                             .size_full()
                             .justify_between()
-                            .child(
-                                MoonText::new(it.base.clone())
-                                    .color(p.text)
-                                    .font_size(13.0)
-                                    .line_height(16.0)
-                                    .weight(600.0)
-                                    .mono(true)
-                                    .uppercase(false)
-                                    .render(),
-                            )
+                            // Верхняя строка: токен монеты слева (ужимается и обрезается),
+                            // бейдж типа справа — `flex_none`, поэтому длинное имя не
+                            // выталкивает бейдж за рамку, а обрезается перед ним.
+                            .child({
+                                // Код+цвет бейджа типа из конфига (под активную тему);
+                                // при включённой опции — обводка по направлению (short/long).
+                                let code = badges.code(it.kind).to_string();
+                                let bcol = design::rgb_to_u32(badges.color(it.kind, is_light));
+                                let mut badge = MoonBadge::new(code)
+                                    .variant(MoonBadgeVariant::Soft)
+                                    .size(MoonBadgeSize::Tiny)
+                                    .bg_color(bcol)
+                                    .text_color(bcol)
+                                    .mono(true);
+                                if badges.mark_direction {
+                                    let ocol =
+                                        design::rgb_to_u32(badges.outline(it.is_short, is_light));
+                                    badge = badge.border_color(ocol).border_alpha(0.9);
+                                }
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div().flex_1().min_w(px(0.0)).overflow_hidden().child(
+                                            MoonText::new(it.base.clone())
+                                                .color(p.text)
+                                                .font_size(13.0)
+                                                .line_height(16.0)
+                                                .weight(600.0)
+                                                .mono(true)
+                                                .uppercase(false),
+                                        ),
+                                    )
+                                    .child(div().flex_none().child(badge))
+                            })
                             .child(
                                 h_flex()
                                     .w_full()
@@ -306,8 +344,8 @@ impl Render for DetectsPanel {
                                     .child(
                                         MoonText::new(format!("{secs}s"))
                                             .color(p.text_muted)
-                                            .font_size(10.0)
-                                            .line_height(12.0)
+                                            .font_size(9.0)
+                                            .line_height(11.0)
                                             .mono(true)
                                             .uppercase(false)
                                             .render(),

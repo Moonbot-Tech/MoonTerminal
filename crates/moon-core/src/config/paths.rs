@@ -131,6 +131,11 @@ pub fn figures_path() -> PathBuf {
     cfg_dir().join("figures.json")
 }
 
+/// Бейджи типов детектов (код+цвета по видам стратегий, на тему) — переносимый JSON.
+pub fn badges_path() -> PathBuf {
+    cfg_dir().join("badges.json")
+}
+
 /// SQLite-БД с отчётами по закрытым ордерам (`ClosedSellOrderReport`).
 pub fn reports_db_path() -> PathBuf {
     data_dir().join("reports.sqlite")
@@ -208,6 +213,7 @@ const CFG_FILES: &[&str] = &[
     "docks.json",
     "detached.json",
     "charts.json",
+    "badges.json",
 ];
 
 /// Одноразовый перенос плоских файлов настроек/раскладки из корня `data_dir` в

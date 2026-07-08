@@ -59,6 +59,7 @@ impl Render for SettingsView {
             Tab::General => self.general_tab(cx).into_any_element(),
             Tab::Hotkeys => self.hotkeys_tab(cx).into_any_element(),
             Tab::Lines => self.lines_tab(cx).into_any_element(),
+            Tab::Badges => self.badges_tab(cx).into_any_element(),
             Tab::Connections => self.connections_tab(cx).into_any_element(),
         };
         // Тело прокручивается (вкладки выше высоты окна): stateful div + overflow_y_scroll.

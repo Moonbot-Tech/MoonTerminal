@@ -12,6 +12,7 @@
 //! в [`common`] (re-export ниже).
 
 mod apply;
+mod badges;
 mod common;
 mod connections;
 mod general;
@@ -36,6 +37,7 @@ use crate::Backend;
 use moon_core::config::{AppConfig, Language};
 use moon_core::market::MarketDataMode;
 
+use badges::BadgesEd;
 use common::{color_row, draft_color, draft_slider, section, separator, slider_row};
 use connections::ConnRow;
 use interface::Iface;
@@ -50,15 +52,17 @@ enum Tab {
     Hotkeys,
     Interface,
     Lines,
+    Badges,
 }
 
 impl Tab {
-    const ALL: [Tab; 5] = [
+    const ALL: [Tab; 6] = [
         Tab::Connections,
         Tab::General,
         Tab::Hotkeys,
         Tab::Interface,
         Tab::Lines,
+        Tab::Badges,
     ];
     /// Стабильный id вкладки (для `MoonButton::new`/ключей) — НЕ переводим.
     fn id(self) -> &'static str {
@@ -68,6 +72,7 @@ impl Tab {
             Tab::Hotkeys => "Хоткеи",
             Tab::Interface => "Интерфейс",
             Tab::Lines => "Линии",
+            Tab::Badges => "Бейджи",
         }
     }
     /// Локализованная подпись вкладки (порт `tab.*`).
@@ -78,6 +83,7 @@ impl Tab {
             Tab::Hotkeys => t!("tab.hotkeys"),
             Tab::Interface => t!("tab.interface"),
             Tab::Lines => t!("tab.lines"),
+            Tab::Badges => t!("tab.badges"),
         }
         .to_string()
     }
@@ -97,6 +103,8 @@ pub struct SettingsView {
     status: Option<(String, bool)>,
     iface: Iface,
     lines: Lines,
+    /// Редактор бейджей типов детектов (вкладка «Бейджи»); пересоздаётся при add/del.
+    badges: BadgesEd,
     /// Per-server editor-стейты (вкладка «Подключения»); пересоздаётся при add/del.
     conn: Vec<ConnRow>,
     /// Выпадающий выбор языка (вкладка «Общие»).
@@ -148,6 +156,7 @@ impl SettingsView {
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let iface = interface::build(&backend, window, cx);
         let lines = lines::build(&backend, window, cx);
+        let badges = badges::build(&backend, window, cx);
         let conn = connections::build_conn(&backend, window, cx);
 
         // Сохранять положение/размер окна «Настройки» в layout — чтобы открывалось на прежнем
@@ -249,6 +258,7 @@ impl SettingsView {
             status: None,
             iface,
             lines,
+            badges,
             conn,
             lang,
             mode,
@@ -278,6 +288,7 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.hotkeys.hash(&mut h);
     format!("{:?}", cfg.theme).hash(&mut h);
     format!("{:?}", cfg.orders).hash(&mut h);
+    format!("{:?}", cfg.badges).hash(&mut h);
 
     cfg.servers.len().hash(&mut h);
     for s in &cfg.servers {

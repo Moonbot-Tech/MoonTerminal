@@ -548,6 +548,12 @@ pub fn run(
                             keep_in_chart_secs: params.keep_in_chart_secs,
                             sound_name: params.sound_name,
                             is_alert: d.is_alert_fire(),
+                            // Вид стратегии-источника для бейджа типа детекта; без снимка
+                            // стратегии срабатывание алерта помечаем видом Alerts (22).
+                            kind: strat
+                                .map(|st| st.kind().ordinal())
+                                .unwrap_or(if d.is_alert_fire() { 22 } else { 0 }),
+                            is_short: strat.map(|st| st.is_short()).unwrap_or(false),
                         });
                     }
                     Event::ClosedSellOrderReport(r) if server.feed.reports => {

@@ -43,3 +43,57 @@ tab.lines:
   ru: "Линии"
   en: "Lines"
   es: "Líneas"
+tab.badges:
+  ru: "Бейджи"
+  en: "Badges"
+  es: "Insignias"
+
+# --- Вкладка «Бейджи» (типы детектов) ---
+badges.title:
+  ru: "Бейджи типов детектов"
+  en: "Detect type badges"
+  es: "Insignias de tipos de detección"
+badges.theme_hint:
+  ru: "Редактируется набор цветов активной темы. Сменить тему — на вкладке «Интерфейс» + Сохранить."
+  en: "Editing the active theme's colors. Change theme on the Interface tab, then Save."
+  es: "Editando los colores del tema activo. Cambia el tema en la pestaña Interfaz y guarda."
+badges.col_type:
+  ru: "Тип (ordinal)"
+  en: "Type (ordinal)"
+  es: "Tipo (ordinal)"
+badges.col_name:
+  ru: "Имя"
+  en: "Name"
+  es: "Nombre"
+badges.col_code:
+  ru: "Код (≤3)"
+  en: "Code (≤3)"
+  es: "Código (≤3)"
+badges.col_color:
+  ru: "Цвет"
+  en: "Color"
+  es: "Color"
+badges.add:
+  ru: "Добавить тип"
+  en: "Add type"
+  es: "Añadir tipo"
+badges.delete:
+  ru: "Удалить"
+  en: "Delete"
+  es: "Eliminar"
+badges.direction_group:
+  ru: "Направление (isShort)"
+  en: "Direction (isShort)"
+  es: "Dirección (isShort)"
+badges.mark_direction:
+  ru: "Помечать направление обводкой бейджа"
+  en: "Mark direction with badge outline"
+  es: "Marcar dirección con borde de insignia"
+badges.short_outline:
+  ru: "Обводка short"
+  en: "Short outline"
+  es: "Borde short"
+badges.long_outline:
+  ru: "Обводка long"
+  en: "Long outline"
+  es: "Borde long"
