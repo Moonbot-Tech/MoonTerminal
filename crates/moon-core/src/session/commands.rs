@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use crate::data::OrderBookModel;
 use crate::feed::{
     ClientSettingsEdit, CoreCmd, FeedWakeTx, LevManageEdit, NewStrategySpec, OrderLinePriceKind,
-    OrderStopKind, ResetProfitKind, WalletKind,
+    OrderStopKind, OrderStopsForm, ResetProfitKind, WalletKind,
 };
 use crate::market::{MarketDataMode, MarketDataSource};
 
@@ -300,6 +300,20 @@ impl SessionManager {
             core,
             CoreCmd::MoveOrderStopPrice { uid, kind, price },
             "move order stop price",
+        )
+    }
+
+    /// Применить форму правок стопов ордера ядра по `uid` из окна редактирования
+    /// («Активный ордер»): SL/TS/TP/VStop разом — вкл/выкл, фиксированная цена или возврат
+    /// к глобальному уровню. `None`-группы не меняются. Пустая форма — no-op.
+    pub fn update_order_stops(&self, core: CoreId, uid: u64, form: OrderStopsForm) -> Result<()> {
+        if form.is_empty() {
+            return Ok(());
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::UpdateOrderStopsForm { uid, form },
+            "update order stops",
         )
     }
 

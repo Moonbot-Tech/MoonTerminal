@@ -18,7 +18,11 @@ use crate::feed::{OrderLinePriceKind, OrderStopKind};
 /// Единый лог исхода торгового вызова: `Ok` → `info` с контекстом `ctx`, `Err` → тот же
 /// контекст + `warn` с ошибкой. Контекст совпадает по тексту с прежними per-функция логами,
 /// чтобы грепы по логам не сломались.
-fn report<T, E: std::fmt::Display>(server_id: u64, ctx: impl std::fmt::Display, r: Result<T, E>) {
+pub(super) fn report<T, E: std::fmt::Display>(
+    server_id: u64,
+    ctx: impl std::fmt::Display,
+    r: Result<T, E>,
+) {
     match r {
         Ok(_) => log::info!("core {server_id} {ctx}"),
         Err(error) => log::warn!("core {server_id} {ctx} failed: {error}"),
@@ -429,7 +433,7 @@ pub(super) fn set_order_stop(
 /// `None` — соседняя, сохраняем её ЭФФЕКТИВНОЕ состояние (override → провод|страта).
 /// Возврат `None` = группа должна быть включена, но уровень найти не удалось.
 #[allow(clippy::too_many_arguments)]
-fn resolve_stop_group(
+pub(super) fn resolve_stop_group(
     server_id: u64,
     uid: u64,
     kind: OrderStopKind,
@@ -491,7 +495,7 @@ fn stop_overrides_map()
 }
 
 /// Записать переопределение (вызывается при отправке тогла).
-fn note_stop_override(server_id: u64, uid: u64, kind: OrderStopKind, on: bool) {
+pub(super) fn note_stop_override(server_id: u64, uid: u64, kind: OrderStopKind, on: bool) {
     stop_overrides_map()
         .lock()
         .unwrap()
@@ -564,7 +568,12 @@ fn remember_stop_params(
 }
 
 /// Запомнить SL/TS группу StopSettings перед выключением.
-fn remember_stop_group(server_id: u64, uid: u64, kind: OrderStopKind, stops: &moonproto::StopSettings) {
+pub(super) fn remember_stop_group(
+    server_id: u64,
+    uid: u64,
+    kind: OrderStopKind,
+    stops: &moonproto::StopSettings,
+) {
     match kind {
         OrderStopKind::StopLoss => remember_stop_params(
             server_id,

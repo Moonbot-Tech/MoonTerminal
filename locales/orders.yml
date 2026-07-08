@@ -94,6 +94,64 @@ orders.sort.old:
   ru: "Старые первые"
   en: "Oldest first"
   es: "Más antiguos primero"
+# --- Окно редактирования активного ордера (клик по BUY/SELL, ПКМ по линии) ---
+orders.edit.title:
+  ru: "Активный ордер"
+  en: "Active Order"
+  es: "Orden activa"
+orders.edit.coin:
+  ru: "Монета:"
+  en: "Coin:"
+  es: "Moneda:"
+orders.edit.side:
+  ru: "Тип:"
+  en: "Type:"
+  es: "Tipo:"
+orders.edit.status:
+  ru: "Статус:"
+  en: "Status:"
+  es: "Estado:"
+orders.edit.size:
+  ru: "Размер:"
+  en: "Size:"
+  es: "Tamaño:"
+orders.edit.strategy:
+  ru: "Стратегия:"
+  en: "Strategy:"
+  es: "Estrategia:"
+orders.edit.core:
+  ru: "Ядро:"
+  en: "Core:"
+  es: "Núcleo:"
+orders.edit.cond:
+  ru: "Условие: Buy если ASK < %{p}"
+  en: "Condition: Buy if ASK < %{p}"
+  es: "Condición: Buy si ASK < %{p}"
+orders.edit.buy_price:
+  ru: "Цена BUY"
+  en: "Order BUY price"
+  es: "Precio BUY"
+orders.edit.sell_price:
+  ru: "Цена SELL"
+  en: "Sell price"
+  es: "Precio SELL"
+orders.edit.current:
+  ru: "Текущая: %{p}"
+  en: "Current: %{p}"
+  es: "Actual: %{p}"
+orders.edit.stops:
+  ru: "Стопы"
+  en: "Stops"
+  es: "Stops"
+orders.edit.fixed:
+  ru: "Fixed"
+  en: "Fixed"
+  es: "Fixed"
+orders.edit.vol_lt:
+  ru: "Vol <"
+  en: "Vol <"
+  es: "Vol <"
+
 # Подъём строк, открытых на Main, наверх (две взаимоисключающие галки + выкл).
 orders.sort.main_all:
   ru: "Main сверху: весь тикер"

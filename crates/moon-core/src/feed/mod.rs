@@ -3,6 +3,7 @@
 
 mod assets;
 pub mod live;
+mod order_edit;
 mod report;
 mod strategies;
 pub mod synth;
@@ -121,6 +122,54 @@ pub enum OrderLinePriceKind {
     TakeProfit,
 }
 
+/// Правка одной stop-группы (SL или TS) из окна редактирования ордера.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StopGroupEdit {
+    /// Целевое состояние: стоп включён.
+    pub on: bool,
+    /// true = фиксированная абсолютная цена `price`; false = глобальный/процентный
+    /// режим (уровень из провода/стратегии/дефолта ClientSettings).
+    pub fixed: bool,
+    /// Абсолютная цена фиксированного стопа (используется при `fixed`).
+    pub price: f64,
+}
+
+/// Правка take-profit из окна редактирования ордера.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TakeProfitEdit {
+    pub on: bool,
+    /// Абсолютная цена TP (используется при `on`).
+    pub price: f64,
+}
+
+/// Правка VStop из окна редактирования ордера.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VStopEdit {
+    pub on: bool,
+    /// true = `level` — фиксированная цена; false — процентный уровень.
+    pub fixed: bool,
+    pub level: f64,
+    /// Объём-порог срабатывания («Vol <»).
+    pub vol: f64,
+}
+
+/// Форма правок стопов ордера из окна редактирования («Активный ордер»). `None` в группе =
+/// пользователь её не менял — feed сохраняет её ЭФФЕКТИВНОЕ состояние (см. feed::order_edit).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct OrderStopsForm {
+    pub sl: Option<StopGroupEdit>,
+    pub ts: Option<StopGroupEdit>,
+    pub tp: Option<TakeProfitEdit>,
+    pub vstop: Option<VStopEdit>,
+}
+
+impl OrderStopsForm {
+    /// Форма без правок — слать нечего.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// Команды координатора → backend ядра. Задают рыночную РОЛЬ ядра.
 #[derive(Debug, Clone)]
 pub enum CoreCmd {
@@ -214,6 +263,11 @@ pub enum CoreCmd {
         kind: OrderLinePriceKind,
         price: f64,
     },
+    /// Применить форму правок стопов ордера из окна редактирования («Активный ордер»):
+    /// SL/TS/TP/VStop разом — вкл/выкл, фиксированная цена или возврат к глобальному
+    /// уровню. SL/TS/TP собираются в ОДИН `update_stops` (нетронутые группы — эффективно,
+    /// как в `SetOrderStop`), VStop — отдельным `update_vstop`. См. feed::order_edit.
+    UpdateOrderStopsForm { uid: u64, form: OrderStopsForm },
     /// Точечная правка `ClientSettings` (TP/SL/выбор sell-пресета) из тулбара. feed берёт
     /// УДЕРЖАННЫЙ снимок настроек, патчит его хелпером и шлёт целиком (`settings().send`).
     EditClientSettings(ClientSettingsEdit),

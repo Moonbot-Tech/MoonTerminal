@@ -160,10 +160,7 @@ fn cell_for(
     };
     match col {
         OrdCol::Core => MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
-        OrdCol::Side => {
-            let (side, tone) = side_label(r);
-            MoonDataCell::text(side).tone(tone).weight(500.0)
-        }
+        OrdCol::Side => MoonDataCell::element(side_cell(e, view, p)),
         OrdCol::Token => MoonDataCell::element(token_cell(e, view, p)),
         OrdCol::Size => MoonDataCell::text(num(r.size)),
         OrdCol::Sl => flag_toggle_cell(
@@ -379,6 +376,40 @@ fn flag_toggle_cell(
             });
         });
     MoonDataCell::element(el)
+}
+
+/// Ячейка типа ордера (BUY/SELL/Short-S/Short-B) — кликабельна: открывает окно
+/// редактирования ордера (порт MoonBot «Active Order» dialog).
+fn side_cell(
+    e: &OrderEntry,
+    view: &Entity<OrdersPanel>,
+    p: MoonPalette,
+) -> impl IntoElement + 'static {
+    let (side, tone) = side_label(&e.row);
+    let core = e.core;
+    let uid = e.row.uid;
+    let view = view.clone();
+    div()
+        .id(SharedString::from(format!("ord-side-{core}-{uid}")))
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .child(
+            MoonText::new(side)
+                .color(tone.color(p))
+                .font_size(10.5)
+                .line_height(14.0)
+                .weight(500.0)
+                .mono(true)
+                .uppercase(false)
+                .render(),
+        )
+        .on_click(move |_, window, app| {
+            let backend = view.read(app).backend.clone();
+            crate::panels::open_order_edit(backend, core, uid, window, app);
+        })
 }
 
 /// Ячейка токена (без quote: `ADAUSDT` → `ADA`), акцентом — намёк, что кликабельна.

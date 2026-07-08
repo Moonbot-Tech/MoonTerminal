@@ -259,6 +259,10 @@ chartwin.clear:
   es: "Cerrar ventana (quitar todos los gráficos)"
 
 # --- Попап настроек раскладки чарт-вкладки (Fit/Scroll + раздельные высоты) ---
+chart.order_menu.edit:
+  ru: "Редактировать…"
+  en: "Edit…"
+  es: "Editar…"
 chart.order_menu.cancel:
   ru: "Cancel"
   en: "Cancel"

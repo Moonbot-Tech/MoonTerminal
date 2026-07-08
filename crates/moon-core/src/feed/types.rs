@@ -136,6 +136,18 @@ pub struct OrderRow {
     pub ts_strat: bool,
     pub vstop_strat: bool,
     pub vstop_on: bool,
+    // --- Сырые per-order параметры стопов с провода (окно редактирования ордера).
+    // Абсолютные цены линий (после разрешения процентов) — ниже, в категории C.
+    /// SL задан фиксированной ценой (wire `sl_fixed`); false = глобальный/процентный режим.
+    pub sl_fixed: bool,
+    /// TS задан фиксированной ценой (wire `trailing_fixed`).
+    pub ts_fixed: bool,
+    /// VStop: фиксированный уровень (wire `vstop_fixed`).
+    pub vstop_fixed: bool,
+    /// VStop: сырой уровень с провода (цена, если `vstop_fixed`; иначе %).
+    pub vstop_level: f64,
+    /// VStop: объём-порог срабатывания («Vol <»).
+    pub vstop_vol: f64,
     /// Цена входа (buy_price).
     pub buy_price: f64,
     /// Цена продажи (sell_price); 0 = не выставлена.

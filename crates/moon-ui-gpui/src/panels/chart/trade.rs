@@ -285,8 +285,9 @@ impl ChartPanel {
         })
     }
 
-    /// ПКМ по линии ордера → контекстное меню. Buy/Buy short → «Cancel» (этого ордера).
-    /// Sell/Sell short → «Join all sells» + «Split order» (per-market в moonproto).
+    /// ПКМ по линии ордера → контекстное меню. Buy/Buy short → «Редактировать…» + «Cancel»
+    /// (этого ордера). Sell/Sell short → «Редактировать…» + «Join all sells» + «Split order»
+    /// (per-market в moonproto).
     /// Возвращает `true`, если меню открыто (вызывающий гасит дальнейшую обработку ПКМ).
     pub(super) fn try_open_order_menu(
         &mut self,
@@ -306,8 +307,17 @@ impl ChartPanel {
         };
         let backend = self.backend.clone();
         let (core, uid, market, short) = (hit.core, hit.uid, hit.market, hit.short);
+        // «Редактировать…» — окно «Активный ордер» (общее с кликом по BUY/SELL в таблице).
+        let backend_edit = self.backend.clone();
+        let edit_item =
+            MoonMenuItem::with_key("order-edit", t!("chart.order_menu.edit").to_string())
+                .on_click(move |_, window, app| {
+                    window.close_context_menu(app);
+                    crate::panels::open_order_edit(backend_edit.clone(), core, uid, window, app);
+                });
         let items: Vec<MoonMenuItem> = match hit.kind {
             LineKind::Buy => vec![
+                edit_item,
                 MoonMenuItem::with_key("order-cancel", t!("chart.order_menu.cancel").to_string())
                     .on_click(move |_, window, app| {
                         window.close_context_menu(app);
@@ -320,6 +330,7 @@ impl ChartPanel {
                 let backend_split = backend.clone();
                 let market_split = market.clone();
                 vec![
+                    edit_item,
                     MoonMenuItem::with_key(
                         "order-join-sells",
                         t!("chart.order_menu.join_sells").to_string(),

@@ -15,11 +15,13 @@ mod chart;
 mod common;
 mod detects;
 mod log;
+mod order_edit;
 mod orders;
 mod report;
 mod stub;
 
 pub(crate) use common::{RadioMark, RenderGate, data_table_host, detach_button, num, radio_items};
+pub(crate) use order_edit::open_order_edit;
 
 pub use alerts::AlertsPanel;
 pub use assets::{AssetsView, open as open_assets_window};

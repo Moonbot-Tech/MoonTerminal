@@ -11,7 +11,7 @@ use super::convert::{apply_client_settings_edit, apply_lev_manage_edit};
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::fv_from_str;
-use crate::feed::{trade, CoreCmd};
+use crate::feed::{order_edit, trade, CoreCmd};
 use crate::util::now_unix_ms as now_ms;
 
 /// Общий путь синка стратегий: берём ПОЛНЫЙ текущий набор, даём его `build` на правку
@@ -328,6 +328,9 @@ pub(super) fn drain_commands(
             }
             Ok(CoreCmd::MoveOrderStopPrice { uid, kind, price }) => {
                 trade::move_order_stop_price(client, server.id, uid, kind, price);
+            }
+            Ok(CoreCmd::UpdateOrderStopsForm { uid, form }) => {
+                order_edit::update_order_stops_form(client, server.id, uid, form);
             }
             Ok(CoreCmd::PanicSellMarket { market, on }) => {
                 trade::panic_sell_market(client, server.id, market, on);
