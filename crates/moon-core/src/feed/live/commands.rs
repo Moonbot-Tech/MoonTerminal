@@ -49,6 +49,7 @@ pub(super) fn drain_commands(
     wanted: &mut Vec<String>,
     wanted_orderbook: &mut Vec<String>,
     force_market_sample: &mut bool,
+    orders_mutated: &mut bool,
 ) -> bool {
     loop {
         match cmd_rx.try_recv() {
@@ -306,6 +307,10 @@ pub(super) fn drain_commands(
                     log::info!("core {} chart alert delete {market} uid={obj_uid}", server.id);
                 }
             }
+            // Ордер-мутирующие команды: рантайм moonproto применяет их к ЛОКАЛЬНОЙ модели
+            // ордеров сразу (до отправки пакета) → помечаем `orders_mutated`, чтобы цикл
+            // фида НЕМЕДЛЕННО отдал свежие строки (оптимистичная отрисовка линий/таблицы),
+            // не дожидаясь эха ядра и 250мс-троттла.
             Ok(CoreCmd::PlaceOrder {
                 market,
                 short,
@@ -316,24 +321,31 @@ pub(super) fn drain_commands(
                 // Селл/стоп новому ордеру ставит САМО ЯДРО из ClientSettings (ROE). Терминал не
                 // переставляет — показываем то, что прислало ядро.
                 trade::place_order(client, server.id, market, short, price, size, strategy_id);
+                *orders_mutated = true;
             }
             Ok(CoreCmd::MoveOrder { uid, new_price }) => {
                 trade::move_order(client, server.id, uid, new_price);
+                *orders_mutated = true;
             }
             Ok(CoreCmd::CancelOrder { uid }) => {
                 trade::cancel_order(client, server.id, uid);
+                *orders_mutated = true;
             }
             Ok(CoreCmd::SetOrderStop { uid, kind, on }) => {
                 trade::set_order_stop(client, server.id, uid, kind, on);
+                *orders_mutated = true;
             }
             Ok(CoreCmd::MoveOrderStopPrice { uid, kind, price }) => {
                 trade::move_order_stop_price(client, server.id, uid, kind, price);
+                *orders_mutated = true;
             }
             Ok(CoreCmd::UpdateOrderStopsForm { uid, form }) => {
                 order_edit::update_order_stops_form(client, server.id, uid, form);
+                *orders_mutated = true;
             }
             Ok(CoreCmd::PanicSellMarket { market, on }) => {
                 trade::panic_sell_market(client, server.id, market, on);
+                *orders_mutated = true;
             }
             Ok(CoreCmd::MarketSellPosition { market }) => {
                 trade::market_sell_position(client, server.id, market);

@@ -190,6 +190,16 @@ pub fn build_order_geometry(
                 st
             };
             let line = &ord.lines[idx];
+            // ВЫКЛЮЧЕННАЯ линия живого ордера (off_ms: стоп/TP/vstop сняли) не рисуется
+            // ВООБЩЕ — «история до момента снятия» выглядела огрызком-артефактом у правого
+            // края/в стакане (репорт мак-тестера 2026-07-09). История жизни ордера нужна
+            // только входу/выходу (Buy/Sell), они off не бывают.
+            if line.off_ms.is_some()
+                && idx != LineKind::Buy as usize
+                && idx != LineKind::Sell as usize
+            {
+                continue;
+            }
             let ended = line.off_ms.is_some() || closed;
             let dashed =
                 st.dashed || (idx == LineKind::Buy as usize && ord.pending && style.pending_dashed);

@@ -142,6 +142,7 @@ pub fn run(
     loop {
         // Команды роли от координатора (полное желаемое состояние, не дельта).
         // Закрытие канала = координатор ушёл → отключаемся.
+        let mut orders_mutated = false;
         if drain_commands(
             cmd_rx,
             &client,
@@ -150,8 +151,29 @@ pub fn run(
             &mut wanted,
             &mut wanted_orderbook,
             &mut force_market_sample,
+            &mut orders_mutated,
         ) {
             return Ok(());
+        }
+        // ОПТИМИСТИЧНАЯ отрисовка ордеров: команда (тогл стопа/drag/отмена/постановка) уже
+        // применена к ЛОКАЛЬНОЙ модели (рантайм применяет до отправки пакета) — отдаём
+        // строки НЕМЕДЛЕННО, мимо event-гейта и 250мс-троттла. Линии/подписи/таблица
+        // реагируют на клик мгновенно; эхо ядра придёт следом и подтвердит/поправит.
+        if orders_mutated && server.feed.orders {
+            if let Some(snap) = client.snapshot() {
+                let order_rows = build_order_rows(
+                    server.id,
+                    &snap,
+                    &[],
+                    server.feed.reports,
+                    &mut orders_index,
+                );
+                last_orders = Instant::now();
+                orders_table_pending = false;
+                if tx.send(FeedMsg::Orders(order_rows)).is_err() {
+                    break;
+                }
+            }
         }
 
         // Биржа ядра (из server_info после BaseCheck) — координатору для группировки
