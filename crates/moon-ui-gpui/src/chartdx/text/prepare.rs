@@ -149,8 +149,14 @@ impl RenderState {
                 // что и дельта метлы, цветом подписи (без ±). Целый процент («14%»).
                 // Показ решает sync_from_market_source (Авто всегда / ручной при расхождении).
                 let (scale_w, scale_h) = if let Some(pct) = self.panes[idx].scale_badge {
-                    let text = format!("{pct}%");
-                    let size = self.label_font_px() * 1.7;
+                    // Диапазон уже целого 1% (авто на спокойном рынке) → «<1%», не голый ноль.
+                    let text = if pct == 0 {
+                        "<1%".to_string()
+                    } else {
+                        format!("{pct}%")
+                    };
+                    // Чуть мельче дельты метлы (−2px), чтобы бейдж не спорил с ней за внимание.
+                    let size = self.label_font_px() * 1.7 - 2.0;
                     let block_w = cap_w.max(delta_w);
                     let gap = if block_w > 0.0 { CAPTION_SCALE_GAP } else { 0.0 };
                     let m = self.draw_sized_text(
