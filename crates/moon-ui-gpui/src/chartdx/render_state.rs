@@ -297,12 +297,15 @@ impl RenderState {
             // Якорь совпадает с текстом (text.rs): есть стакан → у края панели, нет → у края плота.
             // Рисуем ДО гейта `plot_w<60` — иначе в режиме «только стакан» (чарт схлопнут) подложки
             // под подписью не было (как сейчас у соседей с метлой).
-            if pr.caption_w > 0.0 || pr.caption_delta_w > 0.0 {
+            if pr.caption_w > 0.0 || pr.caption_delta_w > 0.0 || pr.caption_scale_w > 0.0 {
                 let lines = (!pr.core_name.is_empty()) as u32 + (!pr.market.is_empty()) as u32;
                 // Строка дельты от якоря (метла) — под подписью, на той же плашке: ширина по
-                // максимуму строк, высота + её замеренная высота (см. prepare_text).
-                let cap_w = pr.caption_w.max(pr.caption_delta_w);
-                let cap_h = lines as f32 * super::text::LINE_H + pr.caption_delta_h;
+                // максимуму строк, высота + её замеренная высота (см. prepare_text). Бейдж
+                // текущего Y-масштаба — левее блока: ширина (с зазором) добавляется слева,
+                // высота может превышать строки подписи (крупный кегль) — берём максимум.
+                let cap_w = pr.caption_w.max(pr.caption_delta_w) + pr.caption_scale_w;
+                let cap_h =
+                    (lines as f32 * super::text::LINE_H + pr.caption_delta_h).max(pr.caption_scale_h);
                 if cap_h > 0.0 {
                     let right_edge = if pr.orderbook_enabled {
                         pane_right

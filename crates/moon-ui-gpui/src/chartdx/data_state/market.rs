@@ -384,6 +384,13 @@ impl ChartDataState {
                 book_focus,
             );
             pane.view.update_y(now, plot_h, visible_price, last_price);
+            // Бейдж текущего Y-масштаба у угловой подписи: Авто — всегда, ручной
+            // drag/RMB-zoom/lock сравнения — если целый % разошёлся с выбранной ступенью.
+            let next_badge = scale_badge_pct(&pane.view);
+            if pr.scale_badge != next_badge {
+                pr.scale_badge = next_badge;
+                pixels_changed = true;
+            }
             let area_win = Rect {
                 x: self.origin.0 + chart_area.x,
                 y: self.origin.1 + chart_area.y,

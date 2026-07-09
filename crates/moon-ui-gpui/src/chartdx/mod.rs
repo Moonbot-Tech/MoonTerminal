@@ -90,6 +90,26 @@ fn union_range(a: Option<(f32, f32)>, b: Option<(f32, f32)>) -> Option<(f32, f32
     }
 }
 
+/// Целый % текущего видимого Y-диапазона от цены — бейдж масштаба у угловой подписи.
+/// None = не показывать. Правила: Авто — показываем всегда; ручной Y (drag/RMB-zoom/lock
+/// сравнения) — только когда целый % разошёлся с выбранной ступенью; фикс-процент без
+/// ручного вмешательства совпадает с выбранным по построению — не пишем.
+fn scale_badge_pct(view: &moon_chart::view::ChartView) -> Option<i32> {
+    let center = view.render_center.abs();
+    if !(center > 1e-9) || !(view.render_range > 0.0) {
+        return None;
+    }
+    let cur = (view.render_range / center * 100.0).round() as i32;
+    if view.auto_price {
+        return Some(cur);
+    }
+    if !view.manual_price {
+        return None;
+    }
+    let selected = (view.scale_percent * 100.0).round() as i32;
+    (cur != selected).then_some(cur)
+}
+
 fn chart_market_diag_enabled() -> bool {
     std::env::var_os("MOON_MARKET_DIAG").is_some() || std::env::var_os("MOON_RENDER_DIAG").is_some()
 }
@@ -213,6 +233,14 @@ struct PaneRender {
     /// `prepare_text`, плашку расширяет `sync_readout_params`.
     caption_delta_w: f32,
     caption_delta_h: f32,
+    /// Бейдж текущего Y-масштаба (целый % видимого диапазона от цены) слева от угловой
+    /// подписи. None = не показывать (фикс-процент совпадает с выбранной ступенью).
+    /// Считается в `sync_from_market_source` по логическому `ChartView` панели.
+    scale_badge: Option<i32>,
+    /// Замеренные размеры (лог. px) текста бейджа масштаба (ширина ВКЛЮЧАЕТ зазор до
+    /// подписи) — `prepare_text` замеряет, `sync_readout_params` расширяет плашку.
+    caption_scale_w: f32,
+    caption_scale_h: f32,
     view: ChartViewGpu,
     layers: PlatformLayers,
     background_params: BackgroundParams,
@@ -331,6 +359,9 @@ impl PaneRender {
             caption_w: 0.0,
             caption_delta_w: 0.0,
             caption_delta_h: 0.0,
+            scale_badge: None,
+            caption_scale_w: 0.0,
+            caption_scale_h: 0.0,
             view: ChartViewGpu::default(),
             layers: PlatformLayers::new(),
             background_params: BackgroundParams::default(),

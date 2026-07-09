@@ -145,6 +145,35 @@ impl RenderState {
                     self.panes[idx].caption_delta_h = delta_h;
                     readout_metrics_changed = true;
                 }
+                // Бейдж текущего Y-масштаба — ЛЕВЕЕ блока подписи, тем же крупным кеглем,
+                // что и дельта метлы, цветом подписи (без ±). Целый процент («14%»).
+                // Показ решает sync_from_market_source (Авто всегда / ручной при расхождении).
+                let (scale_w, scale_h) = if let Some(pct) = self.panes[idx].scale_badge {
+                    let text = format!("{pct}%");
+                    let size = self.label_font_px() * 1.7;
+                    let block_w = cap_w.max(delta_w);
+                    let gap = if block_w > 0.0 { CAPTION_SCALE_GAP } else { 0.0 };
+                    let m = self.draw_sized_text(
+                        ctx,
+                        &text,
+                        size,
+                        cap_x - block_w - gap,
+                        cap_y,
+                        1.0,
+                        0.0,
+                        caption_fg,
+                    )?;
+                    (m.width.as_f32() + gap, m.line_height.as_f32())
+                } else {
+                    (0.0, 0.0)
+                };
+                if (self.panes[idx].caption_scale_w - scale_w).abs() > 0.25
+                    || (self.panes[idx].caption_scale_h - scale_h).abs() > 0.25
+                {
+                    self.panes[idx].caption_scale_w = scale_w;
+                    self.panes[idx].caption_scale_h = scale_h;
+                    readout_metrics_changed = true;
+                }
             }
 
             // Дальше — оси/курсор/сетка, только для нормального (не схлопнутого) чарта.

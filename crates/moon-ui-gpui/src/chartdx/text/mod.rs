@@ -21,6 +21,8 @@ const LABEL_LINE_GAP: f32 = 4.0;
 // строит по ним прозрачную плашку (тем же инсетом — едет вместе с текстом).
 pub(super) const CAPTION_PAD_X: f32 = 30.0;
 pub(super) const CAPTION_PAD_Y: f32 = 4.0;
+// Зазор между бейджем текущего Y-масштаба и блоком угловой подписи (бейдж — левее).
+pub(super) const CAPTION_SCALE_GAP: f32 = 8.0;
 const FIRETEST_TEXT_FONT_SIZE: f32 = 9.0;
 const FIRETEST_TEXT_LINE_H: f32 = 11.0;
 
