@@ -245,7 +245,8 @@ pub fn apply(
         }
         A::OrderSize(i) => match active_core {
             Some(core) => {
-                b.order_size_sel.insert(core, i);
+                // Выбор + персист в конфиг (восстановление после перезапуска).
+                b.set_order_size_sel(core, i);
                 b.order_size_rev = b.order_size_rev.wrapping_add(1);
                 bcx.notify();
                 true

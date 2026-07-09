@@ -124,12 +124,19 @@ pub(super) fn metric_button(
 
 /// Тогл включения стоп-лосса (`panic_if_price_drop`) слева от кнопки SL. Подпись «SL» вынесена
 /// сюда из кнопки; выкл → кнопка SL неактивна (значение/попап только при включённом тогле).
-pub(super) fn sl_toggle(on: bool, backend: Entity<Backend>, group: String) -> impl IntoElement {
+/// `disabled` — режим ручной стратегии: SL тулбара к новым ордерам не применяется.
+pub(super) fn sl_toggle(
+    on: bool,
+    disabled: bool,
+    backend: Entity<Backend>,
+    group: String,
+) -> impl IntoElement {
     MoonToggle::new("toolbar-sl-toggle")
         .label("SL")
         .label_side(MoonToggleLabelSide::Left)
         .checked(on)
         .size(MoonToggleSize::Compact)
+        .disabled(disabled)
         .on_change(move |ch: &bool, _w, app| {
             let v = *ch;
             let b = backend.read(app);

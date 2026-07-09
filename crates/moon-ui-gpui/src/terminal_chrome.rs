@@ -16,7 +16,7 @@ use rust_i18n::t;
 use moon_core::feed::ConnStatus;
 
 use crate::shell::Shell;
-use crate::{Backend, design, screener, settings, strategies};
+use crate::{Backend, design};
 
 pub fn header(
     group: &str,
@@ -64,7 +64,12 @@ pub fn header(
                     core_settings_open,
                     core_settings_content,
                 ))
-                .child(balance_label(free_usdt, total_usdt, p, cx)),
+                .child(balance_label(free_usdt, total_usdt, p, cx))
+                // Ручная стратегия: разделитель + тогл MS + пикер + сводка (на месте бывших
+                // кнопок Стратегии/Скринер — те переехали в тулбар к Live).
+                .child(crate::controls::manual_strategy_controls(
+                    group, &backend, p, cx,
+                )),
         )
         // Метрики Session/Real/Unreal/Risk из шапки убраны: сервер (moonproto) не отдаёт
         // session-профита (см. docs-internal/PROTO_REQUEST_PROFIT_AND_STOP_DEFAULTS.md),
@@ -81,63 +86,8 @@ pub fn header(
                 .flex_none()
                 .gap(design::ui_px(cx, 12.0))
                 .items_center()
-                .child(header_action(
-                    "strategies",
-                    t!("toolbar.strategies").to_string(),
-                    "icons/bot.svg",
-                    {
-                        let backend = backend.clone();
-                        move |_, window, cx| {
-                            let owner_display = window.display(cx).map(|d| d.id());
-                            strategies::open(
-                                backend.clone(),
-                                Some(window.window_handle()),
-                                owner_display,
-                                cx,
-                            )
-                        }
-                    },
-                    p,
-                    cx,
-                ))
-                .child(header_action(
-                    "screener",
-                    t!("toolbar.screener").to_string(),
-                    "icons/chart-pie.svg",
-                    {
-                        let backend = backend.clone();
-                        move |_, window, cx| {
-                            let owner_display = window.display(cx).map(|d| d.id());
-                            screener::open(
-                                backend.clone(),
-                                Some(window.window_handle()),
-                                owner_display,
-                                cx,
-                            )
-                        }
-                    },
-                    p,
-                    cx,
-                ))
-                .child(header_action(
-                    "gear",
-                    t!("shell.settings_btn").to_string(),
-                    "icons/settings.svg",
-                    {
-                        let backend = backend.clone();
-                        move |_, window, cx| {
-                            let owner_display = window.display(cx).map(|d| d.id());
-                            settings::open(
-                                backend.clone(),
-                                Some(window.window_handle()),
-                                owner_display,
-                                cx,
-                            )
-                        }
-                    },
-                    p,
-                    cx,
-                ))
+                // Кнопки «Стратегии»/«Скринер»/«Настройки» переехали в тулбар
+                // (правый край строки Live).
                 // Часы UTC(±пояс) в правом углу; клик — попап выбора пояса.
                 .child(crate::clock::header_clock(&backend, p, cx))
                 .when(design::show_custom_window_controls(), |this| {
@@ -361,6 +311,8 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
 /// прежний absolute-оверлей с захардкоженными координатами уезжал при изменении состава
 /// шапки). Open контролирует Shell (`set_core_settings_open`: сидирует поля при открытии);
 /// закрытие по клику вне — сам popover. Кнопка icon-only → квадрат с полями вокруг иконки.
+/// Иконка чуть левее центра — баг MoonButton (пустой flex-child при 0 сегментов ломает
+/// icon-only режим), записан в FORK_BUGS; чинится в форке, своё не катаем.
 fn core_gear_button(
     shell: Entity<Shell>,
     open: bool,
@@ -404,43 +356,6 @@ fn balance_label(free_usdt: f64, total_usdt: f64, p: MoonPalette, cx: &App) -> i
         )
 }
 
-/// Кнопка-действие шапки: иконка + подпись с нормальными полями по краям.
-/// НЕ MoonButton: у Action-размера захардкожен `pad_x = 0` (фон ровно по контенту),
-/// API паддинга у MoonButton нет, а leading_icon всегда первая — левое поле до иконки
-/// сделать нечем (записано в FORK_BUGS). Чип повторяет визуал `MoonButtonVariant::Panel`
-/// (bg `shell_high`, рамка `border`, текст `text`) с геометрией Action (высота 26).
-fn header_action(
-    id: impl Into<SharedString>,
-    label: impl Into<SharedString>,
-    icon: &'static str,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    p: MoonPalette,
-    cx: &App,
-) -> impl IntoElement {
-    let id: SharedString = id.into();
-    let label: SharedString = label.into();
-    h_flex()
-        .id(id)
-        .h(design::ui_px(cx, 26.0))
-        .px(design::ui_px(cx, 8.0))
-        .gap(design::ui_px(cx, 6.0))
-        .items_center()
-        .rounded(design::ui_px(cx, 4.0))
-        .bg(rgb(p.shell_high))
-        .border_1()
-        .border_color(rgb(p.border))
-        .text_color(rgb(p.text))
-        .text_size(design::t_body(cx))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(p.panel_high)))
-        .on_click(on_click)
-        .child(
-            svg()
-                .w(design::ui_px(cx, 12.0))
-                .h(design::ui_px(cx, 12.0))
-                .flex_none()
-                .text_color(rgb(p.text_soft))
-                .path(icon),
-        )
-        .child(label)
-}
+// Бывший чип `header_action` (иконка+подпись, обход pad_x=0 у MoonButton) удалён:
+// кнопки Стратегии/Скринер/Настройки переехали в тулбар на MoonButton
+// (controls::toolbar::open_window_button).

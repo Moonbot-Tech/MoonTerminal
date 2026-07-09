@@ -216,6 +216,9 @@ struct Backend {
     /// Оптимистичный локальный выбор fixed-sell слота. `Some(slot)` = горит S1-S6,
     /// `None` = горит основной TP. Без этого клик визуально ждёт echo ClientSettings от ядра.
     sell_slot_local: HashMap<CoreId, Option<usize>>,
+    /// Оптимистичный локальный выбор ручной стратегии `(вкл, id)` — живой отклик тогла/пикера
+    /// в шапке до echo ClientSettings от ядра.
+    manual_strat_local: HashMap<CoreId, (bool, u64)>,
     /// «Паник-селл взведён» по (ядро, рынок) — локальный тоггл кнопки Panic Sell на чарте
     /// (визуальная подсветка + on/off, без ожидания эха от ядра).
     panic_armed: HashSet<(CoreId, String)>,

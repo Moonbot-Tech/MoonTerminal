@@ -225,6 +225,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             sell_edit_req: None,
             sell_pct_local: HashMap::new(),
             sell_slot_local: HashMap::new(),
+            manual_strat_local: HashMap::new(),
             panic_armed: HashSet::new(),
             backend_dirty_since_notify: false,
             last_backend_notify: None,

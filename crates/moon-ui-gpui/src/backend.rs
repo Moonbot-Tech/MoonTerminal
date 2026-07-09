@@ -16,20 +16,34 @@ impl Backend {
         const DEFAULT_SEL: usize = 2;
 
         let base = self.session.core_base(core).unwrap_or("");
-        let sizes = self
-            .config
-            .servers
-            .iter()
-            .find(|s| s.id == core)
+        let server = self.config.servers.iter().find(|s| s.id == core);
+        let sizes = server
             .map(|s| s.order_sizes_or_default(base))
             .unwrap_or_else(|| moon_core::config::servers::default_order_sizes(base));
+        // Выбор: рантайм-карта → персист конфига (последний выбор прошлого запуска) → F3.
         let sel = self
             .order_size_sel
             .get(&core)
             .copied()
+            .or_else(|| server.and_then(|s| s.order_size_sel))
             .unwrap_or(DEFAULT_SEL)
             .min(sizes.len().saturating_sub(1));
         (sizes, sel)
+    }
+
+    /// Выбрать пресет размера ордера (клик F1-F6 / хоткей): рантайм-карта + персист в
+    /// конфиг сервера (дебаунс-сейв дренажа через `config_dirty`, как значения пресетов).
+    pub(crate) fn set_order_size_sel(&mut self, core: CoreId, ix: usize) {
+        if ix >= 6 {
+            return;
+        }
+        self.order_size_sel.insert(core, ix);
+        if let Some(s) = self.config.servers.iter_mut().find(|s| s.id == core) {
+            if s.order_size_sel != Some(ix) {
+                s.order_size_sel = Some(ix);
+                self.config_dirty = true;
+            }
+        }
     }
 
     pub(crate) fn manual_order_size(&self, core: CoreId) -> f64 {
@@ -116,6 +130,25 @@ impl Backend {
             .get(&core)
             .map(|slot| slot.is_some())
             .unwrap_or(fallback)
+    }
+
+    /// Оптимистичный локальный выбор ручной стратегии (живой отклик до echo ядра).
+    pub(crate) fn set_manual_strat_local(&mut self, core: CoreId, on: bool, id: u64) {
+        self.manual_strat_local.insert(core, (on, id));
+    }
+
+    /// Эффективное состояние ручной стратегии `(вкл, id)` ядра: локальный кэш поверх
+    /// снимка ClientSettings; ни того ни другого нет → (false, 0).
+    pub(crate) fn manual_strat_state(&self, core: CoreId) -> (bool, u64) {
+        if let Some(v) = self.manual_strat_local.get(&core) {
+            return *v;
+        }
+        self.session
+            .store()
+            .core(core)
+            .and_then(|d| d.client_settings.as_ref())
+            .map(|s| (s.use_manual_strategy, s.manual_strategy_id))
+            .unwrap_or((false, 0))
     }
 
     /// Взведён ли «паник-селл» по (ядро, рынок) — для подсветки кнопки Panic Sell.

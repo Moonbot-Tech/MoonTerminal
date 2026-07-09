@@ -77,7 +77,8 @@ pub(super) fn size_strip(
                 if dbl {
                     b.order_size_edit_req = Some((core, i));
                 } else {
-                    b.order_size_sel.insert(core, i);
+                    // Выбор + персист в конфиг (восстановление после перезапуска).
+                    b.set_order_size_sel(core, i);
                 }
                 b.order_size_rev = b.order_size_rev.wrapping_add(1);
                 bcx.notify();
@@ -99,8 +100,8 @@ pub(super) fn size_strip(
     )
 }
 
-/// Ширины кнопок продажи — единая 44.0 на все слоты (на 30% уже базовых 62).
-const SELL_W: [f32; 6] = [44.0, 44.0, 44.0, 44.0, 44.0, 44.0];
+/// Ширины кнопок продажи — единая 33.0 на все слоты (44 −25%; исходно 62 базовых).
+const SELL_W: [f32; 6] = [33.0, 33.0, 33.0, 33.0, 33.0, 33.0];
 
 /// Полоса fixed-sell пресетов (S1-S6) рядом с кнопкой TP (без подписи). Значения — из
 /// `ClientSettings` активного ядра (видимые проценты). Слот подсвечен ТОЛЬКО когда задействован

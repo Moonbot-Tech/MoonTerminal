@@ -4,8 +4,8 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonInputState,
-    MoonPalette, h_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonSize, MoonButtonVariant,
+    MoonInputState, MoonPalette, h_flex,
 };
 
 use moon_core::session::CoreId;
@@ -43,6 +43,7 @@ pub fn toolbar(
         lev_str,
         sell_pcts,
         sell_slot,
+        manual_on,
     ) = {
         let b = backend.read(cx);
         // Активное торговое ядро = выбор в селекторе шапки (sticky-override) ИЛИ ядро
@@ -95,6 +96,11 @@ pub fn toolbar(
             .filter(|l| *l > 0.0)
             .map(|l| format!("×{}", l as i32))
             .unwrap_or_else(|| "—".to_string());
+        // Ручная стратегия включена (тогл MS в шапке): sell/стопы новым ордерам ставит ядро
+        // из её полей → TP/S-слоты/SL тулбара гасим (значения не применяются).
+        let manual_on = focus_core
+            .map(|c| b.manual_strat_state(c).0)
+            .unwrap_or(false);
         (
             b.follow,
             focus_core,
@@ -107,6 +113,7 @@ pub fn toolbar(
             lev_str,
             sell_pcts,
             sell_slot,
+            manual_on,
         )
     };
     let p = MoonPalette::active(cx);
@@ -133,26 +140,40 @@ pub fn toolbar(
             tp_color,
             74.6,
             open_metric == Some(TradeMetric::Tp),
-            tp_engaged,
+            tp_engaged && !manual_on,
             true,
-            true,
+            !manual_on,
             shell.clone(),
             p,
         ))
-        .child(sell_strip(
-            sell_pcts,
-            sell_slot,
-            // Редактируем S-инпутом только если запрос относится к ФОКУСНОМУ ядру тулбара.
-            sell_edit
-                .filter(|(c, _)| Some(*c) == focus_core)
-                .map(|(_, i)| i),
-            sell_input,
-            backend.clone(),
-            focus_core,
-        ))
+        .child({
+            let strip = sell_strip(
+                sell_pcts,
+                // При ручной стратегии слоты не применяются — ничего не горит.
+                sell_slot.filter(|_| !manual_on),
+                // Редактируем S-инпутом только если запрос относится к ФОКУСНОМУ ядру тулбара.
+                sell_edit
+                    .filter(|(c, _)| Some(*c) == focus_core && !manual_on)
+                    .map(|(_, i)| i),
+                sell_input,
+                backend.clone(),
+                // Ручная стратегия: гасим взаимодействие (клик/колесо/дабл) целиком.
+                focus_core.filter(|_| !manual_on),
+            );
+            if manual_on {
+                div().opacity(0.55).child(strip).into_any_element()
+            } else {
+                strip.into_any_element()
+            }
+        })
         .child(divider(p))
         // Стоп-лосс: тогл вкл/выкл (`panic_if_price_drop`) + кнопка только со значением+попапом.
-        .child(sl_toggle(sl_on, backend.clone(), group.to_string()))
+        .child(sl_toggle(
+            sl_on,
+            manual_on,
+            backend.clone(),
+            group.to_string(),
+        ))
         .child(metric_button(
             TradeMetric::Sl,
             sl_str,
@@ -161,7 +182,7 @@ pub fn toolbar(
             open_metric == Some(TradeMetric::Sl),
             false,
             false,
-            sl_on,
+            sl_on && !manual_on,
             shell.clone(),
             p,
         ))
@@ -204,8 +225,8 @@ pub fn toolbar(
     } else {
         t!("toolbar.pause").to_string()
     };
-    let backend = backend.clone();
-    row.child(
+    let backend_live = backend.clone();
+    row = row.child(
         MoonButton::new("live")
             .width(62.0)
             .variant(MoonButtonVariant::Soft)
@@ -222,11 +243,80 @@ pub fn toolbar(
                     .weight(500.0),
             )
             .on_click(move |_, _, cx| {
-                backend.update(cx, |b, bcx| {
+                backend_live.update(cx, |b, bcx| {
                     b.follow = !b.follow;
                     bcx.notify();
                 });
             })
             .render(),
-    )
+    );
+    // Правый край: «Стратегии»/«Скринер» (иконки) и «Настройки» (иконка+надпись) —
+    // переехали из шапки, стиль как Live.
+    row.child(div().flex_1())
+        .child(open_window_button(
+            "toolbar-strategies",
+            t!("toolbar.strategies").to_string(),
+            "icons/bot.svg",
+            None,
+            backend.clone(),
+            crate::strategies::open,
+            p,
+        ))
+        .child(open_window_button(
+            "toolbar-screener",
+            t!("toolbar.screener").to_string(),
+            "icons/chart-pie.svg",
+            None,
+            backend.clone(),
+            crate::screener::open,
+            p,
+        ))
+        .child(open_window_button(
+            "toolbar-settings",
+            t!("shell.settings_btn").to_string(),
+            "icons/settings.svg",
+            // С надписью. Фикс-ширина вместо паддинга: pad_x у MoonButton = 0 (FORK_BUGS),
+            // контент центрируется внутри заданной ширины.
+            Some(92.0),
+            backend.clone(),
+            crate::settings::open,
+            p,
+        ))
+}
+
+/// Кнопка тулбара, открывающая singleton-окно (Стратегии/Скринер/Настройки): визуал как
+/// Live (Soft/ToolbarCompact). `labeled_width = None` — только иконка (имя тултипом),
+/// `Some(w)` — иконка + надпись в фикс-ширине `w`. `open` — `strategies::open`/
+/// `screener::open`/`settings::open` (одинаковая сигнатура: дедуп/фокус внутри).
+/// Иконка icon-only чуть левее центра — баг MoonButton (см. FORK_BUGS), чинится в форке.
+#[allow(clippy::too_many_arguments)]
+fn open_window_button(
+    id: &'static str,
+    label: String,
+    icon: &'static str,
+    labeled_width: Option<f32>,
+    backend: Entity<Backend>,
+    open: fn(Entity<Backend>, Option<AnyWindowHandle>, Option<DisplayId>, &mut App),
+    p: MoonPalette,
+) -> impl IntoElement {
+    let mut btn = MoonButton::new(id)
+        .width(labeled_width.unwrap_or(30.0))
+        .variant(MoonButtonVariant::Soft)
+        .size(MoonButtonSize::ToolbarCompact)
+        .leading_icon(MoonButtonIconSlot::new(icon).color(p.text_soft));
+    btn = if labeled_width.is_some() {
+        btn.text_segment(label, p.text, 500.0)
+    } else {
+        btn.tooltip(label)
+    };
+    btn.on_click(move |_, window, cx| {
+        let owner_display = window.display(cx).map(|d| d.id());
+        open(
+            backend.clone(),
+            Some(window.window_handle()),
+            owner_display,
+            cx,
+        );
+    })
+    .render()
 }

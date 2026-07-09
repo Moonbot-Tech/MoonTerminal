@@ -91,6 +91,15 @@ toolbar.screener:
   ru: "Скринер"
   en: "Screener"
   es: "Screener"
+# Ручная стратегия (тогл MS + пикер в шапке): пилюля без выбора / пустой список Manual-стратегий.
+header.ms_none:
+  ru: "— стратегия —"
+  en: "— strategy —"
+  es: "— estrategia —"
+header.ms_empty:
+  ru: "Нет ручных стратегий"
+  en: "No manual strategies"
+  es: "No hay estrategias manuales"
 # Заголовки попапов торговых метрик (слайдер + поле ввода).
 toolbar.tp_title:
   ru: "Тейк-профит"

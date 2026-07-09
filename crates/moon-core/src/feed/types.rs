@@ -604,6 +604,11 @@ pub struct ClientSettings {
     pub fixed_sell_pcts: [f64; 6],
     /// Выбранный fixed-sell слот, 1..=6 (`selected_fixed_sell_slot`).
     pub fixed_sell_slot: usize,
+    /// Ручная стратегия включена (`use_manual_strategy`) — ручные ордера ведутся по ней
+    /// (sell/стопы ставит ядро из её полей), TP/S/SL тулбара к новым ордерам не применяются.
+    pub use_manual_strategy: bool,
+    /// ID выбранной ручной стратегии (`manual_strategy_id`), 0 = не выбрана.
+    pub manual_strategy_id: u64,
 }
 
 /// Настройки управления плечом ядра (moonproto `LevManage`). Отдельный снимок, как в MoonBot.
@@ -667,6 +672,9 @@ pub enum ClientSettingsEdit {
     EmuMode(bool),
     /// V-Stop по умолчанию: уровень падения объёма BID, % (`vol_drop_level`, целое).
     VolDropLevel(i32),
+    /// Ручная стратегия: вкл/выкл + ID (`use_manual_strategy`/`manual_strategy_id`).
+    /// Выключение сохраняет ID — повторный тогл возвращает ту же стратегию.
+    ManualStrategy { on: bool, id: u64 },
 }
 
 /// Какой счётчик прибыли сбрасывать (moonproto `ResetProfitKind`). Кнопки «Сессия»/«Всё время»

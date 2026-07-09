@@ -98,6 +98,8 @@ pub(super) fn client_settings_from_proto(c: &moonproto::ClientSettingsCommand) -
         blacklist_text: c.coins_black_list_text.clone(),
         fixed_sell_pcts,
         fixed_sell_slot: c.selected_fixed_sell_slot(),
+        use_manual_strategy: c.use_manual_strategy,
+        manual_strategy_id: c.manual_strategy_id,
     }
 }
 
@@ -192,6 +194,10 @@ pub(super) fn apply_client_settings_edit(
         ClientSettingsEdit::SignOrders(on) => s.sign_orders = on,
         ClientSettingsEdit::EmuMode(on) => s.emu_mode = on,
         ClientSettingsEdit::VolDropLevel(n) => s.vol_drop_level = n,
+        ClientSettingsEdit::ManualStrategy { on, id } => {
+            s.use_manual_strategy = on;
+            s.manual_strategy_id = id;
+        }
     }
 }
 

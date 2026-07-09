@@ -5,18 +5,21 @@
 //!
 //! Разнесено по подмодулям (mod.rs = границы слайдеров + re-export'ы):
 //! - [`fmt`] — форматирование значений (size/sell/поля) и шаги колеса мыши;
+//! - [`manual_strat`] — тогл+пикер «ручной стратегии» (шапка);
 //! - [`metric`] — торговые метрики TP/SL/Lev: кнопки-триггеры и контент попапов;
 //! - [`strips`] — полосы пресетов размера/продажи с overlay-взаимодействием;
 //! - [`scale`] — дропдауны масштаба цены (вкладки/AddToChart-stack);
 //! - [`toolbar`] — сборка полосы тулбара.
 
 mod fmt;
+mod manual_strat;
 mod metric;
 mod scale;
 mod strips;
 mod toolbar;
 
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
+pub use manual_strat::manual_strategy_controls;
 pub use metric::{TradeMetric, metric_popup_content};
 pub(crate) use scale::{scale_dropdown_for_add_stack, scale_dropdown_for_tabs, step_scale};
 pub use toolbar::toolbar;
