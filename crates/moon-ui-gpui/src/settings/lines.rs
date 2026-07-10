@@ -188,7 +188,7 @@ pub(super) fn build(
     cx: &mut Context<SettingsView>,
 ) -> Lines {
     // Редактируем набор линий АКТИВНОЙ темы приложения (по `ui_theme_mode`). Сменить тему
-    // (вкладка Interface) + сохранить → откроется набор другой темы.
+    // (вкладка «Общие») + сохранить → откроется набор другой темы.
     let is_light = backend.read(cx).config.ui_theme_mode == UiThemeMode::Light;
     Lines {
         is_light,
