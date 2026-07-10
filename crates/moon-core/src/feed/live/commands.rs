@@ -272,6 +272,14 @@ pub(super) fn drain_commands(
                 if let Err(error) = client.balances().refresh_transfer_assets() {
                     log::warn!("core {} refresh transfer assets failed: {error}", server.id);
                 }
+                // Заодно свежий баланс-снимок: ручной «пинок» против фантомов «Активов»
+                // (зависшая проданная монета) — клик по ядру в окне и есть просьба
+                // пользователя перечитать остатки. Дёшево (запрос к ядру, не к бирже).
+                if let Err(error) = client.balances().refresh() {
+                    log::warn!("core {} balance refresh request failed: {error}", server.id);
+                } else {
+                    log::info!("core {} balance refresh requested (assets click)", server.id);
+                }
             }
             Ok(CoreCmd::ConvertDust) => {
                 // Конверсия мелких остатков в BNB (Engine API), необратимо.

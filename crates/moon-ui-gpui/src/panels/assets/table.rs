@@ -285,6 +285,7 @@ fn assets_columns() -> Vec<MoonDataTableColumn> {
 pub(super) fn assets_table(
     id: &'static str,
     rows: Rc<Vec<AssetEntry>>,
+    sell_marked: Rc<std::collections::HashSet<(CoreId, String)>>,
     state: &Entity<MoonDataTableState>,
     cx: &Context<AssetsView>,
 ) -> impl IntoElement {
@@ -301,7 +302,9 @@ pub(super) fn assets_table(
         p,
         cx,
         MoonDataTable::new(id, row_count, move |ix, _window, _app| {
-            assets_row(&table_rows[ix], &view, p)
+            let e = &table_rows[ix];
+            let on_sale = sell_marked.contains(&(e.core, e.row.market.clone()));
+            assets_row(e, &view, p, on_sale)
         })
         .columns(assets_columns())
         .state(state)
@@ -310,7 +313,7 @@ pub(super) fn assets_table(
     )
 }
 
-fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette) -> MoonDataRow {
+fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette, on_sale: bool) -> MoonDataRow {
     let r = &e.row;
     let is_position = r.pos_size != 0.0;
     // Кол-во/Сумма: спот — ПОЛНЫЙ удерживаемый остаток (free + заблокированное в открытых
@@ -334,16 +337,25 @@ fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette) -> Moon
     MoonDataRow::new([
         MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
         // Тикер кликабелен → открыть чарт монеты на Main НА ЯДРЕ строки (как в Ордерах/Отчёте).
-        MoonDataCell::element(coin_cell(e, view, p)),
+        MoonDataCell::element(coin_cell(e, view, p, on_sale)),
         MoonDataCell::text(qty),
         MoonDataCell::text(sum),
         actions_cell(e, view, p, is_position),
     ])
+    // Подсветка строки: монета/позиция сейчас СТОИТ НА ПРОДАЖУ (активный sell-ордер,
+    // фаза SellSet/SellAlmostDone на этом ядре). Плюс синяя метка «SELL» у тикера.
+    .selected(on_sale)
 }
 
 /// Ячейка тикера (базовая монета): клик открывает чарт монеты на Main на ядре строки.
-/// Порт клика по тикеру из панели «Ордера».
-fn coin_cell(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette) -> impl IntoElement + 'static {
+/// Порт клика по тикеру из панели «Ордера». `on_sale` — рядом с тикером синяя метка
+/// «SELL» (у монеты сейчас активный sell-ордер, тон Info как в таблице «Ордера»).
+fn coin_cell(
+    e: &AssetEntry,
+    view: &Entity<AssetsView>,
+    p: MoonPalette,
+    on_sale: bool,
+) -> impl IntoElement + 'static {
     let coin = e.row.coin.clone();
     let core = e.core;
     let market = e.row.market.clone();
@@ -372,6 +384,18 @@ fn coin_cell(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette) -> impl 
                 .uppercase(false)
                 .render(),
         )
+        .when(on_sale, |el| {
+            el.child(
+                MoonText::new("SELL")
+                    .color(MoonTone::Info.color(p))
+                    .font_size(9.0)
+                    .line_height(14.0)
+                    .weight(600.0)
+                    .mono(true)
+                    .uppercase(false)
+                    .render(),
+            )
+        })
         .on_click(move |_, _window, app| {
             if market.is_empty() {
                 return; // строка без рынка (чистый баланс) — открывать нечего

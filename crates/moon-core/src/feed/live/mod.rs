@@ -123,6 +123,8 @@ pub fn run(
     let mut last_assets = Instant::now();
     // Троттл активного запроса баланса у ЯДРА после филлов (см. блок в цикле).
     let mut last_balance_refresh = Instant::now();
+    // Окно логирования Balance-событий после нашего refresh (диагностика фантомов «Активов»).
+    let mut balance_refresh_log_until: Option<Instant> = None;
     // Курсор transfer-активов: шлём только при смене revision (request/response).
     let mut last_transfer_rev: u64 = u64::MAX;
     // Курсоры выгрузки стратегий: revision схемы и сигнатура состава/checked —
@@ -332,8 +334,18 @@ pub fn run(
         // не спамила. Ответ придёт Balance-событием на следующей итерации и обновит снимок.
         if has_orders_table_event && last_balance_refresh.elapsed() >= Duration::from_secs(3) {
             last_balance_refresh = Instant::now();
-            if let Err(error) = client.balances().refresh() {
-                log::warn!("core {} balance refresh request failed: {error}", server.id);
+            match client.balances().refresh() {
+                // Диагностика фантомов «Активов»: фиксируем сам факт запроса и (ниже, в цикле
+                // событий) ЧЕМ ядро ответило — полным снимком (SnapshotApplied: обнуляет
+                // пропавшие монеты) или инкрементом (IncrementalApplied: обнулённую монету
+                // НЕ сотрёт — дырка на стороне ядра).
+                Ok(()) => {
+                    balance_refresh_log_until = Some(Instant::now() + Duration::from_secs(5));
+                    log::info!("core {} balance refresh requested (orders event)", server.id);
+                }
+                Err(error) => {
+                    log::warn!("core {} balance refresh request failed: {error}", server.id)
+                }
             }
         }
         // Судьба bulk-снимка 5м-свечей (авто-запрос moonproto после subscribe_all_trades):
@@ -416,6 +428,14 @@ pub fn run(
                     ..
                 }) => {
                     log::warn!("core {} candles snapshot failed: {error}", server.id);
+                }
+                // Окно диагностики после нашего balance-refresh (фантомы «Активов»): вид
+                // ответа решает судьбу зависшей монеты — Snapshot обнуляет пропавшие,
+                // Incremental нет. Вне окна не логируем (балансы пушатся постоянно).
+                Event::Balance(bev) => {
+                    if balance_refresh_log_until.is_some_and(|t| Instant::now() < t) {
+                        log::info!("core {} balance event after refresh: {bev:?}", server.id);
+                    }
                 }
                 _ => {}
             }

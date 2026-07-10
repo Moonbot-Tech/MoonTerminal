@@ -165,8 +165,6 @@ pub struct HotkeysConfig {
     #[serde(default)]
     pub switch_charts: String,
     #[serde(default)]
-    pub reload_book: String,
-    #[serde(default)]
     pub new_long: String,
     #[serde(default)]
     pub new_short: String,
@@ -174,39 +172,17 @@ pub struct HotkeysConfig {
     pub split_order: String,
     #[serde(default)]
     pub split_order_x: String,
-    #[serde(default)]
-    pub shift_buy_up: String,
-    #[serde(default)]
-    pub shift_buy_down: String,
-    #[serde(default)]
-    pub shift_sell_up: String,
-    #[serde(default)]
-    pub shift_sell_down: String,
 
-    #[serde(default = "default_make_shot")]
-    pub make_shot: String,
-    #[serde(default = "default_make_shot_bot")]
-    pub make_shot_bot: String,
-    #[serde(default = "default_reload_chart")]
-    pub reload_chart: String,
+    // MoonBot-хоткеи, под которые в moonproto НЕТ send-команд (reload book/chart,
+    // make shot, spy, show charts, fit sells, broadcast, shift buy/sell, sell +/-),
+    // удалены целиком 2026-07-10 (конфиг+вкладка+диспетчер); serde молча игнорирует
+    // их ключи в старых hotkeys.toml. Появится команда — возвращать по git-истории.
     #[serde(default = "default_scale_plus")]
     pub scale_plus: String,
     #[serde(default = "default_scale_minus")]
     pub scale_minus: String,
-    #[serde(default = "default_sell_plus")]
-    pub sell_plus: String,
-    #[serde(default = "default_sell_minus")]
-    pub sell_minus: String,
-    #[serde(default = "default_spy_mode")]
-    pub spy_mode: String,
-    #[serde(default = "default_show_charts")]
-    pub show_charts: String,
     #[serde(default = "default_switch_figure")]
     pub switch_figure: String,
-    #[serde(default = "default_fit_sells")]
-    pub fit_sells: String,
-    #[serde(default)]
-    pub broadcast: String,
 
     /// Слой рисования фигур (карандаш): тоггл инструментов. Повторное нажатие того же
     /// хоткея (или Esc) выключает режим. Дефолты на Ctrl (Alt-сочетания Windows перехватывает под меню окна — до обработчика не доходят, только системный звук).
@@ -274,27 +250,13 @@ impl Default for HotkeysConfig {
             cancel_all_buys: default_cancel_all_buys(),
             join_sells: String::new(),
             switch_charts: String::new(),
-            reload_book: String::new(),
             new_long: String::new(),
             new_short: String::new(),
             split_order: String::new(),
             split_order_x: String::new(),
-            shift_buy_up: String::new(),
-            shift_buy_down: String::new(),
-            shift_sell_up: String::new(),
-            shift_sell_down: String::new(),
-            make_shot: default_make_shot(),
-            make_shot_bot: default_make_shot_bot(),
-            reload_chart: default_reload_chart(),
             scale_plus: default_scale_plus(),
             scale_minus: default_scale_minus(),
-            sell_plus: default_sell_plus(),
-            sell_minus: default_sell_minus(),
-            spy_mode: default_spy_mode(),
-            show_charts: default_show_charts(),
             switch_figure: default_switch_figure(),
-            fit_sells: default_fit_sells(),
-            broadcast: String::new(),
             draw_hline: default_draw_hline(),
             draw_segment: default_draw_segment(),
             draw_triangle: default_draw_triangle(),
@@ -345,7 +307,7 @@ impl HotkeysConfig {
     /// характерным ключам — serde игнорирует незнакомые поля и на чужом файле молча дал бы
     /// дефолт. `None` = это не хоткеи.
     pub fn parse_share(text: &str) -> Option<Self> {
-        const KEYS: [&str; 4] = ["order_size", "sell_preset", "buy_set_click", "make_shot"];
+        const KEYS: [&str; 4] = ["order_size", "sell_preset", "buy_set_click", "draw_hline"];
         let v: toml::Value = toml::from_str(text).ok()?;
         if v.as_table()
             .is_some_and(|t| KEYS.iter().any(|k| t.contains_key(*k)))
@@ -398,18 +360,6 @@ fn default_fig_alert() -> String {
     "ctrl-b".into()
 }
 
-fn default_make_shot() -> String {
-    "ctrl-f10".into()
-}
-
-fn default_make_shot_bot() -> String {
-    "ctrl-f12".into()
-}
-
-fn default_reload_chart() -> String {
-    "ctrl-r".into()
-}
-
 fn default_scale_plus() -> String {
     "ctrl-q".into()
 }
@@ -418,28 +368,8 @@ fn default_scale_minus() -> String {
     "ctrl-w".into()
 }
 
-fn default_sell_plus() -> String {
-    "ctrl-1".into()
-}
-
-fn default_sell_minus() -> String {
-    "ctrl-2".into()
-}
-
-fn default_spy_mode() -> String {
-    "f7".into()
-}
-
-fn default_show_charts() -> String {
-    "f4".into()
-}
-
 fn default_switch_figure() -> String {
     "ctrl-f".into()
-}
-
-fn default_fit_sells() -> String {
-    "ctrl-s".into()
 }
 
 fn default_panic_sell_one() -> String {

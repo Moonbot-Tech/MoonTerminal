@@ -158,16 +158,16 @@ impl Shell {
             }
             // Встроенный Tab/Del: отмена ордера под курсором (чарт под мышью знает наведённый).
             HotkeyAction::CancelHoveredOrder => {
-                let chart = self
-                    .backend
-                    .read(cx)
-                    .hovered_chart
-                    .clone()
-                    .and_then(|w| w.upgrade());
-                match chart {
-                    Some(chart) => chart.update(cx, |p, pcx| p.cancel_hovered_order(pcx)),
-                    None => false,
-                }
+                crate::hotkeys::cancel_hovered_order(&self.backend, cx)
+            }
+            // Del: приоритет — удалить выделенную фигуру; выделения нет → фолбэк на встроенную
+            // отмену ордера под курсором (дефолтный fig_delete=Del резолвится раньше встроенной
+            // ветки Tab/Del и без фолбэка затенял бы её навсегда).
+            HotkeyAction::FigDelete => {
+                self.backend.update(cx, |b, bcx| {
+                    // Таргет/ядро FigDelete не использует.
+                    crate::hotkeys::apply(action, b, bcx, None, None)
+                }) || crate::hotkeys::cancel_hovered_order(&self.backend, cx)
             }
             // Встроенный Shift+Esc: закрыть все графики Main всех групп (глобальный бамп rev).
             HotkeyAction::CloseAllCharts => {

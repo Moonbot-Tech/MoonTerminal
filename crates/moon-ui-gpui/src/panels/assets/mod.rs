@@ -133,6 +133,10 @@ pub struct AssetsView {
     cache_sig: Option<(u64, bool)>,
     cached_cores: Vec<(CoreId, String)>,
     cached_entries: Rc<Vec<AssetEntry>>,
+    /// `(ядро, рынок)` с АКТИВНЫМ sell-ордером (фаза SellSet/SellAlmostDone) — эти
+    /// строки подсвечиваем: монета/позиция сейчас стоит на продажу. Обновляется в
+    /// `rebuild_cache` (сигнатура включает orders_table_rev ядер).
+    pub(super) sell_marked: Rc<std::collections::HashSet<(CoreId, String)>>,
     cached_aggs: Rc<Vec<CoreAgg>>,
     cached_wallet_key: Option<(Option<CoreId>, u64, bool)>,
     cached_wallets: Rc<Vec<WalletColumnSnapshot>>,
@@ -218,6 +222,7 @@ impl AssetsView {
             cache_sig: None,
             cached_cores: Vec::new(),
             cached_entries: Rc::new(Vec::new()),
+            sell_marked: Rc::new(std::collections::HashSet::new()),
             cached_aggs: Rc::new(Vec::new()),
             cached_wallet_key: None,
             cached_wallets: Rc::new(Vec::new()),
@@ -280,7 +285,8 @@ impl AssetsView {
             .collect()
     }
 
-    /// Сигнатура активов охвата (assets_rev/transfer_rev ядер) — гейт перерисовки.
+    /// Сигнатура активов охвата (assets_rev/transfer_rev ядер + orders_table_rev для
+    /// подсветки «стоит на продажу») — гейт перерисовки.
     fn assets_sig(&self, b: &Backend) -> u64 {
         let store = b.session.store();
         self.scope_cores(b)
@@ -291,7 +297,26 @@ impl AssetsView {
                     .wrapping_add(c.assets_rev)
                     .wrapping_mul(31)
                     .wrapping_add(c.transfer_rev)
+                    .wrapping_mul(31)
+                    .wrapping_add(c.orders_table_rev)
             })
+    }
+
+    /// `(ядро, рынок)` с активным sell-ордером охвата: вход исполнен, выход ВЫСТАВЛЕН
+    /// (фаза SellSet/SellAlmostDone, ордер не терминален). Эти монеты/позиции в таблице
+    /// подсвечиваются — «сейчас стоит на продажу».
+    fn collect_sell_marked(&self, b: &Backend) -> std::collections::HashSet<(CoreId, String)> {
+        let store = b.session.store();
+        let mut out = std::collections::HashSet::new();
+        for (id, _) in &self.cached_cores {
+            let Some(cd) = store.core(*id) else { continue };
+            for o in &cd.orders {
+                if !o.job_is_done && matches!(o.status.as_str(), "SellSet" | "SellAlmostDone") {
+                    out.insert((*id, o.market.clone()));
+                }
+            }
+        }
+        out
     }
 
     /// Строки таблицы по всем ядрам охвата (с USDT-стоимостью), отсортированные по
@@ -455,6 +480,7 @@ impl AssetsView {
         }
         self.cached_cores = cores;
         self.request_missing_transfers(b);
+        self.sell_marked = Rc::new(self.collect_sell_marked(b));
         self.cached_entries = Rc::new(self.collect(b));
         self.cached_aggs = Rc::new(self.per_core(b));
         self.rebuild_wallet_cache(b);
@@ -685,7 +711,13 @@ impl Render for AssetsView {
         let tree_section = self
             .show_wallets
             .then(|| self.bottom(&cores, &aggs, &wallets, cx).into_any_element());
-        let table = table::assets_table("assets-table", entries, &self.table_state, cx);
+        let table = table::assets_table(
+            "assets-table",
+            entries,
+            self.sell_marked.clone(),
+            &self.table_state,
+            cx,
+        );
 
         // Ширина окна для хит-оверлея титлбара (drag/resize/контролы) — как у «Стратегий».
         let chrome_width = match window.window_bounds() {

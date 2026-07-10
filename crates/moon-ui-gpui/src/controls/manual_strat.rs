@@ -167,6 +167,26 @@ pub fn manual_strategy_controls(
     row.into_any_element()
 }
 
+/// Хоткей «Ручная стратегия N»: выбрать `ix`-ю manual-стратегию ядра (тот же порядок,
+/// что в списке пикера MS) и включить режим — ровно то, что делает клик по пункту меню.
+/// `false` — у ядра нет manual-стратегии с таким номером (клавиша всплывает дальше).
+pub(crate) fn select_manual_strategy(b: &mut Backend, core: CoreId, ix: usize) -> bool {
+    let sid = b.session.store().core(core).and_then(|cd| {
+        cd.strategies
+            .iter()
+            .filter(|s| s.kind_ordinal == MANUAL_KIND)
+            .nth(ix)
+            .map(|s| s.id)
+    });
+    match sid {
+        Some(sid) => {
+            send_manual(b, core, true, sid);
+            true
+        }
+        None => false,
+    }
+}
+
 /// Шлёт правку ручной стратегии в ядро + optimistic-кэш (живой отклик до echo).
 fn send_manual(b: &mut Backend, core: CoreId, on: bool, id: u64) {
     b.set_manual_strat_local(core, on, id);

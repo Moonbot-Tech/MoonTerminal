@@ -13,7 +13,7 @@
 //! Кросс-платформенность: дефолты хранятся как `secondary-*` (gpui резолвит в Ctrl на
 //! Windows/Linux и Cmd на macOS), так что назначения из коробки работают на обеих ОС.
 
-use gpui::{Context, KeyDownEvent, Keystroke, Modifiers};
+use gpui::{App, Context, Entity, KeyDownEvent, Keystroke, Modifiers};
 use moon_core::config::HotkeysConfig;
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::figures::FigureTool;
@@ -28,6 +28,9 @@ pub enum HotkeyAction {
     OrderSize(usize),
     /// Задействовать fixed-sell слот S1-S6 (гасит TP).
     SellPreset(usize),
+    /// Выбрать i-ю manual-стратегию активного ядра (порядок пикера MS шапки) и включить
+    /// режим ручной стратегии — то же, что клик по пункту пикера.
+    ManualStrategy(usize),
     /// Отменить ожидающие buy-ордера рынка активного чарта.
     CancelBuy,
     /// Отменить ВСЕ ожидающие buy-ордера активного ядра (по всем рынкам).
@@ -187,9 +190,15 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
         return Some(A::SwitchCharts);
     }
 
+    if let Some(i) = hk.manual_strategy.iter().position(|r| p(r)) {
+        return Some(A::ManualStrategy(i));
+    }
+
     // Распознаём остальные назначенные действия, но backend-путь пока не подключён.
     // make_shot ставит moon-shot — в moonproto нет команды постановки его по цене (это
-    // strategy-тип ордера), поэтому отложен; прочие ждут своих команд/семантики.
+    // strategy-тип ордера), поэтому отложен; прочие ждут своих команд/семантики (проверено
+    // 2026-07-10: в moonproto нет send-команд reload book/chart, shot, spy, broadcast,
+    // shift buy/sell, sell+/-). Держать в синхроне с `settings::hotkeys::slot_wip`.
     const TODO: [(&str, fn(&HotkeysConfig) -> &str); 14] = [
         ("reload_book", |h| &h.reload_book),
         ("reload_chart", |h| &h.reload_chart),
@@ -211,10 +220,23 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
             return Some(A::Todo(name));
         }
     }
-    if hk.manual_strategy.iter().any(|r| p(r)) {
-        return Some(A::Todo("manual_strategy"));
-    }
     None
+}
+
+/// Отменить ордер ПОД КУРСОРОМ через чарт под мышью (`Backend::hovered_chart`) — общий
+/// путь встроенного Tab/Del и фолбэка `FigDelete` без выделенной фигуры (дефолтный
+/// `fig_delete`=Del резолвится раньше встроенной ветки и иначе затенял бы отмену навсегда).
+/// `false` — нет чарта под мышью или наведённого ордера (клавиша всплывает дальше).
+pub fn cancel_hovered_order(backend: &Entity<Backend>, cx: &mut App) -> bool {
+    let chart = backend
+        .read(cx)
+        .hovered_chart
+        .clone()
+        .and_then(|w| w.upgrade());
+    match chart {
+        Some(chart) => chart.update(cx, |p, pcx| p.cancel_hovered_order(pcx)),
+        None => false,
+    }
 }
 
 /// Исполнить действие (кроме масштаба — его окно делает само). `target` — рынок активного
@@ -272,6 +294,17 @@ pub fn apply(
                 b.order_size_rev = b.order_size_rev.wrapping_add(1);
                 bcx.notify();
                 true
+            }
+            None => false,
+        },
+        A::ManualStrategy(i) => match active_core {
+            Some(core) => {
+                if crate::controls::select_manual_strategy(b, core, i) {
+                    bcx.notify();
+                    true
+                } else {
+                    false
+                }
             }
             None => false,
         },

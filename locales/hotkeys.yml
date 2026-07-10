@@ -9,6 +9,10 @@ hotkeys.recording:
   ru: "Нажмите сочетание..."
   en: "Press shortcut..."
   es: "Pulsa el atajo..."
+hotkeys.todo:
+  ru: "не подключено"
+  en: "not wired"
+  es: "sin conectar"
 
 hotkeys.group.builtin:
   ru: "Встроенные хоткеи"
@@ -35,9 +39,9 @@ hotkeys.builtin.reset_windows:
   en: "[Ctrl+Shift+F10] reset all window positions onscreen"
   es: "[Ctrl+Shift+F10] restablecer las posiciones de todas las ventanas"
 hotkeys.builtin.cancel_hover:
-  ru: "[Tab или Del] навести на линию ордера — отменить этот ордер"
-  en: "[Tab or Del] hover an order line — cancel that order"
-  es: "[Tab o Del] sobre una línea de orden — cancelar esa orden"
+  ru: "[Tab или Del] навести на линию ордера — отменить этот ордер (Del при выделенной фигуре удаляет фигуру)"
+  en: "[Tab or Del] hover an order line — cancel that order (Del deletes the figure when one is selected)"
+  es: "[Tab o Del] sobre una línea de orden — cancelar esa orden (Del elimina la figura si hay una seleccionada)"
 hotkeys.builtin.close_all:
   ru: "[Shift+Esc] закрыть все графики Main во всех группах"
   en: "[Shift+Esc] close all Main charts in every group"
@@ -137,9 +141,9 @@ hotkeys.split_order_x:
   en: "Split Order X"
   es: "Split Order X"
 hotkeys.split_order_x_hint:
-  ru: "Альтернативный split-режим MoonBot."
-  en: "MoonBot alternative split mode."
-  es: "Modo split alternativo de MoonBot."
+  ru: "Пока действует как обычный Split Order (на 2 части)."
+  en: "Currently acts as plain Split Order (2 parts)."
+  es: "Por ahora actúa como Split Order normal (2 partes)."
 
 hotkeys.group.chart:
   ru: "График"
@@ -276,9 +280,9 @@ hotkeys.group.mouse:
   en: "Order book mouse"
   es: "Ratón en libro"
 hotkeys.group.mouse_hint:
-  ru: "Живой MoonBot-путь из ChartFrameUnit: постановка и перенос ордеров кликами в зоне стакана."
-  en: "Live MoonBot ChartFrameUnit path: place and move orders by clicking inside the book area."
-  es: "Ruta viva de MoonBot ChartFrameUnit: crear y mover órdenes con clics en el libro."
+  ru: "Живой MoonBot-путь из ChartFrameUnit: постановка ордеров кликами в зоне стакана. Перенос линий сейчас — перетаскивание ЛКМ за линию; Move-жесты ниже пока не применяются."
+  en: "Live MoonBot ChartFrameUnit path: place orders by clicking inside the book area. Moving lines is currently plain LMB drag on the line; the Move gestures below are not applied yet."
+  es: "Ruta viva de MoonBot ChartFrameUnit: crear órdenes con clics en el libro. Mover líneas es por ahora arrastre con botón izquierdo; los gestos Move de abajo aún no se aplican."
 hotkeys.mouse.buy_set:
   ru: "Поставить Long"
   en: "Place Long"
@@ -426,17 +430,17 @@ hotkeys.group.manual_strategy:
   en: "Manual strategies"
   es: "Estrategias manuales"
 hotkeys.group.manual_strategy_hint:
-  ru: "10 хоткеев ManualStratsConfig.hotKeys из MoonBot. По умолчанию пустые."
-  en: "10 MoonBot ManualStratsConfig.hotKeys. Empty by default."
-  es: "10 ManualStratsConfig.hotKeys de MoonBot. Vacíos por defecto."
+  ru: "10 хоткеев ManualStratsConfig.hotKeys из MoonBot: хоткей N выбирает N-ю manual-стратегию активного ядра (порядок — как в пикере MS шапки) и включает режим. По умолчанию пустые."
+  en: "10 MoonBot ManualStratsConfig.hotKeys: hotkey N selects the Nth manual strategy of the active core (same order as the header MS picker) and enables the mode. Empty by default."
+  es: "10 ManualStratsConfig.hotKeys de MoonBot: la tecla N selecciona la N-ésima estrategia manual del núcleo activo (mismo orden que el selector MS) y activa el modo. Vacíos por defecto."
 hotkeys.manual_strategy:
   ru: "Ручная стратегия %{n}"
   en: "Manual strategy %{n}"
   es: "Estrategia manual %{n}"
 hotkeys.manual_strategy_hint:
-  ru: "Запуск ручной стратегии %{n}, если она настроена."
-  en: "Run manual strategy %{n} when configured."
-  es: "Ejecuta estrategia manual %{n} si está configurada."
+  ru: "Выбрать %{n}-ю стратегию списка MS и включить режим."
+  en: "Select the %{n}th strategy of the MS list and enable the mode."
+  es: "Selecciona la estrategia %{n} de la lista MS y activa el modo."
 
 # --- Слой рисования фигур (карандаш) ---
 hotkeys.group.draw:

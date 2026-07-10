@@ -66,6 +66,37 @@ enum MouseSlot {
     ShortSellMove2,
 }
 
+/// Слот ещё не подключён к рантайму: ветка `Todo` в [`crate::hotkeys::resolve`] — клавиша
+/// распознаётся и гасится, но действия нет (в moonproto нет соответствующих send-команд).
+/// Вкладка помечает такие строки бейджем «не подключено»; держать в синхроне с
+/// TODO-таблицей диспетчера.
+fn slot_wip(slot: HotkeySlot) -> bool {
+    matches!(
+        slot,
+        HotkeySlot::ReloadBook
+            | HotkeySlot::ReloadChart
+            | HotkeySlot::MakeShot
+            | HotkeySlot::MakeShotBot
+            | HotkeySlot::SpyMode
+            | HotkeySlot::ShowCharts
+            | HotkeySlot::FitSells
+            | HotkeySlot::Broadcast
+            | HotkeySlot::ShiftBuyUp
+            | HotkeySlot::ShiftBuyDown
+            | HotkeySlot::ShiftSellUp
+            | HotkeySlot::ShiftSellDown
+            | HotkeySlot::SellPlus
+            | HotkeySlot::SellMinus
+    )
+}
+
+/// Мышиный жест, который рантайм пока не читает: постановку ордера смотрит только
+/// BuySet/ShortSet (`ChartPanel::try_place_order_click`), а перенос линий — простое
+/// ЛКМ-перетаскивание за линию, Move-жесты не проверяются.
+fn mouse_slot_wip(slot: MouseSlot) -> bool {
+    !matches!(slot, MouseSlot::BuySet | MouseSlot::ShortSet)
+}
+
 fn parse_hotkey(raw: &str) -> Option<Keystroke> {
     let raw = raw.trim();
     if raw.is_empty() {

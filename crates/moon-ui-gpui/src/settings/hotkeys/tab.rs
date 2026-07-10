@@ -14,8 +14,8 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::{
-    HotkeySlot, MouseSlot, mouse_slot_id, mouse_slot_value, parse_hotkey, set_mouse_slot_value,
-    set_slot_value, slot_id, slot_value,
+    HotkeySlot, MouseSlot, mouse_slot_id, mouse_slot_value, mouse_slot_wip, parse_hotkey,
+    set_mouse_slot_value, set_slot_value, slot_id, slot_value, slot_wip,
 };
 use crate::design;
 use crate::settings::SettingsView;
@@ -524,7 +524,7 @@ impl SettingsView {
         let invalid = !raw.trim().is_empty() && parsed.is_none();
         let id = format!("hotkey-{}", slot_id(slot));
 
-        h_flex()
+        let mut row = h_flex()
             .w_full()
             .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
             .gap(design::ui_px(cx, 10.0))
@@ -547,7 +547,11 @@ impl SettingsView {
                         .color(p.text_muted)
                         .render(),
                 ),
-            )
+            );
+        if slot_wip(slot) {
+            row = row.child(self.wip_tag(&p, cx));
+        }
+        row
             .child(
                 MoonHotkeyInput::new(id)
                     .value(parsed)
@@ -580,6 +584,7 @@ impl SettingsView {
         let current = mouse_slot_value(hotkeys, slot);
         let id = format!("mouse-{}", mouse_slot_id(slot));
         let backend = self.backend.clone();
+        let wip = mouse_slot_wip(slot);
         let items = MouseGestureBinding::ALL.into_iter().map(move |gesture| {
             let backend = backend.clone();
             MoonMenuItem::with_key(
@@ -598,7 +603,7 @@ impl SettingsView {
             })
         });
 
-        h_flex()
+        let mut row = h_flex()
             .w_full()
             .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
             .gap(design::ui_px(cx, 10.0))
@@ -621,7 +626,11 @@ impl SettingsView {
                         .color(p.text_muted)
                         .render(),
                 ),
-            )
+            );
+        if wip {
+            row = row.child(self.wip_tag(&p, cx));
+        }
+        row
             .child(
                 MoonDropdown::new(SharedString::from(id))
                     .label(current.label())
@@ -670,6 +679,18 @@ impl SettingsView {
                         });
                     }),
             )
+            .into_any_element()
+    }
+
+    /// Янтарный бейдж «не подключено» для строк, чей рантайм-путь ещё не существует
+    /// ([`slot_wip`]/[`mouse_slot_wip`]): клавиша/жест сохраняются в конфиг, но действия нет.
+    fn wip_tag(&self, p: &MoonPalette, cx: &Context<Self>) -> AnyElement {
+        MoonText::new(t!("hotkeys.todo").to_string())
+            .mono(true)
+            .font_size(design::font_value(cx, 9.0))
+            .line_height(design::line_value(cx, 12.0))
+            .color(p.amber)
+            .render()
             .into_any_element()
     }
 
