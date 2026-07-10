@@ -10,7 +10,7 @@ use moon_core::config::{
 use moon_ui::{
     MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
     MoonHotkeyInput, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRect, MoonTabItem, MoonTabStrip,
-    MoonText, MoonTooltipView, h_flex, v_flex,
+    MoonText, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -465,32 +465,33 @@ impl SettingsView {
         let invalid = !raw.trim().is_empty() && parsed.is_none();
         let id = format!("hotkey-{}", slot_id(slot));
 
-        let title: String = title.into();
-        let desc: String = desc.into();
-        let desc = SharedString::from(desc);
-
         h_flex()
             .w_full()
             .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
             .gap(design::ui_px(cx, 10.0))
             .items_center()
             .child(
-                // Только название, один размер шрифта; описание — в тултипе (сигнал —
-                // подчёркивание, как head_tip Подключений). Меньше текста, ничего не
-                // уезжает за окно.
-                div()
-                    .id(SharedString::from(format!("hotkey-tip-{}", slot_id(slot))))
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text))
-                    .underline()
-                    .text_decoration_color(rgb(p.text_soft))
-                    .child(title)
-                    .tooltip(move |_window, cx| {
-                        cx.new(|_| MoonTooltipView::new(desc.clone()).max_width(360.0))
-                            .into()
-                    }),
+                MoonText::new(title.into())
+                    .uppercase(false)
+                    .mono(true)
+                    .font_size(design::font_value(cx, 11.0))
+                    .line_height(design::line_value(cx, 14.0))
+                    .color(p.text)
+                    .render(),
             )
-            .child(div().flex_1())
+            .child(
+                // Описание — тем же размером, серым, с переносом (не уходит за окно).
+                div().flex_1().min_w_0().child(
+                    MoonText::new(desc.into())
+                        .uppercase(false)
+                        .mono(true)
+                        .wrap()
+                        .font_size(design::font_value(cx, 11.0))
+                        .line_height(design::line_value(cx, 14.0))
+                        .color(p.text_muted)
+                        .render(),
+                ),
+            )
             .child(
                 MoonHotkeyInput::new(id)
                     .value(parsed)
@@ -542,29 +543,33 @@ impl SettingsView {
             })
         });
 
-        let title: String = title.into();
-        let desc: String = desc.into();
-        let desc = SharedString::from(desc);
         let mut row = h_flex()
             .w_full()
             .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
             .gap(design::ui_px(cx, 10.0))
             .items_center()
             .child(
-                // Название + тултип-описание, как в hotkey_row.
-                div()
-                    .id(SharedString::from(format!("mouse-tip-{}", mouse_slot_id(slot))))
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(if disabled { p.text_muted } else { p.text }))
-                    .underline()
-                    .text_decoration_color(rgb(p.text_soft))
-                    .child(title)
-                    .tooltip(move |_window, cx| {
-                        cx.new(|_| MoonTooltipView::new(desc.clone()).max_width(360.0))
-                            .into()
-                    }),
+                MoonText::new(title.into())
+                    .uppercase(false)
+                    .mono(true)
+                    .font_size(design::font_value(cx, 11.0))
+                    .line_height(design::line_value(cx, 14.0))
+                    .color(if disabled { p.text_muted } else { p.text })
+                    .render(),
             )
-            .child(div().flex_1());
+            .child(
+                // Описание — тем же размером, серым, с переносом (не уходит за окно).
+                div().flex_1().min_w_0().child(
+                    MoonText::new(desc.into())
+                        .uppercase(false)
+                        .mono(true)
+                        .wrap()
+                        .font_size(design::font_value(cx, 11.0))
+                        .line_height(design::line_value(cx, 14.0))
+                        .color(p.text_muted)
+                        .render(),
+                ),
+            );
         if wip {
             row = row.child(self.wip_tag(&p, cx));
         }
