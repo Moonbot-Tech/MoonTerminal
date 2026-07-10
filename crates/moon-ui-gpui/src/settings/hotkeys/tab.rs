@@ -1,7 +1,7 @@
-//! Сборка вкладки «Хоткеи»: сворачиваемые группы по сценариям (`hotkeys_tab`,
-//! по умолчанию все свёрнуты — раскрытость в `SettingsView.open_hotkeys`) и
-//! однострочные строки-редакторы (`hotkey_row`/`mouse_row`/`same_move_checkbox`)
-//! с записью в draft.
+//! Сборка вкладки «Хоткеи» — раскладка как в MoonBot: сверху всегда видимый блок
+//! встроенных (захардкоженных) хоткеев, под ним переключатель групп-саб-вкладок
+//! (`SettingsView.hotkeys_group`), ниже — строки активной группы. Однострочные
+//! редакторы (`hotkey_row`/`mouse_row`/`same_move_checkbox`) пишут в draft.
 
 use gpui::*;
 use moon_core::config::{
@@ -9,13 +9,14 @@ use moon_core::config::{
 };
 use moon_ui::{
     MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonHotkeyInput, MoonMenuItem, MoonMenuSize, MoonPalette, MoonText, h_flex, v_flex,
+    MoonHotkeyInput, MoonMenuItem, MoonMenuSize, MoonPalette, MoonRect, MoonTabItem, MoonTabStrip,
+    MoonText, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use super::{
-    HotkeySlot, MouseSlot, mouse_slot_id, mouse_slot_value, mouse_slot_wip, parse_hotkey,
-    set_mouse_slot_value, set_slot_value, slot_id, slot_value, slot_wip,
+    HotkeyGroup, HotkeySlot, MouseSlot, mouse_slot_id, mouse_slot_value, mouse_slot_wip,
+    parse_hotkey, set_mouse_slot_value, set_slot_value, slot_id, slot_value,
 };
 use crate::design;
 use crate::settings::SettingsView;
@@ -26,30 +27,114 @@ impl SettingsView {
             let b = self.backend.read(cx);
             b.preview.as_ref().unwrap_or(&b.config).hotkeys.clone()
         };
+        let p = MoonPalette::active(cx);
 
-        v_flex()
+        // Как в MoonBot: сверху — фиксированные встроенные хоткеи (всегда видны), под
+        // ними переключатель групп (саб-вкладки), ниже — строки только активной группы.
+        let builtin = v_flex()
             .w_full()
-            .gap(design::ui_px(cx, 6.0))
-            .child(self.hotkey_section(
-                cx,
-                "builtin",
-                &t!("hotkeys.group.builtin"),
-                &t!("hotkeys.group.builtin_hint"),
-                [
+            .gap(design::ui_px(cx, 3.0))
+            .child(
+                MoonText::new(t!("hotkeys.group.builtin").to_string())
+                    .uppercase(false)
+                    .mono(true)
+                    .font_size(design::font_value(cx, 11.0))
+                    .line_height(design::line_value(cx, 14.0))
+                    .color(p.text)
+                    .render(),
+            )
+            .child(
+                MoonText::new(t!("hotkeys.group.builtin_hint").to_string())
+                    .uppercase(false)
+                    .mono(true)
+                    .font_size(design::font_value(cx, 9.0))
+                    .line_height(design::line_value(cx, 12.0))
+                    .color(p.text_muted)
+                    .render(),
+            )
+            .children([
                     self.builtin_row(t!("hotkeys.builtin.wheel_zoom").to_string(), cx),
                     self.builtin_row(t!("hotkeys.builtin.wheel_pan").to_string(), cx),
                     self.builtin_row(t!("hotkeys.builtin.cancel_hover").to_string(), cx),
                     self.builtin_row(t!("hotkeys.builtin.esc_close").to_string(), cx),
                     self.builtin_row(t!("hotkeys.builtin.close_all").to_string(), cx),
                     self.builtin_row(t!("hotkeys.builtin.reset_windows").to_string(), cx),
-                ],
-            ))
-            .child(self.hotkey_section(
-                cx,
-                "presets",
-                &t!("hotkeys.group.presets"),
-                &t!("hotkeys.group.presets_hint"),
-                (0..ORDER_SIZE_KEYS)
+            ]);
+
+        // Переключатель групп — тот же контрол, что полоска чарт-вкладок главного окна
+        // («Main»/Add: MoonTabStrip + MoonTabItem — обычный шрифт, без капса кнопок).
+        // Стрип рисует табы абсолютно и без явных bounds схлопывается в 0×0 (см.
+        // chart_tabs/strip.rs) — ширину даём с запасом, контейнер ниже режет по своей.
+        let entity = cx.entity();
+        let strip_h = design::fit_h_px(cx, 28.0, 13.0, 7.5);
+        let items: Vec<MoonTabItem> = HotkeyGroup::ALL
+            .iter()
+            .map(|g| {
+                let label = g.title();
+                // Ширина по содержимому, как у чарт-вкладок (~7px/символ + паддинги).
+                let width = (label.chars().count() as f32 * 7.0 + 28.0).clamp(64.0, 168.0);
+                MoonTabItem::new(label)
+                    .width(width)
+                    .selected(self.hotkeys_group == *g)
+            })
+            .collect();
+        let switcher = div()
+            .relative()
+            .w_full()
+            .h(strip_h)
+            .overflow_hidden()
+            .child(
+                MoonTabStrip::new("hotkeys-group-strip")
+                    .gap(4.0)
+                    .bounds(MoonRect::new(0.0, 0.0, 2000.0, f32::from(strip_h)))
+                    .items(items)
+                    .on_click(move |ix, _event, _window, app| {
+                        let Some(g) = HotkeyGroup::ALL.get(ix).copied() else {
+                            return;
+                        };
+                        entity.update(app, |this, c| {
+                            if this.hotkeys_group != g {
+                                this.hotkeys_group = g;
+                                c.notify();
+                            }
+                        });
+                    })
+                    .render(),
+            );
+
+        let body = v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 3.0))
+            .child(
+                MoonText::new(self.hotkeys_group.hint())
+                    .uppercase(false)
+                    .mono(true)
+                    .font_size(design::font_value(cx, 9.0))
+                    .line_height(design::line_value(cx, 12.0))
+                    .color(p.text_muted)
+                    .render(),
+            )
+            .children(self.group_rows(self.hotkeys_group, &hotkeys, cx));
+
+        v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 10.0))
+            .child(builtin)
+            .child(switcher)
+            .child(body)
+    }
+
+    /// Строки активной группы (содержимое саб-вкладки). `hotkeys` клонируем локально —
+    /// строки-редакторы берут `&hotkeys` (перенесены из аккордеон-версии без правок).
+    fn group_rows(
+        &self,
+        group: HotkeyGroup,
+        hotkeys: &HotkeysConfig,
+        cx: &Context<Self>,
+    ) -> Vec<AnyElement> {
+        let hotkeys = hotkeys.clone();
+        match group {
+            HotkeyGroup::Presets => (0..ORDER_SIZE_KEYS)
                     .map(|i| {
                         let title = format!("F{}", i + 1);
                         let desc = t!("hotkeys.order_size", n = i + 1).to_string();
@@ -59,14 +144,9 @@ impl SettingsView {
                         let title = format!("S{}", i + 1);
                         let desc = t!("hotkeys.sell_preset", n = i + 1).to_string();
                         self.hotkey_row(title, desc, HotkeySlot::SellPreset(i), &hotkeys, cx)
-                    })),
-            ))
-            .child(self.hotkey_section(
-                cx,
-                "trading",
-                &t!("hotkeys.group.trading"),
-                &t!("hotkeys.group.trading_hint"),
-                [
+                    }))
+                    .collect(),
+            HotkeyGroup::Trading => vec![
                     self.hotkey_row(
                         t!("hotkeys.cancel_buy").to_string(),
                         t!("hotkeys.cancel_buy_hint").to_string(),
@@ -131,27 +211,7 @@ impl SettingsView {
                         cx,
                     ),
                 ],
-            ))
-            .child(self.hotkey_section(
-                cx,
-                "chart",
-                &t!("hotkeys.group.chart"),
-                &t!("hotkeys.group.chart_hint"),
-                [
-                    self.hotkey_row(
-                        t!("hotkeys.reload_chart").to_string(),
-                        t!("hotkeys.reload_chart_hint").to_string(),
-                        HotkeySlot::ReloadChart,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.reload_book").to_string(),
-                        t!("hotkeys.reload_book_hint").to_string(),
-                        HotkeySlot::ReloadBook,
-                        &hotkeys,
-                        cx,
-                    ),
+            HotkeyGroup::Chart => vec![
                     self.hotkey_row(
                         t!("hotkeys.switch_charts").to_string(),
                         t!("hotkeys.switch_charts_hint").to_string(),
@@ -160,23 +220,9 @@ impl SettingsView {
                         cx,
                     ),
                     self.hotkey_row(
-                        t!("hotkeys.show_charts").to_string(),
-                        t!("hotkeys.show_charts_hint").to_string(),
-                        HotkeySlot::ShowCharts,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
                         t!("hotkeys.switch_figure").to_string(),
                         t!("hotkeys.switch_figure_hint").to_string(),
                         HotkeySlot::SwitchFigure,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.fit_sells").to_string(),
-                        t!("hotkeys.fit_sells_hint").to_string(),
-                        HotkeySlot::FitSells,
                         &hotkeys,
                         cx,
                     ),
@@ -195,13 +241,7 @@ impl SettingsView {
                         cx,
                     ),
                 ],
-            ))
-            .child(self.hotkey_section(
-                cx,
-                "draw",
-                &t!("hotkeys.group.draw"),
-                &t!("hotkeys.group.draw_hint"),
-                [
+            HotkeyGroup::Draw => vec![
                     self.hotkey_row(
                         t!("hotkeys.draw_hline").to_string(),
                         t!("hotkeys.draw_hline_hint").to_string(),
@@ -245,13 +285,7 @@ impl SettingsView {
                         cx,
                     ),
                 ],
-            ))
-            .child(self.hotkey_section(
-                cx,
-                "order-move",
-                &t!("hotkeys.group.order_move"),
-                &t!("hotkeys.group.order_move_hint"),
-                [
+            HotkeyGroup::OrderMove => vec![
                     self.hotkey_row(
                         t!("hotkeys.shift_buy_up").to_string(),
                         t!("hotkeys.shift_buy_up_hint").to_string(),
@@ -280,28 +314,8 @@ impl SettingsView {
                         &hotkeys,
                         cx,
                     ),
-                    self.hotkey_row(
-                        t!("hotkeys.sell_plus").to_string(),
-                        t!("hotkeys.sell_plus_hint").to_string(),
-                        HotkeySlot::SellPlus,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.sell_minus").to_string(),
-                        t!("hotkeys.sell_minus_hint").to_string(),
-                        HotkeySlot::SellMinus,
-                        &hotkeys,
-                        cx,
-                    ),
                 ],
-            ))
-            .child(self.hotkey_section(
-                cx,
-                "mouse",
-                &t!("hotkeys.group.mouse"),
-                &t!("hotkeys.group.mouse_hint"),
-                [
+            HotkeyGroup::Mouse => vec![
                     self.mouse_row(
                         t!("hotkeys.mouse.buy_set").to_string(),
                         t!("hotkeys.mouse.buy_set_hint").to_string(),
@@ -400,49 +414,8 @@ impl SettingsView {
                         cx,
                     ),
                 ],
-            ))
-            .child(self.hotkey_section(
-                cx,
-                "tools",
-                &t!("hotkeys.group.tools"),
-                &t!("hotkeys.group.tools_hint"),
-                [
-                    self.hotkey_row(
-                        t!("hotkeys.make_shot").to_string(),
-                        t!("hotkeys.make_shot_hint").to_string(),
-                        HotkeySlot::MakeShot,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.make_shot_bot").to_string(),
-                        t!("hotkeys.make_shot_bot_hint").to_string(),
-                        HotkeySlot::MakeShotBot,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.spy_mode").to_string(),
-                        t!("hotkeys.spy_mode_hint").to_string(),
-                        HotkeySlot::SpyMode,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.broadcast").to_string(),
-                        t!("hotkeys.broadcast_hint").to_string(),
-                        HotkeySlot::Broadcast,
-                        &hotkeys,
-                        cx,
-                    ),
-                ],
-            ))
-            .child(self.hotkey_section(
-                cx,
-                "manual-strategy",
-                &t!("hotkeys.group.manual_strategy"),
-                &t!("hotkeys.group.manual_strategy_hint"),
-                (0..MANUAL_STRATEGY_KEYS).map(|i| {
+            HotkeyGroup::ManualStrategy => (0..MANUAL_STRATEGY_KEYS)
+                .map(|i| {
                     self.hotkey_row(
                         t!("hotkeys.manual_strategy", n = i + 1).to_string(),
                         t!("hotkeys.manual_strategy_hint", n = i + 1).to_string(),
@@ -450,45 +423,9 @@ impl SettingsView {
                         &hotkeys,
                         cx,
                     )
-                }),
-            ))
-    }
-
-    /// Сворачиваемая группа хоткеев (общий MoonAccordion-блок, как блоки вкладки
-    /// «Линии»). По умолчанию свёрнута (`open_hotkeys` пуст); подсказка группы —
-    /// первой строкой тела.
-    fn hotkey_section(
-        &self,
-        cx: &Context<Self>,
-        key: &'static str,
-        title: &str,
-        hint: &str,
-        rows: impl IntoIterator<Item = AnyElement>,
-    ) -> AnyElement {
-        let p = MoonPalette::active(cx);
-        let body = v_flex()
-            .w_full()
-            .gap(design::ui_px(cx, 3.0))
-            .child(
-                MoonText::new(hint.to_string())
-                    .mono(true)
-                    .font_size(design::font_value(cx, 9.0))
-                    .line_height(design::line_value(cx, 12.0))
-                    .color(p.text_muted)
-                    .render(),
-            )
-            .children(rows)
-            .into_any_element();
-        crate::settings::collapse_block(
-            cx,
-            SharedString::from(format!("hotkeys-acc-{key}")),
-            key,
-            title.to_string().into(),
-            self.open_hotkeys.contains(key),
-            body,
-            |this| &mut this.open_hotkeys,
-        )
-        .into_any_element()
+                })
+                .collect(),
+        }
     }
 
     /// Строка-описание встроенного (не конфигурируемого) хоткея: только текст, без
@@ -501,6 +438,7 @@ impl SettingsView {
             .items_center()
             .child(
                 MoonText::new(line.into())
+                    .uppercase(false)
                     .mono(true)
                     .font_size(design::font_value(cx, 11.0))
                     .line_height(design::line_value(cx, 14.0))
@@ -524,13 +462,14 @@ impl SettingsView {
         let invalid = !raw.trim().is_empty() && parsed.is_none();
         let id = format!("hotkey-{}", slot_id(slot));
 
-        let mut row = h_flex()
+        h_flex()
             .w_full()
             .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
             .gap(design::ui_px(cx, 10.0))
             .items_center()
             .child(
                 MoonText::new(title.into())
+                    .uppercase(false)
                     .mono(true)
                     .font_size(design::font_value(cx, 11.0))
                     .line_height(design::line_value(cx, 14.0))
@@ -541,17 +480,14 @@ impl SettingsView {
                 // Описание — той же строкой, серым; лишнее клипается (не переносим).
                 div().flex_1().min_w_0().overflow_hidden().child(
                     MoonText::new(desc.into())
+                        .uppercase(false)
                         .mono(true)
                         .font_size(design::font_value(cx, 9.0))
                         .line_height(design::line_value(cx, 12.0))
                         .color(p.text_muted)
                         .render(),
                 ),
-            );
-        if slot_wip(slot) {
-            row = row.child(self.wip_tag(&p, cx));
-        }
-        row
+            )
             .child(
                 MoonHotkeyInput::new(id)
                     .value(parsed)
@@ -610,6 +546,7 @@ impl SettingsView {
             .items_center()
             .child(
                 MoonText::new(title.into())
+                    .uppercase(false)
                     .mono(true)
                     .font_size(design::font_value(cx, 11.0))
                     .line_height(design::line_value(cx, 14.0))
@@ -620,6 +557,7 @@ impl SettingsView {
                 // Описание — той же строкой, серым; лишнее клипается (не переносим).
                 div().flex_1().min_w_0().overflow_hidden().child(
                     MoonText::new(desc.into())
+                        .uppercase(false)
                         .mono(true)
                         .font_size(design::font_value(cx, 9.0))
                         .line_height(design::line_value(cx, 12.0))
@@ -686,6 +624,7 @@ impl SettingsView {
     /// ([`slot_wip`]/[`mouse_slot_wip`]): клавиша/жест сохраняются в конфиг, но действия нет.
     fn wip_tag(&self, p: &MoonPalette, cx: &Context<Self>) -> AnyElement {
         MoonText::new(t!("hotkeys.todo").to_string())
+            .uppercase(false)
             .mono(true)
             .font_size(design::font_value(cx, 9.0))
             .line_height(design::line_value(cx, 12.0))

@@ -116,8 +116,8 @@ pub struct SettingsView {
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Какие блоки-линии раскрыты (вкладка «Линии», порт CollapsingHeader).
     open_lines: HashSet<&'static str>,
-    /// Какие группы хоткеев раскрыты (вкладка «Хоткеи»); пусто = все свёрнуты (дефолт).
-    open_hotkeys: HashSet<&'static str>,
+    /// Активная группа вкладки «Хоткеи» (саб-вкладки, как страницы хоткеев MoonBot).
+    hotkeys_group: hotkeys::HotkeyGroup,
     /// Кэш иконок групп (вкладка «Подключения»).
     icons: IconSet,
     /// Для какой группы открыт пикер иконок (None = закрыт). Порт egui `picking`.
@@ -287,7 +287,7 @@ impl SettingsView {
             lang,
             mode,
             open_lines: HashSet::new(),
-            open_hotkeys: HashSet::new(),
+            hotkeys_group: hotkeys::HotkeyGroup::Presets,
             icons: IconSet::discover(),
             picking: None,
             last_sig: initial_sig,

@@ -172,11 +172,21 @@ pub struct HotkeysConfig {
     pub split_order: String,
     #[serde(default)]
     pub split_order_x: String,
+    /// Сдвиг ордеров рынка активного чарта на шаг цены (`move_order`): вход (buy, пока не
+    /// залит) / выход (sell) вверх-вниз.
+    #[serde(default)]
+    pub shift_buy_up: String,
+    #[serde(default)]
+    pub shift_buy_down: String,
+    #[serde(default)]
+    pub shift_sell_up: String,
+    #[serde(default)]
+    pub shift_sell_down: String,
 
     // MoonBot-хоткеи, под которые в moonproto НЕТ send-команд (reload book/chart,
-    // make shot, spy, show charts, fit sells, broadcast, shift buy/sell, sell +/-),
-    // удалены целиком 2026-07-10 (конфиг+вкладка+диспетчер); serde молча игнорирует
-    // их ключи в старых hotkeys.toml. Появится команда — возвращать по git-истории.
+    // make shot, spy, show charts, fit sells, broadcast, sell +/-), удалены целиком
+    // 2026-07-10 (конфиг+вкладка+диспетчер); serde молча игнорирует их ключи в старых
+    // hotkeys.toml. Появится команда — возвращать по git-истории.
     #[serde(default = "default_scale_plus")]
     pub scale_plus: String,
     #[serde(default = "default_scale_minus")]
@@ -254,6 +264,10 @@ impl Default for HotkeysConfig {
             new_short: String::new(),
             split_order: String::new(),
             split_order_x: String::new(),
+            shift_buy_up: String::new(),
+            shift_buy_down: String::new(),
+            shift_sell_up: String::new(),
+            shift_sell_down: String::new(),
             scale_plus: default_scale_plus(),
             scale_minus: default_scale_minus(),
             switch_figure: default_switch_figure(),

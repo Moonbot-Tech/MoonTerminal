@@ -9,6 +9,7 @@ mod tab;
 
 use gpui::*;
 use moon_core::config::{HotkeysConfig, MouseGestureBinding};
+use rust_i18n::t;
 
 #[derive(Clone, Copy)]
 enum HotkeySlot {
@@ -21,7 +22,6 @@ enum HotkeySlot {
     CancelAllBuys,
     JoinSells,
     SwitchCharts,
-    ReloadBook,
     NewLong,
     NewShort,
     SplitOrder,
@@ -30,24 +30,67 @@ enum HotkeySlot {
     ShiftBuyDown,
     ShiftSellUp,
     ShiftSellDown,
-    MakeShot,
-    MakeShotBot,
-    ReloadChart,
     ScalePlus,
     ScaleMinus,
-    SellPlus,
-    SellMinus,
-    SpyMode,
-    ShowCharts,
     SwitchFigure,
-    FitSells,
-    Broadcast,
     DrawHline,
     DrawSegment,
     DrawTriangle,
     DrawChannel,
     FigDelete,
     FigAlert,
+}
+
+/// Группы вкладки «Хоткеи» — саб-вкладки под блоком встроенных (раскладка как страницы
+/// хоткеев MoonBot). Встроенные — не группа: они всегда видны над переключателем.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::settings) enum HotkeyGroup {
+    Presets,
+    Trading,
+    Chart,
+    Draw,
+    OrderMove,
+    Mouse,
+    ManualStrategy,
+}
+
+impl HotkeyGroup {
+    pub(in crate::settings) const ALL: [Self; 7] = [
+        Self::Presets,
+        Self::Trading,
+        Self::Chart,
+        Self::Draw,
+        Self::OrderMove,
+        Self::Mouse,
+        Self::ManualStrategy,
+    ];
+
+    pub(in crate::settings) fn title(self) -> String {
+        match self {
+            Self::Presets => t!("hotkeys.group.presets"),
+            Self::Trading => t!("hotkeys.group.trading"),
+            Self::Chart => t!("hotkeys.group.chart"),
+            Self::Draw => t!("hotkeys.group.draw"),
+            Self::OrderMove => t!("hotkeys.group.order_move"),
+            Self::Mouse => t!("hotkeys.group.mouse"),
+            Self::ManualStrategy => t!("hotkeys.group.manual_strategy"),
+        }
+        .to_string()
+    }
+
+    /// Подсказка группы — первой строкой над строками активной саб-вкладки.
+    pub(in crate::settings) fn hint(self) -> String {
+        match self {
+            Self::Presets => t!("hotkeys.group.presets_hint"),
+            Self::Trading => t!("hotkeys.group.trading_hint"),
+            Self::Chart => t!("hotkeys.group.chart_hint"),
+            Self::Draw => t!("hotkeys.group.draw_hint"),
+            Self::OrderMove => t!("hotkeys.group.order_move_hint"),
+            Self::Mouse => t!("hotkeys.group.mouse_hint"),
+            Self::ManualStrategy => t!("hotkeys.group.manual_strategy_hint"),
+        }
+        .to_string()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -64,30 +107,6 @@ enum MouseSlot {
     ShortSellMove,
     ShortBuyMove2,
     ShortSellMove2,
-}
-
-/// Слот ещё не подключён к рантайму: ветка `Todo` в [`crate::hotkeys::resolve`] — клавиша
-/// распознаётся и гасится, но действия нет (в moonproto нет соответствующих send-команд).
-/// Вкладка помечает такие строки бейджем «не подключено»; держать в синхроне с
-/// TODO-таблицей диспетчера.
-fn slot_wip(slot: HotkeySlot) -> bool {
-    matches!(
-        slot,
-        HotkeySlot::ReloadBook
-            | HotkeySlot::ReloadChart
-            | HotkeySlot::MakeShot
-            | HotkeySlot::MakeShotBot
-            | HotkeySlot::SpyMode
-            | HotkeySlot::ShowCharts
-            | HotkeySlot::FitSells
-            | HotkeySlot::Broadcast
-            | HotkeySlot::ShiftBuyUp
-            | HotkeySlot::ShiftBuyDown
-            | HotkeySlot::ShiftSellUp
-            | HotkeySlot::ShiftSellDown
-            | HotkeySlot::SellPlus
-            | HotkeySlot::SellMinus
-    )
 }
 
 /// Мышиный жест, который рантайм пока не читает: постановку ордера смотрит только
@@ -121,7 +140,6 @@ macro_rules! hotkey_field {
             HotkeySlot::CancelAllBuys => $($brw)+ $hotkeys.cancel_all_buys,
             HotkeySlot::JoinSells => $($brw)+ $hotkeys.join_sells,
             HotkeySlot::SwitchCharts => $($brw)+ $hotkeys.switch_charts,
-            HotkeySlot::ReloadBook => $($brw)+ $hotkeys.reload_book,
             HotkeySlot::NewLong => $($brw)+ $hotkeys.new_long,
             HotkeySlot::NewShort => $($brw)+ $hotkeys.new_short,
             HotkeySlot::SplitOrder => $($brw)+ $hotkeys.split_order,
@@ -130,18 +148,9 @@ macro_rules! hotkey_field {
             HotkeySlot::ShiftBuyDown => $($brw)+ $hotkeys.shift_buy_down,
             HotkeySlot::ShiftSellUp => $($brw)+ $hotkeys.shift_sell_up,
             HotkeySlot::ShiftSellDown => $($brw)+ $hotkeys.shift_sell_down,
-            HotkeySlot::MakeShot => $($brw)+ $hotkeys.make_shot,
-            HotkeySlot::MakeShotBot => $($brw)+ $hotkeys.make_shot_bot,
-            HotkeySlot::ReloadChart => $($brw)+ $hotkeys.reload_chart,
             HotkeySlot::ScalePlus => $($brw)+ $hotkeys.scale_plus,
             HotkeySlot::ScaleMinus => $($brw)+ $hotkeys.scale_minus,
-            HotkeySlot::SellPlus => $($brw)+ $hotkeys.sell_plus,
-            HotkeySlot::SellMinus => $($brw)+ $hotkeys.sell_minus,
-            HotkeySlot::SpyMode => $($brw)+ $hotkeys.spy_mode,
-            HotkeySlot::ShowCharts => $($brw)+ $hotkeys.show_charts,
             HotkeySlot::SwitchFigure => $($brw)+ $hotkeys.switch_figure,
-            HotkeySlot::FitSells => $($brw)+ $hotkeys.fit_sells,
-            HotkeySlot::Broadcast => $($brw)+ $hotkeys.broadcast,
             HotkeySlot::DrawHline => $($brw)+ $hotkeys.draw_hline,
             HotkeySlot::DrawSegment => $($brw)+ $hotkeys.draw_segment,
             HotkeySlot::DrawTriangle => $($brw)+ $hotkeys.draw_triangle,
@@ -275,7 +284,6 @@ fn slot_id(slot: HotkeySlot) -> String {
         HotkeySlot::CancelAllBuys => "cancel-all-buys".into(),
         HotkeySlot::JoinSells => "join-sells".into(),
         HotkeySlot::SwitchCharts => "switch-charts".into(),
-        HotkeySlot::ReloadBook => "reload-book".into(),
         HotkeySlot::NewLong => "new-long".into(),
         HotkeySlot::NewShort => "new-short".into(),
         HotkeySlot::SplitOrder => "split-order".into(),
@@ -284,18 +292,9 @@ fn slot_id(slot: HotkeySlot) -> String {
         HotkeySlot::ShiftBuyDown => "shift-buy-down".into(),
         HotkeySlot::ShiftSellUp => "shift-sell-up".into(),
         HotkeySlot::ShiftSellDown => "shift-sell-down".into(),
-        HotkeySlot::MakeShot => "make-shot".into(),
-        HotkeySlot::MakeShotBot => "make-shot-bot".into(),
-        HotkeySlot::ReloadChart => "reload-chart".into(),
         HotkeySlot::ScalePlus => "scale-plus".into(),
         HotkeySlot::ScaleMinus => "scale-minus".into(),
-        HotkeySlot::SellPlus => "sell-plus".into(),
-        HotkeySlot::SellMinus => "sell-minus".into(),
-        HotkeySlot::SpyMode => "spy-mode".into(),
-        HotkeySlot::ShowCharts => "show-charts".into(),
         HotkeySlot::SwitchFigure => "switch-figure".into(),
-        HotkeySlot::FitSells => "fit-sells".into(),
-        HotkeySlot::Broadcast => "broadcast".into(),
         HotkeySlot::DrawHline => "draw-hline".into(),
         HotkeySlot::DrawSegment => "draw-segment".into(),
         HotkeySlot::DrawTriangle => "draw-triangle".into(),

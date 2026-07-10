@@ -163,6 +163,23 @@ impl MarketDataSource {
         inner.clients.get(&core).and_then(SharedMoonClient::get)
     }
 
+    /// Шаг цены рынка (moonproto `chart_price_step`) — размер клавиатурного сдвига
+    /// ордеров (shift_buy/sell_up/down). `None` — нет провайдера/снимка/рынка или шаг
+    /// не задан (≤0): сдвиг тогда не делаем, чтобы не выдумывать шаг.
+    pub fn price_step(&self, core: CoreId, market: &str) -> Option<f64> {
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied()?;
+            inner
+                .clients
+                .get(&provider)
+                .and_then(SharedMoonClient::get)?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        let step = snapshot.markets().price(market)?.chart_price_step;
+        (step.is_finite() && step > 0.0).then_some(step)
+    }
+
     /// MoonBot Coin1hDelta). Для тикера курса в шапке (и будущего скринера).
     /// `None` — нет провайдера/снимка/рынка.
     pub fn market_ticker(&self, core: CoreId, market: &str) -> Option<MarketTickerReadout> {

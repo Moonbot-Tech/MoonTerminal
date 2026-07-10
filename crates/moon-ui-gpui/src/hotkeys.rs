@@ -18,6 +18,7 @@ use moon_core::config::HotkeysConfig;
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::figures::FigureTool;
 use moon_core::session::CoreId;
+use moon_core::session::order_lines::LineKind;
 
 use crate::Backend;
 
@@ -41,6 +42,10 @@ pub enum HotkeyAction {
     PanicSellOne,
     /// Объединить sell-ордера рынка активного чарта (по стороне позиции).
     JoinSells,
+    /// Сдвинуть ордера рынка активного чарта на один шаг цены (`chart_price_step`)
+    /// через `move_order`: `sell=false` — входные buy-линии (только незалитые, тот же
+    /// гард, что у перетаскивания), `sell=true` — выходные sell-линии.
+    ShiftOrder { sell: bool, up: bool },
     /// Разбить sell-ордер рынка активного чарта на части.
     SplitOrder,
     /// Поставить ручной ордер по цене ПОД КУРСОРОМ на чарте (long/short). Исполняет
@@ -78,9 +83,6 @@ pub enum HotkeyAction {
     ScalePlus,
     /// Масштаб Y — зум наружу. Исполняет вызывающее окно.
     ScaleMinus,
-    /// Действие распознано в конфиге, но backend-путь ещё не подключён. Единый механизм
-    /// «знает» клавишу (глотает её + debug-лог), реализация — отдельными задачами.
-    Todo(&'static str),
 }
 
 /// Нажатая клавиша совпала с сочетанием `raw` из конфига. Сравниваем ТОЛЬКО
@@ -186,39 +188,24 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     if p(&hk.new_short) {
         return Some(A::NewShort);
     }
+    if p(&hk.shift_buy_up) {
+        return Some(A::ShiftOrder { sell: false, up: true });
+    }
+    if p(&hk.shift_buy_down) {
+        return Some(A::ShiftOrder { sell: false, up: false });
+    }
+    if p(&hk.shift_sell_up) {
+        return Some(A::ShiftOrder { sell: true, up: true });
+    }
+    if p(&hk.shift_sell_down) {
+        return Some(A::ShiftOrder { sell: true, up: false });
+    }
     if p(&hk.switch_charts) {
         return Some(A::SwitchCharts);
     }
 
     if let Some(i) = hk.manual_strategy.iter().position(|r| p(r)) {
         return Some(A::ManualStrategy(i));
-    }
-
-    // Распознаём остальные назначенные действия, но backend-путь пока не подключён.
-    // make_shot ставит moon-shot — в moonproto нет команды постановки его по цене (это
-    // strategy-тип ордера), поэтому отложен; прочие ждут своих команд/семантики (проверено
-    // 2026-07-10: в moonproto нет send-команд reload book/chart, shot, spy, broadcast,
-    // shift buy/sell, sell+/-). Держать в синхроне с `settings::hotkeys::slot_wip`.
-    const TODO: [(&str, fn(&HotkeysConfig) -> &str); 14] = [
-        ("reload_book", |h| &h.reload_book),
-        ("reload_chart", |h| &h.reload_chart),
-        ("make_shot", |h| &h.make_shot),
-        ("make_shot_bot", |h| &h.make_shot_bot),
-        ("spy_mode", |h| &h.spy_mode),
-        ("show_charts", |h| &h.show_charts),
-        ("fit_sells", |h| &h.fit_sells),
-        ("broadcast", |h| &h.broadcast),
-        ("shift_buy_up", |h| &h.shift_buy_up),
-        ("shift_buy_down", |h| &h.shift_buy_down),
-        ("shift_sell_up", |h| &h.shift_sell_up),
-        ("shift_sell_down", |h| &h.shift_sell_down),
-        ("sell_plus", |h| &h.sell_plus),
-        ("sell_minus", |h| &h.sell_minus),
-    ];
-    for (name, field) in TODO {
-        if p(field(hk)) {
-            return Some(A::Todo(name));
-        }
     }
     None
 }
@@ -370,6 +357,10 @@ pub fn apply(
             }
             None => false,
         },
+        A::ShiftOrder { sell, up } => match target {
+            Some((core, market)) => shift_orders(b, core, &market, sell, up),
+            None => false,
+        },
         // Масштаб, постановка по курсору и переключение активного чарта — забота вызывающего
         // окна: масштаб/активный чарт свои у каждого окна (rev-механизм группы), а цену ордера
         // знает только чарт под курсором (`Backend::hovered_chart`).
@@ -377,9 +368,48 @@ pub fn apply(
         | A::ResetWindows | A::CancelHoveredOrder | A::CloseAllCharts | A::CloseActiveChart => {
             false
         }
-        A::Todo(name) => {
-            log::debug!("hotkey '{name}' распознан, но backend-путь ещё не подключён");
-            true
+    }
+}
+
+/// Хоткеи shift_buy/sell_up/down: сдвинуть живые линии стороны `sell` рынка на один шаг
+/// цены (`chart_price_step` рынка) через `move_order` — та же команда и те же гарды, что
+/// у перетаскивания линии мышью (вход двигаем только пока не залит). Шаг рынка неизвестен
+/// или двигать нечего → `false` (не выдумываем шаг).
+fn shift_orders(b: &mut Backend, core: CoreId, market: &str, sell: bool, up: bool) -> bool {
+    let Some(step) = b.session.market_source().price_step(core, market) else {
+        return false;
+    };
+    let kind = if sell { LineKind::Sell } else { LineKind::Buy };
+    let mut moves: Vec<(u64, f64)> = Vec::new();
+    if let Some(core_data) = b.session.store().core(core) {
+        for order in core_data
+            .order_lines
+            .iter_market(market)
+            .filter(|order| order.closed_ms.is_none())
+        {
+            // Залитый вход — историческая отметка, реплейсить нечего (см. drag в trade.rs).
+            if !sell && order.fill_pct > 0.0 {
+                continue;
+            }
+            if let Some(price) = order.lines[kind as usize]
+                .current_price()
+                .filter(|p| p.is_finite() && *p > 0.0)
+            {
+                moves.push((order.uid, f64::from(price)));
+            }
         }
     }
+    if moves.is_empty() {
+        return false;
+    }
+    for (uid, price) in moves {
+        let next = if up { price + step } else { price - step };
+        if next <= 0.0 {
+            continue;
+        }
+        if let Err(error) = b.session.move_order(core, uid, next) {
+            log::warn!("hotkey shift order failed: uid={uid} price={next:.8}: {error}");
+        }
+    }
+    true
 }

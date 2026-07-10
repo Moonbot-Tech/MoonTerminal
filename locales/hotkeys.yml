@@ -150,25 +150,9 @@ hotkeys.group.chart:
   en: "Chart"
   es: "Gráfico"
 hotkeys.group.chart_hint:
-  ru: "Перезагрузка, показ и режимы графиков."
-  en: "Chart reload, visibility, and chart modes."
-  es: "Recarga, visibilidad y modos del gráfico."
-hotkeys.reload_chart:
-  ru: "Reload Chart"
-  en: "Reload Chart"
-  es: "Reload Chart"
-hotkeys.reload_chart_hint:
-  ru: "MoonBot-дефолт: Ctrl+R."
-  en: "MoonBot default: Ctrl+R."
-  es: "Valor por defecto de MoonBot: Ctrl+R."
-hotkeys.reload_book:
-  ru: "Reload Book"
-  en: "Reload Book"
-  es: "Reload Book"
-hotkeys.reload_book_hint:
-  ru: "Перезагрузить стакан активного рынка."
-  en: "Reload the active market order book."
-  es: "Recarga el libro de órdenes activo."
+  ru: "Переключение графиков, фигуры и масштаб Y."
+  en: "Chart switching, figures, and Y scale."
+  es: "Cambio de gráficos, figuras y escala Y."
 hotkeys.switch_charts:
   ru: "Switch Charts"
   en: "Switch Charts"
@@ -177,14 +161,6 @@ hotkeys.switch_charts_hint:
   ru: "Переключение графиков MoonBot."
   en: "MoonBot chart switching."
   es: "Cambio de gráficos MoonBot."
-hotkeys.show_charts:
-  ru: "Show Charts"
-  en: "Show Charts"
-  es: "Show Charts"
-hotkeys.show_charts_hint:
-  ru: "MoonBot-дефолт для свежего конфига: F4."
-  en: "MoonBot fresh-config default: F4."
-  es: "Valor por defecto de MoonBot en config nueva: F4."
 hotkeys.switch_figure:
   ru: "Switch Figure"
   en: "Switch Figure"
@@ -193,14 +169,6 @@ hotkeys.switch_figure_hint:
   ru: "MoonBot-дефолт: Ctrl+F."
   en: "MoonBot default: Ctrl+F."
   es: "Valor por defecto de MoonBot: Ctrl+F."
-hotkeys.fit_sells:
-  ru: "Fit Sells"
-  en: "Fit Sells"
-  es: "Fit Sells"
-hotkeys.fit_sells_hint:
-  ru: "MoonBot-дефолт: Ctrl+S."
-  en: "MoonBot default: Ctrl+S."
-  es: "Valor por defecto de MoonBot: Ctrl+S."
 hotkeys.scale_plus:
   ru: "Scale +"
   en: "Scale +"
@@ -219,61 +187,45 @@ hotkeys.scale_minus_hint:
   es: "Valor por defecto de MoonBot: Ctrl+W."
 
 hotkeys.group.order_move:
-  ru: "Сдвиг и подстройка ордеров"
-  en: "Order move and tuning"
-  es: "Movimiento y ajuste de órdenes"
+  ru: "Сдвиг ордеров"
+  en: "Order shift"
+  es: "Desplazamiento de órdenes"
 hotkeys.group.order_move_hint:
-  ru: "Сдвиги buy/sell и изменение fixed sell."
-  en: "Buy/sell shifts and fixed-sell tuning."
-  es: "Desplazamientos buy/sell y ajuste de venta fija."
+  ru: "Сдвиг живых ордеров рынка активного чарта на один шаг цены (move_order, как перетаскивание линии). Вход двигается только пока не залит."
+  en: "Shift live orders of the active chart's market by one price step (move_order, same as dragging the line). Entry moves only while unfilled."
+  es: "Desplaza las órdenes vivas del mercado del gráfico activo un paso de precio (move_order, como arrastrar la línea). La entrada solo mientras no esté ejecutada."
 hotkeys.shift_buy_up:
   ru: "Shift Buy Up"
   en: "Shift Buy Up"
   es: "Shift Buy Up"
 hotkeys.shift_buy_up_hint:
-  ru: "Сдвинуть buy вверх."
-  en: "Move buy up."
-  es: "Mueve buy arriba."
+  ru: "Сдвинуть вход (buy) на шаг цены вверх."
+  en: "Move the entry (buy) one price step up."
+  es: "Mueve la entrada (buy) un paso de precio arriba."
 hotkeys.shift_buy_down:
   ru: "Shift Buy Down"
   en: "Shift Buy Down"
   es: "Shift Buy Down"
 hotkeys.shift_buy_down_hint:
-  ru: "Сдвинуть buy вниз."
-  en: "Move buy down."
-  es: "Mueve buy abajo."
+  ru: "Сдвинуть вход (buy) на шаг цены вниз."
+  en: "Move the entry (buy) one price step down."
+  es: "Mueve la entrada (buy) un paso de precio abajo."
 hotkeys.shift_sell_up:
   ru: "Shift Sell Up"
   en: "Shift Sell Up"
   es: "Shift Sell Up"
 hotkeys.shift_sell_up_hint:
-  ru: "Сдвинуть sell вверх."
-  en: "Move sell up."
-  es: "Mueve sell arriba."
+  ru: "Сдвинуть выход (sell) на шаг цены вверх."
+  en: "Move the exit (sell) one price step up."
+  es: "Mueve la salida (sell) un paso de precio arriba."
 hotkeys.shift_sell_down:
   ru: "Shift Sell Down"
   en: "Shift Sell Down"
   es: "Shift Sell Down"
 hotkeys.shift_sell_down_hint:
-  ru: "Сдвинуть sell вниз."
-  en: "Move sell down."
-  es: "Mueve sell abajo."
-hotkeys.sell_plus:
-  ru: "Sell +"
-  en: "Sell +"
-  es: "Sell +"
-hotkeys.sell_plus_hint:
-  ru: "MoonBot-дефолт: Ctrl+1."
-  en: "MoonBot default: Ctrl+1."
-  es: "Valor por defecto de MoonBot: Ctrl+1."
-hotkeys.sell_minus:
-  ru: "Sell -"
-  en: "Sell -"
-  es: "Sell -"
-hotkeys.sell_minus_hint:
-  ru: "MoonBot-дефолт: Ctrl+2."
-  en: "MoonBot default: Ctrl+2."
-  es: "Valor por defecto de MoonBot: Ctrl+2."
+  ru: "Сдвинуть выход (sell) на шаг цены вниз."
+  en: "Move the exit (sell) one price step down."
+  es: "Mueve la salida (sell) un paso de precio abajo."
 
 hotkeys.group.mouse:
   ru: "Мышь на стакане"
@@ -383,47 +335,6 @@ hotkeys.mouse.short_sell_move2_hint:
   ru: "MultiOrders.ShortSellMoveClick2. При SameHotkeysForMove копируется из SellMoveClick2."
   en: "MultiOrders.ShortSellMoveClick2. With SameHotkeysForMove it mirrors SellMoveClick2."
   es: "MultiOrders.ShortSellMoveClick2. Con SameHotkeysForMove copia SellMoveClick2."
-
-hotkeys.group.tools:
-  ru: "Инструменты"
-  en: "Tools"
-  es: "Herramientas"
-hotkeys.group.tools_hint:
-  ru: "Скриншоты, скрытие баланса и вспомогательные команды MoonBot."
-  en: "Screenshots, balance hiding, and MoonBot helper commands."
-  es: "Capturas, ocultar balance y comandos auxiliares de MoonBot."
-hotkeys.make_shot:
-  ru: "Make Shot"
-  en: "Make Shot"
-  es: "Make Shot"
-hotkeys.make_shot_hint:
-  ru: "MoonBot-дефолт: Ctrl+F10."
-  en: "MoonBot default: Ctrl+F10."
-  es: "Valor por defecto de MoonBot: Ctrl+F10."
-hotkeys.make_shot_bot:
-  ru: "Make Shot Bot"
-  en: "Make Shot Bot"
-  es: "Make Shot Bot"
-hotkeys.make_shot_bot_hint:
-  ru: "MoonBot-дефолт: Ctrl+F12."
-  en: "MoonBot default: Ctrl+F12."
-  es: "Valor por defecto de MoonBot: Ctrl+F12."
-hotkeys.spy_mode:
-  ru: "Spy / Hide Balance"
-  en: "Spy / Hide Balance"
-  es: "Spy / Hide Balance"
-hotkeys.spy_mode_hint:
-  ru: "MoonBot-дефолт: F7."
-  en: "MoonBot default: F7."
-  es: "Valor por defecto de MoonBot: F7."
-hotkeys.broadcast:
-  ru: "Broadcast Coin"
-  en: "Broadcast Coin"
-  es: "Broadcast Coin"
-hotkeys.broadcast_hint:
-  ru: "Отправить активную монету во внешний broadcast-сценарий."
-  en: "Send the active coin to an external broadcast scenario."
-  es: "Envía la moneda activa a un escenario broadcast externo."
 
 hotkeys.group.manual_strategy:
   ru: "Ручные стратегии"
