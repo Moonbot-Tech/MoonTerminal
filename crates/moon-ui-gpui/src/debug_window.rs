@@ -531,7 +531,7 @@ pub(crate) fn spawn_debug_chart_windows(cx: &mut App, backend: Entity<Backend>) 
                 .map(|s| s.group.clone())
                 .unwrap_or_else(|| "default".to_string());
             let owner = b.group_windows.get(&group).copied().map(Into::into);
-            (core, group, market, b.epoch, b.config.theme.clone(), owner)
+            (core, group, market, b.epoch, b.config.chart_theme().clone(), owner)
         })
     }) else {
         log::warn!("debug charts: no live sessions/markets; cannot open charts");

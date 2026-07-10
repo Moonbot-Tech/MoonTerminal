@@ -151,6 +151,41 @@ impl Shell {
                     None => false,
                 }
             }
+            // Встроенный Ctrl+Shift+F10: сброс позиций всех окон (спасение уехавших).
+            HotkeyAction::ResetWindows => {
+                crate::windowing::reset_all_windows_onscreen(cx);
+                true
+            }
+            // Встроенный Tab/Del: отмена ордера под курсором (чарт под мышью знает наведённый).
+            HotkeyAction::CancelHoveredOrder => {
+                let chart = self
+                    .backend
+                    .read(cx)
+                    .hovered_chart
+                    .clone()
+                    .and_then(|w| w.upgrade());
+                match chart {
+                    Some(chart) => chart.update(cx, |p, pcx| p.cancel_hovered_order(pcx)),
+                    None => false,
+                }
+            }
+            // Встроенный Shift+Esc: закрыть все графики Main всех групп (глобальный бамп rev).
+            HotkeyAction::CloseAllCharts => {
+                self.backend.update(cx, |b, _| {
+                    b.close_all_charts_rev = b.close_all_charts_rev.wrapping_add(1);
+                });
+                true
+            }
+            // Встроенный Esc: ВСЕГДА закрывает ЧАРТ в фулскрине Main ЭТОЙ группы (и только его),
+            // как в MoonBot — режим рисования при этом НЕ выключается (он тумблерится карандашом).
+            // Окно/откреп не трогаем.
+            HotkeyAction::CloseActiveChart => {
+                self.backend.update(cx, |b, _| {
+                    b.close_active_chart_group = Some(group.clone());
+                    b.close_active_chart_rev = b.close_active_chart_rev.wrapping_add(1);
+                });
+                true
+            }
             other => self.backend.update(cx, |b, bcx| {
                 let target = b.main_chart_target(&group);
                 let active_core = b.active_trade_core(&group);

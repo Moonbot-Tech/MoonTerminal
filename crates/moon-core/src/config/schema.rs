@@ -24,7 +24,9 @@ use crate::market::MarketDataMode;
 /// v11: рантайм-`CoreId` стал стабильным (= `uid`, а не позиция) → одноразовый
 ///      ремап legacy позиционных CoreId в `charts.json` (см. `COREID_UID_VERSION`).
 /// v12: добавлен `ui_theme_mode` (dark/light для MoonUI, открытый settings.toml).
-pub const SCHEMA_VERSION: u32 = 12;
+/// v13: хоткеи переехали в отдельный переносимый `hotkeys.toml` — секция `hotkeys`
+///      в settings.toml больше не пишется (читается как legacy для миграции).
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// Версия схемы, начиная с которой рантайм-`CoreId == uid` (стабильный). Конфиги
 /// старее неё хранили в `charts.json` ПОЗИЦИОННЫЕ CoreId — их надо один раз
@@ -183,8 +185,9 @@ pub struct SettingsFile {
     /// 100 = авто-база, 800 = 8x, как Delphi UseMemForCharts.
     #[serde(default = "default_chart_memory_percent")]
     pub chart_memory_percent: u16,
-    /// Горячие клавиши терминала. Открытый формат, без секретов.
-    #[serde(default)]
+    /// Legacy (schema < v13): хоткеи жили секцией здесь, теперь — в отдельном
+    /// переносимом `hotkeys.toml`. Читаем для одноразовой миграции, не пишем.
+    #[serde(default, skip_serializing)]
     pub hotkeys: HotkeysConfig,
     #[serde(default)]
     pub groups: Vec<GroupConfig>,

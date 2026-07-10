@@ -20,6 +20,7 @@ mod hotkeys;
 mod interface;
 mod lines;
 mod render;
+mod share;
 
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -28,7 +29,7 @@ use std::hash::{Hash, Hasher};
 use gpui::*;
 use moon_ui::{
     IndexPath, MoonBackgroundPolicy, MoonCheckbox, MoonSelectEvent, MoonSelectItem,
-    MoonSelectState, Root,
+    MoonSelectState, MoonSliderState, Root,
 };
 use rust_i18n::t;
 
@@ -38,7 +39,7 @@ use moon_core::config::{AppConfig, Language};
 use moon_core::market::MarketDataMode;
 
 use badges::BadgesEd;
-use common::{color_row, draft_color, draft_slider, section, separator, slider_row};
+use common::{collapse_block, color_row, draft_color, draft_slider, section, separator, slider_row};
 use connections::ConnRow;
 use interface::Iface;
 use lines::Lines;
@@ -107,12 +108,16 @@ pub struct SettingsView {
     badges: BadgesEd,
     /// Per-server editor-стейты (вкладка «Подключения»); пересоздаётся при add/del.
     conn: Vec<ConnRow>,
+    /// Слайдер «Шрифт UI» (`ui_font_delta`, личное из settings.toml) — вкладка «Общие».
+    ui_font: Entity<MoonSliderState>,
     /// Выпадающий выбор языка (вкладка «Общие»).
     lang: Entity<MoonSelectState<Language>>,
     /// Выпадающий выбор источника данных (вкладка «Подключения»).
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Какие блоки-линии раскрыты (вкладка «Линии», порт CollapsingHeader).
     open_lines: HashSet<&'static str>,
+    /// Какие группы хоткеев раскрыты (вкладка «Хоткеи»); пусто = все свёрнуты (дефолт).
+    open_hotkeys: HashSet<&'static str>,
     /// Кэш иконок групп (вкладка «Подключения»).
     icons: IconSet,
     /// Для какой группы открыт пикер иконок (None = закрыт). Порт egui `picking`.
@@ -158,6 +163,24 @@ impl SettingsView {
         let lines = lines::build(&backend, window, cx);
         let badges = badges::build(&backend, window, cx);
         let conn = connections::build_conn(&backend, window, cx);
+
+        // Слайдер «Шрифт UI» — личная настройка (settings.toml), живёт на вкладке «Общие»;
+        // правка переустанавливает MoonUI-тему живьём (масштаб шрифтов всего UI).
+        let ui_font = {
+            let cur = {
+                let b = backend.read(cx);
+                b.preview.as_ref().unwrap_or(&b.config).ui_font_delta
+            };
+            draft_slider(cx, -2.0, 6.0, 1.0, cur, move |p, f, bcx| {
+                if p.ui_font_delta != f {
+                    p.ui_font_delta = f;
+                    crate::install_moon_theme_for_config(p, bcx);
+                    true
+                } else {
+                    false
+                }
+            })
+        };
 
         // Сохранять положение/размер окна «Настройки» в layout — чтобы открывалось на прежнем
         // месте. Дебаунс-сейв делает дренаж по `layout_dirty` (как у Стратегий/Активов).
@@ -260,9 +283,11 @@ impl SettingsView {
             lines,
             badges,
             conn,
+            ui_font,
             lang,
             mode,
             open_lines: HashSet::new(),
+            open_hotkeys: HashSet::new(),
             icons: IconSet::discover(),
             picking: None,
             last_sig: initial_sig,

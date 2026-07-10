@@ -293,6 +293,31 @@ impl DetachedChartHost {
             return;
         };
         let handled = match action {
+            // Встроенный Ctrl+Shift+F10: сброс позиций всех окон.
+            HotkeyAction::ResetWindows => {
+                crate::windowing::reset_all_windows_onscreen(cx);
+                true
+            }
+            // Встроенный Tab/Del: отмена ордера под курсором (чарт под мышью).
+            HotkeyAction::CancelHoveredOrder => {
+                let chart = self
+                    .backend
+                    .read(cx)
+                    .hovered_chart
+                    .clone()
+                    .and_then(|w| w.upgrade());
+                match chart {
+                    Some(chart) => chart.update(cx, |p, pcx| p.cancel_hovered_order(pcx)),
+                    None => false,
+                }
+            }
+            // Встроенный Shift+Esc: закрыть все графики Main всех групп.
+            HotkeyAction::CloseAllCharts => {
+                self.backend.update(cx, |b, _| {
+                    b.close_all_charts_rev = b.close_all_charts_rev.wrapping_add(1);
+                });
+                true
+            }
             HotkeyAction::ScalePlus | HotkeyAction::ScaleMinus => {
                 let zoom_in = matches!(action, HotkeyAction::ScalePlus);
                 let next = crate::controls::step_scale(self.panel.read(cx).scale(), zoom_in);

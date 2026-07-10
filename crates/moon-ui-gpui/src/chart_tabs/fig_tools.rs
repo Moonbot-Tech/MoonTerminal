@@ -64,7 +64,7 @@ impl ChartTabs {
                         MoonButtonVariant::Ghost
                     })
                     .selected(draw_mode)
-                    .tooltip("Рисование фигур: ЛКМ — вкл/выкл режим, ПКМ — стиль. В режиме: Ctrl+ЛКМ рисует, ЛКМ выделяет/двигает.")
+                    .tooltip("Рисование фигур: ЛКМ — вкл/выкл режим, ПКМ — стиль. Держи Ctrl для рисования/захвата фигур (Ctrl+ЛКМ); обычный ЛКМ при этом торгует, как обычно.")
                     .on_click(move |_, _w, app| {
                         backend.update(app, |b, bcx| {
                             b.fig_draw_mode = !b.fig_draw_mode;

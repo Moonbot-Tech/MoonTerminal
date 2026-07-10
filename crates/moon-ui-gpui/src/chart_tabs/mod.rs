@@ -111,6 +111,10 @@ pub struct ChartTabs {
     /// Последняя виденная `switch_charts_rev` — листаем активный чарт Main-стека только на
     /// РОСТ rev, адресованный нашей группе (хоткей `switch_charts`), одноразово.
     last_switch_charts_rev: u64,
+    /// Последняя виденная `close_all_charts_rev` — на её рост закрываем Main-стек (Shift+Esc).
+    last_close_all_charts_rev: u64,
+    /// Последняя виденная `close_active_chart_rev` — на её рост закрываем фулскрин-чарт (Esc).
+    last_close_active_chart_rev: u64,
     /// Откреп-вкладки на восстановление при загрузке (из charts.json): создаём их пустыми и
     /// открываем окна на ПЕРВОМ render (не в конструкторе окна группы — нельзя вложенно).
     restore_pending: Vec<(u32, ChartBucket, chart_persist::WinGeom, Option<f32>)>,
@@ -294,6 +298,8 @@ impl ChartTabs {
             this.drain_chart_repin(cx);
             this.sync_active_scale(cx);
             this.sync_switch_charts(cx);
+            this.sync_close_all_charts(cx);
+            this.sync_close_active_chart(cx);
             this.sync_main_chart_target(cx);
             this.sync_seen_for_active(cx);
             this.persist_scales(cx);
@@ -376,6 +382,8 @@ impl ChartTabs {
             last_sig: initial_sig,
             last_scale_rev: 0,
             last_switch_charts_rev: 0,
+            last_close_all_charts_rev: 0,
+            last_close_active_chart_rev: 0,
             restore_pending,
             window_handle: window.window_handle(),
             focus: cx.focus_handle(),
@@ -659,6 +667,41 @@ impl ChartTabs {
         self.last_switch_charts_rev = rev;
         if ours {
             self.main.update(cx, |s, scx| s.cycle_active(scx));
+        }
+    }
+
+    /// Хоткей `CloseAllCharts` (встроенный Shift+Esc): на РОСТ ГЛОБАЛЬНОЙ `close_all_charts_rev`
+    /// закрываем Main-стек ЭТОЙ группы. Rev общий (без адресации группе) → срабатывает у всех
+    /// ChartTabs всех окон одновременно. AddToChart/кастомные вкладки (именованные) не трогаем.
+    fn sync_close_all_charts(&mut self, cx: &mut Context<Self>) {
+        let rev = self.backend.read(cx).close_all_charts_rev;
+        if rev == self.last_close_all_charts_rev {
+            return;
+        }
+        self.last_close_all_charts_rev = rev;
+        self.main.update(cx, |s, scx| {
+            s.close_all(scx);
+        });
+    }
+
+    /// Встроенный Esc: на РОСТ `close_active_chart_rev`, адресованного нашей группе, закрываем
+    /// ЧАРТ в фулскрине Main (и только его). Не в фулскрине — no-op. Режим рисования не трогаем.
+    fn sync_close_active_chart(&mut self, cx: &mut Context<Self>) {
+        let (rev, ours) = {
+            let b = self.backend.read(cx);
+            (
+                b.close_active_chart_rev,
+                b.close_active_chart_group.as_deref() == Some(&self.group),
+            )
+        };
+        if rev == self.last_close_active_chart_rev {
+            return;
+        }
+        self.last_close_active_chart_rev = rev;
+        if ours {
+            self.main.update(cx, |s, scx| {
+                s.close_active_fullscreen(scx);
+            });
         }
     }
 }

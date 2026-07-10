@@ -330,4 +330,36 @@ impl OrdersStyleSet {
     pub fn save(&self) -> anyhow::Result<()> {
         super::toml_io::save(&paths::orders_path(), self, "orders.toml")
     }
+
+    /// Текст в формате orders.toml — для «Копировать» в Настройках (= содержимое файла).
+    pub fn to_share_string(&self) -> Option<String> {
+        toml::to_string_pretty(self).ok()
+    }
+
+    /// Разобрать текст orders.toml (вставка из буфера / содержимое файла). Валидируем по
+    /// характерным линиям — serde игнорирует незнакомые поля и на чужом файле молча дал бы
+    /// дефолт. Старый плоский `OrdersStyle` → в `dark` поверх `current` (как миграция load).
+    /// `None` = это не стили ордер-линий.
+    pub fn parse_share(text: &str, current: &Self) -> Option<Self> {
+        const KEYS: [&str; 4] = ["buy", "sell", "stop", "take_profit"];
+        let v: toml::Value = toml::from_str(text).ok()?;
+        let table_has = |name: &str| {
+            v.get(name)
+                .and_then(|x| x.as_table())
+                .is_some_and(|t| KEYS.iter().any(|k| t.contains_key(*k)))
+        };
+        if table_has("dark") || table_has("light") {
+            return toml::from_str(text).ok();
+        }
+        if v.as_table()
+            .is_some_and(|t| KEYS.iter().any(|k| t.contains_key(*k)))
+        {
+            let flat: OrdersStyle = toml::from_str(text).ok()?;
+            return Some(Self {
+                dark: flat,
+                light: current.light.clone(),
+            });
+        }
+        None
+    }
 }

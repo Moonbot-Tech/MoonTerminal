@@ -102,7 +102,28 @@ impl Render for SettingsView {
                     .on_click(cx.listener(|this, _, _, cx| this.save(cx)))
                     .render(),
             )
-            .child(status_el);
+            .child(status_el)
+            .child(div().flex_1())
+            // Копировать/Вставить настройки вкладки (только у вкладок со своим
+            // переносимым файлом: Интерфейс/Линии/Бейджи/Хоткеи) — см. share.rs.
+            .when(self.shareable(), |f| {
+                f.child(
+                    MoonButton::new("share-copy")
+                        .ghost()
+                        .small()
+                        .label(t!("settings.copy").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| this.copy_tab(cx)))
+                        .render(),
+                )
+                .child(
+                    MoonButton::new("share-paste")
+                        .ghost()
+                        .small()
+                        .label(t!("settings.paste").to_string())
+                        .on_click(cx.listener(|this, _, window, cx| this.paste_tab(window, cx)))
+                        .render(),
+                )
+            });
 
         v_flex()
             .size_full()

@@ -43,7 +43,7 @@ pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use schema::UiThemeMode;
 pub use secrets::Secret;
 pub use servers::{ChartBucket, FeedFlags, ServerConfig};
-pub use theme::ChartTheme;
+pub use theme::{ChartTheme, ChartThemeSet};
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -93,8 +93,8 @@ pub struct AppConfig {
     pub chart_memory_percent: u16,
     /// Горячие клавиши терминала (settings.toml, открытый формат).
     pub hotkeys: HotkeysConfig,
-    /// Тема оформления чарта (отдельный переносимый theme.toml).
-    pub theme: ChartTheme,
+    /// Тема оформления чарта per-режим UI (тёмная/светлая) — отдельный переносимый theme.toml.
+    pub theme: ChartThemeSet,
     /// Стили линий ордеров per-theme (тёмная/светлая) — отдельный переносимый orders.toml.
     pub orders: OrdersStyleSet,
     /// Бейджи типов детектов (код+цвета по видам, на тему) — отдельный переносимый badges.json.
@@ -116,9 +116,11 @@ impl AppConfig {
         paths::migrate_flat_to_cfg();
         // Тема и стиль линий ордеров — отдельные переносимые файлы, грузятся
         // независимо от серверов/групп.
-        let theme = ChartTheme::load();
+        let theme = ChartThemeSet::load();
         let orders = OrdersStyleSet::load();
         let badges = BadgesConfig::load();
+        // Хоткеи — отдельный переносимый файл (с v13); None = ещё не мигрировали.
+        let hotkeys_file = HotkeysConfig::load();
         if let Some(cfg) = Self::load_plaintext_env(theme.clone(), orders.clone(), badges.clone())? {
             return Ok(cfg);
         }
@@ -126,6 +128,15 @@ impl AppConfig {
             let sf = store::read_servers()?;
             let meta = store::read_settings();
             let merged = reconcile::merge(sf, meta);
+            // hotkeys.toml приоритетен; нет файла → одноразовая миграция legacy-секции
+            // из settings.toml (или дефолта) на диск в новый файл.
+            let hotkeys = hotkeys_file.unwrap_or_else(|| {
+                let h = merged.hotkeys.clone();
+                if let Err(e) = h.save() {
+                    log::warn!("не записал hotkeys.toml при миграции: {e:#}");
+                }
+                h
+            });
             let mut cfg = Self {
                 servers: merged.servers,
                 groups: merged.groups,
@@ -143,7 +154,7 @@ impl AppConfig {
                 ui_theme_mode: merged.ui_theme_mode,
                 ui_scale: merged.ui_scale,
                 chart_memory_percent: merged.chart_memory_percent,
-                hotkeys: merged.hotkeys,
+                hotkeys,
                 theme,
                 orders,
                 badges,
@@ -178,7 +189,7 @@ impl AppConfig {
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
-            cfg.hotkeys = HotkeysConfig::default();
+            cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.save()?;
             log::info!("мигрировано из config.enc → servers.enc + settings.toml");
             return Ok(cfg);
@@ -196,7 +207,7 @@ impl AppConfig {
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
-            cfg.hotkeys = HotkeysConfig::default();
+            cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.save()?;
             log::info!("мигрировано из config.toml → servers.enc + settings.toml");
             return Ok(cfg);
@@ -215,13 +226,13 @@ impl AppConfig {
             ui_theme_mode: UiThemeMode::default(),
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
-            hotkeys: HotkeysConfig::default(),
+            hotkeys: hotkeys_file.unwrap_or_default(),
             ..Self::default()
         })
     }
 
     fn load_plaintext_env(
-        theme: ChartTheme,
+        theme: ChartThemeSet,
         orders: OrdersStyleSet,
         badges: BadgesConfig,
     ) -> anyhow::Result<Option<Self>> {
@@ -321,16 +332,21 @@ impl AppConfig {
             self.ui_theme_mode,
             self.ui_scale,
             self.chart_memory_percent,
-            self.hotkeys.clone(),
         );
         store::write_servers(&sf)?;
         store::write_settings(&meta)?;
-        // Тема, стиль линий и бейджи детектов — в свои переносимые файлы, независимо
-        // от settings.toml.
+        // Тема, стиль линий, бейджи детектов и хоткеи — в свои переносимые файлы,
+        // независимо от settings.toml.
         self.theme.save()?;
         self.orders.save()?;
         self.badges.save();
+        self.hotkeys.save()?;
         Ok(())
+    }
+
+    /// Тема чарта активного режима UI (тёмная/светлая — по `ui_theme_mode`).
+    pub fn chart_theme(&self) -> &ChartTheme {
+        self.theme.get(self.ui_theme_mode == UiThemeMode::Light)
     }
 
     /// Группа имеет смысл только пока на неё ссылается хоть одно ядро. Сироты
@@ -395,7 +411,6 @@ impl AppConfig {
             UiThemeMode::default(),
             schema::default_ui_scale(),
             schema::default_chart_memory_percent(),
-            HotkeysConfig::default(),
         );
         let a = toml::to_string(&sf).unwrap_or_default();
         let b = toml::to_string(&meta).unwrap_or_default();

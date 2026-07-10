@@ -209,6 +209,20 @@ impl BadgesConfig {
         }
     }
 
+    /// Текст в формате badges.json — для «Копировать» в Настройках (= содержимое файла).
+    pub fn to_share_string(&self) -> Option<String> {
+        serde_json::to_string_pretty(self).ok()
+    }
+
+    /// Разобрать текст badges.json (вставка из буфера / содержимое файла). Требуем
+    /// массив `entries` — иначе любой JSON молча дал бы дефолт (serde(default)).
+    /// `None` = это не бейджи.
+    pub fn parse_share(text: &str) -> Option<Self> {
+        let v: serde_json::Value = serde_json::from_str(text).ok()?;
+        v.get("entries")?.as_array()?;
+        serde_json::from_str(text).ok()
+    }
+
     /// Запись по ordinal (первое совпадение).
     pub fn entry(&self, ordinal: u8) -> Option<&BadgeEntry> {
         self.entries.iter().find(|e| e.ordinal == ordinal)

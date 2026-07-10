@@ -118,14 +118,15 @@ impl ChartInput {
         self.pending_to_main = container.target(idx);
     }
 
-    /// Колесо: зум по X (или пан по X при Shift) — у панели под курсором.
+    /// Колесо: зум по X (или пан по X при Shift/Alt) — у панели под курсором.
     /// `dy` — знак/величина прокрутки (lines), `gate_ok` — указатель в зоне графика.
+    /// `pan` — сдвиг графика влево/вправо вместо зума (встроенный хоткей Shift/Alt+колесо).
     /// Возвращает «нужен кадр».
     pub fn wheel(
         &mut self,
         dy: f32,
         precise: bool,
-        shift: bool,
+        pan: bool,
         gate_ok: bool,
         container: &mut Container,
         fallback_w: f32,
@@ -141,7 +142,7 @@ impl ChartInput {
         let (plot_w, cursor_x) = self.plot_metrics_for(self.hovered_pane, fallback_w, ppp);
         let now = now_unix_ms();
         if let Some(view) = self.hovered_view_mut(container) {
-            if shift {
+            if pan {
                 // Пан по X. Точный ввод (Pixels) — на реальные пиксели жеста; дискретное
                 // колесо (Lines) — фиксированный шаг 60 px за щелчок.
                 let dx = if precise { -dy } else { -dy.signum() * 60.0 };

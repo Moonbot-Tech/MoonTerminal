@@ -1,16 +1,18 @@
-//! Вкладка «Общие» — порт egui `settings/general.rs`: язык интерфейса (выпадающий
-//! список), отдельная чарт-вкладка на ядро, лог в файлы + срок хранения. Правки идут
-//! в draft, применяются после «Сохранить» (язык/чарты — на перезапуске/пересборке окон).
+//! Вкладка «Общие» — личные/машинные настройки (settings.toml): тёмная/светлая тема и
+//! шрифт UI, язык интерфейса (выпадающий список), отдельная чарт-вкладка на ядро, лог в
+//! файлы + срок хранения. Правки идут в draft; тема/шрифт применяются живьём, остальное —
+//! после «Сохранить» (язык/чарты — на перезапуске/пересборке окон).
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonCheckboxSize, MoonMenuSize, MoonPalette, MoonSelect, StyledExt,
-    h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonSize, MoonCheckboxSize, MoonMenuSize, MoonPalette, MoonSelect,
+    MoonToggle, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
-use super::SettingsView;
+use super::{SettingsView, slider_row};
 use crate::design;
+use moon_core::config::UiThemeMode;
 
 impl SettingsView {
     /// Изменить срок хранения логов (клампим 0..=365), правит draft.
@@ -63,10 +65,11 @@ impl SettingsView {
     pub(super) fn general_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
-        let (split, scz, idle_secs, logf, ret) = {
+        let (ui_theme_mode, split, scz, idle_secs, logf, ret) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             (
+                d.ui_theme_mode,
                 d.charts_split_by_core,
                 d.separate_control_zones,
                 d.main_idle_close_secs,
@@ -79,6 +82,38 @@ impl SettingsView {
         v_flex()
             .w_full()
             .gap_1()
+            // Тёмная/светлая тема UI + шрифт UI — личные настройки (settings.toml, не
+            // переносимая тема чарта — та на вкладке «Интерфейс» = theme.toml).
+            .child(
+                MoonToggle::new("ui-theme-mode")
+                    .checked(ui_theme_mode == UiThemeMode::Light)
+                    .label(t!("iface.light_theme").to_string())
+                    .on_change(cx.listener(|this, checked: &bool, _window, cx| {
+                        let mode = if *checked {
+                            UiThemeMode::Light
+                        } else {
+                            UiThemeMode::Dark
+                        };
+                        let changed = this.backend.update(cx, |b, bcx| {
+                            let Some(p) = b.preview.as_mut() else {
+                                return false;
+                            };
+                            if p.ui_theme_mode == mode {
+                                return false;
+                            }
+                            p.ui_theme_mode = mode;
+                            crate::install_moon_theme_for_config(p, bcx);
+                            bcx.notify();
+                            true
+                        });
+                        if changed {
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(hint(&t!("iface.light_theme_hint")))
+            .child(slider_row(&t!("iface.font_delta"), &self.ui_font, cx))
+            .child(super::separator(p, cx))
             // Язык интерфейса — выпадающий список.
             .child(
                 h_flex()

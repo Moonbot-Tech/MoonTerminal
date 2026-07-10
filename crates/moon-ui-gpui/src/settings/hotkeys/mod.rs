@@ -2,17 +2,13 @@
 //! компоновкой по сценариям.
 //!
 //! Разбито по файлам: здесь — енумы слотов (`HotkeySlot`/`MouseSlot`), маппинг
-//! «слот → поле `HotkeysConfig`» (геттеры/сеттеры/id) и общие хелперы рендера
-//! (`hotkey_group`/`parse_hotkey`); [`tab`] — сам `impl SettingsView` (сборка
-//! вкладки и строки-редакторы).
+//! «слот → поле `HotkeysConfig`» (геттеры/сеттеры/id) и `parse_hotkey`; [`tab`] —
+//! сам `impl SettingsView` (сборка вкладки и строки-редакторы).
 
 mod tab;
 
 use gpui::*;
 use moon_core::config::{HotkeysConfig, MouseGestureBinding};
-use moon_ui::{MoonPalette, MoonText, rgba_from, v_flex};
-
-use crate::design;
 
 #[derive(Clone, Copy)]
 enum HotkeySlot {
@@ -68,45 +64,6 @@ enum MouseSlot {
     ShortSellMove,
     ShortBuyMove2,
     ShortSellMove2,
-}
-
-fn hotkey_group(
-    title: &str,
-    hint: &str,
-    p: MoonPalette,
-    cx: &App,
-    rows: impl IntoIterator<Item = AnyElement>,
-) -> AnyElement {
-    v_flex()
-        .w_full()
-        .gap(design::ui_px(cx, 7.0))
-        .p(design::ui_px(cx, 10.0))
-        .rounded(px(4.0))
-        .border_1()
-        .border_color(rgba_from(p.border, 0.9))
-        .bg(rgba_from(p.panel, 0.58))
-        .child(
-            v_flex()
-                .gap(px(1.0))
-                .child(
-                    MoonText::new(title.to_string())
-                        .mono(true)
-                        .font_size(design::font_value(cx, 11.0))
-                        .line_height(design::line_value(cx, 14.0))
-                        .color(p.text)
-                        .render(),
-                )
-                .child(
-                    MoonText::new(hint.to_string())
-                        .mono(true)
-                        .font_size(design::font_value(cx, 9.0))
-                        .line_height(design::line_value(cx, 12.0))
-                        .color(p.text_muted)
-                        .render(),
-                ),
-        )
-        .children(rows)
-        .into_any_element()
 }
 
 fn parse_hotkey(raw: &str) -> Option<Keystroke> {

@@ -136,6 +136,12 @@ pub fn badges_path() -> PathBuf {
     cfg_dir().join("badges.json")
 }
 
+/// Горячие клавиши и мышиные жесты — отдельный переносимый файл (можно делиться).
+/// До schema v13 жили секцией внутри settings.toml (одноразовая миграция в load).
+pub fn hotkeys_path() -> PathBuf {
+    cfg_dir().join("hotkeys.toml")
+}
+
 /// SQLite-БД с отчётами по закрытым ордерам (`ClosedSellOrderReport`).
 pub fn reports_db_path() -> PathBuf {
     data_dir().join("reports.sqlite")
@@ -214,6 +220,7 @@ const CFG_FILES: &[&str] = &[
     "detached.json",
     "charts.json",
     "badges.json",
+    "hotkeys.toml",
 ];
 
 /// Одноразовый перенос плоских файлов настроек/раскладки из корня `data_dir` в

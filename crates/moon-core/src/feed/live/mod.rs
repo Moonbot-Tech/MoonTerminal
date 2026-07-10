@@ -121,6 +121,8 @@ pub fn run(
     let mut last_strats = Instant::now();
     // Активы (окно «Активы»): тот же ~1 Гц тик, что у ордеров/стратегий.
     let mut last_assets = Instant::now();
+    // Троттл активного запроса баланса у ЯДРА после филлов (см. блок в цикле).
+    let mut last_balance_refresh = Instant::now();
     // Курсор transfer-активов: шлём только при смене revision (request/response).
     let mut last_transfer_rev: u64 = u64::MAX;
     // Курсоры выгрузки стратегий: revision схемы и сигнатура состава/checked —
@@ -323,6 +325,17 @@ pub fn run(
                 )
             )
         });
+        // Филл/снятие ордера меняет позицию и баланс, но ядро НЕ всегда пушит свежий
+        // баланс (проданный токен зависает фантомом в «Активах» до реконнекта — снимок
+        // протухает). Активно просим у ЯДРА свежий снимок: `Command::Balance` идёт к ядру
+        // (Delphi `SendBalanceCmd`), НЕ на биржу — дёшево. Троттл 3с, чтобы серия филлов
+        // не спамила. Ответ придёт Balance-событием на следующей итерации и обновит снимок.
+        if has_orders_table_event && last_balance_refresh.elapsed() >= Duration::from_secs(3) {
+            last_balance_refresh = Instant::now();
+            if let Err(error) = client.balances().refresh() {
+                log::warn!("core {} balance refresh request failed: {error}", server.id);
+            }
+        }
         // Судьба bulk-снимка 5м-свечей (авто-запрос moonproto после subscribe_all_trades):
         // от него живут свечные величины retained-истории (H.vol/72h скринера). Провал
         // иначе полностью беззвучен (никто событие не слушал). Учти известный баг

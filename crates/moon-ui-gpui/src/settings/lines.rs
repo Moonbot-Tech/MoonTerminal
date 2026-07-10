@@ -6,8 +6,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonAccordion, MoonCheckboxSize, MoonColorPicker, MoonColorPickerState, MoonPalette,
-    MoonSliderState, StyledExt, h_flex, v_flex,
+    MoonCheckboxSize, MoonColorPicker, MoonColorPickerState, MoonPalette, MoonSliderState,
+    StyledExt, h_flex, v_flex,
 };
 
 use super::{SettingsView, separator, slider_row};
@@ -45,7 +45,10 @@ fn ord_color(
     get: fn(&OrdersStyle) -> [u8; 3],
     set: fn(&mut OrdersStyle, [u8; 3]),
 ) -> Entity<MoonColorPickerState> {
-    let cur = get(backend.read(cx).config.orders.get(is_light));
+    let cur = {
+        let b = backend.read(cx);
+        get(b.preview.as_ref().unwrap_or(&b.config).orders.get(is_light))
+    };
     super::draft_color(window, cx, cur, move |p, c| {
         if get(p.orders.get(is_light)) != c {
             set(p.orders.get_mut(is_light), c);
@@ -68,7 +71,10 @@ fn ord_slider(
     max: f32,
     step: f32,
 ) -> Entity<MoonSliderState> {
-    let cur = get(backend.read(cx).config.orders.get(is_light));
+    let cur = {
+        let b = backend.read(cx);
+        get(b.preview.as_ref().unwrap_or(&b.config).orders.get(is_light))
+    };
     super::draft_slider(cx, min, max, step, cur, move |p, f, _bcx| {
         if get(p.orders.get(is_light)) != f {
             set(p.orders.get_mut(is_light), f);
@@ -274,37 +280,27 @@ impl SettingsView {
         .size(MoonCheckboxSize::Compact)
     }
 
-    /// Сворачиваемый блок на компоненте MoonUI `MoonAccordion` (один item на ключ): заголовок
-    /// с шевроном + тело. Раскрытость хранится во `SettingsView.open_lines[key]`; клик по
-    /// заголовку переключает её через `on_toggle_click` (для single-item: открыт ⇔ ix `[0]`).
+    /// Сворачиваемый блок вкладки «Линии» — тонкая обёртка над общим
+    /// [`super::collapse_block`]; раскрытость хранится в `SettingsView.open_lines[key]`.
+    // `use<>`: возвращаемый элемент НЕ заимствует `title` (сразу копируем в owned SharedString).
+    // Без этого Rust 2024 синтаксически «захватывает» лайфтайм `&str` в `impl IntoElement`,
+    // и временный `&t!(..)` из вложенного блока (Path) ловит E0716.
     fn collapse_section(
         &self,
         cx: &Context<Self>,
         key: &'static str,
         title: &str,
         body: AnyElement,
-        // `use<>`: возвращаемый элемент НЕ заимствует `title` (сразу копируем в owned SharedString).
-        // Без этого Rust 2024 синтаксически «захватывает» лайфтайм `&str` в `impl IntoElement`,
-        // и временный `&t!(..)` из вложенного блока (Path) ловит E0716.
     ) -> impl IntoElement + use<> {
-        let open = self.open_lines.contains(key);
-        let title: SharedString = title.to_string().into();
-        let entity = cx.entity();
-        MoonAccordion::new(SharedString::from(format!("lines-acc-{key}")))
-            .item(move |item| item.title(title).open(open).child(body))
-            .on_toggle_click(move |open_ixs, _window, cx| {
-                let now_open = !open_ixs.is_empty();
-                entity.update(cx, |this, c| {
-                    let changed = if now_open {
-                        this.open_lines.insert(key)
-                    } else {
-                        this.open_lines.remove(key)
-                    };
-                    if changed {
-                        c.notify();
-                    }
-                });
-            })
+        super::collapse_block(
+            cx,
+            SharedString::from(format!("lines-acc-{key}")),
+            key,
+            title.to_string().into(),
+            self.open_lines.contains(key),
+            body,
+            |this| &mut this.open_lines,
+        )
     }
 
     /// Тело блока ордер-линии (порт egui `line_block`): цвет+толщина в строке, `dashed`,

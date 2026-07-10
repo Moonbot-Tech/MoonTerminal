@@ -89,7 +89,7 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
         let backend = backend.clone();
         register_panel(cx, "ChartTabs", move |_state, info, window, cx| {
             let group = group_of(info);
-            let theme = backend.read(cx).config.theme.clone();
+            let theme = backend.read(cx).config.chart_theme().clone();
             let backend = backend.clone();
             // Main стартует пустым — монету не открываем автоматически (см. group_window).
             let focus: Option<(CoreId, String)> = None;

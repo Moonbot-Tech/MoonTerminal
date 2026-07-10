@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::paths;
+
 pub const ORDER_SIZE_KEYS: usize = 6;
 pub const SELL_PRESET_KEYS: usize = 6;
 pub const MANUAL_STRATEGY_KEYS: usize = 10;
@@ -312,6 +314,45 @@ impl Default for HotkeysConfig {
             short_sell_move_click: default_left_ctrl(),
             short_buy_move_click2: MouseGestureBinding::None,
             short_sell_move_click2: MouseGestureBinding::None,
+        }
+    }
+}
+
+impl HotkeysConfig {
+    /// Прочитать `hotkeys.toml`. `None` = файла ещё нет (первый запуск после переезда
+    /// хоткеев из settings.toml — вызывающий мигрирует legacy-секцию и записывает файл).
+    /// Битый файл → дефолт (лог внутри), а НЕ `None` — иначе битый файл молча
+    /// перезаписался бы устаревшей legacy-копией из settings.toml.
+    pub fn load() -> Option<Self> {
+        let path = paths::hotkeys_path();
+        if !path.exists() {
+            return None;
+        }
+        Some(super::toml_io::load_or_default(&path, "hotkeys.toml", |_| {}))
+    }
+
+    /// Записать `hotkeys.toml` (открытый человекочитаемый TOML — можно делиться).
+    pub fn save(&self) -> anyhow::Result<()> {
+        super::toml_io::save(&paths::hotkeys_path(), self, "hotkeys.toml")
+    }
+
+    /// Текст в формате hotkeys.toml — для «Копировать» в Настройках (= содержимое файла).
+    pub fn to_share_string(&self) -> Option<String> {
+        toml::to_string_pretty(self).ok()
+    }
+
+    /// Разобрать текст hotkeys.toml (вставка из буфера / содержимое файла). Валидируем по
+    /// характерным ключам — serde игнорирует незнакомые поля и на чужом файле молча дал бы
+    /// дефолт. `None` = это не хоткеи.
+    pub fn parse_share(text: &str) -> Option<Self> {
+        const KEYS: [&str; 4] = ["order_size", "sell_preset", "buy_set_click", "make_shot"];
+        let v: toml::Value = toml::from_str(text).ok()?;
+        if v.as_table()
+            .is_some_and(|t| KEYS.iter().any(|k| t.contains_key(*k)))
+        {
+            toml::from_str(text).ok()
+        } else {
+            None
         }
     }
 }

@@ -1,6 +1,8 @@
 //! Тема оформления чарта (фон/сетка/перекрестие) — ОТДЕЛЬНЫЙ переносимый файл
 //! `theme.toml` рядом с exe, чтобы темой можно было делиться (скопировал файл —
-//! и оформление перенеслось). Цвета заданы в sRGB (как палитра/egui); в linear
+//! и оформление перенеслось). Хранится ПАРОЙ наборов `[dark]`/`[light]` (как
+//! `orders.toml`) — файл самодостаточен и переносится независимо от того, какой
+//! режим UI выбран у получателя. Цвета заданы в sRGB (как палитра/egui); в linear
 //! их конвертируют шейдеры (см. [[srgb-shader-colors]]).
 
 use serde::{Deserialize, Serialize};
@@ -110,11 +112,19 @@ impl Default for ChartTheme {
 }
 
 impl ChartTheme {
-    /// Светлые MoonBot-дефолты для тех частей chart theme, которые нельзя тащить из dark.
-    /// Фон/сетка дальше могут быть уточнены активной MoonUI-палитрой приложения.
-    pub fn apply_light_defaults(&mut self) {
+    /// Дефолт светлого набора: тёмный дефолт + светлые MoonBot-переопределения.
+    fn default_light() -> Self {
+        let mut t = Self::default();
+        t.apply_light_defaults();
+        t
+    }
+
+    /// Светлые MoonBot-дефолты. Фон/сетка = значения светлой MoonUI-палитры
+    /// (chart_bg 0xFFFFFF / row_line 0xECEFF2) — раньше рендер перекрывал их палитрой
+    /// на лету, теперь они просто дефолт светлого набора (и редактируются).
+    fn apply_light_defaults(&mut self) {
         self.bg = [255, 255, 255];
-        self.grid = [211, 211, 211];
+        self.grid = [236, 239, 242];
         self.cross = [128, 128, 128];
         self.book_bg = [255, 255, 255];
         self.book_bid = [0, 128, 0];
@@ -134,13 +144,96 @@ impl ChartTheme {
         self.readout_border_px = 0.0;
     }
 
-    /// Прочитать theme.toml рядом с exe. Нет файла или битый → дефолт (не падаем).
+}
+
+/// Тема чарта ОТДЕЛЬНО для тёмного и светлого режима UI (per-theme, как
+/// [`super::OrdersStyleSet`]). Хранится в одном `theme.toml` таблицами `[dark]`/`[light]`;
+/// активный набор выбирается по `ui_theme_mode`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ChartThemeSet {
+    pub dark: ChartTheme,
+    pub light: ChartTheme,
+}
+
+impl Default for ChartThemeSet {
+    fn default() -> Self {
+        Self {
+            dark: ChartTheme::default(),
+            light: ChartTheme::default_light(),
+        }
+    }
+}
+
+impl ChartThemeSet {
+    /// Набор для активного режима: `light=true` → светлый, иначе тёмный.
+    pub fn get(&self, light: bool) -> &ChartTheme {
+        if light { &self.light } else { &self.dark }
+    }
+    pub fn get_mut(&mut self, light: bool) -> &mut ChartTheme {
+        if light { &mut self.light } else { &mut self.dark }
+    }
+
+    /// Прочитать `theme.toml`. Новый формат — таблицы `[dark]`/`[light]`. СТАРЫЙ плоский
+    /// `ChartTheme` (де-факто тёмная тема; в светлом режиме его перекрывали дефолты) →
+    /// становится `dark`, `light` берёт светлый дефолт; сразу пере-сохраняем. Нет файла →
+    /// дефолт + досейв; битый → дефолт (не падаем).
     pub fn load() -> Self {
-        super::toml_io::load_or_default(&paths::theme_path(), "theme.toml", |_| {})
+        let path = paths::theme_path();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            let def = Self::default();
+            let _ = def.save();
+            return def;
+        };
+        if text.contains("[dark") || text.contains("[light") {
+            return toml::from_str(&text).unwrap_or_else(|e| {
+                log::warn!("theme.toml повреждён ({e}); беру дефолт");
+                Self::default()
+            });
+        }
+        let flat: ChartTheme = toml::from_str(&text).unwrap_or_default();
+        let set = Self {
+            dark: flat,
+            light: ChartTheme::default_light(),
+        };
+        let _ = set.save();
+        set
     }
 
     /// Записать theme.toml (открытый человекочитаемый TOML — можно делиться).
     pub fn save(&self) -> anyhow::Result<()> {
         super::toml_io::save(&paths::theme_path(), self, "theme.toml")
+    }
+
+    /// Текст в формате theme.toml — для «Копировать» в Настройках (= содержимое файла).
+    pub fn to_share_string(&self) -> Option<String> {
+        toml::to_string_pretty(self).ok()
+    }
+
+    /// Разобрать текст theme.toml (вставка из буфера / содержимое файла). Валидируем по
+    /// характерным ключам темы — serde игнорирует незнакомые поля и на чужом файле молча
+    /// дал бы дефолт. Старый плоский `ChartTheme` (де-факто тёмный) → в `dark` поверх
+    /// `current` (как миграция load). `None` = это не тема чарта.
+    pub fn parse_share(text: &str, current: &Self) -> Option<Self> {
+        const KEYS: [&str; 4] = ["bg", "cross", "book_bid", "panel_bg"];
+        let v: toml::Value = toml::from_str(text).ok()?;
+        let table_has = |name: &str| {
+            v.get(name)
+                .and_then(|x| x.as_table())
+                .is_some_and(|t| KEYS.iter().any(|k| t.contains_key(*k)))
+        };
+        if table_has("dark") || table_has("light") {
+            return toml::from_str(text).ok();
+        }
+        if v.as_table()
+            .is_some_and(|t| KEYS.iter().any(|k| t.contains_key(*k)))
+        {
+            let flat: ChartTheme = toml::from_str(text).ok()?;
+            return Some(Self {
+                dark: flat,
+                light: current.light.clone(),
+            });
+        }
+        None
     }
 }

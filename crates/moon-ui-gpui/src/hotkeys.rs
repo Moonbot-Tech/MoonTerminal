@@ -56,8 +56,21 @@ pub enum HotkeyAction {
     FigDelete,
     /// Тоггл chart-алерта выделенной фигуры.
     FigAlert,
-    /// Выйти из режима рисования (Esc).
-    ExitDraw,
+    /// Закрыть ЧАРТ в фулскрине Main (встроенный Esc). Как в MoonBot: Esc ВСЕГДА закрывает
+    /// график, режим рисования при этом НЕ выключается (он тумблерится карандашом). Исполняет
+    /// вызывающее окно (Main-группа), в откреп-окне — no-op.
+    CloseActiveChart,
+    /// Сбросить позиции ВСЕХ окон на экран (встроенный Ctrl+Shift+F10). Исполняет
+    /// вызывающее окно (нужен доступ к списку окон приложения).
+    ResetWindows,
+    /// Отменить ордер ПОД КУРСОРОМ (встроенный Tab/Del над линией ордера). Исполняет
+    /// вызывающее окно через чарт под мышью (`Backend::hovered_chart`) — наведённый ордер
+    /// знает только сам чарт (`order_hover`). Нет наведённого ордера → не обработано (клавиша
+    /// всплывает: Tab остаётся навигацией фокуса).
+    CancelHoveredOrder,
+    /// Закрыть ВСЕ графики Main-стеков всех групп (встроенный Shift+Esc). Исполняет
+    /// вызывающее окно бампом глобальной ревизии — каждый ChartTabs закрывает свой Main.
+    CloseAllCharts,
     /// Масштаб Y — зум внутрь. Исполняет вызывающее окно (свой у каждого).
     ScalePlus,
     /// Масштаб Y — зум наружу. Исполняет вызывающее окно.
@@ -107,8 +120,26 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     if p(&hk.fig_alert) {
         return Some(A::FigAlert);
     }
+    // Встроенный Shift+Esc — закрыть все графики (до плоского Esc, иначе перехватится им).
+    if ev.keystroke.key == "escape"
+        && ev.keystroke.modifiers.shift
+        && !ev.keystroke.modifiers.control
+        && !ev.keystroke.modifiers.alt
+        && !ev.keystroke.modifiers.platform
+    {
+        return Some(A::CloseAllCharts);
+    }
     if ev.keystroke.key == "escape" && ev.keystroke.modifiers == Modifiers::default() {
-        return Some(A::ExitDraw);
+        return Some(A::CloseActiveChart);
+    }
+    // Встроенные (не конфигурируемые) клавиши.
+    if p("ctrl-shift-f10") {
+        return Some(A::ResetWindows);
+    }
+    if (ev.keystroke.key == "tab" || ev.keystroke.key == "delete")
+        && ev.keystroke.modifiers == Modifiers::default()
+    {
+        return Some(A::CancelHoveredOrder);
     }
 
     // Масштаб.
@@ -217,15 +248,6 @@ pub fn apply(
             bcx.notify();
             true
         }
-        A::ExitDraw => {
-            if b.fig_draw_mode {
-                b.fig_draw_mode = false;
-                bcx.notify();
-                true
-            } else {
-                false
-            }
-        }
         A::FigAlert => {
             if b.toggle_selected_figure_alert() {
                 bcx.notify();
@@ -318,7 +340,10 @@ pub fn apply(
         // Масштаб, постановка по курсору и переключение активного чарта — забота вызывающего
         // окна: масштаб/активный чарт свои у каждого окна (rev-механизм группы), а цену ордера
         // знает только чарт под курсором (`Backend::hovered_chart`).
-        A::ScalePlus | A::ScaleMinus | A::NewLong | A::NewShort | A::SwitchCharts => false,
+        A::ScalePlus | A::ScaleMinus | A::NewLong | A::NewShort | A::SwitchCharts
+        | A::ResetWindows | A::CancelHoveredOrder | A::CloseAllCharts | A::CloseActiveChart => {
+            false
+        }
         A::Todo(name) => {
             log::debug!("hotkey '{name}' распознан, но backend-путь ещё не подключён");
             true

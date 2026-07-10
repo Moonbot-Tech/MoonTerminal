@@ -55,7 +55,10 @@ pub(super) fn scroll_wheel(
     let changed = {
         let input = &mut this.input;
         this.chart.with_container_mut(|container| {
-            input.wheel(dy, precise, e.modifiers.shift, within, container, fb, sf)
+            // Встроенный хоткей: Shift ИЛИ Alt + колесо = пан по времени (влево/вправо),
+            // без модификаторов = зум по времени.
+            let pan = e.modifiers.shift || e.modifiers.alt;
+            input.wheel(dy, precise, pan, within, container, fb, sf)
         })
     };
     if changed {
@@ -89,9 +92,10 @@ pub(super) fn mouse_down_left(
         None
     };
     this.sync_native_cursor();
-    // Слой рисования фигур (только в режиме карандаша): secondary+ЛКМ рисует,
-    // простой ЛКМ выделяет/двигает существующую. Вне режима try_fig_click
-    // сразу отдаёт false → клик идёт в торговлю/навигацию.
+    // Слой рисования фигур (только в режиме карандаша): фигуры трогаются ТОЛЬКО по Ctrl
+    // (secondary) — рисование новой / захват существующей. Обычный ЛКМ без модификатора
+    // try_fig_click отдаёт false → клик идёт в торговлю/навигацию (паритет с MoonBot: карандаш
+    // включён, но обычный ЛКМ торгует). Вне режима карандаша try_fig_click тоже сразу false.
     // secondary() = ⌘ на macOS, Ctrl на Windows/Linux. На macOS именно Ctrl нельзя:
     // ОС превращает Ctrl+ЛКМ в правый клик, поэтому событие рисования не доходит.
     // Активный драфт = продолжение рисования: следующие клики завершают фигуру и

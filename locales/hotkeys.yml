@@ -10,6 +10,39 @@ hotkeys.recording:
   en: "Press shortcut..."
   es: "Pulsa el atajo..."
 
+hotkeys.group.builtin:
+  ru: "Встроенные хоткеи"
+  en: "Built-in hotkeys"
+  es: "Atajos integrados"
+hotkeys.group.builtin_hint:
+  ru: "Фиксированные сочетания (не настраиваются), работают на графике и в окнах."
+  en: "Fixed shortcuts (not configurable), active on the chart and in windows."
+  es: "Atajos fijos (no configurables), activos en el gráfico y las ventanas."
+hotkeys.builtin.wheel_zoom:
+  ru: "[Колёсико] на графике — зум по времени"
+  en: "[Wheel] on the chart — zoom by time"
+  es: "[Rueda] en el gráfico — zoom por tiempo"
+hotkeys.builtin.wheel_pan:
+  ru: "[Shift или Alt + Колёсико] двигает график влево/вправо"
+  en: "[Shift or Alt + Wheel] moves the chart left/right"
+  es: "[Shift o Alt + Rueda] mueve el gráfico a izquierda/derecha"
+hotkeys.builtin.esc_close:
+  ru: "[Esc] закрыть чарт, который сейчас в фулскрине Main (режим рисования не выключает)"
+  en: "[Esc] close the chart currently fullscreen in Main (does not exit draw mode)"
+  es: "[Esc] cerrar el gráfico en pantalla completa de Main (no sale del modo dibujo)"
+hotkeys.builtin.reset_windows:
+  ru: "[Ctrl+Shift+F10] сброс позиций всех окон на экран"
+  en: "[Ctrl+Shift+F10] reset all window positions onscreen"
+  es: "[Ctrl+Shift+F10] restablecer las posiciones de todas las ventanas"
+hotkeys.builtin.cancel_hover:
+  ru: "[Tab или Del] навести на линию ордера — отменить этот ордер"
+  en: "[Tab or Del] hover an order line — cancel that order"
+  es: "[Tab o Del] sobre una línea de orden — cancelar esa orden"
+hotkeys.builtin.close_all:
+  ru: "[Shift+Esc] закрыть все графики Main во всех группах"
+  en: "[Shift+Esc] close all Main charts in every group"
+  es: "[Shift+Esc] cerrar todos los gráficos Main de todos los grupos"
+
 hotkeys.group.presets:
   ru: "Пресеты ордера"
   en: "Order presets"

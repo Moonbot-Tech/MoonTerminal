@@ -283,6 +283,41 @@ impl MainChartStack {
         .detach();
     }
 
+    /// Встроенный Esc: закрыть ЧАРТ, который сейчас в фулскрине (и только его). Работает лишь в
+    /// режиме фулскрина (`!show_stack`, есть активный) — в тайловом стеке единого фулскрин-чарта
+    /// нет, там Esc ничего не закрывает. После закрытия оставшиеся показываем стеком (как при
+    /// авто-закрытии активного). Возвращает, было ли закрытие.
+    pub(crate) fn close_active_fullscreen(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.show_stack {
+            return false;
+        }
+        let Some(idx) = self.active.filter(|&i| i < self.charts.len()) else {
+            return false;
+        };
+        let entry = self.charts.remove(idx);
+        entry.panel.update(cx, |p, pcx| p.close_all_panes(pcx));
+        self.active = None;
+        // Остались графики — показываем их стеком (фулскрин закрытого больше некому отдать).
+        self.show_stack = !self.charts.is_empty();
+        cx.notify();
+        true
+    }
+
+    /// Закрыть ВСЕ графики Main-стека (встроенный Shift+Esc). Отписывает стаканы каждой панели
+    /// (`close_all_panes`), очищает стек. Возвращает, было ли что закрывать.
+    pub(crate) fn close_all(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.charts.is_empty() {
+            return false;
+        }
+        for entry in self.charts.drain(..) {
+            entry.panel.update(cx, |p, pcx| p.close_all_panes(pcx));
+        }
+        self.active = None;
+        self.show_stack = false;
+        cx.notify();
+        true
+    }
+
     /// Авто-закрытие графиков по неактивности окна (config `main_idle_close_secs`, сек). Дедлайн
     /// графика = max(последний активный ввод окна, время его прихода) + N → новейший закрывается
     /// последним; ровно N сек после начала неактивности для уже открытых. Если закрылся активный

@@ -19,6 +19,31 @@ settings.title:
   ru: "Настройки"
   en: "Settings"
   es: "Ajustes"
+# --- Копировать/Вставить настройки вкладки (текст = содержимое переносимого файла) ---
+settings.copy:
+  ru: "Копировать"
+  en: "Copy"
+  es: "Copiar"
+settings.paste:
+  ru: "Вставить"
+  en: "Paste"
+  es: "Pegar"
+settings.copied:
+  ru: "Настройки вкладки скопированы в буфер"
+  en: "Tab settings copied to clipboard"
+  es: "Ajustes de la pestaña copiados al portapapeles"
+settings.pasted:
+  ru: "Вставлено — проверь и нажми «Сохранить»"
+  en: "Pasted — review and press Save"
+  es: "Pegado — revisa y pulsa Guardar"
+settings.paste_wrong:
+  ru: "В буфере не настройки этой вкладки"
+  en: "Clipboard doesn't contain this tab's settings"
+  es: "El portapapeles no contiene ajustes de esta pestaña"
+settings.paste_empty:
+  ru: "Буфер обмена пуст"
+  en: "Clipboard is empty"
+  es: "Portapapeles vacío"
 
 # --- Ярлыки вкладок настроек ---
 tab.connections:
@@ -54,9 +79,9 @@ badges.title:
   en: "Detect type badges"
   es: "Insignias de tipos de detección"
 badges.theme_hint:
-  ru: "Редактируется набор цветов активной темы. Сменить тему — на вкладке «Интерфейс» + Сохранить."
-  en: "Editing the active theme's colors. Change theme on the Interface tab, then Save."
-  es: "Editando los colores del tema activo. Cambia el tema en la pestaña Interfaz y guarda."
+  ru: "Редактируется набор цветов активной темы. Сменить тему — на вкладке «Общие» + Сохранить."
+  en: "Editing the active theme's colors. Change theme on the General tab, then Save."
+  es: "Editando los colores del tema activo. Cambia el tema en la pestaña General y guarda."
 badges.col_type:
   ru: "Тип (ordinal)"
   en: "Type (ordinal)"

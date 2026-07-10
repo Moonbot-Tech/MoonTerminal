@@ -359,6 +359,22 @@ impl ChartPanel {
         true
     }
 
+    /// Встроенный Tab/Del: отменить ордер ПОД КУРСОРОМ на этой панели. `order_hover` держит
+    /// (ядро, uid) наведённой линии. Нет наведённого ордера → `false` (клавиша не наша,
+    /// всплывает дальше — напр. Tab-навигация фокуса).
+    pub fn cancel_hovered_order(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(hover) = self.order_hover else {
+            return false;
+        };
+        let (core, uid) = (hover.core, hover.uid);
+        self.backend.update(cx, |b, _| {
+            if let Err(error) = b.session.cancel_order(core, uid) {
+                log::warn!("hotkey cancel hovered order failed: {error}");
+            }
+        });
+        true
+    }
+
     pub(super) fn set_order_interaction(
         &mut self,
         next: Option<OrderHoverKey>,

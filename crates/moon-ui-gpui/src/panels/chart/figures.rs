@@ -157,6 +157,13 @@ impl ChartPanel {
         if !self.backend.read(cx).fig_draw_mode {
             return false;
         }
+        // Паритет с MoonBot: даже при ВКЛЮЧЁННОМ карандаше фигуры трогаем ТОЛЬКО по Ctrl
+        // (`draw_mod` = secondary/⌘ ИЛИ продолжение начатого драфта). Обычный ЛКМ без
+        // модификатора уходит дальше — в торговлю/навигацию, как будто карандаш выключен
+        // (в MoonBot тултип: «Hold CTRL to perform actual draw»).
+        if !draw_mod {
+            return false;
+        }
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return false;
         };
@@ -167,17 +174,17 @@ impl ChartPanel {
         let Some(map) = self.fig_map(pane) else {
             return false;
         };
-        if draw_mod {
-            let tool = self.backend.read(cx).fig_tool;
-            let node = map.node_at(pos);
-            self.fig_draw_click(pane, tool, node, cx);
-            // Точка постановки узла — для drag-release жеста (см. try_fig_release).
-            self.fig_draw_down = self.fig_draft.is_some().then_some(pos);
+        // Ctrl+ЛКМ по СУЩЕСТВУЮЩЕЙ фигуре (вне активного драфта) — схватить узел/тело/выделить;
+        // по пустому месту (или продолжая начатый драфт) — ставим узел новой фигуры.
+        if self.fig_draft.is_none() && self.try_fig_grab(pane, pos, &map, cx) {
             return true;
         }
-        // Без модификатора: захват узла/тела фигуры или выделение (пусто → клик не съеден,
-        // работает пан).
-        self.try_fig_grab(pane, pos, &map, cx)
+        let tool = self.backend.read(cx).fig_tool;
+        let node = map.node_at(pos);
+        self.fig_draw_click(pane, tool, node, cx);
+        // Точка постановки узла — для drag-release жеста (см. try_fig_release).
+        self.fig_draw_down = self.fig_draft.is_some().then_some(pos);
+        true
     }
 
     /// Клик в режиме рисования: ставит узел/завершает фигуру.
@@ -302,7 +309,7 @@ impl ChartPanel {
         true
     }
 
-    /// Захват фигуры вне режима рисования: узлы (у выделенной), затем тело ближайшей.
+    /// Захват фигуры (по Ctrl+ЛКМ в режиме карандаша): узлы (у выделенной), затем тело ближайшей.
     fn try_fig_grab(
         &mut self,
         pane: usize,

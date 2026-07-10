@@ -1,5 +1,7 @@
-//! Сборка вкладки «Хоткеи»: группы по сценариям (`hotkeys_tab`) и строки-редакторы
-//! (`hotkey_row`/`mouse_row`/`same_move_checkbox`) с записью в draft.
+//! Сборка вкладки «Хоткеи»: сворачиваемые группы по сценариям (`hotkeys_tab`,
+//! по умолчанию все свёрнуты — раскрытость в `SettingsView.open_hotkeys`) и
+//! однострочные строки-редакторы (`hotkey_row`/`mouse_row`/`same_move_checkbox`)
+//! с записью в draft.
 
 use gpui::*;
 use moon_core::config::{
@@ -12,15 +14,14 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::{
-    HotkeySlot, MouseSlot, hotkey_group, mouse_slot_id, mouse_slot_value, parse_hotkey,
-    set_mouse_slot_value, set_slot_value, slot_id, slot_value,
+    HotkeySlot, MouseSlot, mouse_slot_id, mouse_slot_value, parse_hotkey, set_mouse_slot_value,
+    set_slot_value, slot_id, slot_value,
 };
 use crate::design;
 use crate::settings::SettingsView;
 
 impl SettingsView {
     pub(in crate::settings) fn hotkeys_tab(&self, cx: &Context<Self>) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
         let hotkeys = {
             let b = self.backend.read(cx);
             b.preview.as_ref().unwrap_or(&b.config).hotkeys.clone()
@@ -28,12 +29,26 @@ impl SettingsView {
 
         v_flex()
             .w_full()
-            .gap(design::ui_px(cx, 12.0))
-            .child(hotkey_group(
+            .gap(design::ui_px(cx, 6.0))
+            .child(self.hotkey_section(
+                cx,
+                "builtin",
+                &t!("hotkeys.group.builtin"),
+                &t!("hotkeys.group.builtin_hint"),
+                [
+                    self.builtin_row(t!("hotkeys.builtin.wheel_zoom").to_string(), cx),
+                    self.builtin_row(t!("hotkeys.builtin.wheel_pan").to_string(), cx),
+                    self.builtin_row(t!("hotkeys.builtin.cancel_hover").to_string(), cx),
+                    self.builtin_row(t!("hotkeys.builtin.esc_close").to_string(), cx),
+                    self.builtin_row(t!("hotkeys.builtin.close_all").to_string(), cx),
+                    self.builtin_row(t!("hotkeys.builtin.reset_windows").to_string(), cx),
+                ],
+            ))
+            .child(self.hotkey_section(
+                cx,
+                "presets",
                 &t!("hotkeys.group.presets"),
                 &t!("hotkeys.group.presets_hint"),
-                p,
-                cx,
                 (0..ORDER_SIZE_KEYS)
                     .map(|i| {
                         let title = format!("F{}", i + 1);
@@ -46,11 +61,11 @@ impl SettingsView {
                         self.hotkey_row(title, desc, HotkeySlot::SellPreset(i), &hotkeys, cx)
                     })),
             ))
-            .child(hotkey_group(
+            .child(self.hotkey_section(
+                cx,
+                "trading",
                 &t!("hotkeys.group.trading"),
                 &t!("hotkeys.group.trading_hint"),
-                p,
-                cx,
                 [
                     self.hotkey_row(
                         t!("hotkeys.cancel_buy").to_string(),
@@ -117,11 +132,11 @@ impl SettingsView {
                     ),
                 ],
             ))
-            .child(hotkey_group(
+            .child(self.hotkey_section(
+                cx,
+                "chart",
                 &t!("hotkeys.group.chart"),
                 &t!("hotkeys.group.chart_hint"),
-                p,
-                cx,
                 [
                     self.hotkey_row(
                         t!("hotkeys.reload_chart").to_string(),
@@ -181,11 +196,11 @@ impl SettingsView {
                     ),
                 ],
             ))
-            .child(hotkey_group(
+            .child(self.hotkey_section(
+                cx,
+                "draw",
                 &t!("hotkeys.group.draw"),
                 &t!("hotkeys.group.draw_hint"),
-                p,
-                cx,
                 [
                     self.hotkey_row(
                         t!("hotkeys.draw_hline").to_string(),
@@ -231,11 +246,11 @@ impl SettingsView {
                     ),
                 ],
             ))
-            .child(hotkey_group(
+            .child(self.hotkey_section(
+                cx,
+                "order-move",
                 &t!("hotkeys.group.order_move"),
                 &t!("hotkeys.group.order_move_hint"),
-                p,
-                cx,
                 [
                     self.hotkey_row(
                         t!("hotkeys.shift_buy_up").to_string(),
@@ -281,11 +296,11 @@ impl SettingsView {
                     ),
                 ],
             ))
-            .child(hotkey_group(
+            .child(self.hotkey_section(
+                cx,
+                "mouse",
                 &t!("hotkeys.group.mouse"),
                 &t!("hotkeys.group.mouse_hint"),
-                p,
-                cx,
                 [
                     self.mouse_row(
                         t!("hotkeys.mouse.buy_set").to_string(),
@@ -386,11 +401,11 @@ impl SettingsView {
                     ),
                 ],
             ))
-            .child(hotkey_group(
+            .child(self.hotkey_section(
+                cx,
+                "tools",
                 &t!("hotkeys.group.tools"),
                 &t!("hotkeys.group.tools_hint"),
-                p,
-                cx,
                 [
                     self.hotkey_row(
                         t!("hotkeys.make_shot").to_string(),
@@ -422,11 +437,11 @@ impl SettingsView {
                     ),
                 ],
             ))
-            .child(hotkey_group(
+            .child(self.hotkey_section(
+                cx,
+                "manual-strategy",
                 &t!("hotkeys.group.manual_strategy"),
                 &t!("hotkeys.group.manual_strategy_hint"),
-                p,
-                cx,
                 (0..MANUAL_STRATEGY_KEYS).map(|i| {
                     self.hotkey_row(
                         t!("hotkeys.manual_strategy", n = i + 1).to_string(),
@@ -437,6 +452,62 @@ impl SettingsView {
                     )
                 }),
             ))
+    }
+
+    /// Сворачиваемая группа хоткеев (общий MoonAccordion-блок, как блоки вкладки
+    /// «Линии»). По умолчанию свёрнута (`open_hotkeys` пуст); подсказка группы —
+    /// первой строкой тела.
+    fn hotkey_section(
+        &self,
+        cx: &Context<Self>,
+        key: &'static str,
+        title: &str,
+        hint: &str,
+        rows: impl IntoIterator<Item = AnyElement>,
+    ) -> AnyElement {
+        let p = MoonPalette::active(cx);
+        let body = v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 3.0))
+            .child(
+                MoonText::new(hint.to_string())
+                    .mono(true)
+                    .font_size(design::font_value(cx, 9.0))
+                    .line_height(design::line_value(cx, 12.0))
+                    .color(p.text_muted)
+                    .render(),
+            )
+            .children(rows)
+            .into_any_element();
+        crate::settings::collapse_block(
+            cx,
+            SharedString::from(format!("hotkeys-acc-{key}")),
+            key,
+            title.to_string().into(),
+            self.open_hotkeys.contains(key),
+            body,
+            |this| &mut this.open_hotkeys,
+        )
+        .into_any_element()
+    }
+
+    /// Строка-описание встроенного (не конфигурируемого) хоткея: только текст, без
+    /// редактора. Как справочная вкладка «Встроенные хоткеи» в MoonBot.
+    fn builtin_row(&self, line: impl Into<String>, cx: &Context<Self>) -> AnyElement {
+        let p = MoonPalette::active(cx);
+        h_flex()
+            .w_full()
+            .min_h(design::fit_h_px(cx, 22.0, 11.0, 5.0))
+            .items_center()
+            .child(
+                MoonText::new(line.into())
+                    .mono(true)
+                    .font_size(design::font_value(cx, 11.0))
+                    .line_height(design::line_value(cx, 14.0))
+                    .color(p.text_muted)
+                    .render(),
+            )
+            .into_any_element()
     }
 
     fn hotkey_row(
@@ -455,30 +526,27 @@ impl SettingsView {
 
         h_flex()
             .w_full()
-            .min_h(design::fit_h_px(cx, 38.0, 13.0, 7.0))
-            .gap(design::ui_px(cx, 12.0))
+            .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
+            .gap(design::ui_px(cx, 10.0))
             .items_center()
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(1.0))
-                    .child(
-                        MoonText::new(title.into())
-                            .mono(true)
-                            .font_size(design::font_value(cx, 11.0))
-                            .line_height(design::line_value(cx, 14.0))
-                            .color(p.text)
-                            .render(),
-                    )
-                    .child(
-                        MoonText::new(desc.into())
-                            .mono(true)
-                            .font_size(design::font_value(cx, 9.0))
-                            .line_height(design::line_value(cx, 12.0))
-                            .color(p.text_muted)
-                            .render(),
-                    ),
+                MoonText::new(title.into())
+                    .mono(true)
+                    .font_size(design::font_value(cx, 11.0))
+                    .line_height(design::line_value(cx, 14.0))
+                    .color(p.text)
+                    .render(),
+            )
+            .child(
+                // Описание — той же строкой, серым; лишнее клипается (не переносим).
+                div().flex_1().min_w_0().overflow_hidden().child(
+                    MoonText::new(desc.into())
+                        .mono(true)
+                        .font_size(design::font_value(cx, 9.0))
+                        .line_height(design::line_value(cx, 12.0))
+                        .color(p.text_muted)
+                        .render(),
+                ),
             )
             .child(
                 MoonHotkeyInput::new(id)
@@ -532,30 +600,27 @@ impl SettingsView {
 
         h_flex()
             .w_full()
-            .min_h(design::fit_h_px(cx, 34.0, 12.0, 6.0))
-            .gap(design::ui_px(cx, 12.0))
+            .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
+            .gap(design::ui_px(cx, 10.0))
             .items_center()
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(1.0))
-                    .child(
-                        MoonText::new(title.into())
-                            .mono(true)
-                            .font_size(design::font_value(cx, 11.0))
-                            .line_height(design::line_value(cx, 14.0))
-                            .color(if disabled { p.text_muted } else { p.text })
-                            .render(),
-                    )
-                    .child(
-                        MoonText::new(desc.into())
-                            .mono(true)
-                            .font_size(design::font_value(cx, 9.0))
-                            .line_height(design::line_value(cx, 12.0))
-                            .color(p.text_muted)
-                            .render(),
-                    ),
+                MoonText::new(title.into())
+                    .mono(true)
+                    .font_size(design::font_value(cx, 11.0))
+                    .line_height(design::line_value(cx, 14.0))
+                    .color(if disabled { p.text_muted } else { p.text })
+                    .render(),
+            )
+            .child(
+                // Описание — той же строкой, серым; лишнее клипается (не переносим).
+                div().flex_1().min_w_0().overflow_hidden().child(
+                    MoonText::new(desc.into())
+                        .mono(true)
+                        .font_size(design::font_value(cx, 9.0))
+                        .line_height(design::line_value(cx, 12.0))
+                        .color(p.text_muted)
+                        .render(),
+                ),
             )
             .child(
                 MoonDropdown::new(SharedString::from(id))

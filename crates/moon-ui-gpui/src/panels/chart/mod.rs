@@ -77,7 +77,7 @@ struct ChartSettingsSig {
 fn chart_settings_sig(backend: &Backend) -> ChartSettingsSig {
     let effective = backend.preview.as_ref().unwrap_or(&backend.config);
     ChartSettingsSig {
-        theme: effective.theme.clone(),
+        theme: effective.chart_theme().clone(),
         orders: effective.orders.clone(),
         follow: backend.follow,
     }

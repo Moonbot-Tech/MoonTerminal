@@ -429,3 +429,13 @@ pub(crate) fn reset_window_onscreen(window: &Window, index: usize) {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn reset_window_onscreen(_: &Window, _: usize) {}
+
+/// Сбросить позиции ВСЕХ окон приложения на экран каскадом (встроенный хоткей
+/// Ctrl+Shift+F10): спасение любых уехавших за экран / свёрнутых окон, независимо от
+/// того, из какого окна нажали. Использует `App::windows()` — не завязано на реестр
+/// откреп-окон в backend, поэтому охватывает и группы, и панели-окна.
+pub(crate) fn reset_all_windows_onscreen(cx: &mut App) {
+    for (i, handle) in cx.windows().into_iter().enumerate() {
+        let _ = handle.update(cx, |_, window, _| reset_window_onscreen(window, i));
+    }
+}

@@ -2,15 +2,44 @@
 //! и draft-байндеры (`draft_color`/`draft_slider`) — общие для вкладок
 //! Интерфейс/Линии/Подключения (re-export в `settings/mod.rs`).
 
+use std::collections::HashSet;
+
 use gpui::*;
 use moon_ui::{
-    MoonColorPicker, MoonColorPickerEvent, MoonColorPickerState, MoonPalette, MoonSlider,
-    MoonSliderEvent, MoonSliderState, h_flex, rgba_from,
+    MoonAccordion, MoonColorPicker, MoonColorPickerEvent, MoonColorPickerState, MoonPalette,
+    MoonSlider, MoonSliderEvent, MoonSliderState, h_flex, rgba_from,
 };
 
 use super::SettingsView;
 use crate::{Backend, design};
 use moon_core::config::AppConfig;
+
+/// Сворачиваемый блок на компоненте MoonUI `MoonAccordion` (один item на ключ): заголовок
+/// с шевроном + тело. Общий для вкладок Линии/Хоткеи: раскрытость живёт в per-вкладочном
+/// `HashSet` (`open` — текущее значение, `set` — доступ к набору для тоггла по клику).
+pub(super) fn collapse_block(
+    cx: &Context<SettingsView>,
+    id: SharedString,
+    key: &'static str,
+    title: SharedString,
+    open: bool,
+    body: AnyElement,
+    set: fn(&mut SettingsView) -> &mut HashSet<&'static str>,
+) -> impl IntoElement + use<> {
+    let entity = cx.entity();
+    MoonAccordion::new(id)
+        .item(move |item| item.title(title).open(open).child(body))
+        .on_toggle_click(move |open_ixs, _window, cx| {
+            let now_open = !open_ixs.is_empty();
+            entity.update(cx, |this, c| {
+                let s = set(this);
+                let changed = if now_open { s.insert(key) } else { s.remove(key) };
+                if changed {
+                    c.notify();
+                }
+            });
+        })
+}
 
 /// Hsla (из color-picker) → sRGB [u8;3] для ChartTheme/OrdersStyle.
 pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {

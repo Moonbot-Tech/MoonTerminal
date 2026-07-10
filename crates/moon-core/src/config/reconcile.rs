@@ -47,7 +47,8 @@ pub struct Merged {
     pub ui_scale: f32,
     /// Множитель бюджета retained chart history.
     pub chart_memory_percent: u16,
-    /// Горячие клавиши терминала.
+    /// Legacy-хоткеи из settings.toml (schema < v13) — только для одноразовой
+    /// миграции в `hotkeys.toml`; при существующем hotkeys.toml игнорируются.
     pub hotkeys: HotkeysConfig,
     /// Нужно пере-сохранить на диск: присвоены новые uid и/или версия схемы
     /// устарела (надо дослоить дефолты новых полей в settings.toml).
@@ -170,7 +171,6 @@ pub fn split(
     ui_theme_mode: UiThemeMode,
     ui_scale: f32,
     chart_memory_percent: u16,
-    hotkeys: HotkeysConfig,
 ) -> (ServersFile, SettingsFile) {
     let sf = ServersFile {
         servers: servers
@@ -198,7 +198,8 @@ pub fn split(
         ui_theme_mode,
         ui_scale,
         chart_memory_percent: clamp_chart_memory_percent(chart_memory_percent),
-        hotkeys,
+        // Legacy-поле: с v13 живёт в hotkeys.toml, в settings.toml не сериализуется.
+        hotkeys: HotkeysConfig::default(),
         groups: groups.to_vec(),
         servers: servers
             .iter()
