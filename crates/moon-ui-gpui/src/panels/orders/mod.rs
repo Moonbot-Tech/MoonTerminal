@@ -532,6 +532,11 @@ impl OrdersPanel {
     /// после создания): переключает контекст хранилища ширин/полей на `:win` и пере-засеивает
     /// ширины И набор видимых колонок из сохранённого набора этого режима. Так у докнутой вкладки
     /// и раскрытого окна свои ширины и свои поля.
+    /// Стейт таблицы — для кнопки «⤢ авто» в заголовке откреп-окна (detached.rs).
+    pub(crate) fn table_state(&self) -> Entity<MoonDataTableState> {
+        self.table_state.clone()
+    }
+
     pub(crate) fn mark_table_detached(&mut self, cx: &mut Context<Self>) {
         self.widths_id = crate::table_persist::ctx_id("orders-table", true);
         let saved = crate::table_persist::saved(self.backend.read(cx), &self.widths_id);

@@ -95,13 +95,32 @@ impl OrdersPanel {
         let view = cx.entity();
         let cur = self.view;
         let mut menu = MoonDropdown::new("orders-columns")
-            .label(format!("{} ▾", t!("orders.columns")))
+            // Кнопка-глиф вместо поля со списком (общий вид селекторов колонок).
+            .segment(moon_ui::MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(86.0)
+            .trigger_width(34.0)
             .menu_width(170.0)
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
+        // «Все» — тумблер: включить все колонки / повторно — оставить одну первую.
+        let full_mask = OrdCol::ALL.iter().fold(0u16, |m, c| m | c.bit());
+        let all_on = cur.columns == full_mask;
+        let all_view = view.clone();
+        menu = menu.item(
+            MoonMenuItem::with_key("col-all", t!("report.filter.all").to_string())
+                .checked(all_on)
+                .selected(all_on)
+                .on_click(move |_, _, app| {
+                    Self::mutate(&all_view, app, |v| {
+                        v.columns = if v.columns == full_mask {
+                            OrdCol::ALL[0].bit()
+                        } else {
+                            full_mask
+                        };
+                    })
+                }),
+        );
         for col in OrdCol::ALL {
             let shown = cur.shows(col);
             // Последняя оставшаяся видимая колонка заблокирована на выключение.
@@ -122,7 +141,13 @@ impl OrdersPanel {
                     }),
             );
         }
-        menu
+        div()
+            .id("orders-cols-tip")
+            .tooltip(|_window, cx| {
+                cx.new(|_| moon_ui::MoonTooltipView::new(t!("orders.columns").to_string()))
+                    .into()
+            })
+            .child(menu)
     }
 
     /// Меню сортировки/фильтра (порт ПКМ-меню egui): фильтр текущего маркета + две

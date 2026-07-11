@@ -5,34 +5,26 @@ use super::*;
 use rust_i18n::t;
 
 impl ReportPanel {
-    /// Комбобокс выбора ядра (Все + ядра из БД).
+    /// Комбобокс ядер — МУЛЬТИВЫБОР (чекбоксы, меню не закрывается на клик, как выбор
+    /// колонок). Подпись: «Все» (пусто) / имя единственного / «Ядер: N».
     pub(super) fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        let cur = if self.sel_core == 0 {
-            t!("report.filter.all").to_string()
-        } else {
-            self.cores
-                .get(self.sel_core - 1)
-                .map(|(_, n)| n.clone())
-                .unwrap_or_else(|| t!("report.filter.all").to_string())
+        let all_selected = !self.cores.is_empty() && self.sel_cores.len() == self.cores.len();
+        let cur = match self.sel_cores.len() {
+            0 => t!("report.filter.all").to_string(),
+            _ if all_selected => t!("report.filter.all").to_string(),
+            1 => {
+                let uid = *self.sel_cores.iter().next().unwrap();
+                self.cores
+                    .iter()
+                    .find(|(u, _)| *u == uid)
+                    .map(|(_, n)| n.clone())
+                    .unwrap_or_else(|| t!("report.cores_n", n = 1).to_string())
+            }
+            n => t!("report.cores_n", n = n).to_string(),
         };
         let view = cx.entity();
-        let mut options: Vec<(usize, SharedString, SharedString)> = vec![(
-            0,
-            "rc-all".into(),
-            t!("report.filter.all").to_string().into(),
-        )];
-        for (i, (_u, name)) in self.cores.iter().enumerate() {
-            options.push((i + 1, format!("rc-{i}").into(), name.clone().into()));
-        }
-        let items = crate::panels::radio_items(
-            options,
-            self.sel_core,
-            crate::panels::RadioMark::Highlight,
-            move |app, idx| {
-                view.update(app, |t, c| t.set_core(idx, c));
-            },
-        );
-        MoonDropdown::new("rep-core")
+        let all_view = view.clone();
+        let mut menu = MoonDropdown::new("rep-core")
             .label(format!("{cur} ▾"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
@@ -40,7 +32,30 @@ impl ReportPanel {
             .menu_width(180.0)
             .menu_max_height(360.0)
             .menu_size(MoonMenuSize::Compact)
-            .items(items)
+            .close_on_select(false)
+            .item(
+                // «Все» — тумблер: ставит галки на все ядра / снимает все.
+                MoonMenuItem::with_key("rc-all", t!("report.filter.all").to_string())
+                    .checked(self.sel_cores.is_empty() || all_selected)
+                    .selected(self.sel_cores.is_empty() || all_selected)
+                    .on_click(move |_, _, app| {
+                        all_view.update(app, |t, c| t.toggle_core(None, c));
+                    }),
+            );
+        for (i, (uid, name)) in self.cores.iter().enumerate() {
+            let uid = *uid;
+            let on = self.sel_cores.contains(&uid);
+            let view = view.clone();
+            menu = menu.item(
+                MoonMenuItem::with_key(format!("rc-{i}"), name.clone())
+                    .checked(on)
+                    .selected(on)
+                    .on_click(move |_, _, app| {
+                        view.update(app, |t, c| t.toggle_core(Some(uid), c));
+                    }),
+            );
+        }
+        menu
     }
 
     /// Комбобокс стороны (Все/Лонг/Шорт).
@@ -85,37 +100,85 @@ impl ReportPanel {
             .items(items)
     }
 
+    /// Комбобокс периода (пресеты «Сегодня/Вчера/…», как в отчёте MoonBot).
+    pub(super) fn period_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        let options: Vec<(Period, SharedString, SharedString)> = Period::ALL
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (*p, format!("rp-{i}").into(), p.label().into()))
+            .collect();
+        let items = crate::panels::radio_items(
+            options,
+            self.period,
+            crate::panels::RadioMark::Highlight,
+            move |app, p| {
+                view.update(app, |t, c| t.set_period(p, c));
+            },
+        );
+        MoonDropdown::new("rep-period")
+            .label(format!("{} ▾", self.period.label()))
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Action)
+            .trigger_width(100.0)
+            .menu_width(130.0)
+            .menu_size(MoonMenuSize::Compact)
+            .items(items)
+    }
+
     /// Попап выбора видимых колонок (чекбоксы) — по рантайм-списку колонок БД,
     /// поэтому авто-добавленные поля ядра сразу доступны к показу.
     pub(super) fn columns_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        let items: Vec<MoonMenuItem> = self
-            .table
-            .cols
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let on = self.visible.contains(c.as_str());
-                let name = c.clone();
-                let view = view.clone();
-                MoonMenuItem::with_key(format!("col-{i}"), header_for(c))
-                    .checked(on)
-                    .selected(on)
-                    .on_click(move |_, _, app| {
-                        let name = name.clone();
-                        view.update(app, |t, c| t.toggle_column(name, c));
-                    })
+        let all_on = !self.table.cols.is_empty()
+            && self
+                .table
+                .cols
+                .iter()
+                .all(|c| self.visible.contains(c.as_str()));
+        let all_view = view.clone();
+        let mut items: Vec<MoonMenuItem> = vec![
+            // «Все» — тумблер: включить все колонки / повторно — оставить одну первую.
+            MoonMenuItem::with_key("col-all", t!("report.filter.all").to_string())
+                .checked(all_on)
+                .selected(all_on)
+                .on_click(move |_, _, app| {
+                    all_view.update(app, |t, c| t.toggle_all_columns(c));
+                }),
+        ];
+        items.extend(self.table.cols.iter().enumerate().map(|(i, c)| {
+            let on = self.visible.contains(c.as_str());
+            let name = c.clone();
+            let view = view.clone();
+            MoonMenuItem::with_key(format!("col-{i}"), header_for(c))
+                .checked(on)
+                .selected(on)
+                .on_click(move |_, _, app| {
+                    let name = name.clone();
+                    view.update(app, |t, c| t.toggle_column(name, c));
+                })
+        }));
+        // Кнопка-глиф вместо поля со списком (общий вид селекторов колонок);
+        // подсказка — тултипом (глифы в словарь не кладём, см. locales/README).
+        div()
+            .id("rep-cols-tip")
+            .tooltip(|_window, cx| {
+                cx.new(|_| {
+                    moon_ui::MoonTooltipView::new(t!("report.columns_menu").to_string())
+                })
+                .into()
             })
-            .collect();
-        MoonDropdown::new("rep-cols")
-            .label(format!("{} ▾", t!("report.columns_menu")))
-            .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
-            .trigger_width(110.0)
-            .menu_width(230.0)
-            .menu_max_height(420.0)
-            .menu_size(MoonMenuSize::Compact)
-            .close_on_select(false)
-            .items(items)
+            .child(
+                MoonDropdown::new("rep-cols")
+                    .segment(moon_ui::MoonButtonSegment::new("▦"))
+                    .trigger_variant(MoonButtonVariant::Soft)
+                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_width(34.0)
+                    .menu_width(230.0)
+                    .menu_max_height(420.0)
+                    .menu_size(MoonMenuSize::Compact)
+                    .close_on_select(false)
+                    .items(items),
+            )
     }
 }

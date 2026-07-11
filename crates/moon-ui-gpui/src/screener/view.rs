@@ -251,6 +251,23 @@ impl ScreenerView {
         } else {
             self.visible_cols.insert(key.to_string());
         }
+        self.persist_visible_cols(cx);
+    }
+
+    /// «Все»-тумблер колонок: включить все / повторно — оставить одну первую
+    /// (все скрыть нельзя — таблица опустеет).
+    fn toggle_all_cols(&mut self, cx: &mut Context<Self>) {
+        let all_on = COLS.iter().all(|c| self.visible_cols.contains(c.0));
+        self.visible_cols = if all_on {
+            std::iter::once(COLS[0].0.to_string()).collect()
+        } else {
+            COLS.iter().map(|c| c.0.to_string()).collect()
+        };
+        self.persist_visible_cols(cx);
+    }
+
+    /// Персист списка видимых колонок (порядок каноничный из `COLS`).
+    fn persist_visible_cols(&self, cx: &mut Context<Self>) {
         let list: Vec<String> = COLS
             .iter()
             .filter(|c| self.visible_cols.contains(c.0))
@@ -387,13 +404,25 @@ impl ScreenerView {
         let view = cx.entity();
         let visible_count = self.visible_cols.len();
         let mut menu = MoonDropdown::new("screener-columns")
-            .label(format!("{} ▾", t!("screener.columns")))
+            // Кнопка-глиф вместо поля со списком (общий вид селекторов колонок).
+            .segment(moon_ui::MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(96.0)
+            .trigger_width(34.0)
             .menu_width(170.0)
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
+        // «Все» — тумблер: включить все колонки / повторно — оставить одну первую.
+        let all_on = COLS.iter().all(|c| self.visible_cols.contains(c.0));
+        let all_view = view.clone();
+        menu = menu.item(
+            MoonMenuItem::with_key("col-all", t!("report.filter.all").to_string())
+                .checked(all_on)
+                .selected(all_on)
+                .on_click(move |_, _, app| {
+                    all_view.update(app, |t, cx| t.toggle_all_cols(cx));
+                }),
+        );
         for &(key, title, ..) in COLS {
             let shown = self.visible_cols.contains(key);
             let last_visible = shown && visible_count == 1;
@@ -407,7 +436,13 @@ impl ScreenerView {
                     }),
             );
         }
-        menu
+        div()
+            .id("screener-cols-tip")
+            .tooltip(|_window, cx| {
+                cx.new(|_| moon_ui::MoonTooltipView::new(t!("screener.columns").to_string()))
+                    .into()
+            })
+            .child(menu)
     }
 
     /// Нижняя полоса: селектор ядра + фильтры Coin/DVol слева (как в MoonBot),

@@ -169,7 +169,8 @@ fn is_numeric_report_column(col: &str) -> bool {
             | "gainedbtc"
             | "profitbtc"
             | "lev"
-            | "db_id"
+            | "id"
+            | "newrecid"
             | "taskid"
     ) || col.ends_with("delta")
         || col.ends_with("ratio")
@@ -234,7 +235,7 @@ pub(super) fn header_for(col: &str) -> String {
     col.to_string()
 }
 
-fn width_for(col: &str) -> f32 {
+pub(super) fn width_for(col: &str) -> f32 {
     match col {
         "buydate" | "closedate" => 120.0,
         "sellsetdate" | "last_update_at" => 116.0,

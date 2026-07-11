@@ -162,6 +162,10 @@ pub struct DetachedWindow {
     group: String,
     panel: String,
     content: AnyView,
+    /// Кнопка «⤢ авто» в заголовке окна — сброс ширин таблицы панели (id, state).
+    /// В доке её даёт `Panel::toolbar_buttons` активной вкладки, у откреп-окна
+    /// свой заголовок — пробрасываем state таблицы явно. None — панель без таблицы.
+    widths_reset: Option<(&'static str, Entity<moon_ui::MoonDataTableState>)>,
 }
 
 impl DetachedWindow {
@@ -170,6 +174,7 @@ impl DetachedWindow {
         group: String,
         panel: String,
         content: AnyView,
+        widths_reset: Option<(&'static str, Entity<moon_ui::MoonDataTableState>)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -193,6 +198,7 @@ impl DetachedWindow {
             group,
             panel,
             content,
+            widths_reset,
         }
     }
 
@@ -287,6 +293,10 @@ impl Render for DetachedWindow {
                             .min_w_0()
                             .items_center(),
                     )
+                    // «⤢ авто» — сброс ширин таблицы панели, как у активной вкладки дока.
+                    .when_some(self.widths_reset.clone(), |this, (id, state)| {
+                        this.child(crate::table_persist::reset_button(id, &state))
+                    })
                     .when(crate::design::show_custom_window_controls(), |this| {
                         this.child(
                             MoonWindowFrame::detached_panel("detached-panel-window-controls", 0.0)
@@ -340,12 +350,15 @@ pub fn spawn(
     let spec = spec.clone();
     app.open_window(opts, move |window, cx| {
         crate::windowing::configure_shell_clear_color(window, cx);
+        // Кнопка «⤢ авто» заголовка окна — для панелей с ресайзабельной таблицей.
+        let mut widths_reset: Option<(&'static str, Entity<moon_ui::MoonDataTableState>)> = None;
         let content: AnyView = match spec.panel.as_str() {
             "Orders" => {
                 let p =
                     cx.new(|cx| OrdersPanel::new(backend.clone(), spec.group.clone(), window, cx));
                 // Открепление = контекст `:win` для ширин таблицы (своя раскладка на окно).
                 p.update(cx, |this, cx| this.mark_table_detached(cx));
+                widths_reset = Some(("orders-reset-widths-win", p.read(cx).table_state()));
                 p.into()
             }
             "Log" => cx
@@ -355,6 +368,7 @@ pub fn spawn(
                 let p =
                     cx.new(|cx| ReportPanel::new(backend.clone(), spec.group.clone(), window, cx));
                 p.update(cx, |this, cx| this.mark_table_detached(cx));
+                widths_reset = Some(("report-reset-widths-win", p.read(cx).table_state()));
                 p.into()
             }
             "Assets" => cx
@@ -385,6 +399,7 @@ pub fn spawn(
                 spec.group.clone(),
                 spec.panel.clone(),
                 content,
+                widths_reset,
                 window,
                 cx,
             )

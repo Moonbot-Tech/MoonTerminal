@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use moonproto::state::{AccountEvent, MarketHistorySizing, OrderEvent, SettingsEvent};
 use moonproto::{
     ClientConfig, ConnectConfig, Event, InitConfig, InitialStrategies, LifecycleEvent, MoonClient,
-    MoonEventSink, TransportMode,
+    MoonEventSink, ReportEvent, ReportHistoryDepth, ReportSyncRequest, TransportMode,
 };
 
 use super::assets::{build_assets, build_transfer_assets};
@@ -29,7 +29,7 @@ use super::{
     StrategyRow,
 };
 use crate::config::ServerConfig;
-use crate::db::ReportTx;
+use crate::db::{DbMsg, ReportTx};
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 
 use commands::drain_commands;
@@ -107,6 +107,35 @@ pub fn run(
     let _client_slot_guard = ClientSlotGuard {
         slot: client_slot.clone(),
     };
+
+    // Typed-реплика БД отчётов: заявляем catch-up сразу (лежит intent'ом — lib отправит
+    // после connect и САМА повторит после hard-reconnect). Курсор = max(newRecID)+1
+    // локальной реплики; 0 = реплика пуста → fresh со ВСЕЙ удержанной историей ядра
+    // (заменяет легаси-таблицу). Догонка идёт СТРАНИЦАМИ: следующая не запрашивается,
+    // пока writer не закоммитил и не ack'нул текущую (backpressure by design).
+    if server.feed.reports {
+        if let Some(sink) = reports {
+            let from = sink.next_cursor(server.uid);
+            let req = if from > 0 {
+                ReportSyncRequest::resume(from)
+            } else {
+                ReportSyncRequest::fresh(ReportHistoryDepth::All)
+            };
+            match client.reports().sync(req) {
+                Ok(_) => log::info!("отчёты: core={} sync запрошен (from_rec_id={from})", server.uid),
+                Err(e) => log::warn!("отчёты: core={} sync не запустился: {e:?}", server.uid),
+            }
+            // Открытые строки могли закрыться/удалиться в оффлайне НИЖЕ курсора —
+            // регистрируем их проверку (lib держит набор и повторяет на hard-reconnect;
+            // результаты придут обычными RowUpsert/RowDelete).
+            let open = sink.open_rows(server.uid);
+            if !open.is_empty() {
+                if let Err(e) = client.reports().check_open_rows(&open) {
+                    log::warn!("отчёты: core={} check_open_rows не ушёл: {e:?}", server.uid);
+                }
+            }
+        }
+    }
 
     // Рыночная роль ядра (задаётся координатором командой SetMarket).
     // is_provider — ретейним ли ВСЕ трейды биржи (subscribe_all_trades).
@@ -610,6 +639,62 @@ pub fn run(
                                 .unwrap_or(if d.is_alert_fire() { 22 } else { 0 }),
                             is_short: strat.map(|st| st.is_short()).unwrap_or(false),
                         });
+                    }
+                    // Typed-реплика БД отчётов: схема/строки/завершение catch-up →
+                    // SQLite-writer'у (он один владеет соединением на запись).
+                    Event::Report(rev) if server.feed.reports => {
+                        if let Some(sink) = reports {
+                            match rev {
+                                ReportEvent::Schema(s) => sink.send(DbMsg::Schema {
+                                    core_uid: server.uid,
+                                    schema: s.clone(),
+                                }),
+                                ReportEvent::RowUpsert(row) => sink.send(DbMsg::Upsert {
+                                    core_uid: server.uid,
+                                    core_name: server.name.clone(),
+                                    row: row.clone(),
+                                }),
+                                ReportEvent::RowDelete { rec_id } => sink.send(DbMsg::Delete {
+                                    core_uid: server.uid,
+                                    rec_id: *rec_id,
+                                }),
+                                ReportEvent::SyncStarted { request, .. } => log::info!(
+                                    "отчёты: core={} sync начат (from_rec_id={})",
+                                    server.uid,
+                                    request.from_rec_id,
+                                ),
+                                // Страница catch-up: writer применит транзакцией и сам
+                                // ack'нет (`page_applied`) после коммита — до этого lib
+                                // следующую страницу не запросит. `database_recreated`
+                                // writer тоже обрабатывает (wipe), lib рестартует сама.
+                                ReportEvent::SyncPage(page) => sink.send(DbMsg::Page {
+                                    core_uid: server.uid,
+                                    core_name: server.name.clone(),
+                                    page: page.clone(),
+                                    ack: client.reports(),
+                                }),
+                                ReportEvent::SyncComplete(done) => {
+                                    sink.send(DbMsg::SyncComplete {
+                                        core_uid: server.uid,
+                                        done: done.clone(),
+                                    });
+                                }
+                                ReportEvent::OpenRowsCheckStarted { rec_ids } => log::info!(
+                                    "отчёты: core={} проверка открытых строк начата ({} шт)",
+                                    server.uid,
+                                    rec_ids.len(),
+                                ),
+                                ReportEvent::OpenRowsCheckComplete { rec_ids } => log::info!(
+                                    "отчёты: core={} проверка открытых строк завершена ({} шт)",
+                                    server.uid,
+                                    rec_ids.len(),
+                                ),
+                                ReportEvent::SchemaRejected { reason } => log::error!(
+                                    "отчёты: core={} схема отвергнута: {reason}",
+                                    server.uid,
+                                ),
+                            }
+                        }
                     }
                     Event::ClosedSellOrderReport(r) if server.feed.reports => {
                         if let Some(tx_db) = reports {

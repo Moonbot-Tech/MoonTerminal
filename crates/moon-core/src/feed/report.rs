@@ -90,7 +90,7 @@ pub(super) fn send_close_report(
         m.and_then(|x| x.buydate).or(p.buydate),
         sql,
     ));
-    let _ = tx_db.send(ReportRow {
+    tx_db.legacy(ReportRow {
         core_uid: server.uid, // СТАБИЛЬНЫЙ uid, не рантайм-id
         core_name: server.name.clone(),
         db_id,

@@ -77,3 +77,32 @@ report.shown_top:
   ru: "показано (топ): %{n}"
   en: "shown (top): %{n}"
   es: "mostrado (top): %{n}"
+
+report.filter.emu:
+  ru: "Эмулятор"
+  en: "Emulator"
+  es: "Emulador"
+report.period.today:
+  ru: "Сегодня"
+  en: "Today"
+  es: "Hoy"
+report.period.yesterday:
+  ru: "Вчера"
+  en: "Yesterday"
+  es: "Ayer"
+report.period.week:
+  ru: "Неделя"
+  en: "Week"
+  es: "Semana"
+report.period.month:
+  ru: "Месяц"
+  en: "Month"
+  es: "Mes"
+report.period.year:
+  ru: "Год"
+  en: "Year"
+  es: "Año"
+report.cores_n:
+  ru: "Ядер: %{n}"
+  en: "Cores: %{n}"
+  es: "Núcleos: %{n}"

@@ -81,7 +81,8 @@ fn classify_value(v: &str) -> Option<Value> {
 
 /// Валиден ли lowercase-ключ как SQLite-идентификатор (защита от инъекции в
 /// ALTER/UPDATE — имя интерполируется в SQL без кавычек): `[a-z_][a-z0-9_]*`.
-fn valid_ident(name: &str) -> bool {
+/// Использует и typed-реплика ([`super::rep`]) для lowercase-имён схемы ядра.
+pub(super) fn valid_ident(name: &str) -> bool {
     let b = name.as_bytes();
     !b.is_empty()
         && (b[0] == b'_' || b[0].is_ascii_lowercase())

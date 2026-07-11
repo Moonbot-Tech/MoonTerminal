@@ -1,25 +1,25 @@
-//! Локальная SQLite-БД отчётов по закрытым ордерам — ПОЛНОЕ зеркало вашей
-//! Postgres-таблицы `orders` (те же имена колонок). PK `(core_uid, db_id)` ≈ ваш
-//! `(server_id, id)`: `db_id` — серверный row id; `core_uid` — наш СТАБИЛЬНЫЙ uid
-//! ядра (`ServerConfig.uid`).
+//! Локальная SQLite-БД отчётов Orders.
 //!
-//! Источники данных (терминал INSERT-SQL от ядра НЕ получает — есть только
-//! close-report CmdId=31 в форме `update Orders set …`):
-//!  - живая МОДЕЛЬ ордера (`snapshot().orders()` → `Order`, питается AllStatuses/
-//!    OrderStatus) — монета, сторона, цены, объёмы, плечо, стратегия, taskid,
-//!    даты open/sell-set/close (через feature `diagnostics`);
-//!  - close-report SQL — финальные closedate/sellprice/profit/sellreason/comment.
-//! Аналитические дельты (btc1hdelta, d5m, pump1h, signaltype, channel …) ядро
-//! терминалу не присылает — колонки в схеме есть (полное зеркало), но NULL.
+//! ОСНОВНОЙ путь — typed-реплика серверной БД (moonproto `Event::Report`, таблица
+//! `orders_rep`, см. [`rep`]): схема от ядра, upsert/delete по `newRecID`, догонка
+//! оффлайна с курсора, reconcile на `SyncComplete`. Аналитические поля (дельты/
+//! pump/signaltype…) приходят настоящими значениями.
+//!
+//! ЛЕГАСИ путь (deprecated в moonproto) — close-SQL `Event::ClosedSellOrderReport` →
+//! таблица `closed_sell_reports` (PK `(core_uid, db_id)`): жив только на переходный
+//! период; после первого полного sync ядра его легаси-строки вычищаются, опустевшая
+//! таблица сносится (маркер `legacy_dropped`), и поток игнорируется.
 //!
 //! Пишет ОДИН поток-writer; читает окно «Отчёты» отдельным соединением (WAL).
 
 mod parse;
+mod rep;
 
 pub use parse::parse_report_sql;
+pub use rep::{DbMsg, ReportSink};
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,9 +60,11 @@ pub struct ReportRow {
     pub sql: String,
 }
 
-pub type ReportTx = Sender<ReportRow>;
+/// Канал feed-потоков к writer'у: раньше — голый `Sender<ReportRow>`, теперь
+/// [`ReportSink`] (канал typed/легаси сообщений + стартовые курсоры per core).
+pub type ReportTx = ReportSink;
 
-/// Хэндл БД: канал записи + счётчик-генерация (растёт после КАЖДОЙ записи —
+/// Хэндл БД: канал записи + счётчик-генерация (растёт после записи —
 /// окно «Отчёты» по нему перезапрашивает данные без поллинга).
 pub struct ReportsHandle {
     pub tx: ReportTx,
@@ -127,13 +129,14 @@ const ALL_DB_COLUMNS: &[(&str, &str)] = &[
 ];
 
 /// Колонки и порядок для отображения в окне «Отчёты» (плюс заголовок/ширина —
-/// в самом окне). core_uid скрыт (служебный), db_id показываем как «ID».
+/// в самом окне). core_uid/newrecid скрыты (служебные); `id` — серверный row id
+/// (бывший легаси db_id).
 pub const DISPLAY_COLUMNS: &[&str] = &[
     "buydate",
     "closedate",
     "sellsetdate",
     "core_name",
-    "db_id",
+    "id",
     "taskid",
     "exorderid",
     "coin",
@@ -190,6 +193,20 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         [],
     )?;
 
+    // Легаси-таблица уже снесена после полного переезда на typed-реплику —
+    // не пересоздаём (CREATE IF NOT EXISTS вернул бы её из мёртвых).
+    let legacy_dropped: bool = conn
+        .query_row(
+            "SELECT value FROM app_meta WHERE key='legacy_dropped'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if legacy_dropped {
+        return Ok(());
+    }
+
     // Очень старая схема по рантайм-`server_id` — пересоздаём под core_uid.
     let has_old: bool = conn
         .query_row(
@@ -233,6 +250,18 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             )?;
         }
     }
+    // Индексы под горячие запросы окна «Отчёт»: дефолтный фильтр периода (closedate) и
+    // per-core вычистка/выборки. Легаси-БД бывает сотни МБ — без индекса каждый requery
+    // (а их триггерит КАЖДАЯ запись writer'а) сканировал таблицу целиком (CPU-спайки).
+    // Первое создание на большой базе занимает секунды — одноразово.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_csr_closedate ON closed_sell_reports(closedate)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_csr_core ON closed_sell_reports(core_uid)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -242,7 +271,9 @@ fn insert(conn: &Connection, row: &ReportRow) -> rusqlite::Result<()> {
     let emulator = row.emulator.map(|b| b as i64);
     // COALESCE: новое значение если есть, иначе НЕ затираем старое (важно, чтобы
     // повторный close-report не обнулял поля, взятые из модели ранее).
-    conn.execute(
+    // prepare_cached: writer может вставлять тысячи строк — компиляция SQL на каждую
+    // строку была узким местом (очередь копилась).
+    let mut stmt = conn.prepare_cached(
         "INSERT INTO closed_sell_reports
             (core_uid, core_name, db_id, taskid, exorderid, coin, isshort, buydate,
              sellsetdate, closedate, quantity, buyprice, sellprice, spentbtc, gainedbtc,
@@ -268,14 +299,33 @@ fn insert(conn: &Connection, row: &ReportRow) -> rusqlite::Result<()> {
             sellreason=COALESCE(excluded.sellreason,sellreason),
             comment=COALESCE(excluded.comment,comment),
             sql=excluded.sql, updated_ms=excluded.updated_ms",
-        rusqlite::params![
-            row.core_uid as i64, row.core_name, row.db_id, row.taskid, row.exorderid,
-            row.coin, isshort, row.buydate, row.sellsetdate, row.closedate, row.quantity,
-            row.buyprice, row.sellprice, row.spentbtc, row.gainedbtc, row.profitbtc,
-            row.lev, row.strategyid, emulator, row.status, row.sellreason, row.comment,
-            row.sql, ts,
-        ],
     )?;
+    stmt.execute(rusqlite::params![
+        row.core_uid as i64,
+        row.core_name,
+        row.db_id,
+        row.taskid,
+        row.exorderid,
+        row.coin,
+        isshort,
+        row.buydate,
+        row.sellsetdate,
+        row.closedate,
+        row.quantity,
+        row.buyprice,
+        row.sellprice,
+        row.spentbtc,
+        row.gainedbtc,
+        row.profitbtc,
+        row.lev,
+        row.strategyid,
+        emulator,
+        row.status,
+        row.sellreason,
+        row.comment,
+        row.sql,
+        ts,
+    ])?;
     Ok(())
 }
 
@@ -365,11 +415,13 @@ fn apply_extras(
     params.push(&ts);
     params.push(&uid);
     params.push(&row.db_id);
-    conn.execute(&sql, params.as_slice())?;
+    let mut stmt = conn.prepare_cached(&sql)?;
+    stmt.execute(params.as_slice())?;
     Ok(())
 }
 
-/// Имена колонок таблицы отчётов сейчас (для seed-кэша writer'а и рантайм-display).
+/// Имена колонок ЛЕГАСИ-таблицы (seed-кэш writer'а для авто-колонок close-SQL).
+/// Пустой набор, если таблица уже снесена.
 fn table_columns(conn: &Connection) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
     if let Ok(mut stmt) = conn.prepare("PRAGMA table_info(closed_sell_reports)") {
@@ -382,8 +434,13 @@ fn table_columns(conn: &Connection) -> std::collections::HashSet<String> {
     out
 }
 
+/// Ёмкость канала к writer'у: backpressure вместо OOM. ~16k сообщений ≈ десятки МБ
+/// пика; при полном канале feed-поток ядра ждёт writer (естественный дроссель догонки).
+const REPORT_QUEUE_CAP: usize = 16_384;
+
 pub fn spawn_writer() -> Option<ReportsHandle> {
-    let (tx, rx): (Sender<ReportRow>, Receiver<ReportRow>) = std::sync::mpsc::channel();
+    let (tx, rx): (std::sync::mpsc::SyncSender<DbMsg>, Receiver<DbMsg>) =
+        std::sync::mpsc::sync_channel(REPORT_QUEUE_CAP);
     let path = paths::reports_db_path();
     let conn = match Connection::open(&path) {
         Ok(c) => c,
@@ -396,31 +453,91 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
         log::error!("отчёты: init схемы не удался: {e}");
         return None;
     }
+    let cursors = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let open_rows = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut rep_state = match rep::init(&conn, cursors.clone(), open_rows.clone()) {
+        Ok(st) => st,
+        Err(e) => {
+            log::error!("отчёты: init typed-реплики не удался: {e}");
+            return None;
+        }
+    };
     let generation = Arc::new(AtomicU64::new(0));
     let gen_writer = generation.clone();
     if let Err(e) = std::thread::Builder::new()
         .name("reports-db".into())
         .spawn(move || {
             log::info!("отчёты: writer запущен ({})", path.display());
-            // Кэш известных колонок (растёт по мере авто-добавления новых полей ядра).
+            // Кэш известных ЛЕГАСИ-колонок (авто-добавление новых полей close-SQL).
             let mut known = table_columns(&conn);
-            while let Ok(row) = rx.recv() {
-                match insert(&conn, &row).and_then(|()| apply_extras(&conn, &mut known, &row)) {
+            // Батчим пачку сообщений в одну транзакцию: catch-up льёт тысячи строк,
+            // и autocommit на каждую (fsync) растянул бы догонку на минуты.
+            let mut thr_count: u64 = 0;
+            let mut thr_started = std::time::Instant::now();
+            loop {
+                let first = match rx.recv() {
+                    Ok(m) => m,
+                    Err(_) => break,
+                };
+                let mut batch = vec![first];
+                while batch.len() < 512 {
+                    match rx.try_recv() {
+                        Ok(m) => batch.push(m),
+                        Err(_) => break,
+                    }
+                }
+                thr_count += batch.len() as u64;
+                let txn = match conn.unchecked_transaction() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        log::error!("отчёты: transaction не открылась: {e}");
+                        continue;
+                    }
+                };
+                // ack страниц (`page_applied`) — ПОСЛЕ коммита (контракт flow-control:
+                // lib не запросит следующую страницу, пока эта не легла на диск).
+                let mut acks = Vec::new();
+                for msg in batch {
+                    apply_msg(&txn, &mut rep_state, &mut known, msg, &mut acks);
+                }
+                match txn.commit() {
                     Ok(()) => {
-                        gen_writer.fetch_add(1, Ordering::Relaxed);
+                        for (ack, page) in acks {
+                            if let Err(e) = ack.page_applied(&page) {
+                                log::warn!("отчёты(rep): page_applied не ушёл: {e:?}");
+                            }
+                        }
+                    }
+                    Err(e) => log::error!("отчёты: commit батча упал: {e}"),
+                }
+                // Легаси снесена этим батчем → одноразовый VACUUM (вне транзакции):
+                // возвращает диску сотни МБ старой таблицы. Блокирует только writer.
+                if rep_state.vacuum_pending {
+                    rep_state.vacuum_pending = false;
+                    let t = std::time::Instant::now();
+                    match conn.execute("VACUUM", []) {
+                        Ok(_) => log::info!(
+                            "отчёты: VACUUM после сноса легаси — {}с",
+                            t.elapsed().as_secs()
+                        ),
+                        Err(e) => log::warn!("отчёты: VACUUM не удался: {e}"),
+                    }
+                }
+                gen_writer.fetch_add(1, Ordering::Relaxed);
+                // Диагностика пропускной способности при плотном потоке (догонка):
+                // видно, успевает ли writer за входом (канал ограничен — не OOM).
+                let el = thr_started.elapsed();
+                if el >= Duration::from_secs(10) {
+                    if thr_count > 2_000 {
                         log::info!(
-                            "отчёт: {} ({}) db_id={} {} buy@{:?} {}",
-                            row.core_uid,
-                            row.core_name,
-                            row.db_id,
-                            row.coin.as_deref().unwrap_or("?"),
-                            row.buydate,
-                            row.profitbtc
-                                .map(|p| format!("{p:+.4}BTC"))
-                                .unwrap_or_default(),
+                            "отчёты: writer {} сообщений за {:.0}с (~{}/с)",
+                            thr_count,
+                            el.as_secs_f32(),
+                            (thr_count as f32 / el.as_secs_f32()) as u64,
                         );
                     }
-                    Err(e) => log::error!("отчёты: запись db_id={} упала: {e}", row.db_id),
+                    thr_count = 0;
+                    thr_started = std::time::Instant::now();
                 }
             }
             log::info!("отчёты: writer завершён");
@@ -429,7 +546,80 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
         log::error!("отчёты: не удалось запустить writer thread: {e}");
         return None;
     }
-    Some(ReportsHandle { tx, generation })
+    Some(ReportsHandle {
+        tx: ReportSink {
+            tx,
+            cursors,
+            open_rows,
+        },
+        generation,
+    })
+}
+
+/// Одно сообщение writer'а: typed-реплика или легаси close-SQL (в СВОЮ таблицу).
+/// Страницы кладут ack в `acks` — вызывающий шлёт `page_applied` после коммита.
+fn apply_msg(
+    conn: &Connection,
+    rep_state: &mut rep::RepState,
+    known: &mut std::collections::HashSet<String>,
+    msg: DbMsg,
+    acks: &mut Vec<(moonproto::MoonReports, std::sync::Arc<moonproto::ReportSyncPage>)>,
+) {
+    match msg {
+        DbMsg::Legacy(row) => {
+            // Легаси-поток игнорируем после сноса таблицы И для ядер с завершённым
+            // sync: их данные уже идут typed-потоком, легаси-вставка после вычистки
+            // давала дубль строки в читателе (реплика + легаси-копия).
+            if !rep_state.legacy_exists || rep_state.synced.contains(&row.core_uid) {
+                return;
+            }
+            match insert(conn, &row).and_then(|()| apply_extras(conn, known, &row)) {
+                Ok(()) => log::info!(
+                    "отчёт(легаси): {} ({}) db_id={} {} buy@{:?} {}",
+                    row.core_uid,
+                    row.core_name,
+                    row.db_id,
+                    row.coin.as_deref().unwrap_or("?"),
+                    row.buydate,
+                    row.profitbtc
+                        .map(|p| format!("{p:+.4}BTC"))
+                        .unwrap_or_default(),
+                ),
+                Err(e) => log::error!("отчёты: запись db_id={} упала: {e}", row.db_id),
+            }
+        }
+        DbMsg::Schema { core_uid, schema } => rep::apply_schema(conn, rep_state, core_uid, schema),
+        DbMsg::Upsert {
+            core_uid,
+            core_name,
+            row,
+        } => {
+            if let Err(e) = rep::apply_upsert(conn, rep_state, core_uid, &core_name, &row) {
+                log::error!(
+                    "отчёты(rep): upsert rec_id={} ядра {core_uid} упал: {e}",
+                    row.rec_id
+                );
+            }
+        }
+        DbMsg::Delete { core_uid, rec_id } => {
+            if let Err(e) = rep::apply_delete(conn, core_uid, rec_id) {
+                log::error!("отчёты(rep): delete rec_id={rec_id} ядра {core_uid} упал: {e}");
+            }
+        }
+        DbMsg::Page {
+            core_uid,
+            core_name,
+            page,
+            ack,
+        } => {
+            if rep::apply_page(conn, rep_state, core_uid, &core_name, &page) {
+                acks.push((ack, page));
+            }
+        }
+        DbMsg::SyncComplete { core_uid, done } => {
+            rep::apply_sync_complete(conn, rep_state, core_uid, &done);
+        }
+    }
 }
 
 // ============================================================================
@@ -458,11 +648,15 @@ pub enum SideFilter {
 
 #[derive(Debug, Clone, Default)]
 pub struct ReportFilter {
-    pub core_uid: Option<u64>,
+    /// Выбранные ядра (мультивыбор); пусто = все.
+    pub core_uids: Vec<u64>,
     pub date_from: Option<i64>,
     pub date_to: Option<i64>,
     pub coin: String,
     pub side: SideFilter,
+    /// Эмуляторные ордера: false (дефолт) — только реальные, true — только эмуляторные
+    /// (как галка «Эмулятор» отчёта MoonBot). NULL в колонке считается «реальный».
+    pub emulator: bool,
 }
 
 pub fn open_reader() -> Option<Connection> {
@@ -539,11 +733,24 @@ pub fn save_visible(conn: &Connection, cols: &[&str]) {
 }
 
 /// Рантайм-список колонок для отображения: известные (`DISPLAY_COLUMNS`) в
-/// каноничном порядке + авто-добавленные поля ядра в хвост (по алфавиту), минус
-/// служебные. Используется и для SELECT, и окном «Отчёт» (заголовки/видимость/меню).
+/// каноничном порядке + новые поля в хвост (по алфавиту), минус служебные.
+/// Набор — ОБЪЕДИНЕНИЕ typed-реплики и легаси-таблицы (переходный период: часть
+/// ядер уже на реплике, часть ещё пишет легаси; легаси `db_id` показываем как `id`).
 pub fn display_columns(conn: &Connection) -> Vec<String> {
-    const SERVICE: &[&str] = &["core_uid", "sql", "created_ms", "updated_ms"];
-    let have = table_columns(conn);
+    const SERVICE: &[&str] = &[
+        "core_uid",
+        "newrecid",
+        "db_id",
+        "sql",
+        "created_ms",
+        "updated_ms",
+    ];
+    let mut have = rep::table_cols(conn);
+    let legacy = table_columns(conn);
+    if legacy.contains("db_id") {
+        have.insert("id".to_string());
+    }
+    have.extend(legacy);
     let mut out: Vec<String> = DISPLAY_COLUMNS
         .iter()
         .filter(|c| have.contains(**c))
@@ -559,51 +766,157 @@ pub fn display_columns(conn: &Connection) -> Vec<String> {
     out
 }
 
-/// Валидируем ключ сортировки против рантайм-колонок (без инъекций).
-fn sort_column(cols: &[String], key: &str) -> String {
-    cols.iter()
-        .find(|c| c.as_str() == key)
-        .cloned()
-        .unwrap_or_else(|| "closedate".to_string())
+/// Источник чтения отчётов: таблица + её колонки + легаси-флаг. Читаем typed-реплику и
+/// (пока не снесена) легаси-таблицу РАЗДЕЛЬНЫМИ запросами — каждый со своим WHERE/
+/// ORDER/LIMIT, работают индексы — и сливаем в Rust. UNION ALL-подзапрос с NULL-
+/// проекцией SQLite не флаттенит: фильтр не проталкивался в ветки → полный скан
+/// легаси-БД в сотни МБ на каждый requery (замерено: ~400мс при «Сегодня»).
+/// Дубли при слиянии невозможны: строки ядра живут ровно в одной таблице (легаси
+/// синхронизированных ядер вычищен и их поток игнорируется).
+struct ReadSource {
+    table: &'static str,
+    cols: std::collections::HashSet<String>,
+    legacy: bool,
 }
 
-fn build_where(f: &ReportFilter) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+fn read_sources(conn: &Connection) -> Vec<ReadSource> {
+    let mut out = vec![ReadSource {
+        table: rep::TABLE,
+        cols: rep::table_cols(conn),
+        legacy: false,
+    }];
+    let legacy_cols = table_columns(conn);
+    if !legacy_cols.is_empty() {
+        out.push(ReadSource {
+            table: "closed_sell_reports",
+            cols: legacy_cols,
+            legacy: true,
+        });
+    }
+    out
+}
+
+/// SELECT-проекция источника на общий набор `cols`: своя колонка как есть, легаси
+/// `db_id` → `id`, отсутствующая → NULL.
+fn source_select(src: &ReadSource, cols: &[String]) -> String {
+    cols.iter()
+        .map(|c| {
+            if src.legacy && c == "id" && src.cols.contains("db_id") {
+                "db_id AS \"id\"".to_string()
+            } else if src.cols.contains(c) {
+                format!("\"{c}\"")
+            } else {
+                format!("NULL AS \"{c}\"")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Сравнение значений при слиянии сортированных источников (числа как f64, текст
+/// лексикографически; NULL обрабатывает вызывающий — всегда в хвост).
+fn cmp_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+    fn num(v: &Value) -> Option<f64> {
+        match v {
+            Value::Integer(i) => Some(*i as f64),
+            Value::Real(r) => Some(*r),
+            _ => None,
+        }
+    }
+    match (num(a), num(b)) {
+        (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+        _ => match (a, b) {
+            (Value::Text(x), Value::Text(y)) => x.cmp(y),
+            _ => std::cmp::Ordering::Equal,
+        },
+    }
+}
+
+/// Валидируем ключ сортировки против рантайм-колонок (без инъекций). Фолбэк —
+/// closedate, а до прихода схемы ядра (нет такой колонки) — newrecid (есть всегда).
+fn sort_column(cols: &[String], key: &str) -> String {
+    if let Some(c) = cols.iter().find(|c| c.as_str() == key) {
+        return c.clone();
+    }
+    if cols.iter().any(|c| c == "closedate") {
+        "closedate".to_string()
+    } else {
+        "newrecid".to_string()
+    }
+}
+
+/// Условия по колонкам ставим только на СУЩЕСТВУЮЩИЕ в источнике: пока схема ядра не
+/// пришла, у реплики может не быть closedate/coin/isshort/emulator — фильтр по
+/// отсутствующей колонке валил бы весь SELECT (нет колонки = нет и данных для условия).
+fn build_where(
+    f: &ReportFilter,
+    cols: &std::collections::HashSet<String>,
+) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    let has = |n: &str| cols.contains(n);
     let mut sql = String::from(" WHERE 1=1");
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    if let Some(uid) = f.core_uid {
-        sql.push_str(" AND core_uid = ?");
-        params.push(Box::new(uid as i64));
+    if !f.core_uids.is_empty() {
+        // Числа инлайним (инъекции нет), IN — под мультивыбор ядер.
+        let ids = f
+            .core_uids
+            .iter()
+            .map(|u| (*u as i64).to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        sql.push_str(&format!(" AND core_uid IN ({ids})"));
     }
-    if let Some(from) = f.date_from {
-        sql.push_str(" AND closedate IS NOT NULL AND closedate >= ?");
-        params.push(Box::new(from));
-    }
-    if let Some(to) = f.date_to {
-        sql.push_str(" AND closedate IS NOT NULL AND closedate <= ?");
-        params.push(Box::new(to));
+    if has("closedate") {
+        if let Some(from) = f.date_from {
+            sql.push_str(" AND closedate IS NOT NULL AND closedate >= ?");
+            params.push(Box::new(from));
+        }
+        if let Some(to) = f.date_to {
+            sql.push_str(" AND closedate IS NOT NULL AND closedate <= ?");
+            params.push(Box::new(to));
+        }
     }
     let coin = f.coin.trim();
-    if !coin.is_empty() {
+    if !coin.is_empty() && has("coin") {
         sql.push_str(" AND coin LIKE ?");
         params.push(Box::new(format!("%{}%", coin.to_uppercase())));
     }
-    match f.side {
-        SideFilter::All => {}
-        SideFilter::Long => sql.push_str(" AND isshort = 0"),
-        SideFilter::Short => sql.push_str(" AND isshort = 1"),
+    if has("isshort") {
+        match f.side {
+            SideFilter::All => {}
+            SideFilter::Long => sql.push_str(" AND isshort = 0"),
+            SideFilter::Short => sql.push_str(" AND isshort = 1"),
+        }
+    }
+    if has("emulator") {
+        sql.push_str(if f.emulator {
+            " AND COALESCE(emulator, 0) = 1"
+        } else {
+            " AND COALESCE(emulator, 0) = 0"
+        });
     }
     (sql, params)
 }
 
 /// Итог по ВСЕМУ фильтру (не по топ-N): (сумма profitbtc, число ордеров).
 pub fn query_totals(conn: &Connection, f: &ReportFilter) -> (f64, i64) {
-    let (where_sql, params) = build_where(f);
-    let sql = format!(
-        "SELECT COALESCE(SUM(profitbtc),0.0), COUNT(*) FROM closed_sell_reports{where_sql}"
-    );
-    let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-    conn.query_row(&sql, refs.as_slice(), |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap_or((0.0, 0))
+    let (mut sum, mut count) = (0.0f64, 0i64);
+    for src in read_sources(conn) {
+        let (where_sql, params) = build_where(f, &src.cols);
+        let profit = if src.cols.contains("profitbtc") {
+            "COALESCE(SUM(profitbtc),0.0)"
+        } else {
+            "0.0"
+        };
+        let sql = format!("SELECT {profit}, COUNT(*) FROM {}{where_sql}", src.table);
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+        if let Ok((s, c)) = conn.query_row(&sql, refs.as_slice(), |r| {
+            Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)?))
+        }) {
+            sum += s;
+            count += c;
+        }
+    }
+    (sum, count)
 }
 
 /// Топ-`limit` отчётов по фильтру и сортировке. Возвращает все DISPLAY_COLUMNS.
@@ -614,36 +927,66 @@ pub fn query_reports(
     desc: bool,
     limit: usize,
 ) -> ReportTable {
-    let (where_sql, mut params) = build_where(f);
     let cols = display_columns(conn);
     let col = sort_column(&cols, sort_key);
+    let sort_ix = cols.iter().position(|c| *c == col);
     let dir = if desc { "DESC" } else { "ASC" };
-    let select = cols.join(", ");
-    // `core_uid` тянем первой (служебной) колонкой — в `cols` не попадает, идёт в `core_uids`.
-    let sql = format!(
-        "SELECT core_uid, {select} FROM closed_sell_reports{where_sql}
-         ORDER BY {col} IS NULL, {col} {dir}, closedate DESC LIMIT ?"
-    );
-    params.push(Box::new(limit as i64));
-    let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
 
-    let mut rows = Vec::new();
-    let mut core_uids = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(&sql) {
-        let n = cols.len();
-        if let Ok(mapped) = stmt.query_map(refs.as_slice(), |r| {
-            let core_uid = r.get::<_, i64>(0)? as u64;
-            let mut v = Vec::with_capacity(n);
-            for i in 0..n {
-                v.push(r.get::<_, Value>(i + 1)?);
-            }
-            Ok((core_uid, v))
-        }) {
-            for (uid, row) in mapped.flatten() {
-                core_uids.push(uid);
-                rows.push(row);
+    // Топ-N с КАЖДОГО источника своим запросом (индексы работают), слияние ниже.
+    let mut merged: Vec<(u64, Vec<Value>)> = Vec::new();
+    for src in read_sources(conn) {
+        let (where_sql, mut params) = build_where(f, &src.cols);
+        let select = source_select(&src, &cols);
+        // Сортируем на стороне SQL только если колонка есть у источника (alias `id`
+        // у легаси виден в ORDER BY); иначе порядок неважен — доупорядочит слияние.
+        let sortable = src.cols.contains(&col) || (src.legacy && col == "id");
+        let order = if sortable {
+            format!("\"{col}\" IS NULL, \"{col}\" {dir}")
+        } else {
+            "1".to_string()
+        };
+        let sql = format!(
+            "SELECT core_uid, {select} FROM {}{where_sql} ORDER BY {order} LIMIT ?",
+            src.table
+        );
+        params.push(Box::new(limit as i64));
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+        if let Ok(mut stmt) = conn.prepare(&sql) {
+            let n = cols.len();
+            if let Ok(mapped) = stmt.query_map(refs.as_slice(), |r| {
+                let core_uid = r.get::<_, i64>(0)? as u64;
+                let mut v = Vec::with_capacity(n);
+                for i in 0..n {
+                    v.push(r.get::<_, Value>(i + 1)?);
+                }
+                Ok((core_uid, v))
+            }) {
+                merged.extend(mapped.flatten());
             }
         }
+    }
+
+    // Слияние: NULL всегда в хвост (как «{col} IS NULL» в SQL), затем направление.
+    merged.sort_by(|a, b| {
+        let va = sort_ix.and_then(|i| a.1.get(i)).unwrap_or(&Value::Null);
+        let vb = sort_ix.and_then(|i| b.1.get(i)).unwrap_or(&Value::Null);
+        match (matches!(va, Value::Null), matches!(vb, Value::Null)) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            _ => {
+                let o = cmp_values(va, vb);
+                if desc { o.reverse() } else { o }
+            }
+        }
+    });
+    merged.truncate(limit);
+
+    let mut rows = Vec::with_capacity(merged.len());
+    let mut core_uids = Vec::with_capacity(merged.len());
+    for (uid, row) in merged {
+        core_uids.push(uid);
+        rows.push(row);
     }
     ReportTable {
         cols,
@@ -653,16 +996,26 @@ pub fn query_reports(
 }
 
 pub fn distinct_cores(conn: &Connection) -> Vec<(u64, String)> {
-    let mut out = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT core_uid, core_name FROM closed_sell_reports
-         GROUP BY core_uid ORDER BY MAX(updated_ms) DESC",
-    ) {
-        if let Ok(rows) = stmt.query_map([], |r| {
-            Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?))
-        }) {
-            for row in rows.flatten() {
-                out.push(row);
+    let mut out: Vec<(u64, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for src in read_sources(conn) {
+        let order = if src.legacy {
+            "MAX(COALESCE(updated_ms, 0))"
+        } else {
+            "MAX(newrecid)"
+        };
+        if let Ok(mut stmt) = conn.prepare(&format!(
+            "SELECT core_uid, core_name FROM {} GROUP BY core_uid ORDER BY {order} DESC",
+            src.table
+        )) {
+            if let Ok(rows) = stmt.query_map([], |r| {
+                Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?))
+            }) {
+                for (uid, name) in rows.flatten() {
+                    if seen.insert(uid) {
+                        out.push((uid, name));
+                    }
+                }
             }
         }
     }
@@ -717,6 +1070,85 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe - 719_468
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Переходный читатель: строки из ЛЕГАСИ-таблицы и typed-реплики видны вместе
+    /// (UNION ALL), db_id легаси отдаётся как `id`; после SyncComplete последнего
+    /// легаси-ядра таблица сносится и читатель живёт на одной реплике.
+    #[test]
+    fn union_reader_and_legacy_drop() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let cursors = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let open_rows = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let mut st = rep::init(&conn, cursors, open_rows).unwrap();
+
+        // Легаси-строка ядра 1.
+        let row = ReportRow {
+            core_uid: 1,
+            core_name: "BB1".into(),
+            db_id: 42,
+            coin: Some("BTCUSDT".into()),
+            profitbtc: Some(0.5),
+            closedate: Some(1_780_000_000),
+            ..Default::default()
+        };
+        insert(&conn, &row).unwrap();
+
+        // Строка реплики ядра 2 (колонки — как их дорастила бы схема ядра).
+        for ddl in [
+            "ALTER TABLE orders_rep ADD COLUMN coin TEXT",
+            "ALTER TABLE orders_rep ADD COLUMN profitbtc REAL",
+            "ALTER TABLE orders_rep ADD COLUMN closedate INTEGER",
+            "ALTER TABLE orders_rep ADD COLUMN id INTEGER",
+        ] {
+            conn.execute(ddl, []).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO orders_rep (core_uid, core_name, newrecid, coin, profitbtc, closedate, id)
+             VALUES (2, 'Rep', 7, 'ETHUSDT', 1.5, 1780000100, 99)",
+            [],
+        )
+        .unwrap();
+
+        let cols = display_columns(&conn);
+        assert!(cols.iter().any(|c| c == "id"), "cols: {cols:?}");
+        assert!(!cols.iter().any(|c| c == "db_id" || c == "newrecid"));
+
+        let t = query_reports(&conn, &ReportFilter::default(), "closedate", true, 10);
+        assert_eq!(t.rows.len(), 2);
+        assert!(t.core_uids.contains(&1) && t.core_uids.contains(&2));
+        // Легаси db_id виден в колонке id.
+        let id_ix = t.cols.iter().position(|c| c == "id").unwrap();
+        let legacy_row = t.core_uids.iter().position(|u| *u == 1).unwrap();
+        assert_eq!(t.rows[legacy_row][id_ix], Value::Integer(42));
+
+        let (profit, count) = query_totals(&conn, &ReportFilter::default());
+        assert_eq!(count, 2);
+        assert!((profit - 2.0).abs() < 1e-9);
+
+        // SyncComplete ядра 1 → его легаси-строки вычищены; таблица опустела → DROP.
+        let done = moonproto::ReportSyncComplete {
+            ticket: moonproto::ReportSyncTicket { sync_id: 1 },
+            page_count: 0,
+            total_rows: 0,
+            max_rec_id: 10,
+            next_from_rec_id: 11,
+        };
+        rep::apply_sync_complete(&conn, &mut st, 1, &done);
+        let legacy_left = table_columns(&conn);
+        assert!(legacy_left.is_empty(), "легаси-таблица должна быть снесена");
+        let t = query_reports(&conn, &ReportFilter::default(), "closedate", true, 10);
+        assert_eq!(t.rows.len(), 1);
+        assert_eq!(t.core_uids, vec![2]);
+        // init_db больше не воскрешает легаси (маркер legacy_dropped).
+        init_db(&conn).unwrap();
+        assert!(table_columns(&conn).is_empty());
+    }
 }
 
 fn civil_from_days(z: i64) -> (i64, i64, i64) {
