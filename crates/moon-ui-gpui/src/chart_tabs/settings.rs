@@ -303,20 +303,29 @@ impl ChartTabs {
 
     /// Применить настройки отображения свечей (и X-масштаб окна-источника, если задан)
     /// ко ВСЕМ вкладкам/окнам группы (кнопка ⧉ попапа ❚) + обновить глобальные дефолты —
-    /// новые вкладки/окна наследуют.
+    /// новые вкладки/окна наследуют. `include_main` — как у ⚙: Main трогаем ТОЛЬКО если
+    /// попап открыт на нём; иначе Main пришпиливается к своему текущему виду (глобальный
+    /// дефолт ниже меняется — без пришпиливания Main «поехал» бы через фолбэк).
     pub(super) fn apply_candle_view_to_all(
         &mut self,
         cfg: moon_core::market::CandleViewCfg,
         x_ppm: Option<f32>,
+        include_main: bool,
         cx: &mut Context<Self>,
     ) {
-        self.main.update(cx, |s, c| {
-            s.set_candle_view(Some(cfg), c);
-            if x_ppm.is_some() {
-                s.set_x_ppm(x_ppm, true, c);
-            }
-        });
-        self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| s.candle_view = Some(cfg));
+        if include_main {
+            self.main.update(cx, |s, c| {
+                s.set_candle_view(Some(cfg), c);
+                if x_ppm.is_some() {
+                    s.set_x_ppm(x_ppm, true, c);
+                }
+            });
+            self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| s.candle_view = Some(cfg));
+        } else if self.main.read(cx).candle_view().is_none() {
+            let pin = self.backend.read(cx).layout.candle_view;
+            self.main.update(cx, |s, c| s.set_candle_view(Some(pin), c));
+            self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| s.candle_view = Some(pin));
+        }
         let targets: Vec<(u32, ChartBucket, Entity<AddChartStack>)> = self
             .add
             .iter()
@@ -410,7 +419,8 @@ impl ChartTabs {
                 mine.into_iter().map(|(_, c, x)| (c, x)).collect()
             });
         for (cfg, x_ppm) in candle_reqs {
-            self.apply_candle_view_to_all(cfg, x_ppm, cx);
+            // Запрос из выносного окна — Main не трогаем (как ⚙ с include_main=false).
+            self.apply_candle_view_to_all(cfg, x_ppm, false, cx);
         }
         let reqs: Vec<crate::ChartApplyAll> = self.backend.update(cx, |b, _| {
             let (mine, rest): (Vec<_>, Vec<_>) =
@@ -478,7 +488,9 @@ impl super::candle_popup::CandlePopupHost for ChartTabs {
             .chart_x_ppm_by_group
             .get(&self.group)
             .copied();
-        self.apply_candle_view_to_all(cfg, x_ppm, cx);
+        // Main получает копию только когда попап открыт на нём (симметрия с ⚙).
+        let include_main = matches!(self.active, Tab::Main);
+        self.apply_candle_view_to_all(cfg, x_ppm, include_main, cx);
     }
 }
 

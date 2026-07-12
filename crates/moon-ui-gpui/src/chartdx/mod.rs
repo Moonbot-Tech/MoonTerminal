@@ -328,6 +328,8 @@ struct PaneRender {
     /// Видимые уровни стакана — CPU-копия для подписи количества под курсором и у sell-линий.
     /// Наполняется при заливке стакана (`prepare`), пусто если стакан выключен.
     orderbook_levels: Vec<moon_core::data::BookDepthPoint>,
+    /// Живые лучшие (bid, ask) книги — границы трёхцветного фона зоны стакана.
+    book_best: Option<(f32, f32)>,
     /// Камера X для own-pass: эпоха времени, поле справа (доля «будущего»), флаг follow и
     /// последняя КВАНТОВАННАЯ пиксель-позиция правого края. Callback двигает камеру по этим
     /// полям на каждый present (vblank, целопиксельно) — живой скролл без отдельного таймера.
@@ -425,6 +427,7 @@ impl PaneRender {
             prospective_usd: None,
             label_placed: Vec::new(),
             orderbook_levels: Vec::new(),
+            book_best: None,
             epoch_ms: 0.0,
             right_margin_frac: 0.10,
             follow: false,

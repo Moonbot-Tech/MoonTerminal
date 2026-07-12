@@ -416,6 +416,10 @@ chart.candles.neutral:
   ru: "Нейтральный цвет"
   en: "Neutral color"
   es: "Color neutro"
+chart.candles.colors_hint:
+  ru: "Цвета свечей — в Настройках → «Интерфейс» (общие для всех окон)"
+  en: "Candle colors — Settings → Interface (shared by all windows)"
+  es: "Colores de velas — Ajustes → Interfaz (comunes a todas las ventanas)"
 chart.layout.orderbook:
   ru: "Стакан"
   en: "Order book"

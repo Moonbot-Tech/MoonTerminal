@@ -18,6 +18,10 @@ struct BookStyle {
     bid: vec4<f32>,
     ask: vec4<f32>,
     level: vec4<f32>,
+    bg_ask: vec4<f32>,
+    bg_bid: vec4<f32>,
+    // x = цена лучшего ask, y = цена лучшего bid, z = есть книга (0/1).
+    edges: vec4<f32>,
 };
 
 struct Level {
@@ -105,6 +109,18 @@ fn book_bg_vertex(@builtin(vertex_index) vid: u32) -> PlainOut {
 }
 
 @fragment
-fn book_bg_fragment(_in: PlainOut) -> @location(0) vec4<f32> {
+fn book_bg_fragment(in: PlainOut) -> @location(0) vec4<f32> {
+    // Трёхцветный фон: выше лучшего ask / щель спреда / ниже лучшего bid.
+    if (bs.edges.z > 0.5) {
+        let base = cv.bounds.y + cv.bounds.w;
+        let ask_y = base - (bs.edges.x - cv.view_price0) * cv.price_to_px;
+        let bid_y = base - (bs.edges.y - cv.view_price0) * cv.price_to_px;
+        if (in.pos.y < ask_y) {
+            return vec4<f32>(bs.bg_ask.rgb, 1.0);
+        }
+        if (in.pos.y > bid_y) {
+            return vec4<f32>(bs.bg_bid.rgb, 1.0);
+        }
+    }
     return vec4<f32>(bs.book_bg.rgb, 1.0);
 }

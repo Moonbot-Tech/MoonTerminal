@@ -19,7 +19,13 @@ pub(super) struct Iface {
     cross: Entity<MoonColorPickerState>,
     cross_alpha: Entity<MoonSliderState>,
     cross_thickness: Entity<MoonSliderState>,
+    candle_up: Entity<MoonColorPickerState>,
+    candle_down: Entity<MoonColorPickerState>,
+    candle_neutral: Entity<MoonColorPickerState>,
+    candle_fill_alpha: Entity<MoonSliderState>,
     book_bg: Entity<MoonColorPickerState>,
+    book_bg_ask: Entity<MoonColorPickerState>,
+    book_bg_bid: Entity<MoonColorPickerState>,
     book_bid: Entity<MoonColorPickerState>,
     book_ask: Entity<MoonColorPickerState>,
     book_level_alpha: Entity<MoonSliderState>,
@@ -130,6 +136,40 @@ pub(super) fn build(
             4.0,
             0.1,
         ),
+        candle_up: color_field(
+            backend,
+            window,
+            cx,
+            is_light,
+            |t| t.candle_up,
+            |t, v| t.candle_up = v,
+        ),
+        candle_down: color_field(
+            backend,
+            window,
+            cx,
+            is_light,
+            |t| t.candle_down,
+            |t, v| t.candle_down = v,
+        ),
+        candle_neutral: color_field(
+            backend,
+            window,
+            cx,
+            is_light,
+            |t| t.candle_neutral,
+            |t, v| t.candle_neutral = v,
+        ),
+        candle_fill_alpha: num_field(
+            backend,
+            cx,
+            is_light,
+            |t| t.candle_fill_alpha,
+            |t, v| t.candle_fill_alpha = v,
+            0.0,
+            1.0,
+            0.01,
+        ),
         book_bg: color_field(
             backend,
             window,
@@ -137,6 +177,22 @@ pub(super) fn build(
             is_light,
             |t| t.book_bg,
             |t, v| t.book_bg = v,
+        ),
+        book_bg_ask: color_field(
+            backend,
+            window,
+            cx,
+            is_light,
+            |t| t.book_bg_ask,
+            |t, v| t.book_bg_ask = v,
+        ),
+        book_bg_bid: color_field(
+            backend,
+            window,
+            cx,
+            is_light,
+            |t| t.book_bg_bid,
+            |t, v| t.book_bg_bid = v,
         ),
         book_bid: color_field(
             backend,
@@ -209,9 +265,27 @@ impl SettingsView {
                 cx,
             ))
             .child(separator(p, cx))
+            // Свечи (единые цвета для всех окон, per-тема; включение/режим — в попапе ❚)
+            .child(section(&t!("iface.sec_candles"), p, cx))
+            .child(color_row(&t!("iface.candle_up"), &i.candle_up, p, cx))
+            .child(color_row(&t!("iface.candle_down"), &i.candle_down, p, cx))
+            .child(color_row(
+                &t!("iface.candle_neutral"),
+                &i.candle_neutral,
+                p,
+                cx,
+            ))
+            .child(slider_row(
+                &t!("iface.candle_fill_alpha"),
+                &i.candle_fill_alpha,
+                cx,
+            ))
+            .child(separator(p, cx))
             // Стакан
             .child(section(&t!("iface.sec_book"), p, cx))
             .child(color_row(&t!("iface.book_bg"), &i.book_bg, p, cx))
+            .child(color_row(&t!("iface.book_bg_ask"), &i.book_bg_ask, p, cx))
+            .child(color_row(&t!("iface.book_bg_bid"), &i.book_bg_bid, p, cx))
             .child(color_row(&t!("iface.book_bid"), &i.book_bid, p, cx))
             .child(color_row(&t!("iface.book_ask"), &i.book_ask, p, cx))
             .child(slider_row(

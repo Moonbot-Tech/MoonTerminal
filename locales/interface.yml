@@ -58,14 +58,42 @@ iface.cross_thickness:
   ru: "Толщина линий"
   en: "Line thickness"
   es: "Grosor de líneas"
+iface.sec_candles:
+  ru: "Свечи"
+  en: "Candles"
+  es: "Velas"
+iface.candle_up:
+  ru: "Растущая свеча"
+  en: "Up candle"
+  es: "Vela alcista"
+iface.candle_down:
+  ru: "Падающая свеча"
+  en: "Down candle"
+  es: "Vela bajista"
+iface.candle_neutral:
+  ru: "Нейтральный цвет (зона трейдов)"
+  en: "Neutral color (trade zone)"
+  es: "Color neutro (zona de trades)"
+iface.candle_fill_alpha:
+  ru: "Непрозрачность тела свечи"
+  en: "Candle body opacity"
+  es: "Opacidad del cuerpo de vela"
 iface.sec_book:
   ru: "Стакан"
   en: "Order book"
   es: "Libro de órdenes"
 iface.book_bg:
-  ru: "Фон стакана"
-  en: "Order book background"
-  es: "Fondo del libro"
+  ru: "Фон спреда (между bid и ask)"
+  en: "Spread background (between bid/ask)"
+  es: "Fondo del spread (entre bid y ask)"
+iface.book_bg_ask:
+  ru: "Фон зоны ask (выше лучшего ask)"
+  en: "Ask zone background"
+  es: "Fondo de la zona ask"
+iface.book_bg_bid:
+  ru: "Фон зоны bid (ниже лучшего bid)"
+  en: "Bid zone background"
+  es: "Fondo de la zona bid"
 iface.book_bid:
   ru: "Цвет покупок (bid)"
   en: "Bid color"

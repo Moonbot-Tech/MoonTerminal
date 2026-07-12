@@ -396,11 +396,18 @@ pub struct ReadoutRect {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BookStyle {
+    /// Фон щели спреда (между лучшими bid/ask); при отсутствии книги — вся зона.
     pub book_bg: [f32; 4],
     pub bid: [f32; 4],
     pub ask: [f32; 4],
     /// x = level-line opacity, y = level-line height in physical px.
     pub level: [f32; 4],
+    /// Фон ask-половины зоны (выше лучшего ask).
+    pub bg_ask: [f32; 4],
+    /// Фон bid-половины зоны (ниже лучшего bid).
+    pub bg_bid: [f32; 4],
+    /// x = цена лучшего ask, y = цена лучшего bid, z = есть книга (0/1).
+    pub edges: [f32; 4],
 }
 
 impl Default for BookStyle {
@@ -410,7 +417,23 @@ impl Default for BookStyle {
             bid: [0.1294, 0.5137, 0.1922, 1.0],
             ask: [1.0, 0.4980, 0.3137, 1.0],
             level: [0.5, 1.5, 0.0, 0.0],
+            bg_ask: [0.0745, 0.0784, 0.0863, 1.0],
+            bg_bid: [0.0745, 0.0784, 0.0863, 1.0],
+            edges: [0.0; 4],
         }
+    }
+}
+
+impl BookStyle {
+    /// Равенство БЕЗ живых границ bid/ask: смена цветов/толщин требует немедленной
+    /// перепечки стакана, а движение границ (каждый тик книги) — только throttled-бейк.
+    pub fn eq_ignore_edges(&self, other: &Self) -> bool {
+        self.book_bg == other.book_bg
+            && self.bid == other.bid
+            && self.ask == other.ask
+            && self.level == other.level
+            && self.bg_ask == other.bg_ask
+            && self.bg_bid == other.bg_bid
     }
 }
 

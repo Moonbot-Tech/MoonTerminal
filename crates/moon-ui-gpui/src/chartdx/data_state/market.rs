@@ -614,22 +614,6 @@ impl ChartDataState {
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }
-            let next_book_style = BookStyle {
-                book_bg: rgb4(self.theme.book_bg),
-                bid: rgb4(self.theme.book_bid),
-                ask: rgb4(self.theme.book_ask),
-                level: [
-                    self.theme.book_level_alpha.clamp(0.0, 1.0),
-                    self.theme.book_level_width.max(0.0),
-                    0.0,
-                    0.0,
-                ],
-            };
-            if pr.book_style != next_book_style {
-                pr.book_style = next_book_style;
-                pr.gpu_prepare_dirty = true;
-                pixels_changed = true;
-            }
             // Флаг стакана в pane (для гейта угловой подписи в render_state/text). В режиме
             // «только стакан» стакан принудительно включён (даже если галка «Стакан» снята).
             pr.orderbook_only = self.orderbook_only;
@@ -653,6 +637,8 @@ impl ChartDataState {
             } else {
                 source.with_orderbook_view(pane.core, &pane.market, |data| {
                     if let Some((book, book_rev)) = data {
+                        // Живые границы книги — для трёхцветного фона зоны (ask/спред/bid).
+                        pr.book_best = book.best_bid_ask();
                         let half = pane.view.render_range.max(1e-9) * 0.5;
                         let (lo, hi) = (
                             pane.view.render_center - half,
@@ -700,16 +686,44 @@ impl ChartDataState {
                                 pr.orderbook_view.bounds
                             ));
                         }
-                    } else if pr.last_book_rev != u64::MAX {
-                        pr.layers.set_orderbook(Vec::new());
-                        pr.orderbook_levels.clear();
-                        pr.last_book_rev = u64::MAX;
-                        pr.last_book_lo = f32::NAN;
-                        pr.last_book_hi = f32::NAN;
-                        pr.gpu_prepare_dirty = true;
-                        pixels_changed = true;
+                    } else {
+                        pr.book_best = None;
+                        if pr.last_book_rev != u64::MAX {
+                            pr.layers.set_orderbook(Vec::new());
+                            pr.orderbook_levels.clear();
+                            pr.last_book_rev = u64::MAX;
+                            pr.last_book_lo = f32::NAN;
+                            pr.last_book_hi = f32::NAN;
+                            pr.gpu_prepare_dirty = true;
+                            pixels_changed = true;
+                        }
                     }
                 });
+            }
+            // Стиль стакана — ПОСЛЕ чтения книги: несёт живые границы bid/ask для
+            // трёхцветного фона (выше ask / щель спреда / ниже bid).
+            let book_edges = pr.book_best.filter(|_| orderbook_on);
+            let next_book_style = BookStyle {
+                book_bg: rgb4(self.theme.book_bg),
+                bid: rgb4(self.theme.book_bid),
+                ask: rgb4(self.theme.book_ask),
+                level: [
+                    self.theme.book_level_alpha.clamp(0.0, 1.0),
+                    self.theme.book_level_width.max(0.0),
+                    0.0,
+                    0.0,
+                ],
+                bg_ask: rgb4(self.theme.book_bg_ask),
+                bg_bid: rgb4(self.theme.book_bg_bid),
+                edges: match book_edges {
+                    Some((bid, ask)) => [ask, bid, 1.0, 0.0],
+                    None => [0.0; 4],
+                },
+            };
+            if pr.book_style != next_book_style {
+                pr.book_style = next_book_style;
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
             }
             let edge_rel = view_time0
                 + (chart_area.w + glass_w) / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);

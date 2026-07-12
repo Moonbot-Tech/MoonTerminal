@@ -145,6 +145,10 @@ impl OrderBookLayer {
         {
             tex.dirty = true;
         }
+        // Живые границы bid/ask (edges) двигаются каждым тиком книги — они инвалидируют
+        // бейк только через throttled-dirty выше; НЕМЕДЛЕННУЮ перепечку требуют лишь
+        // цвета/толщины (eq_ignore_edges) и Y-трансформ.
+        let style_hard_changed = !style.eq_ignore_edges(&tex.last_style);
 
         // BAKE: фон+бары в текстуру (texture-local view). Book data may be throttled, but
         // camera/price-transform changes from user pan/zoom must bake immediately; otherwise
@@ -152,7 +156,7 @@ impl OrderBookLayer {
         let now = Instant::now();
         let transform_changed = tex.last_price_to_px != view.price_to_px
             || tex.last_view_price0 != view.view_price0
-            || tex.last_style != *style;
+            || style_hard_changed;
         let book_data_due = tex.dirty
             && tex
                 .last_bake_at
@@ -192,6 +196,8 @@ impl OrderBookLayer {
                 context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 context.VSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
                 context.VSSetConstantBuffers(1, Some(&[Some(pipe.style_cb.clone())]));
+                // PS фона считает границы зон ask/bid из цен (edges) через Y-трансформ view.
+                context.PSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
                 context.PSSetConstantBuffers(1, Some(&[Some(pipe.style_cb.clone())]));
                 context.OMSetBlendState(None, None, 0xFFFFFFFF);
                 // Фон зоны (всегда, даже при пустой книге) — opaque book_bg.

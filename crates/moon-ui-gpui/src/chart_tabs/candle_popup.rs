@@ -3,8 +3,8 @@
 //! Persist — спек вкладки в charts.json (`ChartTabSpec::candle_view`); вкладки без своего
 //! значения следуют глобальному дефолту `layout.candle_view`. Кнопка ⧉ распространяет
 //! набор на все вкладки/окна (как «применить ко всем» у ⚙) и обновляет глобальный дефолт.
-//! Все контролы stateless (сегменты/чекбоксы/свотчи). Нейтральный цвет — в тему чарта
-//! активного режима (theme.toml `candle_neutral`, общий).
+//! Все контролы stateless (сегменты/чекбоксы). Цвета свечей (up/down/нейтральный)
+//! редактируются в Настройках → «Интерфейс» (theme.toml, общие для всех окон).
 
 use gpui::*;
 use moon_core::market::candles::{
@@ -44,16 +44,6 @@ const MODES: [u8; 4] = [
 const ZONES: [u16; 7] = [0, 1, 2, 3, 5, 10, 20];
 
 const OUTLINES: [u8; 3] = [1, 2, 3];
-
-/// Пресеты нейтрального цвета зоны трейдов (sRGB).
-const NEUTRALS: [[u8; 3]; 6] = [
-    [128, 128, 128],
-    [90, 90, 90],
-    [170, 170, 170],
-    [96, 125, 160],
-    [150, 140, 90],
-    [120, 100, 140],
-];
 
 /// Ширина сценового попапа (лог. px): самый широкий ряд — зона (7 сегментов × 42) + поля/рамка.
 pub(super) fn content_width(cx: &App) -> Pixels {
@@ -152,7 +142,6 @@ fn render_candle_popup<T: CandlePopupHost>(
     id: &str,
     entity: Entity<T>,
     cfg: CandleViewCfg,
-    neutral: [u8; 3],
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -308,50 +297,13 @@ fn render_candle_popup<T: CandlePopupHost>(
                 write_cfg(&entity, app, |c| c.neutral_in_zone = v);
             })
     };
-    // Свотчи нейтрального цвета: пишут в тему чарта АКТИВНОГО режима + сохраняют theme.toml
-    // (цвета — общие для всех чартов, как остальная тема).
-    let neutral_swatches = h_flex()
-        .items_center()
-        .gap(design::ui_px(cx, 6.0))
-        .child(
-            div()
-                .flex_1()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text))
-                .child(t!("chart.candles.neutral").to_string()),
-        )
-        .children(NEUTRALS.iter().enumerate().map(|(i, c)| {
-            let color = *c;
-            let selected = color == neutral;
-            let entity = entity.clone();
-            let is_light = p.is_light();
-            div()
-                .id(SharedString::from(format!("{id}-neutral-{i}")))
-                .w(px(16.0))
-                .h(px(16.0))
-                .rounded(px(3.0))
-                .bg(gpui::rgb(
-                    ((color[0] as u32) << 16) | ((color[1] as u32) << 8) | color[2] as u32,
-                ))
-                .border_1()
-                .border_color(rgb(if selected { p.blue } else { p.border }))
-                .cursor_pointer()
-                .on_mouse_down(MouseButton::Left, move |_, _w, app| {
-                    entity.update(app, |this, cx| {
-                        this.backend().clone().update(cx, |b, bcx| {
-                            let theme = b.config.theme.get_mut(is_light);
-                            if theme.candle_neutral != color {
-                                theme.candle_neutral = color;
-                                if let Err(e) = b.config.theme.save() {
-                                    log::warn!("theme.toml save failed: {e:#}");
-                                }
-                                bcx.notify();
-                            }
-                        });
-                    });
-                    app.stop_propagation();
-                })
-        }));
+    // Цвета свечей (up/down/нейтральный) редактируются в Настройках → «Интерфейс»
+    // (тема одна на все окна и хранится в theme.toml со всеми цветами) — здесь только
+    // подсказка, где их менять.
+    let colors_hint = div()
+        .text_size(design::t_caption(cx))
+        .text_color(rgb(p.text_muted))
+        .child(t!("chart.candles.colors_hint").to_string());
 
     // Иконка «применить ко всем» (⧉) — как у попапа раскладки: раздать набор ЭТОЙ цели
     // всем вкладкам/окнам + обновить глобальный дефолт (новые вкладки наследуют).
@@ -419,7 +371,7 @@ fn render_candle_popup<T: CandlePopupHost>(
                 .child(price_lines_cb)
                 .child(wicks_cb)
                 .child(neutral_cb)
-                .child(neutral_swatches)
+                .child(colors_hint)
                 .into_any_element(),
         ))
         .into_any_element()
@@ -478,11 +430,6 @@ pub(super) fn candle_popup_overlay<T: CandlePopupHost>(
     }
     let p = MoonPalette::active(cx);
     let cfg = this.candle_view_current(cx);
-    let neutral = {
-        let b = this.backend().read(cx);
-        let eff = b.preview.as_ref().unwrap_or(&b.config);
-        eff.theme.get(p.is_light()).candle_neutral
-    };
     let entity = cx.entity();
     let hover_entity = entity.clone();
     let popup_w = content_width(cx);
@@ -505,7 +452,7 @@ pub(super) fn candle_popup_overlay<T: CandlePopupHost>(
                     }
                 });
             })
-            .child(render_candle_popup(id_prefix, entity, cfg, neutral, p, cx)),
+            .child(render_candle_popup(id_prefix, entity, cfg, p, cx)),
     )
 }
 

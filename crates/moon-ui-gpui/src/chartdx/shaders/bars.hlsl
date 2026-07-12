@@ -18,10 +18,13 @@ cbuffer ChartView : register(b0) {
 
 // Цвета стакана (sRGB rgb + pad). Темовые; сейчас близко к крестам (bid green/ask red).
 cbuffer BookStyle : register(b1) {
-    float4 bs_book_bg; // фон зоны
+    float4 bs_book_bg; // фон ЩЕЛИ СПРЕДА (между лучшими bid/ask); без книги — вся зона
     float4 bs_bid;     // bid rgb
     float4 bs_ask;     // ask rgb
     float4 bs_level;   // x = level-line opacity, y = level-line height px
+    float4 bs_bg_ask;  // фон ask-половины (выше лучшего ask)
+    float4 bs_bg_bid;  // фон bid-половины (ниже лучшего bid)
+    float4 bs_edges;   // x = цена лучшего ask, y = цена лучшего bid, z = есть книга
 };
 
 struct Level {
@@ -108,5 +111,18 @@ BgOut bg_vertex(uint vid : SV_VertexID) {
 }
 
 float4 bg_fragment(BgOut i) : SV_Target {
+    // Трёхцветный фон: выше лучшего ask — bg_ask, ниже лучшего bid — bg_bid, между
+    // ними (щель спреда) — book_bg. Y считается тем же трансформом, что бары.
+    if (bs_edges.z > 0.5) {
+        float base = cv_bounds.y + cv_bounds.w;
+        float ask_y = base - (bs_edges.x - cv_view_price0) * cv_price_to_px;
+        float bid_y = base - (bs_edges.y - cv_view_price0) * cv_price_to_px;
+        if (i.pos.y < ask_y) {
+            return float4(bs_bg_ask.rgb, 1.0);
+        }
+        if (i.pos.y > bid_y) {
+            return float4(bs_bg_bid.rgb, 1.0);
+        }
+    }
     return float4(bs_book_bg.rgb, 1.0);
 }

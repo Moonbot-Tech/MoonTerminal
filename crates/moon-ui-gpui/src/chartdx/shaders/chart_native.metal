@@ -61,6 +61,10 @@ struct BookStyle {
     float4 bid;
     float4 ask;
     float4 level;
+    float4 bg_ask;
+    float4 bg_bid;
+    // x = цена лучшего ask, y = цена лучшего bid, z = есть книга (0/1).
+    float4 edges;
 };
 
 struct Cross {
@@ -453,7 +457,17 @@ vertex PriceOut book_bg_vertex(uint vid [[vertex_id]], constant ChartView& cv [[
     return { to_clip(px, cv.resolution) };
 }
 
-fragment float4 book_bg_fragment(constant BookStyle& bs [[buffer(1)]]) {
+fragment float4 book_bg_fragment(PriceOut in [[stage_in]],
+                                 constant ChartView& cv [[buffer(0)]],
+                                 constant BookStyle& bs [[buffer(1)]]) {
+    // Трёхцветный фон: выше лучшего ask / щель спреда / ниже лучшего bid.
+    if (bs.edges.z > 0.5) {
+        float base = cv.bounds.y + cv.bounds.w;
+        float ask_y = base - (bs.edges.x - cv.view_price0) * cv.price_to_px;
+        float bid_y = base - (bs.edges.y - cv.view_price0) * cv.price_to_px;
+        if (in.position.y < ask_y) return float4(bs.bg_ask.rgb, 1.0);
+        if (in.position.y > bid_y) return float4(bs.bg_bid.rgb, 1.0);
+    }
     return float4(bs.book_bg.rgb, 1.0);
 }
 

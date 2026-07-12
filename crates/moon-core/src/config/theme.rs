@@ -45,8 +45,12 @@ pub struct ChartTheme {
     pub candle_fill_alpha: f32,
 
     // --- Стакан ---
-    /// Фон зоны стакана (sRGB).
+    /// Фон зоны стакана МЕЖДУ лучшими bid/ask (щель спреда), sRGB.
     pub book_bg: [u8; 3],
+    /// Фон ask-половины стакана (выше лучшего ask), sRGB.
+    pub book_bg_ask: [u8; 3],
+    /// Фон bid-половины стакана (ниже лучшего bid), sRGB.
+    pub book_bg_bid: [u8; 3],
     /// Цвет bid-стороны (покупки), sRGB.
     pub book_bid: [u8; 3],
     /// Цвет ask-стороны (продажи), sRGB.
@@ -106,6 +110,10 @@ impl Default for ChartTheme {
             candle_neutral: [128, 128, 128],
             candle_fill_alpha: 0.85,
             book_bg: [30, 30, 30],
+            // Половины стакана слегка подкрашены своими сторонами; щель спреда между
+            // лучшими bid/ask остаётся нейтральным book_bg.
+            book_bg_ask: [42, 30, 27],
+            book_bg_bid: [30, 36, 26],
             book_bid: [75, 86, 48],
             book_ask: [170, 73, 39],
             book_level_alpha: 0.5,
@@ -146,6 +154,8 @@ impl ChartTheme {
         self.candle_neutral = [150, 150, 150];
         self.candle_fill_alpha = 0.85;
         self.book_bg = [255, 255, 255];
+        self.book_bg_ask = [255, 244, 242];
+        self.book_bg_bid = [243, 250, 242];
         self.book_bid = [0, 128, 0];
         self.book_ask = [255, 0, 0];
         self.book_level_alpha = 0.5;
