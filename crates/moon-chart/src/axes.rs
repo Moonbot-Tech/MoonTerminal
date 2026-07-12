@@ -81,3 +81,29 @@ pub fn fmt_clock(unix_ms: f64, offset_sec: i64, with_sec: bool) -> String {
         format!("{h:02}:{m:02}")
     }
 }
+
+/// Часы + дата, когда день НЕ сегодняшний: «ДД.ММ ЧЧ:ММ:СС» (на больших ТФ/окнах
+/// курсор гуляет по прошлым суткам — время без даты не читается).
+pub fn fmt_clock_dated(unix_ms: f64, offset_sec: i64, with_sec: bool, now_ms: f64) -> String {
+    let day_of = |ms: f64| ((ms / 1000.0).floor() as i64 + offset_sec).div_euclid(86_400);
+    let clock = fmt_clock(unix_ms, offset_sec, with_sec);
+    if day_of(unix_ms) == day_of(now_ms) {
+        return clock;
+    }
+    let (_, month, day) = civil_from_days(day_of(unix_ms));
+    format!("{day:02}.{month:02} {clock}")
+}
+
+/// Григорианская дата из числа суток от unix-эпохи (алгоритм civil_from_days).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}

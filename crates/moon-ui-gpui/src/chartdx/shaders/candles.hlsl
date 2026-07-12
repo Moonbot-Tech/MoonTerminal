@@ -41,6 +41,7 @@ struct Candle {
     float l;
     float c;
     float vol;
+    float tf_rel; // СВОЙ ТФ свечи (rel ms); 0 = ТФ серии. Хвост истории — старшие ТФ.
 };
 
 StructuredBuffer<Candle> candles : register(t3);
@@ -80,8 +81,12 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     if (cd.t_open >= cs_hide_start) {
         return cull_out(); // зона «только трейды» — свечу не рисуем
     }
+    // Хвост истории дорисован старшими ТФ: у таких свечей свой tf_rel (ширина) и
+    // приглушённые цвета — визуально отличаются от выбранного ТФ.
+    bool foreign_tf = cd.tf_rel > 0.0 && abs(cd.tf_rel - cs_tf_rel) > 0.5;
+    float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs_tf_rel;
     float x0 = cv_bounds.x + (cd.t_open - cv_view_time0) * cv_time_to_px;
-    float x1 = x0 + cs_tf_rel * cv_time_to_px;
+    float x1 = x0 + tf_rel * cv_time_to_px;
     if (x1 < cv_bounds.x - 2.0 || x0 > cv_bounds.x + cv_bounds.z + 2.0) {
         return cull_out();
     }
@@ -146,6 +151,9 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     if (part == 0u && !outline) {
         alpha = saturate(cs_fill_alpha); // заливка тела полупрозрачна (сетка чуть видна)
     }
+    if (foreign_tf) {
+        alpha *= 0.55; // хвост чужого ТФ — полупрозрачный
+    }
 
     CandleOut o;
     o.pos = float4(ndc, 0.0, 1.0);
@@ -163,7 +171,8 @@ float4 candles_fragment(CandleOut i) : SV_Target {
         if (min(dx, dy) > max(cs_outline_px, 1.0)) {
             discard;
         }
-        return float4(i.color.rgb, 1.0);
+        // Альфа из VS: у контуров обычно 1.0, у хвоста чужого ТФ — приглушённая.
+        return i.color;
     }
     return i.color;
 }

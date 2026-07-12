@@ -38,6 +38,8 @@ struct Candle {
     l: f32,
     c: f32,
     vol: f32,
+    // СВОЙ ТФ свечи (rel ms); 0 = ТФ серии. Хвост истории — старшие ТФ (шире, приглушены).
+    tf_rel: f32,
 };
 
 const CORNERS_01: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
@@ -80,8 +82,13 @@ fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     if cd.t_open >= cs.hide_start {
         return cull_out(); // зона «только трейды» — свечу не рисуем
     }
+    let foreign_tf = cd.tf_rel > 0.0 && abs(cd.tf_rel - cs.tf_rel) > 0.5;
+    var tf_rel = cs.tf_rel;
+    if cd.tf_rel > 0.0 {
+        tf_rel = cd.tf_rel;
+    }
     var x0 = cv.bounds.x + (cd.t_open - cv.view_time0) * cv.time_to_px;
-    var x1 = x0 + cs.tf_rel * cv.time_to_px;
+    var x1 = x0 + tf_rel * cv.time_to_px;
     if x1 < cv.bounds.x - 2.0 || x0 > cv.bounds.x + cv.bounds.z + 2.0 {
         return cull_out();
     }
@@ -147,6 +154,9 @@ fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     if part == 0u && !outline {
         alpha = saturate(cs.fill_alpha);
     }
+    if foreign_tf {
+        alpha *= 0.55; // хвост чужого ТФ — полупрозрачный
+    }
 
     var o: CandleOut;
     o.pos = vec4<f32>(ndc, 0.0, 1.0);
@@ -169,7 +179,8 @@ fn candles_fragment(in: CandleOut) -> @location(0) vec4<f32> {
         if min(dx, dy) > max(cs.outline_px, 1.0) {
             discard;
         }
-        return vec4<f32>(in.color.rgb, 1.0);
+        // Альфа из VS: у контуров обычно 1.0, у хвоста чужого ТФ — приглушённая.
+        return in.color;
     }
     return in.color;
 }

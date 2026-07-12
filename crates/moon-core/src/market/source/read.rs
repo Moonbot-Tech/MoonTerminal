@@ -500,6 +500,8 @@ impl MarketDataSource {
                     || need_from < cursor.cache_from_ms;
                 if cache_stale {
                     cursor.cache_rows.clear();
+                    cursor.cache_rows_5m.clear();
+                    cursor.cache_rows_1d.clear();
                     cursor.cache_kind = Some(native_kind_min);
                     cursor.cache_from_ms = need_from;
                     if let (Some(cache), Some(ex)) =
@@ -517,6 +519,15 @@ impl MarketDataSource {
                             cursor.cache_rows =
                                 cache.read_range(ex, market, fb, need_from, i64::MAX);
                             cursor.cache_rows_kind = fb;
+                        }
+                        // Крупные слои для дорисовки хвоста истории старшими ТФ.
+                        if cp.tf_ms < 300_000 {
+                            cursor.cache_rows_5m =
+                                cache.read_range(ex, market, 5, need_from, i64::MAX);
+                        }
+                        if cp.tf_ms < 86_400_000 {
+                            cursor.cache_rows_1d =
+                                cache.read_range(ex, market, 1440, need_from, i64::MAX);
                         }
                         if !cursor.cache_rows.is_empty() {
                             log::info!(
@@ -681,7 +692,14 @@ impl MarketDataSource {
                 cursor.server_candles.clear();
                 let from_base_ms =
                     (epoch_ms + (from_rel_ms - cp.tf_ms.max(0) as f32) as f64) as i64;
-                let to_ms = (epoch_ms + to_rel_ms as f64) as i64;
+                // Правая граница базы — ВСЕГДА не раньше «сейчас», а не правый край окна:
+                // ресет во время прокрутки в прошлое обрезал базу краем ТОГО окна, возврат
+                // в live ресета не делает (только расширение влево) → дыра В СЕРЕДИНЕ ряда
+                // от места прокрутки до сегодняшнего live-бакета, лечившаяся любым паном.
+                let now_unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as i64);
+                let to_ms = ((epoch_ms + to_rel_ms as f64) as i64).max(now_unix);
                 // База №1: CoinCard deep history — честные OHLC эффективного kind («один ТФ
                 // на ядро»). База №2: бесплатный 5м-снимок (только high/low) — ПРЕФИКС
                 // старше deep-части (композит: старое — диапазоны без теней, свежее —
@@ -725,7 +743,7 @@ impl MarketDataSource {
                             moon_time_from_rel_ms(epoch_ms, from_rel_ms - cp.tf_ms.max(0) as f32);
                         r5.copy_time_range(
                             from5,
-                            to_time,
+                            moonproto::MoonTime::from_unix_millis(to_ms),
                             r5.capacity(),
                             &mut cursor.server_candle_rows,
                         );
@@ -812,19 +830,12 @@ impl MarketDataSource {
                 }
                 cursor.candle_trade_rows.clear();
                 if let Some(reader) = trade_reader.as_ref() {
-                    // Хвост серии — ВСЕГДА до «сейчас», а не до правого края окна: при
-                    // прокрутке в прошлое reset читал трейды только до to_time ПРОШЛОГО
-                    // окна, а курсор ставился «от сейчас» → всё между ними в серию не
-                    // попадало никогда (при K=0 ресетов нет — дыра «свечи↔трейды» после
-                    // возврата в live оставалась навсегда).
-                    let now_unix = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_millis() as i64);
-                    let candle_to_time =
-                        moonproto::MoonTime::from_unix_millis(to_ms.max(now_unix));
+                    // Хвост серии — до «сейчас» (to_ms уже включает now): курсор дочитки
+                    // ставится «от сейчас», диапазон копии обязан дотягиваться туда же,
+                    // иначе между ними дыра навсегда.
                     reader.copy_time_range(
                         from_time,
-                        candle_to_time,
+                        moonproto::MoonTime::from_unix_millis(to_ms),
                         reader.capacity(),
                         &mut cursor.candle_trade_rows,
                     );
@@ -856,7 +867,115 @@ impl MarketDataSource {
             read.candles_changed =
                 cursor.candle_series.is_valid() && read.candles_revision != cp.shipped_revision;
             if read.candles_changed {
-                out.candles.extend_from_slice(cursor.candle_series.candles());
+                // Хвост истории дорисовывается СТАРШИМИ ТФ «до упора»: старше начала
+                // серии — 5м-слой (снимок+регистратор), глубже него — дневные свечи
+                // (бэкфилл/кэш). У каждой свечи хвоста свой ТФ (ширина в шейдере) —
+                // рисуются приглушённо, чтобы отличались от выбранного ТФ.
+                let series_first = cursor
+                    .candle_series
+                    .candles()
+                    .first()
+                    .map(|c| c.t_open_ms)
+                    .unwrap_or(f64::INFINITY);
+                let mut prefix: Vec<(ChartCandle, f32)> = Vec::new();
+                let mut boundary = series_first;
+                for (rows, tf) in [
+                    (&cursor.cache_rows_5m, 300_000.0f64),
+                    (&cursor.cache_rows_1d, 86_400_000.0f64),
+                ] {
+                    if (cp.tf_ms as f64) >= tf {
+                        continue;
+                    }
+                    // Берём ряды, НАЧИНАЮЩИЕСЯ до границы (граничная свеча может
+                    // перекрыть шов до целого ТФ): правило «только целиком старше»
+                    // оставляло карман гранулярности до tf_coarse (дневка кончается в
+                    // 00:00, серия начинается в 04:06 → дыра 4ч). Перекрытие невидимо —
+                    // хвост рисуется приглушённой подложкой ПОД мелкими свечами.
+                    let mut taken: Vec<(ChartCandle, f32)> = rows
+                        .iter()
+                        .filter(|c| c.t_open_ms < boundary)
+                        .map(|c| (*c, tf as f32))
+                        .collect();
+                    if let Some((first, _)) = taken.first() {
+                        boundary = first.t_open_ms;
+                    }
+                    taken.extend(prefix.drain(..));
+                    prefix = taken;
+                }
+                if prefix.is_empty() {
+                    out.candles.extend_from_slice(cursor.candle_series.candles());
+                } else {
+                    out.candles.reserve(prefix.len() + cursor.candle_series.candles().len());
+                    out.candle_tf_ms.reserve(out.candles.capacity());
+                    for (c, tf) in &prefix {
+                        out.candles.push(*c);
+                        out.candle_tf_ms.push(*tf);
+                    }
+                    for c in cursor.candle_series.candles() {
+                        out.candles.push(*c);
+                        out.candle_tf_ms.push(cp.tf_ms as f32);
+                    }
+                }
+                // Диагностика разрыва «свечи ↔ сейчас»: если последняя свеча старше 3 ТФ,
+                // раз в 30с печатаем покрытие всех слоёв — по логу видно, КАКОЙ слой
+                // кончился (серия/deep/кэш/5м/1д), вместо слепой чинки по скриншотам.
+                let now_unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_millis() as f64);
+                let last_ms = out.candles.last().map(|c| c.t_open_ms).unwrap_or(0.0);
+                // Дыры и В СЕРЕДИНЕ ряда (следующая свеча позже конца предыдущей) — разрыв
+                // «прокрутка в прошлое → возврат в live» прятался именно там.
+                let mut max_hole = 0.0f64;
+                let mut hole_at = 0.0f64;
+                for i in 1..out.candles.len() {
+                    let prev = &out.candles[i - 1];
+                    let prev_tf = out
+                        .candle_tf_ms
+                        .get(i - 1)
+                        .copied()
+                        .filter(|t| *t > 0.0)
+                        .unwrap_or(cp.tf_ms as f32) as f64;
+                    let hole = out.candles[i].t_open_ms - (prev.t_open_ms + prev_tf);
+                    if hole > max_hole {
+                        max_hole = hole;
+                        hole_at = prev.t_open_ms + prev_tf;
+                    }
+                }
+                if last_ms > 0.0
+                    && (now_unix - last_ms > 3.0 * cp.tf_ms as f64
+                        || max_hole > 3.0 * cp.tf_ms as f64)
+                    && cursor
+                        .last_gap_diag
+                        .map_or(true, |t| t.elapsed() > Duration::from_secs(30))
+                {
+                    cursor.last_gap_diag = Some(Instant::now());
+                    let ago_min = |ms: f64| ((now_unix - ms) / 60_000.0).round();
+                    let span = |rows: &[ChartCandle]| match (rows.first(), rows.last()) {
+                        (Some(f), Some(l)) => {
+                            format!("{}м..{}м назад", ago_min(l.t_open_ms), ago_min(f.t_open_ms))
+                        }
+                        _ => "пусто".to_string(),
+                    };
+                    log::warn!(
+                        "candle gap {market} tf={}с: последняя свеча {}м назад, макс. дыра \
+                         {}м (кончается {}м назад); серия n={} \
+                         [{}], префикс n={}, кэш kind{} n={} [{}], 5м n={} [{}], 1д n={} [{}]",
+                        cp.tf_ms / 1000,
+                        ago_min(last_ms),
+                        (max_hole / 60_000.0).round(),
+                        ago_min(hole_at + max_hole),
+                        cursor.candle_series.candles().len(),
+                        span(cursor.candle_series.candles()),
+                        prefix.len(),
+                        cursor.cache_rows_kind,
+                        cursor.cache_rows.len(),
+                        span(&cursor.cache_rows),
+                        cursor.cache_rows_5m.len(),
+                        span(&cursor.cache_rows_5m),
+                        cursor.cache_rows_1d.len(),
+                        span(&cursor.cache_rows_1d),
+                    );
+                }
             }
             if scan_price {
                 // Авто-Y учитывает high/low видимых свечей (кресты теперь только в зоне —
@@ -869,6 +988,34 @@ impl MarketDataSource {
                         Some((a, b)) => (a.min(lo), b.max(hi)),
                         None => (lo, hi),
                     });
+                }
+                // Хвост старших ТФ тоже виден — его high/low входят в авто-масштаб.
+                let from_abs = epoch_ms + from_rel_ms as f64;
+                let to_abs = epoch_ms + to_rel_ms as f64;
+                let series_first = cursor
+                    .candle_series
+                    .candles()
+                    .first()
+                    .map(|c| c.t_open_ms)
+                    .unwrap_or(f64::INFINITY);
+                for (rows, tf) in [
+                    (&cursor.cache_rows_5m, 300_000.0f64),
+                    (&cursor.cache_rows_1d, 86_400_000.0f64),
+                ] {
+                    if (cp.tf_ms as f64) >= tf {
+                        continue;
+                    }
+                    for c in rows.iter() {
+                        if c.t_open_ms < series_first
+                            && c.t_open_ms + tf > from_abs
+                            && c.t_open_ms <= to_abs
+                        {
+                            read.tick_price_range = Some(match read.tick_price_range {
+                                Some((a, b)) => (a.min(c.low), b.max(c.high)),
+                                None => (c.low, c.high),
+                            });
+                        }
+                    }
                 }
             }
         }

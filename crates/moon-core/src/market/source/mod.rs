@@ -181,12 +181,18 @@ pub struct ChartHistoryCursor {
     /// пан/зум, каждый раз ходить в БД нельзя).
     cache_rows: Vec<ChartCandle>,
     cache_kind: Option<u32>,
-    /// ФАКТИЧЕСКИЙ kind прочитанных рядов: нативный kind панели либо фолбэк 1м
-    /// (фоновый регистратор пишет 1м всех рынков — крупные ТФ ресемплят).
+    /// ФАКТИЧЕСКИЙ kind прочитанных рядов: нативный kind панели либо фолбэк
+    /// (5м регистратора → 1м deep-записей).
     cache_rows_kind: u32,
     cache_from_ms: i64,
+    /// Крупные слои для дорисовки хвоста истории СТАРШИМИ ТФ («до упора»):
+    /// 5м (снимок+регистратор) и 1д (бэкфилл/кэш). Читаются вместе с cache_rows.
+    cache_rows_5m: Vec<ChartCandle>,
+    cache_rows_1d: Vec<ChartCandle>,
     /// Сигнатура последних записанных в кэш deep-рядов — write-back только на изменение.
     cache_written_sig: u64,
+    /// Троттл диагностики «разрыв свечи↔сейчас» (WARN раз в 30с на панель).
+    last_gap_diag: Option<Instant>,
     /// То же для рядов НАТИВНОГО kind панели (урожай разового бэкфилла, когда
     /// эффективный kind ядра мельче нативного).
     cache_written_native_sig: u64,
@@ -231,6 +237,10 @@ pub struct ChartHistoryBuffers {
     /// Свечи серии (полный видимый ряд). Наполняется ТОЛЬКО когда ревизия серии отличается
     /// от `CandleReadParams::shipped_revision` (см. `ChartHistoryRead::candles_changed`).
     pub candles: Vec<ChartCandle>,
+    /// ТФ каждой свечи `candles` (мс), параллельный массив: хвост истории дорисовывается
+    /// СТАРШИМИ ТФ (5м-слой, затем 1д «до упора»), у таких свечей своя ширина.
+    /// Пусто = все свечи ТФ серии.
+    pub candle_tf_ms: Vec<f32>,
 }
 
 impl ChartHistoryBuffers {
@@ -240,6 +250,7 @@ impl ChartHistoryBuffers {
         self.last_points.clear();
         self.mark_points.clear();
         self.candles.clear();
+        self.candle_tf_ms.clear();
     }
 }
 

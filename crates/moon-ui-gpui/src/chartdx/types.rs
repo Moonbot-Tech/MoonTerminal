@@ -80,6 +80,9 @@ pub struct CandleGpu {
     pub low: f32,
     pub close: f32,
     pub volume: f32,
+    /// СВОЙ ТФ свечи (rel ms); 0 = ТФ серии (style.tf_rel_ms). Хвост истории
+    /// дорисовывается старшими ТФ — такие свечи шире и рисуются приглушённо.
+    pub tf_rel: f32,
 }
 
 /// Константы стиля слоя свечей. Layout = cbuffer `CandleStyle` (b1) в candles.hlsl.
@@ -106,20 +109,24 @@ pub struct CandleStyleGpu {
 }
 
 /// Заполнить GPU-буфер свечей из серии (время → относительное от epoch).
+/// `tf_ms` — параллельный массив ТФ каждой свечи (пусто = все свечи ТФ серии):
+/// хвост истории дорисовывается старшими ТФ со своей шириной.
 pub fn fill_candle_upload(
     candles: &[moon_core::market::ChartCandle],
+    tf_ms: &[f32],
     epoch_ms: f64,
     out: &mut Vec<CandleGpu>,
 ) {
     out.clear();
     out.reserve(candles.len());
-    out.extend(candles.iter().map(|c| CandleGpu {
+    out.extend(candles.iter().enumerate().map(|(i, c)| CandleGpu {
         t_open_rel: (c.t_open_ms - epoch_ms) as f32,
         open: c.open,
         high: c.high,
         low: c.low,
         close: c.close,
         volume: c.volume,
+        tf_rel: tf_ms.get(i).copied().unwrap_or(0.0),
     }));
 }
 

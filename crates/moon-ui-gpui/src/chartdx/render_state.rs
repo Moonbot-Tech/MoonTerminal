@@ -367,7 +367,12 @@ impl RenderState {
             if cx_log >= plot_left && cx_log <= plot_right {
                 let left_unix = pr.epoch_ms + pr.view.view_time0 as f64;
                 let unix = left_unix + (cx_log - plot_left) as f64 / time_to_px as f64;
-                let label = moon_chart::axes::fmt_clock(unix, tz_offset_sec, true);
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_millis() as f64);
+                // Не сегодняшний день → «ДД.ММ ЧЧ:ММ:СС» (большие ТФ/окна).
+                let label =
+                    moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, true, now_ms);
                 let text_w = readout_text_width(&label, pr.readout_time_width);
                 let line_h = pr.readout_time_line_h.max(1.0);
                 let half_w = text_w * 0.5;

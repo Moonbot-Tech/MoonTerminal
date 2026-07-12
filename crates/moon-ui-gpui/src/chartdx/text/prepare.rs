@@ -1,7 +1,7 @@
 //! Главный `prepare_text`: оси, подписи ордер-линий и курсорный ридаут
 //! (вынос из text.rs, verbatim).
 
-use moon_chart::axes::{fmt_clock, price_decimals};
+use moon_chart::axes::price_decimals;
 
 use super::*;
 
@@ -367,7 +367,12 @@ impl RenderState {
 
                 if cx_log >= plot_left && cx_log <= plot_right {
                     let unix = left_unix + (cx_log - plot_left) as f64 / time_to_px as f64;
-                    let label = fmt_clock(unix, tz_offset_sec, true);
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0.0, |d| d.as_millis() as f64);
+                    // Не сегодняшний день → «ДД.ММ ЧЧ:ММ:СС» (большие ТФ/окна).
+                    let label =
+                        moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, true, now_ms);
                     let metrics = self.measure_label_text(ctx, &label);
                     let width = metrics.width.as_f32();
                     let line_h = metrics.line_height.as_f32();
@@ -590,7 +595,13 @@ impl RenderState {
                 let frac = k as f64 / 6.0;
                 let x = plot_left + (frac as f32) * plot_w;
                 let unix = left_unix + frac * window_ms;
-                let label = fmt_clock(unix, tz_offset_sec, with_sec);
+                // Подписи оси на не-сегодняшних сутках получают дату «ДД.ММ» — без неё
+                // на широких окнах метки читались как идущие «назад» (шаг > суток).
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_millis() as f64);
+                let label =
+                    moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, with_sec, now_ms);
                 let metrics = self.measure_text(ctx, &label);
                 let half_w = metrics.width.as_f32() * 0.5;
                 let left = x - half_w;

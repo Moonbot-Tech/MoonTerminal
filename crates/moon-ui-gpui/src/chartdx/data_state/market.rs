@@ -393,6 +393,7 @@ impl ChartDataState {
                 if history.candles_changed {
                     fill_candle_upload(
                         &pr.history_buffers.candles,
+                        &pr.history_buffers.candle_tf_ms,
                         pane.view.epoch_ms,
                         &mut pr.candle_upload,
                     );
