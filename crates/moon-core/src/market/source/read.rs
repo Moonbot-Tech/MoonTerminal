@@ -8,6 +8,20 @@ use std::time::{Duration, Instant};
 
 use moonproto::DeepHistoryKind;
 
+/// Retained-ряд CoinCard → свеча чарта (нормализация перепутанного wire-порядка полей).
+fn deep_row_candle(r: &moonproto::DeepPrice) -> crate::market::candles::ChartCandle {
+    let (open, high, low, close) =
+        crate::market::candles::normalize_ohlc(r.open(), r.high(), r.low(), r.close());
+    crate::market::candles::ChartCandle {
+        t_open_ms: r.unix_millis() as f64,
+        open,
+        high,
+        low,
+        close,
+        volume: r.volume(),
+    }
+}
+
 use super::{
     drain_price_line, moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks,
     trade_price_range, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor,
@@ -493,6 +507,24 @@ impl MarketDataSource {
                     {
                         cursor.cache_rows =
                             cache.read_range(ex, market, native_kind_min, need_from, i64::MAX);
+                        cursor.cache_rows_kind = native_kind_min;
+                        // Нативного kind нет — каскадный фолбэк: 5м фонового регистратора,
+                        // затем 1м deep-записей (любой ТФ кратен обоим, ресемпл в merge).
+                        for fb in [5u32, 1] {
+                            if !cursor.cache_rows.is_empty() || native_kind_min <= fb {
+                                break;
+                            }
+                            cursor.cache_rows =
+                                cache.read_range(ex, market, fb, need_from, i64::MAX);
+                            cursor.cache_rows_kind = fb;
+                        }
+                        if !cursor.cache_rows.is_empty() {
+                            log::info!(
+                                "kline cache: префикс {market} kind{}: {} рядов",
+                                cursor.cache_rows_kind,
+                                cursor.cache_rows.len()
+                            );
+                        }
                     }
                 }
             }
@@ -508,7 +540,8 @@ impl MarketDataSource {
                 let have_native = snapshot
                     .tf_candles(market, native_kind)
                     .map_or(false, |r| !r.is_empty());
-                let cache_covers = cursor.cache_rows.len() >= 30;
+                let cache_covers =
+                    cursor.cache_rows_kind == native_kind_min && cursor.cache_rows.len() >= 30;
                 if !have_native && !cache_covers {
                     let inner = self.inner.read().expect("market source poisoned");
                     let mut done = inner
@@ -518,10 +551,42 @@ impl MarketDataSource {
                     let key = (provider, market.to_string(), native_kind_min);
                     if !done.contains(&key) {
                         done.insert(key);
-                        if let Err(e) = client.candles().request_coin_card(market, native_kind) {
-                            super::market_diag(format!(
+                        match client.candles().request_coin_card(market, native_kind) {
+                            Ok(_) => log::info!(
+                                "kline cache: разовый нативный бэкфилл {market} kind={native_kind:?}"
+                            ),
+                            Err(e) => super::market_diag(format!(
                                 "native backfill request failed {market} kind={native_kind:?}: {e}"
-                            ));
+                            )),
+                        }
+                    }
+                }
+            }
+            // Урожай нативного бэкфилла: ряды нативного kind панели (крупнее эффективного)
+            // приезжают МИМО deep-сигнатуры (та следит за эффективным kind) — пишем их в
+            // кэш по собственной сигнатуре и форсим перечитку префикса + пересборку серии,
+            // чтобы глубина появилась сразу, а не со следующей сессии.
+            if use_deep && native_kind_min > deep_kind_min {
+                if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref())
+                {
+                    let native_kind = deep_history_kind(native_kind_min);
+                    if let Some(rows) = snapshot.tf_candles(market, native_kind) {
+                        if !rows.is_empty() {
+                            let sig = (rows.len() as u64).wrapping_mul(0x9e37_79b1)
+                                ^ (rows.last().map_or(0, |r| r.unix_millis()) as u64);
+                            if sig != cursor.cache_written_native_sig {
+                                cursor.cache_written_native_sig = sig;
+                                cache.merge(
+                                    ex.clone(),
+                                    market.to_string(),
+                                    native_kind_min,
+                                    rows.iter().map(deep_row_candle).collect(),
+                                );
+                                // Merge уехал в очередь РАНЬШЕ будущего чтения (FIFO) —
+                                // перечитка префикса увидит свежие ряды.
+                                cursor.cache_kind = None;
+                                cursor.candle_series.invalidate();
+                            }
                         }
                     }
                 }
@@ -694,16 +759,31 @@ impl MarketDataSource {
                     .cloned()
                     .collect();
                 // Write-back свежих deep-рядов в кэш (по смене сигнатуры, неблокирующе).
-                if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref())
-                {
-                    if have_deep && deep_rows_sig != cursor.cache_written_sig {
-                        cursor.cache_written_sig = deep_rows_sig;
-                        cache.merge(
-                            ex.clone(),
-                            market.to_string(),
-                            deep_kind_min,
-                            deep_part.clone(),
-                        );
+                // Пишем ПОЛНЫЙ retained-ряд, НЕ обрезанный видимым окном deep_part:
+                // узкое окно записывало 1 свечу из ответа — глубина терялась.
+                if have_deep && deep_rows_sig != cursor.cache_written_sig {
+                    match (kline_cache.as_ref(), exchange_key.as_ref()) {
+                        (Some(cache), Some(ex)) => {
+                            cursor.cache_written_sig = deep_rows_sig;
+                            let full: Vec<ChartCandle> = snapshot
+                                .tf_candles(market, deep_kind)
+                                .map(|rows| rows.iter().map(deep_row_candle).collect())
+                                .unwrap_or_default();
+                            cache.merge(ex.clone(), market.to_string(), deep_kind_min, full);
+                        }
+                        (Some(_), None) => {
+                            // Идентичность биржи провайдера не доехала — кэш слепнет,
+                            // это надо ВИДЕТЬ в логе (разово на панель: sig не двигаем,
+                            // но лог глушим по первому разу).
+                            if cursor.cache_written_sig == 0 {
+                                cursor.cache_written_sig = 1;
+                                log::warn!(
+                                    "kline cache: провайдер {provider} без ExchangeId — \
+                                     ряды {market} не кэшируются"
+                                );
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 // ЕДИНЫЙ merge базы к ТФ серии, приоритет по возрастанию:
@@ -716,7 +796,7 @@ impl MarketDataSource {
                     let mut scratch: Vec<ChartCandle> = Vec::new();
                     for (part, part_tf) in [
                         (&snap_part, 5 * 60_000i64),
-                        (&cache_part, native_kind_min as i64 * 60_000),
+                        (&cache_part, cursor.cache_rows_kind as i64 * 60_000),
                         (&deep_part, deep_kind_min as i64 * 60_000),
                     ] {
                         if part.is_empty() || part_tf <= 0 || tf < part_tf || tf % part_tf != 0

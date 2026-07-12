@@ -46,8 +46,106 @@ impl MarketDataSource {
     /// без вызова чарты живут как раньше (кэш опционален).
     pub fn init_kline_cache(&self, path: std::path::PathBuf) {
         let cache = crate::market::kline_cache::KlineCache::open(path);
-        let mut inner = self.inner.write().expect("market source poisoned");
-        inner.kline_cache = cache;
+        let opened = cache.is_some();
+        {
+            let mut inner = self.inner.write().expect("market source poisoned");
+            inner.kline_cache = cache;
+        }
+        if opened {
+            self.spawn_kline_recorder();
+        }
+    }
+
+    /// Фоновый регистратор 5м-свечей ВСЕХ рынков провайдеров: трейды по подписке текут
+    /// постоянно — агрегируем ЗАПЕЧАТАННЫЕ 5м-бары из трейд-рингов и складываем в
+    /// kline-кэш. Именно 5м (не 1м): merge переписывает суточный чанк монеты целиком,
+    /// при 1м это ~N рынков перезаписей КАЖДУЮ минуту — WAL раздувался на мегабайты за
+    /// минуты; при 5м пишем в 5 раз реже и чанки в 5 раз мельче (~7КБ/сутки/монета).
+    /// История любой монеты, даже ни разу не открытой, переживает рестарты и болезни
+    /// ядра; 1м-точность для открытых монет обеспечивают deep-запросы (kind1 в кэше).
+    fn spawn_kline_recorder(&self) {
+        let source = self.clone();
+        let _ = std::thread::Builder::new()
+            .name("kline-recorder".into())
+            .spawn(move || {
+                let mut last_written: HashMap<(CoreId, String), i64> = HashMap::new();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                    source.record_sealed_5m(&mut last_written);
+                }
+            });
+    }
+
+    fn record_sealed_5m(&self, last_written: &mut HashMap<(CoreId, String), i64>) {
+        const TF: i64 = 300_000;
+        // Снимок провайдеров под коротким read-локом; вся работа — вне лока.
+        let (cache, providers) = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let Some(cache) = inner.kline_cache.clone() else {
+                return;
+            };
+            let providers: Vec<(CoreId, String, SharedMoonClient)> = inner
+                .provider_exchange
+                .iter()
+                .filter_map(|(p, e)| {
+                    inner
+                        .clients
+                        .get(p)
+                        .map(|c| (*p, format!("{}:{:08x}", e.code, e.dex), c.clone()))
+                })
+                .collect();
+            (cache, providers)
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        let cur_bucket = (now_ms / TF) * TF;
+        let mut ticks: Vec<crate::feed::Tick> = Vec::new();
+        let mut candles: Vec<crate::market::candles::ChartCandle> = Vec::new();
+        for (provider, ex, slot) in providers {
+            let Some(client) = slot.get() else { continue };
+            let Some(snap) = client.snapshot_versioned() else {
+                continue;
+            };
+            let markets = snap.markets();
+            for handle in markets.iter() {
+                let name = handle.name();
+                let Some(readers) = snap.market_history_readers(name) else {
+                    continue;
+                };
+                let Some(reader) = readers.futures_trades.or(readers.spot_trades) else {
+                    continue;
+                };
+                let key = (provider, name.to_string());
+                // С начала бакета ПОСЛЕ последнего записанного; первый прогон — 15 мин.
+                let from_ms = last_written
+                    .get(&key)
+                    .map(|t| t + TF)
+                    .unwrap_or(cur_bucket - 3 * TF);
+                if from_ms >= cur_bucket {
+                    continue;
+                }
+                let mut trade_rows = Vec::new();
+                reader.copy_time_range(
+                    moonproto::MoonTime::from_unix_millis(from_ms),
+                    moonproto::MoonTime::from_unix_millis(cur_bucket - 1),
+                    reader.capacity(),
+                    &mut trade_rows,
+                );
+                // Курсор двигаем даже без трейдов — тихие монеты не перечитываем вечно.
+                last_written.insert(key, cur_bucket - TF);
+                if trade_rows.is_empty() {
+                    continue;
+                }
+                super::rows_to_ticks(&trade_rows, &mut ticks);
+                crate::market::candles::aggregate_trades(&ticks, TF, &mut candles);
+                // Текущий (незапечатанный) бакет не пишем — его допишет следующий прогон.
+                candles.retain(|c| (c.t_open_ms as i64) < cur_bucket);
+                if !candles.is_empty() {
+                    cache.merge(ex.clone(), name.to_string(), 5, std::mem::take(&mut candles));
+                }
+            }
+        }
     }
 
     /// Стабильные идентичности бирж провайдеров — ключ kline-кэша (ядра одной биржи

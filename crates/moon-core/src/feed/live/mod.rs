@@ -458,6 +458,19 @@ pub fn run(
                 }) => {
                     log::warn!("core {} candles snapshot failed: {error}", server.id);
                 }
+                // Отказ CoinCard-запроса (deep history чарта): раньше падал в `_ => {}`
+                // МОЛЧА — свечи «не приезжали» без единого следа в логе.
+                Event::CoinCardCandles(moonproto::state::CoinCardCandlesEvent::UpdateFailed {
+                    market,
+                    kind,
+                    error,
+                    ..
+                }) => {
+                    log::warn!(
+                        "core {} coin-card {market} {kind:?} failed: {error}",
+                        server.id
+                    );
+                }
                 // Окно диагностики после нашего balance-refresh (фантомы «Активов»): вид
                 // ответа решает судьбу зависшей монеты — Snapshot обнуляет пропавшие,
                 // Incremental нет. Вне окна не логируем (балансы пушатся постоянно).

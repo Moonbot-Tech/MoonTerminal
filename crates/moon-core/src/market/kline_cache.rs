@@ -29,11 +29,13 @@ const ROW_BYTES: usize = 24;
 /// Таймаут ответа на чтение: кэш-поток занят/умер → рисуем без префикса, не виснем.
 const READ_TIMEOUT: Duration = Duration::from_millis(250);
 
-/// Ретеншн по kind (суток): мелкие ТФ тяжёлые и восстановимые, крупные — копейки.
+/// Ретеншн по kind (суток): мелкие ТФ тяжёлые, крупные — копейки. 1м пишется фоновым
+/// регистратором ПО ВСЕМ рынкам (~35КБ/сутки/монета) — 30 суток, чтобы база не
+/// разрасталась в гигабайты (из 1м любой крупный ТФ строится ресемплом).
 fn retention_days(kind_min: u32) -> i64 {
     match kind_min {
-        0..=1 => 60,
-        2..=5 => 365,
+        0..=1 => 30,
+        2..=5 => 90,
         _ => 3650,
     }
 }
@@ -81,6 +83,7 @@ impl KlineCache {
             .name("kline-cache".into())
             .spawn(move || run(conn, rx))
             .ok()?;
+        log::info!("kline cache открыт: {}", path.display());
         Some(Self { tx })
     }
 
@@ -151,6 +154,9 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 }
 
 fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
+    // Первый merge по ключу логируем INFO (разово): видно в обычном логе, что кэш живёт.
+    let mut seen: std::collections::HashSet<(String, String, u32)> =
+        std::collections::HashSet::new();
     while let Ok(op) = rx.recv() {
         match op {
             Op::Merge {
@@ -161,6 +167,11 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
             } => {
                 if let Err(e) = merge_rows(&conn, &exchange, &market, kind_min, &rows) {
                     log::warn!("kline cache merge failed {exchange}/{market}/{kind_min}: {e}");
+                } else if seen.insert((exchange.clone(), market.clone(), kind_min)) {
+                    log::info!(
+                        "kline cache: первые ряды {exchange}/{market}/kind{kind_min}: {}",
+                        rows.len()
+                    );
                 }
             }
             Op::Read {
