@@ -70,6 +70,59 @@ pub struct ChartCross {
     pub qty: f32,
 }
 
+/// Одна свеча в GPU-буфере слоя свечей. Layout = `Candle` в candles.hlsl.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CandleGpu {
+    pub t_open_rel: f32,
+    pub open: f32,
+    pub high: f32,
+    pub low: f32,
+    pub close: f32,
+    pub volume: f32,
+}
+
+/// Константы стиля слоя свечей. Layout = cbuffer `CandleStyle` (b1) в candles.hlsl.
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CandleStyleGpu {
+    pub up: [f32; 4],
+    pub down: [f32; 4],
+    pub neutral: [f32; 4],
+    /// Ширина бакета (rel ms).
+    pub tf_rel_ms: f32,
+    /// Начало зоны трейдов (rel ms); `f32::MAX` = зоны нет.
+    pub zone_start_rel: f32,
+    /// 0 заполненные / 1 контуры / 2 контуры в зоне.
+    pub mode: f32,
+    /// Толщина контура, физ. px.
+    pub outline_px: f32,
+    pub wicks_in_zone: f32,
+    pub neutral_in_zone: f32,
+    pub fill_alpha: f32,
+    /// Начало зоны «скрыть свечи» (rel ms); `f32::MAX` = не скрываем. Свечи с
+    /// t_open ≥ этой границы не рисуются вовсе — остаются только трейды.
+    pub hide_start_rel: f32,
+}
+
+/// Заполнить GPU-буфер свечей из серии (время → относительное от epoch).
+pub fn fill_candle_upload(
+    candles: &[moon_core::market::ChartCandle],
+    epoch_ms: f64,
+    out: &mut Vec<CandleGpu>,
+) {
+    out.clear();
+    out.reserve(candles.len());
+    out.extend(candles.iter().map(|c| CandleGpu {
+        t_open_rel: (c.t_open_ms - epoch_ms) as f32,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume,
+    }));
+}
+
 #[allow(dead_code)]
 pub fn cross_append_ranges(start: usize, len: usize, capacity: usize) -> [(usize, usize); 2] {
     if len == 0 || capacity == 0 {

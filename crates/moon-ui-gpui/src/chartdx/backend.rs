@@ -6,7 +6,8 @@ use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance
 use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
-    BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams, GridParams, ReadoutRect,
+    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu,
+    CursorParams, GridParams, ReadoutRect,
 };
 
 #[cfg(target_os = "macos")]
@@ -17,6 +18,7 @@ use super::wgpu_backend::WgpuLayers;
 #[cfg(windows)]
 use super::{
     background::{BACKGROUND_3DLOGO_PNG, BackgroundLayer},
+    candles::CandleLayer,
     combo::ComboLayer,
     cursor::CursorLayer,
     grid::GridLayer,
@@ -33,6 +35,8 @@ use windows::Win32::Graphics::Direct3D11::{
 pub struct PlatformLayers {
     #[cfg(windows)]
     background: BackgroundLayer,
+    #[cfg(windows)]
+    candles: CandleLayer,
     #[cfg(windows)]
     combo: ComboLayer,
     #[cfg(windows)]
@@ -56,6 +60,8 @@ impl PlatformLayers {
         Self {
             #[cfg(windows)]
             background: BackgroundLayer::new(BACKGROUND_3DLOGO_PNG),
+            #[cfg(windows)]
+            candles: CandleLayer::new(),
             #[cfg(windows)]
             combo: ComboLayer::new(),
             #[cfg(windows)]
@@ -125,6 +131,34 @@ impl PlatformLayers {
         }
     }
 
+    /// Полная замена набора свечей слоя (по смене ревизии серии).
+    pub fn set_candles(&mut self, data: Vec<CandleGpu>) {
+        #[cfg(windows)]
+        self.candles.set(data);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_candles(data);
+        #[cfg(target_os = "macos")]
+        self.metal.set_candles(data);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = data;
+        }
+    }
+
+    /// Стиль слоя свечей (режим/зона/цвета/контур). Идемпотентен.
+    pub fn set_candle_style(&mut self, style: CandleStyleGpu) {
+        #[cfg(windows)]
+        self.candles.set_style(style);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_candle_style(style);
+        #[cfg(target_os = "macos")]
+        self.metal.set_candle_style(style);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = style;
+        }
+    }
+
     pub fn set_price_lines(&mut self, last: &[PriceLinePoint], mark: &[PriceLinePoint]) {
         #[cfg(windows)]
         self.combo.set_price_lines(last, mark);
@@ -180,6 +214,7 @@ impl PlatformLayers {
         context: &ID3D11DeviceContext,
         gpu: &gpui::RawGpuAccess,
     ) {
+        self.candles.prepare(device, context, gpu);
         self.combo.prepare(view, device, context, gpu);
         self.orderbook
             .prepare(orderbook_view, book_style, device, context, gpu);
@@ -265,6 +300,9 @@ impl PlatformLayers {
         self.userdata.render_zones(view, context, rtv, gpu);
         crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
         self.grid.render(grid_params, device, context, rtv, gpu);
+        // Свечи — под крестами трейдов (combo блитится поверх).
+        crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
+        self.candles.render(view, context, rtv, gpu, panel_clip);
         crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
         self.combo.render(view, context, rtv, gpu, panel_clip);
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);

@@ -356,6 +356,12 @@ pub(super) fn mouse_down_middle(
         )
     {
         cx.stop_propagation();
+        return;
+    }
+    // [Shift+СКМ] на графике — синхронизация временного X-масштаба чартов ЭТОГО окна
+    // (MoonBot). Торговый жест (если назначен на Shift+СКМ) имеет приоритет — выше.
+    if within && e.modifiers.shift && this.sync_x_scale_window(_window, cx) {
+        cx.stop_propagation();
     }
 }
 

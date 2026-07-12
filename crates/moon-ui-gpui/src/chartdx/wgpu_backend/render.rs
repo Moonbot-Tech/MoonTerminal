@@ -65,6 +65,17 @@ impl WgpuLayers {
         }
         crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
         draw_pipeline(pass, &pipelines.grid, &binds.grid, 6, 1);
+        // Свечи — под крестами трейдов (combo блитится поверх base-кэша).
+        if !self.candles.is_empty() {
+            crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
+            draw_pipeline(
+                pass,
+                &pipelines.candles,
+                &binds.candle,
+                18,
+                self.candles.len() as u32,
+            );
+        }
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
         draw_pipeline(pass, &pipelines.book_bg, &binds.book, 6, 1);
         if !self.levels.is_empty() {

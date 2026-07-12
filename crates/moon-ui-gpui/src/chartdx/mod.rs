@@ -12,6 +12,8 @@ mod backend;
 pub mod background;
 #[cfg(windows)]
 mod base;
+#[cfg(windows)]
+pub mod candles;
 // Оркестратор движка, вынесенный из этого файла (impl-блоки; структуры объявлены ниже).
 // Дочерние модули видят приватные поля структур-предка — логика не менялась, только переезд.
 #[cfg(windows)]
@@ -70,8 +72,9 @@ use windows::Win32::Graphics::Direct3D11::{
 use backend::PlatformLayers;
 use pane::{Container, ContainerKind};
 use types::{
-    BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams, GridParams, ReadoutRect,
-    cover_uv, fill_cross_upload, fill_liq_upload, fill_price_upload, rgb4,
+    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu,
+    CursorParams, GridParams, ReadoutRect, cover_uv, fill_candle_upload, fill_cross_upload,
+    fill_liq_upload, fill_price_upload, rgb4,
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
@@ -262,6 +265,16 @@ struct PaneRender {
     liq_upload: Vec<ChartCross>,
     last_line_upload: Vec<PriceLinePoint>,
     mark_line_upload: Vec<PriceLinePoint>,
+    /// Аплоад-буфер слоя свечей (переиспользуемая аллокация).
+    candle_upload: Vec<CandleGpu>,
+    /// Последняя доставленная в GPU ревизия серии свечей (u64::MAX = не доставлялась).
+    last_candle_rev: u64,
+    /// Применённый cfg отображения свечей — смена форсит history reset (ТФ/зона).
+    applied_candle_cfg: moon_core::market::CandleViewCfg,
+    /// Бакет ТФ «сейчас» на прошлом синке: сдвинулся → зона трейдов уехала → reset.
+    last_zone_bucket: i64,
+    /// Последний отданный слою стиль свечей (сравнение перед set_candle_style).
+    candle_style: CandleStyleGpu,
     combo_cross_capacity: usize,
     combo_price_line_capacity: usize,
     orderbook_view: ChartViewGpu,
@@ -380,6 +393,11 @@ impl PaneRender {
             liq_upload: Vec::new(),
             last_line_upload: Vec::new(),
             mark_line_upload: Vec::new(),
+            candle_upload: Vec::new(),
+            last_candle_rev: u64::MAX,
+            applied_candle_cfg: moon_core::market::CandleViewCfg::default(),
+            last_zone_bucket: i64::MIN,
+            candle_style: CandleStyleGpu::default(),
             combo_cross_capacity: 0,
             combo_price_line_capacity: 0,
             orderbook_view: ChartViewGpu::default(),
@@ -448,13 +466,16 @@ impl PaneRender {
         if !self.follow || !(self.view.time_to_px > 0.0) {
             return false;
         }
-        let ppm = self.view.time_to_px;
+        // ЕДИНЫЙ гард ppm для прямого И обратного преобразования: раньше target_px считался
+        // сырым ppm, а inv_ppm — по флору 1e-6; на глубоком зум-ауте (ppm < 1e-6 при окне
+        // 365 сут) right_rel схлопывался к ~0 и чарт уезжал влево от стакана.
+        let ppm = self.view.time_to_px.max(moon_chart::view::MIN_PX_PER_MS);
         let target_px = ((now_ms - self.epoch_ms) * ppm as f64).round() as i64;
         if target_px == self.last_edge_px {
             return false;
         }
         self.last_edge_px = target_px;
-        let inv_ppm = 1.0 / ppm.max(1e-6);
+        let inv_ppm = 1.0 / ppm;
         let area_w = self.view.bounds[2];
         let glass_w = self.orderbook_view.bounds[2];
         let window_ms = area_w * inv_ppm;
@@ -650,6 +671,12 @@ struct ChartDataState {
     /// Видна ли ось времени (нижние подписи + жёлоб под них), per-окно. Выкл → подписи времени
     /// не рисуются, плот занимает всю высоту. Дефолт — вкл.
     time_axis_visible: bool,
+    /// Глобальные настройки отображения свечей/трейдов (ТФ, режим, зона) — из
+    /// `layout.candle_view`, применяются ко всем панелям движка.
+    candle_view: moon_core::market::CandleViewCfg,
+    /// Сохранённый X-масштаб (px/ms, [Shift+СКМ] sync): НОВЫЕ панели стартуют с него
+    /// вместо 60-секундного дефолта. None = дефолт.
+    default_x_ppm: Option<f32>,
     /// Прогнозный размер ручного ордера (s1-s6) в USD — для подписи на перекрестии курсора.
     /// Ставится из `ChartPanel::render` (у него есть `Backend`). None = нет размера/курса.
     prospective_usd: Option<f64>,

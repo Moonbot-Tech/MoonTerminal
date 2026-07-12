@@ -118,6 +118,7 @@ impl ChartTabs {
                     saved_time_axis,
                     saved_line_labels,
                     saved_cursor_labels,
+                    saved_candle_view,
                     saved_compare,
                 ) = {
                     let specs = &self.backend.read(cx).chart_specs;
@@ -137,6 +138,7 @@ impl ChartTabs {
                         spec.and_then(|s| s.time_axis_visible),
                         spec.and_then(|s| s.line_labels),
                         spec.and_then(|s| s.cursor_labels),
+                        spec.and_then(|s| s.candle_view),
                         spec.map_or((None, false), |s| {
                             (s.compare_anchor.clone(), s.compare_orderbook_only)
                         }),
@@ -184,6 +186,9 @@ impl ChartTabs {
                 }
                 if saved_cursor_labels.is_some() {
                     panel.update(cx, |p, pcx| p.set_cursor_labels(saved_cursor_labels, pcx));
+                }
+                if saved_candle_view.is_some() {
+                    panel.update(cx, |p, pcx| p.set_candle_view(saved_candle_view, pcx));
                 }
                 if saved_compare.0.is_some() || saved_compare.1 {
                     panel.update(cx, |p, pcx| {

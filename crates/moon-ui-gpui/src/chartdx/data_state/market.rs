@@ -3,6 +3,13 @@
 use super::*;
 use super::orders::refresh_orderbook_label_notionals;
 
+/// Аварийный рубильник свечей (`MOON_CANDLES_OFF=1`): чарт возвращается к чистому
+/// тик-режиму (кресты на всё окно, слой свечей пуст). Для A/B-замеров GPU/CPU.
+fn candles_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("MOON_CANDLES_OFF").is_some())
+}
+
 impl ChartDataState {
     pub(crate) fn sync_from_market_source(
         &mut self,
@@ -135,14 +142,14 @@ impl ChartDataState {
                 h: plot_h,
             };
             pane.view
-                .ensure_default_window(chart_area.w, self.present_rate_hz);
+                .ensure_default_window(chart_area.w, self.present_rate_hz, self.default_x_ppm);
             pane.view.follow_edge(now, now);
             let (view_time0, window_ms) = pane.view.visible_x(chart_area.w);
             let cam_px = ((pane.view.right_time_ms - pane.view.epoch_ms)
                 * pane.view.px_per_ms.max(1e-9) as f64)
                 .round() as i64;
             let marker_margin = view::cross_cull_margin_physical_px(&pane.view, self.last_ppp)
-                / pane.view.px_per_ms.max(1e-6);
+                / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
             let history_prefetch = (window_ms * 0.20).max(marker_margin);
             let history_from = view_time0 - history_prefetch;
             let history_to = view_time0 + window_ms + history_prefetch;
@@ -161,12 +168,109 @@ impl ChartDataState {
             // Смена галки «Ликвидации» → перезалить combo (добавить/убрать кресты ликвидаций).
             let liq_toggle_changed = pr.liquidations_enabled != self.liquidations_enabled;
             pr.liquidations_enabled = self.liquidations_enabled;
+            // Свечи/зона трейдов: смена cfg (ТФ/K/лимит) или сдвиг бакета «сейчас» (зона
+            // последних K свечей уехала на новый бакет — старые кресты пора убрать) форсят
+            // history reset. Бакет двигается раз в ТФ (минуты) — reset редкий.
+            let candle_cfg = self.candle_view;
+            let candle_tf_ms = candle_cfg.tf_ms();
+            let candle_cfg_changed = pr.applied_candle_cfg != candle_cfg;
+            pr.applied_candle_cfg = candle_cfg;
+            // Режим «Нет» = чистый тик-чарт: свечи не строим/не рисуем, зона трейдов не
+            // ограничивает кресты (params=None ниже → трейды на всё окно, как раньше).
+            let candles_off = candles_disabled()
+                || candle_cfg.mode == moon_core::market::candles::CANDLE_MODE_OFF;
+            let now_zone_bucket = (now / candle_tf_ms as f64).floor() as i64;
+            let zone_bucket_changed = !candles_off
+                && candle_cfg.trade_candles > 0
+                && pr.last_zone_bucket != now_zone_bucket;
+            pr.last_zone_bucket = now_zone_bucket;
+            if device_lost {
+                // Новый device: слой свечей пуст, доставленная ревизия невалидна.
+                pr.last_candle_rev = u64::MAX;
+            }
             let force_history_reset = device_lost
                 || source_generation_changed
                 || liq_toggle_changed
+                || candle_cfg_changed
+                || zone_bucket_changed
                 || pr.resident_left_rel.is_nan()
                 || history_from < pr.resident_left_rel
                 || (!pane.view.follow && scan_price);
+            // Нижняя граница отображаемых трейдов (rel ms): открытие бакета N-K+1.
+            // K=0 → INFINITY (кресты не рисуем вовсе, только свечи).
+            let trades_zone_rel = if candle_cfg.trade_candles == 0 {
+                f32::INFINITY
+            } else {
+                let zone_open = moon_core::market::candles::bucket_open_ms(now, candle_tf_ms)
+                    - (candle_cfg.trade_candles as f64 - 1.0) * candle_tf_ms as f64;
+                (zone_open - pane.view.epoch_ms) as f32
+            };
+            // Зона «скрыть свечи» (последние N бакетов — только трейды): граница для
+            // шейдера, данные не трогает. Двигается раз в бакет — стиль ниже сам
+            // подхватит смену на ближайшем синке.
+            let hide_start_rel = if candle_cfg.hide_candles == 0 {
+                f32::MAX
+            } else {
+                let hide_open = moon_core::market::candles::bucket_open_ms(now, candle_tf_ms)
+                    - (candle_cfg.hide_candles as f64 - 1.0) * candle_tf_ms as f64;
+                (hide_open - pane.view.epoch_ms) as f32
+            };
+            // Диаг X-геометрии (жалоба «зум-аут → разрыв между чартом и стаканом»): раз в
+            // секунду per-панель пишем окно/якорь/последние данные — по логу видно, кто врёт:
+            // камера (right уехал от now) или данные (тики/свечи легально кончились раньше).
+            if chart_market_diag_enabled()
+                && chart_market_diag_due(format!("xgeom:{}:{}:{}", pane.core, pane.market, idx))
+            {
+                let epoch = pane.view.epoch_ms;
+                let last_tick_rel = pr
+                    .history_buffers
+                    .ticks
+                    .last()
+                    .map(|t| t.time_ms - epoch)
+                    .unwrap_or(f64::NAN);
+                let last_candle_rel = pr
+                    .history_buffers
+                    .candles
+                    .last()
+                    .map(|c| c.t_open_ms - epoch)
+                    .unwrap_or(f64::NAN);
+                chart_market_diag(format!(
+                    "xgeom pane={} market={} now_rel={:.0} right_rel={:.0} follow={} \
+                     ppm={:.6} window_ms={:.0} view_time0={:.0} chart_w={:.0} \
+                     right_edge_rel={:.0} now_frac={:.2} last_tick_rel={:.0} \
+                     last_candle_rel={:.0} zone_rel={:.0} hide_rel={:.0}",
+                    idx,
+                    pane.market,
+                    now - epoch,
+                    pane.view.right_time_ms - epoch,
+                    pane.view.follow,
+                    pane.view.px_per_ms,
+                    window_ms,
+                    view_time0,
+                    chart_area.w,
+                    view_time0 as f64 + window_ms as f64,
+                    ((now - epoch) - view_time0 as f64) / window_ms.max(1.0) as f64,
+                    last_tick_rel,
+                    last_candle_rel,
+                    trades_zone_rel,
+                    hide_start_rel,
+                ));
+            }
+            let candle_params = moon_core::market::CandleReadParams {
+                tf_ms: candle_tf_ms,
+                trades_from_rel_ms: trades_zone_rel,
+                // Жёсткий лимит трейдов убран по просьбе пользователя (реальный предел —
+                // ёмкость ринга); поле осталось в протоколе чтения на будущее.
+                trades_limit: usize::MAX,
+                shipped_revision: pr.last_candle_rev,
+            };
+            if candles_off && pr.last_candle_rev != u64::MAX {
+                pr.layers.set_candles(Vec::new());
+                pr.last_candle_rev = u64::MAX;
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
+            }
+            let candle_params_opt = (!candles_off).then_some(&candle_params);
             let read_history = history_source_changed || force_history_reset;
             let mut history = if read_history {
                 let history_read_started = force_history_reset.then(std::time::Instant::now);
@@ -178,6 +282,7 @@ impl ChartDataState {
                     history_to,
                     force_history_reset,
                     scan_price,
+                    candle_params_opt,
                     &mut pr.history_cursor,
                     &mut pr.history_buffers,
                 );
@@ -210,6 +315,7 @@ impl ChartDataState {
                     history_to,
                     true,
                     scan_price,
+                    candle_params_opt,
                     &mut pr.history_cursor,
                     &mut pr.history_buffers,
                 );
@@ -282,23 +388,48 @@ impl ChartDataState {
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
-                if history.price_lines_changed || history.combo_reset {
-                    fill_price_upload(
-                        &pr.history_buffers.last_points,
+                // Свечи: серия изменилась (rebuild или живой батч трейдов) → полная
+                // перезаливка инстанс-буфера слоя (сотни строк, дёшево).
+                if history.candles_changed {
+                    fill_candle_upload(
+                        &pr.history_buffers.candles,
                         pane.view.epoch_ms,
-                        &mut pr.last_line_upload,
-                    );
-                    fill_price_upload(
-                        &pr.history_buffers.mark_points,
-                        pane.view.epoch_ms,
-                        &mut pr.mark_line_upload,
+                        &mut pr.candle_upload,
                     );
                     crate::diag::bump_by(
-                        &crate::diag::CHART_PRICE_LINE_UPLOAD_LEN,
-                        (pr.last_line_upload.len() + pr.mark_line_upload.len()) as u64,
+                        &crate::diag::CHART_CANDLE_UPLOAD_LEN,
+                        pr.candle_upload.len() as u64,
                     );
-                    pr.layers
-                        .set_price_lines(&pr.last_line_upload, &pr.mark_line_upload);
+                    pr.layers.set_candles(std::mem::take(&mut pr.candle_upload));
+                    pr.last_candle_rev = history.candles_revision;
+                    pr.gpu_prepare_dirty = true;
+                    pixels_changed = true;
+                }
+                if history.price_lines_changed || history.combo_reset {
+                    // Галка «Линии цены»: выкл → last/mark линии не рисуем (смена галки
+                    // форсит history reset через candle_cfg_changed → попадаем сюда).
+                    if candle_cfg.price_lines {
+                        fill_price_upload(
+                            &pr.history_buffers.last_points,
+                            pane.view.epoch_ms,
+                            &mut pr.last_line_upload,
+                        );
+                        fill_price_upload(
+                            &pr.history_buffers.mark_points,
+                            pane.view.epoch_ms,
+                            &mut pr.mark_line_upload,
+                        );
+                        crate::diag::bump_by(
+                            &crate::diag::CHART_PRICE_LINE_UPLOAD_LEN,
+                            (pr.last_line_upload.len() + pr.mark_line_upload.len()) as u64,
+                        );
+                        pr.layers
+                            .set_price_lines(&pr.last_line_upload, &pr.mark_line_upload);
+                    } else {
+                        pr.last_line_upload.clear();
+                        pr.mark_line_upload.clear();
+                        pr.layers.set_price_lines(&[], &[]);
+                    }
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
@@ -333,6 +464,8 @@ impl ChartDataState {
                 if pr.resident_left_rel.is_finite() {
                     pr.layers.reset_combo(Vec::new());
                     pr.layers.set_price_lines(&[], &[]);
+                    pr.layers.set_candles(Vec::new());
+                    pr.last_candle_rev = u64::MAX;
                     pr.history_cursor.reset();
                     pr.resident_left_rel = f32::NAN;
                     pr.cached_tick_price = None;
@@ -456,6 +589,31 @@ impl ChartDataState {
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }
+            // Стиль слоя свечей: цвета из темы, режим/зона/контур из cfg. Зона (rel ms)
+            // меняется раз в бакет ТФ (см. zone_bucket_changed выше) — стиль обновится там же.
+            let next_candle_style = CandleStyleGpu {
+                up: rgb4(self.theme.candle_up),
+                down: rgb4(self.theme.candle_down),
+                neutral: rgb4(self.theme.candle_neutral),
+                tf_rel_ms: candle_tf_ms as f32,
+                zone_start_rel: if trades_zone_rel.is_finite() {
+                    trades_zone_rel
+                } else {
+                    f32::MAX
+                },
+                mode: candle_cfg.mode.min(2) as f32,
+                outline_px: (candle_cfg.outline_px * self.last_ppp).max(1.0),
+                wicks_in_zone: candle_cfg.wicks_in_zone as u8 as f32,
+                neutral_in_zone: candle_cfg.neutral_in_zone as u8 as f32,
+                fill_alpha: self.theme.candle_fill_alpha.clamp(0.05, 1.0),
+                hide_start_rel,
+            };
+            if pr.candle_style != next_candle_style {
+                pr.candle_style = next_candle_style;
+                pr.layers.set_candle_style(next_candle_style);
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
+            }
             let next_book_style = BookStyle {
                 book_bg: rgb4(self.theme.book_bg),
                 bid: rgb4(self.theme.book_bid),
@@ -553,7 +711,8 @@ impl ChartDataState {
                     }
                 });
             }
-            let edge_rel = view_time0 + (chart_area.w + glass_w) / pane.view.px_per_ms.max(1e-6);
+            let edge_rel = view_time0
+                + (chart_area.w + glass_w) / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
             if pr.view.pad != edge_rel {
                 pr.view.pad = edge_rel;
                 pixels_changed = true;

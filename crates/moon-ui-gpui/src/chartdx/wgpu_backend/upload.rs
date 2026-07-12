@@ -179,6 +179,26 @@ impl WgpuLayers {
             );
             self.userdata_buffers_dirty = false;
         }
+        if self.candle_buffers_dirty
+            || self.candle_buffer.buffer.is_none()
+            || self.candle_style_uniform.buffer.is_none()
+        {
+            binds_dirty |= self.candle_buffer.write(
+                device,
+                queue,
+                "moon_chart_candles",
+                wgpu::BufferUsages::STORAGE,
+                &self.candles,
+            );
+            binds_dirty |= self.candle_style_uniform.write(
+                device,
+                queue,
+                "moon_chart_candle_style",
+                wgpu::BufferUsages::UNIFORM,
+                &[self.candle_style],
+            );
+            self.candle_buffers_dirty = false;
+        }
         if binds_dirty {
             self.prepared_binds = None;
         }
@@ -361,6 +381,24 @@ impl WgpuLayers {
                 },
             ],
         });
+        let candle_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("moon_chart_candle_bind"),
+            layout: &pipelines.candle_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.view_uniform.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.candle_style_uniform.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.candle_buffer.binding(),
+                },
+            ],
+        });
         let zone_bind = self.bind_view_storage(
             device,
             &pipelines.view_storage_layout,
@@ -394,6 +432,7 @@ impl WgpuLayers {
             last: last_bind,
             mark: mark_bind,
             book: book_bind,
+            candle: candle_bind,
             zone: zone_bind,
             hline: hline_bind,
             seg: seg_bind,

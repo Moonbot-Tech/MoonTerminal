@@ -14,6 +14,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
     let hline_shader = shader(device, "moon_chart_hline_wgsl", HLINE_SHADER);
     let seg_shader = shader(device, "moon_chart_seg_wgsl", SEG_SHADER);
     let marker_shader = shader(device, "moon_chart_marker_wgsl", MARKER_SHADER);
+    let candles_shader = shader(device, "moon_chart_candles_wgsl", CANDLES_SHADER);
     let bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("moon_chart_bg_layout"),
         entries: &[
@@ -60,6 +61,14 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         entries: &[
             uniform_entry(0, std::mem::size_of::<ChartViewGpu>()),
             uniform_entry(1, std::mem::size_of::<BookStyle>()),
+            storage_entry(2),
+        ],
+    });
+    let candle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("moon_chart_candle_layout"),
+        entries: &[
+            uniform_entry(0, std::mem::size_of::<ChartViewGpu>()),
+            uniform_entry(1, std::mem::size_of::<CandleStyleGpu>()),
             storage_entry(2),
         ],
     });
@@ -152,6 +161,14 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         "book_bars_vertex",
         "book_bars_fragment",
     );
+    let candles = pipeline(
+        device,
+        format,
+        &candles_shader,
+        &candle_layout,
+        "candles_vertex",
+        "candles_fragment",
+    );
     let zone = pipeline(
         device,
         format,
@@ -203,6 +220,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         readout_layout,
         view_storage_layout,
         book_layout,
+        candle_layout,
         background,
         blit,
         grid,
@@ -214,6 +232,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         price_mark,
         book_bg,
         book_bars,
+        candles,
         zone,
         hline,
         seg,

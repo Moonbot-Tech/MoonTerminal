@@ -9,11 +9,11 @@ use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance
 use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
-    BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams, DEFAULT_VOLUME_ALPHA,
-    GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu, append_cross_ring,
-    cross_append_ranges, cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring,
-    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, seg_of,
-    update_cross_volume_max, zone_of,
+    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu,
+    CursorParams, DEFAULT_VOLUME_ALPHA, GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu,
+    ZoneGpu, append_cross_ring, cross_append_ranges, cross_volume_max, evicted_cross_ranges,
+    hl_of, mk_of, ordered_cross_ring, ranges_have_entries, ranges_touch_volume_max,
+    reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
 };
 
 const BACKGROUND_SHADER: &str = include_str!("shaders/native_background.wgsl");
@@ -27,6 +27,7 @@ const HLINE_SHADER: &str = include_str!("shaders/native_hline.wgsl");
 const SEG_SHADER: &str = include_str!("shaders/native_seg.wgsl");
 const MARKER_SHADER: &str = include_str!("shaders/native_marker.wgsl");
 const READOUT_SHADER: &str = include_str!("shaders/native_readout.wgsl");
+const CANDLES_SHADER: &str = include_str!("shaders/native_candles.wgsl");
 const BACKGROUND_PNG: &[u8] = include_bytes!("../../../../assets/img/3Dlogo_s01.png");
 const MIN_COMBO_CAPACITY: usize = 1;
 
@@ -113,6 +114,7 @@ struct Pipelines {
     readout_layout: wgpu::BindGroupLayout,
     view_storage_layout: wgpu::BindGroupLayout,
     book_layout: wgpu::BindGroupLayout,
+    candle_layout: wgpu::BindGroupLayout,
     background: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     grid: wgpu::RenderPipeline,
@@ -124,6 +126,7 @@ struct Pipelines {
     price_mark: wgpu::RenderPipeline,
     book_bg: wgpu::RenderPipeline,
     book_bars: wgpu::RenderPipeline,
+    candles: wgpu::RenderPipeline,
     zone: wgpu::RenderPipeline,
     hline: wgpu::RenderPipeline,
     seg: wgpu::RenderPipeline,
@@ -324,6 +327,7 @@ struct PreparedBindGroups {
     last: wgpu::BindGroup,
     mark: wgpu::BindGroup,
     book: wgpu::BindGroup,
+    candle: wgpu::BindGroup,
     zone: wgpu::BindGroup,
     hline: wgpu::BindGroup,
     seg: wgpu::BindGroup,
@@ -346,6 +350,9 @@ pub struct WgpuLayers {
     mark_line: Vec<PriceLinePoint>,
     combo_capacity: usize,
     price_line_capacity: usize,
+    /// Свечи (полный набор серии; замена целиком по смене ревизии) + стиль слоя.
+    candles: Vec<CandleGpu>,
+    candle_style: CandleStyleGpu,
     levels: Vec<LevelInstance>,
     zones: Vec<ZoneGpu>,
     hlines: Vec<HLineGpu>,
@@ -370,10 +377,13 @@ pub struct WgpuLayers {
     hline_buffer: BufferSlot,
     seg_buffer: BufferSlot,
     marker_buffer: BufferSlot,
+    candle_buffer: BufferSlot,
+    candle_style_uniform: BufferSlot,
     combo_buffers_dirty: bool,
     price_line_buffers_dirty: bool,
     book_buffer_dirty: bool,
     userdata_buffers_dirty: bool,
+    candle_buffers_dirty: bool,
 }
 
 // Разнос по смысловым блокам (verbatim-перенос): layers — данные/ёмкости/скейл объёма;

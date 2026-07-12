@@ -97,6 +97,9 @@ pub struct ChartPanel {
     /// Рисовать ли трейды ликвидаций на графиках этой панели (per-окно/вкладка, попап ⚙).
     /// Применяется в render (`set_liquidations_enabled` движка). Дефолт — вкл.
     liquidations_enabled: bool,
+    /// Настройки отображения свечей/трейдов ЭТОЙ панели (per-окно/вкладка, попап ❚).
+    /// None = следовать глобальному дефолту (`layout.candle_view`). Применяется в render.
+    candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Показывать ли тусклую заливку зоны управления при раздельных зонах и СКРЫТОМ стакане
     /// (per-окно/вкладка, из настроек попапа ⚙). Применяется в render. Дефолт — вкл.
     show_zone: bool,
@@ -309,6 +312,7 @@ impl ChartPanel {
             scale: None,
             orderbook_enabled: true,
             liquidations_enabled: true,
+            candle_view: None,
             show_zone: true,
             auto_pin: false,
             cancel_buy_pos: Default::default(),
@@ -423,6 +427,7 @@ impl ChartPanel {
             scale: None,
             orderbook_enabled: true,
             liquidations_enabled: true,
+            candle_view: None,
             show_zone: true,
             auto_pin: false,
             cancel_buy_pos: Default::default(),
@@ -551,6 +556,54 @@ impl ChartPanel {
     pub fn set_liquidations_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.liquidations_enabled != enabled {
             self.liquidations_enabled = enabled;
+            self.view_dirty = true;
+            cx.notify();
+        }
+    }
+
+    /// Настройки отображения свечей/трейдов этой панели (per-окно/вкладка, попап ❚).
+    /// None = глобальный дефолт. Применяется в render (`set_candle_view` движка).
+    pub fn set_candle_view(
+        &mut self,
+        cfg: Option<moon_core::market::CandleViewCfg>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.candle_view != cfg {
+            self.candle_view = cfg;
+            self.view_dirty = true;
+            cx.notify();
+        }
+    }
+
+    /// [Shift+СКМ] на графике — синхронизация временного X-масштаба чартов СВОЕГО
+    /// ОС-окна (MoonBot): масштаб наведённой панели → запрос в Backend с хендлом окна;
+    /// хозяин окна (полоска вкладок / выносной хост) применит ко всем своим стекам и
+    /// сохранит (группа → layout, выносное окно → спек вкладки).
+    pub(super) fn sync_x_scale_window(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(ppm) = self.chart.pane_x_ppm(self.input.hovered_pane) else {
+            return false;
+        };
+        let handle = window.window_handle();
+        self.backend.update(cx, |b, bcx| {
+            b.chart_x_sync = Some((handle, ppm));
+            b.chart_x_sync_rev = b.chart_x_sync_rev.wrapping_add(1);
+            bcx.notify();
+        });
+        true
+    }
+
+    /// Дефолтный X-масштаб для НОВЫХ графиков панели (ставит стек-хозяин; None = 60с).
+    pub fn set_default_x_ppm(&mut self, ppm: Option<f32>) {
+        self.chart.set_default_x_ppm(ppm);
+    }
+
+    /// Применить X-масштаб ко всем открытым графикам панели (sync окна).
+    pub fn apply_x_ppm(&mut self, ppm: f32, cx: &mut Context<Self>) {
+        if self.chart.set_x_ppm_all(ppm, now_unix_ms()) {
             self.view_dirty = true;
             cx.notify();
         }

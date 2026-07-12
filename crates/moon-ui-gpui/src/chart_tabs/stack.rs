@@ -278,6 +278,17 @@ pub(super) fn set_panels_liquidations<S: 'static>(
     }
 }
 
+/// Применить настройки отображения свечей ко всем панелям стека (None = глобальный дефолт).
+pub(super) fn set_panels_candle_view<S: 'static>(
+    entries: &[ChartStackEntry],
+    cfg: Option<moon_core::market::CandleViewCfg>,
+    cx: &mut Context<S>,
+) {
+    for e in entries {
+        e.panel.update(cx, |p, pcx| p.set_candle_view(cfg, pcx));
+    }
+}
+
 /// Применить видимость подписей у перекрестия ко всем панелям стека.
 pub(super) fn set_panels_cursor_labels<S: 'static>(
     entries: &[ChartStackEntry],

@@ -11,6 +11,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::candle_popup::{self, CandlePopupHost};
 use super::common::{self, LayoutPopupHost};
 use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search};
 use crate::design;
@@ -201,6 +202,25 @@ impl Render for ChartTabs {
                 })
                 .render()
         };
+        // Кнопка настроек отображения свечей/трейдов (❚) — ГЛОБАЛЬНЫЙ набор, рядом с ⚙.
+        let candle_popup_open = self.candle_popup_open;
+        let candle_btn = {
+            let entity = cx.entity();
+            MoonButton::new("chart-candle-settings")
+                .label("❚")
+                .tooltip(t!("chart.candles.tip").to_string())
+                .size(MoonButtonSize::Micro)
+                .variant(if candle_popup_open {
+                    MoonButtonVariant::Blue
+                } else {
+                    MoonButtonVariant::Ghost
+                })
+                .selected(candle_popup_open)
+                .on_click(move |_, _window, app| {
+                    entity.update(app, |this, cx| this.toggle_candle_popup(cx));
+                })
+                .render()
+        };
         // Поле ввода монеты (поиск) — слева от масштаба, своё на окно; набор зависит от ядер
         // активной вкладки. Список совпадений рисуем абсолютно от обёртки поля (top_full), а сам
         // кластер выносим на уровень v_flex (ниже): overflow_hidden полоски не срежет выпадашку.
@@ -260,6 +280,7 @@ impl Render for ChartTabs {
                 .child(coin_search_el)
                 .child(scale_dropdown)
                 .children(gather_btn)
+                .child(candle_btn)
                 .child(settings_btn),
         );
         // Попап раскладки ⚙ активной вкладки + слой-дисмиссер: общий оверлей с выносными
@@ -277,6 +298,14 @@ impl Render for ChartTabs {
             cx,
         );
         let layout_dismiss = common::layout_popup_dismiss(self, "chart-layout", cx);
+        // Попап «Свечи и трейды» (глобальный) — тот же якорь, что у ⚙.
+        let candle_popup = candle_popup::candle_popup_overlay(
+            self,
+            "chart-candles",
+            px(strip_h + design::ui_value(cx, 4.0)),
+            cx,
+        );
+        let candle_dismiss = candle_popup::candle_popup_dismiss(self, "chart-candles", cx);
 
         v_flex()
             .size_full()
@@ -304,5 +333,7 @@ impl Render for ChartTabs {
             .child(right_cluster)
             .children(layout_dismiss)
             .children(layout_popup)
+            .children(candle_dismiss)
+            .children(candle_popup)
     }
 }

@@ -6,6 +6,7 @@
 //! механизм покрывает оба режима: в dedup один провайдер на биржу, в per-core каждое
 //! ядро провайдер самому себе (см. `MarketDataMode`).
 
+pub mod candles;
 mod screener;
 mod source;
 
@@ -18,10 +19,11 @@ use crate::data::OrderBookModel;
 use crate::feed::{OrderBook, Tick};
 use crate::session::CoreId;
 
+pub use candles::{CandleViewCfg, ChartCandle};
 pub use screener::ScreenerRow;
 pub use source::{
-    ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, LatestPriceError, MarketDataSource,
-    MarketRevisions, MarketTickerReadout,
+    CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, LatestPriceError,
+    MarketDataSource, MarketRevisions, MarketTickerReadout,
 };
 
 /// Shared market buffer owned by moon-core, not by a GPUI entity. Live feeds only wake

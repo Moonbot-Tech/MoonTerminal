@@ -352,6 +352,7 @@ impl ChartTabs {
             Option<bool>,
             Option<bool>,
             Option<bool>,
+            Option<moon_core::market::CandleViewCfg>,
         )> = {
             let all = &self.backend.read(cx).chart_specs;
             all.iter()
@@ -376,6 +377,7 @@ impl ChartTabs {
                             s.time_axis_visible,
                             s.line_labels,
                             s.cursor_labels,
+                            s.candle_view,
                         )
                     })
                 })
@@ -399,6 +401,7 @@ impl ChartTabs {
             time_axis,
             line_labels,
             cursor_labels,
+            candle_view,
         ) in specs
         {
             let stack = cx.new(|_| {
@@ -440,6 +443,9 @@ impl ChartTabs {
                 }
                 if cursor_labels.is_some() {
                     s.set_cursor_labels(cursor_labels, c);
+                }
+                if candle_view.is_some() {
+                    s.set_candle_view(candle_view, c);
                 }
                 for (core, market) in &coins {
                     s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);

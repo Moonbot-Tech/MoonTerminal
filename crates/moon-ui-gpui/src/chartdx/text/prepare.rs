@@ -206,7 +206,7 @@ impl RenderState {
                 ((plot_bottom * sf) - (price - y_min) * view.price_to_px).round() / sf
             };
             let dec = price_decimals(y_min + price_range * 0.5);
-            let time_to_px = (view.time_to_px / sf).max(1e-6);
+            let time_to_px = (view.time_to_px / sf).max(moon_chart::view::MIN_PX_PER_MS);
             let window_ms = plot_w as f64 / time_to_px as f64;
             let left_unix = epoch_ms + view.view_time0 as f64;
 

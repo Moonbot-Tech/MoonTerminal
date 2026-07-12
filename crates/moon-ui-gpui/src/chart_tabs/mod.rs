@@ -8,6 +8,7 @@
 //! `DetachedChartHost`) — в [`windows`].
 
 mod add_stack;
+mod candle_popup;
 // pub(crate): `search`/`render_popup` реюзает тикер курса в шапке (shell/ticker.rs).
 pub(crate) mod coin_search;
 mod common;
@@ -115,6 +116,9 @@ pub struct ChartTabs {
     last_close_all_charts_rev: u64,
     /// Последняя виденная `close_active_chart_rev` — на её рост закрываем фулскрин-чарт (Esc).
     last_close_active_chart_rev: u64,
+    /// Последняя виденная `chart_x_sync_rev` — [Shift+СКМ] в НАШЕМ окне применяет масштаб
+    /// ко всем стекам окна + persist (`layout.chart_x_ppm_by_group`), одноразово.
+    last_x_sync_rev: u64,
     /// Откреп-вкладки на восстановление при загрузке (из charts.json): создаём их пустыми и
     /// открываем окна на ПЕРВОМ render (не в конструкторе окна группы — нельзя вложенно).
     restore_pending: Vec<(u32, ChartBucket, chart_persist::WinGeom, Option<f32>)>,
@@ -130,6 +134,10 @@ pub struct ChartTabs {
     layout_popup_open: bool,
     /// Был ли курсор внутри popup-а. Уход после первого входа закрывает popup и коммитит ввод.
     layout_popup_hovered: bool,
+    /// In-scene попап «Свечи и трейды» (кнопка ❚ рядом с ⚙) — ГЛОБАЛЬНЫЕ настройки
+    /// отображения свечей (см. [`candle_popup`]).
+    candle_popup_open: bool,
+    candle_popup_hovered: bool,
     /// Поле высоты режима Fit.
     layout_fit_input: Entity<MoonInputState>,
     /// Поле высоты режима Scroll.
@@ -166,6 +174,7 @@ impl ChartTabs {
             )
         });
         let initial_sig = chart_tabs_sig(backend.read(cx), &group);
+        let initial_x_sync_rev = backend.read(cx).chart_x_sync_rev;
         #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
         {
             if let Some(main_handle) = main.read(cx).debug_data_handle(cx) {
@@ -189,6 +198,7 @@ impl ChartTabs {
             main_time_axis,
             main_line_labels,
             main_cursor_labels,
+            main_candle_view,
             restore_pending,
         ): (
             Option<f32>,
@@ -205,6 +215,7 @@ impl ChartTabs {
             Option<bool>,
             Option<bool>,
             Option<bool>,
+            Option<moon_core::market::CandleViewCfg>,
             Vec<_>,
         ) = {
             let specs = &backend.read(cx).chart_specs;
@@ -223,6 +234,7 @@ impl ChartTabs {
             let main_time_axis = main_spec.and_then(|s| s.time_axis_visible);
             let main_line_labels = main_spec.and_then(|s| s.line_labels);
             let main_cursor_labels = main_spec.and_then(|s| s.cursor_labels);
+            let main_candle_view = main_spec.and_then(|s| s.candle_view);
             let pending = specs
                 .iter()
                 .filter(|s| s.group == group && s.num >= 1 && s.detached.is_some())
@@ -240,6 +252,7 @@ impl ChartTabs {
                 main_time_axis,
                 main_line_labels,
                 main_cursor_labels,
+                main_candle_view,
                 pending,
             )
         };
@@ -258,6 +271,9 @@ impl ChartTabs {
             main.update(cx, |p, pcx| {
                 p.set_liquidations_enabled(main_liquidations, pcx)
             });
+        }
+        if main_candle_view.is_some() {
+            main.update(cx, |p, pcx| p.set_candle_view(main_candle_view, pcx));
         }
         if main_show_zone.is_some() {
             main.update(cx, |p, pcx| p.set_show_zone(main_show_zone, pcx));
@@ -282,9 +298,21 @@ impl ChartTabs {
         if main_cursor_labels.is_some() {
             main.update(cx, |p, pcx| p.set_cursor_labels(main_cursor_labels, pcx));
         }
+        // Сохранённый X-масштаб окна группы ([Shift+СКМ] sync) — новые графики стартуют с него.
+        let group_x_ppm = backend
+            .read(cx)
+            .layout
+            .chart_x_ppm_by_group
+            .get(&group)
+            .copied();
+        if group_x_ppm.is_some() {
+            main.update(cx, |s, c| s.set_x_ppm(group_x_ppm, false, c));
+        }
         cx.observe(&backend, |this, backend, cx| {
             // Запросы «применить ко всем» из выносных окон — до early-return по sig (они sig не меняют).
             this.drain_apply_all(cx);
+            // [Shift+СКМ] в НАШЕМ окне → применить масштаб ко всем стекам окна + persist.
+            this.drain_x_sync(cx);
             let sig = chart_tabs_sig(backend.read(cx), &this.group);
             if sig == this.last_sig {
                 return;
@@ -384,12 +412,15 @@ impl ChartTabs {
             last_switch_charts_rev: 0,
             last_close_all_charts_rev: 0,
             last_close_active_chart_rev: 0,
+            last_x_sync_rev: initial_x_sync_rev,
             restore_pending,
             window_handle: window.window_handle(),
             focus: cx.focus_handle(),
             fig_style_popup_open: false,
             layout_popup_open: false,
             layout_popup_hovered: false,
+            candle_popup_open: false,
+            candle_popup_hovered: false,
             layout_fit_input,
             layout_scroll_input,
             custom_name_input,

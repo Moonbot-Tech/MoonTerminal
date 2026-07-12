@@ -443,6 +443,43 @@ impl ChartEngine {
         true
     }
 
+    /// Сохранённый X-масштаб для НОВЫХ панелей (px/ms; None = 60-секундный дефолт).
+    pub fn set_default_x_ppm(&mut self, ppm: Option<f32>) {
+        self.data.borrow_mut().default_x_ppm = ppm;
+    }
+
+    /// X-масштаб (px/ms) панели `idx` (наведённой), иначе первой — источник sync.
+    pub fn pane_x_ppm(&self, idx: Option<usize>) -> Option<f32> {
+        let container = self.container.borrow();
+        let panes = container.panes();
+        let pane = idx.and_then(|i| panes.get(i)).or_else(|| panes.first())?;
+        Some(pane.view.px_per_ms)
+    }
+
+    /// Навязать X-масштаб всем панелям движка ([Shift+СКМ] sync). `true` при изменении.
+    pub fn set_x_ppm_all(&mut self, ppm: f32, now_ms: f64) -> bool {
+        let mut changed = false;
+        for p in self.container.borrow_mut().panes_mut() {
+            changed |= p.view.set_px_per_ms_sync(ppm, now_ms);
+        }
+        if changed {
+            self.data.borrow_mut().mark_view_dirty();
+        }
+        changed
+    }
+
+    /// Глобальные настройки отображения свечей/трейдов (ТФ/режим/зона/контур) для всех
+    /// панелей движка. `true` при изменении (форсит пересинк истории).
+    pub fn set_candle_view(&mut self, cfg: moon_core::market::CandleViewCfg) -> bool {
+        let mut data = self.data.borrow_mut();
+        if data.candle_view == cfg {
+            return false;
+        }
+        data.candle_view = cfg;
+        data.mark_view_dirty();
+        true
+    }
+
     /// Вкл/выкл трейды ликвидаций для всех панелей движка (per-окно). `true` при изменении.
     pub fn set_liquidations_enabled(&mut self, enabled: bool) -> bool {
         let mut data = self.data.borrow_mut();

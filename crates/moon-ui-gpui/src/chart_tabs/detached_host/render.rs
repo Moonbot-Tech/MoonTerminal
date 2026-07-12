@@ -10,6 +10,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::super::candle_popup::{self, CandlePopupHost};
 use super::super::common::{self, LayoutPopupHost};
 use super::super::{chart_pane_label, coin_search};
 use super::DetachedChartHost;
@@ -27,6 +28,26 @@ impl Render for DetachedChartHost {
         if self.taskbar_hide_ticks > 0 {
             crate::windowing::hide_window_from_taskbar(window);
             self.taskbar_hide_ticks -= 1;
+        }
+        // [Shift+СКМ] на графике ЭТОГО окна → X-масштаб на панель окна + persist в спек.
+        {
+            let (rev, req) = {
+                let b = self.backend.read(cx);
+                (b.chart_x_sync_rev, b.chart_x_sync)
+            };
+            if rev != self.last_x_sync_rev {
+                self.last_x_sync_rev = rev;
+                if let Some((handle, ppm)) = req {
+                    if handle == window.window_handle() {
+                        self.panel.update(cx, |s, c| s.set_x_ppm(Some(ppm), true, c));
+                        let backend = self.backend.clone();
+                        let (num, bucket) = (self.num, self.bucket.clone());
+                        common::upsert_spec(&backend, &self.group.clone(), num, &bucket, cx, move |s| {
+                            s.x_ppm = Some(ppm)
+                        });
+                    }
+                }
+            }
         }
         let p = MoonPalette::active(cx);
         // Масштаб — СВОЙ у этой панели (по-вкладочно), правится прямо в неё.
@@ -47,6 +68,11 @@ impl Render for DetachedChartHost {
             cx,
         );
         let layout_dismiss = common::layout_popup_dismiss(self, "detached-chart-layout", cx);
+        // Попап «Свечи и трейды» (глобальный) — кнопка ❚ рядом с ⚙, якорь под шапкой.
+        let candle_popup_open = self.candle_popup_open;
+        let candle_popup =
+            candle_popup::candle_popup_overlay(self, "detached-chart-candles", px(38.0), cx);
+        let candle_dismiss = candle_popup::candle_popup_dismiss(self, "detached-chart-candles", cx);
         // Поле ввода монеты (поиск) шапки + список совпадений. Список рисуем на уровне v_flex
         // (после тела), иначе тело окна (paint-порядок ниже) перекроет выпадашку из шапки.
         let coin_search_el = div().w(px(80.0)).child(
@@ -120,6 +146,23 @@ impl Render for DetachedChartHost {
                     ))
                     .child({
                         let entity = cx.entity();
+                        MoonButton::new("detached-candle-settings")
+                            .label("❚")
+                            .tooltip(t!("chart.candles.tip").to_string())
+                            .size(MoonButtonSize::Micro)
+                            .variant(if candle_popup_open {
+                                MoonButtonVariant::Blue
+                            } else {
+                                MoonButtonVariant::Ghost
+                            })
+                            .selected(candle_popup_open)
+                            .on_click(move |_, _window, app| {
+                                entity.update(app, |this, cx| this.toggle_candle_popup(cx));
+                            })
+                            .render()
+                    })
+                    .child({
+                        let entity = cx.entity();
                         div().relative().child(
                             MoonButton::new("detached-layout-settings")
                                 .label("⚙")
@@ -168,5 +211,7 @@ impl Render for DetachedChartHost {
             .children(coin_popup)
             .children(layout_dismiss)
             .children(layout_popup)
+            .children(candle_dismiss)
+            .children(candle_popup)
     }
 }

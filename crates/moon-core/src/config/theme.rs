@@ -34,6 +34,16 @@ pub struct ChartTheme {
     /// Полутолщина линий перекрестия, px.
     pub cross_thickness: f32,
 
+    // --- Свечи ---
+    /// Цвет растущей свечи (close ≥ open), sRGB. Дефолт = зелёный крестов buy.
+    pub candle_up: [u8; 3],
+    /// Цвет падающей свечи, sRGB. Дефолт = оранжевый крестов sell.
+    pub candle_down: [u8; 3],
+    /// Нейтральный цвет свечей в зоне трейдов (галка «Нейтральный цвет в зоне»), sRGB.
+    pub candle_neutral: [u8; 3],
+    /// Непрозрачность заливки тела свечи 0..1 (контуры/фитили рисуются плотнее).
+    pub candle_fill_alpha: f32,
+
     // --- Стакан ---
     /// Фон зоны стакана (sRGB).
     pub book_bg: [u8; 3],
@@ -90,6 +100,11 @@ impl Default for ChartTheme {
             cross: [128, 128, 128],
             cross_alpha: 0.5,
             cross_thickness: 1.0,
+            // Свечи в цветах крестов трейдов (crosses.hlsl buy/sell), нейтраль — серый.
+            candle_up: [47, 168, 92],
+            candle_down: [255, 142, 90],
+            candle_neutral: [128, 128, 128],
+            candle_fill_alpha: 0.85,
             book_bg: [30, 30, 30],
             book_bid: [75, 86, 48],
             book_ask: [170, 73, 39],
@@ -126,6 +141,10 @@ impl ChartTheme {
         self.bg = [255, 255, 255];
         self.grid = [236, 239, 242];
         self.cross = [128, 128, 128];
+        self.candle_up = [0, 128, 0];
+        self.candle_down = [255, 0, 0];
+        self.candle_neutral = [150, 150, 150];
+        self.candle_fill_alpha = 0.85;
         self.book_bg = [255, 255, 255];
         self.book_bid = [0, 128, 0];
         self.book_ask = [255, 0, 0];

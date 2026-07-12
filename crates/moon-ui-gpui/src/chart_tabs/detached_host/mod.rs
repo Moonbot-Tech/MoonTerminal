@@ -47,6 +47,12 @@ pub(super) struct DetachedChartHost {
     layout_popup_open: bool,
     /// Был ли курсор внутри popup-а. Уход после первого входа закрывает popup и коммитит ввод.
     layout_popup_hovered: bool,
+    /// In-scene попап «Свечи и трейды» (кнопка ❚) — глобальные настройки отображения свечей.
+    candle_popup_open: bool,
+    candle_popup_hovered: bool,
+    /// Последняя виденная `chart_x_sync_rev` — [Shift+СКМ] в ЭТОМ окне применяет масштаб
+    /// к панели окна + persist в спек вкладки, одноразово.
+    last_x_sync_rev: u64,
     /// Поле высоты режима Fit.
     layout_fit_input: Entity<MoonInputState>,
     /// Поле высоты режима Scroll.
@@ -119,6 +125,7 @@ impl DetachedChartHost {
             });
         })
         .detach();
+        let initial_x_sync_rev = backend.read(cx).chart_x_sync_rev;
         // Восстановить сохранённую раскладку + флаг стакана вкладки из charts.json в панель.
         let (group2, num2, bucket2) = (group.clone(), num, bucket.clone());
         let saved = backend.read(cx).chart_specs.iter().find_map(|s| {
@@ -136,6 +143,8 @@ impl DetachedChartHost {
                     s.time_axis_visible,
                     s.line_labels,
                     s.cursor_labels,
+                    s.candle_view,
+                    s.x_ppm,
                 )
             })
         });
@@ -152,6 +161,8 @@ impl DetachedChartHost {
             time_axis,
             line_labels,
             cursor_labels,
+            candle_view,
+            saved_x_ppm,
         )) = saved
         {
             if m.is_some() || hf.is_some() || hs.is_some() {
@@ -162,6 +173,21 @@ impl DetachedChartHost {
             }
             if liq.is_some() {
                 panel.update(cx, |p, pcx| p.set_liquidations_enabled(liq, pcx));
+            }
+            if candle_view.is_some() {
+                panel.update(cx, |p, pcx| p.set_candle_view(candle_view, pcx));
+            }
+            // X-масштаб окна: свой из спека, иначе масштаб группы-родителя.
+            let x_ppm = saved_x_ppm.or_else(|| {
+                backend
+                    .read(cx)
+                    .layout
+                    .chart_x_ppm_by_group
+                    .get(&group)
+                    .copied()
+            });
+            if x_ppm.is_some() {
+                panel.update(cx, |p, pcx| p.set_x_ppm(x_ppm, false, pcx));
             }
             if sz.is_some() {
                 panel.update(cx, |p, pcx| p.set_show_zone(sz, pcx));
@@ -254,6 +280,9 @@ impl DetachedChartHost {
             taskbar_hide_ticks: 8,
             layout_popup_open: false,
             layout_popup_hovered: false,
+            candle_popup_open: false,
+            candle_popup_hovered: false,
+            last_x_sync_rev: initial_x_sync_rev,
             layout_fit_input,
             layout_scroll_input,
             custom_name_input,
@@ -474,6 +503,41 @@ impl DetachedChartHost {
             "[geom] n={num} bucket={bucket:?} → x={} y={} w={} h={} (spec_found={found})",
             geom.x, geom.y, geom.w, geom.h
         ));
+    }
+}
+
+/// Хозяин попапа «Свечи и трейды» (кнопка ❚): цель = панель ЭТОГО окна; «ко всем» —
+/// запрос группе через Backend (дренит полоска вкладок, как ChartApplyAll).
+impl super::candle_popup::CandlePopupHost for DetachedChartHost {
+    fn candle_popup_open(&self) -> bool {
+        self.candle_popup_open
+    }
+    fn set_candle_popup_open(&mut self, open: bool) {
+        self.candle_popup_open = open;
+    }
+    fn candle_popup_hovered(&self) -> bool {
+        self.candle_popup_hovered
+    }
+    fn set_candle_popup_hovered(&mut self, hovered: bool) {
+        self.candle_popup_hovered = hovered;
+    }
+    fn candle_view_override(&self, cx: &App) -> Option<moon_core::market::CandleViewCfg> {
+        self.panel.read(cx).candle_view()
+    }
+    fn apply_candle_view_all(
+        &mut self,
+        cfg: moon_core::market::CandleViewCfg,
+        cx: &mut Context<Self>,
+    ) {
+        // Применить к себе сразу; остальным — через очередь Backend (дренит полоска группы).
+        // Вместе с набором копируем X-масштаб этого окна.
+        self.apply_candle_view(cfg, cx);
+        let x_ppm = self.panel.read(cx).x_ppm();
+        let group = self.group.clone();
+        self.backend.update(cx, |bk, bcx| {
+            bk.chart_candle_apply_all.push((group, cfg, x_ppm));
+            bcx.notify();
+        });
     }
 }
 

@@ -363,7 +363,7 @@ impl RenderState {
             let cx_log = (slot_origin[0] + cursor.local[0]) / sf;
             let cy_log = (slot_origin[1] + cursor.local[1]) / sf;
 
-            let time_to_px = (pr.view.time_to_px / sf).max(1e-6);
+            let time_to_px = (pr.view.time_to_px / sf).max(moon_chart::view::MIN_PX_PER_MS);
             if cx_log >= plot_left && cx_log <= plot_right {
                 let left_unix = pr.epoch_ms + pr.view.view_time0 as f64;
                 let unix = left_unix + (cx_log - plot_left) as f64 / time_to_px as f64;

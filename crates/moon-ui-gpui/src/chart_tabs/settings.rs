@@ -301,10 +301,117 @@ impl ChartTabs {
         cx.notify();
     }
 
+    /// Применить настройки отображения свечей (и X-масштаб окна-источника, если задан)
+    /// ко ВСЕМ вкладкам/окнам группы (кнопка ⧉ попапа ❚) + обновить глобальные дефолты —
+    /// новые вкладки/окна наследуют.
+    pub(super) fn apply_candle_view_to_all(
+        &mut self,
+        cfg: moon_core::market::CandleViewCfg,
+        x_ppm: Option<f32>,
+        cx: &mut Context<Self>,
+    ) {
+        self.main.update(cx, |s, c| {
+            s.set_candle_view(Some(cfg), c);
+            if x_ppm.is_some() {
+                s.set_x_ppm(x_ppm, true, c);
+            }
+        });
+        self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| s.candle_view = Some(cfg));
+        let targets: Vec<(u32, ChartBucket, Entity<AddChartStack>)> = self
+            .add
+            .iter()
+            .chain(self.custom.iter())
+            .chain(self.detached.iter())
+            .map(|(n, b, p)| (*n, b.clone(), p.clone()))
+            .collect();
+        for (num, bucket, panel) in targets {
+            panel.update(cx, |s, c| {
+                s.set_candle_view(Some(cfg), c);
+                if x_ppm.is_some() {
+                    s.set_x_ppm(x_ppm, true, c);
+                }
+            });
+            self.upsert_spec(cx, num, &bucket, |s| {
+                s.candle_view = Some(cfg);
+                if x_ppm.is_some() {
+                    s.x_ppm = x_ppm;
+                }
+            });
+        }
+        let group = self.group.clone();
+        self.backend.update(cx, |b, _| {
+            b.layout.candle_view = cfg;
+            if let Some(ppm) = x_ppm {
+                // Масштаб — в СВОЮ группу и во все известные группы-окна: их новые
+                // графики наследуют (живые окна других групп подхватят на своих чартах).
+                b.layout.chart_x_ppm_by_group.insert(group, ppm);
+                let groups: Vec<String> = b.layout.groups.keys().cloned().collect();
+                for g in groups {
+                    b.layout.chart_x_ppm_by_group.insert(g, ppm);
+                }
+            }
+            b.layout_dirty = true;
+        });
+        cx.notify();
+    }
+
+    /// [Shift+СКМ] на графике НАШЕГО окна: применить X-масштаб ко всем стекам окна
+    /// (Main + вкладки; выносные окна группы — НЕ трогаем, у них свой скоуп) + persist
+    /// в `layout.chart_x_ppm_by_group` (новые графики окна наследуют).
+    pub(super) fn drain_x_sync(&mut self, cx: &mut Context<Self>) {
+        let (rev, req) = {
+            let b = self.backend.read(cx);
+            (b.chart_x_sync_rev, b.chart_x_sync)
+        };
+        if rev == self.last_x_sync_rev {
+            return;
+        }
+        self.last_x_sync_rev = rev;
+        let Some((handle, ppm)) = req else {
+            return;
+        };
+        if handle != self.window_handle {
+            return;
+        }
+        self.apply_x_ppm_to_window(ppm, cx);
+    }
+
+    /// Применить X-масштаб ко всем стекам ЭТОГО окна + persist per-группа.
+    pub(super) fn apply_x_ppm_to_window(&mut self, ppm: f32, cx: &mut Context<Self>) {
+        self.main.update(cx, |s, c| s.set_x_ppm(Some(ppm), true, c));
+        let stacks: Vec<Entity<AddChartStack>> = self
+            .add
+            .iter()
+            .chain(self.custom.iter())
+            .map(|(_, _, p)| p.clone())
+            .collect();
+        for panel in stacks {
+            panel.update(cx, |s, c| s.set_x_ppm(Some(ppm), true, c));
+        }
+        let group = self.group.clone();
+        self.backend.update(cx, |b, _| {
+            b.layout.chart_x_ppm_by_group.insert(group, ppm);
+            b.layout_dirty = true;
+        });
+        cx.notify();
+    }
+
     /// Дренаж запросов «применить ко всем» из выносных окон чартов ЭТОЙ группы (у них нет доступа
     /// к стекам группы, поэтому шлют через Backend).
     pub(super) fn drain_apply_all(&mut self, cx: &mut Context<Self>) {
         let group = self.group.clone();
+        let candle_reqs: Vec<(moon_core::market::CandleViewCfg, Option<f32>)> =
+            self.backend.update(cx, |b, _| {
+                let (mine, rest): (Vec<_>, Vec<_>) = b
+                    .chart_candle_apply_all
+                    .drain(..)
+                    .partition(|(g, _, _)| *g == group);
+                b.chart_candle_apply_all = rest;
+                mine.into_iter().map(|(_, c, x)| (c, x)).collect()
+            });
+        for (cfg, x_ppm) in candle_reqs {
+            self.apply_candle_view_to_all(cfg, x_ppm, cx);
+        }
         let reqs: Vec<crate::ChartApplyAll> = self.backend.update(cx, |b, _| {
             let (mine, rest): (Vec<_>, Vec<_>) =
                 b.chart_apply_all.drain(..).partition(|r| r.group == group);
@@ -332,6 +439,46 @@ impl ChartTabs {
                 cx,
             );
         }
+    }
+}
+
+/// Хозяин попапа «Свечи и трейды» (кнопка ❚): цель = АКТИВНАЯ вкладка (как у ⚙);
+/// применение/persist — через `apply_tab_setting(StackSetting::CandleView)`.
+impl super::candle_popup::CandlePopupHost for ChartTabs {
+    fn candle_popup_open(&self) -> bool {
+        self.candle_popup_open
+    }
+    fn set_candle_popup_open(&mut self, open: bool) {
+        self.candle_popup_open = open;
+    }
+    fn candle_popup_hovered(&self) -> bool {
+        self.candle_popup_hovered
+    }
+    fn set_candle_popup_hovered(&mut self, hovered: bool) {
+        self.candle_popup_hovered = hovered;
+    }
+    fn candle_view_override(&self, cx: &App) -> Option<moon_core::market::CandleViewCfg> {
+        match &self.active {
+            Tab::Main => self.main.read(cx).candle_view(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => {
+                self.add_stack(*n, b).and_then(|p| p.read(cx).candle_view())
+            }
+        }
+    }
+    fn apply_candle_view_all(
+        &mut self,
+        cfg: moon_core::market::CandleViewCfg,
+        cx: &mut Context<Self>,
+    ) {
+        // Вместе с набором свечей копируем и X-масштаб этого окна (если задан).
+        let x_ppm = self
+            .backend
+            .read(cx)
+            .layout
+            .chart_x_ppm_by_group
+            .get(&self.group)
+            .copied();
+        self.apply_candle_view_to_all(cfg, x_ppm, cx);
     }
 }
 

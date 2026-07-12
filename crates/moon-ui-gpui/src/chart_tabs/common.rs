@@ -43,6 +43,8 @@ pub(super) enum StackSetting {
     LineLabels(bool),
     /// Подписи у перекрестия.
     CursorLabels(bool),
+    /// Настройки отображения свечей/трейдов (попап ❚).
+    CandleView(moon_core::market::CandleViewCfg),
 }
 
 impl StackSetting {
@@ -67,6 +69,7 @@ impl StackSetting {
             StackSetting::TimeAxis(v) => s.time_axis_visible = Some(v),
             StackSetting::LineLabels(v) => s.line_labels = Some(v),
             StackSetting::CursorLabels(v) => s.cursor_labels = Some(v),
+            StackSetting::CandleView(v) => s.candle_view = Some(v),
         }
     }
 }
@@ -105,6 +108,9 @@ macro_rules! set_stack_setting {
             }
             crate::chart_tabs::common::StackSetting::CursorLabels(v) => {
                 $s.set_cursor_labels(Some(v), $c)
+            }
+            crate::chart_tabs::common::StackSetting::CandleView(v) => {
+                $s.set_candle_view(Some(v), $c)
             }
         }
     };

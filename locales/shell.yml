@@ -328,6 +328,94 @@ chart.layout.apply_all_charts:
   ru: "Применить ко всем чартам"
   en: "Apply to all charts"
   es: "Aplicar a todos los gráficos"
+chart.candles.title:
+  ru: "Свечи и трейды"
+  en: "Candles & trades"
+  es: "Velas y trades"
+chart.candles.apply_all:
+  ru: "Применить ко всем вкладкам и окнам"
+  en: "Apply to all tabs and windows"
+  es: "Aplicar a todas las pestañas y ventanas"
+chart.candles.tip:
+  ru: "Отображение свечей и трейдов (общее для всех чартов)"
+  en: "Candle & trade display (global for all charts)"
+  es: "Visualización de velas y trades (global)"
+chart.candles.frame_candles:
+  ru: "Свечи"
+  en: "Candles"
+  es: "Velas"
+chart.candles.frame_trades:
+  ru: "Трейды"
+  en: "Trades"
+  es: "Trades"
+chart.candles.tf:
+  ru: "Таймфрейм"
+  en: "Timeframe"
+  es: "Marco temporal"
+chart.candles.mode:
+  ru: "Режим свечей"
+  en: "Candle mode"
+  es: "Modo de velas"
+chart.candles.mode_off:
+  ru: "Нет"
+  en: "Off"
+  es: "No"
+chart.candles.price_lines:
+  ru: "Линии цены (last/mark)"
+  en: "Price lines (last/mark)"
+  es: "Líneas de precio (last/mark)"
+chart.candles.mode_filled:
+  ru: "Заливка"
+  en: "Filled"
+  es: "Relleno"
+chart.candles.mode_outline:
+  ru: "Контур"
+  en: "Outline"
+  es: "Contorno"
+chart.candles.mode_zone:
+  ru: "В зоне"
+  en: "In zone"
+  es: "En zona"
+chart.candles.mode_hint:
+  ru: "«В зоне» — контуры там, где трейды,\nлевее — заполненные"
+  en: "\"In zone\" — outlines where trades are,\nfilled to the left"
+  es: "\"En zona\" — contornos donde hay trades,\nrelleno a la izquierda"
+chart.candles.outline:
+  ru: "Толщина контура"
+  en: "Outline width"
+  es: "Grosor del contorno"
+chart.candles.zone:
+  ru: "Свечей с трейдами"
+  en: "Candles with trades"
+  es: "Velas con trades"
+chart.candles.zone_hint:
+  ru: "Трейды рисуются в последних N свечах;\n0 — только свечи"
+  en: "Trades are drawn in the last N candles;\n0 — candles only"
+  es: "Los trades se dibujan en las últimas N velas;\n0 — solo velas"
+chart.candles.hide:
+  ru: "Скрыть последних свечей"
+  en: "Hide last candles"
+  es: "Ocultar últimas velas"
+chart.candles.hide_hint:
+  ru: "В последних N свечах свечи не рисуются —\nостаются только трейды"
+  en: "The last N candles are not drawn —\nonly trades remain there"
+  es: "Las últimas N velas no se dibujan —\nsolo quedan trades"
+chart.candles.limit:
+  ru: "Лимит трейдов"
+  en: "Trades limit"
+  es: "Límite de trades"
+chart.candles.wicks_in_zone:
+  ru: "Тени в зоне трейдов"
+  en: "Wicks in trade zone"
+  es: "Mechas en zona de trades"
+chart.candles.neutral_in_zone:
+  ru: "Нейтральный цвет в зоне"
+  en: "Neutral color in zone"
+  es: "Color neutro en zona"
+chart.candles.neutral:
+  ru: "Нейтральный цвет"
+  en: "Neutral color"
+  es: "Color neutro"
 chart.layout.orderbook:
   ru: "Стакан"
   en: "Order book"

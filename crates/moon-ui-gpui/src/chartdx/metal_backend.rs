@@ -17,10 +17,10 @@ use objc::{msg_send, sel, sel_impl};
 use std::ffi::c_void;
 
 use super::types::{
-    BackgroundParams, BookStyle, ChartCross, ChartViewGpu, CursorParams, DEFAULT_VOLUME_ALPHA,
-    GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu, append_cross_ring,
-    cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring,
-    ranges_touch_volume_max, reset_cross_ring, seg_of,
+    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu,
+    CursorParams, DEFAULT_VOLUME_ALPHA, GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu,
+    ZoneGpu, append_cross_ring, cross_volume_max, evicted_cross_ranges, hl_of, mk_of,
+    ordered_cross_ring, ranges_touch_volume_max, reset_cross_ring, seg_of,
     update_cross_volume_max, zone_of,
 };
 
@@ -143,6 +143,7 @@ struct Pipelines {
     grid: RenderPipelineState,
     cursor: RenderPipelineState,
     readout_rect: RenderPipelineState,
+    candles: RenderPipelineState,
     crosses: RenderPipelineState,
     volume: RenderPipelineState,
     price_last: RenderPipelineState,
@@ -291,6 +292,9 @@ pub struct MetalLayers {
     mark_line: Vec<PriceLinePoint>,
     combo_capacity: usize,
     price_line_capacity: usize,
+    /// Свечи (полный набор серии; замена целиком по смене ревизии) + стиль слоя.
+    candles: Vec<CandleGpu>,
+    candle_style: CandleStyleGpu,
     levels: Vec<LevelInstance>,
     zones: Vec<ZoneGpu>,
     hlines: Vec<HLineGpu>,
@@ -313,10 +317,13 @@ pub struct MetalLayers {
     hline_buffer: BufferSlot,
     seg_buffer: BufferSlot,
     marker_buffer: BufferSlot,
+    candle_buffer: BufferSlot,
+    candle_style_uniform: BufferSlot,
     combo_buffers_dirty: bool,
     price_line_buffers_dirty: bool,
     book_buffer_dirty: bool,
     userdata_buffers_dirty: bool,
+    candle_buffers_dirty: bool,
 }
 
 impl MetalLayers {
@@ -336,6 +343,8 @@ impl MetalLayers {
             mark_line: Vec::new(),
             combo_capacity: MIN_COMBO_CAPACITY,
             price_line_capacity: MIN_COMBO_CAPACITY,
+            candles: Vec::new(),
+            candle_style: CandleStyleGpu::default(),
             levels: Vec::new(),
             zones: Vec::new(),
             hlines: Vec::new(),
@@ -358,10 +367,30 @@ impl MetalLayers {
             hline_buffer: BufferSlot::default(),
             seg_buffer: BufferSlot::default(),
             marker_buffer: BufferSlot::default(),
+            candle_buffer: BufferSlot::default(),
+            candle_style_uniform: BufferSlot::default(),
             combo_buffers_dirty: true,
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
             userdata_buffers_dirty: true,
+            candle_buffers_dirty: true,
+        }
+    }
+
+    /// Полная замена набора свечей (по смене ревизии серии). Свечи лежат в base-кэше —
+    /// его надо перепечь.
+    pub fn set_candles(&mut self, data: Vec<CandleGpu>) {
+        self.candles = data;
+        self.candle_buffers_dirty = true;
+        self.base_cache.valid = false;
+    }
+
+    /// Стиль слоя свечей (режим/зона/цвета/контур). Идемпотентен.
+    pub fn set_candle_style(&mut self, style: CandleStyleGpu) {
+        if self.candle_style != style {
+            self.candle_style = style;
+            self.candle_buffers_dirty = true;
+            self.base_cache.valid = false;
         }
     }
 
@@ -519,10 +548,13 @@ impl MetalLayers {
         self.hline_buffer = BufferSlot::default();
         self.seg_buffer = BufferSlot::default();
         self.marker_buffer = BufferSlot::default();
+        self.candle_buffer = BufferSlot::default();
+        self.candle_style_uniform = BufferSlot::default();
         self.combo_buffers_dirty = true;
         self.price_line_buffers_dirty = true;
         self.book_buffer_dirty = true;
         self.userdata_buffers_dirty = true;
+        self.candle_buffers_dirty = true;
     }
 
     pub fn render(
@@ -588,6 +620,15 @@ impl MetalLayers {
         crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
         set_uniform(encoder, 0, self.grid_uniform.buffer());
         draw(encoder, &pipelines.grid, 6, 1);
+
+        // Свечи — под крестами трейдов (combo блитится поверх base-кэша).
+        if !self.candles.is_empty() {
+            crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
+            set_uniform(encoder, 0, self.view_uniform.buffer());
+            set_uniform(encoder, 1, self.candle_style_uniform.buffer());
+            set_storage(encoder, 2, self.candle_buffer.buffer());
+            draw(encoder, &pipelines.candles, 18, self.candles.len() as u64);
+        }
 
         crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
         set_uniform(encoder, 0, self.book_view_uniform.buffer());
@@ -1081,6 +1122,19 @@ impl MetalLayers {
                 .write(device, "moon_chart_markers", &self.markers);
             self.userdata_buffers_dirty = false;
         }
+        if self.candle_buffers_dirty
+            || self.candle_buffer.buffer.is_none()
+            || self.candle_style_uniform.buffer.is_none()
+        {
+            self.candle_buffer
+                .write(device, "moon_chart_candles", &self.candles);
+            self.candle_style_uniform.write(
+                device,
+                "moon_chart_candle_style",
+                &[self.candle_style],
+            );
+            self.candle_buffers_dirty = false;
+        }
     }
 
     fn upload_frame_uniforms(
@@ -1291,6 +1345,13 @@ fn create_pipelines(device: &DeviceRef, pixel_format: MTLPixelFormat) -> Pipelin
             pixel_format,
             "readout_rect_vertex",
             "readout_rect_fragment",
+        ),
+        candles: pipeline(
+            device,
+            &library,
+            pixel_format,
+            "candles_vertex",
+            "candles_fragment",
         ),
         crosses: pipeline(
             device,

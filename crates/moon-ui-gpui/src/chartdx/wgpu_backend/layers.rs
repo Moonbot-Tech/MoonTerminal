@@ -21,6 +21,8 @@ impl WgpuLayers {
             mark_line: Vec::new(),
             combo_capacity: MIN_COMBO_CAPACITY,
             price_line_capacity: MIN_COMBO_CAPACITY,
+            candles: Vec::new(),
+            candle_style: CandleStyleGpu::default(),
             levels: Vec::new(),
             zones: Vec::new(),
             hlines: Vec::new(),
@@ -44,10 +46,30 @@ impl WgpuLayers {
             hline_buffer: BufferSlot::default(),
             seg_buffer: BufferSlot::default(),
             marker_buffer: BufferSlot::default(),
+            candle_buffer: BufferSlot::default(),
+            candle_style_uniform: BufferSlot::default(),
             combo_buffers_dirty: true,
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
             userdata_buffers_dirty: true,
+            candle_buffers_dirty: true,
+        }
+    }
+
+    /// Полная замена набора свечей (по смене ревизии серии). Свечи лежат в base-кэше —
+    /// его надо перепечь.
+    pub fn set_candles(&mut self, data: Vec<CandleGpu>) {
+        self.candles = data;
+        self.candle_buffers_dirty = true;
+        self.base_cache.valid = false;
+    }
+
+    /// Стиль слоя свечей (режим/зона/цвета/контур). Идемпотентен.
+    pub fn set_candle_style(&mut self, style: CandleStyleGpu) {
+        if self.candle_style != style {
+            self.candle_style = style;
+            self.candle_buffers_dirty = true;
+            self.base_cache.valid = false;
         }
     }
 
@@ -208,10 +230,13 @@ impl WgpuLayers {
         self.hline_buffer = BufferSlot::default();
         self.seg_buffer = BufferSlot::default();
         self.marker_buffer = BufferSlot::default();
+        self.candle_buffer = BufferSlot::default();
+        self.candle_style_uniform = BufferSlot::default();
         self.combo_buffers_dirty = true;
         self.price_line_buffers_dirty = true;
         self.book_buffer_dirty = true;
         self.userdata_buffers_dirty = true;
+        self.candle_buffers_dirty = true;
     }
 
     fn recalc_volume_scale(&mut self) {

@@ -53,6 +53,10 @@ diag_counters!(
     CHART_BASE_BLIT   => "base_blit",
     CHART_COMBO_DRAW  => "combo_draw",
     CHART_COMBO_BAKE  => "combo_bake",
+    // Слой свечей: дроу раз на base-проход; UPLOAD_LEN — строк залито по смене ревизии серии
+    // (живой край бампает ревизию на каждый батч трейдов — это ожидаемо и дёшево).
+    CHART_CANDLE_DRAW => "candle_draw",
+    CHART_CANDLE_UPLOAD_LEN => "candle_upload_len",
     CHART_HISTORY_RESET_ROWS => "history_reset_rows",
     CHART_HISTORY_RESET_MS => "history_reset_ms",
     CHART_COMBO_UPLOAD_LEN => "combo_upload_len",

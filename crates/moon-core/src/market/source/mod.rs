@@ -13,6 +13,7 @@ use moonproto::state::{
 };
 use moonproto::MoonTime;
 
+use super::candles::{CandleSeries, ChartCandle};
 use crate::feed::{MarketDirtyFlags, PricePoint, SharedMoonClient, Side, Tick};
 use crate::session::CoreId;
 
@@ -158,6 +159,27 @@ pub struct ChartHistoryCursor {
     liq_rows: Vec<TradeHistoryRow>,
     last_price_rows: Vec<LastPricePoint>,
     mark_price_rows: Vec<MarkPricePoint>,
+    /// Слитная серия свечей (серверная база + локальный хвост из трейдов).
+    /// Свой курсор по трейд-рингу (агрегация независима от зоны отображения крестов).
+    candle_series: CandleSeries,
+    candle_trades: Option<SeqRingCursor>,
+    candle_trade_rows: Vec<TradeHistoryRow>,
+    candle_ticks: Vec<Tick>,
+    server_candle_rows: Vec<moonproto::state::Candle5mRow>,
+    server_candles: Vec<ChartCandle>,
+    /// Троттл неблокирующего запроса CoinCard deep history (честные OHLC).
+    last_deep_request: Option<Instant>,
+    /// Последний запрошенный kind — смена ТФ обходит троттл.
+    last_deep_kind: Option<moonproto::DeepHistoryKind>,
+    /// Активная подписка живых ТФ-баров (`Event::LiveCandle`): (рынок, kind).
+    /// Без неё retained tf_candles заморожены с момента ответа — на больших ТФ
+    /// (1д/4ч) серия отставала на часы («разрыв между лайв-данными и свечами»).
+    /// Переподписка при смене kind/рынка; снятие при выключенных свечах.
+    candle_sub: Option<(String, moonproto::DeepHistoryKind)>,
+    /// Сигнатура загруженных deep-строк на момент последней пересборки серии: их
+    /// приход/обновление форсит rebuild (без этого история появлялась только после
+    /// переоткрытия графика).
+    last_deep_sig: u64,
 }
 
 impl ChartHistoryCursor {
@@ -172,6 +194,14 @@ impl ChartHistoryCursor {
         self.liq_rows.clear();
         self.last_price_rows.clear();
         self.mark_price_rows.clear();
+        self.candle_series.invalidate();
+        self.candle_trades = None;
+        self.candle_trade_rows.clear();
+        self.candle_ticks.clear();
+        self.server_candle_rows.clear();
+        self.server_candles.clear();
+        // last_deep_request НЕ сбрасываем: троттл запросов переживает reset
+        // (смена рынка пересоздаёт PaneRender → курсор свежий).
     }
 }
 
@@ -184,6 +214,9 @@ pub struct ChartHistoryBuffers {
     pub liquidations: Vec<Tick>,
     pub last_points: Vec<PricePoint>,
     pub mark_points: Vec<PricePoint>,
+    /// Свечи серии (полный видимый ряд). Наполняется ТОЛЬКО когда ревизия серии отличается
+    /// от `CandleReadParams::shipped_revision` (см. `ChartHistoryRead::candles_changed`).
+    pub candles: Vec<ChartCandle>,
 }
 
 impl ChartHistoryBuffers {
@@ -192,7 +225,23 @@ impl ChartHistoryBuffers {
         self.liquidations.clear();
         self.last_points.clear();
         self.mark_points.clear();
+        self.candles.clear();
     }
+}
+
+/// Параметры чтения свечей/зоны трейдов для `read_chart_history_into`. `None` у вызова =
+/// легаси-поведение (только кресты, без свечей).
+#[derive(Debug, Clone, Copy)]
+pub struct CandleReadParams {
+    /// Таймфрейм серии, мс.
+    pub tf_ms: i64,
+    /// Нижняя граница ОТОБРАЖАЕМЫХ трейдов (rel ms от epoch) — зона «последних K свечей».
+    /// `f32::INFINITY` = трейды не отображаем вовсе (K=0). На агрегацию свечей не влияет.
+    pub trades_from_rel_ms: f32,
+    /// Жёсткий лимит числа отображаемых трейдов.
+    pub trades_limit: usize,
+    /// Ревизия серии, уже доставленная рендеру: совпала — `out.candles` не наполняем.
+    pub shipped_revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -208,6 +257,10 @@ pub struct ChartHistoryRead {
     pub caught_up: bool,
     pub tick_price_range: Option<(f32, f32)>,
     pub last_price: Option<f32>,
+    /// Серия свечей изменилась относительно `shipped_revision` — `out.candles` наполнен.
+    pub candles_changed: bool,
+    /// Текущая ревизия серии свечей (вернуть в следующий `CandleReadParams`).
+    pub candles_revision: u64,
 }
 
 struct MarketDataSourceInner {

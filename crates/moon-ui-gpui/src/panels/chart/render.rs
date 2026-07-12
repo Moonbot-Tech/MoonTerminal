@@ -83,7 +83,7 @@ impl Render for ChartPanel {
         self.chart.set_present_rate_hz(effective_present_rate_hz);
         // ВАЖНО: НЕТ request_animation_frame/continuous-present. `gpu_canvas.frame()` решает
         // present на platform tick без dirty GPUI tree; `draw()` рисует в тот же tick.
-        let (theme, orders_style, follow, prospective_usd) = {
+        let (theme, orders_style, follow, prospective_usd, candle_view) = {
             let b = self.backend.read(cx);
             let eff = b.preview.as_ref().unwrap_or(&b.config);
             // Прогнозный размер ордера (s1-s6) активной монеты в $ — для подписи на перекрестии.
@@ -96,7 +96,9 @@ impl Render for ChartPanel {
             // перекрытий палитрой на лету, цвета редактируются как у тёмного.
             let orders = eff.orders.get(palette.is_light()).clone();
             let theme = eff.theme.get(palette.is_light()).clone();
-            (theme, orders, b.follow, prospective)
+            // Свечи: per-вкладочный override панели, иначе глобальный дефолт из layout.
+            let candle_view = self.candle_view.unwrap_or(b.layout.candle_view);
+            (theme, orders, b.follow, prospective, candle_view)
         };
         // Масштаб — ПО-ВКЛАДОЧНЫЙ: берём self.scale (его правят set_scale из тулбара активной
         // вкладки / шапки выносного окна), а не глобальный backend.price_scale.
@@ -108,6 +110,7 @@ impl Render for ChartPanel {
                 .chart
                 .set_liquidations_enabled(self.liquidations_enabled)
             | self.chart.set_orderbook_only(self.orderbook_only)
+            | self.chart.set_candle_view(candle_view)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
             | self.chart.set_time_axis_visible(self.time_axis_visible)
             | self.chart.set_line_labels(self.line_labels)

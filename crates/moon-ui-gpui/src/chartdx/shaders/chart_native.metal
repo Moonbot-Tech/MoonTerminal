@@ -207,6 +207,138 @@ fragment float4 readout_rect_fragment(ReadoutRectOut in [[stage_in]]) {
     return edge <= in.border_width ? in.border : in.bg;
 }
 
+// ── Свечи (зеркало candles.hlsl): тело + верхний/нижний фитили, 18 вершин/инстанс ──
+
+struct CandleStyle {
+    float4 up;
+    float4 down;
+    float4 neutral;
+    float tf_rel;
+    float zone_start;
+    float mode;
+    float outline_px;
+    float wicks_in_zone;
+    float neutral_in_zone;
+    float fill_alpha;
+    float hide_start; // rel ms: свечи с t_open >= границы не рисуем (только трейды)
+};
+
+struct Candle {
+    float t_open;
+    float o;
+    float h;
+    float l;
+    float c;
+    float vol;
+};
+
+struct CandleOut {
+    float4 position [[position]];
+    float2 uv;
+    float2 size_px [[flat]];
+    float outline [[flat]];
+    float4 color [[flat]];
+};
+
+static inline float candle_price_y(constant ChartView& cv, float price) {
+    return cv.bounds.y + cv.bounds.w - (price - cv.view_price0) * cv.price_to_px;
+}
+
+static inline CandleOut candle_cull_out() {
+    return { float4(2.0, 2.0, 0.0, 1.0), float2(0.0), float2(1.0), 0.0, float4(0.0) };
+}
+
+vertex CandleOut candles_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                                constant ChartView& cv [[buffer(0)]],
+                                constant CandleStyle& cs [[buffer(1)]],
+                                const device Candle* candles [[buffer(2)]]) {
+    Candle cd = candles[iid];
+    uint part = vid / 6u; // 0 тело, 1 верхний фитиль, 2 нижний фитиль
+    float2 corner = CORNERS_01[vid % 6u];
+
+    if (cd.t_open >= cs.hide_start) {
+        return candle_cull_out(); // зона «только трейды» — свечу не рисуем
+    }
+    float x0 = cv.bounds.x + (cd.t_open - cv.view_time0) * cv.time_to_px;
+    float x1 = x0 + cs.tf_rel * cv.time_to_px;
+    if (x1 < cv.bounds.x - 2.0 || x0 > cv.bounds.x + cv.bounds.z + 2.0) {
+        return candle_cull_out();
+    }
+    x0 = round(x0);
+    x1 = max(round(x1), x0 + 1.0);
+
+    bool in_zone = cd.t_open >= cs.zone_start;
+    bool outline = (cs.mode >= 0.5 && cs.mode < 1.5) || (cs.mode >= 1.5 && in_zone);
+    if (part != 0u && in_zone && cs.wicks_in_zone < 0.5) {
+        return candle_cull_out();
+    }
+
+    float y_top_body = round(min(candle_price_y(cv, cd.o), candle_price_y(cv, cd.c)));
+    float y_bot_body = max(round(max(candle_price_y(cv, cd.o), candle_price_y(cv, cd.c))),
+                           y_top_body + 1.0);
+
+    float gap = clamp((x1 - x0) * 0.10, 0.0, 4.0);
+    float bx0 = x0 + gap;
+    float bx1 = x1 - gap;
+    if (bx1 - bx0 < 1.0) {
+        float cx = floor((x0 + x1) * 0.5);
+        bx0 = cx;
+        bx1 = cx + 1.0;
+    }
+
+    float2 p0;
+    float2 sz;
+    if (part == 0u) {
+        p0 = float2(bx0, y_top_body);
+        sz = float2(bx1 - bx0, y_bot_body - y_top_body);
+    } else {
+        float wick_w = max(1.0, min(cs.outline_px, bx1 - bx0));
+        float wx = floor((x0 + x1) * 0.5 - wick_w * 0.5);
+        float y0;
+        float y1;
+        if (part == 1u) {
+            y0 = round(candle_price_y(cv, cd.h));
+            y1 = y_top_body;
+        } else {
+            y0 = y_bot_body;
+            y1 = round(candle_price_y(cv, cd.l));
+        }
+        if (y1 - y0 < 0.5) {
+            return candle_cull_out();
+        }
+        p0 = float2(wx, y0);
+        sz = float2(wick_w, y1 - y0);
+    }
+
+    float2 px = p0 + corner * sz;
+    float4 base = (cd.c >= cd.o) ? cs.up : cs.down;
+    if (in_zone && cs.neutral_in_zone > 0.5) {
+        base = cs.neutral;
+    }
+    float alpha = (part == 0u && !outline) ? saturate(cs.fill_alpha) : 1.0;
+
+    CandleOut out;
+    out.position = to_clip(px, cv.resolution);
+    out.uv = corner;
+    out.size_px = sz;
+    out.outline = (part == 0u && outline) ? 1.0 : 0.0;
+    out.color = float4(base.rgb, alpha);
+    return out;
+}
+
+fragment float4 candles_fragment(CandleOut in [[stage_in]],
+                                 constant CandleStyle& cs [[buffer(1)]]) {
+    if (in.outline > 0.5) {
+        float dx = min(in.uv.x, 1.0 - in.uv.x) * in.size_px.x;
+        float dy = min(in.uv.y, 1.0 - in.uv.y) * in.size_px.y;
+        if (min(dx, dy) > max(cs.outline_px, 1.0)) {
+            discard_fragment();
+        }
+        return float4(in.color.rgb, 1.0);
+    }
+    return in.color;
+}
+
 struct CrossOut { float4 position [[position]]; float2 uv; uint side [[flat]]; };
 
 vertex CrossOut crosses_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],

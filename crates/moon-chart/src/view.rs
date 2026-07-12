@@ -33,8 +33,17 @@ const RANGE_HYST: f32 = 1.15;
 const CENTER_SNAP_PX: f32 = 8.0;
 /// Если правый live-якорь ближе этого расстояния к now, считаем вид снова live.
 const LIVE_REJOIN_FRAC: f32 = 0.05;
-/// Максимальное видимое окно времени, мс (Delphi MaxTimeRange=360 минут = 6 часов).
-const MAX_WINDOW_MS: f32 = 21_600_000.0;
+/// Максимальное видимое окно времени, мс. Было 6 часов (Delphi MaxTimeRange=360 мин) —
+/// под тик-чарт; со свечами (глубокая история с ядра, ТФ до 1 дня) нужно видеть НАМНОГО
+/// больше: 365 суток (~365 дневных свечей). Трейды при этом не дорожают (читаются только
+/// в зоне последних K свечей), свечи капятся ёмкостью буфера слоя.
+const MAX_WINDOW_MS: f32 = 31_536_000_000.0;
+/// Нижний гард px_per_ms для делений (ТОЛЬКО от нуля/мусора). ЕДИНЫЙ по всем гео-путям
+/// (view + own-pass камера + ось времени): исторические страховки `.max(1e-6)` были ВЫШЕ
+/// реального минимума зума (area/MAX_WINDOW ≈ 4e-8 при окне 365 сут) и срабатывали
+/// по-разному в разных местах — камера/данные/подписи расходились, чарт «уезжал влево
+/// от стакана» на глубоком зум-ауте. Гард обязан быть ниже минимально достижимого ppm.
+pub const MIN_PX_PER_MS: f32 = 1e-9;
 /// Дефолтное видимое окно, к которому выбираем пиксельно-гладкий live scale.
 const DEFAULT_WINDOW_MS: f32 = 60_000.0;
 /// Минимальное видимое окно при макс. зум-ин (раньше упирались в дефолтные 60 c).
@@ -138,7 +147,14 @@ impl ChartView {
     /// Подгоняет default time window к ближайшей фазо-чистой точке вокруг 60 c:
     /// целое число px/frame или 1 px за N кадров. Пересчитывается только пока
     /// scale остаётся default/reset-to-live, при первом кадре/resize/present change.
-    pub fn ensure_default_window(&mut self, area_w: f32, present_hz: f32) {
+    /// `default_ppm` — сохранённый пользовательский X-масштаб ([Shift+СКМ] sync):
+    /// новый график стартует с него вместо фазо-чистого 60-секундного дефолта.
+    pub fn ensure_default_window(
+        &mut self,
+        area_w: f32,
+        present_hz: f32,
+        default_ppm: Option<f32>,
+    ) {
         if area_w < 1.0 {
             return;
         }
@@ -151,6 +167,16 @@ impl ChartView {
             self.phase_default_px_per_ms = default_px_per_ms;
             self.last_phase_area_w = area_w;
             self.last_phase_present_hz = present_hz;
+        }
+        // Сохранённый пользовательский масштаб: применяем ТОЛЬКО на инициализации
+        // (дальше он живёт как «ручной» — resize его не пересчитывает).
+        if self.x_init_pending {
+            if let Some(ppm) = default_ppm.filter(|p| p.is_finite() && *p > 0.0) {
+                self.px_per_ms = ppm.clamp(area_w / MAX_WINDOW_MS, 100.0);
+                self.x_default_scale = false;
+                self.x_init_pending = false;
+                return;
+            }
         }
         // Видимый масштаб пересчитываем только на инициализации или при изменении ШИРИНЫ
         // (resize) — НЕ на изменение одной лишь present_hz. На старте она детектится и
@@ -165,6 +191,26 @@ impl ChartView {
         self.px_per_ms = default_px_per_ms;
         self.x_default_scale = true;
         self.x_init_pending = false;
+    }
+
+    /// Навязать X-масштаб (px/ms) извне — синхронизация [Shift+СКМ] со всех графиков.
+    /// `true` при реальном изменении. Дальше масштаб живёт как «ручной» (см. zoom_x_at);
+    /// live-якорь сохраняется.
+    pub fn set_px_per_ms_sync(&mut self, ppm: f32, now_ms: f64) -> bool {
+        if !(ppm.is_finite() && ppm > 0.0) {
+            return false;
+        }
+        let ppm = ppm.clamp(MIN_PX_PER_MS, 100.0);
+        if (self.px_per_ms - ppm).abs() <= self.px_per_ms * 1e-6 {
+            return false;
+        }
+        self.px_per_ms = ppm;
+        self.x_default_scale = false;
+        self.x_init_pending = false;
+        if self.follow {
+            self.right_time_ms = now_ms;
+        }
+        true
     }
 
     /// Лайв сейчас?
@@ -189,7 +235,7 @@ impl ChartView {
     /// шаг = гладко для чёткого 2D (на 60+ Гц шаг в 1 px глаз не ловит). ТУ ЖЕ формулу
     /// применяет own-pass callback, двигая камеру на каждый present (см. chartdx).
     pub fn quantize_edge_ms(&self, edge_ms: f64) -> f64 {
-        let ppm = self.px_per_ms.max(1e-9) as f64;
+        let ppm = self.px_per_ms.max(MIN_PX_PER_MS) as f64;
         let rel = edge_ms - self.epoch_ms;
         (rel * ppm).round() / ppm + self.epoch_ms
     }
@@ -238,7 +284,7 @@ impl ChartView {
             return false;
         }
         let tolerance_ms =
-            (area_w.max(1.0) * LIVE_REJOIN_FRAC) as f64 / self.px_per_ms.max(1e-6) as f64;
+            (area_w.max(1.0) * LIVE_REJOIN_FRAC) as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
         if now_ms - self.right_time_ms <= tolerance_ms {
             self.resume_live(now_ms);
             true
@@ -250,7 +296,7 @@ impl ChartView {
     /// Видимое окно по X: (время у левого края, ширина окна в мс).
     /// Единый источник X-геометрии для uniform и для куллинга видимых тиков.
     pub fn visible_x(&self, area_w: f32) -> (f32, f32) {
-        let window_ms = area_w / self.px_per_ms.max(1e-6);
+        let window_ms = area_w / self.px_per_ms.max(MIN_PX_PER_MS);
         let right_rel =
             (self.right_time_ms - self.epoch_ms) as f32 + window_ms * self.right_margin_frac;
         (right_rel - window_ms, window_ms)
@@ -308,7 +354,7 @@ impl ChartView {
 
     /// Пан по X на dx пикселей (drag ЛКМ / Shift-колесо).
     pub fn pan_x_px(&mut self, dx: f32, now_ms: f64, area_w: f32) {
-        let dt_ms = dx as f64 / self.px_per_ms.max(1e-6) as f64;
+        let dt_ms = dx as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
         self.right_time_ms = (self.right_time_ms - dt_ms).min(now_ms);
         self.follow = false;
         // П.9: пан не выключает live навсегда — заводим окно ручного удержания, по
@@ -330,7 +376,7 @@ impl ChartView {
     /// сохраняем время под курсором и после дискретного шага можем re-anchor к live.
     pub fn zoom_x_at(&mut self, factor: f32, area_w: f32, cursor_x: f32, now_ms: f64) {
         let was_follow = self.follow;
-        let old_px = self.px_per_ms.max(1e-6);
+        let old_px = self.px_per_ms.max(MIN_PX_PER_MS);
         let cursor_x = cursor_x.clamp(0.0, area_w.max(1.0));
         let (old_left, _) = self.visible_x(area_w);
         let cursor_time = self.epoch_ms + old_left as f64 + cursor_x as f64 / old_px as f64;
@@ -355,7 +401,7 @@ impl ChartView {
             self.follow = true;
             return;
         }
-        let new_window = area_w / self.px_per_ms.max(1e-6);
+        let new_window = area_w / self.px_per_ms.max(MIN_PX_PER_MS);
         let left = cursor_time - self.epoch_ms - cursor_x as f64 / self.px_per_ms as f64;
         self.right_time_ms =
             (self.epoch_ms + left + new_window as f64 * (1.0 - self.right_margin_frac as f64))
@@ -509,7 +555,7 @@ mod tests {
     fn x_pan_detaches_immediately_even_inside_live_snap_zone() {
         let now = 100_000.0;
         let mut view = ChartView::new(0.0);
-        view.ensure_default_window(1000.0, 60.0);
+        view.ensure_default_window(1000.0, 60.0, None);
         view.resume_live(now);
 
         view.pan_x_px(1.0, now, 1000.0);
@@ -524,7 +570,7 @@ mod tests {
     fn zoom_in_is_clamped_to_min_window_30s() {
         let now = 100_000.0;
         let mut view = ChartView::new(0.0);
-        view.ensure_default_window(1000.0, 60.0);
+        view.ensure_default_window(1000.0, 60.0, None);
         let default_px_per_ms = view.px_per_ms;
 
         // Один шаг зум-ин (×2) от дефолта (60 c) допускается до 30 c = 2× px/ms (П.7).
@@ -541,7 +587,7 @@ mod tests {
     fn pan_then_hold_auto_returns_to_live() {
         let now = 100_000.0;
         let mut view = ChartView::new(0.0);
-        view.ensure_default_window(1000.0, 60.0);
+        view.ensure_default_window(1000.0, 60.0, None);
         view.resume_live(now);
 
         view.pan_x_px(50.0, now, 1000.0);
@@ -552,6 +598,65 @@ mod tests {
         // По истечении удержания — авто-возврат к live.
         assert!(view.tick_auto_live(now + MANUAL_HOLD_MS + 1.0));
         assert!(view.follow);
+    }
+
+    #[test]
+    fn deep_zoom_out_keeps_live_edge_anchored() {
+        // Регрессия «зум-аут до упора → чарт уезжает влево от стакана»: при ppm ниже
+        // исторического флора 1e-6 (окно 365 сут) visible_x капал окно, а камера — нет,
+        // и live-край уходил с якоря (1-margin). Гард обязан быть ниже min ppm.
+        let area = 1300.0_f32;
+        let now = 7_200_000.0; // 2 часа от эпохи
+        let mut view = ChartView::new(0.0);
+        view.ensure_default_window(area, 60.0, None);
+        view.resume_live(now);
+
+        // Крутим зум-аут до клампа (min ppm = area / MAX_WINDOW_MS ≈ 4e-8 < 1e-6).
+        for _ in 0..40 {
+            view.zoom_x_at(0.5, area, area * 0.5, now);
+        }
+        let lo = area / super::MAX_WINDOW_MS;
+        assert!(
+            (view.px_per_ms - lo).abs() <= lo * 1e-3,
+            "ppm {} не дошёл до клампа {}",
+            view.px_per_ms,
+            lo
+        );
+        assert!(view.px_per_ms < 1e-6, "тест должен покрывать зону ниже старого флора");
+        assert!(view.follow, "зум в live не должен срывать follow");
+
+        // Окно НЕ капается старым флором: равно area/ppm (365 суток), а не area/1e-6.
+        view.follow_edge(now, now);
+        let (left, window_ms) = view.visible_x(area);
+        let expected_window = area / view.px_per_ms;
+        assert!(
+            (window_ms - expected_window).abs() <= expected_window * 1e-3,
+            "окно {} != area/ppm {}",
+            window_ms,
+            expected_window
+        );
+        // Live-край (now) стоит на якоре (1-margin) ширины — не уезжает влево.
+        let x_now = ((now - view.epoch_ms) as f32 - left) * view.px_per_ms;
+        let expected_x = area * (1.0 - view.right_margin_frac);
+        assert!(
+            (x_now - expected_x).abs() <= area * 0.01,
+            "live-край на {} px, ожидался {} px",
+            x_now,
+            expected_x
+        );
+
+        // Повторные крутки на упоре не сдвигают вид (нет дрейфа влево).
+        let (left_before, _) = view.visible_x(area);
+        for _ in 0..5 {
+            view.zoom_x_at(0.5, area, area * 0.3, now);
+        }
+        let (left_after, _) = view.visible_x(area);
+        assert!(
+            (left_after - left_before).abs() <= window_ms * 1e-3,
+            "дрейф левого края на упоре зума: {} → {}",
+            left_before,
+            left_after
+        );
     }
 
     #[test]

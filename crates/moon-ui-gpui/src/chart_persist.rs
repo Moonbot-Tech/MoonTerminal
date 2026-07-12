@@ -159,6 +159,14 @@ pub struct ChartTabSpec {
     /// Показывать подписи у перекрестия (курсорный ридаут). None → дефолт (вкл). Per-окно/вкладка.
     #[serde(default)]
     pub cursor_labels: Option<bool>,
+    /// Настройки отображения свечей/трейдов (ТФ, режим, зона; попап ❚). None → глобальный
+    /// дефолт (`layout.candle_view`). Per-окно/вкладка.
+    #[serde(default)]
+    pub candle_view: Option<moon_core::market::CandleViewCfg>,
+    /// Временной X-масштаб (px на мс) выносного окна этой вкладки ([Shift+СКМ] в нём).
+    /// None → масштаб группы / 60-секундный дефолт.
+    #[serde(default)]
+    pub x_ppm: Option<f32>,
 }
 
 impl ChartTabSpec {
@@ -190,6 +198,8 @@ impl ChartTabSpec {
             time_axis_visible: None,
             line_labels: None,
             cursor_labels: None,
+            candle_view: None,
+            x_ppm: None,
         }
     }
 

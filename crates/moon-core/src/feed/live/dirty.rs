@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use moonproto::state::{MarketsEvent, OrderBookEvent, TradesEvent};
+use moonproto::state::{CoinCardCandlesEvent, MarketsEvent, OrderBookEvent, TradesEvent};
 use moonproto::Event;
 
 use crate::feed::{MarketDirty, MarketDirtyFlags};
@@ -56,6 +56,17 @@ pub(super) fn market_dirty_from_events(
             }
             Event::Markets(MarketsEvent::PricesUpdated { .. }) => {
                 push_wanted_dirty(&mut dirty, wanted, MarketDirtyFlags::HISTORY);
+            }
+            // Пришла глубокая история CoinCard (честные OHLC для свечей чарта) —
+            // разбудить чарт этого рынка на пересборку серии.
+            Event::CoinCardCandles(CoinCardCandlesEvent::Updated { market, .. }) => {
+                push_dirty(&mut dirty, market.clone(), MarketDirtyFlags::HISTORY);
+            }
+            // Живой ТФ-бар (подписка subscribe_candles): применён к retained tf_candles —
+            // разбудить чарт (новый бакет меняет сигнатуру deep-рядов → пересборка серии;
+            // тихие монеты без трейд-событий иначе не проснулись бы вовсе).
+            Event::LiveCandle(ev) if ev.applied_to_history => {
+                push_dirty(&mut dirty, ev.market_name.clone(), MarketDirtyFlags::HISTORY);
             }
             Event::Markets(
                 MarketsEvent::MarketsListReplaced { .. }
