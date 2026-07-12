@@ -555,12 +555,15 @@ impl MarketDataSource {
                 let from_base_ms =
                     (epoch_ms + (from_rel_ms - cp.tf_ms.max(0) as f32) as f64) as i64;
                 let to_ms = (epoch_ms + to_rel_ms as f64) as i64;
-                // База №1: CoinCard deep history — честные OHLC родного ТФ (замер
-                // показал, что bulk-снимок 5м несёт только high/low). Запрашивается
-                // ниже неблокирующе; пока не приехала — фолбэк на 5м-снимок.
+                // База №1: CoinCard deep history — честные OHLC эффективного kind («один ТФ
+                // на ядро»). База №2: бесплатный 5м-снимок (только high/low) — ПРЕФИКС
+                // старше deep-части (композит: старое — диапазоны без теней, свежее —
+                // честные свечи) либо вся база, пока deep не приехала. ТФ < 5м снимок
+                // не использует (вниз не ресемплится).
                 let mut base_tf_ms = deep_kind_min as i64 * 60_000;
+                let mut deep_part: Vec<ChartCandle> = Vec::new();
                 if let Some(rows) = snapshot.tf_candles(market, deep_kind).filter(|_| use_deep) {
-                    cursor.server_candles.extend(
+                    deep_part.extend(
                         rows.iter()
                             .filter(|r| {
                                 let t = r.unix_millis();
@@ -585,12 +588,10 @@ impl MarketDataSource {
                             }),
                     );
                 }
-                let have_deep = !cursor.server_candles.is_empty();
-                if !have_deep {
-                    // База №2 (фолбэк): retained 5м-снимок — только high/low; тела
-                    // ориентируем по направлению, честные OHLC заменят их по приходу
-                    // deep history (событие CoinCardCandles будит чарт).
-                    base_tf_ms = 5 * 60_000;
+                let have_deep = !deep_part.is_empty();
+                let use_snap5 = cp.tf_ms >= 300_000 && cp.tf_ms % 300_000 == 0;
+                let mut snap_part: Vec<ChartCandle> = Vec::new();
+                if use_snap5 {
                     if let Some(r5) = readers.candles_5m.as_ref() {
                         let from5 =
                             moon_time_from_rel_ms(epoch_ms, from_rel_ms - cp.tf_ms.max(0) as f32);
@@ -600,27 +601,48 @@ impl MarketDataSource {
                             r5.capacity(),
                             &mut cursor.server_candle_rows,
                         );
-                        cursor
-                            .server_candles
-                            .extend(cursor.server_candle_rows.iter().map(|r| {
-                                let (open, high, low, close) =
-                                    crate::market::candles::normalize_ohlc(
-                                        r.open(),
-                                        r.high(),
-                                        r.low(),
-                                        r.close(),
-                                    );
-                                ChartCandle {
-                                    t_open_ms: r.time().unix_millis() as f64,
-                                    open,
-                                    high,
-                                    low,
-                                    close,
-                                    volume: r.volume(),
-                                }
-                            }));
-                        crate::market::candles::orient_range_rows(&mut cursor.server_candles);
+                        snap_part.extend(cursor.server_candle_rows.iter().map(|r| {
+                            let (open, high, low, close) = crate::market::candles::normalize_ohlc(
+                                r.open(),
+                                r.high(),
+                                r.low(),
+                                r.close(),
+                            );
+                            ChartCandle {
+                                t_open_ms: r.time().unix_millis() as f64,
+                                open,
+                                high,
+                                low,
+                                close,
+                                volume: r.volume(),
+                            }
+                        }));
+                        crate::market::candles::orient_range_rows(&mut snap_part);
                     }
+                }
+                if !have_deep {
+                    // Deep ещё не приехала: снимок целиком (честные OHLC заменят его по
+                    // приходу deep — событие CoinCardCandles будит чарт).
+                    cursor.server_candles.append(&mut snap_part);
+                    base_tf_ms = 5 * 60_000;
+                } else if snap_part.is_empty() {
+                    cursor.server_candles.append(&mut deep_part);
+                } else {
+                    // КОМПОЗИТ: обе части ресемплим к ТФ серии, снимок оставляем только
+                    // бакетами СТРОГО СТАРШЕ первой deep-свечи (deep честнее).
+                    let tf = cp.tf_ms;
+                    let mut deep_tf = Vec::new();
+                    let mut snap_tf = Vec::new();
+                    crate::market::candles::resample(&deep_part, tf, &mut deep_tf);
+                    crate::market::candles::resample(&snap_part, tf, &mut snap_tf);
+                    let first_deep = deep_tf
+                        .first()
+                        .map(|c| c.t_open_ms)
+                        .unwrap_or(f64::INFINITY);
+                    snap_tf.retain(|c| c.t_open_ms < first_deep);
+                    cursor.server_candles.append(&mut snap_tf);
+                    cursor.server_candles.append(&mut deep_tf);
+                    base_tf_ms = tf;
                 }
                 cursor.candle_trade_rows.clear();
                 if let Some(reader) = trade_reader.as_ref() {
