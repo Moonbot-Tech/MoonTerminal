@@ -189,7 +189,7 @@ fn cell_for(
         OrdCol::Fill => MoonDataCell::text(format!("{:.0}%", r.fill_pct)).tone(MoonTone::Muted),
         OrdCol::Pnl => pnl_cell(r),
         OrdCol::PnlPct => pnl_pct_cell(r),
-        OrdCol::Strat => MoonDataCell::text(r.strat.clone()).tone(MoonTone::Muted),
+        OrdCol::Strat => strat_cell(e, view, p),
     }
 }
 
@@ -410,6 +410,53 @@ fn side_cell(
             let backend = view.read(app).backend.clone();
             crate::panels::open_order_edit(backend, core, uid, window, app);
         })
+}
+
+/// Ячейка стратегии ордера. Если ордер выставлен стратегией (`strat_id != 0`) —
+/// кликабельна: открывает окно «Стратегии» с переходом к этой стратегии на ядре
+/// ордера (снимает «только активные», раскрывает и выбирает). Ручной ордер без
+/// стратегии — обычный текст.
+fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> MoonDataCell {
+    let r = &e.row;
+    if r.strat_id == 0 {
+        return MoonDataCell::text(r.strat.clone()).tone(MoonTone::Muted);
+    }
+    let core = e.core;
+    let uid = r.uid;
+    let strat_id = r.strat_id;
+    let view = view.clone();
+    let el = div()
+        .id(SharedString::from(format!("ord-strat-{core}-{uid}")))
+        // Кликабельна вся ячейка (см. token_cell); колонка `.right()` → контент вправо.
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .justify_end()
+        .cursor_pointer()
+        .child(
+            MoonText::new(r.strat.clone())
+                .color(MoonTone::Muted.color(p))
+                .font_size(10.5)
+                .line_height(14.0)
+                .weight(500.0)
+                .mono(true)
+                .uppercase(false)
+                .render(),
+        )
+        .on_click(move |_, window, app| {
+            let backend = view.read(app).backend.clone();
+            let owner_display = window.display(app).map(|d| d.id());
+            crate::strategies::open_goto(
+                backend,
+                core,
+                strat_id,
+                Some(window.window_handle()),
+                owner_display,
+                app,
+            );
+        });
+    MoonDataCell::element(el)
 }
 
 /// Ячейка токена (без quote: `ADAUSDT` → `ADA`), акцентом — намёк, что кликабельна.

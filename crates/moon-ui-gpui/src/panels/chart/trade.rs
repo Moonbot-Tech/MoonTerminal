@@ -307,7 +307,10 @@ impl ChartPanel {
         };
         let backend = self.backend.clone();
         let (core, uid, market, short) = (hit.core, hit.uid, hit.market, hit.short);
-        // «Редактировать…» — окно «Активный ордер» (общее с кликом по BUY/SELL в таблице).
+        if !matches!(hit.kind, LineKind::Buy | LineKind::Sell) {
+            return false;
+        }
+        // «Ордер…» — окно «Активный ордер» (общее с кликом по BUY/SELL в таблице).
         let backend_edit = self.backend.clone();
         let edit_item =
             MoonMenuItem::with_key("order-edit", t!("chart.order_menu.edit").to_string())
@@ -315,9 +318,41 @@ impl ChartPanel {
                     window.close_context_menu(app);
                     crate::panels::open_order_edit(backend_edit.clone(), core, uid, window, app);
                 });
-        let items: Vec<MoonMenuItem> = match hit.kind {
-            LineKind::Buy => vec![
-                edit_item,
+        let mut items: Vec<MoonMenuItem> = vec![edit_item];
+        // «Стратегия» — переход к стратегии ордера в окне «Стратегии» (только если ордер
+        // выставлен стратегией: strat_id != 0 у строки открытых ордеров ядра).
+        let strat_id = self
+            .backend
+            .read(cx)
+            .session
+            .store()
+            .core(core)
+            .and_then(|cd| cd.orders.iter().find(|o| o.uid == uid))
+            .map(|o| o.strat_id)
+            .filter(|id| *id != 0);
+        if let Some(strat_id) = strat_id {
+            let backend_strat = self.backend.clone();
+            items.push(
+                MoonMenuItem::with_key(
+                    "order-strategy",
+                    t!("chart.order_menu.strategy").to_string(),
+                )
+                .on_click(move |_, window, app| {
+                    window.close_context_menu(app);
+                    let owner_display = window.display(app).map(|d| d.id());
+                    crate::strategies::open_goto(
+                        backend_strat.clone(),
+                        core,
+                        strat_id,
+                        Some(window.window_handle()),
+                        owner_display,
+                        app,
+                    );
+                }),
+            );
+        }
+        match hit.kind {
+            LineKind::Buy => items.push(
                 MoonMenuItem::with_key("order-cancel", t!("chart.order_menu.cancel").to_string())
                     .on_click(move |_, window, app| {
                         window.close_context_menu(app);
@@ -325,12 +360,11 @@ impl ChartPanel {
                             let _ = b.session.cancel_order(core, uid);
                         });
                     }),
-            ],
+            ),
             LineKind::Sell => {
                 let backend_split = backend.clone();
                 let market_split = market.clone();
-                vec![
-                    edit_item,
+                items.push(
                     MoonMenuItem::with_key(
                         "order-join-sells",
                         t!("chart.order_menu.join_sells").to_string(),
@@ -341,6 +375,8 @@ impl ChartPanel {
                             let _ = b.session.join_sells(core, market.clone(), short);
                         });
                     }),
+                );
+                items.push(
                     MoonMenuItem::with_key("order-split", t!("chart.order_menu.split").to_string())
                         .on_click(move |_, window, app| {
                             window.close_context_menu(app);
@@ -350,10 +386,11 @@ impl ChartPanel {
                                         .split_order(core, market_split.clone(), SPLIT_PARTS);
                             });
                         }),
-                ]
+                );
             }
-            _ => return false,
-        };
+            // Прочие виды линий отсечены гейтом выше.
+            _ => {}
+        }
         window.open_moon_context_menu(cx, "chart-order-menu", menu_pos, items, 170.0);
         cx.notify();
         true

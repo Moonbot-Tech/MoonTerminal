@@ -237,6 +237,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             group_windows: HashMap::new(),
             settings_window: None,
             strategies_window: None,
+            strategies_goto: None,
             assets_window: None,
             screener_window: None,
             firetest: firetest_config.clone().map(firetest::Runtime::new),

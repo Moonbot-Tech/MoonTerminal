@@ -246,6 +246,10 @@ struct Backend {
     settings_window: Option<WindowHandle<Root>>,
     /// Окно «Стратегии» (отдельное ОС-окно, общее на приложение) — дедуп/фокус.
     strategies_window: Option<WindowHandle<Root>>,
+    /// Запрос «показать стратегию в окне Стратегий»: (ядро, id стратегии). Ставится из
+    /// ПКМ по линии ордера на чарте / клика по колонке Strat в «Ордерах»; дренит
+    /// `StrategiesView` в render (снимает «только активные», раскрывает и выбирает).
+    strategies_goto: Option<(CoreId, u64)>,
     /// Глобальное окно «Активы» (singleton, все ядра) — дедуп/фокус.
     assets_window: Option<WindowHandle<Root>>,
     /// Окно «Скринер» (singleton, все биржи с дедупом по провайдеру) — дедуп/фокус.

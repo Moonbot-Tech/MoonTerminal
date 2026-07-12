@@ -28,7 +28,7 @@ use moon_ui::{
     MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonCheckboxSize, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
     MoonMenuSize, MoonPalette, MoonTextArea, MoonTextAreaEvent, MoonTextAreaState, MoonTone,
-    MoonTreeState, MoonWindowFrame, Root, h_flex, v_flex,
+    MoonTreeItem, MoonTreeState, MoonWindowFrame, Root, h_flex, v_flex,
 };
 
 use crate::design::{moon, moon_alpha};
@@ -126,10 +126,13 @@ impl StrategiesView {
 
         // Новые снимки стратегий/схемы → перерисовка. Hot-reload правил живёт на
         // отдельном file-mtime таймере ниже: backend data observe не должен быть
-        // суррогатным polling loop для файловой системы.
+        // суррогатным polling loop для файловой системы. Запрос «показать стратегию»
+        // (`strategies_goto`) тоже будит render — дренаж живёт там (нужен `Window`).
         cx.observe(&backend, |this, backend, cx| {
-            let sig = strategies_sig(backend.read(cx));
-            if sig != this.last_sig {
+            let b = backend.read(cx);
+            let goto = b.strategies_goto.is_some();
+            let sig = strategies_sig(b);
+            if sig != this.last_sig || goto {
                 this.last_sig = sig;
                 this.sync_pending_select(cx);
                 this.clamp_selected_section(cx);
@@ -265,6 +268,45 @@ impl StrategiesView {
         self.pending_select = None;
         self.clamp_selected_section(cx);
         true
+    }
+
+    /// Дренаж запроса «показать стратегию» (`Backend::strategies_goto`): снять «только
+    /// активные», при необходимости сбросить прочие фильтры (иначе цель не видна),
+    /// раскрыть ядро/папки и выбрать стратегию. Возвращает ключ для скролла к строке
+    /// (render зовёт до построения дерева, скроллит после `set_items`).
+    fn drain_goto(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Key> {
+        let (core, strat_id) = self.backend.read(cx).strategies_goto?;
+        self.backend.update(cx, |b, _| b.strategies_goto = None);
+        let row = {
+            let store = self.backend.read(cx).session.store();
+            store
+                .core(core)?
+                .strategies
+                .iter()
+                .find(|r| r.id == strat_id)
+                .cloned()?
+        };
+        self.filter.only_active = false;
+        // Фильтры вида/направления/поиска могут всё ещё прятать цель — сбрасываем их
+        // (и сам инпут поиска: `set_value` не эмитит Change, фильтр правим вручную).
+        if !self.filter.matches(&row) {
+            self.filter.kind = None;
+            self.filter.dir = None;
+            if !self.filter.search.trim().is_empty() {
+                self.filter.search.clear();
+                self.search
+                    .update(cx, |st, cx| st.set_value(String::new(), window, cx));
+            }
+        }
+        let key: Key = (core, strat_id);
+        self.expanded_cores.insert(core);
+        self.expand_path(core, tree_ops::path_segments(&row.folder_path));
+        self.sel.clear();
+        self.sel.insert(key);
+        self.anchor = Some(key);
+        self.selected = Some(key);
+        self.clamp_selected_section(cx);
+        Some(key)
     }
 
     fn clamp_selected_section(&mut self, cx: &App) -> bool {
@@ -659,6 +701,10 @@ impl Focusable for StrategiesView {
 
 impl Render for StrategiesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Запрос «показать стратегию» (ПКМ по линии ордера / клик Strat в Ордерах) —
+        // дренаж ДО построения дерева, чтобы фильтры/раскрытие/выбор попали в этот кадр.
+        let goto = self.drain_goto(window, cx);
+
         // Список ядер (id, имя) — все подключённые, как egui (session.sessions()).
         let cores: Vec<(CoreId, String)> = {
             let b = self.backend.read(cx);
@@ -680,6 +726,16 @@ impl Render for StrategiesView {
             st.set_items(build.items, c);
             st.set_force_expanded(searching, c);
             st.set_expanded(build.expanded_ids, c);
+            // Переход к стратегии: прокрутить дерево к её строке. Индекс по id через
+            // выбор MoonTree (выбор тут же снимаем — подсветку рисует наш `sel`).
+            if let Some((core, id)) = goto {
+                let item = MoonTreeItem::new(tree_moon::id_strat(core, id), "");
+                st.set_selected_item(Some(&item), c);
+                if let Some(ix) = st.selected_index() {
+                    st.scroll_to_item(ix, ScrollStrategy::Center);
+                }
+                st.set_selected_item(None, c);
+            }
         });
         let node_data = std::rc::Rc::new(build.node_data);
 
@@ -760,6 +816,26 @@ fn strategies_header(p: MoonPalette, cx: &App) -> impl IntoElement {
                     .visual_controls(cx),
             )
         })
+}
+
+/// Открыть окно «Стратегии» и перейти к стратегии ядра `core` с id `strat_id`:
+/// окно открывается/фокусируется, «только активные» снимается, ядро и папки цели
+/// раскрываются, стратегия выбирается (дренаж запроса — в render `StrategiesView`).
+/// Точки входа: ПКМ по линии ордера на чарте, клик по колонке Strat в «Ордерах».
+pub fn open_goto(
+    backend: Entity<Backend>,
+    core: CoreId,
+    strat_id: u64,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    cx: &mut App,
+) {
+    backend.update(cx, |b, bcx| {
+        b.strategies_goto = Some((core, strat_id));
+        // Будит observe уже открытого окна (дедуп в `open` только фокусирует его).
+        bcx.notify();
+    });
+    open(backend, owner, owner_display, cx);
 }
 
 /// Открыть окно «Стратегии» (tool/secondary окно). Дедуп окон — в `Backend`.

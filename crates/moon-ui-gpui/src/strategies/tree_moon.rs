@@ -29,7 +29,7 @@ fn id_core(core: CoreId) -> SharedString {
 fn id_folder(core: CoreId, path: &str) -> SharedString {
     SharedString::from(format!("f:{core}:{path}"))
 }
-fn id_strat(core: CoreId, id: u64) -> SharedString {
+pub(super) fn id_strat(core: CoreId, id: u64) -> SharedString {
     SharedString::from(format!("s:{core}:{id}"))
 }
 

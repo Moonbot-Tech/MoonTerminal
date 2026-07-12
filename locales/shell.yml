@@ -269,9 +269,13 @@ chartwin.clear:
 
 # --- Попап настроек раскладки чарт-вкладки (Fit/Scroll + раздельные высоты) ---
 chart.order_menu.edit:
-  ru: "Редактировать…"
-  en: "Edit…"
-  es: "Editar…"
+  ru: "Ордер…"
+  en: "Order…"
+  es: "Orden…"
+chart.order_menu.strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
 chart.order_menu.cancel:
   ru: "Cancel"
   en: "Cancel"
