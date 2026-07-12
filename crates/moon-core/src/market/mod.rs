@@ -7,6 +7,7 @@
 //! ядро провайдер самому себе (см. `MarketDataMode`).
 
 pub mod candles;
+pub mod kline_cache;
 mod screener;
 mod source;
 

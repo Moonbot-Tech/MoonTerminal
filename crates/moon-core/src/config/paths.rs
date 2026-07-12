@@ -142,9 +142,43 @@ pub fn hotkeys_path() -> PathBuf {
     cfg_dir().join("hotkeys.toml")
 }
 
+/// Подпапка баз данных (reports/klines). На Windows — `data/` рядом с exe, чтобы не
+/// захламлять портативный корень крупными файлами; на macOS/Linux `data_dir` и так
+/// выделенная папка приложения (Application Support/.config) — кладём прямо в неё.
+/// Разовая миграция: старый `reports.sqlite` (+ -wal/-shm) из корня переносится
+/// rename-ом (мгновенно на одном томе; wal/shm едут вместе — консистентность БД).
+pub fn db_dir() -> PathBuf {
+    #[cfg(windows)]
+    let dir = data_dir().join("data");
+    #[cfg(not(windows))]
+    let dir = data_dir();
+    static MIGRATED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    MIGRATED.get_or_init(|| {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            log::warn!("не удалось создать директорию БД {}: {e}", dir.display());
+            return;
+        }
+        for name in ["reports.sqlite", "reports.sqlite-wal", "reports.sqlite-shm"] {
+            let old = data_dir().join(name);
+            let new = dir.join(name);
+            if old != new && old.exists() && !new.exists() {
+                if let Err(e) = std::fs::rename(&old, &new) {
+                    log::warn!("миграция {} → {} не удалась: {e}", old.display(), new.display());
+                }
+            }
+        }
+    });
+    dir
+}
+
 /// SQLite-БД с отчётами по закрытым ордерам (`ClosedSellOrderReport`).
 pub fn reports_db_path() -> PathBuf {
-    data_dir().join("reports.sqlite")
+    db_dir().join("reports.sqlite")
+}
+
+/// SQLite-БД локального kline-кэша (см. `market::kline_cache`) — отдельная от отчётов.
+pub fn klines_db_path() -> PathBuf {
+    db_dir().join("klines.sqlite")
 }
 
 /// Папка логов (команды/отчёты ядра для диагностики).

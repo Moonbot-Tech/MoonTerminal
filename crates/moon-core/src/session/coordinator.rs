@@ -225,6 +225,13 @@ impl SessionManager {
         }
 
         self.market_source.set_provider_map(&new_core_provider);
+        // Стабильные идентичности бирж провайдеров — ключ локального kline-кэша
+        // (ядра одной биржи делят кэш; CoreId между сессиями нестабилен).
+        let provider_exchange: HashMap<CoreId, ExchangeId> = new_core_provider
+            .values()
+            .filter_map(|p| self.core_key.get(p).map(|k| (*p, *k)))
+            .collect();
+        self.market_source.set_provider_exchanges(&provider_exchange);
         self.core_provider = new_core_provider;
     }
 }

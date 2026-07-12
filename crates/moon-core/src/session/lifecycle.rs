@@ -24,6 +24,9 @@ impl SessionManager {
     ) -> Self {
         let market = MarketStore::shared(epoch_ms);
         let market_source = MarketDataSource::new(market.clone());
+        // Локальный kline-кэш (klines.sqlite в db_dir): глубина свечей переживает
+        // рестарты и «один ТФ на ядро». Опционален — без него чарты живут как раньше.
+        market_source.init_kline_cache(crate::config::paths::klines_db_path());
         let mut mgr = Self {
             sessions: Vec::new(),
             feed_wake,

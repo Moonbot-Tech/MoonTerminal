@@ -31,12 +31,33 @@ impl MarketDataSource {
                 deep_req_gate: std::sync::Mutex::new(HashMap::new()),
                 deep_kind_wants: std::sync::Mutex::new(HashMap::new()),
                 candle_subs: std::sync::Mutex::new(HashMap::new()),
+                kline_cache: None,
+                provider_exchange: HashMap::new(),
+                native_backfill_done: std::sync::Mutex::new(HashSet::new()),
             })),
         }
     }
 
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    /// Открыть локальный kline-кэш (klines.sqlite). Зовётся один раз на старте;
+    /// без вызова чарты живут как раньше (кэш опционален).
+    pub fn init_kline_cache(&self, path: std::path::PathBuf) {
+        let cache = crate::market::kline_cache::KlineCache::open(path);
+        let mut inner = self.inner.write().expect("market source poisoned");
+        inner.kline_cache = cache;
+    }
+
+    /// Стабильные идентичности бирж провайдеров — ключ kline-кэша (ядра одной биржи
+    /// делят кэш; CoreId между сессиями нестабилен). Зовёт координатор при reconcile.
+    pub fn set_provider_exchanges(
+        &self,
+        map: &HashMap<crate::session::CoreId, crate::feed::ExchangeId>,
+    ) {
+        let mut inner = self.inner.write().expect("market source poisoned");
+        inner.provider_exchange = map.clone();
     }
 
     pub fn store(&self) -> SharedMarketStore {

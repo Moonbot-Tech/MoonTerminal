@@ -3,7 +3,7 @@ mod refresh;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
@@ -176,6 +176,14 @@ pub struct ChartHistoryCursor {
     /// приход новых рядов сбрасывает. Иначе зависшее ядро/биржа = вечный 30с-шторм запросов
     /// со всех открытых чартов → «автостоп по превышению лимитов API» ядра.
     deep_retry_delay_s: u32,
+    /// Префикс из локального kline-кэша (нативный kind панели): читается из sqlite один
+    /// раз на (рынок, kind, левый край) и переживает series_reset'ы (ресеты частые —
+    /// пан/зум, каждый раз ходить в БД нельзя).
+    cache_rows: Vec<ChartCandle>,
+    cache_kind: Option<u32>,
+    cache_from_ms: i64,
+    /// Сигнатура последних записанных в кэш deep-рядов — write-back только на изменение.
+    cache_written_sig: u64,
     /// Сигнатура загруженных deep-строк на момент последней пересборки серии: их
     /// приход/обновление форсит rebuild (без этого история появлялась только после
     /// переоткрытия графика).
@@ -295,6 +303,13 @@ struct MarketDataSourceInner {
     /// «трогают» запись, протухшие (>60с без спроса: панель закрыта/суб-минутный ТФ)
     /// отписываются попутно при следующем свечном чтении этого провайдера.
     candle_subs: Mutex<HashMap<(CoreId, String), CandleSubState>>,
+    /// Локальный kline-кэш (klines.sqlite) — None, пока терминал не задал путь.
+    kline_cache: Option<crate::market::kline_cache::KlineCache>,
+    /// Стабильная идентичность биржи провайдера — ключ kline-кэша (НЕ CoreId).
+    provider_exchange: HashMap<CoreId, crate::feed::ExchangeId>,
+    /// Разовые нативные бэкфиллы крупных ТФ за сессию: (провайдер, рынок, kind_min).
+    /// Один осознанный флип ТФ-слота ядра на открытие крупного ТФ с пустым кэшем.
+    native_backfill_done: Mutex<HashSet<(CoreId, String, u32)>>,
 }
 
 /// UI-agnostic market read-model bridge.
