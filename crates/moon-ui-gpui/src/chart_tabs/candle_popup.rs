@@ -20,9 +20,9 @@ use rust_i18n::t;
 use super::common::{LayoutPopupHost, StackSetting};
 use crate::design;
 
-/// Таймфреймы (подпись) — синхронно с `CANDLE_TF_CHOICES_MIN` (0 = 30 секунд).
-const TFS: [(u32, &str); 7] = [
-    (0, "30с"),
+/// Таймфреймы (подпись) — синхронно с `CANDLE_TF_CHOICES_MIN` (30с удалён вовсе;
+/// легаси-конфиги с tf_min=0 клампятся к 1м в `tf_ms`).
+const TFS: [(u32, &str); 6] = [
     (1, "1м"),
     (5, "5м"),
     (30, "30м"),
@@ -55,7 +55,7 @@ const NEUTRALS: [[u8; 3]; 6] = [
     [120, 100, 140],
 ];
 
-/// Ширина сценового попапа (лог. px): самый широкий ряд — ТФ, 7 сегментов × 42 + поля/рамка.
+/// Ширина сценового попапа (лог. px): самый широкий ряд — зона (7 сегментов × 42) + поля/рамка.
 pub(super) fn content_width(cx: &App) -> Pixels {
     let pad = f32::from(design::ui_px(cx, 8.0));
     let fpx = f32::from(design::ui_px(cx, 6.0));
@@ -163,7 +163,13 @@ fn render_candle_popup<T: CandlePopupHost>(
             format!("{id}-tf"),
             t!("chart.candles.tf").to_string(),
             TFS.iter()
-                .map(|(m, l)| (l.to_string(), *m == cfg.tf_min))
+                // Легаси 30с (tf_min=0) подсвечиваем как 1м — к нему он и клампится.
+                .map(|(m, l)| {
+                    (
+                        l.to_string(),
+                        *m == cfg.tf_min || (cfg.tf_min == 0 && *m == 1),
+                    )
+                })
                 .collect(),
             42.0,
             p,

@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::feed::Tick;
 
-/// Допустимые таймфреймы свечей, минуты; 0 = 30 секунд (только из трейдов).
+/// Допустимые таймфреймы свечей, минуты. 30с (код 0) УДАЛЁН из набора по просьбе
+/// пользователя (2026-07-12): суб-минутный ТФ жил только из трейдов, без deep-базы.
 /// База: CoinCard-история родного ТФ (1/5/30/60/240/1440), фолбэк — 5м-снимок ядра.
-pub const CANDLE_TF_CHOICES_MIN: [u32; 7] = [0, 1, 5, 30, 60, 240, 1440];
+pub const CANDLE_TF_CHOICES_MIN: [u32; 6] = [1, 5, 30, 60, 240, 1440];
 
 /// Режим отрисовки свечей (см. `CandleViewCfg::mode`).
 pub const CANDLE_MODE_FILLED: u8 = 0;
@@ -68,14 +69,17 @@ impl Default for CandleViewCfg {
 }
 
 impl CandleViewCfg {
-    /// Таймфрейм в миллисекундах (клампится к допустимому набору; 0 = 30 секунд).
+    /// Таймфрейм в миллисекундах (клампится к допустимому набору; легаси 30с (код 0)
+    /// сведён к 1м — суб-минутные удалены из настроек).
     pub fn tf_ms(&self) -> i64 {
-        let tf = if CANDLE_TF_CHOICES_MIN.contains(&self.tf_min) {
+        let tf = if self.tf_min == 0 {
+            1
+        } else if CANDLE_TF_CHOICES_MIN.contains(&self.tf_min) {
             self.tf_min
         } else {
             5
         };
-        if tf == 0 { 30_000 } else { tf as i64 * 60_000 }
+        tf as i64 * 60_000
     }
 }
 
@@ -601,8 +605,8 @@ mod tests {
         // Неизвестный/убранный ТФ клампится к 5м (легаси 15м из старых конфигов).
         let bad = CandleViewCfg { tf_min: 15, ..cfg };
         assert_eq!(bad.tf_ms(), TF5);
-        // 30 секунд и сутки.
-        assert_eq!(CandleViewCfg { tf_min: 0, ..cfg }.tf_ms(), 30_000);
+        // Легаси 30с (код 0) сведён к 1м; сутки.
+        assert_eq!(CandleViewCfg { tf_min: 0, ..cfg }.tf_ms(), 60_000);
         assert_eq!(
             CandleViewCfg {
                 tf_min: 1440,
