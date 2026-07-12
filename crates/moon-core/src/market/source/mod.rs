@@ -171,6 +171,11 @@ pub struct ChartHistoryCursor {
     last_deep_request: Option<Instant>,
     /// Последний запрошенный kind — смена ТФ обходит троттл.
     last_deep_kind: Option<moonproto::DeepHistoryKind>,
+    /// Бэкофф повторных coin-card запросов, СЕКУНДЫ (0 → стартовые 30). Deep history ядро
+    /// тянет с БИРЖЕВОГО API (веса!) — ретрай без прогресса удваивает паузу до 10 мин,
+    /// приход новых рядов сбрасывает. Иначе зависшее ядро/биржа = вечный 30с-шторм запросов
+    /// со всех открытых чартов → «автостоп по превышению лимитов API» ядра.
+    deep_retry_delay_s: u32,
     /// Активная подписка живых ТФ-баров (`Event::LiveCandle`): (рынок, kind).
     /// Без неё retained tf_candles заморожены с момента ответа — на больших ТФ
     /// (1д/4ч) серия отставала на часы («разрыв между лайв-данными и свечами»).
@@ -272,6 +277,11 @@ struct MarketDataSourceInner {
     market_revisions: HashMap<CoreId, HashMap<String, MarketRevisionCounters>>,
     provider_generations: HashMap<CoreId, u64>,
     started_at: Instant,
+    /// ГЛОБАЛЬНЫЙ дедуп coin-card запросов (provider, market, kind_min → момент отправки):
+    /// курсоры per-pane, и N окон одной монеты слали N одинаковых запросов; deep history
+    /// стоит биржевых весов на ядре, поэтому одна пара (монета, ТФ) — не чаще раза в 30с
+    /// на всё приложение (ответ ложится в общий retained-стейт, панели делят его).
+    deep_req_gate: Mutex<HashMap<(CoreId, String, u32), Instant>>,
 }
 
 /// UI-agnostic market read-model bridge.

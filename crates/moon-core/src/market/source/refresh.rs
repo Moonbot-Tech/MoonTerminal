@@ -28,6 +28,7 @@ impl MarketDataSource {
                 market_revisions: HashMap::new(),
                 provider_generations: HashMap::new(),
                 started_at: Instant::now(),
+                deep_req_gate: std::sync::Mutex::new(HashMap::new()),
             })),
         }
     }

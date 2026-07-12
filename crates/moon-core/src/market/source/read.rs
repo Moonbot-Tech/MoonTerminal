@@ -429,7 +429,10 @@ impl MarketDataSource {
             // выключена) ресетов между сменами cfg нет вообще, и потерянный/просроченный
             // ответ раньше замораживал серию навсегда. «Устарело» = нет ряда ТЕКУЩЕГО
             // бакета (живая подписка обязана его держать; дыра = пропущенный ответ или
-            // разрыв) → неблокирующий re-request с троттлом 30с (смена kind обходит).
+            // разрыв). ВАЖНО: deep history ядро тянет с БИРЖЕВОГО API (весовые лимиты!),
+            // поэтому повтор без прогресса — с ЭКСПОНЕНЦИАЛЬНЫМ бэкоффом 30с→10мин
+            // (сброс по приходу новых рядов / смене kind). Ровный 30с-ретрай при молчащем
+            // ядре/бирже приводил к «автостоп по превышению лимитов API» ядра.
             if use_deep {
                 let base_tf_native_ms = deep_kind_min as i64 * 60_000;
                 let rows = snapshot.tf_candles(market, deep_kind);
@@ -442,18 +445,46 @@ impl MarketDataSource {
                     .and_then(|r| r.last())
                     .map_or(true, |r| (r.unix_millis() as f64) < cur_bucket_ms);
                 let kind_changed = cursor.last_deep_kind != Some(deep_kind);
+                let retry_delay = Duration::from_secs(cursor.deep_retry_delay_s.max(30) as u64);
                 if deep_stale
                     && (kind_changed
                         || cursor
                             .last_deep_request
-                            .map_or(true, |t| t.elapsed() > Duration::from_secs(30)))
+                            .map_or(true, |t| t.elapsed() > retry_delay))
                 {
                     cursor.last_deep_request = Some(Instant::now());
                     cursor.last_deep_kind = Some(deep_kind);
-                    if let Err(e) = client.candles().request_coin_card(market, deep_kind) {
-                        super::market_diag(format!(
-                            "coin-card request failed {market} kind={deep_kind:?}: {e}"
-                        ));
+                    // Глобальный дедуп поверх per-pane бэкоффа: N панелей одной монеты
+                    // делят retained-ответ — шлём один запрос (монета, kind) в 30с на всё
+                    // приложение. Заблокированная панель бэкофф НЕ раскручивает (запрос
+                    // ушёл от соседа) — её last_deep_request уже отодвинут выше.
+                    let gate_open = {
+                        let inner = self.inner.read().expect("market source poisoned");
+                        let mut gate =
+                            inner.deep_req_gate.lock().expect("deep req gate poisoned");
+                        let key = (provider, market.to_string(), deep_kind_min);
+                        let now_i = Instant::now();
+                        match gate.get(&key) {
+                            Some(t) if now_i.duration_since(*t) < Duration::from_secs(30) => {
+                                false
+                            }
+                            _ => {
+                                gate.insert(key, now_i);
+                                true
+                            }
+                        }
+                    };
+                    if gate_open {
+                        cursor.deep_retry_delay_s = if kind_changed {
+                            30
+                        } else {
+                            (cursor.deep_retry_delay_s.max(30) * 2).min(600)
+                        };
+                        if let Err(e) = client.candles().request_coin_card(market, deep_kind) {
+                            super::market_diag(format!(
+                                "coin-card request failed {market} kind={deep_kind:?}: {e}"
+                            ));
+                        }
                     }
                 }
             }
@@ -468,6 +499,10 @@ impl MarketDataSource {
             } else {
                 0
             };
+            if deep_rows_sig != cursor.last_deep_sig {
+                // Deep-ряды продвинулись (ответ/live-бар) — прогресс, бэкофф запросов заново.
+                cursor.deep_retry_delay_s = 30;
+            }
             let series_reset = force_reset
                 || read.combo_reset
                 || !cursor.candle_series.is_valid()
