@@ -646,9 +646,19 @@ impl MarketDataSource {
                 }
                 cursor.candle_trade_rows.clear();
                 if let Some(reader) = trade_reader.as_ref() {
+                    // Хвост серии — ВСЕГДА до «сейчас», а не до правого края окна: при
+                    // прокрутке в прошлое reset читал трейды только до to_time ПРОШЛОГО
+                    // окна, а курсор ставился «от сейчас» → всё между ними в серию не
+                    // попадало никогда (при K=0 ресетов нет — дыра «свечи↔трейды» после
+                    // возврата в live оставалась навсегда).
+                    let now_unix = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_millis() as i64);
+                    let candle_to_time =
+                        moonproto::MoonTime::from_unix_millis(to_ms.max(now_unix));
                     reader.copy_time_range(
                         from_time,
-                        to_time,
+                        candle_to_time,
                         reader.capacity(),
                         &mut cursor.candle_trade_rows,
                     );
