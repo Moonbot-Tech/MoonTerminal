@@ -402,28 +402,67 @@ impl MarketDataSource {
         if let Some(cp) = candle_params {
             // CoinCard deep history применима только к ТФ ≥ 1м (суб-минутные — из трейдов).
             let use_deep = cp.tf_ms >= 60_000;
-            let deep_kind_min =
+            let native_kind_min =
                 crate::market::candles::deep_kind_min_for_tf((cp.tf_ms / 60_000) as u32);
+            // ЯДРО ДЕРЖИТ ОДИН СВЕЧНОЙ ТФ НА ЯДРО (разраб МБ, 2026-07-12): kind-флипы между
+            // окнами с разными ТФ заставляли ядро перекачивать историю с биржи на каждый
+            // запрос/подписку → бан API. Эффективный kind провайдера = MIN живых желаний
+            // (kind'ы цепочкой делятся: 1|5|30|60|240|1440) — панели крупнее ресемплят из
+            // мелкой базы ценой глубины (ринг ядра ~10к строк базового ТФ).
+            let deep_kind_min = if use_deep {
+                let inner = self.inner.read().expect("market source poisoned");
+                let mut wants = inner
+                    .deep_kind_wants
+                    .lock()
+                    .expect("deep kind wants poisoned");
+                let now_i = Instant::now();
+                let m = wants.entry(provider).or_default();
+                m.insert(native_kind_min, now_i);
+                m.retain(|_, t| now_i.duration_since(*t) < Duration::from_secs(30));
+                m.keys().copied().min().unwrap_or(native_kind_min)
+            } else {
+                native_kind_min
+            };
             let deep_kind = deep_history_kind(deep_kind_min);
             // Подписка на живые ТФ-бары ядра: Event::LiveCandle дошивает/заменяет последний
-            // ряд retained tf_candles (правило candle-window ядра). БЕЗ подписки deep-ряды
-            // заморожены с момента ответа — на больших ТФ (1д/4ч) серия отставала на часы.
-            // Курсор per-pane: переподписка на смене kind/рынка, снятие при use_deep=false.
-            if use_deep {
-                let sub_ok = cursor
-                    .candle_sub
-                    .as_ref()
-                    .is_some_and(|(m, k)| m == market && *k == deep_kind);
-                if !sub_ok {
-                    if let Some((old_market, _)) = cursor.candle_sub.take() {
-                        let _ = client.streams().unsubscribe_candles([old_market]);
+            // ряд retained tf_candles — без неё deep-ряды заморожены с момента ответа и на
+            // больших ТФ серия отставала на часы. Подписка ГЛОБАЛЬНА на клиенте (последний
+            // kind выигрывает) → общий реестр per (провайдер, рынок): панели «трогают»
+            // запись, протухшие (>60с без спроса) отписываются попутно.
+            {
+                let inner = self.inner.read().expect("market source poisoned");
+                let mut subs = inner.candle_subs.lock().expect("candle subs poisoned");
+                let now_i = Instant::now();
+                if use_deep {
+                    let entry = subs
+                        .entry((provider, market.to_string()))
+                        .or_insert(super::CandleSubState {
+                            kind_min: deep_kind_min,
+                            last_want: now_i,
+                            subscribed: false,
+                        });
+                    if !entry.subscribed || entry.kind_min != deep_kind_min {
+                        if client.streams().subscribe_candles([market], deep_kind).is_ok() {
+                            entry.subscribed = true;
+                            entry.kind_min = deep_kind_min;
+                        }
                     }
-                    if client.streams().subscribe_candles([market], deep_kind).is_ok() {
-                        cursor.candle_sub = Some((market.to_string(), deep_kind));
-                    }
+                    entry.last_want = now_i;
                 }
-            } else if let Some((old_market, _)) = cursor.candle_sub.take() {
-                let _ = client.streams().unsubscribe_candles([old_market]);
+                // Попутная уборка протухших подписок ЭТОГО провайдера (его клиент под рукой).
+                let stale: Vec<String> = subs
+                    .iter()
+                    .filter(|((p, _), s)| {
+                        *p == provider
+                            && s.subscribed
+                            && now_i.duration_since(s.last_want) > Duration::from_secs(60)
+                    })
+                    .map(|((_, m), _)| m.clone())
+                    .collect();
+                for m in stale {
+                    let _ = client.streams().unsubscribe_candles([m.as_str()]);
+                    subs.remove(&(provider, m));
+                }
             }
             // Свежесть базы — КАЖДЫЙ проход, не только на reset: при K=0 (зона трейдов
             // выключена) ресетов между сменами cfg нет вообще, и потерянный/просроченный
