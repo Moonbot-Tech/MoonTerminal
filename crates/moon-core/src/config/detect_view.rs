@@ -30,6 +30,12 @@ pub struct DetectViewCfg {
     pub show_exchange: bool,
     /// Тип биржи (спот/фьючи/квартальные).
     pub show_exchange_kind: bool,
+    /// Режим мини-чарта: false = полые свечи (2ч), true = линия цены (24ч) + дельты 24ч/1ч.
+    pub line_mode: bool,
+    /// Показывать цифру дельты 24ч (режим «линия»).
+    pub show_delta_24h: bool,
+    /// Показывать цифру дельты 1ч (режим «линия»).
+    pub show_delta_1h: bool,
 }
 
 impl Default for DetectViewCfg {
@@ -42,6 +48,9 @@ impl Default for DetectViewCfg {
             show_chart: true,
             show_exchange: false,
             show_exchange_kind: false,
+            line_mode: false,
+            show_delta_24h: true,
+            show_delta_1h: true,
         }
     }
 }

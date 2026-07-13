@@ -261,6 +261,7 @@ impl MarketDataSource {
     /// же биржи/рынка). Собирать ОДИН раз в момент детекта, морозить в карточке. Пусто — нет
     /// провайдера/клиента/снимка/истории.
     pub fn detect_snapshot(&self, core: CoreId, market: &str, bars: usize) -> DetectSnapshot {
+        let t0 = std::time::Instant::now();
         let (client, kline_cache, exchange_key) = {
             let inner = self.inner.read().expect("market source poisoned");
             let Some(provider) = inner.core_provider.get(&core).copied() else {
@@ -291,25 +292,66 @@ impl MarketDataSource {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
-        let from_ms = now_ms - (bars as i64 + 2) * tf_ms;
+        // Окно 24ч: свечной режим берёт из него последние `bars` бакетов (~2ч), линейный —
+        // все close-цены (до 24ч). `line_cap` = максимум 5м-бакетов в 24ч (288).
+        let from_ms = now_ms - 24 * 3_600_000;
+        let line_cap = (24 * 3_600_000 / tf_ms) as usize;
 
-        // Свечи по бакету 5м (ключ = t_open): сшиваем ИСТОРИЮ из kline-кэша и ЖИВОЙ хвост из
-        // трейд-ринга (перекрывает свежие бакеты). Трейд-ринг короткий (~минуты), поэтому одним
-        // им выходило 1-2 бара — историю дорисовывает кэш регистратора.
+        // Свечи по бакету 5м (ключ = t_open, ФЛОР к tf для сшивки разных источников):
+        //   база №1 = retained 5м-снимок ЯДРА (тянется при старте по скоупу → ГЛУБИНА истории);
+        //   база №2 = локальный kline-кэш (реальные OHLC, перекрывает снимок);
+        //   хвост   = трейд-ринг (живой край, перекрывает свежие бакеты).
+        // Приоритет свежести — порядок вставки (снимок < кэш < ринг). Раньше снимок был лишь
+        // фолбэком «если пусто» → ринг всегда давал пару бар → глубина снимка игнорировалась.
         let mut buckets: std::collections::BTreeMap<i64, (f32, f32, f32, f32)> =
             std::collections::BTreeMap::new();
-
-        // История: локальный kline-кэш (реальные 5м-OHLC прошлых минут/сессий, kind_min=5).
-        if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref()) {
-            for c in cache.read_range(ex, market, 5, from_ms, now_ms) {
-                if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
-                    buckets.insert(c.t_open_ms as i64, (c.open, c.high, c.low, c.close));
-                }
-            }
-        }
+        let bucket_key = |t_ms: i64| (t_ms.max(0) / tf_ms) * tf_ms;
+        let mut snap5_n = 0usize;
+        let mut cache_n = 0usize;
 
         if let Some(readers) = snapshot.market_history_readers(market) {
-            // Живой хвост: трейд-ринг провайдера → 5м-свечи (перекрывает свежие бакеты кэша).
+            // База №1: 5м-снимок ядра. Несёт только high/low (open==high, close==low) → тело=
+            // диапазон; штампуется КОНЦОМ периода → сдвигаем на tf назад к open (совпасть с кэшем).
+            // normalize_ohlc + orient_range_rows (как чарт): ориентируем «диапазонные» свечи по
+            // тренду средней, иначе тела-only покрасили бы всю историю в один цвет (close<open).
+            if let Some(candles) = readers.candles_5m {
+                let mut snap: Vec<ChartCandle> = Vec::new();
+                candles.with_last(line_cap, |view| {
+                    view.for_each(|c| {
+                        let (o, h, l, cl) = crate::market::candles::normalize_ohlc(
+                            c.open(),
+                            c.high(),
+                            c.low(),
+                            c.close(),
+                        );
+                        if h.is_finite() && l.is_finite() && h > 0.0 {
+                            snap.push(ChartCandle {
+                                t_open_ms: (c.time().unix_millis() - tf_ms) as f64,
+                                open: o,
+                                high: h,
+                                low: l,
+                                close: cl,
+                                volume: 0.0,
+                            });
+                        }
+                    });
+                });
+                crate::market::candles::orient_range_rows(&mut snap);
+                for c in &snap {
+                    buckets.insert(bucket_key(c.t_open_ms as i64), (c.open, c.high, c.low, c.close));
+                }
+                snap5_n = buckets.len();
+            }
+            // База №2: kline-кэш (реальные OHLC прошлых минут/сессий, kind_min=5).
+            if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref()) {
+                for c in cache.read_range(ex, market, 5, from_ms, now_ms) {
+                    if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
+                        buckets.insert(bucket_key(c.t_open_ms as i64), (c.open, c.high, c.low, c.close));
+                    }
+                }
+            }
+            cache_n = buckets.len();
+            // Хвост: трейд-ринг провайдера → 5м-свечи (перекрывает свежие бакеты).
             if let Some(reader) = readers.futures_trades.or(readers.spot_trades) {
                 let from_t = moonproto::MoonTime::from_unix_millis(from_ms);
                 let to_t = moonproto::MoonTime::from_unix_millis(now_ms);
@@ -321,28 +363,64 @@ impl MarketDataSource {
                 crate::market::candles::aggregate_trades(&ticks, tf_ms, &mut candles);
                 for c in &candles {
                     if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
-                        buckets.insert(c.t_open_ms as i64, (c.open, c.high, c.low, c.close));
+                        buckets.insert(bucket_key(c.t_open_ms as i64), (c.open, c.high, c.low, c.close));
                     }
-                }
-            }
-            // Фолбэк (совсем пусто): retained `candles_5m` снимка (только high/low — тело вырождено).
-            if buckets.is_empty() {
-                if let Some(candles) = readers.candles_5m {
-                    candles.with_last(bars, |view| {
-                        view.for_each(|c| {
-                            let (o, h, l, cl) = (c.open(), c.high(), c.low(), c.close());
-                            if h.is_finite() && l.is_finite() && h > 0.0 {
-                                buckets.insert(c.time().unix_millis(), (o, h, l, cl));
-                            }
-                        });
-                    });
                 }
             }
         }
 
-        // Последние `bars` бакетов, старые→новые.
+        // Диагностика (env MOON_DETECT_DIAG=1): реальная структура бакетов — сколько свечей,
+        // общий охват, МАКС дыра во времени (по-индексный рендер её скрывает, но она укажет на
+        // рваность данных) и ценовой диапазон (выброс = сплющивание). Не гадать про «разрывы».
+        if std::env::var_os("MOON_DETECT_DIAG").is_some() {
+            let keys: Vec<i64> = buckets.keys().copied().collect();
+            let max_gap = keys.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
+            let (mut pmin, mut pmax) = (f32::INFINITY, f32::NEG_INFINITY);
+            for &(_, bh, bl, _) in buckets.values() {
+                pmax = pmax.max(bh);
+                pmin = pmin.min(bl);
+            }
+            let span_ms = keys.last().copied().unwrap_or(0) - keys.first().copied().unwrap_or(0);
+            log::info!(
+                "detect_thumb {market}: n={} (snap5={} cache+={} ex_key={}) span_ms={} \
+                 max_gap_ms={} (tf={}) price=[{:.6},{:.6}] data={:.1}мкс",
+                keys.len(),
+                snap5_n,
+                cache_n.saturating_sub(snap5_n),
+                exchange_key.as_deref().unwrap_or("<none>"),
+                span_ms,
+                max_gap,
+                tf_ms,
+                pmin,
+                pmax,
+                t0.elapsed().as_nanos() as f64 / 1000.0
+            );
+        }
+
+        // Линия (режим «линия»): все close-цены 24ч-окна, старые→новые.
+        out.line = buckets.values().map(|&(_, _, _, c)| c).collect();
+        // Свечи (режим «свечи»): последние `bars` бакетов (~2ч), старые→новые.
         let start = buckets.len().saturating_sub(bars);
         out.bars = buckets.values().skip(start).copied().collect();
+        // Дельты 1ч/24ч = ФАКТИЧЕСКОЕ изменение цены за период (сейчас vs цена N назад) — из
+        // НАШИХ бакетов, чтобы совпадали со сдвигом линии. (moonproto coin_*_delta — это
+        // отклонение от СРЕДНЕЙ за период, другая метрика; она осталась тикеру шапки.)
+        if let Some((_, &(_, _, _, last))) = buckets.iter().next_back() {
+            let close_at = |ago_ms: i64| -> Option<f32> {
+                let target = now_ms - ago_ms;
+                buckets
+                    .range(..=target)
+                    .next_back()
+                    .map(|(_, &(_, _, _, c))| c)
+                    .or_else(|| buckets.values().next().map(|&(_, _, _, c)| c))
+            };
+            if let Some(c1) = close_at(3_600_000).filter(|v| *v > 0.0) {
+                out.delta_1h = (last - c1) / c1 * 100.0;
+            }
+            if let Some(c24) = close_at(24 * 3_600_000).filter(|v| *v > 0.0) {
+                out.delta_24h = (last - c24) / c24 * 100.0;
+            }
+        }
         out
     }
 

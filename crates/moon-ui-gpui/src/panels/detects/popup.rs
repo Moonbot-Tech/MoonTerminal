@@ -101,6 +101,27 @@ fn settings_menu(cfg: &DetectViewCfg, entity: Entity<DetectsPanel>) -> impl Into
         ))
         .item(field_item(
             &entity,
+            "f-line",
+            "Линия (вместо свечей)",
+            cfg.line_mode,
+            |c, v| c.line_mode = v,
+        ))
+        .item(field_item(
+            &entity,
+            "f-d24",
+            "Дельта 24ч (в линии)",
+            cfg.show_delta_24h,
+            |c, v| c.show_delta_24h = v,
+        ))
+        .item(field_item(
+            &entity,
+            "f-d1",
+            "Дельта 1ч (в линии)",
+            cfg.show_delta_1h,
+            |c, v| c.show_delta_1h = v,
+        ))
+        .item(field_item(
+            &entity,
             "f-exch",
             "Биржа",
             cfg.show_exchange,

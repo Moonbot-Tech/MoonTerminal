@@ -5,8 +5,6 @@
 //! навешивает [`super`] снаружи. Мини-чарт — замороженный тумбнейл (см.
 //! [`crate::detect_thumb`]); поля гейтятся галками, физически невлезающие в мини — опущены.
 
-use std::sync::Arc;
-
 use gpui::*;
 use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonText, h_flex, rgba_from, v_flex,
@@ -17,10 +15,27 @@ use moon_core::config::{BadgesConfig, DetectViewCfg};
 use super::DetectItem;
 use crate::design;
 
-/// Размер, в котором пекутся тумбнейлы (физ. px, аспект 5:3 под ленты карточек). Один бейк
-/// на карточку, gpui масштабирует под место показа; 160×96×4 ≈ 61КБ на карточку (≤48 → ≤3МБ).
-pub(super) const THUMB_BAKE_W: u32 = 160;
-pub(super) const THUMB_BAKE_H: u32 = 96;
+/// Высота ячейки графика среднего размера (лог. px): карточка минус отступы (3+3) и рамка.
+pub(super) fn medium_cell_h(cx: &App) -> f32 {
+    (design::fit_h_value(cx, 40.0, 14.0, 10.0) - 8.0).max(12.0)
+}
+
+/// Размер холста тумбнейла = ТОЧНЫЙ размер ячейки показа (лог. px, округлённый) — печём 1:1,
+/// БЕЗ растяжений (просьба пользователя; заодно интринсик картинки = ячейке, и никакие
+/// auto-размеры gpui не могут её раздуть). Зависит от режима размера карточки.
+pub(super) fn thumb_px(cfg: &DetectViewCfg, cx: &App) -> (u32, u32) {
+    if cfg.size_clamped() == DETECT_SIZE_LARGE {
+        // Крупный: ширина = внутренняя ширина плитки (150 - 2×8 паддинг - 2 рамка), высота 84.
+        let w = (design::ui_value(cx, 150.0) - 2.0 * design::ui_value(cx, 8.0) - 2.0).max(20.0);
+        (w.round() as u32, design::ui_value(cx, 84.0).round() as u32)
+    } else {
+        // Средний (и мини — чарт там не показывается): ячейка 110 × (карточка-8).
+        (
+            design::ui_value(cx, 110.0).round() as u32,
+            medium_cell_h(cx).round() as u32,
+        )
+    }
+}
 
 /// Сетка плиток (flex-wrap) для этого размера? Мини/крупный — да, средний — список.
 pub(super) fn size_is_grid(size: u8) -> bool {
@@ -53,6 +68,8 @@ fn base(color: u32, cx: &App) -> Div {
         .border_1()
         .border_color(rgba_from(color, 0.32))
         .bg(rgba_from(color, 0.12))
+        // Клип содержимого по рамке карточки — тумбнейл/тексты не вылезают за границу.
+        .overflow_hidden()
         .hover(|s| {
             s.border_color(rgba_from(color, 0.6))
                 .bg(rgba_from(color, 0.2))
@@ -111,15 +128,75 @@ fn muted(text: String, p: MoonPalette) -> MoonText {
         .uppercase(false)
 }
 
-/// Элемент тумбнейла заданного размера (обрезка по углам).
-fn thumb_el(tex: &Arc<RenderImage>, w: Pixels, h: Pixels, cx: &App) -> Div {
+/// Цвета роста/падения (как дельты в шапке терминала).
+fn pos_col(p: MoonPalette) -> u32 {
+    if p.is_light() {
+        p.green_text
+    } else {
+        p.green
+    }
+}
+fn neg_col(p: MoonPalette) -> u32 {
+    if p.is_light() {
+        p.red_text
+    } else {
+        p.red
+    }
+}
+
+/// Подпись дельты («+1.23%» / «-0.45%») с ПОДЛОЖКОЙ (полупрозрачный фон темы — не сливается с
+/// линией). Зелёная при ≥0, красная при <0, со знаком; мелкий жирный моно (стандартный MoonText).
+fn delta_text(val: f32, p: MoonPalette) -> Div {
+    let col = if val < 0.0 { neg_col(p) } else { pos_col(p) };
     div()
-        .w(w)
-        .h(h)
-        .flex_none()
+        .px(px(2.0))
+        .rounded(px(2.0))
+        .bg(rgba_from(p.surface, 0.72))
+        .child(
+            MoonText::new(format!("{val:+.2}%"))
+                .color(col)
+                .font_size(8.0)
+                .line_height(10.0)
+                .weight(700.0)
+                .mono(true)
+                .uppercase(false),
+        )
+}
+
+/// Ячейка графика (свечи ИЛИ линия по `cfg.line_mode`) + дельты 24ч (сверху-слева) и 1ч
+/// (снизу-слева) поверх — гейтятся галками, показываются в ОБОИХ режимах. Размер задаёт
+/// родитель (definite w×h; холст 1:1). `ObjectFit::Fill` — картинка точно по ячейке.
+fn chart_cell(it: &DetectItem, cfg: &DetectViewCfg, p: MoonPalette, cx: &App) -> Div {
+    let mut cell = div()
+        .relative()
+        .size_full()
         .rounded(design::ui_px(cx, 3.0))
-        .overflow_hidden()
-        .child(img(tex.clone()).size_full())
+        .overflow_hidden();
+    // img — ОБЫЧНЫЙ (in-flow) ребёнок, НЕ absolute-обёртка: пары инсетов (inset_0) в gpui не
+    // резолвят размер → обёртка брала интринсик картинки и, будучи absolute, НЕ клипалась
+    // overflow_hidden. In-flow + size_full от ячейки с definite-размером = точные границы.
+    let tex = if cfg.line_mode {
+        &it.line_thumb
+    } else {
+        &it.thumb
+    };
+    if let Some(tex) = tex {
+        cell = cell.child(img(tex.clone()).size_full().object_fit(ObjectFit::Fill));
+    }
+    cell.children(cfg.show_delta_24h.then(|| {
+        div()
+            .absolute()
+            .top(px(2.0))
+            .left(px(3.0))
+            .child(delta_text(it.delta_24h, p))
+    }))
+    .children(cfg.show_delta_1h.then(|| {
+        div()
+            .absolute()
+            .bottom(px(2.0))
+            .left(px(3.0))
+            .child(delta_text(it.delta_1h, p))
+    }))
 }
 
 /// Строка «биржа · тип» (то, что включено галками). Пусто → None.
@@ -145,6 +222,7 @@ fn medium_card(
     cx: &App,
 ) -> Div {
     let color = design::rgb_to_u32(it.color);
+    let card_hv = design::fit_h_value(cx, 40.0, 14.0, 10.0);
     let text_col = v_flex()
         .flex_1()
         .min_w(px(0.0))
@@ -189,19 +267,31 @@ fn medium_card(
 
     let mut row = h_flex().size_full().gap_2().items_stretch().child(text_col);
     if cfg.show_chart {
-        if let Some(tex) = &it.thumb {
-            row = row.child(thumb_el(
-                tex,
-                design::ui_px(cx, 60.0),
-                design::ui_px(cx, 34.0),
-                cx,
-            ));
-        }
+        // Резервируем ширину под график ПУСТЫМ спейсером — сам график рисуем АБСОЛЮТНЫМ
+        // оверлеем с прижимом top+bottom (ниже): flex-высота строки резолвилась больше
+        // внутренней области карточки (дебаг-рамка показала: ячейка доходила до низа карточки),
+        // поэтому любой h_full/явный h в потоке вылезал. Абсолют с top+bottom не может.
+        row = row.child(div().w(design::ui_px(cx, 110.0)).flex_none());
     }
-    base(color, cx)
+    let mut card = base(color, cx)
+        .relative()
         .w_full()
-        .h(design::fit_h_px(cx, 40.0, 14.0, 10.0))
-        .child(row)
+        .h(px(card_hv))
+        .child(row);
+    if cfg.show_chart {
+        // ЯВНАЯ высота оверлея (НЕ пара top+bottom инсетов!): gpui не резолвит высоту
+        // абсолюта из двух инсетов. Размер оверлея = размеру холста бейка (thumb_px) —
+        // картинка кладётся 1:1, без растяжений.
+        let overlay = div()
+            .absolute()
+            .top(px(3.0))
+            .right(px(4.0))
+            .w(px(design::ui_value(cx, 110.0).round()))
+            .h(px(medium_cell_h(cx).round()))
+            .child(chart_cell(it, cfg, p, cx));
+        card = card.child(overlay);
+    }
+    card
 }
 
 // --- Крупный размер: КВАДРАТНАЯ кнопка, картинка сверху, текст ПОД ней ---
@@ -225,19 +315,16 @@ fn large_card(
         .aspect_ratio(1.0)
         .overflow_hidden()
         .gap(design::ui_px(cx, 3.0));
-    // Картинка СВЕРХУ, тянется на всё свободное место квадрата над текстом.
+    // Картинка СВЕРХУ (свечи/линия + дельты) — ФИКС-размер контейнера = размеру холста (1:1).
     if cfg.show_chart {
-        if let Some(tex) = &it.thumb {
-            col = col.child(
-                div()
-                    .w_full()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .rounded(design::ui_px(cx, 3.0))
-                    .overflow_hidden()
-                    .child(img(tex.clone()).size_full()),
-            );
-        }
+        let (tw, th) = thumb_px(cfg, cx);
+        col = col.child(
+            div()
+                .w(px(tw as f32))
+                .h(px(th as f32))
+                .flex_none()
+                .child(chart_cell(it, cfg, p, cx)),
+        );
     }
     // Текст ПОД картинкой (flex_none — держит высоту, картинка сверху забирает остаток).
     col.child(

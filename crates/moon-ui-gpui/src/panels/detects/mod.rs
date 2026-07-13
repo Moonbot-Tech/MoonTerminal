@@ -23,8 +23,10 @@ use moon_chart::paint::now_unix_ms;
 use moon_core::config::DetectViewCfg;
 use moon_core::session::CoreId;
 
-/// Сколько закрытых 5м-свечей морозим для мини-чарта карточки (≈5.3ч истории).
-const DETECT_THUMB_BARS: usize = 64;
+/// Сколько закрытых 5м-свечей морозим для мини-чарта карточки (≈2ч истории). Под ПОЛЫЕ свечи:
+/// `cards::THUMB_BAKE_W`=120px / 24 = 5px на свечу → тело ~3.4px (1px контур + 1px контур +
+/// ~1.4px просвет), иначе «полое» схлопывается в закрашенное. Меньше свечей = шире и читаемее.
+const DETECT_THUMB_BARS: usize = 24;
 
 /// Кнопка ленты детектов (порт `src/dock/detects.rs::RibbonItem`).
 pub(crate) struct DetectItem {
@@ -43,14 +45,23 @@ pub(crate) struct DetectItem {
     ttl_ms: f64,
     /// Замороженный на момент детекта срез 5м-свечей `(open, high, low, close)` для мини-чарта.
     bars: Vec<(f32, f32, f32, f32)>,
+    /// Цены (close) 24ч для режима «линия» (старые→новые).
+    line: Vec<f32>,
+    /// Дельты цены 24ч/1ч, % (на момент детекта).
+    delta_24h: f32,
+    delta_1h: f32,
     /// Имя биржи (Binance Futures/Bybit/…) на момент детекта.
     exchange_name: String,
     /// Тип биржи (Спот/Фьючи/DEX/…) на момент детекта.
     exchange_kind: String,
-    /// Испечённый тумбнейл (лениво, из `bars`; переиспечь при смене темы).
+    /// Испечённые тумбнейлы (лениво; переиспечь при смене темы): свечи и линия.
     thumb: Option<Arc<RenderImage>>,
-    /// Для какой темы испечён тумбнейл (светлая=true) — переиспечь при переключении.
+    line_thumb: Option<Arc<RenderImage>>,
+    /// Для какой темы испечены тумбнейлы (светлая=true) — переиспечь при переключении.
     thumb_light: bool,
+    /// Размер холста, под который испечены тумбнейлы (1:1 с ячейкой показа) — переиспечь при
+    /// смене размера карточки/масштаба UI.
+    thumb_size: (u32, u32),
 }
 
 pub struct DetectsPanel {
@@ -163,9 +174,13 @@ impl DetectsPanel {
                     it.is_short = det.is_short;
                     // Пере-морозка на свежее срабатывание той же монеты.
                     it.bars = snap.bars;
+                    it.line = snap.line;
+                    it.delta_24h = snap.delta_24h;
+                    it.delta_1h = snap.delta_1h;
                     it.exchange_name = snap.exchange_name;
                     it.exchange_kind = snap.exchange_kind;
                     it.thumb = None;
+                    it.line_thumb = None;
                     changed = true;
                 } else {
                     self.items.push_back(DetectItem {
@@ -179,10 +194,15 @@ impl DetectsPanel {
                         born_ms: det.time_ms,
                         ttl_ms: ttl,
                         bars: snap.bars,
+                        line: snap.line,
+                        delta_24h: snap.delta_24h,
+                        delta_1h: snap.delta_1h,
                         exchange_name: snap.exchange_name,
                         exchange_kind: snap.exchange_kind,
                         thumb: None,
+                        line_thumb: None,
                         thumb_light: false,
+                        thumb_size: (0, 0),
                     });
                     changed = true;
                 }
@@ -276,22 +296,59 @@ impl DetectsPanel {
 
     /// Пере-морозить тумбнейлы, у которых их ещё нет / испечены под другую тему. Мутирует
     /// items — вызывать до построения элементов. Дёшево: свежих ≤ числа новых детектов.
-    fn bake_thumbs(&mut self, is_light: bool, cx: &App) {
+    fn bake_thumbs(&mut self, cfg: &DetectViewCfg, is_light: bool, cx: &App) {
         let theme = self.backend.read(cx).config.chart_theme().clone();
+        let diag = std::env::var_os("MOON_DETECT_DIAG").is_some();
+        // Холст = ТОЧНЫЙ размер ячейки показа (1:1, без растяжений) — см. cards::thumb_px.
+        let (tw, th) = cards::thumb_px(cfg, cx);
         for it in self.items.iter_mut() {
-            if it.bars.is_empty() {
-                continue;
+            // Смена темы ИЛИ размера ячейки инвалидирует оба тумбнейла.
+            if it.thumb_light != is_light || it.thumb_size != (tw, th) {
+                it.thumb = None;
+                it.line_thumb = None;
+                it.thumb_light = is_light;
+                it.thumb_size = (tw, th);
             }
-            if it.thumb.is_none() || it.thumb_light != is_light {
+            let t0 = std::time::Instant::now();
+            if cfg.line_mode {
+                if it.line.len() >= 2 && it.line_thumb.is_none() {
+                    it.line_thumb = crate::detect_thumb::render_line(
+                        &it.line,
+                        tw,
+                        th,
+                        theme.candle_up,
+                        theme.candle_down,
+                    );
+                    if diag {
+                        log::info!(
+                            "detect_thumb bake-line {}: {} точек {}×{} → {:.1}мкс",
+                            it.market,
+                            it.line.len(),
+                            tw,
+                            th,
+                            t0.elapsed().as_nanos() as f64 / 1000.0
+                        );
+                    }
+                }
+            } else if !it.bars.is_empty() && it.thumb.is_none() {
                 it.thumb = crate::detect_thumb::render_thumb(
                     &it.bars,
-                    cards::THUMB_BAKE_W,
-                    cards::THUMB_BAKE_H,
+                    tw,
+                    th,
                     theme.candle_up,
                     theme.candle_down,
                     theme.candle_neutral,
                 );
-                it.thumb_light = is_light;
+                if diag {
+                    log::info!(
+                        "detect_thumb bake {}: {} свечей {}×{} → {:.1}мкс",
+                        it.market,
+                        it.bars.len(),
+                        tw,
+                        th,
+                        t0.elapsed().as_nanos() as f64 / 1000.0
+                    );
+                }
             }
         }
     }
@@ -335,7 +392,7 @@ impl Render for DetectsPanel {
         let badges = self.backend.read(cx).config.badges.clone();
         // Испечь недостающие тумбнейлы (только если чарт включён) до построения элементов.
         if cfg.show_chart {
-            self.bake_thumbs(is_light, cx);
+            self.bake_thumbs(&cfg, is_light, cx);
         }
         let now = now_unix_ms();
 
