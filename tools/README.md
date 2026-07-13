@@ -8,8 +8,7 @@
   Tauri = `app.exe` + потомки `msedgewebview2.exe`), + кадры/латентность через PresentMon.
 - **Синт/стресс-режим** (env-флаги) — оба бинаря сами наращивают нагрузку: каждые N секунд
   открывают новое чарт-ОКНО с M синт-панелями, до K окон. Данные — **детерминированный
-  синтетический фид** (одинаковый в обоих). Реализация в нативе: [`src/feed/synth.rs`](../src/feed/synth.rs).
-- **`TAURI_BENCH_PARITY.md`** — что повторить в Tauri, чтобы нагрузка совпала 1:1 (+ грабли).
+  синтетический фид** (одинаковый в обоих). Реализация в нативе: [`crates/moon-core/src/feed/synth.rs`](../crates/moon-core/src/feed/synth.rs).
 
 ## Зачем синтетика, а не живой рынок
 
@@ -46,7 +45,7 @@ performance, на переднем плане. DevTools закрыты.
 ### 1. Собрать оба в RELEASE
 ```powershell
 # Натив
-cargo build --release          # → target/release/moon-terminal.exe
+cargo build --release          # → target/release/moonterminal.exe
 # Tauri
 npm run tauri build            # → src-tauri/target/release/<exe>
 ```

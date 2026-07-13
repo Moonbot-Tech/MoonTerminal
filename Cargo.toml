@@ -3,8 +3,7 @@
 # геометрию (view/axes/transform/build_order_geometry/инстанс-типы), wgpu-free.
 #
 # Старый egui-бинарь moon-terminal (корневой src/) удалён вместе с wgpu-движком и
-# offscreen→readback — рисование переведено на own-pass DX11 (chartdx). См.
-# docs/REFACTOR_RENDER.md.
+# offscreen→readback — рисование переведено на own-pass DX11 (chartdx).
 [workspace]
 members = ["crates/moon-core", "crates/moon-chart", "crates/moon-ui-gpui"]
 resolver = "2"
