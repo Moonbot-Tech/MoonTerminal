@@ -2,23 +2,32 @@
 //! ядер группы с `SoundAlert=Yes` и `AddToChart==0` (AddToChart-детекты — в чарт-вкладки),
 //! держит `KeepAlert` секунд, новые сверху. Клик → открыть монету на Main (через
 //! `Backend.open_request`, который читает Shell).
+//!
+//! Отображение настраивается полоской ⚙ (размер карточки + видимые поля) — per-group,
+//! persist в `layout.detect_view_by_group` (см. [`popup`]). Раскладка карточек и мини-чарт
+//! (замороженный тумбнейл на момент детекта) — в [`cards`]/[`crate::detect_thumb`].
+
+mod cards;
+mod popup;
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::*;
-use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonText, Panel, PanelEvent,
-    PanelState, h_flex, rgba_from, v_flex,
-};
+use moon_ui::{MoonPalette, Panel, PanelEvent, PanelState, h_flex, v_flex};
 use rust_i18n::t;
 
-use crate::{Backend, design};
+use crate::Backend;
 use moon_chart::paint::now_unix_ms;
+use moon_core::config::DetectViewCfg;
 use moon_core::session::CoreId;
 
+/// Сколько закрытых 5м-свечей морозим для мини-чарта карточки (≈5.3ч истории).
+const DETECT_THUMB_BARS: usize = 64;
+
 /// Кнопка ленты детектов (порт `src/dock/detects.rs::RibbonItem`).
-struct DetectItem {
+pub(crate) struct DetectItem {
     core: CoreId,
     core_name: String,
     /// Полный символ рынка (для подписки при клике).
@@ -32,6 +41,16 @@ struct DetectItem {
     is_short: bool,
     born_ms: f64,
     ttl_ms: f64,
+    /// Замороженный на момент детекта срез 5м-свечей `(open, high, low, close)` для мини-чарта.
+    bars: Vec<(f32, f32, f32, f32)>,
+    /// Имя биржи (Binance Futures/Bybit/…) на момент детекта.
+    exchange_name: String,
+    /// Тип биржи (Спот/Фьючи/DEX/…) на момент детекта.
+    exchange_kind: String,
+    /// Испечённый тумбнейл (лениво, из `bars`; переиспечь при смене темы).
+    thumb: Option<Arc<RenderImage>>,
+    /// Для какой темы испечён тумбнейл (светлая=true) — переиспечь при переключении.
+    thumb_light: bool,
 }
 
 pub struct DetectsPanel {
@@ -126,6 +145,12 @@ impl DetectsPanel {
                     continue;
                 }
                 let ttl = (det.keep_alert_secs.max(1) as f64) * 1000.0;
+                // Замороженный снимок на момент детекта: мини-чарт (5м H/L) + имя/тип биржи.
+                // Данные бесплатны (собственная запись ядра, не биржевой API).
+                let snap =
+                    b.session
+                        .market_source()
+                        .detect_snapshot(id, &det.market, DETECT_THUMB_BARS);
                 if let Some(it) = self
                     .items
                     .iter_mut()
@@ -136,6 +161,11 @@ impl DetectsPanel {
                     it.color = color;
                     it.kind = det.kind;
                     it.is_short = det.is_short;
+                    // Пере-морозка на свежее срабатывание той же монеты.
+                    it.bars = snap.bars;
+                    it.exchange_name = snap.exchange_name;
+                    it.exchange_kind = snap.exchange_kind;
+                    it.thumb = None;
                     changed = true;
                 } else {
                     self.items.push_back(DetectItem {
@@ -148,6 +178,11 @@ impl DetectsPanel {
                         is_short: det.is_short,
                         born_ms: det.time_ms,
                         ttl_ms: ttl,
+                        bars: snap.bars,
+                        exchange_name: snap.exchange_name,
+                        exchange_kind: snap.exchange_kind,
+                        thumb: None,
+                        thumb_light: false,
                     });
                     changed = true;
                 }
@@ -227,6 +262,39 @@ impl DetectsPanel {
         self.arm_prune_timer(cx);
         cx.notify();
     }
+
+    /// Текущая настройка отображения группы (или дефолт).
+    fn view_cfg(&self, cx: &App) -> DetectViewCfg {
+        self.backend
+            .read(cx)
+            .layout
+            .detect_view_by_group
+            .get(&self.group)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Пере-морозить тумбнейлы, у которых их ещё нет / испечены под другую тему. Мутирует
+    /// items — вызывать до построения элементов. Дёшево: свежих ≤ числа новых детектов.
+    fn bake_thumbs(&mut self, is_light: bool, cx: &App) {
+        let theme = self.backend.read(cx).config.chart_theme().clone();
+        for it in self.items.iter_mut() {
+            if it.bars.is_empty() {
+                continue;
+            }
+            if it.thumb.is_none() || it.thumb_light != is_light {
+                it.thumb = crate::detect_thumb::render_thumb(
+                    &it.bars,
+                    cards::THUMB_BAKE_W,
+                    cards::THUMB_BAKE_H,
+                    theme.candle_up,
+                    theme.candle_down,
+                    theme.candle_neutral,
+                );
+                it.thumb_light = is_light;
+            }
+        }
+    }
 }
 
 fn detects_sig(b: &Backend, group: &str) -> u64 {
@@ -256,132 +324,70 @@ impl Panel for DetectsPanel {
         crate::dock_persist::panel_state_with_group("Detects", &self.group)
     }
 }
+
 impl Render for DetectsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let is_light = p.is_light();
+        let cfg = self.view_cfg(cx);
         // Настройки бейджей (код/цвет по видам + обводка направления) — из конфига,
         // под активную тему. Клон дешёвый (≤пара десятков записей), лента редко рендерится.
         let badges = self.backend.read(cx).config.badges.clone();
+        // Испечь недостающие тумбнейлы (только если чарт включён) до построения элементов.
+        if cfg.show_chart {
+            self.bake_thumbs(is_light, cx);
+        }
         let now = now_unix_ms();
-        let mut col = v_flex()
-            .id("detects")
-            .size_full()
-            .gap_1p5()
-            .p_2()
-            .track_focus(&self.focus);
-        // Новые сверху.
+
+        // Полоска-настройки сверху (меню ⚙ размера/полей слева) + разделитель под ней.
+        let toolbar = popup::toolbar(&cfg, p, cx);
+        let divider = div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border));
+
+        // Карточки: новые сверху. Медиум — вертикальный список; мини/крупный — сетка плиток.
+        let grid = cards::size_is_grid(cfg.size_clamped());
+        let mut container = if grid {
+            h_flex().flex_wrap().gap_1p5().content_start()
+        } else {
+            v_flex().gap_1p5()
+        };
         for (i, it) in self.items.iter().enumerate().rev() {
             let secs = ((it.ttl_ms - (now - it.born_ms)) / 1000.0).ceil().max(0.0) as u32;
-            // Карточка = soft-тинт цветом ядра (порт визуала egui `detect_button` на Moon-
-            // примитивы — без ручного градиента/lerp/luminance, см. РефакторUI «Блокер 10»).
-            // Цвет ядра идёт прямо в `rgba_from` (фон/рамка) и в `MoonBadge` имени ядра.
-            let color = design::rgb_to_u32(it.color);
             let (core, market) = (it.core, it.market.clone());
             let market_rmb = it.market.clone();
-            col = col.child(
-                div()
-                    .id(SharedString::from(format!("det-{i}")))
-                    .w_full()
-                    .h(design::fit_h_px(cx, 34.0, 14.0, 10.0))
-                    .px_2()
-                    .py_1()
-                    .cursor_pointer()
-                    .rounded(design::ui_px(cx, 4.0))
-                    .border_1()
-                    .border_color(rgba_from(color, 0.32))
-                    .bg(rgba_from(color, 0.12))
-                    .hover(|s| {
-                        s.border_color(rgba_from(color, 0.6))
-                            .bg(rgba_from(color, 0.2))
-                    })
-                    // Токен крупно сверху-слева; нижняя строка — таймер слева, ядро справа.
-                    .child(
-                        v_flex()
-                            .size_full()
-                            .justify_between()
-                            // Верхняя строка: токен монеты слева (ужимается и обрезается),
-                            // бейдж типа справа — `flex_none`, поэтому длинное имя не
-                            // выталкивает бейдж за рамку, а обрезается перед ним.
-                            .child({
-                                // Бейдж типа: код (long/short по направлению) + цвет из
-                                // конфига под тему; обводка — пер-строка (цвета long/short).
-                                // Неактивный тип — бейдж не рисуем.
-                                let type_badge = badges.active(it.kind).then(|| {
-                                    let code = badges.code(it.kind, it.is_short).to_string();
-                                    let bcol = design::rgb_to_u32(badges.color(it.kind, is_light));
-                                    let mut badge = MoonBadge::new(code)
-                                        .variant(MoonBadgeVariant::Soft)
-                                        .size(MoonBadgeSize::Tiny)
-                                        .bg_color(bcol)
-                                        .text_color(bcol)
-                                        .mono(true);
-                                    if let Some(oc) =
-                                        badges.outline_color(it.kind, it.is_short, is_light)
-                                    {
-                                        let ocol = design::rgb_to_u32(oc);
-                                        badge = badge.border_color(ocol).border_alpha(0.9);
-                                    }
-                                    badge
-                                });
-                                h_flex()
-                                    .w_full()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(
-                                        div().flex_1().min_w(px(0.0)).overflow_hidden().child(
-                                            MoonText::new(it.base.clone())
-                                                .color(p.text)
-                                                .font_size(13.0)
-                                                .line_height(16.0)
-                                                .weight(600.0)
-                                                .mono(true)
-                                                .uppercase(false),
-                                        ),
-                                    )
-                                    .child(div().flex_none().children(type_badge))
-                            })
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .justify_between()
-                                    .items_end()
-                                    // Секунды приподняты на пару px от низа карточки.
-                                    .child(
-                                        div().mb(px(2.0)).child(
-                                            MoonText::new(format!("{secs}s"))
-                                                .color(p.text_muted)
-                                                .font_size(9.0)
-                                                .line_height(11.0)
-                                                .mono(true)
-                                                .uppercase(false),
-                                        ),
-                                    )
-                                    .child(
-                                        MoonBadge::new(it.core_name.clone())
-                                            .variant(MoonBadgeVariant::Soft)
-                                            .size(MoonBadgeSize::Status)
-                                            .bg_color(color)
-                                            .text_color(color)
-                                            .border_color(color)
-                                            .border_alpha(0.4)
-                                            .mono(true),
-                                    ),
-                            ),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.open(core, market.clone(), cx);
-                    }))
-                    // ПКМ — открыть в новой кастомной вкладке в режиме сравнения (замок+метла).
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |this, _, _, cx| {
-                            this.open_compare(core, market_rmb.clone(), cx);
-                            cx.stop_propagation();
-                        }),
-                    ),
-            );
+            let card = cards::card(it, secs, &cfg, &badges, p, is_light, cx)
+                .id(SharedString::from(format!("det-{i}")))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.open(core, market.clone(), cx);
+                }))
+                // ПКМ — открыть в новой кастомной вкладке в режиме сравнения (замок+метла).
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, _, _, cx| {
+                        this.open_compare(core, market_rmb.clone(), cx);
+                        cx.stop_propagation();
+                    }),
+                );
+            container = container.child(card);
         }
-        col
+
+        let scroll = div()
+            .id("detects-scroll")
+            .flex_1()
+            .w_full()
+            .min_h(px(0.0))
+            .overflow_y_scroll()
+            .p_2()
+            .child(container);
+
+        v_flex()
+            .id("detects")
+            .size_full()
+            .min_h(px(0.0))
+            .track_focus(&self.focus)
+            .bg(rgb(p.table_body))
+            .child(toolbar)
+            .child(divider)
+            .child(scroll)
     }
 }

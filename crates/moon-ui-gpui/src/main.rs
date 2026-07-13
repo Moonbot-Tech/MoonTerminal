@@ -32,6 +32,7 @@ mod crash;
 mod debug_window;
 mod design;
 mod detached;
+mod detect_thumb;
 mod diag;
 mod dock_persist;
 mod figures_backend;

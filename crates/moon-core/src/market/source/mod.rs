@@ -126,6 +126,22 @@ pub struct MarketTickerReadout {
     pub delta_24h_pct: f64,
 }
 
+/// Замороженный снимок для карточки детекта (собирается ОДИН раз в момент детекта):
+/// мини-чарт последних закрытых 5м-свечей + идентити биржи. Данные — ретейненный снимок
+/// провайдера: `candles_5m` = собственная запись ядра (биржевой API не трогаем),
+/// `server_info` = идентити подключения. Пустой — нет провайдера/снимка.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DetectSnapshot {
+    /// Последние 5м-свечи `(open, high, low, close)`, порядок старые→новые. Пусто — нет истории.
+    /// Полный OHLC → мини-чарт рисует тело+фитиль (фолбэк `candles_5m` несёт только high/low →
+    /// тело вырождено, но тень видна).
+    pub bars: Vec<(f32, f32, f32, f32)>,
+    /// Человекочитаемое имя биржи из server_info (напр. «Binance Futures», «Bybit»). Пусто — нет.
+    pub exchange_name: String,
+    /// Короткий тип биржи из `exchange_type_mask` («Спот»/«Фьючи»/«DEX»/…). Пусто — не сообщён.
+    pub exchange_kind: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LatestPriceError {
     NoProvider,

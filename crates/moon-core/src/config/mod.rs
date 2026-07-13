@@ -16,6 +16,7 @@
 
 pub mod badges;
 pub mod crypto;
+pub mod detect_view;
 pub mod groups;
 pub mod hotkeys;
 pub mod lang;
@@ -33,6 +34,7 @@ mod store;
 mod toml_io;
 
 pub use badges::{BadgeEntry, BadgesConfig};
+pub use detect_view::DetectViewCfg;
 pub use groups::GroupConfig;
 pub use hotkeys::{
     HotkeysConfig, MouseGestureBinding, MANUAL_STRATEGY_KEYS, ORDER_SIZE_KEYS, SELL_PRESET_KEYS,

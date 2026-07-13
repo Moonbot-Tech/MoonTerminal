@@ -25,9 +25,27 @@ fn deep_row_candle(r: &moonproto::DeepPrice) -> crate::market::candles::ChartCan
 use super::{
     drain_price_line, moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks,
     trade_price_range, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor,
-    ChartHistoryRead, LatestPriceError, MarketDataSource, MarketRevisions, MarketTickerReadout,
+    ChartHistoryRead, DetectSnapshot, LatestPriceError, MarketDataSource, MarketRevisions,
+    MarketTickerReadout,
 };
 use crate::market::candles::ChartCandle;
+
+/// Короткий тип биржи из `exchange_type_mask` server_info: «Спот»/«Фьючи»/«DEX»/…
+/// (core i18n-агностичен — строки простым текстом, UI при желании перелокализует). Маска —
+/// набор возможностей подключения; для одиночного коннекта обычно ровно один торговый бит.
+fn exchange_kind_label(info: &moonproto::ServerInfo) -> String {
+    use moonproto::ExchangeTypeMask as M;
+    let spot = info.supports(M::SPOT);
+    let fut = info.supports(M::FUTURES);
+    let dex = info.supports(M::DEX);
+    match (dex, fut, spot) {
+        (true, _, _) => "DEX".to_string(),
+        (false, true, false) => "Фьючи".to_string(),
+        (false, false, true) => "Спот".to_string(),
+        (false, true, true) => "Спот/Фьючи".to_string(),
+        _ => String::new(),
+    }
+}
 
 /// ТФ CoinCard-истории (мин) → wire-kind moonproto.
 fn deep_history_kind(tf_min: u32) -> DeepHistoryKind {
@@ -234,6 +252,98 @@ impl MarketDataSource {
             delta_1h_pct: delta.coin_1h_delta,
             delta_24h_pct: delta.coin_24h_delta,
         })
+    }
+
+    /// Замороженный снимок для карточки детекта: последние `bars` 5м-свечей `(high, low)`
+    /// (старые→новые) + имя/тип биржи. История — из локального kline-кэша (фоновый регистратор
+    /// пишет 5м-бары по ВСЕМ рынкам, 90 дней), живой хвост — из трейд-ринга провайдера; оба
+    /// БЕСПЛАТНЫ (биржевой API НЕ трогаем). Данные — ДЕДУП-ПРОВАЙДЕРА биржи (общие для ядер той
+    /// же биржи/рынка). Собирать ОДИН раз в момент детекта, морозить в карточке. Пусто — нет
+    /// провайдера/клиента/снимка/истории.
+    pub fn detect_snapshot(&self, core: CoreId, market: &str, bars: usize) -> DetectSnapshot {
+        let (client, kline_cache, exchange_key) = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let Some(provider) = inner.core_provider.get(&core).copied() else {
+                return DetectSnapshot::default();
+            };
+            let Some(client) = inner.clients.get(&provider).and_then(SharedMoonClient::get) else {
+                return DetectSnapshot::default();
+            };
+            // Стабильный ключ биржи провайдера для kline-кэша (как в read_chart_history_into).
+            let exchange_key = inner
+                .provider_exchange
+                .get(&provider)
+                .map(|e| format!("{}:{:08x}", e.code, e.dex));
+            (client, inner.kline_cache.clone(), exchange_key)
+        };
+        let Some(snapshot) = client.snapshot_versioned() else {
+            return DetectSnapshot::default();
+        };
+        let mut out = DetectSnapshot::default();
+        // Имя/тип биржи — из идентити подключения (server_info из BaseCheck).
+        let info = snapshot.server_info();
+        if let Some(name) = &info.exchange_name {
+            out.exchange_name = name.clone();
+        }
+        out.exchange_kind = exchange_kind_label(info);
+
+        let tf_ms: i64 = 300_000; // 5м
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        let from_ms = now_ms - (bars as i64 + 2) * tf_ms;
+
+        // Свечи по бакету 5м (ключ = t_open): сшиваем ИСТОРИЮ из kline-кэша и ЖИВОЙ хвост из
+        // трейд-ринга (перекрывает свежие бакеты). Трейд-ринг короткий (~минуты), поэтому одним
+        // им выходило 1-2 бара — историю дорисовывает кэш регистратора.
+        let mut buckets: std::collections::BTreeMap<i64, (f32, f32, f32, f32)> =
+            std::collections::BTreeMap::new();
+
+        // История: локальный kline-кэш (реальные 5м-OHLC прошлых минут/сессий, kind_min=5).
+        if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref()) {
+            for c in cache.read_range(ex, market, 5, from_ms, now_ms) {
+                if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
+                    buckets.insert(c.t_open_ms as i64, (c.open, c.high, c.low, c.close));
+                }
+            }
+        }
+
+        if let Some(readers) = snapshot.market_history_readers(market) {
+            // Живой хвост: трейд-ринг провайдера → 5м-свечи (перекрывает свежие бакеты кэша).
+            if let Some(reader) = readers.futures_trades.or(readers.spot_trades) {
+                let from_t = moonproto::MoonTime::from_unix_millis(from_ms);
+                let to_t = moonproto::MoonTime::from_unix_millis(now_ms);
+                let mut rows = Vec::new();
+                reader.copy_time_range(from_t, to_t, reader.capacity(), &mut rows);
+                let mut ticks = Vec::new();
+                rows_to_ticks(&rows, &mut ticks);
+                let mut candles = Vec::new();
+                crate::market::candles::aggregate_trades(&ticks, tf_ms, &mut candles);
+                for c in &candles {
+                    if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
+                        buckets.insert(c.t_open_ms as i64, (c.open, c.high, c.low, c.close));
+                    }
+                }
+            }
+            // Фолбэк (совсем пусто): retained `candles_5m` снимка (только high/low — тело вырождено).
+            if buckets.is_empty() {
+                if let Some(candles) = readers.candles_5m {
+                    candles.with_last(bars, |view| {
+                        view.for_each(|c| {
+                            let (o, h, l, cl) = (c.open(), c.high(), c.low(), c.close());
+                            if h.is_finite() && l.is_finite() && h > 0.0 {
+                                buckets.insert(c.time().unix_millis(), (o, h, l, cl));
+                            }
+                        });
+                    });
+                }
+            }
+        }
+
+        // Последние `bars` бакетов, старые→новые.
+        let start = buckets.len().saturating_sub(bars);
+        out.bars = buckets.values().skip(start).copied().collect();
+        out
     }
 
     /// Search the provider's market universe for a terminal coin-search box.
