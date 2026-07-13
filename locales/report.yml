@@ -55,6 +55,28 @@ report.columns_menu:
   ru: "Колонки"
   en: "Columns"
   es: "Columnas"
+# Меню сохранения отчёта в файл (кнопка ⇩ левее «Колонок»). Период выборки —
+# текущий фильтр панели (пресет/даты С:–По:). «CSV»/«Excel» не переводим.
+report.export_menu:
+  ru: "Сохранить отчёт в файл (CSV / Excel)"
+  en: "Save report to a file (CSV / Excel)"
+  es: "Guardar informe en archivo (CSV / Excel)"
+report.export.csv:
+  ru: "CSV"
+  en: "CSV"
+  es: "CSV"
+report.export.csv_all:
+  ru: "CSV — все колонки"
+  en: "CSV — all columns"
+  es: "CSV — todas las columnas"
+report.export.xlsx:
+  ru: "Excel (XLSX)"
+  en: "Excel (XLSX)"
+  es: "Excel (XLSX)"
+report.export.xlsx_all:
+  ru: "Excel — все колонки"
+  en: "Excel — all columns"
+  es: "Excel — todas las columnas"
 
 # --- Пустые состояния и итоги ---
 report.all_cols_hidden:

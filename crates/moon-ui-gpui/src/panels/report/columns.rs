@@ -176,7 +176,8 @@ fn is_numeric_report_column(col: &str) -> bool {
         || col.ends_with("ratio")
 }
 
-/// Текст + цвет ячейки по имени колонки и значению (порт `cell`).
+/// Текст + цвет ячейки по имени колонки и значению (порт `cell`). Только для показа
+/// в таблице — экспорт (export.rs) пишет СЫРЫЕ значения БД, без этого форматирования.
 fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>) {
     match col {
         "buydate" | "closedate" | "sellsetdate" | "last_update_at" => {

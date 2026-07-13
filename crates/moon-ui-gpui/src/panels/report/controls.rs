@@ -126,6 +126,65 @@ impl ReportPanel {
             .items(items)
     }
 
+    /// Меню сохранения отчёта в файл: CSV / CSV со всеми колонками / Excel (XLSX) /
+    /// Excel со всеми колонками. Период выборки = текущий фильтр панели
+    /// (пресет «Сегодня» и т.п. или ручные даты С:/По:).
+    pub(super) fn export_menu(&self, cx: &Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        let item = |key: &'static str,
+                    label: String,
+                    fmt: super::export::Format,
+                    all_cols: bool| {
+            let view = view.clone();
+            MoonMenuItem::with_key(key, label).on_click(move |_, _, app| {
+                view.update(app, |t, c| t.export_report(fmt, all_cols, c));
+            })
+        };
+        let items = vec![
+            item(
+                "exp-csv",
+                t!("report.export.csv").to_string(),
+                super::export::Format::Csv,
+                false,
+            ),
+            item(
+                "exp-csv-all",
+                t!("report.export.csv_all").to_string(),
+                super::export::Format::Csv,
+                true,
+            ),
+            item(
+                "exp-xlsx",
+                t!("report.export.xlsx").to_string(),
+                super::export::Format::Xlsx,
+                false,
+            ),
+            item(
+                "exp-xlsx-all",
+                t!("report.export.xlsx_all").to_string(),
+                super::export::Format::Xlsx,
+                true,
+            ),
+        ];
+        // Кнопка-глиф в ряд с селектором колонок (общий вид, подсказка тултипом).
+        div()
+            .id("rep-export-tip")
+            .tooltip(|_window, cx| {
+                cx.new(|_| moon_ui::MoonTooltipView::new(t!("report.export_menu").to_string()))
+                    .into()
+            })
+            .child(
+                MoonDropdown::new("rep-export")
+                    .segment(moon_ui::MoonButtonSegment::new("⇩"))
+                    .trigger_variant(MoonButtonVariant::Soft)
+                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_width(34.0)
+                    .menu_width(200.0)
+                    .menu_size(MoonMenuSize::Compact)
+                    .items(items),
+            )
+    }
+
     /// Попап выбора видимых колонок (чекбоксы) — по рантайм-списку колонок БД,
     /// поэтому авто-добавленные поля ядра сразу доступны к показу.
     pub(super) fn columns_menu(&self, cx: &Context<Self>) -> impl IntoElement {

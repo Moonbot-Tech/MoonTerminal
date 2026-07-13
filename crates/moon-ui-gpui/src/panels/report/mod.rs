@@ -8,6 +8,7 @@
 
 mod columns;
 mod controls;
+mod export;
 
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -668,6 +669,49 @@ impl ReportPanel {
         self.save_ctx_columns(cx);
         cx.notify();
     }
+    /// Экспорт отчёта в файл (пункты меню «Сохранить»): диалог пути → фоновый запрос
+    /// БД по ТЕКУЩЕМУ фильтру (период/даты/ядра/монета/сторона/эмулятор, сортировка
+    /// как в таблице) → запись CSV/XLSX. `all_cols` — все колонки БД, иначе видимые.
+    fn export_report(&mut self, fmt: export::Format, all_cols: bool, cx: &mut Context<Self>) {
+        let cols: Vec<String> = if all_cols {
+            self.table.cols.clone()
+        } else {
+            self.table
+                .cols
+                .iter()
+                .filter(|c| self.visible.contains(c.as_str()))
+                .cloned()
+                .collect()
+        };
+        if cols.is_empty() {
+            log::warn!("отчёт: экспорт без колонок (таблица пуста?)");
+            return;
+        }
+        let filter = self.filter(cx);
+        let sort_key = self.sort_key.clone();
+        let sort_desc = self.sort_desc;
+        let suggested = export::suggested_name(&filter, fmt);
+        let rx = cx.prompt_for_new_path(&export::default_dir(), Some(&suggested));
+        cx.spawn(async move |_this, cx| {
+            // Диалог отменён/закрыт — тихо выходим.
+            let Ok(Ok(Some(path))) = rx.await else {
+                return;
+            };
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let result = executor
+                .spawn(async move {
+                    export::run(&path, fmt, &cols, &filter, &sort_key, sort_desc)
+                        .map(|n| (n, path))
+                })
+                .await;
+            match result {
+                Ok((n, path)) => log::info!("отчёт: экспортировано {n} строк → {}", path.display()),
+                Err(e) => log::warn!("отчёт: экспорт не удался: {e:#}"),
+            }
+        })
+        .detach();
+    }
+
     fn set_report_sort(&mut self, col: &str, sort_desc: bool, cx: &mut Context<Self>) {
         if self.sort_key == col && self.sort_desc == sort_desc {
             return;
@@ -811,6 +855,7 @@ impl Render for ReportPanel {
                         .child(MoonInput::new("rep-to").state(&self.to).small()),
                 )
             })
+            .child(self.export_menu(cx))
             .child(self.columns_menu(cx));
 
         // ── Таблица ──

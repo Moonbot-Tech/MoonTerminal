@@ -51,6 +51,8 @@ rusqlite = "0.32"
 # Сериализация раскладки доков/откреплённых окон (→ docks.json / detached.json).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Экспорт отчёта в Excel (.xlsx) — панель «Отчёт», меню сохранения (report/export.rs).
+rust_xlsxwriter = "0.96.0"
 
 # Локальное смещение времени (подписи часов) + НАШ DX11 own-pass рендер чарта (chartdx).
 # Только Windows; иначе UTC. moon-chart намеренно windows-free, поэтому tz/DX11 здесь.
