@@ -102,6 +102,8 @@ impl MarketDataSource {
         let cur_bucket = (now_ms / TF) * TF;
         let mut ticks: Vec<crate::feed::Tick> = Vec::new();
         let mut candles: Vec<crate::market::candles::ChartCandle> = Vec::new();
+        // Весь цикл (тысячи рынков) уезжает в кэш ОДНОЙ транзакцией — копим элементы.
+        let mut batch: Vec<crate::market::kline_cache::MergeItem> = Vec::new();
         for (provider, ex, slot) in providers {
             let Some(client) = slot.get() else { continue };
             let Some(snap) = client.snapshot_versioned() else {
@@ -142,10 +144,16 @@ impl MarketDataSource {
                 // Текущий (незапечатанный) бакет не пишем — его допишет следующий прогон.
                 candles.retain(|c| (c.t_open_ms as i64) < cur_bucket);
                 if !candles.is_empty() {
-                    cache.merge(ex.clone(), name.to_string(), 5, std::mem::take(&mut candles));
+                    batch.push(crate::market::kline_cache::MergeItem {
+                        exchange: ex.clone(),
+                        market: name.to_string(),
+                        kind_min: 5,
+                        rows: std::mem::take(&mut candles),
+                    });
                 }
             }
         }
+        cache.merge_batch(batch);
     }
 
     /// Стабильные идентичности бирж провайдеров — ключ kline-кэша (ядра одной биржи

@@ -40,12 +40,26 @@ fn retention_days(kind_min: u32) -> i64 {
     }
 }
 
+/// Элемент батч-записи: ряды одного (биржа, рынок, kind). Публичный — регистратор
+/// копит вектор таких и шлёт одним `merge_batch`: весь цикл (~тысячи рынков) уезжает
+/// ОДНОЙ транзакцией вместо тысячи мелких, так соседние чанки на общей странице
+/// пишутся в WAL один раз, а не по разу на коммит.
+pub struct MergeItem {
+    pub exchange: String,
+    pub market: String,
+    pub kind_min: u32,
+    pub rows: Vec<ChartCandle>,
+}
+
 enum Op {
     Merge {
         exchange: String,
         market: String,
         kind_min: u32,
         rows: Vec<ChartCandle>,
+    },
+    MergeBatch {
+        items: Vec<MergeItem>,
     },
     Read {
         exchange: String,
@@ -99,6 +113,15 @@ impl KlineCache {
             kind_min,
             rows,
         });
+    }
+
+    /// Дописать/обновить ряды МНОГИХ (биржа, рынок, kind) одной транзакцией. Пустые
+    /// элементы поток отсеет сам. Неблокирующе, как `merge`.
+    pub fn merge_batch(&self, items: Vec<MergeItem>) {
+        if items.is_empty() {
+            return;
+        }
+        let _ = self.tx.send(Op::MergeBatch { items });
     }
 
     /// Прочитать ряды диапазона [from_ms, to_ms] (по t_open). Блокирует не дольше
@@ -165,13 +188,54 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
                 kind_min,
                 rows,
             } => {
-                if let Err(e) = merge_rows(&conn, &exchange, &market, kind_min, &rows) {
+                let now = now_unix_ms();
+                let res = conn.unchecked_transaction().and_then(|tx| {
+                    upsert_one(&tx, &exchange, &market, kind_min, &rows, now)?;
+                    tx.commit()
+                });
+                if let Err(e) = res {
                     log::warn!("kline cache merge failed {exchange}/{market}/{kind_min}: {e}");
                 } else if seen.insert((exchange.clone(), market.clone(), kind_min)) {
                     log::info!(
                         "kline cache: первые ряды {exchange}/{market}/kind{kind_min}: {}",
                         rows.len()
                     );
+                }
+            }
+            Op::MergeBatch { items } => {
+                let now = now_unix_ms();
+                let tx = match conn.unchecked_transaction() {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        log::warn!("kline cache batch tx failed ({} items): {e}", items.len());
+                        continue;
+                    }
+                };
+                // Ошибка одного элемента не роняет транзакцию SQLite — логируем и пишем
+                // остальные, затем один commit на весь цикл.
+                for it in &items {
+                    match upsert_one(&tx, &it.exchange, &it.market, it.kind_min, &it.rows, now) {
+                        Ok(()) => {
+                            if seen.insert((it.exchange.clone(), it.market.clone(), it.kind_min)) {
+                                log::info!(
+                                    "kline cache: первые ряды {}/{}/kind{}: {}",
+                                    it.exchange,
+                                    it.market,
+                                    it.kind_min,
+                                    it.rows.len()
+                                );
+                            }
+                        }
+                        Err(e) => log::warn!(
+                            "kline cache batch merge {}/{}/{}: {e}",
+                            it.exchange,
+                            it.market,
+                            it.kind_min
+                        ),
+                    }
+                }
+                if let Err(e) = tx.commit() {
+                    log::warn!("kline cache batch commit failed ({} items): {e}", items.len());
                 }
             }
             Op::Read {
@@ -193,12 +257,16 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
     }
 }
 
-fn merge_rows(
+/// Записать ряды одного (биржа, рынок, kind) на УЖЕ ОТКРЫТОЙ транзакции `conn`
+/// (обычная `Connection` или `Transaction` через Deref). Транзакцией/коммитом
+/// управляет вызывающий — так один merge и батч из тысяч делят общий коммит.
+fn upsert_one(
     conn: &rusqlite::Connection,
     exchange: &str,
     market: &str,
     kind_min: u32,
     rows: &[ChartCandle],
+    now: i64,
 ) -> rusqlite::Result<()> {
     // Группируем по суткам; внутри дня merge по t_open (BTreeMap держит сортировку).
     let mut by_day: BTreeMap<i64, Vec<&ChartCandle>> = BTreeMap::new();
@@ -211,10 +279,8 @@ fn merge_rows(
     if by_day.is_empty() {
         return Ok(());
     }
-    let now = now_unix_ms();
-    let tx = conn.unchecked_transaction()?;
     for (day, day_rows) in by_day {
-        let existing: Option<Vec<u8>> = tx
+        let existing: Option<Vec<u8>> = conn
             .query_row(
                 "SELECT rows FROM chunks WHERE exchange=?1 AND market=?2 AND kind=?3 AND day=?4",
                 rusqlite::params![exchange, market, kind_min, day],
@@ -232,13 +298,13 @@ fn merge_rows(
             merged.insert((r.t_open_ms as i64 - day_start) as u32, r.clone());
         }
         let blob = pack_rows(merged.values(), day_start);
-        tx.execute(
+        conn.execute(
             "INSERT OR REPLACE INTO chunks(exchange, market, kind, day, rows, updated_ms)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![exchange, market, kind_min, day, blob, now],
         )?;
     }
-    tx.commit()
+    Ok(())
 }
 
 fn read_rows(
