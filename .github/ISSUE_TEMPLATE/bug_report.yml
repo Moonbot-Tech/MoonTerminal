@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a problem with MoonTerminal
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report. Please fill in the details below.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "Release tag, or the build stamp from the log line `build: moonterminal=<sha>`."
+      placeholder: "v0.10"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected vs. actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log output (the app writes logs next to the executable).
+      render: text
+    validations:
+      required: false
