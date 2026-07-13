@@ -342,6 +342,14 @@ impl AssetsView {
                         r.market, r.coin, r.pos_size, r.qty, r.qty_full, r.value_usdt, r.min_lot_usd, r.price
                     );
                 }
+                // Кошельковый спот (Bitget/Hyperliquid и т.п.): value=0 у «@»-имён = баг цены
+                // (рынок «@699USDT» не существует) → монета уходит под фильтр пыли.
+                for w in &cd.transfer_assets.spot {
+                    log::error!(
+                        "[assets_diag]   wallet-spot currency={} total={} amount={} value={:.2}",
+                        w.currency, w.total, w.amount, w.value_usdt
+                    );
+                }
             }
             // Монеты, уже показанные из per-market строк — чтобы не задублировать их
             // спотовым кошельком (`transfer_assets`) ниже.
@@ -554,6 +562,11 @@ impl AssetsView {
 /// — конкатенация (`BTCUSDC`), Gate — с подчёркиванием (`SOVRN_USDT`). Возвращаем найденное
 /// имя (для Market Sell / клика по тикеру) или `None`, если рынка нет.
 fn resolve_market(markets: &std::collections::HashSet<String>, coin: &str, quote: &str) -> Option<String> {
+    // Рынок = САМО имя монеты (Hyperliquid спот-индексы «@699» зовутся так, а не «@699USDC»).
+    // Пробуем первым — иначе Sell скрыт и кошельковая монета не разрешается в рынок.
+    if markets.contains(coin) {
+        return Some(coin.to_string());
+    }
     let concat = format!("{coin}{quote}");
     if markets.contains(&concat) {
         return Some(concat);

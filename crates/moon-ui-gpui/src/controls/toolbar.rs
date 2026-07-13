@@ -1,4 +1,4 @@
-//! Сборка полосы тулбара (TP/S-слоты/SL/Lev/size/Live). Вынесено из `controls.rs` точь-в-точь.
+//! Сборка полосы тулбара (size/Lev/SL/TP+S-слоты/Live). Вынесено из `controls.rs` точь-в-точь.
 
 use gpui::*;
 use rust_i18n::t;
@@ -11,7 +11,7 @@ use moon_ui::{
 use moon_core::session::CoreId;
 
 use super::metric::{metric_button, sl_toggle};
-use super::strips::{SIZE_SEL_DEFAULT, divider, sell_strip, size_strip, strip_label};
+use super::strips::{SIZE_SEL_DEFAULT, divider, sell_strip, size_strip};
 use super::{TOOLBAR_H, TradeMetric, fmt_field2, fmt_field2_signed};
 use crate::shell::Shell;
 use crate::{Backend, design};
@@ -132,6 +132,53 @@ pub fn toolbar(
         .border_color(rgb(p.border));
 
     row = row
+        // Размер ордера первым, без подписи «size» — s1-s6 говорят сами за себя.
+        .child(size_strip(
+            size_values,
+            size_sel,
+            // Редактируем инпутом только если запрос относится к ФОКУСНОМУ ядру тулбара.
+            size_edit
+                .filter(|(c, _)| Some(*c) == focus_core)
+                .map(|(_, i)| i),
+            size_input,
+            backend.clone(),
+            focus_core,
+        ))
+        .child(divider(p))
+        // Плечо.
+        .child(metric_button(
+            TradeMetric::Lev,
+            lev_str,
+            p.text,
+            61.6,
+            open_metric == Some(TradeMetric::Lev),
+            false,
+            true,
+            true,
+            shell.clone(),
+            p,
+        ))
+        .child(divider(p))
+        // Стоп-лосс: тогл вкл/выкл (`panic_if_price_drop`) + кнопка только со значением+попапом.
+        .child(sl_toggle(
+            sl_on,
+            manual_on,
+            backend.clone(),
+            group.to_string(),
+        ))
+        .child(metric_button(
+            TradeMetric::Sl,
+            sl_str,
+            sl_color,
+            58.0,
+            open_metric == Some(TradeMetric::Sl),
+            false,
+            false,
+            sl_on && !manual_on,
+            shell.clone(),
+            p,
+        ))
+        .child(divider(p))
         // TP + полоса S-слотов рядом (без подписи «sell»): это один и тот же sell-таргет, горит
         // что-то одно — либо TP, либо выбранный S-слот.
         .child(metric_button(
@@ -166,51 +213,6 @@ pub fn toolbar(
                 strip.into_any_element()
             }
         })
-        .child(divider(p))
-        // Стоп-лосс: тогл вкл/выкл (`panic_if_price_drop`) + кнопка только со значением+попапом.
-        .child(sl_toggle(
-            sl_on,
-            manual_on,
-            backend.clone(),
-            group.to_string(),
-        ))
-        .child(metric_button(
-            TradeMetric::Sl,
-            sl_str,
-            sl_color,
-            58.0,
-            open_metric == Some(TradeMetric::Sl),
-            false,
-            false,
-            sl_on && !manual_on,
-            shell.clone(),
-            p,
-        ))
-        .child(metric_button(
-            TradeMetric::Lev,
-            lev_str,
-            p.text,
-            61.6,
-            open_metric == Some(TradeMetric::Lev),
-            false,
-            true,
-            true,
-            shell.clone(),
-            p,
-        ))
-        .child(divider(p))
-        .child(strip_label("size", p, cx))
-        .child(size_strip(
-            size_values,
-            size_sel,
-            // Редактируем инпутом только если запрос относится к ФОКУСНОМУ ядру тулбара.
-            size_edit
-                .filter(|(c, _)| Some(*c) == focus_core)
-                .map(|(_, i)| i),
-            size_input,
-            backend.clone(),
-            focus_core,
-        ))
         .child(divider(p));
     // Масштаб переехал в полоску чарт-вкладок (рядом с ⚙) и теперь per-вкладочный —
     // см. controls::scale_dropdown_for_tabs / chart_tabs::ChartTabs::pick_active_scale.

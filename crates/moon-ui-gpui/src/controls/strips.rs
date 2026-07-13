@@ -101,7 +101,7 @@ pub(super) fn size_strip(
 }
 
 /// Ширины кнопок продажи — единая 33.0 на все слоты (44 −25%; исходно 62 базовых).
-const SELL_W: [f32; 6] = [33.0, 33.0, 33.0, 33.0, 33.0, 33.0];
+const SELL_W: [f32; 6] = [40.0, 40.0, 40.0, 40.0, 40.0, 40.0];
 
 /// Полоса fixed-sell пресетов (S1-S6) рядом с кнопкой TP (без подписи). Значения — из
 /// `ClientSettings` активного ядра (видимые проценты). Слот подсвечен ТОЛЬКО когда задействован
@@ -118,7 +118,7 @@ pub(super) fn sell_strip(
     let items: Vec<MoonSegmentItem> = (0..6)
         .map(|i| {
             let value = match pcts {
-                Some(p) => format!("+{}%", fmt_sell_pct(p[i])),
+                Some(p) => format!("{}%", fmt_sell_pct(p[i])),
                 None => "—".to_string(),
             };
             let mut it = MoonSegmentItem::new("", value).width(SELL_W[i]);

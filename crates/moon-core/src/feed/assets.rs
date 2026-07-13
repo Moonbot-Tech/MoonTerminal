@@ -67,9 +67,18 @@ fn coin_to_usdt(markets: &MarketsState, currency: &str, qty: f64) -> f64 {
         return qty;
     }
     let px = markets
-        .price(&format!("{cur}USDT"))
+        // Рынок = САМО имя монеты: Hyperliquid спот-индексы («@699») зовутся так и есть,
+        // конкатенации «@699USDT»/«@699USDC» не существует → иначе кошелёк оценивался бы в 0
+        // и монета пряталась фильтром пыли. Пробуем первым (по исходному имени, без upper).
+        .price(currency)
         .map(|p| p.p_last)
         .filter(|x| *x > 0.0)
+        .or_else(|| {
+            markets
+                .price(&format!("{cur}USDT"))
+                .map(|p| p.p_last)
+                .filter(|x| *x > 0.0)
+        })
         .or_else(|| {
             markets
                 .price(&format!("{cur}USDC"))
