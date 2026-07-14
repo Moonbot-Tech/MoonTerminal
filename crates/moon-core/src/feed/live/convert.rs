@@ -249,6 +249,20 @@ fn build_order_row(
     remember_reports: bool,
     orders_index: &mut OrderIndex,
 ) -> OrderRow {
+    // Отображаемое имя рынка. Hyperliquid спот именует пары ИНДЕКСОМ («@206»); человекочитаемое
+    // имя даёт moonproto в `market_name_mb_classic` («UENAUSDT»). Кладём в ордер/отчёт классик —
+    // тогда `coin_of_market` даёт «UENA», а не «@206». Гейт по префиксу «@» — обычные рынки
+    // (BTCUSDT) не трогаем. ВНУТРЕННИЕ catalog-лукапы ниже (цена/снимок/ликвидация) остаются на
+    // СЫРОМ `o.market_name` — ядро ключует по нему. mb_classic пустой/тоже «@» → фолбэк на сырое.
+    let market_display = if o.market_name.starts_with('@') {
+        snap.markets()
+            .get(&o.market_name)
+            .map(|h| h.with(|m| m.market_name_mb_classic.clone()))
+            .filter(|s| !s.is_empty() && !s.starts_with('@'))
+            .unwrap_or_else(|| o.market_name.clone())
+    } else {
+        o.market_name.clone()
+    };
     // Полные данные ордера по uid (есть с открытия); db_id→uid —
     // когда db_id появился (перед закрытием). close-SQL этих полей
     // не несёт.
@@ -256,7 +270,7 @@ fn build_order_row(
         orders_index.remember(
             o.uid,
             OrderMeta {
-                coin: o.market_name.clone(),
+                coin: market_display.clone(),
                 isshort: o.is_short,
                 buyprice: o.buy_price,
                 sellprice: o.sell_price,
@@ -503,7 +517,9 @@ fn build_order_row(
         crate::feed::trade::stop_override(server_id, o.uid, kind, wire).unwrap_or(wire || strat)
     };
     OrderRow {
+        // КЛЮЧ данных — сырое имя (ядро ключует по нему); отображение — mb_classic-резолв.
         market: o.market_name.clone(),
+        market_display,
         is_short: o.is_short,
         size,
         remaining_size,

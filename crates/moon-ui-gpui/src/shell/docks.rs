@@ -128,9 +128,17 @@ impl Shell {
                             b.layout_dirty = true;
                         });
                     }
-                    Some(DockSlot::Tab(ix)) => {
+                    Some(DockSlot::Tab { ix, left }) => {
+                        log::info!(
+                            "[dock] detach {key}: tab ix={ix} left={:?}",
+                            left.as_deref().unwrap_or("<leftmost>")
+                        );
                         backend.update(app, |b, _| {
                             b.layout.dock_tab_index.insert(key.clone(), ix);
+                            // Пустая строка = была крайней слева; иначе имя соседа.
+                            b.layout
+                                .dock_tab_left
+                                .insert(key.clone(), left.unwrap_or_default());
                             b.layout.dock_split_slot.remove(&key);
                             b.layout_dirty = true;
                         });
@@ -247,6 +255,18 @@ impl Shell {
     }
 }
 
+/// Имена панелей (слева-направо) ПЕРВОЙ tab-полосы, содержащей любую из [`DOCK_TAB_ORDER`] —
+/// «домашней» линии вкладок. Для устойчивого вычисления индекса возврата по левому соседу.
+fn strip_names(node: &PanelState) -> Option<Vec<String>> {
+    if let PanelInfo::Tabs { .. } = &node.info {
+        let names: Vec<String> = node.children.iter().map(|c| c.panel_name.clone()).collect();
+        if names.iter().any(|n| DOCK_TAB_ORDER.contains(&n.as_str())) {
+            return Some(names);
+        }
+    }
+    node.children.iter().find_map(strip_names)
+}
+
 fn restore_panel_to_home_tabs(
     dock: &Entity<DockArea>,
     backend: &Entity<Backend>,
@@ -256,10 +276,13 @@ fn restore_panel_to_home_tabs(
     window: &mut Window,
     app: &mut App,
 ) {
+    let key = format!("{group}:{panel_name}");
+    log::info!("[dock] restore {key}: begin (prefer_split={prefer_split})");
     let Some(panel) = detached::build_panel(panel_name, group, backend, window, app) else {
+        log::info!("[dock] restore {key}: build_panel returned none");
         return;
     };
-    let key = format!("{group}:{panel_name}");
+    log::info!("[dock] restore {key}: panel built");
     // Приоритет размещения при возврате:
     //   1) split-слот — вернуть РЯДОМ с соседом сплитом (если сосед сейчас в доке) — ТОЛЬКО когда
     //      `prefer_split` (возврат из окна); × на докнутой панели (prefer_split=false) сбрасывает
@@ -272,6 +295,23 @@ fn restore_panel_to_home_tabs(
         .then(|| backend.read(app).layout.dock_split_slot.get(&key).cloned())
         .flatten();
     let tab_ix = backend.read(app).layout.dock_tab_index.get(&key).copied();
+    // Левый сосед на момент открепления (пустая строка = была крайней слева, None = не сохраняли).
+    let tab_left = backend.read(app).layout.dock_tab_left.get(&key).cloned();
+    // Живой порядок домашней tab-полосы — ОТДЕЛЬНЫМ dump-апдейтом (как `captured_slot`), НЕ внутри
+    // апдейта со вставкой: dump обходит и читает ВСЕ панели дока; делать это в том же апдейте, где
+    // мы мутируем дерево (remove/insert), — риск реентранси/дедлока. Отдельный апдейт безопасен.
+    let strip: Vec<String> = dock.update(app, |area, cx| {
+        let state = area.dump(cx);
+        strip_names(&state.center)
+            .or_else(|| state.bottom_dock.as_ref().and_then(|d| strip_names(&d.panel)))
+            .or_else(|| state.left_dock.as_ref().and_then(|d| strip_names(&d.panel)))
+            .or_else(|| state.right_dock.as_ref().and_then(|d| strip_names(&d.panel)))
+            .unwrap_or_default()
+    });
+    log::info!(
+        "[dock] restore {key}: strip={strip:?} tab_ix={tab_ix:?} left={:?}",
+        tab_left.as_deref()
+    );
     dock.update(app, |area, cx| {
         area.remove_panel_by_name(panel_name, window, cx);
         if let Some(slot) = &split {
@@ -299,20 +339,37 @@ fn restore_panel_to_home_tabs(
                     cx,
                 )
             {
+                log::info!("[dock] restore {key}: placed beside sibling (split)");
                 return;
             }
         }
-        let ix = tab_ix.unwrap_or_else(|| dock_home_priority(panel_name));
+        // Индекс возврата — по ЖИВОЙ полосе (`strip`, посчитана выше) относительно левого соседа:
+        // место не съезжает, даже если полоса менялась. Соседа нет → фолбэк на сырой `tab_ix` →
+        // каноничный priority. Пустой сосед = была крайней слева (ix=0).
+        let ix = match tab_left.as_deref() {
+            Some("") => 0,
+            Some(name) => strip
+                .iter()
+                .position(|n| n == name)
+                .map(|p| p + 1)
+                .or(tab_ix)
+                .unwrap_or_else(|| dock_home_priority(panel_name)),
+            None => tab_ix.unwrap_or_else(|| dock_home_priority(panel_name)),
+        };
+        log::info!("[dock] restore {key}: -> ix={ix}, inserting");
         if !area.insert_panel_into_home_tabs(panel.clone(), ix, &DOCK_TAB_ORDER, window, cx) {
             area.add_panel(panel, DockPlacement::Bottom, None, window, cx);
         }
+        log::info!("[dock] restore {key}: inserted");
     });
+    log::info!("[dock] restore {key}: done");
 }
 
 /// Запомненное размещение панели в доке (для восстановления при возврате).
 enum DockSlot {
-    /// Панель была вкладкой в tab-полосе — на позиции `ix`.
-    Tab(usize),
+    /// Панель была вкладкой в tab-полосе — на позиции `ix`, справа от соседа `left`
+    /// (`None` = крайняя слева). Возврат предпочитает соседа (устойчив к сдвигу полосы).
+    Tab { ix: usize, left: Option<String> },
     /// Панель была ОТДЕЛЬНЫМ листом в сплите. `siblings` — соседи-якоря (для поиска сплита),
     /// `slot_panels` — панели соседнего слота (обернуть целиком при схлопе), `index` — её позиция
     /// в сплите, `placement` — сторона, `size`/`sibling_size` — пиксельные размеры слотов (0.0 =
@@ -351,7 +408,14 @@ fn captured_slot(dock: &Entity<DockArea>, panel_name: &str, app: &mut App) -> Op
         match &node.info {
             PanelInfo::Tabs { .. } => {
                 if let Some(ix) = node.children.iter().position(|c| c.panel_name == target) {
-                    return Some(DockSlot::Tab(ix));
+                    // Левый сосед (для устойчивого возврата): панель на ix-1, пустое имя пропускаем.
+                    let left = ix.checked_sub(1).and_then(|j| {
+                        node.children
+                            .get(j)
+                            .map(|c| c.panel_name.clone())
+                            .filter(|n| !n.is_empty())
+                    });
+                    return Some(DockSlot::Tab { ix, left });
                 }
             }
             PanelInfo::Stack { axis, sizes } => {

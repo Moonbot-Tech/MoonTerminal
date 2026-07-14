@@ -188,7 +188,7 @@ pub(crate) fn open_order_edit(
         let footer_state = state.clone();
         let title = {
             let s = state.read(cx);
-            let token = symbol::coin_of_market(&s.row.market).to_string();
+            let token = symbol::coin_of_market(&s.row.market_display).to_string();
             let (side, _) = side_label(&s.row, s.executed);
             format!("{} — {token} ({side})", t!("orders.edit.title"))
         };
@@ -260,7 +260,7 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
                     div()
                         .text_color(moon(p.accent))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(r.market.clone()),
+                        .child(r.market_display.clone()),
                 ))
                 .child(info_kv(
                     p,

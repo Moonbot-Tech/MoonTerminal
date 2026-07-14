@@ -468,12 +468,23 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
         .name("reports-db".into())
         .spawn(move || {
             log::info!("отчёты: writer запущен ({})", path.display());
+            // Путь к WAL-файлу — для ленивого чекпоинта по РЕАЛЬНОМУ размеру (см. ниже).
+            let wal_path = {
+                let mut s = path.clone().into_os_string();
+                s.push("-wal");
+                std::path::PathBuf::from(s)
+            };
             // Кэш известных ЛЕГАСИ-колонок (авто-добавление новых полей close-SQL).
             let mut known = table_columns(&conn);
             // Батчим пачку сообщений в одну транзакцию: catch-up льёт тысячи строк,
             // и autocommit на каждую (fsync) растянул бы догонку на минуты.
             let mut thr_count: u64 = 0;
             let mut thr_started = std::time::Instant::now();
+            // Старое значение → первый чекпоинт срабатывает на первом же батче, усекая уже
+            // накопленный (возможно сотни МБ) WAL сразу после запуска, а не через 30с.
+            let mut last_ckpt = std::time::Instant::now()
+                .checked_sub(Duration::from_secs(30))
+                .unwrap_or_else(std::time::Instant::now);
             loop {
                 let first = match rx.recv() {
                     Ok(m) => m,
@@ -524,6 +535,25 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                     }
                 }
                 gen_writer.fetch_add(1, Ordering::Relaxed);
+                // ЛЕНИВЫЙ чекпоинт WAL. Авто-чекпоинт SQLite (PASSIVE) обычно держит -wal мелким
+                // сам; форсировать TRUNCATE каждый раз — лишний CPU-всплеск (копирование WAL→main
+                // на writer-потоке). Поэтому TRUNCATE зовём ТОЛЬКО когда файл -wal реально разросся
+                // (авто-сброс не поспевает — напр. reader «Отчётов» мешает reset'у), иначе просто
+                // пропускаем. Так в норме всплесков нет, а раздувание диска в сотни МБ не случится.
+                // Проверяем размер раз в 60с (stat дёшев).
+                if last_ckpt.elapsed() >= Duration::from_secs(60) {
+                    last_ckpt = std::time::Instant::now();
+                    let wal_big = std::fs::metadata(&wal_path)
+                        .map(|m| m.len() > 32 * 1024 * 1024)
+                        .unwrap_or(false);
+                    if wal_big {
+                        if let Err(e) =
+                            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+                        {
+                            log::debug!("отчёты: wal_checkpoint не удался: {e}");
+                        }
+                    }
+                }
                 // Диагностика пропускной способности при плотном потоке (догонка):
                 // видно, успевает ли writer за входом (канал ограничен — не OOM).
                 let el = thr_started.elapsed();

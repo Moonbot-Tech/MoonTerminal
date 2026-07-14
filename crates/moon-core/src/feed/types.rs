@@ -115,8 +115,13 @@ pub struct OrderTrace {
 /// Открытый ордер (для нижнего дока).
 #[derive(Debug, Clone)]
 pub struct OrderRow {
-    /// Имя рынка (монета).
+    /// Имя рынка — КЛЮЧ данных (moonproto `market_name`): подписки/цена/открытие чарта/матчинг.
+    /// Для Hyperliquid-спота это индекс («@206»), НЕ человекочитаемое имя.
     pub market: String,
+    /// Имя рынка для ОТОБРАЖЕНИЯ (`market_name_mb_classic`): «@206» → «UENAUSDT», обычные рынки
+    /// = `market`. Токен в таблице резолвим из него (`coin_of_market` → «UENA»), а данные — из
+    /// `market`. Разделение, чтобы не сломать матчинг/лукапы по ключу.
+    pub market_display: String,
     /// true = Short, false = Long.
     pub is_short: bool,
     /// Размер входной ноги (buy для long / sell для short), в базовой валюте.

@@ -61,7 +61,12 @@ fn base_rate(markets: &MarketsState, base: &str) -> f64 {
 /// монеты по префиксу `<CUR>USD` — на COIN-M/квартальных ядрах рынков `<CUR>USDT`
 /// НЕТ, но цена контрактов `BTCUSD_PERP`/`BTCUSD_260925` уже в USD (иначе весь
 /// квартальный кошелёк оценивался бы в 0 и прятался фильтром пыли). 0 = неизвестно.
-fn coin_to_usdt(markets: &MarketsState, currency: &str, qty: f64) -> f64 {
+fn coin_to_usdt(
+    markets: &MarketsState,
+    currency: &str,
+    qty: f64,
+    coin_px: &std::collections::HashMap<String, f64>,
+) -> f64 {
     let cur = currency.to_ascii_uppercase();
     if is_stable(&cur) {
         return qty;
@@ -92,7 +97,11 @@ fn coin_to_usdt(markets: &MarketsState, currency: &str, qty: f64) -> f64 {
                 .filter(|h| h.name().starts_with(&prefix))
                 .map(|h| h.price().p_last)
                 .find(|x| *x > 0.0)
-        });
+        })
+        // Hyperliquid-спот: рынок токена назван индексом («@206»), а кошелёк — именем («UENA»).
+        // Индекс `coin_px` мапит базовую монету рынка → цену, покрывая этот случай (цена рынка
+        // «@206» = цена UENA, quote USDC≈USD).
+        .or_else(|| coin_px.get(&cur).copied().filter(|x| *x > 0.0));
     px.map(|px| qty * px).unwrap_or(0.0)
 }
 
@@ -307,6 +316,28 @@ pub(super) fn build_transfer_assets(
     markets: &MarketsState,
     st: &TransferAssetsState,
 ) -> TransferAssetsSnapshot {
+    // Индекс «базовая монета рынка (UPPER) → цена». Покрывает Hyperliquid-спот: там рынок назван
+    // ИНДЕКСОМ («@206»), а кошелёк отдаёт токен по ИМЕНИ («UENA»), и конкатенация `UENA+quote`
+    // рынка не находит → стоимость 0 → холдинг прячется фильтром пыли. Строим ОДИН раз (скан на
+    // каждую монету дал бы O(рынки×монеты) — дорого по CPU); первый рынок монеты выигрывает.
+    let mut coin_px: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for h in markets.iter() {
+        let px = h.price().p_last;
+        if !(px > 0.0) {
+            continue;
+        }
+        let coin = h.with(|m| {
+            let c = m.market_currency_canonic.trim();
+            if c.is_empty() {
+                m.market_currency.clone()
+            } else {
+                c.to_string()
+            }
+        });
+        if !coin.is_empty() {
+            coin_px.entry(coin.to_ascii_uppercase()).or_insert(px);
+        }
+    }
     let conv = |kind: ExchangeKind| -> Vec<TransferAssetRow> {
         st.get(kind)
             .iter()
@@ -314,7 +345,7 @@ pub(super) fn build_transfer_assets(
                 currency: a.currency.clone(),
                 amount: a.amount,
                 total: a.total,
-                value_usdt: coin_to_usdt(markets, &a.currency, a.total),
+                value_usdt: coin_to_usdt(markets, &a.currency, a.total, &coin_px),
             })
             .collect()
     };

@@ -600,7 +600,8 @@ fn token_cell(
     view: &Entity<OrdersPanel>,
     p: MoonPalette,
 ) -> impl IntoElement + 'static {
-    let token = symbol::coin_of_market(&e.row.market).to_string();
+    // Токен — из ОТОБРАЖАЕМОГО имени (mb_classic): «@206» → «UENA», а не сырой индекс.
+    let token = symbol::coin_of_market(&e.row.market_display).to_string();
     let coin = token.clone();
     let core = e.core;
     let market = e.row.market.clone();
