@@ -231,9 +231,17 @@ fn value_to_string(v: &Value) -> String {
 
 /// Заголовок колонки = ИМЯ колонки БД как есть, БЕЗ i18n. Единообразно с
 /// авто-добавленными полями ядра (дельты/dmark/…), нейтрально к языку и сразу
-/// показывает, что реально приходит в отчёт.
+/// показывает, что реально приходит в отчёт. Исключение — легаси-поля MoonBot с
+/// хвостом «btc» (`profitbtc`/`spentbtc`/`gainedbtc`): суффикс исторический, суммы
+/// деноминированы в котировке пары (usdt/usdc/…), а не в BTC — на не-BTC паре «btc»
+/// путает. Показываем нейтральные `profit`/`spent`/`gained` (валюта зависит от строки).
 pub(super) fn header_for(col: &str) -> String {
-    col.to_string()
+    match col {
+        "profitbtc" => "profit".to_string(),
+        "spentbtc" => "spent".to_string(),
+        "gainedbtc" => "gained".to_string(),
+        _ => col.to_string(),
+    }
 }
 
 pub(super) fn width_for(col: &str) -> f32 {

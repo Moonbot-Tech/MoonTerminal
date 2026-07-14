@@ -690,7 +690,7 @@ impl ReportPanel {
         let filter = self.filter(cx);
         let sort_key = self.sort_key.clone();
         let sort_desc = self.sort_desc;
-        let suggested = export::suggested_name(&filter, fmt);
+        let suggested = export::suggested_name(&filter, fmt, all_cols);
         let rx = cx.prompt_for_new_path(&export::default_dir(), Some(&suggested));
         cx.spawn(async move |_this, cx| {
             // Диалог отменён/закрыт — тихо выходим.
@@ -926,10 +926,12 @@ impl Render for ReportPanel {
                     .child(t!("report.totals").to_string()),
             )
             .child(
+                // Без «BTC»: сумма деноминирована в котировке пар отчёта (обычно usdt),
+                // а не в BTC — жёсткий суффикс путал на не-BTC парах (см. header_for).
                 div()
                     .font_bold()
                     .text_color(rgb(sum_col))
-                    .child(format!("{sum:+.6} BTC")),
+                    .child(format!("{sum:+.6}")),
             )
             .child(
                 div()

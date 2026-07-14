@@ -198,9 +198,11 @@ impl ReportPanel {
         let all_view = view.clone();
         let mut items: Vec<MoonMenuItem> = vec![
             // «Все» — тумблер: включить все колонки / повторно — оставить одну первую.
+            // Только `checked` (галочка-глиф слева) — БЕЗ `selected`: голубой фон
+            // `selected` на светлой теме делал выбранные строки нечитаемыми (см. правку
+            // «чекбоксы вместо подсветки»), а checked-глиф — явный индикатор выбора.
             MoonMenuItem::with_key("col-all", t!("report.filter.all").to_string())
                 .checked(all_on)
-                .selected(all_on)
                 .on_click(move |_, _, app| {
                     all_view.update(app, |t, c| t.toggle_all_columns(c));
                 }),
@@ -211,7 +213,6 @@ impl ReportPanel {
             let view = view.clone();
             MoonMenuItem::with_key(format!("col-{i}"), header_for(c))
                 .checked(on)
-                .selected(on)
                 .on_click(move |_, _, app| {
                     let name = name.clone();
                     view.update(app, |t, c| t.toggle_column(name, c));

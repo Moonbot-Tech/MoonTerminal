@@ -106,13 +106,6 @@ impl Shell {
                             .color(p.text_soft)
                             .gap_after(10.0),
                         MoonStatusItem::separator().gap_after(10.0),
-                        MoonStatusItem::new("Mode:")
-                            .color(p.text_muted)
-                            .gap_after(6.0),
-                        MoonStatusItem::new("Demo")
-                            .color(p.text_soft)
-                            .gap_after(10.0),
-                        MoonStatusItem::separator().gap_after(10.0),
                         MoonStatusItem::new(license_text)
                             .color(license_color)
                             .weight(600.0)

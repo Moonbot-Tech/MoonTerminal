@@ -35,8 +35,10 @@ impl Format {
 }
 
 /// Имя файла по умолчанию: период фильтра в имени (`report_2026-07-13.csv`,
-/// `report_2026-07-01_2026-07-10.xlsx`, без дат — `report_all.csv`).
-pub(super) fn suggested_name(filter: &ReportFilter, fmt: Format) -> String {
+/// `report_2026-07-01_2026-07-10.xlsx`, без дат — `report_all.csv`). При выгрузке ПО
+/// ВСЕМ колонкам БД добавляем суффикс `-All` (`report_2026-07-13-All.csv`) — чтобы на
+/// диске сразу отличать полный отчёт от урезанного до видимых колонок.
+pub(super) fn suggested_name(filter: &ReportFilter, fmt: Format, all_cols: bool) -> String {
     let day = |secs: i64| {
         let full = db::fmt_unix(secs);
         full.get(..10).unwrap_or(&full).to_string()
@@ -47,7 +49,8 @@ pub(super) fn suggested_name(filter: &ReportFilter, fmt: Format) -> String {
         (None, Some(t)) => format!("_{}", day(t)),
         (None, None) => "all".to_string(),
     };
-    format!("report_{range}.{}", fmt.ext())
+    let all = if all_cols { "-All" } else { "" };
+    format!("report_{range}{all}.{}", fmt.ext())
 }
 
 /// Стартовая папка диалога сохранения: профиль пользователя, иначе текущая.
@@ -130,6 +133,16 @@ fn date_col(col: &str) -> bool {
     )
 }
 
+/// Колонки-идентификаторы: большие целые (i64), которые Excel при записи ЧИСЛОМ
+/// показывает экспонентой (`-3,06221E+18`) и теряет точность. Это ID, а не суммы —
+/// пишем ТЕКСТОМ, чтобы значение читалось полностью и не округлялось.
+fn id_text_col(col: &str) -> bool {
+    matches!(
+        col,
+        "strategyid" | "exorderid" | "taskid" | "newrecid"
+    )
+}
+
 /// Текст поля для CSV: даты — форматированные, остальное — сырое значение БД
 /// (без локализации: isshort/emulator остаются 0/1, числа — `Display` как есть,
 /// NULL — пустое поле). Блобов в отчёте нет.
@@ -180,6 +193,13 @@ fn write_xlsx(path: &Path, idx: &[(usize, &str)], rows: &[Vec<Value>]) -> anyhow
                     ws.write_string(r, c, text)?;
                 }
                 continue;
+            }
+            // ID-поля — текстом (иначе Excel рвёт большие i64 в экспоненту).
+            if id_text_col(name) {
+                if let Value::Integer(n) = val {
+                    ws.write_string(r, c, n.to_string())?;
+                    continue;
+                }
             }
             match val {
                 Value::Integer(n) => {
