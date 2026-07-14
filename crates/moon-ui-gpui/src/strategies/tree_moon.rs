@@ -654,8 +654,12 @@ fn strategy_row(
         .pr(design::ui_px(app, 2.0))
         .py(design::ui_px(app, 1.0))
         .child(
+            // Зелёный тон = «включена/активна» (по умолчанию тон Info давал бледно-голубой
+            // квадрат, неотличимый от пустого на светлой теме — просьба пользователя сделать
+            // «зелёный = активный»). Галочка-глиф внутри тоже зелёная.
             MoonCheckbox::new(SharedString::from(format!("chk-{core}-{id}")))
                 .checked(val)
+                .tone(MoonTone::Positive)
                 .size(MoonCheckboxSize::Compact)
                 .on_change(move |ch: &bool, _window, app| {
                     let v = *ch;

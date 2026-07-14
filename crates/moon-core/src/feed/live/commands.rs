@@ -10,9 +10,27 @@ use moonproto::{
 use super::convert::{apply_client_settings_edit, apply_lev_manage_edit};
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
-use crate::feed::strategies::fv_from_str;
+use crate::feed::strategies::{fv_from_str, strat_kind_name};
 use crate::feed::{order_edit, trade, CoreCmd};
 use crate::util::now_unix_ms as now_ms;
+
+/// Значение поля `SignalType` → ordinal вида стратегии (`StrategyKind`). В MoonBot тип
+/// (вид) стратегии И ЕСТЬ её SignalType, но snapshot хранит вид отдельным байтом `kind`
+/// (не полем), поэтому правка поля сама по себе вид не меняет — мапим строку в ordinal,
+/// чтобы синхронно пересобрать снапшот. Сначала по именам видов из схемы ядра (авторитет),
+/// затем фолбэк на наш хардкод имён. Нет совпадения → None (вид не трогаем).
+fn signaltype_to_kind_ordinal(schema: Option<&StrategySchema>, value: &str) -> Option<u8> {
+    let v = value.trim();
+    if v.is_empty() {
+        return None;
+    }
+    if let Some(s) = schema {
+        if let Some(k) = s.kinds.iter().find(|k| k.name.eq_ignore_ascii_case(v)) {
+            return Some(k.ordinal());
+        }
+    }
+    (0u8..=23).find(|o| strat_kind_name(*o).eq_ignore_ascii_case(v))
+}
 
 /// Общий путь синка стратегий: берём ПОЛНЫЙ текущий набор, даём его `build` на правку
 /// (патч полей / смена пути / добавление новых), и если что-то изменилось — шлём ОДИН
@@ -179,6 +197,27 @@ pub(super) fn drain_commands(
                             let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
                             sc.fields
                                 .insert(name.as_str(), fv_from_str(existing.as_ref(), stype, val));
+                        }
+                        // Смена SignalType = смена вида стратегии: snapshot держит вид
+                        // отдельным (pub(crate)) байтом, а не полем, поэтому пересобираем
+                        // снапшот с новым `kind` (иначе бейдж вида в дереве остаётся старым).
+                        if let Some((_, sig)) = changes
+                            .iter()
+                            .find(|(n, _)| n.eq_ignore_ascii_case("SignalType"))
+                        {
+                            if let Some(ord) = signaltype_to_kind_ordinal(schema, sig) {
+                                if ord != sc.kind().ordinal() {
+                                    *sc = StrategySnapshot::new(
+                                        sc.strategy_id,
+                                        sc.strategy_ver,
+                                        sc.last_date,
+                                        sc.checked,
+                                        StrategyKind::from_ordinal(ord),
+                                        sc.path.clone(),
+                                        sc.fields.clone(),
+                                    );
+                                }
+                            }
                         }
                         sc.last_date = now.max(sc.last_date + 1);
                         edited += 1;

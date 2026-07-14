@@ -51,6 +51,10 @@ dialogs.name_ph:
   ru: "имя"
   en: "name"
   es: "nombre"
+dialogs.name_required:
+  ru: "Введите имя стратегии"
+  en: "Enter a strategy name"
+  es: "Introduzca un nombre de estrategia"
 dialogs.folder_prefix:
   ru: "папка: %{path}"
   en: "folder: %{path}"

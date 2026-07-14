@@ -190,7 +190,14 @@ fn op_dialog_footer(
                 .on_click(move |_, window, cx| {
                     match ok_view.update(cx, |this, cx| this.confirm_op_dialog(cx)) {
                         Ok(true) => window.close_dialog(cx),
-                        Ok(false) => {}
+                        // Валидация не прошла (пустое имя стратегии) — диалог оставляем
+                        // открытым и явно говорим почему (раньше была «тишина»).
+                        Ok(false) => {
+                            window.push_notification(
+                                MoonNotification::warning(t!("dialogs.name_required").to_string()),
+                                cx,
+                            );
+                        }
                         Err(error) => {
                             log::warn!("strategies operation failed: {error}");
                             window
