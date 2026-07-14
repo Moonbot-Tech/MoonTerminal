@@ -14,9 +14,9 @@ pub const GLASS_ZONE_PX: f32 = 220.0;
 const SEG_PATTERN_SOLID: f32 = 0.0;
 const SEG_PATTERN_DASH_DOT_DOT: f32 = 1.0;
 const SEG_PATTERN_DOT: f32 = 2.0;
-/// MoonBot: `ShowLightLines := T.RangeT > 0.02`, где RangeT — Delphi days.
+/// Moonbot: `ShowLightLines := T.RangeT > 0.02`, где RangeT — Delphi days.
 const MB_TRACE_LIGHT_RANGE_MS: f32 = 0.02 * 86_400_000.0;
-/// MoonBot draws MoonShot area with fixed 0.15 opacity, independent from order line alpha.
+/// Moonbot draws MoonShot area with fixed 0.15 opacity, independent from order line alpha.
 const MB_MOONSHOT_ZONE_ALPHA: f32 = 0.15;
 
 pub mod axes;
@@ -106,7 +106,7 @@ pub fn build_order_geometry(
             continue;
         }
         // Выставленный, но ещё НЕ исполненный (вход не залит, fill=0) → тусклее: после исполнения
-        // линия становится ярче (как в MoonBot). Закрытый — отдельный, самый тусклый уровень.
+        // линия становится ярче (как в Moonbot). Закрытый — отдельный, самый тусклый уровень.
         let alpha = if closed {
             style.closed_alpha
         } else if ord.fill_pct <= 0.0 {
@@ -180,7 +180,7 @@ pub fn build_order_geometry(
             if closed && idx != LineKind::Buy as usize && idx != LineKind::Sell as usize {
                 continue;
             }
-            // Шорт-ордер красим вход/выход отдельными стилями (как long/short в MoonBot:
+            // Шорт-ордер красим вход/выход отдельными стилями (как long/short в Moonbot:
             // BuyShort/SellShort): Buy → `buy_short`, Sell → `sell_short`.
             let st = if ord.is_short && idx == LineKind::Buy as usize {
                 &style.buy_short
@@ -666,7 +666,7 @@ mod tests {
                     && near(s.pattern, SEG_PATTERN_DOT)
                     && near(s.thickness, 1.0)
             }),
-            "server trace temp point must be drawn as MoonBot dotted vertical preview"
+            "server trace temp point must be drawn as Moonbot dotted vertical preview"
         );
         assert!(
             segs.iter().any(|s| {
@@ -678,7 +678,7 @@ mod tests {
                     && near(s.pattern, SEG_PATTERN_DOT)
                     && near(s.thickness, 2.0)
             }),
-            "server trace stop-line must be drawn like MoonBot SetStopPrice"
+            "server trace stop-line must be drawn like Moonbot SetStopPrice"
         );
     }
 

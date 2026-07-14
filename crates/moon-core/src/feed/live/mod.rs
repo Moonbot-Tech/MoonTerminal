@@ -1,4 +1,4 @@
-//! Live-backend: подключение к ядру MoonBot через MoonProtoBeta.
+//! Live-backend: подключение к ядру Moonbot через MoonProtoBeta.
 //! Единственный модуль, знающий про moonproto.
 //!
 //! Поток: event-driven. `MoonEventSink` будит backend thread после реального события;
@@ -63,7 +63,7 @@ pub fn run(
 
     // 1. Ключ -> мастер/мак ключи + предложенная сеть.
     let info = moonproto::parse_key_info(server.key.expose())
-        .ok_or_else(|| anyhow::anyhow!("не удалось разобрать ключ MoonBot (server.key)"))?;
+        .ok_or_else(|| anyhow::anyhow!("не удалось разобрать ключ Moonbot (server.key)"))?;
 
     // 2. Endpoint берётся из ключа (host/port/transport зашиты в нём; отдельных
     //    полей в конфиге больше нет).

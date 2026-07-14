@@ -105,7 +105,7 @@ Settings -> Connections
 Per-core connection setup.
 
 <p align="center">
-  <img src="assets/img/screenshot-settings-connections.png" alt="Settings — connections / MoonBot cores" width="640">
+  <img src="assets/img/screenshot-settings-connections.png" alt="Settings — connections / Moonbot cores" width="640">
 </p>
 
 Runtime config lives next to the executable. Server credentials are stored in encrypted config

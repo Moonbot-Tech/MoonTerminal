@@ -74,7 +74,7 @@ pub enum UiThemeMode {
 
 /// Запись сервера в servers.enc (секрет + стабильный uid).
 ///
-/// host/port НЕ храним: они зашиты в самом ключе MoonBot (см. `parse_key_info` в
+/// host/port НЕ храним: они зашиты в самом ключе Moonbot (см. `parse_key_info` в
 /// feed/live.rs). Старые servers.enc с полями host/port читаются без ошибки —
 /// неизвестные поля serde просто игнорирует, подключение пойдёт по ключу.
 #[derive(Clone, Debug, Serialize, Deserialize)]

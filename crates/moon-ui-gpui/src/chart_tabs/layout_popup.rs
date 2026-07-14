@@ -355,7 +355,7 @@ where
         .on_change(move |ch: &bool, _w, app| on_toggle_cursor_labels(*ch, app));
 
     // Селекторы позиции кнопок Cancel Buy / Panic Sell в зоне чарта (— L C R). Названия кнопок —
-    // бренд-термины MoonBot, НЕ переводим.
+    // бренд-термины Moonbot, НЕ переводим.
     let cancel_pos_row = pos_selector_row(
         format!("{id}-cancelbuy-pos"),
         "Cancel Buy",

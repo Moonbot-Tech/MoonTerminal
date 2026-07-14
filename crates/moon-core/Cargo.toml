@@ -50,7 +50,7 @@ bytemuck = { version = "1", features = ["derive"] }
 # Локальная БД отчётов (db/).
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# Связь с ядром MoonBot (feed/live.rs) — единственный, кто знает транспорт.
+# Связь с ядром Moonbot (feed/live.rs) — единственный, кто знает транспорт.
 moonproto = { git = "https://github.com/Moonbot-Tech/MoonProtoBeta" }
 
 [target.'cfg(windows)'.dependencies]

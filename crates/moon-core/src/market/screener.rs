@@ -24,7 +24,7 @@ pub struct ScreenerRow {
     pub provider: CoreId,
     /// Каноничное имя рынка = `MarketHandle::name()` (биржевое `bn_market_name`).
     /// Именно по нему ключуются `handles_by_name`/подписки/поиск — display-имя
-    /// MoonBot (`market_name`) для открытия чарта НЕ годится (пустой чарт).
+    /// Moonbot (`market_name`) для открытия чарта НЕ годится (пустой чарт).
     pub market: String,
     /// Монета («BTC»).
     pub coin: String,
@@ -40,12 +40,12 @@ pub struct ScreenerRow {
     pub ask: f64,
     /// Максимум цены за последний час (по 5м-свечам + текущей).
     pub high_1h: f64,
-    /// Макс. размер ордера биржи в котируемой валюте (MoonBot Max.Order):
+    /// Макс. размер ордера биржи в котируемой валюте (Moonbot Max.Order):
     /// `max_notional`, фолбэк `max_qty × ask`. 0 — биржа лимит не отдала.
     pub max_order: f64,
     /// Дельты, %. 24ч/1ч — знаковые серверные (`MarketDeltaState`, парность
-    /// MoonBot Coin1hDelta/Coin24hDelta); 3ч/15м/1м/72ч — derived-максимумы
-    /// retained-истории (беззнаковая величина движения, как в таблице MoonBot).
+    /// Moonbot Coin1hDelta/Coin24hDelta); 3ч/15м/1м/72ч — derived-максимумы
+    /// retained-истории (беззнаковая величина движения, как в таблице Moonbot).
     pub d_24h: f64,
     pub d_3h: f64,
     pub d_1h: f64,

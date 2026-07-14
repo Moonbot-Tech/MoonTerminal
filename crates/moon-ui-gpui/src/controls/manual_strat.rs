@@ -1,4 +1,4 @@
-//! Тогл и пикер «ручной стратегии» (MoonBot manual strategies) в шапке.
+//! Тогл и пикер «ручной стратегии» (Moonbot manual strategies) в шапке.
 //!
 //! Состояние живёт в ЯДРЕ (`ClientSettings.use_manual_strategy`/`manual_strategy_id`):
 //! тогл/выбор шлют `ClientSettingsEdit::ManualStrategy`, живой отклик — optimistic-кэш
@@ -21,7 +21,7 @@ use moon_core::session::CoreId;
 
 use crate::{Backend, design};
 
-/// Ordinal вида Manual в схеме стратегий MoonBot (см. `strat_kind_name`).
+/// Ordinal вида Manual в схеме стратегий Moonbot (см. `strat_kind_name`).
 const MANUAL_KIND: u8 = 12;
 
 /// Геометрия пилюли — как у селектора ядра в шапке.

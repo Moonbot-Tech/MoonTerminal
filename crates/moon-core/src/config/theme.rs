@@ -135,14 +135,14 @@ impl Default for ChartTheme {
 }
 
 impl ChartTheme {
-    /// Дефолт светлого набора: тёмный дефолт + светлые MoonBot-переопределения.
+    /// Дефолт светлого набора: тёмный дефолт + светлые Moonbot-переопределения.
     fn default_light() -> Self {
         let mut t = Self::default();
         t.apply_light_defaults();
         t
     }
 
-    /// Светлые MoonBot-дефолты. Фон/сетка = значения светлой MoonUI-палитры
+    /// Светлые Moonbot-дефолты. Фон/сетка = значения светлой MoonUI-палитры
     /// (chart_bg 0xFFFFFF / row_line 0xECEFF2) — раньше рендер перекрывал их палитрой
     /// на лету, теперь они просто дефолт светлого набора (и редактируются).
     fn apply_light_defaults(&mut self) {

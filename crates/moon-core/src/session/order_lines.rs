@@ -73,7 +73,7 @@ pub struct LineTrace {
     pub server_points: Vec<(f64, f32)>,
     /// Живая temp-точка серверной трассы: рисуется пунктиром от последней точки.
     pub tmp_point: Option<(f64, f32)>,
-    /// Stop-line, пришедшая вместе с серверной трассой, как в MoonBot `SetStopPrice`.
+    /// Stop-line, пришедшая вместе с серверной трассой, как в Moonbot `SetStopPrice`.
     pub server_stop_price: Option<f32>,
     pub server_stop_time_ms: Option<f64>,
     /// Линия выключена (цена стала недоступна), но ордер ещё жив. Конец линии.

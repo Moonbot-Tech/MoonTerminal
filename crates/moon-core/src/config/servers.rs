@@ -1,4 +1,4 @@
-//! Описание одного ядра MoonBot (сервера) и группы.
+//! Описание одного ядра Moonbot (сервера) и группы.
 
 use serde::{Deserialize, Serialize};
 
@@ -77,7 +77,7 @@ pub struct ServerConfig {
     /// Что принимаем от ядра (клиентский фильтр).
     #[serde(default)]
     pub feed: FeedFlags,
-    /// Base64-ключ MoonBot. Внутри зашиты host/port/transport — отдельных полей нет.
+    /// Base64-ключ Moonbot. Внутри зашиты host/port/transport — отдельных полей нет.
     #[serde(default)]
     pub key: Secret,
     /// Группа = имя окна, куда попадает ядро. Цвет/иконка — на группе (GroupConfig).

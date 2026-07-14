@@ -229,7 +229,7 @@ impl MarketDataSource {
         (step.is_finite() && step > 0.0).then_some(step)
     }
 
-    /// MoonBot Coin1hDelta). Для тикера курса в шапке (и будущего скринера).
+    /// Moonbot Coin1hDelta). Для тикера курса в шапке (и будущего скринера).
     /// `None` — нет провайдера/снимка/рынка.
     pub fn market_ticker(&self, core: CoreId, market: &str) -> Option<MarketTickerReadout> {
         let client = {

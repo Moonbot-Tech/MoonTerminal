@@ -14,7 +14,7 @@ use crate::feed::strategies::{fv_from_str, strat_kind_name};
 use crate::feed::{order_edit, trade, CoreCmd};
 use crate::util::now_unix_ms as now_ms;
 
-/// Значение поля `SignalType` → ordinal вида стратегии (`StrategyKind`). В MoonBot тип
+/// Значение поля `SignalType` → ordinal вида стратегии (`StrategyKind`). В Moonbot тип
 /// (вид) стратегии И ЕСТЬ её SignalType, но snapshot хранит вид отдельным байтом `kind`
 /// (не полем), поэтому правка поля сама по себе вид не меняет — мапим строку в ordinal,
 /// чтобы синхронно пересобрать снапшот. Сначала по именам видов из схемы ядра (авторитет),

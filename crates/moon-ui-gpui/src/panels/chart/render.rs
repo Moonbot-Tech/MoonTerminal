@@ -23,7 +23,7 @@ enum ActKind {
 
 /// Кнопка Cancel Buy / Panic Sell — общий конструктор per-pane ветки и
 /// fullscreen-оверлея (label/variant/on_click идентичны; вызывающие добавляют
-/// только id и `.full_width()`). Бренд-термины MoonBot — НЕ локализуем.
+/// только id и `.full_width()`). Бренд-термины Moonbot — НЕ локализуем.
 fn action_button(
     kind: ActKind,
     id: SharedString,

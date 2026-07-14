@@ -1,4 +1,4 @@
-//! Кодек blob'а chart-объекта MoonBot (`TChartObject.Save()`) — им chart-алерты
+//! Кодек blob'а chart-объекта Moonbot (`TChartObject.Save()`) — им chart-алерты
 //! ездят в ядро (`upsert`). Формат восстановлен реверсом 6 живых сэмплов
 //! (см. заметку chart-alerts-research). Всё little-endian.
 //!
@@ -182,10 +182,10 @@ pub fn decode(blob: &[u8]) -> Option<DecodedAlert> {
 mod tests {
     use super::*;
 
-    // Живые сэмплы из MoonBot (лог core 1, 2026-07-04).
+    // Живые сэмплы из Moonbot (лог core 1, 2026-07-04).
     const MINA_HLINE: &str = "010d000000fff8f0ffb563c53f0100000001000000009ede3c6eec8fe640000000000000000000009c0cf1ad47c30674d5d4b2b5be48a83f0000";
     const BTC_SEGMENT: &str = "020d000000fff8f0ff9cfabd3f010000000100000000cbfb25afec8fe640000000000000000000005c5923c2ec47b217e7541714ea8fe6404df899d30adcee40d36e9fdeeb8fe64001969f155bddee40";
-    // Тип 4 = ТРЕУГОЛЬНИК (3 вершины); тип 5 = КАНАЛ MoonBot (2 горизонтальные цены).
+    // Тип 4 = ТРЕУГОЛЬНИК (3 вершины); тип 5 = КАНАЛ Moonbot (2 горизонтальные цены).
     const TRIANGLE: &str = "040d00000040c4ffff0000803f01000000010000000006a506def18fe6400000000000000000000010000000000000008c15ce11f18fe64000000000948fb03fe0791a8cf18fe640000000802dcab13f8c15ce11f18fe6401fbd30c9a947b23f";
     const CHANNEL: &str = "050d000000fff8f0ff1608e33f0100000001000000009f840ee9f18fe6400000000000000000000083ed837d5ea1c4fde57e87a2409fb03fce8de9094b3cb03f0000";
     // Горизонталь СО СТРАТЕГИЕЙ (@32 strategy_id=7394783480262116308).

@@ -445,7 +445,7 @@ impl ScreenerView {
             .child(menu)
     }
 
-    /// Нижняя полоса: селектор ядра + фильтры Coin/DVol слева (как в MoonBot),
+    /// Нижняя полоса: селектор ядра + фильтры Coin/DVol слева (как в Moonbot),
     /// меню колонок и счётчик справа.
     fn bottom_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let label = |text: &'static str| {

@@ -655,7 +655,7 @@ pub struct ReportFilter {
     pub coin: String,
     pub side: SideFilter,
     /// Эмуляторные ордера: false (дефолт) — только реальные, true — только эмуляторные
-    /// (как галка «Эмулятор» отчёта MoonBot). NULL в колонке считается «реальный».
+    /// (как галка «Эмулятор» отчёта Moonbot). NULL в колонке считается «реальный».
     pub emulator: bool,
 }
 

@@ -94,7 +94,7 @@ pub(super) fn mouse_down_left(
     this.sync_native_cursor();
     // Слой рисования фигур (только в режиме карандаша): фигуры трогаются ТОЛЬКО по Ctrl
     // (secondary) — рисование новой / захват существующей. Обычный ЛКМ без модификатора
-    // try_fig_click отдаёт false → клик идёт в торговлю/навигацию (паритет с MoonBot: карандаш
+    // try_fig_click отдаёт false → клик идёт в торговлю/навигацию (паритет с Moonbot: карандаш
     // включён, но обычный ЛКМ торгует). Вне режима карандаша try_fig_click тоже сразу false.
     // secondary() = ⌘ на macOS, Ctrl на Windows/Linux. На macOS именно Ctrl нельзя:
     // ОС превращает Ctrl+ЛКМ в правый клик, поэтому событие рисования не доходит.
@@ -359,7 +359,7 @@ pub(super) fn mouse_down_middle(
         return;
     }
     // [Shift+СКМ] на графике — синхронизация временного X-масштаба чартов ЭТОГО окна
-    // (MoonBot). Торговый жест (если назначен на Shift+СКМ) имеет приоритет — выше.
+    // (Moonbot). Торговый жест (если назначен на Shift+СКМ) имеет приоритет — выше.
     if within && e.modifiers.shift && this.sync_x_scale_window(_window, cx) {
         cx.stop_propagation();
     }

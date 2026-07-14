@@ -16,13 +16,13 @@ conn.market_src_tip:
   en: "Where crosses and the order book come from. Dedup: one provider core per exchange serves the market for all (cheap with many cores). Per-core: each chart reads the market from its own core (no dedup)."
   es: "De dónde vienen los cruces y el libro de órdenes. Dedup: un núcleo proveedor por bolsa sirve el mercado a todos (económico con muchos núcleos). Por núcleo: cada gráfico lee el mercado de su propio núcleo (sin dedup)."
 conn.market_dedup:
-  ru: "Дедуп (провайдер на биржу)"
-  en: "Dedup (provider per exchange)"
-  es: "Dedup (proveedor por bolsa)"
+  ru: "Общие данные — одно ядро на биржу"
+  en: "Shared data — one core per exchange"
+  es: "Datos compartidos — un núcleo por bolsa"
 conn.market_percore:
-  ru: "По ядрам (без дедупа)"
-  en: "Per-core (no dedup)"
-  es: "Por núcleo (sin dedup)"
+  ru: "Раздельно — своё ядро на каждый чарт"
+  en: "Separate — each chart its own core"
+  es: "Separado — cada gráfico su propio núcleo"
 conn.groups_heading:
   ru: "Группы"
   en: "Groups"
@@ -192,6 +192,26 @@ conn.tip.win:
   ru: "Рисовать окно/чарт. Выкл = headless: данные в БД/память без окна"
   en: "Draw window/chart. Off = headless: data to DB/memory without a window"
   es: "Dibujar ventana/gráfico. Desactivado = headless: datos a BD/memoria sin ventana"
+conn.tip.name:
+  ru: "Имя ядра (произвольное, для отображения в терминале)"
+  en: "Core name (arbitrary, for display in the terminal)"
+  es: "Nombre del núcleo (arbitrario, para mostrar en el terminal)"
+conn.tip.key:
+  ru: "Ключ ядра Moonbot. Кнопка «Вставить» вставит его из буфера обмена; глаз — показать/скрыть."
+  en: "Moonbot core key. The Paste button inserts it from the clipboard; the eye shows/hides it."
+  es: "Clave del núcleo Moonbot. El botón Pegar la inserta desde el portapapeles; el ojo la muestra/oculta."
+conn.key_ph:
+  ru: "вставьте ключ ядра"
+  en: "paste the core key"
+  es: "pega la clave del núcleo"
+conn.paste_key:
+  ru: "Вставить"
+  en: "Paste"
+  es: "Pegar"
+conn.paste_key_tip:
+  ru: "Вставить ключ из буфера обмена"
+  en: "Paste the key from the clipboard"
+  es: "Pegar la clave desde el portapapeles"
 conn.tip.flags:
   ru: "Приём данных от ядра. Серая = принимаем всё; цветная = часть категорий выключена. Клик — настроить."
   en: "Data received from the core. Gray = all on; colored = some categories off. Click to configure."

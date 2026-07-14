@@ -52,7 +52,7 @@ fn bytes_of(name: &str) -> Option<&'static [u8]> {
 }
 
 /// Проиграть звук по имени (не блокирует; один звук за раз — новый прерывает
-/// предыдущий, как в MoonBot). Неизвестное имя → ничего.
+/// предыдущий, как в Moonbot). Неизвестное имя → ничего.
 pub fn play(name: &str) {
     let Some(wav) = bytes_of(name) else {
         return;

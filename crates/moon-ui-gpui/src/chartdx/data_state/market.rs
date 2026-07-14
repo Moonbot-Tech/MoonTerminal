@@ -655,7 +655,7 @@ impl ChartDataState {
                             diag_levels_len = Some(levels.len());
                             pr.layers.set_orderbook(levels);
                             // CPU-копия видимой книги — для подписей объёма в стакане:
-                            // cursor volume и MoonBot-style sell-line depth label.
+                            // cursor volume и Moonbot-style sell-line depth label.
                             book.collect_visible_depth(lo, hi, &mut pr.orderbook_levels);
                             refresh_orderbook_label_notionals(
                                 &mut pr.orderbook_labels,

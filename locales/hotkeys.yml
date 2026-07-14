@@ -52,9 +52,9 @@ hotkeys.group.presets:
   en: "Order presets"
   es: "Preajustes de orden"
 hotkeys.group.presets_hint:
-  ru: "Те же F1-F6 и S1-S6, что в MoonBot: размер ручного ордера и fixed sell."
-  en: "The same F1-F6 and S1-S6 as MoonBot: manual order size and fixed sell."
-  es: "Los mismos F1-F6 y S1-S6 que MoonBot: tamaño de orden manual y venta fija."
+  ru: "Те же F1-F6 и S1-S6, что в Moonbot: размер ручного ордера и fixed sell."
+  en: "The same F1-F6 and S1-S6 as Moonbot: manual order size and fixed sell."
+  es: "Los mismos F1-F6 y S1-S6 que Moonbot: tamaño de orden manual y venta fija."
 hotkeys.order_size:
   ru: "Выбрать размер ручного ордера %{n}"
   en: "Select manual order size %{n}"
@@ -69,9 +69,9 @@ hotkeys.group.trading:
   en: "Trading commands"
   es: "Comandos de trading"
 hotkeys.group.trading_hint:
-  ru: "Команды, которые в MoonBot назначаются через HotkeysConfig и работают с активным рынком."
-  en: "MoonBot HotkeysConfig commands that operate on the active market."
-  es: "Comandos de HotkeysConfig de MoonBot que operan sobre el mercado activo."
+  ru: "Команды, которые в Moonbot назначаются через HotkeysConfig и работают с активным рынком."
+  en: "Moonbot HotkeysConfig commands that operate on the active market."
+  es: "Comandos de HotkeysConfig de Moonbot que operan sobre el mercado activo."
 hotkeys.cancel_buy:
   ru: "Cancel Buy"
   en: "Cancel Buy"
@@ -93,17 +93,17 @@ hotkeys.panic_sell_one:
   en: "Panic Sell One"
   es: "Panic Sell One"
 hotkeys.panic_sell_one_hint:
-  ru: "MoonBot-дефолт: Ctrl+F1."
-  en: "MoonBot default: Ctrl+F1."
-  es: "Valor por defecto de MoonBot: Ctrl+F1."
+  ru: "Moonbot-дефолт: Ctrl+F1."
+  en: "Moonbot default: Ctrl+F1."
+  es: "Valor por defecto de Moonbot: Ctrl+F1."
 hotkeys.cancel_all_buys:
   ru: "Cancel All Buys"
   en: "Cancel All Buys"
   es: "Cancel All Buys"
 hotkeys.cancel_all_buys_hint:
-  ru: "MoonBot-дефолт: Ctrl+Del."
-  en: "MoonBot default: Ctrl+Del."
-  es: "Valor por defecto de MoonBot: Ctrl+Del."
+  ru: "Moonbot-дефолт: Ctrl+Del."
+  en: "Moonbot default: Ctrl+Del."
+  es: "Valor por defecto de Moonbot: Ctrl+Del."
 hotkeys.join_sells:
   ru: "Join Sells"
   en: "Join Sells"
@@ -158,33 +158,33 @@ hotkeys.switch_charts:
   en: "Switch Charts"
   es: "Switch Charts"
 hotkeys.switch_charts_hint:
-  ru: "Переключение графиков MoonBot."
-  en: "MoonBot chart switching."
-  es: "Cambio de gráficos MoonBot."
+  ru: "Переключение графиков Moonbot."
+  en: "Moonbot chart switching."
+  es: "Cambio de gráficos Moonbot."
 hotkeys.switch_figure:
   ru: "Switch Figure"
   en: "Switch Figure"
   es: "Switch Figure"
 hotkeys.switch_figure_hint:
-  ru: "MoonBot-дефолт: Ctrl+F."
-  en: "MoonBot default: Ctrl+F."
-  es: "Valor por defecto de MoonBot: Ctrl+F."
+  ru: "Moonbot-дефолт: Ctrl+F."
+  en: "Moonbot default: Ctrl+F."
+  es: "Valor por defecto de Moonbot: Ctrl+F."
 hotkeys.scale_plus:
   ru: "Scale +"
   en: "Scale +"
   es: "Scale +"
 hotkeys.scale_plus_hint:
-  ru: "MoonBot-дефолт: Ctrl+Q."
-  en: "MoonBot default: Ctrl+Q."
-  es: "Valor por defecto de MoonBot: Ctrl+Q."
+  ru: "Moonbot-дефолт: Ctrl+Q."
+  en: "Moonbot default: Ctrl+Q."
+  es: "Valor por defecto de Moonbot: Ctrl+Q."
 hotkeys.scale_minus:
   ru: "Scale -"
   en: "Scale -"
   es: "Scale -"
 hotkeys.scale_minus_hint:
-  ru: "MoonBot-дефолт: Ctrl+W."
-  en: "MoonBot default: Ctrl+W."
-  es: "Valor por defecto de MoonBot: Ctrl+W."
+  ru: "Moonbot-дефолт: Ctrl+W."
+  en: "Moonbot default: Ctrl+W."
+  es: "Valor por defecto de Moonbot: Ctrl+W."
 
 hotkeys.group.order_move:
   ru: "Сдвиг ордеров"
@@ -232,72 +232,72 @@ hotkeys.group.mouse:
   en: "Order book mouse"
   es: "Ratón en libro"
 hotkeys.group.mouse_hint:
-  ru: "Живой MoonBot-путь из ChartFrameUnit: постановка ордеров кликами в зоне стакана. Перенос линий сейчас — перетаскивание ЛКМ за линию; Move-жесты ниже пока не применяются."
-  en: "Live MoonBot ChartFrameUnit path: place orders by clicking inside the book area. Moving lines is currently plain LMB drag on the line; the Move gestures below are not applied yet."
-  es: "Ruta viva de MoonBot ChartFrameUnit: crear órdenes con clics en el libro. Mover líneas es por ahora arrastre con botón izquierdo; los gestos Move de abajo aún no se aplican."
+  ru: "Живой Moonbot-путь из ChartFrameUnit: постановка ордеров кликами в зоне стакана. Перенос линий сейчас — перетаскивание ЛКМ за линию; Move-жесты ниже пока не применяются."
+  en: "Live Moonbot ChartFrameUnit path: place orders by clicking inside the book area. Moving lines is currently plain LMB drag on the line; the Move gestures below are not applied yet."
+  es: "Ruta viva de Moonbot ChartFrameUnit: crear órdenes con clics en el libro. Mover líneas es por ahora arrastre con botón izquierdo; los gestos Move de abajo aún no se aplican."
 hotkeys.mouse.buy_set:
   ru: "Поставить Long"
   en: "Place Long"
   es: "Crear Long"
 hotkeys.mouse.buy_set_hint:
-  ru: "MultiOrders.BuySetClick. MoonBot-дефолт: Dbl_Click."
-  en: "MultiOrders.BuySetClick. MoonBot default: Dbl_Click."
+  ru: "MultiOrders.BuySetClick. Moonbot-дефолт: Dbl_Click."
+  en: "MultiOrders.BuySetClick. Moonbot default: Dbl_Click."
   es: "MultiOrders.BuySetClick. Valor por defecto: Dbl_Click."
 hotkeys.mouse.short_set:
   ru: "Поставить Short"
   en: "Place Short"
   es: "Crear Short"
 hotkeys.mouse.short_set_hint:
-  ru: "MultiOrders.ShortSetClick. MoonBot-дефолт: None_Click."
-  en: "MultiOrders.ShortSetClick. MoonBot default: None_Click."
+  ru: "MultiOrders.ShortSetClick. Moonbot-дефолт: None_Click."
+  en: "MultiOrders.ShortSetClick. Moonbot default: None_Click."
   es: "MultiOrders.ShortSetClick. Valor por defecto: None_Click."
 hotkeys.mouse.pending_long:
   ru: "Pending Long"
   en: "Pending Long"
   es: "Pending Long"
 hotkeys.mouse.pending_long_hint:
-  ru: "PendingOrderSetClick. MoonBot-дефолт: None_Click."
-  en: "PendingOrderSetClick. MoonBot default: None_Click."
+  ru: "PendingOrderSetClick. Moonbot-дефолт: None_Click."
+  en: "PendingOrderSetClick. Moonbot default: None_Click."
   es: "PendingOrderSetClick. Valor por defecto: None_Click."
 hotkeys.mouse.pending_short:
   ru: "Pending Short"
   en: "Pending Short"
   es: "Pending Short"
 hotkeys.mouse.pending_short_hint:
-  ru: "MultiOrders.PendingShortSetClick. MoonBot-дефолт: None_Click."
-  en: "MultiOrders.PendingShortSetClick. MoonBot default: None_Click."
+  ru: "MultiOrders.PendingShortSetClick. Moonbot-дефолт: None_Click."
+  en: "MultiOrders.PendingShortSetClick. Moonbot default: None_Click."
   es: "MultiOrders.PendingShortSetClick. Valor por defecto: None_Click."
 hotkeys.mouse.buy_move:
   ru: "Move Open Long"
   en: "Move Open Long"
   es: "Mover Open Long"
 hotkeys.mouse.buy_move_hint:
-  ru: "MultiOrders.BuyMoveClick. MoonBot-дефолт: Shift_Click."
-  en: "MultiOrders.BuyMoveClick. MoonBot default: Shift_Click."
+  ru: "MultiOrders.BuyMoveClick. Moonbot-дефолт: Shift_Click."
+  en: "MultiOrders.BuyMoveClick. Moonbot default: Shift_Click."
   es: "MultiOrders.BuyMoveClick. Valor por defecto: Shift_Click."
 hotkeys.mouse.sell_move:
   ru: "Move TP Long"
   en: "Move TP Long"
   es: "Mover TP Long"
 hotkeys.mouse.sell_move_hint:
-  ru: "MultiOrders.SellMoveClick. MoonBot-дефолт: CTRL_Click."
-  en: "MultiOrders.SellMoveClick. MoonBot default: CTRL_Click."
+  ru: "MultiOrders.SellMoveClick. Moonbot-дефолт: CTRL_Click."
+  en: "MultiOrders.SellMoveClick. Moonbot default: CTRL_Click."
   es: "MultiOrders.SellMoveClick. Valor por defecto: CTRL_Click."
 hotkeys.mouse.buy_move2:
   ru: "Move Open Long #2"
   en: "Move Open Long #2"
   es: "Mover Open Long #2"
 hotkeys.mouse.buy_move2_hint:
-  ru: "MultiOrders.BuyMoveClick2. MoonBot-дефолт: None_Click."
-  en: "MultiOrders.BuyMoveClick2. MoonBot default: None_Click."
+  ru: "MultiOrders.BuyMoveClick2. Moonbot-дефолт: None_Click."
+  en: "MultiOrders.BuyMoveClick2. Moonbot default: None_Click."
   es: "MultiOrders.BuyMoveClick2. Valor por defecto: None_Click."
 hotkeys.mouse.sell_move2:
   ru: "Move TP Long #2"
   en: "Move TP Long #2"
   es: "Mover TP Long #2"
 hotkeys.mouse.sell_move2_hint:
-  ru: "MultiOrders.SellMoveClick2. MoonBot-дефолт: None_Click."
-  en: "MultiOrders.SellMoveClick2. MoonBot default: None_Click."
+  ru: "MultiOrders.SellMoveClick2. Moonbot-дефолт: None_Click."
+  en: "MultiOrders.SellMoveClick2. Moonbot default: None_Click."
   es: "MultiOrders.SellMoveClick2. Valor por defecto: None_Click."
 hotkeys.mouse.same_move:
   ru: "Short move использует те же жесты, что Long move"
@@ -341,9 +341,9 @@ hotkeys.group.manual_strategy:
   en: "Manual strategies"
   es: "Estrategias manuales"
 hotkeys.group.manual_strategy_hint:
-  ru: "10 хоткеев ManualStratsConfig.hotKeys из MoonBot: хоткей N выбирает N-ю manual-стратегию активного ядра (порядок — как в пикере MS шапки) и включает режим. По умолчанию пустые."
-  en: "10 MoonBot ManualStratsConfig.hotKeys: hotkey N selects the Nth manual strategy of the active core (same order as the header MS picker) and enables the mode. Empty by default."
-  es: "10 ManualStratsConfig.hotKeys de MoonBot: la tecla N selecciona la N-ésima estrategia manual del núcleo activo (mismo orden que el selector MS) y activa el modo. Vacíos por defecto."
+  ru: "10 хоткеев ManualStratsConfig.hotKeys из Moonbot: хоткей N выбирает N-ю manual-стратегию активного ядра (порядок — как в пикере MS шапки) и включает режим. По умолчанию пустые."
+  en: "10 Moonbot ManualStratsConfig.hotKeys: hotkey N selects the Nth manual strategy of the active core (same order as the header MS picker) and enables the mode. Empty by default."
+  es: "10 ManualStratsConfig.hotKeys de Moonbot: la tecla N selecciona la N-ésima estrategia manual del núcleo activo (mismo orden que el selector MS) y activa el modo. Vacíos por defecto."
 hotkeys.manual_strategy:
   ru: "Ручная стратегия %{n}"
   en: "Manual strategy %{n}"
@@ -359,8 +359,8 @@ hotkeys.group.draw:
   en: "Drawing"
   es: "Dibujo"
 hotkeys.group.draw_hint:
-  ru: "Фигуры на чарте (как карандаш MoonBot). Хоткей выбирает инструмент и включает режим рисования (повтор/Esc — выкл). В режиме: Ctrl+ЛКМ рисует, простой ЛКМ выделяет/двигает фигуру. Кнопка-карандаш в полоске вкладок: ЛКМ — режим, ПКМ — стиль (цвет/толщина/Solid-Dash)."
-  en: "Chart figures (MoonBot-style pencil). Hotkey selects the tool and enters draw mode (again/Esc turns it off). In draw mode: Ctrl+LMB draws, plain LMB selects/moves a figure. Pencil button in the tab strip: LMB — mode, RMB — style (color/thickness/Solid-Dash)."
+  ru: "Фигуры на чарте (как карандаш Moonbot). Хоткей выбирает инструмент и включает режим рисования (повтор/Esc — выкл). В режиме: Ctrl+ЛКМ рисует, простой ЛКМ выделяет/двигает фигуру. Кнопка-карандаш в полоске вкладок: ЛКМ — режим, ПКМ — стиль (цвет/толщина/Solid-Dash)."
+  en: "Chart figures (Moonbot-style pencil). Hotkey selects the tool and enters draw mode (again/Esc turns it off). In draw mode: Ctrl+LMB draws, plain LMB selects/moves a figure. Pencil button in the tab strip: LMB — mode, RMB — style (color/thickness/Solid-Dash)."
   es: "Figuras en el gráfico: la tecla activa la herramienta (repetir o Esc la desactiva), clic izquierdo coloca nodos. Clic en una figura fuera del modo la selecciona; arrastre nodos/cuerpo para editar."
 hotkeys.draw_hline:
   ru: "Горизонтальная линия"
@@ -383,17 +383,17 @@ hotkeys.draw_triangle:
   en: "Triangle"
   es: "Triángulo"
 hotkeys.draw_triangle_hint:
-  ru: "Инструмент: три клика — три вершины треугольника (△ MoonBot)."
-  en: "Tool: three clicks — the triangle's three vertices (MoonBot △)."
-  es: "Herramienta: tres clics — los tres vértices del triángulo (△ MoonBot)."
+  ru: "Инструмент: три клика — три вершины треугольника (△ Moonbot)."
+  en: "Tool: three clicks — the triangle's three vertices (Moonbot △)."
+  es: "Herramienta: tres clics — los tres vértices del triángulo (△ Moonbot)."
 hotkeys.draw_channel:
   ru: "Параллельный канал"
   en: "Parallel channel"
   es: "Canal paralelo"
 hotkeys.draw_channel_hint:
-  ru: "Инструмент: два клика по ценам — горизонтальный канал (коридор, как канал MoonBot)."
-  en: "Tool: two clicks at prices — a horizontal channel (band, like MoonBot channel)."
-  es: "Herramienta: dos clics en precios — un canal horizontal (banda, como el canal de MoonBot)."
+  ru: "Инструмент: два клика по ценам — горизонтальный канал (коридор, как канал Moonbot)."
+  en: "Tool: two clicks at prices — a horizontal channel (band, like Moonbot channel)."
+  es: "Herramienta: dos clics en precios — un canal horizontal (banda, como el canal de Moonbot)."
 hotkeys.fig_delete:
   ru: "Удалить выделенную фигуру"
   en: "Delete selected figure"

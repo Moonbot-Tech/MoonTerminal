@@ -1,4 +1,4 @@
-//! Состояние вида графика — порт интерактива из MoonBot/WebGame:
+//! Состояние вида графика — порт интерактива из Moonbot/WebGame:
 //!   X (время): зум колесом вокруг курсора, пан ЛКМ/Shift-колесо. Live/latest
 //!              определяется пространственно: правый край в пределах 5% окна
 //!              от now снова якорится к «сейчас», таймера возврата нет.
@@ -121,7 +121,7 @@ impl ChartView {
             px_per_price: 0.5,
             render_center: 0.0,
             render_range: 1.0,
-            marker_half_px: 3.5, // крест 7px (NormalX MoonBot)
+            marker_half_px: 3.5, // крест 7px (NormalX Moonbot)
             x_default_scale: true,
             x_init_pending: true,
             last_phase_area_w: f32::NAN,
@@ -229,7 +229,7 @@ impl ChartView {
         }
     }
 
-    /// Снап правого края на ЦЕЛЫЙ пиксель (аналог MoonBot `NowPhase`): между кадрами
+    /// Снап правого края на ЦЕЛЫЙ пиксель (аналог Moonbot `NowPhase`): между кадрами
     /// меняется только целое число пикселей, поэтому тонкие элементы (кресты трейдов,
     /// линии ордеров, last/mark) не дрожат субпиксельно. Контринтуитивно, но дискретный
     /// шаг = гладко для чёткого 2D (на 60+ Гц шаг в 1 px глаз не ловит). ТУ ЖЕ формулу
@@ -372,7 +372,7 @@ impl ChartView {
         self.render_center = self.center_price;
     }
 
-    /// Зум по X. В live сохраняем live-якорь (как WebGame/MoonBot); в ручном X-view
+    /// Зум по X. В live сохраняем live-якорь (как WebGame/Moonbot); в ручном X-view
     /// сохраняем время под курсором и после дискретного шага можем re-anchor к live.
     pub fn zoom_x_at(&mut self, factor: f32, area_w: f32, cursor_x: f32, now_ms: f64) {
         let was_follow = self.follow;

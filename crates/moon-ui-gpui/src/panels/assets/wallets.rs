@@ -98,7 +98,7 @@ impl AssetsView {
             let fmt_qty = moon_core::util::fmt::qty;
             let preview_label: SharedString =
                 format!("{} {}", a.currency, fmt_qty(a.amount)).into();
-            // Формат строки — 1:1 с MoonBot Transfer: `МОНЕТА свободно / всего (стоимость$)`,
+            // Формат строки — 1:1 с Moonbot Transfer: `МОНЕТА свободно / всего (стоимость$)`,
             // всё слева в строку; стоимость считается по `total`, цена неизвестна → `(?$)`.
             // Точность ограничена: кол-во — `fmt::qty` (макс. тысячные), доллары —
             // `fmt::usd` (макс. сотые), не adaptive-простыни.
@@ -108,7 +108,7 @@ impl AssetsView {
             } else {
                 "(?$)".to_string()
             };
-            // Значок монеты (32×32 PNG из assets/coins) — как в MoonBot Transfer. Нет
+            // Значок монеты (32×32 PNG из assets/coins) — как в Moonbot Transfer. Нет
             // значка → пустая ячейка той же ширины, чтобы тикеры оставались выровнены.
             let icon_side = design::ui_px(cx, 16.0);
             let icon: AnyElement = match crate::coin_icons::coin_icon(&a.currency) {
@@ -177,7 +177,7 @@ impl AssetsView {
                     .text_size(design::t_body(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(p.text_soft))
-                    // Заголовок по центру, как у групп Spot/Futures/Quarterly в MoonBot.
+                    // Заголовок по центру, как у групп Spot/Futures/Quarterly в Moonbot.
                     .text_center()
                     .child(format!("{} ({})", kind.label(), snapshot.total_count)),
             )

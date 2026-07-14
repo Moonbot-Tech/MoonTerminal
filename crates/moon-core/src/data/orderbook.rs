@@ -32,7 +32,7 @@ pub struct BookDepthPoint {
     pub qty: f32,
     /// Кумулятивный объём от спреда до этого уровня в базовой монете.
     pub cum_qty: f32,
-    /// Индивидуальный ноционал уровня (`qty * price`) — как `Quantity * Rate` в MoonBot.
+    /// Индивидуальный ноционал уровня (`qty * price`) — как `Quantity * Rate` в Moonbot.
     pub notional: f32,
     /// Кумулятивный ноционал от спреда до этого уровня.
     pub cum_notional: f32,

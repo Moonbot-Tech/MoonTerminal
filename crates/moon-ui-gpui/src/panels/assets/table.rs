@@ -267,8 +267,8 @@ impl AssetsView {
     }
 }
 
-/// Колонки — 1:1 с окном Assets MoonBot: монета, количество, сумма в $, две кнопки.
-/// Плюс «Ядро» слева: у MoonBot окно per-core, наше — общее на все ядра охвата.
+/// Колонки — 1:1 с окном Assets Moonbot: монета, количество, сумма в $, две кнопки.
+/// Плюс «Ядро» слева: у Moonbot окно per-core, наше — общее на все ядра охвата.
 fn assets_columns() -> Vec<MoonDataTableColumn> {
     let numeric =
         |key: &'static str, title: String, w: f32| MoonDataTableColumn::new(key, title, w).right();
@@ -317,7 +317,7 @@ fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette, on_sale
     let r = &e.row;
     let is_position = r.pos_size != 0.0;
     // Кол-во/Сумма: спот — ПОЛНЫЙ удерживаемый остаток (free + заблокированное в открытых
-    // sell-ордерах), как MoonBot — открытую позу с TP-ордерами показываем целиком, а не
+    // sell-ордерах), как Moonbot — открытую позу с TP-ордерами показываем целиком, а не
     // «свободно≈0»; фьюч-позиция — остаток позиции и её стоимость (размер × цена рынка;
     // котируемая у фьючей — USD-стейбл). Кол-во — ограниченная точность по величине
     // (`fmt::qty`: макс. тысячные, мин. десятые), не adaptive.

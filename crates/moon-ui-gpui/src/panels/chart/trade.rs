@@ -14,7 +14,7 @@ use moon_core::session::order_lines::LineKind;
 
 use super::ChartPanel;
 
-/// На сколько частей делит «Split order» (ПКМ по линии sell). MoonBot по умолчанию — на 2.
+/// На сколько частей делит «Split order» (ПКМ по линии sell). Moonbot по умолчанию — на 2.
 const SPLIT_PARTS: i32 = 2;
 const ORDER_DRAG_PREVIEW_HOLD: Duration = Duration::from_millis(3_000);
 
@@ -571,7 +571,7 @@ impl ChartPanel {
         });
         self.apply_order_visual(cx);
         self.arm_order_drag_preview_timeout(cx);
-        // Семантика линий при перетаскивании (как в MoonBot):
+        // Семантика линий при перетаскивании (как в Moonbot):
         // - Buy/Sell (вход/выход) → `move_order` = replace СВОЕЙ ноги ордера (ядро делает
         //   cancel+new: для селла в стакане новый кросс-лимит исполняется маркетом). Так нет
         //   орфана (отдельный DoSellOrder оставлял резерв-лимит висеть → опасно).

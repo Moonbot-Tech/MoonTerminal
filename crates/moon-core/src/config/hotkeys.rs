@@ -142,13 +142,13 @@ impl MouseGestureBinding {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HotkeysConfig {
-    /// Размер ручного ордера F1-F6 (`HotkeysConfig.OKeys` в MoonBot).
+    /// Размер ручного ордера F1-F6 (`HotkeysConfig.OKeys` в Moonbot).
     #[serde(default = "default_order_size_keys")]
     pub order_size: [String; ORDER_SIZE_KEYS],
-    /// Fixed sell S1-S6 (`HotkeysConfig.SKeys` в MoonBot).
+    /// Fixed sell S1-S6 (`HotkeysConfig.SKeys` в Moonbot).
     #[serde(default = "default_sell_preset_keys")]
     pub sell_preset: [String; SELL_PRESET_KEYS],
-    /// Manual strategy buttons 1-10 (`ManualStratsConfig.hotKeys` в MoonBot).
+    /// Manual strategy buttons 1-10 (`ManualStratsConfig.hotKeys` в Moonbot).
     #[serde(default = "default_manual_strategy_keys")]
     pub manual_strategy: [String; MANUAL_STRATEGY_KEYS],
 
@@ -183,7 +183,7 @@ pub struct HotkeysConfig {
     #[serde(default)]
     pub shift_sell_down: String,
 
-    // MoonBot-хоткеи, под которые в moonproto НЕТ send-команд (reload book/chart,
+    // Moonbot-хоткеи, под которые в moonproto НЕТ send-команд (reload book/chart,
     // make shot, spy, show charts, fit sells, broadcast, sell +/-), удалены целиком
     // 2026-07-10 (конфиг+вкладка+диспетчер); serde молча игнорирует их ключи в старых
     // hotkeys.toml. Появится команда — возвращать по git-истории.
@@ -211,28 +211,28 @@ pub struct HotkeysConfig {
     #[serde(default = "default_fig_alert")]
     pub fig_alert: String,
 
-    /// Живой MoonBot-путь MultiOrders: поставить long по стакану.
+    /// Живой Moonbot-путь MultiOrders: поставить long по стакану.
     #[serde(default = "default_left_double")]
     pub buy_set_click: MouseGestureBinding,
-    /// Живой MoonBot-путь MultiOrders: поставить short по стакану.
+    /// Живой Moonbot-путь MultiOrders: поставить short по стакану.
     #[serde(default)]
     pub short_set_click: MouseGestureBinding,
-    /// Живой MoonBot-путь: поставить pending long.
+    /// Живой Moonbot-путь: поставить pending long.
     #[serde(default)]
     pub pending_long_click: MouseGestureBinding,
-    /// Живой MoonBot-путь MultiOrders: поставить pending short.
+    /// Живой Moonbot-путь MultiOrders: поставить pending short.
     #[serde(default)]
     pub pending_short_click: MouseGestureBinding,
-    /// Живой MoonBot-путь MultiOrders: двигать open/buy long.
+    /// Живой Moonbot-путь MultiOrders: двигать open/buy long.
     #[serde(default = "default_left_shift")]
     pub buy_move_click: MouseGestureBinding,
-    /// Живой MoonBot-путь MultiOrders: двигать TP/sell long.
+    /// Живой Moonbot-путь MultiOrders: двигать TP/sell long.
     #[serde(default = "default_left_ctrl")]
     pub sell_move_click: MouseGestureBinding,
-    /// Живой MoonBot-путь MultiOrders: второй жест движения open/buy long.
+    /// Живой Moonbot-путь MultiOrders: второй жест движения open/buy long.
     #[serde(default)]
     pub buy_move_click2: MouseGestureBinding,
-    /// Живой MoonBot-путь MultiOrders: второй жест движения TP/sell long.
+    /// Живой Moonbot-путь MultiOrders: второй жест движения TP/sell long.
     #[serde(default)]
     pub sell_move_click2: MouseGestureBinding,
     /// Delphi `SameHotkeysForMove`: short move жесты повторяют long move.
@@ -345,7 +345,7 @@ fn default_manual_strategy_keys() -> [String; MANUAL_STRATEGY_KEYS] {
     std::array::from_fn(|_| String::new())
 }
 
-// Клавиатурные дефолты — буквальный `ctrl-` на ОБЕИХ платформах (паритет с MoonBot: на маке
+// Клавиатурные дефолты — буквальный `ctrl-` на ОБЕИХ платформах (паритет с Moonbot: на маке
 // управление тоже через Ctrl). На маке физический Control для клавиатурных хоткеев доходит
 // нормально (в отличие от Ctrl+ЛКМ, который ОС превращает в правый клик — поэтому мышиный
 // жест РИСОВАНИЯ остаётся на `secondary()`/Cmd, это отдельный код, не дефолт хоткея).

@@ -5,8 +5,8 @@
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckboxSize, MoonColorPicker,
-    MoonDropdown, MoonInput, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTooltipView, StyledExt,
-    h_flex,
+    MoonDropdown, MoonInput, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTone, MoonTooltipView,
+    StyledExt, h_flex,
 };
 use rust_i18n::t;
 
@@ -168,6 +168,10 @@ impl SettingsView {
                     format!("{} ({})", t!(key), t!("conn.filter_note")),
                 )
                 .checked(cur)
+                // Явное различие вкл/выкл: включённые — зелёные с галочкой, выключенные —
+                // приглушённые без галочки (чтобы сразу видеть, какой пункт отключён, а не
+                // угадывать по счётчику «7/8»).
+                .tone(if cur { MoonTone::Positive } else { MoonTone::Muted })
                 .on_click(move |_, _, cx| {
                     backend.update(cx, |b, bcx| {
                         if let Some(p) = b.preview.as_mut() {
@@ -261,17 +265,65 @@ impl SettingsView {
                         .small(),
                 ),
             )
-            .child(
-                Self::cell(200.0, true).child(
-                    MoonInput::new(SharedString::from(format!("key-{i}")))
-                        .state(&row.key)
-                        .small()
-                        .mask_toggle()
-                        // Кнопка очистки (×) — быстро удалить/заменить ключ. Авто-выделение всей
-                        // строки при фокусе недоступно из moon_ui (select_all приватный в форке).
-                        .cleanable(true),
-                ),
-            )
+            .child(Self::cell(200.0, true).child({
+                // Поле ключа + кнопка «Вставить»: placeholder намекает, что сюда ждём ключ;
+                // кнопка вставляет из буфера (set_value не эмитит Change → пишем и в draft).
+                let key_state = row.key.clone();
+                h_flex()
+                    .w_full()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div().flex_grow_1().min_w_0().child(
+                            MoonInput::new(SharedString::from(format!("key-{i}")))
+                                .state(&row.key)
+                                .small()
+                                .placeholder(t!("conn.key_ph").to_string())
+                                .mask_toggle()
+                                // Кнопка очистки (×) — быстро удалить/заменить ключ.
+                                .cleanable(true),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("paste-key-tip-{i}")))
+                            .tooltip(|_window, cx| {
+                                cx.new(|_| {
+                                    MoonTooltipView::new(t!("conn.paste_key_tip").to_string())
+                                        .max_width(320.0)
+                                })
+                                .into()
+                            })
+                            .child(
+                                MoonButton::new(SharedString::from(format!("paste-key-{i}")))
+                                    .ghost()
+                                    .size(MoonButtonSize::Micro)
+                                    .label(t!("conn.paste_key").to_string())
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        let Some(text) = cx
+                                            .read_from_clipboard()
+                                            .and_then(|it| it.text())
+                                            .filter(|t| !t.trim().is_empty())
+                                        else {
+                                            return;
+                                        };
+                                        let text = text.trim().to_string();
+                                        key_state.update(cx, |st, c| {
+                                            st.set_value(text.clone(), window, c)
+                                        });
+                                        this.backend.update(cx, |b, bcx| {
+                                            if let Some(p) = b.preview.as_mut() {
+                                                if let Some(s) = p.servers.get_mut(i) {
+                                                    s.key = Secret::new(text.clone());
+                                                    bcx.notify();
+                                                }
+                                            }
+                                        });
+                                    }))
+                                    .render(),
+                            ),
+                    )
+            }))
             .child(
                 Self::cell(110.0, false).child(
                     MoonInput::new(SharedString::from(format!("group-{i}")))
@@ -319,26 +371,6 @@ impl SettingsView {
         } else {
             d.flex_grow_0().flex_shrink_0()
         }
-    }
-
-    /// Заголовок колонки (тусклая подпись). `pad` — левый отступ ТЕКСТА (через внутренний
-    /// margin) под внутренний отступ инпута (`px_2`≈8px у MoonInput), чтобы подпись стояла
-    /// над текстом поля; margin внутреннего блока НЕ меняет ширину колонки. `grow` — как в `cell`.
-    fn col_head(
-        label: &str,
-        basis: f32,
-        grow: bool,
-        pad: f32,
-        p: MoonPalette,
-        cx: &App,
-    ) -> impl IntoElement {
-        Self::cell(basis, grow).child(
-            div()
-                .ml(px(pad))
-                .text_size(design::t_body(cx))
-                .text_color(rgb(p.text_soft))
-                .child(label.to_string()),
-        )
     }
 
     /// Заголовок колонки с тултипом (порт egui `head_tip`). Подпись помечена подчёркиванием
@@ -421,15 +453,26 @@ impl SettingsView {
                 p,
                 cx,
             ))
-            .child(Self::col_head(
+            .child(Self::col_head_tip(
+                "h-name",
                 &t!("conn.col.name"),
                 150.0,
                 true,
                 8.0,
+                t!("conn.tip.name").to_string().into(),
                 p,
                 cx,
             ))
-            .child(Self::col_head(&t!("conn.col.key"), 200.0, true, 8.0, p, cx))
+            .child(Self::col_head_tip(
+                "h-key",
+                &t!("conn.col.key"),
+                200.0,
+                true,
+                8.0,
+                t!("conn.tip.key").to_string().into(),
+                p,
+                cx,
+            ))
             .child(Self::col_head_tip(
                 "h-group",
                 &t!("conn.col.group"),

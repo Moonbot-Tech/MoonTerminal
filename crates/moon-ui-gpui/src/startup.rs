@@ -138,7 +138,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         install_moon_theme_for_config(&cfg, cx);
         cx.text_system()
             .add_fonts(embedded_fonts())
-            .expect("failed to add embedded MoonBot fonts");
+            .expect("failed to add embedded Moonbot fonts");
 
         let layout = WindowLayout::load();
         let dock_states = dock_persist::load_all();
@@ -401,7 +401,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
                             return;
                         }
                         // Серверный набор chart-алертов изменился → пере-декодировать
-                        // remote-фигуры (алерты, созданные в ядре/MoonBot). Гейт по activity,
+                        // remote-фигуры (алерты, созданные в ядре/Moonbot). Гейт по activity,
                         // чтобы не декодить blob'ы на каждый ui_state-тик.
                         let alerts_activity = b.session.store().chart_alerts_activity();
                         if alerts_activity != b.last_chart_alerts_activity {

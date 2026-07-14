@@ -100,7 +100,7 @@ impl ReportPanel {
             .items(items)
     }
 
-    /// Комбобокс периода (пресеты «Сегодня/Вчера/…», как в отчёте MoonBot).
+    /// Комбобокс периода (пресеты «Сегодня/Вчера/…», как в отчёте Moonbot).
     pub(super) fn period_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let options: Vec<(Period, SharedString, SharedString)> = Period::ALL

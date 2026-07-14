@@ -16,7 +16,7 @@ pub(super) use crate::design::{moon, moon_alpha};
 /// Схема колонки: (ключ, заголовок, ширина, числовая/вправо).
 pub(super) type ColDef = (&'static str, &'static str, f32, bool);
 
-/// Колонки таблицы. Заголовки — отраслевые токены MoonBot (не переводятся,
+/// Колонки таблицы. Заголовки — отраслевые токены Moonbot (не переводятся,
 /// как колонки Orders/Report).
 pub(super) const COLS: &[ColDef] = &[
     ("market", "Market", 92.0, false),
@@ -68,7 +68,7 @@ pub(super) fn parse_vol(s: &str) -> f64 {
     num_part.trim().replace(',', ".").parse::<f64>().unwrap_or(0.0) * mult
 }
 
-/// Короткий объёмный формат MoonBot: 1 712 345 → «1.7m», 320 100 → «320k».
+/// Короткий объёмный формат Moonbot: 1 712 345 → «1.7m», 320 100 → «320k».
 fn vol_fmt(v: f64) -> String {
     let a = v.abs();
     if a >= 1e9 {
@@ -193,7 +193,7 @@ pub(super) fn screener_row(
             "d1m" => delta_cell(r.d_1m),
             "d72h" => delta_cell(r.d_72h),
             "funding" => {
-                // Как в MoonBot: минусовый фандинг зелёный, плюсовый оранжевый.
+                // Как в Moonbot: минусовый фандинг зелёный, плюсовый оранжевый.
                 let tone = if r.funding_pct < 0.0 {
                     MoonTone::Positive
                 } else if r.funding_pct > 0.0 {
@@ -227,7 +227,7 @@ pub(super) fn screener_row(
                 })
             }
             "step" => {
-                // «0.01% / 0.001» — шаг цены в % от ask и абсолютом (как MoonBot).
+                // «0.01% / 0.001» — шаг цены в % от ask и абсолютом (как Moonbot).
                 if r.price_step > 0.0 && r.ask > 0.0 {
                     MoonDataCell::text(format!(
                         "{:.2}% / {}",

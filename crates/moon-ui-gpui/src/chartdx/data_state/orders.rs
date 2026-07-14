@@ -199,7 +199,7 @@ impl ChartDataState {
 
 /// Подписи ордерных линий рынка для слоя текста: размер у buy-линии, % от входа +
 /// количество купленного у sell-линии, % стопа у stop-линии. Сторона размещения
-/// (над/под линией) зависит от long/short — как в эталоне MoonBot (категория E).
+/// (над/под линией) зависит от long/short — как в эталоне Moonbot (категория E).
 /// Только открытые ордера (закрытые/исполненные не подписываем).
 fn build_order_labels(
     out: &mut Vec<OrderLabel>,
@@ -276,7 +276,7 @@ fn build_order_labels(
             push(bp, text, !short, ORDER_LABEL_NEUTRAL, PRIO_BUY, forced);
         }
         // SELL: профит-% от цены входа (знаковый цвет) + РАЗМЕР на продажу в $-ноционале
-        // (remaining·цена_продажи·курс) на противоположной стороне линии — как в MoonBot:
+        // (remaining·цена_продажи·курс) на противоположной стороне линии — как в Moonbot:
         // процент primary рисуется всегда, остаток caption проходит через YTextFill.
         if let Some(sp) = sell {
             let forced = line_forced(LineKind::Sell);
@@ -399,12 +399,12 @@ fn sell_book_notional(levels: &[moon_core::data::BookDepthPoint], price: f32, sh
     let mut sum = 0.0_f32;
     for level in levels {
         if short {
-            // MoonBot: short sell-line volume uses buy glass above sell price.
+            // Moonbot: short sell-line volume uses buy glass above sell price.
             if !level.is_ask && level.price > price {
                 sum += level.notional;
             }
         } else {
-            // MoonBot: long sell-line volume uses sell glass below sell price.
+            // Moonbot: long sell-line volume uses sell glass below sell price.
             if level.is_ask && level.price < price {
                 sum += level.notional;
             }

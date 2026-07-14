@@ -23,7 +23,7 @@ const SEG_PATTERN_SOLID: f32 = 0.0;
 const SEG_PATTERN_DASH: f32 = 1.0; // DashDotDot в шейдере — ближайший «штрих»
 const SEG_PATTERN_DOT: f32 = 2.0;
 
-/// Паттерн отрезка (шейдер: 0 solid / 1 dashdotdot / 2 dot) по виду линии MoonBot.
+/// Паттерн отрезка (шейдер: 0 solid / 1 dashdotdot / 2 dot) по виду линии Moonbot.
 /// Штриховых вариантов в шейдере меньше пяти → Dash/DashDot/DashDotDot дают один штрих.
 fn seg_pattern(kind: LineKind) -> f32 {
     match kind {

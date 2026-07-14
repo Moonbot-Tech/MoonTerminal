@@ -157,10 +157,10 @@ impl ChartPanel {
         if !self.backend.read(cx).fig_draw_mode {
             return false;
         }
-        // Паритет с MoonBot: даже при ВКЛЮЧЁННОМ карандаше фигуры трогаем ТОЛЬКО по Ctrl
+        // Паритет с Moonbot: даже при ВКЛЮЧЁННОМ карандаше фигуры трогаем ТОЛЬКО по Ctrl
         // (`draw_mod` = secondary/⌘ ИЛИ продолжение начатого драфта). Обычный ЛКМ без
         // модификатора уходит дальше — в торговлю/навигацию, как будто карандаш выключен
-        // (в MoonBot тултип: «Hold CTRL to perform actual draw»).
+        // (в Moonbot тултип: «Hold CTRL to perform actual draw»).
         if !draw_mod {
             return false;
         }

@@ -165,7 +165,7 @@ pub(super) fn build_assets(
         });
         let rate = quote_to_usdt(markets, &quote);
         // Стоимость СТРОКИ — от ПОЛНОГО удерживаемого баланса (free + заблокировано в открытых
-        // sell-ордерах), как MoonBot: открытая поза держит всё количество в TP-ордерах (free≈0),
+        // sell-ордерах), как Moonbot: открытая поза держит всё количество в TP-ордерах (free≈0),
         // но это по-прежнему наш актив — прятать его нельзя (иначе строка с value 0 уходит под
         // фильтр пыли). `_full` может быть не заполнен биржей → берём max(full, free).
         let held_qty = if bp.asset_balance_full.abs() > bp.asset_balance.abs() {

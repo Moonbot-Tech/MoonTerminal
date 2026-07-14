@@ -182,7 +182,7 @@ pub(super) struct PlacedLabel {
 
 pub(super) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;
 
-// Плотность СТАТИЧНОЙ сетки: фикс. деления ширины/высоты (модель MoonBot — сетка стоит, едут
+// Плотность СТАТИЧНОЙ сетки: фикс. деления ширины/высоты (модель Moonbot — сетка стоит, едут
 // только подписи). И вертикали (время), и горизонтали (цена) на фикс. экранных долях.
 pub(super) const GRID_N_VERT: f32 = 60.0;
 pub(super) const GRID_N_HORIZ: f32 = 6.0;
@@ -204,7 +204,7 @@ pub(super) struct OrderLabel {
     /// Цвет линии (0xRRGGBB) — подпись красится в него же.
     pub color: u32,
     /// Приоритет draw-order-а при пересечении: младшие рисуются раньше, старшие поверх.
-    /// Настоящий MoonBot-style Y-bucket для secondary captions пока должен жить отдельным pass-ом.
+    /// Настоящий Moonbot-style Y-bucket для secondary captions пока должен жить отдельным pass-ом.
     pub priority: u8,
     /// Drag/hover label надо рисовать поверх и не давить overlap-ом.
     pub force: bool,
@@ -316,7 +316,7 @@ struct PaneRender {
     /// Stable priority order for `order_labels`, rebuilt together with order labels.
     /// Cursor-only text frames must not allocate/sort it again.
     order_label_order: Vec<usize>,
-    /// Подписи объёма стакана у sell-линий (MoonBot `LastSellOrderPriceVol`): цель берём из
+    /// Подписи объёма стакана у sell-линий (Moonbot `LastSellOrderPriceVol`): цель берём из
     /// ордера, фактический объём считаем из текущей CPU-копии стакана.
     orderbook_labels: Vec<OrderBookLabel>,
     /// Прогнозный размер ордера (s1-s6) в USD — рисуется на перекрестии курсора. None = нет
@@ -461,7 +461,7 @@ impl PaneRender {
     }
 
     /// Пиксельный рубильник камеры (follow по X). Двигаем правый край по `now_ms` ТОЛЬКО
-    /// когда «сейчас» уехало на ≥1 ЦЕЛЫЙ пиксель (MoonBot `round(Now/FdtScale)`): между
+    /// когда «сейчас» уехало на ≥1 ЦЕЛЫЙ пиксель (Moonbot `round(Now/FdtScale)`): между
     /// пикселями кадр попиксельно идентичен → present переказывает его без работы. Целый
     /// шаг убирает субпиксельное дрожание; вызов на каждый present даёт гладкость на vblank.
     /// True — камера реально сдвинулась (для счётчика «рабочих» кадров).

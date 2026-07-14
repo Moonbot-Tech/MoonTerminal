@@ -1,6 +1,6 @@
 # MoonProto Contract Inspector
 
-Local Figma plugin for the MoonBot UI N3 workflow.
+Local Figma plugin for the Moonbot UI N3 workflow.
 
 It solves the click problem:
 

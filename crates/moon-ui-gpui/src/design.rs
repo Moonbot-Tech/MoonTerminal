@@ -1,4 +1,4 @@
-//! MoonBot terminal design tokens extracted from the MoonBot Terminal design reference.
+//! Moonbot terminal design tokens extracted from the Moonbot Terminal design reference.
 //!
 //! This is a thin GPUI-div adapter over MoonPalette tokens. Keep it visual-only:
 //! no terminal logic, no chart renderer state.

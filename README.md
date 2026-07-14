@@ -105,7 +105,7 @@ Makefile выбирает MSVC-таргет на Windows и нативный т�
 Настройка подключений по каждому ядру.
 
 <p align="center">
-  <img src="assets/img/screenshot-settings-connections.png" alt="Настройки — подключения / ядра MoonBot" width="640">
+  <img src="assets/img/screenshot-settings-connections.png" alt="Настройки — подключения / ядра Moonbot" width="640">
 </p>
 
 Рантайм-конфиг лежит рядом с исполняемым файлом. Учётные данные серверов хранятся в шифрованном

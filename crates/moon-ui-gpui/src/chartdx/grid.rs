@@ -1,6 +1,6 @@
 //! Слой сетки (хром данных): СТАТИЧНЫЕ вертикали (фикс. X-деления) + горизонтали по цене.
 //! Процедурный fullscreen-проход над chart_area (1 drawcall). Рисуется ПЕРВЫМ в нашем
-//! own-pass — под крестами/данными. Вертикали не «едут» (модель MoonBot).
+//! own-pass — под крестами/данными. Вертикали не «едут» (модель Moonbot).
 
 use gpui::RawGpuAccess;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;

@@ -119,13 +119,13 @@ impl Default for PathStyle {
 pub struct OrdersStyle {
     /// Линия входа ЛОНГ-ордера (buy_price). По умолчанию оранжевый.
     pub buy: LineStyle,
-    /// Линия входа ШОРТ-ордера — отдельный цвет/стиль от лонга (как long/short в MoonBot).
+    /// Линия входа ШОРТ-ордера — отдельный цвет/стиль от лонга (как long/short в Moonbot).
     /// Применяется к линии входа, кресту и подписи размера, когда ордер шорт.
     pub buy_short: LineStyle,
     /// Линия цены продажи (sell_price) ЛОНГ-ордера. По умолчанию синий.
     pub sell: LineStyle,
     /// Линия цены продажи ШОРТ-ордера — отдельный цвет/стиль от лонга (как long/short в
-    /// MoonBot: BuyShort/SellShort). Применяется к sell-линии, когда ордер шорт.
+    /// Moonbot: BuyShort/SellShort). Применяется к sell-линии, когда ордер шорт.
     pub sell_short: LineStyle,
     /// Стоп-лосс. Красный.
     pub stop: LineStyle,
@@ -141,7 +141,7 @@ pub struct OrdersStyle {
     pub liq: LineStyle,
     /// Путь (trail) — змейка движения линий по истории перестановок (опц.).
     pub path: PathStyle,
-    /// Прозрачность серверной трассы ордера (`CO_OrderLine.Thikness2` в MoonBot).
+    /// Прозрачность серверной трассы ордера (`CO_OrderLine.Thikness2` в Moonbot).
     pub trace_alpha: f32,
 
     /// Прозрачность активных линий, 0..1.
@@ -155,7 +155,7 @@ pub struct OrdersStyle {
 }
 
 impl Default for OrdersStyle {
-    /// Дефолт = тёмный набор MoonBot.
+    /// Дефолт = тёмный набор Moonbot.
     fn default() -> Self {
         let liq = LineStyle {
             start_marker: false,
@@ -198,7 +198,7 @@ impl Default for OrdersStyle {
 }
 
 impl OrdersStyle {
-    /// Дефолт светлого набора MoonBot.
+    /// Дефолт светлого набора Moonbot.
     fn default_light() -> Self {
         let liq = LineStyle {
             start_marker: false,

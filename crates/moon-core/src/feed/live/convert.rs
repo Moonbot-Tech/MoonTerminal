@@ -345,7 +345,7 @@ fn build_order_row(
         o.buy_price
     } else if in_position && pos_price > 0.0 {
         // Sell из удерживаемого актива (listing-sell/MoonHook): входа через бота не было →
-        // `buy_price=0`. Цена входа = средняя цена позиции (как показывает MoonBot «Buy»).
+        // `buy_price=0`. Цена входа = средняя цена позиции (как показывает Moonbot «Buy»).
         // Без этого линия входа (`g(true, buy_price)`) и PnL не рисовались.
         pos_price
     } else {
@@ -443,11 +443,11 @@ fn build_order_row(
     let pending = o.pending_buy_cond_price.is_some();
     // `filled` (позиция держится, гейт sell-линии/стопов/TP/liq и PnL) = `in_position`
     // (см. определение выше: fill_pct>0 либо фаза SellSet). Без этого продажа из удерживаемого
-    // актива (fill_pct=0) не показывала ни линий, ни PnL, хотя в MoonBot всё есть.
+    // актива (fill_pct=0) не показывала ни линий, ни PnL, хотя в Moonbot всё есть.
     let filled = in_position;
     let create_time_ms = moon_time_to_unix_millis_f64(o.buy_order.create_time());
     // Фолбэк-индикатор: SL/TS/VStop включены в СТРАТЕГИИ ордера (по `strat_id`), если
-    // per-order флаг не выставлен. Имена полей — Delphi-имена MoonBot (подтверждены строками
+    // per-order флаг не выставлен. Имена полей — Delphi-имена Moonbot (подтверждены строками
     // MoonBot.exe): `UseStopLoss`/`UseTrailing`/`UseBV_SV_Stop`.
     // ВАЖНО: сериализатор стратегий (Delphi и moonproto зеркально) НЕ передаёт поля, значение
     // которых равно ДЕФОЛТУ СХЕМЫ (writer skips schema defaults). Отсутствующее поле в снимке
@@ -495,7 +495,7 @@ fn build_order_row(
     } else {
         (false, false, false)
     };
-    // ЭФФЕКТИВНЫЕ флаги стопов («сработает ли», модель MoonBot): per-order стопа у ордера
+    // ЭФФЕКТИВНЫЕ флаги стопов («сработает ли», модель Moonbot): per-order стопа у ордера
     // может НЕ БЫТЬ — тогда действует стоп СТРАТЕГИИ (на проводе per-order поля пустые).
     // Явный override терминала (клик в таблице) главнее обоих: провод не отличает
     // «выключен» от «не задан», и без override флаг стратегии маскировал бы наш OFF.

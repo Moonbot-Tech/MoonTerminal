@@ -116,7 +116,7 @@ pub struct SettingsView {
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Какие блоки-линии раскрыты (вкладка «Линии», порт CollapsingHeader).
     open_lines: HashSet<&'static str>,
-    /// Активная группа вкладки «Хоткеи» (саб-вкладки, как страницы хоткеев MoonBot).
+    /// Активная группа вкладки «Хоткеи» (саб-вкладки, как страницы хоткеев Moonbot).
     hotkeys_group: hotkeys::HotkeyGroup,
     /// Кэш иконок групп (вкладка «Подключения»).
     icons: IconSet,

@@ -32,7 +32,7 @@ const SOUND_STEMS: &[&str] = &[
 ];
 
 /// Нормализует значение поля к стему звука: трим/нижний регистр + срез расширения
-/// (MoonBot хранит имя и как «BABYTOY», и как «BABYTOY.wav»). Не звук → None.
+/// (Moonbot хранит имя и как «BABYTOY», и как «BABYTOY.wav»). Не звук → None.
 fn sound_stem(val: &str) -> Option<String> {
     let low = val.trim().to_ascii_lowercase();
     let stem = low.strip_suffix(".wav").unwrap_or(&low);
@@ -247,7 +247,7 @@ fn map_ui(u: StrategyFieldUiKind) -> SchemaFieldUi {
     }
 }
 
-/// Тип (вид) стратегии MoonBot по ordinal `StrategyKind`.
+/// Тип (вид) стратегии Moonbot по ordinal `StrategyKind`.
 pub(super) fn strat_kind_name(ordinal: u8) -> &'static str {
     match ordinal {
         0 => "Unknown",

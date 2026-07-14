@@ -122,7 +122,7 @@ pub struct OrderRow {
     /// Размер входной ноги (buy для long / sell для short), в базовой валюте.
     pub size: f64,
     /// Остаток выходной ноги, в базовой валюте. Для подписи sell-линии на чарте:
-    /// MoonBot показывает именно QuantityRemaining, а не исходный размер входа.
+    /// Moonbot показывает именно QuantityRemaining, а не исходный размер входа.
     pub remaining_size: f64,
     /// SL/TS включены НА САМОМ ОРДЕРЕ (per-order `StopSettings`). Это то, что тогается кликом.
     pub sl_on: bool,
@@ -173,7 +173,7 @@ pub struct OrderRow {
     /// Эмуляторный ордер (не реальный) — для фильтра и пометки «(E)».
     pub emulator: bool,
     /// Ордер терминальный (`job_is_done` у ядра) — исполнен/отменён, ждёт deferred-removal.
-    /// АВТОРИТЕТНЫЙ флаг закрытия (как MoonBot `o.IsClosed`): стор помечает линию закрытой
+    /// АВТОРИТЕТНЫЙ флаг закрытия (как Moonbot `o.IsClosed`): стор помечает линию закрытой
     /// по нему СРАЗУ, пока ордер ещё в снимке, а не по исчезновению+грейс.
     pub job_is_done: bool,
 
@@ -255,7 +255,7 @@ pub struct CoreLogLine {
 }
 
 /// Один chart-алерт, принятый ядром (`Event::ChartAlert::Upserted`). Алерт в
-/// MoonBot — это нарисованная на чарте фигура (линия/канал/фибо/…) с галкой
+/// Moonbot — это нарисованная на чарте фигура (линия/канал/фибо/…) с галкой
 /// «Alert»; `blob` — её непрозрачный бинарь `TChartObject.Save()`. Терминал
 /// хранит blob как есть: он нужен для повторного `upsert` (вкл/выкл алерта)
 /// и для реверса формата (этап 0). Декаплено от moonproto.
@@ -481,7 +481,7 @@ pub struct GlobalBalanceRow {
     pub btc_full: f64,
     /// special_coin_balance (USDT для фьюч, BUSD/USDC в MA-режиме и т.п.).
     pub special_coin: f64,
-    /// Суммарный PnL ядра в БАЗОВОЙ валюте (серверный `total_pnl` = MoonBot RecalcTotalPnl:
+    /// Суммарный PnL ядра в БАЗОВОЙ валюте (серверный `total_pnl` = Moonbot RecalcTotalPnl:
     /// сумма `total_profit` ТОЛЬКО по рынкам базовой валюты `is_btc_market`). Это «реальный»
     /// PnL ядра — не равен сумме `profit_*` по всем строкам таблицы (там мешаются котировки).
     pub total_pnl: f64,
@@ -552,7 +552,7 @@ impl TransferAssetsSnapshot {
     }
 }
 
-/// License/module/MoonCredits state of one MoonBot core.
+/// License/module/MoonCredits state of one Moonbot core.
 /// Декаплено от moonproto: UI видит только готовый аккаунтный snapshot.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LicenseState {
@@ -611,7 +611,7 @@ pub struct ClientSettings {
     pub manual_strategy_id: u64,
 }
 
-/// Настройки управления плечом ядра (moonproto `LevManage`). Отдельный снимок, как в MoonBot.
+/// Настройки управления плечом ядра (moonproto `LevManage`). Отдельный снимок, как в Moonbot.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LevManageState {
     pub auto_max_order: bool,

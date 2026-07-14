@@ -37,7 +37,7 @@ use moon_core::db::{self, ReportFilter, ReportTable, SideFilter};
 /// каждые ~30с гоняли бы стотысячные выборки (CPU впустую).
 const MAX_REPORT_ROWS: usize = 100;
 
-/// Пресеты периода, как в отчёте MoonBot. Границы — сутки UTC (даты в БД и в
+/// Пресеты периода, как в отчёте Moonbot. Границы — сутки UTC (даты в БД и в
 /// таблице отображаются в UTC — фильтр согласован с тем, что видно в колонках).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Period {

@@ -22,6 +22,9 @@ use moon_core::config::{BadgeEntry, UiThemeMode};
 
 /// Редактор одной строки бейджа: поля ввода + пикеры цвета активной темы.
 pub(super) struct BadgeRowEd {
+    /// Индекс записи в `badges.entries` (draft). Может НЕ совпадать с позицией строки в
+    /// списке: служебный вид `Unknown` (ordinal 0) в редакторе скрыт, но остаётся в данных.
+    idx: usize,
     ordinal: Entity<MoonInputState>,
     name: Entity<MoonInputState>,
     code: Entity<MoonInputState>,
@@ -115,7 +118,11 @@ pub(super) fn build(
     let rows = entries
         .iter()
         .enumerate()
+        // Служебный `Unknown` (ordinal 0) — фолбэк-бакет для нераспознанного типа детекта;
+        // в редакторе не показываем (просьба пользователя), в данных/`badges.json` оставляем.
+        .filter(|(_, e)| e.ordinal != 0)
         .map(|(idx, e)| BadgeRowEd {
+            idx,
             ordinal: badge_input(window, cx, idx, e.ordinal.to_string(), |e, v| {
                 if let Ok(n) = v.trim().parse::<u8>() {
                     e.ordinal = n;
@@ -405,8 +412,10 @@ impl SettingsView {
                     .text_color(rgba_from(p.text_soft, 1.0))
                     .child(t!("badges.theme_hint").to_string()),
             );
-        for (idx, row) in self.badges.rows.iter().enumerate() {
-            col = col.child(self.badge_row(cx, idx, row));
+        // Индекс берём из строки (row.idx = позиция в `entries`), НЕ из enumerate: список
+        // строк может быть короче entries (скрыт служебный Unknown), иначе правки уехали бы.
+        for row in self.badges.rows.iter() {
+            col = col.child(self.badge_row(cx, row.idx, row));
         }
         col.child(separator(p, cx)).child(
             div().mt_1().child(
