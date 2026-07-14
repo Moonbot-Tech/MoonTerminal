@@ -142,9 +142,15 @@ pub fn fit_h_px(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f
     px(fit_h_value(cx, base_height, base_line_height, base_pad_y))
 }
 
+/// Брендовый тёмно-синий словесного знака «Moonbot» (брендбук) — для СВЕТЛОЙ темы.
+/// Раньше буквы красились в `p.text` (near-black на светлом фоне) → логотип выглядел
+/// чёрным, а не фирменным navy. На тёмной теме navy не читался бы — там оставляем `p.text`.
+const LOGO_WORDMARK_NAVY: u32 = 0x0C2C4A;
+
 pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
     let p = MoonPalette::active(cx);
-    let text_fill = format!("#{text:06X}", text = p.text);
+    let text = if p.is_light() { LOGO_WORDMARK_NAVY } else { p.text };
+    let text_fill = format!("#{text:06X}");
     let logo =
         LOGO_GLOW_SVG_RAW.replace(r##"fill="#E7E7E7""##, &format!(r##"fill="{text_fill}""##));
     let paths = logo

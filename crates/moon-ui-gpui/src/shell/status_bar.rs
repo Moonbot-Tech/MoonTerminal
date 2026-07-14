@@ -148,6 +148,23 @@ impl Shell {
                     .right_item(MoonStatusItem::new("moonbot.pro").color(p.blue))
                     .render(),
             );
+        // Кликабельная зона поверх подписи «moonbot.pro» (MoonStatusItem не умеет on_click):
+        // открывает сайт в браузере, чтобы не набирать адрес руками. Ширина ≈ подписи, у
+        // правого края (right_item там же). Курсор-палец — намёк на ссылку.
+        host = host.child(
+            div()
+                .id("moonbot-link")
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right(px(6.0))
+                .w(px(80.0))
+                .cursor_pointer()
+                .tooltip(|_window, cx| {
+                    cx.new(|_| moon_ui::MoonTooltipView::new("moonbot.pro")).into()
+                })
+                .on_click(|_, _window, cx: &mut App| cx.open_url("https://moonbot.pro")),
+        );
         #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
         {
             let backend = self.backend.clone();
