@@ -95,9 +95,6 @@ impl Shell {
                             .color(badge_col)
                             .weight(600.0)
                             .gap_after(10.0),
-                        MoonStatusItem::new("Binance Futures")
-                            .color(p.text_soft)
-                            .gap_after(10.0),
                         MoonStatusItem::separator().gap_after(10.0),
                         MoonStatusItem::new("ping")
                             .color(p.text_muted)
@@ -158,7 +155,7 @@ impl Shell {
                 .top_0()
                 .bottom_0()
                 .right(px(6.0))
-                .w(px(80.0))
+                .w(px(72.0))
                 .cursor_pointer()
                 .tooltip(|_window, cx| {
                     cx.new(|_| moon_ui::MoonTooltipView::new("moonbot.pro")).into()
@@ -172,7 +169,8 @@ impl Shell {
                 div()
                     .id("debug-status-open")
                     .absolute()
-                    .right(px(82.0))
+                    // Левее ссылки moonbot.pro (правый угол ~6..78), чтобы debug-кнопка её не перекрывала.
+                    .right(px(150.0))
                     .top(px(3.0))
                     .px(design::ui_px(cx, 6.0))
                     .h(design::fit_h_px(cx, 16.0, 10.0, 3.0))

@@ -199,7 +199,8 @@ fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>) {
                 Some(x) if x < 0.0 => Some(p.red),
                 _ => None,
             };
-            (n.map(|x| format!("{x:+.6}")).unwrap_or_default(), color)
+            // Профит в долларах — 2 знака + «$» (раньше 6 знаков «тысячных» зря).
+            (n.map(|x| format!("{x:+.2} $")).unwrap_or_default(), color)
         }
         _ => (value_to_string(v), None),
     }

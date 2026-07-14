@@ -5,8 +5,8 @@
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckboxSize, MoonColorPicker,
-    MoonDropdown, MoonInput, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTone, MoonTooltipView,
-    StyledExt, h_flex,
+    MoonDropdown, MoonInput, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonText,
+    MoonTone, MoonTooltipView, StyledExt, h_flex,
 };
 use rust_i18n::t;
 
@@ -97,6 +97,58 @@ impl SettingsView {
             checkbox = checkbox.label(label);
         }
         checkbox
+    }
+
+    /// Аффикс «Вставить» внутри поля ключа (стиль как встроенные глаз/×): глиф-кнопка,
+    /// по клику берёт ключ из буфера обмена и кладёт в `servers[i].key` (и в стейт инпута —
+    /// `set_value` не эмитит Change, поэтому пишем в draft напрямую).
+    fn paste_key_affix(
+        &self,
+        i: usize,
+        key_state: Entity<MoonInputState>,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        div()
+            .id(SharedString::from(format!("paste-key-{i}")))
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(2.0))
+            .cursor_pointer()
+            .tooltip(|_window, cx| {
+                cx.new(|_| {
+                    MoonTooltipView::new(t!("conn.paste_key_tip").to_string()).max_width(320.0)
+                })
+                .into()
+            })
+            .child(
+                MoonText::new("⧉")
+                    .color(p.text_muted)
+                    .font_size(12.0)
+                    .mono(true)
+                    .uppercase(false)
+                    .render(),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                let Some(text) = cx
+                    .read_from_clipboard()
+                    .and_then(|it| it.text())
+                    .filter(|t| !t.trim().is_empty())
+                else {
+                    return;
+                };
+                let text = text.trim().to_string();
+                key_state.update(cx, |st, c| st.set_value(text.clone(), window, c));
+                this.backend.update(cx, |b, bcx| {
+                    if let Some(pv) = b.preview.as_mut() {
+                        if let Some(s) = pv.servers.get_mut(i) {
+                            s.key = Secret::new(text.clone());
+                            bcx.notify();
+                        }
+                    }
+                });
+            }))
     }
 
     /// Добавить сервер в draft (id = max+1) в указанную группу и пересобрать editor-стейты.
@@ -265,65 +317,23 @@ impl SettingsView {
                         .small(),
                 ),
             )
-            .child(Self::cell(200.0, true).child({
-                // Поле ключа + кнопка «Вставить»: placeholder намекает, что сюда ждём ключ;
-                // кнопка вставляет из буфера (set_value не эмитит Change → пишем и в draft).
-                let key_state = row.key.clone();
-                h_flex()
-                    .w_full()
-                    .gap_1()
-                    .items_center()
-                    .child(
-                        div().flex_grow_1().min_w_0().child(
-                            MoonInput::new(SharedString::from(format!("key-{i}")))
-                                .state(&row.key)
-                                .small()
-                                .placeholder(t!("conn.key_ph").to_string())
-                                .mask_toggle()
-                                // Кнопка очистки (×) — быстро удалить/заменить ключ.
-                                .cleanable(true),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("paste-key-tip-{i}")))
-                            .tooltip(|_window, cx| {
-                                cx.new(|_| {
-                                    MoonTooltipView::new(t!("conn.paste_key_tip").to_string())
-                                        .max_width(320.0)
-                                })
-                                .into()
-                            })
-                            .child(
-                                MoonButton::new(SharedString::from(format!("paste-key-{i}")))
-                                    .ghost()
-                                    .size(MoonButtonSize::Micro)
-                                    .label(t!("conn.paste_key").to_string())
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        let Some(text) = cx
-                                            .read_from_clipboard()
-                                            .and_then(|it| it.text())
-                                            .filter(|t| !t.trim().is_empty())
-                                        else {
-                                            return;
-                                        };
-                                        let text = text.trim().to_string();
-                                        key_state.update(cx, |st, c| {
-                                            st.set_value(text.clone(), window, c)
-                                        });
-                                        this.backend.update(cx, |b, bcx| {
-                                            if let Some(p) = b.preview.as_mut() {
-                                                if let Some(s) = p.servers.get_mut(i) {
-                                                    s.key = Secret::new(text.clone());
-                                                    bcx.notify();
-                                                }
-                                            }
-                                        });
-                                    }))
-                                    .render(),
-                            ),
-                    )
-            }))
+            .child(
+                Self::cell(200.0, true).child(
+                    MoonInput::new(SharedString::from(format!("key-{i}")))
+                        .state(&row.key)
+                        .small()
+                        // Placeholder намекает, что сюда ждём ключ ядра.
+                        .placeholder(t!("conn.key_ph").to_string())
+                        // Кнопка «Вставить» — ВНУТРИ поля, в стиле аффиксов (как глаз/×).
+                        // suffix рисуется правее встроенных глаз/× (порядок аффиксов задаёт
+                        // форк), поэтому paste стоит после ×. set_value не эмитит Change →
+                        // пишем и в draft.
+                        .suffix(self.paste_key_affix(i, row.key.clone(), cx))
+                        .mask_toggle()
+                        // Кнопка очистки (×) — быстро удалить/заменить ключ.
+                        .cleanable(true),
+                ),
+            )
             .child(
                 Self::cell(110.0, false).child(
                     MoonInput::new(SharedString::from(format!("group-{i}")))

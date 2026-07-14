@@ -291,9 +291,9 @@ fn pnl_tp_cell(r: &OrderRow) -> MoonDataCell {
                 MoonTone::Danger
             };
             let text = if v >= 0.0 {
-                format!("+{v:.2}")
+                format!("+{v:.2} $")
             } else {
-                format!("{v:.2}")
+                format!("{v:.2} $")
             };
             MoonDataCell::text(text).tone(tone).weight(500.0)
         }
@@ -310,11 +310,11 @@ fn pnl_cell(r: &OrderRow) -> MoonDataCell {
             } else {
                 MoonTone::Danger
             };
-            // PnL округляем до сотых (валютная величина), а не adaptive-формат как у цен.
+            // PnL в долларах: 2 знака + «$» (валютная величина, не adaptive-формат цен).
             let text = if v >= 0.0 {
-                format!("+{v:.2}")
+                format!("+{v:.2} $")
             } else {
-                format!("{v:.2}")
+                format!("{v:.2} $")
             };
             MoonDataCell::text(text).tone(tone).weight(500.0)
         }

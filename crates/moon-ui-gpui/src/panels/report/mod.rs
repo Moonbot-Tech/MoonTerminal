@@ -926,12 +926,12 @@ impl Render for ReportPanel {
                     .child(t!("report.totals").to_string()),
             )
             .child(
-                // Без «BTC»: сумма деноминирована в котировке пар отчёта (обычно usdt),
-                // а не в BTC — жёсткий суффикс путал на не-BTC парах (см. header_for).
+                // Профит в долларах: 2 знака + «$» (без «BTC» — сумма в котировке пар,
+                // обычно usdt; 6 знаков «тысячных» были лишними).
                 div()
                     .font_bold()
                     .text_color(rgb(sum_col))
-                    .child(format!("{sum:+.6}")),
+                    .child(format!("{sum:+.2} $")),
             )
             .child(
                 div()
