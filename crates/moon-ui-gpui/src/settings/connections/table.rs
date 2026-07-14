@@ -317,23 +317,28 @@ impl SettingsView {
                         .small(),
                 ),
             )
-            .child(
-                Self::cell(200.0, true).child(
-                    MoonInput::new(SharedString::from(format!("key-{i}")))
-                        .state(&row.key)
-                        .small()
-                        // Placeholder намекает, что сюда ждём ключ ядра.
-                        .placeholder(t!("conn.key_ph").to_string())
-                        // Кнопка «Вставить» — ВНУТРИ поля, в стиле аффиксов (как глаз/×).
-                        // suffix рисуется правее встроенных глаз/× (порядок аффиксов задаёт
-                        // форк), поэтому paste стоит после ×. set_value не эмитит Change →
-                        // пишем и в draft.
-                        .suffix(self.paste_key_affix(i, row.key.clone(), cx))
-                        .mask_toggle()
-                        // Кнопка очистки (×) — быстро удалить/заменить ключ.
-                        .cleanable(true),
-                ),
-            )
+            .child(Self::cell(200.0, true).child(
+                // Поле ключа + ⧉-кнопка «Вставить» РЯДОМ (не в компоненте — порядок встроенных
+                // аффиксов задаёт форк, между глаз/× не встроить). set_value не эмитит Change →
+                // affix пишет и в draft.
+                h_flex()
+                    .w_full()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div().flex_grow_1().min_w_0().child(
+                            MoonInput::new(SharedString::from(format!("key-{i}")))
+                                .state(&row.key)
+                                .small()
+                                // Placeholder намекает, что сюда ждём ключ ядра.
+                                .placeholder(t!("conn.key_ph").to_string())
+                                .mask_toggle()
+                                // Кнопка очистки (×) — быстро удалить/заменить ключ.
+                                .cleanable(true),
+                        ),
+                    )
+                    .child(self.paste_key_affix(i, row.key.clone(), cx)),
+            ))
             .child(
                 Self::cell(110.0, false).child(
                     MoonInput::new(SharedString::from(format!("group-{i}")))
