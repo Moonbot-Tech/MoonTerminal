@@ -56,6 +56,8 @@ pub(super) enum PrimarySort {
     SellFirst,
     BuyFirst,
     Creation,
+    /// Прибыльные первыми: сортировка по локальному PnL по убыванию (+500 → −20).
+    ProfitFirst,
 }
 
 impl PrimarySort {
@@ -65,12 +67,14 @@ impl PrimarySort {
             PrimarySort::Creation => 0,
             PrimarySort::SellFirst => 1,
             PrimarySort::BuyFirst => 2,
+            PrimarySort::ProfitFirst => 3,
         }
     }
     fn from_u8(v: u8) -> Self {
         match v {
             1 => PrimarySort::SellFirst,
             2 => PrimarySort::BuyFirst,
+            3 => PrimarySort::ProfitFirst,
             _ => PrimarySort::Creation,
         }
     }
@@ -147,31 +151,40 @@ pub(super) enum OrdCol {
     Side,
     Token,
     Size,
-    Sl,
-    Ts,
-    Vstop,
     Buy,
     CurP,
+    /// Цена тейк-профита (целевая цена выходной ноги, `sell_price`).
+    TpPrice,
     Fill,
     Pnl,
     PnlPct,
+    /// PnL, если позиция закроется по цене тейка (`(tp − entry)·qty·dir`).
+    PnlTp,
+    Sl,
+    Ts,
+    Vstop,
     Strat,
 }
 
 impl OrdCol {
-    pub(super) const ALL: [OrdCol; 13] = [
+    // Стопы (SL/TS/Vstop) стоят СПРАВА, рядом со «Strat» (просьба пользователя: важные
+    // цена/PnL — под рукой, стопы у стратегии). Цена TP — рядом с ценами (Buy/Cur.P),
+    // PNL TP — рядом с PnL/PnL%.
+    pub(super) const ALL: [OrdCol; 15] = [
         OrdCol::Core,
         OrdCol::Side,
         OrdCol::Token,
         OrdCol::Size,
-        OrdCol::Sl,
-        OrdCol::Ts,
-        OrdCol::Vstop,
         OrdCol::Buy,
         OrdCol::CurP,
+        OrdCol::TpPrice,
         OrdCol::Fill,
         OrdCol::Pnl,
         OrdCol::PnlPct,
+        OrdCol::PnlTp,
+        OrdCol::Sl,
+        OrdCol::Ts,
+        OrdCol::Vstop,
         OrdCol::Strat,
     ];
 
@@ -187,9 +200,11 @@ impl OrdCol {
             OrdCol::Vstop => "vstop",
             OrdCol::Buy => "buy",
             OrdCol::CurP => "cur.p",
+            OrdCol::TpPrice => "tp.p",
             OrdCol::Fill => "fill",
             OrdCol::Pnl => "pnl",
             OrdCol::PnlPct => "pnl.pct",
+            OrdCol::PnlTp => "pnl.tp",
             OrdCol::Strat => "strat",
         }
     }
@@ -628,15 +643,34 @@ impl OrdersPanel {
 /// Ключ группировки по ОТОБРАЖАЕМОЙ стороне (с учётом исполнения → SELL). 0 = выше.
 fn primary_key(p: PrimarySort, r: &OrderRow) -> u8 {
     match p {
-        PrimarySort::Creation => 0,
+        // ProfitFirst сюда не доходит (обрабатывается отдельно в sort_entries), группа нейтральна.
+        PrimarySort::Creation | PrimarySort::ProfitFirst => 0,
         PrimarySort::SellFirst => u8::from(!is_sell(r)),
         PrimarySort::BuyFirst => u8::from(!is_buy(r)),
     }
 }
 
-/// Базовая сортировка: первичная (SELL/BUY/Creation) + новые/старые. Подъём «Main сверху»
-/// применяется отдельно поверх (стабильно) в `rebuild_cache`.
+/// Базовая сортировка: первичная (SELL/BUY/Creation/Profit) + новые/старые. Подъём
+/// «Main сверху» применяется отдельно поверх (стабильно) в `rebuild_cache`.
 fn sort_entries(entries: &mut [OrderEntry], view: &OrdersViewState) {
+    // «Profit первые» — отдельная ветка: сортируем по PnL по убыванию (прибыльные вверху),
+    // без позиции (`None`) — вниз. Тай-брейк — по uid (новые/старые), как у других режимов.
+    if view.primary == PrimarySort::ProfitFirst {
+        entries.sort_by(|a, b| {
+            let pa = table::order_pnl(&a.row);
+            let pb = table::order_pnl(&b.row);
+            // None считаем как −∞ (внизу списка).
+            let key = |v: Option<f64>| v.unwrap_or(f64::NEG_INFINITY);
+            key(pb)
+                .partial_cmp(&key(pa))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let c = a.row.uid.cmp(&b.row.uid);
+                    if view.newest_first { c.reverse() } else { c }
+                })
+        });
+        return;
+    }
     entries.sort_by(|a, b| {
         let ka = primary_key(view.primary, &a.row);
         let kb = primary_key(view.primary, &b.row);

@@ -183,6 +183,11 @@ impl OrdersPanel {
         menu = menu.items(crate::panels::radio_items(
             [
                 (
+                    PrimarySort::ProfitFirst,
+                    "m-profit".into(),
+                    t!("orders.sort.profit").to_string().into(),
+                ),
+                (
                     PrimarySort::SellFirst,
                     "m-sell".into(),
                     t!("orders.sort.sell").to_string().into(),

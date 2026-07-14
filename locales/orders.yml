@@ -42,6 +42,14 @@ orders.col.price:
   ru: "Цена"
   en: "Price"
   es: "Precio"
+orders.col.tp_price:
+  ru: "Цена TP"
+  en: "TP price"
+  es: "Precio TP"
+orders.col.pnl_tp:
+  ru: "PNL TP"
+  en: "PNL TP"
+  es: "PNL TP"
 orders.open_hint:
   ru: "Открыть чарт на Main (это ядро)"
   en: "Open chart on Main (this core)"
@@ -74,6 +82,10 @@ orders.show_all:
   ru: "Показать все"
   en: "Show all"
   es: "Mostrar todo"
+orders.sort.profit:
+  ru: "Profit первые"
+  en: "Profit first"
+  es: "Profit primero"
 orders.sort.sell:
   ru: "Sell первые"
   en: "Sell first"
