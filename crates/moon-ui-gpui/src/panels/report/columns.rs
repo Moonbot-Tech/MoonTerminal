@@ -2,6 +2,7 @@
 //! значений БД в текст+цвет, человекочитаемые заголовки и ширины.
 
 use super::*;
+use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use rust_i18n::t;
 
 pub(super) fn report_columns(table: &ReportTable, vis: &[usize]) -> Vec<MoonDataTableColumn> {
@@ -23,17 +24,38 @@ pub(super) fn report_data_row(
     ri: usize,
     table: &ReportTable,
     vis: &[usize],
+    selected_cores: &Rc<Vec<u64>>,
     backend: &Entity<Backend>,
     p: MoonPalette,
 ) -> MoonDataRow {
     let mut cells = Vec::with_capacity(vis.len());
     if let Some(r) = table.rows.get(ri) {
         let core_uid = table.core_uids.get(ri).copied().unwrap_or(0);
+        // Стратегия сделки — колонка `strategyid` (может быть невидима, читаем по имени из
+        // ВСЕХ колонок). 0/отсутствует = ручная/без стратегии → секция стратегии в меню скрыта.
+        let strat_id = table
+            .cols
+            .iter()
+            .position(|c| c == "strategyid")
+            .and_then(|idx| r.get(idx))
+            .and_then(|v| match v {
+                Value::Integer(i) => Some(*i as u64),
+                _ => None,
+            })
+            .filter(|id| *id != 0);
         for &i in vis {
             let cname = table.cols[i].as_str();
             let val = r.get(i).unwrap_or(&Value::Null);
             if cname == "coin" {
-                cells.push(coin_cell(ri, val, core_uid, backend, p));
+                cells.push(coin_cell(
+                    ri,
+                    val,
+                    core_uid,
+                    strat_id,
+                    selected_cores.clone(),
+                    backend,
+                    p,
+                ));
             } else {
                 cells.push(report_data_cell(cname, val, p));
             }
@@ -49,11 +71,15 @@ fn coin_cell(
     ri: usize,
     val: &Value,
     core_uid: u64,
+    strat_id: Option<u64>,
+    selected_cores: Rc<Vec<u64>>,
     backend: &Entity<Backend>,
     p: MoonPalette,
 ) -> MoonDataCell {
     let coin = value_to_string(val);
     let backend = backend.clone();
+    let backend_menu = backend.clone();
+    let coin_menu = coin.clone();
     let el = div()
         .id(SharedString::from(format!("rep-coin-{ri}")))
         .w_full()
@@ -86,7 +112,55 @@ fn coin_cell(
                 b.open_request_activate = false;
                 bcx.notify();
             });
-        });
+        })
+        // ПКМ — единое контекстное меню монеты. Стратегия сделки известна (`strategyid`) →
+        // доступна и «В ЧС стратегии». «Выбранные ядра» = фильтр ядер отчёта.
+        .on_mouse_down(
+            MouseButton::Right,
+            move |e: &MouseDownEvent, window, app| {
+                if coin_menu.is_empty() {
+                    return;
+                }
+                app.stop_propagation();
+                let market = {
+                    let b = backend_menu.read(app);
+                    resolve_market(b, core_uid, &coin_menu)
+                };
+                let coin_base = moon_core::symbol::coin_of_market(&market).to_string();
+                let (core_name, strat_name) = {
+                    let b = backend_menu.read(app);
+                    let core_name = b
+                        .session
+                        .sessions()
+                        .iter()
+                        .find(|s| s.id == core_uid)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default();
+                    let strat_name = strat_id.and_then(|sid| {
+                        b.session
+                            .store()
+                            .core(core_uid)
+                            .and_then(|cd| cd.strategies.iter().find(|s| s.id == sid))
+                            .map(|s| s.name.clone())
+                    });
+                    (core_name, strat_name)
+                };
+                let ctx = CoinMenuCtx {
+                    core: core_uid,
+                    core_name,
+                    market,
+                    coin: coin_base,
+                    selected_cores: (*selected_cores).clone(),
+                    strat_id,
+                    strat_name,
+                    order_uid: None,
+                    side: None,
+                    short: false,
+                    origin: CoinMenuOrigin::OrderTable,
+                };
+                crate::controls::open_coin_menu(ctx, backend_menu.clone(), e.position, window, app);
+            },
+        );
     MoonDataCell::element(el)
 }
 
@@ -104,7 +178,7 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
     let upper = coin.to_ascii_uppercase();
     // Уже полный рынок: кончается на quote ядра ИЛИ содержит dex-префикс HIP-3 (`xyz:BIRD`) →
     // берём как есть (достраивать quote нельзя — HL/HIP-3 не несут суффикса в имени).
-    let already_full = coin.contains(':')
+    let already_full = moon_core::symbol::is_hip3(coin)
         || (!quote.is_empty() && upper.len() > quote.len() && upper.ends_with(&quote));
     let candidate = if already_full || quote.is_empty() {
         coin.to_string()
@@ -119,18 +193,9 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
     }
     universe
         .iter()
-        .find(|m| market_base_coin(m).eq_ignore_ascii_case(coin))
+        .find(|m| moon_core::symbol::coin_of_market(m).eq_ignore_ascii_case(coin))
         .cloned()
         .unwrap_or(candidate)
-}
-
-/// Базовая монета рынка для сопоставления с сохранённой в отчёте: срезаем HIP-3 dex-префикс
-/// (`xyz:BIRD` → `BIRD`), затем quote-суффикс (`BIRDUSDC` → `BIRD`). Без среза префикса
-/// dex-перпы не находились (в отчёте «BIRD», реальный рынок «xyz:BIRD») → монета не открывалась.
-fn market_base_coin(m: &str) -> &str {
-    let after_dex = m.rsplit(':').next().unwrap_or(m);
-    let quote = moon_core::symbol::resolve_quote(after_dex);
-    moon_core::symbol::base_symbol(after_dex, &quote)
 }
 
 fn report_data_cell(col: &str, val: &Value, p: MoonPalette) -> MoonDataCell {

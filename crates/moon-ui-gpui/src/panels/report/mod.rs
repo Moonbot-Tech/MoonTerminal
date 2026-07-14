@@ -881,6 +881,12 @@ impl Render for ReportPanel {
             let backend = self.backend.clone();
             let table_state = self.table_state.clone();
             let cols = columns::report_columns(&self.table, &vis);
+            // «Выбранные ядра» для контекстного меню монеты: пусто = все ядра отчёта.
+            let selected_cores: Rc<Vec<u64>> = Rc::new(if self.sel_cores.is_empty() {
+                self.cores.iter().map(|(u, _)| *u).collect()
+            } else {
+                self.sel_cores.iter().copied().collect()
+            });
             // Общий хост докнутых таблиц (как Orders/Assets): overflow_hidden не даёт
             // раздвинутым колонкам распирать layout панели, «пусто» — оверлеем.
             crate::panels::common::data_table_host(
@@ -890,7 +896,7 @@ impl Render for ReportPanel {
                 p,
                 cx,
                 MoonDataTable::new("report-table", row_count, move |ri, _window, _app| {
-                    columns::report_data_row(ri, &table, &visible, &backend, p)
+                    columns::report_data_row(ri, &table, &visible, &selected_cores, &backend, p)
                 })
                 .state(&table_state)
                 .columns(cols)

@@ -79,7 +79,7 @@ impl ChartDataState {
             let order_price = session
                 .store()
                 .core(pane.core)
-                .and_then(|core_st| core_st.order_lines.buy_sell_range(&pane.market));
+                .and_then(|core_st| core_st.order_lines.auto_fit_range(&pane.market));
             if pr.cached_order_price != order_price {
                 pr.cached_order_price = order_price;
                 self.view_dirty = true;

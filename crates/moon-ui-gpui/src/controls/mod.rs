@@ -11,6 +11,7 @@
 //! - [`scale`] — дропдауны масштаба цены (вкладки/AddToChart-stack);
 //! - [`toolbar`] — сборка полосы тулбара.
 
+mod coin_menu;
 mod fmt;
 mod manual_strat;
 mod metric;
@@ -18,6 +19,7 @@ mod scale;
 mod strips;
 mod toolbar;
 
+pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use manual_strat::manual_strategy_controls;
 pub(crate) use manual_strat::select_manual_strategy;

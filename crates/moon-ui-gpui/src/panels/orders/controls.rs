@@ -4,47 +4,61 @@ use super::*;
 use rust_i18n::t;
 
 impl OrdersPanel {
-    /// Поле-список источника (Все ядра + ядра группы) — порт egui ComboBox.
+    /// Поле-список ядер — МУЛЬТИВЫБОР (чекбоксы, меню не закрывается на клик, как в «Отчёте»
+    /// и выборе колонок). Подпись: «Все» (пусто/все) / имя единственного / «Ядер: N».
     pub(super) fn source_combo(
         &self,
         cores: &[(CoreId, String)],
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let cur = match self.view.source {
-            OrdersSource::All => t!("orders.all_cores").to_string(),
-            OrdersSource::Core(id) => cores
-                .iter()
-                .find(|(c, _)| *c == id)
-                .map(|(_, n)| n.clone())
-                .unwrap_or_else(|| t!("orders.all_cores").to_string()),
+        let all_selected = !cores.is_empty() && self.sel_cores.len() == cores.len();
+        let cur = match self.sel_cores.len() {
+            0 => t!("orders.all_cores").to_string(),
+            _ if all_selected => t!("orders.all_cores").to_string(),
+            1 => {
+                let id = *self.sel_cores.iter().next().unwrap();
+                cores
+                    .iter()
+                    .find(|(c, _)| *c == id)
+                    .map(|(_, n)| n.clone())
+                    .unwrap_or_else(|| t!("orders.cores_n", n = 1).to_string())
+            }
+            n => t!("orders.cores_n", n = n).to_string(),
         };
         let view = cx.entity();
-        let mut options: Vec<(OrdersSource, SharedString, SharedString)> = vec![(
-            OrdersSource::All,
-            "all".into(),
-            t!("orders.all_cores").to_string().into(),
-        )];
-        for (id, name) in cores {
-            options.push((
-                OrdersSource::Core(*id),
-                format!("core-{id}").into(),
-                name.clone().into(),
-            ));
-        }
-        let items = crate::panels::radio_items(
-            options,
-            self.view.source,
-            crate::panels::RadioMark::Check,
-            move |app, src| Self::mutate(&view, app, |v| v.source = src),
-        );
-        MoonDropdown::new("orders-source")
+        let all_view = view.clone();
+        let mut menu = MoonDropdown::new("orders-source")
             .label(format!("{cur} ▾"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
             .trigger_width(118.0)
-            .menu_width(160.0)
+            .menu_width(170.0)
+            .menu_max_height(360.0)
             .menu_size(MoonMenuSize::Compact)
-            .items(items)
+            .close_on_select(false)
+            .item(
+                // «Все» — тумблер: снять все / выбрать все ядра группы.
+                MoonMenuItem::with_key("os-all", t!("orders.all_cores").to_string())
+                    .checked(self.sel_cores.is_empty() || all_selected)
+                    .selected(self.sel_cores.is_empty() || all_selected)
+                    .on_click(move |_, _, app| {
+                        all_view.update(app, |t, c| t.toggle_core(None, c));
+                    }),
+            );
+        for (i, (id, name)) in cores.iter().enumerate() {
+            let id = *id;
+            let on = self.sel_cores.contains(&id);
+            let view = view.clone();
+            menu = menu.item(
+                MoonMenuItem::with_key(format!("os-{i}"), name.clone())
+                    .checked(on)
+                    .selected(on)
+                    .on_click(move |_, _, app| {
+                        view.update(app, |t, c| t.toggle_core(Some(id), c));
+                    }),
+            );
+        }
+        menu
     }
 
     /// Поле-список типа ордеров (Все / Реальные / Эмуляторные).

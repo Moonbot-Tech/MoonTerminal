@@ -58,6 +58,10 @@ orders.all_cores:
   ru: "Все ядра"
   en: "All cores"
   es: "Todos los núcleos"
+orders.cores_n:
+  ru: "Ядер: %{n}"
+  en: "Cores: %{n}"
+  es: "Núcleos: %{n}"
 orders.columns:
   ru: "Поля"
   en: "Fields"

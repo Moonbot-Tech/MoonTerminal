@@ -133,7 +133,7 @@ impl DetectsPanel {
                 (s.id, s.name.clone(), color, quote)
             })
             .collect();
-        for (id, name, color, quote) in cores {
+        for (id, name, color, _quote) in cores {
             let Some(d) = b.session.store().core(id) else {
                 continue;
             };
@@ -187,7 +187,7 @@ impl DetectsPanel {
                         core: id,
                         core_name: name.clone(),
                         market: det.market.clone(),
-                        base: moon_core::symbol::base_symbol(&det.market, &quote).to_string(),
+                        base: moon_core::symbol::coin_of_market(&det.market).to_string(),
                         color,
                         kind: det.kind,
                         is_short: det.is_short,

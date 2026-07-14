@@ -117,10 +117,7 @@ fn ticker_readout(
     });
     let base = sel
         .as_ref()
-        .map(|(_, market)| {
-            let quote = moon_core::symbol::resolve_quote(market);
-            moon_core::symbol::base_symbol(market, &quote).to_string()
-        })
+        .map(|(_, market)| moon_core::symbol::coin_of_market(market).to_string())
         .unwrap_or_else(|| "BTC".to_string());
     let delta_span = |v: f64| {
         let color = if v < 0.0 { danger_text(p) } else { positive_text(p) };

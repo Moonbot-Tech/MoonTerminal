@@ -45,6 +45,8 @@ pub(super) struct OrderEntry {
 struct OrdersCacheKey {
     data_sig: u64,
     view: OrdersViewState,
+    /// Выбранные ядра фильтра (отсортировано) — их смена меняет набор строк.
+    sel_cores: Vec<CoreId>,
     current: Option<(CoreId, String)>,
     /// Монеты, открытые в Main группы — их изменение меняет подсветку и порядок строк.
     main_open: Vec<(CoreId, String)>,
@@ -107,13 +109,6 @@ impl MainOnTop {
             _ => MainOnTop::Off,
         }
     }
-}
-
-/// Источник ордеров: все ядра группы или конкретное ядро.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum OrdersSource {
-    All,
-    Core(CoreId),
 }
 
 /// Фильтр по типу ордера: все / реальные / эмуляторные.
@@ -229,7 +224,6 @@ pub(super) const ALL_COLUMNS_MASK: u16 = (1u16 << OrdCol::ALL.len()) - 1;
 /// Состояние вида таблицы (источник + тип + фильтр + сортировка + видимые колонки). Своё у панели.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct OrdersViewState {
-    pub(super) source: OrdersSource,
     pub(super) kind: OrderKind,
     pub(super) only_current_market: bool,
     pub(super) primary: PrimarySort,
@@ -259,7 +253,6 @@ impl OrdersViewState {
 impl Default for OrdersViewState {
     fn default() -> Self {
         Self {
-            source: OrdersSource::All,
             // По умолчанию — только РЕАЛЬНЫЕ ордера (без эмулятора) и SELL (позиции в работе)
             // сверху: первым делом видно, что открыто/продаётся. Пользователь может сменить
             // в меню сортировки/типа — выбор персистится в docks.json.
@@ -298,6 +291,8 @@ pub struct OrdersPanel {
     pub(super) backend: Entity<Backend>,
     pub(super) group: String,
     pub(super) view: OrdersViewState,
+    /// Выбранные ядра фильтра (мультивыбор, как в «Отчёте»). Пусто = все ядра группы.
+    pub(super) sel_cores: HashSet<CoreId>,
     /// Гейт перерисовки: ордерные ивенты летят часто, цены/P&L живут от рынка — общий
     /// `RenderGate` (сигнатура ИЛИ 1 Гц-тик, пол 250мс) экономит UI-поток на холостом ходу.
     gate: RenderGate,
@@ -376,6 +371,7 @@ impl OrdersPanel {
             backend,
             group,
             view: OrdersViewState::default(),
+            sel_cores: HashSet::new(),
             gate: RenderGate::default(),
             cache_key: None,
             cached_cores: Vec::new(),
@@ -435,6 +431,11 @@ impl OrdersPanel {
         OrdersCacheKey {
             data_sig: orders_sig(b, &self.group),
             view: self.view,
+            sel_cores: {
+                let mut v: Vec<CoreId> = self.sel_cores.iter().copied().collect();
+                v.sort_unstable();
+                v
+            },
             current: self
                 .view
                 .only_current_market
@@ -456,6 +457,38 @@ impl OrdersPanel {
             .collect()
     }
 
+    /// Тумблер выбранного ядра фильтра (мультивыбор, как в «Отчёте»). `None` — пункт «Все»
+    /// (все выбраны → очистить в «пусто = все»; иначе выбрать все ядра группы). `Some(id)` —
+    /// тогл одного ядра. Не персистится (как и прежний одиночный источник — сброс на «Все»).
+    pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
+        let all: HashSet<CoreId> = self
+            .backend
+            .read(cx)
+            .session
+            .sessions()
+            .iter()
+            .filter(|s| s.group == self.group)
+            .map(|s| s.id)
+            .collect();
+        match id {
+            None => {
+                if !all.is_empty() && self.sel_cores.len() == all.len() {
+                    self.sel_cores.clear();
+                } else {
+                    self.sel_cores = all;
+                }
+            }
+            Some(id) => {
+                if !self.sel_cores.remove(&id) {
+                    self.sel_cores.insert(id);
+                }
+            }
+        }
+        let backend = self.backend.clone();
+        self.rebuild_cache(backend.read(cx));
+        cx.notify();
+    }
+
     fn build_entries(
         &self,
         b: &Backend,
@@ -464,10 +497,8 @@ impl OrdersPanel {
     ) -> Vec<OrderEntry> {
         let mut entries = self.collect(b);
         entries.retain(|e| {
-            let by_source = match view.source {
-                OrdersSource::All => true,
-                OrdersSource::Core(id) => e.core == id,
-            };
+            // Мультивыбор ядер (как в «Отчёте»): пусто = все ядра группы.
+            let by_source = self.sel_cores.is_empty() || self.sel_cores.contains(&e.core);
             let by_kind = match view.kind {
                 OrderKind::All => true,
                 OrderKind::Real => !e.row.emulator,

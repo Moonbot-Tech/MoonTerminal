@@ -1,10 +1,73 @@
 //! Таблица панели «Ордера»: колонки, строки/ячейки, клик по токену, тогл стопов.
 
 use super::*;
+use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use moon_core::feed::OrderStopKind;
 use moon_core::session::CoreId;
 use rust_i18n::t;
 use std::collections::HashSet;
+
+/// Открыть единое контекстное меню монеты по строке ордера (ПКМ на ячейке токена/стратегии).
+/// «Выбранные ядра» = мультивыбор фильтра ядер панели (`sel_cores`): пусто → все ядра группы,
+/// иначе выбранные (пункт «ЧС выбранных ядер» появляется только при >1).
+#[allow(clippy::too_many_arguments)]
+fn open_row_coin_menu(
+    core: CoreId,
+    market: String,
+    coin: String,
+    uid: u64,
+    strat_id: Option<u64>,
+    strat_name: Option<String>,
+    short: bool,
+    view: &Entity<OrdersPanel>,
+    pos: Point<Pixels>,
+    window: &mut Window,
+    app: &mut App,
+) {
+    app.stop_propagation();
+    let (backend, group, sel_cores) = {
+        let panel = view.read(app);
+        (
+            panel.backend.clone(),
+            panel.group.clone(),
+            panel.sel_cores.clone(),
+        )
+    };
+    let (selected_cores, core_name) = {
+        let b = backend.read(app);
+        let sessions = b.session.sessions();
+        let selected: Vec<CoreId> = if sel_cores.is_empty() {
+            sessions
+                .iter()
+                .filter(|s| s.group == group)
+                .map(|s| s.id)
+                .collect()
+        } else {
+            sel_cores.iter().copied().collect()
+        };
+        let name = sessions
+            .iter()
+            .find(|s| s.id == core)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        (selected, name)
+    };
+    let ctx = CoinMenuCtx {
+        core,
+        core_name,
+        market,
+        coin,
+        selected_cores,
+        strat_id,
+        strat_name,
+        order_uid: Some(uid),
+        // Строка таблицы — не конкретная нога линии: секция ордера = «Редактировать» + «Отменить».
+        side: None,
+        short,
+        origin: CoinMenuOrigin::OrderTable,
+    };
+    crate::controls::open_coin_menu(ctx, backend, pos, window, app);
+}
 
 pub(super) fn orders_table(
     rows: Rc<Vec<OrderEntry>>,
@@ -471,7 +534,12 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
     let core = e.core;
     let uid = r.uid;
     let strat_id = r.strat_id;
+    let strat_name = r.strat.clone();
+    let market_menu = r.market.clone();
+    let coin_menu = symbol::coin_of_market(&r.market).to_string();
+    let short = r.is_short;
     let view = view.clone();
+    let view_menu = view.clone();
     let el = div()
         .id(SharedString::from(format!("ord-strat-{core}-{uid}")))
         // Кликабельна вся ячейка (см. token_cell); колонка `.right()` → контент вправо.
@@ -502,7 +570,26 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
                 owner_display,
                 app,
             );
-        });
+        })
+        // ПКМ — единое контекстное меню монеты (та же строка ордера, стратегия известна).
+        .on_mouse_down(
+            MouseButton::Right,
+            move |e: &MouseDownEvent, window, app| {
+                open_row_coin_menu(
+                    core,
+                    market_menu.clone(),
+                    coin_menu.clone(),
+                    uid,
+                    Some(strat_id),
+                    Some(strat_name.clone()),
+                    short,
+                    &view_menu,
+                    e.position,
+                    window,
+                    app,
+                );
+            },
+        );
     MoonDataCell::element(el)
 }
 
@@ -513,11 +600,17 @@ fn token_cell(
     view: &Entity<OrdersPanel>,
     p: MoonPalette,
 ) -> impl IntoElement + 'static {
-    let token = symbol::base_symbol(&e.row.market, &e.quote).to_string();
+    let token = symbol::coin_of_market(&e.row.market).to_string();
+    let coin = token.clone();
     let core = e.core;
     let market = e.row.market.clone();
     let uid = e.row.uid;
+    let strat_id = (e.row.strat_id != 0).then_some(e.row.strat_id);
+    let strat_name = strat_id.map(|_| e.row.strat.clone());
+    let short = e.row.is_short;
     let view = view.clone();
+    let view_menu = view.clone();
+    let market_menu = market.clone();
 
     div()
         .id(SharedString::from(format!("ord-tok-{core}-{uid}")))
@@ -550,4 +643,24 @@ fn token_cell(
                 });
             });
         })
+        // ПКМ — единое контекстное меню монеты (ЧС ядра/ядер/стратегии, переход к стратегии,
+        // редактирование/отмена ордера).
+        .on_mouse_down(
+            MouseButton::Right,
+            move |e: &MouseDownEvent, window, app| {
+                open_row_coin_menu(
+                    core,
+                    market_menu.clone(),
+                    coin.clone(),
+                    uid,
+                    strat_id,
+                    strat_name.clone(),
+                    short,
+                    &view_menu,
+                    e.position,
+                    window,
+                    app,
+                );
+            },
+        )
 }

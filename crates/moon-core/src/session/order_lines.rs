@@ -239,10 +239,10 @@ pub struct OrderLineStore {
     /// Кольцо uid ЗАКРЫТЫХ в порядке закрытия — единственный кап на закрытые,
     /// без сорта/прун-скана: пришёл новый закрытый → в хвост, переполнено → из головы.
     closed_ring: VecDeque<u64>,
-    /// Кэш диапазона цен buy/sell открытых ордеров по рынку (для авто-Y). Пересобирается
-    /// ТОЛЬКО при изменении ордеров (вместе с rev), а не каждый prepare — buy_sell_range
-    /// раньше сканировал все ордера ядра 60 раз/сек на каждую панель.
-    buy_sell_ranges: HashMap<String, (f32, f32)>,
+    /// Кэш диапазона цен ордер-линий открытых ордеров по рынку (для авто-Y): buy/sell +
+    /// АКТИВНЫЕ стопы исполненных ордеров (Stop/Trailing/VStop — у них цена есть только после
+    /// фила). Пересобирается ТОЛЬКО при изменении ордеров (вместе с rev), а не каждый prepare.
+    auto_fit_ranges: HashMap<String, (f32, f32)>,
     /// Растёт при реальном изменении геометрии (новый ордер/узел/закрытие/liq).
     pub rev: u64,
     seq_counter: u64,
@@ -425,7 +425,7 @@ impl OrderLineStore {
                     order.closed_rev = Some(self.rev);
                 }
             }
-            self.rebuild_buy_sell_ranges();
+            self.rebuild_auto_fit_ranges();
         }
         changed
     }
@@ -433,19 +433,26 @@ impl OrderLineStore {
     /// Пересобирает кэш buy/sell-диапазонов по рынкам из текущих открытых ордеров.
     /// Зовётся только при реальном изменении (`changed`) — цены линий мутируют лишь в
     /// `update`, поэтому кэш всегда свежий, но скан O(ордера) идёт 4 Гц, не 60.
-    fn rebuild_buy_sell_ranges(&mut self) {
-        self.buy_sell_ranges.clear();
+    fn rebuild_auto_fit_ranges(&mut self) {
+        self.auto_fit_ranges.clear();
         for o in self.orders.values() {
             if o.closed_ms.is_some() {
                 continue;
             }
-            for idx in [LineKind::Buy as usize, LineKind::Sell as usize] {
+            // Buy/Sell + активные защитные стопы. У Stop/Trailing/VStop `current_price()` есть
+            // только после фила (значение гейтится флагом `filled` в sync) — поэтому в диапазон
+            // попадают лишь РЕАЛЬНО стоящие стопы исполненных ордеров, как и просил юзер («как
+            // селл»). Pending-ордера без стопов диапазон не расширяют.
+            for idx in [
+                LineKind::Buy as usize,
+                LineKind::Sell as usize,
+                LineKind::Stop as usize,
+                LineKind::Trailing as usize,
+                LineKind::VStop as usize,
+            ] {
                 if let Some(p) = o.lines[idx].current_price() {
                     if p.is_finite() && p > 0.0 {
-                        let e = self
-                            .buy_sell_ranges
-                            .entry(o.market.clone())
-                            .or_insert((p, p));
+                        let e = self.auto_fit_ranges.entry(o.market.clone()).or_insert((p, p));
                         e.0 = e.0.min(p);
                         e.1 = e.1.max(p);
                     }
@@ -508,11 +515,12 @@ impl OrderLineStore {
         out
     }
 
-    /// Диапазон цен (min,max) текущих линий BUY и SELL открытых (не закрытых)
-    /// ордеров рынка — для авто-масштаба Y. ТОЛЬКО buy/sell (не стопы/liq/прочее).
-    /// Готовый кэш (`rebuild_buy_sell_ranges` при изменении ордеров), не скан per-prepare.
-    pub fn buy_sell_range(&self, market: &str) -> Option<(f32, f32)> {
-        self.buy_sell_ranges.get(market).copied()
+    /// Диапазон цен (min,max) ордер-линий открытых (не закрытых) ордеров рынка — для авто-Y:
+    /// BUY/SELL + активные стопы (Stop/Trailing/VStop) ИСПОЛНЕННЫХ ордеров (у них цена есть
+    /// только после фила). Pending-стопов/liq в диапазоне нет.
+    /// Готовый кэш (`rebuild_auto_fit_ranges` при изменении ордеров), не скан per-prepare.
+    pub fn auto_fit_range(&self, market: &str) -> Option<(f32, f32)> {
+        self.auto_fit_ranges.get(market).copied()
     }
 
     pub fn order_state(&self, uid: u64) -> Option<OrderLineState> {

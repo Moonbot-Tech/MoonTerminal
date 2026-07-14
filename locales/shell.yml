@@ -288,6 +288,30 @@ chart.order_menu.split:
   ru: "Split order"
   en: "Split order"
   es: "Split order"
+coin_menu.open:
+  ru: "Открыть на графике"
+  en: "Open on chart"
+  es: "Abrir en el gráfico"
+coin_menu.compare:
+  ru: "Сравнить"
+  en: "Compare"
+  es: "Comparar"
+coin_menu.bl_core:
+  ru: "В ЧС ядра «%{core}»"
+  en: "Add to core «%{core}» blacklist"
+  es: "Añadir a la lista negra del núcleo «%{core}»"
+coin_menu.bl_cores:
+  ru: "В ЧС выбранных ядер (%{n})"
+  en: "Add to blacklist of selected cores (%{n})"
+  es: "Añadir a la lista negra de núcleos seleccionados (%{n})"
+coin_menu.bl_strategy:
+  ru: "В ЧС стратегии «%{name}»"
+  en: "Add to strategy «%{name}» blacklist"
+  es: "Añadir a la lista negra de la estrategia «%{name}»"
+coin_menu.strategy_goto:
+  ru: "Перейти к стратегии"
+  en: "Go to strategy"
+  es: "Ir a la estrategia"
 chart.layout.title:
   ru: "Раскладка вкладки"
   en: "Tab layout"

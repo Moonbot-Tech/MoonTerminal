@@ -172,7 +172,7 @@ where
 
     for (i, (core, market, server)) in results.into_iter().enumerate() {
         let quote = moon_core::symbol::resolve_quote(&market);
-        let base = moon_core::symbol::base_symbol(&market, &quote).to_string();
+        let base = moon_core::symbol::coin_of_market(&market).to_string();
         let on_pick = on_pick.clone();
         let market_pick = market.clone();
         let checked = selected.contains(&(core, market.clone()));

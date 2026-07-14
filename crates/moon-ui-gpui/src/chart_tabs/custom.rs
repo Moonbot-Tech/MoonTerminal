@@ -127,8 +127,7 @@ impl ChartTabs {
     /// (соседи — «только стакан»). Повторный ПКМ по той же монете фокусирует уже созданную
     /// вкладку (по имени), не плодя дубли.
     pub(super) fn open_compare_tab(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
-        let quote = moon_core::symbol::resolve_quote(&market);
-        let label = moon_core::symbol::base_symbol(&market, &quote).to_string();
+        let label = moon_core::symbol::coin_of_market(&market).to_string();
         // Вкладка с именем этой монеты уже есть → просто перейти на неё.
         if let Some((n, b)) = self
             .custom

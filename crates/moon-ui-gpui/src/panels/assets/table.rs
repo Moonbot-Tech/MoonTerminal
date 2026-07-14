@@ -2,8 +2,60 @@
 //! (баланс USDT), таблица позиций/балансов и нижний список ядер (свободно/итого).
 
 use super::*;
+use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use moon_ui::{MoonButtonVariant, MoonNotification, MoonText, MoonWindowExt as _};
 use rust_i18n::t;
+
+/// Открыть единое контекстное меню монеты по строке Активов (ПКМ на тикере). Стратегии/ордера
+/// у балансов нет → меню = навигация + ЧС ядра/ядер. «Выбранные ядра» = ядра охвата панели
+/// (группа → ядра группы, глобальное окно → все ядра).
+fn open_asset_coin_menu(
+    core: CoreId,
+    market: String,
+    coin: String,
+    view: &Entity<AssetsView>,
+    pos: Point<Pixels>,
+    window: &mut Window,
+    app: &mut App,
+) {
+    app.stop_propagation();
+    let (backend, scope) = {
+        let panel = view.read(app);
+        (panel.backend.clone(), panel.scope.clone())
+    };
+    let (selected_cores, core_name) = {
+        let b = backend.read(app);
+        let sessions = b.session.sessions();
+        let selected: Vec<CoreId> = sessions
+            .iter()
+            .filter(|s| match &scope {
+                AssetsScope::Group(g) => &s.group == g,
+                AssetsScope::All => true,
+            })
+            .map(|s| s.id)
+            .collect();
+        let name = sessions
+            .iter()
+            .find(|s| s.id == core)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        (selected, name)
+    };
+    let ctx = CoinMenuCtx {
+        core,
+        core_name,
+        market,
+        coin,
+        selected_cores,
+        strat_id: None,
+        strat_name: None,
+        order_uid: None,
+        side: None,
+        short: false,
+        origin: CoinMenuOrigin::OrderTable,
+    };
+    crate::controls::open_coin_menu(ctx, backend, pos, window, app);
+}
 
 
 impl AssetsView {
@@ -360,6 +412,9 @@ fn coin_cell(
     let core = e.core;
     let market = e.row.market.clone();
     let view = view.clone();
+    let view_menu = view.clone();
+    let coin_menu = coin.clone();
+    let market_menu = market.clone();
     // Значок монеты (assets/coins). Нет значка → тикер без иконки (без пустого места:
     // тут колонка узкая, выравнивание держит сама таблица).
     let icon = crate::coin_icons::coin_icon(&coin);
@@ -410,6 +465,21 @@ fn coin_cell(
                 });
             });
         })
+        // ПКМ — единое контекстное меню монеты (ЧС ядра/ядер охвата; стратегии/ордера нет).
+        .on_mouse_down(
+            MouseButton::Right,
+            move |e: &MouseDownEvent, window, app| {
+                open_asset_coin_menu(
+                    core,
+                    market_menu.clone(),
+                    coin_menu.clone(),
+                    &view_menu,
+                    e.position,
+                    window,
+                    app,
+                );
+            },
+        )
 }
 
 /// Ячейка действий позиции: «Market sell» (panic-sell по рынку) + «Order» (заглушка — окно

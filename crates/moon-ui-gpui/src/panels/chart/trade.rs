@@ -4,9 +4,6 @@
 use gpui::*;
 use std::time::{Duration, Instant};
 
-use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonWindowExt as _};
-use rust_i18n::t;
-
 use moon_core::config::MouseGestureBinding;
 use moon_core::feed::OrderLinePriceKind;
 use moon_core::session::CoreId;
@@ -14,8 +11,6 @@ use moon_core::session::order_lines::LineKind;
 
 use super::ChartPanel;
 
-/// На сколько частей делит «Split order» (ПКМ по линии sell). Moonbot по умолчанию — на 2.
-const SPLIT_PARTS: i32 = 2;
 const ORDER_DRAG_PREVIEW_HOLD: Duration = Duration::from_millis(3_000);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -305,93 +300,51 @@ impl ChartPanel {
         let Some(hit) = self.hit_order_line(local_pos, cx) else {
             return false;
         };
-        let backend = self.backend.clone();
         let (core, uid, market, short) = (hit.core, hit.uid, hit.market, hit.short);
-        if !matches!(hit.kind, LineKind::Buy | LineKind::Sell) {
-            return false;
-        }
-        // «Ордер…» — окно «Активный ордер» (общее с кликом по BUY/SELL в таблице).
-        let backend_edit = self.backend.clone();
-        let edit_item =
-            MoonMenuItem::with_key("order-edit", t!("chart.order_menu.edit").to_string())
-                .on_click(move |_, window, app| {
-                    window.close_context_menu(app);
-                    crate::panels::open_order_edit(backend_edit.clone(), core, uid, window, app);
-                });
-        let mut items: Vec<MoonMenuItem> = vec![edit_item];
-        // «Стратегия» — переход к стратегии ордера в окне «Стратегии» (только если ордер
-        // выставлен стратегией: strat_id != 0 у строки открытых ордеров ядра).
-        let strat_id = self
-            .backend
-            .read(cx)
+        let side = match hit.kind {
+            LineKind::Buy => crate::controls::OrderSide::Buy,
+            LineKind::Sell => crate::controls::OrderSide::Sell,
+            // Прочие виды линий (стопы/трейл/…) не несут монетного меню.
+            _ => return false,
+        };
+        // strat_id ордера (0 — ручной/join) — из строки открытых ордеров ядра.
+        let b = self.backend.read(cx);
+        let strat_id = b
             .session
             .store()
             .core(core)
             .and_then(|cd| cd.orders.iter().find(|o| o.uid == uid))
             .map(|o| o.strat_id)
             .filter(|id| *id != 0);
-        if let Some(strat_id) = strat_id {
-            let backend_strat = self.backend.clone();
-            items.push(
-                MoonMenuItem::with_key(
-                    "order-strategy",
-                    t!("chart.order_menu.strategy").to_string(),
-                )
-                .on_click(move |_, window, app| {
-                    window.close_context_menu(app);
-                    let owner_display = window.display(app).map(|d| d.id());
-                    crate::strategies::open_goto(
-                        backend_strat.clone(),
-                        core,
-                        strat_id,
-                        Some(window.window_handle()),
-                        owner_display,
-                        app,
-                    );
-                }),
-            );
-        }
-        match hit.kind {
-            LineKind::Buy => items.push(
-                MoonMenuItem::with_key("order-cancel", t!("chart.order_menu.cancel").to_string())
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        backend.update(app, |b, _| {
-                            let _ = b.session.cancel_order(core, uid);
-                        });
-                    }),
-            ),
-            LineKind::Sell => {
-                let backend_split = backend.clone();
-                let market_split = market.clone();
-                items.push(
-                    MoonMenuItem::with_key(
-                        "order-join-sells",
-                        t!("chart.order_menu.join_sells").to_string(),
-                    )
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        backend.update(app, |b, _| {
-                            let _ = b.session.join_sells(core, market.clone(), short);
-                        });
-                    }),
-                );
-                items.push(
-                    MoonMenuItem::with_key("order-split", t!("chart.order_menu.split").to_string())
-                        .on_click(move |_, window, app| {
-                            window.close_context_menu(app);
-                            backend_split.update(app, |b, _| {
-                                let _ =
-                                    b.session
-                                        .split_order(core, market_split.clone(), SPLIT_PARTS);
-                            });
-                        }),
-                );
-            }
-            // Прочие виды линий отсечены гейтом выше.
-            _ => {}
-        }
-        window.open_moon_context_menu(cx, "chart-order-menu", menu_pos, items, 170.0);
+        let strat_name = strat_id.and_then(|sid| {
+            b.session
+                .store()
+                .core(core)
+                .and_then(|cd| cd.strategies.iter().find(|s| s.id == sid))
+                .map(|s| s.name.clone())
+        });
+        let core_name = b
+            .session
+            .sessions()
+            .iter()
+            .find(|s| s.id == core)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        let coin = moon_core::symbol::coin_of_market(&market).to_string();
+        let ctx = crate::controls::CoinMenuCtx {
+            core,
+            core_name,
+            market,
+            coin,
+            selected_cores: vec![core],
+            strat_id,
+            strat_name,
+            order_uid: Some(uid),
+            side: Some(side),
+            short,
+            origin: crate::controls::CoinMenuOrigin::ChartLine,
+        };
+        crate::controls::open_coin_menu(ctx, self.backend.clone(), menu_pos, window, cx);
         cx.notify();
         true
     }

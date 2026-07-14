@@ -41,12 +41,58 @@ pub fn base_symbol<'a>(sym: &'a str, quote: &str) -> &'a str {
     }
 }
 
-/// Полный тикер для подписи на чарте: `BTCUSDT` → `BTC-USDT`. Если quote не распознан —
-/// возвращаем рынок как есть (без дефиса).
+/// Полный тикер для подписи на чарте: `BTCUSDT` → `BTC-USDT`. HIP-3 (`xyz:BIRD`) → `BIRD`
+/// (dex-префикс и неявный USDC не показываем). Если quote не распознан — монета без префикса.
 pub fn display_pair(market: &str) -> String {
-    let quote = resolve_quote(market);
+    let after_dex = strip_dex(market);
+    let quote = resolve_quote(after_dex);
     if quote.is_empty() {
-        return market.to_string();
+        return coin_of_market(market).to_string();
     }
-    format!("{}-{}", base_symbol(market, &quote), quote)
+    format!("{}-{}", base_symbol(after_dex, &quote), quote)
+}
+
+/// HIP-3-рынок Hyperliquid: имя несёт dex-префикс `dex_name:coin` (`xyz:BIRD`). Двоеточие в
+/// имени рынка бывает ТОЛЬКО у HIP-3 (обычные биржи шлют пустой `dex_name`, без `:`).
+pub fn is_hip3(market: &str) -> bool {
+    market.contains(':')
+}
+
+/// Имя dex у HIP-3-рынка (`xyz:BIRD` → `Some("xyz")`), иначе `None`.
+pub fn dex_of_market(market: &str) -> Option<&str> {
+    market.split_once(':').map(|(dex, _)| dex)
+}
+
+/// Часть имени рынка ПОСЛЕ dex-префикса: `xyz:BIRD` → `BIRD`, `ADAUSDT` → `ADAUSDT`.
+fn strip_dex(market: &str) -> &str {
+    market.rsplit(':').next().unwrap_or(market)
+}
+
+/// КАНОНИЧЕСКАЯ монета рынка (для ЧС/матчинга/показа тикера): срезаем dex-префикс, затем
+/// quote-суффикс. `xyz:BIRD` → `BIRD`, `BIRDUSDC` → `BIRD`, `ADAUSDT` → `ADA`.
+///
+/// ВАЖНО: это НЕ ключ рынка. Для подписки/открытия/поиска всегда берём полное имя рынка
+/// (`xyz:BIRD`) — сервер резолвит по `market_name`. `coin_of_market` — только «как называется
+/// монета» (сервер сравнивает ЧС именно с этим `market_currency`, без префикса).
+pub fn coin_of_market(market: &str) -> &str {
+    let after_dex = strip_dex(market);
+    base_symbol(after_dex, &resolve_quote(after_dex))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::coin_of_market;
+
+    #[test]
+    fn coin_plain() {
+        assert_eq!(coin_of_market("ADAUSDT"), "ADA");
+        assert_eq!(coin_of_market("BTCUSDT"), "BTC");
+        assert_eq!(coin_of_market("VANRY_USDT"), "VANRY");
+    }
+
+    #[test]
+    fn coin_hip3_strips_dex() {
+        assert_eq!(coin_of_market("xyz:BIRD"), "BIRD");
+        assert_eq!(coin_of_market("xyz:BIRDUSDC"), "BIRD");
+    }
 }
