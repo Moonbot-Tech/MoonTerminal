@@ -127,7 +127,7 @@ const DEFAULTS: &[(u8, &str, &str, u32, u32)] = &[
     (2,  "Drops",         "DRP", 0x2FA85C, 0x168A49),
     (6,  "MoonShot",      "SHT", 0x2FA85C, 0x168A49),
     (13, "MoonStrike",    "STR", 0x2FA85C, 0x168A49),
-    (20, "Moon Hook",     "HOK", 0x2FA85C, 0x168A49),
+    (20, "MoonHook",      "HOK", 0x2FA85C, 0x168A49),
     (14, "New Listing",   "NEW", 0x2FA85C, 0x168A49),
     // Импульс / объём — Warning (amber)
     (4,  "Volumes",       "VOL", 0xFFB347, 0xB97800),

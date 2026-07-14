@@ -62,6 +62,38 @@ fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<Core
     }
 }
 
+/// Латинская буква на той же физической клавише QWERTY, что и кириллическая ЙЦУКЕН
+/// (`и`→`b`, `е`→`t`, `с`→`c`). Тикеры рынков латиница, поэтому кириллица в поиске —
+/// почти всегда забытая раскладка; конвертируем, чтобы «иес» находило `BTC`. Регистр
+/// сохраняем (заглавная кириллица → заглавная латиница). Неизвестный символ — как есть.
+fn ru_key_to_en(ch: char) -> char {
+    let lower = ch.to_lowercase().next().unwrap_or(ch);
+    let mapped = match lower {
+        'й' => 'q', 'ц' => 'w', 'у' => 'e', 'к' => 'r', 'е' => 't', 'н' => 'y',
+        'г' => 'u', 'ш' => 'i', 'щ' => 'o', 'з' => 'p', 'х' => '[', 'ъ' => ']',
+        'ф' => 'a', 'ы' => 's', 'в' => 'd', 'а' => 'f', 'п' => 'g', 'р' => 'h',
+        'о' => 'j', 'л' => 'k', 'д' => 'l', 'ж' => ';', 'э' => '\'',
+        'я' => 'z', 'ч' => 'x', 'с' => 'c', 'м' => 'v', 'и' => 'b', 'т' => 'n',
+        'ь' => 'm', 'б' => ',', 'ю' => '.', 'ё' => '`',
+        _ => return ch,
+    };
+    if ch.is_uppercase() {
+        mapped.to_ascii_uppercase()
+    } else {
+        mapped
+    }
+}
+
+/// Если в строке есть кириллица — переклад раскладки RU→EN (см. [`ru_key_to_en`]);
+/// иначе строка без изменений (без лишних аллокаций для обычного латинского ввода).
+fn normalize_layout(query: &str) -> std::borrow::Cow<'_, str> {
+    if query.chars().any(|c| ('а'..='я').contains(&c) || ('А'..='Я').contains(&c) || c == 'ё' || c == 'Ё') {
+        std::borrow::Cow::Owned(query.chars().map(ru_key_to_en).collect())
+    } else {
+        std::borrow::Cow::Borrowed(query)
+    }
+}
+
 /// Результаты поиска монеты для вкладки: `(ядро, market, имя сервера)`.
 /// `pub(crate)`: реюз тикером курса в шапке (bucket=None → все ядра группы).
 pub(crate) fn search(
@@ -70,6 +102,7 @@ pub(crate) fn search(
     bucket: Option<&ChartBucket>,
     query: &str,
 ) -> Vec<(CoreId, String, String)> {
+    let query = normalize_layout(query.trim());
     let query = query.trim();
     if query.is_empty() {
         return Vec::new();

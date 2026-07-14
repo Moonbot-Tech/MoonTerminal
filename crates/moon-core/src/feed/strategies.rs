@@ -270,7 +270,7 @@ pub(super) fn strat_kind_name(ordinal: u8) -> &'static str {
         17 => "EMA",
         18 => "Spread",
         19 => "Chart Wall",
-        20 => "Moon Hook",
+        20 => "MoonHook",
         21 => "Activity",
         22 => "Alerts",
         23 => "Watcher",
