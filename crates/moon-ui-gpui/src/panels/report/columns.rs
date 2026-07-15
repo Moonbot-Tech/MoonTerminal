@@ -20,10 +20,6 @@ pub(super) fn report_columns(table: &ReportTable, vis: &[usize]) -> Vec<MoonData
         .collect()
 }
 
-/// ВНИМАНИЕ: `font_size(10.5)` в element-ячейках ниже — это дефолт `MoonTableCell`,
-/// продублированный руками: `MoonDataCell::element` НЕ наследует стиль ячейки и без
-/// этого текст падает на дефолт `MoonText` (9.0). Снять после фикса форка —
-/// см. `docs-internal/FORK_BUGS.md`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn report_data_row(
     ri: usize,
@@ -95,15 +91,9 @@ fn coin_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        .child(
-            MoonText::new(coin.clone())
-                .color(MoonTone::Accent.color(p))
-                .font_size(10.5)
-                .line_height(13.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
+        // Кегль/шрифт наследуются от стиля ячейки (каскад moonui, фикс `9a33dbf`).
+        .text_color(rgb(MoonTone::Accent.color(p)))
+        .child(coin.clone())
         .on_click(move |_, _window, app| {
             if coin.is_empty() {
                 return;
@@ -224,15 +214,8 @@ fn core_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        .child(
-            MoonText::new(name)
-                .color(MoonTone::Muted.color(p))
-                .font_size(10.5)
-                .line_height(13.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
+        .text_color(rgb(MoonTone::Muted.color(p)))
+        .child(name)
         .on_click(move |_, _window, app| {
             view.update(app, |t, c| t.filter_to_core(core_uid, c));
         });
@@ -243,7 +226,7 @@ fn report_data_cell(col: &str, val: &Value, p: MoonPalette) -> MoonDataCell {
     let (text, color) = cell(col, val, p);
     // Клиппируем форматированный content по реальной ширине колонки. Выравнивание — как
     // у колонки, а сам MoonDataTable дополнительно защищает границы ячейки на уровне
-    // контейнера.
+    // контейнера. Кегль/шрифт — от стиля ячейки (каскад moonui, фикс `9a33dbf`).
     let right = is_numeric_report_column(col);
     let color = color.unwrap_or_else(|| MoonTone::Default.color(p));
     let inner = div()
@@ -252,15 +235,8 @@ fn report_data_cell(col: &str, val: &Value, p: MoonPalette) -> MoonDataCell {
         .min_w_0()
         .overflow_hidden()
         .when(right, |d| d.justify_end())
-        .child(
-            MoonText::new(text)
-                .color(color)
-                .font_size(10.5)
-                .line_height(13.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        );
+        .text_color(rgb(color))
+        .child(text);
     MoonDataCell::element(inner)
 }
 

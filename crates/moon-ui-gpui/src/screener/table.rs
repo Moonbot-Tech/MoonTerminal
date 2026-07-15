@@ -2,7 +2,7 @@
 //! сортировка и рендер строки (`MoonDataRow`/ячейки). Вынесено вербатим из `mod.rs`.
 
 use gpui::*;
-use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonText, MoonTone};
+use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone};
 
 use moon_core::market::ScreenerRow;
 use moon_core::session::CoreId;
@@ -279,18 +279,10 @@ fn market_cell(e: &Entry, view: &Entity<ScreenerView>, p: MoonPalette) -> impl I
         .flex()
         .items_center()
         .cursor_pointer()
-        .child(
-            // 10.5 = дефолт MoonTableCell: element-ячейка НЕ наследует стиль ячейки и
-            // без этого падает на дефолт MoonText (9.0), разъезжаясь с соседними
-            // колонками. Снять после фикса форка — docs-internal/FORK_BUGS.md.
-            MoonText::new(e.row.coin.clone())
-                .color(MoonTone::Accent.color(p))
-                .font_size(10.5)
-                .weight(500.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
+        // Кегль/шрифт наследуются от стиля ячейки (каскад moonui, фикс `9a33dbf`).
+        .text_color(rgb(MoonTone::Accent.color(p)))
+        .font_weight(FontWeight::MEDIUM)
+        .child(e.row.coin.clone())
         .on_click(move |_, _window, app| {
             view.update(app, |this, cx| {
                 this.backend.update(cx, |b, bcx| {

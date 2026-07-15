@@ -20,7 +20,7 @@ use gpui::*;
 use moon_ui::{
     DockArea, MoonButtonSize, MoonButtonVariant, MoonDataCell, MoonDataRow, MoonDataTable,
     MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonText, MoonTone, Panel, PanelEvent, PanelInfo, PanelState, h_flex, v_flex,
+    MoonTone, Panel, PanelEvent, PanelInfo, PanelState, h_flex, v_flex,
 };
 
 use rust_i18n::t;

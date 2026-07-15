@@ -475,15 +475,9 @@ fn core_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        .child(
-            MoonText::new(e.core_name.clone())
-                .color(MoonTone::Muted.color(p))
-                .font_size(10.5)
-                .line_height(14.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
+        // Кегль/шрифт наследуются от стиля ячейки (каскад moonui, фикс `9a33dbf`).
+        .text_color(rgb(MoonTone::Muted.color(p)))
+        .child(e.core_name.clone())
         .on_click(move |_, _window, app| {
             view.update(app, |this, cx| this.filter_to_core(core, cx));
         })
@@ -519,21 +513,15 @@ fn coin_cell(
         .when_some(icon, |el, tex| {
             el.child(img(tex).w(px(14.0)).h(px(14.0)).flex_none())
         })
-        .child(
-            MoonText::new(coin)
-                .color(MoonTone::Accent.color(p))
-                .font_size(10.5)
-                .line_height(14.0)
-                .weight(500.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
+        // Кегль/шрифт тикера — от стиля ячейки (каскад moonui, фикс `9a33dbf`).
+        .text_color(rgb(MoonTone::Accent.color(p)))
+        .font_weight(FontWeight::MEDIUM)
+        .child(coin)
         .when(on_sale, |el| {
+            // Метка «SELL» меньше тикера — дефолтный кегль MoonText (9).
             el.child(
                 MoonText::new("SELL")
                     .color(MoonTone::Info.color(p))
-                    .font_size(9.0)
                     .line_height(14.0)
                     .weight(600.0)
                     .mono(true)

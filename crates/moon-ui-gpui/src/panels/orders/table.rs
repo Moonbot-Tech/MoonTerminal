@@ -208,12 +208,9 @@ pub(super) fn stop_tag(kind: OrderStopKind) -> u8 {
     }
 }
 
-/// ВНИМАНИЕ: `font_size(10.5)` в element-ячейках ниже — это дефолт `MoonTableCell`,
-/// продублированный руками: `MoonDataCell::element` НЕ наследует стиль ячейки и без
-/// этого текст падает на дефолт `MoonText` (9.0). Снять после фикса форка —
-/// см. `docs-internal/FORK_BUGS.md`.
 /// Ячейка для одной колонки строки. Порядок ячеек ДОЛЖЕН совпадать с `column_def` по тем
-/// же видимым колонкам — оба идут по одному списку `cols`.
+/// же видимым колонкам — оба идут по одному списку `cols`. Кегль/интерлиньяж/моно в
+/// element-ячейках НЕ задаём: их даёт стиль ячейки moonui каскадом (фикс `9a33dbf`).
 fn cell_for(
     col: OrdCol,
     e: &OrderEntry,
@@ -459,16 +456,11 @@ fn flag_toggle_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        .child(
-            MoonText::new(label)
-                .color(tone.color(p))
-                .font_size(10.5)
-                .line_height(14.0)
-                .weight(500.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
+        // Кегль/шрифт наследуются от стиля ячейки (каскад moonui); переопределяем
+        // только тон и вес.
+        .text_color(rgb(tone.color(p)))
+        .font_weight(FontWeight::MEDIUM)
+        .child(label)
         .on_click(move |_, _window, app| {
             log::info!(
                 "orders UI click toggle stop core={core} uid={uid} kind={kind:?} on={on} -> {}",
@@ -510,16 +502,9 @@ fn side_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        .child(
-            MoonText::new(side)
-                .color(tone.color(p))
-                .font_size(10.5)
-                .line_height(14.0)
-                .weight(500.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
+        .text_color(rgb(tone.color(p)))
+        .font_weight(FontWeight::MEDIUM)
+        .child(side)
         .on_click(move |_, window, app| {
             let backend = view.read(app).backend.clone();
             crate::panels::open_order_edit(backend, core, uid, window, app);
@@ -553,16 +538,9 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
         .items_center()
         .justify_end()
         .cursor_pointer()
-        .child(
-            MoonText::new(r.strat.clone())
-                .color(MoonTone::Muted.color(p))
-                .font_size(10.5)
-                .line_height(14.0)
-                .weight(500.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
+        .text_color(rgb(MoonTone::Muted.color(p)))
+        .font_weight(FontWeight::MEDIUM)
+        .child(r.strat.clone())
         .on_click(move |_, window, app| {
             let backend = view.read(app).backend.clone();
             let owner_display = window.display(app).map(|d| d.id());
@@ -617,15 +595,8 @@ fn core_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        .child(
-            MoonText::new(e.core_name.clone())
-                .color(MoonTone::Muted.color(p))
-                .font_size(10.5)
-                .line_height(14.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
+        .text_color(rgb(MoonTone::Muted.color(p)))
+        .child(e.core_name.clone())
         .on_click(move |_, _window, app| {
             view.update(app, |this, cx| this.filter_to_core(core, cx));
         })
@@ -659,16 +630,9 @@ fn token_cell(
         .items_center()
         .justify_end()
         .cursor_pointer()
-        .child(
-            MoonText::new(token)
-                .color(MoonTone::Accent.color(p))
-                .font_size(10.5)
-                .line_height(14.0)
-                .weight(500.0)
-                .mono(true)
-                .uppercase(false)
-                .render(),
-        )
+        .text_color(rgb(MoonTone::Accent.color(p)))
+        .font_weight(FontWeight::MEDIUM)
+        .child(token)
         .on_click(move |_, _window, app| {
             view.update(app, |this, cx| {
                 this.backend.update(cx, |b, bcx| {
