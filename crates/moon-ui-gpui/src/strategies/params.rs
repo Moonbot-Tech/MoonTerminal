@@ -246,6 +246,45 @@ impl StrategiesView {
                     }))
                     .into_any_element()
             }
+            // Color-поле: hex-инпут + кликабельный свотч с палитрой (не только «индекс
+            // цвета», но и сам цвет + выбор из палитры).
+            SchemaFieldUi::Color => {
+                let keys_arc = Arc::new(keys.to_vec());
+                let state = self.field_input_state(
+                    row_id.clone(),
+                    value.clone(),
+                    keys_arc.clone(),
+                    field_name.clone(),
+                    window,
+                    cx,
+                );
+                let picker = self.field_color_state(
+                    row_id.clone(),
+                    &value,
+                    keys_arc,
+                    field_name.clone(),
+                    window,
+                    cx,
+                );
+                let mut input = MoonInput::new(SharedString::from(format!(
+                    "field-input-{row_id}"
+                )))
+                .state(&state)
+                .small()
+                .tone(MoonTone::Warning)
+                .selected(dirty || differ)
+                .disabled(!active);
+                if differ {
+                    input = input.placeholder(t!("strat.mixed_values").to_string());
+                }
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_1()
+                    .child(div().flex_1().min_w_0().child(input))
+                    .child(MoonColorPicker::new(&picker))
+                    .into_any_element()
+            }
             SchemaFieldUi::Combo if !f.picklist.is_empty() => {
                 let mut items = Vec::with_capacity(f.picklist.len());
                 for option in &f.picklist {

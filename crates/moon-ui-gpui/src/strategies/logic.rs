@@ -193,6 +193,29 @@ pub(super) fn field_value(row: &StrategyRow, f: &SchemaField) -> String {
     v
 }
 
+/// Последние 6 hex-цифр значения Color-поля → RGB (формат Moonbot `AARRGGBB`
+/// или голый `RRGGBB`). Мусор/короткое значение → серый.
+pub(super) fn parse_hex_rgb(v: &str) -> [u8; 3] {
+    let hex: String = v.trim().chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if hex.len() < 6 {
+        return [128, 128, 128];
+    }
+    let tail = &hex[hex.len() - 6..];
+    let n = u32::from_str_radix(tail, 16).unwrap_or(0x80_80_80);
+    crate::design::u32_to_rgb(n)
+}
+
+/// Префикс значения ДО последних 6 hex-цифр (обычно альфа «FF») — сохраняется
+/// при выборе цвета пикером.
+pub(super) fn hex_alpha_prefix(v: &str) -> String {
+    let hex: String = v.trim().chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if hex.len() > 6 {
+        hex[..hex.len() - 6].to_string()
+    } else {
+        String::new()
+    }
+}
+
 pub(super) fn is_on(v: &str) -> bool {
     matches!(v.to_ascii_lowercase().as_str(), "yes" | "true" | "1" | "on")
 }

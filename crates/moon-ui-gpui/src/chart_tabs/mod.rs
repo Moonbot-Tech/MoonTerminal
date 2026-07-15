@@ -35,7 +35,8 @@ use crate::chart_persist::StackLayoutMode;
 
 use gpui::*;
 use moon_ui::{
-    MoonBackgroundPolicy, MoonInputEvent, MoonInputState, Panel, PanelEvent, PanelState,
+    MoonBackgroundPolicy, MoonColorPickerEvent, MoonColorPickerState, MoonInputEvent,
+    MoonInputState, Panel, PanelEvent, PanelState,
 };
 use rust_i18n::t;
 
@@ -151,6 +152,8 @@ pub struct ChartTabs {
     coin_query: String,
     /// Открыт ли выпадающий список совпадений монеты.
     coin_popup_open: bool,
+    /// Пикер произвольного цвета рисования (кнопка «Custom» в попапе стиля карандаша).
+    fig_color_picker: Entity<MoonColorPickerState>,
 }
 
 impl ChartTabs {
@@ -365,6 +368,26 @@ impl ChartTabs {
             },
         )
         .detach();
+        // Пикер произвольного цвета рисования: выбор пишет RGB в fig_style (альфа
+        // сохраняется — ей управляет степпер «Прозр.»).
+        let fig_color_picker = {
+            let init = backend.read(cx).fig_style.color;
+            let hsla: Hsla = gpui::rgb(crate::design::rgb_to_u32([init[0], init[1], init[2]])).into();
+            cx.new(|cx| MoonColorPickerState::new(window, cx).default_value(hsla))
+        };
+        cx.subscribe(
+            &fig_color_picker,
+            |this, _st, ev: &MoonColorPickerEvent, cx| {
+                let MoonColorPickerEvent::Change(h) = ev;
+                let c = crate::design::hsla_to_rgb8(*h);
+                this.backend.update(cx, |b, bcx| {
+                    let a = b.fig_style.color[3];
+                    b.fig_style.color = [c[0], c[1], c[2], a];
+                    bcx.notify();
+                });
+            },
+        )
+        .detach();
         let layout_fit_input = cx.new(|cx| MoonInputState::new(window, cx));
         let layout_scroll_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(
@@ -439,6 +462,7 @@ impl ChartTabs {
             coin_input,
             coin_query: String::new(),
             coin_popup_open: false,
+            fig_color_picker,
         };
         this.restore_detached(cx);
         this.restore_custom_tabs(cx);

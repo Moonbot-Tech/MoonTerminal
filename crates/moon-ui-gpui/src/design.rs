@@ -75,6 +75,17 @@ pub fn rgb_to_u32(c: [u8; 3]) -> u32 {
     (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32
 }
 
+/// Hsla (из MoonColorPicker) → sRGB `[u8;3]` — для конфигов/полей, хранящих
+/// цвет байтами (fig_style, hex-поля стратегий).
+pub fn hsla_to_rgb8(h: Hsla) -> [u8; 3] {
+    let c: Rgba = h.into();
+    [
+        (c.r * 255.0).round() as u8,
+        (c.g * 255.0).round() as u8,
+        (c.b * 255.0).round() as u8,
+    ]
+}
+
 pub fn mono() -> SharedString {
     SharedString::from("Geist Mono")
 }

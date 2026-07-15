@@ -473,6 +473,10 @@ chart.fig.kind:
   ru: "Вид"
   en: "Style"
   es: "Estilo"
+chart.fig.custom_color:
+  ru: "Свой цвет из палитры"
+  en: "Custom color from the palette"
+  es: "Color personalizado de la paleta"
 chart.layout.orderbook:
   ru: "Стакан"
   en: "Order book"

@@ -166,7 +166,7 @@ impl ChartTabs {
             );
         }
 
-        // Свотчи цвета.
+        // Свотчи цвета + пикер произвольного цвета (Custom) в конце ряда.
         let mut color_row = h_flex().items_center().gap(px(3.0)).flex_wrap();
         for (i, sw) in SWATCHES.iter().enumerate() {
             let backend = self.backend.clone();
@@ -198,6 +198,19 @@ impl ChartTabs {
                     }),
             );
         }
+        // Произвольный цвет из палитры (не только фикс-набор): moonui MoonColorPicker,
+        // выбор пишется в fig_style через подписку в `ChartTabs::new`.
+        color_row = color_row.child(
+            div()
+                .id("fig-custom-color")
+                .tooltip(|_window, cx| {
+                    cx.new(|_| {
+                        moon_ui::MoonTooltipView::new(t!("chart.fig.custom_color").to_string())
+                    })
+                    .into()
+                })
+                .child(moon_ui::MoonColorPicker::new(&self.fig_color_picker)),
+        );
 
         // Степперы толщины/непрозрачности + Kind Solid/Dash.
         let thickness_row = h_flex()

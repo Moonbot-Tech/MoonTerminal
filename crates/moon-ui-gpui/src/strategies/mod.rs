@@ -26,9 +26,10 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
-    MoonCheckboxSize, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
-    MoonMenuSize, MoonPalette, MoonTextArea, MoonTextAreaEvent, MoonTextAreaState, MoonTone,
-    MoonTreeItem, MoonTreeState, MoonWindowFrame, Root, h_flex, v_flex,
+    MoonCheckboxSize, MoonColorPicker, MoonColorPickerEvent, MoonColorPickerState, MoonDropdown,
+    MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette,
+    MoonTextArea, MoonTextAreaEvent, MoonTextAreaState, MoonTone, MoonTreeItem, MoonTreeState,
+    MoonWindowFrame, Root, h_flex, v_flex,
 };
 
 use crate::design::{moon, moon_alpha};
@@ -76,6 +77,9 @@ pub struct StrategiesView {
     field_inputs: HashMap<String, Entity<MoonInputState>>,
     /// Живые состояния memo/formula редакторов видимых/посещённых полей.
     field_memos: HashMap<String, Entity<MoonTextAreaState>>,
+    /// Пикеры Color-полей: row_id → (RGB на момент создания, state). При внешней
+    /// смене hex пересоздаются (у MoonColorPickerState нет тихого sync).
+    field_colors: HashMap<String, ([u8; 3], Entity<MoonColorPickerState>)>,
     /// Поле, для которого открыт контекстный helper/autocomplete.
     focused_field: Option<String>,
     /// Раскрытые ядра в дереве.
@@ -200,6 +204,7 @@ impl StrategiesView {
             field_edits: HashMap::new(),
             field_inputs: HashMap::new(),
             field_memos: HashMap::new(),
+            field_colors: HashMap::new(),
             focused_field: None,
             expanded_cores: HashSet::new(),
             expanded_folders: HashSet::new(),
@@ -445,6 +450,7 @@ impl StrategiesView {
         self.field_edits.clear();
         self.field_inputs.clear();
         self.field_memos.clear();
+        self.field_colors.clear();
         self.focused_field = None;
     }
 
@@ -526,6 +532,38 @@ impl StrategiesView {
         })
         .detach();
         self.field_memos.insert(id, state.clone());
+        state
+    }
+
+    /// Пикер Color-поля (свотч + палитра moonui): выбор цвета стейджит новый hex,
+    /// сохраняя альфа-префикс текущего значения (формат Moonbot AARRGGBB). Кэш по
+    /// row_id; при внешней смене hex state пересоздаётся под новый цвет.
+    fn field_color_state(
+        &mut self,
+        id: String,
+        hex: &str,
+        keys: Arc<Vec<Key>>,
+        field: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<MoonColorPickerState> {
+        let rgb_val = parse_hex_rgb(hex);
+        if let Some((cached, state)) = self.field_colors.get(&id) {
+            if *cached == rgb_val {
+                return state.clone();
+            }
+        }
+        let init: Hsla = gpui::rgb(design::rgb_to_u32(rgb_val)).into();
+        let state = cx.new(|cx| MoonColorPickerState::new(window, cx).default_value(init));
+        let prefix = hex_alpha_prefix(hex);
+        cx.subscribe(&state, move |this, _st, ev: &MoonColorPickerEvent, cx| {
+            let MoonColorPickerEvent::Change(h) = ev;
+            let c = design::hsla_to_rgb8(*h);
+            let hexv = format!("{prefix}{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
+            this.stage_field_value(keys.as_ref(), &field, hexv, cx);
+        })
+        .detach();
+        self.field_colors.insert(id, (rgb_val, state.clone()));
         state
     }
 
