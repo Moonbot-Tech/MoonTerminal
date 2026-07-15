@@ -282,7 +282,11 @@ impl StrategiesView {
                     .items_center()
                     .gap_1()
                     .child(div().flex_1().min_w_0().child(input))
-                    .child(MoonColorPicker::new(&picker))
+                    .child(
+                        MoonColorPicker::new(&picker)
+                            .colors(design::picker_palette())
+                            .disabled(!active),
+                    )
                     .into_any_element()
             }
             SchemaFieldUi::Combo if !f.picklist.is_empty() => {

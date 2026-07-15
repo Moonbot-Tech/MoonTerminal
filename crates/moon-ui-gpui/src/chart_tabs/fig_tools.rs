@@ -209,7 +209,10 @@ impl ChartTabs {
                     })
                     .into()
                 })
-                .child(moon_ui::MoonColorPicker::new(&self.fig_color_picker)),
+                .child(
+                    moon_ui::MoonColorPicker::new(&self.fig_color_picker)
+                        .colors(design::picker_palette()),
+                ),
         );
 
         // Степперы толщины/непрозрачности + Kind Solid/Dash.
