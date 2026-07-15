@@ -254,16 +254,27 @@ impl DetachedChartHost {
         let coin_input = cx.new(|cx| {
             MoonInputState::new(window, cx).placeholder(t!("chart.coin.search").to_string())
         });
-        cx.subscribe(&coin_input, |this, input, ev: &MoonInputEvent, cx| {
-            if matches!(ev, MoonInputEvent::Change) {
-                let value = input.read(cx).value().to_string();
-                if this.coin_query != value {
-                    this.coin_popup_open = !value.trim().is_empty();
-                    this.coin_query = value;
-                    cx.notify();
+        // RU-раскладка → латиница прямо в поле (см. chart_tabs::new, тот же паттерн).
+        cx.subscribe_in(
+            &coin_input,
+            window,
+            |this, input, ev: &MoonInputEvent, window, cx| {
+                if matches!(ev, MoonInputEvent::Change) {
+                    let value = input.read(cx).value().to_string();
+                    if let std::borrow::Cow::Owned(en) =
+                        crate::controls::coin_search::normalize_layout(&value)
+                    {
+                        input.update(cx, |st, c| st.set_value(en, window, c));
+                        return;
+                    }
+                    if this.coin_query != value {
+                        this.coin_popup_open = !value.trim().is_empty();
+                        this.coin_query = value;
+                        cx.notify();
+                    }
                 }
-            }
-        })
+            },
+        )
         .detach();
         // Фокус корня для хоткеев (масштаб): фокусируем сразу, чтобы Scale +/− работали
         // без предварительного клика в тело окна.
