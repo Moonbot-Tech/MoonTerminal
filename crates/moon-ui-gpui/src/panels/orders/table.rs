@@ -226,7 +226,7 @@ fn cell_for(
             .unwrap_or(baked)
     };
     match col {
-        OrdCol::Core => MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
+        OrdCol::Core => MoonDataCell::element(core_cell(e, view, p)),
         OrdCol::Side => MoonDataCell::element(side_cell(e, view, p)),
         OrdCol::Token => MoonDataCell::element(token_cell(e, view, p)),
         OrdCol::Size => MoonDataCell::text(num(r.size)),
@@ -595,6 +595,38 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
 
 /// Ячейка токена (без quote: `ADAUSDT` → `ADA`), акцентом — намёк, что кликабельна.
 /// Клик открывает чарт монеты на Main НА ЯДРЕ ордера (порт клика по строке egui).
+/// Ячейка «Ядро» (имя ядра): клик выставляет фильтр панели РОВНО на это ядро (повторный
+/// клик по уже единственному выбранному — сброс на «Все»), как быстрый фильтр по колонке.
+/// Текст — тем же тусклым (Muted) стилем, что и прежняя `MoonDataCell::text`.
+fn core_cell(
+    e: &OrderEntry,
+    view: &Entity<OrdersPanel>,
+    p: MoonPalette,
+) -> impl IntoElement + 'static {
+    let core = e.core;
+    let uid = e.row.uid;
+    let view = view.clone();
+    div()
+        .id(SharedString::from(format!("ord-core-{core}-{uid}")))
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .child(
+            MoonText::new(e.core_name.clone())
+                .color(MoonTone::Muted.color(p))
+                .font_size(10.5)
+                .line_height(14.0)
+                .mono(true)
+                .uppercase(false)
+                .render(),
+        )
+        .on_click(move |_, _window, app| {
+            view.update(app, |this, cx| this.filter_to_core(core, cx));
+        })
+}
+
 fn token_cell(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,

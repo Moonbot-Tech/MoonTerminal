@@ -20,12 +20,14 @@ pub(super) fn report_columns(table: &ReportTable, vis: &[usize]) -> Vec<MoonData
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn report_data_row(
     ri: usize,
     table: &ReportTable,
     vis: &[usize],
     selected_cores: &Rc<Vec<u64>>,
     backend: &Entity<Backend>,
+    view: &Entity<ReportPanel>,
     p: MoonPalette,
 ) -> MoonDataRow {
     let mut cells = Vec::with_capacity(vis.len());
@@ -56,6 +58,8 @@ pub(super) fn report_data_row(
                     backend,
                     p,
                 ));
+            } else if cname == "core_name" {
+                cells.push(core_cell(ri, val, core_uid, view, p));
             } else {
                 cells.push(report_data_cell(cname, val, p));
             }
@@ -196,6 +200,39 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
         .find(|m| moon_core::symbol::coin_of_market(m).eq_ignore_ascii_case(coin))
         .cloned()
         .unwrap_or(candidate)
+}
+
+/// Ячейка «Ядро» в «Отчёте»: цвет как в Ордерах/Активах (тон Muted), кликом ставит фильтр
+/// ТОЛЬКО на это ядро (повторный клик по нему же — сброс на «все»).
+fn core_cell(
+    ri: usize,
+    val: &Value,
+    core_uid: u64,
+    view: &Entity<ReportPanel>,
+    p: MoonPalette,
+) -> MoonDataCell {
+    let name = value_to_string(val);
+    let view = view.clone();
+    let el = div()
+        .id(SharedString::from(format!("rep-core-{ri}")))
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .child(
+            MoonText::new(name)
+                .color(MoonTone::Muted.color(p))
+                .font_size(10.0)
+                .line_height(13.0)
+                .mono(true)
+                .uppercase(false)
+                .render(),
+        )
+        .on_click(move |_, _window, app| {
+            view.update(app, |t, c| t.filter_to_core(core_uid, c));
+        });
+    MoonDataCell::element(el)
 }
 
 fn report_data_cell(col: &str, val: &Value, p: MoonPalette) -> MoonDataCell {

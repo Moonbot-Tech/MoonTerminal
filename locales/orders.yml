@@ -82,6 +82,11 @@ orders.only_current:
   ru: "Только ордера текущего маркета"
   en: "Only current market orders"
   es: "Solo órdenes del mercado actual"
+# Нижний футер: всего открытых ордеров (реальных/эму).
+orders.footer_total:
+  ru: "Всего %{total} (%{real}/%{emu})"
+  en: "Total %{total} (%{real}/%{emu})"
+  es: "Total %{total} (%{real}/%{emu})"
 orders.show_all:
   ru: "Показать все"
   en: "Show all"

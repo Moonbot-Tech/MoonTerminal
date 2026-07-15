@@ -59,16 +59,103 @@ fn open_asset_coin_menu(
 
 
 impl AssetsView {
-    /// Шапка секции «Позиции» (над таблицей): стрелка сворачивания + подпись, счётчик строк,
-    /// галка «показать всё», Σ стоимость. Один визуальный образец для всех трёх секций окна.
-    pub(super) fn controls(
+    /// Верхняя полоса: поле-список выбора ядер (мультивыбор, как в «Ордерах») + справа слайдер
+    /// порога «скрыть дешевле N $» с подписью `≥ N$`. Счётчик/Σ уехали в нижний футер [`Self::footer`].
+    pub(super) fn core_bar(
+        &self,
+        cores: &[(CoreId, String)],
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        h_flex()
+            .w_full()
+            .flex_none()
+            .gap_2()
+            .items_center()
+            .px_2()
+            .py_1()
+            .child(self.core_combo(cores, cx))
+            // Слайдер порога пыли + подпись `≥ N$` (0 = показать всё). Колесо мыши над ним
+            // меняет порог на ±1$ (тащить мышью по узкому слайдеру неудобно).
+            .child(
+                div()
+                    .id("assets-min-value-wheel")
+                    .w(px(120.0))
+                    // Подсказка: что делает слайдер (0 = показать всё, колесо мыши меняет).
+                    .tooltip(|_window, cx| {
+                        cx.new(|_| {
+                            moon_ui::MoonTooltipView::new(t!("assets.min_value_hint").to_string())
+                        })
+                        .into()
+                    })
+                    .on_scroll_wheel(cx.listener(
+                        |this, ev: &ScrollWheelEvent, window, cx| {
+                            let dy = match ev.delta {
+                                ScrollDelta::Lines(pt) => pt.y,
+                                ScrollDelta::Pixels(pt) => f32::from(pt.y),
+                            };
+                            if dy == 0.0 {
+                                return;
+                            }
+                            let next = (this.min_value_usd + if dy > 0.0 { 1.0 } else { -1.0 })
+                                .clamp(0.0, 100.0);
+                            if next != this.min_value_usd {
+                                this.min_value_usd = next;
+                                this.min_value_slider.update(cx, |s, c| {
+                                    s.set_value(next as f32, window, c);
+                                });
+                                let backend = this.backend.clone();
+                                this.rebuild_cache(backend.read(cx));
+                                this.persist_min_value(cx);
+                                cx.notify();
+                            }
+                        },
+                    ))
+                    .child(
+                        MoonSlider::new(&self.min_value_slider)
+                            .id("assets-min-value")
+                            .height(18.0),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_muted))
+                    .child(format!("≥ {}$", self.min_value_usd.round() as i64)),
+            )
+    }
+
+    /// Поле-список ядер — МУЛЬТИВЫБОР (общий виджет [`crate::controls::core_combo`], как в
+    /// «Ордерах»/«Отчёте»). Подпись: «Все ядра» (пусто/все) / имя единственного / «Ядер: N».
+    pub(super) fn core_combo(
+        &self,
+        cores: &[(CoreId, String)],
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let view = cx.entity();
+        crate::controls::core_combo(
+            "assets-core",
+            cores,
+            &self.sel_cores,
+            t!("assets.all_cores").to_string(),
+            |n| t!("assets.cores_n", n = n).to_string(),
+            170.0,
+            move |id, app| {
+                view.update(app, |t, c| t.toggle_core(id, c));
+            },
+        )
+    }
+
+    /// Нижний футер: счётчик позиций «Позиции N» и Σ-стоимость справа. Единый визуальный
+    /// образец футера (как в «Отчёте»). Порог видимости («показать всё») переехал слайдером
+    /// в верхнюю полосу [`Self::core_bar`].
+    pub(super) fn footer(
         &self,
         count: usize,
         total_value: f64,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        let arrow = if self.positions_collapsed { "▸" } else { "▾" };
         h_flex()
             .w_full()
             .flex_none()
@@ -77,48 +164,16 @@ impl AssetsView {
             .px_2()
             .py_1()
             .child(
-                h_flex()
-                    .id("assets-positions-toggle")
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(p.text)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.positions_collapsed = !this.positions_collapsed;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_muted))
-                            .child(arrow),
-                    )
-                    .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_soft))
-                            .child(t!("assets.section_positions").to_string()),
-                    ),
+                div()
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(p.text_soft))
+                    .child(t!("assets.section_positions").to_string()),
             )
             .child(
                 div()
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_muted))
                     .child(format!("{count}")),
-            )
-            .child(
-                MoonCheckbox::new("assets-show-all")
-                    .label(t!("assets.show_all").to_string())
-                    .checked(self.show_all)
-                    .size(MoonCheckboxSize::Compact)
-                    .on_change(cx.listener(|this, ch: &bool, _, cx| {
-                        if this.show_all != *ch {
-                            this.show_all = *ch;
-                            let backend = this.backend.clone();
-                            this.rebuild_cache(backend.read(cx));
-                            cx.notify();
-                        }
-                    })),
             )
             .child(div().flex_1())
             .child(
@@ -387,7 +442,8 @@ fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette, on_sale
         (moon_core::util::fmt::qty(held), money(e.value))
     };
     MoonDataRow::new([
-        MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
+        // Ядро кликабельно → фильтр панели ровно на это ядро (повторный клик — сброс на «Все»).
+        MoonDataCell::element(core_cell(e, view, p)),
         // Тикер кликабелен → открыть чарт монеты на Main НА ЯДРЕ строки (как в Ордерах/Отчёте).
         MoonDataCell::element(coin_cell(e, view, p, on_sale)),
         MoonDataCell::text(qty),
@@ -397,6 +453,40 @@ fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette, on_sale
     // Подсветка строки: монета/позиция сейчас СТОИТ НА ПРОДАЖУ (активный sell-ордер,
     // фаза SellSet/SellAlmostDone на этом ядре). Плюс синяя метка «SELL» у тикера.
     .selected(on_sale)
+}
+
+/// Ячейка «Ядро» (имя ядра): левый клик выставляет фильтр панели РОВНО на это ядро (повторный
+/// клик по уже единственному выбранному — сброс на «Все»). ПКМ-меню монеты живёт на тикере —
+/// сюда не добавляем. Текст — прежним тусклым (Muted) стилем.
+fn core_cell(
+    e: &AssetEntry,
+    view: &Entity<AssetsView>,
+    p: MoonPalette,
+) -> impl IntoElement + 'static {
+    let core = e.core;
+    let view = view.clone();
+    div()
+        .id(SharedString::from(format!(
+            "asset-core-cell-{core}-{}",
+            e.row.market
+        )))
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .child(
+            MoonText::new(e.core_name.clone())
+                .color(MoonTone::Muted.color(p))
+                .font_size(10.5)
+                .line_height(14.0)
+                .mono(true)
+                .uppercase(false)
+                .render(),
+        )
+        .on_click(move |_, _window, app| {
+            view.update(app, |this, cx| this.filter_to_core(core, cx));
+        })
 }
 
 /// Ячейка тикера (базовая монета): клик открывает чарт монеты на Main на ядре строки.

@@ -4,6 +4,9 @@
 //! `Backend`. Визуальные контролы берём из палитры, выведенной из HTML-эталона.
 //!
 //! Разнесено по подмодулям (mod.rs = границы слайдеров + re-export'ы):
+//! - [`coin_search`] — поиск монеты + выпадающий список «COIN - Server» (общий: чарт-вкладки,
+//!   тикер шапки, фильтр монеты «Отчёта»);
+//! - [`core_combo`] — поле-список выбора ядер, мультивыбор (общий: Ордера/Отчёт/Активы);
 //! - [`fmt`] — форматирование значений (size/sell/поля) и шаги колеса мыши;
 //! - [`manual_strat`] — тогл+пикер «ручной стратегии» (шапка);
 //! - [`metric`] — торговые метрики TP/SL/Lev: кнопки-триггеры и контент попапов;
@@ -12,6 +15,8 @@
 //! - [`toolbar`] — сборка полосы тулбара.
 
 mod coin_menu;
+pub(crate) mod coin_search;
+mod core_combo;
 mod fmt;
 mod manual_strat;
 mod metric;
@@ -20,6 +25,7 @@ mod strips;
 mod toolbar;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
+pub(crate) use core_combo::core_combo;
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use manual_strat::manual_strategy_controls;
 pub(crate) use manual_strat::select_manual_strategy;

@@ -684,9 +684,9 @@ pub struct ReportFilter {
     pub date_to: Option<i64>,
     pub coin: String,
     pub side: SideFilter,
-    /// Эмуляторные ордера: false (дефолт) — только реальные, true — только эмуляторные
-    /// (как галка «Эмулятор» отчёта Moonbot). NULL в колонке считается «реальный».
-    pub emulator: bool,
+    /// Эмуляторные ордера: `None` — все, `Some(false)` — только реальные, `Some(true)` —
+    /// только эмуляторные (поле-список типа в отчёте). NULL в колонке считается «реальный».
+    pub emulator: Option<bool>,
 }
 
 pub fn open_reader() -> Option<Connection> {
@@ -918,11 +918,11 @@ fn build_where(
         }
     }
     if has("emulator") {
-        sql.push_str(if f.emulator {
-            " AND COALESCE(emulator, 0) = 1"
-        } else {
-            " AND COALESCE(emulator, 0) = 0"
-        });
+        match f.emulator {
+            None => {}
+            Some(true) => sql.push_str(" AND COALESCE(emulator, 0) = 1"),
+            Some(false) => sql.push_str(" AND COALESCE(emulator, 0) = 0"),
+        }
     }
     (sql, params)
 }

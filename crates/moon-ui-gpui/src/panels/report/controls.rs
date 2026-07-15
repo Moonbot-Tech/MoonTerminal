@@ -5,57 +5,21 @@ use super::*;
 use rust_i18n::t;
 
 impl ReportPanel {
-    /// Комбобокс ядер — МУЛЬТИВЫБОР (чекбоксы, меню не закрывается на клик, как выбор
-    /// колонок). Подпись: «Все» (пусто) / имя единственного / «Ядер: N».
+    /// Комбобокс ядер — МУЛЬТИВЫБОР (общий виджет [`crate::controls::core_combo`], как в
+    /// «Ордерах»/«Активах»). Подпись: «Все ядра» (пусто/все) / имя единственного / «Ядер: N».
     pub(super) fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        let all_selected = !self.cores.is_empty() && self.sel_cores.len() == self.cores.len();
-        let cur = match self.sel_cores.len() {
-            0 => t!("report.filter.all").to_string(),
-            _ if all_selected => t!("report.filter.all").to_string(),
-            1 => {
-                let uid = *self.sel_cores.iter().next().unwrap();
-                self.cores
-                    .iter()
-                    .find(|(u, _)| *u == uid)
-                    .map(|(_, n)| n.clone())
-                    .unwrap_or_else(|| t!("report.cores_n", n = 1).to_string())
-            }
-            n => t!("report.cores_n", n = n).to_string(),
-        };
         let view = cx.entity();
-        let all_view = view.clone();
-        let mut menu = MoonDropdown::new("rep-core")
-            .label(format!("{cur} ▾"))
-            .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
-            .trigger_width(130.0)
-            .menu_width(180.0)
-            .menu_max_height(360.0)
-            .menu_size(MoonMenuSize::Compact)
-            .close_on_select(false)
-            .item(
-                // «Все» — тумблер: ставит галки на все ядра / снимает все.
-                MoonMenuItem::with_key("rc-all", t!("report.filter.all").to_string())
-                    .checked(self.sel_cores.is_empty() || all_selected)
-                    .selected(self.sel_cores.is_empty() || all_selected)
-                    .on_click(move |_, _, app| {
-                        all_view.update(app, |t, c| t.toggle_core(None, c));
-                    }),
-            );
-        for (i, (uid, name)) in self.cores.iter().enumerate() {
-            let uid = *uid;
-            let on = self.sel_cores.contains(&uid);
-            let view = view.clone();
-            menu = menu.item(
-                MoonMenuItem::with_key(format!("rc-{i}"), name.clone())
-                    .checked(on)
-                    .selected(on)
-                    .on_click(move |_, _, app| {
-                        view.update(app, |t, c| t.toggle_core(Some(uid), c));
-                    }),
-            );
-        }
-        menu
+        crate::controls::core_combo(
+            "rep-core",
+            &self.cores,
+            &self.sel_cores,
+            t!("report.all_cores").to_string(),
+            |n| t!("report.cores_n", n = n).to_string(),
+            180.0,
+            move |uid, app| {
+                view.update(app, |t, c| t.toggle_core(uid, c));
+            },
+        )
     }
 
     /// Комбобокс стороны (Все/Лонг/Шорт).
@@ -94,8 +58,50 @@ impl ReportPanel {
             .label(format!("{cur} ▾"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(86.0)
+            .trigger_width(69.0)
             .menu_width(120.0)
+            .menu_size(MoonMenuSize::Compact)
+            .items(items)
+    }
+
+    /// Поле-список типа ордеров (Все / Реальные / Эмуляторные) — как в «Ордерах».
+    pub(super) fn kind_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let cur = match self.kind {
+            ReportKind::All => t!("report.kind.all"),
+            ReportKind::Real => t!("report.kind.real"),
+            ReportKind::Emu => t!("report.kind.emu"),
+        };
+        let view = cx.entity();
+        let items = crate::panels::radio_items(
+            [
+                (
+                    ReportKind::All,
+                    "rk-all".into(),
+                    t!("report.kind.all").to_string().into(),
+                ),
+                (
+                    ReportKind::Real,
+                    "rk-real".into(),
+                    t!("report.kind.real").to_string().into(),
+                ),
+                (
+                    ReportKind::Emu,
+                    "rk-emu".into(),
+                    t!("report.kind.emu").to_string().into(),
+                ),
+            ],
+            self.kind,
+            crate::panels::RadioMark::Check,
+            move |app, k| {
+                view.update(app, |t, c| t.set_kind(k, c));
+            },
+        );
+        MoonDropdown::new("rep-kind")
+            .label(format!("{cur} ▾"))
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Action)
+            .trigger_width(102.0)
+            .menu_width(138.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }

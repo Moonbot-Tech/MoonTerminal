@@ -320,6 +320,10 @@ pub struct OrdersPanel {
     /// stop_tag) → (целевой флаг, момент клика). Запись живёт ≤3с — дальше истина сервера
     /// (строки) главнее; сходятся обычно за тик, т.к. feed держит одноимённый override.
     pub(super) stop_overlay: std::collections::HashMap<(CoreId, u64, u8), (bool, Instant)>,
+    /// Счётчики для нижнего футера: реальные/эмуляторные ордера ДО фильтра типа (но после
+    /// фильтра ядра/текущего маркета). Обновляются в [`Self::rebuild_cache`].
+    count_real: usize,
+    count_emu: usize,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -382,6 +386,8 @@ impl OrdersPanel {
             main_open: Rc::new(HashSet::new()),
             highlight: Rc::new(HashSet::new()),
             stop_overlay: std::collections::HashMap::new(),
+            count_real: 0,
+            count_emu: 0,
             dock: None,
             focus: cx.focus_handle(),
         };
@@ -489,39 +495,61 @@ impl OrdersPanel {
         cx.notify();
     }
 
+    /// Клик по ячейке «Ядро»: выставить фильтр РОВНО на это ядро; повторный клик по уже
+    /// единственному выбранному ядру — сброс на «Все». Не мультитогл (в отличие от
+    /// [`Self::toggle_core`]), а «set-to-single / clear».
+    pub(super) fn filter_to_core(&mut self, id: CoreId, cx: &mut Context<Self>) {
+        if self.sel_cores.len() == 1 && self.sel_cores.contains(&id) {
+            self.sel_cores.clear();
+        } else {
+            self.sel_cores = HashSet::from([id]);
+        }
+        let backend = self.backend.clone();
+        self.rebuild_cache(backend.read(cx));
+        cx.notify();
+    }
+
+    /// Собрать и отфильтровать строки. Возвращает `(строки, реальных, эму)`, где счётчики
+    /// считаются ПОСЛЕ фильтра ядра/текущего маркета, но ДО фильтра типа (Все/Реальные/
+    /// Эмуляторные) — для нижнего футера «Всего N (real/emu)».
     fn build_entries(
         &self,
         b: &Backend,
         view: &OrdersViewState,
         current: &Option<(CoreId, String)>,
-    ) -> Vec<OrderEntry> {
+    ) -> (Vec<OrderEntry>, usize, usize) {
         let mut entries = self.collect(b);
+        // Фильтр ядра (мультивыбор, пусто = все) + текущего маркета — БЕЗ фильтра типа.
         entries.retain(|e| {
-            // Мультивыбор ядер (как в «Отчёте»): пусто = все ядра группы.
             let by_source = self.sel_cores.is_empty() || self.sel_cores.contains(&e.core);
-            let by_kind = match view.kind {
-                OrderKind::All => true,
-                OrderKind::Real => !e.row.emulator,
-                OrderKind::Emu => e.row.emulator,
-            };
             by_source
-                && by_kind
                 && (!view.only_current_market
                     || match current {
                         Some((c, m)) => e.core == *c && &e.row.market == m,
                         None => true,
                     })
         });
+        // Разбивка реальные/эму по этому набору (до фильтра типа) — для футера.
+        let count_real = entries.iter().filter(|e| !e.row.emulator).count();
+        let count_emu = entries.len() - count_real;
+        // Фильтр типа ордера (Все / Реальные / Эмуляторные).
+        entries.retain(|e| match view.kind {
+            OrderKind::All => true,
+            OrderKind::Real => !e.row.emulator,
+            OrderKind::Emu => e.row.emulator,
+        });
         sort_entries(&mut entries, view);
-        entries
+        (entries, count_real, count_emu)
     }
 
     fn rebuild_cache(&mut self, b: &Backend) {
         let key = self.cache_key(b);
         self.cached_cores = self.group_cores(b);
         self.main_open = Rc::new(key.main_open.iter().cloned().collect());
-        // Базовый порядок (первичная + новые/старые).
-        let mut entries = self.build_entries(b, &key.view, &key.current);
+        // Базовый порядок (первичная + новые/старые) + счётчики real/emu для футера.
+        let (mut entries, count_real, count_emu) = self.build_entries(b, &key.view, &key.current);
+        self.count_real = count_real;
+        self.count_emu = count_emu;
         // Подсветка: ПЕРВАЯ строка каждой Main-открытой (монета+ядро) в базовом порядке — одна
         // строка на пару (не все ордера монеты).
         let mut seen: HashSet<(CoreId, String)> = HashSet::new();
@@ -852,7 +880,6 @@ impl Render for OrdersPanel {
         let view = self.view;
         let cores = self.cached_cores.clone();
         let entries = self.cached_entries.clone();
-        let shown = entries.len();
         let p = MoonPalette::active(cx);
 
         // ── Панель управления ──
@@ -866,13 +893,7 @@ impl Render for OrdersPanel {
             .child(self.source_combo(&cores, cx))
             .child(self.kind_combo(cx))
             .child(self.columns_menu(cx))
-            .child(self.sort_menu(cx))
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_muted))
-                    .child(format!("{shown}")),
-            );
+            .child(self.sort_menu(cx));
         if view.only_current_market {
             controls = controls.child(
                 div()
@@ -902,6 +923,30 @@ impl Render for OrdersPanel {
             cx,
         );
 
+        // ── Футер: всего открытых ордеров (реальных/эму) ──
+        let total = self.count_real + self.count_emu;
+        let footer = h_flex()
+            .w_full()
+            .flex_none()
+            .gap_2()
+            .items_center()
+            .px_2()
+            .py_1()
+            .child(
+                div()
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(p.text_soft))
+                    .child(
+                        t!(
+                            "orders.footer_total",
+                            total = total,
+                            real = self.count_real,
+                            emu = self.count_emu
+                        )
+                        .to_string(),
+                    ),
+            );
+
         v_flex()
             .id("orders-panel")
             .size_full()
@@ -914,6 +959,8 @@ impl Render for OrdersPanel {
             .child(controls)
             .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
             .child(table)
+            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
+            .child(footer)
     }
 }
 

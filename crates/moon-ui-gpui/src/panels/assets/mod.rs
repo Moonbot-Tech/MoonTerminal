@@ -16,15 +16,16 @@
 mod table;
 mod wallets;
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonCheckbox, MoonCheckboxSize,
-    MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonInput,
-    MoonInputState, MoonPalette, MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root,
-    h_flex, v_flex,
+    DockArea, MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonDataCell, MoonDataRow,
+    MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonInput, MoonInputState, MoonPalette,
+    MoonSlider, MoonSliderEvent, MoonSliderState, MoonTone, MoonWindowFrame, Panel, PanelEvent,
+    PanelState, Root, h_flex, v_flex,
 };
 
 use crate::Backend;
@@ -118,10 +119,13 @@ pub struct AssetsView {
     show_wallets: bool,
     /// Выбранное ядро для нижних контейнеров кошельков.
     pub(super) selected_core: Option<CoreId>,
-    /// Показывать ВСЁ (иначе только балансы >1 USDT с известной ценой).
-    pub(super) show_all: bool,
-    /// Свёрнута ли секция позиций/балансов (таблица сверху).
-    pub(super) positions_collapsed: bool,
+    /// Порог «скрыть активы дешевле N $»: показываем только строки со стоимостью ≥ `min_value_usd`
+    /// (плюс открытые позиции всегда). `<= 0.0` = показать всё (аналог прежнего «показать всё»).
+    pub(super) min_value_usd: f64,
+    /// Состояние слайдера порога в верхней полосе (диапазон 0..=100 $, шаг 1, дефолт 1).
+    min_value_slider: Entity<MoonSliderState>,
+    /// Выбранные ядра фильтра (мультивыбор, как в «Ордерах»/«Отчёте»). Пусто = все ядра охвата.
+    pub(super) sel_cores: HashSet<CoreId>,
     /// Свёрнута ли секция кошельков (список ядер + Спот/Фьючерсы/Квартальные).
     pub(super) wallets_collapsed: bool,
     /// Открытый диалог переноса (количество) + поле ввода. Тип `PendingTransfer`
@@ -130,7 +134,7 @@ pub struct AssetsView {
     transfer_input: Option<Entity<MoonInputState>>,
     /// Гейт перерисовки (сигнатура assets_rev/transfer_rev ИЛИ 1 Гц-тик, пол 250мс).
     gate: RenderGate,
-    cache_sig: Option<(u64, bool)>,
+    cache_sig: Option<(u64, u64)>,
     cached_cores: Vec<(CoreId, String)>,
     cached_entries: Rc<Vec<AssetEntry>>,
     /// `(ядро, рынок)` с АКТИВНЫМ sell-ордером (фаза SellSet/SellAlmostDone) — эти
@@ -138,7 +142,7 @@ pub struct AssetsView {
     /// `rebuild_cache` (сигнатура включает orders_table_rev ядер).
     pub(super) sell_marked: Rc<std::collections::HashSet<(CoreId, String)>>,
     cached_aggs: Rc<Vec<CoreAgg>>,
-    cached_wallet_key: Option<(Option<CoreId>, u64, bool)>,
+    cached_wallet_key: Option<(Option<CoreId>, u64, u64)>,
     cached_wallets: Rc<Vec<WalletColumnSnapshot>>,
     cached_total_value: f64,
     /// Состояние таблицы позиций (ширины/сортировка колонок) — своё, чтобы ширины
@@ -165,7 +169,7 @@ impl AssetsView {
             let now = moon_chart::paint::now_unix_ms();
             let b = backend.read(cx);
             let sig = this.assets_sig(b);
-            let key = (sig, this.show_all);
+            let key = (sig, this.min_value_usd.to_bits());
             let changed = this.cache_sig != Some(key);
             let due = this.gate.should_notify(sig, now);
             if changed || due {
@@ -207,14 +211,47 @@ impl AssetsView {
         })
         .detach();
 
+        // Порог «скрыть дешевле N $» — из сохранённой раскладки (`layout.toml`, общий на все
+        // окна/вкладки «Активов»); нет записи → дефолт 1$.
+        let min_value_usd = backend
+            .read(cx)
+            .layout
+            .assets_min_value
+            .unwrap_or(1.0)
+            .clamp(0.0, 100.0);
+        // Слайдер порога (верхняя полоса): 0..=100, шаг 1, стартовое значение — сохранённое.
+        let min_value_slider = cx.new(|_| {
+            MoonSliderState::new()
+                .min(0.0)
+                .max(100.0)
+                .step(1.0)
+                .default_value(min_value_usd as f32)
+        });
+        // На изменение слайдера — новый порог + пересборка строк (гейт-независимо, как реакция
+        // на клик; сама пересборка дешёвая — снапшот кэшируется) + персист в раскладку.
+        cx.subscribe(&min_value_slider, |this, _e, ev: &MoonSliderEvent, cx| {
+            if let MoonSliderEvent::Change(v) = ev {
+                let v = v.end() as f64;
+                if this.min_value_usd != v {
+                    this.min_value_usd = v;
+                    let backend = this.backend.clone();
+                    this.rebuild_cache(backend.read(cx));
+                    this.persist_min_value(cx);
+                    cx.notify();
+                }
+            }
+        })
+        .detach();
+
         let mut this = Self {
             backend,
             scope,
             windowed,
             show_wallets,
             selected_core: None,
-            show_all: false,
-            positions_collapsed: false,
+            min_value_usd,
+            min_value_slider,
+            sel_cores: HashSet::new(),
             wallets_collapsed: false,
             pending_transfer: None,
             transfer_input: None,
@@ -320,12 +357,18 @@ impl AssetsView {
     }
 
     /// Строки таблицы по всем ядрам охвата (с USDT-стоимостью), отсортированные по
-    /// убыванию стоимости. По умолчанию — только >1 USDT (или открытая позиция); галка
-    /// «показать всё» снимает фильтр.
+    /// убыванию стоимости. По умолчанию — только ≥ `min_value_usd` $ (или открытая позиция);
+    /// порог `<= 0.0` (слайдер в 0) снимает фильтр («показать всё»).
     fn collect(&self, b: &Backend) -> Vec<AssetEntry> {
         let store = b.session.store();
+        // Порог видимости пыли (слайдер верхней полосы). `<= 0.0` = показать всё.
+        let thr = self.min_value_usd;
         let mut out = Vec::new();
         for (id, name) in self.scope_cores(b) {
+            // Мультивыбор ядер (как в «Ордерах»): пусто = все ядра охвата.
+            if !self.sel_cores.is_empty() && !self.sel_cores.contains(&id) {
+                continue;
+            }
             let Some(cd) = store.core(id) else { continue };
             // ДИАГ (env MOON_ASSETS_DIAG): что реально пришло в balance_position ядра —
             // есть ли строка для рынка позиции и её поля. Показывает, скрыта ли поза
@@ -375,8 +418,8 @@ impl AssetsView {
                 let is_position =
                     row.pos_size != 0.0 && row.pos_size.abs() * row.price >= min_lot;
                 let spot_coin_visible =
-                    !cd.assets.futures_account && !row.is_quote_asset && value >= min_lot;
-                let keep = self.show_all || is_position || spot_coin_visible;
+                    !cd.assets.futures_account && !row.is_quote_asset && value >= thr;
+                let keep = thr <= 0.0 || is_position || spot_coin_visible;
                 if !keep {
                     continue;
                 }
@@ -425,7 +468,7 @@ impl AssetsView {
                     // `value_usdt` кошелька уже посчитан от `total`.
                     let held_qty = w.total;
                     let held_value = w.value_usdt;
-                    let keep = self.show_all || (!is_quote && held_value >= 1.0);
+                    let keep = thr <= 0.0 || (!is_quote && held_value >= thr);
                     if !keep {
                         continue;
                     }
@@ -476,6 +519,59 @@ impl AssetsView {
             .collect()
     }
 
+    /// Тумблер выбранного ядра фильтра (мультивыбор, как в «Ордерах»). `None` — пункт «Все»
+    /// (все выбраны → очистить в «пусто = все»; иначе выбрать все ядра охвата). `Some(id)` —
+    /// тогл одного ядра. Не персистится (сброс на «Все» при переоткрытии).
+    pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
+        let all: HashSet<CoreId> = self
+            .scope_cores(self.backend.read(cx))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        match id {
+            None => {
+                if !all.is_empty() && self.sel_cores.len() == all.len() {
+                    self.sel_cores.clear();
+                } else {
+                    self.sel_cores = all;
+                }
+            }
+            Some(id) => {
+                if !self.sel_cores.remove(&id) {
+                    self.sel_cores.insert(id);
+                }
+            }
+        }
+        let backend = self.backend.clone();
+        self.rebuild_cache(backend.read(cx));
+        cx.notify();
+    }
+
+    /// Сохранить порог пыли в раскладку (`layout.toml`). Общий на все окна/вкладки «Активов»:
+    /// значение одно, поэтому пишем без ключа охвата. Зовётся из обработчиков слайдера и колеса.
+    pub(super) fn persist_min_value(&self, cx: &mut Context<Self>) {
+        let v = self.min_value_usd;
+        self.backend.update(cx, |b, _| {
+            if b.layout.assets_min_value != Some(v) {
+                b.layout.assets_min_value = Some(v);
+                b.layout_dirty = true;
+            }
+        });
+    }
+
+    /// Клик по ячейке «Ядро»: выставить фильтр РОВНО на это ядро; повторный клик по уже
+    /// единственному выбранному ядру — сброс на «Все». «set-to-single / clear», не мультитогл.
+    pub(super) fn filter_to_core(&mut self, id: CoreId, cx: &mut Context<Self>) {
+        if self.sel_cores.len() == 1 && self.sel_cores.contains(&id) {
+            self.sel_cores.clear();
+        } else {
+            self.sel_cores = HashSet::from([id]);
+        }
+        let backend = self.backend.clone();
+        self.rebuild_cache(backend.read(cx));
+        cx.notify();
+    }
+
     fn rebuild_cache(&mut self, b: &Backend) {
         let sig = self.assets_sig(b);
         let cores = self.scope_cores(b);
@@ -493,7 +589,7 @@ impl AssetsView {
         self.cached_aggs = Rc::new(self.per_core(b));
         self.rebuild_wallet_cache(b);
         self.cached_total_value = self.cached_entries.iter().map(|e| e.value).sum();
-        self.cache_sig = Some((sig, self.show_all));
+        self.cache_sig = Some((sig, self.min_value_usd.to_bits()));
     }
 
     /// Дозапрос transfer-активов для ядер охвата, которые ещё НЕ прислали ни одного снимка
@@ -511,12 +607,12 @@ impl AssetsView {
         }
     }
 
-    fn wallet_cache_key(&self, b: &Backend) -> (Option<CoreId>, u64, bool) {
+    fn wallet_cache_key(&self, b: &Backend) -> (Option<CoreId>, u64, u64) {
         let transfer_rev = self
             .selected_core
             .and_then(|core| b.session.store().core(core).map(|cd| cd.transfer_rev))
             .unwrap_or(0);
-        (self.selected_core, transfer_rev, self.show_all)
+        (self.selected_core, transfer_rev, self.min_value_usd.to_bits())
     }
 
     fn rebuild_wallet_cache(&mut self, b: &Backend) {
@@ -538,9 +634,10 @@ impl AssetsView {
         for kind in WalletKind::ALL {
             let all_items = cd.transfer_assets.wallet(kind).to_vec();
             let total_count = all_items.len();
+            let thr = self.min_value_usd;
             let mut rows: Vec<TransferAssetRow> = all_items
                 .into_iter()
-                .filter(|a| self.show_all || a.value_usdt > 1.0)
+                .filter(|a| thr <= 0.0 || a.value_usdt > thr)
                 .collect();
             rows.sort_by(|a, b| {
                 b.value_usdt
@@ -717,7 +814,9 @@ impl Render for AssetsView {
         // 1 «Позиции» (таблица), 2 «Кошельки» (только в отдельном окне). Секции «Ядра»
         // (плашки) больше НЕТ — балансы ядер видны в списке слева у «Кошельков».
         let aggs = self.cached_aggs.clone();
-        let controls = self.controls(count, total_value, cx);
+        // Верхняя полоса — селектор ядер; счётчик/«показать всё»/Σ уехали в нижний футер.
+        let core_bar = self.core_bar(&cores, cx);
+        let footer = self.footer(count, total_value, cx);
         // Контейнеры переноса (список ядер + кошельки) — в отдельном ОКНЕ (глобальном или
         // откреплённом); во вкладке дока показываем только позиции/балансы (таблица шире).
         let wallets = self.cached_wallets.clone();
@@ -750,24 +849,26 @@ impl Render for AssetsView {
             .text_size(design::t_body(cx))
             .bg(rgb(p.table_body))
             .when(windowed, |this| this.child(assets_header(p, cx)))
-            .child(controls)
+            .child(core_bar)
             .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
-        // Таблица позиций (контент секции 1): высота-basis по содержимому (пусто → 0,
-        // N строк → под N строк), при нехватке места СЖИМАЕТСЯ (скролл внутри) — уступая
-        // развёрнутым секциям ниже.
-        if !self.positions_collapsed {
-            root = root.child(
-                v_flex()
-                    .h(px(table_natural_h))
-                    .min_h(px(0.0))
-                    .w_full()
-                    .overflow_hidden()
-                    .child(table),
-            );
+        // Таблица позиций (всегда показана). В ОКНЕ с кошельками — высота под контент (кошельки
+        // ниже растягиваются); во вкладке дока (кошельков нет) — таблица занимает ВСЮ высоту до
+        // футера (flex_1), иначе снизу оставался пустой обрыв.
+        let table_wrap = v_flex().w_full().min_h(px(0.0)).overflow_hidden().child(table);
+        root = root.child(if self.show_wallets {
+            table_wrap.h(px(table_natural_h))
+        } else {
+            table_wrap.flex_1()
+        });
+        root = root.child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
+        // Кошельки (только в отдельном окне) занимают растяжку под таблицей.
+        if let Some(tree) = tree_section {
+            root = root
+                .child(tree)
+                .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
         }
-        root = root
-            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
-            .children(tree_section);
+        // ── Нижний футер: счётчик позиций + порог + Σ ──
+        root = root.child(footer);
         if windowed {
             root = root.child(
                 MoonWindowFrame::tool("assets-window-frame-hit", chrome_width)

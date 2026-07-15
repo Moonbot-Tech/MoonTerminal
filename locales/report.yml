@@ -128,3 +128,21 @@ report.cores_n:
   ru: "Ядер: %{n}"
   en: "Cores: %{n}"
   es: "Núcleos: %{n}"
+# Подпись поля-списка ядер — одинаковая с «Ордерами» (orders.all_cores).
+report.all_cores:
+  ru: "Все ядра"
+  en: "All cores"
+  es: "Todos los núcleos"
+# Поле-список типа ордеров (как orders.kind.*).
+report.kind.all:
+  ru: "Все"
+  en: "All"
+  es: "Todas"
+report.kind.real:
+  ru: "Реальные"
+  en: "Real"
+  es: "Reales"
+report.kind.emu:
+  ru: "Эмуляторные"
+  en: "Emulator"
+  es: "Emulador"

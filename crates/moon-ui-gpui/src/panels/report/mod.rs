@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDataCell,
+    DockArea, MoonButtonSize, MoonButtonVariant, MoonDataCell,
     MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonInput,
     MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonText, MoonTone,
     Panel, PanelEvent, PanelState, StyledExt, h_flex, v_flex,
@@ -85,6 +85,26 @@ impl Period {
             Self::Week => (Some(day - 6 * 86_400), None),
             Self::Month => (Some(day - 29 * 86_400), None),
             Self::Year => (Some(day - 364 * 86_400), None),
+        }
+    }
+}
+
+/// Фильтр по типу ордера в отчёте (Все / Реальные / Эмуляторные) — как в «Ордерах».
+/// Дефолт «Реальные» (сохраняет прежнее поведение галки «Эмулятор» = выкл).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReportKind {
+    All,
+    Real,
+    Emu,
+}
+
+impl ReportKind {
+    /// В фильтр БД: `None` = все, `Some(false)` = реальные, `Some(true)` = эмуляторные.
+    fn to_filter(self) -> Option<bool> {
+        match self {
+            ReportKind::All => None,
+            ReportKind::Real => Some(false),
+            ReportKind::Emu => Some(true),
         }
     }
 }
@@ -194,14 +214,20 @@ pub struct ReportPanel {
     /// Выбранные ядра (мультивыбор по uid, как выбор колонок); пусто = все.
     pub(super) sel_cores: HashSet<u64>,
     coin: Entity<MoonInputState>,
+    /// Текст поля монеты (зеркало `coin`, обновляется по `Change`). Нужен, чтобы отличить
+    /// РУЧНОЙ ввод (открыть список совпадений) от программной подстановки в `on_pick`
+    /// (зеркало выставляется заранее → список не открывается заново).
+    coin_query: String,
+    /// Открыт ли выпадающий список совпадений монеты (общий виджет `controls::coin_search`).
+    coin_popup_open: bool,
     from: Entity<MoonInputState>,
     to: Entity<MoonInputState>,
     pub(super) side: SideFilter,
     /// Пресет периода (дефолт «Сегодня», как MB). Ручные даты С:/По: действуют
     /// только при пресете «Все»; правка дат сбрасывает пресет на «Все».
     pub(super) period: Period,
-    /// Галка «Эмулятор»: выкл (дефолт) — только реальные, вкл — только эмуляторные.
-    pub(super) emu: bool,
+    /// Тип ордеров: Все / Реальные (дефолт) / Эмуляторные (поле-список, как в «Ордерах»).
+    pub(super) kind: ReportKind,
     needs_query: bool,
     query_inflight: bool,
     query_seq: u64,
@@ -286,8 +312,16 @@ impl ReportPanel {
         let to = cx.new(|cx| {
             MoonInputState::new(window, cx).placeholder(t!("report.filter.date_ph").to_string())
         });
-        cx.subscribe(&coin, |t, _e, ev: &MoonInputEvent, cx| {
+        // Правка поля монеты → перезапрос + (при РУЧНОМ вводе) открыть список совпадений.
+        // Программная подстановка из `on_pick` заранее ставит `coin_query` → условие не
+        // срабатывает и список не открывается обратно (Change прилетает и синхронно, и отложенно).
+        cx.subscribe(&coin, |t, e, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
+                let value = e.read(cx).value().to_string();
+                if t.coin_query != value {
+                    t.coin_query = value;
+                    t.coin_popup_open = !t.coin_query.trim().is_empty();
+                }
                 t.request_requery(cx);
             }
         })
@@ -335,11 +369,13 @@ impl ReportPanel {
             sort_desc,
             sel_cores: HashSet::new(),
             coin,
+            coin_query: String::new(),
+            coin_popup_open: false,
             from,
             to,
             side: SideFilter::All,
             period: Period::Today,
-            emu: false,
+            kind: ReportKind::Real,
             needs_query: true,
             query_inflight: false,
             query_seq: 0,
@@ -478,9 +514,12 @@ impl ReportPanel {
             core_uids: self.sel_cores.iter().copied().collect(),
             date_from,
             date_to,
-            coin: self.coin.read(cx).value().to_string(),
+            // Раскладку переводим и для SQL-фильтра, а не только для попапа поиска: иначе
+            // набранное русскими («бтц») уходило в запрос как есть → `coin LIKE %бтц%` → пусто.
+            coin: crate::controls::coin_search::normalize_layout(&self.coin.read(cx).value())
+                .into_owned(),
             side: self.side,
-            emulator: self.emu,
+            emulator: self.kind.to_filter(),
         }
     }
 
@@ -606,6 +645,17 @@ impl ReportPanel {
         self.request_requery(cx);
     }
 
+    /// Клик по ячейке «Ядро»: фильтр ТОЛЬКО на это ядро; повторный клик по нему же (когда оно
+    /// единственное выбранное) — сброс на «все». Как клик по ядру в «Ордерах»/«Активах».
+    pub(super) fn filter_to_core(&mut self, uid: u64, cx: &mut Context<Self>) {
+        if self.sel_cores.len() == 1 && self.sel_cores.contains(&uid) {
+            self.sel_cores.clear();
+        } else {
+            self.sel_cores = HashSet::from([uid]);
+        }
+        self.request_requery(cx);
+    }
+
     /// «Все»-тумблер колонок: включает все колонки; повторный клик по полному набору
     /// оставляет только первую (все скрыть нельзя — таблица опустеет).
     pub(super) fn toggle_all_columns(&mut self, cx: &mut Context<Self>) {
@@ -641,9 +691,18 @@ impl ReportPanel {
             self.request_requery(cx);
         }
     }
-    pub(super) fn set_emu(&mut self, on: bool, cx: &mut Context<Self>) {
-        if self.emu != on {
-            self.emu = on;
+    /// Закрыть список совпадений монеты (клик вне списка). Текст фильтра НЕ трогаем —
+    /// он остаётся набранным (в отличие от чарт-вкладок, где выбор чистит поле).
+    pub(super) fn close_coin_popup(&mut self, cx: &mut Context<Self>) {
+        if self.coin_popup_open {
+            self.coin_popup_open = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn set_kind(&mut self, k: ReportKind, cx: &mut Context<Self>) {
+        if self.kind != k {
+            self.kind = k;
             self.request_requery(cx);
         }
     }
@@ -780,27 +839,67 @@ impl Render for ReportPanel {
         let p = MoonPalette::active(cx);
         let border = rgb(p.border);
 
-        // ── Фильтры ──
-        let filters = h_flex()
-            .w_full()
-            .flex_wrap()
-            .gap_2()
-            .items_center()
-            .px_2()
-            .py_1()
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("report.filter.core").to_string()),
+        // ── Поле монеты: общий виджет поиска (как на чартах, «BTC - Bybit1») ──
+        // Отличие от чартов: выбор НЕ открывает монету, а подставляет её базу в ТЕКСТОВЫЙ
+        // фильтр отчёта (SQL `coin LIKE %…%`) и перезапрашивает выборку. Ручной ввод
+        // частичного имени продолжает работать — список лишь подсказка сверху.
+        let coin_popup = self.coin_popup_open.then(|| {
+            let results = {
+                let b = self.backend.read(cx);
+                crate::controls::coin_search::search(
+                    b,
+                    &self.group,
+                    None,
+                    &self.coin.read(cx).value(),
+                )
+            };
+            let view = cx.entity();
+            let coin_input = self.coin.clone();
+            crate::controls::coin_search::render_popup(
+                "rep-coin-search",
+                results,
+                &HashSet::new(),
+                false,
+                p,
+                cx,
+                move |_core, market, window, app| {
+                    // Фильтр текстовый → берём БАЗУ рынка («BTCUSDT» → «BTC»); ядро не важно
+                    // (для него есть свой селектор). Зеркало ставим ДО set_value, иначе
+                    // прилетевший Change снова откроет список.
+                    let base = moon_core::symbol::coin_of_market(&market).to_string();
+                    view.update(app, |this, cx| {
+                        this.coin_query = base.clone();
+                        this.coin_popup_open = false;
+                        cx.notify();
+                    });
+                    coin_input.update(app, |inp, c| inp.set_value(base.clone(), window, c));
+                    view.update(app, |this, cx| this.request_requery(cx));
+                },
+                |_core, _market, _app| {},
+                |_app| {},
             )
-            .child(self.core_combo(cx))
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("report.filter.coin").to_string()),
-            )
+            .absolute()
+            .top_full()
+            .left_0()
+            .mt(px(2.0))
+        });
+        // Слой-перехватчик клика вне списка (закрыть). Ниже фильтров в z-порядке — клик по
+        // строке списка ловит сама строка, клик мимо закрывает список.
+        let coin_dismiss = self.coin_popup_open.then(|| {
+            div()
+                .id("rep-coin-dismiss")
+                .absolute()
+                .inset_0()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                        this.close_coin_popup(cx);
+                        cx.stop_propagation();
+                    }),
+                )
+        });
+        let coin_field = div()
+            .relative()
             .child(
                 div().w(px(90.0)).child(
                     MoonInput::new("rep-coin")
@@ -809,25 +908,27 @@ impl Render for ReportPanel {
                         .cleanable(true),
                 ),
             )
+            .children(coin_popup);
+
+        // ── Фильтры ──
+        let filters = h_flex()
+            .w_full()
+            .flex_wrap()
+            .gap_2()
+            .items_center()
+            .px_2()
+            .py_1()
+            .child(self.core_combo(cx))
             .child(
                 div()
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_soft))
-                    .child(t!("report.filter.side").to_string()),
+                    .child(t!("report.filter.coin").to_string()),
             )
+            .child(coin_field)
             .child(self.side_combo(cx))
             .child(self.period_combo(cx))
-            .child({
-                let view = cx.entity();
-                MoonCheckbox::new("rep-emu")
-                    .checked(self.emu)
-                    .size(MoonCheckboxSize::Compact)
-                    .label(t!("report.filter.emu").to_string())
-                    .on_change(move |on: &bool, _w, app| {
-                        let on = *on;
-                        view.update(app, |t, c| t.set_emu(on, c));
-                    })
-            })
+            .child(self.kind_combo(cx))
             // Ручные даты С:/По: — только в откреплённом окне; в докнутой вкладке
             // хватает пресетов периода (компактная строка: ядро/монета/сторона/
             // период/эмулятор/колонки).
@@ -878,6 +979,9 @@ impl Render for ReportPanel {
             let visible = Rc::new(vis.clone());
             let row_count = table.rows.len();
             let view = cx.entity();
+            // Клон для замыкания строк (клик по ячейке «Ядро» → filter_to_core); `view` ниже
+            // ещё нужен для on_sort.
+            let view_row = view.clone();
             let backend = self.backend.clone();
             let table_state = self.table_state.clone();
             let cols = columns::report_columns(&self.table, &vis);
@@ -896,7 +1000,15 @@ impl Render for ReportPanel {
                 p,
                 cx,
                 MoonDataTable::new("report-table", row_count, move |ri, _window, _app| {
-                    columns::report_data_row(ri, &table, &visible, &selected_cores, &backend, p)
+                    columns::report_data_row(
+                        ri,
+                        &table,
+                        &visible,
+                        &selected_cores,
+                        &backend,
+                        &view_row,
+                        p,
+                    )
                 })
                 .state(&table_state)
                 .columns(cols)
@@ -958,8 +1070,11 @@ impl Render for ReportPanel {
         v_flex()
             .id("report-panel")
             .size_full()
+            .relative()
             .track_focus(&self.focus)
             .bg(rgb(p.table_body))
+            // Дисмиссер ниже фильтров в z-порядке (см. `coin_dismiss`).
+            .children(coin_dismiss)
             .child(filters)
             .child(div().w_full().h(px(1.0)).bg(border))
             .child(table_el)

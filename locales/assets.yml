@@ -10,6 +10,11 @@ assets.show_all:
   ru: "показать всё"
   en: "show all"
   es: "mostrar todo"
+# Подсказка слайдера порога пыли в верхней полосе (0 = показать всё).
+assets.min_value_hint:
+  ru: "Скрывать активы дешевле N $ (0 — показать всё; колесо мыши меняет)"
+  en: "Hide assets worth less than N $ (0 — show all; mouse wheel changes)"
+  es: "Ocultar activos por debajo de N $ (0 — mostrar todo; la rueda del ratón lo cambia)"
 assets.cores_free_total:
   ru: "Ядра · своб/итого"
   en: "Cores · free/total"
@@ -30,6 +35,15 @@ assets.section_positions:
   ru: "Позиции"
   en: "Positions"
   es: "Posiciones"
+# Поле-список выбора ядер (как orders.all_cores / orders.cores_n).
+assets.all_cores:
+  ru: "Все ядра"
+  en: "All cores"
+  es: "Todos los núcleos"
+assets.cores_n:
+  ru: "Ядер: %{n}"
+  en: "Cores: %{n}"
+  es: "Núcleos: %{n}"
 
 # --- Колонки таблицы активов ---
 assets.col.core:
