@@ -42,6 +42,9 @@ pub(super) struct PendingOrderDrag {
 pub(super) struct OrderHoverKey {
     core: CoreId,
     uid: u64,
+    /// Курсор на кресте начала (клик-отмена): рендер показывает «палец» вместо
+    /// вертикальной стрелки перетаскивания.
+    pub(super) cancel: bool,
 }
 
 struct OrderHit {
@@ -54,6 +57,9 @@ struct OrderHit {
     market: String,
     /// Сторона позиции ордера (для выбора `OrderSide` в join).
     short: bool,
+    /// Курсор на КРЕСТЕ НАЧАЛА линии невыполненного входа (Buy, fill=0) —
+    /// клик по нему отменяет ордер (как в Moonbot), а не начинает drag.
+    on_start_cross: bool,
 }
 
 impl ChartPanel {
@@ -216,18 +222,30 @@ impl ChartPanel {
         let Some(plot) = self.local_plot_rect(pane) else {
             return None;
         };
-        let Some((center, range)) = self.chart.with_container(|container| {
-            container
-                .pane(pane)
-                .map(|pane| (pane.view.render_center, pane.view.render_range))
-        }) else {
+        let Some((center, range, epoch_ms, left_rel, window_ms)) =
+            self.chart.with_container(|container| {
+                container.pane(pane).map(|pane| {
+                    let (left, window) = pane.view.visible_x(plot.w);
+                    (
+                        pane.view.render_center,
+                        pane.view.render_range,
+                        pane.view.epoch_ms,
+                        left,
+                        window,
+                    )
+                })
+            })
+        else {
             return None;
         };
-        if plot.h <= 1.0 || !(range > 0.0) {
+        if plot.h <= 1.0 || !(range > 0.0) || !(window_ms > 0.0) {
             return None;
         }
+        // X начала линии (первая ступень трассы) — тем же маппингом, что рендер.
+        let x_of_time =
+            |t_ms: f64| plot.x + ((t_ms - epoch_ms) as f32 - left_rel) / window_ms * plot.w;
         let threshold = (6.0 * self.last_ppp).max(6.0);
-        let mut best: Option<(u64, LineKind, f32, bool, f32)> = None;
+        let mut best: Option<(u64, LineKind, f32, bool, f32, f32, f32)> = None;
         if let Some(core_data) = self.backend.read(cx).session.store().core(core) {
             for order in core_data
                 .order_lines
@@ -251,24 +269,50 @@ impl ChartPanel {
                     if kind == LineKind::Buy && order.fill_pct > 0.0 {
                         continue;
                     }
-                    let Some(price) = order.lines[kind as usize]
+                    let line = &order.lines[kind as usize];
+                    let Some(price) = line
                         .current_price()
                         .filter(|p| p.is_finite() && *p > 0.0)
                     else {
                         continue;
                     };
+                    // Линия существует от своей ПЕРВОЙ ступени до правого края — левее её
+                    // начала цепляться нельзя (раньше drag ловился в любом месте этой цены,
+                    // даже там, где линии нет).
+                    let start_x = line.steps.first().map(|&(t, _)| x_of_time(t));
+                    if let Some(start_x) = start_x {
+                        if pos.0 + threshold < start_x {
+                            continue;
+                        }
+                    }
                     let rel_y = 0.5 - (price - center) / range;
                     let y = plot.y + rel_y * plot.h;
                     let dist = (y - pos.1).abs();
                     if dist <= threshold
-                        && best.is_none_or(|(_, _, _, _, best_dist)| dist < best_dist)
+                        && best.is_none_or(|(_, _, _, _, best_dist, _, _)| dist < best_dist)
                     {
-                        best = Some((order.uid, kind, price, order.is_short, dist));
+                        best = Some((
+                            order.uid,
+                            kind,
+                            price,
+                            order.is_short,
+                            dist,
+                            start_x.unwrap_or(f32::NEG_INFINITY),
+                            order.fill_pct,
+                        ));
                     }
                 }
             }
         }
-        let (uid, kind, price, short, _) = best?;
+        let (uid, kind, price, short, dist, start_x, fill_pct) = best?;
+        // Крест начала невыполненного входа: клик-цель отмены. Радиус = тот же threshold
+        // (крест ~7px). Только Buy-линия (вход, в т.ч. шорт) с fill=0 — исполненный вход
+        // отменять нечем, его крест исторический.
+        let on_start_cross = kind == LineKind::Buy
+            && fill_pct <= 0.0
+            && start_x.is_finite()
+            && (pos.0 - start_x).abs() <= threshold
+            && dist <= threshold;
         Some(OrderHit {
             core,
             uid,
@@ -277,7 +321,34 @@ impl ChartPanel {
             price,
             market,
             short,
+            on_start_cross,
         })
+    }
+
+    /// ЛКМ по КРЕСТУ НАЧАЛА линии невыполненного входа → отмена ордера (как в Moonbot).
+    /// Работает и в режиме раздельных зон (крест — точная цель в зоне чарта, в отличие
+    /// от drag, который там ограничен стаканом). `true` = клик съеден.
+    pub(super) fn try_cancel_order_click(
+        &mut self,
+        pos: (f32, f32),
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(hit) = self.hit_order_line(pos, cx) else {
+            return false;
+        };
+        if !hit.on_start_cross {
+            return false;
+        }
+        let (core, uid) = (hit.core, hit.uid);
+        self.backend.update(cx, |b, _| {
+            match b.session.cancel_order(core, uid) {
+                Ok(()) => log::info!("chart start-cross cancel: core={core} uid={uid}"),
+                Err(error) => {
+                    log::warn!("chart start-cross cancel failed: core={core} uid={uid}: {error}")
+                }
+            }
+        });
+        true
     }
 
     /// ПКМ по линии ордера → контекстное меню. Buy/Buy short → «Редактировать…» + «Cancel»
@@ -445,13 +516,19 @@ impl ChartPanel {
     }
 
     pub(super) fn sync_order_hover(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
-        // Раздельные зоны: за линии цепляемся только в стакане → и подсветку даём только там.
-        if self.separate_zones(cx) && self.glass_pane_at(pos).is_none() {
-            return self.set_order_interaction(None, cx);
-        }
-        let next = self.hit_order_line(pos, cx).map(|hit| OrderHoverKey {
-            core: hit.core,
-            uid: hit.uid,
+        // Раздельные зоны: за линии цепляемся только в стакане → и подсветку даём только
+        // там. Исключение — крест начала (клик-отмена): он в зоне чарта и остаётся
+        // активной целью в обоих режимах.
+        let glass_gate = self.separate_zones(cx) && self.glass_pane_at(pos).is_none();
+        let next = self.hit_order_line(pos, cx).and_then(|hit| {
+            if glass_gate && !hit.on_start_cross {
+                return None;
+            }
+            Some(OrderHoverKey {
+                core: hit.core,
+                uid: hit.uid,
+                cancel: hit.on_start_cross,
+            })
         });
         self.set_order_interaction(next, cx)
     }
@@ -464,6 +541,11 @@ impl ChartPanel {
         let Some(hit) = self.hit_order_line(pos, cx) else {
             return false;
         };
+        // Крест начала — цель клика-отмены (обрабатывается ДО drag в mouse_down_left);
+        // drag с него не начинаем, чтобы промах по времени клика не переставлял ордер.
+        if hit.on_start_cross {
+            return false;
+        }
         let price = hit.price as f64;
         self.order_drag = Some(OrderDrag {
             core: hit.core,
@@ -477,6 +559,7 @@ impl ChartPanel {
             Some(OrderHoverKey {
                 core: hit.core,
                 uid: hit.uid,
+                cancel: false,
             }),
             cx,
         );

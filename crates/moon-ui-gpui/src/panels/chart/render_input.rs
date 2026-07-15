@@ -120,6 +120,13 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
+    // Клик по кресту начала невыполненного входа — отмена ордера (до drag: с креста
+    // перетаскивание не начинается).
+    if within && e.click_count <= 1 && this.try_cancel_order_click(pos, cx) {
+        cx.notify();
+        cx.stop_propagation();
+        return;
+    }
     if within && e.click_count <= 1 && this.try_start_order_drag(pos, cx) {
         this.sync_native_cursor();
         cx.notify();

@@ -474,10 +474,20 @@ impl Render for ChartPanel {
             // стрелка «вверх-вниз»: линию двигают только по цене (Y), это сразу читается как
             // «можно тянуть». Отдельный grab/grabbing не используем — ns-resize точнее
             // отражает одномерную (вертикальную) природу перетаскивания.
-            .when(
-                self.order_drag.is_some() || self.order_hover.is_some(),
-                |this| this.cursor_ns_resize(),
-            )
+            // Над КРЕСТОМ НАЧАЛА невыполненного входа — «палец»: клик отменяет ордер.
+            .map(|this| {
+                if self.order_drag.is_some() {
+                    this.cursor_ns_resize()
+                } else if let Some(hover) = self.order_hover {
+                    if hover.cancel {
+                        this.cursor_pointer()
+                    } else {
+                        this.cursor_ns_resize()
+                    }
+                } else {
+                    this
+                }
+            })
             .on_scroll_wheel(cx.listener(render_input::scroll_wheel))
             .on_mouse_down(MouseButton::Left, cx.listener(render_input::mouse_down_left))
             .on_mouse_up(MouseButton::Left, cx.listener(render_input::mouse_up_left))
