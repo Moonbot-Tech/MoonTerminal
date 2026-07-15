@@ -581,25 +581,35 @@ impl RenderState {
                 }
             }
 
-            let div_sec = window_ms / 1000.0 / 6.0;
-            let with_sec = div_sec < 60.0;
-            // Прореживание по горизонтали: при узком окне 7 подписей налезают друг на друга —
+            // Метки времени — на КРУГЛЫХ границах локального времени (nice_time_step:
+            // 1с..6ч под ~6 подписей). Раньше метки стояли на фикс. долях ширины окна →
+            // некруглые времена с плавающим шагом (19:46, 19:56, 20:05 — то +9, то +10).
+            let step_ms =
+                (moon_chart::axes::nice_time_step(window_ms / 1000.0, 6.0) * 1000.0).max(1000.0);
+            let with_sec = step_ms < 60_000.0;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_millis() as f64);
+            let tz_ms = tz_offset_sec as f64 * 1000.0;
+            let right_unix = left_unix + window_ms;
+            // Первая круглая граница в окне (выравнивание по ЛОКАЛЬНОМУ времени).
+            let mut tick_unix = ((left_unix + tz_ms) / step_ms).ceil() * step_ms - tz_ms;
+            // Прореживание по горизонтали: при узком окне подписи налезают друг на друга —
             // рисуем подпись, только если её левый край отстоит от ПРАВОГО края предыдущей
             // нарисованной (иначе пропуск → «через одну»).
             let min_h_gap = 6.0;
             let mut last_right = f32::NEG_INFINITY;
-            for k in 0..=6 {
-                if !time_axis_visible {
+            while time_axis_visible && tick_unix <= right_unix + 0.5 {
+                let unix = tick_unix;
+                tick_unix += step_ms;
+                // Правые ~10% окна — «будущее» за живым краем: время, которого ещё нет,
+                // не подписываем (сбивало с толку у границы стакана).
+                if now_ms > 0.0 && unix > now_ms {
                     break;
                 }
-                let frac = k as f64 / 6.0;
-                let x = plot_left + (frac as f32) * plot_w;
-                let unix = left_unix + frac * window_ms;
+                let x = plot_left + ((unix - left_unix) / window_ms) as f32 * plot_w;
                 // Подписи оси на не-сегодняшних сутках получают дату «ДД.ММ» — без неё
                 // на широких окнах метки читались как идущие «назад» (шаг > суток).
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0.0, |d| d.as_millis() as f64);
                 let label =
                     moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, with_sec, now_ms);
                 let metrics = self.measure_text(ctx, &label);
@@ -609,7 +619,7 @@ impl RenderState {
                 let overlaps_readout = skip_time_label_x.is_some_and(|(skip_left, skip_right)| {
                     right >= skip_left && left <= skip_right
                 });
-                if !overlaps_readout && left >= last_right + min_h_gap {
+                if !overlaps_readout && left >= last_right + min_h_gap && left >= plot_left - 1.0 {
                     self.draw_text(ctx, &label, x, pane_bottom - 2.0, 0.5, 1.0, ink)?;
                     last_right = right;
                 }
