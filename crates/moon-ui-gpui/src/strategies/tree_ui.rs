@@ -178,6 +178,19 @@ impl StrategiesView {
         let m = &ev.keystroke.modifiers;
         let key = ev.keystroke.key.as_str();
         if m.control && key == "c" {
+            // Нет выбора стратегий, но кликом выделена ПАПКА → копируем её целиком
+            // (со всем содержимым, как в Moonbot).
+            let no_sel = {
+                let store = self.backend.read(cx).session.store();
+                self.selection_rows(store).is_empty()
+            };
+            if no_sel {
+                if let Some((core, path)) = self.selected_folder.clone() {
+                    let path = tree_ops::split_path(&path);
+                    self.copy_folder(core, path, cx);
+                    return;
+                }
+            }
             self.copy_selection(cx);
         } else if m.control && key == "v" {
             let (core, target) = {

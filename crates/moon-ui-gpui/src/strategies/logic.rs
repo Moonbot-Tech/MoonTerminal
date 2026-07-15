@@ -176,14 +176,21 @@ pub(super) fn edited_field_value(
         .unwrap_or_else(|| field_value(row, f))
 }
 
-/// Значение поля стратегии (по имени) или дефолт схемы.
+/// Значение поля стратегии (по имени) или дефолт схемы. Числовое поле без
+/// значения и без дефолта показываем как «0» (формат Moonbot: сервер не шлёт
+/// поля, равные дефолту, а пустой инпут путал — «что тут должно быть?»).
 pub(super) fn field_value(row: &StrategyRow, f: &SchemaField) -> String {
-    row.fields
+    let v = row
+        .fields
         .iter()
         .find(|(n, _)| n == &f.name)
         .map(|(_, v)| v.clone())
         .or_else(|| f.default.clone())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if v.is_empty() && f.type_name != "String" && matches!(f.ui, SchemaFieldUi::Edit) {
+        return "0".to_string();
+    }
+    v
 }
 
 pub(super) fn is_on(v: &str) -> bool {

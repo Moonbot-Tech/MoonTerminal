@@ -48,6 +48,8 @@ pub(super) enum NodeData {
         label: String,
         active: usize,
         total: usize,
+        /// Папка выделена кликом (подсветка + цель Ctrl+C «копировать папку»).
+        selected: bool,
     },
     Strategy {
         core: CoreId,
@@ -209,6 +211,7 @@ fn convert_node(
                 label: name.clone(),
                 active,
                 total,
+                selected: view.selected_folder.as_ref() == Some(&(core, prefix.join("/"))),
             },
         );
         out.push(
@@ -390,6 +393,7 @@ fn render_row(
             core_folder_row(
                 view,
                 entry.is_expanded(),
+                false,
                 indent,
                 txt,
                 p.blue,
@@ -404,6 +408,7 @@ fn render_row(
             label,
             active,
             total,
+            selected,
         } => {
             let core = *core;
             let path = path.clone();
@@ -411,6 +416,7 @@ fn render_row(
             core_folder_row(
                 view,
                 entry.is_expanded(),
+                *selected,
                 indent,
                 txt,
                 p.text_soft,
@@ -456,6 +462,7 @@ enum ToggleTarget {
 fn core_folder_row(
     view: &Entity<StrategiesView>,
     expanded: bool,
+    selected: bool,
     indent: Pixels,
     text: String,
     color: u32,
@@ -482,6 +489,7 @@ fn core_folder_row(
         .gap(design::ui_px(app, 5.0))
         .cursor_pointer()
         .rounded(design::ui_px(app, 3.0))
+        .when(selected, |s| s.bg(moon_alpha(p.amber, 0.14)))
         .hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
         .child(
             MoonText::new(marker)
@@ -501,9 +509,14 @@ fn core_folder_row(
         .on_click(move |_e, _window, app| {
             view_click.update(app, |this, cx| {
                 match &target {
-                    ToggleTarget::Core(c) => toggle(&mut this.expanded_cores, *c),
+                    ToggleTarget::Core(c) => {
+                        toggle(&mut this.expanded_cores, *c);
+                        this.selected_folder = None;
+                    }
                     ToggleTarget::Folder(c, path) => {
-                        toggle(&mut this.expanded_folders, (*c, path.join("/")))
+                        toggle(&mut this.expanded_folders, (*c, path.join("/")));
+                        // Клик и ВЫДЕЛЯЕТ папку (подсветка + цель Ctrl+C), как в Moonbot.
+                        this.selected_folder = Some((*c, path.join("/")));
                     }
                 }
                 cx.notify();

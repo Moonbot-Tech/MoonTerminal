@@ -378,13 +378,30 @@ impl StrategiesView {
             .when(dirty, |s| s.bg(moon_alpha(p.amber, 0.06)))
             .hover(move |s| s.bg(moon_alpha(p.panel, 0.46)))
             .child(
-                div()
+                h_flex()
                     .w(design::font_w_px(cx, 180.0))
                     .flex_none()
                     .pt(px(5.0))
-                    .truncate()
-                    .text_color(moon(name_col))
-                    .child(f.name.clone()),
+                    .items_start()
+                    .gap_1()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(moon(name_col))
+                            .child(f.name.clone()),
+                    )
+                    // Маркер «изменено, но не применено»: видно, какие поля из
+                    // простыни правились до нажатия «применить».
+                    .when(dirty, |row| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(moon(p.red))
+                                .child("**"),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -407,6 +424,24 @@ impl StrategiesView {
         let field = self.focused_field.clone()?;
         if !is_formula_field(&field) {
             return None;
+        }
+        // Хелпер формул — только для СТРОКОВЫХ редактируемых полей. Матч по имени
+        // ловил и чекбоксы («IgnoreFilters» содержит «filter») — клик по галке
+        // открывал подсказки EMA. Смотрим тип/контрол поля в схеме.
+        {
+            let b = self.backend.read(cx);
+            let store = b.session.store();
+            if let Some(sections) = selected_sections(self, store) {
+                if let Some(f) = sections
+                    .iter()
+                    .flat_map(|s| &s.fields)
+                    .find(|f| f.name == field)
+                {
+                    if f.type_name != "String" || !matches!(f.ui, SchemaFieldUi::Edit) {
+                        return None;
+                    }
+                }
+            }
         }
         let p = MoonPalette::active(cx);
         let snippets = formula_snippets();

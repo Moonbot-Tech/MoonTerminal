@@ -86,6 +86,14 @@ pub struct StrategiesView {
     rules: Rules,
     /// Буфер копирования стратегий/папок (исходные данные — для межъядерной вставки).
     clipboard: Option<Vec<tree_ops::ClipItem>>,
+    /// Имена, УЖЕ отправленные на создание, но ещё не пришедшие эхом от ядра:
+    /// (ядро, имя). Без резерва два быстрых Ctrl+V читали один и тот же снимок
+    /// store и генерировали одинаковые имена (четыре «S (7)»). Чистится при
+    /// появлении имени в store.
+    pending_names: HashSet<(CoreId, String)>,
+    /// Выделенная кликом папка дерева: (ядро, путь) — подсветка + цель Ctrl+C
+    /// (копия папки целиком, как в Moonbot).
+    selected_folder: Option<(CoreId, String)>,
     /// Пустые UI-папки (до наполнения первой стратегией): (ядро, путь через `/`).
     ui_folders: HashSet<(CoreId, String)>,
     /// Активная модалка операции над деревом (создать/переименовать/подтвердить).
@@ -197,6 +205,8 @@ impl StrategiesView {
             expanded_folders: HashSet::new(),
             rules: Rules::load(),
             clipboard: None,
+            pending_names: HashSet::new(),
+            selected_folder: None,
             ui_folders: HashSet::new(),
             op: None,
             op_input: None,
@@ -243,6 +253,8 @@ impl StrategiesView {
         }
         // Первичная (источник схемы/секций) — всегда кликнутая. Раздел не сбрасываем.
         self.selected = Some(key);
+        // Клик по стратегии снимает выделение папки (Ctrl+C снова копирует выбор).
+        self.selected_folder = None;
         before_selected != self.selected || before_anchor != self.anchor || before_sel != self.sel
     }
 

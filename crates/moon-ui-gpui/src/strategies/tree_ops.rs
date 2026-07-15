@@ -78,6 +78,11 @@ fn set_field(fields: &mut Vec<(String, String)>, name: &str, value: &str) {
 pub fn new_strategy(kind: &SchemaKind, name: &str, folder_path: &str) -> NewStrategy {
     let mut fields = default_fields(kind);
     set_field(&mut fields, STRATEGY_NAME_FIELD, name);
+    // Тип стратегии в Moonbot = поле `SignalType` (kind-байт снапшота сервер
+    // пересобирает из него при sync, см. feed/live/commands.rs). Без явной
+    // записи созданная «Volumes» возвращалась с дефолтным SignalType схемы
+    // (Drops) — выбранный в диалоге вид игнорировался.
+    set_field(&mut fields, "SignalType", &kind.name);
     NewStrategy {
         kind_ordinal: kind.ordinal,
         folder_path: folder_path.to_string(),
@@ -139,17 +144,40 @@ pub fn copy_folder(rows: &[StrategyRow], folder_prefix: &[String]) -> Vec<ClipIt
     clip_with_base(&under, &folder_prefix[..parent_len])
 }
 
-/// Уникальное имя в наборе занятых: `name` → `name (copy)` → `name (2)` → …
+/// База имени без суффиксов копий: срезает ХВОСТОВЫЕ « (copy)» / « (N)», сколько бы
+/// их ни накопилось («S (copy) (copy)», «S (copy) (2)» → «S»). Имя целиком из
+/// суффиксов не трогаем.
+fn base_name(name: &str) -> &str {
+    let mut s = name.trim_end();
+    loop {
+        let Some(open) = s.rfind(" (") else { break };
+        let Some(inner) = s[open + 2..].strip_suffix(')') else {
+            break;
+        };
+        let is_copy_suffix =
+            inner == "copy" || (!inner.is_empty() && inner.bytes().all(|b| b.is_ascii_digit()));
+        if !is_copy_suffix {
+            break;
+        }
+        let head = s[..open].trim_end();
+        if head.is_empty() {
+            break;
+        }
+        s = head;
+    }
+    s
+}
+
+/// Уникальное имя в наборе занятых: единый формат «База (N)» с наименьшим свободным
+/// N от 2. Старые суффиксы срезаются (см. [`base_name`]) — копия копии больше не
+/// плодит «S (copy) (copy)», а разнобой «(copy)»/«(2)» сведён к одному виду.
 pub fn unique_name(taken: &HashSet<String>, desired: &str) -> String {
     if !taken.contains(desired) {
         return desired.to_string();
     }
-    let with_copy = format!("{desired} (copy)");
-    if !taken.contains(&with_copy) {
-        return with_copy;
-    }
+    let base = base_name(desired);
     for n in 2.. {
-        let cand = format!("{desired} ({n})");
+        let cand = format!("{base} ({n})");
         if !taken.contains(&cand) {
             return cand;
         }
@@ -181,6 +209,104 @@ pub fn paste_plan(
         });
     }
     out
+}
+
+// --- Текстовый буфер (блокнот / обмен между пользователями) ----------------
+
+/// Экранирование значения поля для строчного формата: `\` → `\\`, перевод строки → `\n`.
+fn escape_value(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for ch in v.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn unescape_value(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    let mut it = v.chars();
+    while let Some(ch) = it.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match it.next() {
+            Some('n') => out.push('\n'),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Сериализация буфера в ТЕКСТ (кладётся в системный буфер обмена вместе с внутренним):
+/// блок `[Strategy]` на стратегию, `Ключ=Значение` построчно. Самодостаточен для
+/// обратной вставки ([`clip_from_text`]) в любом ядре/экземпляре терминала — так папку
+/// со стратегиями можно выкинуть в блокнот и переслать целиком.
+pub fn clip_to_text(clip: &[ClipItem]) -> String {
+    let mut out = String::new();
+    for item in clip {
+        out.push_str("[Strategy]\n");
+        out.push_str(&format!("Kind={}\n", escape_value(&item.kind)));
+        out.push_str(&format!("KindOrdinal={}\n", item.kind_ordinal));
+        if !item.rel_path.is_empty() {
+            out.push_str(&format!("Path={}\n", escape_value(&join_path(&item.rel_path))));
+        }
+        out.push_str(&format!("Name={}\n", escape_value(&item.name)));
+        for (n, v) in &item.fields {
+            out.push_str(&format!("{n}={}\n", escape_value(v)));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Разбор текста [`clip_to_text`]. Не наш формат / битые блоки → `None`.
+pub fn clip_from_text(text: &str) -> Option<Vec<ClipItem>> {
+    let mut out: Vec<ClipItem> = Vec::new();
+    let mut cur: Option<ClipItem> = None;
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.trim() == "[Strategy]" {
+            if let Some(item) = cur.take() {
+                out.push(item);
+            }
+            cur = Some(ClipItem {
+                kind_ordinal: 0,
+                kind: String::new(),
+                name: String::new(),
+                rel_path: Vec::new(),
+                fields: Vec::new(),
+            });
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let item = cur.as_mut()?; // содержимое до первого блока — не наш формат
+        let (key, value) = line.split_once('=')?;
+        let value = unescape_value(value);
+        match key {
+            "Kind" => item.kind = value,
+            "KindOrdinal" => item.kind_ordinal = value.parse().ok()?,
+            "Path" => item.rel_path = split_path(&value),
+            "Name" => item.name = value,
+            _ => item.fields.push((key.to_string(), value)),
+        }
+    }
+    if let Some(item) = cur.take() {
+        out.push(item);
+    }
+    (!out.is_empty() && out.iter().all(|i| !i.name.is_empty())).then_some(out)
 }
 
 // --- Переименование / перенос (правка folder_path существующих) -----------
@@ -339,11 +465,37 @@ mod tests {
         let mut taken = HashSet::new();
         assert_eq!(unique_name(&taken, "S"), "S");
         taken.insert("S".to_string());
-        assert_eq!(unique_name(&taken, "S"), "S (copy)");
-        taken.insert("S (copy)".to_string());
         assert_eq!(unique_name(&taken, "S"), "S (2)");
         taken.insert("S (2)".to_string());
         assert_eq!(unique_name(&taken, "S"), "S (3)");
+        // Копия копии: старые суффиксы срезаются до базы, «(copy) (copy)» не плодится.
+        taken.insert("S (copy)".to_string());
+        assert_eq!(unique_name(&taken, "S (copy)"), "S (3)");
+        taken.insert("S (3)".to_string());
+        assert_eq!(unique_name(&taken, "S (3)"), "S (4)");
+        // Занятое «(copy) (copy)» уникализируется от БАЗЫ, а не наращивает хвост.
+        taken.insert("S (copy) (copy)".to_string());
+        assert_eq!(unique_name(&taken, "S (copy) (copy)"), "S (4)");
+        // Скобки не-копийного вида — часть имени, не срезаются.
+        taken.insert("Grid (v2 beta)".to_string());
+        assert_eq!(unique_name(&taken, "Grid (v2 beta)"), "Grid (v2 beta) (2)");
+    }
+
+    #[test]
+    fn clip_text_roundtrip() {
+        let clip = vec![ClipItem {
+            kind_ordinal: 7,
+            kind: "MoonShot".to_string(),
+            name: "S (2)".to_string(),
+            rel_path: split_path("fld/sub"),
+            fields: vec![
+                (STRATEGY_NAME_FIELD.to_string(), "S (2)".to_string()),
+                ("Formula".to_string(), "a\nb\\c".to_string()),
+            ],
+        }];
+        let text = clip_to_text(&clip);
+        assert_eq!(clip_from_text(&text), Some(clip));
+        assert_eq!(clip_from_text("случайный текст"), None);
     }
 
     #[test]
@@ -414,8 +566,8 @@ mod tests {
             .unwrap()
             .1
             .clone();
-        assert_eq!(n0, "S (copy)");
-        assert_eq!(n1, "S (2)");
+        assert_eq!(n0, "S (2)");
+        assert_eq!(n1, "S (3)");
         assert_ne!(n0, n1);
     }
 

@@ -17,41 +17,76 @@ impl StrategiesView {
             return;
         }
         let refs: Vec<&StrategyRow> = rows.iter().map(|(_, r)| r).collect();
-        self.clipboard = Some(tree_ops::copy_rows(&refs));
+        self.set_clipboard(tree_ops::copy_rows(&refs), cx);
         cx.notify();
     }
 
     pub(super) fn copy_folder(&mut self, core: CoreId, path: Vec<String>, cx: &mut Context<Self>) {
-        let store = self.backend.read(cx).session.store();
-        let Some(cd) = store.core(core) else { return };
-        self.clipboard = Some(tree_ops::copy_folder(&cd.strategies, &path));
+        let clip = {
+            let store = self.backend.read(cx).session.store();
+            let Some(cd) = store.core(core) else { return };
+            tree_ops::copy_folder(&cd.strategies, &path)
+        };
+        self.set_clipboard(clip, cx);
         cx.notify();
     }
 
+    /// Внутренний буфер + ТЕКСТОВАЯ копия в системный буфер обмена: стратегию/папку
+    /// можно вставить в блокнот и переслать (обратно принимает `paste_into`).
+    fn set_clipboard(&mut self, clip: Vec<tree_ops::ClipItem>, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(tree_ops::clip_to_text(&clip)));
+        self.clipboard = Some(clip);
+    }
+
     pub(super) fn paste_into(&mut self, core: CoreId, target: String, cx: &mut Context<Self>) {
-        let Some(clip) = self.clipboard.clone() else {
+        // Внутренний буфер; пусто → пробуем СИСТЕМНЫЙ (текстовый формат clip_to_text —
+        // так вставляется папка/стратегия, присланная другим пользователем текстом).
+        let clip = self.clipboard.clone().or_else(|| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .and_then(|t| tree_ops::clip_from_text(&t))
+        });
+        let Some(clip) = clip else {
             return;
         };
         let specs = {
             let store = self.backend.read(cx).session.store();
-            let taken: std::collections::HashSet<String> = store
+            let existing: std::collections::HashSet<String> = store
                 .core(core)
                 .map(|cd| cd.strategies.iter().map(|r| r.name.clone()).collect())
                 .unwrap_or_default();
+            // Имена, отправленные прошлыми вставками и уже пришедшие эхом, из резерва
+            // выбрасываем; остальные считаем занятыми — иначе быстрые Ctrl+V читали
+            // один и тот же снимок store и плодили дубли имён.
+            self.pending_names
+                .retain(|(c, n)| *c != core || !existing.contains(n));
+            let mut taken = existing;
+            taken.extend(
+                self.pending_names
+                    .iter()
+                    .filter(|(c, _)| *c == core)
+                    .map(|(_, n)| n.clone()),
+            );
             let plan = tree_ops::paste_plan(&clip, &tree_ops::split_path(&target), &taken);
             specs_from(plan)
         };
+        let new_names: Vec<String> = specs
+            .iter()
+            .filter_map(|s| {
+                s.fields
+                    .iter()
+                    .find(|(n, _)| n == tree_ops::STRATEGY_NAME_FIELD)
+                    .map(|(_, v)| v.clone())
+            })
+            .collect();
         // Имя первой вставленной — выберем её, как только ядро пришлёт эхо.
-        let first_name = specs.first().and_then(|s| {
-            s.fields
-                .iter()
-                .find(|(n, _)| n == tree_ops::STRATEGY_NAME_FIELD)
-                .map(|(_, v)| v.clone())
-        });
+        let first_name = new_names.first().cloned();
         if let Err(error) = self.backend.read(cx).session.create_strategies(core, specs) {
             log::warn!("paste strategies failed: {error}");
             return;
         }
+        self.pending_names
+            .extend(new_names.into_iter().map(|n| (core, n)));
         // Новые/вставленные стратегии всегда выключены — снимаем «только активные», иначе их
         // не видно. Раскрываем целевое ядро, чтобы результат был на виду.
         self.filter.only_active = false;

@@ -57,7 +57,7 @@ fn op_dialog_body(
 
     match op {
         TreeOp::CreateStrategy { core, target, kind } => {
-            let kinds: Vec<(u8, String)> = backend
+            let mut kinds: Vec<(u8, String)> = backend
                 .read(cx)
                 .session
                 .store()
@@ -70,6 +70,15 @@ fn op_dialog_body(
                         .collect()
                 })
                 .unwrap_or_default();
+            // MoonShot — наверх списка (самый используемый вид), остальные в
+            // порядке схемы: меньше беготни по длинному меню.
+            if let Some(pos) = kinds
+                .iter()
+                .position(|(_, n)| n.eq_ignore_ascii_case("MoonShot"))
+            {
+                let k = kinds.remove(pos);
+                kinds.insert(0, k);
+            }
             let kind_name = kind
                 .and_then(|k| kinds.iter().find(|(o, _)| *o == k))
                 .map(|(_, n)| n.clone())
@@ -222,7 +231,14 @@ impl StrategiesView {
         cx: &mut Context<Self>,
     ) {
         let store = self.backend.read(cx).session.store();
-        let kind = self.kinds_of(store, core).first().map(|(o, _)| *o);
+        // Дефолт вида — MoonShot (статистически самый используемый), а не первый
+        // по схеме (Telegram); нет MoonShot в схеме → первый.
+        let kinds = self.kinds_of(store, core);
+        let kind = kinds
+            .iter()
+            .find(|(_, n)| n.eq_ignore_ascii_case("MoonShot"))
+            .or_else(|| kinds.first())
+            .map(|(o, _)| *o);
         self.op_input_init = String::new();
         self.op_input = None; // каждое открытие получает свежий input entity/layout
         self.op = Some(TreeOp::CreateStrategy { core, target, kind });
