@@ -6,7 +6,6 @@ use std::collections::HashSet;
 
 use gpui::*;
 use moon_ui::Root;
-use rust_i18n::t;
 
 use super::SettingsView;
 use moon_core::config::AppConfig;
@@ -27,10 +26,10 @@ impl SettingsView {
         });
         match res {
             Ok(()) => {
-                self.status = Some((t!("settings.saved").to_string(), false));
+                self.status = Some((super::StatusMsg::Key("settings.saved"), false));
                 self.apply_settings(&before, cx);
             }
-            Err(e) => self.status = Some((e.to_string(), true)),
+            Err(e) => self.status = Some((super::StatusMsg::Text(e.to_string()), true)),
         }
         cx.notify();
     }

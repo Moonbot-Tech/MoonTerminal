@@ -97,11 +97,19 @@ const MODE_LABELS: [(&str, MarketDataMode); 2] = [
     ("conn.market_percore", MarketDataMode::PerCore),
 ];
 
+/// Сообщение статуса подвала: ключ i18n (резолвится на РЕНДЕРЕ — не кэшируем
+/// готовую строку, иначе после смены языка «Сохранено» оставалось хвостом
+/// прошлой локали) либо готовый текст (ошибки I/O, не локализуются).
+pub(crate) enum StatusMsg {
+    Key(&'static str),
+    Text(String),
+}
+
 pub struct SettingsView {
     backend: Entity<Backend>,
     active: Tab,
-    /// Статус сохранения: (текст, ошибка?).
-    status: Option<(String, bool)>,
+    /// Статус сохранения: (сообщение, ошибка?).
+    status: Option<(StatusMsg, bool)>,
     iface: Iface,
     lines: Lines,
     /// Редактор бейджей типов детектов (вкладка «Бейджи»); пересоздаётся при add/del.

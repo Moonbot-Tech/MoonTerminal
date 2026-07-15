@@ -27,6 +27,22 @@ const SWATCHES: [[u8; 4]; 8] = [
     [150, 160, 175, 255], // серый
 ];
 
+/// Шаг непрозрачности ±5% с посадкой на круглые проценты. Прежняя арифметика
+/// «±24 из 255» давала прыжки 100→91→81 и недостижимые значения (15% не
+/// выставлялось никак) — теперь любое кратное 5 в диапазоне 5..=100 достижимо.
+fn opacity_step(a: u8, up: bool) -> u8 {
+    let pct = (a as f32 / 255.0 * 100.0).round() as i32;
+    let next = if up {
+        pct / 5 * 5 + 5
+    } else if pct % 5 == 0 {
+        pct - 5
+    } else {
+        pct / 5 * 5
+    }
+    .clamp(5, 100);
+    (next as f32 / 100.0 * 255.0).round() as u8
+}
+
 const TOOLS: [(FigureTool, &str, &str); 4] = [
     (FigureTool::HLine, "fig-tool-hline", "─"),
     (FigureTool::Segment, "fig-tool-segment", "╱"),
@@ -193,7 +209,7 @@ impl ChartTabs {
             }))
             .child(
                 div()
-                    .w(px(28.0))
+                    .w(design::font_w_px(cx, 28.0))
                     .text_center()
                     .text_color(rgb(p.text))
                     .child(format!("{:.1}", style.thickness)),
@@ -208,17 +224,17 @@ impl ChartTabs {
             .gap(px(4.0))
             .child(label(&t!("chart.fig.opacity")))
             .child(self.step_btn("fig-op-dn", "−", cx, |s| {
-                s.color[3] = s.color[3].saturating_sub(24).max(24)
+                s.color[3] = opacity_step(s.color[3], false)
             }))
             .child(
                 div()
-                    .w(px(34.0))
+                    .w(design::font_w_px(cx, 34.0))
                     .text_center()
                     .text_color(rgb(p.text))
                     .child(format!("{opacity_pct}%")),
             )
             .child(self.step_btn("fig-op-up", "+", cx, |s| {
-                s.color[3] = s.color[3].saturating_add(24)
+                s.color[3] = opacity_step(s.color[3], true)
             }));
 
         // Вид линии (Kind): выпадашка из 5 значений (Solid/Dash/Dot/DashDot/DashDotDot).
@@ -260,7 +276,9 @@ impl ChartTabs {
             .top_full()
             .left_0()
             .mt(px(4.0))
-            .w(px(210.0))
+            // Ширина попапа растёт с кеглем — иначе на +6 подписи/значения
+            // переносились на вторую строку.
+            .w(design::font_w_px(cx, 210.0))
             .p(px(8.0))
             .gap(px(6.0))
             .bg(rgb(p.surface))

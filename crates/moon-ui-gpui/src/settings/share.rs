@@ -6,8 +6,6 @@
 //! Формат/валидация — в moon-core (`to_share_string`/`parse_share` у структур файлов).
 
 use gpui::*;
-use rust_i18n::t;
-
 use super::{SettingsView, Tab, badges, interface, lines};
 use moon_core::config::{AppConfig, BadgesConfig, ChartThemeSet, HotkeysConfig, OrdersStyleSet};
 
@@ -37,7 +35,7 @@ impl SettingsView {
             return;
         };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
-        self.status = Some((t!("settings.copied").to_string(), false));
+        self.status = Some((super::StatusMsg::Key("settings.copied"), false));
         cx.notify();
     }
 
@@ -50,7 +48,7 @@ impl SettingsView {
             .and_then(|item| item.text())
             .filter(|t| !t.trim().is_empty())
         else {
-            self.status = Some((t!("settings.paste_empty").to_string(), true));
+            self.status = Some((super::StatusMsg::Key("settings.paste_empty"), true));
             cx.notify();
             return;
         };
@@ -86,9 +84,9 @@ impl SettingsView {
                 Tab::Badges => self.badges = badges::build(&self.backend, window, cx),
                 _ => {}
             }
-            self.status = Some((t!("settings.pasted").to_string(), false));
+            self.status = Some((super::StatusMsg::Key("settings.pasted"), false));
         } else {
-            self.status = Some((t!("settings.paste_wrong").to_string(), true));
+            self.status = Some((super::StatusMsg::Key("settings.paste_wrong"), true));
         }
         cx.notify();
     }

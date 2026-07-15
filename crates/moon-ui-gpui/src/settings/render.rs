@@ -78,10 +78,18 @@ impl Render for SettingsView {
             );
 
         // ── Подвал: Сохранить + статус ──────────────────────────────────────
+        // Текст статуса резолвим здесь (ключ → текущая локаль), чтобы после
+        // смены языка не оставался «хвост» прошлой локали.
         let status_el = match &self.status {
-            Some((msg, err)) => div()
-                .text_color(rgba_from(if *err { p.red } else { p.green }, 1.0))
-                .child(msg.clone()),
+            Some((msg, err)) => {
+                let text = match msg {
+                    super::StatusMsg::Key(k) => t!(*k).to_string(),
+                    super::StatusMsg::Text(s) => s.clone(),
+                };
+                div()
+                    .text_color(rgba_from(if *err { p.red } else { p.green }, 1.0))
+                    .child(text)
+            }
             None => div(),
         };
         let footer = h_flex()

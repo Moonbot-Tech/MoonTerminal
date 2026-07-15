@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use gpui::*;
 use moon_ui::{
     MoonAccordion, MoonColorPicker, MoonColorPickerEvent, MoonColorPickerState, MoonPalette,
-    MoonSlider, MoonSliderEvent, MoonSliderState, h_flex, rgba_from,
+    MoonSlider, MoonSliderEvent, MoonSliderState, h_flex, rgba_from, v_flex,
 };
 
 use super::SettingsView;
@@ -51,35 +51,38 @@ pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
     ]
 }
 
-/// Строка слайдера (порт egui `Slider::new(..).text(label)`): сам слайдер, справа —
-/// подпись и текущее значение. Инлайн, на высоту одного ряда (как на стенде).
+/// Строка слайдера (порт egui `Slider::new(..).text(label)`): подпись СВЕРХУ
+/// (полная ширина, не обрезается при крупном кегле), под ней — слайдер и
+/// текущее значение. Значение нормализуем от IEEE `-0.0` (квантование слайдера
+/// на отрицательном поддиапазоне даёт минус-ноль → печаталось «-0.00»).
 pub(super) fn slider_row(label: &str, st: &Entity<MoonSliderState>, cx: &App) -> impl IntoElement {
     let p = MoonPalette::active(cx);
     let val = st.read(cx).value().end();
-    h_flex()
+    let val = if val == 0.0 { 0.0 } else { val };
+    v_flex()
         .w_full()
-        .min_h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
-        .gap(design::ui_px(cx, 10.0))
-        .items_center()
         .child(
             div()
-                .w(px(180.0))
-                .child(MoonSlider::new(st).height(design::ui_value(cx, 22.0))),
-        )
-        .child(
-            div()
-                .w(px(210.0))
-                .min_w_0()
-                .truncate()
                 .text_color(rgba_from(p.text_soft, 1.0))
                 .child(label.to_string()),
         )
         .child(
-            div()
-                .w(px(58.0))
-                .text_right()
-                .text_color(rgba_from(p.text_muted, 1.0))
-                .child(format!("{val:.2}")),
+            h_flex()
+                .w_full()
+                .min_h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
+                .gap(design::ui_px(cx, 10.0))
+                .items_center()
+                .child(
+                    div()
+                        .w(px(180.0))
+                        .child(MoonSlider::new(st).height(design::ui_value(cx, 22.0))),
+                )
+                .child(
+                    div()
+                        .w(design::font_w_px(cx, 58.0))
+                        .text_color(rgba_from(p.text_muted, 1.0))
+                        .child(format!("{val:.2}")),
+                ),
         )
 }
 
@@ -170,7 +173,10 @@ pub(super) fn draft_slider(
         let MoonSliderEvent::Change(f) = ev else {
             return;
         };
+        // Квантование слайдера на отрицательном поддиапазоне даёт IEEE -0.0 —
+        // нормализуем, чтобы в конфиг/на диск не уезжал «минус-ноль».
         let f = f.end();
+        let f = if f == 0.0 { 0.0 } else { f };
         this.backend.update(cx, |b, bcx| {
             if let Some(p) = b.preview.as_mut() {
                 if apply(p, f, bcx) {

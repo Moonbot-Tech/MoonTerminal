@@ -59,6 +59,51 @@ impl SettingsView {
         }
     }
 
+    /// Ряд степпера «<<  <  значение  >  >>»: одинарные стрелки — малый шаг,
+    /// двойные — крупный (быстрый набор без «тыкать в плюсик до отсыхания»).
+    /// Общий для счётчиков секунд/дней; клампы — внутри `adjust`.
+    fn stepper_controls(
+        &self,
+        cx: &Context<Self>,
+        id: &'static str,
+        enabled: bool,
+        value_text: String,
+        small: i32,
+        large: i32,
+        adjust: fn(&mut Self, i32, &mut Context<Self>),
+    ) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let color = if enabled {
+            rgba_from(p.text, 1.0)
+        } else {
+            rgba_from(p.text_muted, 1.0)
+        };
+        let btn = |suffix: &'static str, label: &'static str, delta: i32| {
+            MoonButton::new(SharedString::from(format!("{id}{suffix}")))
+                .ghost()
+                .size(MoonButtonSize::Micro)
+                .width(28.0)
+                .label(label)
+                .disabled(!enabled)
+                .on_click(cx.listener(move |this, _, _, cx| adjust(this, delta, cx)))
+                .render()
+        };
+        h_flex()
+            .gap(design::ui_px(cx, 4.0))
+            .items_center()
+            .child(btn("-large", "<<", -large))
+            .child(btn("-small", "<", -small))
+            .child(
+                div()
+                    .w(design::font_w_px(cx, 72.0))
+                    .text_center()
+                    .text_color(color)
+                    .child(value_text),
+            )
+            .child(btn("+small", ">", small))
+            .child(btn("+large", ">>", large))
+    }
+
     /// Вкладка «Общие» — порт egui `settings/general.rs` точь-в-точь: язык (выпадающий
     /// список) + хинт; разделитель; чекбокс «чарт-вкладка на ядро» + хинт; разделитель;
     /// чекбокс «писать лог в файлы» + хинт; срок хранения (число) + хинт.
@@ -194,37 +239,15 @@ impl SettingsView {
                             })
                             .child(t!("general.main_idle_close_secs").to_string()),
                     )
-                    .child(
-                        MoonButton::new("idle-")
-                            .ghost()
-                            .size(MoonButtonSize::Micro)
-                            .width(24.0)
-                            .label("-")
-                            .disabled(idle_secs == 0)
-                            .on_click(cx.listener(|this, _, _, cx| this.adjust_idle(-10, cx)))
-                            .render(),
-                    )
-                    .child(
-                        div()
-                            .w(px(64.0))
-                            .text_center()
-                            .text_color(if idle_secs > 0 {
-                                rgba_from(p.text, 1.0)
-                            } else {
-                                muted
-                            })
-                            .child(format!("{idle_secs} {}", t!("general.seconds"))),
-                    )
-                    .child(
-                        MoonButton::new("idle+")
-                            .ghost()
-                            .size(MoonButtonSize::Micro)
-                            .width(24.0)
-                            .label("+")
-                            .disabled(idle_secs == 0)
-                            .on_click(cx.listener(|this, _, _, cx| this.adjust_idle(10, cx)))
-                            .render(),
-                    ),
+                    .child(self.stepper_controls(
+                        cx,
+                        "idle",
+                        idle_secs > 0,
+                        format!("{idle_secs} {}", t!("general.seconds")),
+                        10,
+                        100,
+                        Self::adjust_idle,
+                    )),
             )
             .child(hint(&t!("general.main_idle_close_hint")))
             .child(super::separator(p, cx))
@@ -256,33 +279,15 @@ impl SettingsView {
                             .text_color(if logf { rgba_from(p.text, 1.0) } else { muted })
                             .child(t!("general.log_retention").to_string()),
                     )
-                    .child(
-                        MoonButton::new("ret-")
-                            .ghost()
-                            .size(MoonButtonSize::Micro)
-                            .width(24.0)
-                            .label("-")
-                            .disabled(!logf)
-                            .on_click(cx.listener(|this, _, _, cx| this.adjust_ret(-1, cx)))
-                            .render(),
-                    )
-                    .child(
-                        div()
-                            .w(px(56.0))
-                            .text_center()
-                            .text_color(if logf { rgba_from(p.text, 1.0) } else { muted })
-                            .child(format!("{ret} {}", t!("general.days"))),
-                    )
-                    .child(
-                        MoonButton::new("ret+")
-                            .ghost()
-                            .size(MoonButtonSize::Micro)
-                            .width(24.0)
-                            .label("+")
-                            .disabled(!logf)
-                            .on_click(cx.listener(|this, _, _, cx| this.adjust_ret(1, cx)))
-                            .render(),
-                    ),
+                    .child(self.stepper_controls(
+                        cx,
+                        "ret",
+                        logf,
+                        format!("{ret} {}", t!("general.days")),
+                        1,
+                        10,
+                        Self::adjust_ret,
+                    )),
             )
             .child(hint(&t!("general.log_retention_hint")))
     }
