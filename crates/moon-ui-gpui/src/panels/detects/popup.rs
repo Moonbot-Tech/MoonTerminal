@@ -266,8 +266,8 @@ fn slot_cell(
         .label(format!("{} ▾", t!(field_key(slot.field))))
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::Micro)
-        .trigger_width(76.0)
-        .menu_width(130.0)
+        .trigger_width(design::font_w(cx, 76.0))
+        .menu_width(design::font_w(cx, 130.0))
         .menu_size(MoonMenuSize::Compact)
         .items(items);
 

@@ -593,7 +593,9 @@ impl Render for LogPanel {
             let list_el = MoonVirtualList::new(
                 "log-virtual-rows",
                 self.lines.len(),
-                18.0,
+                // Высота строки растёт с кеглем (MoonVirtualList берёт сырые px):
+                // фикс 18 при +6 обрезал текст по вертикали.
+                crate::design::fit_h_value(cx, 18.0, 14.0, 2.0),
                 move |ix, _w, app| {
                     weak.upgrade()
                         .and_then(|e| {

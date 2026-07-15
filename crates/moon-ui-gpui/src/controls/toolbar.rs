@@ -230,7 +230,7 @@ pub fn toolbar(
     let backend_live = backend.clone();
     row = row.child(
         MoonButton::new("live")
-            .width(62.0)
+            .width(design::font_w(cx, 62.0))
             .variant(MoonButtonVariant::Soft)
             .size(MoonButtonSize::ToolbarCompact)
             .segment(
@@ -279,7 +279,7 @@ pub fn toolbar(
             "icons/settings.svg",
             // С надписью. Фикс-ширина вместо паддинга: pad_x у MoonButton = 0 (FORK_BUGS),
             // контент центрируется внутри заданной ширины.
-            Some(92.0),
+            Some(design::font_w(cx, 92.0)),
             backend.clone(),
             crate::settings::open,
             p,

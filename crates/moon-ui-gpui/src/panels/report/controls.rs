@@ -10,6 +10,7 @@ impl ReportPanel {
     pub(super) fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         crate::controls::core_combo(
+            cx,
             "rep-core",
             &self.cores,
             &self.sel_cores,
@@ -58,8 +59,8 @@ impl ReportPanel {
             .label(format!("{cur} ▾"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(69.0)
-            .menu_width(120.0)
+            .trigger_width(design::font_w(cx, 69.0))
+            .menu_width(design::font_w(cx, 120.0))
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -100,8 +101,8 @@ impl ReportPanel {
             .label(format!("{cur} ▾"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(102.0)
-            .menu_width(138.0)
+            .trigger_width(design::font_w(cx, 102.0))
+            .menu_width(design::font_w(cx, 138.0))
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -126,8 +127,8 @@ impl ReportPanel {
             .label(format!("{} ▾", self.period.label()))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(100.0)
-            .menu_width(130.0)
+            .trigger_width(design::font_w(cx, 100.0))
+            .menu_width(design::font_w(cx, 130.0))
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -184,8 +185,8 @@ impl ReportPanel {
                     .segment(moon_ui::MoonButtonSegment::new("⇩"))
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
-                    .trigger_width(34.0)
-                    .menu_width(200.0)
+                    .trigger_width(design::font_w(cx, 34.0))
+                    .menu_width(design::font_w(cx, 200.0))
                     .menu_size(MoonMenuSize::Compact)
                     .items(items),
             )
@@ -239,8 +240,8 @@ impl ReportPanel {
                     .segment(moon_ui::MoonButtonSegment::new("▦"))
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
-                    .trigger_width(34.0)
-                    .menu_width(230.0)
+                    .trigger_width(design::font_w(cx, 34.0))
+                    .menu_width(design::font_w(cx, 230.0))
                     .menu_max_height(420.0)
                     .menu_size(MoonMenuSize::Compact)
                     .close_on_select(false)

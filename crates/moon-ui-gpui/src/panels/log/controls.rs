@@ -3,6 +3,8 @@
 use super::*;
 use rust_i18n::t;
 
+use crate::design;
+
 impl LogPanel {
     /// Комбобокс источника.
     pub(super) fn source_combo(
@@ -24,8 +26,8 @@ impl LogPanel {
             .label(format!("{cur} ▾"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(150.0)
-            .menu_width(180.0)
+            .trigger_width(design::font_w(cx, 150.0))
+            .menu_width(design::font_w(cx, 180.0))
             .menu_size(MoonMenuSize::Compact)
             .items(items.into_iter().enumerate().map(move |(i, (src, disp))| {
                 let selected = src == self.source;
@@ -73,8 +75,8 @@ impl LogPanel {
             .label(format!("{cur} ▾"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(180.0)
-            .menu_width(220.0)
+            .trigger_width(design::font_w(cx, 180.0))
+            .menu_width(design::font_w(cx, 220.0))
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }

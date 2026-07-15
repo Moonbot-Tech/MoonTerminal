@@ -75,7 +75,7 @@ impl Render for DetachedChartHost {
         let candle_dismiss = candle_popup::candle_popup_dismiss(self, "detached-chart-candles", cx);
         // Поле ввода монеты (поиск) шапки + список совпадений. Список рисуем на уровне v_flex
         // (после тела), иначе тело окна (paint-порядок ниже) перекроет выпадашку из шапки.
-        let coin_search_el = div().w(px(80.0)).child(
+        let coin_search_el = div().w(design::font_w_px(cx, 80.0)).child(
             MoonInput::new("detached-coin-search")
                 .state(&self.coin_input)
                 .cleanable(true)
@@ -140,6 +140,7 @@ impl Render for DetachedChartHost {
                     )
                     .child(coin_search_el)
                     .child(crate::controls::scale_dropdown_for_add_stack(
+                        cx,
                         scale,
                         panel.clone(),
                         p,

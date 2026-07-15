@@ -201,7 +201,7 @@ impl SettingsView {
     }
 
     /// Источник рыночных данных — выпадающий список (порт egui ComboBox).
-    fn market_src_selector(&self) -> impl IntoElement {
+    fn market_src_selector(&self, cx: &App) -> impl IntoElement {
         h_flex()
             .gap_2()
             .items_center()
@@ -222,7 +222,7 @@ impl SettingsView {
                 div().w(px(260.0)).child(
                     MoonSelect::new(&self.mode)
                         .trigger_size(MoonButtonSize::Action)
-                        .menu_width(260.0)
+                        .menu_width(design::font_w(cx, 260.0))
                         .menu_size(MoonMenuSize::Compact),
                 ),
             )
@@ -353,7 +353,7 @@ impl SettingsView {
             .w_full()
             .gap_2()
             // Источник рыночных данных — выпадающий список (порт egui ComboBox).
-            .child(self.market_src_selector())
+            .child(self.market_src_selector(cx))
             .child(list_col)
     }
 }

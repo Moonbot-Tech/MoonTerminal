@@ -13,6 +13,7 @@ impl OrdersPanel {
     ) -> impl IntoElement {
         let view = cx.entity();
         crate::controls::core_combo(
+            cx,
             "orders-source",
             cores,
             &self.sel_cores,
@@ -59,8 +60,8 @@ impl OrdersPanel {
             .label(format!("{cur} ▾"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(102.0)
-            .menu_width(138.0)
+            .trigger_width(design::font_w(cx, 102.0))
+            .menu_width(design::font_w(cx, 138.0))
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -77,8 +78,8 @@ impl OrdersPanel {
             .segment(moon_ui::MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(34.0)
-            .menu_width(170.0)
+            .trigger_width(design::font_w(cx, 34.0))
+            .menu_width(design::font_w(cx, 170.0))
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         // «Все» — тумблер: включить все колонки / повторно — оставить одну первую.
@@ -138,8 +139,8 @@ impl OrdersPanel {
             .label("⚙")
             .trigger_variant(MoonButtonVariant::Ghost)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(34.0)
-            .menu_width(220.0)
+            .trigger_width(design::font_w(cx, 34.0))
+            .menu_width(design::font_w(cx, 220.0))
             .menu_size(MoonMenuSize::Normal)
             .item(
                 MoonMenuItem::with_key("m-onlycur", t!("orders.only_current").to_string())

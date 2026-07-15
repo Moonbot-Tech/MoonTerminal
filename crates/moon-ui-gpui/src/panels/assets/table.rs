@@ -134,6 +134,7 @@ impl AssetsView {
     ) -> impl IntoElement {
         let view = cx.entity();
         crate::controls::core_combo(
+            cx,
             "assets-core",
             cores,
             &self.sel_cores,

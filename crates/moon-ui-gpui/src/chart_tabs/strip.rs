@@ -182,6 +182,7 @@ impl Render for ChartTabs {
         let popup_open = self.layout_popup_open;
         let p_strip = MoonPalette::active(cx);
         let scale_dropdown = crate::controls::scale_dropdown_for_tabs(
+            cx,
             self.active_scale_value(cx),
             cx.entity(),
             p_strip,
@@ -251,7 +252,7 @@ impl Render for ChartTabs {
         let coin_search_el = div()
             .relative()
             .child(
-                div().w(px(80.0)).child(
+                div().w(design::font_w_px(cx, 80.0)).child(
                     MoonInput::new("tabs-coin-search")
                         .state(&self.coin_input)
                         .cleanable(true)

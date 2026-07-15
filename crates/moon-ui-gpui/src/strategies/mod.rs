@@ -583,7 +583,7 @@ impl StrategiesView {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
         let mut col = v_flex()
-            .w(px(264.0))
+            .w(design::font_w_px(cx, 264.0))
             .h_full()
             .bg(moon(p.shell_high))
             .font_family(design::mono())

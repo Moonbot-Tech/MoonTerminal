@@ -245,8 +245,8 @@ impl SettingsView {
                 MoonButtonVariant::Neutral
             })
             .trigger_size(MoonButtonSize::Micro)
-            .trigger_width(52.0)
-            .menu_width(272.0)
+            .trigger_width(design::font_w(cx, 52.0))
+            .menu_width(design::font_w(cx, 272.0))
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false)
             .items(items)

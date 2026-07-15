@@ -274,7 +274,7 @@ where
         .id(id)
         .flex()
         .flex_col()
-        .w(px(240.0))
+        .w(design::font_w_px(cx, 240.0))
         .bg(rgb(p.panel_high))
         .border_1()
         .border_color(rgb(p.border))

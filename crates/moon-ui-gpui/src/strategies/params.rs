@@ -288,8 +288,8 @@ impl StrategiesView {
                         MoonButtonVariant::Soft
                     })
                     .trigger_size(MoonButtonSize::Action)
-                    .trigger_width(180.0)
-                    .menu_width(220.0)
+                    .trigger_width(design::font_w(cx, 180.0))
+                    .menu_width(design::font_w(cx, 220.0))
                     .menu_size(MoonMenuSize::Compact)
                     .menu_max_height(220.0)
                     .disabled(!active)
@@ -379,7 +379,7 @@ impl StrategiesView {
             .hover(move |s| s.bg(moon_alpha(p.panel, 0.46)))
             .child(
                 div()
-                    .w(px(180.0))
+                    .w(design::font_w_px(cx, 180.0))
                     .flex_none()
                     .pt(px(5.0))
                     .truncate()
@@ -446,7 +446,7 @@ impl StrategiesView {
         }
         Some(
             v_flex()
-                .w(px(280.0))
+                .w(design::font_w_px(cx, 280.0))
                 .h_full()
                 .flex_none()
                 .gap(design::ui_px(cx, 10.0))

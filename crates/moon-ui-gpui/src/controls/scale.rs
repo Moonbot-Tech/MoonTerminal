@@ -4,6 +4,8 @@
 use gpui::*;
 use rust_i18n::t;
 
+use crate::design;
+
 use moon_ui::{
     MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize,
     MoonPalette, MoonTooltipView,
@@ -65,6 +67,7 @@ pub(crate) fn step_scale(current: Option<f32>, zoom_in: bool) -> Option<f32> {
 /// набор id, размер триггера (`Micro`/`ToolbarCompact`) и куда писать выбранный масштаб
 /// (`on_pick`). Визуал/тултип/лупа/«А» для Авто — общие.
 fn scale_dropdown(
+    cx: &App,
     scale: Option<f32>,
     tip_id: &'static str,
     dropdown_id: &'static str,
@@ -99,10 +102,10 @@ fn scale_dropdown(
         })
         .child(
             MoonDropdown::new(dropdown_id)
-                .trigger_width(72.0)
+                .trigger_width(design::font_w(cx, 72.0))
                 .trigger_variant(MoonButtonVariant::Neutral)
                 .trigger_size(trigger_size)
-                .menu_width(116.0)
+                .menu_width(design::font_w(cx, 116.0))
                 .menu_size(MoonMenuSize::Compact)
                 .segment(
                     MoonButtonSegment::new("🔍")
@@ -119,11 +122,13 @@ fn scale_dropdown(
 }
 
 pub(crate) fn scale_dropdown_for_tabs(
+    cx: &App,
     scale: Option<f32>,
     tabs: Entity<crate::chart_tabs::ChartTabs>,
     p: MoonPalette,
-) -> impl IntoElement {
+) -> AnyElement {
     scale_dropdown(
+        cx,
         scale,
         "tabs-scale-tip",
         "tabs-scale-dropdown",
@@ -134,17 +139,20 @@ pub(crate) fn scale_dropdown_for_tabs(
             tabs.update(cx, |t, tcx| t.pick_active_scale(pct, tcx));
         },
     )
+    .into_any_element()
 }
 
 /// Дропдаун масштаба для AddToChart-stack: пишет масштаб во все отдельные ChartPanel внутри
 /// stack-а. Это сохраняет Delphi-модель "один график = одна сущность", но управление масштабом
 /// остаётся единым для окна/вкладки.
 pub(crate) fn scale_dropdown_for_add_stack(
+    cx: &App,
     scale: Option<f32>,
     stack: Entity<crate::chart_tabs::AddChartStack>,
     p: MoonPalette,
-) -> impl IntoElement {
+) -> AnyElement {
     scale_dropdown(
+        cx,
         scale,
         "detached-stack-scale-tip",
         "detached-stack-scale-dropdown",
@@ -155,4 +163,5 @@ pub(crate) fn scale_dropdown_for_add_stack(
             stack.update(cx, |st, scx| st.set_scale(pct, scx));
         },
     )
+    .into_any_element()
 }

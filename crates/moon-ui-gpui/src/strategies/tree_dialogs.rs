@@ -108,8 +108,8 @@ fn op_dialog_body(
                         .label(format!("{kind_name} ▾"))
                         .trigger_variant(MoonButtonVariant::Soft)
                         .trigger_size(MoonButtonSize::Action)
-                        .trigger_width(320.0)
-                        .menu_width(320.0)
+                        .trigger_width(design::font_w(cx, 320.0))
+                        .menu_width(design::font_w(cx, 320.0))
                         .menu_size(MoonMenuSize::Compact)
                         .menu_max_height(240.0)
                         .items(kind_items),

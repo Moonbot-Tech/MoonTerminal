@@ -156,7 +156,7 @@ impl AlertsPanel {
             .unwrap_or_else(|| "—".to_string())
     }
 
-    fn table(&self, p: MoonPalette) -> impl IntoElement {
+    fn table(&self, p: MoonPalette, cx: &App) -> impl IntoElement {
         let header = h_flex()
             .w_full()
             .px(px(8.0))
@@ -218,8 +218,8 @@ impl AlertsPanel {
                 .label(format!("{} ▾", self.strategy_name(core, r.strategy_id)))
                 .trigger_variant(MoonButtonVariant::Soft)
                 .trigger_size(MoonButtonSize::Action)
-                .trigger_width(150.0)
-                .menu_width(200.0)
+                .trigger_width(design::font_w(cx, 150.0))
+                .menu_width(design::font_w(cx, 200.0))
                 .menu_size(MoonMenuSize::Compact)
                 .items(items);
 
@@ -393,8 +393,8 @@ impl AlertsPanel {
             .label(format!("{cur} ▾"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(120.0)
-            .menu_width(150.0)
+            .trigger_width(design::font_w(cx, 120.0))
+            .menu_width(design::font_w(cx, 150.0))
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -461,7 +461,7 @@ impl Render for AlertsPanel {
             .font_family(design::mono())
             .text_size(design::t_body(cx))
             .track_focus(&self.focus)
-            .child(self.table(p))
+            .child(self.table(p, cx))
             .child(self.bottom_bar(p, cx))
     }
 }

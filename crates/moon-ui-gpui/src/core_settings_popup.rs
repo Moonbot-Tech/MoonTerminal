@@ -250,7 +250,7 @@ fn param_row(
                     ),
                 )
                 .child(
-                    div().w(px(56.0)).child(
+                    div().w(design::font_w_px(cx, 56.0)).child(
                         MoonInput::new(SharedString::from(input_id.to_string()))
                             .state(input)
                             .small(),
@@ -295,7 +295,7 @@ pub fn core_settings_content(
     // только контент фикс. ширины.
     let root = v_flex()
         .id("core-settings-popup")
-        .w(px(248.0))
+        .w(design::font_w_px(cx, 248.0))
         .gap(design::ui_px(cx, 8.0))
         .child(
             h_flex()

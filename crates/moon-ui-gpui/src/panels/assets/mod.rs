@@ -822,7 +822,7 @@ impl Render for AssetsView {
         let table_natural_h = if count == 0 {
             0.0
         } else {
-            design::TABLE_HEAD_H + count as f32 * design::TABLE_ROW_H
+            design::table_head_h(cx) + count as f32 * design::table_row_h(cx)
         };
         let total_value = self.cached_total_value;
 

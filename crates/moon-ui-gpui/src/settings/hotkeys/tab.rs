@@ -581,8 +581,8 @@ impl SettingsView {
                     } else {
                         MoonButtonVariant::Blue
                     })
-                    .trigger_width(176.0)
-                    .menu_width(228.0)
+                    .trigger_width(design::font_w(cx, 176.0))
+                    .menu_width(design::font_w(cx, 228.0))
                     .menu_size(MoonMenuSize::Compact)
                     .disabled(disabled)
                     .items(items),

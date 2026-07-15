@@ -8,6 +8,8 @@
 use std::collections::HashSet;
 
 use gpui::App;
+
+use crate::design;
 use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize};
 
 /// Поле-список ядер: МУЛЬТИВЫБОР (чекбоксы, меню НЕ закрывается на клик — можно отметить
@@ -18,6 +20,7 @@ use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, Moo
 /// `id` — id дропдауна; от него же образуются ключи пунктов (`{id}-all` / `{id}-{i}`),
 /// уникальные в пределах своего меню.
 pub(crate) fn core_combo<F>(
+    cx: &App,
     id: &'static str,
     cores: &[(u64, String)],
     selected: &HashSet<u64>,
@@ -49,8 +52,8 @@ where
         .label(format!("{cur} ▾"))
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::Action)
-        .trigger_width(118.0)
-        .menu_width(menu_width)
+        .trigger_width(design::font_w(cx, 118.0))
+        .menu_width(design::font_w(cx, menu_width))
         .menu_max_height(360.0)
         .menu_size(MoonMenuSize::Compact)
         .close_on_select(false)

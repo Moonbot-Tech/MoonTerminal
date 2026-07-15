@@ -392,8 +392,8 @@ impl ScreenerView {
             .label(format!("{cur} ▾"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(118.0)
-            .menu_width(160.0)
+            .trigger_width(design::font_w(cx, 118.0))
+            .menu_width(design::font_w(cx, 160.0))
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -408,8 +408,8 @@ impl ScreenerView {
             .segment(moon_ui::MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(34.0)
-            .menu_width(170.0)
+            .trigger_width(design::font_w(cx, 34.0))
+            .menu_width(design::font_w(cx, 170.0))
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         // «Все» — тумблер: включить все колонки / повторно — оставить одну первую.

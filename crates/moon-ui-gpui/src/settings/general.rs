@@ -169,7 +169,7 @@ impl SettingsView {
                         div().w(px(220.0)).child(
                             MoonSelect::new(&self.lang)
                                 .trigger_size(MoonButtonSize::Action)
-                                .menu_width(220.0)
+                                .menu_width(design::font_w(cx, 220.0))
                                 .menu_size(MoonMenuSize::Compact),
                         ),
                     ),

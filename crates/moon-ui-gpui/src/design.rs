@@ -148,6 +148,19 @@ pub fn fit_h_px(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f
     px(fit_h_value(cx, base_height, base_line_height, base_pad_y))
 }
 
+/// Фактические (масштабированные под кегль) высоты строки/шапки MoonDataTable.
+/// Зеркалят fit_height-аргументы самого компонента (data_table.rs: строка
+/// `fit(row_h, 14.0, 5.5)`, шапка `fit(header_h, 11.0, 7.5)`), чтобы обёртки,
+/// считающие «натуральную» высоту таблицы, не отставали от неё при крупном
+/// шрифте (иначе строки клипались при +6).
+pub fn table_row_h(cx: &App) -> f32 {
+    fit_h_value(cx, TABLE_ROW_H, 14.0, 5.5)
+}
+
+pub fn table_head_h(cx: &App) -> f32 {
+    fit_h_value(cx, TABLE_HEAD_H, 11.0, 7.5)
+}
+
 /// Масштаб текущего кегля относительно базового (1.0 при нулевой дельте
 /// слайдера «Шрифт»). Геометрия через `ui()` дельту слайдера НЕ видит —
 /// поэтому фиксированные ширины, держащие текст (поля значений, попапы,
@@ -162,6 +175,13 @@ pub fn font_scale(cx: &App) -> f32 {
 /// Для контейнеров текста фиксированной ширины (см. `font_scale`).
 pub fn font_w_px(cx: &App, base: f32) -> Pixels {
     px(base * font_scale(cx))
+}
+
+/// То же, но `f32` — для билдеров moonui, берущих сырые пиксели БЕЗ
+/// собственного масштабирования (`menu_width`/`trigger_width`/`MoonButton::width`
+/// кладут значение в `px(..)` как есть — проверено по форку).
+pub fn font_w(cx: &App, base: f32) -> f32 {
+    base * font_scale(cx)
 }
 
 /// Скругления — из метрик moonui (`MoonMetrics::TERMINAL`), не свои числа.
