@@ -280,6 +280,23 @@ pub(crate) fn run() -> anyhow::Result<()> {
         // Фабрики панелей для восстановления раскладки доков (PanelRegistry — глобален).
         dock_persist::register_panels(cx, backend.clone(), epoch);
 
+        // Tab над линией ордера = отмена ордера (паритет с Del). Клавишу «tab» MoonRoot
+        // биндит на ЭКШЕН root::Tab (focus_next), а gpui диспатчит экшены РАНЬШЕ
+        // on_key_down — до резолвера хоткеев (`hotkeys::resolve` → CancelHoveredOrder)
+        // Tab не доходил и просто гулял фокусом по контролам. Интерцептор срабатывает
+        // ДО экшенов: есть ордер под курсором → отменяем и гасим событие; нет —
+        // пропускаем, Tab остаётся навигацией фокуса.
+        let tab_backend = backend.clone();
+        cx.intercept_keystrokes(move |ev, _window, cx| {
+            if ev.keystroke.key == "tab"
+                && ev.keystroke.modifiers == Modifiers::default()
+                && crate::hotkeys::cancel_hovered_order(&tab_backend, cx)
+            {
+                cx.stop_propagation();
+            }
+        })
+        .detach();
+
         // Закрытие ГЛАВНОГО (группового) окна = полный выход: убираем закрытое окно из
         // group_windows, и если групповых окон не осталось — quit (закроет и откреплённые
         // чарт-окна). Детач-чарт окна сами quit не вызывают (их id нет в group_windows).
