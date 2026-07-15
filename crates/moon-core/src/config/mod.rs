@@ -34,7 +34,10 @@ mod store;
 mod toml_io;
 
 pub use badges::{BadgeEntry, BadgesConfig};
-pub use detect_view::DetectViewCfg;
+pub use detect_view::{
+    DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI, DetectChart,
+    DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg, DetectViewFile, detect_slot_count,
+};
 pub use groups::GroupConfig;
 pub use hotkeys::{
     HotkeysConfig, MouseGestureBinding, MANUAL_STRATEGY_KEYS, ORDER_SIZE_KEYS, SELL_PRESET_KEYS,

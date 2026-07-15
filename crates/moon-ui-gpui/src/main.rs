@@ -32,7 +32,6 @@ mod crash;
 mod debug_window;
 mod design;
 mod detached;
-mod detect_thumb;
 mod diag;
 mod dock_persist;
 mod figures_backend;
@@ -173,6 +172,9 @@ struct Backend {
     /// (дебаунс через дренаж-таймер). Порт egui WindowLayout/layout.toml.
     layout: WindowLayout,
     layout_dirty: bool,
+    /// Отображение лент детектов (per-group: габариты/график/rail/слоты по размерам) —
+    /// отдельный переносимый detects_view.toml; save сразу на изменении (файл мелкий).
+    detects_view: moon_core::config::DetectViewFile,
     /// Кэш ДЕФОЛТНОГО источника тикера шапки (нет сохранённого выбора): (ядро, рынок).
     /// Резолвится лениво при первом успешном поиске BTCUSDT/UBTCUSDC; не персистится.
     header_ticker_default: Option<(CoreId, String)>,

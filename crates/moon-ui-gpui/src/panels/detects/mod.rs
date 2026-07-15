@@ -3,29 +3,31 @@
 //! держит `KeepAlert` секунд, новые сверху. Клик → открыть монету на Main (через
 //! `Backend.open_request`, который читает Shell).
 //!
-//! Отображение настраивается полоской ⚙ (размер карточки + видимые поля) — per-group,
-//! persist в `layout.detect_view_by_group` (см. [`popup`]). Раскладка карточек и мини-чарт
-//! (замороженный тумбнейл на момент детекта) — в [`cards`]/[`crate::detect_thumb`].
+//! Отображение настраивается попапом-конструктором ⚙ (габариты/график/rail/слоты по
+//! размерам) — per-group, persist в отдельном `detects_view.toml` (см. [`popup`]).
+//! Раскладка карточек и векторные мини-чарты (замороженный срез на момент детекта) —
+//! в [`cards`].
 
 mod cards;
 mod popup;
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::*;
-use moon_ui::{MoonPalette, Panel, PanelEvent, PanelState, h_flex, v_flex};
+use moon_ui::{
+    MoonPalette, MoonSliderEvent, MoonSliderState, Panel, PanelEvent, PanelState, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use crate::Backend;
 use moon_chart::paint::now_unix_ms;
-use moon_core::config::DetectViewCfg;
+use moon_core::config::{DETECT_RAIL_MAX, DetectViewCfg};
 use moon_core::session::CoreId;
 
-/// Сколько закрытых 5м-свечей морозим для мини-чарта карточки (≈2ч истории). Под ПОЛЫЕ свечи:
-/// `cards::THUMB_BAKE_W`=120px / 24 = 5px на свечу → тело ~3.4px (1px контур + 1px контур +
-/// ~1.4px просвет), иначе «полое» схлопывается в закрашенное. Меньше свечей = шире и читаемее.
+/// Сколько закрытых 5м-свечей морозим для мини-чарта карточки (≈2ч истории). Под ПОЛЫЕ свечи
+/// при типовой ширине зоны ~75-130px: ~24 свечи → 3-5px на свечу (тело 1px контур + просвет),
+/// иначе «полое» схлопывается в закрашенное. Меньше свечей = шире и читаемее.
 const DETECT_THUMB_BARS: usize = 24;
 
 /// Кнопка ленты детектов (порт `src/dock/detects.rs::RibbonItem`).
@@ -54,14 +56,6 @@ pub(crate) struct DetectItem {
     exchange_name: String,
     /// Тип биржи (Спот/Фьючи/DEX/…) на момент детекта.
     exchange_kind: String,
-    /// Испечённые тумбнейлы (лениво; переиспечь при смене темы): свечи и линия.
-    thumb: Option<Arc<RenderImage>>,
-    line_thumb: Option<Arc<RenderImage>>,
-    /// Для какой темы испечены тумбнейлы (светлая=true) — переиспечь при переключении.
-    thumb_light: bool,
-    /// Размер холста, под который испечены тумбнейлы (1:1 с ячейкой показа) — переиспечь при
-    /// смене размера карточки/масштаба UI.
-    thumb_size: (u32, u32),
 }
 
 pub struct DetectsPanel {
@@ -72,6 +66,16 @@ pub struct DetectsPanel {
     last_sig: u64,
     prune_timer_armed: bool,
     focus: FocusHandle,
+    /// Попап-конструктор отображения (⚙): открыт ли и какой РАЗМЕР редактируется
+    /// (вкладка = активный размер ленты).
+    popup_open: bool,
+    popup_tab: u8,
+    /// Слайдеры попапа (ширина/высота карточки, полоса сервера, градиент) — сидируются
+    /// из конфига вкладки при открытии/смене вкладки, Change пишет обратно в конфиг.
+    w_slider: Entity<MoonSliderState>,
+    h_slider: Entity<MoonSliderState>,
+    rail_slider: Entity<MoonSliderState>,
+    grad_slider: Entity<MoonSliderState>,
 }
 
 const MAX_DETECT_BTNS: usize = 48;
@@ -96,6 +100,37 @@ impl DetectsPanel {
         })
         .detach();
         let initial_backend = backend.clone();
+        let mk_slider = |cx: &mut Context<Self>, min: f32, max: f32, step: f32| {
+            cx.new(|_| MoonSliderState::new().min(min).max(max).step(step))
+        };
+        let w_slider = mk_slider(cx, 20.0, 320.0, 2.0);
+        let h_slider = mk_slider(cx, 20.0, 320.0, 2.0);
+        let rail_slider = mk_slider(cx, 0.0, f32::from(DETECT_RAIL_MAX), 1.0);
+        // Градиент: шкала до максимума ширины; фактический потолок = ширина карточки
+        // (клампится в конфиге, подпись показывает уже клампнутое значение).
+        let grad_slider = mk_slider(cx, 0.0, 320.0, 2.0);
+        // Change слайдеров → записать в конфиг РЕДАКТИРУЕМОЙ вкладки (гард от эха сидинга).
+        for (sl, apply) in [
+            (
+                &w_slider,
+                (|c: &mut moon_core::config::DetectSizeCfg, v: f32| c.w = v.round() as u16)
+                    as fn(&mut moon_core::config::DetectSizeCfg, f32),
+            ),
+            (&h_slider, |c, v| c.h = v.round() as u16),
+            (&rail_slider, |c, v| c.rail_w = v.round() as u8),
+            (&grad_slider, |c, v| c.rail_grad = v.round() as u16),
+        ] {
+            cx.subscribe(sl, move |this, _, ev: &MoonSliderEvent, cx| {
+                if let MoonSliderEvent::Change(v) = ev {
+                    let v = v.end();
+                    let tab = this.popup_tab;
+                    this.write_view(cx, |cfg| {
+                        apply(cfg.size_cfg_mut(tab), v);
+                    });
+                }
+            })
+            .detach();
+        }
         let mut this = Self {
             backend,
             group,
@@ -104,11 +139,38 @@ impl DetectsPanel {
             last_sig: initial_sig,
             prune_timer_armed: false,
             focus: cx.focus_handle(),
+            popup_open: false,
+            popup_tab: 0,
+            w_slider,
+            h_slider,
+            rail_slider,
+            grad_slider,
         };
         this.ingest(initial_backend.read(cx));
         this.prune(now_unix_ms());
         this.arm_prune_timer(cx);
         this
+    }
+
+    /// Правка конфига отображения группы: текущее → мутатор → persist в detects_view.toml.
+    /// Ничего не пишет, если мутатор не изменил конфиг (эхо сидинга слайдеров).
+    fn write_view(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut DetectViewCfg)) {
+        let group = self.group.clone();
+        let changed = self.backend.update(cx, |b, bcx| {
+            let mut cfg = b.detects_view.group(&group);
+            let before = cfg;
+            f(&mut cfg);
+            if cfg == before {
+                return false;
+            }
+            b.detects_view.set_group(&group, cfg);
+            b.detects_view.save();
+            bcx.notify();
+            true
+        });
+        if changed {
+            cx.notify();
+        }
     }
 
     /// Втянуть свежие детекты ядер группы (seq > курсора, sound_alert, не AddToChart).
@@ -179,8 +241,6 @@ impl DetectsPanel {
                     it.delta_1h = snap.delta_1h;
                     it.exchange_name = snap.exchange_name;
                     it.exchange_kind = snap.exchange_kind;
-                    it.thumb = None;
-                    it.line_thumb = None;
                     changed = true;
                 } else {
                     self.items.push_back(DetectItem {
@@ -199,10 +259,6 @@ impl DetectsPanel {
                         delta_1h: snap.delta_1h,
                         exchange_name: snap.exchange_name,
                         exchange_kind: snap.exchange_kind,
-                        thumb: None,
-                        line_thumb: None,
-                        thumb_light: false,
-                        thumb_size: (0, 0),
                     });
                     changed = true;
                 }
@@ -283,75 +339,11 @@ impl DetectsPanel {
         cx.notify();
     }
 
-    /// Текущая настройка отображения группы (или дефолт).
+    /// Текущая настройка отображения группы (или дефолт) — из detects_view.toml.
     fn view_cfg(&self, cx: &App) -> DetectViewCfg {
-        self.backend
-            .read(cx)
-            .layout
-            .detect_view_by_group
-            .get(&self.group)
-            .copied()
-            .unwrap_or_default()
+        self.backend.read(cx).detects_view.group(&self.group)
     }
 
-    /// Пере-морозить тумбнейлы, у которых их ещё нет / испечены под другую тему. Мутирует
-    /// items — вызывать до построения элементов. Дёшево: свежих ≤ числа новых детектов.
-    fn bake_thumbs(&mut self, cfg: &DetectViewCfg, is_light: bool, cx: &App) {
-        let theme = self.backend.read(cx).config.chart_theme().clone();
-        let diag = std::env::var_os("MOON_DETECT_DIAG").is_some();
-        // Холст = ТОЧНЫЙ размер ячейки показа (1:1, без растяжений) — см. cards::thumb_px.
-        let (tw, th) = cards::thumb_px(cfg, cx);
-        for it in self.items.iter_mut() {
-            // Смена темы ИЛИ размера ячейки инвалидирует оба тумбнейла.
-            if it.thumb_light != is_light || it.thumb_size != (tw, th) {
-                it.thumb = None;
-                it.line_thumb = None;
-                it.thumb_light = is_light;
-                it.thumb_size = (tw, th);
-            }
-            let t0 = std::time::Instant::now();
-            if cfg.line_mode {
-                if it.line.len() >= 2 && it.line_thumb.is_none() {
-                    it.line_thumb = crate::detect_thumb::render_line(
-                        &it.line,
-                        tw,
-                        th,
-                        theme.candle_up,
-                        theme.candle_down,
-                    );
-                    if diag {
-                        log::info!(
-                            "detect_thumb bake-line {}: {} точек {}×{} → {:.1}мкс",
-                            it.market,
-                            it.line.len(),
-                            tw,
-                            th,
-                            t0.elapsed().as_nanos() as f64 / 1000.0
-                        );
-                    }
-                }
-            } else if !it.bars.is_empty() && it.thumb.is_none() {
-                it.thumb = crate::detect_thumb::render_thumb(
-                    &it.bars,
-                    tw,
-                    th,
-                    theme.candle_up,
-                    theme.candle_down,
-                    theme.candle_neutral,
-                );
-                if diag {
-                    log::info!(
-                        "detect_thumb bake {}: {} свечей {}×{} → {:.1}мкс",
-                        it.market,
-                        it.bars.len(),
-                        tw,
-                        th,
-                        t0.elapsed().as_nanos() as f64 / 1000.0
-                    );
-                }
-            }
-        }
-    }
 }
 
 fn detects_sig(b: &Backend, group: &str) -> u64 {
@@ -390,28 +382,21 @@ impl Render for DetectsPanel {
         // Настройки бейджей (код/цвет по видам + обводка направления) — из конфига,
         // под активную тему. Клон дешёвый (≤пара десятков записей), лента редко рендерится.
         let badges = self.backend.read(cx).config.badges.clone();
-        // Испечь недостающие тумбнейлы (только если чарт включён) до построения элементов.
-        if cfg.show_chart {
-            self.bake_thumbs(&cfg, is_light, cx);
-        }
+        // Тема чарта — цвета векторных свечей/линии карточек.
+        let theme = self.backend.read(cx).config.chart_theme().clone();
         let now = now_unix_ms();
 
-        // Полоска-настройки сверху (меню ⚙ размера/полей слева) + разделитель под ней.
-        let toolbar = popup::toolbar(&cfg, p, cx);
+        // Полоска-настройки сверху (⚙ = триггер попапа-конструктора) + разделитель.
+        let toolbar = popup::toolbar(self, &cfg, p, cx);
         let divider = div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border));
 
-        // Карточки: новые сверху. Медиум — вертикальный список; мини/крупный — сетка плиток.
-        let grid = cards::size_is_grid(cfg.size_clamped());
-        let mut container = if grid {
-            h_flex().flex_wrap().gap_1p5().content_start()
-        } else {
-            v_flex().gap_1p5()
-        };
+        // Карточки: новые сверху, кнопки фикс-ширины из конфига — сетка с переносом.
+        let mut container = h_flex().flex_wrap().gap_1p5().content_start();
         for (i, it) in self.items.iter().enumerate().rev() {
             let secs = ((it.ttl_ms - (now - it.born_ms)) / 1000.0).ceil().max(0.0) as u32;
             let (core, market) = (it.core, it.market.clone());
             let market_rmb = it.market.clone();
-            let card = cards::card(it, secs, &cfg, &badges, p, is_light, cx)
+            let card = cards::card(it, secs, &cfg, &theme, &badges, p, is_light, cx)
                 .id(SharedString::from(format!("det-{i}")))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -439,6 +424,7 @@ impl Render for DetectsPanel {
 
         v_flex()
             .id("detects")
+            .relative()
             .size_full()
             .min_h(px(0.0))
             .track_focus(&self.focus)

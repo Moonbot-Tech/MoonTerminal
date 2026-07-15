@@ -31,7 +31,115 @@ dock.tab.alerts:
   ru: "Алерты"
   en: "Alerts"
   es: "Alertas"
-# Попап ⚙ ленты детектов: размер карточки + видимые поля.
+# Попап-конструктор ⚙ ленты детектов (вкладки размеров, слайдеры, слоты, превью).
+detects.cfg.title:
+  ru: "Вид детектов"
+  en: "Detect view"
+  es: "Vista de detecciones"
+detects.cfg.show_this:
+  ru: "Показывать этот размер в ленте"
+  en: "Show this size in the feed"
+  es: "Mostrar este tamaño en la cinta"
+detects.cfg.decimals:
+  ru: "Точность"
+  en: "Decimals"
+  es: "Decimales"
+detects.cfg.frame_size:
+  ru: "Размер и график"
+  en: "Size & chart"
+  es: "Tamaño y gráfico"
+detects.cfg.width:
+  ru: "Ширина"
+  en: "Width"
+  es: "Ancho"
+detects.cfg.height:
+  ru: "Высота"
+  en: "Height"
+  es: "Alto"
+detects.cfg.chart:
+  ru: "График"
+  en: "Chart"
+  es: "Gráfico"
+detects.cfg.chart_none:
+  ru: "Нет"
+  en: "None"
+  es: "No"
+detects.cfg.chart_candles:
+  ru: "Свечи"
+  en: "Candles"
+  es: "Velas"
+detects.cfg.chart_line:
+  ru: "Линия"
+  en: "Line"
+  es: "Línea"
+detects.cfg.rail_frame:
+  ru: "Полоса сервера"
+  en: "Server rail"
+  es: "Franja del servidor"
+detects.cfg.rail_hint:
+  ru: "Цветная полоска слева + градиент от неё"
+  en: "Colored strip on the left + gradient fade"
+  es: "Franja de color a la izquierda + degradado"
+detects.cfg.rail_w:
+  ru: "Полоса"
+  en: "Strip"
+  es: "Franja"
+detects.cfg.rail_grad:
+  ru: "Градиент"
+  en: "Gradient"
+  es: "Degradado"
+detects.cfg.frame_fields:
+  ru: "Поля"
+  en: "Fields"
+  es: "Campos"
+detects.cfg.preview:
+  ru: "Как будет"
+  en: "Preview"
+  es: "Vista previa"
+detects.cfg.preview_empty:
+  ru: "Нет детектов — превью появится с первым детектом"
+  en: "No detects yet — preview appears with the first detect"
+  es: "Sin detecciones — la vista previa aparecerá con la primera"
+detects.cfg.over_on:
+  ru: "Поверх графика"
+  en: "Over the chart"
+  es: "Sobre el gráfico"
+detects.cfg.over_off:
+  ru: "В тексте (клик — поверх графика)"
+  en: "In text (click — over the chart)"
+  es: "En el texto (clic — sobre el gráfico)"
+detects.cfg.align_left:
+  ru: "Слева (клик — вправо)"
+  en: "Left (click — right)"
+  es: "Izquierda (clic — derecha)"
+detects.cfg.align_right:
+  ru: "Справа (клик — влево)"
+  en: "Right (click — left)"
+  es: "Derecha (clic — izquierda)"
+detects.cfg.vpos_above:
+  ru: "Над графиком (клик — под)"
+  en: "Above the chart (click — below)"
+  es: "Encima del gráfico (clic — debajo)"
+detects.cfg.vpos_below:
+  ru: "Под графиком (клик — над)"
+  en: "Below the chart (click — above)"
+  es: "Debajo del gráfico (clic — encima)"
+detects.field.none:
+  ru: "—"
+  en: "—"
+  es: "—"
+detects.field.coin:
+  ru: "Монета"
+  en: "Coin"
+  es: "Moneda"
+detects.field.d24:
+  ru: "Δ 24ч"
+  en: "Δ 24h"
+  es: "Δ 24h"
+detects.field.d1:
+  ru: "Δ 1ч"
+  en: "Δ 1h"
+  es: "Δ 1h"
 detects.view.size_mini:
   ru: "Мини"
   en: "Mini"

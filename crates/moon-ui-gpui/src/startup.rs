@@ -209,6 +209,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             debug_main_chart_handles: HashMap::new(),
             layout: layout.clone(),
             layout_dirty: false,
+            detects_view: moon_core::config::DetectViewFile::load(),
             header_ticker_default: None,
             last_header_ticker_refresh: None,
             dock_states,

@@ -136,6 +136,12 @@ pub fn badges_path() -> PathBuf {
     cfg_dir().join("badges.json")
 }
 
+/// Отображение лент детектов (габариты/график/rail/слоты по размерам, per-group) —
+/// отдельный переносимый файл (можно делиться, Копировать/Вставить в попапе ⚙).
+pub fn detects_view_path() -> PathBuf {
+    cfg_dir().join("detects_view.toml")
+}
+
 /// Горячие клавиши и мышиные жесты — отдельный переносимый файл (можно делиться).
 /// До schema v13 жили секцией внутри settings.toml (одноразовая миграция в load).
 pub fn hotkeys_path() -> PathBuf {

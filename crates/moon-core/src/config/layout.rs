@@ -125,11 +125,8 @@ pub struct WindowLayout {
     /// ГЛОБАЛЬНЫЙ ДЕФОЛТ (вкладки могут переопределять в спеке charts.json).
     #[serde(default)]
     pub candle_view: crate::market::candles::CandleViewCfg,
-    /// Отображение ленты детектов (размер карточек + видимые поля) ПО ГРУППАМ: лента одна
-    /// на окно-терминала (= группу), у каждой свой набор. Ключ — имя группы. Нет записи =
-    /// [`super::detect_view::DetectViewCfg::default`] (средний размер + чарт).
-    #[serde(default)]
-    pub detect_view_by_group: HashMap<String, super::detect_view::DetectViewCfg>,
+    // Бывший `detect_view_by_group` переехал в отдельный `detects_view.toml`
+    // (см. `detect_view::DetectViewFile`); старый ключ в layout.toml просто игнорируется.
     /// Временной X-масштаб чартов (px на мс) ПО ОКНАМ ГРУПП: [Shift+СКМ] на графике
     /// синхронизирует и сохраняет масштаб для чартов СВОЕГО окна; новые чарты окна
     /// наследуют. Нет записи = 60-секундный дефолт. Выносные окна хранят свой в
