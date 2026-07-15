@@ -174,7 +174,7 @@ fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl Int
         .py(design::ui_px(cx, 4.0))
         .border_1()
         .border_color(rgb(p.border))
-        .rounded(design::ui_px(cx, 4.0))
+        .rounded(design::r_button(cx))
         .child(
             div()
                 .text_size(design::t_caption(cx))

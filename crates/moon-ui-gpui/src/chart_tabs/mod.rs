@@ -748,7 +748,7 @@ impl Panel for ChartTabs {
         "ChartTabs"
     }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        SharedString::from("Чарты")
+        SharedString::from(t!("dock.tab.charts").to_string())
     }
     fn dump(&self, _cx: &App) -> PanelState {
         // AddToChart-вкладки не сохраняем: они пересоздаются из детектов при работе.

@@ -236,7 +236,7 @@ pub fn toolbar(
             .segment(
                 MoonButtonSegment::new("●")
                     .color(live_tone)
-                    .font_size(8.0)
+                    .font_size(9.0)
                     .weight(700.0),
             )
             .segment(

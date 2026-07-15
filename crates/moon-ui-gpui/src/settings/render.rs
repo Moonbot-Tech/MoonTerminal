@@ -4,8 +4,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonWindowFrame, h_flex,
-    rgba_from, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonWindowFrame, h_flex, rgba_from,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -37,7 +37,7 @@ impl Render for SettingsView {
                     })
                     .size(MoonButtonSize::Custom {
                         height: 24.0,
-                        radius: 4.0,
+                        radius: design::R_BUTTON_BASE,
                         font_size: 10.5,
                         line_height: 13.0,
                         gap: 5.0,

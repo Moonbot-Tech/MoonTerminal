@@ -67,7 +67,7 @@ impl Render for DragChip {
         div()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(design::r_button(cx))
             .bg(moon(p.shell_high))
             .border_1()
             .border_color(moon(p.blue))

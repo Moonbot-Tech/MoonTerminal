@@ -754,6 +754,7 @@ impl MainChartStack {
         entity: Entity<Self>,
         palette: MoonPalette,
         stack_card: bool,
+        title_size: Pixels,
     ) -> Stateful<Div> {
         let panel_for_event = panel.clone();
         let label = self
@@ -768,6 +769,7 @@ impl MainChartStack {
                 panel,
                 palette,
                 border,
+                title_size,
             )
         } else {
             div()
@@ -860,6 +862,7 @@ impl Render for MainChartStack {
                     entity,
                     palette,
                     false,
+                    crate::design::t_body(cx),
                 )
                 .size_full()
                 .border_0()
@@ -881,6 +884,7 @@ impl Render for MainChartStack {
             .is_horizontal();
         let entity = cx.entity();
         let p = palette;
+        let title_size = crate::design::t_body(cx);
         let on_visible_range = cx.processor(|this, range: Range<usize>, _window, cx| {
             this.sync_stack_visible_range(range, cx);
         });
@@ -898,7 +902,7 @@ impl Render for MainChartStack {
             |s, ix| s.charts.get(ix).map(|e| e.panel.clone()),
             move |s, ix, panel, size, flex, min_w, horizontal, border, ent| {
                 s.render_tile(
-                    ix, panel, size, flex, min_w, horizontal, border, ent, p, true,
+                    ix, panel, size, flex, min_w, horizontal, border, ent, p, true, title_size,
                 )
                 .into_any_element()
             },

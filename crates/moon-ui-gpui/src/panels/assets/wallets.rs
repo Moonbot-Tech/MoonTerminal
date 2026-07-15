@@ -39,7 +39,7 @@ impl Render for AssetDragPreview {
         div()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(design::r_button(cx))
             .bg(rgb(p.shell_high))
             .border_1()
             .border_color(rgb(p.blue))
@@ -76,6 +76,7 @@ impl AssetsView {
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let kind = snapshot.kind;
+        let drop_bg = design::moon_alpha(p.blue, 0.13);
 
         let mut list = v_flex().w_full().gap_0().p(px(4.0));
         if snapshot.rows.is_empty() {
@@ -117,7 +118,11 @@ impl AssetsView {
                     .h(icon_side)
                     .flex_none()
                     .into_any_element(),
-                None => div().w(icon_side).h(icon_side).flex_none().into_any_element(),
+                None => div()
+                    .w(icon_side)
+                    .h(icon_side)
+                    .flex_none()
+                    .into_any_element(),
             };
             list = list.child(
                 div()
@@ -129,14 +134,17 @@ impl AssetsView {
                     .w_full()
                     .h(design::fit_h_px(cx, 26.0, 12.0, 6.0))
                     .px(design::ui_px(cx, 6.0))
-                    .rounded(px(3.0))
+                    .rounded(design::ui_px(cx, 3.0))
                     .flex()
                     .items_center()
                     .gap_2()
                     .cursor_grab()
                     .text_color(rgb(p.text))
                     // Заметная подсветка строки при наведении (видно, что потащишь).
-                    .hover(|s| s.bg(rgba(0x3b82f626)).border_color(rgb(p.blue)))
+                    .hover(|s| {
+                        s.bg(design::moon_alpha(p.blue, 0.15))
+                            .border_color(rgb(p.blue))
+                    })
                     .border_1()
                     .border_color(rgba(0x00000000))
                     .child(icon)
@@ -146,7 +154,12 @@ impl AssetsView {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(a.currency.clone()),
                     )
-                    .child(div().flex_none().text_color(rgb(p.text_muted)).child(qty_txt))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(rgb(p.text_muted))
+                            .child(qty_txt),
+                    )
                     .child(
                         div()
                             .flex_none()
@@ -191,7 +204,7 @@ impl AssetsView {
                     .w_full()
                     .min_h(px(0.0))
                     .overflow_y_scroll()
-                    .drag_over::<AssetDrag>(|s, _drag, _w, _cx| s.bg(rgba(0x3b82f622)))
+                    .drag_over::<AssetDrag>(move |s, _drag, _w, _cx| s.bg(drop_bg))
                     .on_drop(cx.listener(move |this, drag: &AssetDrag, window, cx| {
                         if drag.core == core && drag.from != kind {
                             this.open_transfer_dialog(drag, kind, window, cx);
@@ -243,7 +256,7 @@ impl AssetsView {
                 .overlay_closable(true)
                 .bg(rgb(p.shell_high))
                 .border_color(rgb(p.border))
-                .rounded(px(8.0))
+                .rounded(design::r_container(cx))
                 .text_color(rgb(p.text))
                 .on_cancel(move |_, _, cx| {
                     cancel_view.update(cx, |this, cx| this.close_transfer_dialog(cx));

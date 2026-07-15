@@ -10,6 +10,7 @@ use moon_ui::{
 };
 
 use moon_core::figures::{DrawStyle, FigureTool, LineKind};
+use rust_i18n::t;
 
 use super::ChartTabs;
 use crate::design;
@@ -64,7 +65,7 @@ impl ChartTabs {
                         MoonButtonVariant::Ghost
                     })
                     .selected(draw_mode)
-                    .tooltip("Рисование фигур: ЛКМ — вкл/выкл режим, ПКМ — стиль. Держи Ctrl для рисования/захвата фигур (Ctrl+ЛКМ); обычный ЛКМ при этом торгует, как обычно.")
+                    .tooltip(t!("chart.fig.pencil_tip").to_string())
                     .on_click(move |_, _w, app| {
                         backend.update(app, |b, bcx| {
                             b.fig_draw_mode = !b.fig_draw_mode;
@@ -160,12 +161,16 @@ impl ChartTabs {
                     .id(("fig-swatch", i))
                     .w(px(16.0))
                     .h(px(16.0))
-                    .rounded(px(3.0))
+                    .rounded(design::ui_px(cx, 3.0))
                     .bg(gpui::rgb(
                         ((sw[0] as u32) << 16) | ((sw[1] as u32) << 8) | sw[2] as u32,
                     ))
                     .border_2()
-                    .border_color(if selected { rgb(p.accent) } else { rgb(p.border) })
+                    .border_color(if selected {
+                        rgb(p.accent)
+                    } else {
+                        rgb(p.border)
+                    })
                     .cursor_pointer()
                     .on_click(move |_, _w, app| {
                         backend.update(app, |b, bcx| {
@@ -182,7 +187,7 @@ impl ChartTabs {
         let thickness_row = h_flex()
             .items_center()
             .gap(px(4.0))
-            .child(label("Толщина"))
+            .child(label(&t!("chart.fig.thickness")))
             .child(self.step_btn("fig-th-dn", "−", cx, |s| {
                 s.thickness = (s.thickness - 0.5).max(0.5)
             }))
@@ -201,7 +206,7 @@ impl ChartTabs {
         let opacity_row = h_flex()
             .items_center()
             .gap(px(4.0))
-            .child(label("Прозр."))
+            .child(label(&t!("chart.fig.opacity")))
             .child(self.step_btn("fig-op-dn", "−", cx, |s| {
                 s.color[3] = s.color[3].saturating_sub(24).max(24)
             }))
@@ -219,9 +224,13 @@ impl ChartTabs {
         // Вид линии (Kind): выпадашка из 5 значений (Solid/Dash/Dot/DashDot/DashDotDot).
         let backend_kind = self.backend.clone();
         let kind_items = crate::panels::radio_items(
-            LineKind::ALL
-                .iter()
-                .map(|k| (*k, SharedString::from(k.label()), SharedString::from(k.label()))),
+            LineKind::ALL.iter().map(|k| {
+                (
+                    *k,
+                    SharedString::from(k.label()),
+                    SharedString::from(k.label()),
+                )
+            }),
             style.kind,
             crate::panels::RadioMark::Check,
             move |app, k: LineKind| {
@@ -234,7 +243,7 @@ impl ChartTabs {
         let kind_row = h_flex()
             .items_center()
             .gap(px(4.0))
-            .child(label("Вид"))
+            .child(label(&t!("chart.fig.kind")))
             .child(
                 MoonDropdown::new("fig-kind")
                     .label(format!("{} ▾", style.kind.label()))
@@ -257,7 +266,7 @@ impl ChartTabs {
             .bg(rgb(p.surface))
             .border_1()
             .border_color(rgb(p.border))
-            .rounded(px(6.0))
+            .rounded(design::r_container(cx))
             .shadow_lg()
             .text_size(design::t_body(cx))
             .child(tool_row)

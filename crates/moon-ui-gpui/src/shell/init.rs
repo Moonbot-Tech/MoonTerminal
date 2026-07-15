@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::*;
+use rust_i18n::t;
 
 use moon_ui::{
     DockArea, DockEvent, DockItem, MoonBackgroundPolicy, MoonInputEvent, MoonInputState,
@@ -334,8 +335,10 @@ impl Shell {
         let trailing_input = cx.new(|cx| MoonInputState::new(window, cx));
         let vstop_input = cx.new(|cx| MoonInputState::new(window, cx));
         let blacklist_input = cx.new(|cx| MoonInputState::new(window, cx));
-        let def_strategy_input =
-            cx.new(|cx| MoonInputState::new(window, cx).placeholder("поиск…"));
+        let def_strategy_input = cx.new(|cx| {
+            MoonInputState::new(window, cx)
+                .placeholder(t!("core_settings.def_strategy_search").to_string())
+        });
         // Ввод в поле поиска стратегии → перерисовать попап (пере-фильтровать список).
         cx.subscribe(&def_strategy_input, |_this, _, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
@@ -344,8 +347,11 @@ impl Shell {
         })
         .detach();
         // Multi-line от рождения; Enter коммитит (submit), а не вставляет перенос строки.
-        let blacklist_area =
-            cx.new(|cx| MoonInputState::new(window, cx).multi_line(true).submit_on_enter(true));
+        let blacklist_area = cx.new(|cx| {
+            MoonInputState::new(window, cx)
+                .multi_line(true)
+                .submit_on_enter(true)
+        });
         let ticker_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("BTC…"));
         // Ввод в поиске тикера — только перерисовать попап (список считается в layers).
         cx.subscribe(&ticker_input, |_this, _inp, ev: &MoonInputEvent, cx| {
@@ -442,20 +448,25 @@ impl Shell {
         .detach();
         // Текст чёрного списка: коммит по Blur/Enter (одна логика для однострочного поля и
         // развёрнутого multi-line редактора). Флаг вкл берём текущий у активного ядра.
-        let commit_bl = |this: &mut Self, inp: Entity<MoonInputState>, ev: &MoonInputEvent, cx: &mut Context<Self>| {
+        let commit_bl = |this: &mut Self,
+                         inp: Entity<MoonInputState>,
+                         ev: &MoonInputEvent,
+                         cx: &mut Context<Self>| {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
             }
             let text = inp.read(cx).value().to_string();
             this.commit_blacklist_text(text, cx);
         };
-        cx.subscribe(&blacklist_input, move |this, inp, ev: &MoonInputEvent, cx| {
-            commit_bl(this, inp, ev, cx)
-        })
+        cx.subscribe(
+            &blacklist_input,
+            move |this, inp, ev: &MoonInputEvent, cx| commit_bl(this, inp, ev, cx),
+        )
         .detach();
-        cx.subscribe(&blacklist_area, move |this, inp, ev: &MoonInputEvent, cx| {
-            commit_bl(this, inp, ev, cx)
-        })
+        cx.subscribe(
+            &blacklist_area,
+            move |this, inp, ev: &MoonInputEvent, cx| commit_bl(this, inp, ev, cx),
+        )
         .detach();
 
         // Фокус корня окна для хоткеев (см. поле `focus`). Фокусируем сразу, чтобы F-клавиши

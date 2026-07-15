@@ -398,7 +398,7 @@ impl Render for DebugPerfWindow {
                         div()
                             .w_full()
                             .p_2()
-                            .rounded(design::ui_px(cx, 4.0))
+                            .rounded(design::r_button(cx))
                             .bg(rgba(0x00000055))
                             .font_family(design::mono())
                             .text_size(design::t_body(cx))
@@ -531,7 +531,14 @@ pub(crate) fn spawn_debug_chart_windows(cx: &mut App, backend: Entity<Backend>) 
                 .map(|s| s.group.clone())
                 .unwrap_or_else(|| "default".to_string());
             let owner = b.group_windows.get(&group).copied().map(Into::into);
-            (core, group, market, b.epoch, b.config.chart_theme().clone(), owner)
+            (
+                core,
+                group,
+                market,
+                b.epoch,
+                b.config.chart_theme().clone(),
+                owner,
+            )
         })
     }) else {
         log::warn!("debug charts: no live sessions/markets; cannot open charts");

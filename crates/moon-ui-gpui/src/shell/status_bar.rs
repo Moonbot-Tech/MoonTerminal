@@ -158,7 +158,8 @@ impl Shell {
                 .w(px(72.0))
                 .cursor_pointer()
                 .tooltip(|_window, cx| {
-                    cx.new(|_| moon_ui::MoonTooltipView::new("moonbot.pro")).into()
+                    cx.new(|_| moon_ui::MoonTooltipView::new("moonbot.pro"))
+                        .into()
                 })
                 .on_click(|_, _window, cx: &mut App| cx.open_url("https://moonbot.pro")),
         );

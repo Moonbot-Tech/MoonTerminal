@@ -278,7 +278,7 @@ where
         .bg(rgb(p.panel_high))
         .border_1()
         .border_color(rgb(p.border))
-        .rounded(px(4.0))
+        .rounded(design::r_button(cx))
         // Перехват mouse_down на всём попапе: иначе клик по чекбоксу (он реагирует на on_change,
         // а не на mouse_down) проваливается на слой-дисмиссер под попапом и закрывает список.
         // У строки-пика свой on_mouse_down со stop_propagation — он отработает раньше этого.

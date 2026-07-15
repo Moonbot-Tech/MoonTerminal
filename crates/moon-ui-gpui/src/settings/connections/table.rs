@@ -125,7 +125,7 @@ impl SettingsView {
             .child(
                 MoonText::new("⧉")
                     .color(p.text_muted)
-                    .font_size(12.0)
+                    .font_size(11.0)
                     .mono(true)
                     .uppercase(false)
                     .render(),

@@ -65,7 +65,7 @@ fn def_alert_strategy_row(
                 .gap(design::ui_px(cx, 6.0))
                 .px(design::ui_px(cx, 6.0))
                 .py(design::ui_px(cx, 3.0))
-                .rounded(design::ui_px(cx, 4.0))
+                .rounded(design::r_button(cx))
                 .cursor_pointer()
                 .when(selected, |e| e.bg(rgba_from(p.accent, 0.16)))
                 .hover(|e| e.bg(rgba_from(p.text, 0.06)))
@@ -99,7 +99,11 @@ fn def_alert_strategy_row(
                     .text_color(rgb(p.text_muted))
                     .child(t!("core_settings.def_strategy").to_string()),
             )
-            .child(MoonInput::new("core-def-strategy-filter").state(filter_input).small())
+            .child(
+                MoonInput::new("core-def-strategy-filter")
+                    .state(filter_input)
+                    .small(),
+            )
             .child(
                 div()
                     .id("core-def-strategy-list")
@@ -180,7 +184,7 @@ fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl Int
         .py(design::ui_px(cx, 4.0))
         .border_1()
         .border_color(rgb(p.border))
-        .rounded(design::ui_px(cx, 4.0))
+        .rounded(design::r_button(cx))
         .child(
             div()
                 .text_size(design::t_caption(cx))
@@ -366,7 +370,7 @@ pub fn core_settings_content(
                     .w_full()
                     .px(design::ui_px(cx, 6.0))
                     .py(design::ui_px(cx, 3.0))
-                    .rounded(design::ui_px(cx, 4.0))
+                    .rounded(design::r_button(cx))
                     .bg(rgba_from(p.amber, 0.18))
                     .border_1()
                     .border_color(rgb(p.amber))
@@ -715,7 +719,13 @@ pub fn core_settings_content(
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 6.0))
-            .children(def_alert_strategy_row(core, def_strategy_input, backend, p, cx))
+            .children(def_alert_strategy_row(
+                core,
+                def_strategy_input,
+                backend,
+                p,
+                cx,
+            ))
             .child(cancel_all)
             .into_any_element(),
     );
@@ -769,4 +779,3 @@ fn runtime_status(rt: Option<RuntimeState>, p: MoonPalette, cx: &App) -> impl In
             cx,
         ))
 }
-

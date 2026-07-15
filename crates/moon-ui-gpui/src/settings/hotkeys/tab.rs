@@ -38,8 +38,8 @@ impl SettingsView {
                 MoonText::new(t!("hotkeys.group.builtin").to_string())
                     .uppercase(false)
                     .mono(true)
-                    .font_size(design::font_value(cx, 11.0))
-                    .line_height(design::line_value(cx, 14.0))
+                    .font_size(11.0)
+                    .line_height(14.0)
                     .color(p.text)
                     .render(),
             )
@@ -48,8 +48,7 @@ impl SettingsView {
                     .uppercase(false)
                     .mono(true)
                     .wrap()
-                    .font_size(design::font_value(cx, 9.0))
-                    .line_height(design::line_value(cx, 12.0))
+                    .line_height(12.0)
                     .color(p.text_muted)
                     .render(),
             )
@@ -111,8 +110,7 @@ impl SettingsView {
                     .uppercase(false)
                     .mono(true)
                     .wrap()
-                    .font_size(design::font_value(cx, 9.0))
-                    .line_height(design::line_value(cx, 12.0))
+                    .line_height(12.0)
                     .color(p.text_muted)
                     .render(),
             )
@@ -443,8 +441,8 @@ impl SettingsView {
                     .uppercase(false)
                     .mono(true)
                     .wrap()
-                    .font_size(design::font_value(cx, 11.0))
-                    .line_height(design::line_value(cx, 14.0))
+                    .font_size(11.0)
+                    .line_height(14.0)
                     .color(p.text_muted)
                     .render(),
             )
@@ -474,8 +472,8 @@ impl SettingsView {
                 MoonText::new(title.into())
                     .uppercase(false)
                     .mono(true)
-                    .font_size(design::font_value(cx, 11.0))
-                    .line_height(design::line_value(cx, 14.0))
+                    .font_size(11.0)
+                    .line_height(14.0)
                     .color(p.text)
                     .render(),
             )
@@ -486,8 +484,8 @@ impl SettingsView {
                         .uppercase(false)
                         .mono(true)
                         .wrap()
-                        .font_size(design::font_value(cx, 11.0))
-                        .line_height(design::line_value(cx, 14.0))
+                        .font_size(11.0)
+                        .line_height(14.0)
                         .color(p.text_muted)
                         .render(),
                 ),
@@ -552,8 +550,8 @@ impl SettingsView {
                 MoonText::new(title.into())
                     .uppercase(false)
                     .mono(true)
-                    .font_size(design::font_value(cx, 11.0))
-                    .line_height(design::line_value(cx, 14.0))
+                    .font_size(11.0)
+                    .line_height(14.0)
                     .color(if disabled { p.text_muted } else { p.text })
                     .render(),
             )
@@ -564,8 +562,8 @@ impl SettingsView {
                         .uppercase(false)
                         .mono(true)
                         .wrap()
-                        .font_size(design::font_value(cx, 11.0))
-                        .line_height(design::line_value(cx, 14.0))
+                        .font_size(11.0)
+                        .line_height(14.0)
                         .color(p.text_muted)
                         .render(),
                 ),
@@ -627,12 +625,11 @@ impl SettingsView {
 
     /// Янтарный бейдж «не подключено» для строк, чей рантайм-путь ещё не существует
     /// ([`slot_wip`]/[`mouse_slot_wip`]): клавиша/жест сохраняются в конфиг, но действия нет.
-    fn wip_tag(&self, p: &MoonPalette, cx: &Context<Self>) -> AnyElement {
+    fn wip_tag(&self, p: &MoonPalette, _cx: &Context<Self>) -> AnyElement {
         MoonText::new(t!("hotkeys.todo").to_string())
             .uppercase(false)
             .mono(true)
-            .font_size(design::font_value(cx, 9.0))
-            .line_height(design::line_value(cx, 12.0))
+            .line_height(12.0)
             .color(p.amber)
             .render()
             .into_any_element()

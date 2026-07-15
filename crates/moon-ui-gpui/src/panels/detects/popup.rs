@@ -4,20 +4,24 @@
 //! сам). Persist — per-group в `layout.detect_view_by_group` (лента одна на окно-группу).
 
 use gpui::*;
-use moon_ui::{
-    MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette, h_flex,
-};
-use moon_core::config::detect_view::{DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI};
 use moon_core::config::DetectViewCfg;
+use moon_core::config::detect_view::{DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI};
+use moon_ui::{
+    MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette,
+    h_flex,
+};
+
+use rust_i18n::t;
 
 use super::DetectsPanel;
 use crate::design;
-use crate::panels::{radio_items, RadioMark};
+use crate::panels::{RadioMark, radio_items};
 
+/// Размеры карточки: код + ключ локали подписи (подпись резолвится при рендере).
 const SIZES: [(u8, &str); 3] = [
-    (DETECT_SIZE_MINI, "Мини"),
-    (DETECT_SIZE_MEDIUM, "Средний"),
-    (DETECT_SIZE_LARGE, "Крупный"),
+    (DETECT_SIZE_MINI, "detects.view.size_mini"),
+    (DETECT_SIZE_MEDIUM, "detects.view.size_medium"),
+    (DETECT_SIZE_LARGE, "detects.view.size_large"),
 ];
 
 /// Правка cfg группы: текущее → мутатор → persist в layout.
@@ -60,7 +64,7 @@ fn settings_menu(cfg: &DetectViewCfg, entity: Entity<DetectsPanel>) -> impl Into
     let size_items = radio_items(
         SIZES
             .iter()
-            .map(|(sz, label)| (*sz, format!("sz-{sz}").into(), label.to_string().into())),
+            .map(|(sz, key)| (*sz, format!("sz-{sz}").into(), t!(*key).to_string().into())),
         cur,
         RadioMark::Check,
         {
@@ -79,58 +83,66 @@ fn settings_menu(cfg: &DetectViewCfg, entity: Entity<DetectsPanel>) -> impl Into
         .close_on_select(false)
         .items(size_items)
         .item(MoonMenuItem::separator())
-        .item(field_item(&entity, "f-time", "Время", cfg.show_time, |c, v| {
-            c.show_time = v
-        }))
-        .item(field_item(&entity, "f-core", "Ядро", cfg.show_core, |c, v| {
-            c.show_core = v
-        }))
+        .item(field_item(
+            &entity,
+            "f-time",
+            &t!("detects.view.time"),
+            cfg.show_time,
+            |c, v| c.show_time = v,
+        ))
+        .item(field_item(
+            &entity,
+            "f-core",
+            &t!("detects.view.core"),
+            cfg.show_core,
+            |c, v| c.show_core = v,
+        ))
         .item(field_item(
             &entity,
             "f-badge",
-            "Бейдж",
+            &t!("detects.view.badge"),
             cfg.show_badge,
             |c, v| c.show_badge = v,
         ))
         .item(field_item(
             &entity,
             "f-chart",
-            "Чарт",
+            &t!("detects.view.chart"),
             cfg.show_chart,
             |c, v| c.show_chart = v,
         ))
         .item(field_item(
             &entity,
             "f-line",
-            "Линия (вместо свечей)",
+            &t!("detects.view.line_mode"),
             cfg.line_mode,
             |c, v| c.line_mode = v,
         ))
         .item(field_item(
             &entity,
             "f-d24",
-            "Дельта 24ч (в линии)",
+            &t!("detects.view.delta_24h"),
             cfg.show_delta_24h,
             |c, v| c.show_delta_24h = v,
         ))
         .item(field_item(
             &entity,
             "f-d1",
-            "Дельта 1ч (в линии)",
+            &t!("detects.view.delta_1h"),
             cfg.show_delta_1h,
             |c, v| c.show_delta_1h = v,
         ))
         .item(field_item(
             &entity,
             "f-exch",
-            "Биржа",
+            &t!("detects.view.exchange"),
             cfg.show_exchange,
             |c, v| c.show_exchange = v,
         ))
         .item(field_item(
             &entity,
             "f-exch-kind",
-            "Тип биржи",
+            &t!("detects.view.exchange_kind"),
             cfg.show_exchange_kind,
             |c, v| c.show_exchange_kind = v,
         ))

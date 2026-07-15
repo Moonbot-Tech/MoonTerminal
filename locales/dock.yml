@@ -3,6 +3,10 @@
 _version: 2
 
 # --- Нижний док: вкладки ---
+dock.tab.charts:
+  ru: "Чарты"
+  en: "Charts"
+  es: "Gráficos"
 dock.tab.orders:
   ru: "Ордера"
   en: "Orders"
@@ -27,6 +31,55 @@ dock.tab.alerts:
   ru: "Алерты"
   en: "Alerts"
   es: "Alertas"
+# Попап ⚙ ленты детектов: размер карточки + видимые поля.
+detects.view.size_mini:
+  ru: "Мини"
+  en: "Mini"
+  es: "Mini"
+detects.view.size_medium:
+  ru: "Средний"
+  en: "Medium"
+  es: "Medio"
+detects.view.size_large:
+  ru: "Крупный"
+  en: "Large"
+  es: "Grande"
+detects.view.time:
+  ru: "Время"
+  en: "Time"
+  es: "Hora"
+detects.view.core:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+detects.view.badge:
+  ru: "Бейдж"
+  en: "Badge"
+  es: "Insignia"
+detects.view.chart:
+  ru: "Чарт"
+  en: "Chart"
+  es: "Gráfico"
+detects.view.line_mode:
+  ru: "Линия (вместо свечей)"
+  en: "Line (instead of candles)"
+  es: "Línea (en vez de velas)"
+detects.view.delta_24h:
+  ru: "Дельта 24ч (в линии)"
+  en: "24h delta (on the line)"
+  es: "Delta 24h (en la línea)"
+detects.view.delta_1h:
+  ru: "Дельта 1ч (в линии)"
+  en: "1h delta (on the line)"
+  es: "Delta 1h (en la línea)"
+detects.view.exchange:
+  ru: "Биржа"
+  en: "Exchange"
+  es: "Exchange"
+detects.view.exchange_kind:
+  ru: "Тип биржи"
+  en: "Exchange type"
+  es: "Tipo de exchange"
 dock.todo.assets:
   ru: "Активы: канал балансов ядра пока не подключён"
   en: "Assets: core balance feed not wired yet"

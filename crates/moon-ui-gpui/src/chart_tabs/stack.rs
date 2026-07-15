@@ -78,12 +78,15 @@ type VisibleRangeHandler = Box<dyn Fn(Range<usize>, &mut Window, &mut App)>;
 /// Важно: body вокруг `ChartPanel` намеренно без `.bg()`. Chart own-pass рисуется через
 /// UnderScene, и любой непрозрачный quad над plot-зоной закроет график. Красим только header,
 /// border и отдельный gutter вне plot-зоны.
+/// `title_size` резолвится вызывающим (`design::t_body(cx)`): плитку строит
+/// `Clone + 'static` замыкание раскладки, куда `&App` не захватить.
 pub(super) fn chart_stack_card(
     id: SharedString,
     label: impl Into<SharedString>,
     panel: Entity<ChartPanel>,
     p: MoonPalette,
     border: Rgba,
+    title_size: Pixels,
 ) -> Stateful<Div> {
     let label = label.into();
     div()
@@ -127,7 +130,7 @@ pub(super) fn chart_stack_card(
                         .child(
                             div()
                                 .font_family(crate::design::mono())
-                                .text_size(px(10.0))
+                                .text_size(title_size)
                                 .text_color(rgb(p.text_soft))
                                 .whitespace_nowrap()
                                 .overflow_hidden()

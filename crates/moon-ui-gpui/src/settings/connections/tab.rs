@@ -37,7 +37,7 @@ impl SettingsView {
             .items_center()
             .px_1()
             .py_0p5()
-            .rounded(px(4.0))
+            .rounded(design::r_button(cx))
             .bg(rgb(p.panel_high))
             .child(
                 MoonCheckbox::new(SharedString::from(format!("grp-{name}")))
@@ -146,7 +146,7 @@ impl SettingsView {
                     .id(SharedString::from(format!("ico-{id}")))
                     .p_0p5()
                     .cursor_pointer()
-                    .rounded(design::ui_px(cx, 4.0))
+                    .rounded(design::r_button(cx))
                     .hover(move |s| s.bg(rgb(p.panel_high)))
                     .child(cell)
                     .on_click(cx.listener(move |this, _, _, cx| {

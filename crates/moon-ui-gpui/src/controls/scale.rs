@@ -5,13 +5,15 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem,
-    MoonMenuSize, MoonPalette, MoonTooltipView,
+    MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize,
+    MoonPalette, MoonTooltipView,
 };
 
 /// Пресеты масштаба цены (Y) — 1:1 с egui `dock/controls.rs::SCALES`. `None` = «Авто».
+/// Первый элемент пары — СТАБИЛЬНЫЙ ключ пункта меню (не показывается): проценты
+/// интернациональны и идут в подпись как есть, «Авто» подставляется из локали.
 const SCALES: [(&str, Option<f32>); 6] = [
-    ("Авто", None),
+    ("auto", None),
     ("50%", Some(0.50)),
     ("20%", Some(0.20)),
     ("10%", Some(0.10)),
@@ -19,12 +21,14 @@ const SCALES: [(&str, Option<f32>); 6] = [
     ("2%", Some(0.02)),
 ];
 
-fn scale_label(scale: Option<f32>) -> &'static str {
+/// Подпись ступени. `None` (и кастомный масштаб после перетаскивания, который не
+/// совпал ни с одной ступенью) → «Авто» из локали; проценты — как в `SCALES`.
+fn scale_label(scale: Option<f32>) -> String {
     SCALES
         .iter()
-        .find(|(_, value)| *value == scale)
-        .map(|(label, _)| *label)
-        .unwrap_or("Авто")
+        .find(|(_, value)| *value == scale && value.is_some())
+        .map(|(label, _)| (*label).to_string())
+        .unwrap_or_else(|| t!("toolbar.scale_auto").to_string())
 }
 
 /// Следующая ступень масштаба для хоткеев Scale +/− (единый источник порядка — `SCALES`:
@@ -71,10 +75,10 @@ fn scale_dropdown(
 ) -> impl IntoElement {
     let selected_label = scale_label(scale);
     let mut items = Vec::with_capacity(SCALES.len());
-    for (label, pct) in SCALES {
+    for (key, pct) in SCALES {
         let on_pick = on_pick.clone();
         items.push(
-            MoonMenuItem::with_key(format!("{item_key_prefix}-{label}"), label)
+            MoonMenuItem::with_key(format!("{item_key_prefix}-{key}"), scale_label(pct))
                 .selected(scale == pct)
                 .checked(scale == pct)
                 .on_click(move |_, _, cx| on_pick(pct, cx)),
@@ -83,7 +87,7 @@ fn scale_dropdown(
 
     // Лупа вместо слова «МАСШТАБ» + «А» для Авто (компактнее); подсказка «Масштаб» — тултипом.
     let trigger_val = if scale.is_none() {
-        "А"
+        t!("toolbar.scale_auto_short").to_string()
     } else {
         selected_label
     };

@@ -64,7 +64,7 @@ fn base(color: u32, cx: &App) -> Div {
     div()
         .px(design::ui_px(cx, 8.0))
         .py(design::ui_px(cx, 4.0))
-        .rounded(design::ui_px(cx, 4.0))
+        .rounded(design::r_button(cx))
         .border_1()
         .border_color(rgba_from(color, 0.32))
         .bg(rgba_from(color, 0.12))
@@ -120,10 +120,9 @@ fn coin_text(it: &DetectItem, p: MoonPalette, size: f32) -> MoonText {
 
 /// Мелкая приглушённая подпись (время/биржа).
 fn muted(text: String, p: MoonPalette) -> MoonText {
+    // Кегль/интерлиньяж НЕ задаём: дефолт MoonText (9/11) — ровно то, что нужно.
     MoonText::new(text)
         .color(p.text_muted)
-        .font_size(9.0)
-        .line_height(11.0)
         .mono(true)
         .uppercase(false)
 }
@@ -146,17 +145,15 @@ fn neg_col(p: MoonPalette) -> u32 {
 
 /// Подпись дельты («+1.23%» / «-0.45%») с ПОДЛОЖКОЙ (полупрозрачный фон темы — не сливается с
 /// линией). Зелёная при ≥0, красная при <0, со знаком; мелкий жирный моно (стандартный MoonText).
-fn delta_text(val: f32, p: MoonPalette) -> Div {
+fn delta_text(val: f32, p: MoonPalette, cx: &App) -> Div {
     let col = if val < 0.0 { neg_col(p) } else { pos_col(p) };
     div()
         .px(px(2.0))
-        .rounded(px(2.0))
+        .rounded(design::ui_px(cx, 2.0))
         .bg(rgba_from(p.surface, 0.72))
         .child(
             MoonText::new(format!("{val:+.2}%"))
                 .color(col)
-                .font_size(8.0)
-                .line_height(10.0)
                 .weight(700.0)
                 .mono(true)
                 .uppercase(false),
@@ -188,14 +185,14 @@ fn chart_cell(it: &DetectItem, cfg: &DetectViewCfg, p: MoonPalette, cx: &App) ->
             .absolute()
             .top(px(2.0))
             .left(px(3.0))
-            .child(delta_text(it.delta_24h, p))
+            .child(delta_text(it.delta_24h, p, cx))
     }))
     .children(cfg.show_delta_1h.then(|| {
         div()
             .absolute()
             .bottom(px(2.0))
             .left(px(3.0))
-            .child(delta_text(it.delta_1h, p))
+            .child(delta_text(it.delta_1h, p, cx))
     }))
 }
 

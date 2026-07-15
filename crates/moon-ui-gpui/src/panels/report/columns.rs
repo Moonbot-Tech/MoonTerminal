@@ -20,6 +20,10 @@ pub(super) fn report_columns(table: &ReportTable, vis: &[usize]) -> Vec<MoonData
         .collect()
 }
 
+/// ВНИМАНИЕ: `font_size(10.5)` в element-ячейках ниже — это дефолт `MoonTableCell`,
+/// продублированный руками: `MoonDataCell::element` НЕ наследует стиль ячейки и без
+/// этого текст падает на дефолт `MoonText` (9.0). Снять после фикса форка —
+/// см. `docs-internal/FORK_BUGS.md`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn report_data_row(
     ri: usize,
@@ -94,7 +98,7 @@ fn coin_cell(
         .child(
             MoonText::new(coin.clone())
                 .color(MoonTone::Accent.color(p))
-                .font_size(10.0)
+                .font_size(10.5)
                 .line_height(13.0)
                 .mono(true)
                 .uppercase(false)
@@ -223,7 +227,7 @@ fn core_cell(
         .child(
             MoonText::new(name)
                 .color(MoonTone::Muted.color(p))
-                .font_size(10.0)
+                .font_size(10.5)
                 .line_height(13.0)
                 .mono(true)
                 .uppercase(false)
@@ -251,7 +255,7 @@ fn report_data_cell(col: &str, val: &Value, p: MoonPalette) -> MoonDataCell {
         .child(
             MoonText::new(text)
                 .color(color)
-                .font_size(10.0)
+                .font_size(10.5)
                 .line_height(13.0)
                 .mono(true)
                 .uppercase(false)

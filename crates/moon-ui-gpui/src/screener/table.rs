@@ -280,8 +280,12 @@ fn market_cell(e: &Entry, view: &Entity<ScreenerView>, p: MoonPalette) -> impl I
         .items_center()
         .cursor_pointer()
         .child(
+            // 10.5 = дефолт MoonTableCell: element-ячейка НЕ наследует стиль ячейки и
+            // без этого падает на дефолт MoonText (9.0), разъезжаясь с соседними
+            // колонками. Снять после фикса форка — docs-internal/FORK_BUGS.md.
             MoonText::new(e.row.coin.clone())
                 .color(MoonTone::Accent.color(p))
+                .font_size(10.5)
                 .weight(500.0)
                 .mono(true)
                 .uppercase(false)

@@ -366,7 +366,7 @@ impl StrategiesView {
                     .overlay_closable(true)
                     .bg(moon(p.shell_high))
                     .border_color(moon(p.border))
-                    .rounded(px(6.0))
+                    .rounded(design::r_container(cx))
                     .text_color(moon(p.text))
                     .header(
                         div()

@@ -99,7 +99,7 @@ impl Shell {
                     .bg(rgb(p.panel_high))
                     .border_1()
                     .border_color(rgb(p.border))
-                    .rounded(px(4.0))
+                    .rounded(design::r_button(cx))
                     .child(
                         div()
                             .text_size(design::t_caption(cx))

@@ -666,7 +666,7 @@ fn open_market_sell_confirm(
             .overlay_closable(true)
             .bg(rgb(p.shell_high))
             .border_color(rgb(p.border))
-            .rounded(px(8.0))
+            .rounded(design::r_container(cx))
             .text_color(rgb(p.text))
             .header(
                 div()

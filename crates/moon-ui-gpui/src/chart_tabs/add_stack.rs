@@ -728,6 +728,8 @@ impl Render for AddChartStack {
             .is_horizontal();
         let entity = cx.entity();
         let p = palette;
+        let title_size = crate::design::t_body(cx);
+        let highlight_radius = crate::design::ui_px(cx, 2.0);
         let visible_order = render_order.clone();
         let panel_order = render_order.clone();
         let tile_order = render_order.clone();
@@ -770,8 +772,14 @@ impl Render for AddChartStack {
                         false,
                     ),
                 };
-                let mut tile =
-                    chart_stack_card(SharedString::from(id.clone()), label, panel, p, border);
+                let mut tile = chart_stack_card(
+                    SharedString::from(id.clone()),
+                    label,
+                    panel,
+                    p,
+                    border,
+                    title_size,
+                );
                 // Поперёк оси — на всю ширину/высоту; вдоль оси — flex+cap (COMPRESS до size, сжатие),
                 // фикс (size без flex) или растяжение (FIT). Гор: ось = X (ширина), верт: ось = Y.
                 tile = if horizontal {
@@ -814,7 +822,7 @@ impl Render for AddChartStack {
                         .bottom(px(9.0))
                         .border_2()
                         .border_color(accent)
-                        .rounded(px(2.0))
+                        .rounded(highlight_radius)
                         .with_animation(
                             SharedString::from(format!("{id}-arrive")),
                             Animation::new(HIGHLIGHT),

@@ -417,7 +417,7 @@ impl StrategiesView {
                 v_flex()
                     .id(SharedString::from(format!("helper-{label}")))
                     .w_full()
-                    .rounded(design::ui_px(cx, 4.0))
+                    .rounded(design::r_button(cx))
                     .border_1()
                     .border_color(moon(p.border))
                     .bg(moon(p.panel))

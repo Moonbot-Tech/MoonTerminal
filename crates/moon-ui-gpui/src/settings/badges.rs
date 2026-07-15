@@ -17,7 +17,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::{SettingsView, separator};
-use crate::{design, Backend};
+use crate::{Backend, design};
 use moon_core::config::{BadgeEntry, UiThemeMode};
 
 /// Редактор одной строки бейджа: поля ввода + пикеры цвета активной темы.
@@ -373,9 +373,17 @@ impl SettingsView {
             .child(outline_chk)
             .when(outline, |el| {
                 el.child(cap("L"))
-                    .child(div().flex_none().child(MoonColorPicker::new(&row.outline_long)))
+                    .child(
+                        div()
+                            .flex_none()
+                            .child(MoonColorPicker::new(&row.outline_long)),
+                    )
                     .child(cap("S"))
-                    .child(div().flex_none().child(MoonColorPicker::new(&row.outline_short)))
+                    .child(
+                        div()
+                            .flex_none()
+                            .child(MoonColorPicker::new(&row.outline_short)),
+                    )
             })
             .child(
                 MoonButton::new(SharedString::from(format!("badge-del-{idx}")))
@@ -392,7 +400,7 @@ impl SettingsView {
         div()
             .px_1()
             .py_0p5()
-            .rounded(design::ui_px(cx, 4.0))
+            .rounded(design::r_button(cx))
             .border_1()
             .border_color(rgba_from(p.border, 1.0))
             .child(row_el)
