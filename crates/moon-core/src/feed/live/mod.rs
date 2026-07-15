@@ -152,6 +152,7 @@ pub fn run(
     let mut last_assets = Instant::now();
     // Троттл активного запроса баланса у ЯДРА после филлов (см. блок в цикле).
     let mut last_balance_refresh = Instant::now();
+    let mut last_wallet_refresh = Instant::now();
     // Окно логирования Balance-событий после нашего refresh (диагностика фантомов «Активов»).
     let mut balance_refresh_log_until: Option<Instant> = None;
     // Курсор transfer-активов: шлём только при смене revision (request/response).
@@ -375,6 +376,23 @@ pub fn run(
                 Err(error) => {
                     log::warn!("core {} balance refresh request failed: {error}", server.id)
                 }
+            }
+        }
+        // У кошельковых спот-бирж (Bitget, Hyperliquid-спот) купленные монеты живут ТОЛЬКО
+        // в transfer_assets — per-market балансов ядро не шлёт вовсе. Без переопроса
+        // свежекупленная монета не появится в «Активах» до ручного клика по ядру.
+        // Спрашиваем один Spot-кошелёк (не все три) и реже балансов: этот запрос ядро
+        // форвардит на биржу (CheckAssets в логе ядра бывает и в таймаут).
+        if has_orders_table_event && last_wallet_refresh.elapsed() >= Duration::from_secs(10) {
+            last_wallet_refresh = Instant::now();
+            if let Err(error) = client
+                .balances()
+                .refresh_transfer_assets_kind(moonproto::ExchangeKind::Spot)
+            {
+                log::warn!(
+                    "core {} spot wallet refresh request failed: {error}",
+                    server.id
+                );
             }
         }
         // Судьба bulk-снимка 5м-свечей (авто-запрос moonproto после subscribe_all_trades):

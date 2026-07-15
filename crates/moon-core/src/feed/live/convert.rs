@@ -372,9 +372,22 @@ fn build_order_row(
     // прочие *USD = $10). Реальный размер в монете = контракты × contract_size / цена_входа.
     // После этого и подпись размера (монеты), и её USD-нотионал (монеты × цена = контракты × cs)
     // считаются верно по общей формуле. `contract_size == 1` → linear/спот, size уже в монете.
-    // (futures_type/валюты у coin-margined приходят пустыми — надёжен только contract_size.)
+    //
+    // ВАЖНО: `contract_size != 1` сам по себе НЕ значит inverse. У ЛИНЕЙНЫХ quanto-фьючей
+    // Gate (ASTEROID_USDT: cs=10000 монет/контракт) ядро уже отдаёт ноги В МОНЕТАХ — деление
+    // на копеечную цену раздувало количество до 7e14 и PnL до −71 млн при честных −1$.
+    // Отличие настоящего coin-margined: КОТИРУЕМАЯ ВАЛЮТА ПУСТАЯ (контракт деноминирован в
+    // USD; так же его различает build_assets) — только тогда конвертируем.
+    let quote_is_empty = mkt_snapshot
+        .as_ref()
+        .is_some_and(|m| m.base_currency.trim().is_empty());
     let convert_contract_qty = |qty: f64, price: f64| {
-        if contract_size != 1.0 && contract_size > 0.0 && price.is_finite() && price > 0.0 {
+        if quote_is_empty
+            && contract_size != 1.0
+            && contract_size > 0.0
+            && price.is_finite()
+            && price > 0.0
+        {
             qty * contract_size / price
         } else {
             qty

@@ -410,7 +410,9 @@ pub(super) fn assets_table(
         cx,
         MoonDataTable::new(id, row_count, move |ix, _window, _app| {
             let e = &table_rows[ix];
-            let on_sale = sell_marked.contains(&(e.core, e.row.market.clone()));
+            // Матч «в продаже» — по МОНЕТЕ, не по имени рынка: у кошельковых строк
+            // HL-спота рынок не резолвится (индексные имена «@151»), а монета совпадает.
+            let on_sale = sell_marked.contains(&(e.core, e.row.coin.to_ascii_uppercase()));
             assets_row(e, &view, p, on_sale)
         })
         .columns(assets_columns())

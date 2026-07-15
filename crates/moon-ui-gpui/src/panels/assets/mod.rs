@@ -339,9 +339,11 @@ impl AssetsView {
             })
     }
 
-    /// `(ядро, рынок)` с активным sell-ордером охвата: вход исполнен, выход ВЫСТАВЛЕН
-    /// (фаза SellSet/SellAlmostDone, ордер не терминален). Эти монеты/позиции в таблице
-    /// подсвечиваются — «сейчас стоит на продажу».
+    /// `(ядро, МОНЕТА-UPPER)` с активным sell-ордером охвата: вход исполнен, выход
+    /// ВЫСТАВЛЕН (фаза SellSet/SellAlmostDone, ордер не терминален). Эти монеты/позиции
+    /// в таблице подсвечиваются — «сейчас стоит на продажу». Матчим по монете, а не по
+    /// имени рынка: у кошельковых строк HL-спота рынок индексный («@151») и в строку
+    /// актива не резолвится — бейдж по рынку не загорался.
     fn collect_sell_marked(&self, b: &Backend) -> std::collections::HashSet<(CoreId, String)> {
         let store = b.session.store();
         let mut out = std::collections::HashSet::new();
@@ -349,7 +351,17 @@ impl AssetsView {
             let Some(cd) = store.core(*id) else { continue };
             for o in &cd.orders {
                 if !o.job_is_done && matches!(o.status.as_str(), "SellSet" | "SellAlmostDone") {
-                    out.insert((*id, o.market.clone()));
+                    // Отображаемое имя рынка (mb_classic) резолвит «@N» в «KHYPEUSDT» —
+                    // из него монета выводится как везде (`coin_of_market`).
+                    let disp = if o.market_display.is_empty() {
+                        &o.market
+                    } else {
+                        &o.market_display
+                    };
+                    out.insert((
+                        *id,
+                        moon_core::symbol::coin_of_market(disp).to_ascii_uppercase(),
+                    ));
                 }
             }
         }
@@ -658,9 +670,13 @@ impl AssetsView {
 /// Реальное имя рынка `<coin>/<quote>` из каталога ядра. Форматы бирж разные: Binance/Bitget
 /// — конкатенация (`BTCUSDC`), Gate — с подчёркиванием (`SOVRN_USDT`). Возвращаем найденное
 /// имя (для Market Sell / клика по тикеру) или `None`, если рынка нет.
+///
+/// НАРОЧНО без фолбэка «каноничная монета → индексный рынок» (пробовали для HL-спота
+/// «KHYPE»→«@151»): Market sell кошельковых остатков через Moonbot там не работает, и
+/// правильное поведение — кнопку НЕ показывать. Бейдж «в продаже» от рынка не зависит
+/// (матчится по монете, см. `collect_sell_marked`).
 fn resolve_market(markets: &std::collections::HashSet<String>, coin: &str, quote: &str) -> Option<String> {
     // Рынок = САМО имя монеты (Hyperliquid спот-индексы «@699» зовутся так, а не «@699USDC»).
-    // Пробуем первым — иначе Sell скрыт и кошельковая монета не разрешается в рынок.
     if markets.contains(coin) {
         return Some(coin.to_string());
     }
