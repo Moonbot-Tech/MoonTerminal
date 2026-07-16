@@ -98,8 +98,7 @@ impl AnalyticsView {
                         .overflow_y_scroll()
                         .gap(design::ui_px(cx, 8.0))
                         .child(self.kpi_matrix(p, cx))
-                        .child(self.fields_grid(p, window, cx))
-                        .child(self.suggest_card(p, cx)),
+                        .child(self.fields_grid(p, window, cx)),
                 );
             }
             StratMode::Coins => {
@@ -263,7 +262,9 @@ impl AnalyticsView {
                     .gap(design::ui_px(cx, 6.0))
                     .items_center()
                     .children(alive_dot)
-                    .child(div().min_w_0().truncate().child(g.name.clone())),
+                    // flex_1 обязателен: div с truncate() без флекс-базиса
+                    // схлопывается в «…» (так пропадали имена стратегий).
+                    .child(div().flex_1().min_w_0().truncate().child(g.name.clone())),
             )
             .child(
                 div()

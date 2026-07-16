@@ -263,7 +263,16 @@ const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("dbtc1m", None, Some("Delta_BTC_1m_Max")),
 ];
 
-/// Пороговые параметры ВЫБРАННОЙ стратегии по полям тюнера: поле → (min, max).
+/// Чип поля: пороги стратегии либо «фильтры этого класса игнорируются».
+#[derive(Clone, Copy, Debug)]
+pub enum StratChip {
+    /// IgnoreFilters / IgnoreDelta / IgnoreVolume выключают класс фильтров —
+    /// что бы ни стояло в порогах, стратегия их не применяет.
+    Ignored,
+    Bounds(Option<f64>, Option<f64>),
+}
+
+/// Пороговые параметры ВЫБРАННОЙ стратегии по полям тюнера.
 /// Источник — текущая версия в strategies.sqlite (raw_json нормализован со
 /// схемными дефолтами). `defaults` — дефолты схемы (lowercase имя → число):
 /// значение, РАВНОЕ дефолту, скрывается — это «фильтр не настроен», а не
@@ -271,7 +280,7 @@ const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
 pub fn strategy_bounds(
     strategy_id: i64,
     defaults: &std::collections::HashMap<String, f64>,
-) -> std::collections::HashMap<&'static str, (Option<f64>, Option<f64>)> {
+) -> std::collections::HashMap<&'static str, StratChip> {
     let mut out = std::collections::HashMap::new();
     let path = crate::config::paths::strategies_db_path();
     if !path.exists() {
@@ -320,20 +329,41 @@ pub fn strategy_bounds(
         }
         Some(f)
     };
+    // Ignore-флаги: булево либо строка YES/TRUE/1.
+    let truthy = |key: &str| -> bool {
+        match map.get(key) {
+            Some(serde_json::Value::Bool(b)) => *b,
+            Some(serde_json::Value::String(s)) => {
+                matches!(s.trim().to_ascii_uppercase().as_str(), "YES" | "TRUE" | "1")
+            }
+            Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0) != 0.0,
+            _ => false,
+        }
+    };
+    let all_off = truthy("IgnoreFilters");
+    let delta_off = all_off || truthy("IgnoreDelta");
+    let volume_off = all_off || truthy("IgnoreVolume");
     for (field, pmin, pmax) in STRAT_PARAMS {
+        let ignored = match *field {
+            "hvol" | "dvol" => volume_off,
+            "bvsvratio" => all_off,
+            _ => delta_off,
+        };
+        if ignored {
+            out.insert(*field, StratChip::Ignored);
+            continue;
+        }
         let (lo, hi) = (num(*pmin), num(*pmax));
         if lo.is_some() || hi.is_some() {
-            out.insert(*field, (lo, hi));
+            out.insert(*field, StratChip::Bounds(lo, hi));
         }
     }
     out
 }
 
-/// Результат автоподбора: лучший диапазон одного поля.
+/// Результат автоподбора: лучший диапазон поля.
 #[derive(Clone, Debug)]
 pub struct Suggestion {
-    pub field: &'static str,
-    pub label: &'static str,
     pub from: Option<f64>,
     pub to: Option<f64>,
     /// Профит периода при таком фильтре и сколько сделок остаётся.
@@ -341,81 +371,68 @@ pub struct Suggestion {
     pub n: i64,
 }
 
-/// Автоподбор: для каждого поля перебираем все пары квантильных краёв
-/// (≈16×16/2 комбинаций) и берём диапазон с максимальным профитом при
-/// сохранении ≥`min_n` сделок. Результат — по убыванию профита. Один скан БД.
-pub fn auto_suggest(q: &Query, min_n: i64) -> Option<Vec<Suggestion>> {
+/// Автоподбор порога ОДНОГО поля: перебор всех пар квантильных краёв
+/// (≈16×16/2 комбинаций), максимум профита при сохранении ≥`min_n` сделок.
+pub fn suggest_field(q: &Query, field: &str, min_n: i64) -> Option<Suggestion> {
     const EDGES: usize = 16;
+    if !FIELDS.iter().any(|(c, _)| *c == field) {
+        return None;
+    }
     let conn = super::open_reader()?;
     let mut q = q.clone();
     if q.from < 0 {
         q.from = 1;
     }
     let src = unified_from(&conn, &q)?;
-    let cols = FIELDS
-        .iter()
-        .map(|(c, _)| format!("o.\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!("SELECT {cols}, COALESCE(o.profitbtc,0) FROM {src}");
-    let mut per_field: Vec<Vec<(f64, f64)>> = vec![Vec::new(); FIELDS.len()];
-    {
-        let mut stmt = conn.prepare(&sql).ok()?;
-        let mut rows = stmt.query(rusqlite::params![q.from, q.to]).ok()?;
-        while let Ok(Some(r)) = rows.next() {
-            let profit: f64 = r.get(FIELDS.len()).unwrap_or(0.0);
-            for (fi, vals) in per_field.iter_mut().enumerate() {
-                if let Ok(Some(v)) = r.get::<_, Option<f64>>(fi) {
-                    if v.is_finite() {
-                        vals.push((v, profit));
-                    }
-                }
-            }
-        }
-    }
-
+    let sql = format!(
+        "SELECT o.\"{field}\", COALESCE(o.profitbtc,0)
+         FROM {src} WHERE o.\"{field}\" IS NOT NULL"
+    );
+    let mut vals: Vec<(f64, f64)> = conn
+        .prepare(&sql)
+        .ok()?
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
+        })
+        .ok()?
+        .flatten()
+        .filter(|(v, _)| v.is_finite())
+        .collect();
     let min_n = min_n.max(1) as usize;
-    let mut out: Vec<Suggestion> = Vec::new();
-    for (fi, mut vals) in per_field.into_iter().enumerate() {
-        if vals.len() < min_n {
-            continue;
-        }
-        vals.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let len = vals.len();
-        // Префиксные суммы профита + позиции квантильных краёв.
-        let mut pre = Vec::with_capacity(len + 1);
-        pre.push(0.0f64);
-        for (_, p) in &vals {
-            pre.push(pre.last().unwrap() + p);
-        }
-        let pos: Vec<usize> = (0..=EDGES).map(|k| k * len / EDGES).collect();
-        let mut best: Option<(f64, usize, usize)> = None;
-        for i in 0..EDGES {
-            for j in (i + 1)..=EDGES {
-                let (a, b) = (pos[i], pos[j]);
-                if b - a < min_n {
-                    continue;
-                }
-                let profit = pre[b] - pre[a];
-                if best.is_none_or(|(bp, _, _)| profit > bp) {
-                    best = Some((profit, i, j));
-                }
+    if vals.len() < min_n {
+        return None;
+    }
+    vals.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let len = vals.len();
+    // Префиксные суммы профита + позиции квантильных краёв.
+    let mut pre = Vec::with_capacity(len + 1);
+    pre.push(0.0f64);
+    for (_, p) in &vals {
+        pre.push(pre.last().unwrap() + p);
+    }
+    let pos: Vec<usize> = (0..=EDGES).map(|k| k * len / EDGES).collect();
+    let mut best: Option<(f64, usize, usize)> = None;
+    for i in 0..EDGES {
+        for j in (i + 1)..=EDGES {
+            let (a, b) = (pos[i], pos[j]);
+            if b - a < min_n {
+                continue;
+            }
+            let profit = pre[b] - pre[a];
+            if best.is_none_or(|(bp, _, _)| profit > bp) {
+                best = Some((profit, i, j));
             }
         }
-        if let Some((profit, i, j)) = best {
-            let (a, b) = (pos[i], pos[j]);
-            out.push(Suggestion {
-                field: FIELDS[fi].0,
-                label: FIELDS[fi].1,
-                from: (i > 0).then(|| vals[a].0),
-                to: (j < EDGES).then(|| vals[b - 1].0),
-                profit,
-                n: (b - a) as i64,
-            });
-        }
     }
-    out.sort_by(|a, b| b.profit.total_cmp(&a.profit));
-    Some(out)
+    best.map(|(profit, i, j)| {
+        let (a, b) = (pos[i], pos[j]);
+        Suggestion {
+            from: (i > 0).then(|| vals[a].0),
+            to: (j < EDGES).then(|| vals[b - 1].0),
+            profit,
+            n: (b - a) as i64,
+        }
+    })
 }
 
 #[cfg(test)]

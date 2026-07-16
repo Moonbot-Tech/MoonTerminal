@@ -19,7 +19,7 @@ use super::summary::{fmt_signed, sign_color};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::config::layout::{TunerBoundCfg, TunerVariantCfg};
-use moon_core::db::tuner::{Bound, FIELDS, HistBucket, Suggestion, VarStats, Variant};
+use moon_core::db::tuner::{Bound, FIELDS, HistBucket, StratChip, VarStats, Variant};
 
 /// Вариантов помимо «Факта» (V3 держит 8 — начинаем с двух).
 pub(super) const N_VAR: usize = 2;
@@ -37,9 +37,8 @@ pub(super) struct TunerState {
     pub(super) stats: Option<Arc<Vec<VarStats>>>,
     pub(super) hist: Option<Arc<Vec<HistBucket>>>,
     /// Пороговые параметры выбранной стратегии по полям (чипы у имён полей).
-    strat_bounds: Arc<HashMap<&'static str, (Option<f64>, Option<f64>)>>,
-    /// Результаты автоподбора (кнопка «Подобрать»).
-    sugg: Option<Arc<Vec<Suggestion>>>,
+    strat_bounds: Arc<HashMap<&'static str, StratChip>>,
+    /// Автоподбор (кнопка «Подобрать») выполняется в фоне.
     sugg_busy: bool,
     seq: u64,
     hist_seq: u64,
@@ -64,7 +63,6 @@ impl TunerState {
             stats: None,
             hist: None,
             strat_bounds: Arc::new(HashMap::new()),
-            sugg: None,
             sugg_busy: false,
             seq: 0,
             hist_seq: 0,
@@ -77,7 +75,6 @@ impl TunerState {
     pub(super) fn invalidate(&mut self) {
         self.stats = None;
         self.hist = None;
-        self.sugg = None;
     }
 
     /// Варианты для запроса: [пустой «Факт», v1..vN].
@@ -203,11 +200,14 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Фоновый автоподбор порогов (перебор пар квантильных краёв всех полей).
-    fn reload_suggest(&mut self, cx: &mut Context<Self>) {
+    /// Автоподбор порога ВЫБРАННОГО поля (кнопка «Подобрать»): перебор пар
+    /// квантильных краёв в фоне, результат сразу пишется в v1 этого поля.
+    fn suggest_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
         self.tuner.sugg_busy = true;
+        let fi = self.tuner.sel_field;
+        let field = FIELDS[fi].0.to_string();
         let q = self.tuner_query();
         // Не позволяем «оптимизации» схлопнуться в пару счастливых сделок:
         // держим минимум 1/5 фактических сделок (но не меньше 30).
@@ -221,7 +221,7 @@ impl AnalyticsView {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let sugg = executor
-                .spawn(async move { moon_core::db::tuner::auto_suggest(&q, min_n) })
+                .spawn(async move { moon_core::db::tuner::suggest_field(&q, &field, min_n) })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -229,7 +229,11 @@ impl AnalyticsView {
                         return;
                     }
                     this.tuner.sugg_busy = false;
-                    this.tuner.sugg = sugg.map(Arc::new);
+                    if let Some(s) = sugg {
+                        let from = s.from.map(fmt_bound).unwrap_or_default();
+                        let to = s.to.map(fmt_bound).unwrap_or_default();
+                        this.apply_bounds(0, fi, from, to, cx);
+                    }
                     cx.notify();
                 });
             });
@@ -527,11 +531,19 @@ impl AnalyticsView {
             if selected {
                 row = row.bg(moon_alpha(p.amber, 0.08));
             }
-            // Чип: НЕдефолтные пороги выбранной стратегии по этому полю
-            // (справочно, некликабелен).
+            // Чип: НЕдефолтные пороги выбранной стратегии (справочно), либо
+            // серое «ignore» — стратегия игнорирует этот класс фильтров.
             let chip = strat_bounds.get(FIELDS[fi].0).copied();
             row = row.child(match chip {
-                Some((lo, hi)) => {
+                Some(StratChip::Ignored) => div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon_alpha(p.text_muted, 0.7))
+                    .child("ignore")
+                    .into_any_element(),
+                Some(StratChip::Bounds(lo, hi)) => {
                     let text = [
                         lo.map(|v| format!("min({})", fmt_bound(v))),
                         hi.map(|v| format!("max({})", fmt_bound(v))),
@@ -580,13 +592,56 @@ impl AnalyticsView {
             }
             grid = grid.child(row);
         }
-        card(
-            t!("analytics.tuner.fields_title").to_string(),
-            t!("analytics.tuner.fields_sub").to_string(),
-            grid.into_any_element(),
-            p,
-            cx,
-        )
+        // Карточка со своей шапкой: заголовок + «Подобрать» (пишет лучший
+        // диапазон ВЫБРАННОГО поля сразу в v1) справа.
+        v_flex()
+            .w_full()
+            .flex_none()
+            .rounded(design::ui_px(cx, 8.0))
+            .bg(moon(p.panel))
+            .border_1()
+            .border_color(moon(p.border))
+            .overflow_hidden()
+            .child(
+                h_flex()
+                    .w_full()
+                    .px(design::ui_px(cx, 12.0))
+                    .py(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(
+                        div()
+                            .text_size(design::t_title(cx))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!("analytics.tuner.fields_title").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(design::t_caption(cx))
+                            .text_color(moon(p.text_muted))
+                            .child(t!("analytics.tuner.fields_sub").to_string()),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        MoonButton::new("tun-suggest-run")
+                            .variant(MoonButtonVariant::Blue)
+                            .size(MoonButtonSize::Micro)
+                            .label(if self.tuner.sugg_busy {
+                                "…".to_string()
+                            } else {
+                                t!("analytics.tuner.suggest_run").to_string()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if !this.tuner.sugg_busy {
+                                    this.suggest_into_v1(cx);
+                                    cx.notify();
+                                }
+                            }))
+                            .render(),
+                    ),
+            )
+            .child(grid)
+            .into_any_element()
     }
 
     /// Гистограмма выбранного поля: выигрыши вверх, убытки вниз, счётчик и края.
@@ -689,144 +744,6 @@ impl AnalyticsView {
         card(title, t!("analytics.tuner.hist_sub").to_string(), body, p, cx)
     }
 
-    /// Карточка автоподбора: кнопка «Подобрать» + топ диапазонов по профиту.
-    pub(super) fn suggest_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let fact_profit = self
-            .tuner
-            .stats
-            .as_ref()
-            .and_then(|s| s.first().map(|f| f.profit))
-            .unwrap_or(0.0);
-        let body: AnyElement = if self.tuner.sugg_busy {
-            div()
-                .p(design::ui_px(cx, 8.0))
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.loading").to_string())
-                .into_any_element()
-        } else {
-            match self.tuner.sugg.clone() {
-                None => div()
-                    .p(design::ui_px(cx, 8.0))
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.tuner.suggest_hint").to_string())
-                    .into_any_element(),
-                Some(sugg) => {
-                    let mut list = v_flex().w_full();
-                    for (i, s) in sugg.iter().take(8).enumerate() {
-                        let range = format!(
-                            "{} {}  {} {}",
-                            t!("analytics.tuner.from"),
-                            s.from.map(fmt_bound).unwrap_or_else(|| "—".into()),
-                            t!("analytics.tuner.to"),
-                            s.to.map(fmt_bound).unwrap_or_else(|| "—".into()),
-                        );
-                        let delta = s.profit - fact_profit;
-                        let (from_s, to_s) = (
-                            s.from.map(fmt_bound).unwrap_or_default(),
-                            s.to.map(fmt_bound).unwrap_or_default(),
-                        );
-                        let field = s.field;
-                        let mut row = h_flex()
-                            .w_full()
-                            .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
-                            .px(design::ui_px(cx, 8.0))
-                            .gap(design::ui_px(cx, 6.0))
-                            .items_center()
-                            .border_t_1()
-                            .border_color(moon_alpha(p.border, 0.5))
-                            .child(
-                                div()
-                                    .w(design::font_w_px(cx, 58.0))
-                                    .flex_none()
-                                    .truncate()
-                                    .child(s.label.to_string()),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(design::t_caption(cx))
-                                    .text_color(moon(p.text_soft))
-                                    .child(range),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_color(moon(sign_color(p, delta)))
-                                    .child(format!("{} ({})", fmt_signed(delta), s.n)),
-                            );
-                        for vi in 0..N_VAR {
-                            let (from_s, to_s) = (from_s.clone(), to_s.clone());
-                            row = row.child(
-                                MoonButton::new(SharedString::from(format!("sug-{i}-v{vi}")))
-                                    .variant(MoonButtonVariant::Soft)
-                                    .size(MoonButtonSize::Micro)
-                                    .label(format!("→v{}", vi + 1))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        let Some(fi) =
-                                            FIELDS.iter().position(|(c, _)| *c == field)
-                                        else {
-                                            return;
-                                        };
-                                        this.apply_bounds(
-                                            vi,
-                                            fi,
-                                            from_s.clone(),
-                                            to_s.clone(),
-                                            cx,
-                                        );
-                                    }))
-                                    .render(),
-                            );
-                        }
-                        list = list.child(row);
-                    }
-                    list.into_any_element()
-                }
-            }
-        };
-        // card() с кастомной шапкой: заголовок + кнопка запуска.
-        v_flex()
-            .w_full()
-            .flex_none()
-            .rounded(design::ui_px(cx, 8.0))
-            .bg(moon(p.panel))
-            .border_1()
-            .border_color(moon(p.border))
-            .overflow_hidden()
-            .child(
-                h_flex()
-                    .w_full()
-                    .px(design::ui_px(cx, 12.0))
-                    .py(design::ui_px(cx, 8.0))
-                    .items_center()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(
-                        div()
-                            .text_size(design::t_title(cx))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(t!("analytics.tuner.suggest_title").to_string()),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        MoonButton::new("tun-suggest-run")
-                            .variant(MoonButtonVariant::Blue)
-                            .size(MoonButtonSize::Micro)
-                            .label(t!("analytics.tuner.suggest_run").to_string())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if !this.tuner.sugg_busy {
-                                    this.reload_suggest(cx);
-                                    cx.notify();
-                                }
-                            }))
-                            .render(),
-                    ),
-            )
-            .child(body)
-            .into_any_element()
-    }
 }
 
 /// Формат числа для границ/чипов: крупные — с суффиксом k/M/B/T (обратно

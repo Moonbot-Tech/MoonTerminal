@@ -89,18 +89,10 @@ analytics.tuner.strat_chip:
   ru: "стратегия"
   en: "strategy"
   es: "estrategia"
-analytics.tuner.suggest_title:
-  ru: "Автоподбор"
-  en: "Auto-search"
-  es: "Búsqueda auto"
 analytics.tuner.suggest_run:
   ru: "Подобрать"
   en: "Search"
   es: "Buscar"
-analytics.tuner.suggest_hint:
-  ru: "Перебор порогов: для каждого поля ищется диапазон с максимальным профитом периода (не отбрасывая больше 4/5 сделок). Кнопки →v1/→v2 подставляют найденное в вариант."
-  en: "Threshold sweep: for every field, finds the range with the highest period profit (keeping at least 1/5 of trades). →v1/→v2 buttons apply the result to a variant."
-  es: "Barrido de umbrales: para cada campo busca el rango con mayor beneficio (conservando al menos 1/5 de operaciones). →v1/→v2 lo aplican a una variante."
 analytics.tuner.hist_title:
   ru: "Распределение"
   en: "Distribution"
