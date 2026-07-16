@@ -630,9 +630,11 @@ impl AnalyticsView {
         // подтверждение (первый клик — «Подтвердить?»).
         if self.sel_strategy.is_some() {
             let confirm = self.tuner.save_confirm;
+            // Кнопка «загорается», когда есть непримененные клики «ignore».
+            let dirty = staged_dirty(&self.tuner.strat, &self.tuner.staged_ignore);
             header = header.child(
                 MoonButton::new("tun-save-strat")
-                    .variant(if confirm {
+                    .variant(if confirm || dirty {
                         MoonButtonVariant::Amber
                     } else {
                         MoonButtonVariant::Soft
@@ -730,18 +732,6 @@ impl AnalyticsView {
                         cx.notify();
                     })),
             );
-            if let Some(want) = staged.filter(|s| *s != cur_ignore) {
-                hdr = hdr.child(
-                    MoonButton::new(SharedString::from(format!("tun-ign-apply-{flag}")))
-                        .variant(MoonButtonVariant::Amber)
-                        .size(MoonButtonSize::Micro)
-                        .label(t!("analytics.tuner.apply_ignore").to_string())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.apply_ignore(flag, want, cx);
-                        }))
-                        .render(),
-                );
-            }
         }
         hdr.into_any_element()
     }
@@ -820,6 +810,24 @@ pub(super) fn card(
         .child(head)
         .child(body)
         .into_any_element()
+}
+
+/// Есть ли стейджи «ignore», отличающиеся от текущих флагов стратегии.
+pub(super) fn staged_dirty(
+    f: &StratFilters,
+    staged: &HashMap<&'static str, bool>,
+) -> bool {
+    staged.iter().any(|(flag, want)| {
+        let cur = match *flag {
+            "IgnoreFilters" => f.ignore_filters,
+            "IgnorePing" => f.ignore_ping,
+            "IgnoreDelta" => f.ignore_delta,
+            "IgnoreVolume" => f.ignore_volume,
+            "UseBV_SV_Filter" => !f.use_bvsv,
+            _ => return false,
+        };
+        *want != cur
+    })
 }
 
 /// Флаг игнора группы + его ТЕКУЩЕЕ состояние у стратегии (семантика

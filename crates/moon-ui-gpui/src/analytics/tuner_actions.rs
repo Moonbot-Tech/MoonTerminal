@@ -188,50 +188,57 @@ impl AnalyticsView {
                 delta_touched = true;
             }
         }
-        if changes.is_empty() {
-            log::info!("аналитика: «В стратегию» — в v1 нет полей с маппингом на параметры");
-            return;
-        }
-        // Включаем затронутые классы фильтров, если стратегия их игнорировала.
+        // Флаги игноров: автовключение классов, чьи пороги пишем, ПЛЮС явные
+        // клики «ignore» на подзаголовках (стейдж приоритетнее автологики).
         let f = self.tuner.strat.clone();
+        let mut flags: Vec<(&'static str, bool)> = Vec::new(); // (флаг, игнорировать)
         if f.ignore_filters {
-            changes.push(("IgnoreFilters".to_string(), "NO".to_string()));
+            flags.push(("IgnoreFilters", false));
         }
         if delta_touched && f.ignore_delta {
-            changes.push(("IgnoreDelta".to_string(), "NO".to_string()));
+            flags.push(("IgnoreDelta", false));
         }
         if volume_touched && f.ignore_volume {
-            changes.push(("IgnoreVolume".to_string(), "NO".to_string()));
+            flags.push(("IgnoreVolume", false));
         }
-        // BV/SV гейтится собственным включателем.
         if bvsv_touched && !f.use_bvsv {
-            changes.push(("UseBV_SV_Filter".to_string(), "YES".to_string()));
+            flags.push(("UseBV_SV_Filter", false));
         }
-        // PriceBug — секция Ping со своим игнором.
         if ping_touched && f.ignore_ping {
-            changes.push(("IgnorePing".to_string(), "NO".to_string()));
+            flags.push(("IgnorePing", false));
+        }
+        for (flag, want) in self.tuner.staged_ignore.clone() {
+            flags.retain(|(fl, _)| *fl != flag);
+            let cur = match flag {
+                "IgnoreFilters" => f.ignore_filters,
+                "IgnorePing" => f.ignore_ping,
+                "IgnoreDelta" => f.ignore_delta,
+                "IgnoreVolume" => f.ignore_volume,
+                "UseBV_SV_Filter" => !f.use_bvsv,
+                _ => continue,
+            };
+            if want != cur {
+                flags.push((flag, want));
+            }
+        }
+        self.tuner.staged_ignore.clear();
+        for (flag, ignore) in flags {
+            // UseBV_SV_Filter — включатель (инверсная семантика игнора).
+            let value = if flag == "UseBV_SV_Filter" {
+                if ignore { "NO" } else { "YES" }
+            } else if ignore {
+                "YES"
+            } else {
+                "NO"
+            };
+            changes.push((flag.to_string(), value.to_string()));
         }
 
-        self.send_strategy_changes(sid, name, changes, cx);
-    }
-
-    /// «ignore» подзаголовка: применить ОДИН флаг игнора обратно в стратегию
-    /// (например, вернуть IgnorePing=YES после отката порогов PriceBug).
-    pub(super) fn apply_ignore(&mut self, flag: &'static str, ignore: bool, cx: &mut Context<Self>) {
-        let Some((key, name)) = self.sel_strategy.clone() else {
+        if changes.is_empty() {
+            log::info!("аналитика: «Сохранить» — нет ни порогов с маппингом, ни изменённых игноров");
             return;
-        };
-        let Ok(sid) = key.parse::<i64>() else { return };
-        // UseBV_SV_Filter — включатель (инверсная семантика игнора).
-        let value = if flag == "UseBV_SV_Filter" {
-            if ignore { "NO" } else { "YES" }
-        } else if ignore {
-            "YES"
-        } else {
-            "NO"
-        };
-        self.tuner.staged_ignore.remove(flag);
-        self.send_strategy_changes(sid, name, vec![(flag.to_string(), value.to_string())], cx);
+        }
+        self.send_strategy_changes(sid, name, changes, cx);
     }
 
     /// Общий хвост записи в стратегию: ядра из strategies.sqlite (не на
@@ -275,6 +282,16 @@ impl AnalyticsView {
                     cx.notify();
                 });
             });
+            // Эхо ядра приходит с лагом — перечитываем ещё дважды, чтобы
+            // чипы/игноры показали ФАКТИЧЕСКИ применённое состояние.
+            for delay_ms in [1500u64, 3500] {
+                executor
+                    .timer(std::time::Duration::from_millis(delay_ms))
+                    .await;
+                let _ = cx.update(|cx| {
+                    let _ = this.update(cx, |this, cx| this.reload_tuner(cx));
+                });
+            }
         })
         .detach();
     }
