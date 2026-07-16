@@ -90,9 +90,9 @@ analytics.tuner.strat_chip:
   en: "strategy"
   es: "estrategia"
 analytics.tuner.suggest_run:
-  ru: "Подобрать"
-  en: "Search"
-  es: "Buscar"
+  ru: "Подобрать всё"
+  en: "Search all"
+  es: "Buscar todo"
 analytics.tuner.hist_title:
   ru: "Распределение"
   en: "Distribution"

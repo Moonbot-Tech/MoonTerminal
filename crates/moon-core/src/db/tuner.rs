@@ -371,35 +371,53 @@ pub struct Suggestion {
     pub n: i64,
 }
 
-/// Автоподбор порога ОДНОГО поля: перебор всех пар квантильных краёв
-/// (≈16×16/2 комбинаций), максимум профита при сохранении ≥`min_n` сделок.
-pub fn suggest_field(q: &Query, field: &str, min_n: i64) -> Option<Suggestion> {
-    const EDGES: usize = 16;
-    if !FIELDS.iter().any(|(c, _)| *c == field) {
-        return None;
-    }
+/// Автоподбор по ВСЕМ полям одним сканом: для каждого поля лучший диапазон
+/// (перебор пар квантильных краёв, максимум профита при ≥`min_n` сделок).
+/// Поля без результата (мало данных) в ответ не попадают.
+pub fn suggest_all(q: &Query, min_n: i64) -> Option<Vec<(&'static str, Suggestion)>> {
     let conn = super::open_reader()?;
     let mut q = q.clone();
     if q.from < 0 {
         q.from = 1;
     }
     let src = unified_from(&conn, &q)?;
-    let sql = format!(
-        "SELECT o.\"{field}\", COALESCE(o.profitbtc,0)
-         FROM {src} WHERE o.\"{field}\" IS NOT NULL"
-    );
-    let mut vals: Vec<(f64, f64)> = conn
-        .prepare(&sql)
-        .ok()?
-        .query_map(rusqlite::params![q.from, q.to], |r| {
-            Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
-        })
-        .ok()?
-        .flatten()
-        .filter(|(v, _)| v.is_finite())
-        .collect();
+    let cols = FIELDS
+        .iter()
+        .map(|(c, _)| format!("o.\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("SELECT {cols}, COALESCE(o.profitbtc,0) FROM {src}");
+    let mut per_field: Vec<Vec<(f64, f64)>> = vec![Vec::new(); FIELDS.len()];
+    {
+        let mut stmt = conn.prepare(&sql).ok()?;
+        let mut rows = stmt.query(rusqlite::params![q.from, q.to]).ok()?;
+        while let Ok(Some(r)) = rows.next() {
+            let profit: f64 = r.get(FIELDS.len()).unwrap_or(0.0);
+            for (fi, vals) in per_field.iter_mut().enumerate() {
+                if let Ok(Some(v)) = r.get::<_, Option<f64>>(fi) {
+                    if v.is_finite() {
+                        vals.push((v, profit));
+                    }
+                }
+            }
+        }
+    }
     let min_n = min_n.max(1) as usize;
-    if vals.len() < min_n {
+    Some(
+        per_field
+            .into_iter()
+            .enumerate()
+            .filter_map(|(fi, mut vals)| {
+                best_range(&mut vals, min_n).map(|s| (FIELDS[fi].0, s))
+            })
+            .collect(),
+    )
+}
+
+/// Лучший диапазон одного поля по выборке `(значение, профит)`.
+fn best_range(vals: &mut Vec<(f64, f64)>, min_n: usize) -> Option<Suggestion> {
+    const EDGES: usize = 16;
+    if vals.len() < min_n.max(1) {
         return None;
     }
     vals.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -407,7 +425,7 @@ pub fn suggest_field(q: &Query, field: &str, min_n: i64) -> Option<Suggestion> {
     // Префиксные суммы профита + позиции квантильных краёв.
     let mut pre = Vec::with_capacity(len + 1);
     pre.push(0.0f64);
-    for (_, p) in &vals {
+    for (_, p) in vals.iter() {
         pre.push(pre.last().unwrap() + p);
     }
     let pos: Vec<usize> = (0..=EDGES).map(|k| k * len / EDGES).collect();

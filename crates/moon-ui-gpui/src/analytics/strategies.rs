@@ -244,6 +244,9 @@ impl AnalyticsView {
         } else {
             g.core.clone()
         };
+        // Имя — слева (гибкое, с обрезкой), все фиксированные колонки — одной
+        // жёсткой обоймой справа (justify_between): при глюках распределения
+        // флекса на ресайзе колонки не разъезжаются между строками.
         let mut row = h_flex()
             .id(SharedString::from(format!("an-strat-{}", g.key)))
             .w_full()
@@ -251,6 +254,7 @@ impl AnalyticsView {
             .px(design::ui_px(cx, 8.0))
             .gap(design::ui_px(cx, 8.0))
             .items_center()
+            .justify_between()
             .cursor_pointer()
             .bg(moon(p.table_body))
             .border_t_1()
@@ -267,29 +271,35 @@ impl AnalyticsView {
                     .child(div().flex_1().min_w_0().truncate().child(g.name.clone())),
             )
             .child(
-                div()
-                    .w(design::font_w_px(cx, 72.0))
+                h_flex()
                     .flex_none()
-                    .truncate()
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    .child(g.kind.clone()),
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .w(design::font_w_px(cx, 72.0))
+                            .flex_none()
+                            .truncate()
+                            .text_size(design::t_caption(cx))
+                            .text_color(moon(p.text_muted))
+                            .child(g.kind.clone()),
+                    )
+                    .child(
+                        div()
+                            .w(design::font_w_px(cx, 88.0))
+                            .flex_none()
+                            .truncate()
+                            .text_color(moon(p.text_soft))
+                            .child(core_label),
+                    )
+                    .child(num_cell(cx, 56.0, g.n.to_string(), p.text_soft))
+                    .child(num_cell(cx, 56.0, format!("{:.1}%", g.winrate()), p.text_soft))
+                    .child(num_cell(cx, 84.0, fmt_signed(g.profit), sign_color(p, g.profit)))
+                    .child(num_cell(cx, 70.0, fmt_signed(g.avg()), sign_color(p, g.avg())))
+                    .child(num_cell(cx, 52.0, format!("{:.2}", g.pf), p.text_soft))
+                    .child(num_cell(cx, 70.0, fmt_signed(g.best), sign_color(p, g.best)))
+                    .child(num_cell(cx, 70.0, fmt_signed(g.worst), sign_color(p, g.worst))),
             )
-            .child(
-                div()
-                    .w(design::font_w_px(cx, 88.0))
-                    .flex_none()
-                    .truncate()
-                    .text_color(moon(p.text_soft))
-                    .child(core_label),
-            )
-            .child(num_cell(cx, 56.0, g.n.to_string(), p.text_soft))
-            .child(num_cell(cx, 56.0, format!("{:.1}%", g.winrate()), p.text_soft))
-            .child(num_cell(cx, 84.0, fmt_signed(g.profit), sign_color(p, g.profit)))
-            .child(num_cell(cx, 70.0, fmt_signed(g.avg()), sign_color(p, g.avg())))
-            .child(num_cell(cx, 52.0, format!("{:.2}", g.pf), p.text_soft))
-            .child(num_cell(cx, 70.0, fmt_signed(g.best), sign_color(p, g.best)))
-            .child(num_cell(cx, 70.0, fmt_signed(g.worst), sign_color(p, g.worst)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if this.sel_strategy.as_ref().is_some_and(|(k, _)| *k == key) {
                     this.set_sel_strategy(None, cx);
@@ -539,29 +549,42 @@ fn header_row(p: MoonPalette, cx: &Context<AnalyticsView>) -> impl IntoElement {
         .px(design::ui_px(cx, 8.0))
         .gap(design::ui_px(cx, 8.0))
         .items_center()
+        .justify_between()
         .text_size(design::t_caption(cx))
         .text_color(moon(p.text_soft))
         .bg(moon(p.table_head))
-        .child(div().flex_1().child(t!("analytics.col.strategy").to_string()))
         .child(
             div()
-                .w(design::font_w_px(cx, 72.0))
-                .flex_none()
-                .child(t!("analytics.col.kind").to_string()),
+                .flex_1()
+                .min_w_0()
+                .child(t!("analytics.col.strategy").to_string()),
         )
+        // Обойма фиксированных колонок — зеркально строкам (justify_between).
         .child(
-            div()
-                .w(design::font_w_px(cx, 88.0))
+            h_flex()
                 .flex_none()
-                .child(t!("analytics.col.core").to_string()),
+                .gap(design::ui_px(cx, 8.0))
+                .items_center()
+                .child(
+                    div()
+                        .w(design::font_w_px(cx, 72.0))
+                        .flex_none()
+                        .child(t!("analytics.col.kind").to_string()),
+                )
+                .child(
+                    div()
+                        .w(design::font_w_px(cx, 88.0))
+                        .flex_none()
+                        .child(t!("analytics.col.core").to_string()),
+                )
+                .child(cell(56.0, "analytics.kpi.trades"))
+                .child(cell(56.0, "analytics.kpi.winrate"))
+                .child(cell(84.0, "analytics.col.profit"))
+                .child(cell(70.0, "analytics.kpi.avg_short"))
+                .child(cell(52.0, "analytics.col.pf"))
+                .child(cell(70.0, "analytics.col.best"))
+                .child(cell(70.0, "analytics.col.worst")),
         )
-        .child(cell(56.0, "analytics.kpi.trades"))
-        .child(cell(56.0, "analytics.kpi.winrate"))
-        .child(cell(84.0, "analytics.col.profit"))
-        .child(cell(70.0, "analytics.kpi.avg_short"))
-        .child(cell(52.0, "analytics.col.pf"))
-        .child(cell(70.0, "analytics.col.best"))
-        .child(cell(70.0, "analytics.col.worst"))
 }
 
 fn num_cell(

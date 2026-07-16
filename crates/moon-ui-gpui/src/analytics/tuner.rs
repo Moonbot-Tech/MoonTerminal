@@ -200,14 +200,12 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Автоподбор порога ВЫБРАННОГО поля (кнопка «Подобрать»): перебор пар
-    /// квантильных краёв в фоне, результат сразу пишется в v1 этого поля.
+    /// Автоподбор порогов ВСЕХ полей (кнопка «Подобрать всё»): перебор пар
+    /// квантильных краёв в фоне, результаты пишутся в v1 построчно.
     fn suggest_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
         self.tuner.sugg_busy = true;
-        let fi = self.tuner.sel_field;
-        let field = FIELDS[fi].0.to_string();
         let q = self.tuner_query();
         // Не позволяем «оптимизации» схлопнуться в пару счастливых сделок:
         // держим минимум 1/5 фактических сделок (но не меньше 30).
@@ -221,7 +219,7 @@ impl AnalyticsView {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let sugg = executor
-                .spawn(async move { moon_core::db::tuner::suggest_field(&q, &field, min_n) })
+                .spawn(async move { moon_core::db::tuner::suggest_all(&q, min_n) })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -229,10 +227,24 @@ impl AnalyticsView {
                         return;
                     }
                     this.tuner.sugg_busy = false;
-                    if let Some(s) = sugg {
-                        let from = s.from.map(fmt_bound).unwrap_or_default();
-                        let to = s.to.map(fmt_bound).unwrap_or_default();
-                        this.apply_bounds(0, fi, from, to, cx);
+                    if let Some(res) = sugg {
+                        let by_field: HashMap<&str, _> = res.into_iter().collect();
+                        for fi in 0..FIELDS.len() {
+                            let (from, to) = by_field
+                                .get(FIELDS[fi].0)
+                                .map(|s| {
+                                    (
+                                        s.from.map(fmt_bound).unwrap_or_default(),
+                                        s.to.map(fmt_bound).unwrap_or_default(),
+                                    )
+                                })
+                                .unwrap_or_default();
+                            this.tuner.bounds[0][fi] = (from, to);
+                            this.tuner.inputs.remove(&format!("tv0f{fi}a"));
+                            this.tuner.inputs.remove(&format!("tv0f{fi}b"));
+                        }
+                        this.persist_tuner(cx);
+                        this.reload_tuner(cx);
                     }
                     cx.notify();
                 });
@@ -284,14 +296,12 @@ impl AnalyticsView {
         if self.tuner.bounds[vi][fi] == (from.clone(), to.clone()) {
             return;
         }
-        self.tuner.bounds[vi][fi] = (from.clone(), to.clone());
-        for (is_to, value) in [(false, from), (true, to)] {
-            let id = format!("tv{vi}f{fi}{}", if is_to { "b" } else { "a" });
-            if let Some(state) = self.tuner.inputs.get(&id) {
-                // sync_value не эмитит Change/Blur — не зацикливает коммит.
-                state.update(cx, |s, cx| s.sync_value(value, cx));
-            }
-        }
+        self.tuner.bounds[vi][fi] = (from, to);
+        // Пересоздаём инпуты (сброс кэша): свежий default_value рисуется с
+        // НАЧАЛА строки; sync_value оставлял курсор в конце — длинное значение
+        // «уезжало» вправо и виден был только хвост.
+        self.tuner.inputs.remove(&format!("tv{vi}f{fi}a"));
+        self.tuner.inputs.remove(&format!("tv{vi}f{fi}b"));
         self.persist_tuner(cx);
         self.reload_tuner(cx);
         cx.notify();
@@ -460,7 +470,7 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let in_w = 56.0;
+        let in_w = 60.0;
         let mut head = h_flex()
             .w_full()
             .px(design::ui_px(cx, 8.0))
@@ -592,8 +602,8 @@ impl AnalyticsView {
             }
             grid = grid.child(row);
         }
-        // Карточка со своей шапкой: заголовок + «Подобрать» (пишет лучший
-        // диапазон ВЫБРАННОГО поля сразу в v1) справа.
+        // Карточка со своей шапкой: заголовок + «Подобрать всё» (заполняет
+        // v1 лучшими диапазонами ВСЕХ полей) справа.
         v_flex()
             .w_full()
             .flex_none()
