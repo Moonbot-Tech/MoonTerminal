@@ -18,11 +18,16 @@ pub(super) fn row(store: &CoreStore, core: CoreId, id: u64) -> Option<&StrategyR
     store.core(core)?.strategies.iter().find(|s| s.id == id)
 }
 
-/// Выбранная строка стратегии (по `selected`).
+/// Выбранная строка стратегии (по `selected`). Если в панели «Версии» выбрана
+/// старая версия — подставляется её синтетическая строка (поля из raw_json):
+/// панели разделов/параметров показывают исторические значения.
 pub(super) fn selected_row<'a>(
-    st: &StrategiesView,
+    st: &'a StrategiesView,
     store: &'a CoreStore,
 ) -> Option<&'a StrategyRow> {
+    if let Some((_, r)) = st.version_override() {
+        return Some(r);
+    }
     let (core, id) = st.selected?;
     row(store, core, id)
 }
@@ -37,9 +42,13 @@ pub(super) fn selected_keys(st: &StrategiesView) -> Vec<Key> {
 }
 
 pub(super) fn multi_row_pairs<'a>(
-    st: &StrategiesView,
+    st: &'a StrategiesView,
     store: &'a CoreStore,
 ) -> Vec<(Key, &'a StrategyRow)> {
+    // Просмотр старой версии (только одиночный выбор) — единственная «строка».
+    if let Some((key, r)) = st.version_override() {
+        return vec![(key, r)];
+    }
     selected_keys(st)
         .iter()
         .filter_map(|(c, id)| row(store, *c, *id).map(|row| ((*c, *id), row)))

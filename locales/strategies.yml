@@ -181,3 +181,25 @@ strat.action_delete:
   ru: "удалить"
   en: "delete"
   es: "eliminar"
+
+# --- Панель «Версии» (история версий стратегии + статистика) ---
+strat.versions:
+  ru: "Версии"
+  en: "Versions"
+  es: "Versiones"
+strat.versions_empty:
+  ru: "нет истории"
+  en: "no history"
+  es: "sin historial"
+strat.versions_multi:
+  ru: "мультивыбор — версии недоступны"
+  en: "multi-select — versions unavailable"
+  es: "selección múltiple — versiones no disponibles"
+strat.versions_current:
+  ru: "тек."
+  en: "cur."
+  es: "act."
+strat.version_view:
+  ru: "Просмотр версии от %{date} — только чтение"
+  en: "Viewing the version from %{date} — read-only"
+  es: "Viendo la versión del %{date} — solo lectura"

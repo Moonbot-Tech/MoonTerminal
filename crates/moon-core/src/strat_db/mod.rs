@@ -20,6 +20,7 @@
 //! дефолту схемы, поэтому feed материализует дефолты перед отправкой — иначе
 //! фантомные версии от «исчезнувших» полей.
 
+pub mod stats;
 mod write;
 
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};

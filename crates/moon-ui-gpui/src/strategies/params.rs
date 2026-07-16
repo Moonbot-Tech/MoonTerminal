@@ -140,6 +140,27 @@ impl StrategiesView {
                 .border_color(moon_alpha(p.amber, 0.72))
                 .pl_2();
         }
+        // Баннер просмотра исторической версии — параметры только для чтения.
+        if let Some(vf) = self.versions.sel {
+            col = col.child(
+                div()
+                    .w_full()
+                    .px(design::ui_px(cx, 8.0))
+                    .py(design::ui_px(cx, 4.0))
+                    .rounded(design::ui_px(cx, 3.0))
+                    .bg(moon_alpha(p.amber, 0.10))
+                    .border_l_2()
+                    .border_color(moon_alpha(p.amber, 0.72))
+                    .text_color(moon(p.amber))
+                    .child(
+                        t!(
+                            "strat.version_view",
+                            date = moon_core::strat_db::stats::short_date(vf)
+                        )
+                        .to_string(),
+                    ),
+            );
+        }
         col = col
             .child(header)
             .child(
@@ -210,6 +231,9 @@ impl StrategiesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // Просмотр старой версии: все контролы задизейблены (истинный гейт —
+        // в stage_field_value), значения остаются читаемыми.
+        let active = active && !self.viewing_version();
         let p = MoonPalette::active(cx);
         let name_col = if active { p.text_soft } else { p.text_muted };
         let val_col = if active { p.text } else { p.text_muted };

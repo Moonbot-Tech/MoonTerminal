@@ -17,6 +17,7 @@ mod tree_menu;
 mod tree_moon;
 mod tree_ops;
 mod tree_ui;
+mod versions;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -58,6 +59,8 @@ pub struct StrategiesView {
     selected: Option<Key>,
     /// Множественный выбор (ядро, id) — подсветка + объединённый показ параметров.
     sel: HashSet<Key>,
+    /// Панель «Версии»: история версий выбранной стратегии + выбранная старая.
+    versions: versions::VersionsState,
     /// Якорь для range-выбора по Shift.
     anchor: Option<Key>,
     /// Плоский порядок видимых стратегий прошлого кадра — для Shift-диапазона.
@@ -196,6 +199,7 @@ impl StrategiesView {
             filter: StrategyFilter::default(),
             selected: None,
             sel: HashSet::new(),
+            versions: versions::VersionsState::default(),
             anchor: None,
             flat_order: Vec::new(),
             tree_state: cx.new(|cx| MoonTreeState::new(cx)),
@@ -399,7 +403,9 @@ impl StrategiesView {
         value: String,
         cx: &mut Context<Self>,
     ) {
-        if keys.is_empty() {
+        // Просмотр старой версии — только чтение (контролы задизейблены; сеттер
+        // гейтим страховкой от обходных путей вроде пикера цвета).
+        if keys.is_empty() || self.viewing_version() {
             return;
         }
         self.focused_field = Some(field.to_string());
@@ -789,6 +795,8 @@ impl Render for StrategiesView {
         });
         let node_data = std::rc::Rc::new(build.node_data);
 
+        // Панель «Версии» — до блока с заимствованием store (спавнит фоновые загрузки).
+        let versions = self.versions_panel(cx);
         let (tree, sections, params_model) = {
             let store = self.backend.read(cx).session.store();
             (
@@ -824,6 +832,7 @@ impl Render for StrategiesView {
                     .w_full()
                     .min_h_0()
                     .child(tree)
+                    .child(versions)
                     .child(sections)
                     .child(params),
             );
