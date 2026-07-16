@@ -215,3 +215,7 @@ strat.version_added:
   ru: "новое поле"
   en: "new field"
   es: "campo nuevo"
+strat.versions_live:
+  ru: "Текущая"
+  en: "Current"
+  es: "Actual"

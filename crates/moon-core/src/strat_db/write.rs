@@ -158,16 +158,16 @@ pub(super) fn apply_full_set(
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
-            let (changed_json, n_changed, renamed) = match &prev {
-                None => (None, 0usize, false),
+            let (changed_json, n_changed) = match &prev {
+                None => (None, 0usize),
                 Some((_, prev_raw)) => {
-                    let (diff, renamed) = diff_maps(prev_raw, &stripped, &st.ignore);
+                    let diff = diff_maps(prev_raw, &stripped, &st.ignore);
                     let n = diff.len();
                     if n == 0 && change_kind == "params" {
                         // Хэш дрогнул, а контент тот же (коллизия/порядок) — не версия.
-                        (None, 0, false)
+                        (None, 0)
                     } else {
-                        (Some(serde_json::to_string(&Value::Object(diff))?), n, renamed)
+                        (Some(serde_json::to_string(&Value::Object(diff))?), n)
                     }
                 }
             };
@@ -178,7 +178,7 @@ pub(super) fn apply_full_set(
                 writes += 1;
                 continue;
             }
-            let kind = if change_kind == "params" && renamed { "renamed" } else { change_kind };
+            let kind = change_kind;
             // valid_from строго возрастает в пределах стратегии (UNIQUE-ключ).
             let valid_from = prev.as_ref().map(|(f, _)| now.max(f + 1)).unwrap_or(now);
             tx.execute(
@@ -333,12 +333,12 @@ fn head_hash_of(d: &StratDump) -> i64 {
 }
 
 /// Дифф контента: `{"Поле": {"old": …, "new": …}}` (добавленное — old=null,
-/// удалённое — new=null). Второй элемент — «изменилось ТОЛЬКО StrategyName».
+/// удалённое — new=null).
 fn diff_maps(
     prev_raw: &str,
     new_stripped: &Map<String, Value>,
     ignore: &HashSet<String>,
-) -> (Map<String, Value>, bool) {
+) -> Map<String, Value> {
     let prev_stripped = match serde_json::from_str::<Value>(prev_raw) {
         Ok(Value::Object(m)) => strip(&m, ignore),
         _ => Map::new(),
@@ -363,8 +363,7 @@ fn diff_maps(
             out.insert(k.clone(), Value::Object(pair));
         }
     }
-    let renamed = out.len() == 1 && out.contains_key("StrategyName");
-    (out, renamed)
+    out
 }
 
 #[cfg(test)]
@@ -435,11 +434,16 @@ mod tests {
     }
 
     #[test]
-    fn rename_only_marks_renamed() {
+    fn rename_does_not_version_but_updates_head() {
         let (conn, mut st) = setup();
         apply_full_set(&conn, &mut st, 7, "core", true, &[dump(1, "A", 5, "x")]).unwrap();
+        // StrategyName в игноре: переименование — только head, без версии.
         apply_full_set(&conn, &mut st, 7, "core", false, &[dump(1, "B", 5, "x")]).unwrap();
-        assert_eq!(versions(&conn, 1)[1].0, "renamed");
+        assert_eq!(versions(&conn, 1).len(), 1);
+        let name: String = conn
+            .query_row("SELECT name FROM strategies WHERE strategy_id=1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "B");
     }
 
     #[test]

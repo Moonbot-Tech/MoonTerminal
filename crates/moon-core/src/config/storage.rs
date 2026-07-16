@@ -14,7 +14,9 @@ use super::{paths, toml_io};
 /// - `PreventWorkingUntil`: sgStop/sgStart — состояние, не правка параметров
 ///   (трекается в head.checked), иначе каждый стоп плодил бы версию;
 /// - `OrderSize`: размер ордера крутится рутинно (в т.ч. хоткеями), версия
-///   параметров от него не нужна (решение 2026-07-16).
+///   параметров от него не нужна (решение 2026-07-16);
+/// - `StrategyName`: переименование — не правка параметров; текущее имя живёт
+///   в head-строке (решение 2026-07-16).
 pub const DEFAULT_IGNORE_FIELDS: &[&str] = &[
     "Active",
     "LastEditDate",
@@ -36,6 +38,7 @@ pub const DEFAULT_IGNORE_FIELDS: &[&str] = &[
     "Comment",
     "PreventWorkingUntil",
     "OrderSize",
+    "StrategyName",
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -201,13 +201,40 @@ impl StrategiesView {
         }
 
         let mut list = v_flex().w_full().gap_0();
+        // «Текущая» — живой режим (все поля, редактирование), выбор по умолчанию.
+        // Ниже отдельной строкой идёт та же текущая версия («тек.»), но кликом
+        // открывается её ДИФФ+профит, как у исторических.
+        {
+            let live_on = self.versions.sel.is_none();
+            let mut live_row = h_flex()
+                .id("ver-live")
+                .w_full()
+                .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+                .px(design::ui_px(cx, 6.0))
+                .rounded(design::ui_px(cx, 3.0))
+                .border_1()
+                .border_color(moon_alpha(p.border, 0.0))
+                .items_center()
+                .cursor_pointer()
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(moon(p.text))
+                        .child(t!("strat.versions_live").to_string()),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.select_version(None, cx)));
+            if live_on {
+                live_row = live_row
+                    .bg(moon_alpha(p.amber, 0.16))
+                    .border_color(moon_alpha(p.amber, 0.55));
+            } else {
+                live_row = live_row.hover(move |s| s.bg(moon_alpha(p.panel, 0.74)));
+            }
+            list = list.child(live_row);
+        }
         for (i, v) in self.versions.list.iter().enumerate() {
             let is_current = i == 0;
-            let on = if is_current {
-                self.versions.sel.is_none()
-            } else {
-                self.versions.sel == Some(v.valid_from)
-            };
+            let on = self.versions.sel == Some(v.valid_from);
             let profit_col = if v.profit > 0.0 {
                 p.green
             } else if v.profit < 0.0 {
@@ -260,7 +287,7 @@ impl StrategiesView {
                     )
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.select_version(if is_current { None } else { Some(vf) }, cx);
+                    this.select_version(Some(vf), cx);
                 }));
             if on {
                 row = row
