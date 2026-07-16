@@ -198,7 +198,10 @@ impl AnalyticsView {
         // периода + группировки) запускается только действием пользователя —
         // открытие окна, смена вкладки-периода-фильтра, повторный клик пресета.
 
-        let backend_tuner_cfg = backend.read(cx).layout.analytics_tuner.clone();
+        let (backend_tuner_cfg, backend_tuner_off) = {
+            let l = &backend.read(cx).layout;
+            (l.analytics_tuner.clone(), l.analytics_tuner_off.clone())
+        };
         let mut this = Self {
             backend,
             tab: Tab::Summary,
@@ -215,7 +218,7 @@ impl AnalyticsView {
             detail: None,
             detail_seq: 0,
             strat_mode: strategies::StratMode::Overview,
-            tuner: tuner::TunerState::load(&backend_tuner_cfg),
+            tuner: tuner::TunerState::load(&backend_tuner_cfg, &backend_tuner_off),
             focus: cx.focus_handle(),
         };
         this.reload(cx);

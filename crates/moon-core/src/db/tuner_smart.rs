@@ -61,7 +61,16 @@ impl Rng {
 /// крутится до сходимости (≤16 проходов). Ограничение мощности: полей-слотов
 /// (Delta2/Delta3) с диапазоном может быть НЕ БОЛЬШЕ ДВУХ — в стратегию
 /// больше не сохранить; перебор ищет лучшую пару слотов.
-pub fn smart_suggest(q: &Query, restarts: usize, min_n: i64) -> Option<SmartResult> {
+///
+/// `locked[fi]`: None — поле перебирается; Some((from, to)) — поле НЕ
+/// перебирается, но участвует фиксированным фильтром (снятый чекбокс с
+/// заполненными границами); Some((None, None)) — исключено вовсе.
+pub fn smart_suggest(
+    q: &Query,
+    restarts: usize,
+    min_n: i64,
+    locked: &[Option<(Option<f64>, Option<f64>)>],
+) -> Option<SmartResult> {
     let conn = super::open_reader()?;
     let mut q = q.clone();
     if q.from < 0 {
@@ -136,6 +145,31 @@ pub fn smart_suggest(q: &Query, restarts: usize, min_n: i64) -> Option<SmartResu
         .iter()
         .map(|(_, _, c)| *c == FieldClass::DeltaSlot)
         .collect();
+    // Перебираемые поля; фиксированные маски залипают в fail-счётчиках базой.
+    let free: Vec<bool> = (0..nf)
+        .map(|fi| locked.get(fi).is_none_or(|l| l.is_none()))
+        .collect();
+    let mut base_fail: Vec<u16> = vec![0; n];
+    for fi in 0..nf {
+        let Some(Some((lo, hi))) = locked.get(fi) else { continue };
+        if lo.is_none() && hi.is_none() {
+            continue;
+        }
+        for t in 0..n {
+            let v = vals[fi][t];
+            let ok = lo.is_none_or(|l| v >= l) && hi.is_none_or(|h| v <= h);
+            if !ok {
+                base_fail[t] += 1;
+            }
+        }
+    }
+    // Занятые фикс-полями слоты уменьшают лимит пары Delta2/Delta3.
+    let locked_slots: usize = (0..nf)
+        .filter(|fi| {
+            is_slot[*fi]
+                && matches!(locked.get(*fi), Some(Some((lo, hi))) if lo.is_some() || hi.is_some())
+        })
+        .count();
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ (n as u64) ^ ((min_n as u64) << 32));
     let mut best_global: Option<(f64, i64, Vec<Option<(usize, usize)>>)> = None;
     for restart in 0..restarts {
@@ -144,6 +178,9 @@ pub fn smart_suggest(q: &Query, restarts: usize, min_n: i64) -> Option<SmartResu
             // ~30% полей стартуют со случайного диапазона (слотов — макс 2).
             let mut slots_used = 0usize;
             for (fi, s) in sel.iter_mut().enumerate() {
+                if !free[fi] {
+                    continue;
+                }
                 if rng.below(100) < 30 {
                     if is_slot[fi] {
                         if slots_used >= 2 {
@@ -157,9 +194,9 @@ pub fn smart_suggest(q: &Query, restarts: usize, min_n: i64) -> Option<SmartResu
                 }
             }
         }
-        // Маски из инициализации.
+        // Маски из инициализации (поверх фиксированных фильтров).
         let mut pass: Vec<Vec<bool>> = vec![vec![true; n]; nf];
-        let mut fail: Vec<u16> = vec![0; n];
+        let mut fail: Vec<u16> = base_fail.clone();
         for fi in 0..nf {
             if let Some((i, j)) = sel[fi] {
                 for t in 0..n {
@@ -172,11 +209,11 @@ pub fn smart_suggest(q: &Query, restarts: usize, min_n: i64) -> Option<SmartResu
                 }
             }
         }
-        let mut order: Vec<usize> = (0..nf).collect();
+        let mut order: Vec<usize> = (0..nf).filter(|fi| free[*fi]).collect();
         for _pass_no in 0..16 {
         if restart > 0 {
             // Fisher–Yates: свой порядок полей на каждый проход.
-            for k in (1..nf).rev() {
+            for k in (1..order.len()).rev() {
                 order.swap(k, rng.below(k + 1));
             }
         }
@@ -210,11 +247,12 @@ pub fn smart_suggest(q: &Query, restarts: usize, min_n: i64) -> Option<SmartResu
             // Слотов Delta2/Delta3 всего два: если ДРУГИЕ два слота уже с
             // диапазонами, этому полю доступен только вариант «без фильтра».
             let slot_full = is_slot[fi]
-                && sel
-                    .iter()
-                    .enumerate()
-                    .filter(|(o, s)| *o != fi && is_slot[*o] && s.is_some())
-                    .count()
+                && locked_slots
+                    + sel
+                        .iter()
+                        .enumerate()
+                        .filter(|(o, s)| *o != fi && is_slot[*o] && s.is_some())
+                        .count()
                     >= 2;
             if !slot_full {
             for i in 0..EDGES {

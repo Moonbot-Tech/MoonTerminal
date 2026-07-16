@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonInputEvent, MoonInputState,
-    MoonPalette, h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInput,
+    MoonInputEvent, MoonInputState, MoonPalette, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -44,10 +44,12 @@ pub(super) struct TunerState {
     /// Стейдж кликабельных «ignore» подзаголовков: флаг → желаемое состояние
     /// игнора (семантика «игнорировать», для UseBV_SV_Filter инверсна).
     pub(super) staged_ignore: HashMap<&'static str, bool>,
-    /// Параметры умного подбора: итераций (проходов) и минимум сделок
-    /// (пусто = авто: ≥1/5 факта, не меньше 30).
+    /// Параметры умного подбора: попыток и минимум сделок (пусто = авто 1/5).
     pub(super) iters: String,
     pub(super) min_trades: String,
+    /// Участие поля в автопереборе (чекбоксы); выключенное с границами —
+    /// фиксированный фильтр.
+    pub(super) enabled: Vec<bool>,
     seq: u64,
     hist_seq: u64,
     pub(super) sugg_seq: u64,
@@ -55,7 +57,7 @@ pub(super) struct TunerState {
 
 impl TunerState {
     /// Загрузка границ из layout (незнакомые поля молча пропускаются).
-    pub(super) fn load(cfg: &[TunerVariantCfg]) -> Self {
+    pub(super) fn load(cfg: &[TunerVariantCfg], off: &[String]) -> Self {
         let mut bounds = vec![vec![(String::new(), String::new()); FIELDS.len()]; N_VAR];
         for (vi, v) in cfg.iter().take(N_VAR).enumerate() {
             for b in &v.bounds {
@@ -64,6 +66,10 @@ impl TunerState {
                 }
             }
         }
+        let enabled = FIELDS
+            .iter()
+            .map(|(c, _, _)| !off.iter().any(|o| o == c))
+            .collect();
         Self {
             bounds,
             inputs: HashMap::new(),
@@ -76,6 +82,7 @@ impl TunerState {
             staged_ignore: HashMap::new(),
             iters: "4".to_string(),
             min_trades: String::new(),
+            enabled,
             seq: 0,
             hist_seq: 0,
             sugg_seq: 0,
@@ -287,9 +294,16 @@ impl AnalyticsView {
                     .collect(),
             })
             .collect();
+        let off: Vec<String> = FIELDS
+            .iter()
+            .enumerate()
+            .filter(|(fi, _)| !self.tuner.enabled[*fi])
+            .map(|(_, (c, _, _))| c.to_string())
+            .collect();
         self.backend.update(cx, |b, _| {
-            if b.layout.analytics_tuner != cfg {
+            if b.layout.analytics_tuner != cfg || b.layout.analytics_tuner_off != off {
                 b.layout.analytics_tuner = cfg;
+                b.layout.analytics_tuner_off = off;
                 b.layout_dirty = true;
             }
         });
@@ -380,6 +394,24 @@ impl AnalyticsView {
             .text_color(moon(p.text_soft))
             .bg(moon(p.table_head))
             .child(
+                div().flex_none().child(
+                    MoonCheckbox::new("tun-en-all")
+                        .checked(self.tuner.enabled.iter().all(|e| *e))
+                        .size(MoonCheckboxSize::Compact)
+                        .on_change({
+                            let view = cx.entity();
+                            move |ch: &bool, _w, app| {
+                                let on = *ch;
+                                view.update(app, |this, cx| {
+                                    this.tuner.enabled.iter_mut().for_each(|e| *e = on);
+                                    this.persist_tuner(cx);
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                ),
+            )
+            .child(
                 div()
                     .w(design::font_w_px(cx, 58.0))
                     .flex_none()
@@ -427,6 +459,24 @@ impl AnalyticsView {
                 .gap(design::ui_px(cx, 6.0))
                 .border_t_1()
                 .border_color(moon_alpha(p.border, 0.5))
+                .child(
+                    div().flex_none().child(
+                        MoonCheckbox::new(SharedString::from(format!("tun-en-{fi}")))
+                            .checked(self.tuner.enabled[fi])
+                            .size(MoonCheckboxSize::Compact)
+                            .on_change({
+                                let view = cx.entity();
+                                move |ch: &bool, _w, app| {
+                                    let on = *ch;
+                                    view.update(app, |this, cx| {
+                                        this.tuner.enabled[fi] = on;
+                                        this.persist_tuner(cx);
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    ),
+                )
                 .child(
                     div()
                         .w(design::font_w_px(cx, 58.0))

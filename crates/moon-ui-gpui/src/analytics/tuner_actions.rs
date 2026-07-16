@@ -28,11 +28,23 @@ impl AnalyticsView {
             .unwrap_or(4)
             .clamp(1, 64);
         let min_n = self.suggest_min_n();
+        // Снятые чекбоксы: поле не перебирается; с заполненными границами —
+        // участвует фиксированным фильтром.
+        let locked: Vec<Option<(Option<f64>, Option<f64>)>> = (0..FIELDS.len())
+            .map(|fi| {
+                if self.tuner.enabled[fi] {
+                    None
+                } else {
+                    let (from, to) = &self.tuner.bounds[0][fi];
+                    Some((parse_num(from), parse_num(to)))
+                }
+            })
+            .collect();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let sugg = executor
                 .spawn(async move {
-                    moon_core::db::tuner_smart::smart_suggest(&q, rounds, min_n)
+                    moon_core::db::tuner_smart::smart_suggest(&q, rounds, min_n, &locked)
                 })
                 .await;
             let _ = cx.update(|cx| {
@@ -51,6 +63,10 @@ impl AnalyticsView {
                         let by_field: HashMap<&str, _> =
                             res.fields.into_iter().map(|f| (f.field, f)).collect();
                         for fi in 0..FIELDS.len() {
+                            // Не перебиравшиеся поля не трогаем (фикс/выкл).
+                            if !this.tuner.enabled[fi] {
+                                continue;
+                            }
                             let (from, to) = by_field
                                 .get(FIELDS[fi].0)
                                 .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
@@ -115,9 +131,8 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Минимум сделок для автоподбора: из конфиг-строки; пусто = авто — не
-    /// «оптимизируемся» в пару счастливых сделок, держим ≥1/5 факта (но не
-    /// меньше 30).
+    /// Минимум сделок для автоподбора: из конфиг-строки; пусто = авто (1/5
+    /// фактических сделок скоупа).
     fn suggest_min_n(&self) -> i64 {
         if let Ok(v) = self.tuner.min_trades.trim().parse::<i64>() {
             return v.max(1);
@@ -127,7 +142,7 @@ impl AnalyticsView {
             .as_ref()
             .and_then(|s| s.first().map(|f| f.n / 5))
             .unwrap_or(0)
-            .max(30)
+            .max(1)
     }
 
     /// «В стратегию»: пороги v1 → параметры выбранной стратегии на всех её

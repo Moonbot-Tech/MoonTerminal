@@ -159,6 +159,9 @@ pub struct WindowLayout {
     /// пользователь (строками — переживают локаль/формат).
     #[serde(default)]
     pub analytics_tuner: Vec<TunerVariantCfg>,
+    /// Поля тюнера, ИСКЛЮЧЁННЫЕ из автоперебора (снятые чекбоксы).
+    #[serde(default)]
+    pub analytics_tuner_off: Vec<String>,
     /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,
