@@ -32,7 +32,8 @@ impl AnalyticsView {
     /// Смена выбранной стратегии: детализация + скоуп тюнера.
     fn set_sel_strategy(&mut self, sel: Option<(String, String)>, cx: &mut Context<Self>) {
         self.sel_strategy = sel;
-        self.detail = None;
+        // detail НЕ обнуляем: старая карточка остаётся до прихода новой —
+        // иначе всё окно «мерцало» вспышками «Загрузка…».
         self.reload_detail(cx);
         // Скоуп тюнера сменился — старые расчёты (включая автоподбор) неверны.
         self.tuner.invalidate();
@@ -48,7 +49,7 @@ impl AnalyticsView {
             return;
         }
         self.strat_mode = mode;
-        if mode == StratMode::Filters && self.tuner.stats.is_none() {
+        if mode == StratMode::Filters && self.tuner.needs_reload() {
             self.reload_tuner(cx);
             self.reload_hist(cx);
         }
@@ -88,24 +89,144 @@ impl AnalyticsView {
         match mode {
             StratMode::Overview => {}
             StratMode::Filters => {
+                // KPI прибит сверху; скроллится ТОЛЬКО контейнер порогов.
                 main = main.child(
                     v_flex()
-                        .id("an-tuner-col")
                         .w(design::font_w_px(cx, 470.0))
                         .flex_none()
                         .h_full()
                         .min_h_0()
-                        .overflow_y_scroll()
                         .gap(design::ui_px(cx, 8.0))
                         .child(self.kpi_matrix(p, cx))
-                        .child(self.fields_grid(p, window, cx)),
+                        .child(
+                            div()
+                                .id("an-tuner-col")
+                                .w_full()
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .child(self.fields_grid(p, window, cx)),
+                        ),
                 );
             }
             StratMode::Coins => {
                 main = main.child(self.strat_coins_table(p, cx));
             }
         }
-        main.into_any_element()
+        // Окно подтверждения сохранения — оверлеем поверх вкладки.
+        let dialog = self.save_dialog_overlay(p, cx);
+        div()
+            .relative()
+            .size_full()
+            .child(main)
+            .children(dialog)
+            .into_any_element()
+    }
+
+    /// Оверлей «Записать в стратегию»: список правок + Да/Нет.
+    fn save_dialog_overlay(
+        &self,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let dlg = self.tuner.save_dialog.clone()?;
+        let mut list = v_flex().w_full().gap_0();
+        for (k, v) in &dlg.changes {
+            list = list.child(
+                h_flex()
+                    .w_full()
+                    .h(design::fit_h_px(cx, 22.0, 13.0, 4.5))
+                    .px(design::ui_px(cx, 10.0))
+                    .gap(design::ui_px(cx, 10.0))
+                    .items_center()
+                    .border_t_1()
+                    .border_color(moon_alpha(p.border, 0.5))
+                    .child(div().flex_1().min_w_0().truncate().child(k.clone()))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(moon(p.amber))
+                            .child(v.clone()),
+                    ),
+            );
+        }
+        Some(
+            div()
+                .id("an-save-overlay")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(moon_alpha(p.shell, 0.6))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.tuner.save_dialog = None;
+                    cx.notify();
+                }))
+                .child(
+                    v_flex()
+                        .id("an-save-dialog")
+                        .w(design::font_w_px(cx, 360.0))
+                        .max_h(design::ui_px(cx, 480.0))
+                        .rounded(design::ui_px(cx, 8.0))
+                        .bg(moon(p.panel_high))
+                        .border_1()
+                        .border_color(moon(p.border))
+                        .overflow_hidden()
+                        .occlude()
+                        .child(
+                            div()
+                                .px(design::ui_px(cx, 12.0))
+                                .py(design::ui_px(cx, 8.0))
+                                .text_size(design::t_title(cx))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(
+                                    t!("analytics.tuner.save_title", name = dlg.name.as_str())
+                                        .to_string(),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("an-save-list")
+                                .w_full()
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .child(list),
+                        )
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .px(design::ui_px(cx, 12.0))
+                                .py(design::ui_px(cx, 8.0))
+                                .gap(design::ui_px(cx, 8.0))
+                                .justify_end()
+                                .border_t_1()
+                                .border_color(moon_alpha(p.border, 0.6))
+                                .child(
+                                    MoonButton::new("an-save-no")
+                                        .variant(MoonButtonVariant::Ghost)
+                                        .size(MoonButtonSize::Micro)
+                                        .label(t!("analytics.tuner.save_no").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.tuner.save_dialog = None;
+                                            cx.notify();
+                                        }))
+                                        .render(),
+                                )
+                                .child(
+                                    MoonButton::new("an-save-yes")
+                                        .variant(MoonButtonVariant::Blue)
+                                        .size(MoonButtonSize::Micro)
+                                        .label(t!("analytics.tuner.save_yes").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.confirm_save_dialog(cx);
+                                        }))
+                                        .render(),
+                                ),
+                        ),
+                ),
+        )
     }
 
     /// Карточка списка: шапка (заголовок + режимы + счётчик), свой скролл.

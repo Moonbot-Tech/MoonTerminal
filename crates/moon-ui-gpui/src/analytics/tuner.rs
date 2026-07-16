@@ -15,139 +15,15 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::AnalyticsView;
+pub(super) use super::tuner_state::{
+    N_VAR, TunerState, card, flag_of, fmt_bound, parse_num, staged_dirty,
+};
 use crate::design;
 use crate::design::{moon, moon_alpha};
-use moon_core::config::layout::{TunerBoundCfg, TunerVariantCfg};
-use moon_core::db::tuner::{Bound, FIELDS, FieldClass, HistBucket, StratFilters, VarStats, Variant};
+use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
 
-/// Вариантов помимо «Факта» (V3 держит 8 — начинаем с двух).
-pub(super) const N_VAR: usize = 2;
 /// Вёдер гистограммы.
 const HIST_BUCKETS: usize = 14;
-
-/// Состояние тюнера внутри `AnalyticsView`.
-pub(super) struct TunerState {
-    /// Границы вариантов текстом: `[вариант][индекс поля] = (от, до)`.
-    pub(super) bounds: Vec<Vec<(String, String)>>,
-    /// Кэш инпутов границ (ленивое создание в render).
-    pub(super) inputs: HashMap<String, Entity<MoonInputState>>,
-    /// Поле гистограммы (индекс в `FIELDS`).
-    pub(super) sel_field: usize,
-    pub(super) stats: Option<Arc<Vec<VarStats>>>,
-    pub(super) hist: Option<Arc<Vec<HistBucket>>>,
-    /// Фильтровая карточка выбранной стратегии (Ignore-флаги + пороги).
-    pub(super) strat: Arc<StratFilters>,
-    /// Автоподбор (кнопки «Подобрать») выполняется в фоне.
-    pub(super) sugg_busy: bool,
-    /// Кнопка «В стратегию» ждёт второго клика-подтверждения.
-    pub(super) save_confirm: bool,
-    /// Стейдж кликабельных «ignore» подзаголовков: флаг → желаемое состояние
-    /// игнора (семантика «игнорировать», для UseBV_SV_Filter инверсна).
-    pub(super) staged_ignore: HashMap<&'static str, bool>,
-    /// Параметры умного подбора: попыток и минимум сделок (пусто = авто 1/5).
-    pub(super) iters: String,
-    pub(super) min_trades: String,
-    /// Участие поля в автопереборе (чекбоксы); выключенное с границами —
-    /// фиксированный фильтр.
-    pub(super) enabled: Vec<bool>,
-    seq: u64,
-    hist_seq: u64,
-    pub(super) sugg_seq: u64,
-}
-
-impl TunerState {
-    /// Загрузка границ из layout (незнакомые поля молча пропускаются).
-    pub(super) fn load(cfg: &[TunerVariantCfg], off: &[String]) -> Self {
-        let mut bounds = vec![vec![(String::new(), String::new()); FIELDS.len()]; N_VAR];
-        for (vi, v) in cfg.iter().take(N_VAR).enumerate() {
-            for b in &v.bounds {
-                if let Some(fi) = FIELDS.iter().position(|(c, _, _)| *c == b.field) {
-                    bounds[vi][fi] = (b.from.clone(), b.to.clone());
-                }
-            }
-        }
-        let enabled = FIELDS
-            .iter()
-            .map(|(c, _, _)| !off.iter().any(|o| o == c))
-            .collect();
-        Self {
-            bounds,
-            inputs: HashMap::new(),
-            sel_field: 0,
-            stats: None,
-            hist: None,
-            strat: Arc::new(StratFilters::default()),
-            sugg_busy: false,
-            save_confirm: false,
-            staged_ignore: HashMap::new(),
-            iters: "4".to_string(),
-            min_trades: String::new(),
-            enabled,
-            seq: 0,
-            hist_seq: 0,
-            sugg_seq: 0,
-        }
-    }
-
-    /// Сброс всех расчётов (смена скоупа/фильтров/периода) — пересчёт при
-    /// следующем входе в режим «Фильтры» или явным reload_*.
-    pub(super) fn invalidate(&mut self) {
-        self.stats = None;
-        self.hist = None;
-        self.save_confirm = false;
-        self.staged_ignore.clear();
-    }
-
-    /// Варианты для запроса: [пустой «Факт», v1..vN].
-    fn variants(&self) -> Vec<Variant> {
-        let mut out = vec![Variant::default()];
-        for v in &self.bounds {
-            let bounds = v
-                .iter()
-                .enumerate()
-                .filter_map(|(fi, (from, to))| {
-                    let from = parse_num(from);
-                    let to = parse_num(to);
-                    (from.is_some() || to.is_some()).then(|| Bound {
-                        field: FIELDS[fi].0.to_string(),
-                        from,
-                        to,
-                    })
-                })
-                .collect();
-            out.push(Variant { bounds });
-        }
-        out
-    }
-}
-
-/// Число из поля ввода: запятая как точка, суффиксы k/M/B/T (и кириллические
-/// к/м), пусто/мусор = None.
-pub(super) fn parse_num(s: &str) -> Option<f64> {
-    let s = s.trim().replace(',', ".");
-    if s.is_empty() {
-        return None;
-    }
-    let (mut t, mut mult) = (s.as_str(), 1.0f64);
-    if let Some(c) = s.chars().last() {
-        let m = match c {
-            'k' | 'K' | 'к' | 'К' => 1e3,
-            'm' | 'M' | 'м' | 'М' => 1e6,
-            'b' | 'B' => 1e9,
-            't' | 'T' => 1e12,
-            _ => 1.0,
-        };
-        if m != 1.0 {
-            mult = m;
-            t = &s[..s.len() - c.len_utf8()];
-        }
-    }
-    t.trim()
-        .parse::<f64>()
-        .ok()
-        .map(|v| v * mult)
-        .filter(|v| v.is_finite())
-}
 
 impl AnalyticsView {
     /// Запрос тюнера: общие фильтры + скоуп выбранной стратегии.
@@ -214,6 +90,7 @@ impl AnalyticsView {
                     }
                     this.tuner.stats = stats.map(Arc::new);
                     this.tuner.strat = Arc::new(strat);
+                    this.tuner.dirty = false;
                     cx.notify();
                 });
             });
@@ -275,25 +152,9 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Границы вариантов → layout (персист как ввёл пользователь).
+    /// Персист настроек тюнера: только чекбоксы участия (границы намеренно
+    /// НЕ сохраняются — окно каждый раз открывается с чистыми полями).
     pub(super) fn persist_tuner(&mut self, cx: &mut Context<Self>) {
-        let cfg: Vec<TunerVariantCfg> = self
-            .tuner
-            .bounds
-            .iter()
-            .map(|v| TunerVariantCfg {
-                bounds: v
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (f, t))| !f.trim().is_empty() || !t.trim().is_empty())
-                    .map(|(fi, (f, t))| TunerBoundCfg {
-                        field: FIELDS[fi].0.to_string(),
-                        from: f.clone(),
-                        to: t.clone(),
-                    })
-                    .collect(),
-            })
-            .collect();
         let off: Vec<String> = FIELDS
             .iter()
             .enumerate()
@@ -301,8 +162,7 @@ impl AnalyticsView {
             .map(|(_, (c, _, _))| c.to_string())
             .collect();
         self.backend.update(cx, |b, _| {
-            if b.layout.analytics_tuner != cfg || b.layout.analytics_tuner_off != off {
-                b.layout.analytics_tuner = cfg;
+            if b.layout.analytics_tuner_off != off {
                 b.layout.analytics_tuner_off = off;
                 b.layout_dirty = true;
             }
@@ -425,18 +285,30 @@ impl AnalyticsView {
                     div()
                         .w(design::font_w_px(cx, in_w))
                         .flex_none()
-                        .text_right()
+                        .text_center()
                         .child(format!("v{} {}", vi + 1, t!("analytics.tuner.from"))),
                 )
                 .child(
                     div()
                         .w(design::font_w_px(cx, in_w))
                         .flex_none()
-                        .text_right()
+                        .text_center()
                         .child(t!("analytics.tuner.to").to_string()),
                 )
-                // Спейсер под кнопку очистки строки.
-                .child(div().w(design::ui_px(cx, 12.0)).flex_none());
+                // Очистка ВСЕЙ колонки варианта — над строчными крестиками.
+                .child(
+                    div()
+                        .id(SharedString::from(format!("tun-clr-col-{vi}")))
+                        .w(design::ui_px(cx, 12.0))
+                        .flex_none()
+                        .cursor_pointer()
+                        .text_color(moon(p.text_muted))
+                        .hover(move |st| st.text_color(moon(p.orange)))
+                        .child("✕")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.clear_variant(vi, cx);
+                        })),
+                );
         }
 
         let strat = self.tuner.strat.clone();
@@ -600,17 +472,7 @@ impl AnalyticsView {
                     MoonInput::new("tun-cfg-mn").state(&mn_input).small(),
                 ),
             )
-            .child(div().flex_1())
-            .child(
-                MoonButton::new("tun-clear-all")
-                    .variant(MoonButtonVariant::Ghost)
-                    .size(MoonButtonSize::Micro)
-                    .label(t!("analytics.tuner.clear_all").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.clear_all_bounds(cx);
-                    }))
-                    .render(),
-            );
+            .child(div().flex_1());
         // Подбор (как и сохранение) имеет смысл только в скоупе стратегии.
         if self.sel_strategy.is_some() {
             cfg_row = cfg_row
@@ -668,29 +530,20 @@ impl AnalyticsView {
         // «В стратегию» — только при выбранной стратегии; двухкликовое
         // подтверждение (первый клик — «Подтвердить?»).
         if self.sel_strategy.is_some() {
-            let confirm = self.tuner.save_confirm;
-            // Кнопка «загорается», когда есть непримененные клики «ignore».
+            // Кнопка «загорается», когда есть непримененные клики «ignore»;
+            // сохранение — через окно подтверждения со списком полей.
             let dirty = staged_dirty(&self.tuner.strat, &self.tuner.staged_ignore);
             header = header.child(
                 MoonButton::new("tun-save-strat")
-                    .variant(if confirm || dirty {
+                    .variant(if dirty {
                         MoonButtonVariant::Amber
                     } else {
                         MoonButtonVariant::Soft
                     })
                     .size(MoonButtonSize::Micro)
-                    .label(if confirm {
-                        t!("analytics.tuner.save_confirm").to_string()
-                    } else {
-                        t!("analytics.tuner.save_btn").to_string()
-                    })
+                    .label(t!("analytics.tuner.save_btn").to_string())
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if this.tuner.save_confirm {
-                            this.tuner.save_confirm = false;
-                            this.save_v1_to_strategy(cx);
-                        } else {
-                            this.tuner.save_confirm = true;
-                        }
+                        this.open_save_dialog(cx);
                         cx.notify();
                     }))
                     .render(),
@@ -774,110 +627,5 @@ impl AnalyticsView {
             );
         }
         hdr.into_any_element()
-    }
-}
-
-/// Формат числа для границ/чипов: крупные — с суффиксом k/M/B/T (обратно
-/// понимается `parse_num`), прочие — до 4 знаков без хвостовых нулей.
-pub(super) fn fmt_bound(v: f64) -> String {
-    let a = v.abs();
-    let (div, suf) = if a >= 1e12 {
-        (1e12, "T")
-    } else if a >= 1e9 {
-        (1e9, "B")
-    } else if a >= 1e6 {
-        (1e6, "M")
-    } else if a >= 1e3 {
-        (1e3, "k")
-    } else {
-        (1.0, "")
-    };
-    let x = v / div;
-    let mut s = if suf.is_empty() {
-        format!("{x:.4}")
-    } else {
-        format!("{x:.2}")
-    };
-    if s.contains('.') {
-        while s.ends_with('0') {
-            s.pop();
-        }
-        if s.ends_with('.') {
-            s.pop();
-        }
-    }
-    s.push_str(suf);
-    s
-}
-
-/// Карточка с заголовком и подзаголовком (общий вид карточек Аналитики).
-pub(super) fn card(
-    title: String,
-    sub: String,
-    body: AnyElement,
-    p: MoonPalette,
-    cx: &Context<AnalyticsView>,
-) -> AnyElement {
-    let mut head = h_flex()
-        .w_full()
-        .px(design::ui_px(cx, 12.0))
-        .py(design::ui_px(cx, 8.0))
-        .items_center()
-        .gap(design::ui_px(cx, 8.0))
-        .child(
-            div()
-                .text_size(design::t_title(cx))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
-        );
-    if !sub.is_empty() {
-        head = head.child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(moon(p.text_muted))
-                .child(sub),
-        );
-    }
-    v_flex()
-        .w_full()
-        // В скролл-колонке карточки не должны ужиматься под высоту вьюпорта.
-        .flex_none()
-        .rounded(design::ui_px(cx, 8.0))
-        .bg(moon(p.panel))
-        .border_1()
-        .border_color(moon(p.border))
-        .overflow_hidden()
-        .child(head)
-        .child(body)
-        .into_any_element()
-}
-
-/// Есть ли стейджи «ignore», отличающиеся от текущих флагов стратегии.
-pub(super) fn staged_dirty(
-    f: &StratFilters,
-    staged: &HashMap<&'static str, bool>,
-) -> bool {
-    staged.iter().any(|(flag, want)| {
-        let cur = match *flag {
-            "IgnoreFilters" => f.ignore_filters,
-            "IgnorePing" => f.ignore_ping,
-            "IgnoreDelta" => f.ignore_delta,
-            "IgnoreVolume" => f.ignore_volume,
-            "UseBV_SV_Filter" => !f.use_bvsv,
-            _ => return false,
-        };
-        *want != cur
-    })
-}
-
-/// Флаг игнора группы + его ТЕКУЩЕЕ состояние у стратегии (семантика
-/// «игнорируется»; UseBV_SV_Filter инверсный — включатель).
-pub(super) fn flag_of(class: FieldClass, f: &StratFilters) -> (&'static str, bool) {
-    match class {
-        FieldClass::Filter => ("IgnoreFilters", f.ignore_filters),
-        FieldClass::Ping => ("IgnorePing", f.ignore_ping),
-        FieldClass::BvSv => ("UseBV_SV_Filter", !f.use_bvsv),
-        FieldClass::Delta | FieldClass::DeltaSlot => ("IgnoreDelta", f.ignore_delta),
-        FieldClass::Volume => ("IgnoreVolume", f.ignore_volume),
     }
 }

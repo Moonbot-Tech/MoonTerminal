@@ -32,21 +32,6 @@ impl Default for StrategiesPanels {
     }
 }
 
-/// Один вариант тюнера фильтров «Аналитики»: границы от/до по полям отчёта.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct TunerVariantCfg {
-    pub bounds: Vec<TunerBoundCfg>,
-}
-
-/// Граница варианта: поле (колонка отчёта) + от/до текстом как ввёл пользователь.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct TunerBoundCfg {
-    pub field: String,
-    pub from: String,
-    pub to: String,
-}
 
 /// Геометрия+состояние окна группы (ключ карты — имя группы).
 #[derive(Clone, Serialize, Deserialize)]
@@ -155,11 +140,8 @@ pub struct WindowLayout {
     /// Геометрия окна «Аналитика» (singleton) — чтобы открывалось на прежнем месте.
     #[serde(default)]
     pub analytics_window: Option<GeomRect>,
-    /// Варианты тюнера фильтров «Аналитики»: границы от/до по полям, как ввёл
-    /// пользователь (строками — переживают локаль/формат).
-    #[serde(default)]
-    pub analytics_tuner: Vec<TunerVariantCfg>,
-    /// Поля тюнера, ИСКЛЮЧЁННЫЕ из автоперебора (снятые чекбоксы).
+    /// Поля тюнера «Аналитики», ИСКЛЮЧЁННЫЕ из автоперебора (снятые
+    /// чекбоксы). Сами границы НЕ персистятся — окно открывается чистым.
     #[serde(default)]
     pub analytics_tuner_off: Vec<String>,
     /// Видимые колонки скринера (ключи в каноничном порядке). None = все.

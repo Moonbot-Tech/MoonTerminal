@@ -14,6 +14,7 @@ mod strategies;
 mod summary;
 mod tuner;
 mod tuner_actions;
+mod tuner_state;
 mod tuner_hist;
 
 use std::collections::HashSet;
@@ -198,10 +199,7 @@ impl AnalyticsView {
         // периода + группировки) запускается только действием пользователя —
         // открытие окна, смена вкладки-периода-фильтра, повторный клик пресета.
 
-        let (backend_tuner_cfg, backend_tuner_off) = {
-            let l = &backend.read(cx).layout;
-            (l.analytics_tuner.clone(), l.analytics_tuner_off.clone())
-        };
+        let backend_tuner_off = backend.read(cx).layout.analytics_tuner_off.clone();
         let mut this = Self {
             backend,
             tab: Tab::Summary,
@@ -218,7 +216,7 @@ impl AnalyticsView {
             detail: None,
             detail_seq: 0,
             strat_mode: strategies::StratMode::Overview,
-            tuner: tuner::TunerState::load(&backend_tuner_cfg, &backend_tuner_off),
+            tuner: tuner::TunerState::load(&backend_tuner_off),
             focus: cx.focus_handle(),
         };
         this.reload(cx);
@@ -394,7 +392,7 @@ impl AnalyticsView {
                             this.tab = t;
                             if t == Tab::Strategies
                                 && this.strat_mode == strategies::StratMode::Filters
-                                && this.tuner.stats.is_none()
+                                && this.tuner.needs_reload()
                             {
                                 this.reload_tuner(cx);
                                 this.reload_hist(cx);

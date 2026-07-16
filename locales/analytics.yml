@@ -97,10 +97,6 @@ analytics.tuner.iters:
   ru: "попыток"
   en: "restarts"
   es: "intentos"
-analytics.tuner.clear_all:
-  ru: "Очистить всё"
-  en: "Clear all"
-  es: "Limpiar todo"
 analytics.tuner.min_trades:
   ru: "сделок ≥"
   en: "trades ≥"
@@ -117,10 +113,18 @@ analytics.tuner.save_btn:
   ru: "Сохранить"
   en: "Save"
   es: "Guardar"
-analytics.tuner.save_confirm:
-  ru: "Подтвердить?"
-  en: "Confirm?"
-  es: "¿Confirmar?"
+analytics.tuner.save_title:
+  ru: "Записать в «%{name}»"
+  en: "Write to “%{name}”"
+  es: "Escribir en «%{name}»"
+analytics.tuner.save_yes:
+  ru: "Сохранить"
+  en: "Save"
+  es: "Guardar"
+analytics.tuner.save_no:
+  ru: "Отмена"
+  en: "Cancel"
+  es: "Cancelar"
 analytics.tuner.grp_filter:
   ru: "Фильтры (IgnoreFilters)"
   en: "Filters (IgnoreFilters)"

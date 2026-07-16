@@ -9,6 +9,7 @@ use gpui::*;
 
 use super::AnalyticsView;
 use super::tuner::{fmt_bound, parse_num};
+use super::tuner_state::SaveDialog;
 use moon_core::db::tuner::{FIELDS, FieldClass, params_for, slot_type_for};
 
 impl AnalyticsView {
@@ -117,14 +118,12 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// «Очистить всё»: снять все границы v1 и v2 разом.
-    pub(super) fn clear_all_bounds(&mut self, cx: &mut Context<Self>) {
-        for vi in 0..super::tuner::N_VAR {
-            for fi in 0..FIELDS.len() {
-                self.tuner.bounds[vi][fi] = (String::new(), String::new());
-                self.tuner.inputs.remove(&format!("tv{vi}f{fi}a"));
-                self.tuner.inputs.remove(&format!("tv{vi}f{fi}b"));
-            }
+    /// Очистить ВСЮ колонку варианта (крестик в шапке сетки).
+    pub(super) fn clear_variant(&mut self, vi: usize, cx: &mut Context<Self>) {
+        for fi in 0..FIELDS.len() {
+            self.tuner.bounds[vi][fi] = (String::new(), String::new());
+            self.tuner.inputs.remove(&format!("tv{vi}f{fi}a"));
+            self.tuner.inputs.remove(&format!("tv{vi}f{fi}b"));
         }
         self.persist_tuner(cx);
         self.reload_tuner(cx);
@@ -152,7 +151,7 @@ impl AnalyticsView {
     /// имели бы эффекта. Пишутся поля с маппингом на параметры; поля-слоты
     /// (d1h/d15m/d5m/d1m/Pump1H/Dump1H) — через Delta2/Delta3: сначала
     /// `DeltaN_Type`, затем `DeltaN_Min/Max`; слотов два — лишние в лог.
-    pub(super) fn save_v1_to_strategy(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_save_dialog(&mut self, cx: &mut Context<Self>) {
         let Some((key, name)) = self.sel_strategy.clone() else {
             return;
         };
@@ -267,7 +266,6 @@ impl AnalyticsView {
                 flags.push((flag, want));
             }
         }
-        self.tuner.staged_ignore.clear();
         for (flag, ignore) in flags {
             // UseBV_SV_Filter — включатель (инверсная семантика игнора).
             let value = if flag == "UseBV_SV_Filter" {
@@ -284,7 +282,18 @@ impl AnalyticsView {
             log::info!("аналитика: «Сохранить» — нет ни порогов с маппингом, ни изменённых игноров");
             return;
         }
-        self.send_strategy_changes(sid, name, changes, cx);
+        self.tuner.save_dialog = Some(Arc::new(SaveDialog { sid, name, changes }));
+        cx.notify();
+    }
+
+    /// «Да» в окне подтверждения: отправить подготовленные правки.
+    pub(super) fn confirm_save_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some(dlg) = self.tuner.save_dialog.take() else {
+            return;
+        };
+        self.tuner.staged_ignore.clear();
+        self.send_strategy_changes(dlg.sid, dlg.name.clone(), dlg.changes.clone(), cx);
+        cx.notify();
     }
 
     /// Общий хвост записи в стратегию: ядра из strategies.sqlite (не на
