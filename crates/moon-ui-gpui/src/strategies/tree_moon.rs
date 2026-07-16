@@ -666,6 +666,7 @@ fn deleted_strategy_row(
     let p = MoonPalette::active(app);
     let key: Key = (core, id);
     let view_click = view.clone();
+    let view_menu = view.clone();
     let mut name_row = h_flex()
         .id(SharedString::from(format!("dstrat-{core}-{id}")))
         .flex_1()
@@ -704,7 +705,26 @@ fn deleted_strategy_row(
                 window.focus(&this.focus, cx);
                 this.select_deleted_strategy(key, cx);
             });
-        });
+        })
+        .on_mouse_down(
+            MouseButton::Right,
+            move |e: &MouseDownEvent, window, app| {
+                app.stop_propagation();
+                let pos = e.position;
+                view_menu.update(app, |this, cx| {
+                    this.select_deleted_strategy(key, cx);
+                    this.open_menu(
+                        ContextMenu {
+                            core,
+                            target: MenuTarget::DeletedStrategy(id),
+                            pos,
+                        },
+                        window,
+                        cx,
+                    );
+                });
+            },
+        );
     if highlighted {
         name_row = name_row
             .bg(moon_alpha(p.amber, 0.16))

@@ -40,6 +40,8 @@ pub(super) struct ContextMenu {
 pub(super) enum MenuTarget {
     Folder(Vec<String>),
     Strategy(u64),
+    /// Удалённая на сервере стратегия (папка «Удалённые»): только «Восстановить».
+    DeletedStrategy(u64),
 }
 
 /// Полезная нагрузка drag&drop: перетаскиваемые стратегии (ядро-источник + id).

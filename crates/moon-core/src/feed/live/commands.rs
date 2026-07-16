@@ -315,6 +315,35 @@ pub(super) fn drain_commands(
                     specs.len()
                 });
             }
+            Ok(CoreCmd::RestoreStrategy {
+                id,
+                kind_ordinal,
+                folder_path,
+                fields,
+            }) => {
+                local_strat_edits.mark(id);
+                rebuild_sync(client, server.id, "restore", |full, schema, now| {
+                    // Уже живая (двойной клик по меню/эхо) — не дублируем.
+                    if full.iter().any(|s| s.strategy_id == id) {
+                        return 0;
+                    }
+                    let mut f = StrategyFields::new();
+                    for (name, val) in &fields {
+                        let stype = schema.and_then(|s| s.field(name)).map(|x| x.type_id);
+                        f.insert(name.as_str(), fv_from_str(None, stype, val));
+                    }
+                    full.push(StrategySnapshot::new(
+                        id,
+                        0,
+                        now,
+                        false, // восстановленная всегда ВЫКЛЮЧЕНА — включать осознанно
+                        StrategyKind::from_ordinal(kind_ordinal),
+                        folder_path.clone(),
+                        f,
+                    ));
+                    1
+                });
+            }
             Ok(CoreCmd::MoveStrategies { moves }) => {
                 // Смена `path` у указанных стратегий + bump last_date → один sync.
                 rebuild_sync(client, server.id, "move", |full, _schema, now| {

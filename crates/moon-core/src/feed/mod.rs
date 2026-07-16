@@ -213,6 +213,17 @@ pub enum CoreCmd {
     /// ядра, поля из строк по схеме, `last_date=now`), один `sync_local_strategies`. Один набор
     /// на ядро.
     CreateStrategies { specs: Vec<NewStrategySpec> },
+    /// Восстановить УДАЛЁННУЮ стратегию под её СТАРЫМ id (история версий и
+    /// профит по ордерам продолжаются: join идёт по `strategyid`). feed пушит
+    /// снапшот с этим id в полный набор (`sync_local_strategies` шлёт id
+    /// клиента как есть — ядро принимает произвольные уникальные id, как и при
+    /// обычном create с max+1). Поля — из последней версии strat_db.
+    RestoreStrategy {
+        id: u64,
+        kind_ordinal: u8,
+        folder_path: String,
+        fields: Vec<(String, String)>,
+    },
     /// Сменить папку существующих стратегий (переименование папки / перенос). `moves` —
     /// `(strategy_id, новый folder_path)`. feed правит `path` у указанных в полном наборе,
     /// бампает `last_date`, шлёт один `sync_local_strategies`.

@@ -227,3 +227,15 @@ strat.deleted_folder:
   ru: "Удалённые"
   en: "Deleted"
   es: "Eliminadas"
+strat.menu_restore:
+  ru: "Восстановить"
+  en: "Restore"
+  es: "Restaurar"
+strat.version_cur:
+  ru: "тек.: %{v}"
+  en: "cur.: %{v}"
+  es: "act.: %{v}"
+strat.copy_to_current:
+  ru: "→ в тек."
+  en: "→ to cur."
+  es: "→ a act."

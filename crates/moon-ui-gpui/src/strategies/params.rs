@@ -296,6 +296,9 @@ impl StrategiesView {
         // значения через `stage_field_value` ложится сразу во ВСЕ выбранные ключи (унифицирует).
         let differ = merged.is_none();
         let value = merged.unwrap_or_default();
+        // Значение версии (до move в контролы) — для сравнения с текущим и
+        // кнопки «копировать в текущую».
+        let version_val = value.clone();
         let control: AnyElement = match f.ui {
             SchemaFieldUi::Checkbox => {
                 let on = is_on(&value);
@@ -456,24 +459,73 @@ impl StrategiesView {
                 }
             }
         };
-        // Старое значение изменённого поля версии — строкой под контролом.
-        let control: AnyElement = if let Some(old) = old_note {
-            let note = if old.is_empty() {
-                t!("strat.version_added").to_string()
-            } else {
-                t!("strat.version_was", v = old).to_string()
+        // Просмотр версии: под контролом — «было: X» (значение до этой версии)
+        // и «тек.: Y» (живое значение сейчас, если отличается) с кнопкой
+        // «→ в тек.»: значение версии стейджится в ЖИВУЮ стратегию (жёлтый
+        // dirty-маркер), реально применяется кнопкой «Применить N» — тогда
+        // ядро получит правку и появится новая версия.
+        let cur_note: Option<String> = if frozen {
+            let live = {
+                let b = self.backend.read(cx);
+                let store = b.session.store();
+                self.selected
+                    .and_then(|(c, id)| row(store, c, id))
+                    .map(|r| field_value(r, f))
             };
-            v_flex()
-                .w_full()
-                .gap(px(1.0))
-                .child(control)
-                .child(
+            live.filter(|cur| *cur != version_val)
+        } else {
+            None
+        };
+        let control: AnyElement = if old_note.is_some() || cur_note.is_some() {
+            let mut wrap = v_flex().w_full().gap(px(1.0)).child(control);
+            if let Some(old) = old_note {
+                let note = if old.is_empty() {
+                    t!("strat.version_added").to_string()
+                } else {
+                    t!("strat.version_was", v = old).to_string()
+                };
+                wrap = wrap.child(
                     div()
                         .text_size(design::t_caption(cx))
                         .text_color(moon(p.text_soft))
                         .child(note),
-                )
-                .into_any_element()
+                );
+            }
+            if let Some(cur) = cur_note {
+                let fname = field_name.clone();
+                let vval = version_val.clone();
+                wrap = wrap.child(
+                    h_flex()
+                        .items_center()
+                        .gap(design::ui_px(cx, 6.0))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(design::t_caption(cx))
+                                .text_color(moon(p.blue))
+                                .child(t!("strat.version_cur", v = cur).to_string()),
+                        )
+                        .child(
+                            MoonButton::new(SharedString::from(format!("copy-cur-{row_id}")))
+                                .ghost()
+                                .size(MoonButtonSize::Micro)
+                                .label(t!("strat.copy_to_current").to_string())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    // Мимо гейта viewing_version НАРОЧНО: копирование
+                                    // из версии — единственная легальная правка здесь.
+                                    if let Some((core, id)) = this.selected {
+                                        this.field_edits
+                                            .insert((core, id, fname.clone()), vval.clone());
+                                        this.focused_field = Some(fname.clone());
+                                        cx.notify();
+                                    }
+                                }))
+                                .render(),
+                        ),
+                );
+            }
+            wrap.into_any_element()
         } else {
             control
         };

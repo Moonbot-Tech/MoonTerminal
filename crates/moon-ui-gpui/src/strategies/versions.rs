@@ -37,6 +37,8 @@ pub(super) struct VersionsState {
     /// Выбрать ПОСЛЕДНЮЮ версию, как только список догрузится (клик по
     /// удалённой стратегии: живого режима нет — сразу её финальные параметры).
     pub pending_latest: bool,
+    /// Панель свёрнута влево в узкую полоску (виден только счётчик версий).
+    pub collapsed: bool,
 }
 
 impl StrategiesView {
@@ -144,6 +146,45 @@ impl StrategiesView {
         .detach();
     }
 
+    /// Восстановить удалённую стратегию под её СТАРЫМ id (ПКМ → «Восстановить»):
+    /// head + поля последней версии грузятся фоном, затем `RestoreStrategy` в
+    /// ядро. Эхо-снапшот оживит head (restored-версия), профит склеится по id.
+    pub(super) fn restore_deleted_strategy(
+        &mut self,
+        core: moon_core::session::CoreId,
+        id: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let backend = self.backend.clone();
+        cx.spawn(async move |_this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let payload = executor
+                .spawn(async move {
+                    let head = moon_core::strat_db::stats::head_row(core, id as i64)?;
+                    let fields =
+                        moon_core::strat_db::stats::latest_version_fields(core, id as i64)?;
+                    Some((head, fields))
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let Some((head, fields)) = payload else {
+                    log::warn!("восстановление {id}: нет head/версий в strat_db");
+                    return;
+                };
+                if let Err(e) = backend.read(cx).session.restore_strategy(
+                    core,
+                    id,
+                    head.kind_ordinal,
+                    head.folder_path,
+                    fields,
+                ) {
+                    log::warn!("restore strategy {id} failed: {e}");
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Выбор УДАЛЁННОЙ стратегии из дерева (папка «Удалённые»): обычный выбор +
     /// автопереход на последнюю версию (живых параметров у неё нет).
     pub(super) fn select_deleted_strategy(&mut self, key: Key, cx: &mut Context<Self>) {
@@ -233,12 +274,49 @@ impl StrategiesView {
         .detach();
     }
 
-    /// Панель «Версии» (колонка между деревом и разделами).
+    /// Панель «Версии» (колонка между деревом и разделами). Сворачивается влево
+    /// в узкую полоску: стрелка + счётчик версий выбранной стратегии.
     pub(super) fn versions_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
+        let single = self.selected.is_some() && self.sel.len() <= 1;
+        if self.versions.collapsed {
+            if single {
+                self.ensure_versions(cx); // счётчик на полоске должен быть свежим
+            }
+            let count = single.then(|| self.versions.list.len()).filter(|n| *n > 0);
+            return v_flex()
+                .id("versions-collapsed")
+                .w(design::ui_px(cx, 22.0))
+                .flex_none()
+                .h_full()
+                .bg(moon(p.shell_high))
+                .border_r_1()
+                .border_color(border)
+                .items_center()
+                .pt(design::ui_px(cx, 12.0))
+                .gap(design::ui_px(cx, 6.0))
+                .cursor_pointer()
+                .font_family(design::mono())
+                .text_size(design::t_body(cx))
+                .text_color(moon(p.text_muted))
+                .hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.versions.collapsed = false;
+                    cx.notify();
+                }))
+                .child(div().child("▸"))
+                .when_some(count, |s, n| {
+                    s.child(
+                        div()
+                            .text_size(design::t_caption(cx))
+                            .child(n.to_string()),
+                    )
+                })
+                .into_any_element();
+        }
         let mut col = v_flex()
-            .w(design::font_w_px(cx, 158.0))
+            .w(design::font_w_px(cx, 166.0))
             .flex_none()
             .h_full()
             .bg(moon(p.shell_high))
@@ -251,9 +329,30 @@ impl StrategiesView {
             .py(design::ui_px(cx, 12.0))
             .gap(design::ui_px(cx, 7.0))
             .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(t!("strat.versions").to_string()),
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!("strat.versions").to_string()),
+                    )
+                    // Свернуть панель влево (останется полоска со счётчиком).
+                    .child(
+                        div()
+                            .id("versions-collapse")
+                            .px(design::ui_px(cx, 4.0))
+                            .rounded(design::ui_px(cx, 3.0))
+                            .cursor_pointer()
+                            .text_color(moon(p.text_muted))
+                            .hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.versions.collapsed = true;
+                                cx.notify();
+                            }))
+                            .child("◂"),
+                    ),
             )
             .child(div().w_full().h(px(1.0)).bg(border));
 

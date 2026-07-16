@@ -89,6 +89,29 @@ impl SessionManager {
         )
     }
 
+    /// Восстановить удалённую стратегию под её СТАРЫМ id: история версий и
+    /// профит по ордерам (join по strategyid) продолжаются. Поля — из последней
+    /// версии strat_db; восстановленная приходит выключенной.
+    pub fn restore_strategy(
+        &self,
+        core: CoreId,
+        id: u64,
+        kind_ordinal: u8,
+        folder_path: String,
+        fields: Vec<(String, String)>,
+    ) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::RestoreStrategy {
+                id,
+                kind_ordinal,
+                folder_path,
+                fields,
+            },
+            "restore strategy",
+        )
+    }
+
     /// Сменить папку существующих стратегий ядра (переименование папки / перенос).
     /// `moves` — `(strategy_id, новый folder_path)`. Один набор на ядро.
     pub fn move_strategies(&self, core: CoreId, moves: Vec<(u64, String)>) -> Result<()> {

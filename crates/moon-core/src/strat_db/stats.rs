@@ -295,6 +295,22 @@ pub fn deleted_heads() -> Vec<HeadRow> {
         .unwrap_or_default()
 }
 
+/// Поля ПОСЛЕДНЕЙ версии стратегии (display-строки) — материал восстановления
+/// удалённой (`RestoreStrategy`). None — версий нет.
+pub fn latest_version_fields(core_uid: u64, strategy_id: i64) -> Option<Vec<(String, String)>> {
+    let conn = open_rw()?;
+    let vf: i64 = conn
+        .query_row(
+            "SELECT MAX(valid_from) FROM strategy_versions
+             WHERE core_uid=?1 AND strategy_id=?2",
+            rusqlite::params![core_uid as i64, strategy_id],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten()?;
+    version_view(core_uid, strategy_id, vf).map(|v| v.fields)
+}
+
 /// Head одной стратегии (живой или удалённой) — база синтетической строки,
 /// когда стратегии нет в живом сторе.
 pub fn head_row(core_uid: u64, strategy_id: i64) -> Option<HeadRow> {
