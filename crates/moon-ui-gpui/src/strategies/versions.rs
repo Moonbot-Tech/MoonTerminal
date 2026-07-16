@@ -28,9 +28,9 @@ pub(super) struct VersionsState {
     pub sel: Option<i64>,
     /// Синтетическая строка старой версии (поля из raw_json) для панелей справа.
     pub row: Option<(Key, i64, StrategyRow)>,
-    /// Изменённые в выбранной версии поля: имя(lowercase) → старое значение
-    /// (display; пустое = поля не было). Пусто — дифф отсутствует (created).
-    pub changed: std::collections::HashMap<String, String>,
+    /// Изменённые в выбранной версии поля: имя(lowercase) → (имя как в дампе,
+    /// старое значение display; пустое = поля не было). Пусто — диффа нет.
+    pub changed: std::collections::HashMap<String, (String, String)>,
     /// Раздел в режиме просмотра версии: None = псевдораздел «Все» (только
     /// изменённые поля всех разделов), Some(i) = раздел схемы (тоже фильтр).
     pub section: Option<usize>,
@@ -57,7 +57,7 @@ impl StrategiesView {
     /// Фильтр «только изменённые поля» активен? (просмотр версии с непустым диффом).
     pub(super) fn version_changed_filter(
         &self,
-    ) -> Option<&std::collections::HashMap<String, String>> {
+    ) -> Option<&std::collections::HashMap<String, (String, String)>> {
         if self.viewing_version() && !self.versions.changed.is_empty() {
             Some(&self.versions.changed)
         } else {
@@ -263,7 +263,7 @@ impl StrategiesView {
                         this.versions.changed = view
                             .changed
                             .into_iter()
-                            .map(|(k, old)| (k.to_lowercase(), old))
+                            .map(|(k, old)| (k.to_lowercase(), (k, old)))
                             .collect();
                         this.versions.row = Some(((core, id), vf, r));
                         cx.notify();

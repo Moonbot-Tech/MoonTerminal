@@ -32,13 +32,29 @@ impl StrategiesView {
             match self.versions.section {
                 None => {
                     let mut seen = HashSet::new();
-                    let fields: Vec<SchemaField> = sections
+                    let mut fields: Vec<SchemaField> = sections
                         .iter()
                         .flat_map(|s| &s.fields)
                         .filter(|f| ch.contains_key(&f.name.to_lowercase()))
                         .filter(|f| seen.insert(f.name.to_lowercase()))
                         .cloned()
                         .collect();
+                    // Изменённые поля, которых НЕТ в схеме текущего вида
+                    // (ядро удалило поле апдейтом / поле другого вида) —
+                    // синтетические строки, иначе «(2)» в списке, а полей 0.
+                    let mut extra: Vec<&String> = ch
+                        .iter()
+                        .filter(|(lc, _)| !seen.contains(lc.as_str()))
+                        .map(|(_, (name, _))| name)
+                        .collect();
+                    extra.sort();
+                    fields.extend(extra.into_iter().map(|name| SchemaField {
+                        name: name.clone(),
+                        type_name: "String".to_string(),
+                        ui: SchemaFieldUi::Edit,
+                        picklist: Vec::new(),
+                        default: None,
+                    }));
                     SchemaSection {
                         title: t!("strat.sections_all").to_string(),
                         fields,
@@ -276,7 +292,10 @@ impl StrategiesView {
         let frozen = self.viewing_version();
         let active = active && !frozen;
         let old_note = if frozen {
-            self.versions.changed.get(&f.name.to_lowercase()).cloned()
+            self.versions
+                .changed
+                .get(&f.name.to_lowercase())
+                .map(|(_, old)| old.clone())
         } else {
             None
         };
