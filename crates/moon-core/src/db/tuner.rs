@@ -265,10 +265,12 @@ const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
 
 /// Пороговые параметры ВЫБРАННОЙ стратегии по полям тюнера: поле → (min, max).
 /// Источник — текущая версия в strategies.sqlite (raw_json нормализован со
-/// схемными дефолтами — дефолтные значения тоже показываем). Пустая карта —
-/// БД нет или стратегия не найдена.
+/// схемными дефолтами). `defaults` — дефолты схемы (lowercase имя → число):
+/// значение, РАВНОЕ дефолту, скрывается — это «фильтр не настроен», а не
+/// осознанный порог (…100T и т.п.). Пустая карта — БД нет / не найдена.
 pub fn strategy_bounds(
     strategy_id: i64,
+    defaults: &std::collections::HashMap<String, f64>,
 ) -> std::collections::HashMap<&'static str, (Option<f64>, Option<f64>)> {
     let mut out = std::collections::HashMap::new();
     let path = crate::config::paths::strategies_db_path();
@@ -298,7 +300,8 @@ pub fn strategy_bounds(
     };
     let Some(map) = json.as_object() else { return out };
     let num = |key: Option<&str>| -> Option<f64> {
-        let v = map.get(key?)?;
+        let key = key?;
+        let v = map.get(key)?;
         let f = match v {
             serde_json::Value::Number(n) => n.as_f64()?,
             serde_json::Value::String(s) => {
@@ -306,7 +309,16 @@ pub fn strategy_bounds(
             }
             _ => return None,
         };
-        f.is_finite().then_some(f)
+        if !f.is_finite() {
+            return None;
+        }
+        // Равно дефолту схемы = фильтр не настраивали — не показываем.
+        if let Some(d) = defaults.get(&key.to_ascii_lowercase()) {
+            if (f - d).abs() <= f64::EPSILON.max(d.abs() * 1e-9) {
+                return None;
+            }
+        }
+        Some(f)
     };
     for (field, pmin, pmax) in STRAT_PARAMS {
         let (lo, hi) = (num(*pmin), num(*pmax));

@@ -149,6 +149,33 @@ impl AnalyticsView {
         let q = self.tuner_query();
         let sid = q.strategy;
         let variants = self.tuner.variants();
+        // Дефолты схемы ядра (числовые поля): чипы прячут значения, равные
+        // дефолту — «фильтр не настроен» порогом не является.
+        let defaults: HashMap<String, f64> = {
+            let b = self.backend.read(cx);
+            let store = b.session.store();
+            let mut out = HashMap::new();
+            for (_, cd) in store.cores() {
+                let Some(sch) = cd.schema.as_ref() else { continue };
+                for k in &sch.kinds {
+                    for s in &k.sections {
+                        for f in &s.fields {
+                            let Some(d) = f.default.as_ref() else { continue };
+                            if let Ok(v) = d
+                                .trim()
+                                .trim_end_matches('%')
+                                .replace(',', ".")
+                                .parse::<f64>()
+                            {
+                                out.entry(f.name.to_ascii_lowercase()).or_insert(v);
+                            }
+                        }
+                    }
+                }
+                break; // схемы ядер совпадают — одной достаточно
+            }
+            out
+        };
         // Автоподбор НЕ сбрасываем: правка границ не меняет распределение
         // факта, по которому он считался (сброс — в invalidate()).
         cx.spawn(async move |this, cx| {
@@ -157,7 +184,7 @@ impl AnalyticsView {
                 .spawn(async move {
                     let stats = moon_core::db::tuner::variant_stats(&q, &variants);
                     let sb = sid
-                        .map(moon_core::db::tuner::strategy_bounds)
+                        .map(|sid| moon_core::db::tuner::strategy_bounds(sid, &defaults))
                         .unwrap_or_default();
                     (stats, sb)
                 })
@@ -352,7 +379,6 @@ impl AnalyticsView {
             (t!("analytics.tuner.avg_win").to_string(), |s| s.avg_win, Some(true), false),
             (t!("analytics.tuner.avg_loss").to_string(), |s| s.avg_loss, Some(false), false),
             (t!("analytics.kpi.maxdd").to_string(), |s| s.max_dd, Some(false), false),
-            (t!("analytics.tuner.avg_spent").to_string(), |s| s.avg_spent, None, false),
         ];
         let col_w = 92.0;
         let mut head = h_flex()
@@ -501,29 +527,26 @@ impl AnalyticsView {
             if selected {
                 row = row.bg(moon_alpha(p.amber, 0.08));
             }
-            // Чип с порогами ВЫБРАННОЙ стратегии по этому полю; клик — в v1.
+            // Чип: НЕдефолтные пороги выбранной стратегии по этому полю
+            // (справочно, некликабелен).
             let chip = strat_bounds.get(FIELDS[fi].0).copied();
             row = row.child(match chip {
                 Some((lo, hi)) => {
-                    let text = format!(
-                        "{}…{}",
-                        lo.map(fmt_bound).unwrap_or_default(),
-                        hi.map(fmt_bound).unwrap_or_default(),
-                    );
+                    let text = [
+                        lo.map(|v| format!("min({})", fmt_bound(v))),
+                        hi.map(|v| format!("max({})", fmt_bound(v))),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" ");
                     div()
-                        .id(SharedString::from(format!("tun-chip-{fi}")))
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .cursor_pointer()
                         .text_size(design::t_caption(cx))
                         .text_color(moon(p.amber))
                         .child(text)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let from = lo.map(fmt_bound).unwrap_or_default();
-                            let to = hi.map(fmt_bound).unwrap_or_default();
-                            this.apply_bounds(0, fi, from, to, cx);
-                        }))
                         .into_any_element()
                 }
                 None => div().flex_1().into_any_element(),
@@ -568,10 +591,17 @@ impl AnalyticsView {
 
     /// Гистограмма выбранного поля: выигрыши вверх, убытки вниз, счётчик и края.
     pub(super) fn hist_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+        // В заголовке — поле и скоуп (имя стратегии / все).
+        let scope = self
+            .sel_strategy
+            .as_ref()
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
         let title = format!(
-            "{} — {}",
+            "{} — {} — {}",
             t!("analytics.tuner.hist_title"),
-            FIELDS[self.tuner.sel_field].1
+            FIELDS[self.tuner.sel_field].1,
+            scope,
         );
         let body: AnyElement = match self.tuner.hist.clone() {
             None => div()

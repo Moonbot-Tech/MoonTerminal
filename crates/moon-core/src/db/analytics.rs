@@ -197,6 +197,8 @@ pub struct GroupStat {
     pub key: String,
     /// Отображаемое имя (для стратегий — из strategies.sqlite, иначе id).
     pub name: String,
+    /// Тип стратегии (SignalType текущей версии); пусто у монет/без БД.
+    pub kind: String,
     /// Имя одного из ядер группы + число разных ядер (колонка «Ядро»).
     pub core: String,
     pub cores_n: i64,
@@ -334,7 +336,7 @@ pub fn strategy_detail(q: &Query, strategy_id: i64) -> Option<StrategyDetail> {
 
     // Вклад по монетам этой стратегии.
     let sql = format!(
-        "SELECT COALESCE(o.coin,'') AS k, COALESCE(o.coin,''),
+        "SELECT COALESCE(o.coin,'') AS k, COALESCE(o.coin,''), '',
                 MAX(o.core_name), COUNT(DISTINCT o.core_uid), NULL,
                 COUNT(*), COALESCE(SUM(o.profitbtc),0),
                 COALESCE(SUM(o.profitbtc > 0),0),
@@ -342,7 +344,7 @@ pub fn strategy_detail(q: &Query, strategy_id: i64) -> Option<StrategyDetail> {
                 COALESCE(SUM(CASE WHEN o.profitbtc <= 0 THEN -o.profitbtc END),0),
                 COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0)
          FROM {src} WHERE o.strategyid = ?3
-         GROUP BY k ORDER BY 7 DESC"
+         GROUP BY k ORDER BY 8 DESC"
     );
     let coins = conn
         .prepare(&sql)
@@ -377,20 +379,21 @@ pub fn strategy_detail(q: &Query, strategy_id: i64) -> Option<StrategyDetail> {
     Some(StrategyDetail { coins, last })
 }
 
-/// Строка группового запроса: k, name, core, cores_n, alive, n, profit, wins,
-/// wsum, lsum, max, min.
+/// Строка группового запроса: k, name, kind, core, cores_n, alive, n, profit,
+/// wins, wsum, lsum, max, min.
 fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
-    let wsum: f64 = r.get(8)?;
-    let lsum: f64 = r.get(9)?;
+    let wsum: f64 = r.get(9)?;
+    let lsum: f64 = r.get(10)?;
     Ok(GroupStat {
         key: r.get(0)?,
         name: r.get(1)?,
-        core: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-        cores_n: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
-        alive: r.get(4)?,
-        n: r.get(5)?,
-        profit: r.get(6)?,
-        wins: r.get(7)?,
+        kind: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        core: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        cores_n: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+        alive: r.get(5)?,
+        n: r.get(6)?,
+        profit: r.get(7)?,
+        wins: r.get(8)?,
         pf: if lsum > 0.0 {
             wsum / lsum
         } else if wsum > 0.0 {
@@ -398,8 +401,8 @@ fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
         } else {
             0.0
         },
-        best: r.get(10)?,
-        worst: r.get(11)?,
+        best: r.get(11)?,
+        worst: r.get(12)?,
     })
 }
 
@@ -565,10 +568,21 @@ fn groups(
 ) -> Vec<GroupStat> {
     // Ключ стратегии — id: переименования не плодят группы, одноимённые
     // разные стратегии не сливаются; имя — только подпись.
-    let (key, name, alive) = if by_strategy {
+    let (key, name, kind, alive) = if by_strategy {
         (
             "CAST(o.strategyid AS TEXT)".to_string(),
             format!("MAX({})", strategy_name_expr(has_names)),
+            // Тип (SignalType) из текущей версии стратегии (JSON1 доступен —
+            // rusqlite bundled).
+            if has_names {
+                "MAX(COALESCE((SELECT json_extract(v.raw_json, '$.SignalType')
+                               FROM strat.strategy_versions v
+                               WHERE v.core_uid = o.core_uid
+                                 AND v.strategy_id = o.strategyid
+                                 AND v.valid_to IS NULL), ''))"
+            } else {
+                "''"
+            },
             // Статус «жива сейчас» по head'ам БД стратегий: 2 включена,
             // 1 есть но выключена, 0 удалена; максимум по ядрам группы.
             if has_names {
@@ -584,10 +598,10 @@ fn groups(
         )
     } else {
         let coin = "COALESCE(o.coin,'')".to_string();
-        (coin.clone(), coin, "NULL")
+        (coin.clone(), coin, "''", "NULL")
     };
     let sql = format!(
-        "SELECT {key} AS k, {name}, MAX(o.core_name), COUNT(DISTINCT o.core_uid),
+        "SELECT {key} AS k, {name}, {kind}, MAX(o.core_name), COUNT(DISTINCT o.core_uid),
                 {alive},
                 COUNT(*), COALESCE(SUM(o.profitbtc),0),
                 COALESCE(SUM(o.profitbtc > 0),0),
@@ -595,7 +609,7 @@ fn groups(
                 COALESCE(SUM(CASE WHEN o.profitbtc <= 0 THEN -o.profitbtc END),0),
                 COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0)
          FROM {src}
-         GROUP BY k ORDER BY 7 DESC"
+         GROUP BY k ORDER BY 8 DESC"
     );
     let Ok(mut stmt) = conn.prepare(&sql) else {
         return Vec::new();

@@ -267,6 +267,15 @@ impl AnalyticsView {
             )
             .child(
                 div()
+                    .w(design::font_w_px(cx, 72.0))
+                    .flex_none()
+                    .truncate()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_muted))
+                    .child(g.kind.clone()),
+            )
+            .child(
+                div()
                     .w(design::font_w_px(cx, 88.0))
                     .flex_none()
                     .truncate()
@@ -533,6 +542,12 @@ fn header_row(p: MoonPalette, cx: &Context<AnalyticsView>) -> impl IntoElement {
         .text_color(moon(p.text_soft))
         .bg(moon(p.table_head))
         .child(div().flex_1().child(t!("analytics.col.strategy").to_string()))
+        .child(
+            div()
+                .w(design::font_w_px(cx, 72.0))
+                .flex_none()
+                .child(t!("analytics.col.kind").to_string()),
+        )
         .child(
             div()
                 .w(design::font_w_px(cx, 88.0))
