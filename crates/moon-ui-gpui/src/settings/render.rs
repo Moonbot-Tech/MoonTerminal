@@ -42,7 +42,8 @@ impl Render for SettingsView {
                         line_height: 13.0,
                         gap: 5.0,
                     })
-                    .width(118.0)
+                    // 110: семь вкладок должны влезать в дефолтную ширину окна (860).
+                    .width(110.0)
                     .selected(on)
                     .label(t.title())
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -61,6 +62,7 @@ impl Render for SettingsView {
             Tab::Lines => self.lines_tab(cx).into_any_element(),
             Tab::Badges => self.badges_tab(cx).into_any_element(),
             Tab::Connections => self.connections_tab(cx).into_any_element(),
+            Tab::Storage => self.storage_tab(cx).into_any_element(),
         };
         // Тело прокручивается (вкладки выше высоты окна): stateful div + overflow_y_scroll.
         let body = div()

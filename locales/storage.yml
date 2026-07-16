@@ -1,0 +1,121 @@
+# Вкладка «Хранилище» окна настроек: локальные БД (отчёты/стратегии/кэш свечей).
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+tab.storage:
+  ru: "Хранилище"
+  en: "Storage"
+  es: "Almacén"
+
+storage.data_dir:
+  ru: "Папка данных"
+  en: "Data folder"
+  es: "Carpeta de datos"
+storage.open_folder:
+  ru: "Открыть папку"
+  en: "Open folder"
+  es: "Abrir carpeta"
+storage.refresh:
+  ru: "Обновить"
+  en: "Refresh"
+  es: "Actualizar"
+storage.total_size:
+  ru: "Всего: %{size}"
+  en: "Total: %{size}"
+  es: "Total: %{size}"
+storage.size:
+  ru: "Размер: %{size}"
+  en: "Size: %{size}"
+  es: "Tamaño: %{size}"
+storage.size_wal:
+  ru: "Размер: %{size} (+ WAL %{wal})"
+  en: "Size: %{size} (+ WAL %{wal})"
+  es: "Tamaño: %{size} (+ WAL %{wal})"
+storage.no_file:
+  ru: "файла ещё нет"
+  en: "no file yet"
+  es: "aún no hay archivo"
+
+storage.reports_title:
+  ru: "Отчёты — reports.sqlite"
+  en: "Reports — reports.sqlite"
+  es: "Informes — reports.sqlite"
+storage.reports_rows:
+  ru: "Сделок в реплике: %{rows}"
+  en: "Trades in replica: %{rows}"
+  es: "Operaciones en la réplica: %{rows}"
+storage.reports_hint:
+  ru: "Типизированная реплика БД отчёта ядер. Восстановима: пересинхронизируется с сервера."
+  en: "Typed replica of the cores' report DB. Recoverable: re-syncs from the server."
+  es: "Réplica tipada de la BD de informes de los núcleos. Recuperable: se resincroniza desde el servidor."
+
+storage.strategies_title:
+  ru: "Стратегии — strategies.sqlite"
+  en: "Strategies — strategies.sqlite"
+  es: "Estrategias — strategies.sqlite"
+storage.strategies_enabled:
+  ru: "Вести локальную БД стратегий"
+  en: "Keep a local strategy DB"
+  es: "Mantener una BD local de estrategias"
+storage.strategies_enabled_hint:
+  ru: "История версий по реальным правкам параметров (косметика/старт-стоп версий не плодят). Применяется сразу. Игнор-лист полей — руками в cfg/storage.toml."
+  en: "Version history of real parameter edits (cosmetics/start-stop don't spawn versions). Applies immediately. The field ignore list is hand-edited in cfg/storage.toml."
+  es: "Historial de versiones de cambios reales de parámetros (la cosmética/inicio-parada no crea versiones). Se aplica al instante. La lista de campos ignorados se edita a mano en cfg/storage.toml."
+storage.strategies_rows:
+  ru: "Стратегий: %{live} (удалённых: %{deleted}) · Версий: %{versions}"
+  en: "Strategies: %{live} (deleted: %{deleted}) · Versions: %{versions}"
+  es: "Estrategias: %{live} (eliminadas: %{deleted}) · Versiones: %{versions}"
+storage.version_limit:
+  ru: "Лимит версий на стратегию"
+  en: "Version limit per strategy"
+  es: "Límite de versiones por estrategia"
+storage.version_limit_off:
+  ru: "без лимита"
+  en: "unlimited"
+  es: "sin límite"
+storage.version_limit_hint:
+  ru: "0 — хранить все версии (рекомендуется: история невосстановима). Лимит обрезает старые при записи новых."
+  en: "0 — keep all versions (recommended: the history is unrecoverable). A limit trims old ones as new are written."
+  es: "0 — conservar todas las versiones (recomendado: el historial es irrecuperable). Un límite recorta las antiguas al escribir nuevas."
+storage.strategies_hint:
+  ru: "Единственный экземпляр истории — пересинхроном не восстанавливается. Для сохранности — «Бэкап»."
+  en: "The only copy of the history — a re-sync cannot restore it. Use Backup to keep it safe."
+  es: "La única copia del historial — una resincronización no lo restaura. Usa «Copia» para conservarlo."
+
+storage.klines_title:
+  ru: "Кэш свечей — klines.sqlite"
+  en: "Kline cache — klines.sqlite"
+  es: "Caché de velas — klines.sqlite"
+storage.klines_hint:
+  ru: "Восстановимый кэш истории свечей: можно удалить файл при закрытом терминале."
+  en: "Recoverable kline history cache: the file can be deleted while the terminal is closed."
+  es: "Caché recuperable del historial de velas: el archivo puede borrarse con el terminal cerrado."
+
+storage.compact:
+  ru: "Сжать"
+  en: "Compact"
+  es: "Compactar"
+storage.backup:
+  ru: "Бэкап"
+  en: "Backup"
+  es: "Copia"
+storage.busy:
+  ru: "Выполняется: %{op}…"
+  en: "Running: %{op}…"
+  es: "Ejecutando: %{op}…"
+storage.op_done:
+  ru: "%{op}: готово"
+  en: "%{op}: done"
+  es: "%{op}: hecho"
+storage.op_failed:
+  ru: "%{op}: ошибка — %{err}"
+  en: "%{op}: failed — %{err}"
+  es: "%{op}: error — %{err}"
+storage.op_compact:
+  ru: "Сжатие"
+  en: "Compaction"
+  es: "Compactación"
+storage.op_backup:
+  ru: "Бэкап"
+  en: "Backup"
+  es: "Copia"

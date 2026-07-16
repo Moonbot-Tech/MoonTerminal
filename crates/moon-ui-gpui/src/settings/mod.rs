@@ -21,6 +21,7 @@ mod interface;
 mod lines;
 mod render;
 mod share;
+mod storage;
 
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -54,16 +55,18 @@ enum Tab {
     Interface,
     Lines,
     Badges,
+    Storage,
 }
 
 impl Tab {
-    const ALL: [Tab; 6] = [
+    const ALL: [Tab; 7] = [
         Tab::Connections,
         Tab::General,
         Tab::Hotkeys,
         Tab::Interface,
         Tab::Lines,
         Tab::Badges,
+        Tab::Storage,
     ];
     /// Стабильный id вкладки (для `MoonButton::new`/ключей) — НЕ переводим.
     fn id(self) -> &'static str {
@@ -74,6 +77,7 @@ impl Tab {
             Tab::Interface => "Интерфейс",
             Tab::Lines => "Линии",
             Tab::Badges => "Бейджи",
+            Tab::Storage => "Хранилище",
         }
     }
     /// Локализованная подпись вкладки (порт `tab.*`).
@@ -85,6 +89,7 @@ impl Tab {
             Tab::Interface => t!("tab.interface"),
             Tab::Lines => t!("tab.lines"),
             Tab::Badges => t!("tab.badges"),
+            Tab::Storage => t!("tab.storage"),
         }
         .to_string()
     }
@@ -126,6 +131,8 @@ pub struct SettingsView {
     open_lines: HashSet<&'static str>,
     /// Активная группа вкладки «Хоткеи» (саб-вкладки, как страницы хоткеев Moonbot).
     hotkeys_group: hotkeys::HotkeyGroup,
+    /// Вкладка «Хранилище»: конфиг storage.toml + фоновый снимок размеров/счётчиков.
+    storage: storage::StorageEd,
     /// Кэш иконок групп (вкладка «Подключения»).
     icons: IconSet,
     /// Для какой группы открыт пикер иконок (None = закрыт). Порт egui `picking`.
@@ -296,6 +303,7 @@ impl SettingsView {
             mode,
             open_lines: HashSet::new(),
             hotkeys_group: hotkeys::HotkeyGroup::Presets,
+            storage: storage::build(),
             icons: IconSet::discover(),
             picking: None,
             last_sig: initial_sig,

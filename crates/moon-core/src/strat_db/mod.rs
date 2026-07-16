@@ -23,7 +23,7 @@
 mod write;
 
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use rusqlite::Connection;
@@ -99,12 +99,16 @@ static SINK: OnceLock<Option<StratSink>> = OnceLock::new();
 /// Живой тогл записи (вкладка «Хранилище»): выключен — sink() отдаёт None,
 /// writer простаивает. Инициализируется из `storage.toml` при первом обращении.
 static ENABLED: AtomicBool = AtomicBool::new(true);
+/// Живой лимит версий на стратегию (0 = без лимита) — writer читает на каждую
+/// запись, правка из вкладки «Хранилище» действует сразу.
+static VERSION_LIMIT: AtomicU32 = AtomicU32::new(0);
 static ENABLED_INIT: OnceLock<()> = OnceLock::new();
 
 fn ensure_enabled_loaded() {
     ENABLED_INIT.get_or_init(|| {
         let cfg = crate::config::storage::load();
         ENABLED.store(cfg.strategies.enabled, Ordering::Relaxed);
+        VERSION_LIMIT.store(cfg.strategies.version_limit, Ordering::Relaxed);
     });
 }
 
@@ -127,6 +131,18 @@ pub fn is_enabled() -> bool {
 pub fn set_enabled(on: bool) {
     ensure_enabled_loaded();
     ENABLED.store(on, Ordering::Relaxed);
+}
+
+/// Текущий лимит версий (0 = без лимита).
+pub fn version_limit() -> u32 {
+    ensure_enabled_loaded();
+    VERSION_LIMIT.load(Ordering::Relaxed)
+}
+
+/// Живой лимит версий (вкладка «Хранилище» пишет и сюда, и в storage.toml).
+pub fn set_version_limit(v: u32) {
+    ensure_enabled_loaded();
+    VERSION_LIMIT.store(v, Ordering::Relaxed);
 }
 
 /// Поколение записей (0 — writer не поднимался).

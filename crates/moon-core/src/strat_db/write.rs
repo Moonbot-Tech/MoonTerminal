@@ -30,7 +30,6 @@ struct Head {
 
 pub(super) struct State {
     ignore: HashSet<String>,
-    version_limit: u32,
     heads: HashMap<(i64, i64), Head>,
 }
 
@@ -102,7 +101,6 @@ pub(super) fn init(conn: &Connection, cfg: &StrategiesStoreCfg) -> rusqlite::Res
     }
     Ok(State {
         ignore: cfg.ignore_fields.iter().cloned().collect(),
-        version_limit: cfg.version_limit,
         heads,
     })
 }
@@ -208,14 +206,16 @@ pub(super) fn apply_full_set(
                     changed_json,
                 ],
             )?;
-            if st.version_limit > 0 {
+            // Лимит — живой атомик (правка из «Хранилища» действует сразу).
+            let limit = super::version_limit();
+            if limit > 0 {
                 tx.execute(
                     "DELETE FROM strategy_versions
                      WHERE core_uid=?1 AND strategy_id=?2 AND id NOT IN (
                         SELECT id FROM strategy_versions
                         WHERE core_uid=?1 AND strategy_id=?2
                         ORDER BY valid_from DESC LIMIT ?3)",
-                    rusqlite::params![uid, d.strategy_id, st.version_limit as i64],
+                    rusqlite::params![uid, d.strategy_id, limit as i64],
                 )?;
             }
             log::info!(
