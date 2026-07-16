@@ -758,6 +758,32 @@ pub fn run(
                             send_close_report(tx_db, server, r.db_id, r.sql.clone(), m);
                         }
                     }
+                    // Диагностика (фича moonproto-diagnostics, по умолчанию ВЫКЛ):
+                    // пакеты, отвергнутые парсером/валидацией lib, в обычной сборке
+                    // исчезают бесследно — так завис report-sync BB1 (страница
+                    // отвергалась молча, курсор стоял сутками). Для страницы
+                    // catch-up (CmdId=39) декодируем заголовок: видно, ЧТО прислал
+                    // сервер (row_count/last/max_rec_id) и почему не прошло.
+                    #[cfg(feature = "moonproto-diagnostics")]
+                    Event::ParseFailed { cmd, len, payload } => {
+                        let mut extra = String::new();
+                        if payload.first() == Some(&39) && payload.len() >= 37 {
+                            let i = |a: usize| {
+                                i64::from_le_bytes(payload[a..a + 8].try_into().unwrap())
+                            };
+                            let ru = u64::from_le_bytes(payload[11..19].try_into().unwrap());
+                            let rc = u16::from_le_bytes(payload[35..37].try_into().unwrap());
+                            extra = format!(
+                                " sync-page: request_uid={ru} last_rec_id={} max_rec_id={} row_count={rc}",
+                                i(19),
+                                i(27),
+                            );
+                        }
+                        log::warn!(
+                            "отчёты(diag): core={} пакет отвергнут: cmd={cmd:?} len={len}{extra}",
+                            server.uid,
+                        );
+                    }
                     _ => {}
                 }
             }
