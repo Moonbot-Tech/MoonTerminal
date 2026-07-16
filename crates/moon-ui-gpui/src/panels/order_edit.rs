@@ -45,7 +45,6 @@ pub struct OrderEditState {
     uid: u64,
     row: OrderRow,
     core_name: String,
-    quote: String,
     /// Вход исполнен → активная нога SELL (двигаем цену выхода), иначе BUY.
     executed: bool,
     sl_on: bool,
@@ -105,7 +104,7 @@ pub(crate) fn open_order_edit(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let (row, core_name, quote) = {
+    let (row, core_name) = {
         let b = backend.read(cx);
         let store = b.session.store();
         let Some(row) = store
@@ -122,14 +121,7 @@ pub(crate) fn open_order_edit(
             .find(|s| s.id == core)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        let quote = b
-            .config
-            .servers
-            .iter()
-            .find(|sv| sv.id == core)
-            .map(|sv| symbol::resolve_quote(&sv.market))
-            .unwrap_or_default();
-        (row, core_name, quote)
+        (row, core_name)
     };
     let executed = super::orders::executed(&row);
 
@@ -164,7 +156,6 @@ pub(crate) fn open_order_edit(
         uid,
         row,
         core_name,
-        quote,
         executed,
         sl_on: init.sl_on,
         sl_fixed: init.sl_fixed,

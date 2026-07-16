@@ -30,14 +30,15 @@ use crate::design;
 use crate::panels::{RenderGate, num};
 use moon_core::feed::OrderRow;
 use moon_core::session::CoreId;
+// Не используется в этом файле, но table.rs берёт через `use super::*`.
 use moon_core::symbol;
 
 /// Одна строка таблицы ордеров с привязкой к ядру-источнику (порт `OrderEntry`).
+/// Квоты рынка тут нет: ячейка токена режет её `symbol`-хелперами по имени рынка.
 #[derive(Clone)]
 pub(super) struct OrderEntry {
     pub(super) core: CoreId,
     pub(super) core_name: String,
-    pub(super) quote: String,
     pub(super) row: OrderRow,
 }
 
@@ -407,19 +408,11 @@ impl OrdersPanel {
             .iter()
             .filter(|s| s.group == self.group)
         {
-            let quote = b
-                .config
-                .servers
-                .iter()
-                .find(|sv| sv.id == s.id)
-                .map(|sv| symbol::resolve_quote(&sv.market))
-                .unwrap_or_default();
             if let Some(d) = store.core(s.id) {
                 for o in &d.orders {
                     rows.push(OrderEntry {
                         core: s.id,
                         core_name: s.name.clone(),
-                        quote: quote.clone(),
                         row: o.clone(),
                     });
                 }

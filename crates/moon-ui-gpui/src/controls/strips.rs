@@ -13,15 +13,6 @@ use moon_core::session::CoreId;
 use super::fmt::{fmt_adaptive, fmt_sell_pct, scroll_up, wheel_step};
 use crate::{Backend, design};
 
-/// Мелкая тусклая подпись группы (`size`/`sell`/`МАСШТАБ`) — стендовый `.strip-label`.
-pub(super) fn strip_label(text: &'static str, p: MoonPalette, cx: &App) -> impl IntoElement {
-    div()
-        .text_size(design::t_caption(cx))
-        .font_family(design::ui_font())
-        .text_color(rgb(p.text_muted))
-        .child(text)
-}
-
 /// Вертикальный разделитель групп (стендовый `.divider`): тонкая линия высотой 16px.
 pub(super) fn divider(p: MoonPalette) -> impl IntoElement {
     design::vline(16.0, p)
