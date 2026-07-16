@@ -10,9 +10,11 @@ use serde::{Deserialize, Serialize};
 use super::{paths, toml_io};
 
 /// Поля стратегии, изменение которых НЕ создаёт новую версию (косметика/статус/
-/// оформление). Перенесено из mb_ai (проверено там годом эксплуатации), плюс
-/// `PreventWorkingUntil`: sgStop/sgStart — состояние, не правка параметров
-/// (трекается в head.checked), иначе каждый стоп плодил бы версию.
+/// оформление). Перенесено из mb_ai (проверено там годом эксплуатации), плюс:
+/// - `PreventWorkingUntil`: sgStop/sgStart — состояние, не правка параметров
+///   (трекается в head.checked), иначе каждый стоп плодил бы версию;
+/// - `OrderSize`: размер ордера крутится рутинно (в т.ч. хоткеями), версия
+///   параметров от него не нужна (решение 2026-07-16).
 pub const DEFAULT_IGNORE_FIELDS: &[&str] = &[
     "Active",
     "LastEditDate",
@@ -33,6 +35,7 @@ pub const DEFAULT_IGNORE_FIELDS: &[&str] = &[
     "DebugLog",
     "Comment",
     "PreventWorkingUntil",
+    "OrderSize",
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
