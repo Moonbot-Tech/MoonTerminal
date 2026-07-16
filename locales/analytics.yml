@@ -93,6 +93,18 @@ analytics.tuner.suggest_run:
   ru: "Подобрать всё"
   en: "Search all"
   es: "Buscar todo"
+analytics.tuner.iters:
+  ru: "итераций"
+  en: "iterations"
+  es: "iteraciones"
+analytics.tuner.min_trades:
+  ru: "сделок ≥"
+  en: "trades ≥"
+  es: "operac. ≥"
+analytics.tuner.auto_ph:
+  ru: "авто"
+  en: "auto"
+  es: "auto"
 analytics.tuner.suggest_one:
   ru: "Подобрать"
   en: "Search"

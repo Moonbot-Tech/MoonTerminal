@@ -14,6 +14,7 @@
 
 pub mod analytics;
 pub mod tuner;
+pub mod tuner_smart;
 pub mod maint;
 mod parse;
 mod rep;

@@ -12,17 +12,28 @@ use super::tuner::{fmt_bound, parse_num};
 use moon_core::db::tuner::{FIELDS, FieldClass, params_for, slot_type_for};
 
 impl AnalyticsView {
-    /// «Подобрать всё»: лучшие диапазоны ВСЕХ полей одним сканом → v1.
+    /// «Подобрать всё» — УМНЫЙ подбор (координатный спуск): максимизируем
+    /// суммарный профит комбинации диапазонов ВСЕХ полей сразу; итераций и
+    /// минимум сделок — из конфиг-строки. Результат → v1.
     pub(super) fn suggest_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
         self.tuner.sugg_busy = true;
         let q = self.tuner_query();
+        let rounds = self
+            .tuner
+            .iters
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(4)
+            .clamp(1, 50);
         let min_n = self.suggest_min_n();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let sugg = executor
-                .spawn(async move { moon_core::db::tuner::suggest_all(&q, min_n) })
+                .spawn(async move {
+                    moon_core::db::tuner_smart::smart_suggest(&q, rounds, min_n)
+                })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -31,16 +42,18 @@ impl AnalyticsView {
                     }
                     this.tuner.sugg_busy = false;
                     if let Some(res) = sugg {
-                        let by_field: HashMap<&str, _> = res.into_iter().collect();
+                        log::info!(
+                            "аналитика: умный подбор — профит {:+.2}, сделок {}, итераций {}",
+                            res.profit,
+                            res.n,
+                            res.rounds
+                        );
+                        let by_field: HashMap<&str, _> =
+                            res.fields.into_iter().map(|f| (f.field, f)).collect();
                         for fi in 0..FIELDS.len() {
                             let (from, to) = by_field
                                 .get(FIELDS[fi].0)
-                                .map(|s| {
-                                    (
-                                        s.from.map(fmt_bound).unwrap_or_default(),
-                                        s.to.map(fmt_bound).unwrap_or_default(),
-                                    )
-                                })
+                                .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
                                 .unwrap_or_default();
                             this.tuner.bounds[0][fi] = (from, to);
                             this.tuner.inputs.remove(&format!("tv0f{fi}a"));
@@ -88,9 +101,13 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Минимум сделок для автоподбора: не «оптимизируемся» в пару счастливых
-    /// сделок — держим ≥1/5 факта (но не меньше 30).
+    /// Минимум сделок для автоподбора: из конфиг-строки; пусто = авто — не
+    /// «оптимизируемся» в пару счастливых сделок, держим ≥1/5 факта (но не
+    /// меньше 30).
     fn suggest_min_n(&self) -> i64 {
+        if let Ok(v) = self.tuner.min_trades.trim().parse::<i64>() {
+            return v.max(1);
+        }
         self.tuner
             .stats
             .as_ref()

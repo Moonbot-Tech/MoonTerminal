@@ -15,7 +15,6 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::AnalyticsView;
-use super::summary::{fmt_signed, sign_color};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::config::layout::{TunerBoundCfg, TunerVariantCfg};
@@ -45,6 +44,10 @@ pub(super) struct TunerState {
     /// Стейдж кликабельных «ignore» подзаголовков: флаг → желаемое состояние
     /// игнора (семантика «игнорировать», для UseBV_SV_Filter инверсна).
     pub(super) staged_ignore: HashMap<&'static str, bool>,
+    /// Параметры умного подбора: итераций (проходов) и минимум сделок
+    /// (пусто = авто: ≥1/5 факта, не меньше 30).
+    pub(super) iters: String,
+    pub(super) min_trades: String,
     seq: u64,
     hist_seq: u64,
     pub(super) sugg_seq: u64,
@@ -71,6 +74,8 @@ impl TunerState {
             sugg_busy: false,
             save_confirm: false,
             staged_ignore: HashMap::new(),
+            iters: "4".to_string(),
+            min_trades: String::new(),
             seq: 0,
             hist_seq: 0,
             sugg_seq: 0,
@@ -317,106 +322,44 @@ impl AnalyticsView {
         state
     }
 
-    /// Матрица KPI: строки — показатели, колонки — Факт / v1 / v2.
-    pub(super) fn kpi_matrix(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        // Подзаголовок = скоуп: имя выбранной стратегии или «все стратегии».
-        let scope = self
-            .sel_strategy
-            .as_ref()
-            .map(|(_, n)| n.clone())
-            .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
-        let Some(stats) = self.tuner.stats.clone() else {
-            return card(
-                t!("analytics.tuner.kpi_title").to_string(),
-                scope,
-                div()
-                    .p(design::ui_px(cx, 8.0))
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.loading").to_string())
-                    .into_any_element(),
-                p,
-                cx,
-            );
+    /// Инпут настройки подбора (итерации / мин. сделок): кэш + коммит в поле
+    /// состояния по Blur/Enter. `which`: true = min_trades, false = iters.
+    fn cfg_input(
+        &mut self,
+        which: bool,
+        placeholder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<MoonInputState> {
+        let id = if which { "cfg-mn" } else { "cfg-it" }.to_string();
+        if let Some(state) = self.tuner.inputs.get(&id) {
+            return state.clone();
+        }
+        let value = if which {
+            self.tuner.min_trades.clone()
+        } else {
+            self.tuner.iters.clone()
         };
-        // (подпись, значение, больше=лучше; None — без сравнения с фактом)
-        type Row = (String, fn(&VarStats) -> f64, Option<bool>, bool);
-        let rows: Vec<Row> = vec![
-            (t!("analytics.kpi.trades").to_string(), |s| s.n as f64, None, true),
-            (t!("analytics.kpi.profit").to_string(), |s| s.profit, Some(true), false),
-            (t!("analytics.kpi.winrate").to_string(), |s| s.winrate(), Some(true), false),
-            (t!("analytics.col.pf").to_string(), |s| s.pf, Some(true), false),
-            (t!("analytics.kpi.avg_short").to_string(), |s| s.avg, Some(true), false),
-            (t!("analytics.tuner.avg_win").to_string(), |s| s.avg_win, Some(true), false),
-            (t!("analytics.tuner.avg_loss").to_string(), |s| s.avg_loss, Some(false), false),
-            (t!("analytics.kpi.maxdd").to_string(), |s| s.max_dd, Some(false), false),
-        ];
-        let col_w = 92.0;
-        let mut head = h_flex()
-            .w_full()
-            .px(design::ui_px(cx, 8.0))
-            .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
-            .items_center()
-            .gap(design::ui_px(cx, 8.0))
-            .text_size(design::t_caption(cx))
-            .text_color(moon(p.text_soft))
-            .bg(moon(p.table_head))
-            .child(div().flex_1().child(t!("analytics.tuner.metric").to_string()));
-        for i in 0..stats.len() {
-            let name = if i == 0 {
-                t!("analytics.tuner.fact").to_string()
-            } else {
-                format!("v{i}")
-            };
-            head = head.child(div().w(design::font_w_px(cx, col_w)).flex_none().text_right().child(name));
-        }
-
-        let mut body = v_flex().w_full().child(head);
-        for (label, get, better, int) in rows {
-            let fact = get(&stats[0]);
-            let mut row = h_flex()
-                .w_full()
-                .px(design::ui_px(cx, 8.0))
-                .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
-                .items_center()
-                .gap(design::ui_px(cx, 8.0))
-                .border_t_1()
-                .border_color(moon_alpha(p.border, 0.5))
-                .child(div().flex_1().text_color(moon(p.text_soft)).child(label));
-            for (i, s) in stats.iter().enumerate() {
-                let v = get(s);
-                let text = if int { format!("{}", v as i64) } else { fmt_signed(v) };
-                let color = match better {
-                    // Вариант красим относительно факта; сам факт — по знаку.
-                    Some(hb) if i > 0 => {
-                        if (v > fact) == hb && v != fact {
-                            p.green
-                        } else if v != fact {
-                            p.orange
-                        } else {
-                            p.text
-                        }
-                    }
-                    Some(_) => sign_color(p, v),
-                    None => p.text,
-                };
-                row = row.child(
-                    div()
-                        .w(design::font_w_px(cx, col_w))
-                        .flex_none()
-                        .text_right()
-                        .text_color(moon(color))
-                        .child(text),
-                );
+        let ph = placeholder.to_string();
+        let state = cx.new(|cx| {
+            MoonInputState::new(window, cx)
+                .default_value(value)
+                .placeholder(ph)
+        });
+        cx.subscribe(&state, move |this, state, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                let value = state.read(cx).value().to_string();
+                if which {
+                    this.tuner.min_trades = value;
+                } else {
+                    this.tuner.iters = value;
+                }
+                cx.notify();
             }
-            body = body.child(row);
-        }
-        card(
-            t!("analytics.tuner.kpi_title").to_string(),
-            scope,
-            body.into_any_element(),
-            p,
-            cx,
-        )
+        })
+        .detach();
+        self.tuner.inputs.insert(id, state.clone());
+        state
     }
 
     /// Конструктор диапазонов: строки-поля, клик по имени — гистограмма поля.
@@ -575,21 +518,37 @@ impl AnalyticsView {
             }
             grid = grid.child(row);
         }
-        // Карточка со своей шапкой: заголовок + кнопки «Подобрать» (выбранное
-        // поле → v1), «Подобрать всё» (все поля → v1) и «В стратегию»
-        // (запись v1 в параметры выбранной стратегии, с подтверждением).
+        // Строка умного подбора: итерации координатного спуска + минимум
+        // сделок (пусто = авто) + кнопки запуска.
         let busy = self.tuner.sugg_busy;
-        let mut header = h_flex()
+        let it_input = self.cfg_input(false, "4", window, cx);
+        let mn_input = self.cfg_input(true, &t!("analytics.tuner.auto_ph"), window, cx);
+        let cfg_row = h_flex()
             .w_full()
             .px(design::ui_px(cx, 12.0))
-            .py(design::ui_px(cx, 8.0))
+            .pb(design::ui_px(cx, 6.0))
             .items_center()
             .gap(design::ui_px(cx, 6.0))
+            .text_size(design::t_caption(cx))
             .child(
                 div()
-                    .text_size(design::t_title(cx))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(t!("analytics.tuner.fields_title").to_string()),
+                    .text_color(moon(p.text_muted))
+                    .child(t!("analytics.tuner.iters").to_string()),
+            )
+            .child(
+                div().w(design::font_w_px(cx, 34.0)).flex_none().child(
+                    MoonInput::new("tun-cfg-it").state(&it_input).small(),
+                ),
+            )
+            .child(
+                div()
+                    .text_color(moon(p.text_muted))
+                    .child(t!("analytics.tuner.min_trades").to_string()),
+            )
+            .child(
+                div().w(design::font_w_px(cx, 52.0)).flex_none().child(
+                    MoonInput::new("tun-cfg-mn").state(&mn_input).small(),
+                ),
             )
             .child(div().flex_1())
             .child(
@@ -626,6 +585,22 @@ impl AnalyticsView {
                     }))
                     .render(),
             );
+        // Карточка со своей шапкой: заголовок + кнопки «Подобрать» (выбранное
+        // поле → v1), «Подобрать всё» (все поля → v1) и «В стратегию»
+        // (запись v1 в параметры выбранной стратегии, с подтверждением).
+        let mut header = h_flex()
+            .w_full()
+            .px(design::ui_px(cx, 12.0))
+            .py(design::ui_px(cx, 8.0))
+            .items_center()
+            .gap(design::ui_px(cx, 6.0))
+            .child(
+                div()
+                    .text_size(design::t_title(cx))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("analytics.tuner.fields_title").to_string()),
+            )
+            .child(div().flex_1());
         // «В стратегию» — только при выбранной стратегии; двухкликовое
         // подтверждение (первый клик — «Подтвердить?»).
         if self.sel_strategy.is_some() {
@@ -666,6 +641,7 @@ impl AnalyticsView {
             .border_color(moon(p.border))
             .overflow_hidden()
             .child(header)
+            .child(cfg_row)
             .child(grid)
             .into_any_element()
     }
