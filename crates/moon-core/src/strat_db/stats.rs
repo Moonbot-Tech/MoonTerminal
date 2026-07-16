@@ -187,30 +187,50 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
     out
 }
 
-/// Поля версии (raw_json) в отображаемых строках — формат как у `fmt_field`
-/// живых стратегий (Yes/No, compact-числа). None — версии нет.
-pub fn version_fields(
-    core_uid: u64,
-    strategy_id: i64,
-    valid_from: i64,
-) -> Option<Vec<(String, String)>> {
+/// Содержимое версии для панелей окна «Стратегии»: полный дамп полей + дифф
+/// с предыдущей версией.
+pub struct VersionView {
+    /// Все поля версии (raw_json) в отображаемых строках — формат как у
+    /// `fmt_field` живых стратегий (Yes/No, compact-числа).
+    pub fields: Vec<(String, String)>,
+    /// Изменённые в ЭТОЙ версии поля: имя → старое значение (display-строка;
+    /// пустая = поля раньше не было). Пусто у created/без диффа.
+    pub changed: Vec<(String, String)>,
+}
+
+/// Поля и дифф версии. None — версии нет.
+pub fn version_view(core_uid: u64, strategy_id: i64, valid_from: i64) -> Option<VersionView> {
     let conn = open_rw()?;
-    let raw: String = conn
+    let (raw, changed_raw): (String, Option<String>) = conn
         .query_row(
-            "SELECT raw_json FROM strategy_versions
+            "SELECT raw_json, changed_json FROM strategy_versions
              WHERE core_uid=?1 AND strategy_id=?2 AND valid_from=?3",
             rusqlite::params![core_uid as i64, strategy_id, valid_from],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .ok()??;
     let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&raw).ok()?;
-    Some(
-        map.into_iter()
-            .filter(|(k, _)| !k.starts_with("__"))
-            .map(|(k, v)| (k, json_display(&v)))
-            .collect(),
-    )
+    let fields = map
+        .into_iter()
+        .filter(|(k, _)| !k.starts_with("__"))
+        .map(|(k, v)| (k, json_display(&v)))
+        .collect();
+    // Дифф {"Поле":{"old":…,"new":…}} → (имя, старое значение display).
+    let mut changed = Vec::new();
+    if let Some(cj) = changed_raw {
+        if let Ok(serde_json::Value::Object(m)) = serde_json::from_str(&cj) {
+            for (name, pair) in m {
+                let old = pair
+                    .get("old")
+                    .filter(|v| !v.is_null())
+                    .map(json_display)
+                    .unwrap_or_default();
+                changed.push((name, old));
+            }
+        }
+    }
+    Some(VersionView { fields, changed })
 }
 
 /// JSON-значение поля → строка показа (зеркало `feed::strategies::fmt_field`).

@@ -203,3 +203,15 @@ strat.version_view:
   ru: "Просмотр версии от %{date} — только чтение"
   en: "Viewing the version from %{date} — read-only"
   es: "Viendo la versión del %{date} — solo lectura"
+strat.sections_all:
+  ru: "Все"
+  en: "All"
+  es: "Todas"
+strat.version_was:
+  ru: "было: %{v}"
+  en: "was: %{v}"
+  es: "era: %{v}"
+strat.version_added:
+  ru: "новое поле"
+  en: "new field"
+  es: "campo nuevo"

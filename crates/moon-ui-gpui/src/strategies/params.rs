@@ -26,8 +26,44 @@ impl StrategiesView {
         let Some(sections) = selected_sections(self, store) else {
             return ParamsPanelModel::NoSchema;
         };
-        let Some(section) = sections.get(self.selected_section).cloned() else {
-            return ParamsPanelModel::NoSchema;
+        // Просмотр версии с диффом: показываем ТОЛЬКО изменённые поля — либо по
+        // всем разделам («Все», по умолчанию), либо внутри выбранного раздела.
+        let section = if let Some(ch) = self.version_changed_filter() {
+            match self.versions.section {
+                None => {
+                    let mut seen = HashSet::new();
+                    let fields: Vec<SchemaField> = sections
+                        .iter()
+                        .flat_map(|s| &s.fields)
+                        .filter(|f| ch.contains_key(&f.name.to_lowercase()))
+                        .filter(|f| seen.insert(f.name.to_lowercase()))
+                        .cloned()
+                        .collect();
+                    SchemaSection {
+                        title: t!("strat.sections_all").to_string(),
+                        fields,
+                    }
+                }
+                Some(i) => {
+                    let Some(sec) = sections.get(i) else {
+                        return ParamsPanelModel::NoSchema;
+                    };
+                    SchemaSection {
+                        title: sec.title.clone(),
+                        fields: sec
+                            .fields
+                            .iter()
+                            .filter(|f| ch.contains_key(&f.name.to_lowercase()))
+                            .cloned()
+                            .collect(),
+                    }
+                }
+            }
+        } else {
+            let Some(section) = sections.get(self.selected_section).cloned() else {
+                return ParamsPanelModel::NoSchema;
+            };
+            section
         };
         let values = selected_values(self, store);
         let row_pairs: Vec<(Key, StrategyRow)> = multi_row_pairs(self, store)
@@ -193,7 +229,9 @@ impl StrategiesView {
                 continue;
             }
             let active = self.rules.field_active(&f.name, &values);
-            if self.only_active_params && !active {
+            // В режиме «только изменения» ничего не прячем: список и так узкий,
+            // а изменённое-но-неактивное поле — всё равно изменение.
+            if self.only_active_params && !active && self.version_changed_filter().is_none() {
                 continue;
             }
             let merged = merged_value_for_owned(self, &row_pairs, f);
@@ -232,8 +270,15 @@ impl StrategiesView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // Просмотр старой версии: все контролы задизейблены (истинный гейт —
-        // в stage_field_value), значения остаются читаемыми.
-        let active = active && !self.viewing_version();
+        // в stage_field_value), значения остаются читаемыми; у изменённых полей
+        // под значением показываем старое («было: …»).
+        let frozen = self.viewing_version();
+        let active = active && !frozen;
+        let old_note = if frozen {
+            self.versions.changed.get(&f.name.to_lowercase()).cloned()
+        } else {
+            None
+        };
         let p = MoonPalette::active(cx);
         let name_col = if active { p.text_soft } else { p.text_muted };
         let val_col = if active { p.text } else { p.text_muted };
@@ -409,6 +454,27 @@ impl StrategiesView {
                     input.into_any_element()
                 }
             }
+        };
+        // Старое значение изменённого поля версии — строкой под контролом.
+        let control: AnyElement = if let Some(old) = old_note {
+            let note = if old.is_empty() {
+                t!("strat.version_added").to_string()
+            } else {
+                t!("strat.version_was", v = old).to_string()
+            };
+            v_flex()
+                .w_full()
+                .gap(px(1.0))
+                .child(control)
+                .child(
+                    div()
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(p.text_soft))
+                        .child(note),
+                )
+                .into_any_element()
+        } else {
+            control
         };
         // Значок «≠» перед редактируемым контролом, когда значения различаются.
         let value_el: AnyElement = if differ {

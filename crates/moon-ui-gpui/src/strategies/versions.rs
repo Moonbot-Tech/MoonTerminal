@@ -28,6 +28,12 @@ pub(super) struct VersionsState {
     pub sel: Option<i64>,
     /// Синтетическая строка старой версии (поля из raw_json) для панелей справа.
     pub row: Option<(Key, i64, StrategyRow)>,
+    /// Изменённые в выбранной версии поля: имя(lowercase) → старое значение
+    /// (display; пустое = поля не было). Пусто — дифф отсутствует (created).
+    pub changed: std::collections::HashMap<String, String>,
+    /// Раздел в режиме просмотра версии: None = псевдораздел «Все» (только
+    /// изменённые поля всех разделов), Some(i) = раздел схемы (тоже фильтр).
+    pub section: Option<usize>,
 }
 
 impl StrategiesView {
@@ -43,6 +49,17 @@ impl StrategiesView {
         (Some(*key) == self.selected && *row_vf == vf).then_some((*key, row))
     }
 
+    /// Фильтр «только изменённые поля» активен? (просмотр версии с непустым диффом).
+    pub(super) fn version_changed_filter(
+        &self,
+    ) -> Option<&std::collections::HashMap<String, String>> {
+        if self.viewing_version() && !self.versions.changed.is_empty() {
+            Some(&self.versions.changed)
+        } else {
+            None
+        }
+    }
+
     /// Перезагрузка списка версий при смене выбора/поколения БД (fire-and-forget).
     fn ensure_versions(&mut self, cx: &mut Context<Self>) {
         let key = self.selected;
@@ -55,6 +72,8 @@ impl StrategiesView {
             self.versions.list.clear();
             self.versions.sel = None;
             self.versions.row = None;
+            self.versions.changed.clear();
+            self.versions.section = None;
         }
         self.versions.key = key;
         self.versions.db_gen = db_gen;
@@ -87,20 +106,22 @@ impl StrategiesView {
         }
         self.versions.sel = vf;
         self.versions.row = None;
+        self.versions.changed.clear();
+        self.versions.section = None; // по умолчанию — «Все» (только изменения)
         cx.notify();
         let (Some((core, id)), Some(vf)) = (self.selected, vf) else {
             return;
         };
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            let fields = executor
+            let view = executor
                 .spawn(async move {
-                    moon_core::strat_db::stats::version_fields(core, id as i64, vf)
+                    moon_core::strat_db::stats::version_view(core, id as i64, vf)
                 })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
-                    let Some(fields) = fields else { return };
+                    let Some(view) = view else { return };
                     if this.versions.sel != Some(vf) || this.selected != Some((core, id)) {
                         return; // выбор уже ушёл
                     }
@@ -112,12 +133,18 @@ impl StrategiesView {
                         logic::row(store, core, id).cloned()
                     };
                     if let Some(mut r) = live {
-                        if let Some((_, n)) = fields.iter().find(|(k, _)| k == "StrategyName") {
+                        if let Some((_, n)) = view.fields.iter().find(|(k, _)| k == "StrategyName")
+                        {
                             if !n.is_empty() {
                                 r.name = n.clone();
                             }
                         }
-                        r.fields = fields;
+                        r.fields = view.fields;
+                        this.versions.changed = view
+                            .changed
+                            .into_iter()
+                            .map(|(k, old)| (k.to_lowercase(), old))
+                            .collect();
                         this.versions.row = Some(((core, id), vf, r));
                         cx.notify();
                     }
