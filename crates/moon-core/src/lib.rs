@@ -20,5 +20,6 @@ pub mod market;
 pub mod metrics;
 pub mod palette;
 pub mod session;
+pub mod strat_db;
 pub mod symbol;
 pub mod util;

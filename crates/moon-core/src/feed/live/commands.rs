@@ -32,6 +32,48 @@ fn signaltype_to_kind_ordinal(schema: Option<&StrategySchema>, value: &str) -> O
     (0u8..=23).find(|o| strat_kind_name(*o).eq_ignore_ascii_case(v))
 }
 
+/// Кольцо недавних ЛОКАЛЬНЫХ правок стратегий — для пометки `origin=local` у
+/// версий strat_db (эхо сервера придёт снапшотом через feed-цикл). `wildcard` —
+/// команды без известного id (создание: id назначается внутри rebuild_sync).
+/// TTL короткий: эхо приходит за секунды, протухшее — чужая правка.
+pub(super) struct LocalStratEdits {
+    ids: std::collections::HashMap<u64, std::time::Instant>,
+    wildcard: Option<std::time::Instant>,
+}
+
+const LOCAL_EDIT_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+impl LocalStratEdits {
+    pub(super) fn new() -> Self {
+        Self {
+            ids: std::collections::HashMap::new(),
+            wildcard: None,
+        }
+    }
+
+    fn mark(&mut self, id: u64) {
+        self.ids.insert(id, std::time::Instant::now());
+    }
+
+    fn mark_all(&mut self) {
+        self.wildcard = Some(std::time::Instant::now());
+    }
+
+    /// Правка этого id (или любая) отправлена нами недавно?
+    pub(super) fn is_local(&self, id: u64) -> bool {
+        let fresh = |t: &std::time::Instant| t.elapsed() < LOCAL_EDIT_TTL;
+        self.ids.get(&id).map(fresh).unwrap_or(false)
+            || self.wildcard.as_ref().map(fresh).unwrap_or(false)
+    }
+
+    pub(super) fn prune(&mut self) {
+        self.ids.retain(|_, t| t.elapsed() < LOCAL_EDIT_TTL);
+        if self.wildcard.map(|t| t.elapsed() >= LOCAL_EDIT_TTL).unwrap_or(false) {
+            self.wildcard = None;
+        }
+    }
+}
+
 /// Общий путь синка стратегий: берём ПОЛНЫЙ текущий набор, даём его `build` на правку
 /// (патч полей / смена пути / добавление новых), и если что-то изменилось — шлём ОДИН
 /// `sync_local_strategies` + лог. `build` возвращает число затронутых. Бамп `last_date`
@@ -68,6 +110,7 @@ pub(super) fn drain_commands(
     wanted_orderbook: &mut Vec<String>,
     force_market_sample: &mut bool,
     orders_mutated: &mut bool,
+    local_strat_edits: &mut LocalStratEdits,
 ) -> bool {
     loop {
         match cmd_rx.try_recv() {
@@ -182,6 +225,9 @@ pub(super) fn drain_commands(
                 );
             }
             Ok(CoreCmd::EditStrategyFields { edits }) => {
+                for (id, _) in &edits {
+                    local_strat_edits.mark(*id);
+                }
                 // `sync_local_strategies` СИНХРОНИТ ВЕСЬ локальный набор (moonproto делает
                 // replace_with_snapshots). Патчим ВСЕ указанные в `edits` за один проход → один
                 // sync (раздельные команды на стратегии одного ядра перетёрли бы друг друга).
@@ -241,6 +287,8 @@ pub(super) fn drain_commands(
                 log::info!("core {} delete folder {path}", server.id);
             }
             Ok(CoreCmd::CreateStrategies { specs }) => {
+                // id новых назначаются внутри rebuild_sync (max+1) — метим «любую» правку.
+                local_strat_edits.mark_all();
                 // К полному набору добавляем новые снапшоты. id = max+1 ЦЕЛЕВОГО ядра
                 // (безопасно для межъядерной вставки). Поля — из строк по типу схемы
                 // (как fv_from_str при правках), existing=None.

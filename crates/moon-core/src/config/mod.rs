@@ -25,6 +25,7 @@ pub mod orders;
 pub mod paths;
 pub mod secrets;
 pub mod servers;
+pub mod storage;
 pub mod theme;
 
 mod migrate;

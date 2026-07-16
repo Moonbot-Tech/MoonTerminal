@@ -125,6 +125,9 @@ pub(super) struct RepState {
     /// коммита батча (внутри транзакции VACUUM запрещён): без него файл БД остаётся
     /// прежних сотен МБ.
     pub(super) vacuum_pending: bool,
+    /// Индекс `idx_rep_strat` уже создан в этой сессии (не дёргать CREATE на
+    /// каждую схему ядра).
+    strat_index_done: bool,
 }
 
 /// Создаёт скелет таблицы реплики (колонки доращивает схема ядра), считает стартовые
@@ -175,6 +178,7 @@ pub(super) fn init(
         legacy_exists,
         synced,
         vacuum_pending: false,
+        strat_index_done: false,
     };
     // Вычистка легаси-строк синхронизированных ядер, накопившихся ПОСЛЕ их SyncComplete
     // (легаси-поток успевал дописывать до фикса скипа) — иначе дубли в читателе.
@@ -239,6 +243,21 @@ pub(super) fn apply_schema(
                 st.cols.insert(name);
             }
             Err(e) => log::error!("отчёты(rep): ADD COLUMN {name} не удался: {e}"),
+        }
+    }
+    // Индекс под аналитику версий стратегий (strat_db): выборка сделок одной
+    // стратегии + range-join по buydate к valid_from/valid_to версии. Колонки —
+    // авто (из схемы ядра), поэтому создаём здесь, когда обе точно есть;
+    // IF NOT EXISTS делает повторные вызовы бесплатными.
+    if !st.strat_index_done && st.cols.contains("strategyid") && st.cols.contains("buydate") {
+        match conn.execute(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS idx_rep_strat ON {TABLE}(core_uid, strategyid, buydate)"
+            ),
+            [],
+        ) {
+            Ok(_) => st.strat_index_done = true,
+            Err(e) => log::warn!("отчёты(rep): индекс idx_rep_strat не создался: {e}"),
         }
     }
     st.schemas.insert(core_uid, schema);

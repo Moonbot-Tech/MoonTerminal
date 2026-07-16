@@ -23,7 +23,10 @@ use moonproto::{
 
 use super::assets::{build_assets, build_transfer_assets};
 use super::report::{send_close_report, OrderIndex};
-use super::strategies::{alert_params, build_schema_model, fmt_field, strat_kind_name};
+use super::strategies::{
+    alert_params, build_schema_model, fmt_field, schema_default_fields, strat_db_dump,
+    strat_kind_name,
+};
 use super::{
     ConnStatus, CoreCmd, CoreLogLine, DetectRow, ExchangeId, FeedMsg, FeedTx, SharedMoonClient,
     StrategyRow,
@@ -32,7 +35,7 @@ use crate::config::ServerConfig;
 use crate::db::{DbMsg, ReportTx};
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 
-use commands::drain_commands;
+use commands::{drain_commands, LocalStratEdits};
 use convert::{
     build_order_rows, client_settings_from_proto, lev_manage_from_proto, license_state_from_proto,
     runtime_state_from_proto, settings_event_snapshot,
@@ -161,6 +164,13 @@ pub fn run(
     // шлём только при изменениях (поля стратегий тяжёлые, гонять каждую секунду незачем).
     let mut last_schema_rev: u64 = u64::MAX;
     let mut last_strat_sig: u64 = u64::MAX;
+    // strat_db: дефолты полей схемы по видам (нормализация дампов — сервер не шлёт
+    // поля, равные дефолту), кольцо наших правок (origin=local) и флаг первого
+    // набора после (ре)коннекта (origin неизвестен — правки могли пройти оффлайн).
+    let mut strat_schema_defaults: std::collections::HashMap<u8, Vec<(String, moonproto::FieldValue)>> =
+        std::collections::HashMap::new();
+    let mut local_strat_edits = LocalStratEdits::new();
+    let mut strat_db_initial = true;
     // Монотонный per-core номер детекта — курсор ингеста в ленту детектов UI.
     let mut detect_seq: u64 = 0;
     // Полные данные ордеров для close-report'ов (uid/db_id) — см. feed::report.
@@ -186,6 +196,7 @@ pub fn run(
             &mut wanted_orderbook,
             &mut force_market_sample,
             &mut orders_mutated,
+            &mut local_strat_edits,
         ) {
             return Ok(());
         }
@@ -822,6 +833,8 @@ pub fn run(
                 if sr != last_schema_rev {
                     last_schema_rev = sr;
                     if let Some(schema) = strats.strategy_schema() {
+                        // Дефолты полей для нормализации дампов strat_db (см. ниже).
+                        strat_schema_defaults = schema_default_fields(schema);
                         if tx
                             .send(FeedMsg::StrategySchema(build_schema_model(schema)))
                             .is_err()
@@ -879,6 +892,33 @@ pub fn run(
                         .collect();
                     if tx.send(FeedMsg::Strategies(strategies)).is_err() {
                         break;
+                    }
+
+                    // strat_db: тот же снапшот — в локальную БД стратегий (head +
+                    // версии по контент-диффу; эхо/косметика дедупятся у writer'а).
+                    // Ждём схему: без материализации её дефолтов дампы неполны и
+                    // при её приходе появились бы фантомные версии.
+                    if !strat_schema_defaults.is_empty() {
+                        if let Some(sink) = crate::strat_db::sink() {
+                            local_strat_edits.prune();
+                            let dumps: Vec<crate::strat_db::StratDump> = strats
+                                .snapshots()
+                                .map(|s| {
+                                    strat_db_dump(
+                                        s,
+                                        &strat_schema_defaults,
+                                        local_strat_edits.is_local(s.strategy_id),
+                                    )
+                                })
+                                .collect();
+                            sink.send(crate::strat_db::StratMsg::FullSet {
+                                core_uid: server.uid,
+                                core_name: server.name.clone(),
+                                initial: strat_db_initial,
+                                strategies: dumps,
+                            });
+                            strat_db_initial = false;
+                        }
                     }
                 }
             }

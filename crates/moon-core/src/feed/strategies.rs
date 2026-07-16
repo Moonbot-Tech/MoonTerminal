@@ -247,6 +247,83 @@ fn map_ui(u: StrategyFieldUiKind) -> SchemaFieldUi {
     }
 }
 
+/// Дефолты полей схемы по видам: ordinal вида → [(имя, дефолт)]. Кэш feed-цикла
+/// (пересобирается по смене revision схемы) для нормализации дампов strat_db:
+/// сервер НЕ шлёт поля со значением, равным дефолту схемы, — без материализации
+/// дефолтов «исчезнувшее» (= ставшее дефолтным) поле плодило бы фантомные версии.
+pub(super) fn schema_default_fields(
+    schema: &StrategySchema,
+) -> std::collections::HashMap<u8, Vec<(String, FieldValue)>> {
+    let mut out = std::collections::HashMap::new();
+    for k in &schema.kinds {
+        let mut defs: Vec<(String, FieldValue)> = Vec::new();
+        for sec in schema.editor_sections_for_strategy_kind(k.kind()) {
+            for f in &sec.fields {
+                if let Some(dv) = f.default_value.as_ref() {
+                    defs.push((f.name.clone(), dv.clone()));
+                }
+            }
+        }
+        out.insert(k.ordinal(), defs);
+    }
+    out
+}
+
+/// JSON-представление значения поля (для дампов strat_db).
+fn fv_json(v: &FieldValue) -> serde_json::Value {
+    use serde_json::Value as J;
+    match v {
+        FieldValue::Bool(b) => J::from(*b),
+        FieldValue::Int32(x) => J::from(*x),
+        FieldValue::Int64(x) => J::from(*x),
+        FieldValue::UInt32(x) => J::from(*x),
+        FieldValue::UInt64(x) => J::from(*x),
+        FieldValue::Byte(x) => J::from(*x),
+        FieldValue::Word(x) => J::from(*x),
+        FieldValue::Double(x) => J::from(*x),
+        FieldValue::Single(x) => J::from(*x as f64),
+        FieldValue::String(s) => J::from(s.clone()),
+    }
+}
+
+/// Нормализованный дамп стратегии для strat_db: дефолты схемы её вида,
+/// перекрытые явными полями снапшота. Ключи `serde_json::Map` отсортированы
+/// (BTreeMap) — сериализация канонична, контент-сравнение стабильно.
+pub(super) fn strat_db_dump(
+    s: &StrategySnapshot,
+    defaults: &std::collections::HashMap<u8, Vec<(String, FieldValue)>>,
+    local_edit: bool,
+) -> crate::strat_db::StratDump {
+    let mut fields = serde_json::Map::new();
+    if let Some(defs) = defaults.get(&s.kind().ordinal()) {
+        for (n, v) in defs {
+            fields.insert(n.clone(), fv_json(v));
+        }
+    }
+    for (n, v) in s.fields.iter() {
+        fields.insert(n.to_string(), fv_json(v));
+    }
+    let name = s
+        .strategy_name()
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("strat {}", s.strategy_id));
+    crate::strat_db::StratDump {
+        // Signed-представление: ядро пишет strategyid ордера как Delphi signed.
+        strategy_id: s.strategy_id as i64,
+        name,
+        kind: strat_kind_name(s.kind().ordinal()).to_string(),
+        kind_ordinal: s.kind().ordinal(),
+        folder_path: s.path.to_string(),
+        is_short: s.is_short(),
+        checked: s.checked,
+        server_ver: s.strategy_ver,
+        server_ms: s.last_date as i64,
+        fields,
+        local_edit,
+    }
+}
+
 /// Тип (вид) стратегии Moonbot по ordinal `StrategyKind`.
 pub(super) fn strat_kind_name(ordinal: u8) -> &'static str {
     match ordinal {
