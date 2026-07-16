@@ -50,7 +50,6 @@ pub const FIELDS: &[(&str, &str, FieldClass)] = &[
     ("d3h", "d3h", FieldClass::Delta),
     ("da1m", "da1m", FieldClass::Delta),
     ("d5s", "d5s", FieldClass::Delta),
-    ("vd1m", "Vd1m", FieldClass::Delta),
     ("dmark", "dMark", FieldClass::Delta),
     ("btc1hdelta", "dBTC", FieldClass::Delta),
     ("exchange1hdelta", "dMarket", FieldClass::Delta),
@@ -58,10 +57,12 @@ pub const FIELDS: &[(&str, &str, FieldClass)] = &[
     ("exchange24hdelta", "dM24", FieldClass::Delta),
     ("btc5mdelta", "dBTC5m", FieldClass::Delta),
     ("dbtc1m", "dBTC1m", FieldClass::Delta),
-    // Объёмы (IgnoreFilters | IgnoreVolume).
+    // Объёмы (IgnoreFilters | IgnoreVolume; MinuteVolDelta — тоже секция
+    // Filters/Volume, поэтому Vd1m здесь).
     ("hvol", "H.Vol", FieldClass::Volume),
     ("hvolf", "H.VolF", FieldClass::Volume),
     ("dvol", "D.Vol", FieldClass::Volume),
+    ("vd1m", "Vd1m", FieldClass::Volume),
 ];
 
 /// Значения `Delta2_Type`/`Delta3_Type` ↔ поля отчёта. Типы без колонки
@@ -294,8 +295,9 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> Option<Vec<HistBucket>>
 }
 
 /// Маппинг «поле отчёта → параметры-фильтры стратегии MoonBot» (min, max).
-/// Для полей без однозначного параметра (d1h/d15m/… — настраиваемые
-/// Delta2/Delta3 окна; PriceBug/da1m/d5s/dMark/H.VolF) маппинга нет.
+/// Сверен 2026-07-17 по union параметров всех видов стратегий. Без маппинга
+/// остались только da1m и d5s (параметров-фильтров в схеме нет; слоты
+/// Delta2/Delta3 таких типов тоже не имеют).
 const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
     // Фильтр BV/SV: параметры фильтра (не детектора BV_SV_Ratio!), гейт —
     // UseBV_SV_Filter.
@@ -304,13 +306,16 @@ const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("d24h", Some("Delta_24h_Min"), Some("Delta_24h_Max")),
     ("d3h", Some("Delta_3h_Min"), Some("Delta_3h_Max")),
     ("hvol", Some("MinHourlyVolume"), Some("MaxHourlyVolume")),
+    ("hvolf", Some("MinHourlyVolFast"), Some("MaxHourlyVolFast")),
     ("dvol", Some("MinVolume"), Some("MaxVolume")),
+    ("vd1m", Some("MinuteVolDeltaMin"), Some("MinuteVolDeltaMax")),
+    ("dmark", Some("MarkPriceMin"), Some("MarkPriceMax")),
     ("btc1hdelta", Some("Delta_BTC_Min"), Some("Delta_BTC_Max")),
     ("exchange1hdelta", Some("Delta_Market_Min"), Some("Delta_Market_Max")),
     ("btc24hdelta", Some("Delta_BTC_24_Min"), Some("Delta_BTC_24_Max")),
     ("exchange24hdelta", Some("Delta_Market_24_Min"), Some("Delta_Market_24_Max")),
-    ("btc5mdelta", None, Some("Delta_BTC_5m_Max")),
-    ("dbtc1m", None, Some("Delta_BTC_1m_Max")),
+    ("btc5mdelta", Some("Delta_BTC_5m_Min"), Some("Delta_BTC_5m_Max")),
+    ("dbtc1m", Some("Delta_BTC_1m_Min"), Some("Delta_BTC_1m_Max")),
 ];
 
 /// Параметры стратегии (min, max) для поля отчёта; (None, None) — маппинга нет.
