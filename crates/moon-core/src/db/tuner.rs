@@ -247,6 +247,166 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> Option<Vec<HistBucket>>
     Some(out)
 }
 
+/// Маппинг «поле отчёта → параметры-фильтры стратегии MoonBot» (min, max).
+/// Для полей без однозначного параметра (d1h/d15m/… — настраиваемые
+/// Delta2/Delta3 окна) маппинга нет.
+const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
+    ("bvsvratio", None, Some("BV_SV_Ratio")),
+    ("d24h", None, Some("Delta_24h_Max")),
+    ("d3h", Some("Delta_3h_Min"), Some("Delta_3h_Max")),
+    ("hvol", Some("MinHourlyVolume"), Some("MaxHourlyVolume")),
+    ("dvol", Some("MinVolume"), Some("MaxVolume")),
+    ("btc1hdelta", Some("Delta_BTC_Min"), Some("Delta_BTC_Max")),
+    ("exchange1hdelta", Some("Delta_Market_Min"), Some("Delta_Market_Max")),
+    ("btc24hdelta", Some("Delta_BTC_24_Min"), Some("Delta_BTC_24_Max")),
+    ("btc5mdelta", None, Some("Delta_BTC_5m_Max")),
+    ("dbtc1m", None, Some("Delta_BTC_1m_Max")),
+];
+
+/// Пороговые параметры ВЫБРАННОЙ стратегии по полям тюнера: поле → (min, max).
+/// Источник — текущая версия в strategies.sqlite (raw_json нормализован со
+/// схемными дефолтами); 0/пусто = фильтр выключен → None. Пустая карта — БД
+/// нет или стратегия не найдена.
+pub fn strategy_bounds(
+    strategy_id: i64,
+) -> std::collections::HashMap<&'static str, (Option<f64>, Option<f64>)> {
+    let mut out = std::collections::HashMap::new();
+    let path = crate::config::paths::strategies_db_path();
+    if !path.exists() {
+        return out;
+    }
+    let Ok(conn) = Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return out;
+    };
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT v.raw_json FROM strategies s
+             JOIN strategy_versions v
+               ON v.core_uid = s.core_uid AND v.strategy_id = s.strategy_id
+             WHERE s.strategy_id = ?1 AND s.deleted = 0 AND v.valid_to IS NULL
+             ORDER BY s.checked DESC LIMIT 1",
+            [strategy_id],
+            |r| r.get(0),
+        )
+        .ok();
+    let Some(raw) = raw else { return out };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return out;
+    };
+    let Some(map) = json.as_object() else { return out };
+    let num = |key: Option<&str>| -> Option<f64> {
+        let v = map.get(key?)?;
+        let f = match v {
+            serde_json::Value::Number(n) => n.as_f64()?,
+            serde_json::Value::String(s) => {
+                s.trim().trim_end_matches('%').replace(',', ".").parse().ok()?
+            }
+            _ => return None,
+        };
+        // 0 у фильтров MoonBot = «выключен».
+        (f != 0.0 && f.is_finite()).then_some(f)
+    };
+    for (field, pmin, pmax) in STRAT_PARAMS {
+        let (lo, hi) = (num(*pmin), num(*pmax));
+        if lo.is_some() || hi.is_some() {
+            out.insert(*field, (lo, hi));
+        }
+    }
+    out
+}
+
+/// Результат автоподбора: лучший диапазон одного поля.
+#[derive(Clone, Debug)]
+pub struct Suggestion {
+    pub field: &'static str,
+    pub label: &'static str,
+    pub from: Option<f64>,
+    pub to: Option<f64>,
+    /// Профит периода при таком фильтре и сколько сделок остаётся.
+    pub profit: f64,
+    pub n: i64,
+}
+
+/// Автоподбор: для каждого поля перебираем все пары квантильных краёв
+/// (≈16×16/2 комбинаций) и берём диапазон с максимальным профитом при
+/// сохранении ≥`min_n` сделок. Результат — по убыванию профита. Один скан БД.
+pub fn auto_suggest(q: &Query, min_n: i64) -> Option<Vec<Suggestion>> {
+    const EDGES: usize = 16;
+    let conn = super::open_reader()?;
+    let mut q = q.clone();
+    if q.from < 0 {
+        q.from = 1;
+    }
+    let src = unified_from(&conn, &q)?;
+    let cols = FIELDS
+        .iter()
+        .map(|(c, _)| format!("o.\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("SELECT {cols}, COALESCE(o.profitbtc,0) FROM {src}");
+    let mut per_field: Vec<Vec<(f64, f64)>> = vec![Vec::new(); FIELDS.len()];
+    {
+        let mut stmt = conn.prepare(&sql).ok()?;
+        let mut rows = stmt.query(rusqlite::params![q.from, q.to]).ok()?;
+        while let Ok(Some(r)) = rows.next() {
+            let profit: f64 = r.get(FIELDS.len()).unwrap_or(0.0);
+            for (fi, vals) in per_field.iter_mut().enumerate() {
+                if let Ok(Some(v)) = r.get::<_, Option<f64>>(fi) {
+                    if v.is_finite() {
+                        vals.push((v, profit));
+                    }
+                }
+            }
+        }
+    }
+
+    let min_n = min_n.max(1) as usize;
+    let mut out: Vec<Suggestion> = Vec::new();
+    for (fi, mut vals) in per_field.into_iter().enumerate() {
+        if vals.len() < min_n {
+            continue;
+        }
+        vals.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let len = vals.len();
+        // Префиксные суммы профита + позиции квантильных краёв.
+        let mut pre = Vec::with_capacity(len + 1);
+        pre.push(0.0f64);
+        for (_, p) in &vals {
+            pre.push(pre.last().unwrap() + p);
+        }
+        let pos: Vec<usize> = (0..=EDGES).map(|k| k * len / EDGES).collect();
+        let mut best: Option<(f64, usize, usize)> = None;
+        for i in 0..EDGES {
+            for j in (i + 1)..=EDGES {
+                let (a, b) = (pos[i], pos[j]);
+                if b - a < min_n {
+                    continue;
+                }
+                let profit = pre[b] - pre[a];
+                if best.is_none_or(|(bp, _, _)| profit > bp) {
+                    best = Some((profit, i, j));
+                }
+            }
+        }
+        if let Some((profit, i, j)) = best {
+            let (a, b) = (pos[i], pos[j]);
+            out.push(Suggestion {
+                field: FIELDS[fi].0,
+                label: FIELDS[fi].1,
+                from: (i > 0).then(|| vals[a].0),
+                to: (j < EDGES).then(|| vals[b - 1].0),
+                profit,
+                n: (b - a) as i64,
+            });
+        }
+    }
+    out.sort_by(|a, b| b.profit.total_cmp(&a.profit));
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

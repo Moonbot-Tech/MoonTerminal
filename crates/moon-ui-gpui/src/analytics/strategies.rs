@@ -6,7 +6,6 @@
 //!   СКОУПЕ выбранной стратегии, внизу прибитая гистограмма поля;
 //! - «Монеты» — справа таблица по монетам выбранной (или всех сделок).
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -75,14 +74,15 @@ impl AnalyticsView {
                 main = main.child(
                     v_flex()
                         .id("an-tuner-col")
-                        .w(design::font_w_px(cx, 460.0))
+                        .w(design::font_w_px(cx, 470.0))
                         .flex_none()
                         .h_full()
                         .min_h_0()
                         .overflow_y_scroll()
                         .gap(design::ui_px(cx, 8.0))
                         .child(self.kpi_matrix(p, cx))
-                        .child(self.fields_grid(p, window, cx)),
+                        .child(self.fields_grid(p, window, cx))
+                        .child(self.suggest_card(p, cx)),
                 );
             }
             StratMode::Coins => {
@@ -221,9 +221,6 @@ impl AnalyticsView {
         let selected = self.sel_strategy.as_ref().is_some_and(|(k, _)| *k == g.key);
         let key = g.key.clone();
         let name = g.name.clone();
-        // Группа = id стратегии; имя — подпись, id — мутным рядом (различает
-        // одноимённые стратегии и переживает переименования).
-        let show_id = g.name != g.key;
         // Индикатор «жива сейчас»: ● зелёная — есть в ядре и включена,
         // ● мутная — есть, но выключена, ○ контур — удалена из ядер.
         let alive_dot = g.alive.map(|a| {
@@ -261,16 +258,7 @@ impl AnalyticsView {
                     .gap(design::ui_px(cx, 6.0))
                     .items_center()
                     .children(alive_dot)
-                    .child(div().min_w_0().truncate().child(g.name.clone()))
-                    .when(show_id, |el| {
-                        el.child(
-                            div()
-                                .flex_none()
-                                .text_size(design::t_caption(cx))
-                                .text_color(moon(p.text_muted))
-                                .child(format!("#{}", g.key)),
-                        )
-                    }),
+                    .child(div().min_w_0().truncate().child(g.name.clone())),
             )
             .child(
                 div()
