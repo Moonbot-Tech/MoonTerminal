@@ -109,6 +109,10 @@ analytics.tuner.grp_filter:
   ru: "Фильтры (IgnoreFilters)"
   en: "Filters (IgnoreFilters)"
   es: "Filtros (IgnoreFilters)"
+analytics.tuner.grp_bvsv:
+  ru: "BV/SV фильтр (UseBV_SV_Filter)"
+  en: "BV/SV filter (UseBV_SV_Filter)"
+  es: "Filtro BV/SV (UseBV_SV_Filter)"
 analytics.tuner.grp_slot:
   ru: "Слоты Delta2/Delta3 (IgnoreDelta) — в стратегию макс. 2"
   en: "Delta2/Delta3 slots (IgnoreDelta) — max 2 saved to strategy"

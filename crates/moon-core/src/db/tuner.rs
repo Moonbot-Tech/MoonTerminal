@@ -20,6 +20,9 @@ use super::analytics::{Query, unified_from};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldClass {
     Filter,
+    /// BV/SV-фильтр: свой включатель `UseBV_SV_Filter` (false = выключен)
+    /// поверх общего IgnoreFilters.
+    BvSv,
     Delta,
     DeltaSlot,
     Volume,
@@ -30,8 +33,9 @@ pub enum FieldClass {
 /// (вайтлист). Порядок = порядок в сетке, группами по классу.
 pub const FIELDS: &[(&str, &str, FieldClass)] = &[
     // Общие фильтры (только IgnoreFilters).
-    ("bvsvratio", "bvsv", FieldClass::Filter),
     ("pricebug", "PriceBug", FieldClass::Filter),
+    // BV/SV (IgnoreFilters | !UseBV_SV_Filter).
+    ("bvsvratio", "bvsv", FieldClass::BvSv),
     // Слоты Delta2/Delta3 (IgnoreFilters | IgnoreDelta; в стратегию — макс 2).
     ("d1h", "d1h", FieldClass::DeltaSlot),
     ("d15m", "d15m", FieldClass::DeltaSlot),
@@ -291,7 +295,9 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> Option<Vec<HistBucket>>
 /// Для полей без однозначного параметра (d1h/d15m/… — настраиваемые
 /// Delta2/Delta3 окна; PriceBug/da1m/d5s/dMark/H.VolF) маппинга нет.
 const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
-    ("bvsvratio", None, Some("BV_SV_Ratio")),
+    // Фильтр BV/SV: параметры фильтра (не детектора BV_SV_Ratio!), гейт —
+    // UseBV_SV_Filter.
+    ("bvsvratio", Some("BV_SV_FilterRatio"), Some("BV_SV_FilterRatioMax")),
     ("d24h", Some("Delta_24h_Min"), Some("Delta_24h_Max")),
     ("d3h", Some("Delta_3h_Min"), Some("Delta_3h_Max")),
     ("hvol", Some("MinHourlyVolume"), Some("MaxHourlyVolume")),
@@ -344,6 +350,8 @@ pub struct StratFilters {
     pub ignore_filters: bool,
     pub ignore_delta: bool,
     pub ignore_volume: bool,
+    /// Включатель BV/SV-фильтра (`UseBV_SV_Filter`); false = выключен.
+    pub use_bvsv: bool,
     pub bounds: std::collections::HashMap<&'static str, (Option<f64>, Option<f64>)>,
     /// Занятые слоты Delta2/Delta3: (номер 2|3, поле отчёта, min, max).
     /// Слоты с типом без колонки отчёта (2h/30m/Pump5m) не попадают.
@@ -356,6 +364,7 @@ impl StratFilters {
         self.ignore_filters
             || match class {
                 FieldClass::Filter => false,
+                FieldClass::BvSv => !self.use_bvsv,
                 FieldClass::Delta | FieldClass::DeltaSlot => self.ignore_delta,
                 FieldClass::Volume => self.ignore_volume,
             }
@@ -442,6 +451,7 @@ pub fn strategy_filters(
     out.ignore_filters = truthy("IgnoreFilters");
     out.ignore_delta = truthy("IgnoreDelta");
     out.ignore_volume = truthy("IgnoreVolume");
+    out.use_bvsv = truthy("UseBV_SV_Filter");
     for (field, pmin, pmax) in STRAT_PARAMS {
         let (lo, hi) = (num(*pmin), num(*pmax));
         if lo.is_some() || hi.is_some() {

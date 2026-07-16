@@ -113,7 +113,7 @@ impl AnalyticsView {
         let Ok(sid) = key.parse::<i64>() else { return };
 
         let mut changes: Vec<(String, String)> = Vec::new();
-        let (mut delta_touched, mut volume_touched) = (false, false);
+        let (mut delta_touched, mut volume_touched, mut bvsv_touched) = (false, false, false);
         // Поля-слоты с порогами v1 — кандидаты в Delta2/Delta3.
         let mut slot_wanted: Vec<(&'static str, Option<f64>, Option<f64>)> = Vec::new();
         for (fi, (col, _, class)) in FIELDS.iter().enumerate() {
@@ -133,6 +133,7 @@ impl AnalyticsView {
                 match class {
                     FieldClass::Delta => delta_touched = true,
                     FieldClass::Volume => volume_touched = true,
+                    FieldClass::BvSv => bvsv_touched = true,
                     FieldClass::Filter | FieldClass::DeltaSlot => {}
                 }
             }
@@ -199,6 +200,10 @@ impl AnalyticsView {
         }
         if volume_touched && f.ignore_volume {
             changes.push(("IgnoreVolume".to_string(), "NO".to_string()));
+        }
+        // BV/SV гейтится собственным включателем.
+        if bvsv_touched && !f.use_bvsv {
+            changes.push(("UseBV_SV_Filter".to_string(), "YES".to_string()));
         }
 
         let n_fields = changes.len();
