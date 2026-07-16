@@ -476,6 +476,10 @@ impl AnalyticsView {
                         t!("analytics.tuner.grp_bvsv").to_string(),
                         strat.found && strat.class_ignored(FieldClass::BvSv),
                     ),
+                    FieldClass::Ping => (
+                        t!("analytics.tuner.grp_ping").to_string(),
+                        strat.found && strat.class_ignored(FieldClass::Ping),
+                    ),
                     FieldClass::DeltaSlot => (
                         t!("analytics.tuner.grp_slot").to_string(),
                         strat.found && strat.class_ignored(FieldClass::DeltaSlot),
