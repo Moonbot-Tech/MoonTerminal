@@ -118,6 +118,25 @@ impl AnalyticsView {
         .detach();
     }
 
+    /// Копировать границы v1 → v2: строку `fi` или (None) всю колонку.
+    pub(super) fn copy_v1_to_v2(&mut self, fi: Option<usize>, cx: &mut Context<Self>) {
+        let range: Vec<usize> = match fi {
+            Some(fi) => vec![fi],
+            None => (0..FIELDS.len()).collect(),
+        };
+        for fi in range {
+            let v = self.tuner.bounds[0][fi].clone();
+            if self.tuner.bounds[1][fi] == v {
+                continue;
+            }
+            self.tuner.bounds[1][fi] = v;
+            self.tuner.inputs.remove(&format!("tv1f{fi}a"));
+            self.tuner.inputs.remove(&format!("tv1f{fi}b"));
+        }
+        self.reload_tuner(cx);
+        cx.notify();
+    }
+
     /// Очистить ВСЮ колонку варианта (крестик в шапке сетки).
     pub(super) fn clear_variant(&mut self, vi: usize, cx: &mut Context<Self>) {
         for fi in 0..FIELDS.len() {

@@ -1,7 +1,6 @@
 //! Вкладка «Стратегии» окна «Аналитика» — рабочее место анализа стратегии.
 //! Слева всегда список (сравнение по ID: сделки/WR/прибыль/ср./PF/best/worst,
-//! свой скролл), режимы кнопками в шапке списка:
-//! - «Обзор» — нижняя ПРИБИТАЯ к низу плашка «вклад по монетам» выбранной;
+//! свой скролл), режимы кнопками в шапке списка (дефолт — «Фильтры»):
 //! - «Фильтры» — справа тюнер порогов (KPI Факт vs v1/v2 + сетка от/до) в
 //!   СКОУПЕ выбранной стратегии, внизу прибитая гистограмма поля;
 //! - «Монеты» — справа таблица по монетам выбранной (или всех сделок).
@@ -20,10 +19,9 @@ use moon_core::db::analytics::GroupStat;
 /// хвост за пределами топа по |прибыли| малоинформативен, а DOM — не резиновый).
 const MAX_ROWS: usize = 300;
 
-/// Режим правой панели/нижней плашки вкладки «Стратегии».
+/// Режим правой панели вкладки «Стратегии» (дефолт — «Фильтры»).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum StratMode {
-    Overview,
     Filters,
     Coins,
 }
@@ -76,7 +74,6 @@ impl AnalyticsView {
             .gap(design::ui_px(cx, 8.0))
             .child(self.strat_list_card(p, cx));
         match mode {
-            StratMode::Overview => left = left.child(self.coins_contrib_card(p, cx)),
             StratMode::Filters => left = left.child(self.hist_card(p, cx)),
             StratMode::Coins => {}
         }
@@ -87,7 +84,6 @@ impl AnalyticsView {
             .gap(design::ui_px(cx, 8.0))
             .child(left);
         match mode {
-            StratMode::Overview => {}
             StratMode::Filters => {
                 // KPI прибит сверху; скроллится ТОЛЬКО контейнер порогов.
                 main = main.child(
@@ -301,11 +297,6 @@ impl AnalyticsView {
                             .child(t!("analytics.strat.title").to_string()),
                     )
                     .child(mode_btn(
-                        "sm-overview",
-                        StratMode::Overview,
-                        t!("analytics.strat.mode_overview").to_string(),
-                    ))
-                    .child(mode_btn(
                         "sm-filters",
                         StratMode::Filters,
                         t!("analytics.tab.tuner").to_string(),
@@ -436,88 +427,6 @@ impl AnalyticsView {
             row = row.hover(move |s| s.bg(moon_alpha(p.panel_high, 0.9)));
         }
         row
-    }
-
-    /// Нижняя плашка «Обзора»: вклад по монетам выбранной стратегии.
-    fn coins_contrib_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let Some((_, name)) = &self.sel_strategy else {
-            return bottom_card(
-                t!("analytics.strat.mode_overview").to_string(),
-                div()
-                    .p(design::ui_px(cx, 10.0))
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.strat.pick").to_string())
-                    .into_any_element(),
-                p,
-                cx,
-            );
-        };
-        let body: AnyElement = match self.detail.clone() {
-            None => div()
-                .p(design::ui_px(cx, 10.0))
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.loading").to_string())
-                .into_any_element(),
-            Some(detail) => {
-                // Топ-8 по |вкладу|, мини-бары от максимума.
-                let mut coins: Vec<&GroupStat> = detail.coins.iter().collect();
-                coins.sort_by(|a, b| b.profit.abs().total_cmp(&a.profit.abs()));
-                coins.truncate(8);
-                let max_abs = coins
-                    .iter()
-                    .map(|c| c.profit.abs())
-                    .fold(1e-9f64, f64::max);
-                let mut list = v_flex()
-                    .w_full()
-                    .px(design::ui_px(cx, 12.0))
-                    .pb(design::ui_px(cx, 8.0))
-                    .gap(design::ui_px(cx, 4.0));
-                for c in &coins {
-                    list = list.child(
-                        h_flex()
-                            .w_full()
-                            .gap(design::ui_px(cx, 8.0))
-                            .items_center()
-                            .child(
-                                div()
-                                    .w(design::font_w_px(cx, 64.0))
-                                    .flex_none()
-                                    .truncate()
-                                    .child(c.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h(px(5.0))
-                                    .rounded(px(2.0))
-                                    .bg(moon_alpha(p.border, 0.6))
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .w(relative((c.profit.abs() / max_abs) as f32))
-                                            .h_full()
-                                            .bg(moon(sign_color(p, c.profit))),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .w(design::font_w_px(cx, 90.0))
-                                    .flex_none()
-                                    .text_right()
-                                    .text_color(moon(sign_color(p, c.profit)))
-                                    .child(format!("{} ({})", fmt_signed(c.profit), c.n)),
-                            ),
-                    );
-                }
-                list.into_any_element()
-            }
-        };
-        bottom_card(
-            t!("analytics.strat.by_coins", name = name.as_str()).to_string(),
-            body,
-            p,
-            cx,
-        )
     }
 
     /// Правая панель «Монеты»: таблица по монетам выбранной (или всех сделок).
@@ -720,31 +629,4 @@ fn num_cell(
         .text_right()
         .text_color(moon(color))
         .child(text)
-}
-
-/// Нижняя прибитая плашка с заголовком.
-fn bottom_card(
-    title: String,
-    body: AnyElement,
-    p: MoonPalette,
-    cx: &Context<AnalyticsView>,
-) -> AnyElement {
-    v_flex()
-        .w_full()
-        .flex_none()
-        .rounded(design::ui_px(cx, 8.0))
-        .bg(moon(p.panel))
-        .border_1()
-        .border_color(moon(p.border))
-        .overflow_hidden()
-        .child(
-            div()
-                .px(design::ui_px(cx, 12.0))
-                .py(design::ui_px(cx, 8.0))
-                .text_size(design::t_title(cx))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
-        )
-        .child(body)
-        .into_any_element()
 }

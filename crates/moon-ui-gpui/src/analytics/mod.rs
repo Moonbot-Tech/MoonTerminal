@@ -35,44 +35,26 @@ use moon_core::db::analytics::{Query, StrategyDetail, Summary};
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
 
-/// Вкладки окна (реализована «Сводка»; остальные — этапы плана).
+/// Вкладки окна. Заглушки (Монеты/Heatmap/Календарь/Плечо) убраны — вернутся
+/// по мере реализации этапов плана.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Summary,
     Strategies,
-    Coins,
-    Heatmap,
-    Calendar,
-    Leverage,
 }
 
 impl Tab {
-    const ALL: [Tab; 6] = [
-        Tab::Summary,
-        Tab::Strategies,
-        Tab::Coins,
-        Tab::Heatmap,
-        Tab::Calendar,
-        Tab::Leverage,
-    ];
+    const ALL: [Tab; 2] = [Tab::Summary, Tab::Strategies];
     fn id(self) -> &'static str {
         match self {
             Tab::Summary => "an-summary",
             Tab::Strategies => "an-strategies",
-            Tab::Coins => "an-coins",
-            Tab::Heatmap => "an-heatmap",
-            Tab::Calendar => "an-calendar",
-            Tab::Leverage => "an-leverage",
         }
     }
     fn title(self) -> String {
         match self {
             Tab::Summary => t!("analytics.tab.summary"),
             Tab::Strategies => t!("analytics.tab.strategies"),
-            Tab::Coins => t!("analytics.tab.coins"),
-            Tab::Heatmap => t!("analytics.tab.heatmap"),
-            Tab::Calendar => t!("analytics.tab.calendar"),
-            Tab::Leverage => t!("analytics.tab.leverage"),
         }
         .to_string()
     }
@@ -215,7 +197,7 @@ impl AnalyticsView {
             sel_strategy: None,
             detail: None,
             detail_seq: 0,
-            strat_mode: strategies::StratMode::Overview,
+            strat_mode: strategies::StratMode::Filters,
             tuner: tuner::TunerState::load(&backend_tuner_off),
             focus: cx.focus_handle(),
         };
@@ -527,16 +509,6 @@ impl AnalyticsView {
                     .child(counter),
             )
     }
-
-    /// Заглушка нереализованной вкладки.
-    fn stub(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        div()
-            .w_full()
-            .p(design::ui_px(cx, 18.0))
-            .text_color(moon(p.text_muted))
-            .child(t!("analytics.stub").to_string())
-            .into_any_element()
-    }
 }
 
 impl EventEmitter<()> for AnalyticsView {}
@@ -557,7 +529,6 @@ impl Render for AnalyticsView {
         let body = match self.tab {
             Tab::Summary => self.summary_tab(p, cx),
             Tab::Strategies => self.strategies_tab(p, window, cx),
-            _ => self.stub(p, cx),
         };
         // «Стратегии» делят высоту сами (нижняя плашка прибита к низу экрана,
         // список скроллится внутри) — внешний скролл только прочим вкладкам.

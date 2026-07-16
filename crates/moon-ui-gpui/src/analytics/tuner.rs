@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInput,
@@ -288,6 +289,22 @@ impl AnalyticsView {
                         .text_center()
                         .child(format!("v{} {}", vi + 1, t!("analytics.tuner.from"))),
                 )
+                // v2: копирование ВСЕЙ колонки v1 → v2 (между «от» и «до»).
+                .when(vi == 1, |el| {
+                    el.child(
+                        div()
+                            .id("tun-cp-col")
+                            .w(design::ui_px(cx, 12.0))
+                            .flex_none()
+                            .cursor_pointer()
+                            .text_color(moon(p.text_muted))
+                            .hover(move |st| st.text_color(moon(p.amber)))
+                            .child("→")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.copy_v1_to_v2(None, cx);
+                            })),
+                    )
+                })
                 .child(
                     div()
                         .w(design::font_w_px(cx, in_w))
@@ -413,6 +430,23 @@ impl AnalyticsView {
             });
             for vi in 0..N_VAR {
                 for is_to in [false, true] {
+                    // v2: копирование строки v1 → v2 (между «от» и «до»).
+                    if vi == 1 && is_to {
+                        row = row.child(
+                            div()
+                                .id(SharedString::from(format!("tun-cp-{fi}")))
+                                .flex_none()
+                                .px(design::ui_px(cx, 2.0))
+                                .cursor_pointer()
+                                .text_size(design::t_caption(cx))
+                                .text_color(moon(p.text_muted))
+                                .hover(move |st| st.text_color(moon(p.amber)))
+                                .child("→")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.copy_v1_to_v2(Some(fi), cx);
+                                })),
+                        );
+                    }
                     let input = self.bound_input(vi, fi, is_to, window, cx);
                     row = row.child(
                         div().w(design::font_w_px(cx, in_w)).flex_none().child(
@@ -604,11 +638,13 @@ impl AnalyticsView {
                     .id(SharedString::from(format!("tun-ign-{flag}")))
                     .cursor_pointer()
                     .text_color(if shown {
-                        moon_alpha(p.text_muted, 0.9)
+                        // Фильтры класса ИГНОРИРУЮТСЯ — тёмно-серый.
+                        moon_alpha(p.text_muted, 0.7)
                     } else {
-                        moon_alpha(p.text_muted, 0.3)
+                        // Фильтры работают — зелёный.
+                        moon(p.green)
                     })
-                    .child("ignore")
+                    .child(if shown { "ignore=YES" } else { "ignore=NO" })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let (_, cur) = flag_of(class, &this.tuner.strat.clone());
                         let now = this
