@@ -13,6 +13,7 @@
 //! Пишет ОДИН поток-writer; читает окно «Отчёты» отдельным соединением (WAL).
 
 pub mod analytics;
+pub mod tuner;
 pub mod maint;
 mod parse;
 mod rep;

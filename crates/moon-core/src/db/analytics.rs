@@ -69,6 +69,7 @@ impl Query {
 }
 
 /// Общий набор колонок, на который проецируются оба источника отчётов.
+/// Хвост — рыночные поля входа для тюнера фильтров (`db::tuner`).
 const UNIFIED_COLS: &[&str] = &[
     "core_uid",
     "core_name",
@@ -79,12 +80,30 @@ const UNIFIED_COLS: &[&str] = &[
     "profitbtc",
     "strategyid",
     "emulator",
+    "spentbtc",
+    "bvsvratio",
+    "pump1h",
+    "dump1h",
+    "d24h",
+    "d3h",
+    "d1h",
+    "d15m",
+    "d5m",
+    "d1m",
+    "vd1m",
+    "hvol",
+    "dvol",
+    "btc1hdelta",
+    "exchange1hdelta",
+    "btc24hdelta",
+    "btc5mdelta",
+    "dbtc1m",
 ];
 
 /// FROM-источник `o`: реплика + легаси одним UNION ALL, у каждой ветки СВОЙ
 /// WHERE (фильтры пушатся в ветку — работает индекс closedate), отсутствующие
 /// колонки → NULL. None — ни у одного источника ещё нет closedate/profitbtc.
-fn unified_from(conn: &Connection, q: &Query) -> Option<String> {
+pub(super) fn unified_from(conn: &Connection, q: &Query) -> Option<String> {
     let mut branches = Vec::new();
     for src in super::read_sources(conn) {
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {

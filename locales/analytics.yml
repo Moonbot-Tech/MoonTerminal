@@ -35,10 +35,72 @@ analytics.tab.leverage:
   ru: "Плечо"
   en: "Leverage"
   es: "Apalancam."
+analytics.tab.tuner:
+  ru: "Фильтры"
+  en: "Filters"
+  es: "Filtros"
 analytics.stub:
   ru: "Вкладка в разработке — следующий этап плана аналитики."
   en: "Tab under construction — next stage of the analytics plan."
   es: "Pestaña en desarrollo — siguiente etapa del plan."
+
+# Тюнер фильтров (вкладка «Фильтры»): что-если по порогам рыночных полей.
+analytics.tuner.kpi_title:
+  ru: "Факт vs варианты"
+  en: "Fact vs variants"
+  es: "Real vs variantes"
+analytics.tuner.kpi_sub:
+  ru: "как изменились бы итоги периода с фильтрами v1/v2"
+  en: "how the period would look with v1/v2 filters applied"
+  es: "cómo cambiaría el período con los filtros v1/v2"
+analytics.tuner.metric:
+  ru: "Показатель"
+  en: "Metric"
+  es: "Métrica"
+analytics.tuner.fact:
+  ru: "Факт"
+  en: "Fact"
+  es: "Real"
+analytics.tuner.avg_win:
+  ru: "Ср. профит"
+  en: "Avg win"
+  es: "Ganancia media"
+analytics.tuner.avg_loss:
+  ru: "Ср. убыток"
+  en: "Avg loss"
+  es: "Pérdida media"
+analytics.tuner.avg_spent:
+  ru: "Ср. объём входа"
+  en: "Avg entry size"
+  es: "Entrada media"
+analytics.tuner.fields_title:
+  ru: "Пороги"
+  en: "Thresholds"
+  es: "Umbrales"
+analytics.tuner.fields_sub:
+  ru: "клик по полю — гистограмма"
+  en: "click a field for its histogram"
+  es: "clic en un campo — histograma"
+analytics.tuner.field:
+  ru: "Поле"
+  en: "Field"
+  es: "Campo"
+analytics.tuner.from:
+  ru: "от"
+  en: "from"
+  es: "de"
+analytics.tuner.to:
+  ru: "до"
+  en: "to"
+  es: "a"
+analytics.tuner.hist_title:
+  ru: "Распределение"
+  en: "Distribution"
+  es: "Distribución"
+analytics.tuner.hist_sub:
+  ru: "профит/убыток и сделки по квантильным вёдрам значения поля на входе"
+  en: "profit/loss and trades over quantile buckets of the field's entry value"
+  es: "beneficio/pérdida y operaciones por cubos cuantílicos del campo"
 
 analytics.period.today:
   ru: "Сегодня"

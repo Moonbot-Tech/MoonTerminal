@@ -12,6 +12,7 @@
 mod charts;
 mod strategies;
 mod summary;
+mod tuner;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -40,16 +41,18 @@ enum Tab {
     Heatmap,
     Calendar,
     Leverage,
+    Tuner,
 }
 
 impl Tab {
-    const ALL: [Tab; 6] = [
+    const ALL: [Tab; 7] = [
         Tab::Summary,
         Tab::Strategies,
         Tab::Coins,
         Tab::Heatmap,
         Tab::Calendar,
         Tab::Leverage,
+        Tab::Tuner,
     ];
     fn id(self) -> &'static str {
         match self {
@@ -59,6 +62,7 @@ impl Tab {
             Tab::Heatmap => "an-heatmap",
             Tab::Calendar => "an-calendar",
             Tab::Leverage => "an-leverage",
+            Tab::Tuner => "an-tuner",
         }
     }
     fn title(self) -> String {
@@ -69,6 +73,7 @@ impl Tab {
             Tab::Heatmap => t!("analytics.tab.heatmap"),
             Tab::Calendar => t!("analytics.tab.calendar"),
             Tab::Leverage => t!("analytics.tab.leverage"),
+            Tab::Tuner => t!("analytics.tab.tuner"),
         }
         .to_string()
     }
@@ -166,6 +171,8 @@ pub struct AnalyticsView {
     pub(super) sel_strategy: Option<(String, String)>,
     pub(super) detail: Option<Arc<StrategyDetail>>,
     detail_seq: u64,
+    /// Вкладка «Фильтры» (тюнер порогов) — состояние в своём модуле.
+    pub(super) tuner: tuner::TunerState,
     focus: FocusHandle,
 }
 
@@ -190,6 +197,7 @@ impl AnalyticsView {
         // периода + группировки) запускается только действием пользователя —
         // открытие окна, смена вкладки-периода-фильтра, повторный клик пресета.
 
+        let backend_tuner_cfg = backend.read(cx).layout.analytics_tuner.clone();
         let mut this = Self {
             backend,
             tab: Tab::Summary,
@@ -205,6 +213,7 @@ impl AnalyticsView {
             sel_strategy: None,
             detail: None,
             detail_seq: 0,
+            tuner: tuner::TunerState::load(&backend_tuner_cfg),
             focus: cx.focus_handle(),
         };
         this.reload(cx);
@@ -237,6 +246,14 @@ impl AnalyticsView {
         self.inflight = true;
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
+        // Тюнер зависит от тех же фильтров: сбрасываем, активной вкладке —
+        // пересчёт сразу, неактивной — при следующем открытии.
+        self.tuner.stats = None;
+        self.tuner.hist = None;
+        if self.tab == Tab::Tuner {
+            self.reload_tuner(cx);
+            self.reload_hist(cx);
+        }
         let q = self.query();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -370,6 +387,10 @@ impl AnalyticsView {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.tab != t {
                             this.tab = t;
+                            if t == Tab::Tuner && this.tuner.stats.is_none() {
+                                this.reload_tuner(cx);
+                                this.reload_hist(cx);
+                            }
                             cx.notify();
                         }
                     }))
@@ -530,6 +551,7 @@ impl Render for AnalyticsView {
         let body = match self.tab {
             Tab::Summary => self.summary_tab(p, cx),
             Tab::Strategies => self.strategies_tab(p, cx),
+            Tab::Tuner => self.tuner_tab(p, window, cx),
             _ => self.stub(p, cx),
         };
         v_flex()
