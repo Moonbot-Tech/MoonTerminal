@@ -61,6 +61,13 @@ pub struct StrategiesView {
     sel: HashSet<Key>,
     /// Панель «Версии»: история версий выбранной стратегии + выбранная старая.
     versions: versions::VersionsState,
+    /// Удалённые на серверах стратегии (только в нашей БД): core → head-строки.
+    /// Папка «Удалённые» в дереве; путей ядра у них больше нет — лежат плоско.
+    deleted: HashMap<CoreId, Vec<moon_core::strat_db::stats::HeadRow>>,
+    deleted_gen: u64,
+    deleted_inflight: bool,
+    /// Раскрытые папки «Удалённые» по ядрам.
+    expanded_deleted: HashSet<CoreId>,
     /// Якорь для range-выбора по Shift.
     anchor: Option<Key>,
     /// Плоский порядок видимых стратегий прошлого кадра — для Shift-диапазона.
@@ -200,6 +207,10 @@ impl StrategiesView {
             selected: None,
             sel: HashSet::new(),
             versions: versions::VersionsState::default(),
+            deleted: HashMap::new(),
+            deleted_gen: u64::MAX,
+            deleted_inflight: false,
+            expanded_deleted: HashSet::new(),
             anchor: None,
             flat_order: Vec::new(),
             tree_state: cx.new(|cx| MoonTreeState::new(cx)),
@@ -867,7 +878,9 @@ impl Render for StrategiesView {
         });
         let node_data = std::rc::Rc::new(build.node_data);
 
-        // Панель «Версии» — до блока с заимствованием store (спавнит фоновые загрузки).
+        // Панель «Версии» + кэш удалённых — до блока с заимствованием store
+        // (спавнят фоновые загрузки).
+        self.ensure_deleted(cx);
         let versions = self.versions_panel(cx);
         let (tree, sections, params_model) = {
             let store = self.backend.read(cx).session.store();

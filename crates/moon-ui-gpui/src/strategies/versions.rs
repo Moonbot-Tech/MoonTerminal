@@ -34,6 +34,9 @@ pub(super) struct VersionsState {
     /// Раздел в режиме просмотра версии: None = псевдораздел «Все» (только
     /// изменённые поля всех разделов), Some(i) = раздел схемы (тоже фильтр).
     pub section: Option<usize>,
+    /// Выбрать ПОСЛЕДНЮЮ версию, как только список догрузится (клик по
+    /// удалённой стратегии: живого режима нет — сразу её финальные параметры).
+    pub pending_latest: bool,
 }
 
 impl StrategiesView {
@@ -91,12 +94,72 @@ impl StrategiesView {
                     this.versions.inflight = false;
                     if this.versions.key == Some((core, id)) {
                         this.versions.list = list;
+                        // Удалённая стратегия: живого режима нет — сразу
+                        // открываем последнюю известную версию.
+                        if this.versions.pending_latest {
+                            this.versions.pending_latest = false;
+                            if let Some(vf) = this.versions.list.first().map(|v| v.valid_from) {
+                                this.select_version(Some(vf), cx);
+                            }
+                        }
                         cx.notify();
                     }
                 });
             });
         })
         .detach();
+    }
+
+    /// Фоновая загрузка удалённых стратегий (папка «Удалённые» дерева): по
+    /// смене поколения strat_db (soft-delete пишется на FullSet-снапшоте).
+    pub(super) fn ensure_deleted(&mut self, cx: &mut Context<Self>) {
+        let db_gen = moon_core::strat_db::generation();
+        if self.deleted_gen == db_gen || self.deleted_inflight {
+            return;
+        }
+        self.deleted_gen = db_gen;
+        self.deleted_inflight = true;
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let heads = executor
+                .spawn(async move { moon_core::strat_db::stats::deleted_heads() })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.deleted_inflight = false;
+                    let mut map: std::collections::HashMap<
+                        moon_core::session::CoreId,
+                        Vec<moon_core::strat_db::stats::HeadRow>,
+                    > = std::collections::HashMap::new();
+                    for h in heads {
+                        map.entry(h.core_uid).or_default().push(h);
+                    }
+                    if this.deleted != map {
+                        this.deleted = map;
+                        cx.notify();
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Выбор УДАЛЁННОЙ стратегии из дерева (папка «Удалённые»): обычный выбор +
+    /// автопереход на последнюю версию (живых параметров у неё нет).
+    pub(super) fn select_deleted_strategy(&mut self, key: Key, cx: &mut Context<Self>) {
+        self.sel.clear();
+        self.sel.insert(key);
+        self.anchor = Some(key);
+        self.selected = Some(key);
+        self.selected_folder = None;
+        if self.versions.key == Some(key) && !self.versions.list.is_empty() {
+            let vf = self.versions.list[0].valid_from;
+            self.versions.pending_latest = false;
+            self.select_version(Some(vf), cx);
+        } else {
+            self.versions.pending_latest = true;
+        }
+        cx.notify();
     }
 
     /// Выбор версии: None = текущая (живая), Some = старая (грузим её поля фоном).
@@ -114,9 +177,12 @@ impl StrategiesView {
         };
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            let view = executor
+            let (view, head) = executor
                 .spawn(async move {
-                    moon_core::strat_db::stats::version_view(core, id as i64, vf)
+                    (
+                        moon_core::strat_db::stats::version_view(core, id as i64, vf),
+                        moon_core::strat_db::stats::head_row(core, id as i64),
+                    )
                 })
                 .await;
             let _ = cx.update(|cx| {
@@ -127,12 +193,25 @@ impl StrategiesView {
                     }
                     // Синтетическая строка: живой снапшот (вид/папка/галка) +
                     // поля версии; имя — из версии (могло быть переименование).
+                    // Удалённой стратегии в сторе нет — база из head-строки БД.
                     let live = {
                         let b = this.backend.read(cx);
                         let store = b.session.store();
                         logic::row(store, core, id).cloned()
                     };
-                    if let Some(mut r) = live {
+                    let base = live.or_else(|| {
+                        head.map(|h| StrategyRow {
+                            id,
+                            name: h.name,
+                            kind: h.kind,
+                            kind_ordinal: h.kind_ordinal,
+                            folder_path: h.folder_path,
+                            checked: false,
+                            is_short: h.is_short,
+                            fields: Vec::new(),
+                        })
+                    });
+                    if let Some(mut r) = base {
                         if let Some((_, n)) = view.fields.iter().find(|(k, _)| k == "StrategyName")
                         {
                             if !n.is_empty() {
@@ -200,11 +279,20 @@ impl StrategiesView {
             return col.child(hint(text)).into_any_element();
         }
 
+        // Удалённая стратегия (есть в БД, нет в живом сторе): живого режима нет —
+        // строка «Текущая» не показывается, список только исторический.
+        let live_exists = self
+            .selected
+            .map(|(c, id)| {
+                let b = self.backend.read(cx);
+                logic::row(b.session.store(), c, id).is_some()
+            })
+            .unwrap_or(false);
         let mut list = v_flex().w_full().gap_0();
         // «Текущая» — живой режим (все поля, редактирование), выбор по умолчанию.
         // Ниже отдельной строкой идёт та же текущая версия («тек.»), но кликом
         // открывается её ДИФФ+профит, как у исторических.
-        {
+        if live_exists {
             let live_on = self.versions.sel.is_none();
             let mut live_row = h_flex()
                 .id("ver-live")
@@ -292,7 +380,7 @@ impl StrategiesView {
                         .text_color(moon(profit_col))
                         .child(profit),
                 )
-                .when(is_current, |r| {
+                .when(is_current && live_exists, |r| {
                     r.child(
                         div()
                             .flex_none()

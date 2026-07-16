@@ -252,6 +252,63 @@ fn json_display(v: &serde_json::Value) -> String {
     }
 }
 
+/// Head-строка стратегии из strategies.sqlite (для показа удалённых, которых
+/// уже нет в живом сторе ядра).
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeadRow {
+    pub core_uid: u64,
+    pub strategy_id: i64,
+    pub name: String,
+    pub kind: String,
+    pub kind_ordinal: u8,
+    pub folder_path: String,
+    pub is_short: bool,
+}
+
+fn head_from_row(r: &rusqlite::Row) -> rusqlite::Result<HeadRow> {
+    Ok(HeadRow {
+        core_uid: r.get::<_, i64>(0)? as u64,
+        strategy_id: r.get(1)?,
+        name: r.get(2)?,
+        kind: r.get(3)?,
+        kind_ordinal: r.get::<_, i64>(4)? as u8,
+        folder_path: r.get(5)?,
+        is_short: r.get::<_, i64>(6)? != 0,
+    })
+}
+
+const HEAD_COLS: &str = "core_uid, strategy_id, name, kind, kind_ordinal, folder_path, is_short";
+
+/// Все удалённые на серверах стратегии (head.deleted=1) — папка «Удалённые»
+/// в дереве окна Стратегий. История их версий остаётся доступной.
+pub fn deleted_heads() -> Vec<HeadRow> {
+    let Some(conn) = super::open_reader() else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT {HEAD_COLS} FROM strategies WHERE deleted=1 ORDER BY core_uid, name"
+    )) else {
+        return Vec::new();
+    };
+    stmt.query_map([], |r| head_from_row(r))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+}
+
+/// Head одной стратегии (живой или удалённой) — база синтетической строки,
+/// когда стратегии нет в живом сторе.
+pub fn head_row(core_uid: u64, strategy_id: i64) -> Option<HeadRow> {
+    let conn = super::open_reader()?;
+    conn.query_row(
+        &format!("SELECT {HEAD_COLS} FROM strategies WHERE core_uid=?1 AND strategy_id=?2"),
+        rusqlite::params![core_uid as i64, strategy_id],
+        |r| head_from_row(r),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
 /// «дд.мм» из unix-ms (UTC) — краткая подпись версии в списке.
 pub fn short_date(ms: i64) -> String {
     let days = (ms / 1000).div_euclid(86_400);

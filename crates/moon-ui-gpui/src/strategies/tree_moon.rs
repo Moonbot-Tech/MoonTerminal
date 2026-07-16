@@ -32,6 +32,12 @@ fn id_folder(core: CoreId, path: &str) -> SharedString {
 pub(super) fn id_strat(core: CoreId, id: u64) -> SharedString {
     SharedString::from(format!("s:{core}:{id}"))
 }
+fn id_del_folder(core: CoreId) -> SharedString {
+    SharedString::from(format!("d:{core}"))
+}
+fn id_del_strat(core: CoreId, id: u64) -> SharedString {
+    SharedString::from(format!("ds:{core}:{id}"))
+}
 
 /// Данные одной строки дерева (берёт `render_row`/декораторы по id узла).
 pub(super) enum NodeData {
@@ -62,6 +68,17 @@ pub(super) enum NodeData {
         highlighted: bool,
         is_short: bool,
         drag_ids: Vec<u64>,
+    },
+    /// Папка «Удалённые» ядра: стратегии, которых на сервере уже нет (живут
+    /// только в нашей БД, путей ядра у них нет — лежат плоско).
+    DeletedFolder { core: CoreId, count: usize },
+    DeletedStrategy {
+        core: CoreId,
+        id: u64,
+        name: String,
+        kind: String,
+        is_short: bool,
+        highlighted: bool,
     },
 }
 
@@ -137,6 +154,52 @@ pub(super) fn build(
             &mut flat,
             &mut expanded,
         );
+
+        // Папка «Удалённые» — в хвост ядра. При поиске фильтруем по имени.
+        let search_lc = filter.search.trim().to_lowercase();
+        let del: Vec<&moon_core::strat_db::stats::HeadRow> = view
+            .deleted
+            .get(&core)
+            .map(|v| {
+                v.iter()
+                    .filter(|h| search_lc.is_empty() || h.name.to_lowercase().contains(&search_lc))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !del.is_empty() {
+            let did = id_del_folder(core);
+            if searching || view.expanded_deleted.contains(&core) {
+                expanded.push(did.clone());
+            }
+            let mut dchildren = Vec::new();
+            for h in &del {
+                let sid_u = h.strategy_id as u64;
+                let key: Key = (core, sid_u);
+                let dsid = id_del_strat(core, sid_u);
+                data.insert(
+                    dsid.clone(),
+                    NodeData::DeletedStrategy {
+                        core,
+                        id: sid_u,
+                        name: h.name.clone(),
+                        kind: h.kind.clone(),
+                        is_short: h.is_short,
+                        highlighted: if view.sel.is_empty() {
+                            view.selected == Some(key)
+                        } else {
+                            view.sel.contains(&key)
+                        },
+                    },
+                );
+                dchildren.push(MoonTreeItem::new(dsid, h.name.clone()));
+            }
+            data.insert(did.clone(), NodeData::DeletedFolder { core, count: del.len() });
+            children.push(
+                MoonTreeItem::new(did, rust_i18n::t!("strat.deleted_folder").to_string())
+                    .folder(true)
+                    .children(dchildren),
+            );
+        }
 
         data.insert(
             cid.clone(),
@@ -356,7 +419,9 @@ fn drop_dest(
     match data.get(entry.item().id())? {
         NodeData::Core { core, .. } => Some((*core, Vec::new())),
         NodeData::Folder { core, path, .. } => Some((*core, path.clone())),
-        NodeData::Strategy { .. } => None,
+        NodeData::Strategy { .. }
+        | NodeData::DeletedFolder { .. }
+        | NodeData::DeletedStrategy { .. } => None,
     }
 }
 
@@ -450,12 +515,46 @@ fn render_row(
             indent,
             app,
         ),
+        NodeData::DeletedFolder { core, count } => {
+            let core = *core;
+            core_folder_row(
+                view,
+                entry.is_expanded(),
+                false,
+                indent,
+                format!("{}  {count}", rust_i18n::t!("strat.deleted_folder")),
+                p.text_muted,
+                400.0,
+                ToggleTarget::Deleted(core),
+                app,
+            )
+        }
+        NodeData::DeletedStrategy {
+            core,
+            id,
+            name,
+            kind,
+            is_short,
+            highlighted,
+        } => deleted_strategy_row(
+            view,
+            *core,
+            *id,
+            name,
+            kind,
+            *is_short,
+            *highlighted,
+            indent,
+            app,
+        ),
     }
 }
 
 enum ToggleTarget {
     Core(CoreId),
     Folder(CoreId, Vec<String>),
+    /// Папка «Удалённые» ядра.
+    Deleted(CoreId),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -475,7 +574,7 @@ fn core_folder_row(
     // ПКМ-меню — только у папок (как в egui): переименовать/копировать/вставить/новая/удалить.
     let menu = match &target {
         ToggleTarget::Folder(c, path) => Some((*c, path.clone())),
-        ToggleTarget::Core(_) => None,
+        ToggleTarget::Core(_) | ToggleTarget::Deleted(_) => None,
     };
     let view_click = view.clone();
     let view_menu = view.clone();
@@ -518,6 +617,10 @@ fn core_folder_row(
                         // Клик и ВЫДЕЛЯЕТ папку (подсветка + цель Ctrl+C), как в Moonbot.
                         this.selected_folder = Some((*c, path.join("/")));
                     }
+                    ToggleTarget::Deleted(c) => {
+                        toggle(&mut this.expanded_deleted, *c);
+                        this.selected_folder = None;
+                    }
                 }
                 cx.notify();
             });
@@ -543,6 +646,87 @@ fn core_folder_row(
                 },
             )
         })
+        .into_any_element()
+}
+
+/// Строка удалённой стратегии: без чекбокса/ПКМ/DnD, приглушённая; клик —
+/// выбор с автопереходом на последнюю версию (живых параметров нет).
+#[allow(clippy::too_many_arguments)]
+fn deleted_strategy_row(
+    view: &Entity<StrategiesView>,
+    core: CoreId,
+    id: u64,
+    name: &str,
+    kind: &str,
+    is_short: bool,
+    highlighted: bool,
+    indent: Pixels,
+    app: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(app);
+    let key: Key = (core, id);
+    let view_click = view.clone();
+    let mut name_row = h_flex()
+        .id(SharedString::from(format!("dstrat-{core}-{id}")))
+        .flex_1()
+        .min_w_0()
+        .h(design::fit_h_px(app, 23.0, 14.0, 4.5))
+        .items_center()
+        .justify_between()
+        .gap(design::ui_px(app, 6.0))
+        .px(design::ui_px(app, 6.0))
+        .rounded(design::ui_px(app, 3.0))
+        .border_1()
+        .border_color(moon_alpha(p.border, 0.0))
+        .cursor_pointer()
+        .child(
+            div().flex_1().min_w_0().truncate().child(
+                MoonText::new(name.to_string())
+                    .mono(true)
+                    .uppercase(false)
+                    .color(p.text_muted)
+                    .render(),
+            ),
+        )
+        .child(
+            MoonBadge::new(kind.to_string())
+                .tone(if is_short {
+                    MoonTone::Negative
+                } else {
+                    MoonTone::Muted
+                })
+                .variant(MoonBadgeVariant::Soft)
+                .size(MoonBadgeSize::Tiny)
+                .render_with_palette(p),
+        )
+        .on_click(move |_e, window, app| {
+            view_click.update(app, |this, cx| {
+                window.focus(&this.focus, cx);
+                this.select_deleted_strategy(key, cx);
+            });
+        });
+    if highlighted {
+        name_row = name_row
+            .bg(moon_alpha(p.amber, 0.16))
+            .border_color(moon_alpha(p.amber, 0.55));
+    } else {
+        name_row = name_row.hover(move |s| s.bg(moon_alpha(p.panel, 0.74)));
+    }
+    h_flex()
+        .w_full()
+        .items_center()
+        .gap(design::ui_px(app, 6.0))
+        .pl(indent)
+        .pr(design::ui_px(app, 2.0))
+        .py(design::ui_px(app, 1.0))
+        .child(
+            MoonText::new("✕")
+                .mono(true)
+                .uppercase(false)
+                .color(p.text_muted)
+                .render(),
+        )
+        .child(name_row)
         .into_any_element()
 }
 

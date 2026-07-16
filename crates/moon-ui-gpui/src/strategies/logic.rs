@@ -142,13 +142,15 @@ pub(super) fn section_active(rules: &Rules, values: &Values, sec: &SchemaSection
 }
 
 /// Секции схемы для выбранной стратегии (по её виду). None — нет выбора/схемы.
+/// Вид берём через `selected_row` (живой ИЛИ синтетический из версии) — так
+/// схема резолвится и для удалённых стратегий, которых в сторе уже нет.
 pub(super) fn selected_sections<'a>(
-    st: &StrategiesView,
+    st: &'a StrategiesView,
     store: &'a CoreStore,
 ) -> Option<&'a [SchemaSection]> {
-    let (core, id) = st.selected?;
+    let (core, _) = st.selected?;
     let cd = store.core(core)?;
-    let row = cd.strategies.iter().find(|s| s.id == id)?;
+    let row = selected_row(st, store)?;
     let schema = cd.schema.as_ref()?;
     let kind = schema
         .kinds
