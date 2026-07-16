@@ -215,12 +215,27 @@ impl StrategiesView {
                 .border_1()
                 .border_color(moon_alpha(p.border, 0.0))
                 .items_center()
+                .gap_1()
                 .cursor_pointer()
                 .child(
                     div()
+                        .flex_1()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(moon(p.text))
                         .child(t!("strat.versions_live").to_string()),
+                )
+                // Дата последней версии (той, что сейчас в ядре) — справа, тускло.
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(moon(p.text_muted))
+                        .child(
+                            self.versions
+                                .list
+                                .first()
+                                .map(|v| short_date(v.valid_from))
+                                .unwrap_or_default(),
+                        ),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.select_version(None, cx)));
             if live_on {
