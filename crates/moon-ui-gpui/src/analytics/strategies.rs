@@ -98,6 +98,25 @@ impl AnalyticsView {
         // Группа = id стратегии; имя — подпись, id — мутным рядом (различает
         // одноимённые стратегии и переживает переименования).
         let show_id = g.name != g.key;
+        // Индикатор «жива сейчас»: ● зелёная — есть в ядре и включена,
+        // ● мутная — есть, но выключена, ○ контур — удалена из ядер.
+        let alive_dot = g.alive.map(|a| {
+            let dot = div()
+                .flex_none()
+                .w(design::ui_px(cx, 6.0))
+                .h(design::ui_px(cx, 6.0))
+                .rounded_full();
+            match a {
+                2 => dot.bg(moon(p.green)),
+                1 => dot.bg(moon_alpha(p.text_muted, 0.8)),
+                _ => dot.border_1().border_color(moon_alpha(p.text_muted, 0.6)),
+            }
+        });
+        let core_label = if g.cores_n > 1 {
+            t!("report.cores_n", n = g.cores_n).to_string()
+        } else {
+            g.core.clone()
+        };
         let mut row = h_flex()
             .id(SharedString::from(format!("an-strat-{}", g.key)))
             .w_full()
@@ -115,6 +134,7 @@ impl AnalyticsView {
                     .min_w_0()
                     .gap(design::ui_px(cx, 6.0))
                     .items_center()
+                    .children(alive_dot)
                     .child(div().min_w_0().truncate().child(g.name.clone()))
                     .when(show_id, |el| {
                         el.child(
@@ -125,6 +145,14 @@ impl AnalyticsView {
                                 .child(format!("#{}", g.key)),
                         )
                     }),
+            )
+            .child(
+                div()
+                    .w(design::font_w_px(cx, 88.0))
+                    .flex_none()
+                    .truncate()
+                    .text_color(moon(p.text_soft))
+                    .child(core_label),
             )
             .child(num_cell(p, cx, 56.0, g.n.to_string(), p.text_soft))
             // Winrate: мини-бар + процент.
@@ -326,6 +354,12 @@ fn header_row(p: MoonPalette, cx: &Context<AnalyticsView>) -> impl IntoElement {
         .text_color(moon(p.text_soft))
         .bg(moon(p.table_head))
         .child(div().flex_1().child(t!("analytics.col.strategy").to_string()))
+        .child(
+            div()
+                .w(design::font_w_px(cx, 88.0))
+                .flex_none()
+                .child(t!("analytics.col.core").to_string()),
+        )
         .child(cell(56.0, "analytics.kpi.trades"))
         .child(cell(92.0, "analytics.kpi.winrate"))
         .child(cell(84.0, "analytics.col.profit"))

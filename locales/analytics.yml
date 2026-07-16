@@ -52,10 +52,14 @@ analytics.period.week:
   ru: "Неделя"
   en: "Week"
   es: "Semana"
+analytics.period.cur_month:
+  ru: "Тек. месяц"
+  en: "This month"
+  es: "Mes actual"
 analytics.period.month:
-  ru: "Месяц"
-  en: "Month"
-  es: "Mes"
+  ru: "30 дней"
+  en: "30 days"
+  es: "30 días"
 analytics.period.year:
   ru: "Год"
   en: "Year"
@@ -151,6 +155,10 @@ analytics.col.strategy:
   ru: "Стратегия"
   en: "Strategy"
   es: "Estrategia"
+analytics.col.core:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
 analytics.col.profit:
   ru: "Профит"
   en: "Profit"

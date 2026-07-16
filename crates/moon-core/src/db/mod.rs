@@ -422,12 +422,6 @@ fn apply_extras(
     Ok(())
 }
 
-/// Имена колонок реплики `orders_rep` (lowercase) — аналитика проверяет, что
-/// нужные авто-колонки уже доросли (свежая реплика могла ещё не получить схему).
-pub(crate) fn rep_columns(conn: &Connection) -> std::collections::HashSet<String> {
-    rep::table_cols(conn)
-}
-
 /// Имена колонок ЛЕГАСИ-таблицы (seed-кэш writer'а для авто-колонок close-SQL).
 /// Пустой набор, если таблица уже снесена.
 fn table_columns(conn: &Connection) -> std::collections::HashSet<String> {

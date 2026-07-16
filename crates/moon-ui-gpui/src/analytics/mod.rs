@@ -5,8 +5,9 @@
 //! `layout.analytics_window`. Вкладки — полоса MoonButton (как в Настройках);
 //! пока функциональна «Сводка», остальные — заглушки следующих этапов.
 //! Данные считает `moon_core::db::analytics` на background executor (полная
-//! выборка периода из SQLite — не на UI-потоке), перезапрашиваются по смене
-//! периода и по поколению writer'а отчётов.
+//! выборка периода из SQLite — не на UI-потоке), перезапрашиваются ТОЛЬКО
+//! действием пользователя: открытие окна, смена периода/фильтра, повторный
+//! клик активного пресета периода (ручное обновление).
 
 mod charts;
 mod strategies;
@@ -79,16 +80,20 @@ pub(super) enum Period {
     Today,
     Yesterday,
     Week,
+    /// Текущий календарный месяц (с 1-го числа, UTC).
+    CurMonth,
+    /// Скользящие 30 дней.
     Month,
     Year,
     All,
 }
 
 impl Period {
-    const ALL: [Period; 6] = [
+    const ALL: [Period; 7] = [
         Period::Today,
         Period::Yesterday,
         Period::Week,
+        Period::CurMonth,
         Period::Month,
         Period::Year,
         Period::All,
@@ -98,6 +103,7 @@ impl Period {
             Period::Today => "p-today",
             Period::Yesterday => "p-yesterday",
             Period::Week => "p-week",
+            Period::CurMonth => "p-cur-month",
             Period::Month => "p-month",
             Period::Year => "p-year",
             Period::All => "p-all",
@@ -108,6 +114,7 @@ impl Period {
             Period::Today => t!("analytics.period.today"),
             Period::Yesterday => t!("analytics.period.yesterday"),
             Period::Week => t!("analytics.period.week"),
+            Period::CurMonth => t!("analytics.period.cur_month"),
             Period::Month => t!("analytics.period.month"),
             Period::Year => t!("analytics.period.year"),
             Period::All => t!("analytics.period.all"),
@@ -123,6 +130,13 @@ impl Period {
             Period::Today => (day0, tomorrow),
             Period::Yesterday => (day0 - 86_400, day0),
             Period::Week => (tomorrow - 7 * 86_400, tomorrow),
+            Period::CurMonth => {
+                // 1-е число текущего месяца: "YYYY-MM" из форматтера БД + "-01".
+                let ym = moon_core::db::fmt_unix(now);
+                let start = moon_core::db::parse_ymd(&format!("{}-01", &ym[..7.min(ym.len())]))
+                    .unwrap_or(day0);
+                (start, tomorrow)
+            }
             Period::Month => (tomorrow - 30 * 86_400, tomorrow),
             Period::Year => (tomorrow - 365 * 86_400, tomorrow),
             Period::All => (-1, tomorrow),
@@ -147,16 +161,11 @@ pub struct AnalyticsView {
     inflight: bool,
     /// Номер запроса — устаревшие результаты отбрасываются.
     seq: u64,
-    /// Поколение writer'а отчётов на момент последней загрузки — новые записи
-    /// в БД перезапускают расчёт (не чаще гейта наблюдателя).
-    last_gen: u64,
     /// Вкладка «Стратегии»: выбранная группа `(strategyid текстом, имя)`
     /// + её детализация.
     pub(super) sel_strategy: Option<(String, String)>,
     pub(super) detail: Option<Arc<StrategyDetail>>,
     detail_seq: u64,
-    /// Дебаунс-таймер перерасчёта по новым отчётам уже запущен.
-    pending_reload: bool,
     focus: FocusHandle,
 }
 
@@ -177,33 +186,9 @@ impl AnalyticsView {
         })
         .detach();
 
-        // Новые записи отчётов → перерасчёт (поколение writer'а). ДЕБАУНС
-        // обязателен: живой поток ордеров бампает поколение постоянно, а один
-        // перерасчёт = полные сканы периода + группировки; без гейта окно
-        // молотит SQLite нон-стоп (жрёт CPU просто будучи открытым).
-        cx.observe(&backend, |this, backend, cx| {
-            let g = backend
-                .read(cx)
-                .reports
-                .as_ref()
-                .map(|h| h.generation.load(std::sync::atomic::Ordering::Relaxed))
-                .unwrap_or(0);
-            if g != this.last_gen && !this.inflight && !this.pending_reload {
-                this.pending_reload = true;
-                cx.spawn(async move |this, cx| {
-                    let executor = cx.update(|cx| cx.background_executor().clone());
-                    executor.timer(std::time::Duration::from_secs(3)).await;
-                    let _ = cx.update(|cx| {
-                        let _ = this.update(cx, |this, cx| {
-                            this.pending_reload = false;
-                            this.reload(cx);
-                        });
-                    });
-                })
-                .detach();
-            }
-        })
-        .detach();
+        // Автоперечитки по новым отчётам НЕТ намеренно: пересчёт (полные сканы
+        // периода + группировки) запускается только действием пользователя —
+        // открытие окна, смена вкладки-периода-фильтра, повторный клик пресета.
 
         let mut this = Self {
             backend,
@@ -212,15 +197,14 @@ impl AnalyticsView {
             cores: Vec::new(),
             sel_cores: HashSet::new(),
             side: SideFilter::All,
-            emu: None,
+            // Дефолт «Реальные» — как в Отчёте (эмуляторные шумят статистику).
+            emu: Some(false),
             data: None,
             inflight: false,
             seq: 0,
-            last_gen: 0,
             sel_strategy: None,
             detail: None,
             detail_seq: 0,
-            pending_reload: false,
             focus: cx.focus_handle(),
         };
         this.reload(cx);
@@ -253,13 +237,6 @@ impl AnalyticsView {
         self.inflight = true;
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
-        self.last_gen = self
-            .backend
-            .read(cx)
-            .reports
-            .as_ref()
-            .map(|h| h.generation.load(std::sync::atomic::Ordering::Relaxed))
-            .unwrap_or(0);
         let q = self.query();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -316,11 +293,11 @@ impl AnalyticsView {
     }
 
     fn set_period(&mut self, p: Period, cx: &mut Context<Self>) {
-        if self.period != p {
-            self.period = p;
-            self.reload(cx);
-            cx.notify();
-        }
+        // Повторный клик по активному пресету = ручное обновление данных
+        // (автоперечитки по новым отчётам нет).
+        self.period = p;
+        self.reload(cx);
+        cx.notify();
     }
 
     /// Тогл ядра в мультивыборе; `None` — тумблер «Все» (пусто ↔ все).
