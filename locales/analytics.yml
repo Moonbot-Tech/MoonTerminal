@@ -109,6 +109,10 @@ analytics.tuner.grp_filter:
   ru: "Фильтры (IgnoreFilters)"
   en: "Filters (IgnoreFilters)"
   es: "Filtros (IgnoreFilters)"
+analytics.tuner.apply_ignore:
+  ru: "применить"
+  en: "apply"
+  es: "aplicar"
 analytics.tuner.grp_ping:
   ru: "PriceBug (IgnorePing)"
   en: "PriceBug (IgnorePing)"

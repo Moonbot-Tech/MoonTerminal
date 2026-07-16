@@ -42,6 +42,9 @@ pub(super) struct TunerState {
     pub(super) sugg_busy: bool,
     /// Кнопка «В стратегию» ждёт второго клика-подтверждения.
     pub(super) save_confirm: bool,
+    /// Стейдж кликабельных «ignore» подзаголовков: флаг → желаемое состояние
+    /// игнора (семантика «игнорировать», для UseBV_SV_Filter инверсна).
+    pub(super) staged_ignore: HashMap<&'static str, bool>,
     seq: u64,
     hist_seq: u64,
     pub(super) sugg_seq: u64,
@@ -67,6 +70,7 @@ impl TunerState {
             strat: Arc::new(StratFilters::default()),
             sugg_busy: false,
             save_confirm: false,
+            staged_ignore: HashMap::new(),
             seq: 0,
             hist_seq: 0,
             sugg_seq: 0,
@@ -79,6 +83,7 @@ impl TunerState {
         self.stats = None;
         self.hist = None;
         self.save_confirm = false;
+        self.staged_ignore.clear();
     }
 
     /// Варианты для запроса: [пустой «Факт», v1..vN].
@@ -464,54 +469,10 @@ impl AnalyticsView {
         let mut last_class: Option<FieldClass> = None;
         for fi in 0..FIELDS.len() {
             let class = FIELDS[fi].2;
-            // Подзаголовок группы (класс игноров); у игнорируемой — метка.
+            // Подзаголовок группы (класс игноров) с кликабельным «ignore».
             if last_class != Some(class) {
                 last_class = Some(class);
-                let (label, ignored) = match class {
-                    FieldClass::Filter => (
-                        t!("analytics.tuner.grp_filter").to_string(),
-                        strat.found && strat.ignore_filters,
-                    ),
-                    FieldClass::BvSv => (
-                        t!("analytics.tuner.grp_bvsv").to_string(),
-                        strat.found && strat.class_ignored(FieldClass::BvSv),
-                    ),
-                    FieldClass::Ping => (
-                        t!("analytics.tuner.grp_ping").to_string(),
-                        strat.found && strat.class_ignored(FieldClass::Ping),
-                    ),
-                    FieldClass::DeltaSlot => (
-                        t!("analytics.tuner.grp_slot").to_string(),
-                        strat.found && strat.class_ignored(FieldClass::DeltaSlot),
-                    ),
-                    FieldClass::Delta => (
-                        t!("analytics.tuner.grp_delta").to_string(),
-                        strat.found && strat.class_ignored(FieldClass::Delta),
-                    ),
-                    FieldClass::Volume => (
-                        t!("analytics.tuner.grp_volume").to_string(),
-                        strat.found && strat.class_ignored(FieldClass::Volume),
-                    ),
-                };
-                let mut hdr = h_flex()
-                    .w_full()
-                    .px(design::ui_px(cx, 8.0))
-                    .py(design::ui_px(cx, 2.0))
-                    .gap(design::ui_px(cx, 6.0))
-                    .items_center()
-                    .bg(moon_alpha(p.table_head, 0.6))
-                    .border_t_1()
-                    .border_color(moon_alpha(p.border, 0.7))
-                    .text_size(design::t_caption(cx))
-                    .child(div().text_color(moon(p.text_soft)).child(label));
-                if ignored {
-                    hdr = hdr.child(
-                        div()
-                            .text_color(moon_alpha(p.text_muted, 0.7))
-                            .child("ignore"),
-                    );
-                }
-                grid = grid.child(hdr);
+                grid = grid.child(self.group_header(class, &strat, p, cx));
             }
             let selected = self.tuner.sel_field == fi;
             let mut row = h_flex()
@@ -707,6 +668,83 @@ impl AnalyticsView {
             .into_any_element()
     }
 
+
+    /// Подзаголовок группы: подпись + кликабельное «ignore» (стейджится) и
+    /// «применить», когда стейдж отличается от текущего флага стратегии —
+    /// пишет В СТРАТЕГИЮ только этот флаг (вернуть игнор назад так же легко,
+    /// как снять его сохранением порогов).
+    fn group_header(
+        &self,
+        class: FieldClass,
+        strat: &StratFilters,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let label = match class {
+            FieldClass::Filter => t!("analytics.tuner.grp_filter"),
+            FieldClass::BvSv => t!("analytics.tuner.grp_bvsv"),
+            FieldClass::Ping => t!("analytics.tuner.grp_ping"),
+            FieldClass::DeltaSlot => t!("analytics.tuner.grp_slot"),
+            FieldClass::Delta => t!("analytics.tuner.grp_delta"),
+            FieldClass::Volume => t!("analytics.tuner.grp_volume"),
+        }
+        .to_string();
+        let mut hdr = h_flex()
+            .w_full()
+            .px(design::ui_px(cx, 8.0))
+            .py(design::ui_px(cx, 2.0))
+            .gap(design::ui_px(cx, 6.0))
+            .items_center()
+            .bg(moon_alpha(p.table_head, 0.6))
+            .border_t_1()
+            .border_color(moon_alpha(p.border, 0.7))
+            .text_size(design::t_caption(cx))
+            .child(div().text_color(moon(p.text_soft)).child(label));
+        if strat.found {
+            let (flag, cur_ignore) = flag_of(class, strat);
+            let staged = self.tuner.staged_ignore.get(flag).copied();
+            let shown = staged.unwrap_or(cur_ignore);
+            hdr = hdr.child(
+                div()
+                    .id(SharedString::from(format!("tun-ign-{flag}")))
+                    .cursor_pointer()
+                    .text_color(if shown {
+                        moon_alpha(p.text_muted, 0.9)
+                    } else {
+                        moon_alpha(p.text_muted, 0.3)
+                    })
+                    .child("ignore")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let (_, cur) = flag_of(class, &this.tuner.strat.clone());
+                        let now = this
+                            .tuner
+                            .staged_ignore
+                            .get(flag)
+                            .copied()
+                            .unwrap_or(cur);
+                        if !now == cur {
+                            this.tuner.staged_ignore.remove(flag);
+                        } else {
+                            this.tuner.staged_ignore.insert(flag, !now);
+                        }
+                        cx.notify();
+                    })),
+            );
+            if let Some(want) = staged.filter(|s| *s != cur_ignore) {
+                hdr = hdr.child(
+                    MoonButton::new(SharedString::from(format!("tun-ign-apply-{flag}")))
+                        .variant(MoonButtonVariant::Amber)
+                        .size(MoonButtonSize::Micro)
+                        .label(t!("analytics.tuner.apply_ignore").to_string())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.apply_ignore(flag, want, cx);
+                        }))
+                        .render(),
+                );
+            }
+        }
+        hdr.into_any_element()
+    }
 }
 
 /// Формат числа для границ/чипов: крупные — с суффиксом k/M/B/T (обратно
@@ -782,4 +820,16 @@ pub(super) fn card(
         .child(head)
         .child(body)
         .into_any_element()
+}
+
+/// Флаг игнора группы + его ТЕКУЩЕЕ состояние у стратегии (семантика
+/// «игнорируется»; UseBV_SV_Filter инверсный — включатель).
+pub(super) fn flag_of(class: FieldClass, f: &StratFilters) -> (&'static str, bool) {
+    match class {
+        FieldClass::Filter => ("IgnoreFilters", f.ignore_filters),
+        FieldClass::Ping => ("IgnorePing", f.ignore_ping),
+        FieldClass::BvSv => ("UseBV_SV_Filter", !f.use_bvsv),
+        FieldClass::Delta | FieldClass::DeltaSlot => ("IgnoreDelta", f.ignore_delta),
+        FieldClass::Volume => ("IgnoreVolume", f.ignore_volume),
+    }
 }

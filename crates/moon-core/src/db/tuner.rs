@@ -595,9 +595,11 @@ fn best_range(vals: &mut Vec<(f64, f64)>, min_n: usize) -> Option<Suggestion> {
     }
     best.map(|(profit, i, j)| {
         let (a, b) = (pos[i], pos[j]);
+        // Всегда ПАРА от/до: на краях распределения границей становится
+        // фактический min/max данных (открытых диапазонов не выдаём).
         Suggestion {
-            from: (i > 0).then(|| vals[a].0),
-            to: (j < EDGES).then(|| vals[b - 1].0),
+            from: Some(vals[a].0),
+            to: Some(vals[b - 1].0),
             profit,
             n: (b - a) as i64,
         }

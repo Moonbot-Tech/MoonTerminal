@@ -212,9 +212,39 @@ impl AnalyticsView {
             changes.push(("IgnorePing".to_string(), "NO".to_string()));
         }
 
+        self.send_strategy_changes(sid, name, changes, cx);
+    }
+
+    /// «ignore» подзаголовка: применить ОДИН флаг игнора обратно в стратегию
+    /// (например, вернуть IgnorePing=YES после отката порогов PriceBug).
+    pub(super) fn apply_ignore(&mut self, flag: &'static str, ignore: bool, cx: &mut Context<Self>) {
+        let Some((key, name)) = self.sel_strategy.clone() else {
+            return;
+        };
+        let Ok(sid) = key.parse::<i64>() else { return };
+        // UseBV_SV_Filter — включатель (инверсная семантика игнора).
+        let value = if flag == "UseBV_SV_Filter" {
+            if ignore { "NO" } else { "YES" }
+        } else if ignore {
+            "YES"
+        } else {
+            "NO"
+        };
+        self.tuner.staged_ignore.remove(flag);
+        self.send_strategy_changes(sid, name, vec![(flag.to_string(), value.to_string())], cx);
+    }
+
+    /// Общий хвост записи в стратегию: ядра из strategies.sqlite (не на
+    /// UI-потоке), затем правки обычным путём окна Стратегий (edit_strategies,
+    /// одна команда на ядро), после — перечитка чипов.
+    fn send_strategy_changes(
+        &mut self,
+        sid: i64,
+        name: String,
+        changes: Vec<(String, String)>,
+        cx: &mut Context<Self>,
+    ) {
         let n_fields = changes.len();
-        // Ядра стратегии — из strategies.sqlite (не на UI-потоке), затем
-        // правки с UI-потока обычным путём окна Стратегий (edit_strategies).
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let cores = executor
@@ -231,13 +261,13 @@ impl AnalyticsView {
                             match b.session.edit_strategies(*core, edits) {
                                 Ok(()) => sent += 1,
                                 Err(e) => log::warn!(
-                                    "аналитика: пороги → «{name}» ядро {core} не ушли: {e:#}"
+                                    "аналитика: правки → «{name}» ядро {core} не ушли: {e:#}"
                                 ),
                             }
                         }
                     }
                     log::info!(
-                        "аналитика: пороги v1 → стратегия «{name}»: {n_fields} полей, ядер {sent}/{}",
+                        "аналитика: правки → стратегия «{name}»: {n_fields} полей, ядер {sent}/{}",
                         cores.len()
                     );
                     // Эхо снапшота обновит strategies.sqlite — перечитаем чипы.
