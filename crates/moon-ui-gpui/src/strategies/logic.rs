@@ -227,6 +227,24 @@ pub(super) fn hex_alpha_prefix(v: &str) -> String {
     }
 }
 
+/// Семантическое равенство display-значений полей: регистр («YES» из импортной
+/// эры == «Yes» живое), числа («1» == «1.0», «-4» == «-4.00»), булевы формы.
+pub(super) fn values_equal(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim(), b.trim());
+    if a.eq_ignore_ascii_case(b) {
+        return true;
+    }
+    if let (Ok(x), Ok(y)) = (a.parse::<f64>(), b.parse::<f64>()) {
+        return (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0);
+    }
+    let boolish = |s: &str| match s.to_ascii_lowercase().as_str() {
+        "yes" | "true" | "on" => Some(true),
+        "no" | "false" | "off" | "" => Some(false),
+        _ => None,
+    };
+    matches!((boolish(a), boolish(b)), (Some(x), Some(y)) if x == y)
+}
+
 pub(super) fn is_on(v: &str) -> bool {
     matches!(v.to_ascii_lowercase().as_str(), "yes" | "true" | "1" | "on")
 }

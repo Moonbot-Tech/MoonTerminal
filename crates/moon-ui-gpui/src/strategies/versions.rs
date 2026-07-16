@@ -6,13 +6,15 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonPalette, h_flex, v_flex};
+use moon_ui::{
+    MoonContextMenuWindowExt as _, MoonMenuItem, MoonPalette, MoonWindowExt as _, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use super::{Key, StrategiesView, logic};
 use crate::design;
 use crate::design::{moon, moon_alpha};
-use moon_core::feed::StrategyRow;
+use moon_core::feed::{SchemaFieldUi, StrategyRow};
 use moon_core::strat_db::stats::{VersionInfo, short_date};
 
 /// Состояние панели версий.
@@ -140,6 +142,99 @@ impl StrategiesView {
                         this.deleted = map;
                         cx.notify();
                     }
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// ПКМ на версии → «Восстановить в текущую»: стейджит ПОЛНУЮ версию в живую
+    /// стратегию — каждое поле схемы получает значение версии (отсутствовало в
+    /// версии → дефолт схемы, т.е. добавленные позже поля сбрасываются), но
+    /// только там, где текущее значение реально отличается. Косметика из
+    /// игнор-листа не трогается. Применение — кнопкой «Применить» (новая версия).
+    pub(super) fn stage_version_into_current(&mut self, vf: i64, cx: &mut Context<Self>) {
+        let Some((core, id)) = self.selected else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let payload = executor
+                .spawn(async move {
+                    let view = moon_core::strat_db::stats::version_view(core, id as i64, vf)?;
+                    let ignore: std::collections::HashSet<String> =
+                        moon_core::config::storage::load()
+                            .strategies
+                            .ignore_fields
+                            .into_iter()
+                            .collect();
+                    Some((view.fields, ignore))
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    let Some((fields, ignore)) = payload else { return };
+                    if this.selected != Some((core, id)) {
+                        return;
+                    }
+                    let vmap: std::collections::HashMap<String, String> =
+                        fields.into_iter().collect();
+                    // Диф против живых значений по ВСЕЙ схеме вида.
+                    let edits: Vec<(String, String)> = {
+                        let b = this.backend.read(cx);
+                        let store = b.session.store();
+                        let Some(live) = logic::row(store, core, id) else {
+                            return;
+                        };
+                        let Some(kind) = store
+                            .core(core)
+                            .and_then(|cd| cd.schema.as_ref())
+                            .and_then(|sch| {
+                                sch.kinds.iter().find(|k| k.ordinal == live.kind_ordinal)
+                            })
+                        else {
+                            return;
+                        };
+                        let mut seen = std::collections::HashSet::new();
+                        let mut out = Vec::new();
+                        for sec in &kind.sections {
+                            for f in &sec.fields {
+                                if !seen.insert(f.name.to_lowercase())
+                                    || ignore.contains(&f.name)
+                                {
+                                    continue;
+                                }
+                                let mut target = vmap
+                                    .get(&f.name)
+                                    .cloned()
+                                    .or_else(|| f.default.clone())
+                                    .unwrap_or_default();
+                                // Как field_value: пустое числовое = «0».
+                                if target.is_empty()
+                                    && f.type_name != "String"
+                                    && matches!(f.ui, SchemaFieldUi::Edit)
+                                {
+                                    target = "0".to_string();
+                                }
+                                let cur = logic::field_value(live, f);
+                                if !logic::values_equal(&cur, &target) {
+                                    out.push((f.name.clone(), target));
+                                }
+                            }
+                        }
+                        out
+                    };
+                    if edits.is_empty() {
+                        return;
+                    }
+                    let n = edits.len();
+                    for (name, v) in edits {
+                        this.field_edits.insert((core, id, name), v);
+                    }
+                    log::info!("версия {vf} → в текущую: {n} полей застейджено");
+                    // К живому виду: жёлтые dirty-маркеры + кнопка «Применить».
+                    this.select_version(None, cx);
+                    cx.notify();
                 });
             });
         })
@@ -492,7 +587,36 @@ impl StrategiesView {
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.select_version(Some(vf), cx);
-                }));
+                }))
+                // ПКМ: восстановить ПОЛНУЮ версию на место текущей (стейджинг).
+                .when(live_exists, |r| {
+                    r.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            let pos = e.position;
+                            let view = cx.entity();
+                            let item = MoonMenuItem::with_key(
+                                "version-restore-current",
+                                t!("strat.version_restore").to_string(),
+                            )
+                            .on_click(move |_, window, app| {
+                                window.close_context_menu(app);
+                                view.update(app, |this, cx| {
+                                    this.stage_version_into_current(vf, cx);
+                                });
+                            });
+                            let _ = this;
+                            window.open_moon_context_menu(
+                                cx,
+                                "strat-version-menu",
+                                pos,
+                                vec![item],
+                                200.0,
+                            );
+                        }),
+                    )
+                });
             if on {
                 row = row
                     .bg(moon_alpha(p.amber, 0.16))

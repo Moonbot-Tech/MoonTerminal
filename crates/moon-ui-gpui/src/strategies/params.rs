@@ -510,7 +510,8 @@ impl StrategiesView {
                 );
             }
             if let Some(cur) = cur_note {
-                let differs = cur != version_val;
+                // Семантическое сравнение: «YES» (импортная эра) == «Yes», «1» == «1.0».
+                let differs = !values_equal(&cur, &version_val);
                 let fname = field_name.clone();
                 let vval = version_val.clone();
                 let mut line = h_flex()

@@ -239,3 +239,7 @@ strat.copy_to_current:
   ru: "→ в тек."
   en: "→ to cur."
   es: "→ a act."
+strat.version_restore:
+  ru: "Восстановить в текущую"
+  en: "Restore into current"
+  es: "Restaurar en la actual"
