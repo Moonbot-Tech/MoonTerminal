@@ -105,9 +105,12 @@ pub struct TopTrade {
     pub is_short: bool,
 }
 
-/// Агрегат группы (стратегия по имени / монета).
+/// Агрегат группы (стратегия по id / монета).
 #[derive(Clone, Debug)]
 pub struct GroupStat {
+    /// Ключ группы: для стратегий — `strategyid` текстом, для монет — имя.
+    pub key: String,
+    /// Отображаемое имя (для стратегий — из strategies.sqlite, иначе id).
     pub name: String,
     pub n: i64,
     pub profit: f64,
@@ -152,8 +155,8 @@ pub struct Summary {
     pub days: Vec<DayPoint>,
     pub best: Vec<TopTrade>,
     pub worst: Vec<TopTrade>,
-    /// Группы по ИМЕНИ стратегии (одноимённые на разных ядрах сливаются),
-    /// прибыль по убыванию.
+    /// Группы по ID стратегии (`strategyid`; синк шлёт одинаковые id на все
+    /// ядра, а одноимённые РАЗНЫЕ стратегии не сливаются), прибыль по убыванию.
     pub strategies: Vec<GroupStat>,
     /// Группы по монете, прибыль по убыванию.
     pub coins: Vec<GroupStat>,
@@ -223,31 +226,30 @@ pub fn summary(q: &Query) -> Option<Summary> {
     })
 }
 
-/// Детализация стратегии по ИМЕНИ (группа как во вкладке «Стратегии»).
-pub fn strategy_detail(q: &Query, name: &str) -> Option<StrategyDetail> {
+/// Детализация стратегии по ID (`strategyid` — ключ группы вкладки «Стратегии»).
+pub fn strategy_detail(q: &Query, strategy_id: i64) -> Option<StrategyDetail> {
     let conn = super::open_reader()?;
-    let has_names = attach_strategies(&conn);
     let mut q = q.clone();
     if q.from < 0 {
         q.from = 1;
     }
-    let name_expr = strategy_name_expr(has_names);
     let wh = q.where_sql();
 
     // Вклад по монетам этой стратегии.
     let sql = format!(
-        "SELECT COALESCE(o.coin,''), COUNT(*), COALESCE(SUM(o.profitbtc),0),
+        "SELECT COALESCE(o.coin,'') AS k, COALESCE(o.coin,''), COUNT(*),
+                COALESCE(SUM(o.profitbtc),0),
                 COALESCE(SUM(o.profitbtc > 0),0),
                 COALESCE(SUM(CASE WHEN o.profitbtc > 0 THEN o.profitbtc END),0),
                 COALESCE(SUM(CASE WHEN o.profitbtc <= 0 THEN -o.profitbtc END),0),
                 COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0)
-         FROM orders_rep o WHERE {wh} AND {name_expr} = ?3
-         GROUP BY 1 ORDER BY 3 DESC"
+         FROM orders_rep o WHERE {wh} AND o.strategyid = ?3
+         GROUP BY k ORDER BY 4 DESC"
     );
     let coins = conn
         .prepare(&sql)
         .ok()?
-        .query_map(rusqlite::params![q.from, q.to, name], group_from_row)
+        .query_map(rusqlite::params![q.from, q.to, strategy_id], group_from_row)
         .map(|rows| rows.flatten().collect())
         .unwrap_or_default();
 
@@ -255,13 +257,13 @@ pub fn strategy_detail(q: &Query, name: &str) -> Option<StrategyDetail> {
     let sql = format!(
         "SELECT o.closedate, COALESCE(o.coin,''), o.core_name, o.core_name,
                 COALESCE(o.profitbtc,0), COALESCE(o.isshort,0)
-         FROM orders_rep o WHERE {wh} AND {name_expr} = ?3
+         FROM orders_rep o WHERE {wh} AND o.strategyid = ?3
          ORDER BY o.closedate DESC LIMIT 10"
     );
     let last = conn
         .prepare(&sql)
         .ok()?
-        .query_map(rusqlite::params![q.from, q.to, name], |r| {
+        .query_map(rusqlite::params![q.from, q.to, strategy_id], |r| {
             Ok(TopTrade {
                 closedate: r.get(0)?,
                 coin: r.get(1)?,
@@ -277,14 +279,16 @@ pub fn strategy_detail(q: &Query, name: &str) -> Option<StrategyDetail> {
     Some(StrategyDetail { coins, last })
 }
 
+/// Строка группового запроса: k, name, n, profit, wins, wsum, lsum, max, min.
 fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
-    let wsum: f64 = r.get(4)?;
-    let lsum: f64 = r.get(5)?;
+    let wsum: f64 = r.get(5)?;
+    let lsum: f64 = r.get(6)?;
     Ok(GroupStat {
-        name: r.get(0)?,
-        n: r.get(1)?,
-        profit: r.get(2)?,
-        wins: r.get(3)?,
+        key: r.get(0)?,
+        name: r.get(1)?,
+        n: r.get(2)?,
+        profit: r.get(3)?,
+        wins: r.get(4)?,
         pf: if lsum > 0.0 {
             wsum / lsum
         } else if wsum > 0.0 {
@@ -292,8 +296,8 @@ fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
         } else {
             0.0
         },
-        best: r.get(6)?,
-        worst: r.get(7)?,
+        best: r.get(7)?,
+        worst: r.get(8)?,
     })
 }
 
@@ -443,23 +447,29 @@ fn top_trades(conn: &Connection, q: &Query, has_names: bool, best: bool) -> Vec<
     .unwrap_or_default()
 }
 
-/// Группы периода: по имени стратегии (`by_strategy=true`) или по монете.
+/// Группы периода: по ID стратегии (`by_strategy=true`) или по монете.
 /// Прибыль по убыванию (хвост списка = худшие).
 fn groups(conn: &Connection, q: &Query, has_names: bool, by_strategy: bool) -> Vec<GroupStat> {
-    let key = if by_strategy {
-        strategy_name_expr(has_names).to_string()
+    // Ключ стратегии — id: переименования не плодят группы, одноимённые
+    // разные стратегии не сливаются; имя — только подпись.
+    let (key, name) = if by_strategy {
+        (
+            "CAST(o.strategyid AS TEXT)".to_string(),
+            format!("MAX({})", strategy_name_expr(has_names)),
+        )
     } else {
-        "COALESCE(o.coin,'')".to_string()
+        let coin = "COALESCE(o.coin,'')".to_string();
+        (coin.clone(), coin)
     };
     let wh = q.where_sql();
     let sql = format!(
-        "SELECT {key} AS k, COUNT(*), COALESCE(SUM(o.profitbtc),0),
+        "SELECT {key} AS k, {name}, COUNT(*), COALESCE(SUM(o.profitbtc),0),
                 COALESCE(SUM(o.profitbtc > 0),0),
                 COALESCE(SUM(CASE WHEN o.profitbtc > 0 THEN o.profitbtc END),0),
                 COALESCE(SUM(CASE WHEN o.profitbtc <= 0 THEN -o.profitbtc END),0),
                 COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0)
          FROM orders_rep o WHERE {wh}
-         GROUP BY k ORDER BY 3 DESC"
+         GROUP BY k ORDER BY 4 DESC"
     );
     let Ok(mut stmt) = conn.prepare(&sql) else {
         return Vec::new();

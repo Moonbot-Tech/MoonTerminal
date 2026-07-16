@@ -150,10 +150,13 @@ pub struct AnalyticsView {
     /// Поколение writer'а отчётов на момент последней загрузки — новые записи
     /// в БД перезапускают расчёт (не чаще гейта наблюдателя).
     last_gen: u64,
-    /// Вкладка «Стратегии»: выбранная группа (по имени) + её детализация.
-    pub(super) sel_strategy: Option<String>,
+    /// Вкладка «Стратегии»: выбранная группа `(strategyid текстом, имя)`
+    /// + её детализация.
+    pub(super) sel_strategy: Option<(String, String)>,
     pub(super) detail: Option<Arc<StrategyDetail>>,
     detail_seq: u64,
+    /// Дебаунс-таймер перерасчёта по новым отчётам уже запущен.
+    pending_reload: bool,
     focus: FocusHandle,
 }
 
@@ -174,8 +177,10 @@ impl AnalyticsView {
         })
         .detach();
 
-        // Новые записи отчётов → перерасчёт (поколение writer'а, гейт по факту
-        // смены — сам observe дёргается часто, сравнение дёшево).
+        // Новые записи отчётов → перерасчёт (поколение writer'а). ДЕБАУНС
+        // обязателен: живой поток ордеров бампает поколение постоянно, а один
+        // перерасчёт = полные сканы периода + группировки; без гейта окно
+        // молотит SQLite нон-стоп (жрёт CPU просто будучи открытым).
         cx.observe(&backend, |this, backend, cx| {
             let g = backend
                 .read(cx)
@@ -183,8 +188,19 @@ impl AnalyticsView {
                 .as_ref()
                 .map(|h| h.generation.load(std::sync::atomic::Ordering::Relaxed))
                 .unwrap_or(0);
-            if g != this.last_gen && !this.inflight {
-                this.reload(cx);
+            if g != this.last_gen && !this.inflight && !this.pending_reload {
+                this.pending_reload = true;
+                cx.spawn(async move |this, cx| {
+                    let executor = cx.update(|cx| cx.background_executor().clone());
+                    executor.timer(std::time::Duration::from_secs(3)).await;
+                    let _ = cx.update(|cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            this.pending_reload = false;
+                            this.reload(cx);
+                        });
+                    });
+                })
+                .detach();
             }
         })
         .detach();
@@ -204,6 +220,7 @@ impl AnalyticsView {
             sel_strategy: None,
             detail: None,
             detail_seq: 0,
+            pending_reload: false,
             focus: cx.focus_handle(),
         };
         this.reload(cx);
@@ -272,17 +289,18 @@ impl AnalyticsView {
 
     /// Фоновая детализация выбранной стратегии (вкладка «Стратегии»).
     pub(super) fn reload_detail(&mut self, cx: &mut Context<Self>) {
-        let Some(name) = self.sel_strategy.clone() else {
+        let Some((key, _)) = self.sel_strategy.clone() else {
             self.detail = None;
             return;
         };
+        let id: i64 = key.parse().unwrap_or(0);
         self.detail_seq = self.detail_seq.wrapping_add(1);
         let req = self.detail_seq;
         let q = self.query();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let detail = executor
-                .spawn(async move { moon_core::db::analytics::strategy_detail(&q, &name) })
+                .spawn(async move { moon_core::db::analytics::strategy_detail(&q, id) })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -381,7 +399,11 @@ impl AnalyticsView {
                     .render(),
             );
         }
-        row
+        // Фильтры — прижаты вправо (те же контролы, что в Ордерах/Отчёте).
+        row.child(div().flex_1())
+            .child(self.core_combo(cx))
+            .child(self.side_combo(cx))
+            .child(self.kind_combo(cx))
     }
 
     /// Комбобокс ядер — мультивыбор (общий виджет, как в Ордерах/Отчёте).
@@ -492,11 +514,6 @@ impl AnalyticsView {
             .py(design::ui_px(cx, 8.0))
             .gap(design::ui_px(cx, 8.0))
             .items_center()
-            // Фильтры — те же контролы, что в Ордерах/Отчёте.
-            .child(self.core_combo(cx))
-            .child(self.side_combo(cx))
-            .child(self.kind_combo(cx))
-            .child(div().w(design::ui_px(cx, 6.0)))
             .child(seg)
             .child(div().flex_1())
             .child(

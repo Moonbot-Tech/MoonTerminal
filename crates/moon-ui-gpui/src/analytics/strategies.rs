@@ -1,7 +1,8 @@
-//! Вкладка «Стратегии» окна «Аналитика»: таблица сравнения групп по ИМЕНИ
+//! Вкладка «Стратегии» окна «Аналитика»: таблица сравнения групп по ID
 //! стратегии (сделки, winrate с мини-баром, прибыль, ср./сделка, PF, best/worst)
 //! + drill-down по клику: вклад по монетам и последние сделки группы.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonTone, h_flex, v_flex};
 use rust_i18n::t;
@@ -82,7 +83,7 @@ impl AnalyticsView {
             );
 
         // Drill-down выбранной группы.
-        if let Some(name) = &self.sel_strategy {
+        if let Some((_, name)) = &self.sel_strategy {
             col = col.child(self.detail_cards(name, p, cx));
         }
         col.into_any_element()
@@ -90,11 +91,15 @@ impl AnalyticsView {
 
     /// Строка таблицы сравнения; клик — выбрать/снять группу для детализации.
     fn strategy_row(&self, g: &GroupStat, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
-        let selected = self.sel_strategy.as_deref() == Some(g.name.as_str());
+        let selected = self.sel_strategy.as_ref().is_some_and(|(k, _)| *k == g.key);
+        let key = g.key.clone();
         let name = g.name.clone();
         let wr = g.winrate();
+        // Группа = id стратегии; имя — подпись, id — мутным рядом (различает
+        // одноимённые стратегии и переживает переименования).
+        let show_id = g.name != g.key;
         let mut row = h_flex()
-            .id(SharedString::from(format!("an-strat-{}", g.name)))
+            .id(SharedString::from(format!("an-strat-{}", g.key)))
             .w_full()
             .h(design::fit_h_px(cx, 25.0, 14.0, 5.5))
             .px(design::ui_px(cx, 8.0))
@@ -104,7 +109,23 @@ impl AnalyticsView {
             .bg(moon(p.table_body))
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.6))
-            .child(div().flex_1().min_w_0().truncate().child(g.name.clone()))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(design::ui_px(cx, 6.0))
+                    .items_center()
+                    .child(div().min_w_0().truncate().child(g.name.clone()))
+                    .when(show_id, |el| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .text_size(design::t_caption(cx))
+                                .text_color(moon(p.text_muted))
+                                .child(format!("#{}", g.key)),
+                        )
+                    }),
+            )
             .child(num_cell(p, cx, 56.0, g.n.to_string(), p.text_soft))
             // Winrate: мини-бар + процент.
             .child(
@@ -140,12 +161,11 @@ impl AnalyticsView {
             .child(num_cell(p, cx, 70.0, fmt_signed(g.best), sign_color(p, g.best)))
             .child(num_cell(p, cx, 70.0, fmt_signed(g.worst), sign_color(p, g.worst)))
             .on_click(cx.listener(move |this, _, _, cx| {
-                let name = name.clone();
-                if this.sel_strategy.as_deref() == Some(name.as_str()) {
+                if this.sel_strategy.as_ref().is_some_and(|(k, _)| *k == key) {
                     this.sel_strategy = None;
                     this.detail = None;
                 } else {
-                    this.sel_strategy = Some(name);
+                    this.sel_strategy = Some((key.clone(), name.clone()));
                     this.detail = None;
                     this.reload_detail(cx);
                 }
