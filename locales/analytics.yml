@@ -200,3 +200,40 @@ analytics.ins.best_hour:
   ru: "Самый прибыльный час — %{hour} UTC (%{profit} USDT, %{n} сделок)."
   en: "Most profitable hour — %{hour} UTC (%{profit} USDT, %{n} trades)."
   es: "Hora más rentable — %{hour} UTC (%{profit} USDT, %{n} operaciones)."
+
+analytics.strat.title:
+  ru: "Сравнение стратегий"
+  en: "Strategy comparison"
+  es: "Comparación de estrategias"
+analytics.strat.hint:
+  ru: "клик по строке — детализация"
+  en: "click a row for details"
+  es: "clic en una fila para detalles"
+analytics.strat.shown:
+  ru: "показано %{shown} из %{total}"
+  en: "showing %{shown} of %{total}"
+  es: "mostrando %{shown} de %{total}"
+analytics.strat.by_coins:
+  ru: "%{name} — по монетам"
+  en: "%{name} — by coins"
+  es: "%{name} — por monedas"
+analytics.strat.last_trades:
+  ru: "Последние сделки"
+  en: "Recent trades"
+  es: "Operaciones recientes"
+analytics.kpi.avg_short:
+  ru: "Ср./сделка"
+  en: "Avg"
+  es: "Prom."
+analytics.col.pf:
+  ru: "PF"
+  en: "PF"
+  es: "PF"
+analytics.col.best:
+  ru: "Best"
+  en: "Best"
+  es: "Best"
+analytics.col.worst:
+  ru: "Worst"
+  en: "Worst"
+  es: "Worst"

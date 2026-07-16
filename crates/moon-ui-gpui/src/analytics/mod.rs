@@ -9,21 +9,24 @@
 //! периода и по поколению writer'а отчётов.
 
 mod charts;
+mod strategies;
 mod summary;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette,
-    MoonWindowFrame, Root, h_flex, v_flex,
+    MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown,
+    MoonMenuSize, MoonPalette, MoonWindowFrame, Root, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
-use moon_core::db::analytics::Summary;
+use moon_core::db::SideFilter;
+use moon_core::db::analytics::{Query, StrategyDetail, Summary};
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
 
@@ -132,6 +135,13 @@ pub struct AnalyticsView {
     backend: Entity<Backend>,
     tab: Tab,
     period: Period,
+    /// Ядра из реплики (для комбобокса) + мультивыбор (пусто = все) — те же
+    /// контролы, что в «Ордерах»/«Отчёте».
+    cores: Vec<(u64, String)>,
+    sel_cores: HashSet<u64>,
+    side: SideFilter,
+    /// None — все, Some(false) — реальные, Some(true) — эмуляторные.
+    emu: Option<bool>,
     /// Данные сводки (фоновый расчёт); None — ещё не загружены.
     pub(super) data: Option<Arc<Summary>>,
     inflight: bool,
@@ -140,6 +150,10 @@ pub struct AnalyticsView {
     /// Поколение writer'а отчётов на момент последней загрузки — новые записи
     /// в БД перезапускают расчёт (не чаще гейта наблюдателя).
     last_gen: u64,
+    /// Вкладка «Стратегии»: выбранная группа (по имени) + её детализация.
+    pub(super) sel_strategy: Option<String>,
+    pub(super) detail: Option<Arc<StrategyDetail>>,
+    detail_seq: u64,
     focus: FocusHandle,
 }
 
@@ -179,17 +193,45 @@ impl AnalyticsView {
             backend,
             tab: Tab::Summary,
             period: Period::Month,
+            cores: Vec::new(),
+            sel_cores: HashSet::new(),
+            side: SideFilter::All,
+            emu: None,
             data: None,
             inflight: false,
             seq: 0,
             last_gen: 0,
+            sel_strategy: None,
+            detail: None,
+            detail_seq: 0,
             focus: cx.focus_handle(),
         };
         this.reload(cx);
         this
     }
 
-    /// Фоновый расчёт сводки за текущий период.
+    /// Текущие фильтры одной структурой (общая для всех вкладок).
+    fn query(&self) -> Query {
+        let (from, to) = self.period.range();
+        Query {
+            from,
+            to,
+            cores: self.cores_selected(),
+            side: self.side,
+            emulator: self.emu,
+        }
+    }
+
+    /// Выбранные ядра для запроса: пусто или все = без фильтра.
+    fn cores_selected(&self) -> Vec<u64> {
+        if self.sel_cores.is_empty() || self.sel_cores.len() == self.cores.len() {
+            Vec::new()
+        } else {
+            self.sel_cores.iter().copied().collect()
+        }
+    }
+
+    /// Фоновый расчёт сводки за текущий период/фильтры.
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.inflight = true;
         self.seq = self.seq.wrapping_add(1);
@@ -201,19 +243,53 @@ impl AnalyticsView {
             .as_ref()
             .map(|h| h.generation.load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(0);
-        let (from, to) = self.period.range();
+        let q = self.query();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let data = executor
-                .spawn(async move { moon_core::db::analytics::summary(from, to) })
+                .spawn(async move { moon_core::db::analytics::summary(&q) })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     if this.seq != req {
-                        return; // период уже сменили
+                        return; // период/фильтры уже сменили
                     }
                     this.inflight = false;
+                    if let Some(d) = &data {
+                        this.cores = d.cores.clone();
+                    }
                     this.data = data.map(Arc::new);
+                    // Детализация стратегии зависит от фильтров — перечитать.
+                    if this.sel_strategy.is_some() {
+                        this.reload_detail(cx);
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Фоновая детализация выбранной стратегии (вкладка «Стратегии»).
+    pub(super) fn reload_detail(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self.sel_strategy.clone() else {
+            self.detail = None;
+            return;
+        };
+        self.detail_seq = self.detail_seq.wrapping_add(1);
+        let req = self.detail_seq;
+        let q = self.query();
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let detail = executor
+                .spawn(async move { moon_core::db::analytics::strategy_detail(&q, &name) })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if this.detail_seq != req {
+                        return;
+                    }
+                    this.detail = detail.map(Arc::new);
                     cx.notify();
                 });
             });
@@ -224,6 +300,42 @@ impl AnalyticsView {
     fn set_period(&mut self, p: Period, cx: &mut Context<Self>) {
         if self.period != p {
             self.period = p;
+            self.reload(cx);
+            cx.notify();
+        }
+    }
+
+    /// Тогл ядра в мультивыборе; `None` — тумблер «Все» (пусто ↔ все).
+    fn toggle_core(&mut self, core: Option<u64>, cx: &mut Context<Self>) {
+        match core {
+            None => {
+                if self.sel_cores.is_empty() {
+                    self.sel_cores = self.cores.iter().map(|(c, _)| *c).collect();
+                } else {
+                    self.sel_cores.clear();
+                }
+            }
+            Some(c) => {
+                if !self.sel_cores.remove(&c) {
+                    self.sel_cores.insert(c);
+                }
+            }
+        }
+        self.reload(cx);
+        cx.notify();
+    }
+
+    fn set_side(&mut self, side: SideFilter, cx: &mut Context<Self>) {
+        if self.side != side {
+            self.side = side;
+            self.reload(cx);
+            cx.notify();
+        }
+    }
+
+    fn set_emu(&mut self, emu: Option<bool>, cx: &mut Context<Self>) {
+        if self.emu != emu {
+            self.emu = emu;
             self.reload(cx);
             cx.notify();
         }
@@ -272,6 +384,83 @@ impl AnalyticsView {
         row
     }
 
+    /// Комбобокс ядер — мультивыбор (общий виджет, как в Ордерах/Отчёте).
+    fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        crate::controls::core_combo(
+            cx,
+            "an-core",
+            &self.cores,
+            &self.sel_cores,
+            t!("report.all_cores").to_string(),
+            |n| t!("report.cores_n", n = n).to_string(),
+            180.0,
+            move |uid, app| {
+                view.update(app, |t, c| t.toggle_core(uid, c));
+            },
+        )
+    }
+
+    /// Комбобокс стороны (Все/Лонг/Шорт) — как в Отчёте.
+    fn side_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let cur = match self.side {
+            SideFilter::All => t!("report.filter.all").to_string(),
+            SideFilter::Long => t!("report.side.long").to_string(),
+            SideFilter::Short => t!("report.side.short").to_string(),
+        };
+        let view = cx.entity();
+        let items = crate::panels::radio_items(
+            [
+                (SideFilter::All, "as-all".into(), t!("report.filter.all").to_string().into()),
+                (SideFilter::Long, "as-long".into(), t!("report.side.long").to_string().into()),
+                (SideFilter::Short, "as-short".into(), t!("report.side.short").to_string().into()),
+            ],
+            self.side,
+            crate::panels::RadioMark::Highlight,
+            move |app, side| {
+                view.update(app, |t, c| t.set_side(side, c));
+            },
+        );
+        MoonDropdown::new("an-side")
+            .label(format!("{cur} ▾"))
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Action)
+            .trigger_width(design::font_w(cx, 69.0))
+            .menu_width(design::font_w(cx, 120.0))
+            .menu_size(MoonMenuSize::Compact)
+            .items(items)
+    }
+
+    /// Комбобокс типа ордеров (Все / Реальные / Эмуляторные) — как в Отчёте.
+    fn kind_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let cur = match self.emu {
+            None => t!("report.kind.all"),
+            Some(false) => t!("report.kind.real"),
+            Some(true) => t!("report.kind.emu"),
+        };
+        let view = cx.entity();
+        let items = crate::panels::radio_items(
+            [
+                (None, "ak-all".into(), t!("report.kind.all").to_string().into()),
+                (Some(false), "ak-real".into(), t!("report.kind.real").to_string().into()),
+                (Some(true), "ak-emu".into(), t!("report.kind.emu").to_string().into()),
+            ],
+            self.emu,
+            crate::panels::RadioMark::Check,
+            move |app, k| {
+                view.update(app, |t, c| t.set_emu(k, c));
+            },
+        );
+        MoonDropdown::new("an-kind")
+            .label(format!("{cur} ▾"))
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Action)
+            .trigger_width(design::font_w(cx, 102.0))
+            .menu_width(design::font_w(cx, 138.0))
+            .menu_size(MoonMenuSize::Compact)
+            .items(items)
+    }
+
     /// Полоса пресетов периода + счётчик закрытых сделок справа.
     fn period_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let mut seg = h_flex().gap(design::ui_px(cx, 4.0)).items_center();
@@ -301,8 +490,13 @@ impl AnalyticsView {
             .w_full()
             .px(design::ui_px(cx, 10.0))
             .py(design::ui_px(cx, 8.0))
-            .gap(design::ui_px(cx, 10.0))
+            .gap(design::ui_px(cx, 8.0))
             .items_center()
+            // Фильтры — те же контролы, что в Ордерах/Отчёте.
+            .child(self.core_combo(cx))
+            .child(self.side_combo(cx))
+            .child(self.kind_combo(cx))
+            .child(div().w(design::ui_px(cx, 6.0)))
             .child(seg)
             .child(div().flex_1())
             .child(
@@ -341,6 +535,7 @@ impl Render for AnalyticsView {
         };
         let body = match self.tab {
             Tab::Summary => self.summary_tab(p, cx),
+            Tab::Strategies => self.strategies_tab(p, cx),
             _ => self.stub(p, cx),
         };
         v_flex()

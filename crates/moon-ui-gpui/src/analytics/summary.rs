@@ -436,7 +436,7 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
 }
 
 /// «дд.мм чч:мм» UTC для топ-таблиц.
-fn fmt_dm_hm(secs: i64) -> String {
+pub(super) fn fmt_dm_hm(secs: i64) -> String {
     let s = moon_core::db::fmt_unix(secs);
     // fmt_unix → "ГГГГ-ММ-ДД ЧЧ:ММ"; берём «ДД.ММ ЧЧ:ММ».
     if s.len() >= 16 {
