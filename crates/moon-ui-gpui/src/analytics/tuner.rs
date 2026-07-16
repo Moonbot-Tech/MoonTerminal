@@ -1,7 +1,8 @@
-//! Вкладка «Фильтры» окна «Аналитика» — тюнер порогов по рыночным полям отчёта
-//! (приём из «Аналитики V3»): матрица KPI «Факт vs варианты», конструктор
+//! Тюнер порогов по рыночным полям отчёта (приём из «Аналитики V3») — режим
+//! «Фильтры» вкладки «Стратегии»: матрица KPI «Факт vs варианты», конструктор
 //! диапазонов от/до по полям и гистограмма профита по квантильным вёдрам
-//! выбранного поля. Границы персистятся в layout (строками, как ввёл юзер).
+//! выбранного поля. Скоуп — выбранная в списке стратегия (или все). Границы
+//! персистятся в layout (строками, как ввёл юзер).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -91,11 +92,21 @@ fn parse_num(s: &str) -> Option<f64> {
 }
 
 impl AnalyticsView {
+    /// Запрос тюнера: общие фильтры + скоуп выбранной стратегии.
+    fn tuner_query(&self) -> moon_core::db::analytics::Query {
+        let mut q = self.query();
+        q.strategy = self
+            .sel_strategy
+            .as_ref()
+            .and_then(|(k, _)| k.parse::<i64>().ok());
+        q
+    }
+
     /// Фоновый пересчёт матрицы KPI по вариантам.
     pub(super) fn reload_tuner(&mut self, cx: &mut Context<Self>) {
         self.tuner.seq = self.tuner.seq.wrapping_add(1);
         let req = self.tuner.seq;
-        let q = self.query();
+        let q = self.tuner_query();
         let variants = self.tuner.variants();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -119,7 +130,7 @@ impl AnalyticsView {
     pub(super) fn reload_hist(&mut self, cx: &mut Context<Self>) {
         self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
         let req = self.tuner.hist_seq;
-        let q = self.query();
+        let q = self.tuner_query();
         let field = FIELDS[self.tuner.sel_field].0.to_string();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -201,35 +212,18 @@ impl AnalyticsView {
         state
     }
 
-    /// Тело вкладки «Фильтры».
-    pub(super) fn tuner_tab(
-        &mut self,
-        p: MoonPalette,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        v_flex()
-            .w_full()
-            .p(design::ui_px(cx, 10.0))
-            .gap(design::ui_px(cx, 8.0))
-            .child(self.kpi_matrix(p, cx))
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap(design::ui_px(cx, 8.0))
-                    .items_start()
-                    .child(self.fields_grid(p, window, cx))
-                    .child(self.hist_card(p, cx)),
-            )
-            .into_any_element()
-    }
-
     /// Матрица KPI: строки — показатели, колонки — Факт / v1 / v2.
-    fn kpi_matrix(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn kpi_matrix(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+        // Подзаголовок = скоуп: имя выбранной стратегии или «все стратегии».
+        let scope = self
+            .sel_strategy
+            .as_ref()
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
         let Some(stats) = self.tuner.stats.clone() else {
             return card(
                 t!("analytics.tuner.kpi_title").to_string(),
-                String::new(),
+                scope,
                 div()
                     .p(design::ui_px(cx, 8.0))
                     .text_color(moon(p.text_muted))
@@ -314,7 +308,7 @@ impl AnalyticsView {
         }
         card(
             t!("analytics.tuner.kpi_title").to_string(),
-            t!("analytics.tuner.kpi_sub").to_string(),
+            scope,
             body.into_any_element(),
             p,
             cx,
@@ -322,7 +316,7 @@ impl AnalyticsView {
     }
 
     /// Конструктор диапазонов: строки-поля, клик по имени — гистограмма поля.
-    fn fields_grid(
+    pub(super) fn fields_grid(
         &mut self,
         p: MoonPalette,
         window: &mut Window,
@@ -402,21 +396,17 @@ impl AnalyticsView {
             }
             grid = grid.child(row);
         }
-        div()
-            .w(design::font_w_px(cx, 380.0))
-            .flex_none()
-            .child(card(
-                t!("analytics.tuner.fields_title").to_string(),
-                t!("analytics.tuner.fields_sub").to_string(),
-                grid.into_any_element(),
-                p,
-                cx,
-            ))
-            .into_any_element()
+        card(
+            t!("analytics.tuner.fields_title").to_string(),
+            t!("analytics.tuner.fields_sub").to_string(),
+            grid.into_any_element(),
+            p,
+            cx,
+        )
     }
 
     /// Гистограмма выбранного поля: выигрыши вверх, убытки вниз, счётчик и края.
-    fn hist_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn hist_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         let title = format!(
             "{} — {}",
             t!("analytics.tuner.hist_title"),
@@ -505,17 +495,7 @@ impl AnalyticsView {
                     .into_any_element()
             }
         };
-        div()
-            .flex_1()
-            .min_w_0()
-            .child(card(
-                title,
-                t!("analytics.tuner.hist_sub").to_string(),
-                body,
-                p,
-                cx,
-            ))
-            .into_any_element()
+        card(title, t!("analytics.tuner.hist_sub").to_string(), body, p, cx)
     }
 }
 

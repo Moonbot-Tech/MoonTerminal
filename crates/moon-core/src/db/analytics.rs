@@ -28,6 +28,9 @@ pub struct Query {
     /// `None` — все, `Some(false)` — реальные, `Some(true)` — эмуляторные
     /// (NULL в колонке считается «реальный», как в Отчёте).
     pub emulator: Option<bool>,
+    /// Скоуп по одной стратегии (`strategyid`) — тюнер фильтров в контексте
+    /// выбранной строки списка. None = все стратегии.
+    pub strategy: Option<i64>,
 }
 
 impl Query {
@@ -62,6 +65,11 @@ impl Query {
                 None => {}
                 Some(false) => w.push_str(" AND COALESCE(emulator,0) = 0"),
                 Some(true) => w.push_str(" AND COALESCE(emulator,0) = 1"),
+            }
+        }
+        if let Some(sid) = self.strategy {
+            if has("strategyid") {
+                w.push_str(&format!(" AND COALESCE(strategyid,0) = {sid}"));
             }
         }
         w

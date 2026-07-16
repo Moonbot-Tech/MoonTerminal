@@ -49,10 +49,6 @@ analytics.tuner.kpi_title:
   ru: "Факт vs варианты"
   en: "Fact vs variants"
   es: "Real vs variantes"
-analytics.tuner.kpi_sub:
-  ru: "как изменились бы итоги периода с фильтрами v1/v2"
-  en: "how the period would look with v1/v2 filters applied"
-  es: "cómo cambiaría el período con los filtros v1/v2"
 analytics.tuner.metric:
   ru: "Показатель"
   en: "Metric"
@@ -287,10 +283,18 @@ analytics.strat.by_coins:
   ru: "%{name} — по монетам"
   en: "%{name} — by coins"
   es: "%{name} — por monedas"
-analytics.strat.last_trades:
-  ru: "Последние сделки"
-  en: "Recent trades"
-  es: "Operaciones recientes"
+analytics.strat.mode_overview:
+  ru: "Обзор"
+  en: "Overview"
+  es: "Resumen"
+analytics.strat.pick:
+  ru: "Выбери стратегию в списке — здесь появится её вклад по монетам."
+  en: "Pick a strategy in the list to see its per-coin contribution here."
+  es: "Elige una estrategia en la lista para ver su aporte por moneda."
+analytics.strat.scope_all:
+  ru: "все стратегии"
+  en: "all strategies"
+  es: "todas las estrategias"
 analytics.kpi.avg_short:
   ru: "Ср./сделка"
   en: "Avg"

@@ -41,18 +41,16 @@ enum Tab {
     Heatmap,
     Calendar,
     Leverage,
-    Tuner,
 }
 
 impl Tab {
-    const ALL: [Tab; 7] = [
+    const ALL: [Tab; 6] = [
         Tab::Summary,
         Tab::Strategies,
         Tab::Coins,
         Tab::Heatmap,
         Tab::Calendar,
         Tab::Leverage,
-        Tab::Tuner,
     ];
     fn id(self) -> &'static str {
         match self {
@@ -62,7 +60,6 @@ impl Tab {
             Tab::Heatmap => "an-heatmap",
             Tab::Calendar => "an-calendar",
             Tab::Leverage => "an-leverage",
-            Tab::Tuner => "an-tuner",
         }
     }
     fn title(self) -> String {
@@ -73,7 +70,6 @@ impl Tab {
             Tab::Heatmap => t!("analytics.tab.heatmap"),
             Tab::Calendar => t!("analytics.tab.calendar"),
             Tab::Leverage => t!("analytics.tab.leverage"),
-            Tab::Tuner => t!("analytics.tab.tuner"),
         }
         .to_string()
     }
@@ -171,8 +167,11 @@ pub struct AnalyticsView {
     pub(super) sel_strategy: Option<(String, String)>,
     pub(super) detail: Option<Arc<StrategyDetail>>,
     detail_seq: u64,
-    /// Вкладка «Фильтры» (тюнер порогов) — состояние в своём модуле.
-    pub(super) tuner: tuner::TunerState,
+    /// Режим вкладки «Стратегии» (Обзор / Фильтры / Монеты). Приватность —
+    /// модульная: субмодули вкладок видят поля родителя без pub(super).
+    strat_mode: strategies::StratMode,
+    /// Тюнер порогов (режим «Фильтры») — состояние в своём модуле.
+    tuner: tuner::TunerState,
     focus: FocusHandle,
 }
 
@@ -213,6 +212,7 @@ impl AnalyticsView {
             sel_strategy: None,
             detail: None,
             detail_seq: 0,
+            strat_mode: strategies::StratMode::Overview,
             tuner: tuner::TunerState::load(&backend_tuner_cfg),
             focus: cx.focus_handle(),
         };
@@ -229,6 +229,7 @@ impl AnalyticsView {
             cores: self.cores_selected(),
             side: self.side,
             emulator: self.emu,
+            strategy: None,
         }
     }
 
@@ -246,11 +247,11 @@ impl AnalyticsView {
         self.inflight = true;
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
-        // Тюнер зависит от тех же фильтров: сбрасываем, активной вкладке —
-        // пересчёт сразу, неактивной — при следующем открытии.
+        // Тюнер зависит от тех же фильтров: сбрасываем; активному режиму —
+        // пересчёт сразу, иначе — при следующем входе в режим «Фильтры».
         self.tuner.stats = None;
         self.tuner.hist = None;
-        if self.tab == Tab::Tuner {
+        if self.tab == Tab::Strategies && self.strat_mode == strategies::StratMode::Filters {
             self.reload_tuner(cx);
             self.reload_hist(cx);
         }
@@ -387,7 +388,10 @@ impl AnalyticsView {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.tab != t {
                             this.tab = t;
-                            if t == Tab::Tuner && this.tuner.stats.is_none() {
+                            if t == Tab::Strategies
+                                && this.strat_mode == strategies::StratMode::Filters
+                                && this.tuner.stats.is_none()
+                            {
                                 this.reload_tuner(cx);
                                 this.reload_hist(cx);
                             }
@@ -550,10 +554,12 @@ impl Render for AnalyticsView {
         };
         let body = match self.tab {
             Tab::Summary => self.summary_tab(p, cx),
-            Tab::Strategies => self.strategies_tab(p, cx),
-            Tab::Tuner => self.tuner_tab(p, window, cx),
+            Tab::Strategies => self.strategies_tab(p, window, cx),
             _ => self.stub(p, cx),
         };
+        // «Стратегии» делят высоту сами (нижняя плашка прибита к низу экрана,
+        // список скроллится внутри) — внешний скролл только прочим вкладкам.
+        let body_scrolls = self.tab != Tab::Strategies;
         v_flex()
             .size_full()
             .relative()
@@ -572,7 +578,7 @@ impl Render for AnalyticsView {
                     .flex_1()
                     .w_full()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .when(body_scrolls, |el| el.overflow_y_scroll())
                     .child(body),
             )
             .child(
