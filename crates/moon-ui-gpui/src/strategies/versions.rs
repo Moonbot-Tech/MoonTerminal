@@ -303,6 +303,7 @@ impl StrategiesView {
                 .hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.versions.collapsed = false;
+                    this.save_panels(cx);
                     cx.notify();
                 }))
                 .child(div().child("▸"))
@@ -316,7 +317,7 @@ impl StrategiesView {
                 .into_any_element();
         }
         let mut col = v_flex()
-            .w(design::font_w_px(cx, 166.0))
+            .w(px(self.panels.versions_w))
             .flex_none()
             .h_full()
             .bg(moon(p.shell_high))
@@ -349,6 +350,7 @@ impl StrategiesView {
                             .hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.versions.collapsed = true;
+                                this.save_panels(cx);
                                 cx.notify();
                             }))
                             .child("◂"),

@@ -9,6 +9,29 @@ use serde::{Deserialize, Serialize};
 
 use super::paths;
 
+/// Панели окна «Стратегии»: ширины (дерево/версии/разделы) + свёрнутость версий.
+/// Клампы — на стороне окна при применении.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StrategiesPanels {
+    pub tree_w: f32,
+    pub versions_w: f32,
+    pub sections_w: f32,
+    pub versions_collapsed: bool,
+}
+
+impl Default for StrategiesPanels {
+    fn default() -> Self {
+        Self {
+            tree_w: 418.0,
+            versions_w: 166.0,
+            sections_w: 264.0,
+            // По умолчанию колонка версий свёрнута в полоску со счётчиком.
+            versions_collapsed: true,
+        }
+    }
+}
+
 /// Геометрия+состояние окна группы (ключ карты — имя группы).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GroupLayout {
@@ -95,6 +118,10 @@ pub struct WindowLayout {
     /// Геометрия окна «Стратегии» (отдельное окно) — чтобы открывалось на прежнем месте.
     #[serde(default)]
     pub strategies_window: Option<GeomRect>,
+    /// Панели окна «Стратегии»: ширины колонок (лог. px, тянутся сплиттерами)
+    /// и свёрнутость колонки «Версии» — как персист ширин колонок таблиц.
+    #[serde(default)]
+    pub strategies_panels: StrategiesPanels,
     /// Геометрия глобального окна «Активы» (singleton) — чтобы открывалось на прежнем месте.
     #[serde(default)]
     pub assets_window: Option<GeomRect>,

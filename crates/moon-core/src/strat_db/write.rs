@@ -135,6 +135,32 @@ pub(super) fn apply_full_set(
             Some("external")
         };
 
+        // Восстановление БЕЗ изменений контента (удалили → вернули как было) —
+        // не новая версия: переоткрываем последнюю (valid_to=NULL) и оживляем
+        // head. Промежуток удаления остаётся внутри её окна (сделок там нет).
+        if let Some(h) = st.heads.get(&key) {
+            if h.deleted && h.content_hash == content_hash {
+                tx.execute(
+                    "UPDATE strategy_versions SET valid_to=NULL
+                     WHERE core_uid=?1 AND strategy_id=?2 AND valid_from=(
+                        SELECT MAX(valid_from) FROM strategy_versions
+                        WHERE core_uid=?1 AND strategy_id=?2)",
+                    rusqlite::params![uid, d.strategy_id],
+                )?;
+                upsert_head(&tx, uid, core_name, d, content_hash, head_hash, now)?;
+                st.heads.insert(
+                    key,
+                    Head { content_hash, head_hash, deleted: false, server_ver: d.server_ver },
+                );
+                writes += 1;
+                log::info!(
+                    "стратегии(db): {core_name} «{}» восстановлена без изменений — версия переоткрыта",
+                    d.name
+                );
+                continue;
+            }
+        }
+
         let (need_version, change_kind, ver_gap) = match st.heads.get(&key) {
             None => (true, "created", false),
             Some(h) if h.deleted => (true, "restored", false),
@@ -447,6 +473,28 @@ mod tests {
     }
 
     #[test]
+    fn restore_same_content_reopens_version() {
+        let (conn, mut st) = setup();
+        apply_full_set(&conn, &mut st, 7, "core", true, &[dump(1, "A", 5, "x")]).unwrap();
+        // Удалили (пропала из набора) → версия закрыта, head.deleted=1.
+        apply_full_set(&conn, &mut st, 7, "core", false, &[dump(2, "B", 3, "x")]).unwrap();
+        assert!(versions(&conn, 1)[0].2.is_some(), "закрыта при удалении");
+        // Вернулась С ТЕМ ЖЕ контентом → НЕ новая версия, старая переоткрыта.
+        apply_full_set(
+            &conn, &mut st, 7, "core", false,
+            &[dump(1, "A", 5, "x"), dump(2, "B", 3, "x")],
+        )
+        .unwrap();
+        let v = versions(&conn, 1);
+        assert_eq!(v.len(), 1, "restored-версия не создана");
+        assert!(v[0].2.is_none(), "версия переоткрыта (valid_to=NULL)");
+        let del: i64 = conn
+            .query_row("SELECT deleted FROM strategies WHERE strategy_id=1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(del, 0);
+    }
+
+    #[test]
     fn missing_marks_deleted_and_reappear_restores() {
         let (conn, mut st) = setup();
         apply_full_set(
@@ -461,10 +509,10 @@ mod tests {
             .unwrap();
         assert_eq!(del, 1);
         assert!(versions(&conn, 2)[0].2.is_some(), "версия удалённой закрыта");
-        // Вернулась → restored.
+        // Вернулась С ИЗМЕНЕНИЕМ (TP 3→9) → новая версия restored.
         apply_full_set(
             &conn, &mut st, 7, "core", false,
-            &[dump(1, "A", 5, "x"), dump(2, "B", 3, "x")],
+            &[dump(1, "A", 5, "x"), dump(2, "B", 9, "x")],
         )
         .unwrap();
         let v = versions(&conn, 2);

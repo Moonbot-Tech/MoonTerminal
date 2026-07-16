@@ -68,6 +68,9 @@ pub struct StrategiesView {
     deleted_inflight: bool,
     /// Раскрытые папки «Удалённые» по ядрам.
     expanded_deleted: HashSet<CoreId>,
+    /// Ширины панелей (дерево/версии/разделы) — тянутся сплиттерами, персист
+    /// в layout.strategies_panels (как ширины колонок таблиц).
+    panels: moon_core::config::layout::StrategiesPanels,
     /// Якорь для range-выбора по Shift.
     anchor: Option<Key>,
     /// Плоский порядок видимых стратегий прошлого кадра — для Shift-диапазона.
@@ -129,6 +132,7 @@ pub struct StrategiesView {
 
 impl StrategiesView {
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let panels = backend.read(cx).layout.strategies_panels;
         let search = cx
             .new(|cx| MoonInputState::new(window, cx).placeholder(t!("strat.search").to_string()));
         // Печать в поиске → обновить фильтр и перерисовать. Render не должен читать input
@@ -206,7 +210,11 @@ impl StrategiesView {
             filter: StrategyFilter::default(),
             selected: None,
             sel: HashSet::new(),
-            versions: versions::VersionsState::default(),
+            versions: versions::VersionsState {
+                collapsed: panels.versions_collapsed,
+                ..Default::default()
+            },
+            panels,
             deleted: HashMap::new(),
             deleted_gen: u64::MAX,
             deleted_inflight: false,
@@ -650,7 +658,8 @@ impl StrategiesView {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
         let mut col = v_flex()
-            .w(design::font_w_px(cx, 264.0))
+            .w(px(self.panels.sections_w))
+            .flex_none()
             .h_full()
             .bg(moon(p.shell_high))
             .font_family(design::mono())
@@ -817,6 +826,94 @@ impl StrategiesView {
     // ── Панель 3: параметры выбранной секции ────────────────────────────────
 }
 
+/// Какой сплиттер панелей тянут.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PanelSplit {
+    Tree,
+    Versions,
+    Sections,
+}
+
+/// Полезная нагрузка drag'а сплиттера.
+#[derive(Clone)]
+struct PanelResizeDrag {
+    which: PanelSplit,
+}
+
+/// Пустой «призрак» drag'а сплиттера — ничего не рисуем, панель следует за мышью.
+struct SplitGhost;
+impl Render for SplitGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// Ширина сплиттера между панелями (лог. px).
+const PANEL_SPLIT_W: f32 = 5.0;
+/// Ширина свёрнутой полоски «Версии».
+const VERSIONS_COLLAPSED_W: f32 = 22.0;
+
+impl StrategiesView {
+    /// Персист ширин панелей + свёрнутости версий в layout (дебаунс-сейв по
+    /// `layout_dirty`, как геометрия окна).
+    pub(super) fn save_panels(&mut self, cx: &mut Context<Self>) {
+        let mut p = self.panels;
+        p.versions_collapsed = self.versions.collapsed;
+        self.panels = p;
+        self.backend.update(cx, |b, _| {
+            let cur = b.layout.strategies_panels;
+            if (cur.tree_w, cur.versions_w, cur.sections_w, cur.versions_collapsed)
+                != (p.tree_w, p.versions_w, p.sections_w, p.versions_collapsed)
+            {
+                b.layout.strategies_panels = p;
+                b.layout_dirty = true;
+            }
+        });
+    }
+
+    /// Вертикальный сплиттер между панелями (тянется мышью).
+    fn panel_splitter(&self, which: PanelSplit, cx: &Context<Self>) -> AnyElement {
+        let p = MoonPalette::active(cx);
+        div()
+            .id(SharedString::from(format!("strat-split-{which:?}")))
+            .w(px(PANEL_SPLIT_W))
+            .h_full()
+            .flex_none()
+            .cursor(CursorStyle::ResizeLeftRight)
+            .hover(move |s| s.bg(moon_alpha(p.blue, 0.35)))
+            .on_drag(PanelResizeDrag { which }, |_, _, _, cx| {
+                cx.new(|_| SplitGhost)
+            })
+            .into_any_element()
+    }
+
+    /// Обработка перетаскивания сплиттера: ширина панели = позиция мыши минус
+    /// левый край панели (абсолютно от окна — устойчиво к пропущенным событиям).
+    fn on_panel_split_drag(&mut self, x: f32, which: PanelSplit, cx: &mut Context<Self>) {
+        match which {
+            PanelSplit::Tree => {
+                self.panels.tree_w = (x - PANEL_SPLIT_W / 2.0).clamp(240.0, 900.0);
+            }
+            PanelSplit::Versions => {
+                self.panels.versions_w =
+                    (x - self.panels.tree_w - PANEL_SPLIT_W * 1.5).clamp(90.0, 420.0);
+            }
+            PanelSplit::Sections => {
+                let vers = if self.versions.collapsed {
+                    VERSIONS_COLLAPSED_W
+                } else {
+                    self.panels.versions_w + PANEL_SPLIT_W
+                };
+                self.panels.sections_w =
+                    (x - self.panels.tree_w - PANEL_SPLIT_W - vers - PANEL_SPLIT_W / 2.0)
+                        .clamp(150.0, 520.0);
+            }
+        }
+        self.save_panels(cx);
+        cx.notify();
+    }
+}
+
 fn strategies_sig(b: &Backend) -> u64 {
     let store = b.session.store();
     b.session
@@ -891,6 +988,10 @@ impl Render for StrategiesView {
             )
         };
         let params = self.params_panel(params_model, window, cx);
+        let split_tree = self.panel_splitter(PanelSplit::Tree, cx);
+        let split_versions =
+            (!self.versions.collapsed).then(|| self.panel_splitter(PanelSplit::Versions, cx));
+        let split_sections = self.panel_splitter(PanelSplit::Sections, cx);
 
         let p = MoonPalette::active(cx);
         let chrome_width = match window.window_bounds() {
@@ -910,6 +1011,14 @@ impl Render for StrategiesView {
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 this.handle_tree_key(ev, window, cx);
             }))
+            // Перетаскивание сплиттеров панелей (ширины персистятся в layout).
+            .on_drag_move(cx.listener(
+                |this, e: &DragMoveEvent<PanelResizeDrag>, _window, cx| {
+                    let which = e.drag(cx).which;
+                    let x = f32::from(e.event.position.x);
+                    this.on_panel_split_drag(x, which, cx);
+                },
+            ))
             .child(strategies_header(p, cx))
             .child(
                 h_flex()
@@ -917,8 +1026,11 @@ impl Render for StrategiesView {
                     .w_full()
                     .min_h_0()
                     .child(tree)
+                    .child(split_tree)
                     .child(versions)
+                    .children(split_versions)
                     .child(sections)
+                    .child(split_sections)
                     .child(params),
             );
         root = root.child(

@@ -38,8 +38,9 @@ impl StrategiesView {
         let cores_owned: Arc<Vec<(CoreId, String)>> = Arc::new(cores.to_vec());
 
         v_flex()
-            // +10% к 380 — чтобы справа влезала плашка «вид(N)» с числом ордеров.
-            .w(px(418.0))
+            // Ширина тянется сплиттером (персист в layout.strategies_panels).
+            .w(px(self.panels.tree_w))
+            .flex_none()
             .h_full()
             .bg(moon(p.shell_high))
             .font_family(design::mono())

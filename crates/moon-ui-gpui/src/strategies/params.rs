@@ -464,15 +464,14 @@ impl StrategiesView {
         // «→ в тек.»: значение версии стейджится в ЖИВУЮ стратегию (жёлтый
         // dirty-маркер), реально применяется кнопкой «Применить N» — тогда
         // ядро получит правку и появится новая версия.
+        // «тек.» показываем ВСЕГДА (пока стратегия жива); кнопку копирования —
+        // только когда текущее значение отличается от значения версии.
         let cur_note: Option<String> = if frozen {
-            let live = {
-                let b = self.backend.read(cx);
-                let store = b.session.store();
-                self.selected
-                    .and_then(|(c, id)| row(store, c, id))
-                    .map(|r| field_value(r, f))
-            };
-            live.filter(|cur| *cur != version_val)
+            let b = self.backend.read(cx);
+            let store = b.session.store();
+            self.selected
+                .and_then(|(c, id)| row(store, c, id))
+                .map(|r| field_value(r, f))
         } else {
             None
         };
@@ -492,38 +491,42 @@ impl StrategiesView {
                 );
             }
             if let Some(cur) = cur_note {
+                let differs = cur != version_val;
                 let fname = field_name.clone();
                 let vval = version_val.clone();
-                wrap = wrap.child(
-                    h_flex()
-                        .items_center()
-                        .gap(design::ui_px(cx, 6.0))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(design::t_caption(cx))
-                                .text_color(moon(p.blue))
-                                .child(t!("strat.version_cur", v = cur).to_string()),
-                        )
-                        .child(
-                            MoonButton::new(SharedString::from(format!("copy-cur-{row_id}")))
-                                .ghost()
-                                .size(MoonButtonSize::Micro)
-                                .label(t!("strat.copy_to_current").to_string())
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    // Мимо гейта viewing_version НАРОЧНО: копирование
-                                    // из версии — единственная легальная правка здесь.
-                                    if let Some((core, id)) = this.selected {
-                                        this.field_edits
-                                            .insert((core, id, fname.clone()), vval.clone());
-                                        this.focused_field = Some(fname.clone());
-                                        cx.notify();
-                                    }
-                                }))
-                                .render(),
-                        ),
-                );
+                let mut line = h_flex()
+                    .items_center()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(design::t_caption(cx))
+                            // Отличие от версии — синим (есть что копировать),
+                            // совпадение — тускло.
+                            .text_color(moon(if differs { p.blue } else { p.text_soft }))
+                            .child(t!("strat.version_cur", v = cur).to_string()),
+                    );
+                if differs {
+                    line = line.child(
+                        MoonButton::new(SharedString::from(format!("copy-cur-{row_id}")))
+                            .ghost()
+                            .size(MoonButtonSize::Micro)
+                            .label(t!("strat.copy_to_current").to_string())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                // Мимо гейта viewing_version НАРОЧНО: копирование
+                                // из версии — единственная легальная правка здесь.
+                                if let Some((core, id)) = this.selected {
+                                    this.field_edits
+                                        .insert((core, id, fname.clone()), vval.clone());
+                                    this.focused_field = Some(fname.clone());
+                                    cx.notify();
+                                }
+                            }))
+                            .render(),
+                    );
+                }
+                wrap = wrap.child(line);
             }
             wrap.into_any_element()
         } else {
