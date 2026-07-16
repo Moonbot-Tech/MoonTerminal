@@ -34,6 +34,8 @@ impl AnalyticsView {
         self.sel_strategy = sel;
         self.detail = None;
         self.reload_detail(cx);
+        // Скоуп тюнера сменился — старые расчёты (включая автоподбор) неверны.
+        self.tuner.invalidate();
         if self.strat_mode == StratMode::Filters {
             self.reload_tuner(cx);
             self.reload_hist(cx);
@@ -62,12 +64,27 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mode = self.strat_mode;
-        let mut main = h_flex()
-            .w_full()
+        // Левая половина: список; в «Фильтрах» под ним прибитая гистограмма,
+        // в «Обзоре» — вклад по монетам. Правая колонка (Фильтры/Монеты) —
+        // на ВСЮ высоту вкладки.
+        let mut left = v_flex()
             .flex_1()
+            .min_w_0()
+            .h_full()
             .min_h_0()
             .gap(design::ui_px(cx, 8.0))
             .child(self.strat_list_card(p, cx));
+        match mode {
+            StratMode::Overview => left = left.child(self.coins_contrib_card(p, cx)),
+            StratMode::Filters => left = left.child(self.hist_card(p, cx)),
+            StratMode::Coins => {}
+        }
+
+        let mut main = h_flex()
+            .size_full()
+            .p(design::ui_px(cx, 10.0))
+            .gap(design::ui_px(cx, 8.0))
+            .child(left);
         match mode {
             StratMode::Overview => {}
             StratMode::Filters => {
@@ -89,19 +106,7 @@ impl AnalyticsView {
                 main = main.child(self.strat_coins_table(p, cx));
             }
         }
-
-        let mut col = v_flex()
-            .size_full()
-            .p(design::ui_px(cx, 10.0))
-            .gap(design::ui_px(cx, 8.0))
-            .child(main);
-        // Нижняя плашка — прибита к низу, не зависит от скролла списка.
-        match mode {
-            StratMode::Overview => col = col.child(self.coins_contrib_card(p, cx)),
-            StratMode::Filters => col = col.child(self.hist_card(p, cx)),
-            StratMode::Coins => {}
-        }
-        col.into_any_element()
+        main.into_any_element()
     }
 
     /// Карточка списка: шапка (заголовок + режимы + счётчик), свой скролл.

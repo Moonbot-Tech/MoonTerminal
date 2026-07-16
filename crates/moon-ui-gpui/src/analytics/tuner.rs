@@ -72,6 +72,14 @@ impl TunerState {
         }
     }
 
+    /// Сброс всех расчётов (смена скоупа/фильтров/периода) — пересчёт при
+    /// следующем входе в режим «Фильтры» или явным reload_*.
+    pub(super) fn invalidate(&mut self) {
+        self.stats = None;
+        self.hist = None;
+        self.sugg = None;
+    }
+
     /// Варианты для запроса: [пустой «Факт», v1..vN].
     fn variants(&self) -> Vec<Variant> {
         let mut out = vec![Variant::default()];
@@ -95,13 +103,32 @@ impl TunerState {
     }
 }
 
-/// Число из поля ввода: запятая как точка, пусто/мусор = None.
+/// Число из поля ввода: запятая как точка, суффиксы k/M/B/T (и кириллические
+/// к/м), пусто/мусор = None.
 fn parse_num(s: &str) -> Option<f64> {
     let s = s.trim().replace(',', ".");
     if s.is_empty() {
         return None;
     }
-    s.parse::<f64>().ok().filter(|v| v.is_finite())
+    let (mut t, mut mult) = (s.as_str(), 1.0f64);
+    if let Some(c) = s.chars().last() {
+        let m = match c {
+            'k' | 'K' | 'к' | 'К' => 1e3,
+            'm' | 'M' | 'м' | 'М' => 1e6,
+            'b' | 'B' => 1e9,
+            't' | 'T' => 1e12,
+            _ => 1.0,
+        };
+        if m != 1.0 {
+            mult = m;
+            t = &s[..s.len() - c.len_utf8()];
+        }
+    }
+    t.trim()
+        .parse::<f64>()
+        .ok()
+        .map(|v| v * mult)
+        .filter(|v| v.is_finite())
 }
 
 impl AnalyticsView {
@@ -122,8 +149,8 @@ impl AnalyticsView {
         let q = self.tuner_query();
         let sid = q.strategy;
         let variants = self.tuner.variants();
-        // Смена скоупа/фильтров обесценивает прошлый автоподбор.
-        self.tuner.sugg = None;
+        // Автоподбор НЕ сбрасываем: правка границ не меняет распределение
+        // факта, по которому он считался (сброс — в invalidate()).
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let (stats, strat_bounds) = executor
@@ -772,9 +799,27 @@ impl AnalyticsView {
     }
 }
 
-/// Формат числа для границ/чипов: до 4 значащих знаков без хвостовых нулей.
+/// Формат числа для границ/чипов: крупные — с суффиксом k/M/B/T (обратно
+/// понимается `parse_num`), прочие — до 4 знаков без хвостовых нулей.
 fn fmt_bound(v: f64) -> String {
-    let mut s = format!("{v:.4}");
+    let a = v.abs();
+    let (div, suf) = if a >= 1e12 {
+        (1e12, "T")
+    } else if a >= 1e9 {
+        (1e9, "B")
+    } else if a >= 1e6 {
+        (1e6, "M")
+    } else if a >= 1e3 {
+        (1e3, "k")
+    } else {
+        (1.0, "")
+    };
+    let x = v / div;
+    let mut s = if suf.is_empty() {
+        format!("{x:.4}")
+    } else {
+        format!("{x:.2}")
+    };
     if s.contains('.') {
         while s.ends_with('0') {
             s.pop();
@@ -783,6 +828,7 @@ fn fmt_bound(v: f64) -> String {
             s.pop();
         }
     }
+    s.push_str(suf);
     s
 }
 

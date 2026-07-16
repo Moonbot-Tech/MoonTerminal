@@ -249,8 +249,7 @@ impl AnalyticsView {
         let req = self.seq;
         // Тюнер зависит от тех же фильтров: сбрасываем; активному режиму —
         // пересчёт сразу, иначе — при следующем входе в режим «Фильтры».
-        self.tuner.stats = None;
-        self.tuner.hist = None;
+        self.tuner.invalidate();
         if self.tab == Tab::Strategies && self.strat_mode == strategies::StratMode::Filters {
             self.reload_tuner(cx);
             self.reload_hist(cx);
