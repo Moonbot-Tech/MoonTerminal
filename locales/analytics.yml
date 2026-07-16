@@ -93,6 +93,30 @@ analytics.tuner.suggest_run:
   ru: "Подобрать всё"
   en: "Search all"
   es: "Buscar todo"
+analytics.tuner.suggest_one:
+  ru: "Подобрать"
+  en: "Search"
+  es: "Buscar"
+analytics.tuner.save_btn:
+  ru: "В стратегию"
+  en: "To strategy"
+  es: "A estrategia"
+analytics.tuner.save_confirm:
+  ru: "Подтвердить?"
+  en: "Confirm?"
+  es: "¿Confirmar?"
+analytics.tuner.grp_filter:
+  ru: "Фильтры (IgnoreFilters)"
+  en: "Filters (IgnoreFilters)"
+  es: "Filtros (IgnoreFilters)"
+analytics.tuner.grp_delta:
+  ru: "Дельты (IgnoreDelta)"
+  en: "Deltas (IgnoreDelta)"
+  es: "Deltas (IgnoreDelta)"
+analytics.tuner.grp_volume:
+  ru: "Объёмы (IgnoreVolume)"
+  en: "Volumes (IgnoreVolume)"
+  es: "Volúmenes (IgnoreVolume)"
 analytics.tuner.hist_title:
   ru: "Распределение"
   en: "Distribution"

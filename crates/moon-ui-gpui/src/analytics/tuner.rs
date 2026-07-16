@@ -19,7 +19,7 @@ use super::summary::{fmt_signed, sign_color};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::config::layout::{TunerBoundCfg, TunerVariantCfg};
-use moon_core::db::tuner::{Bound, FIELDS, HistBucket, StratChip, VarStats, Variant};
+use moon_core::db::tuner::{Bound, FIELDS, FieldClass, HistBucket, StratFilters, VarStats, Variant};
 
 /// Вариантов помимо «Факта» (V3 держит 8 — начинаем с двух).
 pub(super) const N_VAR: usize = 2;
@@ -31,18 +31,20 @@ pub(super) struct TunerState {
     /// Границы вариантов текстом: `[вариант][индекс поля] = (от, до)`.
     pub(super) bounds: Vec<Vec<(String, String)>>,
     /// Кэш инпутов границ (ленивое создание в render).
-    inputs: HashMap<String, Entity<MoonInputState>>,
+    pub(super) inputs: HashMap<String, Entity<MoonInputState>>,
     /// Поле гистограммы (индекс в `FIELDS`).
     pub(super) sel_field: usize,
     pub(super) stats: Option<Arc<Vec<VarStats>>>,
     pub(super) hist: Option<Arc<Vec<HistBucket>>>,
-    /// Пороговые параметры выбранной стратегии по полям (чипы у имён полей).
-    strat_bounds: Arc<HashMap<&'static str, StratChip>>,
-    /// Автоподбор (кнопка «Подобрать») выполняется в фоне.
-    sugg_busy: bool,
+    /// Фильтровая карточка выбранной стратегии (Ignore-флаги + пороги).
+    pub(super) strat: Arc<StratFilters>,
+    /// Автоподбор (кнопки «Подобрать») выполняется в фоне.
+    pub(super) sugg_busy: bool,
+    /// Кнопка «В стратегию» ждёт второго клика-подтверждения.
+    pub(super) save_confirm: bool,
     seq: u64,
     hist_seq: u64,
-    sugg_seq: u64,
+    pub(super) sugg_seq: u64,
 }
 
 impl TunerState {
@@ -51,7 +53,7 @@ impl TunerState {
         let mut bounds = vec![vec![(String::new(), String::new()); FIELDS.len()]; N_VAR];
         for (vi, v) in cfg.iter().take(N_VAR).enumerate() {
             for b in &v.bounds {
-                if let Some(fi) = FIELDS.iter().position(|(c, _)| *c == b.field) {
+                if let Some(fi) = FIELDS.iter().position(|(c, _, _)| *c == b.field) {
                     bounds[vi][fi] = (b.from.clone(), b.to.clone());
                 }
             }
@@ -62,8 +64,9 @@ impl TunerState {
             sel_field: 0,
             stats: None,
             hist: None,
-            strat_bounds: Arc::new(HashMap::new()),
+            strat: Arc::new(StratFilters::default()),
             sugg_busy: false,
+            save_confirm: false,
             seq: 0,
             hist_seq: 0,
             sugg_seq: 0,
@@ -75,6 +78,7 @@ impl TunerState {
     pub(super) fn invalidate(&mut self) {
         self.stats = None;
         self.hist = None;
+        self.save_confirm = false;
     }
 
     /// Варианты для запроса: [пустой «Факт», v1..vN].
@@ -102,7 +106,7 @@ impl TunerState {
 
 /// Число из поля ввода: запятая как точка, суффиксы k/M/B/T (и кириллические
 /// к/м), пусто/мусор = None.
-fn parse_num(s: &str) -> Option<f64> {
+pub(super) fn parse_num(s: &str) -> Option<f64> {
     let s = s.trim().replace(',', ".");
     if s.is_empty() {
         return None;
@@ -130,7 +134,7 @@ fn parse_num(s: &str) -> Option<f64> {
 
 impl AnalyticsView {
     /// Запрос тюнера: общие фильтры + скоуп выбранной стратегии.
-    fn tuner_query(&self) -> moon_core::db::analytics::Query {
+    pub(super) fn tuner_query(&self) -> moon_core::db::analytics::Query {
         let mut q = self.query();
         q.strategy = self
             .sel_strategy
@@ -177,13 +181,13 @@ impl AnalyticsView {
         // факта, по которому он считался (сброс — в invalidate()).
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            let (stats, strat_bounds) = executor
+            let (stats, strat) = executor
                 .spawn(async move {
                     let stats = moon_core::db::tuner::variant_stats(&q, &variants);
-                    let sb = sid
-                        .map(|sid| moon_core::db::tuner::strategy_bounds(sid, &defaults))
+                    let sf = sid
+                        .map(|sid| moon_core::db::tuner::strategy_filters(sid, &defaults))
                         .unwrap_or_default();
-                    (stats, sb)
+                    (stats, sf)
                 })
                 .await;
             let _ = cx.update(|cx| {
@@ -192,60 +196,7 @@ impl AnalyticsView {
                         return;
                     }
                     this.tuner.stats = stats.map(Arc::new);
-                    this.tuner.strat_bounds = Arc::new(strat_bounds);
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
-    }
-
-    /// Автоподбор порогов ВСЕХ полей (кнопка «Подобрать всё»): перебор пар
-    /// квантильных краёв в фоне, результаты пишутся в v1 построчно.
-    fn suggest_into_v1(&mut self, cx: &mut Context<Self>) {
-        self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
-        let req = self.tuner.sugg_seq;
-        self.tuner.sugg_busy = true;
-        let q = self.tuner_query();
-        // Не позволяем «оптимизации» схлопнуться в пару счастливых сделок:
-        // держим минимум 1/5 фактических сделок (но не меньше 30).
-        let min_n = self
-            .tuner
-            .stats
-            .as_ref()
-            .and_then(|s| s.first().map(|f| f.n / 5))
-            .unwrap_or(0)
-            .max(30);
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let sugg = executor
-                .spawn(async move { moon_core::db::tuner::suggest_all(&q, min_n) })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    if this.tuner.sugg_seq != req {
-                        return;
-                    }
-                    this.tuner.sugg_busy = false;
-                    if let Some(res) = sugg {
-                        let by_field: HashMap<&str, _> = res.into_iter().collect();
-                        for fi in 0..FIELDS.len() {
-                            let (from, to) = by_field
-                                .get(FIELDS[fi].0)
-                                .map(|s| {
-                                    (
-                                        s.from.map(fmt_bound).unwrap_or_default(),
-                                        s.to.map(fmt_bound).unwrap_or_default(),
-                                    )
-                                })
-                                .unwrap_or_default();
-                            this.tuner.bounds[0][fi] = (from, to);
-                            this.tuner.inputs.remove(&format!("tv0f{fi}a"));
-                            this.tuner.inputs.remove(&format!("tv0f{fi}b"));
-                        }
-                        this.persist_tuner(cx);
-                        this.reload_tuner(cx);
-                    }
+                    this.tuner.strat = Arc::new(strat);
                     cx.notify();
                 });
             });
@@ -292,7 +243,7 @@ impl AnalyticsView {
 
     /// Программная установка ОБЕИХ границ поля (чип стратегии / очистка /
     /// автоподбор): состояние + тихая синхронизация инпутов + пересчёт.
-    fn apply_bounds(&mut self, vi: usize, fi: usize, from: String, to: String, cx: &mut Context<Self>) {
+    pub(super) fn apply_bounds(&mut self, vi: usize, fi: usize, from: String, to: String, cx: &mut Context<Self>) {
         if self.tuner.bounds[vi][fi] == (from.clone(), to.clone()) {
             return;
         }
@@ -308,7 +259,7 @@ impl AnalyticsView {
     }
 
     /// Границы вариантов → layout (персист как ввёл пользователь).
-    fn persist_tuner(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn persist_tuner(&mut self, cx: &mut Context<Self>) {
         let cfg: Vec<TunerVariantCfg> = self
             .tuner
             .bounds
@@ -508,9 +459,48 @@ impl AnalyticsView {
                 .child(div().w(design::ui_px(cx, 12.0)).flex_none());
         }
 
-        let strat_bounds = self.tuner.strat_bounds.clone();
+        let strat = self.tuner.strat.clone();
         let mut grid = v_flex().w_full().child(head);
+        let mut last_class: Option<FieldClass> = None;
         for fi in 0..FIELDS.len() {
+            let class = FIELDS[fi].2;
+            // Подзаголовок группы (класс игноров); у игнорируемой — метка.
+            if last_class != Some(class) {
+                last_class = Some(class);
+                let (label, ignored) = match class {
+                    FieldClass::Filter => (
+                        t!("analytics.tuner.grp_filter").to_string(),
+                        strat.found && strat.ignore_filters,
+                    ),
+                    FieldClass::Delta => (
+                        t!("analytics.tuner.grp_delta").to_string(),
+                        strat.found && strat.class_ignored(FieldClass::Delta),
+                    ),
+                    FieldClass::Volume => (
+                        t!("analytics.tuner.grp_volume").to_string(),
+                        strat.found && strat.class_ignored(FieldClass::Volume),
+                    ),
+                };
+                let mut hdr = h_flex()
+                    .w_full()
+                    .px(design::ui_px(cx, 8.0))
+                    .py(design::ui_px(cx, 2.0))
+                    .gap(design::ui_px(cx, 6.0))
+                    .items_center()
+                    .bg(moon_alpha(p.table_head, 0.6))
+                    .border_t_1()
+                    .border_color(moon_alpha(p.border, 0.7))
+                    .text_size(design::t_caption(cx))
+                    .child(div().text_color(moon(p.text_soft)).child(label));
+                if ignored {
+                    hdr = hdr.child(
+                        div()
+                            .text_color(moon_alpha(p.text_muted, 0.7))
+                            .child("ignore"),
+                    );
+                }
+                grid = grid.child(hdr);
+            }
             let selected = self.tuner.sel_field == fi;
             let mut row = h_flex()
                 .id(SharedString::from(format!("tun-field-{fi}")))
@@ -541,19 +531,14 @@ impl AnalyticsView {
             if selected {
                 row = row.bg(moon_alpha(p.amber, 0.08));
             }
-            // Чип: НЕдефолтные пороги выбранной стратегии (справочно), либо
-            // серое «ignore» — стратегия игнорирует этот класс фильтров.
-            let chip = strat_bounds.get(FIELDS[fi].0).copied();
+            // Чип: НЕдефолтные пороги выбранной стратегии (справочно). Если
+            // класс игнорируется флагами — значений НЕ показываем (метка
+            // «ignore» стоит на подзаголовке группы).
+            let chip = (strat.found && !strat.class_ignored(class))
+                .then(|| strat.bounds.get(FIELDS[fi].0).copied())
+                .flatten();
             row = row.child(match chip {
-                Some(StratChip::Ignored) => div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon_alpha(p.text_muted, 0.7))
-                    .child("ignore")
-                    .into_any_element(),
-                Some(StratChip::Bounds(lo, hi)) => {
+                Some((lo, hi)) => {
                     let text = [
                         lo.map(|v| format!("min({})", fmt_bound(v))),
                         hi.map(|v| format!("max({})", fmt_bound(v))),
@@ -602,8 +587,86 @@ impl AnalyticsView {
             }
             grid = grid.child(row);
         }
-        // Карточка со своей шапкой: заголовок + «Подобрать всё» (заполняет
-        // v1 лучшими диапазонами ВСЕХ полей) справа.
+        // Карточка со своей шапкой: заголовок + кнопки «Подобрать» (выбранное
+        // поле → v1), «Подобрать всё» (все поля → v1) и «В стратегию»
+        // (запись v1 в параметры выбранной стратегии, с подтверждением).
+        let busy = self.tuner.sugg_busy;
+        let mut header = h_flex()
+            .w_full()
+            .px(design::ui_px(cx, 12.0))
+            .py(design::ui_px(cx, 8.0))
+            .items_center()
+            .gap(design::ui_px(cx, 6.0))
+            .child(
+                div()
+                    .text_size(design::t_title(cx))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("analytics.tuner.fields_title").to_string()),
+            )
+            .child(div().flex_1())
+            .child(
+                MoonButton::new("tun-suggest-one")
+                    .variant(MoonButtonVariant::Soft)
+                    .size(MoonButtonSize::Micro)
+                    .label(if busy {
+                        "…".to_string()
+                    } else {
+                        t!("analytics.tuner.suggest_one").to_string()
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.tuner.sugg_busy {
+                            this.suggest_one_into_v1(cx);
+                            cx.notify();
+                        }
+                    }))
+                    .render(),
+            )
+            .child(
+                MoonButton::new("tun-suggest-run")
+                    .variant(MoonButtonVariant::Blue)
+                    .size(MoonButtonSize::Micro)
+                    .label(if busy {
+                        "…".to_string()
+                    } else {
+                        t!("analytics.tuner.suggest_run").to_string()
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.tuner.sugg_busy {
+                            this.suggest_into_v1(cx);
+                            cx.notify();
+                        }
+                    }))
+                    .render(),
+            );
+        // «В стратегию» — только при выбранной стратегии; двухкликовое
+        // подтверждение (первый клик — «Подтвердить?»).
+        if self.sel_strategy.is_some() {
+            let confirm = self.tuner.save_confirm;
+            header = header.child(
+                MoonButton::new("tun-save-strat")
+                    .variant(if confirm {
+                        MoonButtonVariant::Amber
+                    } else {
+                        MoonButtonVariant::Soft
+                    })
+                    .size(MoonButtonSize::Micro)
+                    .label(if confirm {
+                        t!("analytics.tuner.save_confirm").to_string()
+                    } else {
+                        t!("analytics.tuner.save_btn").to_string()
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.tuner.save_confirm {
+                            this.tuner.save_confirm = false;
+                            this.save_v1_to_strategy(cx);
+                        } else {
+                            this.tuner.save_confirm = true;
+                        }
+                        cx.notify();
+                    }))
+                    .render(),
+            );
+        }
         v_flex()
             .w_full()
             .flex_none()
@@ -612,153 +675,16 @@ impl AnalyticsView {
             .border_1()
             .border_color(moon(p.border))
             .overflow_hidden()
-            .child(
-                h_flex()
-                    .w_full()
-                    .px(design::ui_px(cx, 12.0))
-                    .py(design::ui_px(cx, 8.0))
-                    .items_center()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(
-                        div()
-                            .text_size(design::t_title(cx))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(t!("analytics.tuner.fields_title").to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(design::t_caption(cx))
-                            .text_color(moon(p.text_muted))
-                            .child(t!("analytics.tuner.fields_sub").to_string()),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        MoonButton::new("tun-suggest-run")
-                            .variant(MoonButtonVariant::Blue)
-                            .size(MoonButtonSize::Micro)
-                            .label(if self.tuner.sugg_busy {
-                                "…".to_string()
-                            } else {
-                                t!("analytics.tuner.suggest_run").to_string()
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if !this.tuner.sugg_busy {
-                                    this.suggest_into_v1(cx);
-                                    cx.notify();
-                                }
-                            }))
-                            .render(),
-                    ),
-            )
+            .child(header)
             .child(grid)
             .into_any_element()
-    }
-
-    /// Гистограмма выбранного поля: выигрыши вверх, убытки вниз, счётчик и края.
-    pub(super) fn hist_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        // В заголовке — поле и скоуп (имя стратегии / все).
-        let scope = self
-            .sel_strategy
-            .as_ref()
-            .map(|(_, n)| n.clone())
-            .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
-        let title = format!(
-            "{} — {} — {}",
-            t!("analytics.tuner.hist_title"),
-            FIELDS[self.tuner.sel_field].1,
-            scope,
-        );
-        let body: AnyElement = match self.tuner.hist.clone() {
-            None => div()
-                .p(design::ui_px(cx, 8.0))
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.loading").to_string())
-                .into_any_element(),
-            Some(h) if h.is_empty() => div()
-                .p(design::ui_px(cx, 8.0))
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.empty_period").to_string())
-                .into_any_element(),
-            Some(h) => {
-                let max = h
-                    .iter()
-                    .map(|b| b.wsum.max(b.lsum))
-                    .fold(1e-9f64, f64::max);
-                let half = design::ui_px(cx, 74.0);
-                let mut row = h_flex().w_full().gap(design::ui_px(cx, 3.0)).items_start();
-                for b in h.iter() {
-                    let up = ((b.wsum / max) as f32).clamp(0.0, 1.0);
-                    let dn = ((b.lsum / max) as f32).clamp(0.0, 1.0);
-                    row = row.child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .items_center()
-                            .gap(px(2.0))
-                            // Выигрыши (вверх от оси).
-                            .child(
-                                div().w_full().h(half).flex().items_end().justify_center().child(
-                                    div()
-                                        .w(relative(0.62))
-                                        .h(relative(up.max(if b.wsum > 0.0 { 0.02 } else { 0.0 })))
-                                        .rounded_t(px(2.0))
-                                        .bg(moon(p.green)),
-                                ),
-                            )
-                            // Убытки (вниз от оси).
-                            .child(
-                                div()
-                                    .w_full()
-                                    .h(half)
-                                    .flex()
-                                    .items_start()
-                                    .justify_center()
-                                    .border_t_1()
-                                    .border_color(moon_alpha(p.border, 0.8))
-                                    .child(
-                                        div()
-                                            .w(relative(0.62))
-                                            .h(relative(dn.max(if b.lsum > 0.0 { 0.02 } else { 0.0 })))
-                                            .rounded_b(px(2.0))
-                                            .bg(moon(p.orange)),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_size(design::t_caption(cx))
-                                    .text_color(moon(sign_color(p, b.wsum - b.lsum)))
-                                    .child(fmt_signed(b.wsum - b.lsum)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(design::t_caption(cx))
-                                    .text_color(moon(p.text_soft))
-                                    .child(b.n.to_string()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(design::t_caption(cx))
-                                    .text_color(moon(p.text_muted))
-                                    .child(short_num(b.lo)),
-                            ),
-                    );
-                }
-                v_flex()
-                    .w_full()
-                    .px(design::ui_px(cx, 8.0))
-                    .pb(design::ui_px(cx, 6.0))
-                    .child(row)
-                    .into_any_element()
-            }
-        };
-        card(title, t!("analytics.tuner.hist_sub").to_string(), body, p, cx)
     }
 
 }
 
 /// Формат числа для границ/чипов: крупные — с суффиксом k/M/B/T (обратно
 /// понимается `parse_num`), прочие — до 4 знаков без хвостовых нулей.
-fn fmt_bound(v: f64) -> String {
+pub(super) fn fmt_bound(v: f64) -> String {
     let a = v.abs();
     let (div, suf) = if a >= 1e12 {
         (1e12, "T")
@@ -790,7 +716,7 @@ fn fmt_bound(v: f64) -> String {
 }
 
 /// Карточка с заголовком и подзаголовком (общий вид карточек Аналитики).
-fn card(
+pub(super) fn card(
     title: String,
     sub: String,
     body: AnyElement,
@@ -829,22 +755,4 @@ fn card(
         .child(head)
         .child(body)
         .into_any_element()
-}
-
-/// Короткий формат числа для краёв вёдер (объёмы до миллиардов).
-fn short_num(v: f64) -> String {
-    let a = v.abs();
-    if a >= 1e9 {
-        format!("{:.1}B", v / 1e9)
-    } else if a >= 1e6 {
-        format!("{:.1}M", v / 1e6)
-    } else if a >= 1e3 {
-        format!("{:.1}k", v / 1e3)
-    } else if a >= 100.0 {
-        format!("{v:.0}")
-    } else if a >= 10.0 {
-        format!("{v:.1}")
-    } else {
-        format!("{v:.2}")
-    }
 }

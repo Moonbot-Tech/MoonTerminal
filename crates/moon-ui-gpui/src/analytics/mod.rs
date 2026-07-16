@@ -13,6 +13,8 @@ mod charts;
 mod strategies;
 mod summary;
 mod tuner;
+mod tuner_actions;
+mod tuner_hist;
 
 use std::collections::HashSet;
 use std::sync::Arc;

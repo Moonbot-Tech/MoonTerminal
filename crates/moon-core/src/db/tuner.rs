@@ -12,26 +12,45 @@ use rusqlite::Connection;
 
 use super::analytics::{Query, unified_from};
 
-/// Поля отчёта, доступные фильтрам: (колонка реплики, подпись как в MB/V3).
-/// ЕДИНСТВЕННЫЙ источник имён колонок, попадающих в SQL тюнера (вайтлист).
-pub const FIELDS: &[(&str, &str)] = &[
-    ("bvsvratio", "bvsv"),
-    ("pump1h", "Pump1H"),
-    ("dump1h", "Dump1H"),
-    ("d24h", "d24h"),
-    ("d3h", "d3h"),
-    ("d1h", "d1h"),
-    ("d15m", "d15m"),
-    ("d5m", "d5m"),
-    ("d1m", "d1m"),
-    ("vd1m", "Vd1m"),
-    ("hvol", "H.Vol"),
-    ("dvol", "D.Vol"),
-    ("btc1hdelta", "dBTC"),
-    ("exchange1hdelta", "dMarket"),
-    ("btc24hdelta", "d24BTC"),
-    ("btc5mdelta", "dBTC5m"),
-    ("dbtc1m", "dBTC1m"),
+/// Класс поля — каким Ignore-флагом стратегии выключается его фильтр.
+/// `IgnoreFilters` выключает ВСЕ классы; `IgnoreDelta`/`IgnoreVolume` — свои.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldClass {
+    Filter,
+    Delta,
+    Volume,
+}
+
+/// Поля отчёта, доступные фильтрам: (колонка реплики, подпись как в MB/V3,
+/// класс). ЕДИНСТВЕННЫЙ источник имён колонок, попадающих в SQL тюнера
+/// (вайтлист). Порядок = порядок в сетке, группами по классу.
+pub const FIELDS: &[(&str, &str, FieldClass)] = &[
+    // Общие фильтры (только IgnoreFilters).
+    ("bvsvratio", "bvsv", FieldClass::Filter),
+    ("pump1h", "Pump1H", FieldClass::Filter),
+    ("dump1h", "Dump1H", FieldClass::Filter),
+    ("pricebug", "PriceBug", FieldClass::Filter),
+    // Дельты (IgnoreFilters | IgnoreDelta).
+    ("d24h", "d24h", FieldClass::Delta),
+    ("d3h", "d3h", FieldClass::Delta),
+    ("d1h", "d1h", FieldClass::Delta),
+    ("d15m", "d15m", FieldClass::Delta),
+    ("d5m", "d5m", FieldClass::Delta),
+    ("d1m", "d1m", FieldClass::Delta),
+    ("da1m", "da1m", FieldClass::Delta),
+    ("d5s", "d5s", FieldClass::Delta),
+    ("vd1m", "Vd1m", FieldClass::Delta),
+    ("dmark", "dMark", FieldClass::Delta),
+    ("btc1hdelta", "dBTC", FieldClass::Delta),
+    ("exchange1hdelta", "dMarket", FieldClass::Delta),
+    ("btc24hdelta", "d24BTC", FieldClass::Delta),
+    ("exchange24hdelta", "dM24", FieldClass::Delta),
+    ("btc5mdelta", "dBTC5m", FieldClass::Delta),
+    ("dbtc1m", "dBTC1m", FieldClass::Delta),
+    // Объёмы (IgnoreFilters | IgnoreVolume).
+    ("hvol", "H.Vol", FieldClass::Volume),
+    ("hvolf", "H.VolF", FieldClass::Volume),
+    ("dvol", "D.Vol", FieldClass::Volume),
 ];
 
 /// Диапазон по одному полю; None — граница не задана.
@@ -59,7 +78,7 @@ impl Variant {
     fn where_sql(&self) -> String {
         let mut w = String::new();
         for b in &self.bounds {
-            if !FIELDS.iter().any(|(c, _)| *c == b.field) {
+            if !FIELDS.iter().any(|(c, _, _)| *c == b.field) {
                 continue;
             }
             if let Some(v) = b.from.filter(|v| v.is_finite()) {
@@ -175,7 +194,7 @@ pub struct HistBucket {
 /// Гистограмма распределения сделок/профита по значению поля на входе.
 /// Вёдра квантильные (≈равнонаполненные, ≤`want`); NULL-поля пропускаются.
 pub fn histogram(q: &Query, field: &str, want: usize) -> Option<Vec<HistBucket>> {
-    if !FIELDS.iter().any(|(c, _)| *c == field) {
+    if !FIELDS.iter().any(|(c, _, _)| *c == field) {
         return None;
     }
     let conn = super::open_reader()?;
@@ -249,7 +268,7 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> Option<Vec<HistBucket>>
 
 /// Маппинг «поле отчёта → параметры-фильтры стратегии MoonBot» (min, max).
 /// Для полей без однозначного параметра (d1h/d15m/… — настраиваемые
-/// Delta2/Delta3 окна) маппинга нет.
+/// Delta2/Delta3 окна; PriceBug/da1m/d5s/dMark/H.VolF) маппинга нет.
 const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("bvsvratio", None, Some("BV_SV_Ratio")),
     ("d24h", None, Some("Delta_24h_Max")),
@@ -259,29 +278,76 @@ const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("btc1hdelta", Some("Delta_BTC_Min"), Some("Delta_BTC_Max")),
     ("exchange1hdelta", Some("Delta_Market_Min"), Some("Delta_Market_Max")),
     ("btc24hdelta", Some("Delta_BTC_24_Min"), Some("Delta_BTC_24_Max")),
+    ("exchange24hdelta", Some("Delta_Market_24_Min"), Some("Delta_Market_24_Max")),
     ("btc5mdelta", None, Some("Delta_BTC_5m_Max")),
     ("dbtc1m", None, Some("Delta_BTC_1m_Max")),
 ];
 
-/// Чип поля: пороги стратегии либо «фильтры этого класса игнорируются».
-#[derive(Clone, Copy, Debug)]
-pub enum StratChip {
-    /// IgnoreFilters / IgnoreDelta / IgnoreVolume выключают класс фильтров —
-    /// что бы ни стояло в порогах, стратегия их не применяет.
-    Ignored,
-    Bounds(Option<f64>, Option<f64>),
+/// Параметры стратегии (min, max) для поля отчёта; (None, None) — маппинга нет.
+pub fn params_for(field: &str) -> (Option<&'static str>, Option<&'static str>) {
+    STRAT_PARAMS
+        .iter()
+        .find(|(f, _, _)| *f == field)
+        .map(|(_, lo, hi)| (*lo, *hi))
+        .unwrap_or((None, None))
+}
+
+/// Ядра, на которых стратегия сейчас существует (head'ы strategies.sqlite,
+/// deleted=0) — адресаты сохранения порогов.
+pub fn strategy_cores(strategy_id: i64) -> Vec<u64> {
+    let path = crate::config::paths::strategies_db_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(conn) =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return Vec::new();
+    };
+    conn.prepare("SELECT core_uid FROM strategies WHERE strategy_id = ?1 AND deleted = 0")
+        .ok()
+        .and_then(|mut st| {
+            st.query_map([strategy_id], |r| r.get::<_, i64>(0))
+                .ok()
+                .map(|rows| rows.flatten().map(|c| c as u64).collect())
+        })
+        .unwrap_or_default()
+}
+
+/// Фильтровая «карточка» стратегии: Ignore-флаги + НЕдефолтные пороги по
+/// полям тюнера. Флаги нужны и чипам (игнорируемый класс не показываем), и
+/// сохранению порогов (перед записью включить нужные классы).
+#[derive(Clone, Debug, Default)]
+pub struct StratFilters {
+    pub found: bool,
+    pub ignore_filters: bool,
+    pub ignore_delta: bool,
+    pub ignore_volume: bool,
+    pub bounds: std::collections::HashMap<&'static str, (Option<f64>, Option<f64>)>,
+}
+
+impl StratFilters {
+    /// Игнорируется ли класс поля текущими флагами стратегии.
+    pub fn class_ignored(&self, class: FieldClass) -> bool {
+        self.ignore_filters
+            || match class {
+                FieldClass::Filter => false,
+                FieldClass::Delta => self.ignore_delta,
+                FieldClass::Volume => self.ignore_volume,
+            }
+    }
 }
 
 /// Пороговые параметры ВЫБРАННОЙ стратегии по полям тюнера.
 /// Источник — текущая версия в strategies.sqlite (raw_json нормализован со
 /// схемными дефолтами). `defaults` — дефолты схемы (lowercase имя → число):
 /// значение, РАВНОЕ дефолту, скрывается — это «фильтр не настроен», а не
-/// осознанный порог (…100T и т.п.). Пустая карта — БД нет / не найдена.
-pub fn strategy_bounds(
+/// осознанный порог (…100T и т.п.). `found=false` — БД нет / не найдена.
+pub fn strategy_filters(
     strategy_id: i64,
     defaults: &std::collections::HashMap<String, f64>,
-) -> std::collections::HashMap<&'static str, StratChip> {
-    let mut out = std::collections::HashMap::new();
+) -> StratFilters {
+    let mut out = StratFilters::default();
     let path = crate::config::paths::strategies_db_path();
     if !path.exists() {
         return out;
@@ -340,22 +406,14 @@ pub fn strategy_bounds(
             _ => false,
         }
     };
-    let all_off = truthy("IgnoreFilters");
-    let delta_off = all_off || truthy("IgnoreDelta");
-    let volume_off = all_off || truthy("IgnoreVolume");
+    out.found = true;
+    out.ignore_filters = truthy("IgnoreFilters");
+    out.ignore_delta = truthy("IgnoreDelta");
+    out.ignore_volume = truthy("IgnoreVolume");
     for (field, pmin, pmax) in STRAT_PARAMS {
-        let ignored = match *field {
-            "hvol" | "dvol" => volume_off,
-            "bvsvratio" => all_off,
-            _ => delta_off,
-        };
-        if ignored {
-            out.insert(*field, StratChip::Ignored);
-            continue;
-        }
         let (lo, hi) = (num(*pmin), num(*pmax));
         if lo.is_some() || hi.is_some() {
-            out.insert(*field, StratChip::Bounds(lo, hi));
+            out.bounds.insert(*field, (lo, hi));
         }
     }
     out
@@ -383,7 +441,7 @@ pub fn suggest_all(q: &Query, min_n: i64) -> Option<Vec<(&'static str, Suggestio
     let src = unified_from(&conn, &q)?;
     let cols = FIELDS
         .iter()
-        .map(|(c, _)| format!("o.\"{c}\""))
+        .map(|(c, _, _)| format!("o.\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!("SELECT {cols}, COALESCE(o.profitbtc,0) FROM {src}");
@@ -412,6 +470,34 @@ pub fn suggest_all(q: &Query, min_n: i64) -> Option<Vec<(&'static str, Suggestio
             })
             .collect(),
     )
+}
+
+/// Автоподбор порога ОДНОГО поля (кнопка «Подобрать» у выбранной строки).
+pub fn suggest_field(q: &Query, field: &str, min_n: i64) -> Option<Suggestion> {
+    if !FIELDS.iter().any(|(c, _, _)| *c == field) {
+        return None;
+    }
+    let conn = super::open_reader()?;
+    let mut q = q.clone();
+    if q.from < 0 {
+        q.from = 1;
+    }
+    let src = unified_from(&conn, &q)?;
+    let sql = format!(
+        "SELECT o.\"{field}\", COALESCE(o.profitbtc,0)
+         FROM {src} WHERE o.\"{field}\" IS NOT NULL"
+    );
+    let mut vals: Vec<(f64, f64)> = conn
+        .prepare(&sql)
+        .ok()?
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
+        })
+        .ok()?
+        .flatten()
+        .filter(|(v, _)| v.is_finite())
+        .collect();
+    best_range(&mut vals, min_n.max(1) as usize)
 }
 
 /// Лучший диапазон одного поля по выборке `(значение, профит)`.
