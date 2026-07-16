@@ -26,7 +26,7 @@ impl AnalyticsView {
             .trim()
             .parse::<usize>()
             .unwrap_or(4)
-            .clamp(1, 50);
+            .clamp(1, 64);
         let min_n = self.suggest_min_n();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -43,7 +43,7 @@ impl AnalyticsView {
                     this.tuner.sugg_busy = false;
                     if let Some(res) = sugg {
                         log::info!(
-                            "аналитика: умный подбор — профит {:+.2}, сделок {}, итераций {}",
+                            "аналитика: умный подбор — профит {:+.2}, сделок {}, попыток {}",
                             res.profit,
                             res.n,
                             res.rounds
@@ -99,6 +99,20 @@ impl AnalyticsView {
             });
         })
         .detach();
+    }
+
+    /// «Очистить всё»: снять все границы v1 и v2 разом.
+    pub(super) fn clear_all_bounds(&mut self, cx: &mut Context<Self>) {
+        for vi in 0..super::tuner::N_VAR {
+            for fi in 0..FIELDS.len() {
+                self.tuner.bounds[vi][fi] = (String::new(), String::new());
+                self.tuner.inputs.remove(&format!("tv{vi}f{fi}a"));
+                self.tuner.inputs.remove(&format!("tv{vi}f{fi}b"));
+            }
+        }
+        self.persist_tuner(cx);
+        self.reload_tuner(cx);
+        cx.notify();
     }
 
     /// Минимум сделок для автоподбора: из конфиг-строки; пусто = авто — не

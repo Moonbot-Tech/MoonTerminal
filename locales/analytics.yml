@@ -94,9 +94,13 @@ analytics.tuner.suggest_run:
   en: "Search all"
   es: "Buscar todo"
 analytics.tuner.iters:
-  ru: "итераций"
-  en: "iterations"
-  es: "iteraciones"
+  ru: "попыток"
+  en: "restarts"
+  es: "intentos"
+analytics.tuner.clear_all:
+  ru: "Очистить всё"
+  en: "Clear all"
+  es: "Limpiar todo"
 analytics.tuner.min_trades:
   ru: "сделок ≥"
   en: "trades ≥"

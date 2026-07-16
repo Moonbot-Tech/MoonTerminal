@@ -523,7 +523,7 @@ impl AnalyticsView {
         let busy = self.tuner.sugg_busy;
         let it_input = self.cfg_input(false, "4", window, cx);
         let mn_input = self.cfg_input(true, &t!("analytics.tuner.auto_ph"), window, cx);
-        let cfg_row = h_flex()
+        let mut cfg_row = h_flex()
             .w_full()
             .px(design::ui_px(cx, 12.0))
             .pb(design::ui_px(cx, 6.0))
@@ -552,39 +552,53 @@ impl AnalyticsView {
             )
             .child(div().flex_1())
             .child(
-                MoonButton::new("tun-suggest-one")
-                    .variant(MoonButtonVariant::Soft)
+                MoonButton::new("tun-clear-all")
+                    .variant(MoonButtonVariant::Ghost)
                     .size(MoonButtonSize::Micro)
-                    .label(if busy {
-                        "…".to_string()
-                    } else {
-                        t!("analytics.tuner.suggest_one").to_string()
-                    })
+                    .label(t!("analytics.tuner.clear_all").to_string())
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if !this.tuner.sugg_busy {
-                            this.suggest_one_into_v1(cx);
-                            cx.notify();
-                        }
-                    }))
-                    .render(),
-            )
-            .child(
-                MoonButton::new("tun-suggest-run")
-                    .variant(MoonButtonVariant::Blue)
-                    .size(MoonButtonSize::Micro)
-                    .label(if busy {
-                        "…".to_string()
-                    } else {
-                        t!("analytics.tuner.suggest_run").to_string()
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if !this.tuner.sugg_busy {
-                            this.suggest_into_v1(cx);
-                            cx.notify();
-                        }
+                        this.clear_all_bounds(cx);
                     }))
                     .render(),
             );
+        // Подбор (как и сохранение) имеет смысл только в скоупе стратегии.
+        if self.sel_strategy.is_some() {
+            cfg_row = cfg_row
+                .child(
+                    MoonButton::new("tun-suggest-one")
+                        .variant(MoonButtonVariant::Soft)
+                        .size(MoonButtonSize::Micro)
+                        .label(if busy {
+                            "…".to_string()
+                        } else {
+                            t!("analytics.tuner.suggest_one").to_string()
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if !this.tuner.sugg_busy {
+                                this.suggest_one_into_v1(cx);
+                                cx.notify();
+                            }
+                        }))
+                        .render(),
+                )
+                .child(
+                    MoonButton::new("tun-suggest-run")
+                        .variant(MoonButtonVariant::Blue)
+                        .size(MoonButtonSize::Micro)
+                        .label(if busy {
+                            "…".to_string()
+                        } else {
+                            t!("analytics.tuner.suggest_run").to_string()
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if !this.tuner.sugg_busy {
+                                this.suggest_into_v1(cx);
+                                cx.notify();
+                            }
+                        }))
+                        .render(),
+                );
+        }
         // Карточка со своей шапкой: заголовок + кнопки «Подобрать» (выбранное
         // поле → v1), «Подобрать всё» (все поля → v1) и «В стратегию»
         // (запись v1 в параметры выбранной стратегии, с подтверждением).
