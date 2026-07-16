@@ -241,6 +241,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             strategies_goto: None,
             assets_window: None,
             screener_window: None,
+            analytics_window: None,
             firetest: firetest_config.clone().map(firetest::Runtime::new),
             hovered_chart: None,
             detached,

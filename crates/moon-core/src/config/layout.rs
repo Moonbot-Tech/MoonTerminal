@@ -136,6 +136,9 @@ pub struct WindowLayout {
     /// Геометрия окна «Скринер» (singleton) — чтобы открывалось на прежнем месте.
     #[serde(default)]
     pub screener_window: Option<GeomRect>,
+    /// Геометрия окна «Аналитика» (singleton) — чтобы открывалось на прежнем месте.
+    #[serde(default)]
+    pub analytics_window: Option<GeomRect>,
     /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

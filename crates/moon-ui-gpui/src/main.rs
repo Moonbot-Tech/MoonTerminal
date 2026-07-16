@@ -37,6 +37,7 @@ mod dock_persist;
 mod figures_backend;
 mod firetest;
 mod group_window;
+mod analytics;
 mod hotkeys;
 mod icons;
 mod input;
@@ -257,6 +258,8 @@ struct Backend {
     assets_window: Option<WindowHandle<Root>>,
     /// Окно «Скринер» (singleton, все биржи с дедупом по провайдеру) — дедуп/фокус.
     screener_window: Option<WindowHandle<Root>>,
+    /// Окно «Аналитика» (singleton, анализаторы отчётов) — дедуп/фокус.
+    analytics_window: Option<WindowHandle<Root>>,
     /// Built-in debug scenario runner (`--debug-script chart-smoke`). None in normal app runs.
     firetest: Option<firetest::Runtime>,
     /// Откреплённые dock-панели (какая панель, из какой группы, геометрия окна) — load

@@ -274,6 +274,15 @@ pub fn toolbar(
             p,
         ))
         .child(open_window_button(
+            "toolbar-analytics",
+            t!("toolbar.analytics").to_string(),
+            "icons/layout-dashboard.svg",
+            None,
+            backend.clone(),
+            crate::analytics::open,
+            p,
+        ))
+        .child(open_window_button(
             "toolbar-settings",
             t!("shell.settings_btn").to_string(),
             "icons/settings.svg",

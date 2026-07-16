@@ -12,6 +12,7 @@
 //!
 //! Пишет ОДИН поток-writer; читает окно «Отчёты» отдельным соединением (WAL).
 
+pub mod analytics;
 pub mod maint;
 mod parse;
 mod rep;
@@ -419,6 +420,12 @@ fn apply_extras(
     let mut stmt = conn.prepare_cached(&sql)?;
     stmt.execute(params.as_slice())?;
     Ok(())
+}
+
+/// Имена колонок реплики `orders_rep` (lowercase) — аналитика проверяет, что
+/// нужные авто-колонки уже доросли (свежая реплика могла ещё не получить схему).
+pub(crate) fn rep_columns(conn: &Connection) -> std::collections::HashSet<String> {
+    rep::table_cols(conn)
 }
 
 /// Имена колонок ЛЕГАСИ-таблицы (seed-кэш writer'а для авто-колонок close-SQL).

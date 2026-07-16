@@ -1,0 +1,202 @@
+# Окно «Аналитика»: вкладки, периоды, KPI сводки, топы, инсайты.
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+analytics.window_title:
+  ru: "MoonTerminal — Аналитика"
+  en: "MoonTerminal — Analytics"
+  es: "MoonTerminal — Analítica"
+toolbar.analytics:
+  ru: "Аналитика"
+  en: "Analytics"
+  es: "Analítica"
+
+analytics.tab.summary:
+  ru: "Сводка"
+  en: "Summary"
+  es: "Resumen"
+analytics.tab.strategies:
+  ru: "Стратегии"
+  en: "Strategies"
+  es: "Estrategias"
+analytics.tab.coins:
+  ru: "Монеты"
+  en: "Coins"
+  es: "Monedas"
+analytics.tab.heatmap:
+  ru: "Heatmap"
+  en: "Heatmap"
+  es: "Heatmap"
+analytics.tab.calendar:
+  ru: "Календарь"
+  en: "Calendar"
+  es: "Calendario"
+analytics.tab.leverage:
+  ru: "Плечо"
+  en: "Leverage"
+  es: "Apalancam."
+analytics.stub:
+  ru: "Вкладка в разработке — следующий этап плана аналитики."
+  en: "Tab under construction — next stage of the analytics plan."
+  es: "Pestaña en desarrollo — siguiente etapa del plan."
+
+analytics.period.today:
+  ru: "Сегодня"
+  en: "Today"
+  es: "Hoy"
+analytics.period.yesterday:
+  ru: "Вчера"
+  en: "Yesterday"
+  es: "Ayer"
+analytics.period.week:
+  ru: "Неделя"
+  en: "Week"
+  es: "Semana"
+analytics.period.month:
+  ru: "Месяц"
+  en: "Month"
+  es: "Mes"
+analytics.period.year:
+  ru: "Год"
+  en: "Year"
+  es: "Año"
+analytics.period.all:
+  ru: "Все"
+  en: "All"
+  es: "Todo"
+analytics.trades_count:
+  ru: "%{n} закрытых сделок"
+  en: "%{n} closed trades"
+  es: "%{n} operaciones cerradas"
+analytics.loading:
+  ru: "Загрузка…"
+  en: "Loading…"
+  es: "Cargando…"
+analytics.empty_period:
+  ru: "В этом периоде нет закрытых сделок."
+  en: "No closed trades in this period."
+  es: "No hay operaciones cerradas en este período."
+
+analytics.kpi.profit:
+  ru: "Прибыль, USDT"
+  en: "Profit, USDT"
+  es: "Beneficio, USDT"
+analytics.kpi.trades:
+  ru: "Сделки"
+  en: "Trades"
+  es: "Operaciones"
+analytics.kpi.winrate:
+  ru: "Winrate"
+  en: "Winrate"
+  es: "Winrate"
+analytics.kpi.pf:
+  ru: "Profit Factor"
+  en: "Profit Factor"
+  es: "Profit Factor"
+analytics.kpi.maxdd:
+  ru: "Max Drawdown"
+  en: "Max Drawdown"
+  es: "Max Drawdown"
+analytics.kpi.avg:
+  ru: "Средн./сделка"
+  en: "Avg / trade"
+  es: "Prom./operación"
+analytics.kpi.duration:
+  ru: "Ср. длительность"
+  en: "Avg duration"
+  es: "Duración media"
+analytics.minutes:
+  ru: "мин"
+  en: "min"
+  es: "min"
+analytics.vs_prev:
+  ru: "к пред. периоду"
+  en: "vs prev. period"
+  es: "vs período ant."
+
+analytics.cum_title:
+  ru: "Накопительная прибыль"
+  en: "Cumulative profit"
+  es: "Beneficio acumulado"
+analytics.cum_sub:
+  ru: "USDT, по дням закрытия"
+  en: "USDT, by close date"
+  es: "USDT, por fecha de cierre"
+analytics.daily_title:
+  ru: "Дневная прибыль"
+  en: "Daily profit"
+  es: "Beneficio diario"
+analytics.daily_sub:
+  ru: "USDT за сутки"
+  en: "USDT per day"
+  es: "USDT por día"
+
+analytics.best_trades:
+  ru: "Топ-5 сделок"
+  en: "Top 5 trades"
+  es: "Top 5 operaciones"
+analytics.worst_trades:
+  ru: "Худшие 5 сделок"
+  en: "Worst 5 trades"
+  es: "Peores 5 operaciones"
+analytics.col.closed:
+  ru: "Закрыта"
+  en: "Closed"
+  es: "Cerrada"
+analytics.col.coin:
+  ru: "Монета"
+  en: "Coin"
+  es: "Moneda"
+analytics.col.strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+analytics.col.profit:
+  ru: "Профит"
+  en: "Profit"
+  es: "Beneficio"
+
+analytics.insights:
+  ru: "Инсайты"
+  en: "Insights"
+  es: "Conclusiones"
+analytics.insights_sub:
+  ru: "автоматические выводы по периоду"
+  en: "automatic conclusions for the period"
+  es: "conclusiones automáticas del período"
+analytics.ins.best_strategy:
+  ru: "Лучшая стратегия — %{name}: %{profit} USDT при winrate %{wr}%."
+  en: "Best strategy — %{name}: %{profit} USDT at %{wr}% winrate."
+  es: "Mejor estrategia — %{name}: %{profit} USDT con %{wr}% de winrate."
+analytics.ins.top_coin:
+  ru: "Монета %{name} дала %{share}% всей прибыли периода."
+  en: "Coin %{name} produced %{share}% of the period's profit."
+  es: "La moneda %{name} generó el %{share}% del beneficio del período."
+analytics.ins.worst_coin:
+  ru: "Проблемная монета — %{name}: %{profit} USDT за период."
+  en: "Problem coin — %{name}: %{profit} USDT over the period."
+  es: "Moneda problemática — %{name}: %{profit} USDT en el período."
+analytics.ins.pf:
+  ru: "Profit Factor %{pf} — %{verdict}; макс. серия побед — %{w}, поражений — %{l}."
+  en: "Profit Factor %{pf} — %{verdict}; longest win streak — %{w}, loss streak — %{l}."
+  es: "Profit Factor %{pf} — %{verdict}; mejor racha de ganancias — %{w}, de pérdidas — %{l}."
+analytics.ins.pf_great:
+  ru: "отлично"
+  en: "excellent"
+  es: "excelente"
+analytics.ins.pf_good:
+  ru: "хорошо"
+  en: "good"
+  es: "bien"
+analytics.ins.pf_edge:
+  ru: "на грани"
+  en: "borderline"
+  es: "al límite"
+analytics.ins.pf_bad:
+  ru: "требуется оптимизация"
+  en: "needs optimization"
+  es: "requiere optimización"
+analytics.ins.best_hour:
+  ru: "Самый прибыльный час — %{hour} UTC (%{profit} USDT, %{n} сделок)."
+  en: "Most profitable hour — %{hour} UTC (%{profit} USDT, %{n} trades)."
+  es: "Hora más rentable — %{hour} UTC (%{profit} USDT, %{n} operaciones)."
