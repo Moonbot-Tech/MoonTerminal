@@ -472,6 +472,10 @@ impl AnalyticsView {
                         t!("analytics.tuner.grp_filter").to_string(),
                         strat.found && strat.ignore_filters,
                     ),
+                    FieldClass::DeltaSlot => (
+                        t!("analytics.tuner.grp_slot").to_string(),
+                        strat.found && strat.class_ignored(FieldClass::DeltaSlot),
+                    ),
                     FieldClass::Delta => (
                         t!("analytics.tuner.grp_delta").to_string(),
                         strat.found && strat.class_ignored(FieldClass::Delta),
@@ -531,15 +535,30 @@ impl AnalyticsView {
             if selected {
                 row = row.bg(moon_alpha(p.amber, 0.08));
             }
-            // Чип: НЕдефолтные пороги выбранной стратегии (справочно). Если
-            // класс игнорируется флагами — значений НЕ показываем (метка
-            // «ignore» стоит на подзаголовке группы).
-            let chip = (strat.found && !strat.class_ignored(class))
-                .then(|| strat.bounds.get(FIELDS[fi].0).copied())
-                .flatten();
+            // Чип: НЕдефолтные пороги выбранной стратегии (справочно). Поля-
+            // слоты показывают назначение «Δ2/Δ3» + пороги слота. Если класс
+            // игнорируется флагами — значений НЕ показываем (метка «ignore»
+            // стоит на подзаголовке группы).
+            let chip: Option<(Option<u8>, Option<f64>, Option<f64>)> =
+                if strat.found && !strat.class_ignored(class) {
+                    if class == FieldClass::DeltaSlot {
+                        strat
+                            .slot_of(FIELDS[fi].0)
+                            .map(|(n, lo, hi)| (Some(n), lo, hi))
+                    } else {
+                        strat
+                            .bounds
+                            .get(FIELDS[fi].0)
+                            .copied()
+                            .map(|(lo, hi)| (None, lo, hi))
+                    }
+                } else {
+                    None
+                };
             row = row.child(match chip {
-                Some((lo, hi)) => {
+                Some((slot, lo, hi)) => {
                     let text = [
+                        slot.map(|n| format!("Δ{n}")),
                         lo.map(|v| format!("min({})", fmt_bound(v))),
                         hi.map(|v| format!("max({})", fmt_bound(v))),
                     ]

@@ -9,7 +9,7 @@ use gpui::*;
 
 use super::AnalyticsView;
 use super::tuner::{fmt_bound, parse_num};
-use moon_core::db::tuner::{FIELDS, FieldClass, params_for};
+use moon_core::db::tuner::{FIELDS, FieldClass, params_for, slot_type_for};
 
 impl AnalyticsView {
     /// «Подобрать всё»: лучшие диапазоны ВСЕХ полей одним сканом → v1.
@@ -103,7 +103,9 @@ impl AnalyticsView {
     /// ядрах (sync шлёт полный набор — правки одной командой на ядро). Если
     /// классы затронутых полей игнорировались (IgnoreFilters/IgnoreDelta/
     /// IgnoreVolume) — соответствующие флаги выключаются, иначе пороги не
-    /// имели бы эффекта. Пишутся ТОЛЬКО поля с маппингом на параметры.
+    /// имели бы эффекта. Пишутся поля с маппингом на параметры; поля-слоты
+    /// (d1h/d15m/d5m/d1m/Pump1H/Dump1H) — через Delta2/Delta3: сначала
+    /// `DeltaN_Type`, затем `DeltaN_Min/Max`; слотов два — лишние в лог.
     pub(super) fn save_v1_to_strategy(&mut self, cx: &mut Context<Self>) {
         let Some((key, name)) = self.sel_strategy.clone() else {
             return;
@@ -112,9 +114,18 @@ impl AnalyticsView {
 
         let mut changes: Vec<(String, String)> = Vec::new();
         let (mut delta_touched, mut volume_touched) = (false, false);
+        // Поля-слоты с порогами v1 — кандидаты в Delta2/Delta3.
+        let mut slot_wanted: Vec<(&'static str, Option<f64>, Option<f64>)> = Vec::new();
         for (fi, (col, _, class)) in FIELDS.iter().enumerate() {
-            let (pmin, pmax) = params_for(col);
             let (from, to) = &self.tuner.bounds[0][fi];
+            if *class == FieldClass::DeltaSlot {
+                let (lo, hi) = (parse_num(from), parse_num(to));
+                if lo.is_some() || hi.is_some() {
+                    slot_wanted.push((col, lo, hi));
+                }
+                continue;
+            }
+            let (pmin, pmax) = params_for(col);
             for (txt, param) in [(from, pmin), (to, pmax)] {
                 let Some(param) = param else { continue };
                 let Some(v) = parse_num(txt) else { continue };
@@ -122,8 +133,56 @@ impl AnalyticsView {
                 match class {
                     FieldClass::Delta => delta_touched = true,
                     FieldClass::Volume => volume_touched = true,
-                    FieldClass::Filter => {}
+                    FieldClass::Filter | FieldClass::DeltaSlot => {}
                 }
+            }
+        }
+        // Раздача слотов: своё прежнее место (если тип уже стоит) — иначе
+        // свободный по порядку. Больше двух не влезает — остальные в лог.
+        if !slot_wanted.is_empty() {
+            let cur2 = self.tuner.strat.slots.iter().find(|(n, ..)| *n == 2).map(|(_, f, ..)| *f);
+            let cur3 = self.tuner.strat.slots.iter().find(|(n, ..)| *n == 3).map(|(_, f, ..)| *f);
+            let mut used = [false, false]; // [Delta2, Delta3]
+            let mut assigned: Vec<(u8, &'static str, Option<f64>, Option<f64>)> = Vec::new();
+            let mut dropped: Vec<&'static str> = Vec::new();
+            // Сначала — поля, уже сидящие в своих слотах.
+            for (col, lo, hi) in &slot_wanted {
+                if cur2 == Some(*col) && !used[0] {
+                    used[0] = true;
+                    assigned.push((2, col, *lo, *hi));
+                } else if cur3 == Some(*col) && !used[1] {
+                    used[1] = true;
+                    assigned.push((3, col, *lo, *hi));
+                }
+            }
+            for (col, lo, hi) in &slot_wanted {
+                if assigned.iter().any(|(_, f, ..)| f == col) {
+                    continue;
+                }
+                if let Some(i) = used.iter().position(|u| !u) {
+                    used[i] = true;
+                    assigned.push((i as u8 + 2, col, *lo, *hi));
+                } else {
+                    dropped.push(col);
+                }
+            }
+            if !dropped.is_empty() {
+                log::warn!(
+                    "аналитика: «В стратегию» — слотов Delta2/Delta3 только два, не вошли: {}",
+                    dropped.join(", ")
+                );
+            }
+            for (n, col, lo, hi) in assigned {
+                let Some(ty) = slot_type_for(col) else { continue };
+                // Порядок важен: сначала тип слота, затем его пороги.
+                changes.push((format!("Delta{n}_Type"), ty.to_string()));
+                if let Some(v) = lo {
+                    changes.push((format!("Delta{n}_Min"), fmt_plain(v)));
+                }
+                if let Some(v) = hi {
+                    changes.push((format!("Delta{n}_Max"), fmt_plain(v)));
+                }
+                delta_touched = true;
             }
         }
         if changes.is_empty() {

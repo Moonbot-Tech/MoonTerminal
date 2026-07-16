@@ -14,10 +14,14 @@ use super::analytics::{Query, unified_from};
 
 /// Класс поля — каким Ignore-флагом стратегии выключается его фильтр.
 /// `IgnoreFilters` выключает ВСЕ классы; `IgnoreDelta`/`IgnoreVolume` — свои.
+/// `DeltaSlot` — дельты, у которых в стратегии НЕТ собственных параметров:
+/// они подключаются через слоты Delta2/Delta3 (тип + min/max), т.е. в
+/// стратегию сохраняются максимум две; игнорятся как дельты.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldClass {
     Filter,
     Delta,
+    DeltaSlot,
     Volume,
 }
 
@@ -27,16 +31,17 @@ pub enum FieldClass {
 pub const FIELDS: &[(&str, &str, FieldClass)] = &[
     // Общие фильтры (только IgnoreFilters).
     ("bvsvratio", "bvsv", FieldClass::Filter),
-    ("pump1h", "Pump1H", FieldClass::Filter),
-    ("dump1h", "Dump1H", FieldClass::Filter),
     ("pricebug", "PriceBug", FieldClass::Filter),
-    // Дельты (IgnoreFilters | IgnoreDelta).
+    // Слоты Delta2/Delta3 (IgnoreFilters | IgnoreDelta; в стратегию — макс 2).
+    ("d1h", "d1h", FieldClass::DeltaSlot),
+    ("d15m", "d15m", FieldClass::DeltaSlot),
+    ("d5m", "d5m", FieldClass::DeltaSlot),
+    ("d1m", "d1m", FieldClass::DeltaSlot),
+    ("pump1h", "Pump1H", FieldClass::DeltaSlot),
+    ("dump1h", "Dump1H", FieldClass::DeltaSlot),
+    // Дельты с собственными параметрами (IgnoreFilters | IgnoreDelta).
     ("d24h", "d24h", FieldClass::Delta),
     ("d3h", "d3h", FieldClass::Delta),
-    ("d1h", "d1h", FieldClass::Delta),
-    ("d15m", "d15m", FieldClass::Delta),
-    ("d5m", "d5m", FieldClass::Delta),
-    ("d1m", "d1m", FieldClass::Delta),
     ("da1m", "da1m", FieldClass::Delta),
     ("d5s", "d5s", FieldClass::Delta),
     ("vd1m", "Vd1m", FieldClass::Delta),
@@ -52,6 +57,22 @@ pub const FIELDS: &[(&str, &str, FieldClass)] = &[
     ("hvolf", "H.VolF", FieldClass::Volume),
     ("dvol", "D.Vol", FieldClass::Volume),
 ];
+
+/// Значения `Delta2_Type`/`Delta3_Type` ↔ поля отчёта. Типы без колонки
+/// отчёта (2h/30m/Pump5m) непредставимы в тюнере и пропускаются.
+pub const SLOT_TYPES: &[(&str, &str)] = &[
+    ("d1h", "1h"),
+    ("d15m", "15m"),
+    ("d5m", "5m"),
+    ("d1m", "1m"),
+    ("pump1h", "Pump1h"),
+    ("dump1h", "Dump1h"),
+];
+
+/// Значение `DeltaN_Type` для поля-слота (None — поле не слот).
+pub fn slot_type_for(field: &str) -> Option<&'static str> {
+    SLOT_TYPES.iter().find(|(f, _)| *f == field).map(|(_, t)| *t)
+}
 
 /// Диапазон по одному полю; None — граница не задана.
 #[derive(Clone, Debug, Default)]
@@ -271,7 +292,7 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> Option<Vec<HistBucket>>
 /// Delta2/Delta3 окна; PriceBug/da1m/d5s/dMark/H.VolF) маппинга нет.
 const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("bvsvratio", None, Some("BV_SV_Ratio")),
-    ("d24h", None, Some("Delta_24h_Max")),
+    ("d24h", Some("Delta_24h_Min"), Some("Delta_24h_Max")),
     ("d3h", Some("Delta_3h_Min"), Some("Delta_3h_Max")),
     ("hvol", Some("MinHourlyVolume"), Some("MaxHourlyVolume")),
     ("dvol", Some("MinVolume"), Some("MaxVolume")),
@@ -324,6 +345,9 @@ pub struct StratFilters {
     pub ignore_delta: bool,
     pub ignore_volume: bool,
     pub bounds: std::collections::HashMap<&'static str, (Option<f64>, Option<f64>)>,
+    /// Занятые слоты Delta2/Delta3: (номер 2|3, поле отчёта, min, max).
+    /// Слоты с типом без колонки отчёта (2h/30m/Pump5m) не попадают.
+    pub slots: Vec<(u8, &'static str, Option<f64>, Option<f64>)>,
 }
 
 impl StratFilters {
@@ -332,9 +356,17 @@ impl StratFilters {
         self.ignore_filters
             || match class {
                 FieldClass::Filter => false,
-                FieldClass::Delta => self.ignore_delta,
+                FieldClass::Delta | FieldClass::DeltaSlot => self.ignore_delta,
                 FieldClass::Volume => self.ignore_volume,
             }
+    }
+
+    /// Слот, назначенный полю (если есть): (номер, min, max).
+    pub fn slot_of(&self, field: &str) -> Option<(u8, Option<f64>, Option<f64>)> {
+        self.slots
+            .iter()
+            .find(|(_, f, _, _)| *f == field)
+            .map(|(n, _, lo, hi)| (*n, *lo, *hi))
     }
 }
 
@@ -415,6 +447,22 @@ pub fn strategy_filters(
         if lo.is_some() || hi.is_some() {
             out.bounds.insert(*field, (lo, hi));
         }
+    }
+    // Слоты Delta2/Delta3: тип строкой («15m»/«Pump1h»/…) → поле отчёта.
+    for (n, prefix) in [(2u8, "Delta2"), (3u8, "Delta3")] {
+        let Some(serde_json::Value::String(t)) = map.get(&format!("{prefix}_Type")) else {
+            continue;
+        };
+        let t = t.trim();
+        let Some((field, _)) = SLOT_TYPES
+            .iter()
+            .find(|(_, ty)| ty.eq_ignore_ascii_case(t))
+        else {
+            continue; // 2h/30m/Pump5m — колонки отчёта нет
+        };
+        let lo = num(Some(&format!("{prefix}_Min")));
+        let hi = num(Some(&format!("{prefix}_Max")));
+        out.slots.push((n, field, lo, hi));
     }
     out
 }
