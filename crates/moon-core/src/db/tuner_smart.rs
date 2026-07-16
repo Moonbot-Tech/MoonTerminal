@@ -15,7 +15,7 @@
 //! background executor.
 
 use super::analytics::{Query, unified_from};
-use super::tuner::FIELDS;
+use super::tuner::{FIELDS, FieldClass};
 
 const EDGES: usize = 64;
 /// Бин «ниже первого края» (значения COALESCE-0 при положительном минимуме).
@@ -58,7 +58,9 @@ impl Rng {
 
 /// Random-restart координатный спуск: максимум суммарного профита при
 /// сохранении ≥`min_n` сделок. `restarts` — число попыток (1..=64); каждая
-/// крутится до сходимости (≤16 проходов).
+/// крутится до сходимости (≤16 проходов). Ограничение мощности: полей-слотов
+/// (Delta2/Delta3) с диапазоном может быть НЕ БОЛЬШЕ ДВУХ — в стратегию
+/// больше не сохранить; перебор ищет лучшую пару слотов.
 pub fn smart_suggest(q: &Query, restarts: usize, min_n: i64) -> Option<SmartResult> {
     let conn = super::open_reader()?;
     let mut q = q.clone();
@@ -130,14 +132,25 @@ pub fn smart_suggest(q: &Query, restarts: usize, min_n: i64) -> Option<SmartResu
     // Мульти-старт: рестарт 0 — жадный с пустого состояния, дальше —
     // случайная инициализация + перетасованный порядок полей.
     let restarts = restarts.clamp(1, 64);
+    let is_slot: Vec<bool> = FIELDS
+        .iter()
+        .map(|(_, _, c)| *c == FieldClass::DeltaSlot)
+        .collect();
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ (n as u64) ^ ((min_n as u64) << 32));
     let mut best_global: Option<(f64, i64, Vec<Option<(usize, usize)>>)> = None;
     for restart in 0..restarts {
         let mut sel: Vec<Option<(usize, usize)>> = vec![None; nf];
         if restart > 0 {
-            // ~30% полей стартуют со случайного диапазона.
-            for s in sel.iter_mut() {
+            // ~30% полей стартуют со случайного диапазона (слотов — макс 2).
+            let mut slots_used = 0usize;
+            for (fi, s) in sel.iter_mut().enumerate() {
                 if rng.below(100) < 30 {
+                    if is_slot[fi] {
+                        if slots_used >= 2 {
+                            continue;
+                        }
+                        slots_used += 1;
+                    }
                     let i = rng.below(EDGES);
                     let j = i + 1 + rng.below(EDGES - i);
                     *s = Some((i, j));
@@ -194,6 +207,16 @@ pub fn smart_suggest(q: &Query, restarts: usize, min_n: i64) -> Option<SmartResu
             }
             let mut best: Option<(usize, usize)> = None;
             let mut best_p = tot_p; // None-вариант (n = tot_n всегда допустим)
+            // Слотов Delta2/Delta3 всего два: если ДРУГИЕ два слота уже с
+            // диапазонами, этому полю доступен только вариант «без фильтра».
+            let slot_full = is_slot[fi]
+                && sel
+                    .iter()
+                    .enumerate()
+                    .filter(|(o, s)| *o != fi && is_slot[*o] && s.is_some())
+                    .count()
+                    >= 2;
+            if !slot_full {
             for i in 0..EDGES {
                 for j in (i + 1)..=EDGES {
                     let c = pre_c[j] - pre_c[i];
@@ -206,6 +229,7 @@ pub fn smart_suggest(q: &Query, restarts: usize, min_n: i64) -> Option<SmartResu
                         best = Some((i, j));
                     }
                 }
+            }
             }
             if best != sel[fi] {
                 // Пересобрать маску поля и счётчики отказов.
