@@ -177,7 +177,14 @@ impl StrategiesView {
                 .pl_2();
         }
         // Баннер просмотра исторической версии — параметры только для чтения.
+        // Без диффа (created/точка отсчёта) поясняем, почему показаны все поля.
         if let Some(vf) = self.versions.sel {
+            let date = moon_core::strat_db::stats::short_date(vf);
+            let text = if self.version_changed_filter().is_some() {
+                t!("strat.version_view", date = date).to_string()
+            } else {
+                t!("strat.version_view_nodiff", date = date).to_string()
+            };
             col = col.child(
                 div()
                     .w_full()
@@ -188,13 +195,7 @@ impl StrategiesView {
                     .border_l_2()
                     .border_color(moon_alpha(p.amber, 0.72))
                     .text_color(moon(p.amber))
-                    .child(
-                        t!(
-                            "strat.version_view",
-                            date = moon_core::strat_db::stats::short_date(vf)
-                        )
-                        .to_string(),
-                    ),
+                    .child(text),
             );
         }
         col = col

@@ -219,3 +219,7 @@ strat.versions_live:
   ru: "Текущая"
   en: "Current"
   es: "Actual"
+strat.version_view_nodiff:
+  ru: "Версия от %{date}: изменений против предыдущей нет (точка отсчёта) — показаны все поля, только чтение"
+  en: "Version from %{date}: no changes vs the previous one (baseline) — all fields shown, read-only"
+  es: "Versión del %{date}: sin cambios frente a la anterior (línea base) — se muestran todos los campos, solo lectura"
