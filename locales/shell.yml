@@ -63,10 +63,6 @@ toolbar.scale_auto_short:
   ru: "А"
   en: "A"
   es: "A"
-toolbar.scale_auto:
-  ru: "Авто"
-  en: "Auto"
-  es: "Auto"
 # «Live» — отраслевой термин, не переводим; глиф ▶ — отдельный segment.
 toolbar.live:
   ru: "Live"
