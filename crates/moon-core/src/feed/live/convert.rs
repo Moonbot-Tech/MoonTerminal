@@ -353,8 +353,17 @@ fn build_order_row(
     // Sell-линия дополнительно гейтится `sell_price > 0` ниже, так что «нарисовать sell рано»
     // невозможно: пока ядро не выставило sell-цену, линии выхода нет даже при in_position.
     let in_position = fill_pct > 0.0 || o.status == OrderWorkerStatus::SellSet;
+    // Верхнеуровневые `o.buy_price`/`o.sell_price` moonproto обновляет ТОЛЬКО на смене
+    // статуса воркера и при ЛОКАЛЬНОМ move_order; серверные cancel-replace (ядро само
+    // ведёт лимитку за ценой) двигают лишь `*_order.actual_price`. Поэтому для РАБОЧЕГО
+    // (незаполненного) ордера цена линии — `actual_price` ноги, иначе линия замерзает на
+    // цене выставления (репорт 2026-07-17: бай шорта стоял там, где стакан давно прошёл,
+    // и «чинился» только drag-ом — тот как раз локально переписывает buy_price).
+    let live = |p: f64| (p.is_finite() && p > 0.0).then_some(p);
     let entry = if fill_pct > 0.0 && pos_price > 0.0 {
         pos_price
+    } else if fill_pct <= 0.0 && live(o.buy_order.actual_price).is_some() {
+        o.buy_order.actual_price
     } else if o.buy_price.is_finite() && o.buy_price > 0.0 {
         o.buy_price
     } else if in_position && pos_price > 0.0 {
@@ -570,7 +579,13 @@ fn build_order_row(
         vstop_level: o.vstop_level,
         vstop_vol: o.vstop_vol,
         buy_price: entry,
-        sell_price: o.sell_price,
+        // Как и вход: живая цена РАБОЧЕГО sell-ордера — `sell_order.actual_price`
+        // (серверные переносы тейка не обновляют `o.sell_price` до смены статуса).
+        sell_price: if o.sell_order.actual_price.is_finite() && o.sell_order.actual_price > 0.0 {
+            o.sell_order.actual_price
+        } else {
+            o.sell_price
+        },
         create_time_ms,
         price: last,
         fill_pct,
