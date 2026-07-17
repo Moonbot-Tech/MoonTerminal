@@ -3,7 +3,10 @@
 //! сделок и автоматические «инсайты». Макет — артефакт analytics-mock.
 
 use gpui::*;
-use moon_ui::{MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonTone, h_flex, v_flex};
+use moon_ui::{
+    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
+    MoonTone, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use super::AnalyticsView;
@@ -59,13 +62,44 @@ impl AnalyticsView {
                     .w_full()
                     .gap(design::ui_px(cx, 8.0))
                     .items_start()
-                    .child(chart_card(
-                        t!("analytics.cum_title").to_string(),
-                        t!("analytics.cum_sub").to_string(),
-                        charts::cumulative_area(&data.days, p),
-                        p,
-                        cx,
-                    ))
+                    .child({
+                        // Верхний левый: суммарная накопительная ИЛИ по
+                        // ядрам (галка «по ядрам», вкл по умолчанию).
+                        let by_core = self.sum_by_core;
+                        let toggle = h_flex()
+                            .gap(design::ui_px(cx, 5.0))
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_size(design::t_caption(cx))
+                                    .text_color(moon(p.text_muted))
+                                    .child(t!("analytics.by_cores").to_string()),
+                            )
+                            .child(MoonCheckbox::new("sum-by-core").checked(by_core).size(MoonCheckboxSize::Compact).on_change({
+                                let view = cx.entity();
+                                move |ch: &bool, _w, app| {
+                                    let on = *ch;
+                                    view.update(app, |this, cx| {
+                                        this.sum_by_core = on;
+                                        cx.notify();
+                                    });
+                                }
+                            }))
+                            .into_any_element();
+                        let body = if by_core {
+                            charts::core_lines(&data.days, &data.core_days, 170.0, p, cx)
+                        } else {
+                            charts::cumulative_area(&data.days, p)
+                        };
+                        chart_card_ex(
+                            t!("analytics.cum_title").to_string(),
+                            t!("analytics.cum_sub").to_string(),
+                            Some(toggle),
+                            body,
+                            p,
+                            cx,
+                        )
+                    })
                     .child(chart_card(
                         t!("analytics.daily_title").to_string(),
                         t!("analytics.daily_sub").to_string(),
@@ -93,11 +127,12 @@ impl AnalyticsView {
                     ))
                     .child(insights_card(&data, p, cx)),
             )
-            // Нижний чарт на всю ширину: накопительная прибыль ПО ЯДРАМ.
+            // Нижний чарт на всю ширину: столбики профита каждого ядра по
+            // вёдрам периода + ховер-попап значений даты.
             .child(chart_card(
                 t!("analytics.cores_title").to_string(),
                 t!("analytics.cores_sub").to_string(),
-                charts::core_lines(&data.days, &data.core_days, p, cx),
+                charts::core_bars(&data.days, &data.core_days, self.hover_core_bucket, p, cx),
                 p,
                 cx,
             ))
@@ -214,6 +249,34 @@ fn chart_card(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> impl IntoElement {
+    chart_card_ex(title, sub, None, body, p, cx)
+}
+
+/// Карточка графика с необязательным контролом в шапке (галка режима и т.п.).
+fn chart_card_ex(
+    title: String,
+    sub: String,
+    head_extra: Option<AnyElement>,
+    body: AnyElement,
+    p: MoonPalette,
+    cx: &Context<AnalyticsView>,
+) -> impl IntoElement {
+    let mut head = h_flex()
+        .w_full()
+        .items_center()
+        .gap(design::ui_px(cx, 8.0))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(design::t_title(cx))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        );
+    if let Some(extra) = head_extra {
+        head = head.child(extra);
+    }
     v_flex()
         .flex_1()
         .min_w_0()
@@ -224,12 +287,7 @@ fn chart_card(
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
-        .child(
-            div()
-                .text_size(design::t_title(cx))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
-        )
+        .child(head)
         .child(
             div()
                 .text_size(design::t_caption(cx))
