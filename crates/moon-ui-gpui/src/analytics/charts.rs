@@ -182,13 +182,17 @@ pub(super) fn daily_bars(
             } else {
                 (bottom - 13.0).max(0.0)
             };
+            // Подпись шире колонки (±24px по бокам) и без переносов — иначе
+            // «333» обрезалось в «33»; соседние подписи могут чуть касаться,
+            // но числа читаемы целиком.
             col = col.child(
                 div()
                     .absolute()
-                    .left_0()
-                    .right_0()
+                    .left(px(-24.0))
+                    .right(px(-24.0))
                     .bottom(px(label_bottom))
                     .text_size(px(8.0))
+                    .whitespace_nowrap()
                     .text_color(moon(super::summary::sign_color(p, d.profit)))
                     .child(
                         div().w_full().flex().justify_center().child(
@@ -373,7 +377,8 @@ fn core_bucket_popup(
         .map(|(ci, c)| (ci, c.per_bucket[bi]))
         .filter(|(_, v)| v.abs() > 1e-9)
         .collect();
-    items.sort_by(|a, b| b.1.abs().total_cmp(&a.1.abs()));
+    // Сортировка ПО ПРОФИТУ: прибыльные сверху, убыточные внизу.
+    items.sort_by(|a, b| b.1.total_cmp(&a.1));
     let total: f64 = items.iter().map(|(_, v)| *v).sum();
     // Итог дня — В ШАПКЕ попапа (при десятках ядер низ списка не виден).
     let mut card = v_flex()
@@ -525,6 +530,7 @@ pub(super) fn core_totals_bars(
                 )
                 .child(
                     div()
+                        .whitespace_nowrap()
                         .text_size(crate::design::t_caption(cx))
                         .text_color(moon(super::summary::sign_color(p, v)))
                         .child(super::summary::fmt_signed(v)),
