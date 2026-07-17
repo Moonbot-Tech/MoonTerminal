@@ -76,6 +76,7 @@ pub fn smart_suggest(
     min_n: i64,
     locked: &[Option<(Option<f64>, Option<f64>)>],
     edges_want: usize,
+    round: bool,
 ) -> Option<SmartResult> {
     let ne = edges_want.clamp(4, 128);
     let conn = super::open_reader()?;
@@ -343,11 +344,22 @@ pub fn smart_suggest(
         .enumerate()
         .filter_map(|(fi, s)| {
             // Пара на обоих краях данных ничего не режет — не подставляем.
-            s.filter(|(i, j)| !(*i == 0 && *j == ne)).map(|(i, j)| SmartField {
-                field: FIELDS[fi].col,
-                from: edges[fi][i],
-                to: edges[fi][j],
-            })
+            let (i, j) = (*s).filter(|(i, j)| !(*i == 0 && *j == ne))?;
+            let (mut from, mut to) = (edges[fi][i], edges[fi][j]);
+            if round {
+                let (rf, rt) = (
+                    super::tuner::round_bound(from, false),
+                    super::tuner::round_bound(to, true),
+                );
+                // Округление наружу у краёв распределения может увести ОБЕ
+                // границы за min/max данных — пара перестала бы резать (ровно
+                // так рождались «фильтры-пустышки» при жёстком min_n); тогда
+                // оставляем сырые значения.
+                if rf > edges[fi][0] || rt < edges[fi][ne] {
+                    (from, to) = (rf, rt);
+                }
+            }
+            Some(SmartField { field: FIELDS[fi].col, from, to })
         })
         .collect();
     Some(SmartResult { fields, profit, n: cnt, rounds: restarts })

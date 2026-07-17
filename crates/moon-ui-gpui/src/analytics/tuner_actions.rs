@@ -11,7 +11,6 @@ use rust_i18n::t;
 
 use super::AnalyticsView;
 use super::tuner::{fmt_bound, parse_num};
-use super::tuner_state::round_bound;
 use super::tuner_state::SaveDialog;
 use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
@@ -33,6 +32,7 @@ impl AnalyticsView {
             .clamp(1, 1000);
         let min_n = self.suggest_min_n();
         let edges = self.suggest_edges();
+        let round = self.tuner.round_results;
         // Снятые чекбоксы: поле не перебирается; с заполненными границами —
         // участвует фиксированным фильтром.
         let locked: Vec<Option<(Option<f64>, Option<f64>)>> = (0..FIELDS.len())
@@ -50,7 +50,9 @@ impl AnalyticsView {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let sugg = executor
                 .spawn(async move {
-                    moon_core::db::tuner_smart::smart_suggest(&q, rounds, min_n, &locked, edges)
+                    moon_core::db::tuner_smart::smart_suggest(
+                        &q, rounds, min_n, &locked, edges, round,
+                    )
                 })
                 .await;
             let _ = cx.update(|cx| {
@@ -67,7 +69,6 @@ impl AnalyticsView {
                             res.n,
                             res.rounds
                         );
-                        let round = this.tuner.round_results;
                         let by_field: HashMap<&str, _> =
                             res.fields.into_iter().map(|f| (f.field, f)).collect();
                         for fi in 0..FIELDS.len() {
@@ -77,14 +78,7 @@ impl AnalyticsView {
                             }
                             let (from, to) = by_field
                                 .get(FIELDS[fi].col)
-                                .map(|f| {
-                                    let (lo, hi) = if round {
-                                        (round_bound(f.from, false), round_bound(f.to, true))
-                                    } else {
-                                        (f.from, f.to)
-                                    };
-                                    (fmt_bound(lo), fmt_bound(hi))
-                                })
+                                .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
                                 .unwrap_or_default();
                             this.tuner.bounds[0][fi] = (from, to);
                             this.tuner.inputs.remove(&format!("tv0f{fi}a"));
@@ -109,11 +103,14 @@ impl AnalyticsView {
         let q = self.tuner_query();
         let min_n = self.suggest_min_n();
         let edges = self.suggest_edges();
+        let round = self.tuner.round_results;
         self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let sugg = executor
-                .spawn(async move { moon_core::db::tuner::suggest_field(&q, &field, min_n, edges) })
+                .spawn(async move {
+                    moon_core::db::tuner::suggest_field(&q, &field, min_n, edges, round)
+                })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -123,13 +120,8 @@ impl AnalyticsView {
                     }
                     this.tuner.sugg_busy = false;
                     if let Some(s) = sugg {
-                        let round = this.tuner.round_results;
-                        let rd = |v: Option<f64>, up: bool| {
-                            v.map(|v| fmt_bound(if round { round_bound(v, up) } else { v }))
-                                .unwrap_or_default()
-                        };
-                        let from = rd(s.from, false);
-                        let to = rd(s.to, true);
+                        let from = s.from.map(fmt_bound).unwrap_or_default();
+                        let to = s.to.map(fmt_bound).unwrap_or_default();
                         this.apply_bounds(0, fi, from, to, cx);
                     }
                     cx.notify();

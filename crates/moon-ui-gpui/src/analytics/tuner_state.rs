@@ -158,19 +158,6 @@ pub(super) fn parse_num(s: &str) -> Option<f64> {
 }
 
 
-/// «Умное» округление границы подбора: 3 значащих цифры по разряду числа,
-/// НАРУЖУ (`up=false` — вниз для «от», `up=true` — вверх для «до»), чтобы
-/// округлённый диапазон гарантированно не отрезал найденные сделки.
-pub(super) fn round_bound(v: f64, up: bool) -> f64 {
-    if v == 0.0 || !v.is_finite() {
-        return v;
-    }
-    let mag = v.abs().log10().floor() as i32;
-    let step = 10f64.powi(mag - 2);
-    let r = if up { (v / step).ceil() } else { (v / step).floor() };
-    r * step
-}
-
 /// Формат числа для границ/чипов: крупные — с суффиксом k/M/B/T (обратно
 /// понимается `parse_num`), прочие — до 4 знаков без хвостовых нулей.
 pub(super) fn fmt_bound(v: f64) -> String {

@@ -549,9 +549,30 @@ pub struct Suggestion {
     pub n: i64,
 }
 
+/// «Умное» округление границы подбора: 3 значащих цифры по разряду числа,
+/// НАРУЖУ (`up=false` — вниз для «от», `up=true` — вверх для «до»), чтобы
+/// округлённый диапазон не отрезал найденные сделки.
+pub fn round_bound(v: f64, up: bool) -> f64 {
+    if v == 0.0 || !v.is_finite() {
+        return v;
+    }
+    let mag = v.abs().log10().floor() as i32;
+    let step = 10f64.powi(mag - 2);
+    let r = if up { (v / step).ceil() } else { (v / step).floor() };
+    r * step
+}
+
 /// Автоподбор порога ОДНОГО поля (кнопка «Подобрать» у выбранной строки).
-/// `edges` — число квантильных краёв перебора (чем больше, тем тоньше сетка).
-pub fn suggest_field(q: &Query, field: &str, min_n: i64, edges: usize) -> Option<Suggestion> {
+/// `edges` — число квантильных краёв перебора (чем больше, тем тоньше сетка);
+/// `round` — округлить результат наружу (если после округления пара перестаёт
+/// резать данные — остаются сырые значения, найденный фильтр не теряется).
+pub fn suggest_field(
+    q: &Query,
+    field: &str,
+    min_n: i64,
+    edges: usize,
+    round: bool,
+) -> Option<Suggestion> {
     if !FIELDS.iter().any(|s| s.col == field) {
         return None;
     }
@@ -575,11 +596,16 @@ pub fn suggest_field(q: &Query, field: &str, min_n: i64, edges: usize) -> Option
         .flatten()
         .filter(|(v, _)| v.is_finite())
         .collect();
-    best_range(&mut vals, min_n.max(1) as usize, edges)
+    best_range(&mut vals, min_n.max(1) as usize, edges, round)
 }
 
 /// Лучший диапазон одного поля по выборке `(значение, профит)`.
-fn best_range(vals: &mut Vec<(f64, f64)>, min_n: usize, edges: usize) -> Option<Suggestion> {
+fn best_range(
+    vals: &mut Vec<(f64, f64)>,
+    min_n: usize,
+    edges: usize,
+    round: bool,
+) -> Option<Suggestion> {
     let edges = edges.clamp(4, 128);
     if vals.len() < min_n.max(1) {
         return None;
@@ -619,9 +645,19 @@ fn best_range(vals: &mut Vec<(f64, f64)>, min_n: usize, edges: usize) -> Option<
         let (a, b) = (pos[i], pos[j]);
         // Всегда ПАРА от/до: на краях распределения границей становится
         // фактический min/max данных (открытых диапазонов не выдаём).
+        let (mut from, mut to) = (vals[a].0, vals[b - 1].0);
+        if round {
+            let (rf, rt) = (round_bound(from, false), round_bound(to, true));
+            // Округление наружу у краёв распределения может увести ОБЕ
+            // границы за min/max данных — пара перестала бы резать; в этом
+            // случае оставляем сырые значения (фильтр найден не зря).
+            if rf > vals[0].0 || rt < vals[len - 1].0 {
+                (from, to) = (rf, rt);
+            }
+        }
         Suggestion {
-            from: Some(vals[a].0),
-            to: Some(vals[b - 1].0),
+            from: Some(from),
+            to: Some(to),
             profit,
             n: (b - a) as i64,
         }
@@ -653,14 +689,27 @@ mod tests {
         // Все сделки прибыльные: никакой поддиапазон не лучше «без фильтра» —
         // пару min/max-пустышку предлагать нельзя.
         let mut vals: Vec<(f64, f64)> = (0..100).map(|i| (i as f64, 1.0)).collect();
-        assert!(best_range(&mut vals, 1, 16).is_none());
+        assert!(best_range(&mut vals, 1, 16, false).is_none());
         // Нижняя треть в минусе: диапазон предлагается и он НЕ весь размах.
         let mut vals: Vec<(f64, f64)> = (0..99)
             .map(|i| (i as f64, if i < 33 { -1.0 } else { 1.0 }))
             .collect();
-        let s = best_range(&mut vals, 1, 16).expect("фильтр должен найтись");
+        let s = best_range(&mut vals, 1, 16, false).expect("фильтр должен найтись");
         assert!(s.from.unwrap() > 0.0, "нижняя граница должна отрезать минус");
         assert_eq!(s.to.unwrap(), 98.0, "верхняя пара — фактический max данных");
+    }
+
+    #[test]
+    fn round_falls_back_when_pair_stops_cutting() {
+        // Диапазон режет только два хвостовых минуса у самых краёв данных:
+        // округление наружу увело бы ОБЕ границы за min/max (пустышка) —
+        // должны остаться сырые режущие значения.
+        let mut vals: Vec<(f64, f64)> = (0..100)
+            .map(|i| (1000.0 + i as f64, if i < 2 { -5.0 } else { 1.0 }))
+            .collect();
+        let s = best_range(&mut vals, 1, 50, true).expect("фильтр должен найтись");
+        let from = s.from.unwrap();
+        assert!(from > 1000.0, "граница обязана резать данные, got {from}");
     }
 
     #[test]
