@@ -52,7 +52,9 @@ impl AnalyticsView {
                 .child(t!("analytics.empty_period").to_string())
                 .into_any_element();
         }
-        v_flex()
+        // Верх (KPI/чарты/топы) скроллится сам; чарт «Прибыль по ядрам»
+        // ПРИБИТ к нижнему краю окна (как нижняя плашка «Стратегий»).
+        let top = v_flex()
             .w_full()
             .p(design::ui_px(cx, 10.0))
             .gap(design::ui_px(cx, 8.0))
@@ -133,16 +135,34 @@ impl AnalyticsView {
                         cx,
                     ))
                     .child(insights_card(&data, p, cx)),
+            );
+        v_flex()
+            .size_full()
+            .child(
+                div()
+                    .id("an-sum-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_y_scroll()
+                    .child(top),
             )
-            // Нижний чарт на всю ширину: СУММА за период по ядрам — один
-            // столбик на ядро, имя и итог под ним.
-            .child(chart_card(
-                t!("analytics.cores_title").to_string(),
-                t!("analytics.cores_sub").to_string(),
-                charts::core_totals_bars(&data.core_days, p, cx),
-                p,
-                cx,
-            ))
+            // Нижний чарт на всю ширину, прижат к низу: СУММА за период по
+            // ядрам — один столбик на ядро, имя и итог под ним.
+            .child(
+                div()
+                    .flex_none()
+                    .w_full()
+                    .px(design::ui_px(cx, 10.0))
+                    .pb(design::ui_px(cx, 10.0))
+                    .child(chart_card(
+                        t!("analytics.cores_title").to_string(),
+                        t!("analytics.cores_sub").to_string(),
+                        charts::core_totals_bars(&data.core_days, p, cx),
+                        p,
+                        cx,
+                    )),
+            )
             .into_any_element()
     }
 

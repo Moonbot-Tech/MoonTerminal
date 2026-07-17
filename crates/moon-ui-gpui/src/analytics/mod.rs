@@ -608,9 +608,9 @@ impl Render for AnalyticsView {
             Tab::Summary => self.summary_tab(p, cx),
             Tab::Strategies => self.strategies_tab(p, window, cx),
         };
-        // «Стратегии» делят высоту сами (нижняя плашка прибита к низу экрана,
-        // список скроллится внутри) — внешний скролл только прочим вкладкам.
-        let body_scrolls = self.tab != Tab::Strategies;
+        // Обе вкладки делят высоту сами (нижние плашки прибиты к низу окна,
+        // содержимое скроллится внутри) — внешнего скролла нет.
+        let body_scrolls = false;
         let busy_overlay = self.busy_overlay_due(cx);
         v_flex()
             .size_full()

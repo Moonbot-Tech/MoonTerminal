@@ -12,8 +12,9 @@ use moon_core::db::analytics::{CoreSeries, DayPoint};
 
 const CHART_H: f32 = 170.0;
 
-/// Высота нижнего чарта «прибыль по ядрам» (на всю ширину сводки).
-const CORES_CHART_H: f32 = 260.0;
+/// Высота столбиков нижнего чарта «прибыль по ядрам» (плашка прибита к низу
+/// сводки; вместе с шапкой карточки и подписями ~290px).
+const CORES_CHART_H: f32 = 190.0;
 
 /// Цвета серий ядер (циклом; легенда различает по имени).
 fn core_color(p: MoonPalette, i: usize) -> u32 {
@@ -292,8 +293,9 @@ pub(super) fn core_lines(
                         .child(canvas_el)
                         .child(hover_row),
                 )
-                .child(axis_row(p, dm(first), dm(last), None))
-                .child(core_legend(cores, p, cx)),
+                // Легенды тут нет намеренно: имена/итоги ядер видны в
+                // попапе по датам и в нижнем чарте «Прибыль по ядрам».
+                .child(axis_row(p, dm(first), dm(last), None)),
         )
         .children(popup)
         .into_any_element()
@@ -378,43 +380,6 @@ fn core_bucket_popup(
         holder = holder.right(relative(1.0 - frac)).mr(px(12.0));
     }
     holder.child(card).into_any_element()
-}
-
-/// Легенда серий ядер: точка цвета + имя + итог за период (с переносами).
-fn core_legend(
-    cores: &[CoreSeries],
-    p: MoonPalette,
-    cx: &Context<AnalyticsView>,
-) -> AnyElement {
-    let mut legend = h_flex()
-        .w_full()
-        .flex_wrap()
-        .gap_x(design::ui_px(cx, 12.0))
-        .gap_y(design::ui_px(cx, 3.0))
-        .items_center()
-        .text_size(crate::design::t_caption(cx));
-    for (i, c) in cores.iter().enumerate() {
-        legend = legend.child(
-            h_flex()
-                .gap(design::ui_px(cx, 4.0))
-                .items_center()
-                .child(
-                    div()
-                        .flex_none()
-                        .w(design::ui_px(cx, 7.0))
-                        .h(design::ui_px(cx, 7.0))
-                        .rounded_full()
-                        .bg(moon(core_color(p, i))),
-                )
-                .child(div().text_color(moon(p.text_soft)).child(c.name.clone()))
-                .child(
-                    div()
-                        .text_color(moon(super::summary::sign_color(p, c.total)))
-                        .child(super::summary::fmt_signed(c.total)),
-                ),
-        );
-    }
-    legend.into_any_element()
 }
 
 /// Итог периода ПО ЯДРАМ: один столбик на ядро (СУММА профита за период),
