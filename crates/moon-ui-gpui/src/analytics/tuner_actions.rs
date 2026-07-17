@@ -44,6 +44,7 @@ impl AnalyticsView {
                 }
             })
             .collect();
+        self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let sugg = executor
@@ -53,6 +54,7 @@ impl AnalyticsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    this.op_finished(cx);
                     if this.tuner.sugg_seq != req {
                         return;
                     }
@@ -98,6 +100,7 @@ impl AnalyticsView {
         let q = self.tuner_query();
         let min_n = self.suggest_min_n();
         let edges = self.suggest_edges();
+        self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let sugg = executor
@@ -105,6 +108,7 @@ impl AnalyticsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    this.op_finished(cx);
                     if this.tuner.sugg_seq != req {
                         return;
                     }

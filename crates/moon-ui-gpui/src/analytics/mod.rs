@@ -145,6 +145,10 @@ pub struct AnalyticsView {
     /// Данные сводки (фоновый расчёт); None — ещё не загружены.
     pub(super) data: Option<Arc<Summary>>,
     inflight: bool,
+    /// Счётчик фоновых пересчётов (сводка/тюнер/гистограмма/подбор): >0 —
+    /// блокирующий оверлей «Загрузка…» поверх окна. Длинные сканы большой БД
+    /// иначе никак не видны, а клики по фильтрам/стратегиям копились в очередь.
+    busy_ops: usize,
     /// Номер запроса — устаревшие результаты отбрасываются.
     seq: u64,
     /// Вкладка «Стратегии»: выбранная группа `(strategyid текстом, имя)`
@@ -192,6 +196,7 @@ impl AnalyticsView {
             emu: Some(false),
             data: None,
             inflight: false,
+            busy_ops: 0,
             seq: 0,
             sel_strategy: None,
             detail: None,
@@ -226,9 +231,20 @@ impl AnalyticsView {
         }
     }
 
+    /// Старт/финиш фоновой операции: каждый spawn обязан декрементить ровно
+    /// один раз (ДО seq-проверки — устаревшие завершения тоже считаются).
+    pub(super) fn op_started(&mut self) {
+        self.busy_ops += 1;
+    }
+    pub(super) fn op_finished(&mut self, cx: &mut Context<Self>) {
+        self.busy_ops = self.busy_ops.saturating_sub(1);
+        cx.notify();
+    }
+
     /// Фоновый расчёт сводки за текущий период/фильтры.
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.inflight = true;
+        self.op_started();
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
         // Тюнер зависит от тех же фильтров: сбрасываем; активному режиму —
@@ -246,6 +262,7 @@ impl AnalyticsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    this.op_finished(cx);
                     if this.seq != req {
                         return; // период/фильтры уже сменили
                     }
@@ -275,6 +292,7 @@ impl AnalyticsView {
         self.detail_seq = self.detail_seq.wrapping_add(1);
         let req = self.detail_seq;
         let q = self.query();
+        self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let detail = executor
@@ -282,6 +300,7 @@ impl AnalyticsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    this.op_finished(cx);
                     if this.detail_seq != req {
                         return;
                     }
@@ -553,6 +572,33 @@ impl Render for AnalyticsView {
                     .when(body_scrolls, |el| el.overflow_y_scroll())
                     .child(body),
             )
+            // Фоновый пересчёт: приглушаем окно и глушим клики (occlude) —
+            // иначе долгие сканы большой БД невидимы, а клики копятся.
+            .when(self.busy_ops > 0, |el| {
+                el.child(
+                    div()
+                        .id("an-busy-overlay")
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(moon_alpha(p.shell, 0.45))
+                        .child(
+                            h_flex()
+                                .px(design::ui_px(cx, 14.0))
+                                .py(design::ui_px(cx, 7.0))
+                                .rounded(design::ui_px(cx, 6.0))
+                                .bg(moon(p.panel_high))
+                                .border_1()
+                                .border_color(moon(p.border))
+                                .text_size(design::t_body(cx))
+                                .text_color(moon(p.text_soft))
+                                .child(t!("analytics.loading").to_string()),
+                        ),
+                )
+            })
             .child(
                 MoonWindowFrame::tool("analytics-window-frame-hit", chrome_width)
                     .header_height(ANALYTICS_HEADER_H)

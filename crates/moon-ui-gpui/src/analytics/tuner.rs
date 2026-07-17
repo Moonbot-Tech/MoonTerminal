@@ -73,6 +73,7 @@ impl AnalyticsView {
         };
         // Автоподбор НЕ сбрасываем: правка границ не меняет распределение
         // факта, по которому он считался (сброс — в invalidate()).
+        self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let (stats, strat) = executor
@@ -86,6 +87,7 @@ impl AnalyticsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    this.op_finished(cx);
                     if this.tuner.seq != req {
                         return;
                     }
@@ -105,6 +107,7 @@ impl AnalyticsView {
         let req = self.tuner.hist_seq;
         let q = self.tuner_query();
         let field = FIELDS[self.tuner.sel_field].col.to_string();
+        self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let hist = executor
@@ -112,6 +115,7 @@ impl AnalyticsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    this.op_finished(cx);
                     if this.tuner.hist_seq != req {
                         return;
                     }
