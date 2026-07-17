@@ -228,13 +228,14 @@ pub fn smart_suggest(
             let selfpass = &pass[fi];
             let mut bp = vec![0.0f64; ne + 1]; // бины + BELOW последним
             let mut bc = vec![0usize; ne + 1];
-            let mut tot_p = 0.0f64;
+            let (mut tot_p, mut tot_c) = (0.0f64, 0usize);
             for t in 0..n {
                 let others_ok = fail[t] == u16::from(!selfpass[t]);
                 if !others_ok {
                     continue;
                 }
                 tot_p += profits[t];
+                tot_c += 1;
                 let b = bins[fi][t];
                 let idx = if b == BELOW { ne } else { b as usize };
                 bp[idx] += profits[t];
@@ -248,7 +249,11 @@ pub fn smart_suggest(
                 pre_c[k + 1] = pre_c[k] + bc[k];
             }
             let mut best: Option<(usize, usize)> = None;
-            let mut best_p = tot_p; // None-вариант (n = tot_n всегда допустим)
+            // None-вариант — база; кандидат обязан обыгрывать её БОЛЬШЕ, чем
+            // на float-шум: суммы бинов и tot_p копятся в разном порядке, и
+            // функционально равный набор сделок «выигрывает» на ~1e-12,
+            // оставляя в результате фильтр-пустышку.
+            let mut best_p = tot_p + tot_p.abs().max(1.0) * 1e-9;
             // Слотов Delta2/Delta3 всего два: если ДРУГИЕ два слота уже с
             // диапазонами, этому полю доступен только вариант «без фильтра».
             let slot_full = is_slot[fi]
@@ -262,14 +267,14 @@ pub fn smart_suggest(
             if !slot_full {
             for i in 0..ne {
                 for j in (i + 1)..=ne {
-                    // Весь размах данных = фильтр-пустышка; выигрыш против
-                    // «без фильтра» требует СТРОГО большего профита, так что
-                    // выбраться такой не может — но и кандидатом не считаем.
-                    if i == 0 && j == ne {
-                        continue;
-                    }
                     let c = pre_c[j] - pre_c[i];
                     if c < min_n {
+                        continue;
+                    }
+                    // Кандидат, пропускающий ВСЕ сделки текущей комбинации
+                    // (включая «весь размах»), — функционально «без фильтра»:
+                    // не рассматриваем (точная целочисленная проверка).
+                    if c == tot_c {
                         continue;
                     }
                     let p = pre_p[j] - pre_p[i];
