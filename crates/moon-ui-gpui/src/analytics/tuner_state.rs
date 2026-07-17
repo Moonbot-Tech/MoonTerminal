@@ -19,6 +19,9 @@ pub(super) struct SaveDialog {
     pub(super) sid: i64,
     pub(super) name: String,
     pub(super) changes: Vec<(String, String)>,
+    /// Текущие значения параметров стратегии тем же индексом, что `changes`
+    /// (окно показывает «сейчас → будет»); None — параметра нет в стратегии.
+    pub(super) olds: Vec<Option<String>>,
     /// Предупреждения (перезапись чужого слот-типа, не вошедшие поля) —
     /// показываются в окне подтверждения, не только в логе.
     pub(super) warns: Vec<String>,

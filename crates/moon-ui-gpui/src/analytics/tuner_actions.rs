@@ -386,8 +386,31 @@ impl AnalyticsView {
             format!("{}; {stamp}", base.join("; "))
         };
         changes.push(("Comment".to_string(), comment));
-        self.tuner.save_dialog = Some(Arc::new(SaveDialog { sid, name, changes, warns }));
-        cx.notify();
+        // Текущие значения параметров — фоном из strategies.sqlite (окно
+        // показывает «сейчас → будет»); диалог открывается по готовности.
+        let keys: Vec<String> = changes.iter().map(|(k, _)| k.clone()).collect();
+        self.op_started();
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let olds_map = executor
+                .spawn(async move {
+                    moon_core::db::tuner::strategy_current_values(sid, &keys)
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.op_finished(cx);
+                    let olds = changes
+                        .iter()
+                        .map(|(k, _)| olds_map.get(k).cloned())
+                        .collect();
+                    this.tuner.save_dialog =
+                        Some(Arc::new(SaveDialog { sid, name, changes, olds, warns }));
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     /// «Да» в окне подтверждения: отправить подготовленные правки.

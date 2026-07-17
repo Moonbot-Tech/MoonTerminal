@@ -127,13 +127,15 @@ impl AnalyticsView {
     ) -> Option<impl IntoElement + use<>> {
         let dlg = self.tuner.save_dialog.clone()?;
         let mut list = v_flex().w_full().gap_0();
-        for (k, v) in &dlg.changes {
+        for (i, (k, v)) in dlg.changes.iter().enumerate() {
+            // «сейчас → будет»: текущее значение стратегии мутным, новое — янтарным.
+            let old = dlg.olds.get(i).cloned().flatten();
             list = list.child(
                 h_flex()
                     .w_full()
                     .h(design::fit_h_px(cx, 22.0, 13.0, 4.5))
                     .px(design::ui_px(cx, 10.0))
-                    .gap(design::ui_px(cx, 10.0))
+                    .gap(design::ui_px(cx, 6.0))
                     .items_center()
                     .border_t_1()
                     .border_color(moon_alpha(p.border, 0.5))
@@ -141,6 +143,17 @@ impl AnalyticsView {
                     .child(
                         div()
                             .flex_none()
+                            .max_w(design::font_w_px(cx, 90.0))
+                            .truncate()
+                            .text_color(moon(p.text_muted))
+                            .child(old.unwrap_or_else(|| "—".to_string())),
+                    )
+                    .child(div().flex_none().text_color(moon(p.text_muted)).child("→"))
+                    .child(
+                        div()
+                            .flex_none()
+                            .max_w(design::font_w_px(cx, 120.0))
+                            .truncate()
                             .text_color(moon(p.amber))
                             .child(v.clone()),
                     ),
@@ -186,14 +199,32 @@ impl AnalyticsView {
                         .overflow_hidden()
                         .occlude()
                         .child(
-                            div()
+                            h_flex()
                                 .px(design::ui_px(cx, 12.0))
                                 .py(design::ui_px(cx, 8.0))
-                                .text_size(design::t_title(cx))
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .items_center()
+                                .gap(design::ui_px(cx, 8.0))
                                 .child(
-                                    t!("analytics.tuner.save_title", name = dlg.name.as_str())
-                                        .to_string(),
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(design::t_title(cx))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(
+                                            t!(
+                                                "analytics.tuner.save_title",
+                                                name = dlg.name.as_str()
+                                            )
+                                            .to_string(),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(design::t_caption(cx))
+                                        .text_color(moon(p.text_muted))
+                                        .child(t!("analytics.tuner.save_now_next").to_string()),
                                 ),
                         )
                         .child(

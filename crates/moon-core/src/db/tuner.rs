@@ -428,6 +428,52 @@ impl StratFilters {
     }
 }
 
+/// Текущие значения параметров стратегии (для окна подтверждения записи:
+/// «сейчас → будет»). Ключи — имена параметров из списка правок; отсутствующий
+/// в raw_json ключ в ответ не попадает. Значения строками как в стратегии
+/// (булевы — YES/NO). Ходит в strategies.sqlite — вызывать с bg executor.
+pub fn strategy_current_values(
+    strategy_id: i64,
+    keys: &[String],
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let path = crate::config::paths::strategies_db_path();
+    if !path.exists() {
+        return out;
+    }
+    let Ok(conn) =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return out;
+    };
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT v.raw_json FROM strategies s
+             JOIN strategy_versions v
+               ON v.core_uid = s.core_uid AND v.strategy_id = s.strategy_id
+             WHERE s.strategy_id = ?1 AND s.deleted = 0 AND v.valid_to IS NULL
+             ORDER BY s.checked DESC LIMIT 1",
+            [strategy_id],
+            |r| r.get(0),
+        )
+        .ok();
+    let Some(raw) = raw else { return out };
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str(&raw) else {
+        return out;
+    };
+    for key in keys {
+        let Some(v) = map.get(key) else { continue };
+        let s = match v {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Bool(b) => if *b { "YES" } else { "NO" }.to_string(),
+            _ => continue,
+        };
+        out.insert(key.clone(), s);
+    }
+    out
+}
+
 /// Пороговые параметры ВЫБРАННОЙ стратегии по полям тюнера.
 /// Источник — текущая версия в strategies.sqlite (raw_json нормализован со
 /// схемными дефолтами). `defaults` — дефолты схемы (lowercase имя → число):
