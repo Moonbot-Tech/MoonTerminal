@@ -206,13 +206,22 @@ impl AnalyticsView {
                 .placeholder(ph)
         });
         cx.subscribe(&state, move |this, state, ev: &MoonInputEvent, cx| {
-            if matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+            // Change тоже коммитим: значение должно действовать сразу при
+            // клике «Подобрать», без обязательного Enter/выхода из поля.
+            if matches!(
+                ev,
+                MoonInputEvent::Change
+                    | MoonInputEvent::Blur
+                    | MoonInputEvent::PressEnter { .. }
+            ) {
                 let value = state.read(cx).value().to_string();
                 match which {
                     1 => this.tuner.min_trades = value,
                     _ => this.tuner.iters = value,
                 }
-                cx.notify();
+                if !matches!(ev, MoonInputEvent::Change) {
+                    cx.notify();
+                }
             }
         })
         .detach();

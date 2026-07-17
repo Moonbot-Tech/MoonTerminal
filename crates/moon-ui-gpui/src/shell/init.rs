@@ -239,8 +239,25 @@ impl Shell {
         // Инпут инлайн-редактирования размера ордера (дабл-клик по кнопке F1-F6). По Blur
         // (клик вне) или Enter — пишем значение в `ServerConfig.order_sizes` фокусного ядра
         // и сохраняем на диск (config.save). Пустой/нечисловой ввод — отмена без записи.
+        // Каждый ВАЛИДНЫЙ кейстрок коммитится сразу (дебаунс-сейв через config_dirty):
+        // покупка хоткеем/кликом до Enter должна брать УЖЕ набранное значение.
         let size_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(&size_input, |this, inp, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                let Some((core, ix)) = this.size_edit else {
+                    return;
+                };
+                if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
+                    if v > 0.0 && ix < 6 {
+                        this.backend.update(cx, |b, bcx| {
+                            b.set_order_size_value(core, ix, v);
+                            b.order_size_rev = b.order_size_rev.wrapping_add(1);
+                            bcx.notify();
+                        });
+                    }
+                }
+                return;
+            }
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
             }
