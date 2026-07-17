@@ -364,19 +364,21 @@ impl ScreenerView {
                 .map(|s| (s.id, s.name.clone()))
                 .collect()
         };
+        // Одна привязка локализованной подписи «Все ядра» на все её употребления.
+        let all_label = t!("screener.all_cores").to_string();
         let cur = match self.source {
-            ScrSource::All => t!("screener.all_cores").to_string(),
+            ScrSource::All => all_label.clone(),
             ScrSource::Core(id) => cores
                 .iter()
                 .find(|(c, _)| *c == id)
                 .map(|(_, n)| n.clone())
-                .unwrap_or_else(|| t!("screener.all_cores").to_string()),
+                .unwrap_or_else(|| all_label.clone()),
         };
         let view = cx.entity();
         let mut options: Vec<(ScrSource, SharedString, SharedString)> = vec![(
             ScrSource::All,
             "all".into(),
-            t!("screener.all_cores").to_string().into(),
+            all_label.clone().into(),
         )];
         for (id, name) in &cores {
             options.push((
@@ -388,12 +390,21 @@ impl ScreenerView {
         let items = radio_items(options, self.source, RadioMark::Check, move |app, src| {
             view.update(app, |t, cx| t.set_source(src, cx));
         });
+        // Ширина по контенту (единый расчёт с core_combo): кнопка под текущий выбор (пол 118,
+        // потолок), меню под самый длинный пункт между полом 160 и общим потолком.
+        let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
+            cx,
+            &cur,
+            std::iter::once(all_label.as_str()).chain(cores.iter().map(|(_, n)| n.as_str())),
+            118.0,
+            160.0,
+        );
         MoonDropdown::new("screener-source")
-            .label(format!("{cur} ▾"))
+            .label(trigger_label)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 118.0))
-            .menu_width(design::font_w(cx, 160.0))
+            .trigger_width(trigger_w)
+            .menu_width(menu_w)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }

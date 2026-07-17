@@ -1,9 +1,13 @@
-//! Общее поле-список выбора ядер (мультивыбор чекбоксами) — «Ордера», «Отчёт», «Активы».
+//! Общее поле-список выбора ядер (мультивыбор чекбоксами) — фильтр «Все ядра» панелей
+//! «Ордера», «Отчёт», «Активы» и окна «Аналитика».
 //!
-//! Три панели рисовали один и тот же комбобокс с точностью до подписей, ширины меню и id.
-//! Разница в типе ключа была мнимой: `CoreId = u64` (алиас, см. `moon_core::session::store`),
-//! поэтому builder работает с `u64` и подходит всем троим. Что делает тумблер и как зовутся
-//! подписи — решает вызывающий (у каждой панели свои locale-ключи и свой `toggle_core`).
+//! Ширина больше НЕ фиксирована: и кнопка-триггер, и меню растут под контент
+//! (`design::dropdown_content_widths`) с нижней границей на прежнем фикс-виде: кнопка растёт до
+//! потолка и затем усекает имя с «…», меню растёт под самый длинный пункт до общего верхнего
+//! предела. Разница в типе ключа была мнимой: `CoreId = u64` (алиас, см.
+//! `moon_core::session::store`), поэтому builder работает с `u64` и подходит всем.
+//! Что делает тумблер и как зовутся подписи — решает вызывающий (у каждой панели свои
+//! locale-ключи и свой `toggle_core`).
 
 use std::collections::HashSet;
 
@@ -14,11 +18,14 @@ use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, Moo
 
 /// Поле-список ядер: МУЛЬТИВЫБОР (чекбоксы, меню НЕ закрывается на клик — можно отметить
 /// сразу несколько). Подпись триггера: `all_label` (пусто / выбраны все) / имя единственного
-/// выбранного / `cores_n(N)`. `on_toggle(None, app)` — пункт «Все» (тумблер снять все / выбрать
-/// все), `on_toggle(Some(id), app)` — тогл одного ядра.
+/// выбранного / `cores_n(N)`; кнопка растёт под неё до внутреннего потолка (при переполнении
+/// имя усекается с «…»), меню — под самый длинный пункт до общего верхнего предела.
+/// `on_toggle(None, app)` — пункт «Все» (тумблер снять все / выбрать все),
+/// `on_toggle(Some(id), app)` — тогл одного ядра.
 ///
 /// `id` — id дропдауна; от него же образуются ключи пунктов (`{id}-all` / `{id}-{i}`),
-/// уникальные в пределах своего меню.
+/// уникальные в пределах своего меню. `min_menu_w` — НИЖНЯЯ ГРАНИЦА ширины меню (прежний
+/// фикс-вид для коротких списков), а не жёсткая ширина.
 pub(crate) fn core_combo<F>(
     cx: &App,
     id: &'static str,
@@ -26,7 +33,7 @@ pub(crate) fn core_combo<F>(
     selected: &HashSet<u64>,
     all_label: String,
     cores_n: impl Fn(usize) -> String,
-    menu_width: f32,
+    min_menu_w: f32,
     on_toggle: F,
 ) -> MoonDropdown
 where
@@ -47,13 +54,23 @@ where
         }
         n => cores_n(n),
     };
+    // Ширина по контенту (единый расчёт с screener::source_combo): кнопка под текущий выбор
+    // (пол 118, потолок в плотном тулбаре), меню под самый длинный пункт между полом
+    // `min_menu_w` и общим потолком.
+    let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
+        cx,
+        &cur,
+        std::iter::once(all_label.as_str()).chain(cores.iter().map(|(_, n)| n.as_str())),
+        118.0,
+        min_menu_w,
+    );
     let toggle_all = on_toggle.clone();
     let mut menu = MoonDropdown::new(id)
-        .label(format!("{cur} ▾"))
+        .label(trigger_label)
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::Action)
-        .trigger_width(design::font_w(cx, 118.0))
-        .menu_width(design::font_w(cx, menu_width))
+        .trigger_width(trigger_w)
+        .menu_width(menu_w)
         .menu_max_height(360.0)
         .menu_size(MoonMenuSize::Compact)
         .close_on_select(false)
