@@ -130,9 +130,15 @@ pub(super) fn daily_bars(
     let vmin = days.iter().map(|d| d.profit).fold(0.0f64, f64::min).min(0.0);
     let span = (vmax - vmin).max(1e-6);
     let up_frac = (vmax / span) as f32; // доля высоты над нулевой линией
-    let zero_from_bottom = CHART_H * (1.0 - up_frac);
     // Подписи значений читаемы только пока баров немного.
     let labels_on = days.len() <= 45;
+    // Резерв под подписи: сверху всегда (над самым высоким зелёным), снизу —
+    // только если есть минус (подпись ПОД красным). Бары масштабируются в
+    // оставшуюся высоту — цифры не перекрываются столбцами.
+    let pad_top = if labels_on { 13.0f32 } else { 0.0 };
+    let pad_bottom = if labels_on && vmin < 0.0 { 13.0f32 } else { 0.0 };
+    let area_h = (CHART_H - pad_top - pad_bottom).max(10.0);
+    let zero_from_bottom = pad_bottom + area_h * (1.0 - up_frac);
     let n = days.len();
 
     let mut row = h_flex()
@@ -142,12 +148,12 @@ pub(super) fn daily_bars(
         .gap(px(if n > 120 { 0.0 } else { 1.0 }));
     for (bi, d) in days.iter().enumerate() {
         let frac = (d.profit.abs() / span) as f32;
-        let bar_h = (frac * CHART_H).max(if d.trades > 0 { 1.5 } else { 0.0 });
+        let bar_h = (frac * area_h).max(if d.trades > 0 { 1.5 } else { 0.0 });
         // Положительные растут от нулевой линии вверх, отрицательные — вниз.
         let bottom = if d.profit >= 0.0 {
             zero_from_bottom
         } else {
-            (zero_from_bottom - bar_h).max(0.0)
+            (zero_from_bottom - bar_h).max(pad_bottom - 13.0)
         };
         let mut col = div()
             .id(SharedString::from(format!("an-db-{bi}")))
@@ -179,11 +185,12 @@ pub(super) fn daily_bars(
             col = col.bg(moon_alpha(p.text_muted, 0.07));
         }
         if labels_on && d.trades > 0 {
-            // Подпись: над зелёным баром / под красным.
+            // Подпись: над зелёным баром / под красным (место зарезервировано
+            // pad_top/pad_bottom — бар цифру не перекрывает).
             let label_bottom = if d.profit >= 0.0 {
-                (bottom + bar_h + 2.0).min(CHART_H - 11.0)
+                bottom + bar_h + 2.0
             } else {
-                (bottom - 13.0).max(0.0)
+                (bottom - 12.0).max(0.0)
             };
             // Подпись шире колонки (±24px по бокам) и без переносов — иначе
             // «333» обрезалось в «33»; соседние подписи могут чуть касаться,
@@ -542,9 +549,11 @@ pub(super) fn core_totals_bars(
                         .child(c.name.clone()),
                 )
                 .child(
+                    // Итог — крупнее имени (главная цифра диаграммы).
                     div()
                         .whitespace_nowrap()
-                        .text_size(crate::design::t_caption(cx))
+                        .text_size(crate::design::t_body(cx))
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(moon(super::summary::sign_color(p, v)))
                         .child(super::summary::fmt_signed(v)),
                 ),
