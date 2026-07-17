@@ -22,6 +22,9 @@ pub(super) struct SaveDialog {
     /// Текущие значения параметров стратегии тем же индексом, что `changes`
     /// (окно показывает «сейчас → будет»); None — параметра нет в стратегии.
     pub(super) olds: Vec<Option<String>>,
+    /// true — окно «Сделать копию»: подтверждение создаёт НОВУЮ стратегию
+    /// с этими полями (имя из инпута), а не правит исходную.
+    pub(super) copy: bool,
     /// Предупреждения (перезапись чужого слот-типа, не вошедшие поля) —
     /// показываются в окне подтверждения, не только в логе.
     pub(super) warns: Vec<String>,
@@ -60,6 +63,8 @@ pub(super) struct TunerState {
     /// «Округление результата»: границы из подбора округляются до 3 значащих
     /// цифр НАРУЖУ (from вниз, to вверх) — диапазон не теряет найденных сделок.
     pub(super) round_results: bool,
+    /// Имя создаваемой копии (инпут окна «Сделать копию»).
+    pub(super) copy_name: String,
     pub(super) seq: u64,
     pub(super) hist_seq: u64,
     pub(super) sugg_seq: u64,
@@ -84,10 +89,11 @@ impl TunerState {
             save_dialog: None,
             dirty: false,
             staged_ignore: HashMap::new(),
-            iters: "4".to_string(),
+            iters: "20".to_string(),
             min_trades: String::new(),
             edges: 64,
             round_results: true,
+            copy_name: String::new(),
             enabled,
             seq: 0,
             hist_seq: 0,

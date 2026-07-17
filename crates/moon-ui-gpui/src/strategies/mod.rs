@@ -15,7 +15,9 @@ mod tree_dialogs;
 mod tree_dnd;
 mod tree_menu;
 mod tree_moon;
-mod tree_ops;
+// pub(crate): unique_name/set_field/STRATEGY_NAME_FIELD переиспользует
+// «Сделать копию» тюнера Аналитики.
+pub(crate) mod tree_ops;
 mod tree_ui;
 mod versions;
 

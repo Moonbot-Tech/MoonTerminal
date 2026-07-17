@@ -66,7 +66,7 @@ pub fn default_fields(kind: &SchemaKind) -> Vec<(String, String)> {
 }
 
 /// Заменить (или добавить) значение поля по имени.
-fn set_field(fields: &mut Vec<(String, String)>, name: &str, value: &str) {
+pub fn set_field(fields: &mut Vec<(String, String)>, name: &str, value: &str) {
     if let Some(slot) = fields.iter_mut().find(|(n, _)| n == name) {
         slot.1 = value.to_string();
     } else {

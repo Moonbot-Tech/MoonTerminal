@@ -6,7 +6,7 @@
 //! - «Монеты» — справа таблица по монетам выбранной (или всех сделок).
 
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
+use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::AnalyticsView;
@@ -127,6 +127,29 @@ impl AnalyticsView {
     ) -> Option<impl IntoElement + use<>> {
         let dlg = self.tuner.save_dialog.clone()?;
         let mut list = v_flex().w_full().gap_0();
+        // Окно копии: редактируемое имя новой стратегии первой строкой.
+        if dlg.copy {
+            if let Some(input) = self.tuner.inputs.get("copy-name") {
+                list = list.child(
+                    h_flex()
+                        .w_full()
+                        .px(design::ui_px(cx, 10.0))
+                        .py(design::ui_px(cx, 5.0))
+                        .gap(design::ui_px(cx, 8.0))
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(design::t_caption(cx))
+                                .text_color(moon(p.text_muted))
+                                .child(t!("analytics.tuner.copy_name_lbl").to_string()),
+                        )
+                        .child(div().flex_1().min_w_0().child(
+                            MoonInput::new("tun-copy-name").state(input).small(),
+                        )),
+                );
+            }
+        }
         for (i, (k, v)) in dlg.changes.iter().enumerate() {
             // «сейчас → будет»: текущее значение стратегии мутным, новое — янтарным.
             let old = dlg.olds.get(i).cloned().flatten();
@@ -212,10 +235,17 @@ impl AnalyticsView {
                                         .text_size(design::t_title(cx))
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child(
-                                            t!(
-                                                "analytics.tuner.save_title",
-                                                name = dlg.name.as_str()
-                                            )
+                                            if dlg.copy {
+                                                t!(
+                                                    "analytics.tuner.copy_title",
+                                                    name = dlg.name.as_str()
+                                                )
+                                            } else {
+                                                t!(
+                                                    "analytics.tuner.save_title",
+                                                    name = dlg.name.as_str()
+                                                )
+                                            }
                                             .to_string(),
                                         ),
                                 )

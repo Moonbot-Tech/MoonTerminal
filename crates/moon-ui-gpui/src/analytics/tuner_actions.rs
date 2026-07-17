@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use gpui::*;
 
+use moon_ui::{MoonInputEvent, MoonInputState};
 use rust_i18n::t;
 
 use super::AnalyticsView;
@@ -28,7 +29,7 @@ impl AnalyticsView {
             .iters
             .trim()
             .parse::<usize>()
-            .unwrap_or(4)
+            .unwrap_or(20)
             .clamp(1, 1000);
         let min_n = self.suggest_min_n();
         let edges = self.suggest_edges();
@@ -150,9 +151,13 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Очистить ВСЮ колонку варианта (крестик в шапке сетки).
+    /// Очистить колонку варианта (крестик в шапке сетки) — только строки с
+    /// ВКЛЮЧЁННЫМ чекбоксом: снятые = фиксированные фильтры, их не трогаем.
     pub(super) fn clear_variant(&mut self, vi: usize, cx: &mut Context<Self>) {
         for fi in 0..FIELDS.len() {
+            if !self.tuner.enabled[fi] {
+                continue;
+            }
             self.tuner.bounds[vi][fi] = (String::new(), String::new());
             self.tuner.inputs.remove(&format!("tv{vi}f{fi}a"));
             self.tuner.inputs.remove(&format!("tv{vi}f{fi}b"));
@@ -223,10 +228,64 @@ impl AnalyticsView {
     /// (d1h/d15m/d5m/d1m/Pump1H/Dump1H) — через Delta2/Delta3: сначала
     /// `DeltaN_Type`, затем `DeltaN_Min/Max`; слотов два — лишние в лог.
     pub(super) fn open_save_dialog(&mut self, cx: &mut Context<Self>) {
-        let Some((key, name)) = self.sel_strategy.clone() else {
+        let Some((sid, name, mut changes, warns)) = self.build_strategy_changes() else {
             return;
         };
-        let Ok(sid) = key.parse::<i64>() else { return };
+        if changes.is_empty() {
+            log::info!("аналитика: «Сохранить» — нет ни порогов с маппингом, ни изменённых игноров");
+            return;
+        }
+        changes.push(self.analyzer_comment());
+        self.open_change_dialog(sid, name, changes, warns, false, cx);
+    }
+
+    /// «Сделать копию»: та же сборка правок, но адресат — НОВАЯ стратегия
+    /// (копия текущей с применёнными порогами) на всех ядрах исходной. Имя
+    /// авто-уникальное, правится в окне подтверждения. Пустой список правок
+    /// допустим — это просто копия.
+    pub(super) fn open_copy_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((sid, name, mut changes, warns)) = self.build_strategy_changes() else {
+            return;
+        };
+        changes.push(self.analyzer_comment());
+        // Авто-имя: уникальное среди имён стратегий ВСЕХ ядер (имена в
+        // Moonbot глобальны в пределах ядра; берём объединение — надёжно).
+        let mut taken = std::collections::HashSet::new();
+        {
+            let b = self.backend.read(cx);
+            for (_, cd) in b.session.store().cores() {
+                for r in &cd.strategies {
+                    taken.insert(r.name.clone());
+                }
+            }
+        }
+        let proposed = crate::strategies::tree_ops::unique_name(&taken, &name);
+        self.tuner.copy_name = proposed.clone();
+        // Свежий инпут имени на каждое открытие (дефолт рисуется с начала).
+        self.tuner.inputs.remove("copy-name");
+        let state = cx.new(|cx| MoonInputState::new(window, cx).default_value(proposed));
+        cx.subscribe(&state, |this, st, ev: &MoonInputEvent, cx| {
+            if matches!(
+                ev,
+                MoonInputEvent::Change
+                    | MoonInputEvent::Blur
+                    | MoonInputEvent::PressEnter { .. }
+            ) {
+                this.tuner.copy_name = st.read(cx).value().to_string();
+            }
+        })
+        .detach();
+        self.tuner.inputs.insert("copy-name".to_string(), state);
+        self.open_change_dialog(sid, name, changes, warns, true, cx);
+    }
+
+    /// Собрать правки из v1 + стейджей «ignore» (без штампа Comment): пороги
+    /// с маппингом, слоты Delta2/3 (+предупреждения), Ignore-флаги.
+    fn build_strategy_changes(
+        &self,
+    ) -> Option<(i64, String, Vec<(String, String)>, Vec<String>)> {
+        let (key, name) = self.sel_strategy.clone()?;
+        let sid = key.parse::<i64>().ok()?;
 
         let mut changes: Vec<(String, String)> = Vec::new();
         let mut warns: Vec<String> = Vec::new();
@@ -387,14 +446,13 @@ impl AnalyticsView {
             };
             changes.push((flag.to_string(), value.to_string()));
         }
+        Some((sid, name, changes, warns))
+    }
 
-        if changes.is_empty() {
-            log::info!("аналитика: «Сохранить» — нет ни порогов с маппингом, ни изменённых игноров");
-            return;
-        }
-        // Штамп анализатора в Comment: «дд.мм.гггг чч:мм:сс (Save from
-        // analyzer)» UTC. Описание пользователя сохраняем — заменяется только
-        // предыдущий штамп (сегменты через «; »).
+    /// Штамп анализатора для Comment: «дд.мм.гггг чч:мм:сс (Save from
+    /// analyzer)» UTC. Описание пользователя сохраняется — заменяется только
+    /// предыдущий штамп (сегменты через «; »).
+    fn analyzer_comment(&self) -> (String, String) {
         const MARK: &str = "(Save from analyzer)";
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -409,7 +467,9 @@ impl AnalyticsView {
             dmy.next().unwrap_or(""),
         );
         let stamp = format!("{d}.{m}.{y} {time} {MARK}");
-        let base: Vec<&str> = f
+        let base: Vec<&str> = self
+            .tuner
+            .strat
             .comment
             .split("; ")
             .map(str::trim)
@@ -420,9 +480,20 @@ impl AnalyticsView {
         } else {
             format!("{}; {stamp}", base.join("; "))
         };
-        changes.push(("Comment".to_string(), comment));
-        // Текущие значения параметров — фоном из strategies.sqlite (окно
-        // показывает «сейчас → будет»); диалог открывается по готовности.
+        ("Comment".to_string(), comment)
+    }
+
+    /// Открыть окно подтверждения (запись/копия): текущие значения параметров
+    /// («сейчас → будет») тянутся фоном из strategies.sqlite.
+    fn open_change_dialog(
+        &mut self,
+        sid: i64,
+        name: String,
+        changes: Vec<(String, String)>,
+        warns: Vec<String>,
+        copy: bool,
+        cx: &mut Context<Self>,
+    ) {
         let keys: Vec<String> = changes.iter().map(|(k, _)| k.clone()).collect();
         self.op_started();
         cx.spawn(async move |this, cx| {
@@ -439,8 +510,14 @@ impl AnalyticsView {
                         .iter()
                         .map(|(k, _)| olds_map.get(k).cloned())
                         .collect();
-                    this.tuner.save_dialog =
-                        Some(Arc::new(SaveDialog { sid, name, changes, olds, warns }));
+                    this.tuner.save_dialog = Some(Arc::new(SaveDialog {
+                        sid,
+                        name,
+                        changes,
+                        olds,
+                        warns,
+                        copy,
+                    }));
                     cx.notify();
                 });
             });
@@ -448,14 +525,75 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// «Да» в окне подтверждения: отправить подготовленные правки.
+    /// «Да» в окне подтверждения: запись в стратегию или создание копии.
     pub(super) fn confirm_save_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(dlg) = self.tuner.save_dialog.take() else {
             return;
         };
-        self.tuner.staged_ignore.clear();
-        self.send_strategy_changes(dlg.sid, dlg.name.clone(), dlg.changes.clone(), cx);
+        if dlg.copy {
+            self.create_strategy_copy(&dlg, cx);
+        } else {
+            self.tuner.staged_ignore.clear();
+            self.send_strategy_changes(dlg.sid, dlg.name.clone(), dlg.changes.clone(), cx);
+        }
         cx.notify();
+    }
+
+    /// Создать копию стратегии с применёнными правками на всех ядрах, где
+    /// живёт исходная (по живому store). Имя — из инпута окна (пустое =
+    /// авто); на каждом ядре дополнительно уникализируется. Копия приходит
+    /// ВЫКЛЮЧЕННОЙ (правило create_strategies) — безопасно.
+    fn create_strategy_copy(&mut self, dlg: &super::tuner_state::SaveDialog, cx: &mut Context<Self>) {
+        use crate::strategies::tree_ops::{STRATEGY_NAME_FIELD, set_field, unique_name};
+        let sid = dlg.sid as u64;
+        let desired = {
+            let t = self.tuner.copy_name.trim();
+            if t.is_empty() { dlg.name.clone() } else { t.to_string() }
+        };
+        let b = self.backend.read(cx);
+        let mut plans: Vec<(moon_core::session::CoreId, moon_core::feed::NewStrategySpec, String)> =
+            Vec::new();
+        for (cid, cd) in b.session.store().cores() {
+            let Some(row) = cd.strategies.iter().find(|r| r.id == sid) else {
+                continue;
+            };
+            let taken: std::collections::HashSet<String> =
+                cd.strategies.iter().map(|r| r.name.clone()).collect();
+            let name = unique_name(&taken, &desired);
+            let mut fields = row.fields.clone();
+            for (k, v) in &dlg.changes {
+                set_field(&mut fields, k, v);
+            }
+            set_field(&mut fields, STRATEGY_NAME_FIELD, &name);
+            plans.push((
+                cid,
+                moon_core::feed::NewStrategySpec {
+                    kind_ordinal: row.kind_ordinal,
+                    folder_path: row.folder_path.clone(),
+                    fields,
+                },
+                name,
+            ));
+        }
+        if plans.is_empty() {
+            log::warn!(
+                "аналитика: «Сделать копию» — стратегия {} не найдена в живом store",
+                dlg.sid
+            );
+            return;
+        }
+        let total = plans.len();
+        let mut sent = 0usize;
+        for (cid, spec, name) in plans {
+            match b.session.create_strategies(cid, vec![spec]) {
+                Ok(()) => {
+                    sent += 1;
+                    log::info!("аналитика: копия «{name}» создана на ядре {cid}");
+                }
+                Err(e) => log::warn!("аналитика: копия на ядро {cid} не ушла: {e:#}"),
+            }
+        }
+        log::info!("аналитика: «Сделать копию» — ядер {sent}/{total}");
     }
 
     /// Общий хвост записи в стратегию: ядра из strategies.sqlite (не на

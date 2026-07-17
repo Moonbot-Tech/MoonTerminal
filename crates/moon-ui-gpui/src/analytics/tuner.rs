@@ -249,14 +249,24 @@ impl AnalyticsView {
             .child(
                 div().flex_none().child(
                     MoonCheckbox::new("tun-en-all")
-                        .checked(self.tuner.enabled.iter().all(|e| *e))
+                        // Немаппленные поля (нет параметра в стратегии) мастер
+                        // игнорирует: «все включены» = все МАППЛЕННЫЕ.
+                        .checked(
+                            FIELDS
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, s)| s.mapped())
+                                .all(|(fi, _)| self.tuner.enabled[fi]),
+                        )
                         .size(MoonCheckboxSize::Compact)
                         .on_change({
                             let view = cx.entity();
                             move |ch: &bool, _w, app| {
                                 let on = *ch;
                                 view.update(app, |this, cx| {
-                                    this.tuner.enabled.iter_mut().for_each(|e| *e = on);
+                                    for (fi, spec) in FIELDS.iter().enumerate() {
+                                        this.tuner.enabled[fi] = on && spec.mapped();
+                                    }
                                     cx.notify();
                                 });
                             }
@@ -510,7 +520,7 @@ impl AnalyticsView {
         // Строка умного подбора: попытки координатного спуска + минимум
         // сделок (пусто = авто) + число квантилей + кнопки запуска.
         let busy = self.tuner.sugg_busy;
-        let it_input = self.cfg_input(0, "4", window, cx);
+        let it_input = self.cfg_input(0, "20", window, cx);
         let mn_input = self.cfg_input(1, &t!("analytics.tuner.auto_ph"), window, cx);
         // Число квантилей — поле со списком (4/8/16/…/128).
         let ed_view = cx.entity();
@@ -652,6 +662,18 @@ impl AnalyticsView {
                             }
                         }),
                 ));
+            // «Сделать копию»: новая стратегия = текущая + пороги v1.
+            header = header.child(
+                MoonButton::new("tun-copy-strat")
+                    .variant(MoonButtonVariant::Soft)
+                    .size(MoonButtonSize::Micro)
+                    .label(t!("analytics.tuner.copy_btn").to_string())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_copy_dialog(window, cx);
+                        cx.notify();
+                    }))
+                    .render(),
+            );
             // Кнопка «загорается», когда есть что записывать: стейджи
             // «ignore» ИЛИ пороги v1, отличные от текущих параметров
             // стратегии; сохранение — через окно подтверждения.

@@ -153,6 +153,18 @@ analytics.tuner.grp_slot:
   ru: "Слоты Delta2/Delta3 — в стратегию макс. 2"
   en: "Delta2/Delta3 slots — max 2 saved to strategy"
   es: "Slots Delta2/Delta3 — máx. 2 a la estrategia"
+analytics.tuner.copy_btn:
+  ru: "Сделать копию"
+  en: "Make a copy"
+  es: "Crear copia"
+analytics.tuner.copy_title:
+  ru: "Копия «%{name}»"
+  en: "Copy of %{name}"
+  es: "Copia de %{name}"
+analytics.tuner.copy_name_lbl:
+  ru: "имя копии"
+  en: "copy name"
+  es: "nombre de la copia"
 analytics.tuner.save_now_next:
   ru: "сейчас → будет"
   en: "now → new"
