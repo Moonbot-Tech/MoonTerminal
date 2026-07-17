@@ -1072,6 +1072,11 @@ impl Render for ReportPanel {
             .size_full()
             .relative()
             .track_focus(&self.focus)
+            // Моно-шрифт на СВОЁМ корне (как Orders/Assets/Analytics/Screener): в
+            // открепляемом окне панель не наследует моно от шапки — без этого «Отчёт» в
+            // detached-окне рисовался бы Inter'ом (рассинхрон с docked-видом и с измерением
+            // ширины селектора ядра, которое опирается на моно).
+            .font_family(design::mono())
             .bg(rgb(p.table_body))
             // Дисмиссер ниже фильтров в z-порядке (см. `coin_dismiss`).
             .children(coin_dismiss)

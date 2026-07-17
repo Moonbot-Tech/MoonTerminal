@@ -190,13 +190,15 @@ pub fn fit_h_px(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f
 /// Считается суммой advance'ов глифов через text_system: без кернинга/лигатур, но для
 /// подбора ширины попапов/меню под контент этого достаточно. Использовать для
 /// контент-зависимой геометрии (ширина меню по самому длинному пункту), НЕ для
-/// пиксель-точной вёрстки текста.
-pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32) -> f32 {
+/// пиксель-точной вёрстки текста. `mono` — семейство шрифта: `true` для моно (Geist Mono,
+/// как меню/тулбар-контекст панелей), `false` для UI-шрифта — мерить надо тем же, каким
+/// текст реально рисуется, иначе оценка ширины расходится с рендером.
+pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32, mono: bool) -> f32 {
     let tokens = MoonTheme::active_tokens(cx);
     let size = px(tokens.font(base_font_size));
     let font = Font {
         weight: FontWeight(weight),
-        ..font(tokens.font_family(false))
+        ..font(tokens.font_family(mono))
     };
     let ts = cx.text_system();
     let font_id = ts.resolve_font(&font);
@@ -207,9 +209,11 @@ pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32) -> 
 
 /// Ширина `MoonPopupMenu` (size=Compact) под самый длинный пункт: у компонента ширина
 /// только фиксированная, поэтому подбираем её по контенту сами. Зеркалит метрики
-/// Compact-строки меню (dropdown.rs moonui): кегль 9.5/вес до 600 (selected), pad_x 6×2 +
-/// gap 5 + паддинг контейнера 4×2 (ui-масштаб) + колонка галки 12 + рамка 2 (не
-/// масштабируются). `min_w` — нижняя граница (прежний фикс-вид для коротких списков).
+/// Compact-строки меню (dropdown.rs moonui): МОНО-шрифт (`MoonPopupMenu` рисует пункты
+/// `.mono(true)`), кегль 9.5/вес до 600 (selected), pad_x 6×2 + gap 5 + паддинг контейнера
+/// 4×2 (ui-масштаб) + колонка галки 12 + рамка 2 (не масштабируются). `min_w` — нижняя
+/// граница (прежний фикс-вид для коротких списков), `MENU_MAX_W` после масштабирования —
+/// верхняя; если верхняя оказалась меньше `min_w`, нижняя граница имеет приоритет.
 pub fn menu_fit_width<'a>(
     cx: &App,
     labels: impl IntoIterator<Item = &'a str>,
@@ -217,16 +221,93 @@ pub fn menu_fit_width<'a>(
 ) -> f32 {
     let max_label_w = labels
         .into_iter()
-        .map(|l| ui_text_width(cx, l, 9.5, 600.0))
+        .map(|l| ui_text_width(cx, l, 9.5, 600.0, true))
         .fold(0.0, f32::max);
     (ui_value(cx, 6.0 * 2.0 + 5.0 + 4.0 * 2.0) + 12.0 + 2.0 + max_label_w)
         .ceil()
-        .max(min_w)
+        // Верхняя граница ≥ нижней обязательно: часть вызовов передаёт НЕмасштабированный
+        // `min_w` (шапка/MS — сырые 180/200), и при сильно уменьшенном кегле `font_w(MENU_MAX_W)`
+        // мог бы оказаться ниже `min_w` → паника `f32::clamp` (lo > hi). `.max(min_w)` держит
+        // инвариант: при вырожденном кегле пол побеждает потолок.
+        .clamp(min_w, font_w(cx, MENU_MAX_W).max(min_w))
 }
 
 /// Паддинг `MoonPopover` вокруг контента (2×6) — прибавка к ширине меню при задании
 /// ширины поповера (прежде это была ручная константа «+12» у каждого вызова).
 pub const POPOVER_PAD_W: f32 = 12.0;
+
+/// Горизонтальный воздух вокруг метки кнопки-триггера `MoonDropdown`: у `MoonButton`
+/// pad_x=0 (FORK_BUGS), поэтому поля добавляем сами. Масштабируется под кегль. Визуальная
+/// настройка.
+const TRIGGER_PAD_X: f32 = 14.0;
+
+/// Потолок ширины кнопки-триггера `MoonDropdown` в плотном тулбаре панели: длинная подпись не
+/// должна раздвигать кнопку так, что соседние контролы уезжают за обрезаемый край панели —
+/// полное имя читается в раскрытом списке. Визуальная настройка (немасштабированная база
+/// для `font_w`).
+const TRIGGER_MAX_W: f32 = 260.0;
+
+/// Грубый верхний предел ширины меню селектора: не даёт вырожденно-длинному имени ядра
+/// раздуть меню на пол-экрана (`MoonDropdown` двигает поповер, но НЕ ужимает его). Это
+/// ФИКСИРОВАННЫЙ бортик, НЕ фактическая ширина окна — в очень узком detached-окне при крупном
+/// кегле меню всё ещё может выйти за край (как и у шапки, общий предел `menu_fit_width`).
+/// Реальные имена ядер сюда не дотягивают. Немасштабированная база для `font_w`.
+const MENU_MAX_W: f32 = 560.0;
+
+/// Ширины `MoonDropdown`, растущего под контент — ЕДИНЫЙ расчёт для комбобоксов ядер
+/// (`core_combo`, `screener::source_combo`) и полей источника/файла панели «Лог». Возвращает
+/// (метка триггера с кареткой, ширина триггера, ширина меню). `cur` — текущий выбор (без
+/// каретки), `menu_labels` — ВСЕ подписи пунктов меню, `min_trigger_w` / `min_menu_w` — нижние
+/// границы (прежний фикс-вид, у каждого вызова свои). Триггер: пол `min_trigger_w`, потолок
+/// `TRIGGER_MAX_W` (при переполнении подпись усекается с «…»); меню между `min_menu_w` и общим
+/// верхним пределом `MENU_MAX_W`.
+pub fn dropdown_content_widths<'a>(
+    cx: &App,
+    cur: &str,
+    menu_labels: impl IntoIterator<Item = &'a str>,
+    min_trigger_w: f32,
+    min_menu_w: f32,
+) -> (String, f32, f32) {
+    let (label, trigger_w) =
+        fit_dropdown_trigger(cx, cur, font_w(cx, min_trigger_w), font_w(cx, TRIGGER_MAX_W));
+    let menu_w = menu_fit_width(cx, menu_labels, font_w(cx, min_menu_w));
+    (label, trigger_w, menu_w)
+}
+
+/// Метка (с кареткой ` ▾`) и ширина кнопки-триггера `MoonDropdown` под текущий выбор `cur`.
+/// Ширина растёт по контенту между `min_w` (прежний фикс-вид) и `max_w` (потолок). Метка
+/// одиночного сегмента `MoonButton` наследует МОНО-шрифт родителя-панели (Geist Mono) —
+/// меряем им же (не-моно оценка занижала бы ширину, и длинный текст всё равно резался бы).
+/// При превышении потолка метка усекается с «…»: префикс набирается по ФАКТИЧЕСКОЙ ширине
+/// символов (устойчиво к fallback-глифам вне Geist Mono — CJK/emoji равноширинными не бывают),
+/// каретка сохраняется, полное имя остаётся в раскрытом списке. `cur` передаётся БЕЗ каретки.
+fn fit_dropdown_trigger(cx: &App, cur: &str, min_w: f32, max_w: f32) -> (String, f32) {
+    const CARET: &str = " \u{25be}"; // пробел + ▾
+    let tw = |s: &str| ui_text_width(cx, s, 10.5, 400.0, true);
+    let full = format!("{cur}{CARET}");
+    let natural = (ui_value(cx, TRIGGER_PAD_X) + tw(&full)).ceil();
+    if natural <= max_w {
+        return (full, natural.max(min_w));
+    }
+    // Над потолком → усечь имя, сохранив «… ▾». Имена ядер — произвольный Unicode; для глифов
+    // вне Geist Mono равноширинность не гарантирована, поэтому набираем префикс по фактической
+    // ширине КАЖДОГО символа, пока «префикс + … ▾» умещается в бюджет — метка не переливает
+    // кнопку ни при каком имени.
+    let suffix = format!("\u{2026}{CARET}"); // … + пробел + ▾
+    let budget = max_w - ui_value(cx, TRIGGER_PAD_X) - tw(&suffix);
+    let mut head = String::new();
+    let mut used = 0.0f32;
+    let mut buf = [0u8; 4];
+    for ch in cur.chars() {
+        let w = tw(ch.encode_utf8(&mut buf));
+        if used + w > budget {
+            break;
+        }
+        used += w;
+        head.push(ch);
+    }
+    (format!("{}{}", head.trim_end(), suffix), max_w)
+}
 
 /// Фактические (масштабированные под кегль) высоты строки/шапки MoonDataTable.
 /// Зеркалят fit_height-аргументы самого компонента (data_table.rs: строка
