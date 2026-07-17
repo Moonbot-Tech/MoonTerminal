@@ -610,6 +610,29 @@ impl AnalyticsView {
         // «В стратегию» — только при выбранной стратегии; двухкликовое
         // подтверждение (первый клик — «Подтвердить?»).
         if self.sel_strategy.is_some() {
+            // «Округление результата»: подпись + чекбокс, прижаты к «Сохранить».
+            header = header
+                .child(
+                    div()
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(p.text_muted))
+                        .child(t!("analytics.tuner.round_lbl").to_string()),
+                )
+                .child(div().flex_none().child(
+                    MoonCheckbox::new("tun-round")
+                        .checked(self.tuner.round_results)
+                        .size(MoonCheckboxSize::Compact)
+                        .on_change({
+                            let view = cx.entity();
+                            move |ch: &bool, _w, app| {
+                                let on = *ch;
+                                view.update(app, |this, cx| {
+                                    this.tuner.round_results = on;
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                ));
             // Кнопка «загорается», когда есть непримененные клики «ignore»;
             // сохранение — через окно подтверждения со списком полей.
             let dirty = staged_dirty(&self.tuner.strat, &self.tuner.staged_ignore);

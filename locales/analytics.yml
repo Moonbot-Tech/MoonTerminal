@@ -153,6 +153,10 @@ analytics.tuner.grp_slot:
   ru: "Слоты Delta2/Delta3 — в стратегию макс. 2"
   en: "Delta2/Delta3 slots — max 2 saved to strategy"
   es: "Slots Delta2/Delta3 — máx. 2 a la estrategia"
+analytics.tuner.round_lbl:
+  ru: "округление результата"
+  en: "round results"
+  es: "redondear resultado"
 analytics.tuner.edges:
   ru: "сложность"
   en: "depth"

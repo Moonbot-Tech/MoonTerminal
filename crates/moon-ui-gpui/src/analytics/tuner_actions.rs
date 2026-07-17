@@ -11,6 +11,7 @@ use rust_i18n::t;
 
 use super::AnalyticsView;
 use super::tuner::{fmt_bound, parse_num};
+use super::tuner_state::round_bound;
 use super::tuner_state::SaveDialog;
 use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
@@ -66,6 +67,7 @@ impl AnalyticsView {
                             res.n,
                             res.rounds
                         );
+                        let round = this.tuner.round_results;
                         let by_field: HashMap<&str, _> =
                             res.fields.into_iter().map(|f| (f.field, f)).collect();
                         for fi in 0..FIELDS.len() {
@@ -75,7 +77,14 @@ impl AnalyticsView {
                             }
                             let (from, to) = by_field
                                 .get(FIELDS[fi].col)
-                                .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
+                                .map(|f| {
+                                    let (lo, hi) = if round {
+                                        (round_bound(f.from, false), round_bound(f.to, true))
+                                    } else {
+                                        (f.from, f.to)
+                                    };
+                                    (fmt_bound(lo), fmt_bound(hi))
+                                })
                                 .unwrap_or_default();
                             this.tuner.bounds[0][fi] = (from, to);
                             this.tuner.inputs.remove(&format!("tv0f{fi}a"));
@@ -114,8 +123,13 @@ impl AnalyticsView {
                     }
                     this.tuner.sugg_busy = false;
                     if let Some(s) = sugg {
-                        let from = s.from.map(fmt_bound).unwrap_or_default();
-                        let to = s.to.map(fmt_bound).unwrap_or_default();
+                        let round = this.tuner.round_results;
+                        let rd = |v: Option<f64>, up: bool| {
+                            v.map(|v| fmt_bound(if round { round_bound(v, up) } else { v }))
+                                .unwrap_or_default()
+                        };
+                        let from = rd(s.from, false);
+                        let to = rd(s.to, true);
                         this.apply_bounds(0, fi, from, to, cx);
                     }
                     cx.notify();
