@@ -482,17 +482,11 @@ pub(super) fn core_totals_bars(
     let span = (vmax - vmin).max(1e-6);
     let up_frac = (vmax / span) as f32;
     let gap = f32::from(design::ui_px(cx, 8.0));
-    let bars: Vec<(f32, Hsla)> = cores
-        .iter()
-        .enumerate()
-        .map(|(ci, c)| {
-            let col = colors
-                .get(ci)
-                .copied()
-                .unwrap_or_else(|| moon(fallback_core_color(p, ci)));
-            (c.total as f32, col)
-        })
-        .collect();
+    // Цвет бара — по знаку (профит/убыток), как на дневной диаграмме;
+    // цвет ядра живёт в кружке подписи под баром.
+    let bars: Vec<f32> = cores.iter().map(|c| c.total as f32).collect();
+    let up_col = moon(p.green);
+    let down_col = moon(p.orange);
     let muted = moon_alpha(p.text_muted, 0.5);
     let canvas_el = canvas(
         |_, _, _| (),
@@ -516,13 +510,13 @@ pub(super) fn core_totals_bars(
                 ));
             }
             let span32 = span as f32;
-            for (k, (v, col)) in bars.iter().enumerate() {
+            for (k, v) in bars.iter().enumerate() {
                 let x = bounds.origin.x + px(k as f32 * (col_w + gap));
                 let bar_h = (v.abs() / span32 * h).max(if v.abs() > 1e-9 { 1.5 } else { 0.0 });
                 let top = if *v >= 0.0 { zero_y - px(bar_h) } else { zero_y };
                 window.paint_quad(gpui::fill(
                     Bounds::new(gpui::point(x, top), gpui::size(px(col_w), px(bar_h))),
-                    *col,
+                    if *v >= 0.0 { up_col } else { down_col },
                 ));
             }
         },
@@ -533,20 +527,40 @@ pub(super) fn core_totals_bars(
 
     // Подписи под барами — той же сеткой колонок (flex_1 + тот же gap).
     let mut labels = h_flex().w_full().flex_none().gap(px(gap));
-    for c in cores {
+    for (ci, c) in cores.iter().enumerate() {
         let v = c.total;
+        let dot_col = colors
+            .get(ci)
+            .copied()
+            .unwrap_or_else(|| moon(fallback_core_color(p, ci)));
         labels = labels.child(
             v_flex()
                 .flex_1()
                 .min_w_0()
                 .items_center()
                 .child(
-                    div()
+                    // Имя с кружком цвета ядра (как в попапе) — сам бар
+                    // теперь красится по знаку профита.
+                    h_flex()
                         .max_w_full()
-                        .truncate()
-                        .text_size(crate::design::t_caption(cx))
-                        .text_color(moon(p.text_soft))
-                        .child(c.name.clone()),
+                        .items_center()
+                        .gap(design::ui_px(cx, 4.0))
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(design::ui_px(cx, 6.0))
+                                .h(design::ui_px(cx, 6.0))
+                                .rounded_full()
+                                .bg(dot_col),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(crate::design::t_caption(cx))
+                                .text_color(moon(p.text_soft))
+                                .child(c.name.clone()),
+                        ),
                 )
                 .child(
                     // Итог — крупнее имени (главная цифра диаграммы).
