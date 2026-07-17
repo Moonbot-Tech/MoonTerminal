@@ -322,6 +322,33 @@ pub fn smart_suggest(
             break;
         }
         }
+        // Финальная зачистка совместно-избыточных диапазонов: спуск мог
+        // остановиться по лимиту проходов, не успев снять поле, все сделки
+        // которого уже режут ДРУГИЕ фильтры (уникально режет row t только
+        // поле с !pass && fail==1). Такой диапазон — пустышка: удаление не
+        // меняет ни профит, ни счёт. Чистим до стабильности.
+        loop {
+            let mut removed = false;
+            for fi in 0..nf {
+                if !free[fi] || sel[fi].is_none() {
+                    continue;
+                }
+                let redundant = (0..n).all(|t| pass[fi][t] || fail[t] > 1);
+                if redundant {
+                    sel[fi] = None;
+                    for t in 0..n {
+                        if !pass[fi][t] {
+                            fail[t] -= 1;
+                            pass[fi][t] = true;
+                        }
+                    }
+                    removed = true;
+                }
+            }
+            if !removed {
+                break;
+            }
+        }
         // Итог рестарта — против глобального лучшего.
         let (mut profit, mut cnt) = (0.0f64, 0i64);
         for t in 0..n {
