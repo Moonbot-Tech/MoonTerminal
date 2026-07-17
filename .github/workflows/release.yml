@@ -36,7 +36,7 @@ jobs:
         run: |
           mkdir -p dist
           cp target/x86_64-pc-windows-msvc/release/moonterminal.exe dist/MoonTerminal.exe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: dist/MoonTerminal.exe
@@ -55,7 +55,7 @@ jobs:
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --target aarch64-apple-darwin
       - name: Package .app + .dmg
         run: bash .github/scripts/make-dmg.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: dist/MoonTerminal.dmg
