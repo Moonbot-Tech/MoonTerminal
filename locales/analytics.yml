@@ -162,9 +162,9 @@ analytics.cores_title:
   en: "Profit by core"
   es: "Beneficio por núcleo"
 analytics.cores_sub:
-  ru: "столбики — профит каждого ядра по интервалам периода; наведи на дату для деталей"
-  en: "bars — each core profit per interval; hover a date for details"
-  es: "barras — beneficio de cada núcleo por intervalo; pasa el cursor para detalles"
+  ru: "итоговая прибыль каждого ядра за выбранный период"
+  en: "total profit of each core over the selected period"
+  es: "beneficio total de cada núcleo en el período"
 analytics.by_cores:
   ru: "по ядрам"
   en: "by core"

@@ -164,10 +164,13 @@ pub(super) fn daily_bars(
 
 /// Накопительная прибыль ПО ЯДРАМ: линия на ядро (той же сеткой вёдер, что
 /// суммарная накопительная) + легенда с итогами. `h` — высота полотна.
+/// `hover` — ведро под мышью: колонка ловится невидимым оверлеем, попап
+/// показывает профит каждого ядра в эту дату.
 pub(super) fn core_lines(
     days: &[DayPoint],
     cores: &[CoreSeries],
     h: f32,
+    hover: Option<usize>,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
@@ -247,13 +250,134 @@ pub(super) fn core_lines(
 
     let first = days.first().map(|d| d.start).unwrap_or(0);
     let last = days.last().map(|d| d.start).unwrap_or(0);
-    v_flex()
+    // Невидимые колонки-ловушки ховера поверх полотна (по ведру на колонку).
+    let n = days.len();
+    let mut hover_row = h_flex().absolute().inset_0().gap_0();
+    for bi in 0..n {
+        let mut col = div()
+            .id(SharedString::from(format!("an-cl-{bi}")))
+            .flex_1()
+            .h_full()
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    if this.hover_core_bucket != Some(bi) {
+                        this.hover_core_bucket = Some(bi);
+                        cx.notify();
+                    }
+                } else if this.hover_core_bucket == Some(bi) {
+                    this.hover_core_bucket = None;
+                    cx.notify();
+                }
+            }));
+        if hover == Some(bi) {
+            col = col.bg(moon_alpha(p.text_muted, 0.07));
+        }
+        hover_row = hover_row.child(col);
+    }
+    let popup = hover
+        .filter(|bi| *bi < n)
+        .map(|bi| core_bucket_popup(days, cores, bi, p, cx));
+    div()
+        .relative()
         .w_full()
-        .gap(px(4.0))
-        .child(canvas_el)
-        .child(axis_row(p, dm(first), dm(last), None))
-        .child(core_legend(cores, p, cx))
+        .child(
+            v_flex()
+                .w_full()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .relative()
+                        .w_full()
+                        .h(px(h))
+                        .child(canvas_el)
+                        .child(hover_row),
+                )
+                .child(axis_row(p, dm(first), dm(last), None))
+                .child(core_legend(cores, p, cx)),
+        )
+        .children(popup)
         .into_any_element()
+}
+
+/// Попап значений ведра `bi`: дата + профит каждого ядра (по модулю, убыв.)
+/// + итог. Якорится к колонке даты внутри relative-контейнера чарта.
+fn core_bucket_popup(
+    days: &[DayPoint],
+    cores: &[CoreSeries],
+    bi: usize,
+    p: MoonPalette,
+    cx: &Context<AnalyticsView>,
+) -> AnyElement {
+    let mut items: Vec<(usize, f64)> = cores
+        .iter()
+        .enumerate()
+        .map(|(ci, c)| (ci, c.per_bucket[bi]))
+        .filter(|(_, v)| v.abs() > 1e-9)
+        .collect();
+    items.sort_by(|a, b| b.1.abs().total_cmp(&a.1.abs()));
+    let total: f64 = items.iter().map(|(_, v)| *v).sum();
+    let mut card = v_flex()
+        .gap(px(2.0))
+        .px(design::ui_px(cx, 8.0))
+        .py(design::ui_px(cx, 6.0))
+        .rounded(design::ui_px(cx, 6.0))
+        .bg(moon(p.panel_high))
+        .border_1()
+        .border_color(moon(p.border))
+        .shadow_md()
+        .text_size(crate::design::t_caption(cx))
+        .child(div().text_color(moon(p.text)).child(dm(days[bi].start)));
+    for (ci, v) in items.into_iter().take(16) {
+        card = card.child(
+            h_flex()
+                .gap(design::ui_px(cx, 5.0))
+                .items_center()
+                .child(
+                    div()
+                        .flex_none()
+                        .w(design::ui_px(cx, 6.0))
+                        .h(design::ui_px(cx, 6.0))
+                        .rounded_full()
+                        .bg(moon(core_color(p, ci))),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(moon(p.text_soft))
+                        .child(cores[ci].name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(moon(super::summary::sign_color(p, v)))
+                        .child(super::summary::fmt_signed(v)),
+                ),
+        );
+    }
+    card = card.child(
+        h_flex()
+            .gap(design::ui_px(cx, 5.0))
+            .justify_between()
+            .border_t_1()
+            .border_color(moon_alpha(p.border, 0.6))
+            .child(div().text_color(moon(p.text_muted)).child("Σ"))
+            .child(
+                div()
+                    .text_color(moon(super::summary::sign_color(p, total)))
+                    .child(super::summary::fmt_signed(total)),
+            ),
+    );
+    // Якорь к колонке даты: в правой трети — слева от неё, иначе справа.
+    let frac = bi as f32 / days.len().max(1) as f32;
+    let mut holder = div().absolute().top(px(6.0)).w(design::font_w_px(cx, 190.0));
+    if frac <= 0.62 {
+        holder = holder.left(relative(frac)).ml(px(12.0));
+    } else {
+        holder = holder.right(relative(1.0 - frac)).mr(px(12.0));
+    }
+    holder.child(card).into_any_element()
 }
 
 /// Легенда серий ядер: точка цвета + имя + итог за период (с переносами).
@@ -293,171 +417,70 @@ fn core_legend(
     legend.into_any_element()
 }
 
-/// Столбчатый профит ПО ЯДРАМ (как дневные бары, но по столбику на ядро в
-/// каждом ведре) + ховер-попап значений ведра по каждому ядру.
-pub(super) fn core_bars(
-    days: &[DayPoint],
+/// Итог периода ПО ЯДРАМ: один столбик на ядро (СУММА профита за период),
+/// под столбиком — имя ядра и число.
+pub(super) fn core_totals_bars(
     cores: &[CoreSeries],
-    hover: Option<usize>,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
-    if days.is_empty() || cores.is_empty() {
+    if cores.is_empty() {
         return div().h(px(CORES_CHART_H)).into_any_element();
     }
-    let mut vmax = 1e-6f64;
-    let mut vmin = 0.0f64;
-    for c in cores {
-        for v in &c.per_bucket {
-            vmax = vmax.max(*v);
-            vmin = vmin.min(*v);
-        }
-    }
+    let vmax = cores.iter().map(|c| c.total).fold(0.0f64, f64::max).max(1e-6);
+    let vmin = cores.iter().map(|c| c.total).fold(0.0f64, f64::min).min(0.0);
     let span = (vmax - vmin).max(1e-6);
     let up_frac = (vmax / span) as f32;
     let zero_from_bottom = CORES_CHART_H * (1.0 - up_frac);
-    let n = days.len();
 
     let mut row = h_flex()
         .w_full()
-        .h(px(CORES_CHART_H))
         .items_end()
-        .gap(px(if n > 120 { 0.0 } else { 1.0 }));
-    for bi in 0..n {
-        // Кластер ведра: тонкий столбик на КАЖДОЕ ядро; ховер = попап.
-        let mut cluster = h_flex()
-            .id(SharedString::from(format!("an-cb-{bi}")))
-            .flex_1()
-            .h_full()
-            .items_end()
-            .gap_0()
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    if this.hover_core_bucket != Some(bi) {
-                        this.hover_core_bucket = Some(bi);
-                        cx.notify();
-                    }
-                } else if this.hover_core_bucket == Some(bi) {
-                    this.hover_core_bucket = None;
-                    cx.notify();
-                }
-            }));
-        if hover == Some(bi) {
-            cluster = cluster.bg(moon_alpha(p.text_muted, 0.08));
-        }
-        for (ci, c) in cores.iter().enumerate() {
-            let v = c.per_bucket[bi];
-            let frac = (v.abs() / span) as f32;
-            let bar_h = (frac * CORES_CHART_H).max(if v.abs() > 1e-9 { 1.0 } else { 0.0 });
-            let mb = if v >= 0.0 {
-                zero_from_bottom
-            } else {
-                (zero_from_bottom - bar_h).max(0.0)
-            };
-            cluster = cluster.child(
-                div()
-                    .flex_1()
-                    .h(px(bar_h))
-                    .mb(px(mb))
-                    .bg(moon(core_color(p, ci))),
-            );
-        }
-        row = row.child(cluster);
-    }
-
-    // Попап значений ведра: дата + профит каждого ядра (по модулю, убыв.).
-    let popup = hover.filter(|bi| *bi < n).map(|bi| {
-        let mut items: Vec<(usize, f64)> = cores
-            .iter()
-            .enumerate()
-            .map(|(ci, c)| (ci, c.per_bucket[bi]))
-            .filter(|(_, v)| v.abs() > 1e-9)
-            .collect();
-        items.sort_by(|a, b| b.1.abs().total_cmp(&a.1.abs()));
-        let total: f64 = items.iter().map(|(_, v)| *v).sum();
-        let mut card = v_flex()
-            .gap(px(2.0))
-            .px(design::ui_px(cx, 8.0))
-            .py(design::ui_px(cx, 6.0))
-            .rounded(design::ui_px(cx, 6.0))
-            .bg(moon(p.panel_high))
-            .border_1()
-            .border_color(moon(p.border))
-            .shadow_md()
-            .text_size(crate::design::t_caption(cx))
-            .child(
-                div()
-                    .text_color(moon(p.text))
-                    .child(dm(days[bi].start)),
-            );
-        for (ci, v) in items.into_iter().take(16) {
-            card = card.child(
-                h_flex()
-                    .gap(design::ui_px(cx, 5.0))
-                    .items_center()
-                    .child(
+        .gap(design::ui_px(cx, 8.0))
+        .px(design::ui_px(cx, 4.0));
+    for (ci, c) in cores.iter().enumerate() {
+        let v = c.total;
+        let frac = (v.abs() / span) as f32;
+        let bar_h = (frac * CORES_CHART_H).max(if v.abs() > 1e-9 { 1.5 } else { 0.0 });
+        let mb = if v >= 0.0 {
+            zero_from_bottom
+        } else {
+            (zero_from_bottom - bar_h).max(0.0)
+        };
+        row = row.child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap(design::ui_px(cx, 3.0))
+                .child(
+                    // Полотно столбика: фикс-высота, бар прижат к нулевой линии.
+                    div().w_full().h(px(CORES_CHART_H)).flex().items_end().child(
                         div()
-                            .flex_none()
-                            .w(design::ui_px(cx, 6.0))
-                            .h(design::ui_px(cx, 6.0))
-                            .rounded_full()
+                            .w_full()
+                            .h(px(bar_h))
+                            .mb(px(mb))
+                            .rounded(px(2.0))
                             .bg(moon(core_color(p, ci))),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(moon(p.text_soft))
-                            .child(cores[ci].name.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(moon(super::summary::sign_color(p, v)))
-                            .child(super::summary::fmt_signed(v)),
                     ),
-            );
-        }
-        card = card.child(
-            h_flex()
-                .gap(design::ui_px(cx, 5.0))
-                .justify_between()
-                .border_t_1()
-                .border_color(moon_alpha(p.border, 0.6))
-                .child(div().text_color(moon(p.text_muted)).child("Σ"))
+                )
                 .child(
                     div()
-                        .text_color(moon(super::summary::sign_color(p, total)))
-                        .child(super::summary::fmt_signed(total)),
+                        .max_w_full()
+                        .truncate()
+                        .text_size(crate::design::t_caption(cx))
+                        .text_color(moon(p.text_soft))
+                        .child(c.name.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(crate::design::t_caption(cx))
+                        .text_color(moon(super::summary::sign_color(p, v)))
+                        .child(super::summary::fmt_signed(v)),
                 ),
         );
-        // Якорим к колонке даты: слева от курсора в правой трети, иначе справа.
-        let frac = bi as f32 / n.max(1) as f32;
-        let mut holder = div().absolute().top(px(6.0)).w(design::font_w_px(cx, 190.0));
-        if frac <= 0.62 {
-            holder = holder.left(relative(frac)).ml(px(12.0));
-        } else {
-            holder = holder.right(relative(1.0 - frac)).mr(px(12.0));
-        }
-        holder.child(card).into_any_element()
-    });
-
-    let first = days.first().map(|d| d.start).unwrap_or(0);
-    let last = days.last().map(|d| d.start).unwrap_or(0);
-    div()
-        .relative()
-        .w_full()
-        .child(
-            v_flex()
-                .w_full()
-                .gap(px(4.0))
-                .child(row)
-                .child(axis_row(p, dm(first), dm(last), None))
-                .child(core_legend(cores, p, cx)),
-        )
-        .children(popup)
-        .into_any_element()
+    }
+    row.into_any_element()
 }
 
 /// Подписи оси X: первая/последняя дата (+ итог справа у накопительной).

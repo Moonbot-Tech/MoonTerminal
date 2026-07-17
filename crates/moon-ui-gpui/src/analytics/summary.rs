@@ -87,7 +87,14 @@ impl AnalyticsView {
                             }))
                             .into_any_element();
                         let body = if by_core {
-                            charts::core_lines(&data.days, &data.core_days, 170.0, p, cx)
+                            charts::core_lines(
+                                &data.days,
+                                &data.core_days,
+                                170.0,
+                                self.hover_core_bucket,
+                                p,
+                                cx,
+                            )
                         } else {
                             charts::cumulative_area(&data.days, p)
                         };
@@ -127,12 +134,12 @@ impl AnalyticsView {
                     ))
                     .child(insights_card(&data, p, cx)),
             )
-            // Нижний чарт на всю ширину: столбики профита каждого ядра по
-            // вёдрам периода + ховер-попап значений даты.
+            // Нижний чарт на всю ширину: СУММА за период по ядрам — один
+            // столбик на ядро, имя и итог под ним.
             .child(chart_card(
                 t!("analytics.cores_title").to_string(),
                 t!("analytics.cores_sub").to_string(),
-                charts::core_bars(&data.days, &data.core_days, self.hover_core_bucket, p, cx),
+                charts::core_totals_bars(&data.core_days, p, cx),
                 p,
                 cx,
             ))
