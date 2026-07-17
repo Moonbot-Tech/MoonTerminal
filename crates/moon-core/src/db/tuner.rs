@@ -374,6 +374,10 @@ pub struct StratFilters {
     /// Занятые слоты Delta2/Delta3: (номер 2|3, поле отчёта, min, max).
     /// Слоты с типом без колонки отчёта (2h/30m/Pump5m) не попадают.
     pub slots: Vec<(u8, &'static str, Option<f64>, Option<f64>)>,
+    /// Слоты, занятые типом БЕЗ колонки отчёта (2h/30m/Pump5m) с настроенными
+    /// порогами: живой фильтр, который тюнер не видит — перезаписывать такой
+    /// слот сохранение должно в последнюю очередь (и с warn).
+    pub foreign_slots: Vec<(u8, String)>,
 }
 
 impl StratFilters {
@@ -486,14 +490,19 @@ pub fn strategy_filters(
             continue;
         };
         let t = t.trim();
+        let lo = num(Some(&format!("{prefix}_Min")));
+        let hi = num(Some(&format!("{prefix}_Max")));
         let Some((field, _)) = SLOT_TYPES
             .iter()
             .find(|(_, ty)| ty.eq_ignore_ascii_case(t))
         else {
-            continue; // 2h/30m/Pump5m — колонки отчёта нет
+            // 2h/30m/Pump5m — колонки отчёта нет; с настроенными порогами это
+            // живой фильтр — помечаем слот занятым «чужим» типом.
+            if lo.is_some() || hi.is_some() {
+                out.foreign_slots.push((n, t.to_string()));
+            }
+            continue;
         };
-        let lo = num(Some(&format!("{prefix}_Min")));
-        let hi = num(Some(&format!("{prefix}_Max")));
         out.slots.push((n, field, lo, hi));
     }
     out

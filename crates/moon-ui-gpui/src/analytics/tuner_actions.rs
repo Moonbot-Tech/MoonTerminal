@@ -205,11 +205,17 @@ impl AnalyticsView {
             }
         }
         // Раздача слотов: своё прежнее место (если тип уже стоит) — иначе
-        // свободный по порядку. Больше двух не влезает — остальные в лог.
+        // свободный по порядку. Слоты, занятые типом без колонки отчёта
+        // (2h/30m/Pump5m с порогами — «чужой» живой фильтр), перезаписываются
+        // ПОСЛЕДНИМИ и с warn. Больше двух не влезает — остальные в лог.
         if !slot_wanted.is_empty() {
             let cur2 = self.tuner.strat.slots.iter().find(|(n, ..)| *n == 2).map(|(_, f, ..)| *f);
             let cur3 = self.tuner.strat.slots.iter().find(|(n, ..)| *n == 3).map(|(_, f, ..)| *f);
+            let foreign = self.tuner.strat.foreign_slots.clone();
             let mut used = [false, false]; // [Delta2, Delta3]
+            for (n, _) in &foreign {
+                used[(*n - 2) as usize] = true;
+            }
             let mut assigned: Vec<(u8, &'static str, Option<f64>, Option<f64>)> = Vec::new();
             let mut dropped: Vec<&'static str> = Vec::new();
             // Сначала — поля, уже сидящие в своих слотах.
@@ -222,15 +228,32 @@ impl AnalyticsView {
                     assigned.push((3, col, *lo, *hi));
                 }
             }
-            for (col, lo, hi) in &slot_wanted {
-                if assigned.iter().any(|(_, f, ..)| f == col) {
-                    continue;
-                }
-                if let Some(i) = used.iter().position(|u| !u) {
+            // Затем — свободные слоты; в конце — перезапись «чужих».
+            for overwrite_foreign in [false, true] {
+                for (col, lo, hi) in &slot_wanted {
+                    if assigned.iter().any(|(_, f, ..)| f == col) {
+                        continue;
+                    }
+                    let Some(i) = (0..2).find(|i| {
+                        !used[*i]
+                            || (overwrite_foreign
+                                && foreign.iter().any(|(n, _)| *n == *i as u8 + 2)
+                                && !assigned.iter().any(|(n, ..)| *n == *i as u8 + 2))
+                    }) else {
+                        if overwrite_foreign {
+                            dropped.push(col);
+                        }
+                        continue;
+                    };
                     used[i] = true;
+                    if let Some((_, ty)) = foreign.iter().find(|(n, _)| *n == i as u8 + 2) {
+                        log::warn!(
+                            "аналитика: «Сохранить» — Delta{} был занят типом «{ty}» (в отчёте \
+                             колонки нет), перезаписываем на «{col}»",
+                            i + 2
+                        );
+                    }
                     assigned.push((i as u8 + 2, col, *lo, *hi));
-                } else {
-                    dropped.push(col);
                 }
             }
             if !dropped.is_empty() {
