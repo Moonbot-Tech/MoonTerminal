@@ -66,9 +66,9 @@ const fn field(
 /// Поля отчёта, доступные фильтрам. ЕДИНСТВЕННЫЙ источник имён колонок,
 /// попадающих в SQL тюнера (вайтлист). Порядок = порядок в сетке, группами
 /// по классу. Маппинг на параметры сверен 2026-07-17 по union параметров
-/// всех видов стратегий; без маппинга только da1m и d5s (параметров-фильтров
-/// в схеме нет; слот-типов таких тоже нет). Типы слотов 2h/30m/Pump5m без
-/// колонки отчёта непредставимы в тюнере.
+/// всех видов стратегий. Поля БЕЗ параметров и слот-типа (da1m, d5s) в
+/// тюнер не входят: подобранный порог нечем записать в стратегию — перебор
+/// бесполезен. Типы слотов 2h/30m/Pump5m без колонки отчёта непредставимы.
 pub const FIELDS: &[FieldSpec] = &[
     // PriceBug (IgnoreFilters | IgnorePing).
     field("pricebug", "PriceBug", FieldClass::Ping, Some("BinancePriceBugMin"), Some("BinancePriceBug"), None),
@@ -87,8 +87,6 @@ pub const FIELDS: &[FieldSpec] = &[
     // Дельты с собственными параметрами (IgnoreFilters | IgnoreDelta).
     field("d24h", "d24h", FieldClass::Delta, Some("Delta_24h_Min"), Some("Delta_24h_Max"), None),
     field("d3h", "d3h", FieldClass::Delta, Some("Delta_3h_Min"), Some("Delta_3h_Max"), None),
-    field("da1m", "da1m", FieldClass::Delta, None, None, None),
-    field("d5s", "d5s", FieldClass::Delta, None, None, None),
     field("btc1hdelta", "dBTC", FieldClass::Delta, Some("Delta_BTC_Min"), Some("Delta_BTC_Max"), None),
     field("exchange1hdelta", "dMarket", FieldClass::Delta, Some("Delta_Market_Min"), Some("Delta_Market_Max"), None),
     field("btc24hdelta", "d24BTC", FieldClass::Delta, Some("Delta_BTC_24_Min"), Some("Delta_BTC_24_Max"), None),
