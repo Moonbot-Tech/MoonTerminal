@@ -10,7 +10,7 @@ use gpui::*;
 use rust_i18n::t;
 
 use super::AnalyticsView;
-use super::tuner::{fmt_bound, parse_num};
+use super::tuner::{fmt_bound, parse_num, staged_dirty};
 use super::tuner_state::SaveDialog;
 use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
@@ -164,6 +164,41 @@ impl AnalyticsView {
     /// Число квантильных краёв перебора (поле со списком 4/8/…/128).
     fn suggest_edges(&self) -> usize {
         self.tuner.edges.clamp(4, 128)
+    }
+
+    /// Есть ли что записывать: стейджи «ignore» ИЛИ пороги v1, отличающиеся
+    /// от текущих параметров стратегии (кнопка «Сохранить» горит янтарным).
+    pub(super) fn save_dirty(&self) -> bool {
+        if staged_dirty(&self.tuner.strat, &self.tuner.staged_ignore) {
+            return true;
+        }
+        let near = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => (a - b).abs() <= a.abs().max(b.abs()).max(1.0) * 1e-9,
+            _ => false,
+        };
+        let f = &self.tuner.strat;
+        for (fi, spec) in FIELDS.iter().enumerate() {
+            let (from, to) = &self.tuner.bounds[0][fi];
+            let (lo, hi) = (parse_num(from), parse_num(to));
+            if lo.is_none() && hi.is_none() {
+                continue;
+            }
+            // Немаппленные поля в стратегию не пишутся — не считаются.
+            if !spec.mapped() {
+                continue;
+            }
+            let cur = if spec.class == FieldClass::DeltaSlot {
+                f.slot_of(spec.col).map(|(_, l, h)| (l, h))
+            } else {
+                f.bounds.get(spec.col).copied()
+            };
+            match cur {
+                Some((cl, ch)) if near(lo, cl) && near(hi, ch) => {}
+                _ => return true,
+            }
+        }
+        false
     }
 
     /// Минимум сделок для автоподбора: из конфиг-строки; пусто = авто (1/5

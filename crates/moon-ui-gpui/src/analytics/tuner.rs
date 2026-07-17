@@ -425,13 +425,28 @@ impl AnalyticsView {
                         .flatten()
                         .collect::<Vec<_>>()
                         .join(" ");
+                    // Клик по чипу: значения стратегии → v1 (замена) + снять
+                    // галку участия — поле становится ФИКСИРОВАННЫМ фильтром,
+                    // перебор его не трогает.
+                    let (from_s, to_s) = (
+                        lo.map(fmt_bound).unwrap_or_default(),
+                        hi.map(fmt_bound).unwrap_or_default(),
+                    );
                     div()
+                        .id(SharedString::from(format!("tun-chip-{fi}")))
                         .flex_1()
                         .min_w_0()
                         .truncate()
+                        .cursor_pointer()
                         .text_size(design::t_caption(cx))
                         .text_color(moon(p.amber))
+                        .hover(move |st| st.text_color(moon(p.text)))
                         .child(text)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.tuner.enabled[fi] = false;
+                            this.apply_bounds(0, fi, from_s.clone(), to_s.clone(), cx);
+                            cx.notify();
+                        }))
                         .into_any_element()
                 }
                 // Немаппленное поле: вместо чипа — пометка, что подобранный
@@ -637,9 +652,10 @@ impl AnalyticsView {
                             }
                         }),
                 ));
-            // Кнопка «загорается», когда есть непримененные клики «ignore»;
-            // сохранение — через окно подтверждения со списком полей.
-            let dirty = staged_dirty(&self.tuner.strat, &self.tuner.staged_ignore);
+            // Кнопка «загорается», когда есть что записывать: стейджи
+            // «ignore» ИЛИ пороги v1, отличные от текущих параметров
+            // стратегии; сохранение — через окно подтверждения.
+            let dirty = self.save_dirty();
             header = header.child(
                 MoonButton::new("tun-save-strat")
                     .variant(if dirty {
