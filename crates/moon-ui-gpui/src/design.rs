@@ -185,6 +185,49 @@ pub fn fit_h_px(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f
     px(fit_h_value(cx, base_height, base_line_height, base_pad_y))
 }
 
+/// Ширина строки UI-шрифтом темы данного БАЗОВОГО кегля (масштаб «Шрифт» применяется
+/// внутри, как это делает `MoonText` — передавать сюда немасштабированное значение).
+/// Считается суммой advance'ов глифов через text_system: без кернинга/лигатур, но для
+/// подбора ширины попапов/меню под контент этого достаточно. Использовать для
+/// контент-зависимой геометрии (ширина меню по самому длинному пункту), НЕ для
+/// пиксель-точной вёрстки текста.
+pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32) -> f32 {
+    let tokens = MoonTheme::active_tokens(cx);
+    let size = px(tokens.font(base_font_size));
+    let font = Font {
+        weight: FontWeight(weight),
+        ..font(tokens.font_family(false))
+    };
+    let ts = cx.text_system();
+    let font_id = ts.resolve_font(&font);
+    text.chars()
+        .map(|ch| f32::from(ts.layout_width(font_id, size, ch)))
+        .sum()
+}
+
+/// Ширина `MoonPopupMenu` (size=Compact) под самый длинный пункт: у компонента ширина
+/// только фиксированная, поэтому подбираем её по контенту сами. Зеркалит метрики
+/// Compact-строки меню (dropdown.rs moonui): кегль 9.5/вес до 600 (selected), pad_x 6×2 +
+/// gap 5 + паддинг контейнера 4×2 (ui-масштаб) + колонка галки 12 + рамка 2 (не
+/// масштабируются). `min_w` — нижняя граница (прежний фикс-вид для коротких списков).
+pub fn menu_fit_width<'a>(
+    cx: &App,
+    labels: impl IntoIterator<Item = &'a str>,
+    min_w: f32,
+) -> f32 {
+    let max_label_w = labels
+        .into_iter()
+        .map(|l| ui_text_width(cx, l, 9.5, 600.0))
+        .fold(0.0, f32::max);
+    (ui_value(cx, 6.0 * 2.0 + 5.0 + 4.0 * 2.0) + 12.0 + 2.0 + max_label_w)
+        .ceil()
+        .max(min_w)
+}
+
+/// Паддинг `MoonPopover` вокруг контента (2×6) — прибавка к ширине меню при задании
+/// ширины поповера (прежде это была ручная константа «+12» у каждого вызова).
+pub const POPOVER_PAD_W: f32 = 12.0;
+
 /// Фактические (масштабированные под кегль) высоты строки/шапки MoonDataTable.
 /// Зеркалят fit_height-аргументы самого компонента (data_table.rs: строка
 /// `fit(row_h, 14.0, 5.5)`, шапка `fit(header_h, 11.0, 7.5)`), чтобы обёртки,

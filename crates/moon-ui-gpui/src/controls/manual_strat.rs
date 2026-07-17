@@ -24,10 +24,8 @@ use crate::{Backend, design};
 /// Ordinal вида Manual в схеме стратегий Moonbot (см. `strat_kind_name`).
 const MANUAL_KIND: u8 = 12;
 
-/// Геометрия пилюли — как у селектора ядра в шапке.
+/// Геометрия пилюли — как у селектора ядра в шапке (ширина — по контенту, имя не режем).
 const PILL_H: f32 = 26.0;
-/// Лимит символов имени в пилюле (у MoonSelectorPill нет overflow-клипа).
-const NAME_MAX: usize = 16;
 
 /// Кластер «ручная стратегия» шапки: разделитель + тогл MS + пилюля-пикер + сводка
 /// параметров выбранной стратегии. Нет активного ядра группы → не рисуем ничего
@@ -64,7 +62,7 @@ pub fn manual_strategy_controls(
     // Имя в пилюле: выбранная стратегия / «—» (не выбрана) / «?» (id есть, стратегии нет —
     // удалена или снимок ещё не пришёл).
     let display: String = match (sel_row, id) {
-        (Some(r), _) => r.name.chars().take(NAME_MAX).collect(),
+        (Some(r), _) => r.name.clone(),
         (None, 0) => t!("header.ms_none").to_string(),
         (None, _) => "?".to_string(),
     };
@@ -78,12 +76,10 @@ pub fn manual_strategy_controls(
     };
 
     // Пункты меню пикера. Пустой список — некликабельная заглушка.
+    let empty_label = t!("header.ms_empty").to_string();
     let mut items = Vec::with_capacity(manuals.len().max(1));
     if manuals.is_empty() {
-        items.push(MoonMenuItem::with_key(
-            "ms-empty",
-            t!("header.ms_empty").to_string(),
-        ));
+        items.push(MoonMenuItem::with_key("ms-empty", empty_label.clone()));
     }
     for (sid, name) in &manuals {
         let sid = *sid;
@@ -130,10 +126,19 @@ pub fn manual_strategy_controls(
                     });
                 }),
         )
-        .child(
+        .child({
+            // Ширина меню — по самому длинному имени стратегии (или заглушке «пусто»).
+            let menu_w = design::menu_fit_width(
+                cx,
+                manuals
+                    .iter()
+                    .map(|(_, n)| n.as_str())
+                    .chain(manuals.is_empty().then(|| empty_label.as_str())),
+                200.0,
+            );
             MoonPopover::new("header-ms-selector")
                 .placement(MoonPopoverPlacement::BottomStart)
-                .width(212.0) // 200 меню + 2×6 паддинг попапа
+                .width(menu_w + design::POPOVER_PAD_W)
                 .close_on_content_click(true)
                 .trigger(
                     MoonSelectorPill::new("header-ms-pill")
@@ -149,12 +154,12 @@ pub fn manual_strategy_controls(
                 )
                 .content(
                     MoonPopupMenu::new("header-ms-menu")
-                        .width(200.0)
+                        .width(menu_w)
                         .size(MoonMenuSize::Compact)
                         .items(items)
                         .render(),
-                ),
-        );
+                )
+        });
     if let Some(summary) = summary {
         row = row.child(
             div()

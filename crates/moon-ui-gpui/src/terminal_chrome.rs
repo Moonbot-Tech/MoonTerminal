@@ -214,11 +214,9 @@ fn danger_text(p: MoonPalette) -> u32 {
 /// `Backend::active_trade_core` (авто-следование за фуллскрин-чартом + sticky-override
 /// при ручном выборе). Все торговые контролы тулбара/шапки читают это же ядро.
 fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> AnyElement {
-    // Геометрия пилюли: высота фикс., полное скругление = ½ высоты (ширина — по контенту, как в
-    // каноне MoonSelectorPill). `SEL_NAME_MAX` — лимит символов имени (обрезка справа, у пилюли
-    // нет overflow-клипа).
+    // Геометрия пилюли: высота фикс., полное скругление = ½ высоты, ширина — по контенту
+    // (канон MoonSelectorPill): имя НЕ обрезаем, пилюля тянется под него сама.
     const SEL_H: f32 = 26.0;
-    const SEL_NAME_MAX: usize = 13;
 
     let b = backend.read(cx);
     let cores = b.group_cores(group);
@@ -248,10 +246,6 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         .and_then(|id| cores.iter().find(|(cid, _)| *cid == id))
         .map(|(_, n)| n.clone())
         .unwrap_or_else(|| "—".to_string());
-    // У пилюли нет overflow-клипа → длинное имя обрезаем САМИ по символам, оставляя ЛЕВУЮ часть
-    // (как просили: «обрезать справа», левый край на месте). Короткие имена остаются как есть;
-    // многоточие не добавляем (имя — лишь подпись активного ядра, точный список — в попапе).
-    let active_name: String = active_name.chars().take(SEL_NAME_MAX).collect();
 
     let mut items = Vec::with_capacity(cores.len());
     for (id, name) in &cores {
@@ -278,9 +272,12 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
     //
     // Фон пилюли = `p.panel`; у `MoonSelectorPill` есть явный бордер `p.border` → «таблетка»
     // читается даже на фоне шапки `shell_high` (в отличие от старого Panel-кейса без рамки).
+    //
+    // Ширина меню — по самому длинному имени ядра (длинные имена клипались фикс-шириной).
+    let menu_w = design::menu_fit_width(cx, cores.iter().map(|(_, n)| n.as_str()), 180.0);
     MoonPopover::new("header-core-selector")
         .placement(MoonPopoverPlacement::BottomStart)
-        .width(192.0) // 180 ширина меню + 2×6 паддинг попапа
+        .width(menu_w + design::POPOVER_PAD_W)
         .close_on_content_click(true)
         .trigger(
             MoonSelectorPill::new("header-core-pill")
@@ -296,7 +293,7 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         )
         .content(
             MoonPopupMenu::new("header-core-menu")
-                .width(180.0)
+                .width(menu_w)
                 .size(MoonMenuSize::Compact)
                 .items(items)
                 .render(),
