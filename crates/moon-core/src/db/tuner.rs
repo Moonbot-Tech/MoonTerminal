@@ -63,42 +63,67 @@ const fn field(
     FieldSpec { col, label, class, p_min, p_max, slot_type }
 }
 
+impl FieldSpec {
+    /// Есть ли способ записать порог в стратегию (параметры или слот).
+    /// Немаппленные поля (da1m, d5s) в сетке помечаются и по умолчанию
+    /// исключены из автоподбора.
+    pub fn mapped(&self) -> bool {
+        self.p_min.is_some() || self.p_max.is_some() || self.slot_type.is_some()
+    }
+}
+
+impl FieldClass {
+    /// Родительская секция MoonBot: BV/SV живёт внутри Filters/Volume,
+    /// слоты Delta2/Delta3 — внутри Filters/Delta; прочие — сами себе.
+    pub fn parent(self) -> FieldClass {
+        match self {
+            FieldClass::BvSv => FieldClass::Volume,
+            FieldClass::DeltaSlot => FieldClass::Delta,
+            other => other,
+        }
+    }
+}
+
 /// Поля отчёта, доступные фильтрам. ЕДИНСТВЕННЫЙ источник имён колонок,
-/// попадающих в SQL тюнера (вайтлист). Порядок = порядок в сетке, группами
-/// по классу. Маппинг на параметры сверен 2026-07-17 по union параметров
-/// всех видов стратегий. Поля БЕЗ параметров и слот-типа (da1m, d5s) в
-/// тюнер не входят: подобранный порог нечем записать в стратегию — перебор
-/// бесполезен. Типы слотов 2h/30m/Pump5m без колонки отчёта непредставимы.
+/// попадающих в SQL тюнера (вайтлист). Порядок = порядок в сетке и повторяет
+/// порядок секций Filters в MoonBot: Base → Ping → Volume (внутри — BV/SV)
+/// → Delta (внутри — слоты Delta2/Delta3). Маппинг на параметры сверен
+/// 2026-07-17 по union параметров всех видов стратегий. Поля БЕЗ параметров
+/// и слот-типа (da1m, d5s) показываются С ПОМЕТКОЙ «нет параметра»: что-если
+/// по ним считается, но записать порог в стратегию нечем. Типы слотов
+/// 2h/30m/Pump5m без колонки отчёта непредставимы.
 pub const FIELDS: &[FieldSpec] = &[
-    // PriceBug (IgnoreFilters | IgnorePing).
-    field("pricebug", "PriceBug", FieldClass::Ping, Some("BinancePriceBugMin"), Some("BinancePriceBug"), None),
-    // BV/SV: параметры фильтра (не детектора BV_SV_Ratio!), гейт — UseBV_SV_Filter.
-    field("bvsvratio", "bvsv", FieldClass::BvSv, Some("BV_SV_FilterRatio"), Some("BV_SV_FilterRatioMax"), None),
     // Filters/Base (IgnoreFilters | IgnoreBase): плечо и дельта mark-цены (±%).
     field("lev", "Lev", FieldClass::Base, Some("MinLeverage"), Some("MaxLeverage"), None),
     field("dmark", "dMark", FieldClass::Base, Some("MarkPriceMin"), Some("MarkPriceMax"), None),
-    // Слоты Delta2/Delta3 (IgnoreFilters | IgnoreDelta; в стратегию — макс 2).
-    field("d1h", "d1h", FieldClass::DeltaSlot, None, None, Some("1h")),
-    field("d15m", "d15m", FieldClass::DeltaSlot, None, None, Some("15m")),
-    field("d5m", "d5m", FieldClass::DeltaSlot, None, None, Some("5m")),
-    field("d1m", "d1m", FieldClass::DeltaSlot, None, None, Some("1m")),
-    field("pump1h", "Pump1H", FieldClass::DeltaSlot, None, None, Some("Pump1h")),
-    field("dump1h", "Dump1H", FieldClass::DeltaSlot, None, None, Some("Dump1h")),
-    // Дельты с собственными параметрами (IgnoreFilters | IgnoreDelta).
+    // Filters/Ping (IgnoreFilters | IgnorePing).
+    field("pricebug", "PriceBug", FieldClass::Ping, Some("BinancePriceBugMin"), Some("BinancePriceBug"), None),
+    // Filters/Volume (IgnoreFilters | IgnoreVolume).
+    field("hvol", "H.Vol", FieldClass::Volume, Some("MinHourlyVolume"), Some("MaxHourlyVolume"), None),
+    field("hvolf", "H.VolF", FieldClass::Volume, Some("MinHourlyVolFast"), Some("MaxHourlyVolFast"), None),
+    field("dvol", "D.Vol", FieldClass::Volume, Some("MinVolume"), Some("MaxVolume"), None),
+    field("vd1m", "Vd1m", FieldClass::Volume, Some("MinuteVolDeltaMin"), Some("MinuteVolDeltaMax"), None),
+    // BV/SV — ПОДГРУППА Volume: свой включатель UseBV_SV_Filter поверх
+    // IgnoreVolume; параметры фильтра (не детектора BV_SV_Ratio!).
+    field("bvsvratio", "bvsv", FieldClass::BvSv, Some("BV_SV_FilterRatio"), Some("BV_SV_FilterRatioMax"), None),
+    // Filters/Delta (IgnoreFilters | IgnoreDelta).
     field("d24h", "d24h", FieldClass::Delta, Some("Delta_24h_Min"), Some("Delta_24h_Max"), None),
     field("d3h", "d3h", FieldClass::Delta, Some("Delta_3h_Min"), Some("Delta_3h_Max"), None),
+    field("da1m", "da1m", FieldClass::Delta, None, None, None),
+    field("d5s", "d5s", FieldClass::Delta, None, None, None),
     field("btc1hdelta", "dBTC", FieldClass::Delta, Some("Delta_BTC_Min"), Some("Delta_BTC_Max"), None),
     field("exchange1hdelta", "dMarket", FieldClass::Delta, Some("Delta_Market_Min"), Some("Delta_Market_Max"), None),
     field("btc24hdelta", "d24BTC", FieldClass::Delta, Some("Delta_BTC_24_Min"), Some("Delta_BTC_24_Max"), None),
     field("exchange24hdelta", "dM24", FieldClass::Delta, Some("Delta_Market_24_Min"), Some("Delta_Market_24_Max"), None),
     field("btc5mdelta", "dBTC5m", FieldClass::Delta, Some("Delta_BTC_5m_Min"), Some("Delta_BTC_5m_Max"), None),
     field("dbtc1m", "dBTC1m", FieldClass::Delta, Some("Delta_BTC_1m_Min"), Some("Delta_BTC_1m_Max"), None),
-    // Объёмы (IgnoreFilters | IgnoreVolume; MinuteVolDelta — тоже секция
-    // Filters/Volume, поэтому Vd1m здесь).
-    field("hvol", "H.Vol", FieldClass::Volume, Some("MinHourlyVolume"), Some("MaxHourlyVolume"), None),
-    field("hvolf", "H.VolF", FieldClass::Volume, Some("MinHourlyVolFast"), Some("MaxHourlyVolFast"), None),
-    field("dvol", "D.Vol", FieldClass::Volume, Some("MinVolume"), Some("MaxVolume"), None),
-    field("vd1m", "Vd1m", FieldClass::Volume, Some("MinuteVolDeltaMin"), Some("MinuteVolDeltaMax"), None),
+    // Слоты Delta2/Delta3 — ПОДГРУППА Delta (в стратегию — макс 2).
+    field("d1h", "d1h", FieldClass::DeltaSlot, None, None, Some("1h")),
+    field("d15m", "d15m", FieldClass::DeltaSlot, None, None, Some("15m")),
+    field("d5m", "d5m", FieldClass::DeltaSlot, None, None, Some("5m")),
+    field("d1m", "d1m", FieldClass::DeltaSlot, None, None, Some("1m")),
+    field("pump1h", "Pump1H", FieldClass::DeltaSlot, None, None, Some("Pump1h")),
+    field("dump1h", "Dump1H", FieldClass::DeltaSlot, None, None, Some("Dump1h")),
 ];
 
 /// Значение `DeltaN_Type` для поля-слота (None — поле не слот).
@@ -381,7 +406,9 @@ impl StratFilters {
         self.ignore_filters
             || match class {
                 FieldClass::Filter => false,
-                FieldClass::BvSv => !self.use_bvsv,
+                // BV/SV — подгруппа Filters/Volume: гейтится И IgnoreVolume,
+                // И собственным включателем UseBV_SV_Filter.
+                FieldClass::BvSv => self.ignore_volume || !self.use_bvsv,
                 FieldClass::Ping => self.ignore_ping,
                 FieldClass::Base => self.ignore_base,
                 FieldClass::Delta | FieldClass::DeltaSlot => self.ignore_delta,

@@ -313,16 +313,23 @@ impl AnalyticsView {
         let mut last_class: Option<FieldClass> = None;
         for fi in 0..FIELDS.len() {
             let class = FIELDS[fi].class;
-            // Подзаголовок группы (класс игноров) с кликабельным «ignore».
+            // Заголовки: секция MoonBot (родитель), затем подгруппа с
+            // отступом (BV/SV внутри Объёмов, слоты Δ2/Δ3 внутри Дельт).
+            let sub = class.parent() != class;
             if last_class != Some(class) {
+                if sub && last_class.map(|c| c.parent()) != Some(class.parent()) {
+                    grid = grid.child(self.group_header(class.parent(), &strat, p, cx));
+                }
                 last_class = Some(class);
                 grid = grid.child(self.group_header(class, &strat, p, cx));
             }
             let selected = self.tuner.sel_field == fi;
+            let unmapped = !FIELDS[fi].mapped();
             let mut row = h_flex()
                 .id(SharedString::from(format!("tun-field-{fi}")))
                 .w_full()
                 .px(design::ui_px(cx, 8.0))
+                .when(sub, |el| el.pl(design::ui_px(cx, 22.0)))
                 .py(design::ui_px(cx, 2.0))
                 .items_center()
                 .gap(design::ui_px(cx, 6.0))
@@ -351,7 +358,14 @@ impl AnalyticsView {
                         .flex_none()
                         .truncate()
                         .cursor_pointer()
-                        .text_color(moon(if selected { p.amber } else { p.text }))
+                        .text_color(if selected {
+                            moon(p.amber)
+                        } else if unmapped {
+                            // Поле без параметров стратегии — приглушаем.
+                            moon(p.text_muted)
+                        } else {
+                            moon(p.text)
+                        })
                         .child(FIELDS[fi].label.to_string()),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -405,6 +419,16 @@ impl AnalyticsView {
                         .child(text)
                         .into_any_element()
                 }
+                // Немаппленное поле: вместо чипа — пометка, что подобранный
+                // порог записать в стратегию нечем (параметра нет).
+                None if unmapped => div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon_alpha(p.text_muted, 0.7))
+                    .child(t!("analytics.tuner.no_param").to_string())
+                    .into_any_element(),
                 None => div().flex_1().into_any_element(),
             });
             for vi in 0..N_VAR {
@@ -598,18 +622,23 @@ impl AnalyticsView {
             FieldClass::Volume => t!("analytics.tuner.grp_volume"),
         }
         .to_string();
+        // Подгруппа секции MoonBot (BV/SV в Объёмах, слоты Δ2/Δ3 в Дельтах):
+        // отступ + бледнее фон. У слотов НЕТ своего флага (гейт — IgnoreDelta
+        // родителя), кликабельный ignore не рисуем; у BV/SV — свой включатель.
+        let sub = class.parent() != class;
         let mut hdr = h_flex()
             .w_full()
             .px(design::ui_px(cx, 8.0))
+            .when(sub, |el| el.pl(design::ui_px(cx, 22.0)))
             .py(design::ui_px(cx, 2.0))
             .gap(design::ui_px(cx, 6.0))
             .items_center()
-            .bg(moon_alpha(p.table_head, 0.6))
+            .bg(moon_alpha(p.table_head, if sub { 0.35 } else { 0.6 }))
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.7))
             .text_size(design::t_caption(cx))
             .child(div().text_color(moon(p.text_soft)).child(label));
-        if strat.found {
+        if strat.found && !(sub && class != FieldClass::BvSv) {
             let (flag, cur_ignore) = flag_of(class, strat);
             let staged = self.tuner.staged_ignore.get(flag).copied();
             let shown = staged.unwrap_or(cur_ignore);

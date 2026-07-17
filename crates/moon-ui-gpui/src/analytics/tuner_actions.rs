@@ -295,7 +295,9 @@ impl AnalyticsView {
         if delta_touched && f.ignore_delta {
             flags.push(("IgnoreDelta", false));
         }
-        if volume_touched && f.ignore_volume {
+        // BV/SV — подгруппа Filters/Volume: его пороги требуют снять и
+        // IgnoreVolume, и включить сам фильтр.
+        if (volume_touched || bvsv_touched) && f.ignore_volume {
             flags.push(("IgnoreVolume", false));
         }
         if bvsv_touched && !f.use_bvsv {

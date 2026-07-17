@@ -58,11 +58,13 @@ pub(super) struct TunerState {
 }
 
 impl TunerState {
-    /// Свежее состояние: границы ПУСТЫЕ и чекбоксы участия ВСЕ включены
-    /// (намеренно не персистятся — каждое открытие окна с чистого листа).
+    /// Свежее состояние: границы ПУСТЫЕ, чекбоксы участия включены у всех
+    /// полей С МАППИНГОМ на параметры стратегии (немаппленные — da1m/d5s —
+    /// автоподбор по умолчанию игнорирует: подобранное некуда записать).
+    /// Намеренно не персистятся — каждое открытие окна с чистого листа.
     pub(super) fn load() -> Self {
         let bounds = vec![vec![(String::new(), String::new()); FIELDS.len()]; N_VAR];
-        let enabled = vec![true; FIELDS.len()];
+        let enabled = FIELDS.iter().map(|s| s.mapped()).collect();
         Self {
             bounds,
             inputs: HashMap::new(),

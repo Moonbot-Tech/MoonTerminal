@@ -150,9 +150,13 @@ analytics.tuner.grp_base:
   en: "Base — leverage, mark price (IgnoreBase)"
   es: "Base — apalancamiento, precio mark (IgnoreBase)"
 analytics.tuner.grp_slot:
-  ru: "Слоты Delta2/Delta3 (IgnoreDelta) — в стратегию макс. 2"
-  en: "Delta2/Delta3 slots (IgnoreDelta) — max 2 saved to strategy"
-  es: "Slots Delta2/Delta3 (IgnoreDelta) — máx. 2 a la estrategia"
+  ru: "Слоты Delta2/Delta3 — в стратегию макс. 2"
+  en: "Delta2/Delta3 slots — max 2 saved to strategy"
+  es: "Slots Delta2/Delta3 — máx. 2 a la estrategia"
+analytics.tuner.no_param:
+  ru: "нет параметра в стратегии — только что-если"
+  en: "no strategy param — what-if only"
+  es: "sin parámetro en la estrategia — solo hipótesis"
 analytics.tuner.grp_delta:
   ru: "Дельты (IgnoreDelta)"
   en: "Deltas (IgnoreDelta)"
