@@ -46,9 +46,11 @@ pub(super) struct TunerState {
     /// Стейдж кликабельных «ignore» подзаголовков: флаг → желаемое состояние
     /// игнора (семантика «игнорировать», для UseBV_SV_Filter инверсна).
     pub(super) staged_ignore: HashMap<&'static str, bool>,
-    /// Параметры умного подбора: попыток и минимум сделок (пусто = авто 1/5).
+    /// Параметры умного подбора: попыток, минимум сделок (пусто = авто 1/5)
+    /// и число квантильных краёв перебора (список 4..128, деф. 64).
     pub(super) iters: String,
     pub(super) min_trades: String,
+    pub(super) edges: usize,
     /// Участие поля в автопереборе (чекбоксы); выключенное с границами —
     /// фиксированный фильтр.
     pub(super) enabled: Vec<bool>,
@@ -78,6 +80,7 @@ impl TunerState {
             staged_ignore: HashMap::new(),
             iters: "4".to_string(),
             min_trades: String::new(),
+            edges: 64,
             enabled,
             seq: 0,
             hist_seq: 0,

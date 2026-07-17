@@ -4,8 +4,9 @@
 //! Наивный подбор оптимизирует каждое поле независимо — комбинация не
 //! максимальна (поля взаимодействуют). Здесь состояние = диапазон (или «нет
 //! фильтра») на КАЖДОЕ поле; шаг — переоптимизация одного поля полным
-//! перебором пар из 64 КВАНТИЛЬНЫХ краёв (квантили = реальные значения
-//! данных) при зафиксированных остальных; проходы до сходимости. Спуск
+//! перебором пар КВАНТИЛЬНЫХ краёв (квантили = реальные значения данных;
+//! число краёв настраивается, деф. 64) при зафиксированных остальных;
+//! проходы до сходимости. Спуск
 //! жадный и застревает в локальных оптимумах — поэтому несколько РЕСТАРТОВ:
 //! первый с пустого состояния, остальные со случайной инициализации и
 //! перетасованным порядком полей; берётся лучший результат.
@@ -17,8 +18,8 @@
 use super::analytics::{Query, unified_from};
 use super::tuner::{FIELDS, FieldClass};
 
-const EDGES: usize = 64;
 /// Бин «ниже первого края» (значения COALESCE-0 при положительном минимуме).
+/// Число краёв ≤128 — индексы бинов не сталкиваются с сентинелом.
 const BELOW: u8 = u8::MAX;
 
 /// Итоговый диапазон одного поля.
@@ -57,10 +58,12 @@ impl Rng {
 }
 
 /// Random-restart координатный спуск: максимум суммарного профита при
-/// сохранении ≥`min_n` сделок. `restarts` — число попыток (1..=64); каждая
-/// крутится до сходимости (≤16 проходов). Ограничение мощности: полей-слотов
-/// (Delta2/Delta3) с диапазоном может быть НЕ БОЛЬШЕ ДВУХ — в стратегию
-/// больше не сохранить; перебор ищет лучшую пару слотов.
+/// сохранении ≥`min_n` сделок. `restarts` — число попыток (1..=100); каждая
+/// крутится до сходимости (≤16 проходов). `edges_want` — число квантильных
+/// краёв на поле (4..=128; больше = тоньше сетка порогов, дороже шаг).
+/// Ограничение мощности: полей-слотов (Delta2/Delta3) с диапазоном может
+/// быть НЕ БОЛЬШЕ ДВУХ — в стратегию больше не сохранить; перебор ищет
+/// лучшую пару слотов.
 ///
 /// `locked[fi]`: None — поле перебирается; Some((from, to)) — поле НЕ
 /// перебирается, но участвует фиксированным фильтром (снятый чекбокс с
@@ -70,7 +73,9 @@ pub fn smart_suggest(
     restarts: usize,
     min_n: i64,
     locked: &[Option<(Option<f64>, Option<f64>)>],
+    edges_want: usize,
 ) -> Option<SmartResult> {
+    let ne = edges_want.clamp(4, 128);
     let conn = super::open_reader()?;
     let mut q = q.clone();
     if q.from < 0 {
@@ -116,7 +121,7 @@ pub fn smart_suggest(
     for col in &vals {
         let mut sorted = col.clone();
         sorted.sort_by(|a, b| a.total_cmp(b));
-        let e: Vec<f64> = (0..=EDGES).map(|k| sorted[k * (n - 1) / EDGES]).collect();
+        let e: Vec<f64> = (0..=ne).map(|k| sorted[k * (n - 1) / ne]).collect();
         let b = col
             .iter()
             .map(|v| {
@@ -125,12 +130,12 @@ pub fn smart_suggest(
                 } else {
                     // Последний край включительно — клампим в верхний бин.
                     let mut lo = 0usize;
-                    let mut hi = EDGES;
+                    let mut hi = ne;
                     while lo + 1 < hi {
                         let m = (lo + hi) / 2;
                         if *v >= e[m] { lo = m } else { hi = m }
                     }
-                    lo.min(EDGES - 1) as u8
+                    lo.min(ne - 1) as u8
                 }
             })
             .collect();
@@ -140,7 +145,7 @@ pub fn smart_suggest(
 
     // Мульти-старт: рестарт 0 — жадный с пустого состояния, дальше —
     // случайная инициализация + перетасованный порядок полей.
-    let restarts = restarts.clamp(1, 64);
+    let restarts = restarts.clamp(1, 100);
     let is_slot: Vec<bool> = FIELDS
         .iter()
         .map(|s| s.class == FieldClass::DeltaSlot)
@@ -188,8 +193,8 @@ pub fn smart_suggest(
                         }
                         slots_used += 1;
                     }
-                    let i = rng.below(EDGES);
-                    let j = i + 1 + rng.below(EDGES - i);
+                    let i = rng.below(ne);
+                    let j = i + 1 + rng.below(ne - i);
                     *s = Some((i, j));
                 }
             }
@@ -221,8 +226,8 @@ pub fn smart_suggest(
         for &fi in &order {
             // Суммы по бинам среди сделок, проходящих ВСЕ прочие поля.
             let selfpass = &pass[fi];
-            let mut bp = [0.0f64; EDGES + 1]; // бины + BELOW последним
-            let mut bc = [0usize; EDGES + 1];
+            let mut bp = vec![0.0f64; ne + 1]; // бины + BELOW последним
+            let mut bc = vec![0usize; ne + 1];
             let mut tot_p = 0.0f64;
             for t in 0..n {
                 let others_ok = fail[t] == u16::from(!selfpass[t]);
@@ -231,14 +236,14 @@ pub fn smart_suggest(
                 }
                 tot_p += profits[t];
                 let b = bins[fi][t];
-                let idx = if b == BELOW { EDGES } else { b as usize };
+                let idx = if b == BELOW { ne } else { b as usize };
                 bp[idx] += profits[t];
                 bc[idx] += 1;
             }
             // Кандидаты: «без фильтра» и все пары краёв (i, j).
-            let mut pre_p = [0.0f64; EDGES + 1];
-            let mut pre_c = [0usize; EDGES + 1];
-            for k in 0..EDGES {
+            let mut pre_p = vec![0.0f64; ne + 1];
+            let mut pre_c = vec![0usize; ne + 1];
+            for k in 0..ne {
                 pre_p[k + 1] = pre_p[k] + bp[k];
                 pre_c[k + 1] = pre_c[k] + bc[k];
             }
@@ -255,8 +260,8 @@ pub fn smart_suggest(
                         .count()
                     >= 2;
             if !slot_full {
-            for i in 0..EDGES {
-                for j in (i + 1)..=EDGES {
+            for i in 0..ne {
+                for j in (i + 1)..=ne {
                     let c = pre_c[j] - pre_c[i];
                     if c < min_n {
                         continue;

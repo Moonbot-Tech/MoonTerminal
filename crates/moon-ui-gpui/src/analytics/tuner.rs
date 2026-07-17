@@ -10,8 +10,8 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInput,
-    MoonInputEvent, MoonInputState, MoonPalette, h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
+    MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -178,23 +178,22 @@ impl AnalyticsView {
         state
     }
 
-    /// Инпут настройки подбора (итерации / мин. сделок): кэш + коммит в поле
-    /// состояния по Blur/Enter. `which`: true = min_trades, false = iters.
+    /// Инпут настройки подбора: кэш + коммит в поле состояния по Blur/Enter.
+    /// `which`: 0 = попыток, 1 = мин. сделок, 2 = квантилей.
     fn cfg_input(
         &mut self,
-        which: bool,
+        which: usize,
         placeholder: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<MoonInputState> {
-        let id = if which { "cfg-mn" } else { "cfg-it" }.to_string();
+        let id = format!("cfg-{which}");
         if let Some(state) = self.tuner.inputs.get(&id) {
             return state.clone();
         }
-        let value = if which {
-            self.tuner.min_trades.clone()
-        } else {
-            self.tuner.iters.clone()
+        let value = match which {
+            1 => self.tuner.min_trades.clone(),
+            _ => self.tuner.iters.clone(),
         };
         let ph = placeholder.to_string();
         let state = cx.new(|cx| {
@@ -205,10 +204,9 @@ impl AnalyticsView {
         cx.subscribe(&state, move |this, state, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 let value = state.read(cx).value().to_string();
-                if which {
-                    this.tuner.min_trades = value;
-                } else {
-                    this.tuner.iters = value;
+                match which {
+                    1 => this.tuner.min_trades = value,
+                    _ => this.tuner.iters = value,
                 }
                 cx.notify();
             }
@@ -477,11 +475,37 @@ impl AnalyticsView {
             }
             grid = grid.child(row);
         }
-        // Строка умного подбора: итерации координатного спуска + минимум
-        // сделок (пусто = авто) + кнопки запуска.
+        // Строка умного подбора: попытки координатного спуска + минимум
+        // сделок (пусто = авто) + число квантилей + кнопки запуска.
         let busy = self.tuner.sugg_busy;
-        let it_input = self.cfg_input(false, "4", window, cx);
-        let mn_input = self.cfg_input(true, &t!("analytics.tuner.auto_ph"), window, cx);
+        let it_input = self.cfg_input(0, "4", window, cx);
+        let mn_input = self.cfg_input(1, &t!("analytics.tuner.auto_ph"), window, cx);
+        // Число квантилей — поле со списком (4/8/16/…/128).
+        let ed_view = cx.entity();
+        let ed_items = crate::panels::radio_items(
+            [4usize, 8, 16, 32, 64, 128].map(|n| {
+                (
+                    n,
+                    SharedString::from(format!("tun-ed-{n}")),
+                    SharedString::from(n.to_string()),
+                )
+            }),
+            self.tuner.edges,
+            crate::panels::RadioMark::Highlight,
+            move |app, n| {
+                ed_view.update(app, |this, cx| {
+                    this.tuner.edges = n;
+                    cx.notify();
+                });
+            },
+        );
+        let ed_combo = MoonDropdown::new("tun-cfg-ed")
+            .label(format!("{} ▾", self.tuner.edges))
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Micro)
+            .menu_width(design::font_w(cx, 64.0))
+            .menu_size(MoonMenuSize::Compact)
+            .items(ed_items);
         let mut cfg_row = h_flex()
             .w_full()
             .px(design::ui_px(cx, 12.0))
@@ -495,7 +519,7 @@ impl AnalyticsView {
                     .child(t!("analytics.tuner.iters").to_string()),
             )
             .child(
-                div().w(design::font_w_px(cx, 34.0)).flex_none().child(
+                div().w(design::font_w_px(cx, 40.0)).flex_none().child(
                     MoonInput::new("tun-cfg-it").state(&it_input).small(),
                 ),
             )
@@ -509,6 +533,12 @@ impl AnalyticsView {
                     MoonInput::new("tun-cfg-mn").state(&mn_input).small(),
                 ),
             )
+            .child(
+                div()
+                    .text_color(moon(p.text_muted))
+                    .child(t!("analytics.tuner.edges").to_string()),
+            )
+            .child(div().flex_none().child(ed_combo))
             .child(div().flex_1());
         // Подбор (как и сохранение) имеет смысл только в скоупе стратегии.
         if self.sel_strategy.is_some() {

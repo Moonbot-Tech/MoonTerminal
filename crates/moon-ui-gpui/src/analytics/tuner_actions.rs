@@ -29,8 +29,9 @@ impl AnalyticsView {
             .trim()
             .parse::<usize>()
             .unwrap_or(4)
-            .clamp(1, 64);
+            .clamp(1, 100);
         let min_n = self.suggest_min_n();
+        let edges = self.suggest_edges();
         // Снятые чекбоксы: поле не перебирается; с заполненными границами —
         // участвует фиксированным фильтром.
         let locked: Vec<Option<(Option<f64>, Option<f64>)>> = (0..FIELDS.len())
@@ -47,7 +48,7 @@ impl AnalyticsView {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let sugg = executor
                 .spawn(async move {
-                    moon_core::db::tuner_smart::smart_suggest(&q, rounds, min_n, &locked)
+                    moon_core::db::tuner_smart::smart_suggest(&q, rounds, min_n, &locked, edges)
                 })
                 .await;
             let _ = cx.update(|cx| {
@@ -96,10 +97,11 @@ impl AnalyticsView {
         let field = FIELDS[fi].col.to_string();
         let q = self.tuner_query();
         let min_n = self.suggest_min_n();
+        let edges = self.suggest_edges();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let sugg = executor
-                .spawn(async move { moon_core::db::tuner::suggest_field(&q, &field, min_n) })
+                .spawn(async move { moon_core::db::tuner::suggest_field(&q, &field, min_n, edges) })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -147,6 +149,11 @@ impl AnalyticsView {
         }
         self.reload_tuner(cx);
         cx.notify();
+    }
+
+    /// Число квантильных краёв перебора (поле со списком 4/8/…/128).
+    fn suggest_edges(&self) -> usize {
+        self.tuner.edges.clamp(4, 128)
     }
 
     /// Минимум сделок для автоподбора: из конфиг-строки; пусто = авто (1/5
@@ -340,6 +347,35 @@ impl AnalyticsView {
             log::info!("аналитика: «Сохранить» — нет ни порогов с маппингом, ни изменённых игноров");
             return;
         }
+        // Штамп анализатора в Comment: «дд.мм.гггг чч:мм:сс (Save from
+        // analyzer)» UTC. Описание пользователя сохраняем — заменяется только
+        // предыдущий штамп (сегменты через «; »).
+        const MARK: &str = "(Save from analyzer)";
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let ts = moon_core::db::fmt_unix_secs(now); // YYYY-MM-DD HH:MM:SS
+        let (date, time) = ts.split_once(' ').unwrap_or((ts.as_str(), ""));
+        let mut dmy = date.splitn(3, '-');
+        let (y, m, d) = (
+            dmy.next().unwrap_or(""),
+            dmy.next().unwrap_or(""),
+            dmy.next().unwrap_or(""),
+        );
+        let stamp = format!("{d}.{m}.{y} {time} {MARK}");
+        let base: Vec<&str> = f
+            .comment
+            .split("; ")
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && !s.contains(MARK))
+            .collect();
+        let comment = if base.is_empty() {
+            stamp
+        } else {
+            format!("{}; {stamp}", base.join("; "))
+        };
+        changes.push(("Comment".to_string(), comment));
         self.tuner.save_dialog = Some(Arc::new(SaveDialog { sid, name, changes, warns }));
         cx.notify();
     }

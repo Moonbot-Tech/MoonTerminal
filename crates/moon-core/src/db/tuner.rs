@@ -398,6 +398,9 @@ pub struct StratFilters {
     /// порогами: живой фильтр, который тюнер не видит — перезаписывать такой
     /// слот сохранение должно в последнюю очередь (и с warn).
     pub foreign_slots: Vec<(u8, String)>,
+    /// Текущий комментарий стратегии (поле Comment) — сохранение дописывает
+    /// в него штамп анализатора, не затирая описание пользователя.
+    pub comment: String,
 }
 
 impl StratFilters {
@@ -498,6 +501,11 @@ pub fn strategy_filters(
     out.ignore_delta = truthy("IgnoreDelta");
     out.ignore_volume = truthy("IgnoreVolume");
     out.ignore_base = truthy("IgnoreBase");
+    out.comment = map
+        .get("Comment")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
     out.use_bvsv = truthy("UseBV_SV_Filter");
     out.ignore_ping = truthy("IgnorePing");
     for spec in FIELDS {
@@ -541,51 +549,9 @@ pub struct Suggestion {
     pub n: i64,
 }
 
-/// Автоподбор по ВСЕМ полям одним сканом: для каждого поля лучший диапазон
-/// (перебор пар квантильных краёв, максимум профита при ≥`min_n` сделок).
-/// Поля без результата (мало данных) в ответ не попадают.
-pub fn suggest_all(q: &Query, min_n: i64) -> Option<Vec<(&'static str, Suggestion)>> {
-    let conn = super::open_reader()?;
-    let mut q = q.clone();
-    if q.from < 0 {
-        q.from = 1;
-    }
-    let src = unified_from(&conn, &q)?;
-    let cols = FIELDS
-        .iter()
-        .map(|s| format!("o.\"{}\"", s.col))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!("SELECT {cols}, COALESCE(o.profitbtc,0) FROM {src}");
-    let mut per_field: Vec<Vec<(f64, f64)>> = vec![Vec::new(); FIELDS.len()];
-    {
-        let mut stmt = conn.prepare(&sql).ok()?;
-        let mut rows = stmt.query(rusqlite::params![q.from, q.to]).ok()?;
-        while let Ok(Some(r)) = rows.next() {
-            let profit: f64 = r.get(FIELDS.len()).unwrap_or(0.0);
-            for (fi, vals) in per_field.iter_mut().enumerate() {
-                if let Ok(Some(v)) = r.get::<_, Option<f64>>(fi) {
-                    if v.is_finite() {
-                        vals.push((v, profit));
-                    }
-                }
-            }
-        }
-    }
-    let min_n = min_n.max(1) as usize;
-    Some(
-        per_field
-            .into_iter()
-            .enumerate()
-            .filter_map(|(fi, mut vals)| {
-                best_range(&mut vals, min_n).map(|s| (FIELDS[fi].col, s))
-            })
-            .collect(),
-    )
-}
-
 /// Автоподбор порога ОДНОГО поля (кнопка «Подобрать» у выбранной строки).
-pub fn suggest_field(q: &Query, field: &str, min_n: i64) -> Option<Suggestion> {
+/// `edges` — число квантильных краёв перебора (чем больше, тем тоньше сетка).
+pub fn suggest_field(q: &Query, field: &str, min_n: i64, edges: usize) -> Option<Suggestion> {
     if !FIELDS.iter().any(|s| s.col == field) {
         return None;
     }
@@ -609,12 +575,12 @@ pub fn suggest_field(q: &Query, field: &str, min_n: i64) -> Option<Suggestion> {
         .flatten()
         .filter(|(v, _)| v.is_finite())
         .collect();
-    best_range(&mut vals, min_n.max(1) as usize)
+    best_range(&mut vals, min_n.max(1) as usize, edges)
 }
 
 /// Лучший диапазон одного поля по выборке `(значение, профит)`.
-fn best_range(vals: &mut Vec<(f64, f64)>, min_n: usize) -> Option<Suggestion> {
-    const EDGES: usize = 16;
+fn best_range(vals: &mut Vec<(f64, f64)>, min_n: usize, edges: usize) -> Option<Suggestion> {
+    let edges = edges.clamp(4, 128);
     if vals.len() < min_n.max(1) {
         return None;
     }
@@ -626,10 +592,10 @@ fn best_range(vals: &mut Vec<(f64, f64)>, min_n: usize) -> Option<Suggestion> {
     for (_, p) in vals.iter() {
         pre.push(pre.last().unwrap() + p);
     }
-    let pos: Vec<usize> = (0..=EDGES).map(|k| k * len / EDGES).collect();
+    let pos: Vec<usize> = (0..=edges).map(|k| k * len / edges).collect();
     let mut best: Option<(f64, usize, usize)> = None;
-    for i in 0..EDGES {
-        for j in (i + 1)..=EDGES {
+    for i in 0..edges {
+        for j in (i + 1)..=edges {
             let (a, b) = (pos[i], pos[j]);
             if b - a < min_n {
                 continue;
