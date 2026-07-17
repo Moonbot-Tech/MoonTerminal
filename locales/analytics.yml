@@ -153,6 +153,18 @@ analytics.tuner.grp_slot:
   ru: "Слоты Delta2/Delta3 — в стратегию макс. 2"
   en: "Delta2/Delta3 slots — max 2 saved to strategy"
   es: "Slots Delta2/Delta3 — máx. 2 a la estrategia"
+analytics.manual_orders:
+  ru: "Вручную (без стратегии)"
+  en: "Manual (no strategy)"
+  es: "Manual (sin estrategia)"
+analytics.cores_title:
+  ru: "Прибыль по ядрам"
+  en: "Profit by core"
+  es: "Beneficio por núcleo"
+analytics.cores_sub:
+  ru: "накопительная прибыль каждого ядра за выбранный период"
+  en: "cumulative profit of each core over the selected period"
+  es: "beneficio acumulado de cada núcleo en el período"
 analytics.tuner.copy_btn:
   ru: "Сделать копию"
   en: "Make a copy"

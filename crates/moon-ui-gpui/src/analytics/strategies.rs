@@ -412,7 +412,9 @@ impl AnalyticsView {
     fn strategy_row(&self, g: &GroupStat, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let selected = self.sel_strategy.as_ref().is_some_and(|(k, _)| *k == g.key);
         let key = g.key.clone();
-        let name = g.name.clone();
+        // strategyid=0 = ручные ордера — подпись вместо голого «0» (и в
+        // строке, и в выборе: заголовки тюнера/диалогов берут её же).
+        let name = super::summary::strat_display(&g.name);
         // Индикатор «жива сейчас»: ● зелёная — есть в ядре и включена,
         // ● мутная — есть, но выключена, ○ контур — удалена из ядер.
         let alive_dot = g.alive.map(|a| {
@@ -456,7 +458,7 @@ impl AnalyticsView {
                     .children(alive_dot)
                     // flex_1 обязателен: div с truncate() без флекс-базиса
                     // схлопывается в «…» (так пропадали имена стратегий).
-                    .child(div().flex_1().min_w_0().truncate().child(g.name.clone())),
+                    .child(div().flex_1().min_w_0().truncate().child(name.clone())),
             )
             .child(
                 h_flex()

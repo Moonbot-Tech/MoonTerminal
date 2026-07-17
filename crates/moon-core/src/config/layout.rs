@@ -140,6 +140,10 @@ pub struct WindowLayout {
     /// Геометрия окна «Аналитика» (singleton) — чтобы открывалось на прежнем месте.
     #[serde(default)]
     pub analytics_window: Option<GeomRect>,
+    /// Выбранный пресет периода «Аналитики» (id вида "p-cur-month") — окно
+    /// открывается с прошлым выбором. None = дефолт («Тек. месяц»).
+    #[serde(default)]
+    pub analytics_period: Option<String>,
     /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

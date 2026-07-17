@@ -6,10 +6,20 @@ use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 
 use super::AnalyticsView;
+use crate::design;
 use crate::design::{moon, moon_alpha};
-use moon_core::db::analytics::DayPoint;
+use moon_core::db::analytics::{CoreSeries, DayPoint};
 
 const CHART_H: f32 = 170.0;
+
+/// Высота нижнего чарта «прибыль по ядрам» (на всю ширину сводки).
+const CORES_CHART_H: f32 = 260.0;
+
+/// Цвета серий ядер (циклом; легенда различает по имени).
+fn core_color(p: MoonPalette, i: usize) -> u32 {
+    [p.blue, p.green, p.orange, p.amber, p.red, p.yellow, p.accent, p.text_soft]
+        [i % 8]
+}
 
 /// «дд.мм» из unix-секунд (подписи осей).
 fn dm(secs: i64) -> String {
@@ -149,6 +159,127 @@ pub(super) fn daily_bars(
         .gap(px(4.0))
         .child(row)
         .child(axis_row(p, dm(first), dm(last), None))
+        .into_any_element()
+}
+
+/// Накопительная прибыль ПО ЯДРАМ: линия на ядро (той же сеткой вёдер, что
+/// верхний накопительный чарт) + легенда с итогами.
+pub(super) fn core_lines(
+    days: &[DayPoint],
+    cores: &[CoreSeries],
+    p: MoonPalette,
+    cx: &Context<AnalyticsView>,
+) -> AnyElement {
+    if days.is_empty() || cores.is_empty() {
+        return div().h(px(CORES_CHART_H)).into_any_element();
+    }
+    // Кумулятив по каждому ядру + общий диапазон Y.
+    let curves: Vec<Vec<f32>> = cores
+        .iter()
+        .map(|c| {
+            let mut cum = 0.0f32;
+            c.per_bucket
+                .iter()
+                .map(|v| {
+                    cum += *v as f32;
+                    cum
+                })
+                .collect()
+        })
+        .collect();
+    let mut vmax = 1e-6f32;
+    let mut vmin = 0.0f32;
+    for c in &curves {
+        for v in c {
+            vmax = vmax.max(*v);
+            vmin = vmin.min(*v);
+        }
+    }
+    let span = (vmax - vmin).max(1e-6);
+    let colors: Vec<Hsla> = (0..curves.len()).map(|i| moon(core_color(p, i))).collect();
+
+    let curves_paint = curves;
+    let colors_paint = colors.clone();
+    let muted = moon_alpha(p.text_muted, 0.5);
+    let canvas_el = canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let w = f32::from(bounds.size.width);
+            let h = f32::from(bounds.size.height);
+            if w < 4.0 || h < 4.0 {
+                return;
+            }
+            let y = |v: f32| bounds.origin.y + px((vmax - v) / span * (h - 2.0) + 1.0);
+            // Нулевая линия.
+            if vmin < 0.0 {
+                window.paint_quad(gpui::fill(
+                    Bounds::new(
+                        gpui::point(bounds.origin.x, y(0.0)),
+                        gpui::size(px(w), px(1.0)),
+                    ),
+                    muted,
+                ));
+            }
+            for (ci, pts) in curves_paint.iter().enumerate() {
+                if pts.len() < 2 {
+                    continue;
+                }
+                let n = pts.len();
+                let x = |k: usize| bounds.origin.x + px(k as f32 / (n - 1) as f32 * w);
+                let mut pb = PathBuilder::stroke(px(1.6));
+                for (k, &v) in pts.iter().enumerate() {
+                    let pt = gpui::point(x(k), y(v));
+                    if k == 0 {
+                        pb.move_to(pt);
+                    } else {
+                        pb.line_to(pt);
+                    }
+                }
+                if let Ok(path) = pb.build() {
+                    window.paint_path(path, colors_paint[ci]);
+                }
+            }
+        },
+    )
+    .w_full()
+    .h(px(CORES_CHART_H));
+
+    // Легенда: точка цвета + имя ядра + итог за период (переносится строками).
+    let mut legend = h_flex()
+        .w_full()
+        .flex_wrap()
+        .gap_x(design::ui_px(cx, 12.0))
+        .gap_y(design::ui_px(cx, 3.0))
+        .items_center();
+    for (i, c) in cores.iter().enumerate() {
+        legend = legend.child(
+            h_flex()
+                .gap(design::ui_px(cx, 4.0))
+                .items_center()
+                .child(
+                    div()
+                        .flex_none()
+                        .w(design::ui_px(cx, 7.0))
+                        .h(design::ui_px(cx, 7.0))
+                        .rounded_full()
+                        .bg(colors[i]),
+                )
+                .child(div().text_color(moon(p.text_soft)).child(c.name.clone()))
+                .child(
+                    div()
+                        .text_color(moon(super::summary::sign_color(p, c.total)))
+                        .child(super::summary::fmt_signed(c.total)),
+                ),
+        );
+    }
+    let first = days.first().map(|d| d.start).unwrap_or(0);
+    let last = days.last().map(|d| d.start).unwrap_or(0);
+    v_flex()
+        .w_full()
+        .gap(px(4.0))
+        .child(canvas_el)
+        .child(axis_row(p, dm(first), dm(last), None))
+        .child(legend)
         .into_any_element()
 }
 

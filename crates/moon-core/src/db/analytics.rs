@@ -168,6 +168,16 @@ pub struct DayPoint {
     pub trades: i64,
 }
 
+/// Серия одного ядра для нижнего чарта «Сводки»: профит по вёдрам той же
+/// сетки, что `Summary::days` (кумулятив строит UI).
+#[derive(Clone, Debug)]
+pub struct CoreSeries {
+    pub uid: u64,
+    pub name: String,
+    pub per_bucket: Vec<f64>,
+    pub total: f64,
+}
+
 /// Строка топ-сделок (лучшие/худшие за период).
 #[derive(Clone, Debug)]
 pub struct TopTrade {
@@ -243,6 +253,9 @@ pub struct Summary {
     pub strategies: Vec<GroupStat>,
     /// Группы по монете, прибыль по убыванию.
     pub coins: Vec<GroupStat>,
+    /// Серии по ядрам (сетка `days`, прибыль по убыванию итога) — нижний
+    /// чарт «Сводки» «прибыль по ядрам».
+    pub core_days: Vec<CoreSeries>,
     /// Самый прибыльный час UTC: (час, профит, сделок).
     pub best_hour: Option<(u32, f64, i64)>,
     /// Ядра, встречающиеся в реплике (для комбобокса фильтра) — БЕЗ учёта
@@ -282,11 +295,13 @@ pub fn summary(q: &Query) -> Option<Summary> {
         .max_by(|a, b| a.1.0.total_cmp(&b.1.0))
         .map(|(h, (p, n))| (h as u32, *p, *n));
 
+    let core_days = core_series(&conn, &src, &q, &days, bucket);
     Some(Summary {
         cur,
         prev,
         bucket_secs: bucket,
         days,
+        core_days,
         best: top_trades(&conn, &src, &q, has_strat_names, true),
         worst: top_trades(&conn, &src, &q, has_strat_names, false),
         strategies: groups(&conn, &src, &q, has_strat_names, true),
@@ -500,6 +515,58 @@ fn scan_period(
         days = filled;
     }
     (st, days, hours)
+}
+
+/// Серии по ядрам: один скан периода, профит раскладывается по вёдрам сетки
+/// `days`; сортировка по итогу (прибыльные первыми).
+fn core_series(
+    conn: &Connection,
+    src: &str,
+    q: &Query,
+    days: &[DayPoint],
+    bucket: i64,
+) -> Vec<CoreSeries> {
+    let Some(t0) = days.first().map(|d| d.start) else {
+        return Vec::new();
+    };
+    let nb = days.len();
+    let sql = format!(
+        "SELECT o.core_uid, COALESCE(o.core_name,''), o.closedate,
+                COALESCE(o.profitbtc,0)
+         FROM {src}"
+    );
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map(rusqlite::params![q.from, q.to], |r| {
+        Ok((
+            r.get::<_, i64>(0)? as u64,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, f64>(3)?,
+        ))
+    }) else {
+        return Vec::new();
+    };
+    let mut map: std::collections::HashMap<u64, (String, Vec<f64>)> =
+        std::collections::HashMap::new();
+    for (uid, name, close, profit) in rows.flatten() {
+        let idx = (((close - t0) / bucket).max(0) as usize).min(nb - 1);
+        let e = map.entry(uid).or_insert_with(|| (name.clone(), vec![0.0; nb]));
+        if e.0.is_empty() {
+            e.0 = name;
+        }
+        e.1[idx] += profit;
+    }
+    let mut out: Vec<CoreSeries> = map
+        .into_iter()
+        .map(|(uid, (name, per_bucket))| {
+            let total = per_bucket.iter().sum();
+            CoreSeries { uid, name, per_bucket, total }
+        })
+        .collect();
+    out.sort_by(|a, b| b.total.total_cmp(&a.total));
+    out
 }
 
 /// Имя стратегии в SQL: из ATTACH-нутой БД стратегий либо голый id.

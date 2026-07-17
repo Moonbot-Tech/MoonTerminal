@@ -87,6 +87,10 @@ impl Period {
         Period::Year,
         Period::All,
     ];
+    /// Пресет по его id (персист выбора в layout); None — незнакомый id.
+    fn from_id(id: &str) -> Option<Period> {
+        Period::ALL.into_iter().find(|p| p.id() == id)
+    }
     fn id(self) -> &'static str {
         match self {
             Period::Today => "p-today",
@@ -191,10 +195,17 @@ impl AnalyticsView {
         // периода + группировки) запускается только действием пользователя —
         // открытие окна, смена вкладки-периода-фильтра, повторный клик пресета.
 
+        // Период: прошлый выбор из layout, дефолт — текущий календарный месяц.
+        let saved_period = backend
+            .read(cx)
+            .layout
+            .analytics_period
+            .as_deref()
+            .and_then(Period::from_id);
         let mut this = Self {
             backend,
             tab: Tab::Summary,
-            period: Period::Month,
+            period: saved_period.unwrap_or(Period::CurMonth),
             cores: Vec::new(),
             sel_cores: HashSet::new(),
             side: SideFilter::All,
@@ -351,6 +362,14 @@ impl AnalyticsView {
         // Повторный клик по активному пресету = ручное обновление данных
         // (автоперечитки по новым отчётам нет).
         self.period = p;
+        // Выбор персистится — окно (и следующий запуск) откроется с ним.
+        self.backend.update(cx, |b, _| {
+            let id = Some(p.id().to_string());
+            if b.layout.analytics_period != id {
+                b.layout.analytics_period = id;
+                b.layout_dirty = true;
+            }
+        });
         self.reload(cx);
         cx.notify();
     }

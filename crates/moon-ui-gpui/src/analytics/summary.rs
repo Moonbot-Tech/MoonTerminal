@@ -93,6 +93,14 @@ impl AnalyticsView {
                     ))
                     .child(insights_card(&data, p, cx)),
             )
+            // Нижний чарт на всю ширину: накопительная прибыль ПО ЯДРАМ.
+            .child(chart_card(
+                t!("analytics.cores_title").to_string(),
+                t!("analytics.cores_sub").to_string(),
+                charts::core_lines(&data.days, &data.core_days, p, cx),
+                p,
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -251,7 +259,7 @@ fn top_card(
             .text_size(design::t_caption(cx))
             .text_color(moon(p.text_soft))
             .bg(moon(p.table_head))
-            .child(div().w(design::font_w_px(cx, 72.0)).child(t!("analytics.col.closed").to_string()))
+            .child(div().w(design::font_w_px(cx, 96.0)).child(t!("analytics.col.closed").to_string()))
             .child(div().w(design::font_w_px(cx, 78.0)).child(t!("analytics.col.coin").to_string()))
             .child(div().flex_1().min_w_0().child(t!("analytics.col.strategy").to_string()))
             .child(div().child(t!("analytics.col.profit").to_string())),
@@ -270,7 +278,7 @@ fn top_card(
                 .border_color(moon_alpha(p.border, 0.6))
                 .child(
                     div()
-                        .w(design::font_w_px(cx, 72.0))
+                        .w(design::font_w_px(cx, 96.0))
                         .text_color(moon(p.text_soft))
                         .child(fmt_dm_hm(tr.closedate)),
                 )
@@ -298,7 +306,7 @@ fn top_card(
                         .min_w_0()
                         .truncate()
                         .text_color(moon(p.text_soft))
-                        .child(tr.strategy.clone()),
+                        .child(strat_display(&tr.strategy)),
                 )
                 .child(
                     div()
@@ -333,7 +341,7 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
         lines.push(
             t!(
                 "analytics.ins.best_strategy",
-                name = best.name,
+                name = strat_display(&best.name),
                 profit = fmt_signed(best.profit),
                 wr = format!("{:.1}", best.winrate())
             )
@@ -435,13 +443,24 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
         .child(list)
 }
 
-/// «дд.мм чч:мм» UTC для топ-таблиц.
+/// «дд.мм.гг чч:мм» UTC для топ-таблиц — полная дата: на месячных периодах
+/// одно время без числа ни о чём не говорит.
 pub(super) fn fmt_dm_hm(secs: i64) -> String {
     let s = moon_core::db::fmt_unix(secs);
-    // fmt_unix → "ГГГГ-ММ-ДД ЧЧ:ММ"; берём «ДД.ММ ЧЧ:ММ».
+    // fmt_unix → "ГГГГ-ММ-ДД ЧЧ:ММ"; берём «ДД.ММ.ГГ ЧЧ:ММ».
     if s.len() >= 16 {
-        format!("{}.{} {}", &s[8..10], &s[5..7], &s[11..16])
+        format!("{}.{}.{} {}", &s[8..10], &s[5..7], &s[2..4], &s[11..16])
     } else {
         s
+    }
+}
+
+/// Отображаемое имя стратегии: `strategyid = 0` — ручные ордера (без
+/// стратегии), голый «0» заменяем на человеческую подпись.
+pub(super) fn strat_display(name: &str) -> String {
+    if name == "0" {
+        t!("analytics.manual_orders").to_string()
+    } else {
+        name.to_string()
     }
 }
