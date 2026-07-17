@@ -11,6 +11,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Cancel superseded runs for the same ref (e.g. new pushes to an open PR).
+# Each tag ("v*") has a unique ref, so release builds are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"

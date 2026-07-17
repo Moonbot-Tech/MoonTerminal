@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Keep the GitHub Actions used by the workflows up to date.
+  # Scoped to github-actions only: Cargo.lock is intentionally not committed,
+  # so there is no lockfile for a cargo ecosystem entry to update.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
