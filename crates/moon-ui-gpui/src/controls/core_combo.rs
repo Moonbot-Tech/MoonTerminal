@@ -55,13 +55,13 @@ where
         n => cores_n(n),
     };
     // Ширина по контенту (единый расчёт с screener::source_combo): кнопка под текущий выбор
-    // (пол 118, потолок в плотном тулбаре), меню под самый длинный пункт между полом
-    // `min_menu_w` и общим потолком.
+    // (пол — общий `CORES_TRIGGER_MIN_W`, потолок в плотном тулбаре), меню под самый длинный
+    // пункт между полом `min_menu_w` и общим потолком.
     let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
         cx,
         &cur,
         std::iter::once(all_label.as_str()).chain(cores.iter().map(|(_, n)| n.as_str())),
-        118.0,
+        design::CORES_TRIGGER_MIN_W,
         min_menu_w,
     );
     let toggle_all = on_toggle.clone();
