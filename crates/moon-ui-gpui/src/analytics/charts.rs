@@ -13,8 +13,10 @@ use moon_core::db::analytics::{CoreSeries, DayPoint};
 const CHART_H: f32 = 170.0;
 
 
-/// Цвета серий ядер (циклом; легенда различает по имени).
-fn core_color(p: MoonPalette, i: usize) -> u32 {
+/// ФОЛБЭК-цвет серии ядра (циклом из палитры) — когда у сервера нет цвета в
+/// настройках (например, ядро уже удалено из конфига). Основной источник —
+/// `ServerConfig.color` (см. core_colors в summary.rs).
+pub(super) fn fallback_core_color(p: MoonPalette, i: usize) -> u32 {
     [p.blue, p.green, p.orange, p.amber, p.red, p.yellow, p.accent, p.text_soft]
         [i % 8]
 }
@@ -116,6 +118,7 @@ pub(super) fn cumulative_area(days: &[DayPoint], p: MoonPalette) -> AnyElement {
 pub(super) fn daily_bars(
     days: &[DayPoint],
     cores: &[CoreSeries],
+    colors: &[Hsla],
     hover: Option<usize>,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
@@ -205,7 +208,7 @@ pub(super) fn daily_bars(
     }
     let popup = hover
         .filter(|bi| *bi < n && !cores.is_empty())
-        .map(|bi| core_bucket_popup(days, cores, bi, p, cx));
+        .map(|bi| core_bucket_popup(days, cores, colors, bi, p, cx));
     let first = days.first().map(|d| d.start).unwrap_or(0);
     let last = days.last().map(|d| d.start).unwrap_or(0);
     div()
@@ -229,6 +232,7 @@ pub(super) fn daily_bars(
 pub(super) fn core_lines(
     days: &[DayPoint],
     cores: &[CoreSeries],
+    colors: &[Hsla],
     h: f32,
     hover: Option<usize>,
     p: MoonPalette,
@@ -260,10 +264,9 @@ pub(super) fn core_lines(
         }
     }
     let span = (vmax - vmin).max(1e-6);
-    let colors: Vec<Hsla> = (0..curves.len()).map(|i| moon(core_color(p, i))).collect();
 
     let curves_paint = curves;
-    let colors_paint = colors.clone();
+    let colors_paint: Vec<Hsla> = colors.to_vec();
     let muted = moon_alpha(p.text_muted, 0.5);
     let canvas_el = canvas(
         |_, _, _| (),
@@ -336,7 +339,7 @@ pub(super) fn core_lines(
     }
     let popup = hover
         .filter(|bi| *bi < n)
-        .map(|bi| core_bucket_popup(days, cores, bi, p, cx));
+        .map(|bi| core_bucket_popup(days, cores, colors, bi, p, cx));
     // Общий итог всех ядер — в подписи оси (как у суммарной области).
     let total_all: f64 = cores.iter().map(|c| c.total).sum();
     div()
@@ -367,6 +370,7 @@ pub(super) fn core_lines(
 fn core_bucket_popup(
     days: &[DayPoint],
     cores: &[CoreSeries],
+    colors: &[Hsla],
     bi: usize,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
@@ -421,7 +425,9 @@ fn core_bucket_popup(
                         .w(design::ui_px(cx, 6.0))
                         .h(design::ui_px(cx, 6.0))
                         .rounded_full()
-                        .bg(moon(core_color(p, ci))),
+                        .bg(colors.get(ci).copied().unwrap_or_else(|| {
+                            moon(fallback_core_color(p, ci))
+                        })),
                 )
                 .child(
                     div()
@@ -457,6 +463,7 @@ fn core_bucket_popup(
 /// canvas'ом и тянутся на всю высоту, которую даёт прибитая к низу плашка.
 pub(super) fn core_totals_bars(
     cores: &[CoreSeries],
+    colors: &[Hsla],
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
@@ -471,7 +478,13 @@ pub(super) fn core_totals_bars(
     let bars: Vec<(f32, Hsla)> = cores
         .iter()
         .enumerate()
-        .map(|(ci, c)| (c.total as f32, moon(core_color(p, ci))))
+        .map(|(ci, c)| {
+            let col = colors
+                .get(ci)
+                .copied()
+                .unwrap_or_else(|| moon(fallback_core_color(p, ci)));
+            (c.total as f32, col)
+        })
         .collect();
     let muted = moon_alpha(p.text_muted, 0.5);
     let canvas_el = canvas(

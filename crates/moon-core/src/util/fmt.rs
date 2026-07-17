@@ -1,9 +1,14 @@
 //! Форматирование чисел для UI/feed.
 
 /// Компактное число: точность `decimals`, хвостовые нули и точка срезаются
-/// ("1.500000" → "1.5", "2.000000" → "2").
+/// ("1.500000" → "1.5", "2.000000" → "2"). Нули режутся ТОЛЬКО в дробной
+/// части: при `decimals=0` строка без точки, и слепой трим калечил целые
+/// ("330" → "33", "1000" → "1").
 pub fn compact(v: f64, decimals: usize) -> String {
     let s = format!("{v:.decimals$}");
+    if !s.contains('.') {
+        return s;
+    }
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s.is_empty() {
         "0".to_string()
@@ -90,4 +95,28 @@ pub fn adaptive(v: f64) -> String {
     // на ведущие нули у мелких чисел). Ограничиваем сверху на разумный максимум.
     let decimals = (SIG - 1 - exp).clamp(0, 18) as usize;
     compact(v, decimals)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_keeps_integer_zeros() {
+        // Регрессия: слепой трим нулей калечил целые (330 → «33», 1000 → «1»).
+        assert_eq!(compact(330.0, 0), "330");
+        assert_eq!(compact(1000.0, 0), "1000");
+        assert_eq!(compact(0.0, 0), "0");
+        assert_eq!(compact(-500.0, 0), "-500");
+        // Дробная часть по-прежнему чистится.
+        assert_eq!(compact(1.5, 6), "1.5");
+        assert_eq!(compact(2.0, 6), "2");
+        assert_eq!(compact(45.20, 2), "45.2");
+    }
+
+    #[test]
+    fn adaptive_thousands_intact() {
+        assert_eq!(adaptive(25000.0), "25000");
+        assert_eq!(adaptive(1000.0), "1000");
+    }
 }

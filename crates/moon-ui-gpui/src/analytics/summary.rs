@@ -52,6 +52,30 @@ impl AnalyticsView {
                 .child(t!("analytics.empty_period").to_string())
                 .into_any_element();
         }
+        // Цвета серий ядер — из НАСТРОЕК сервера (ServerConfig.color, как в
+        // селекторе ядер); фолбэк-палитра только для ядер без конфига.
+        let core_colors: Vec<Hsla> = {
+            let b = self.backend.read(cx);
+            data.core_days
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    b.config
+                        .servers
+                        .iter()
+                        .find(|s| s.id == c.uid)
+                        .map(|s| {
+                            Hsla::from(gpui::Rgba {
+                                r: s.color[0] as f32 / 255.0,
+                                g: s.color[1] as f32 / 255.0,
+                                b: s.color[2] as f32 / 255.0,
+                                a: 1.0,
+                            })
+                        })
+                        .unwrap_or_else(|| moon(charts::fallback_core_color(p, i)))
+                })
+                .collect()
+        };
         // Верх (KPI/чарты/топы) скроллится сам; чарт «Прибыль по ядрам»
         // ПРИБИТ к нижнему краю окна (как нижняя плашка «Стратегий»).
         let top = v_flex()
@@ -92,6 +116,7 @@ impl AnalyticsView {
                             charts::core_lines(
                                 &data.days,
                                 &data.core_days,
+                                &core_colors,
                                 170.0,
                                 self.hover_core_bucket,
                                 p,
@@ -115,6 +140,7 @@ impl AnalyticsView {
                         charts::daily_bars(
                             &data.days,
                             &data.core_days,
+                            &core_colors,
                             self.hover_daily_bucket,
                             p,
                             cx,
@@ -169,7 +195,7 @@ impl AnalyticsView {
                     .child(chart_card(
                         t!("analytics.cores_title").to_string(),
                         t!("analytics.cores_sub").to_string(),
-                        charts::core_totals_bars(&data.core_days, p, cx),
+                        charts::core_totals_bars(&data.core_days, &core_colors, p, cx),
                         p,
                         cx,
                     )),
