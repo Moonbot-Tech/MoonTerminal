@@ -163,8 +163,11 @@ pub struct AnalyticsView {
     seq: u64,
     /// Сводка: верхний левый чарт в режиме «по ядрам» (галка, деф. ВКЛ).
     pub(super) sum_by_core: bool,
-    /// Ховер-ведро нижнего чарта по ядрам (индекс в `days`) — попап значений.
+    /// Ховер-ведро левого чарта по ядрам (индекс в `days`) — попап значений.
     pub(super) hover_core_bucket: Option<usize>,
+    /// Ховер-ведро правого чарта «Дневная прибыль» — свой попап (иначе один
+    /// стейт рисовал бы попапы на обоих чартах разом).
+    pub(super) hover_daily_bucket: Option<usize>,
     /// Вкладка «Стратегии»: выбранная группа `(strategyid текстом, имя)`
     /// + её детализация.
     pub(super) sel_strategy: Option<(String, String)>,
@@ -222,6 +225,7 @@ impl AnalyticsView {
             seq: 0,
             sum_by_core: true,
             hover_core_bucket: None,
+            hover_daily_bucket: None,
             sel_strategy: None,
             detail: None,
             detail_seq: 0,

@@ -12,9 +12,6 @@ use moon_core::db::analytics::{CoreSeries, DayPoint};
 
 const CHART_H: f32 = 170.0;
 
-/// Высота столбиков нижнего чарта «прибыль по ядрам» (плашка прибита к низу
-/// сводки; вместе с шапкой карточки и подписями ~290px).
-const CORES_CHART_H: f32 = 190.0;
 
 /// Цвета серий ядер (циклом; легенда различает по имени).
 fn core_color(p: MoonPalette, i: usize) -> u32 {
@@ -113,9 +110,13 @@ pub(super) fn cumulative_area(days: &[DayPoint], p: MoonPalette) -> AnyElement {
         .into_any_element()
 }
 
-/// Дневные бары профита: зелёный вверх / оранжевый вниз от нулевой линии.
+/// Дневные бары профита: зелёный вверх / оранжевый вниз от нулевой линии,
+/// подпись значения над зелёным / под красным (пока баров немного), ховер
+/// колонки — тот же попап по ядрам, что у левого чарта.
 pub(super) fn daily_bars(
     days: &[DayPoint],
+    cores: &[CoreSeries],
+    hover: Option<usize>,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
@@ -126,40 +127,94 @@ pub(super) fn daily_bars(
     let vmin = days.iter().map(|d| d.profit).fold(0.0f64, f64::min).min(0.0);
     let span = (vmax - vmin).max(1e-6);
     let up_frac = (vmax / span) as f32; // доля высоты над нулевой линией
+    let zero_from_bottom = CHART_H * (1.0 - up_frac);
+    // Подписи значений читаемы только пока баров немного.
+    let labels_on = days.len() <= 45;
+    let n = days.len();
 
     let mut row = h_flex()
         .w_full()
         .h(px(CHART_H))
         .items_end()
-        .gap(px(if days.len() > 120 { 0.0 } else { 1.0 }));
-    for d in days {
+        .gap(px(if n > 120 { 0.0 } else { 1.0 }));
+    for (bi, d) in days.iter().enumerate() {
         let frac = (d.profit.abs() / span) as f32;
         let bar_h = (frac * CHART_H).max(if d.trades > 0 { 1.5 } else { 0.0 });
-        // Смещение бара: положительные растут от нулевой линии вверх,
-        // отрицательные — вниз (низ бара = нулевая линия минус высота).
-        let zero_from_bottom = CHART_H * (1.0 - up_frac);
-        let mb = if d.profit >= 0.0 {
+        // Положительные растут от нулевой линии вверх, отрицательные — вниз.
+        let bottom = if d.profit >= 0.0 {
             zero_from_bottom
         } else {
             (zero_from_bottom - bar_h).max(0.0)
         };
-        row = row.child(
-            div()
-                .flex_1()
-                .h(px(bar_h))
-                .mb(px(mb))
-                .rounded(px(1.0))
-                .bg(moon(if d.profit >= 0.0 { p.green } else { p.orange })),
-        );
+        let mut col = div()
+            .id(SharedString::from(format!("an-db-{bi}")))
+            .flex_1()
+            .relative()
+            .h_full()
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    if this.hover_daily_bucket != Some(bi) {
+                        this.hover_daily_bucket = Some(bi);
+                        cx.notify();
+                    }
+                } else if this.hover_daily_bucket == Some(bi) {
+                    this.hover_daily_bucket = None;
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(bottom))
+                    .h(px(bar_h))
+                    .rounded(px(1.0))
+                    .bg(moon(if d.profit >= 0.0 { p.green } else { p.orange })),
+            );
+        if hover == Some(bi) {
+            col = col.bg(moon_alpha(p.text_muted, 0.07));
+        }
+        if labels_on && d.trades > 0 {
+            // Подпись: над зелёным баром / под красным.
+            let label_bottom = if d.profit >= 0.0 {
+                (bottom + bar_h + 2.0).min(CHART_H - 11.0)
+            } else {
+                (bottom - 13.0).max(0.0)
+            };
+            col = col.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(label_bottom))
+                    .text_size(px(8.0))
+                    .text_color(moon(super::summary::sign_color(p, d.profit)))
+                    .child(
+                        div().w_full().flex().justify_center().child(
+                            moon_core::util::fmt::compact(d.profit, 0),
+                        ),
+                    ),
+            );
+        }
+        row = row.child(col);
     }
+    let popup = hover
+        .filter(|bi| *bi < n && !cores.is_empty())
+        .map(|bi| core_bucket_popup(days, cores, bi, p, cx));
     let first = days.first().map(|d| d.start).unwrap_or(0);
     let last = days.last().map(|d| d.start).unwrap_or(0);
-    let _ = cx;
-    v_flex()
+    div()
+        .relative()
         .w_full()
-        .gap(px(4.0))
-        .child(row)
-        .child(axis_row(p, dm(first), dm(last), None))
+        .child(
+            v_flex()
+                .w_full()
+                .gap(px(4.0))
+                .child(row)
+                .child(axis_row(p, dm(first), dm(last), None)),
+        )
+        .children(popup)
         .into_any_element()
 }
 
@@ -278,6 +333,8 @@ pub(super) fn core_lines(
     let popup = hover
         .filter(|bi| *bi < n)
         .map(|bi| core_bucket_popup(days, cores, bi, p, cx));
+    // Общий итог всех ядер — в подписи оси (как у суммарной области).
+    let total_all: f64 = cores.iter().map(|c| c.total).sum();
     div()
         .relative()
         .w_full()
@@ -295,7 +352,7 @@ pub(super) fn core_lines(
                 )
                 // Легенды тут нет намеренно: имена/итоги ядер видны в
                 // попапе по датам и в нижнем чарте «Прибыль по ядрам».
-                .child(axis_row(p, dm(first), dm(last), None)),
+                .child(axis_row(p, dm(first), dm(last), Some(total_all as f32))),
         )
         .children(popup)
         .into_any_element()
@@ -318,6 +375,7 @@ fn core_bucket_popup(
         .collect();
     items.sort_by(|a, b| b.1.abs().total_cmp(&a.1.abs()));
     let total: f64 = items.iter().map(|(_, v)| *v).sum();
+    // Итог дня — В ШАПКЕ попапа (при десятках ядер низ списка не виден).
     let mut card = v_flex()
         .gap(px(2.0))
         .px(design::ui_px(cx, 8.0))
@@ -328,7 +386,25 @@ fn core_bucket_popup(
         .border_color(moon(p.border))
         .shadow_md()
         .text_size(crate::design::t_caption(cx))
-        .child(div().text_color(moon(p.text)).child(dm(days[bi].start)));
+        .child(
+            h_flex()
+                .justify_between()
+                .gap(design::ui_px(cx, 10.0))
+                .pb(px(1.0))
+                .border_b_1()
+                .border_color(moon_alpha(p.border, 0.6))
+                .child(div().text_color(moon(p.text)).child(dm(days[bi].start)))
+                .child(
+                    h_flex()
+                        .gap(design::ui_px(cx, 4.0))
+                        .child(div().text_color(moon(p.text_muted)).child("Σ"))
+                        .child(
+                            div()
+                                .text_color(moon(super::summary::sign_color(p, total)))
+                                .child(super::summary::fmt_signed(total)),
+                        ),
+                ),
+        );
     for (ci, v) in items.into_iter().take(16) {
         card = card.child(
             h_flex()
@@ -358,20 +434,9 @@ fn core_bucket_popup(
                 ),
         );
     }
-    card = card.child(
-        h_flex()
-            .gap(design::ui_px(cx, 5.0))
-            .justify_between()
-            .border_t_1()
-            .border_color(moon_alpha(p.border, 0.6))
-            .child(div().text_color(moon(p.text_muted)).child("Σ"))
-            .child(
-                div()
-                    .text_color(moon(super::summary::sign_color(p, total)))
-                    .child(super::summary::fmt_signed(total)),
-            ),
-    );
     // Якорь к колонке даты: в правой трети — слева от неё, иначе справа.
+    // deferred — попап рисуется ПОВЕРХ всего (иначе прятался под нижними
+    // карточками, отрисованными позже).
     let frac = bi as f32 / days.len().max(1) as f32;
     let mut holder = div().absolute().top(px(6.0)).w(design::font_w_px(cx, 190.0));
     if frac <= 0.62 {
@@ -379,56 +444,77 @@ fn core_bucket_popup(
     } else {
         holder = holder.right(relative(1.0 - frac)).mr(px(12.0));
     }
-    holder.child(card).into_any_element()
+    deferred(holder.child(card)).into_any_element()
 }
 
 /// Итог периода ПО ЯДРАМ: один столбик на ядро (СУММА профита за период),
-/// под столбиком — имя ядра и число.
+/// под столбиком — имя ядра и число. Полотно РЕЗИНОВОЕ: бары рисуются
+/// canvas'ом и тянутся на всю высоту, которую даёт прибитая к низу плашка.
 pub(super) fn core_totals_bars(
     cores: &[CoreSeries],
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
     if cores.is_empty() {
-        return div().h(px(CORES_CHART_H)).into_any_element();
+        return div().flex_1().into_any_element();
     }
     let vmax = cores.iter().map(|c| c.total).fold(0.0f64, f64::max).max(1e-6);
     let vmin = cores.iter().map(|c| c.total).fold(0.0f64, f64::min).min(0.0);
     let span = (vmax - vmin).max(1e-6);
     let up_frac = (vmax / span) as f32;
-    let zero_from_bottom = CORES_CHART_H * (1.0 - up_frac);
+    let gap = f32::from(design::ui_px(cx, 8.0));
+    let bars: Vec<(f32, Hsla)> = cores
+        .iter()
+        .enumerate()
+        .map(|(ci, c)| (c.total as f32, moon(core_color(p, ci))))
+        .collect();
+    let muted = moon_alpha(p.text_muted, 0.5);
+    let canvas_el = canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let w = f32::from(bounds.size.width);
+            let h = f32::from(bounds.size.height);
+            let n = bars.len();
+            if w < 4.0 || h < 4.0 || n == 0 {
+                return;
+            }
+            let col_w = ((w - gap * (n as f32 - 1.0)) / n as f32).max(1.0);
+            let zero_y = bounds.origin.y + px(up_frac * (h - 1.0));
+            // Нулевая линия при наличии убыточных.
+            if vmin < 0.0 {
+                window.paint_quad(gpui::fill(
+                    Bounds::new(
+                        gpui::point(bounds.origin.x, zero_y),
+                        gpui::size(px(w), px(1.0)),
+                    ),
+                    muted,
+                ));
+            }
+            let span32 = span as f32;
+            for (k, (v, col)) in bars.iter().enumerate() {
+                let x = bounds.origin.x + px(k as f32 * (col_w + gap));
+                let bar_h = (v.abs() / span32 * h).max(if v.abs() > 1e-9 { 1.5 } else { 0.0 });
+                let top = if *v >= 0.0 { zero_y - px(bar_h) } else { zero_y };
+                window.paint_quad(gpui::fill(
+                    Bounds::new(gpui::point(x, top), gpui::size(px(col_w), px(bar_h))),
+                    *col,
+                ));
+            }
+        },
+    )
+    .w_full()
+    .flex_1()
+    .min_h(px(60.0));
 
-    let mut row = h_flex()
-        .w_full()
-        .items_end()
-        .gap(design::ui_px(cx, 8.0))
-        .px(design::ui_px(cx, 4.0));
-    for (ci, c) in cores.iter().enumerate() {
+    // Подписи под барами — той же сеткой колонок (flex_1 + тот же gap).
+    let mut labels = h_flex().w_full().flex_none().gap(px(gap));
+    for c in cores {
         let v = c.total;
-        let frac = (v.abs() / span) as f32;
-        let bar_h = (frac * CORES_CHART_H).max(if v.abs() > 1e-9 { 1.5 } else { 0.0 });
-        let mb = if v >= 0.0 {
-            zero_from_bottom
-        } else {
-            (zero_from_bottom - bar_h).max(0.0)
-        };
-        row = row.child(
+        labels = labels.child(
             v_flex()
                 .flex_1()
                 .min_w_0()
                 .items_center()
-                .gap(design::ui_px(cx, 3.0))
-                .child(
-                    // Полотно столбика: фикс-высота, бар прижат к нулевой линии.
-                    div().w_full().h(px(CORES_CHART_H)).flex().items_end().child(
-                        div()
-                            .w_full()
-                            .h(px(bar_h))
-                            .mb(px(mb))
-                            .rounded(px(2.0))
-                            .bg(moon(core_color(p, ci))),
-                    ),
-                )
                 .child(
                     div()
                         .max_w_full()
@@ -445,7 +531,12 @@ pub(super) fn core_totals_bars(
                 ),
         );
     }
-    row.into_any_element()
+    v_flex()
+        .size_full()
+        .gap(px(3.0))
+        .child(canvas_el)
+        .child(labels)
+        .into_any_element()
 }
 
 /// Подписи оси X: первая/последняя дата (+ итог справа у накопительной).

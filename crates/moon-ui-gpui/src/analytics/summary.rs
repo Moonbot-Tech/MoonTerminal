@@ -112,7 +112,13 @@ impl AnalyticsView {
                     .child(chart_card(
                         t!("analytics.daily_title").to_string(),
                         t!("analytics.daily_sub").to_string(),
-                        charts::daily_bars(&data.days, p, cx),
+                        charts::daily_bars(
+                            &data.days,
+                            &data.core_days,
+                            self.hover_daily_bucket,
+                            p,
+                            cx,
+                        ),
                         p,
                         cx,
                     )),
@@ -138,20 +144,25 @@ impl AnalyticsView {
             );
         v_flex()
             .size_full()
+            // Верх — естественной высоты, при нехватке места ужимается и
+            // скроллится внутри (basis auto + min_h_0 + overflow).
             .child(
+                // Дефолт flex (grow 0, shrink 1, basis auto): естественная
+                // высота, при нехватке места ужимается и скроллится.
                 div()
                     .id("an-sum-scroll")
-                    .flex_1()
                     .min_h_0()
                     .w_full()
                     .overflow_y_scroll()
                     .child(top),
             )
-            // Нижний чарт на всю ширину, прижат к низу: СУММА за период по
-            // ядрам — один столбик на ядро, имя и итог под ним.
+            // Нижний чарт РЕЗИНОВЫЙ: прижат к низу окна и тянется вверх до
+            // ближайшей карточки (flex_1), бары рисуются canvas'ом на всю
+            // доступную высоту; минимум — чтобы не схлопнуться.
             .child(
                 div()
-                    .flex_none()
+                    .flex_1()
+                    .min_h(design::ui_px(cx, 170.0))
                     .w_full()
                     .px(design::ui_px(cx, 10.0))
                     .pb(design::ui_px(cx, 10.0))
@@ -307,6 +318,9 @@ fn chart_card_ex(
     v_flex()
         .flex_1()
         .min_w_0()
+        // В резиновом низе карточка заполняет данную ей высоту; в верхних
+        // рядах (высота по контенту) h_full вырождается в auto.
+        .h_full()
         .gap(design::ui_px(cx, 2.0))
         .px(design::ui_px(cx, 12.0))
         .py(design::ui_px(cx, 10.0))
@@ -322,7 +336,7 @@ fn chart_card_ex(
                 .mb(design::ui_px(cx, 6.0))
                 .child(sub),
         )
-        .child(body)
+        .child(div().w_full().flex_1().min_h_0().child(body))
 }
 
 /// Таблица топ-сделок (5 строк): закрыта / монета / стратегия / профит.
