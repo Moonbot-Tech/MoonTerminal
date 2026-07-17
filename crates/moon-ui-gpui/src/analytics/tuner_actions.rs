@@ -29,7 +29,7 @@ impl AnalyticsView {
             .trim()
             .parse::<usize>()
             .unwrap_or(4)
-            .clamp(1, 100);
+            .clamp(1, 1000);
         let min_n = self.suggest_min_n();
         let edges = self.suggest_edges();
         // Снятые чекбоксы: поле не перебирается; с заполненными границами —

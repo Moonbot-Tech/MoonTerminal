@@ -40,8 +40,10 @@ pub struct SmartResult {
     pub rounds: usize,
 }
 
-/// Простой детерминированный PRNG (xorshift64*) — rand-зависимость не нужна,
-/// а результат воспроизводим при тех же данных/параметрах.
+/// Простой PRNG (xorshift64*) — rand-зависимость не нужна. Зерно берётся от
+/// времени запуска: каждый клик «Подобрать всё» пробует СВОИ случайные старты
+/// (намеренно, по просьбе пользователя — повторные переборы продолжают искать
+/// новые локальные оптимумы, а не повторяют одну последовательность).
 struct Rng(u64);
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -58,7 +60,7 @@ impl Rng {
 }
 
 /// Random-restart координатный спуск: максимум суммарного профита при
-/// сохранении ≥`min_n` сделок. `restarts` — число попыток (1..=100); каждая
+/// сохранении ≥`min_n` сделок. `restarts` — число попыток (1..=1000); каждая
 /// крутится до сходимости (≤16 проходов). `edges_want` — число квантильных
 /// краёв на поле (4..=128; больше = тоньше сетка порогов, дороже шаг).
 /// Ограничение мощности: полей-слотов (Delta2/Delta3) с диапазоном может
@@ -145,7 +147,7 @@ pub fn smart_suggest(
 
     // Мульти-старт: рестарт 0 — жадный с пустого состояния, дальше —
     // случайная инициализация + перетасованный порядок полей.
-    let restarts = restarts.clamp(1, 100);
+    let restarts = restarts.clamp(1, 1000);
     let is_slot: Vec<bool> = FIELDS
         .iter()
         .map(|s| s.class == FieldClass::DeltaSlot)
@@ -175,7 +177,14 @@ pub fn smart_suggest(
                 && matches!(locked.get(*fi), Some(Some((lo, hi))) if lo.is_some() || hi.is_some())
         })
         .count();
-    let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ (n as u64) ^ ((min_n as u64) << 32));
+    // Зерно от времени запуска: каждый перебор — свои случайные старты
+    // (рестарт 0 всё равно жадный с пустого, он стабилен). Нулевое зерно
+    // xorshift'у запрещено — подмешиваем константу.
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut rng = Rng(seed ^ 0x9E37_79B9_7F4A_7C15 | 1);
     let mut best_global: Option<(f64, i64, Vec<Option<(usize, usize)>>)> = None;
     for restart in 0..restarts {
         let mut sel: Vec<Option<(usize, usize)>> = vec![None; nf];

@@ -523,7 +523,7 @@ impl AnalyticsView {
                     .child(t!("analytics.tuner.iters").to_string()),
             )
             .child(
-                div().w(design::font_w_px(cx, 40.0)).flex_none().child(
+                div().w(design::font_w_px(cx, 46.0)).flex_none().child(
                     MoonInput::new("tun-cfg-it").state(&it_input).small(),
                 ),
             )
