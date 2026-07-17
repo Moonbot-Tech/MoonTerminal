@@ -412,15 +412,19 @@ impl AnalyticsView {
                 };
             row = row.child(match chip {
                 Some((slot, lo, hi)) => {
-                    let text = [
-                        slot.map(|n| format!("Δ{n}")),
-                        lo.map(|v| format!("min({})", fmt_bound(v))),
-                        hi.map(|v| format!("max({})", fmt_bound(v))),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                    // Диапазон компактно: «(от…до)»; открытая сторона пустая.
+                    let range = (lo.is_some() || hi.is_some()).then(|| {
+                        format!(
+                            "({}…{})",
+                            lo.map(fmt_bound).unwrap_or_default(),
+                            hi.map(fmt_bound).unwrap_or_default()
+                        )
+                    });
+                    let text = [slot.map(|n| format!("Δ{n}")), range]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .join(" ");
                     div()
                         .flex_1()
                         .min_w_0()
