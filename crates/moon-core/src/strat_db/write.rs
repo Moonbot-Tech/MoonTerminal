@@ -56,6 +56,9 @@ pub(super) fn init(conn: &Connection, cfg: &StrategiesStoreCfg) -> rusqlite::Res
             updated_ms   INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (core_uid, strategy_id));
         CREATE INDEX IF NOT EXISTS idx_strat_name ON strategies(core_uid, name);
+        -- Тюнер ищет стратегию по id БЕЗ core_uid (strategy_cores/strategy_filters):
+        -- префикс PK (core_uid, strategy_id) там не работает.
+        CREATE INDEX IF NOT EXISTS idx_strat_sid ON strategies(strategy_id);
         CREATE TABLE IF NOT EXISTS strategy_versions (
             id           INTEGER PRIMARY KEY,
             core_uid     INTEGER NOT NULL,
@@ -72,8 +75,9 @@ pub(super) fn init(conn: &Connection, cfg: &StrategiesStoreCfg) -> rusqlite::Res
             raw_json     TEXT NOT NULL,
             changed_json TEXT,
             UNIQUE (core_uid, strategy_id, valid_from));
-        CREATE INDEX IF NOT EXISTS idx_sv_lookup
-            ON strategy_versions(core_uid, strategy_id, valid_from DESC);
+        -- idx_sv_lookup дублировал implicit-индекс UNIQUE-ключа (те же колонки,
+        -- DESC SQLite ходит и по нему) — лишняя цена каждой записи версии.
+        DROP INDEX IF EXISTS idx_sv_lookup;
         CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
     // Кэш head-строк с диска — writer не делает SELECT на каждую стратегию.
@@ -437,6 +441,41 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         let st = init(&conn, &cfg()).unwrap();
         (conn, st)
+    }
+
+    /// Миграция индексов на БД старой версии: дублирующий idx_sv_lookup
+    /// сносится, idx_strat_sid появляется и реально используется планировщиком
+    /// для лукапов по strategy_id без core_uid (strategy_cores и т.п.).
+    #[test]
+    fn init_migrates_indexes() {
+        let (conn, _) = setup();
+        conn.execute(
+            "CREATE INDEX idx_sv_lookup
+             ON strategy_versions(core_uid, strategy_id, valid_from DESC)",
+            [],
+        )
+        .unwrap();
+        let _ = init(&conn, &cfg()).unwrap();
+        let has = |name: &str| -> bool {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                [name],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+                > 0
+        };
+        assert!(!has("idx_sv_lookup"), "дубль UNIQUE-индекса должен сноситься");
+        assert!(has("idx_strat_sid"));
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN
+                 SELECT core_uid FROM strategies WHERE strategy_id=1 AND deleted=0",
+                [],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("idx_strat_sid"), "план без индекса: {plan}");
     }
 
     #[test]

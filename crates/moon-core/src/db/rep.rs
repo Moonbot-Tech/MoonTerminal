@@ -124,9 +124,46 @@ pub(super) struct RepState {
     /// коммита батча (внутри транзакции VACUUM запрещён): без него файл БД остаётся
     /// прежних сотен МБ.
     pub(super) vacuum_pending: bool,
-    /// Индекс `idx_rep_strat` уже создан в этой сессии (не дёргать CREATE на
+    /// Все индексы реплики гарантированно созданы (не дёргать CREATE на
     /// каждую схему ядра).
-    strat_index_done: bool,
+    indexes_done: bool,
+}
+
+/// Индексы под горячие запросы реплики. Колонки приходят из схемы ядра в
+/// непредсказуемый момент, поэтому проверяем и на старте (в старой БД колонки
+/// уже есть), и после каждой схемы: создание только в ветке успешного ALTER
+/// теряло индекс НАВСЕГДА, если колонка старше кода индекса (или CREATE разово
+/// упал). Возвращает true, когда все индексы точно есть — больше не звать.
+fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> bool {
+    let mut done = true;
+    // Дефолтный фильтр периода окна «Отчёт» (как idx_csr_closedate у легаси).
+    if cols.contains("closedate") {
+        if let Err(e) = conn.execute(
+            &format!("CREATE INDEX IF NOT EXISTS idx_rep_closedate ON {TABLE}(closedate)"),
+            [],
+        ) {
+            log::warn!("отчёты(rep): индекс idx_rep_closedate не создался: {e}");
+            done = false;
+        }
+    } else {
+        done = false;
+    }
+    // Аналитика версий стратегий (strat_db): выборка сделок одной стратегии +
+    // range-join по buydate к valid_from/valid_to версии.
+    if cols.contains("strategyid") && cols.contains("buydate") {
+        if let Err(e) = conn.execute(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS idx_rep_strat ON {TABLE}(core_uid, strategyid, buydate)"
+            ),
+            [],
+        ) {
+            log::warn!("отчёты(rep): индекс idx_rep_strat не создался: {e}");
+            done = false;
+        }
+    } else {
+        done = false;
+    }
+    done
 }
 
 /// Создаёт скелет таблицы реплики (колонки доращивает схема ядра), считает стартовые
@@ -170,6 +207,7 @@ pub(super) fn init(
             }));
         }
     }
+    let indexes_done = ensure_indexes(conn, &cols);
     let mut st = RepState {
         schemas: HashMap::new(),
         cols,
@@ -177,7 +215,7 @@ pub(super) fn init(
         legacy_exists,
         synced,
         vacuum_pending: false,
-        strat_index_done: false,
+        indexes_done,
     };
     // Вычистка легаси-строк синхронизированных ядер, накопившихся ПОСЛЕ их SyncComplete
     // (легаси-поток успевал дописывать до фикса скипа) — иначе дубли в читателе.
@@ -232,32 +270,15 @@ pub(super) fn apply_schema(
         ) {
             Ok(_) => {
                 log::info!("отчёты(rep): колонка «{name}» {} (схема ядра {core_uid})", f.sql_spec);
-                // Индекс под дефолтный фильтр периода окна «Отчёт» (как у легаси-таблицы).
-                if name == "closedate" {
-                    let _ = conn.execute(
-                        &format!("CREATE INDEX IF NOT EXISTS idx_rep_closedate ON {TABLE}(closedate)"),
-                        [],
-                    );
-                }
                 st.cols.insert(name);
             }
             Err(e) => log::error!("отчёты(rep): ADD COLUMN {name} не удался: {e}"),
         }
     }
-    // Индекс под аналитику версий стратегий (strat_db): выборка сделок одной
-    // стратегии + range-join по buydate к valid_from/valid_to версии. Колонки —
-    // авто (из схемы ядра), поэтому создаём здесь, когда обе точно есть;
-    // IF NOT EXISTS делает повторные вызовы бесплатными.
-    if !st.strat_index_done && st.cols.contains("strategyid") && st.cols.contains("buydate") {
-        match conn.execute(
-            &format!(
-                "CREATE INDEX IF NOT EXISTS idx_rep_strat ON {TABLE}(core_uid, strategyid, buydate)"
-            ),
-            [],
-        ) {
-            Ok(_) => st.strat_index_done = true,
-            Err(e) => log::warn!("отчёты(rep): индекс idx_rep_strat не создался: {e}"),
-        }
+    // Индексные колонки — авто (из схемы ядра), поэтому доводим индексы здесь,
+    // когда колонки точно есть; IF NOT EXISTS делает повторные вызовы бесплатными.
+    if !st.indexes_done {
+        st.indexes_done = ensure_indexes(conn, &st.cols);
     }
     st.schemas.insert(core_uid, schema);
 }

@@ -1110,6 +1110,47 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
 
+    /// Индексы реплики создаются и для БД, где колонки появились ДО кода
+    /// индексов: создание только в ветке успешного ALTER теряло индекс
+    /// навсегда (колонка уже есть → цикл схемы её скипает).
+    #[test]
+    fn rep_indexes_created_for_preexisting_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        // Скелет реплики с колонками, но БЕЗ индексов — как БД старой версии.
+        conn.execute_batch(
+            "CREATE TABLE orders_rep (core_uid INTEGER NOT NULL,
+                core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+                PRIMARY KEY (core_uid, newrecid));
+             ALTER TABLE orders_rep ADD COLUMN closedate INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN strategyid INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN buydate INTEGER;",
+        )
+        .unwrap();
+        let cursors = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let open_rows = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        rep::init(&conn, cursors, open_rows).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index'
+                 AND name IN ('idx_rep_closedate','idx_rep_strat')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 2, "оба индекса должны существовать после init");
+        // Планировщик реально ходит по индексу для дефолтного фильтра периода.
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT * FROM orders_rep
+                 WHERE closedate >= 1 AND closedate < 2 AND closedate > 0",
+                [],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("idx_rep_closedate"), "план без индекса: {plan}");
+    }
+
     /// Переходный читатель: строки из ЛЕГАСИ-таблицы и typed-реплики видны вместе
     /// (UNION ALL), db_id легаси отдаётся как `id`; после SyncComplete последнего
     /// легаси-ядра таблица сносится и читатель живёт на одной реплике.
