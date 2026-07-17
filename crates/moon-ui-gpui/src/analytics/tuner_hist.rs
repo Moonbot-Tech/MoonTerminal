@@ -127,7 +127,7 @@ impl AnalyticsView {
         let title = format!(
             "{} — {} — {}",
             t!("analytics.tuner.hist_title"),
-            FIELDS[self.tuner.sel_field].1,
+            FIELDS[self.tuner.sel_field].label,
             scope,
         );
         let body: AnyElement = match self.tuner.hist.clone() {

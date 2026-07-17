@@ -137,6 +137,14 @@ analytics.tuner.grp_bvsv:
   ru: "BV/SV фильтр (UseBV_SV_Filter)"
   en: "BV/SV filter (UseBV_SV_Filter)"
   es: "Filtro BV/SV (UseBV_SV_Filter)"
+analytics.tuner.warn_slot_replace:
+  ru: "%{slot} был занят типом «%{old}» (в отчёте такой колонки нет) — будет заменён"
+  en: "%{slot} was set to type \"%{old}\" (no such report column) — it will be replaced"
+  es: "%{slot} tenía el tipo «%{old}» (sin columna en el informe) — será reemplazado"
+analytics.tuner.warn_slot_drop:
+  ru: "Слотов Delta2/Delta3 только два — не вошли: %{fields}"
+  en: "Only two Delta2/Delta3 slots — left out: %{fields}"
+  es: "Solo hay dos slots Delta2/Delta3 — quedaron fuera: %{fields}"
 analytics.tuner.grp_base:
   ru: "База — плечо, mark-цена (IgnoreBase)"
   en: "Base — leverage, mark price (IgnoreBase)"

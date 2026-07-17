@@ -32,57 +32,80 @@ pub enum FieldClass {
     Volume,
 }
 
-/// Поля отчёта, доступные фильтрам: (колонка реплики, подпись как в MB/V3,
-/// класс). ЕДИНСТВЕННЫЙ источник имён колонок, попадающих в SQL тюнера
-/// (вайтлист). Порядок = порядок в сетке, группами по классу.
-pub const FIELDS: &[(&str, &str, FieldClass)] = &[
+/// Описание одного поля тюнера. ЕДИНСТВЕННОЕ место, которое правится при
+/// новой колонке отчёта или новом параметре стратегии: одна строка в `FIELDS`
+/// — всё остальное (SQL-проекция UNION'а, сетка UI, чипы, автоперебор,
+/// сохранение в стратегию) выводится из этой таблицы. Сами колонки в
+/// reports.sqlite доращиваются из схемы ядра автоматически (db/rep.rs).
+pub struct FieldSpec {
+    /// Колонка реплики отчётов (lowercase).
+    pub col: &'static str,
+    /// Подпись в сетке (как в MB/V3).
+    pub label: &'static str,
+    /// Класс = каким Ignore-флагом стратегии выключается фильтр.
+    pub class: FieldClass,
+    /// Параметры-фильтры стратегии (Min, Max); None — в стратегию не пишется.
+    pub p_min: Option<&'static str>,
+    pub p_max: Option<&'static str>,
+    /// Значение `DeltaN_Type` для слот-полей (class == DeltaSlot): порог
+    /// пишется через слот Delta2/Delta3, а не собственными параметрами.
+    pub slot_type: Option<&'static str>,
+}
+
+const fn field(
+    col: &'static str,
+    label: &'static str,
+    class: FieldClass,
+    p_min: Option<&'static str>,
+    p_max: Option<&'static str>,
+    slot_type: Option<&'static str>,
+) -> FieldSpec {
+    FieldSpec { col, label, class, p_min, p_max, slot_type }
+}
+
+/// Поля отчёта, доступные фильтрам. ЕДИНСТВЕННЫЙ источник имён колонок,
+/// попадающих в SQL тюнера (вайтлист). Порядок = порядок в сетке, группами
+/// по классу. Маппинг на параметры сверен 2026-07-17 по union параметров
+/// всех видов стратегий; без маппинга только da1m и d5s (параметров-фильтров
+/// в схеме нет; слот-типов таких тоже нет). Типы слотов 2h/30m/Pump5m без
+/// колонки отчёта непредставимы в тюнере.
+pub const FIELDS: &[FieldSpec] = &[
     // PriceBug (IgnoreFilters | IgnorePing).
-    ("pricebug", "PriceBug", FieldClass::Ping),
-    // BV/SV (IgnoreFilters | !UseBV_SV_Filter).
-    ("bvsvratio", "bvsv", FieldClass::BvSv),
-    // Filters/Base (IgnoreFilters | IgnoreBase): плечо и дельта mark-цены.
-    ("lev", "Lev", FieldClass::Base),
-    ("dmark", "dMark", FieldClass::Base),
+    field("pricebug", "PriceBug", FieldClass::Ping, Some("BinancePriceBugMin"), Some("BinancePriceBug"), None),
+    // BV/SV: параметры фильтра (не детектора BV_SV_Ratio!), гейт — UseBV_SV_Filter.
+    field("bvsvratio", "bvsv", FieldClass::BvSv, Some("BV_SV_FilterRatio"), Some("BV_SV_FilterRatioMax"), None),
+    // Filters/Base (IgnoreFilters | IgnoreBase): плечо и дельта mark-цены (±%).
+    field("lev", "Lev", FieldClass::Base, Some("MinLeverage"), Some("MaxLeverage"), None),
+    field("dmark", "dMark", FieldClass::Base, Some("MarkPriceMin"), Some("MarkPriceMax"), None),
     // Слоты Delta2/Delta3 (IgnoreFilters | IgnoreDelta; в стратегию — макс 2).
-    ("d1h", "d1h", FieldClass::DeltaSlot),
-    ("d15m", "d15m", FieldClass::DeltaSlot),
-    ("d5m", "d5m", FieldClass::DeltaSlot),
-    ("d1m", "d1m", FieldClass::DeltaSlot),
-    ("pump1h", "Pump1H", FieldClass::DeltaSlot),
-    ("dump1h", "Dump1H", FieldClass::DeltaSlot),
+    field("d1h", "d1h", FieldClass::DeltaSlot, None, None, Some("1h")),
+    field("d15m", "d15m", FieldClass::DeltaSlot, None, None, Some("15m")),
+    field("d5m", "d5m", FieldClass::DeltaSlot, None, None, Some("5m")),
+    field("d1m", "d1m", FieldClass::DeltaSlot, None, None, Some("1m")),
+    field("pump1h", "Pump1H", FieldClass::DeltaSlot, None, None, Some("Pump1h")),
+    field("dump1h", "Dump1H", FieldClass::DeltaSlot, None, None, Some("Dump1h")),
     // Дельты с собственными параметрами (IgnoreFilters | IgnoreDelta).
-    ("d24h", "d24h", FieldClass::Delta),
-    ("d3h", "d3h", FieldClass::Delta),
-    ("da1m", "da1m", FieldClass::Delta),
-    ("d5s", "d5s", FieldClass::Delta),
-    ("btc1hdelta", "dBTC", FieldClass::Delta),
-    ("exchange1hdelta", "dMarket", FieldClass::Delta),
-    ("btc24hdelta", "d24BTC", FieldClass::Delta),
-    ("exchange24hdelta", "dM24", FieldClass::Delta),
-    ("btc5mdelta", "dBTC5m", FieldClass::Delta),
-    ("dbtc1m", "dBTC1m", FieldClass::Delta),
+    field("d24h", "d24h", FieldClass::Delta, Some("Delta_24h_Min"), Some("Delta_24h_Max"), None),
+    field("d3h", "d3h", FieldClass::Delta, Some("Delta_3h_Min"), Some("Delta_3h_Max"), None),
+    field("da1m", "da1m", FieldClass::Delta, None, None, None),
+    field("d5s", "d5s", FieldClass::Delta, None, None, None),
+    field("btc1hdelta", "dBTC", FieldClass::Delta, Some("Delta_BTC_Min"), Some("Delta_BTC_Max"), None),
+    field("exchange1hdelta", "dMarket", FieldClass::Delta, Some("Delta_Market_Min"), Some("Delta_Market_Max"), None),
+    field("btc24hdelta", "d24BTC", FieldClass::Delta, Some("Delta_BTC_24_Min"), Some("Delta_BTC_24_Max"), None),
+    field("exchange24hdelta", "dM24", FieldClass::Delta, Some("Delta_Market_24_Min"), Some("Delta_Market_24_Max"), None),
+    field("btc5mdelta", "dBTC5m", FieldClass::Delta, Some("Delta_BTC_5m_Min"), Some("Delta_BTC_5m_Max"), None),
+    field("dbtc1m", "dBTC1m", FieldClass::Delta, Some("Delta_BTC_1m_Min"), Some("Delta_BTC_1m_Max"), None),
     // Объёмы (IgnoreFilters | IgnoreVolume; MinuteVolDelta — тоже секция
     // Filters/Volume, поэтому Vd1m здесь).
-    ("hvol", "H.Vol", FieldClass::Volume),
-    ("hvolf", "H.VolF", FieldClass::Volume),
-    ("dvol", "D.Vol", FieldClass::Volume),
-    ("vd1m", "Vd1m", FieldClass::Volume),
-];
-
-/// Значения `Delta2_Type`/`Delta3_Type` ↔ поля отчёта. Типы без колонки
-/// отчёта (2h/30m/Pump5m) непредставимы в тюнере и пропускаются.
-pub const SLOT_TYPES: &[(&str, &str)] = &[
-    ("d1h", "1h"),
-    ("d15m", "15m"),
-    ("d5m", "5m"),
-    ("d1m", "1m"),
-    ("pump1h", "Pump1h"),
-    ("dump1h", "Dump1h"),
+    field("hvol", "H.Vol", FieldClass::Volume, Some("MinHourlyVolume"), Some("MaxHourlyVolume"), None),
+    field("hvolf", "H.VolF", FieldClass::Volume, Some("MinHourlyVolFast"), Some("MaxHourlyVolFast"), None),
+    field("dvol", "D.Vol", FieldClass::Volume, Some("MinVolume"), Some("MaxVolume"), None),
+    field("vd1m", "Vd1m", FieldClass::Volume, Some("MinuteVolDeltaMin"), Some("MinuteVolDeltaMax"), None),
 ];
 
 /// Значение `DeltaN_Type` для поля-слота (None — поле не слот).
 pub fn slot_type_for(field: &str) -> Option<&'static str> {
-    SLOT_TYPES.iter().find(|(f, _)| *f == field).map(|(_, t)| *t)
+    FIELDS.iter().find(|s| s.col == field).and_then(|s| s.slot_type)
 }
 
 /// Диапазон по одному полю; None — граница не задана.
@@ -110,7 +133,7 @@ impl Variant {
     fn where_sql(&self) -> String {
         let mut w = String::new();
         for b in &self.bounds {
-            if !FIELDS.iter().any(|(c, _, _)| *c == b.field) {
+            if !FIELDS.iter().any(|s| s.col == b.field) {
                 continue;
             }
             if let Some(v) = b.from.filter(|v| v.is_finite()) {
@@ -226,7 +249,7 @@ pub struct HistBucket {
 /// Гистограмма распределения сделок/профита по значению поля на входе.
 /// Вёдра квантильные (≈равнонаполненные, ≤`want`); NULL-поля пропускаются.
 pub fn histogram(q: &Query, field: &str, want: usize) -> Option<Vec<HistBucket>> {
-    if !FIELDS.iter().any(|(c, _, _)| *c == field) {
+    if !FIELDS.iter().any(|s| s.col == field) {
         return None;
     }
     let conn = super::open_reader()?;
@@ -298,38 +321,12 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> Option<Vec<HistBucket>>
     Some(out)
 }
 
-/// Маппинг «поле отчёта → параметры-фильтры стратегии MoonBot» (min, max).
-/// Сверен 2026-07-17 по union параметров всех видов стратегий. Без маппинга
-/// остались только da1m и d5s (параметров-фильтров в схеме нет; слоты
-/// Delta2/Delta3 таких типов тоже не имеют).
-const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
-    // Фильтр BV/SV: параметры фильтра (не детектора BV_SV_Ratio!), гейт —
-    // UseBV_SV_Filter.
-    ("bvsvratio", Some("BV_SV_FilterRatio"), Some("BV_SV_FilterRatioMax")),
-    ("pricebug", Some("BinancePriceBugMin"), Some("BinancePriceBug")),
-    // Filters/Base: плечо рынка и дельта mark-цены (значения ±% как в отчёте).
-    ("lev", Some("MinLeverage"), Some("MaxLeverage")),
-    ("dmark", Some("MarkPriceMin"), Some("MarkPriceMax")),
-    ("d24h", Some("Delta_24h_Min"), Some("Delta_24h_Max")),
-    ("d3h", Some("Delta_3h_Min"), Some("Delta_3h_Max")),
-    ("hvol", Some("MinHourlyVolume"), Some("MaxHourlyVolume")),
-    ("hvolf", Some("MinHourlyVolFast"), Some("MaxHourlyVolFast")),
-    ("dvol", Some("MinVolume"), Some("MaxVolume")),
-    ("vd1m", Some("MinuteVolDeltaMin"), Some("MinuteVolDeltaMax")),
-    ("btc1hdelta", Some("Delta_BTC_Min"), Some("Delta_BTC_Max")),
-    ("exchange1hdelta", Some("Delta_Market_Min"), Some("Delta_Market_Max")),
-    ("btc24hdelta", Some("Delta_BTC_24_Min"), Some("Delta_BTC_24_Max")),
-    ("exchange24hdelta", Some("Delta_Market_24_Min"), Some("Delta_Market_24_Max")),
-    ("btc5mdelta", Some("Delta_BTC_5m_Min"), Some("Delta_BTC_5m_Max")),
-    ("dbtc1m", Some("Delta_BTC_1m_Min"), Some("Delta_BTC_1m_Max")),
-];
-
 /// Параметры стратегии (min, max) для поля отчёта; (None, None) — маппинга нет.
 pub fn params_for(field: &str) -> (Option<&'static str>, Option<&'static str>) {
-    STRAT_PARAMS
+    FIELDS
         .iter()
-        .find(|(f, _, _)| *f == field)
-        .map(|(_, lo, hi)| (*lo, *hi))
+        .find(|s| s.col == field)
+        .map(|s| (s.p_min, s.p_max))
         .unwrap_or((None, None))
 }
 
@@ -478,10 +475,10 @@ pub fn strategy_filters(
     out.ignore_base = truthy("IgnoreBase");
     out.use_bvsv = truthy("UseBV_SV_Filter");
     out.ignore_ping = truthy("IgnorePing");
-    for (field, pmin, pmax) in STRAT_PARAMS {
-        let (lo, hi) = (num(*pmin), num(*pmax));
+    for spec in FIELDS {
+        let (lo, hi) = (num(spec.p_min), num(spec.p_max));
         if lo.is_some() || hi.is_some() {
-            out.bounds.insert(*field, (lo, hi));
+            out.bounds.insert(spec.col, (lo, hi));
         }
     }
     // Слоты Delta2/Delta3: тип строкой («15m»/«Pump1h»/…) → поле отчёта.
@@ -492,9 +489,10 @@ pub fn strategy_filters(
         let t = t.trim();
         let lo = num(Some(&format!("{prefix}_Min")));
         let hi = num(Some(&format!("{prefix}_Max")));
-        let Some((field, _)) = SLOT_TYPES
+        let Some(field) = FIELDS
             .iter()
-            .find(|(_, ty)| ty.eq_ignore_ascii_case(t))
+            .find(|s| s.slot_type.is_some_and(|ty| ty.eq_ignore_ascii_case(t)))
+            .map(|s| s.col)
         else {
             // 2h/30m/Pump5m — колонки отчёта нет; с настроенными порогами это
             // живой фильтр — помечаем слот занятым «чужим» типом.
@@ -530,7 +528,7 @@ pub fn suggest_all(q: &Query, min_n: i64) -> Option<Vec<(&'static str, Suggestio
     let src = unified_from(&conn, &q)?;
     let cols = FIELDS
         .iter()
-        .map(|(c, _, _)| format!("o.\"{c}\""))
+        .map(|s| format!("o.\"{}\"", s.col))
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!("SELECT {cols}, COALESCE(o.profitbtc,0) FROM {src}");
@@ -555,7 +553,7 @@ pub fn suggest_all(q: &Query, min_n: i64) -> Option<Vec<(&'static str, Suggestio
             .into_iter()
             .enumerate()
             .filter_map(|(fi, mut vals)| {
-                best_range(&mut vals, min_n).map(|s| (FIELDS[fi].0, s))
+                best_range(&mut vals, min_n).map(|s| (FIELDS[fi].col, s))
             })
             .collect(),
     )
@@ -563,7 +561,7 @@ pub fn suggest_all(q: &Query, min_n: i64) -> Option<Vec<(&'static str, Suggestio
 
 /// Автоподбор порога ОДНОГО поля (кнопка «Подобрать» у выбранной строки).
 pub fn suggest_field(q: &Query, field: &str, min_n: i64) -> Option<Suggestion> {
-    if !FIELDS.iter().any(|(c, _, _)| *c == field) {
+    if !FIELDS.iter().any(|s| s.col == field) {
         return None;
     }
     let conn = super::open_reader()?;

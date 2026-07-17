@@ -7,10 +7,12 @@ use std::sync::Arc;
 
 use gpui::*;
 
+use rust_i18n::t;
+
 use super::AnalyticsView;
 use super::tuner::{fmt_bound, parse_num};
 use super::tuner_state::SaveDialog;
-use moon_core::db::tuner::{FIELDS, FieldClass, params_for, slot_type_for};
+use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
 impl AnalyticsView {
     /// «Подобрать всё» — УМНЫЙ подбор (координатный спуск): максимизируем
@@ -69,7 +71,7 @@ impl AnalyticsView {
                                 continue;
                             }
                             let (from, to) = by_field
-                                .get(FIELDS[fi].0)
+                                .get(FIELDS[fi].col)
                                 .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
                                 .unwrap_or_default();
                             this.tuner.bounds[0][fi] = (from, to);
@@ -91,7 +93,7 @@ impl AnalyticsView {
         let req = self.tuner.sugg_seq;
         self.tuner.sugg_busy = true;
         let fi = self.tuner.sel_field;
-        let field = FIELDS[fi].0.to_string();
+        let field = FIELDS[fi].col.to_string();
         let q = self.tuner_query();
         let min_n = self.suggest_min_n();
         cx.spawn(async move |this, cx| {
@@ -175,22 +177,23 @@ impl AnalyticsView {
         let Ok(sid) = key.parse::<i64>() else { return };
 
         let mut changes: Vec<(String, String)> = Vec::new();
+        let mut warns: Vec<String> = Vec::new();
         let (mut delta_touched, mut volume_touched, mut bvsv_touched, mut ping_touched) =
             (false, false, false, false);
         let mut base_touched = false;
         // Поля-слоты с порогами v1 — кандидаты в Delta2/Delta3.
         let mut slot_wanted: Vec<(&'static str, Option<f64>, Option<f64>)> = Vec::new();
-        for (fi, (col, _, class)) in FIELDS.iter().enumerate() {
+        for (fi, spec) in FIELDS.iter().enumerate() {
             let (from, to) = &self.tuner.bounds[0][fi];
+            let class = &spec.class;
             if *class == FieldClass::DeltaSlot {
                 let (lo, hi) = (parse_num(from), parse_num(to));
                 if lo.is_some() || hi.is_some() {
-                    slot_wanted.push((col, lo, hi));
+                    slot_wanted.push((spec.col, lo, hi));
                 }
                 continue;
             }
-            let (pmin, pmax) = params_for(col);
-            for (txt, param) in [(from, pmin), (to, pmax)] {
+            for (txt, param) in [(from, spec.p_min), (to, spec.p_max)] {
                 let Some(param) = param else { continue };
                 let Some(v) = parse_num(txt) else { continue };
                 changes.push((param.to_string(), fmt_plain(v)));
@@ -247,10 +250,14 @@ impl AnalyticsView {
                     };
                     used[i] = true;
                     if let Some((_, ty)) = foreign.iter().find(|(n, _)| *n == i as u8 + 2) {
+                        let slot = format!("Delta{}", i + 2);
                         log::warn!(
-                            "аналитика: «Сохранить» — Delta{} был занят типом «{ty}» (в отчёте \
-                             колонки нет), перезаписываем на «{col}»",
-                            i + 2
+                            "аналитика: «Сохранить» — {slot} был занят типом «{ty}» (в отчёте \
+                             колонки нет), перезаписываем на «{col}»"
+                        );
+                        warns.push(
+                            t!("analytics.tuner.warn_slot_replace", slot = slot, old = ty)
+                                .to_string(),
                         );
                     }
                     assigned.push((i as u8 + 2, col, *lo, *hi));
@@ -260,6 +267,9 @@ impl AnalyticsView {
                 log::warn!(
                     "аналитика: «В стратегию» — слотов Delta2/Delta3 только два, не вошли: {}",
                     dropped.join(", ")
+                );
+                warns.push(
+                    t!("analytics.tuner.warn_slot_drop", fields = dropped.join(", ")).to_string(),
                 );
             }
             for (n, col, lo, hi) in assigned {
@@ -328,7 +338,7 @@ impl AnalyticsView {
             log::info!("аналитика: «Сохранить» — нет ни порогов с маппингом, ни изменённых игноров");
             return;
         }
-        self.tuner.save_dialog = Some(Arc::new(SaveDialog { sid, name, changes }));
+        self.tuner.save_dialog = Some(Arc::new(SaveDialog { sid, name, changes, warns }));
         cx.notify();
     }
 

@@ -99,7 +99,7 @@ pub(super) fn unified_from(conn: &Connection, q: &Query) -> Option<String> {
     let cols: Vec<&str> = UNIFIED_COLS
         .iter()
         .copied()
-        .chain(super::tuner::FIELDS.iter().map(|(c, _, _)| *c))
+        .chain(super::tuner::FIELDS.iter().map(|s| s.col))
         .collect();
     let mut branches = Vec::new();
     for src in super::read_sources(conn) {

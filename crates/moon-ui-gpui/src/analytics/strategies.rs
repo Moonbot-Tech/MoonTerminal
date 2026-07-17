@@ -146,6 +146,21 @@ impl AnalyticsView {
                     ),
             );
         }
+        // Предупреждения (перезапись чужого слот-типа и т.п.) — оранжевым,
+        // с переносом строк (не обрезаем).
+        for w in &dlg.warns {
+            list = list.child(
+                div()
+                    .w_full()
+                    .px(design::ui_px(cx, 10.0))
+                    .py(design::ui_px(cx, 5.0))
+                    .border_t_1()
+                    .border_color(moon_alpha(p.border, 0.5))
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.orange))
+                    .child(w.clone()),
+            );
+        }
         Some(
             div()
                 .id("an-save-overlay")

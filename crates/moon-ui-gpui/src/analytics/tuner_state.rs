@@ -19,6 +19,9 @@ pub(super) struct SaveDialog {
     pub(super) sid: i64,
     pub(super) name: String,
     pub(super) changes: Vec<(String, String)>,
+    /// Предупреждения (перезапись чужого слот-типа, не вошедшие поля) —
+    /// показываются в окне подтверждения, не только в логе.
+    pub(super) warns: Vec<String>,
 }
 
 /// Состояние тюнера внутри `AnalyticsView`.
@@ -105,7 +108,7 @@ impl TunerState {
                     let from = parse_num(from);
                     let to = parse_num(to);
                     (from.is_some() || to.is_some()).then(|| Bound {
-                        field: FIELDS[fi].0.to_string(),
+                        field: FIELDS[fi].col.to_string(),
                         from,
                         to,
                     })

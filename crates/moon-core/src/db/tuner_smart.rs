@@ -80,7 +80,7 @@ pub fn smart_suggest(
     let nf = FIELDS.len();
     let cols = FIELDS
         .iter()
-        .map(|(c, _, _)| format!("o.\"{c}\""))
+        .map(|s| format!("o.\"{}\"", s.col))
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!("SELECT {cols}, COALESCE(o.profitbtc,0) FROM {src}");
@@ -143,7 +143,7 @@ pub fn smart_suggest(
     let restarts = restarts.clamp(1, 64);
     let is_slot: Vec<bool> = FIELDS
         .iter()
-        .map(|(_, _, c)| *c == FieldClass::DeltaSlot)
+        .map(|s| s.class == FieldClass::DeltaSlot)
         .collect();
     // Перебираемые поля; фиксированные маски залипают в fail-счётчиках базой.
     let free: Vec<bool> = (0..nf)
@@ -318,7 +318,7 @@ pub fn smart_suggest(
         .enumerate()
         .filter_map(|(fi, s)| {
             s.map(|(i, j)| SmartField {
-                field: FIELDS[fi].0,
+                field: FIELDS[fi].col,
                 from: edges[fi][i],
                 to: edges[fi][j],
             })

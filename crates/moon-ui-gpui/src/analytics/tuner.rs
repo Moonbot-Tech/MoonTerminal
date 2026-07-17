@@ -104,7 +104,7 @@ impl AnalyticsView {
         self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
         let req = self.tuner.hist_seq;
         let q = self.tuner_query();
-        let field = FIELDS[self.tuner.sel_field].0.to_string();
+        let field = FIELDS[self.tuner.sel_field].col.to_string();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let hist = executor
@@ -312,7 +312,7 @@ impl AnalyticsView {
         let mut grid = v_flex().w_full().child(head);
         let mut last_class: Option<FieldClass> = None;
         for fi in 0..FIELDS.len() {
-            let class = FIELDS[fi].2;
+            let class = FIELDS[fi].class;
             // Подзаголовок группы (класс игноров) с кликабельным «ignore».
             if last_class != Some(class) {
                 last_class = Some(class);
@@ -352,7 +352,7 @@ impl AnalyticsView {
                         .truncate()
                         .cursor_pointer()
                         .text_color(moon(if selected { p.amber } else { p.text }))
-                        .child(FIELDS[fi].1.to_string()),
+                        .child(FIELDS[fi].label.to_string()),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.tuner.sel_field != fi {
@@ -373,12 +373,12 @@ impl AnalyticsView {
                 if strat.found && !strat.class_ignored(class) {
                     if class == FieldClass::DeltaSlot {
                         strat
-                            .slot_of(FIELDS[fi].0)
+                            .slot_of(FIELDS[fi].col)
                             .map(|(n, lo, hi)| (Some(n), lo, hi))
                     } else {
                         strat
                             .bounds
-                            .get(FIELDS[fi].0)
+                            .get(FIELDS[fi].col)
                             .copied()
                             .map(|(lo, hi)| (None, lo, hi))
                     }
