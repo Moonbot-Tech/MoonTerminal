@@ -35,6 +35,9 @@ use moon_core::db::analytics::{Query, StrategyDetail, Summary};
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
 
+/// Задержка показа оверлея занятости: быстрые пересчёты не мигают затемнением.
+const BUSY_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
 /// Вкладки окна. Заглушки (Монеты/Heatmap/Календарь/Плечо) убраны — вернутся
 /// по мере реализации этапов плана.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -149,6 +152,9 @@ pub struct AnalyticsView {
     /// блокирующий оверлей «Загрузка…» поверх окна. Длинные сканы большой БД
     /// иначе никак не видны, а клики по фильтрам/стратегиям копились в очередь.
     busy_ops: usize,
+    /// Начало текущей серии пересчётов: оверлей показываем только спустя
+    /// BUSY_OVERLAY_DELAY — быстрые пересчёты не мигают затемнением.
+    busy_since: Option<std::time::Instant>,
     /// Номер запроса — устаревшие результаты отбрасываются.
     seq: u64,
     /// Вкладка «Стратегии»: выбранная группа `(strategyid текстом, имя)`
@@ -197,6 +203,7 @@ impl AnalyticsView {
             data: None,
             inflight: false,
             busy_ops: 0,
+            busy_since: None,
             seq: 0,
             sel_strategy: None,
             detail: None,
@@ -235,10 +242,38 @@ impl AnalyticsView {
     /// один раз (ДО seq-проверки — устаревшие завершения тоже считаются).
     pub(super) fn op_started(&mut self) {
         self.busy_ops += 1;
+        if self.busy_since.is_none() {
+            self.busy_since = Some(std::time::Instant::now());
+        }
     }
     pub(super) fn op_finished(&mut self, cx: &mut Context<Self>) {
         self.busy_ops = self.busy_ops.saturating_sub(1);
+        if self.busy_ops == 0 {
+            self.busy_since = None;
+        }
         cx.notify();
+    }
+
+    /// Показывать ли оверлей занятости; если серия ещё моложе задержки —
+    /// взводит таймер на перерисовку в момент её истечения.
+    fn busy_overlay_due(&self, cx: &mut Context<Self>) -> bool {
+        let Some(since) = self.busy_since else {
+            return false;
+        };
+        let waited = since.elapsed();
+        if waited >= BUSY_OVERLAY_DELAY {
+            return true;
+        }
+        let left = BUSY_OVERLAY_DELAY - waited;
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(left).await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |_, cx| cx.notify());
+            });
+        })
+        .detach();
+        false
     }
 
     /// Фоновый расчёт сводки за текущий период/фильтры.
@@ -551,6 +586,7 @@ impl Render for AnalyticsView {
         // «Стратегии» делят высоту сами (нижняя плашка прибита к низу экрана,
         // список скроллится внутри) — внешний скролл только прочим вкладкам.
         let body_scrolls = self.tab != Tab::Strategies;
+        let busy_overlay = self.busy_overlay_due(cx);
         v_flex()
             .size_full()
             .relative()
@@ -572,9 +608,9 @@ impl Render for AnalyticsView {
                     .when(body_scrolls, |el| el.overflow_y_scroll())
                     .child(body),
             )
-            // Фоновый пересчёт: приглушаем окно и глушим клики (occlude) —
-            // иначе долгие сканы большой БД невидимы, а клики копятся.
-            .when(self.busy_ops > 0, |el| {
+            // Фоновый пересчёт дольше задержки: приглушаем окно и глушим
+            // клики (occlude) — иначе долгие сканы невидимы, а клики копятся.
+            .when(busy_overlay, |el| {
                 el.child(
                     div()
                         .id("an-busy-overlay")
