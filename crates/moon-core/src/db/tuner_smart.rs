@@ -262,6 +262,12 @@ pub fn smart_suggest(
             if !slot_full {
             for i in 0..ne {
                 for j in (i + 1)..=ne {
+                    // Весь размах данных = фильтр-пустышка; выигрыш против
+                    // «без фильтра» требует СТРОГО большего профита, так что
+                    // выбраться такой не может — но и кандидатом не считаем.
+                    if i == 0 && j == ne {
+                        continue;
+                    }
                     let c = pre_c[j] - pre_c[i];
                     if c < min_n {
                         continue;
@@ -322,7 +328,8 @@ pub fn smart_suggest(
         .iter()
         .enumerate()
         .filter_map(|(fi, s)| {
-            s.map(|(i, j)| SmartField {
+            // Пара на обоих краях данных ничего не режет — не подставляем.
+            s.filter(|(i, j)| !(*i == 0 && *j == ne)).map(|(i, j)| SmartField {
                 field: FIELDS[fi].col,
                 from: edges[fi][i],
                 to: edges[fi][j],

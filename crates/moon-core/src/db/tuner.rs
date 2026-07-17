@@ -593,11 +593,16 @@ fn best_range(vals: &mut Vec<(f64, f64)>, min_n: usize, edges: usize) -> Option<
         pre.push(pre.last().unwrap() + p);
     }
     let pos: Vec<usize> = (0..=edges).map(|k| k * len / edges).collect();
+    let total = pre[len];
     let mut best: Option<(f64, usize, usize)> = None;
     for i in 0..edges {
         for j in (i + 1)..=edges {
             let (a, b) = (pos[i], pos[j]);
             if b - a < min_n {
+                continue;
+            }
+            // Полное покрытие данных (min..max) — фильтр-пустышка, не кандидат.
+            if a == 0 && b == len {
                 continue;
             }
             let profit = pre[b] - pre[a];
@@ -606,7 +611,9 @@ fn best_range(vals: &mut Vec<(f64, f64)>, min_n: usize, edges: usize) -> Option<
             }
         }
     }
-    best.map(|(profit, i, j)| {
+    // Диапазон предлагаем только если он РЕАЛЬНО улучшает профит против
+    // «без фильтра» — иначе полю фильтр не нужен вовсе.
+    best.filter(|(profit, _, _)| *profit > total).map(|(profit, i, j)| {
         let (a, b) = (pos[i], pos[j]);
         // Всегда ПАРА от/до: на краях распределения границей становится
         // фактический min/max данных (открытых диапазонов не выдаём).
@@ -637,6 +644,21 @@ mod tests {
         assert!(w.contains("<= 10"));
         assert!(!w.contains("DROP"));
         assert!(!w.contains("hvol"), "пустые границы не добавляют условий");
+    }
+
+    #[test]
+    fn best_range_skips_noop_full_range() {
+        // Все сделки прибыльные: никакой поддиапазон не лучше «без фильтра» —
+        // пару min/max-пустышку предлагать нельзя.
+        let mut vals: Vec<(f64, f64)> = (0..100).map(|i| (i as f64, 1.0)).collect();
+        assert!(best_range(&mut vals, 1, 16).is_none());
+        // Нижняя треть в минусе: диапазон предлагается и он НЕ весь размах.
+        let mut vals: Vec<(f64, f64)> = (0..99)
+            .map(|i| (i as f64, if i < 33 { -1.0 } else { 1.0 }))
+            .collect();
+        let s = best_range(&mut vals, 1, 16).expect("фильтр должен найтись");
+        assert!(s.from.unwrap() > 0.0, "нижняя граница должна отрезать минус");
+        assert_eq!(s.to.unwrap(), 98.0, "верхняя пара — фактический max данных");
     }
 
     #[test]
