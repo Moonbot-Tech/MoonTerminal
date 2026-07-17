@@ -76,7 +76,6 @@ impl AnalyticsView {
                             this.tuner.inputs.remove(&format!("tv0f{fi}a"));
                             this.tuner.inputs.remove(&format!("tv0f{fi}b"));
                         }
-                        this.persist_tuner(cx);
                         this.reload_tuner(cx);
                     }
                     cx.notify();
@@ -144,7 +143,6 @@ impl AnalyticsView {
             self.tuner.inputs.remove(&format!("tv{vi}f{fi}a"));
             self.tuner.inputs.remove(&format!("tv{vi}f{fi}b"));
         }
-        self.persist_tuner(cx);
         self.reload_tuner(cx);
         cx.notify();
     }
@@ -179,6 +177,7 @@ impl AnalyticsView {
         let mut changes: Vec<(String, String)> = Vec::new();
         let (mut delta_touched, mut volume_touched, mut bvsv_touched, mut ping_touched) =
             (false, false, false, false);
+        let mut base_touched = false;
         // Поля-слоты с порогами v1 — кандидаты в Delta2/Delta3.
         let mut slot_wanted: Vec<(&'static str, Option<f64>, Option<f64>)> = Vec::new();
         for (fi, (col, _, class)) in FIELDS.iter().enumerate() {
@@ -200,6 +199,7 @@ impl AnalyticsView {
                     FieldClass::Volume => volume_touched = true,
                     FieldClass::BvSv => bvsv_touched = true,
                     FieldClass::Ping => ping_touched = true,
+                    FieldClass::Base => base_touched = true,
                     FieldClass::Filter | FieldClass::DeltaSlot => {}
                 }
             }
@@ -271,6 +271,9 @@ impl AnalyticsView {
         if ping_touched && f.ignore_ping {
             flags.push(("IgnorePing", false));
         }
+        if base_touched && f.ignore_base {
+            flags.push(("IgnoreBase", false));
+        }
         for (flag, want) in self.tuner.staged_ignore.clone() {
             flags.retain(|(fl, _)| *fl != flag);
             let cur = match flag {
@@ -278,6 +281,7 @@ impl AnalyticsView {
                 "IgnorePing" => f.ignore_ping,
                 "IgnoreDelta" => f.ignore_delta,
                 "IgnoreVolume" => f.ignore_volume,
+                "IgnoreBase" => f.ignore_base,
                 "UseBV_SV_Filter" => !f.use_bvsv,
                 _ => continue,
             };

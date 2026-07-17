@@ -140,10 +140,6 @@ pub struct WindowLayout {
     /// Геометрия окна «Аналитика» (singleton) — чтобы открывалось на прежнем месте.
     #[serde(default)]
     pub analytics_window: Option<GeomRect>,
-    /// Поля тюнера «Аналитики», ИСКЛЮЧЁННЫЕ из автоперебора (снятые
-    /// чекбоксы). Сами границы НЕ персистятся — окно открывается чистым.
-    #[serde(default)]
-    pub analytics_tuner_off: Vec<String>,
     /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

@@ -55,14 +55,11 @@ pub(super) struct TunerState {
 }
 
 impl TunerState {
-    /// Свежее состояние: границы ПУСТЫЕ (намеренно не персистятся — каждое
-    /// открытие окна с чистого листа), чекбоксы участия — из layout.
-    pub(super) fn load(off: &[String]) -> Self {
+    /// Свежее состояние: границы ПУСТЫЕ и чекбоксы участия ВСЕ включены
+    /// (намеренно не персистятся — каждое открытие окна с чистого листа).
+    pub(super) fn load() -> Self {
         let bounds = vec![vec![(String::new(), String::new()); FIELDS.len()]; N_VAR];
-        let enabled = FIELDS
-            .iter()
-            .map(|(c, _, _)| !off.iter().any(|o| o == c))
-            .collect();
+        let enabled = vec![true; FIELDS.len()];
         Self {
             bounds,
             inputs: HashMap::new(),
@@ -235,6 +232,7 @@ pub(super) fn staged_dirty(
             "IgnorePing" => f.ignore_ping,
             "IgnoreDelta" => f.ignore_delta,
             "IgnoreVolume" => f.ignore_volume,
+            "IgnoreBase" => f.ignore_base,
             "UseBV_SV_Filter" => !f.use_bvsv,
             _ => return false,
         };
@@ -248,6 +246,7 @@ pub(super) fn flag_of(class: FieldClass, f: &StratFilters) -> (&'static str, boo
     match class {
         FieldClass::Filter => ("IgnoreFilters", f.ignore_filters),
         FieldClass::Ping => ("IgnorePing", f.ignore_ping),
+        FieldClass::Base => ("IgnoreBase", f.ignore_base),
         FieldClass::BvSv => ("UseBV_SV_Filter", !f.use_bvsv),
         FieldClass::Delta | FieldClass::DeltaSlot => ("IgnoreDelta", f.ignore_delta),
         FieldClass::Volume => ("IgnoreVolume", f.ignore_volume),

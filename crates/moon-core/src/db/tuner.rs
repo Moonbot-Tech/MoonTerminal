@@ -25,6 +25,8 @@ pub enum FieldClass {
     BvSv,
     /// PriceBug: секция Filters/Ping со своим `IgnorePing`.
     Ping,
+    /// Секция Filters/Base со своим `IgnoreBase` (плечо, MarkPrice-дельта).
+    Base,
     Delta,
     DeltaSlot,
     Volume,
@@ -38,6 +40,9 @@ pub const FIELDS: &[(&str, &str, FieldClass)] = &[
     ("pricebug", "PriceBug", FieldClass::Ping),
     // BV/SV (IgnoreFilters | !UseBV_SV_Filter).
     ("bvsvratio", "bvsv", FieldClass::BvSv),
+    // Filters/Base (IgnoreFilters | IgnoreBase): плечо и дельта mark-цены.
+    ("lev", "Lev", FieldClass::Base),
+    ("dmark", "dMark", FieldClass::Base),
     // Слоты Delta2/Delta3 (IgnoreFilters | IgnoreDelta; в стратегию — макс 2).
     ("d1h", "d1h", FieldClass::DeltaSlot),
     ("d15m", "d15m", FieldClass::DeltaSlot),
@@ -50,7 +55,6 @@ pub const FIELDS: &[(&str, &str, FieldClass)] = &[
     ("d3h", "d3h", FieldClass::Delta),
     ("da1m", "da1m", FieldClass::Delta),
     ("d5s", "d5s", FieldClass::Delta),
-    ("dmark", "dMark", FieldClass::Delta),
     ("btc1hdelta", "dBTC", FieldClass::Delta),
     ("exchange1hdelta", "dMarket", FieldClass::Delta),
     ("btc24hdelta", "d24BTC", FieldClass::Delta),
@@ -303,13 +307,15 @@ const STRAT_PARAMS: &[(&str, Option<&str>, Option<&str>)] = &[
     // UseBV_SV_Filter.
     ("bvsvratio", Some("BV_SV_FilterRatio"), Some("BV_SV_FilterRatioMax")),
     ("pricebug", Some("BinancePriceBugMin"), Some("BinancePriceBug")),
+    // Filters/Base: плечо рынка и дельта mark-цены (значения ±% как в отчёте).
+    ("lev", Some("MinLeverage"), Some("MaxLeverage")),
+    ("dmark", Some("MarkPriceMin"), Some("MarkPriceMax")),
     ("d24h", Some("Delta_24h_Min"), Some("Delta_24h_Max")),
     ("d3h", Some("Delta_3h_Min"), Some("Delta_3h_Max")),
     ("hvol", Some("MinHourlyVolume"), Some("MaxHourlyVolume")),
     ("hvolf", Some("MinHourlyVolFast"), Some("MaxHourlyVolFast")),
     ("dvol", Some("MinVolume"), Some("MaxVolume")),
     ("vd1m", Some("MinuteVolDeltaMin"), Some("MinuteVolDeltaMax")),
-    ("dmark", Some("MarkPriceMin"), Some("MarkPriceMax")),
     ("btc1hdelta", Some("Delta_BTC_Min"), Some("Delta_BTC_Max")),
     ("exchange1hdelta", Some("Delta_Market_Min"), Some("Delta_Market_Max")),
     ("btc24hdelta", Some("Delta_BTC_24_Min"), Some("Delta_BTC_24_Max")),
@@ -358,6 +364,8 @@ pub struct StratFilters {
     pub ignore_filters: bool,
     pub ignore_delta: bool,
     pub ignore_volume: bool,
+    /// Игнор секции Filters/Base (плечо, MarkPrice).
+    pub ignore_base: bool,
     /// Включатель BV/SV-фильтра (`UseBV_SV_Filter`); false = выключен.
     pub use_bvsv: bool,
     /// Игнор секции Filters/Ping (PriceBug и пинги).
@@ -376,6 +384,7 @@ impl StratFilters {
                 FieldClass::Filter => false,
                 FieldClass::BvSv => !self.use_bvsv,
                 FieldClass::Ping => self.ignore_ping,
+                FieldClass::Base => self.ignore_base,
                 FieldClass::Delta | FieldClass::DeltaSlot => self.ignore_delta,
                 FieldClass::Volume => self.ignore_volume,
             }
@@ -462,6 +471,7 @@ pub fn strategy_filters(
     out.ignore_filters = truthy("IgnoreFilters");
     out.ignore_delta = truthy("IgnoreDelta");
     out.ignore_volume = truthy("IgnoreVolume");
+    out.ignore_base = truthy("IgnoreBase");
     out.use_bvsv = truthy("UseBV_SV_Filter");
     out.ignore_ping = truthy("IgnorePing");
     for (field, pmin, pmax) in STRAT_PARAMS {

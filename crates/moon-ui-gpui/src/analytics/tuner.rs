@@ -131,7 +131,6 @@ impl AnalyticsView {
             return;
         }
         *cur = value;
-        self.persist_tuner(cx);
         self.reload_tuner(cx);
         cx.notify();
     }
@@ -148,26 +147,8 @@ impl AnalyticsView {
         // «уезжало» вправо и виден был только хвост.
         self.tuner.inputs.remove(&format!("tv{vi}f{fi}a"));
         self.tuner.inputs.remove(&format!("tv{vi}f{fi}b"));
-        self.persist_tuner(cx);
         self.reload_tuner(cx);
         cx.notify();
-    }
-
-    /// Персист настроек тюнера: только чекбоксы участия (границы намеренно
-    /// НЕ сохраняются — окно каждый раз открывается с чистыми полями).
-    pub(super) fn persist_tuner(&mut self, cx: &mut Context<Self>) {
-        let off: Vec<String> = FIELDS
-            .iter()
-            .enumerate()
-            .filter(|(fi, _)| !self.tuner.enabled[*fi])
-            .map(|(_, (c, _, _))| c.to_string())
-            .collect();
-        self.backend.update(cx, |b, _| {
-            if b.layout.analytics_tuner_off != off {
-                b.layout.analytics_tuner_off = off;
-                b.layout_dirty = true;
-            }
-        });
     }
 
     /// Инпут границы с ленивым кэшем (паттерн field_input_state Стратегий).
@@ -265,7 +246,6 @@ impl AnalyticsView {
                                 let on = *ch;
                                 view.update(app, |this, cx| {
                                     this.tuner.enabled.iter_mut().for_each(|e| *e = on);
-                                    this.persist_tuner(cx);
                                     cx.notify();
                                 });
                             }
@@ -359,7 +339,6 @@ impl AnalyticsView {
                                     let on = *ch;
                                     view.update(app, |this, cx| {
                                         this.tuner.enabled[fi] = on;
-                                        this.persist_tuner(cx);
                                         cx.notify();
                                     });
                                 }
@@ -613,6 +592,7 @@ impl AnalyticsView {
             FieldClass::Filter => t!("analytics.tuner.grp_filter"),
             FieldClass::BvSv => t!("analytics.tuner.grp_bvsv"),
             FieldClass::Ping => t!("analytics.tuner.grp_ping"),
+            FieldClass::Base => t!("analytics.tuner.grp_base"),
             FieldClass::DeltaSlot => t!("analytics.tuner.grp_slot"),
             FieldClass::Delta => t!("analytics.tuner.grp_delta"),
             FieldClass::Volume => t!("analytics.tuner.grp_volume"),
