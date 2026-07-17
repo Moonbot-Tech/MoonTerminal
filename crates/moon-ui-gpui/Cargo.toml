@@ -41,6 +41,9 @@ moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI",
 
 anyhow = "1"
 log = "0.4"
+# Конверсии NaiveDate ↔ unix для полей «с»/«по» (MoonCalendar в Аналитике);
+# версия как у moonui (0.4.38) — тип NaiveDate общий с MoonDate.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 env_logger = "0.11"
 # Локализация интерфейса: словари в корневом `locales/*.yml` (см. locales/README.md).
 # Версия = как в MoonUI (rust-i18n 4.1), чтобы глобальный backend локали был общий.

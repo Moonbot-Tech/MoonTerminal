@@ -23,8 +23,9 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown,
-    MoonMenuSize, MoonPalette, MoonWindowFrame, Root, h_flex, v_flex,
+    MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar,
+    MoonCalendarEvent, MoonCalendarState, MoonDate, MoonDropdown, MoonMenuSize, MoonPalette,
+    MoonPopover, MoonPopoverPlacement, MoonWindowFrame, Root, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -75,6 +76,9 @@ pub(super) enum Period {
     Month,
     Year,
     All,
+    /// Произвольный диапазон из полей «с»/«по»: `[from, to)` unix-секунды UTC;
+    /// from = -1 — «с» не задано (вся история до «по»).
+    Custom(i64, i64),
 }
 
 impl Period {
@@ -89,6 +93,10 @@ impl Period {
     ];
     /// Пресет по его id (персист выбора в layout); None — незнакомый id.
     fn from_id(id: &str) -> Option<Period> {
+        if let Some(rest) = id.strip_prefix("p-custom:") {
+            let (f, t) = rest.split_once(':')?;
+            return Some(Period::Custom(f.parse().ok()?, t.parse().ok()?));
+        }
         Period::ALL.into_iter().find(|p| p.id() == id)
     }
     fn id(self) -> &'static str {
@@ -100,6 +108,14 @@ impl Period {
             Period::Month => "p-month",
             Period::Year => "p-year",
             Period::All => "p-all",
+            Period::Custom(..) => "p-custom",
+        }
+    }
+    /// Строка персиста в layout: у Custom границы кодируются в id.
+    fn persist_id(self) -> String {
+        match self {
+            Period::Custom(f, t) => format!("p-custom:{f}:{t}"),
+            p => p.id().to_string(),
         }
     }
     fn title(self) -> String {
@@ -111,6 +127,10 @@ impl Period {
             Period::Month => t!("analytics.period.month"),
             Period::Year => t!("analytics.period.year"),
             Period::All => t!("analytics.period.all"),
+            Period::Custom(f, t) => {
+                let a = if f < 0 { "—".to_string() } else { fmt_day(f) };
+                return format!("{a} – {}", fmt_day((t - 86_400).max(f.max(0))));
+            }
         }
         .to_string()
     }
@@ -133,8 +153,24 @@ impl Period {
             Period::Month => (tomorrow - 30 * 86_400, tomorrow),
             Period::Year => (tomorrow - 365 * 86_400, tomorrow),
             Period::All => (-1, tomorrow),
+            Period::Custom(f, t) => (f, t),
         }
     }
+}
+
+/// unix-секунды → дата UTC (для календарей «с»/«по»).
+fn day_of_secs(secs: i64) -> Option<chrono::NaiveDate> {
+    chrono::DateTime::from_timestamp(secs, 0).map(|d| d.date_naive())
+}
+
+/// Дата UTC → unix-секунды полуночи этих суток.
+fn secs_of_day(d: chrono::NaiveDate) -> i64 {
+    d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp()).unwrap_or(0)
+}
+
+/// «дд.мм.гг» для подписей полей диапазона.
+fn fmt_day(secs: i64) -> String {
+    day_of_secs(secs).map(|d| d.format("%d.%m.%y").to_string()).unwrap_or_default()
 }
 
 /// Состояние окна «Аналитика».
@@ -178,6 +214,13 @@ pub struct AnalyticsView {
     strat_mode: strategies::StratMode,
     /// Тюнер порогов (режим «Фильтры») — состояние в своём модуле.
     tuner: tuner::TunerState,
+    /// Календари произвольного диапазона «с»/«по» (moonui MoonCalendar в
+    /// попапах); выбор даты переключает период в Period::Custom.
+    cal_from: Entity<MoonCalendarState>,
+    cal_to: Entity<MoonCalendarState>,
+    cal_from_open: bool,
+    cal_to_open: bool,
+    _cal_subs: Vec<Subscription>,
     focus: FocusHandle,
 }
 
@@ -209,6 +252,30 @@ impl AnalyticsView {
             .analytics_period
             .as_deref()
             .and_then(Period::from_id);
+
+        // Календари «с»/«по»: выбор дня закрывает попап и переключает период.
+        let cal_from = cx.new(|cx| MoonCalendarState::new(window, cx));
+        let cal_to = cx.new(|cx| MoonCalendarState::new(window, cx));
+        if let Some(Period::Custom(f, t)) = saved_period {
+            if let Some(d) = (f >= 0).then(|| day_of_secs(f)).flatten() {
+                cal_from.update(cx, |s, cx| s.set_date(d, window, cx));
+            }
+            if let Some(d) = day_of_secs(t - 86_400) {
+                cal_to.update(cx, |s, cx| s.set_date(d, window, cx));
+            }
+        }
+        let cal_subs = vec![
+            cx.subscribe_in(&cal_from, window, |this, _, ev, window, cx| {
+                let MoonCalendarEvent::Selected(_) = ev;
+                this.cal_from_open = false;
+                this.apply_custom_range(window, cx);
+            }),
+            cx.subscribe_in(&cal_to, window, |this, _, ev, window, cx| {
+                let MoonCalendarEvent::Selected(_) = ev;
+                this.cal_to_open = false;
+                this.apply_custom_range(window, cx);
+            }),
+        ];
         let mut this = Self {
             backend,
             tab: Tab::Summary,
@@ -231,6 +298,11 @@ impl AnalyticsView {
             detail_seq: 0,
             strat_mode: strategies::StratMode::Filters,
             tuner: tuner::TunerState::load(),
+            cal_from,
+            cal_to,
+            cal_from_open: false,
+            cal_to_open: false,
+            _cal_subs: cal_subs,
             focus: cx.focus_handle(),
         };
         this.reload(cx);
@@ -368,13 +440,19 @@ impl AnalyticsView {
         .detach();
     }
 
-    fn set_period(&mut self, p: Period, cx: &mut Context<Self>) {
+    fn set_period(&mut self, p: Period, window: &mut Window, cx: &mut Context<Self>) {
         // Повторный клик по активному пресету = ручное обновление данных
         // (автоперечитки по новым отчётам нет).
         self.period = p;
+        // Пресет побеждает произвольный диапазон: поля «с»/«по» очищаются.
+        if !matches!(p, Period::Custom(..)) {
+            for cal in [&self.cal_from, &self.cal_to] {
+                cal.update(cx, |s, cx| s.set_date(MoonDate::Single(None), window, cx));
+            }
+        }
         // Выбор персистится — окно (и следующий запуск) откроется с ним.
         self.backend.update(cx, |b, _| {
-            let id = Some(p.id().to_string());
+            let id = Some(p.persist_id());
             if b.layout.analytics_period != id {
                 b.layout.analytics_period = id;
                 b.layout_dirty = true;
@@ -382,6 +460,29 @@ impl AnalyticsView {
         });
         self.reload(cx);
         cx.notify();
+    }
+
+    /// Пересчёт периода из календарей «с»/«по». Пустое «с» — вся история;
+    /// пустое «по» — до завтра; «по» раньше «с» — границы меняются местами.
+    fn apply_custom_range(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut f = self.cal_from.read(cx).date().start();
+        let mut t = self.cal_to.read(cx).date().start();
+        if let (Some(a), Some(b)) = (f, t) {
+            if b < a {
+                (f, t) = (Some(b), Some(a));
+                self.cal_from.update(cx, |s, cx| s.set_date(b, window, cx));
+                self.cal_to.update(cx, |s, cx| s.set_date(a, window, cx));
+            }
+        }
+        if f.is_none() && t.is_none() {
+            return;
+        }
+        let now = moon_core::util::now_unix_ms_i64() / 1000;
+        let tomorrow = now.div_euclid(86_400) * 86_400 + 86_400;
+        let from = f.map(secs_of_day).unwrap_or(-1);
+        // «по» — включительно: конец диапазона = следующая полночь.
+        let to = t.map(|d| secs_of_day(d) + 86_400).unwrap_or(tomorrow);
+        self.set_period(Period::Custom(from, to), window, cx);
     }
 
     /// Тогл ядра в мультивыборе; `None` — тумблер «Все» (пусто ↔ все).
@@ -551,6 +652,58 @@ impl AnalyticsView {
             .items(items)
     }
 
+    /// Поле произвольной границы периода: кнопка «с/по дд.мм.гг» + попап с
+    /// moonui-календарём (готовый MoonCalendar; MoonDatePicker не ужимается до
+    /// высоты Micro-чипсов — Sizable не в фасаде moon_ui).
+    fn date_field(&self, is_to: bool, _p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
+        let (cal, open) = if is_to {
+            (&self.cal_to, self.cal_to_open)
+        } else {
+            (&self.cal_from, self.cal_from_open)
+        };
+        let date_txt = cal
+            .read(cx)
+            .date()
+            .format("%d.%m.%y")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "—".to_string());
+        let lbl = if is_to {
+            t!("analytics.period.to_lbl")
+        } else {
+            t!("analytics.period.from_lbl")
+        };
+        let set = cal.read(cx).date().is_some();
+        let custom_on = matches!(self.period, Period::Custom(..)) && set;
+        let view = cx.entity();
+        MoonPopover::new(if is_to { "an-date-to" } else { "an-date-from" })
+            .placement(MoonPopoverPlacement::BottomStart)
+            .width(264.0 + design::POPOVER_PAD_W)
+            .open(open)
+            .on_open_change(move |o, _, app| {
+                view.update(app, |t, cx| {
+                    if is_to {
+                        t.cal_to_open = o;
+                    } else {
+                        t.cal_from_open = o;
+                    }
+                    cx.notify();
+                });
+            })
+            .trigger(
+                MoonButton::new(if is_to { "an-date-to-btn" } else { "an-date-from-btn" })
+                    .variant(if custom_on {
+                        MoonButtonVariant::Amber
+                    } else {
+                        MoonButtonVariant::Soft
+                    })
+                    .size(MoonButtonSize::Micro)
+                    .selected(custom_on)
+                    .label(format!("{lbl} {date_txt}"))
+                    .render(),
+            )
+            .content(MoonCalendar::new(cal))
+    }
+
     /// Полоса пресетов периода + счётчик закрытых сделок справа.
     fn period_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let mut seg = h_flex().gap(design::ui_px(cx, 4.0)).items_center();
@@ -566,10 +719,16 @@ impl AnalyticsView {
                     .size(MoonButtonSize::Micro)
                     .selected(on)
                     .label(per.title())
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_period(per, cx)))
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.set_period(per, window, cx)),
+                    )
                     .render(),
             );
         }
+        // Произвольный диапазон: два поля-попапа «с»/«по» с MoonCalendar.
+        seg = seg
+            .child(self.date_field(false, p, cx))
+            .child(self.date_field(true, p, cx));
         let counter = match (&self.data, self.inflight) {
             (_, true) => "…".to_string(),
             (Some(d), _) => t!("analytics.trades_count", n = d.cur.n).to_string(),

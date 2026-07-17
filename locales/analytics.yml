@@ -242,6 +242,14 @@ analytics.period.all:
   ru: "Все"
   en: "All"
   es: "Todo"
+analytics.period.from_lbl:
+  ru: "с"
+  en: "from"
+  es: "desde"
+analytics.period.to_lbl:
+  ru: "по"
+  en: "to"
+  es: "hasta"
 analytics.trades_count:
   ru: "%{n} закрытых сделок"
   en: "%{n} closed trades"
