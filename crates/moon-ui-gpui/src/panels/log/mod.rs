@@ -628,6 +628,11 @@ impl Render for LogPanel {
             .id("log-panel")
             .size_full()
             .track_focus(&self.focus)
+            // Моно-шрифт на СВОЁМ корне (как Orders/Assets/Report): в открепляемом окне панель
+            // не наследует моно от шапки — без этого detached-«Лог» рисовался бы Inter'ом
+            // (рассинхрон с docked-видом и с измерением ширины селекторов в controls.rs,
+            // которое опирается на моно).
+            .font_family(crate::design::mono())
             .child(controls)
             .child(div().w_full().h(px(1.0)).bg(rgb(p.border)))
             .child(body)
