@@ -1,5 +1,4 @@
-//! Typed-реплика БД отчёта Orders (moonproto `Event::Report`, docs/reports.md) —
-//! таблица `orders_rep`.
+//! Typed-реплика БД отчёта Orders (moonproto `Event::Report`) — таблица `orders_rep`.
 //!
 //! Схема приходит от ядра (`ReportEvent::Schema`, append-only), имена колонок храним
 //! lowercase — они совпадают с легаси-именами (панель «Отчёт» форматирует по ним), а
@@ -7,7 +6,7 @@
 //! `newRecID` ≠ легаси `db_id`, поэтому typed-поток и легаси close-SQL пишут в РАЗНЫЕ
 //! таблицы (легаси вычищается по мере первых полных sync'ов и сносится целиком).
 //!
-//! Курсор (правило docs/reports.md): min(newRecID открытых строк) ИЛИ committed_max+1,
+//! Курсор (правило репликации moonproto): min(newRecID открытых строк) ИЛИ committed_max+1,
 //! где committed_max — максимум из ПОДТВЕРЖДЁННЫХ `SyncComplete` (не max таблицы: батчи
 //! catch-up приходят вне порядка, и max прерванной догонки перепрыгнул бы дыры).
 //! 0 = fresh-sync со всей удержанной историей ядра.

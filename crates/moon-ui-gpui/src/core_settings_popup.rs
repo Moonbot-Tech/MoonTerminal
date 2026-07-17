@@ -698,8 +698,8 @@ pub fn core_settings_content(
     // ── Рамка «Действия» ─────────────────────────────────────────────────
     // Кнопки «Сброс сессии»/«Сброс всего» убраны: TResetProfitCommand сбрасывает серверные
     // счётчики RepForm, которые клиенту не транслируются — эффект в терминале не виден
-    // (см. docs-internal/PROTO_REQUEST_PROFIT_AND_STOP_DEFAULTS.md). Вернуть, когда протокол
-    // начнёт отдавать счётчики.
+    // (трансляция счётчиков запрошена у авторов moonproto). Вернуть, когда протокол
+    // начнёт их отдавать.
     let cancel_all = MoonButton::new("core-cancel-all")
         .label(if cancel_confirm {
             t!("core_settings.cancel_all_confirm").to_string()

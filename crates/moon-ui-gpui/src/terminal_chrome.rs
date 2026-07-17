@@ -72,8 +72,8 @@ pub fn header(
                 )),
         )
         // Метрики Session/Real/Unreal/Risk из шапки убраны: сервер (moonproto) не отдаёт
-        // session-профита (см. docs-internal/PROTO_REQUEST_PROFIT_AND_STOP_DEFAULTS.md),
-        // а остальное решили не показывать. Остался только баланс у селектора ядра.
+        // session-профита (его трансляция запрошена у авторов протокола), а остальное
+        // решили не показывать. Остался только баланс у селектора ядра.
         .child(
             MoonWindowFrame::main("terminal-header-spacer-drag", 0.0)
                 .drag_handle()

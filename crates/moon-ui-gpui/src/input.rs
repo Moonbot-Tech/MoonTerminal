@@ -1,8 +1,8 @@
-//! Ввод чарт-области в GPUI — порт `src/chart/input.rs` egui-версии 1:1, но
-//! winit-free: вместо winit-типов берёт plain `dy: f32` (колесо) и локальный
-//! [`Btn`]. Всё в ДЕВАЙС-пикселях (та же шкала, в которой движок рендерит offscreen
-//! и в которой живёт `ChartView`). Конвертацию из лог. px окна делает вызывающий
-//! (Shell): `(pos − slot_origin) × scale_factor`.
+//! Ввод чарт-области в GPUI (порт 1:1 из удалённой egui-версии, winit-free):
+//! вместо winit-типов берёт plain `dy: f32` (колесо) и локальный [`Btn`]. Всё в
+//! ДЕВАЙС-пикселях (та же шкала, в которой рендерит чарт-движок и в которой живёт
+//! `ChartView`). Конвертацию из лог. px окна делает вызывающий (Shell):
+//! `(pos − slot_origin) × scale_factor`.
 
 use crate::chartdx::pane::Container;
 use moon_chart::paint::now_unix_ms;

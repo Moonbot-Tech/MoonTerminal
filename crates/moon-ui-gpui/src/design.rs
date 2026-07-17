@@ -230,7 +230,7 @@ pub fn font_w(cx: &App, base: f32) -> f32 {
 /// для сырого gpui `.rounded()`. Путать нельзя: масштаб применится дважды.
 ///
 /// ВНИМАНИЕ: у moonui всего ДВЕ ступени радиуса. Для мелких чипов/свотчей своей
-/// ступени у неё нет — см. `docs-internal/FORK_BUGS.md` (запрос `radius_sm`).
+/// ступени у неё нет (третья ступень `radius_sm` запрошена у авторов MoonUI).
 pub const R_BUTTON_BASE: f32 = M.button_radius;
 pub const R_CONTAINER_BASE: f32 = M.container_radius;
 

@@ -409,8 +409,8 @@ pub fn run(
         // Судьба bulk-снимка 5м-свечей (авто-запрос moonproto после subscribe_all_trades):
         // от него живут свечные величины retained-истории (H.vol/72h скринера). Провал
         // иначе полностью беззвучен (никто событие не слушал). Учти известный баг
-        // moonproto: снимок может молча выброситься уже ПОСЛЕ Ready из-за таймзоны
-        // сервера — см. docs-internal/MOONPROTO_BUG_CANDLES_SNAPSHOT_TZ.md.
+        // moonproto (зарепорчен авторам): снимок может молча выброситься уже ПОСЛЕ
+        // Ready из-за таймзоны сервера.
         // Результаты Engine-действий (плечо/hedge/cancel-all/перенос/…) — в UI тостами.
         // Приходят и при обрыве (`success=false`), так что «не дошло» тоже видно.
         let mut engine_actions: Vec<crate::feed::EngineActionResult> = Vec::new();

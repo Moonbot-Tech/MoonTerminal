@@ -489,7 +489,6 @@ impl MetalLayers {
         // слоя крестиков «на пару секунд назад», пока следующий full-bake не выровняет
         // bake_t0. Full-bake перепекает буфер линейно [0..count] и заново берёт bake_t0
         // от текущего вида — корректно и дёшево (cross_count мал).
-        // См. docs/macos-trade-crosses-fix.md (ветка fix/macos-trade-crosses).
         if let Some(tex) = self.combo_texture.as_mut() {
             tex.valid = false;
         }

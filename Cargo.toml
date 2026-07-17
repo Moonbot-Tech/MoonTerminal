@@ -4,7 +4,7 @@
 #
 # Старый egui-бинарь moon-terminal (корневой src/) удалён вместе с wgpu-движком и
 # offscreen→readback — рисование переведено на own-pass DX11 (chartdx). См.
-# docs/REFACTOR_RENDER.md.
+# docs/ARCHITECTURE.md (раздел «Рендер»).
 [workspace]
 members = ["crates/moon-core", "crates/moon-chart", "crates/moon-ui-gpui"]
 resolver = "2"
