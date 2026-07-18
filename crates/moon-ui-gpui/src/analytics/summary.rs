@@ -37,21 +37,12 @@ pub(super) fn sign_color(p: MoonPalette, v: f64) -> u32 {
 }
 
 impl AnalyticsView {
+    /// Render summary data or the placeholder dictated by its exhaustive load state.
     pub(super) fn summary_tab(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let Some(data) = self.data.clone() else {
-            return div()
-                .p(design::ui_px(cx, 18.0))
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.loading").to_string())
-                .into_any_element();
+        let data = match self.data.view(|d| d.cur.n == 0) {
+            Ok(d) => d.clone(),
+            Err(note) => return super::note_el("an-summary-note", note, 18.0, p, cx),
         };
-        if data.cur.n == 0 {
-            return div()
-                .p(design::ui_px(cx, 18.0))
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.empty_period").to_string())
-                .into_any_element();
-        }
         // Цвета серий ядер — из НАСТРОЕК сервера (ServerConfig.color, как в
         // селекторе ядер); фолбэк-палитра только для ядер без конфига.
         let core_colors: Vec<Hsla> = {
@@ -101,16 +92,21 @@ impl AnalyticsView {
                                     .text_color(moon(p.text_muted))
                                     .child(t!("analytics.by_cores").to_string()),
                             )
-                            .child(MoonCheckbox::new("sum-by-core").checked(by_core).size(MoonCheckboxSize::Compact).on_change({
-                                let view = cx.entity();
-                                move |ch: &bool, _w, app| {
-                                    let on = *ch;
-                                    view.update(app, |this, cx| {
-                                        this.sum_by_core = on;
-                                        cx.notify();
-                                    });
-                                }
-                            }))
+                            .child(
+                                MoonCheckbox::new("sum-by-core")
+                                    .checked(by_core)
+                                    .size(MoonCheckboxSize::Compact)
+                                    .on_change({
+                                        let view = cx.entity();
+                                        move |ch: &bool, _w, app| {
+                                            let on = *ch;
+                                            view.update(app, |this, cx| {
+                                                this.sum_by_core = on;
+                                                cx.notify();
+                                            });
+                                        }
+                                    }),
+                            )
                             .into_any_element();
                         let body = if by_core {
                             charts::core_lines(
@@ -206,8 +202,10 @@ impl AnalyticsView {
     /// Ряд KPI-плиток с дельтами к предыдущему периоду.
     fn kpi_row(&self, d: &Summary, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let (cur, prev) = (&d.cur, &d.prev);
-        // Дельта в % к прошлому периоду; None — прошлый пуст (сравнивать не с чем).
-        let delta = |c: f64, pr: f64| -> Option<f64> {
+        // A missing or zero comparison value has no meaningful percentage
+        // delta, so the KPI tile renders an em dash.
+        let delta = |c: f64, pr: Option<f64>| -> Option<f64> {
+            let pr = pr?;
             (pr.abs() > f64::EPSILON).then(|| (c - pr) / pr.abs() * 100.0)
         };
         let profit_el = colored_value(p, cur.profit, format!("{}", fmt_signed(cur.profit)));
@@ -220,25 +218,73 @@ impl AnalyticsView {
             .w_full()
             .gap(design::ui_px(cx, 8.0))
             .items_stretch()
-            .child(kpi(p, cx, t!("analytics.kpi.profit"), profit_el, delta(cur.profit, prev.profit), false))
-            .child(kpi(p, cx, t!("analytics.kpi.trades"), plain_value(p, cur.n.to_string()), delta(cur.n as f64, prev.n as f64), false))
-            .child(kpi(p, cx, t!("analytics.kpi.winrate"), plain_value(p, format!("{:.1}%", cur.winrate())), delta(cur.winrate(), prev.winrate()), false))
-            .child(kpi(p, cx, t!("analytics.kpi.pf"), plain_value(p, format!("{:.2}", cur.pf)), delta(cur.pf, prev.pf), false))
-            .child(kpi(p, cx, t!("analytics.kpi.maxdd"), dd_el, delta(cur.max_dd, prev.max_dd), true))
-            .child(kpi(p, cx, t!("analytics.kpi.avg"), avg_el, delta(cur.avg, prev.avg), false))
+            .child(kpi(
+                p,
+                cx,
+                t!("analytics.kpi.profit"),
+                profit_el,
+                delta(cur.profit, prev.as_ref().map(|v| v.profit)),
+                false,
+            ))
+            .child(kpi(
+                p,
+                cx,
+                t!("analytics.kpi.trades"),
+                plain_value(p, cur.n.to_string()),
+                delta(cur.n as f64, prev.as_ref().map(|v| v.n as f64)),
+                false,
+            ))
+            .child(kpi(
+                p,
+                cx,
+                t!("analytics.kpi.winrate"),
+                plain_value(p, format!("{:.1}%", cur.winrate())),
+                delta(cur.winrate(), prev.as_ref().map(|v| v.winrate())),
+                false,
+            ))
+            .child(kpi(
+                p,
+                cx,
+                t!("analytics.kpi.pf"),
+                plain_value(p, format!("{:.2}", cur.pf)),
+                delta(cur.pf, prev.as_ref().map(|v| v.pf)),
+                false,
+            ))
+            .child(kpi(
+                p,
+                cx,
+                t!("analytics.kpi.maxdd"),
+                dd_el,
+                delta(cur.max_dd, prev.as_ref().map(|v| v.max_dd)),
+                true,
+            ))
+            .child(kpi(
+                p,
+                cx,
+                t!("analytics.kpi.avg"),
+                avg_el,
+                delta(cur.avg, prev.as_ref().map(|v| v.avg)),
+                false,
+            ))
             .child(kpi(
                 p,
                 cx,
                 t!("analytics.kpi.duration"),
-                plain_value(p, format!("{:.0} {}", cur.avg_dur_min, t!("analytics.minutes"))),
-                delta(cur.avg_dur_min, prev.avg_dur_min),
+                plain_value(
+                    p,
+                    format!("{:.0} {}", cur.avg_dur_min, t!("analytics.minutes")),
+                ),
+                delta(cur.avg_dur_min, prev.as_ref().map(|v| v.avg_dur_min)),
                 true,
             ))
     }
 }
 
 fn plain_value(p: MoonPalette, text: String) -> AnyElement {
-    div().text_color(moon(p.text)).child(text).into_any_element()
+    div()
+        .text_color(moon(p.text))
+        .child(text)
+        .into_any_element()
 }
 
 fn colored_value(p: MoonPalette, v: f64, text: String) -> AnyElement {
@@ -269,7 +315,11 @@ fn kpi(
                     div()
                         .text_size(design::t_caption(cx))
                         .text_color(moon(col))
-                        .child(format!("{} {:.1}%", if d > 0.0 { "▲" } else { "▼" }, d.abs())),
+                        .child(format!(
+                            "{} {:.1}%",
+                            if d > 0.0 { "▲" } else { "▼" },
+                            d.abs()
+                        )),
                 )
                 .child(
                     div()
@@ -301,7 +351,12 @@ fn kpi(
                 .text_color(moon(p.text_soft))
                 .child(label.to_string()),
         )
-        .child(div().text_size(design::t_title(cx)).font_weight(FontWeight::SEMIBOLD).child(value))
+        .child(
+            div()
+                .text_size(design::t_title(cx))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(value),
+        )
         .child(delta_el)
 }
 
@@ -365,7 +420,7 @@ fn chart_card_ex(
         .child(div().w_full().flex_1().min_h_0().child(body))
 }
 
-/// Таблица топ-сделок (5 строк): закрыта / монета / стратегия / профит.
+/// Render a card of ranked trades.
 fn top_card(
     title: String,
     trades: &[TopTrade],
@@ -384,9 +439,22 @@ fn top_card(
             .text_size(design::t_caption(cx))
             .text_color(moon(p.text_soft))
             .bg(moon(p.table_head))
-            .child(div().w(design::font_w_px(cx, 96.0)).child(t!("analytics.col.closed").to_string()))
-            .child(div().w(design::font_w_px(cx, 78.0)).child(t!("analytics.col.coin").to_string()))
-            .child(div().flex_1().min_w_0().child(t!("analytics.col.strategy").to_string()))
+            .child(
+                div()
+                    .w(design::font_w_px(cx, 96.0))
+                    .child(t!("analytics.col.closed").to_string()),
+            )
+            .child(
+                div()
+                    .w(design::font_w_px(cx, 78.0))
+                    .child(t!("analytics.col.coin").to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(t!("analytics.col.strategy").to_string()),
+            )
             .child(div().child(t!("analytics.col.profit").to_string())),
     );
     for tr in trades {
@@ -477,9 +545,8 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
         if let Some(top) = d.coins.first().filter(|g| g.profit > 0.0) {
             let share = (top.profit / d.cur.profit * 100.0).round() as i64;
             if share > 10 {
-                lines.push(
-                    t!("analytics.ins.top_coin", name = top.name, share = share).to_string(),
-                );
+                lines
+                    .push(t!("analytics.ins.top_coin", name = top.name, share = share).to_string());
             }
         }
     }

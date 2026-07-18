@@ -5,10 +5,11 @@ use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use rust_i18n::t;
 
-pub(super) fn report_columns(table: &ReportTable, vis: &[usize]) -> Vec<MoonDataTableColumn> {
+/// Build sortable table descriptors for visible indices in the cached schema.
+pub(super) fn report_columns(cols: &[String], vis: &[usize]) -> Vec<MoonDataTableColumn> {
     vis.iter()
         .map(|&i| {
-            let col = table.cols[i].as_str();
+            let col = cols[i].as_str();
             let column = MoonDataTableColumn::new(col.to_string(), header_for(col), width_for(col))
                 .sortable(true);
             if is_numeric_report_column(col) {
@@ -21,9 +22,11 @@ pub(super) fn report_columns(table: &ReportTable, vis: &[usize]) -> Vec<MoonData
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Build one report row; absent values render as NULL and coin/core cells keep their actions.
 pub(super) fn report_data_row(
     ri: usize,
-    table: &ReportTable,
+    cols: &[String],
+    data: &ReportData,
     vis: &[usize],
     selected_cores: &Rc<Vec<u64>>,
     backend: &Entity<Backend>,
@@ -31,12 +34,11 @@ pub(super) fn report_data_row(
     p: MoonPalette,
 ) -> MoonDataRow {
     let mut cells = Vec::with_capacity(vis.len());
-    if let Some(r) = table.rows.get(ri) {
-        let core_uid = table.core_uids.get(ri).copied().unwrap_or(0);
+    if let Some(r) = data.rows.get(ri) {
+        let core_uid = data.core_uids.get(ri).copied().unwrap_or(0);
         // Стратегия сделки — колонка `strategyid` (может быть невидима, читаем по имени из
         // ВСЕХ колонок). 0/отсутствует = ручная/без стратегии → секция стратегии в меню скрыта.
-        let strat_id = table
-            .cols
+        let strat_id = cols
             .iter()
             .position(|c| c == "strategyid")
             .and_then(|idx| r.get(idx))
@@ -46,7 +48,7 @@ pub(super) fn report_data_row(
             })
             .filter(|id| *id != 0);
         for &i in vis {
-            let cname = table.cols[i].as_str();
+            let cname = cols[i].as_str();
             let val = r.get(i).unwrap_or(&Value::Null);
             if cname == "coin" {
                 cells.push(coin_cell(
@@ -281,8 +283,8 @@ fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>) {
                 Some(x) if x < 0.0 => Some(p.red),
                 _ => None,
             };
-            // Профит: 2 знака без «$» в колонке (знак валюты — только в «Итого»);
-            // раньше было 6 знаков «тысячных» зря.
+            // Profit cells use two decimals without a currency marker; the
+            // totals row owns the marker for the aggregate.
             (n.map(|x| format!("{x:+.2}")).unwrap_or_default(), color)
         }
         _ => (value_to_string(v), None),

@@ -61,8 +61,11 @@ pub(super) fn default_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Выполнить экспорт (зовётся с background executor — БД и запись файла блокирующие).
-/// `cols` — экспортируемые колонки в порядке таблицы. Возвращает число строк данных.
+/// Run a blocking export and return the number of data rows written.
+///
+/// `cols` preserves table order. The full query completes before a CSV/XLSX
+/// writer opens; both `NotReady` and `Failed` abort without writing export bytes
+/// because a partial file would look complete. Call from a background executor.
 pub(super) fn run(
     path: &Path,
     fmt: Format,
@@ -71,13 +74,13 @@ pub(super) fn run(
     sort_key: &str,
     sort_desc: bool,
 ) -> anyhow::Result<usize> {
-    let conn = db::open_reader()
-        .ok_or_else(|| anyhow::anyhow!("БД отчётов недоступна (нет файла или занята)"))?;
-    let table = db::query_reports(&conn, filter, sort_key, sort_desc, EXPORT_MAX_ROWS);
+    let conn = db::open_reader().map_err(|e| anyhow::anyhow!("БД отчётов недоступна: {e}"))?;
+    let table = db::query_reports(&conn, filter, sort_key, sort_desc, EXPORT_MAX_ROWS)
+        .map_err(|e| anyhow::anyhow!("выборка отчёта не прочитана: {e}"))?;
     if table.rows.len() == EXPORT_MAX_ROWS {
         log::warn!("отчёт: экспорт упёрся в кап {EXPORT_MAX_ROWS} строк — выборка усечена");
     }
-    // Индексы экспортируемых колонок в строках выборки (порядок — как в `cols`).
+    // Map requested columns to query-row indices while preserving request order.
     let idx: Vec<(usize, &str)> = cols
         .iter()
         .filter_map(|name| {
@@ -137,10 +140,7 @@ fn date_col(col: &str) -> bool {
 /// показывает экспонентой (`-3,06221E+18`) и теряет точность. Это ID, а не суммы —
 /// пишем ТЕКСТОМ, чтобы значение читалось полностью и не округлялось.
 fn id_text_col(col: &str) -> bool {
-    matches!(
-        col,
-        "strategyid" | "exorderid" | "taskid" | "newrecid"
-    )
+    matches!(col, "strategyid" | "exorderid" | "taskid" | "newrecid")
 }
 
 /// Текст поля для CSV: даты — форматированные, остальное — сырое значение БД

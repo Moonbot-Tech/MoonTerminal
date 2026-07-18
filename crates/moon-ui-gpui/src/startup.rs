@@ -160,6 +160,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
         // шлёт close-report → запись в SQLite), `generation` живёт в Backend для окна
         // «Отчёт». None = БД недоступна (окно отчётов покажет пусто).
         let reports = moon_core::db::spawn_writer();
+        // Check the complete replica once because individual reads only detect
+        // damage on pages reached by their query.
+        moon_core::db::integrity::spawn_check();
         let (feed_wake_tx, feed_wake_rx) = std::sync::mpsc::channel::<()>();
 
         let backend = cx.new(|_| Backend {
@@ -538,12 +541,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
                             let windows = cx.windows().len();
                             coord_backend.update(cx, |b, _| {
                                 let charts = b.live_chart_consumers().len();
-                                let rev_sum: u64 = b
-                                    .session
-                                    .store()
-                                    .cores()
-                                    .map(|(_, d)| d.assets_rev)
-                                    .sum();
+                                let rev_sum: u64 =
+                                    b.session.store().cores().map(|(_, d)| d.assets_rev).sum();
                                 // Ядро могло переподключиться (rev обнулился) — тогда дельта
                                 // не определена, берём сумму заново без бампа.
                                 if rev_sum >= last_assets_rev_sum {

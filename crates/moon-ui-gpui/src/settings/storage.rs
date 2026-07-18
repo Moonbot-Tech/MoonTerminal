@@ -21,7 +21,13 @@ pub(super) struct StorageInfo {
     pub reports: Option<(u64, u64)>,
     pub strategies: Option<(u64, u64)>,
     pub klines: Option<(u64, u64)>,
-    pub report_rows: i64,
+    /// Replica row count from the shared fallible read path.
+    ///
+    /// `None` means the background snapshot has not completed,
+    /// `Err(ReadFail::NotReady)` means the replica is absent, and
+    /// `Err(ReadFail::Failed { .. })` means the count could not be read. Neither
+    /// non-data case may render as zero because zero asserts an empty replica.
+    pub report_rows: Option<moon_core::db::ReadResult<i64>>,
     pub strat_live: i64,
     pub strat_deleted: i64,
     pub strat_versions: i64,
@@ -45,7 +51,10 @@ pub(super) fn build() -> StorageEd {
     }
 }
 
-/// Собрать снимок хранилища (вызывается на background executor).
+/// Collect storage sizes and row counts on the background executor.
+///
+/// The reports count preserves `NotReady` for an absent replica and `Failed`
+/// for an unreadable replica so both remain distinct from a genuine zero.
 fn collect_info() -> StorageInfo {
     use moon_core::db::maint::db_sizes;
     let sized = |p: &std::path::Path| p.exists().then(|| db_sizes(p));
@@ -55,11 +64,7 @@ fn collect_info() -> StorageInfo {
         klines: sized(&paths::klines_db_path()),
         ..Default::default()
     };
-    if let Some(conn) = moon_core::db::open_reader() {
-        out.report_rows = conn
-            .query_row("SELECT COUNT(*) FROM orders_rep", [], |r| r.get(0))
-            .unwrap_or(0);
-    }
+    out.report_rows = Some(moon_core::db::report_row_count());
     if let Some(conn) = moon_core::strat_db::open_reader() {
         let count = |sql: &str| conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0);
         out.strat_live = count("SELECT COUNT(*) FROM strategies WHERE deleted=0");
@@ -126,7 +131,10 @@ impl SettingsView {
             return;
         }
         self.storage.busy = true;
-        self.status = Some((StatusMsg::Text(t!("storage.busy", op = t!(op_key)).to_string()), false));
+        self.status = Some((
+            StatusMsg::Text(t!("storage.busy", op = t!(op_key)).to_string()),
+            false,
+        ));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -184,9 +192,12 @@ impl SettingsView {
             match sz {
                 None => t!("storage.no_file").to_string(),
                 Some((main, 0)) => t!("storage.size", size = fmt_size(main)).to_string(),
-                Some((main, wal)) => {
-                    t!("storage.size_wal", size = fmt_size(main), wal = fmt_size(wal)).to_string()
-                }
+                Some((main, wal)) => t!(
+                    "storage.size_wal",
+                    size = fmt_size(main),
+                    wal = fmt_size(wal)
+                )
+                .to_string(),
             }
         };
         let total: u64 = [info.reports, info.strategies, info.klines]
@@ -233,14 +244,22 @@ impl SettingsView {
                             .render(),
                     ),
             )
-            .child(hint(t!("storage.total_size", size = fmt_size(total)).to_string()))
+            .child(hint(
+                t!("storage.total_size", size = fmt_size(total)).to_string(),
+            ))
             .child(separator(p, cx))
             // ── Отчёты ──────────────────────────────────────────────────────
             .child(section(&t!("storage.reports_title"), p, cx))
             .child(hint(format!(
                 "{} · {}",
                 size_line(info.reports),
-                t!("storage.reports_rows", rows = info.report_rows)
+                match &info.report_rows {
+                    Some(Ok(rows)) => t!("storage.reports_rows", rows = rows).to_string(),
+                    // A missing replica and a pending snapshot are non-errors,
+                    // but neither is evidence of zero rows.
+                    Some(Err(moon_core::db::ReadFail::NotReady)) | None => "—".to_string(),
+                    Some(Err(_)) => t!("common.db_read_failed_short").to_string(),
+                }
             )))
             .child(
                 h_flex().child(
@@ -343,11 +362,11 @@ impl SettingsView {
     }
 }
 
-/// Штамп для имени бэкапа: локальное время `ГГГГММДД-ЧЧММСС` без зависимостей.
+/// UTC timestamp for backup names in `YYYYMMDD-HHMMSS` form without a date dependency.
 fn chrono_like_stamp() -> String {
     let ms = moon_core::util::now_unix_ms_i64();
     let secs = ms / 1000;
-    // Дни с эпохи → Г/М/Д (алгоритм civil_from_days, UTC — для имени файла хватит).
+    // Convert days since the Unix epoch with the civil_from_days algorithm.
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);

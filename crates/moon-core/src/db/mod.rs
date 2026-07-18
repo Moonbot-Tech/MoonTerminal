@@ -13,14 +13,21 @@
 //! Пишет ОДИН поток-writer; читает окно «Отчёты» отдельным соединением (WAL).
 
 pub mod analytics;
-pub mod tuner;
-pub mod tuner_smart;
+pub mod integrity;
 pub mod maint;
 mod parse;
+mod read_fail;
 mod rep;
+#[cfg(test)]
+mod test_support;
+pub mod tuner;
+pub mod tuner_smart;
 
 pub use parse::parse_report_sql;
+pub use read_fail::{FailKind, ReadFail, ReadResult};
 pub use rep::{DbMsg, ReportSink};
+
+use read_fail::read_fail;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
@@ -64,8 +71,7 @@ pub struct ReportRow {
     pub sql: String,
 }
 
-/// Канал feed-потоков к writer'у: раньше — голый `Sender<ReportRow>`, теперь
-/// [`ReportSink`] (канал typed/легаси сообщений + стартовые курсоры per core).
+/// Feed-to-writer sink for typed and legacy messages plus per-core start cursors.
 pub type ReportTx = ReportSink;
 
 /// Хэндл БД: канал записи + счётчик-генерация (растёт после записи —
@@ -424,18 +430,36 @@ fn apply_extras(
     Ok(())
 }
 
-/// Имена колонок ЛЕГАСИ-таблицы (seed-кэш writer'а для авто-колонок close-SQL).
-/// Пустой набор, если таблица уже снесена.
-fn table_columns(conn: &Connection) -> std::collections::HashSet<String> {
+/// Probe legacy-table columns for the writer's close-SQL column cache.
+///
+/// Opening a database does not validate its schema b-tree. An absent table
+/// therefore yields `Ok(empty)`, while any SQLite error remains `Err`.
+fn table_columns_res(conn: &Connection) -> ReadResult<std::collections::HashSet<String>> {
+    const CTX: &str = "отчёты: PRAGMA table_info(closed_sell_reports)";
     let mut out = std::collections::HashSet::new();
-    if let Ok(mut stmt) = conn.prepare("PRAGMA table_info(closed_sell_reports)") {
-        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) {
-            for n in rows.flatten() {
-                out.insert(n);
-            }
-        }
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(closed_sell_reports)")
+        .map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(|e| read_fail(CTX, e))?;
+    for n in rows {
+        out.insert(n.map_err(|e| read_fail(CTX, e))?);
     }
-    out
+    Ok(out)
+}
+
+/// Count rows currently in the typed replica for the Storage settings tab.
+///
+/// Returns `NotReady` when the replica file is absent and `Failed` when opening
+/// it or reading the count fails. Only a successful query may return zero.
+pub fn report_row_count() -> ReadResult<i64> {
+    const CTX: &str = "отчёты: число строк реплики";
+    let conn = open_reader()?;
+    conn.query_row(&format!("SELECT COUNT(*) FROM {}", rep::TABLE), [], |r| {
+        r.get(0)
+    })
+    .map_err(|e| read_fail(CTX, e))
 }
 
 /// Ёмкость канала к writer'у: backpressure вместо OOM. ~16k сообщений ≈ десятки МБ
@@ -479,7 +503,12 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                 std::path::PathBuf::from(s)
             };
             // Кэш известных ЛЕГАСИ-колонок (авто-добавление новых полей close-SQL).
-            let mut known = table_columns(&conn);
+            // Lossy HERE and fatal in `rep::init` on purpose, and the asymmetry
+            // is the point: this is a SEED for the legacy auto-column path, and
+            // `apply_extras` reports its own failure per row. `rep::init`'s cache
+            // instead GATES which fields a page may write while still ACKing it,
+            // so a swallowed probe there destroys data silently.
+            let mut known = table_columns_res(&conn).unwrap_or_default();
             // Батчим пачку сообщений в одну транзакцию: catch-up льёт тысячи строк,
             // и autocommit на каждую (fsync) растянул бы догонку на минуты.
             let mut thr_count: u64 = 0;
@@ -597,7 +626,10 @@ fn apply_msg(
     rep_state: &mut rep::RepState,
     known: &mut std::collections::HashSet<String>,
     msg: DbMsg,
-    acks: &mut Vec<(moonproto::MoonReports, std::sync::Arc<moonproto::ReportSyncPage>)>,
+    acks: &mut Vec<(
+        moonproto::MoonReports,
+        std::sync::Arc<moonproto::ReportSyncPage>,
+    )>,
 ) {
     match msg {
         DbMsg::Legacy(row) => {
@@ -693,21 +725,37 @@ pub struct ReportFilter {
     pub emulator: Option<bool>,
 }
 
-pub fn open_reader() -> Option<Connection> {
+/// Open a reader while distinguishing an absent replica from a SQLite failure.
+///
+/// A genuinely absent file maps to `NotReady`; metadata and SQLite open errors
+/// map to `Failed` so callers cannot present them as an empty period.
+pub fn open_reader() -> ReadResult<Connection> {
     let path = paths::reports_db_path();
-    if !path.exists() {
-        return None;
+    // NOT `Path::exists`: it reports false for a permission or metadata error
+    // too, which would take the silent `NotReady` branch and tell the user the
+    // replica is merely not synced yet. Only a genuine absence may say that.
+    // The check still has to happen because `Connection::open` would otherwise
+    // CREATE an empty database in place of the missing one.
+    match std::fs::metadata(&path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(ReadFail::NotReady),
+        Err(e) => return Err(read_fail::io_fail("отчёты(reader): доступ к файлу", &e)),
     }
-    match Connection::open(&path) {
-        Ok(c) => {
-            let _ = c.busy_timeout(Duration::from_secs(3));
-            Some(c)
-        }
-        Err(e) => {
-            log::warn!("отчёты(reader): {e}");
-            None
-        }
-    }
+    let conn = Connection::open(&path).map_err(|e| read_fail("отчёты(reader)", e))?;
+    let _ = conn.busy_timeout(Duration::from_secs(3));
+    Ok(conn)
+}
+
+/// Pin one WAL snapshot for a multi-statement read.
+///
+/// Separate autocommit statements each observe a newer snapshot, so a panel
+/// could publish a row list and totals that disagree about which trades fall
+/// inside the period. Read-only: dropping the transaction rolls back nothing.
+/// ATTACH cannot run inside a transaction, so callers attach first. Transaction
+/// creation errors map to `Failed`; this function cannot produce `NotReady`.
+pub fn read_snapshot(conn: &Connection) -> ReadResult<rusqlite::Transaction<'_>> {
+    conn.unchecked_transaction()
+        .map_err(|e| read_fail("отчёты: снимок для чтения", e))
 }
 
 pub fn load_sort(conn: &Connection) -> Option<(String, bool)> {
@@ -766,11 +814,13 @@ pub fn save_visible(conn: &Connection, cols: &[&str]) {
     );
 }
 
-/// Рантайм-список колонок для отображения: известные (`DISPLAY_COLUMNS`) в
-/// каноничном порядке + новые поля в хвост (по алфавиту), минус служебные.
-/// Набор — ОБЪЕДИНЕНИЕ typed-реплики и легаси-таблицы (переходный период: часть
-/// ядер уже на реплике, часть ещё пишет легаси; легаси `db_id` показываем как `id`).
-pub fn display_columns(conn: &Connection) -> Vec<String> {
+/// Build the runtime display-column list from the typed and legacy schemas.
+///
+/// Known columns follow `DISPLAY_COLUMNS`; extra columns follow alphabetically,
+/// service columns are omitted, and legacy `db_id` is exposed as `id`. Schema
+/// probe errors map to `Failed`; an absent table contributes no columns. This
+/// function receives an open connection and therefore cannot return `NotReady`.
+pub fn display_columns(conn: &Connection) -> ReadResult<Vec<String>> {
     const SERVICE: &[&str] = &[
         "core_uid",
         "newrecid",
@@ -779,8 +829,8 @@ pub fn display_columns(conn: &Connection) -> Vec<String> {
         "created_ms",
         "updated_ms",
     ];
-    let mut have = rep::table_cols(conn);
-    let legacy = table_columns(conn);
+    let mut have = rep::table_cols_res(conn)?;
+    let legacy = table_columns_res(conn)?;
     if legacy.contains("db_id") {
         have.insert("id".to_string());
     }
@@ -797,7 +847,7 @@ pub fn display_columns(conn: &Connection) -> Vec<String> {
         .collect();
     extra.sort();
     out.extend(extra);
-    out
+    Ok(out)
 }
 
 /// Источник чтения отчётов: таблица + её колонки + легаси-флаг. Читаем typed-реплику и
@@ -813,13 +863,17 @@ struct ReadSource {
     legacy: bool,
 }
 
-fn read_sources(conn: &Connection) -> Vec<ReadSource> {
+/// Discover report sources while preserving failures from either schema probe.
+///
+/// An absent legacy table is omitted. Schema probe errors map to `Failed`; this
+/// function receives an open connection and therefore cannot return `NotReady`.
+fn read_sources_res(conn: &Connection) -> ReadResult<Vec<ReadSource>> {
     let mut out = vec![ReadSource {
         table: rep::TABLE,
-        cols: rep::table_cols(conn),
+        cols: rep::table_cols_res(conn)?,
         legacy: false,
     }];
-    let legacy_cols = table_columns(conn);
+    let legacy_cols = table_columns_res(conn)?;
     if !legacy_cols.is_empty() {
         out.push(ReadSource {
             table: "closed_sell_reports",
@@ -827,7 +881,7 @@ fn read_sources(conn: &Connection) -> Vec<ReadSource> {
             legacy: true,
         });
     }
-    out
+    Ok(out)
 }
 
 /// SELECT-проекция источника на общий набор `cols`: своя колонка как есть, легаси
@@ -931,10 +985,15 @@ fn build_where(
     (sql, params)
 }
 
-/// Итог по ВСЕМУ фильтру (не по топ-N): (сумма profitbtc, число ордеров).
-pub fn query_totals(conn: &Connection, f: &ReportFilter) -> (f64, i64) {
+/// Aggregate profit and order count over the complete filter, not only the top N.
+///
+/// Returns `Failed` when source discovery or any aggregate query fails; only a
+/// successful empty result returns `(0.0, 0)`. The open connection means this
+/// function cannot return `NotReady`.
+pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<(f64, i64)> {
+    const CTX: &str = "отчёты: query_totals";
     let (mut sum, mut count) = (0.0f64, 0i64);
-    for src in read_sources(conn) {
+    for src in read_sources_res(conn)? {
         let (where_sql, params) = build_where(f, &src.cols);
         let profit = if src.cols.contains("profitbtc") {
             "COALESCE(SUM(profitbtc),0.0)"
@@ -943,32 +1002,38 @@ pub fn query_totals(conn: &Connection, f: &ReportFilter) -> (f64, i64) {
         };
         let sql = format!("SELECT {profit}, COUNT(*) FROM {}{where_sql}", src.table);
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-        if let Ok((s, c)) = conn.query_row(&sql, refs.as_slice(), |r| {
-            Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)?))
-        }) {
-            sum += s;
-            count += c;
-        }
+        let (s, c) = conn
+            .query_row(&sql, refs.as_slice(), |r| {
+                Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| read_fail(CTX, e))?;
+        sum += s;
+        count += c;
     }
-    (sum, count)
+    Ok((sum, count))
 }
 
-/// Топ-`limit` отчётов по фильтру и сортировке. Возвращает все DISPLAY_COLUMNS.
+/// Return the top `limit` reports for the filter and sort using all display columns.
+///
+/// Source, schema, query, and row-conversion errors map to `Failed`; no partial
+/// table is returned, which also keeps exports from writing incomplete data.
+/// The open connection means this function cannot return `NotReady`.
 pub fn query_reports(
     conn: &Connection,
     f: &ReportFilter,
     sort_key: &str,
     desc: bool,
     limit: usize,
-) -> ReportTable {
-    let cols = display_columns(conn);
+) -> ReadResult<ReportTable> {
+    const CTX: &str = "отчёты: query_reports";
+    let cols = display_columns(conn)?;
     let col = sort_column(&cols, sort_key);
     let sort_ix = cols.iter().position(|c| *c == col);
     let dir = if desc { "DESC" } else { "ASC" };
 
     // Топ-N с КАЖДОГО источника своим запросом (индексы работают), слияние ниже.
     let mut merged: Vec<(u64, Vec<Value>)> = Vec::new();
-    for src in read_sources(conn) {
+    for src in read_sources_res(conn)? {
         let (where_sql, mut params) = build_where(f, &src.cols);
         let select = source_select(&src, &cols);
         // Сортируем на стороне SQL только если колонка есть у источника (alias `id`
@@ -985,18 +1050,22 @@ pub fn query_reports(
         );
         params.push(Box::new(limit as i64));
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-        if let Ok(mut stmt) = conn.prepare(&sql) {
-            let n = cols.len();
-            if let Ok(mapped) = stmt.query_map(refs.as_slice(), |r| {
+        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+        let n = cols.len();
+        let mapped = stmt
+            .query_map(refs.as_slice(), |r| {
                 let core_uid = r.get::<_, i64>(0)? as u64;
                 let mut v = Vec::with_capacity(n);
                 for i in 0..n {
                     v.push(r.get::<_, Value>(i + 1)?);
                 }
                 Ok((core_uid, v))
-            }) {
-                merged.extend(mapped.flatten());
-            }
+            })
+            .map_err(|e| read_fail(CTX, e))?;
+        // Every row is a trade the user is entitled to see, and the same rows
+        // are what the export writes — so no row error is skippable here.
+        for row in mapped {
+            merged.push(row.map_err(|e| read_fail(CTX, e))?);
         }
     }
 
@@ -1010,7 +1079,11 @@ pub fn query_reports(
             (false, true) => std::cmp::Ordering::Less,
             _ => {
                 let o = cmp_values(va, vb);
-                if desc { o.reverse() } else { o }
+                if desc {
+                    o.reverse()
+                } else {
+                    o
+                }
             }
         }
     });
@@ -1022,38 +1095,49 @@ pub fn query_reports(
         core_uids.push(uid);
         rows.push(row);
     }
-    ReportTable {
+    Ok(ReportTable {
         cols,
         rows,
         core_uids,
-    }
+    })
 }
 
-pub fn distinct_cores(conn: &Connection) -> Vec<(u64, String)> {
+/// Load cores for the filter selector.
+///
+/// Source, query, and row-conversion errors map to `Failed`; only a successful
+/// query may return an empty list. The open connection means this function
+/// cannot return `NotReady`.
+pub fn distinct_cores(conn: &Connection) -> ReadResult<Vec<(u64, String)>> {
+    const CTX: &str = "отчёты: distinct_cores";
     let mut out: Vec<(u64, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for src in read_sources(conn) {
+    for src in read_sources_res(conn)? {
         let order = if src.legacy {
             "MAX(COALESCE(updated_ms, 0))"
         } else {
             "MAX(newrecid)"
         };
-        if let Ok(mut stmt) = conn.prepare(&format!(
-            "SELECT core_uid, core_name FROM {} GROUP BY core_uid ORDER BY {order} DESC",
-            src.table
-        )) {
-            if let Ok(rows) = stmt.query_map([], |r| {
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT core_uid, core_name FROM {} GROUP BY core_uid ORDER BY {order} DESC",
+                src.table
+            ))
+            .map_err(|e| read_fail(CTX, e))?;
+        let rows = stmt
+            .query_map([], |r| {
                 Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?))
-            }) {
-                for (uid, name) in rows.flatten() {
-                    if seen.insert(uid) {
-                        out.push((uid, name));
-                    }
-                }
+            })
+            .map_err(|e| read_fail(CTX, e))?;
+        for row in rows {
+            // core_uid keys the whole selector, so a conversion miss here is
+            // never a skippable "dirty label".
+            let (uid, name) = row.map_err(|e| read_fail(CTX, e))?;
+            if seen.insert(uid) {
+                out.push((uid, name));
             }
         }
     }
-    out
+    Ok(out)
 }
 
 // ============================================================================
@@ -1148,7 +1232,10 @@ mod tests {
                 |r| r.get(3),
             )
             .unwrap();
-        assert!(plan.contains("idx_rep_closedate"), "план без индекса: {plan}");
+        assert!(
+            plan.contains("idx_rep_closedate"),
+            "план без индекса: {plan}"
+        );
     }
 
     /// Переходный читатель: строки из ЛЕГАСИ-таблицы и typed-реплики видны вместе
@@ -1190,11 +1277,12 @@ mod tests {
         )
         .unwrap();
 
-        let cols = display_columns(&conn);
+        let cols = display_columns(&conn).expect("схема читается");
         assert!(cols.iter().any(|c| c == "id"), "cols: {cols:?}");
         assert!(!cols.iter().any(|c| c == "db_id" || c == "newrecid"));
 
-        let t = query_reports(&conn, &ReportFilter::default(), "closedate", true, 10);
+        let t = query_reports(&conn, &ReportFilter::default(), "closedate", true, 10)
+            .expect("выборка читается");
         assert_eq!(t.rows.len(), 2);
         assert!(t.core_uids.contains(&1) && t.core_uids.contains(&2));
         // Легаси db_id виден в колонке id.
@@ -1202,7 +1290,8 @@ mod tests {
         let legacy_row = t.core_uids.iter().position(|u| *u == 1).unwrap();
         assert_eq!(t.rows[legacy_row][id_ix], Value::Integer(42));
 
-        let (profit, count) = query_totals(&conn, &ReportFilter::default());
+        let (profit, count) =
+            query_totals(&conn, &ReportFilter::default()).expect("итоги читаются");
         assert_eq!(count, 2);
         assert!((profit - 2.0).abs() < 1e-9);
 
@@ -1215,14 +1304,106 @@ mod tests {
             next_from_rec_id: 11,
         };
         rep::apply_sync_complete(&conn, &mut st, 1, &done);
-        let legacy_left = table_columns(&conn);
+        let legacy_left = table_columns_res(&conn).expect("схема читается");
         assert!(legacy_left.is_empty(), "легаси-таблица должна быть снесена");
-        let t = query_reports(&conn, &ReportFilter::default(), "closedate", true, 10);
+        let t = query_reports(&conn, &ReportFilter::default(), "closedate", true, 10)
+            .expect("выборка читается после сноса легаси");
         assert_eq!(t.rows.len(), 1);
         assert_eq!(t.core_uids, vec![2]);
         // init_db больше не воскрешает легаси (маркер legacy_dropped).
         init_db(&conn).unwrap();
-        assert!(table_columns(&conn).is_empty());
+        assert!(table_columns_res(&conn).expect("схема читается").is_empty());
+    }
+
+    /// Index-page damage fails the report query instead of returning a table
+    /// that the panel or file export could mistake for a complete result.
+    #[test]
+    fn corrupt_replica_fails_report_query_instead_of_truncating() {
+        let path = test_support::temp_db("report-rows");
+        let day = 1_780_000_000i64 / 86_400 * 86_400;
+        let conn = test_support::build_replica(&path, &test_support::spread_rows(day, 2000));
+
+        let filter = ReportFilter {
+            date_from: Some(day),
+            date_to: Some(day + 2000 * 60),
+            emulator: Some(false),
+            ..Default::default()
+        };
+        // The fixture is healthy first, so the assertions below cannot pass for
+        // a trivial reason (an empty or unreadable database).
+        let before = query_reports(&conn, &filter, "closedate", true, 5_000)
+            .expect("до порчи выборка читается");
+        assert_eq!(before.rows.len(), 2000);
+
+        // Pin the plan: if the planner stops using this index, the test must fail
+        // loudly rather than quietly stop exercising the damaged page.
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT core_uid FROM orders_rep
+                 WHERE closedate IS NOT NULL AND closedate >= 1 AND closedate <= 2
+                 ORDER BY closedate DESC",
+                [],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(
+            plan.contains("idx_rep_closedate"),
+            "план без индекса: {plan}"
+        );
+
+        test_support::corrupt_leaf_page(conn, &path, "idx_rep_closedate");
+        let conn = Connection::open(&path).expect("битая БД всё ещё открывается");
+
+        let res = query_reports(&conn, &filter, "closedate", true, 5_000);
+        assert!(
+            !matches!(res, Ok(_)),
+            "сбой чтения обязан вернуть ошибку, а не частичную/пустую таблицу: \
+             такой файл экспорта неотличим от полного"
+        );
+        assert!(
+            matches!(
+                res,
+                Err(ReadFail::Failed {
+                    kind: FailKind::Corrupt,
+                    ..
+                })
+            ),
+            "порча должна классифицироваться как Corrupt"
+        );
+
+        drop(conn);
+        test_support::remove_db(&path);
+    }
+
+    /// Aggregate corruption returns an error rather than the zero totals of a
+    /// healthy empty period.
+    #[test]
+    fn corrupt_replica_fails_report_totals_instead_of_zeroing() {
+        let path = test_support::temp_db("report-totals");
+        let day = 1_780_000_000i64 / 86_400 * 86_400;
+        let conn = test_support::build_replica(&path, &test_support::spread_rows(day, 2000));
+
+        // No date bounds: the aggregate must read the table itself, so damaging a
+        // TABLE leaf (not an index) is what this scan is guaranteed to hit.
+        let filter = ReportFilter {
+            emulator: Some(false),
+            ..Default::default()
+        };
+        let (profit, count) = query_totals(&conn, &filter).expect("до порчи итоги читаются");
+        assert_eq!(count, 2000);
+        assert!(profit.is_finite());
+
+        test_support::corrupt_leaf_page(conn, &path, "orders_rep");
+        let conn = Connection::open(&path).expect("битая БД всё ещё открывается");
+
+        let res = query_totals(&conn, &filter);
+        assert!(
+            !matches!(res, Ok(_)),
+            "сбой агрегата обязан вернуть ошибку, а не (0.0, 0)"
+        );
+
+        drop(conn);
+        test_support::remove_db(&path);
     }
 }
 

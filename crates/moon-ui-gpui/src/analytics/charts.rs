@@ -12,13 +12,20 @@ use moon_core::db::analytics::{CoreSeries, DayPoint};
 
 const CHART_H: f32 = 170.0;
 
-
 /// ФОЛБЭК-цвет серии ядра (циклом из палитры) — когда у сервера нет цвета в
 /// настройках (например, ядро уже удалено из конфига). Основной источник —
 /// `ServerConfig.color` (см. core_colors в summary.rs).
 pub(super) fn fallback_core_color(p: MoonPalette, i: usize) -> u32 {
-    [p.blue, p.green, p.orange, p.amber, p.red, p.yellow, p.accent, p.text_soft]
-        [i % 8]
+    [
+        p.blue,
+        p.green,
+        p.orange,
+        p.amber,
+        p.red,
+        p.yellow,
+        p.accent,
+        p.text_soft,
+    ][i % 8]
 }
 
 /// «дд.мм» из unix-секунд (подписи осей).
@@ -126,8 +133,16 @@ pub(super) fn daily_bars(
     if days.is_empty() {
         return div().h(px(CHART_H)).into_any_element();
     }
-    let vmax = days.iter().map(|d| d.profit).fold(0.0f64, f64::max).max(1e-6);
-    let vmin = days.iter().map(|d| d.profit).fold(0.0f64, f64::min).min(0.0);
+    let vmax = days
+        .iter()
+        .map(|d| d.profit)
+        .fold(0.0f64, f64::max)
+        .max(1e-6);
+    let vmin = days
+        .iter()
+        .map(|d| d.profit)
+        .fold(0.0f64, f64::min)
+        .min(0.0);
     let span = (vmax - vmin).max(1e-6);
     let up_frac = (vmax / span) as f32; // доля высоты над нулевой линией
     // Подписи значений читаемы только пока баров немного.
@@ -136,7 +151,11 @@ pub(super) fn daily_bars(
     // только если есть минус (подпись ПОД красным). Бары масштабируются в
     // оставшуюся высоту — цифры не перекрываются столбцами.
     let pad_top = if labels_on { 13.0f32 } else { 0.0 };
-    let pad_bottom = if labels_on && vmin < 0.0 { 13.0f32 } else { 0.0 };
+    let pad_bottom = if labels_on && vmin < 0.0 {
+        13.0f32
+    } else {
+        0.0
+    };
     let area_h = (CHART_H - pad_top - pad_bottom).max(10.0);
     let zero_from_bottom = pad_bottom + area_h * (1.0 - up_frac);
     let n = days.len();
@@ -205,9 +224,11 @@ pub(super) fn daily_bars(
                     .whitespace_nowrap()
                     .text_color(moon(super::summary::sign_color(p, d.profit)))
                     .child(
-                        div().w_full().flex().justify_center().child(
-                            moon_core::util::fmt::compact(d.profit, 0),
-                        ),
+                        div()
+                            .w_full()
+                            .flex()
+                            .justify_center()
+                            .child(moon_core::util::fmt::compact(d.profit, 0)),
                     ),
             );
         }
@@ -221,13 +242,12 @@ pub(super) fn daily_bars(
     div()
         .relative()
         .w_full()
-        .child(
-            v_flex()
-                .w_full()
-                .gap(px(4.0))
-                .child(row)
-                .child(axis_row(p, dm(first), dm(last), None)),
-        )
+        .child(v_flex().w_full().gap(px(4.0)).child(row).child(axis_row(
+            p,
+            dm(first),
+            dm(last),
+            None,
+        )))
         .children(popup)
         .into_any_element()
 }
@@ -432,9 +452,10 @@ fn core_bucket_popup(
                         .w(design::ui_px(cx, 6.0))
                         .h(design::ui_px(cx, 6.0))
                         .rounded_full()
-                        .bg(colors.get(ci).copied().unwrap_or_else(|| {
-                            moon(fallback_core_color(p, ci))
-                        })),
+                        .bg(colors
+                            .get(ci)
+                            .copied()
+                            .unwrap_or_else(|| moon(fallback_core_color(p, ci)))),
                 )
                 .child(
                     div()
@@ -456,7 +477,10 @@ fn core_bucket_popup(
     // deferred — попап рисуется ПОВЕРХ всего (иначе прятался под нижними
     // карточками, отрисованными позже).
     let frac = bi as f32 / days.len().max(1) as f32;
-    let mut holder = div().absolute().top(px(6.0)).w(design::font_w_px(cx, 190.0));
+    let mut holder = div()
+        .absolute()
+        .top(px(6.0))
+        .w(design::font_w_px(cx, 190.0));
     if frac <= 0.62 {
         holder = holder.left(relative(frac)).ml(px(12.0));
     } else {
@@ -477,8 +501,16 @@ pub(super) fn core_totals_bars(
     if cores.is_empty() {
         return div().flex_1().into_any_element();
     }
-    let vmax = cores.iter().map(|c| c.total).fold(0.0f64, f64::max).max(1e-6);
-    let vmin = cores.iter().map(|c| c.total).fold(0.0f64, f64::min).min(0.0);
+    let vmax = cores
+        .iter()
+        .map(|c| c.total)
+        .fold(0.0f64, f64::max)
+        .max(1e-6);
+    let vmin = cores
+        .iter()
+        .map(|c| c.total)
+        .fold(0.0f64, f64::min)
+        .min(0.0);
     let span = (vmax - vmin).max(1e-6);
     let up_frac = (vmax / span) as f32;
     let gap = f32::from(design::ui_px(cx, 8.0));
@@ -513,7 +545,11 @@ pub(super) fn core_totals_bars(
             for (k, v) in bars.iter().enumerate() {
                 let x = bounds.origin.x + px(k as f32 * (col_w + gap));
                 let bar_h = (v.abs() / span32 * h).max(if v.abs() > 1e-9 { 1.5 } else { 0.0 });
-                let top = if *v >= 0.0 { zero_y - px(bar_h) } else { zero_y };
+                let top = if *v >= 0.0 {
+                    zero_y - px(bar_h)
+                } else {
+                    zero_y
+                };
                 window.paint_quad(gpui::fill(
                     Bounds::new(gpui::point(x, top), gpui::size(px(col_w), px(bar_h))),
                     if *v >= 0.0 { up_col } else { down_col },
@@ -539,8 +575,8 @@ pub(super) fn core_totals_bars(
                 .min_w_0()
                 .items_center()
                 .child(
-                    // Имя с кружком цвета ядра (как в попапе) — сам бар
-                    // теперь красится по знаку профита.
+                    // Keep the core-color dot beside the name because the bar
+                    // color represents profit sign rather than core identity.
                     h_flex()
                         .max_w_full()
                         .items_center()

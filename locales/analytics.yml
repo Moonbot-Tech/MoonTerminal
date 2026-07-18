@@ -350,14 +350,14 @@ analytics.trades_count:
   ru: "%{n} закрытых сделок"
   en: "%{n} closed trades"
   es: "%{n} operaciones cerradas"
-analytics.loading:
-  ru: "Загрузка…"
-  en: "Loading…"
-  es: "Cargando…"
-analytics.empty_period:
-  ru: "В этом периоде нет закрытых сделок."
-  en: "No closed trades in this period."
-  es: "No hay operaciones cerradas en este período."
+analytics.integrity_damaged:
+  ru: "Реплика отчётов повреждена (проверка целостности SQLite)."
+  en: "The reports replica is damaged (SQLite integrity check)."
+  es: "La réplica de informes está dañada (verificación de integridad SQLite)."
+analytics.integrity_unchecked:
+  ru: "Проверка целостности реплики не выполнена."
+  en: "The replica integrity check did not run."
+  es: "No se realizó la verificación de integridad de la réplica."
 
 analytics.kpi.profit:
   ru: "Прибыль, USDT"

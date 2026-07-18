@@ -61,6 +61,14 @@ report.export_menu:
   ru: "Сохранить отчёт в файл (CSV / Excel)"
   en: "Save report to a file (CSV / Excel)"
   es: "Guardar informe en archivo (CSV / Excel)"
+report.export.ok:
+  ru: "Экспортировано строк: %{n}"
+  en: "Exported %{n} rows"
+  es: "Exportadas %{n} filas"
+report.export.fail:
+  ru: "Экспорт не выполнен — файл не сохранён"
+  en: "Export failed — no file was saved"
+  es: "Exportación fallida: no se guardó ningún archivo"
 report.export.csv:
   ru: "CSV"
   en: "CSV"

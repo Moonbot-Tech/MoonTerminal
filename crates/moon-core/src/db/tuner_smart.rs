@@ -15,8 +15,10 @@
 //! включительные. Один скан БД, дальше всё в памяти — вызывать ТОЛЬКО с
 //! background executor.
 
-use super::analytics::{Query, unified_from};
-use super::tuner::{FIELDS, FieldClass};
+use super::analytics::{unified_from, Query};
+use super::read_fail::read_fail;
+use super::tuner::{FieldClass, FIELDS};
+use super::{ReadFail, ReadResult};
 
 /// Бин «ниже первого края» (значения COALESCE-0 при положительном минимуме).
 /// Число краёв ≤128 — индексы бинов не сталкиваются с сентинелом.
@@ -59,17 +61,17 @@ impl Rng {
     }
 }
 
-/// Random-restart координатный спуск: максимум суммарного профита при
-/// сохранении ≥`min_n` сделок. `restarts` — число попыток (1..=1000); каждая
-/// крутится до сходимости (≤16 проходов). `edges_want` — число квантильных
-/// краёв на поле (4..=128; больше = тоньше сетка порогов, дороже шаг).
-/// Ограничение мощности: полей-слотов (Delta2/Delta3) с диапазоном может
-/// быть НЕ БОЛЬШЕ ДВУХ — в стратегию больше не сохранить; перебор ищет
-/// лучшую пару слотов.
+/// Maximize combined profit with random-restart coordinate descent while
+/// retaining at least `min_n` trades.
 ///
-/// `locked[fi]`: None — поле перебирается; Some((from, to)) — поле НЕ
-/// перебирается, но участвует фиксированным фильтром (снятый чекбокс с
-/// заполненными границами); Some((None, None)) — исключено вовсе.
+/// `restarts` is clamped to 1..=1000, and each attempt runs at most 16 passes.
+/// `edges_want` controls quantile resolution per field. At most two Delta2/3
+/// slot fields may carry ranges because the strategy format cannot store more.
+/// `locked[fi]` is `None` for a searched field, a fixed range for an active
+/// locked field, or `(None, None)` for an excluded field.
+/// `Ok(None)` means no candidate beats the baseline or the sample is too small;
+/// `NotReady` means the replica or required schema is absent, while `Failed`
+/// means opening or scanning the replica failed.
 pub fn smart_suggest(
     q: &Query,
     restarts: usize,
@@ -77,14 +79,17 @@ pub fn smart_suggest(
     locked: &[Option<(Option<f64>, Option<f64>)>],
     edges_want: usize,
     round: bool,
-) -> Option<SmartResult> {
+) -> ReadResult<Option<SmartResult>> {
+    const CTX: &str = "tuner: smart_suggest";
     let ne = edges_want.clamp(4, 128);
     let conn = super::open_reader()?;
     let mut q = q.clone();
     if q.from < 0 {
         q.from = 1;
     }
-    let src = unified_from(&conn, &q)?;
+    let Some(src) = unified_from(&conn, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
     let nf = FIELDS.len();
     let cols = FIELDS
         .iter()
@@ -97,25 +102,25 @@ pub fn smart_suggest(
     let mut profits: Vec<f64> = Vec::new();
     let mut vals: Vec<Vec<f64>> = vec![Vec::new(); nf];
     {
-        let mut stmt = conn.prepare(&sql).ok()?;
-        let mut rows = stmt.query(rusqlite::params![q.from, q.to]).ok()?;
-        while let Ok(Some(r)) = rows.next() {
-            profits.push(r.get(nf).unwrap_or(0.0));
+        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+        let mut rows = stmt
+            .query(rusqlite::params![q.from, q.to])
+            .map_err(|e| read_fail(CTX, e))?;
+        // Every value feeds the optimiser, so an unreadable cell aborts the
+        // calculation. NULL deliberately maps to 0.0; a read error does not.
+        while let Some(r) = rows.next().map_err(|e| read_fail(CTX, e))? {
+            profits.push(r.get(nf).map_err(|e| read_fail(CTX, e))?);
             for (fi, col) in vals.iter_mut().enumerate() {
-                let v = r
-                    .get::<_, Option<f64>>(fi)
-                    .ok()
-                    .flatten()
-                    .filter(|v| v.is_finite())
-                    .unwrap_or(0.0);
-                col.push(v);
+                let v = r.get::<_, Option<f64>>(fi).map_err(|e| read_fail(CTX, e))?;
+                col.push(v.filter(|v| v.is_finite()).unwrap_or(0.0));
             }
         }
     }
     let n = profits.len();
     let min_n = min_n.max(1) as usize;
     if n < min_n {
-        return None;
+        // Not enough sample — a legitimate "no suggestion", not a failure.
+        return Ok(None);
     }
 
     // Квантильные края и бин каждой сделки по каждому полю.
@@ -136,7 +141,11 @@ pub fn smart_suggest(
                     let mut hi = ne;
                     while lo + 1 < hi {
                         let m = (lo + hi) / 2;
-                        if *v >= e[m] { lo = m } else { hi = m }
+                        if *v >= e[m] {
+                            lo = m
+                        } else {
+                            hi = m
+                        }
                     }
                     lo.min(ne - 1) as u8
                 }
@@ -159,7 +168,9 @@ pub fn smart_suggest(
         .collect();
     let mut base_fail: Vec<u16> = vec![0; n];
     for fi in 0..nf {
-        let Some(Some((lo, hi))) = locked.get(fi) else { continue };
+        let Some(Some((lo, hi))) = locked.get(fi) else {
+            continue;
+        };
         if lo.is_none() && hi.is_none() {
             continue;
         }
@@ -226,101 +237,101 @@ pub fn smart_suggest(
         }
         let mut order: Vec<usize> = (0..nf).filter(|fi| free[*fi]).collect();
         for _pass_no in 0..16 {
-        if restart > 0 {
-            // Fisher–Yates: свой порядок полей на каждый проход.
-            for k in (1..order.len()).rev() {
-                order.swap(k, rng.below(k + 1));
-            }
-        }
-        let mut changed = false;
-        for &fi in &order {
-            // Суммы по бинам среди сделок, проходящих ВСЕ прочие поля.
-            let selfpass = &pass[fi];
-            let mut bp = vec![0.0f64; ne + 1]; // бины + BELOW последним
-            let mut bc = vec![0usize; ne + 1];
-            let (mut tot_p, mut tot_c) = (0.0f64, 0usize);
-            for t in 0..n {
-                let others_ok = fail[t] == u16::from(!selfpass[t]);
-                if !others_ok {
-                    continue;
-                }
-                tot_p += profits[t];
-                tot_c += 1;
-                let b = bins[fi][t];
-                let idx = if b == BELOW { ne } else { b as usize };
-                bp[idx] += profits[t];
-                bc[idx] += 1;
-            }
-            // Кандидаты: «без фильтра» и все пары краёв (i, j).
-            let mut pre_p = vec![0.0f64; ne + 1];
-            let mut pre_c = vec![0usize; ne + 1];
-            for k in 0..ne {
-                pre_p[k + 1] = pre_p[k] + bp[k];
-                pre_c[k + 1] = pre_c[k] + bc[k];
-            }
-            let mut best: Option<(usize, usize)> = None;
-            // None-вариант — база; кандидат обязан обыгрывать её БОЛЬШЕ, чем
-            // на float-шум: суммы бинов и tot_p копятся в разном порядке, и
-            // функционально равный набор сделок «выигрывает» на ~1e-12,
-            // оставляя в результате фильтр-пустышку.
-            let mut best_p = tot_p + tot_p.abs().max(1.0) * 1e-9;
-            // Слотов Delta2/Delta3 всего два: если ДРУГИЕ два слота уже с
-            // диапазонами, этому полю доступен только вариант «без фильтра».
-            let slot_full = is_slot[fi]
-                && locked_slots
-                    + sel
-                        .iter()
-                        .enumerate()
-                        .filter(|(o, s)| *o != fi && is_slot[*o] && s.is_some())
-                        .count()
-                    >= 2;
-            if !slot_full {
-            for i in 0..ne {
-                for j in (i + 1)..=ne {
-                    let c = pre_c[j] - pre_c[i];
-                    if c < min_n {
-                        continue;
-                    }
-                    // Кандидат, пропускающий ВСЕ сделки текущей комбинации
-                    // (включая «весь размах»), — функционально «без фильтра»:
-                    // не рассматриваем (точная целочисленная проверка).
-                    if c == tot_c {
-                        continue;
-                    }
-                    let p = pre_p[j] - pre_p[i];
-                    if p > best_p {
-                        best_p = p;
-                        best = Some((i, j));
-                    }
+            if restart > 0 {
+                // Fisher-Yates gives each pass its own field order.
+                for k in (1..order.len()).rev() {
+                    order.swap(k, rng.below(k + 1));
                 }
             }
-            }
-            if best != sel[fi] {
-                // Пересобрать маску поля и счётчики отказов.
-                sel[fi] = best;
-                changed = true;
+            let mut changed = false;
+            for &fi in &order {
+                // Sum bins among trades that pass every other field.
+                let selfpass = &pass[fi];
+                let mut bp = vec![0.0f64; ne + 1]; // бины + BELOW последним
+                let mut bc = vec![0usize; ne + 1];
+                let (mut tot_p, mut tot_c) = (0.0f64, 0usize);
                 for t in 0..n {
-                    let ok = match best {
-                        None => true,
-                        Some((i, j)) => {
-                            let b = bins[fi][t];
-                            b != BELOW && (i..j).contains(&(b as usize))
+                    let others_ok = fail[t] == u16::from(!selfpass[t]);
+                    if !others_ok {
+                        continue;
+                    }
+                    tot_p += profits[t];
+                    tot_c += 1;
+                    let b = bins[fi][t];
+                    let idx = if b == BELOW { ne } else { b as usize };
+                    bp[idx] += profits[t];
+                    bc[idx] += 1;
+                }
+                // Candidates are no filter and every edge pair `(i, j)`.
+                let mut pre_p = vec![0.0f64; ne + 1];
+                let mut pre_c = vec![0usize; ne + 1];
+                for k in 0..ne {
+                    pre_p[k + 1] = pre_p[k] + bp[k];
+                    pre_c[k + 1] = pre_c[k] + bc[k];
+                }
+                let mut best: Option<(usize, usize)> = None;
+                // The no-filter candidate is the baseline. A range must beat it
+                // beyond floating-point noise because bin sums and `tot_p`
+                // accumulate in different orders; otherwise an equivalent trade
+                // set can win by about 1e-12 and leave a no-op filter.
+                let mut best_p = tot_p + tot_p.abs().max(1.0) * 1e-9;
+                // Only two Delta2/Delta3 slots exist. If two other slots already
+                // have ranges, this field may only choose no filter.
+                let slot_full = is_slot[fi]
+                    && locked_slots
+                        + sel
+                            .iter()
+                            .enumerate()
+                            .filter(|(o, s)| *o != fi && is_slot[*o] && s.is_some())
+                            .count()
+                        >= 2;
+                if !slot_full {
+                    for i in 0..ne {
+                        for j in (i + 1)..=ne {
+                            let c = pre_c[j] - pre_c[i];
+                            if c < min_n {
+                                continue;
+                            }
+                            // A candidate that passes every trade in the current
+                            // combination is functionally no filter, including a
+                            // full-span range, so reject it by exact integer count.
+                            if c == tot_c {
+                                continue;
+                            }
+                            let p = pre_p[j] - pre_p[i];
+                            if p > best_p {
+                                best_p = p;
+                                best = Some((i, j));
+                            }
                         }
-                    };
-                    if ok != pass[fi][t] {
-                        if ok {
-                            fail[t] -= 1;
-                        } else {
-                            fail[t] += 1;
+                    }
+                }
+                if best != sel[fi] {
+                    // Rebuild this field's pass mask and failure counts.
+                    sel[fi] = best;
+                    changed = true;
+                    for t in 0..n {
+                        let ok = match best {
+                            None => true,
+                            Some((i, j)) => {
+                                let b = bins[fi][t];
+                                b != BELOW && (i..j).contains(&(b as usize))
+                            }
+                        };
+                        if ok != pass[fi][t] {
+                            if ok {
+                                fail[t] -= 1;
+                            } else {
+                                fail[t] += 1;
+                            }
+                            pass[fi][t] = ok;
                         }
-                        pass[fi][t] = ok;
                     }
                 }
             }
-        }
-        if !changed {
-            break;
-        }
+            if !changed {
+                break;
+            }
         }
         // Финальная зачистка совместно-избыточных диапазонов: спуск мог
         // остановиться по лимиту проходов, не успев снять поле, все сделки
@@ -357,15 +368,15 @@ pub fn smart_suggest(
                 cnt += 1;
             }
         }
-        if best_global
-            .as_ref()
-            .is_none_or(|(bp, _, _)| profit > *bp)
-        {
+        if best_global.as_ref().is_none_or(|(bp, _, _)| profit > *bp) {
             best_global = Some((profit, cnt, sel.clone()));
         }
     }
 
-    let (profit, cnt, sel) = best_global?;
+    // No variant beat the baseline — a legitimate "no suggestion".
+    let Some((profit, cnt, sel)) = best_global else {
+        return Ok(None);
+    };
     let fields = sel
         .iter()
         .enumerate()
@@ -378,16 +389,24 @@ pub fn smart_suggest(
                     super::tuner::round_bound(from, false),
                     super::tuner::round_bound(to, true),
                 );
-                // Округление наружу у краёв распределения может увести ОБЕ
-                // границы за min/max данных — пара перестала бы резать (ровно
-                // так рождались «фильтры-пустышки» при жёстком min_n); тогда
-                // оставляем сырые значения.
+                // Outward rounding can move both distribution-edge bounds past
+                // the observed range and turn the pair into a no-op filter.
+                // Preserve raw bounds in that case.
                 if rf > edges[fi][0] || rt < edges[fi][ne] {
                     (from, to) = (rf, rt);
                 }
             }
-            Some(SmartField { field: FIELDS[fi].col, from, to })
+            Some(SmartField {
+                field: FIELDS[fi].col,
+                from,
+                to,
+            })
         })
         .collect();
-    Some(SmartResult { fields, profit, n: cnt, rounds: restarts })
+    Ok(Some(SmartResult {
+        fields,
+        profit,
+        n: cnt,
+        rounds: restarts,
+    }))
 }

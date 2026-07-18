@@ -6,10 +6,12 @@ use std::sync::Arc;
 use gpui::*;
 use moon_ui::{MoonInputState, MoonPalette, h_flex, v_flex};
 
-use super::AnalyticsView;
+use super::{AnalyticsView, LoadState};
 use crate::design;
 use crate::design::moon;
-use moon_core::db::tuner::{Bound, FIELDS, FieldClass, HistBucket, StratFilters, VarStats, Variant};
+use moon_core::db::tuner::{
+    Bound, FIELDS, FieldClass, HistBucket, StratFilters, VarStats, Variant,
+};
 
 /// Вариантов помимо «Факта» (V3 держит 8 — начинаем с двух).
 pub(super) const N_VAR: usize = 2;
@@ -38,8 +40,10 @@ pub(super) struct TunerState {
     pub(super) inputs: HashMap<String, Entity<MoonInputState>>,
     /// Поле гистограммы (индекс в `FIELDS`).
     pub(super) sel_field: usize,
-    pub(super) stats: Option<Arc<Vec<VarStats>>>,
-    pub(super) hist: Option<Arc<Vec<HistBucket>>>,
+    /// KPI matrix load state; `dirty` separately marks retained data for recomputation.
+    pub(super) stats: LoadState<Vec<VarStats>>,
+    /// Selected-field histogram read state.
+    pub(super) hist: LoadState<Vec<HistBucket>>,
     /// Фильтровая карточка выбранной стратегии (Ignore-флаги + пороги).
     pub(super) strat: Arc<StratFilters>,
     /// Автоподбор (кнопки «Подобрать») выполняется в фоне.
@@ -82,8 +86,8 @@ impl TunerState {
             bounds,
             inputs: HashMap::new(),
             sel_field: 0,
-            stats: None,
-            hist: None,
+            stats: LoadState::default(),
+            hist: LoadState::default(),
             strat: Arc::new(StratFilters::default()),
             sugg_busy: false,
             save_dialog: None,
@@ -101,18 +105,29 @@ impl TunerState {
         }
     }
 
-    /// Пометить расчёты устаревшими (смена скоупа/фильтров/периода): данные
-    /// НЕ обнуляем — старое остаётся на экране до прихода нового (никаких
-    /// вспышек «Загрузка…»), пересчёт при входе в режим или явным reload_*.
+    /// Mark tuner calculations dirty after a scope, filter, or period change.
+    ///
+    /// Current data remains until recomputation completes to avoid a loading
+    /// flash; a completed non-data result clears it. Recompute on mode entry or
+    /// an explicit reload.
     pub(super) fn invalidate(&mut self) {
         self.dirty = true;
         self.save_dialog = None;
         self.staged_ignore.clear();
+        // Advance every generation even when no replacement starts immediately,
+        // so a request from another scope cannot publish KPI, clear `dirty`, or
+        // apply v1 bounds here.
+        self.seq = self.seq.wrapping_add(1);
+        self.hist_seq = self.hist_seq.wrapping_add(1);
+        self.sugg_seq = self.sugg_seq.wrapping_add(1);
+        // Clear busy with the generation change because an orphaned request
+        // exits before its completion handler can re-enable suggestion buttons.
+        self.sugg_busy = false;
     }
 
     /// Нужен ли пересчёт при входе в режим «Фильтры».
     pub(super) fn needs_reload(&self) -> bool {
-        self.stats.is_none() || self.dirty
+        self.stats.data().is_none() || self.dirty
     }
 
     /// Варианты для запроса: [пустой «Факт», v1..vN].
@@ -165,7 +180,6 @@ pub(super) fn parse_num(s: &str) -> Option<f64> {
         .map(|v| v * mult)
         .filter(|v| v.is_finite())
 }
-
 
 /// Формат числа для границ/чипов: крупные — с суффиксом k/M/B/T (обратно
 /// понимается `parse_num`), прочие — до 4 знаков без хвостовых нулей.
@@ -243,10 +257,7 @@ pub(super) fn card(
 }
 
 /// Есть ли стейджи «ignore», отличающиеся от текущих флагов стратегии.
-pub(super) fn staged_dirty(
-    f: &StratFilters,
-    staged: &HashMap<&'static str, bool>,
-) -> bool {
+pub(super) fn staged_dirty(f: &StratFilters, staged: &HashMap<&'static str, bool>) -> bool {
     staged.iter().any(|(flag, want)| {
         let cur = match *flag {
             "IgnoreFilters" => f.ignore_filters,

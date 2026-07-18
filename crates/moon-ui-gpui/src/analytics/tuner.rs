@@ -15,10 +15,10 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::AnalyticsView;
 pub(super) use super::tuner_state::{
     N_VAR, TunerState, card, flag_of, fmt_bound, parse_num, staged_dirty,
 };
+use super::{AnalyticsView, LoadState};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
@@ -51,11 +51,15 @@ impl AnalyticsView {
             let store = b.session.store();
             let mut out = HashMap::new();
             for (_, cd) in store.cores() {
-                let Some(sch) = cd.schema.as_ref() else { continue };
+                let Some(sch) = cd.schema.as_ref() else {
+                    continue;
+                };
                 for k in &sch.kinds {
                     for s in &k.sections {
                         for f in &s.fields {
-                            let Some(d) = f.default.as_ref() else { continue };
+                            let Some(d) = f.default.as_ref() else {
+                                continue;
+                            };
                             if let Ok(v) = d
                                 .trim()
                                 .trim_end_matches('%')
@@ -73,6 +77,9 @@ impl AnalyticsView {
         };
         // Автоподбор НЕ сбрасываем: правка границ не меняет распределение
         // факта, по которому он считался (сброс — в invalidate()).
+        // Carry current numbers as stale during recomputation; any completed
+        // non-data result drops them.
+        self.tuner.stats.begin();
         self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -91,7 +98,9 @@ impl AnalyticsView {
                     if this.tuner.seq != req {
                         return;
                     }
-                    this.tuner.stats = stats.map(Arc::new);
+                    // A completed non-data result clears stale numbers because
+                    // values under a changed period label must belong to it.
+                    this.tuner.stats.apply(stats);
                     this.tuner.strat = Arc::new(strat);
                     this.tuner.dirty = false;
                     cx.notify();
@@ -107,6 +116,7 @@ impl AnalyticsView {
         let req = self.tuner.hist_seq;
         let q = self.tuner_query();
         let field = FIELDS[self.tuner.sel_field].col.to_string();
+        self.tuner.hist.begin();
         self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -119,7 +129,7 @@ impl AnalyticsView {
                     if this.tuner.hist_seq != req {
                         return;
                     }
-                    this.tuner.hist = hist.map(Arc::new);
+                    this.tuner.hist.apply(hist);
                     cx.notify();
                 });
             });
@@ -128,7 +138,14 @@ impl AnalyticsView {
     }
 
     /// Коммит границы (Blur/Enter инпута): состояние → layout → пересчёт.
-    fn commit_bound(&mut self, vi: usize, fi: usize, is_to: bool, value: String, cx: &mut Context<Self>) {
+    fn commit_bound(
+        &mut self,
+        vi: usize,
+        fi: usize,
+        is_to: bool,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
         let slot = &mut self.tuner.bounds[vi][fi];
         let cur = if is_to { &mut slot.1 } else { &mut slot.0 };
         if *cur == value {
@@ -141,7 +158,14 @@ impl AnalyticsView {
 
     /// Программная установка ОБЕИХ границ поля (чип стратегии / очистка /
     /// автоподбор): состояние + тихая синхронизация инпутов + пересчёт.
-    pub(super) fn apply_bounds(&mut self, vi: usize, fi: usize, from: String, to: String, cx: &mut Context<Self>) {
+    pub(super) fn apply_bounds(
+        &mut self,
+        vi: usize,
+        fi: usize,
+        from: String,
+        to: String,
+        cx: &mut Context<Self>,
+    ) {
         if self.tuner.bounds[vi][fi] == (from.clone(), to.clone()) {
             return;
         }
@@ -169,7 +193,11 @@ impl AnalyticsView {
             return state.clone();
         }
         let slot = &self.tuner.bounds[vi][fi];
-        let value = if is_to { slot.1.clone() } else { slot.0.clone() };
+        let value = if is_to {
+            slot.1.clone()
+        } else {
+            slot.0.clone()
+        };
         let state = cx.new(|cx| MoonInputState::new(window, cx).default_value(value));
         cx.subscribe(&state, move |this, state, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
@@ -210,9 +238,7 @@ impl AnalyticsView {
             // клике «Подобрать», без обязательного Enter/выхода из поля.
             if matches!(
                 ev,
-                MoonInputEvent::Change
-                    | MoonInputEvent::Blur
-                    | MoonInputEvent::PressEnter { .. }
+                MoonInputEvent::Change | MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }
             ) {
                 let value = state.read(cx).value().to_string();
                 match which {
@@ -280,7 +306,11 @@ impl AnalyticsView {
                     .child(t!("analytics.tuner.field").to_string()),
             )
             // Колонка чипа: пороги выбранной стратегии (клик — в v1).
-            .child(div().flex_1().child(t!("analytics.tuner.strat_chip").to_string()));
+            .child(
+                div()
+                    .flex_1()
+                    .child(t!("analytics.tuner.strat_chip").to_string()),
+            );
         for vi in 0..N_VAR {
             head = head
                 .child(
@@ -392,7 +422,9 @@ impl AnalyticsView {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.tuner.sel_field != fi {
                         this.tuner.sel_field = fi;
-                        this.tuner.hist = None;
+                        // Another field's histogram is not this field's stale
+                        // data — drop it outright rather than carrying it.
+                        this.tuner.hist = LoadState::default();
                         this.reload_hist(cx);
                         cx.notify();
                     }
@@ -561,9 +593,10 @@ impl AnalyticsView {
                     .child(t!("analytics.tuner.iters").to_string()),
             )
             .child(
-                div().w(design::font_w_px(cx, 46.0)).flex_none().child(
-                    MoonInput::new("tun-cfg-it").state(&it_input).small(),
-                ),
+                div()
+                    .w(design::font_w_px(cx, 46.0))
+                    .flex_none()
+                    .child(MoonInput::new("tun-cfg-it").state(&it_input).small()),
             )
             .child(
                 div()
@@ -571,9 +604,10 @@ impl AnalyticsView {
                     .child(t!("analytics.tuner.min_trades").to_string()),
             )
             .child(
-                div().w(design::font_w_px(cx, 52.0)).flex_none().child(
-                    MoonInput::new("tun-cfg-mn").state(&mn_input).small(),
-                ),
+                div()
+                    .w(design::font_w_px(cx, 52.0))
+                    .flex_none()
+                    .child(MoonInput::new("tun-cfg-mn").state(&mn_input).small()),
             )
             .child(
                 div()
@@ -647,21 +681,23 @@ impl AnalyticsView {
                         .text_color(moon(p.text_muted))
                         .child(t!("analytics.tuner.round_lbl").to_string()),
                 )
-                .child(div().flex_none().child(
-                    MoonCheckbox::new("tun-round")
-                        .checked(self.tuner.round_results)
-                        .size(MoonCheckboxSize::Compact)
-                        .on_change({
-                            let view = cx.entity();
-                            move |ch: &bool, _w, app| {
-                                let on = *ch;
-                                view.update(app, |this, cx| {
-                                    this.tuner.round_results = on;
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                ));
+                .child(
+                    div().flex_none().child(
+                        MoonCheckbox::new("tun-round")
+                            .checked(self.tuner.round_results)
+                            .size(MoonCheckboxSize::Compact)
+                            .on_change({
+                                let view = cx.entity();
+                                move |ch: &bool, _w, app| {
+                                    let on = *ch;
+                                    view.update(app, |this, cx| {
+                                        this.tuner.round_results = on;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    ),
+                );
             // «Сделать копию»: новая стратегия = текущая + пороги v1.
             header = header.child(
                 MoonButton::new("tun-copy-strat")
@@ -707,7 +743,6 @@ impl AnalyticsView {
             .child(grid)
             .into_any_element()
     }
-
 
     /// Подзаголовок группы: подпись + кликабельное «ignore» (стейджится) и
     /// «применить», когда стейдж отличается от текущего флага стратегии —
@@ -764,12 +799,7 @@ impl AnalyticsView {
                     .child(if shown { "ignore=YES" } else { "ignore=NO" })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let (_, cur) = flag_of(class, &this.tuner.strat.clone());
-                        let now = this
-                            .tuner
-                            .staged_ignore
-                            .get(flag)
-                            .copied()
-                            .unwrap_or(cur);
+                        let now = this.tuner.staged_ignore.get(flag).copied().unwrap_or(cur);
                         if !now == cur {
                             this.tuner.staged_ignore.remove(flag);
                         } else {

@@ -22,30 +22,71 @@ impl AnalyticsView {
             .as_ref()
             .map(|(_, n)| n.clone())
             .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
-        let Some(stats) = self.tuner.stats.clone() else {
-            return card(
-                t!("analytics.tuner.kpi_title").to_string(),
-                scope,
-                div()
-                    .p(design::ui_px(cx, 8.0))
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.loading").to_string())
-                    .into_any_element(),
-                p,
-                cx,
-            );
+        // No empty state by design: `stats.len() == variants.len()` always, so
+        // the only non-data cases are loading / not-ready / read failure.
+        let stats = match self.tuner.stats.view(|_| false) {
+            Ok(s) => s.clone(),
+            Err(note) => {
+                return card(
+                    t!("analytics.tuner.kpi_title").to_string(),
+                    scope,
+                    super::note_el("an-tuner-kpi-note", note, 8.0, p, cx),
+                    p,
+                    cx,
+                );
+            }
         };
         // (подпись, значение, больше=лучше; None — без сравнения с фактом)
         type Row = (String, fn(&VarStats) -> f64, Option<bool>, bool);
         let rows: Vec<Row> = vec![
-            (t!("analytics.kpi.trades").to_string(), |s| s.n as f64, None, true),
-            (t!("analytics.kpi.profit").to_string(), |s| s.profit, Some(true), false),
-            (t!("analytics.kpi.winrate").to_string(), |s| s.winrate(), Some(true), false),
-            (t!("analytics.col.pf").to_string(), |s| s.pf, Some(true), false),
-            (t!("analytics.kpi.avg_short").to_string(), |s| s.avg, Some(true), false),
-            (t!("analytics.tuner.avg_win").to_string(), |s| s.avg_win, Some(true), false),
-            (t!("analytics.tuner.avg_loss").to_string(), |s| s.avg_loss, Some(false), false),
-            (t!("analytics.kpi.maxdd").to_string(), |s| s.max_dd, Some(false), false),
+            (
+                t!("analytics.kpi.trades").to_string(),
+                |s| s.n as f64,
+                None,
+                true,
+            ),
+            (
+                t!("analytics.kpi.profit").to_string(),
+                |s| s.profit,
+                Some(true),
+                false,
+            ),
+            (
+                t!("analytics.kpi.winrate").to_string(),
+                |s| s.winrate(),
+                Some(true),
+                false,
+            ),
+            (
+                t!("analytics.col.pf").to_string(),
+                |s| s.pf,
+                Some(true),
+                false,
+            ),
+            (
+                t!("analytics.kpi.avg_short").to_string(),
+                |s| s.avg,
+                Some(true),
+                false,
+            ),
+            (
+                t!("analytics.tuner.avg_win").to_string(),
+                |s| s.avg_win,
+                Some(true),
+                false,
+            ),
+            (
+                t!("analytics.tuner.avg_loss").to_string(),
+                |s| s.avg_loss,
+                Some(false),
+                false,
+            ),
+            (
+                t!("analytics.kpi.maxdd").to_string(),
+                |s| s.max_dd,
+                Some(false),
+                false,
+            ),
         ];
         let col_w = 92.0;
         let mut head = h_flex()
@@ -57,14 +98,24 @@ impl AnalyticsView {
             .text_size(design::t_caption(cx))
             .text_color(moon(p.text_soft))
             .bg(moon(p.table_head))
-            .child(div().flex_1().child(t!("analytics.tuner.metric").to_string()));
+            .child(
+                div()
+                    .flex_1()
+                    .child(t!("analytics.tuner.metric").to_string()),
+            );
         for i in 0..stats.len() {
             let name = if i == 0 {
                 t!("analytics.tuner.fact").to_string()
             } else {
                 format!("v{i}")
             };
-            head = head.child(div().w(design::font_w_px(cx, col_w)).flex_none().text_right().child(name));
+            head = head.child(
+                div()
+                    .w(design::font_w_px(cx, col_w))
+                    .flex_none()
+                    .text_right()
+                    .child(name),
+            );
         }
 
         let mut body = v_flex().w_full().child(head);
@@ -81,7 +132,11 @@ impl AnalyticsView {
                 .child(div().flex_1().text_color(moon(p.text_soft)).child(label));
             for (i, s) in stats.iter().enumerate() {
                 let v = get(s);
-                let text = if int { format!("{}", v as i64) } else { fmt_signed(v) };
+                let text = if int {
+                    format!("{}", v as i64)
+                } else {
+                    fmt_signed(v)
+                };
                 let color = match better {
                     // Вариант красим относительно факта; сам факт — по знаку.
                     Some(hb) if i > 0 => {
@@ -130,22 +185,10 @@ impl AnalyticsView {
             FIELDS[self.tuner.sel_field].label,
             scope,
         );
-        let body: AnyElement = match self.tuner.hist.clone() {
-            None => div()
-                .p(design::ui_px(cx, 8.0))
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.loading").to_string())
-                .into_any_element(),
-            Some(h) if h.is_empty() => div()
-                .p(design::ui_px(cx, 8.0))
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.empty_period").to_string())
-                .into_any_element(),
-            Some(h) => {
-                let max = h
-                    .iter()
-                    .map(|b| b.wsum.max(b.lsum))
-                    .fold(1e-9f64, f64::max);
+        let body: AnyElement = match self.tuner.hist.view(|h| h.is_empty()) {
+            Err(note) => super::note_el("an-tuner-hist-note", note, 8.0, p, cx),
+            Ok(h) => {
+                let max = h.iter().map(|b| b.wsum.max(b.lsum)).fold(1e-9f64, f64::max);
                 let half = design::ui_px(cx, 74.0);
                 let mut row = h_flex().w_full().gap(design::ui_px(cx, 3.0)).items_start();
                 for b in h.iter() {
@@ -168,9 +211,11 @@ impl AnalyticsView {
                                     .child(
                                         div()
                                             .w(relative(0.62))
-                                            .h(relative(
-                                                up.max(if b.wsum > 0.0 { 0.02 } else { 0.0 }),
-                                            ))
+                                            .h(relative(up.max(if b.wsum > 0.0 {
+                                                0.02
+                                            } else {
+                                                0.0
+                                            })))
                                             .rounded_t(px(2.0))
                                             .bg(moon(p.green)),
                                     ),
@@ -188,9 +233,11 @@ impl AnalyticsView {
                                     .child(
                                         div()
                                             .w(relative(0.62))
-                                            .h(relative(
-                                                dn.max(if b.lsum > 0.0 { 0.02 } else { 0.0 }),
-                                            ))
+                                            .h(relative(dn.max(if b.lsum > 0.0 {
+                                                0.02
+                                            } else {
+                                                0.0
+                                            })))
                                             .rounded_b(px(2.0))
                                             .bg(moon(p.orange)),
                                     ),
@@ -223,7 +270,13 @@ impl AnalyticsView {
                     .into_any_element()
             }
         };
-        card(title, t!("analytics.tuner.hist_sub").to_string(), body, p, cx)
+        card(
+            title,
+            t!("analytics.tuner.hist_sub").to_string(),
+            body,
+            p,
+            cx,
+        )
     }
 }
 
