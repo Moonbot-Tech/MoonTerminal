@@ -16,7 +16,7 @@ pub mod store;
 mod commands;
 mod lifecycle;
 
-pub use store::{CoreId, CoreStore};
+pub use store::{BalanceState, CoreId, CoreStore};
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;

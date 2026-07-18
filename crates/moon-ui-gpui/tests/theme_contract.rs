@@ -78,7 +78,17 @@ fn chart_background_policy_keeps_gpu_canvas_under_scene() {
     let chart_tabs_windows =
         fs::read_to_string(root.join("chart_tabs").join("windows.rs")).unwrap();
     let chart_tabs = format!("{chart_tabs_mod}\n{chart_tabs_windows}");
-    let shell = fs::read_to_string(root.join("shell").join("mod.rs")).unwrap();
+    // The shell is a module tree, not one file: the DockArea is built in `init.rs` while the
+    // body is painted in `render.rs`. The policy assertions below must grep the whole set.
+    let shell = ["mod.rs", "init.rs", "render.rs"]
+        .into_iter()
+        .map(|name| {
+            let path = root.join("shell").join(name);
+            fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let detached = fs::read_to_string(root.join("detached.rs")).unwrap();
 
     assert!(
@@ -143,6 +153,9 @@ fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
     let chart_tabs_mod = fs::read_to_string(root.join("chart_tabs").join("mod.rs")).unwrap();
     let chart_tabs_windows =
         fs::read_to_string(root.join("chart_tabs").join("windows.rs")).unwrap();
+    let chart_detached_host =
+        fs::read_to_string(root.join("chart_tabs").join("detached_host").join("render.rs"))
+            .unwrap();
 
     assert!(
         windowing.contains("fn detached_panel_window_options(")
@@ -163,9 +176,12 @@ fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
         detached.contains("detached_panel_window_options("),
         "generic detached panels must use the owner-aware panel factory"
     );
+    // The chart-window lifecycle spans two files: `windows.rs` picks the options factory,
+    // `detached_host/render.rs` hides the taskbar entry once the window exists. The negatives
+    // stay scoped to `windows.rs` — that is where an owner-carrying panel factory could appear.
     assert!(
         chart_tabs_windows.contains("detached_chart_window_options(")
-            && chart_tabs_windows.contains("hide_window_from_taskbar(window)")
+            && chart_detached_host.contains("hide_window_from_taskbar(window)")
             && !chart_tabs_windows.contains("owner: Option<AnyWindowHandle>")
             && !chart_tabs_windows.contains("detached_panel_window_options("),
         "detached chart windows must use the independent chart factory and must not carry owner in the chart lifecycle"

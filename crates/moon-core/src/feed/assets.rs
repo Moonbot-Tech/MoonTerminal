@@ -114,10 +114,10 @@ pub(super) fn to_exchange_kind(w: WalletKind) -> ExchangeKind {
     }
 }
 
-/// Снимок активов ядра: по всем рынкам с ненулевым балансом/позицией читаем
-/// balance_position + price + listed_type + base/quote, плюс account-итоги
-/// (`GlobalBalance`). Пустые рынки пропускаем (иначе тысячи нулевых строк), но
-/// пыль НЕ фильтруем — это делает UI (порог по USDT-стоимости).
+/// Build one core's asset snapshot from nonempty market balances and positions.
+///
+/// Empty markets are omitted, while dust filtering remains a UI concern. The global row also
+/// records whether its published free/total USD valuation is complete and finite.
 pub(super) fn build_assets(
     markets: &MarketsState,
     balances: &BalancesState,
@@ -137,6 +137,9 @@ pub(super) fn build_assets(
     let mut seen_coin_wallet: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut coin_wallet_full_usdt = 0.0f64;
     let mut coin_wallet_free_usdt = 0.0f64;
+    // Coin-wallet equity is usable only when every held coin contributes a finite quantity at
+    // a finite positive USD price; otherwise a partial sum could masquerade as the full equity.
+    let mut coin_wallet_all_priced = true;
     for h in markets.iter() {
         let bp = h.balance_position();
         let lev = h.with(|m| m.leverage_x);
@@ -195,8 +198,23 @@ pub(super) fn build_assets(
         };
         let has_coin_balance = bp.asset_balance != 0.0 || bp.asset_balance_full != 0.0;
         if has_coin_balance && seen_coin_wallet.insert(coin.clone()) {
-            coin_wallet_full_usdt += qty_full_for_equity.abs() * price.p_last * rate;
-            coin_wallet_free_usdt += bp.asset_balance.abs() * price.p_last * rate;
+            let coin_px_usdt = price.p_last * rate;
+            let qty_full = qty_full_for_equity.abs();
+            let qty_free = bp.asset_balance.abs();
+            let (add_full, add_free) = (qty_full * coin_px_usdt, qty_free * coin_px_usdt);
+            // Quantities also come from the wire, so validate the products as well as the price:
+            // `NaN` would poison the sum and overflow would publish an infinite balance. A bad
+            // nonzero holding is excluded and makes the coin-wallet valuation incomplete.
+            if coin_px_usdt.is_finite()
+                && coin_px_usdt > 0.0
+                && add_full.is_finite()
+                && add_free.is_finite()
+            {
+                coin_wallet_full_usdt += add_full;
+                coin_wallet_free_usdt += add_free;
+            } else if qty_full != 0.0 || qty_free != 0.0 {
+                coin_wallet_all_priced = false;
+            }
         }
         // min_lot_size ядра уже в котируемой валюте: max(step, min_qty)·цена и min_notional.
         let min_lot_usd = price.min_lot_size * rate;
@@ -274,7 +292,12 @@ pub(super) fn build_assets(
     // Итог/свободно из global. ФОЛБЭК на `btc_total`, когда `btc_full` не заполнен: у
     // некоторых спот-аккаунтов (напр. Binance spot USDC) биржа не отдаёт «full», и весь
     // баланс лежит в «available» (`btc_total`) — иначе карта ядра показывала бы 0.
-    let global_full = if g.btc_balance_full.abs() > 1e-9 {
+    // A CORRUPT `btc_full` is not an absent one. The fallback above exists for accounts that
+    // never publish the field — a clean `0.0` — and `NaN.abs() > 1e-9` is false, so without this
+    // guard a non-finite value would take the same path and silently swap equity for available
+    // funds: locked balance and unrealized PnL vanish, and the result renders at full strength.
+    let full_corrupt = !g.btc_balance_full.is_finite();
+    let global_full = if !full_corrupt && g.btc_balance_full.abs() > 1e-9 {
         g.btc_balance_full
     } else {
         g.btc_balance_total
@@ -290,6 +313,12 @@ pub(super) fn build_assets(
     } else {
         (global_total_usdt, global_free_usdt)
     };
+    // Published sums must also be finite: rates and accumulation can overflow independently of
+    // whether the source itself was priced.
+    let usd_rate_known =
+        source_priced(coin_margined, coin_wallet_all_priced, full_corrupt, rate)
+            && total_usdt.is_finite()
+            && free_usdt.is_finite();
     let global = GlobalBalanceRow {
         btc_total: g.btc_balance_total,
         btc_locked: g.btc_balance_locked,
@@ -299,6 +328,7 @@ pub(super) fn build_assets(
         free_usdt,
         total_usdt,
         pnl_usdt: g.total_pnl * rate,
+        usd_rate_known,
     };
     AssetsSnapshot {
         rows,
@@ -353,5 +383,63 @@ pub(super) fn build_transfer_assets(
         spot: conv(ExchangeKind::Spot),
         futures: conv(ExchangeKind::Futures),
         quarterly: conv(ExchangeKind::Quarterly),
+    }
+}
+
+/// Whether the source that ACTUALLY produced the published equity vouches for its own pricing.
+///
+/// Which source is asked depends on which one was used: a coin-margined account takes its equity
+/// from the per-coin wallets, so every held coin must have been priceable; every other account
+/// takes it from `global` scaled by the base-currency rate, so that rate must be finite and
+/// positive AND the raw `btc_full` field must not have arrived corrupt.
+///
+/// Split out from `build_assets` because this is the decision that turns a number into a trusted
+/// one, and it is worth pinning on its own: asking the wrong source, or letting a corrupt field
+/// through, publishes a confident figure that is quietly wrong.
+fn source_priced(
+    coin_margined: bool,
+    coin_wallet_all_priced: bool,
+    full_corrupt: bool,
+    rate: f64,
+) -> bool {
+    if coin_margined {
+        coin_wallet_all_priced
+    } else {
+        !full_corrupt && rate.is_finite() && rate > 0.0
+    }
+}
+
+#[cfg(test)]
+/// Checks for the predicate that decides whether published USD equity may be trusted.
+mod tests {
+    use super::source_priced;
+
+    /// A global-sourced account needs a usable base-currency rate.
+    #[test]
+    fn global_source_requires_a_finite_positive_rate() {
+        assert!(source_priced(false, false, false, 1.0));
+        assert!(!source_priced(false, false, false, 0.0));
+        assert!(!source_priced(false, false, false, -1.0));
+        assert!(!source_priced(false, false, false, f64::NAN));
+        assert!(!source_priced(false, false, false, f64::INFINITY));
+    }
+
+    /// A corrupt `btc_full` disqualifies the global source even when the rate is perfect.
+    ///
+    /// The trap this guards: `NaN.abs() > 1e-9` is false, so a non-finite `btc_full` silently took
+    /// the "field not published" fallback and reported available funds as though they were equity
+    /// — locked balance and unrealized PnL dropped, at full rendering strength.
+    #[test]
+    fn corrupt_full_disqualifies_the_global_source() {
+        assert!(!source_priced(false, false, true, 1.0));
+        assert!(!source_priced(false, true, true, 1.0));
+    }
+
+    /// A coin-margined account is judged by its wallets, which `btc_full` never fed — so the same
+    /// corruption must NOT disqualify it, or a healthy COIN-M account would read as unpriced.
+    #[test]
+    fn coin_margined_source_is_judged_by_its_wallets() {
+        assert!(source_priced(true, true, true, 0.0));
+        assert!(!source_priced(true, false, false, 1.0));
     }
 }

@@ -31,6 +31,64 @@ assets.empty:
   ru: "нет активов"
   en: "no assets"
   es: "sin activos"
+# Futures balances are quote-denominated and absent from the table, so its empty state describes
+# open positions rather than account equity; the balance surfaces carry the account figure.
+assets.empty_no_positions:
+  ru: "нет открытых позиций"
+  en: "no open positions"
+  es: "sin posiciones abiertas"
+# --- Footer: account balances across the in-scope cores ---
+# Tooltip on the LEFT footer group. The row carries two different sums side by side, so each
+# group states what it covers — a trader must never read Σ as the account equity.
+assets.footer_table_hint:
+  ru: "Строки таблицы после фильтра пыли; Σ — их суммарная стоимость"
+  en: "Table rows after the dust filter; Σ is their combined value"
+  es: "Filas de la tabla tras el filtro de polvo; Σ es su valor combinado"
+# Appended to the tooltip above when some visible rows have no valid value: the row count
+# includes them but Σ cannot, so a shortened sum must say what it left out.
+assets.footer_rows_unpriced:
+  ru: "У %{n} строк нет корректной стоимости — Σ их не учитывает"
+  en: "%{n} rows have no valid value — Σ excludes them"
+  es: "%{n} filas sin valor válido — Σ las excluye"
+# Closing line of the RIGHT group's tooltip — the counterpart to the hint above.
+assets.balances_scope_hint:
+  ru: "Средства по ядрам охвата — это не сумма таблицы"
+  en: "Equity across the in-scope cores — not the table sum"
+  es: "Fondos de los núcleos en alcance — no es la suma de la tabla"
+assets.balances_total:
+  ru: "Итого"
+  en: "Total"
+  es: "Total"
+assets.balances_free:
+  ru: "своб"
+  en: "free"
+  es: "libre"
+# The retained figure is not confirmed current for the connection.
+assets.balance_stale:
+  ru: "нет связи"
+  en: "offline"
+  es: "sin conexión"
+# A snapshot exists, but its USD valuation is incomplete or invalid rather than zero.
+assets.balance_unpriced:
+  ru: "нет курса"
+  en: "no rate"
+  es: "sin cotización"
+# Cores whose snapshot has not arrived yet: excluded from the total, but the state clears itself.
+assets.balances_awaiting:
+  ru: "ждём: %{n}"
+  en: "awaiting: %{n}"
+  es: "esperando: %{n}"
+# Cores with a snapshot but no conversion rate: also excluded, and — unlike awaiting — it will
+# not resolve on its own, so it is counted separately rather than told to keep waiting.
+assets.balances_unpriced_n:
+  ru: "нет курса: %{n}"
+  en: "no rate: %{n}"
+  es: "sin cotización: %{n}"
+# Some cores were summed from a retained snapshot, so the total is not "as of now".
+assets.balances_stale_n:
+  ru: "нет связи: %{n}"
+  en: "offline: %{n}"
+  es: "sin conexión: %{n}"
 assets.section_positions:
   ru: "Позиции"
   en: "Positions"
