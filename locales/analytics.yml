@@ -44,6 +44,102 @@ analytics.stub:
   en: "Tab under construction — next stage of the analytics plan."
   es: "Pestaña en desarrollo — siguiente etapa del plan."
 
+# Вкладка «Календарь»: тепловые карты PnL по дням.
+analytics.heat.year:
+  ru: "Год"
+  en: "Year"
+  es: "Año"
+analytics.heat.month:
+  ru: "Месяц"
+  en: "Month"
+  es: "Mes"
+analytics.heat.total:
+  ru: "Итог"
+  en: "Total"
+  es: "Total"
+analytics.heat.trades_short:
+  ru: "%{n} сд"
+  en: "%{n} tr"
+  es: "%{n} op"
+analytics.heat.cores_n:
+  ru: "%{n} ядер"
+  en: "%{n} cores"
+  es: "%{n} núcleos"
+analytics.heat.trades_full:
+  ru: "%{n} сделки"
+  en: "%{n} trades"
+  es: "%{n} operac."
+# Календарь прибыли: заголовок, навигация по месяцам, KPI, нижняя полоса.
+analytics.cal.title:
+  ru: "Календарь прибыли"
+  en: "Profit calendar"
+  es: "Calendario de beneficios"
+analytics.cal.day:
+  ru: "День"
+  en: "Day"
+  es: "Día"
+analytics.cal.all_years:
+  ru: "Все года"
+  en: "All years"
+  es: "Todos los años"
+analytics.cal.day_soon:
+  ru: "Детализация дня — следующим этапом"
+  en: "Day details — coming next"
+  es: "Detalle del día — próximamente"
+analytics.cal.prev:
+  ru: "Назад"
+  en: "Back"
+  es: "Atrás"
+analytics.cal.next:
+  ru: "Вперёд"
+  en: "Forward"
+  es: "Adelante"
+analytics.cal.kpi_profit:
+  ru: "Прибыль месяца"
+  en: "Month profit"
+  es: "Beneficio del mes"
+analytics.cal.kpi_wins:
+  ru: "Плюсовые ордера"
+  en: "Winning orders"
+  es: "Órdenes ganadoras"
+analytics.cal.kpi_losses:
+  ru: "Минусовые ордера"
+  en: "Losing orders"
+  es: "Órdenes perdedoras"
+analytics.cal.pos_days:
+  ru: "Плюсовые дни"
+  en: "Winning days"
+  es: "Días ganadores"
+analytics.cal.neg_days:
+  ru: "Минусовые дни"
+  en: "Losing days"
+  es: "Días perdedores"
+analytics.cal.active_days:
+  ru: "Активные дни"
+  en: "Active days"
+  es: "Días activos"
+analytics.cal.neutral_days:
+  ru: "Нейтральные дни"
+  en: "Neutral days"
+  es: "Días neutrales"
+analytics.heat.loss:
+  ru: "убыток"
+  en: "loss"
+  es: "pérdida"
+analytics.heat.profit:
+  ru: "прибыль"
+  en: "profit"
+  es: "beneficio"
+# Короткие дни недели (Пн→Вс) и месяцы (Янв→Дек) — через запятую, по порядку.
+analytics.heat.weekdays:
+  ru: "Пн,Вт,Ср,Чт,Пт,Сб,Вс"
+  en: "Mon,Tue,Wed,Thu,Fri,Sat,Sun"
+  es: "Lun,Mar,Mié,Jue,Vie,Sáb,Dom"
+analytics.heat.months:
+  ru: "Янв,Фев,Мар,Апр,Май,Июн,Июл,Авг,Сен,Окт,Ноя,Дек"
+  en: "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec"
+  es: "Ene,Feb,Mar,Abr,May,Jun,Jul,Ago,Sep,Oct,Nov,Dic"
+
 # Тюнер фильтров (вкладка «Фильтры»): что-если по порогам рыночных полей.
 analytics.tuner.kpi_title:
   ru: "Факт vs варианты"

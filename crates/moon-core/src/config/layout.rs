@@ -144,6 +144,10 @@ pub struct WindowLayout {
     /// открывается с прошлым выбором. None = дефолт («Тек. месяц»).
     #[serde(default)]
     pub analytics_period: Option<String>,
+    /// Режим тепловой карты «Аналитики»: "year" (GitHub-обзор) / "month"
+    /// (крупные карточки-дни). None = дефолт («Месяц»).
+    #[serde(default)]
+    pub analytics_heat_mode: Option<String>,
     /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

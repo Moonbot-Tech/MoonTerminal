@@ -2,13 +2,15 @@
 //! (см. план analytics-panel-plan: сводка → сравнения → heatmap → календарь).
 //!
 //! Отдельное singleton ОС-окно (паттерн «Скринер»): геометрия персистится в
-//! `layout.analytics_window`. Вкладки — полоса MoonButton (как в Настройках);
-//! пока функциональна «Сводка», остальные — заглушки следующих этапов.
+//! `layout.analytics_window`. Вкладки — полоса MoonButton (как в Настройках):
+//! «Сводка», «Стратегии», «Календарь» (тепловые карты). Плечо/Монеты — заглушки
+//! следующих этапов.
 //! Данные считает `moon_core::db::analytics` на background executor (полная
 //! выборка периода из SQLite — не на UI-потоке), перезапрашиваются ТОЛЬКО
 //! действием пользователя: открытие окна, смена периода/фильтра, повторный
 //! клик активного пресета периода (ручное обновление).
 
+mod calendar;
 mod charts;
 mod strategies;
 mod summary;
@@ -32,33 +34,36 @@ use rust_i18n::t;
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
 use moon_core::db::SideFilter;
-use moon_core::db::analytics::{Query, StrategyDetail, Summary};
+use moon_core::db::analytics::{DayCell, Query, StrategyDetail, Summary};
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
 
 /// Задержка показа оверлея занятости: быстрые пересчёты не мигают затемнением.
 const BUSY_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
 
-/// Вкладки окна. Заглушки (Монеты/Heatmap/Календарь/Плечо) убраны — вернутся
-/// по мере реализации этапов плана.
+/// Вкладки окна. Заглушки (Монеты/Плечо) вернутся по мере реализации этапов.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Summary,
     Strategies,
+    /// Календарь прибыли (День / Месяц / Год).
+    Calendar,
 }
 
 impl Tab {
-    const ALL: [Tab; 2] = [Tab::Summary, Tab::Strategies];
+    const ALL: [Tab; 3] = [Tab::Summary, Tab::Strategies, Tab::Calendar];
     fn id(self) -> &'static str {
         match self {
             Tab::Summary => "an-summary",
             Tab::Strategies => "an-strategies",
+            Tab::Calendar => "an-calendar",
         }
     }
     fn title(self) -> String {
         match self {
             Tab::Summary => t!("analytics.tab.summary"),
             Tab::Strategies => t!("analytics.tab.strategies"),
+            Tab::Calendar => t!("analytics.tab.calendar"),
         }
         .to_string()
     }
@@ -158,18 +163,18 @@ impl Period {
     }
 }
 
-/// unix-секунды → дата UTC (для календарей «с»/«по»).
-fn day_of_secs(secs: i64) -> Option<chrono::NaiveDate> {
+/// unix-секунды → дата UTC (для календарей «с»/«по» и тепловой карты).
+pub(super) fn day_of_secs(secs: i64) -> Option<chrono::NaiveDate> {
     chrono::DateTime::from_timestamp(secs, 0).map(|d| d.date_naive())
 }
 
 /// Дата UTC → unix-секунды полуночи этих суток.
-fn secs_of_day(d: chrono::NaiveDate) -> i64 {
+pub(super) fn secs_of_day(d: chrono::NaiveDate) -> i64 {
     d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp()).unwrap_or(0)
 }
 
-/// «дд.мм.гг» для подписей полей диапазона.
-fn fmt_day(secs: i64) -> String {
+/// «дд.мм.гг» для подписей полей диапазона и инфо тепловой карты.
+pub(super) fn fmt_day(secs: i64) -> String {
     day_of_secs(secs).map(|d| d.format("%d.%m.%y").to_string()).unwrap_or_default()
 }
 
@@ -209,6 +214,22 @@ pub struct AnalyticsView {
     pub(super) sel_strategy: Option<(String, String)>,
     pub(super) detail: Option<Arc<StrategyDetail>>,
     detail_seq: u64,
+    /// Вкладка «Календарь»: посуточные ячейки (PnL+сделки+wins) за период.
+    pub(super) cal_days: Option<Arc<Vec<DayCell>>>,
+    cal_seq: u64,
+    /// Серия устарела относительно текущих фильтров — перечитать при входе.
+    cal_dirty: bool,
+    cal_mode: calendar::CalMode,
+    /// Показанный месяц календаря `(год, месяц 1..12)` — СВОЯ навигация вкладки
+    /// (Назад/Вперёд); период-бар окна на «Календаре» не действует.
+    pub(super) cal_ym: (i32, u32),
+    /// Выбранный день (start суток) для режима «День».
+    pub(super) cal_day: i64,
+    /// Агрегат ПРЕДЫДУЩЕГО месяца `(profit, trades, wins)` — для дельт KPI
+    /// «к пред. периоду» (сравниваем месяц с месяцем, не 30 дней).
+    pub(super) cal_prev: Option<(f64, i64, i64)>,
+    /// День под курсором в календаре (start суток) — подсветка ячейки.
+    pub(super) cal_hover: Option<i64>,
     /// Режим вкладки «Стратегии» (Обзор / Фильтры / Монеты). Приватность —
     /// модульная: субмодули вкладок видят поля родителя без pub(super).
     strat_mode: strategies::StratMode,
@@ -252,6 +273,14 @@ impl AnalyticsView {
             .analytics_period
             .as_deref()
             .and_then(Period::from_id);
+        // Режим календаря из прошлого запуска (дефолт — «Месяц»).
+        let saved_mode = backend
+            .read(cx)
+            .layout
+            .analytics_heat_mode
+            .as_deref()
+            .and_then(calendar::CalMode::from_id)
+            .unwrap_or(calendar::CalMode::Month);
 
         // Календари «с»/«по»: выбор дня закрывает попап и переключает период.
         let cal_from = cx.new(|cx| MoonCalendarState::new(window, cx));
@@ -296,6 +325,18 @@ impl AnalyticsView {
             sel_strategy: None,
             detail: None,
             detail_seq: 0,
+            cal_days: None,
+            cal_seq: 0,
+            cal_dirty: true,
+            cal_mode: saved_mode,
+            cal_ym: {
+                use chrono::Datelike;
+                let d = day_of_secs(moon_core::util::now_unix_ms_i64() / 1000).unwrap_or_default();
+                (d.year(), d.month())
+            },
+            cal_day: (moon_core::util::now_unix_ms_i64() / 1000).div_euclid(86_400) * 86_400,
+            cal_prev: None,
+            cal_hover: None,
             strat_mode: strategies::StratMode::Filters,
             tuner: tuner::TunerState::load(),
             cal_from,
@@ -382,6 +423,12 @@ impl AnalyticsView {
             self.reload_tuner(cx);
             self.reload_hist(cx);
         }
+        // Календарь зависит от тех же фильтров: помечаем устаревшим;
+        // активной вкладке — пересчёт сразу, иначе при входе на неё.
+        self.cal_dirty = true;
+        if self.tab == Tab::Calendar {
+            self.reload_calendar(cx);
+        }
         let q = self.query();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -433,6 +480,83 @@ impl AnalyticsView {
                         return;
                     }
                     this.detail = detail.map(Arc::new);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Диапазон `[from,to)` календаря по режиму: месяц / все года / один день
+    /// + текущие фильтры ядро/сторона/эму (период-бар окна тут не участвует).
+    fn cal_query(&self) -> Query {
+        let (from, to) = match self.cal_mode {
+            calendar::CalMode::Month => calendar::month_range(self.cal_ym),
+            calendar::CalMode::Year => calendar::all_history_range(),
+            calendar::CalMode::Day => (self.cal_day, self.cal_day + 86_400),
+        };
+        Query {
+            from,
+            to,
+            cores: self.cores_selected(),
+            side: self.side,
+            emulator: self.emu,
+            strategy: None,
+        }
+    }
+
+    /// Запрос ПРЕДЫДУЩЕГО месяца (для дельт KPI) — только в режиме «Месяц».
+    fn cal_query_prev(&self) -> Option<Query> {
+        if self.cal_mode != calendar::CalMode::Month {
+            return None;
+        }
+        let (from, to) = calendar::prev_month_range(self.cal_ym);
+        Some(Query {
+            from,
+            to,
+            cores: self.cores_selected(),
+            side: self.side,
+            emulator: self.emu,
+            strategy: None,
+        })
+    }
+
+    /// Фоновый расчёт посуточной серии для вкладки «Календарь».
+    pub(super) fn reload_calendar(&mut self, cx: &mut Context<Self>) {
+        self.cal_dirty = false;
+        // Наведённый день из прежней серии больше не под курсором — гасим
+        // застрявшую подсветку (новая серия могла не содержать тот день).
+        self.cal_hover = None;
+        self.cal_seq = self.cal_seq.wrapping_add(1);
+        let req = self.cal_seq;
+        // Календарь строит СВОЙ запрос по режиму, а не по период-бару окна
+        // (он на этой вкладке скрыт). Фильтры ядро/сторона/эму сохраняются.
+        let q = self.cal_query();
+        let q_prev = self.cal_query_prev();
+        self.op_started();
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let data = executor
+                .spawn(async move {
+                    let cur = moon_core::db::analytics::calendar_cells(&q);
+                    // Агрегат пред. месяца (profit, trades, wins) для дельт KPI.
+                    let prev = q_prev.and_then(|qp| moon_core::db::analytics::calendar_cells(&qp)).map(|d| {
+                        d.iter().fold((0.0f64, 0i64, 0i64), |a, c| {
+                            (a.0 + c.profit, a.1 + c.trades, a.2 + c.wins)
+                        })
+                    });
+                    (cur, prev)
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.op_finished(cx);
+                    if this.cal_seq != req {
+                        return; // режим/фильтры уже сменили
+                    }
+                    let (cur, prev) = data;
+                    this.cal_days = cur.map(Arc::new);
+                    this.cal_prev = prev;
                     cx.notify();
                 });
             });
@@ -561,6 +685,9 @@ impl AnalyticsView {
                             {
                                 this.reload_tuner(cx);
                                 this.reload_hist(cx);
+                            }
+                            if t == Tab::Calendar && (this.cal_days.is_none() || this.cal_dirty) {
+                                this.reload_calendar(cx);
                             }
                             cx.notify();
                         }
@@ -774,8 +901,9 @@ impl Render for AnalyticsView {
         let body = match self.tab {
             Tab::Summary => self.summary_tab(p, cx),
             Tab::Strategies => self.strategies_tab(p, window, cx),
+            Tab::Calendar => self.calendar_tab(p, cx),
         };
-        // Обе вкладки делят высоту сами (нижние плашки прибиты к низу окна,
+        // Вкладки делят высоту сами (нижние плашки прибиты к низу окна,
         // содержимое скроллится внутри) — внешнего скролла нет.
         let body_scrolls = false;
         let busy_overlay = self.busy_overlay_due(cx);
@@ -790,7 +918,9 @@ impl Render for AnalyticsView {
             .track_focus(&self.focus)
             .child(analytics_header(p, cx))
             .child(self.tabs_bar(p, cx))
-            .child(self.period_bar(p, cx))
+            // «Календарь» ведёт СВОЮ навигацию по месяцам — период-бар (с/по)
+            // на нём скрыт (у него своя строка Назад/месяц/Вперёд в теле).
+            .when(self.tab != Tab::Calendar, |el| el.child(self.period_bar(p, cx)))
             .child(
                 div()
                     .id("analytics-body")

@@ -168,6 +168,18 @@ pub struct DayPoint {
     pub trades: i64,
 }
 
+/// Ячейка календарной тепловой карты: агрегат суток + вклад по ядрам (для
+/// сегментного бара в крупной карточке дня).
+#[derive(Clone, Debug, Default)]
+pub struct DayCell {
+    /// Начало суток (unix-секунды UTC).
+    pub start: i64,
+    pub profit: f64,
+    pub trades: i64,
+    /// Прибыльных сделок за день (для W/L и winrate ячейки); убытки = trades−wins.
+    pub wins: i64,
+}
+
 /// Серия одного ядра для нижнего чарта «Сводки»: профит по вёдрам той же
 /// сетки, что `Summary::days` (кумулятив строит UI).
 #[derive(Clone, Debug)]
@@ -311,6 +323,74 @@ pub fn summary(q: &Query) -> Option<Summary> {
         from: q.from,
         to: q.to,
     })
+}
+
+/// Плотная посуточная серия ячеек за период — для календарных тепловых карт
+/// («Год» GitHub-style / крупный «Месяц»). Одно ведро = сутки UTC; агрегат
+/// `GROUP BY closedate/86400, core_uid` даёт и суточный итог, и вклад по ядрам
+/// (сегментный бар в карточке). Диапазон заполняется ПОЛНОСТЬЮ (дни без сделок —
+/// пустые ячейки), чтобы сетка календаря была ровной; в отличие от `summary`
+/// НИКОГДА не укрупняет ведро до недели. None — схемы источников ещё нет;
+/// Some(пусто) — период без закрытых сделок.
+pub fn calendar_cells(q: &Query) -> Option<Vec<DayCell>> {
+    calendar_cells_from(&super::open_reader()?, q)
+}
+
+/// Ядро `calendar_cells` над готовым соединением — точка входа для юнит-тестов
+/// (сидируем in-memory `orders_rep`, проверяем бакетинг/дыры/разбивку по ядрам).
+fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
+    let mut q = q.clone();
+    let all_history = q.from < 0;
+    if all_history {
+        q.from = min_closedate(conn);
+    }
+    let Some(src) = unified_from(conn, &q) else {
+        // Схемы источников ещё не пришли — пустой календарь (как `summary`
+        // отдаёт Some(default)), а НЕ None: иначе вкладка висла бы на «Загрузка».
+        return Some(Vec::new());
+    };
+    // Бакет по суткам: PnL, число сделок, прибыльных (для W/L и winrate).
+    let sql = format!(
+        "SELECT (o.closedate / 86400) * 86400 AS d,
+                COALESCE(SUM(o.profitbtc), 0), COUNT(*), COALESCE(SUM(o.profitbtc > 0), 0)
+         FROM {src} GROUP BY d ORDER BY d"
+    );
+    let mut stmt = conn.prepare(&sql).ok()?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, f64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })
+        .ok()?;
+    let mut map: std::collections::HashMap<i64, DayCell> = std::collections::HashMap::new();
+    let (mut first, mut last) = (i64::MAX, i64::MIN);
+    for (d, profit, n, wins) in rows.flatten() {
+        first = first.min(d);
+        last = last.max(d);
+        map.insert(d, DayCell { start: d, profit, trades: n, wins });
+    }
+    if map.is_empty() {
+        return Some(Vec::new()); // период без сделок — пустой календарь
+    }
+    // Границы плотной сетки: для «Все» — от первого дня с данными (иначе
+    // залили бы годы пустот от эпохи); для заданного периода — от его начала.
+    // `to` эксклюзивно → последний день = day(to-1); в будущее не заходим.
+    let now = crate::util::now_unix_ms_i64() / 1000;
+    let today0 = now.div_euclid(86_400) * 86_400;
+    let day0 = if all_history { first } else { q.from.div_euclid(86_400) * 86_400 };
+    let last_grid = ((q.to - 1).div_euclid(86_400) * 86_400).min(today0).max(last);
+    let day0 = day0.min(last_grid);
+    let mut out = Vec::with_capacity((((last_grid - day0) / 86_400) + 1).max(1) as usize);
+    let mut t = day0;
+    while t <= last_grid {
+        out.push(map.remove(&t).unwrap_or(DayCell { start: t, ..Default::default() }));
+        t += 86_400;
+    }
+    Some(out)
 }
 
 /// Самая ранняя closedate по ОБОИМ источникам (резолв периода «Все»).
@@ -673,4 +753,67 @@ fn groups(
     stmt.query_map(rusqlite::params![q.from, q.to], group_from_row)
         .map(|rows| rows.flatten().collect())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// In-memory `orders_rep` (closedate+core_uid+profitbtc) — `unified_from`
+    /// строит ветку по колонкам, которые ЕСТЬ.
+    fn seed(rows: &[(i64, i64, f64)]) -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE orders_rep(closedate INTEGER, core_uid INTEGER, profitbtc REAL);",
+        )
+        .unwrap();
+        for (d, uid, p) in rows {
+            c.execute(
+                "INSERT INTO orders_rep(closedate, core_uid, profitbtc) VALUES (?1, ?2, ?3)",
+                rusqlite::params![d, uid, p],
+            )
+            .unwrap();
+        }
+        c
+    }
+
+    // 2021-01-01 00:00:00 UTC.
+    const D0: i64 = 1_609_459_200;
+
+    #[test]
+    fn buckets_by_utc_day_fills_gaps_and_counts_wins() {
+        // День0: две прибыльные (+10,+5); день1: пусто; день2: одна убыточная (−3).
+        let c = seed(&[
+            (D0 + 3_600, 1, 10.0),
+            (D0 + 7_200, 2, 5.0),
+            (D0 + 2 * 86_400 + 100, 1, -3.0),
+        ]);
+        let q = Query { from: D0, to: D0 + 3 * 86_400, ..Default::default() };
+        let days = calendar_cells_from(&c, &q).unwrap();
+        // Плотный диапазон: ровно 3 дня, включая пустой день1.
+        assert_eq!(days.iter().map(|d| d.start).collect::<Vec<_>>(), vec![D0, D0 + 86_400, D0 + 2 * 86_400]);
+        assert_eq!((days[0].trades, days[0].wins, days[0].profit), (2, 2, 15.0));
+        assert_eq!((days[1].trades, days[1].profit), (0, 0.0)); // дыра заполнена
+        assert_eq!((days[2].trades, days[2].wins, days[2].profit), (1, 0, -3.0));
+    }
+
+    #[test]
+    fn empty_period_is_some_empty_not_none() {
+        let c = seed(&[]);
+        let q = Query { from: D0, to: D0 + 86_400, ..Default::default() };
+        // Схема есть, сделок нет → пустой календарь, а НЕ None и не бесконечный fill.
+        assert_eq!(calendar_cells_from(&c, &q).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn respects_period_bounds_excluding_to() {
+        // Сделка в день3 вне [from, to) не попадает; хвостовой пустой день2 есть.
+        let c = seed(&[(D0 + 100, 1, 7.0), (D0 + 3 * 86_400 + 100, 1, 99.0)]);
+        let q = Query { from: D0, to: D0 + 3 * 86_400, ..Default::default() };
+        let days = calendar_cells_from(&c, &q).unwrap();
+        assert_eq!(days.len(), 3);
+        assert_eq!(days[0].trades, 1);
+        assert!(days.iter().all(|d| (d.profit - 99.0).abs() > 1e-9)); // день3 исключён
+    }
 }
