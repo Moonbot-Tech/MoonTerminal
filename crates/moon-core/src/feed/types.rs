@@ -499,6 +499,15 @@ pub struct GlobalBalanceRow {
     /// Серверный PnL ядра (`total_pnl`), пересчитанный в USDT той же базовой ставкой, что
     /// `free_usdt`/`total_usdt`. Это значение шапки «PnL» — берём с сервера, не суммируем сами.
     pub pnl_usdt: f64,
+    /// Whether `free_usdt`/`total_usdt` carry a complete, finite USD valuation. Global equity
+    /// requires a known base-currency rate; coin-wallet equity requires a valid price for every
+    /// held coin. Missing pricing can otherwise yield a finite zero or a misleading partial sum.
+    ///
+    /// Scope is those two fields ONLY. `pnl_usdt` is always `total_pnl × rate`, so on a
+    /// coin-margined account where equity comes from priced coin wallets while `rate` is zero,
+    /// this can be `true` even though `pnl_usdt` is not valued. Consumers of PnL must establish
+    /// their own pricing validity rather than use this flag.
+    pub usd_rate_known: bool,
 }
 
 /// Снимок активов ядра (для окна «Активы»). Декаплено от moonproto.

@@ -14,10 +14,12 @@ use moon_ui::{
 use rust_i18n::t;
 
 use moon_core::feed::ConnStatus;
+use moon_core::session::BalanceState;
 
 use crate::shell::Shell;
 use crate::{Backend, design};
 
+/// Compose the terminal header for one group from the current backend and shell state.
 pub fn header(
     group: &str,
     backend: Entity<Backend>,
@@ -28,13 +30,21 @@ pub fn header(
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
-    // Баланс активного торгового ядра группы (серверные значения в USDT). Нет ядра/данных → нули.
-    let (free_usdt, total_usdt) = {
+    // Balance of the group's active trade core (server-side USDT figures). Rendered only when
+    // the store classifies it as usable: no core, no snapshot yet, or an invalid valuation all
+    // mean the amount is unknown, and printing 0.00 there would state an empty account as fact.
+    let balance = {
         let b = backend.read(cx);
         b.active_trade_core(group)
             .and_then(|c| b.session.store().core(c))
-            .map(|cd| (cd.assets.global.free_usdt, cd.assets.global.total_usdt))
-            .unwrap_or((0.0, 0.0))
+            .map(|cd| {
+                (
+                    cd.balance_state(),
+                    cd.assets.global.free_usdt,
+                    cd.assets.global.total_usdt,
+                )
+            })
+            .filter(|(state, ..)| state.has_value())
     };
     h_flex()
         .w_full()
@@ -65,7 +75,7 @@ pub fn header(
                     core_settings_content,
                     cx,
                 ))
-                .child(balance_label(free_usdt, total_usdt, p, cx))
+                .child(balance_label(balance, p, cx))
                 // Ручная стратегия: разделитель + тогл MS + пикер + сводка (на месте бывших
                 // кнопок Стратегии/Скринер — те переехали в тулбар к Live).
                 .child(crate::controls::manual_strategy_controls(
@@ -335,24 +345,44 @@ fn core_gear_button(
         .content(content.unwrap_or_else(|| div().into_any_element()))
 }
 
-fn balance_label(free_usdt: f64, total_usdt: f64, p: MoonPalette, cx: &App) -> impl IntoElement {
-    h_flex()
+/// Header balance.
+///
+/// The caller supplies `Some` only for states with a usable value. `None` therefore represents
+/// no core, no snapshot, or no valid valuation and renders as a dash. A `Stale` figure is shown
+/// muted and tagged so a retained pre-outage number is not presented as current.
+fn balance_label(
+    balance: Option<(BalanceState, f64, f64)>,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    let row = h_flex()
         .gap(px(0.0))
         .font_family(design::mono())
         .text_size(design::t_body(cx))
         .text_color(rgb(p.text_soft))
-        .child("Balance: ")
-        .child(
-            div()
-                .text_color(rgb(p.text))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(format!("{free_usdt:.2}")),
-        )
-        .child(
+        .child("Balance: ");
+    let Some((state, free, total)) = balance else {
+        return row.child(div().text_color(rgb(p.text_muted)).child("—"));
+    };
+    let live = state.is_current();
+    row.child(
+        div()
+            .text_color(rgb(if live { p.text } else { p.text_muted }))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(format!("{free:.2}")),
+    )
+    .child(
+        div()
+            .text_color(rgb(p.text_muted))
+            .child(format!(" /{total:.0} USDT")),
+    )
+    .when(!live, |el| {
+        el.child(
             div()
                 .text_color(rgb(p.text_muted))
-                .child(format!(" /{total_usdt:.0} USDT")),
+                .child(format!(" {}", t!("assets.balance_stale"))),
         )
+    })
 }
 
 // Бывший чип `header_action` (иконка+подпись, обход pad_x=0 у MoonButton) удалён:

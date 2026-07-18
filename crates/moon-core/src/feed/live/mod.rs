@@ -52,6 +52,11 @@ impl Drop for ClientSlotGuard {
     }
 }
 
+/// Run one core's live MoonProto event loop until shutdown or a terminal connection error.
+///
+/// Publishes account snapshots and lifecycle state through `tx`, consumes commands from
+/// `cmd_rx`, and exposes the active client through `client_slot`. Returns an error when setup or
+/// the live loop cannot continue; dropping the internal guard clears the shared client slot.
 pub fn run(
     server: &ServerConfig,
     chart_memory_percent: u16,
@@ -315,6 +320,19 @@ pub fn run(
                 // Hedge-mode аккаунта (для тоггла в тулбаре).
                 if let Err(error) = client.account().refresh_hedge_mode() {
                     log::warn!("core {} request hedge mode failed: {error}", server.id);
+                }
+                // Balances are NOT re-pushed on a reconnect: moonproto skips init, so the
+                // retained snapshot keeps feeding pre-outage figures while the status is already
+                // back to Ready — and `CoreData::balance_state()` would then classify them Live.
+                // Request a refresh here so a successful response can shorten that window. This
+                // remains best-effort: a failed request, missing response, or unrelated Assets
+                // rebuild can still leave pre-outage figures classified as Live, so authoritative
+                // freshness needs a connection generation or balance revision on the payload.
+                if let Err(error) = client.balances().refresh() {
+                    log::warn!(
+                        "core {} post-connect balance refresh failed: {error}",
+                        server.id
+                    );
                 }
                 // Chart-алерты авторитетны на ядре: после init/reconnect просим полный
                 // снапшот (без него локальный набор может отстать от сервера).

@@ -1,18 +1,26 @@
-//! Панель/окно «Активы». Сверху — полоса ядер (баланс USDT) + таблица позиций/балансов
-//! по всем ядрам охвата (стоимость/итоги в USDT, фильтр >1 USDT + галка «показать всё»).
-//! Снизу (только в отдельном окне) — список ядер слева (свободно/итого) и 3 контейнера
-//! кошельков (Спот/Фьючерсы/Квартальные) справа: перетаскивание монеты между ними
-//! открывает диалог количества (дефолт — всё свободное) и выполняет перенос.
+//! Assets panel/window. Top: core selector and dust threshold; then the positions/balances table
+//! across every in-scope core (values and totals in USDT); then a footer carrying both summaries
+//! — visible-row count and Σ on the left, the scope's account equity on the right.
+//! Bottom (separate global or detached window only): the core list on the left (free/total) and
+//! three wallet containers (Spot/Futures/Quarterly) on the right — dragging a coin between them
+//! opens a quantity dialog (defaulting to the whole free amount) and performs the transfer.
 //!
-//! Один и тот же `AssetsView` живёт двумя способами:
-//! - как dock-панель в окне группы (`AssetsScope::Group`) — активы ядер группы;
-//! - как глобальное singleton-окно (`AssetsScope::All`, открывается кнопкой «⧉») —
-//!   активы ВСЕХ подключённых ядер. Дедуп окна — в `Backend.assets_window` (как «Стратегии»).
+//! The same `AssetsView` lives in two shapes:
+//! - as a dock panel inside a group window (`AssetsScope::Group`) — that group's cores;
+//! - as a global singleton window (`AssetsScope::All`, opened via the "⧉" button) — ALL
+//!   connected cores. Window dedup lives in `Backend.assets_window` (like "Strategies").
 //!
-//! По функционалу разнесено: состояние/данные/жизненный цикл/окно — здесь, верхняя
-//! таблица и полоса/список ядер — [`table`], 3 контейнера кошельков и диалог переноса
-//! (drag&drop) — [`wallets`].
+//! A futures core shows ONLY open positions in the table (the Moonbot rule, see
+//! [`AssetsView::collect`]), so an account with no positions would look empty: the account
+//! balance comes from the trust-aware balance surfaces ([`balances`]), not from a table row. A
+//! synthetic per-market row would duplicate the margin onto every market, which is what that
+//! rule exists to prevent.
+//!
+//! Split by responsibility: state/data/lifecycle/window here; the table, the core bar/list and
+//! the footer in [`table`]; balance aggregation and its trust-aware rendering in [`balances`];
+//! the 3 wallet containers and the drag&drop transfer dialog in [`wallets`].
 
+mod balances;
 mod table;
 mod wallets;
 
@@ -35,6 +43,8 @@ use moon_core::feed::{AssetRow, TransferAssetRow, WalletKind};
 use moon_core::session::CoreId;
 use rust_i18n::t;
 
+use balances::CoreAgg;
+use moon_core::session::BalanceState;
 use wallets::PendingTransfer;
 
 /// Высота титлбара окна «Активы» (как у окна «Стратегии»).
@@ -56,21 +66,22 @@ pub(super) struct AssetEntry {
     pub(super) core: CoreId,
     pub(super) core_name: String,
     pub(super) row: AssetRow,
-    /// Текущая стоимость в USDT.
+    /// Текущая стоимость в USDT — от удерживаемого БАЛАНСА монеты. Драйвит фильтр пыли и
+    /// сортировку.
+    ///
+    /// NOT what the row displays: a USDT-margined futures position holds no coin balance
+    /// (`feed::assets` builds `value_usdt` from `asset_balance*`), so this is ~0 for it while the
+    /// position is worth its notional. Use [`Self::display_value`] for anything the user reads.
     pub(super) value: f64,
+    /// The number the "Стоим.$" column actually shows: a position's notional
+    /// (`|pos_size| * price`), otherwise [`Self::value`].
+    ///
+    /// Computed once during collection so the value cell and the footer's Σ use the same number;
+    /// summing [`Self::value`] would understate futures rows whose coin balance is near zero.
+    pub(super) display_value: f64,
     /// Рынок строки (`row.market`) реально существует у ядра — гейт кнопки «Market sell»
     /// (у синтетических кошельковых строк рынка `<coin><quote>` может не быть, напр. USDTUSDC).
     pub(super) market_exists: bool,
-}
-
-/// Подытог по ядру: баланс свободно/итого в USDT (для левого списка ядер у «Кошельков»).
-#[derive(Clone)]
-pub(super) struct CoreAgg {
-    pub(super) id: CoreId,
-    /// Свободный баланс в USDT (btc_total * курс).
-    pub(super) free: f64,
-    /// Итоговый баланс в USDT (btc_full * курс, с нереализ. PnL).
-    pub(super) total: f64,
 }
 
 #[derive(Clone)]
@@ -134,6 +145,7 @@ pub struct AssetsView {
     transfer_input: Option<Entity<MoonInputState>>,
     /// Гейт перерисовки (сигнатура assets_rev/transfer_rev ИЛИ 1 Гц-тик, пол 250мс).
     gate: RenderGate,
+    /// Inputs represented by the current caches: data revisions and the dust threshold.
     cache_sig: Option<(u64, u64)>,
     cached_cores: Vec<(CoreId, String)>,
     cached_entries: Rc<Vec<AssetEntry>>,
@@ -141,10 +153,21 @@ pub struct AssetsView {
     /// строки подсвечиваем: монета/позиция сейчас стоит на продажу. Обновляется в
     /// `rebuild_cache` (сигнатура включает orders_table_rev ядер).
     pub(super) sell_marked: Rc<std::collections::HashSet<(CoreId, String)>>,
+    /// Per-core balance figures and their trust classifications for the current scope.
     cached_aggs: Rc<Vec<CoreAgg>>,
+    /// Every in-scope core (after the filter) is a futures core. An empty table then means "no
+    /// open positions" rather than "no assets": futures balances are quote-denominated and never
+    /// reach the table. Computed in `rebuild_cache` to keep the store out of `render`.
+    cached_all_futures: bool,
     cached_wallet_key: Option<(Option<CoreId>, u64, u64)>,
     cached_wallets: Rc<Vec<WalletColumnSnapshot>>,
+    /// Finite USDT value summed across the currently visible table rows.
     cached_total_value: f64,
+    /// Visible rows whose value was not finite and so contributed nothing to `cached_total_value`.
+    /// Counted rather than discarded: the row count includes them, so without this Σ would claim
+    /// to cover rows it silently dropped — the same "partial sum shown as complete" the balance
+    /// side of the footer is built to prevent.
+    cached_value_excluded: usize,
     /// Состояние таблицы позиций (ширины/сортировка колонок) — своё, чтобы ширины
     /// персистились через [`crate::table_persist`].
     table_state: Entity<MoonDataTableState>,
@@ -156,6 +179,7 @@ pub struct AssetsView {
 }
 
 impl AssetsView {
+    /// Build an Assets view for a core scope and the requested window surfaces.
     fn new(
         backend: Entity<Backend>,
         scope: AssetsScope,
@@ -169,7 +193,7 @@ impl AssetsView {
             let now = moon_chart::paint::now_unix_ms();
             let b = backend.read(cx);
             let sig = this.assets_sig(b);
-            let key = (sig, this.min_value_usd.to_bits());
+            let key = this.cache_key(sig);
             let changed = this.cache_sig != Some(key);
             let due = this.gate.should_notify(sig, now);
             if changed || due {
@@ -261,9 +285,11 @@ impl AssetsView {
             cached_entries: Rc::new(Vec::new()),
             sell_marked: Rc::new(std::collections::HashSet::new()),
             cached_aggs: Rc::new(Vec::new()),
+            cached_all_futures: false,
             cached_wallet_key: None,
             cached_wallets: Rc::new(Vec::new()),
             cached_total_value: 0.0,
+            cached_value_excluded: 0,
             table_state,
             widths_id,
             dock: None,
@@ -322,8 +348,7 @@ impl AssetsView {
             .collect()
     }
 
-    /// Сигнатура активов охвата (assets_rev/transfer_rev ядер + orders_table_rev для
-    /// подсветки «стоит на продажу») — гейт перерисовки.
+    /// Render-gate signature for asset, transfer, sale-marker, and balance-freshness inputs.
     fn assets_sig(&self, b: &Backend) -> u64 {
         let store = b.session.store();
         self.scope_cores(b)
@@ -336,6 +361,11 @@ impl AssetsView {
                     .wrapping_add(c.transfer_rev)
                     .wrapping_mul(31)
                     .wrapping_add(c.orders_table_rev)
+                    // Hash the rendered trust state rather than selected ingredients. Status
+                    // transitions bump no data revision, but they can change `balance_state()`
+                    // and must therefore invalidate the rendered balance immediately.
+                    .wrapping_mul(31)
+                    .wrapping_add(c.balance_state().code())
             })
     }
 
@@ -378,7 +408,7 @@ impl AssetsView {
         let mut out = Vec::new();
         for (id, name) in self.scope_cores(b) {
             // Мультивыбор ядер (как в «Ордерах»): пусто = все ядра охвата.
-            if !self.sel_cores.is_empty() && !self.sel_cores.contains(&id) {
+            if !balances::in_scope(&self.sel_cores, id) {
                 continue;
             }
             let Some(cd) = store.core(id) else { continue };
@@ -436,12 +466,21 @@ impl AssetsView {
                     continue;
                 }
                 seen_coin.insert(row.coin.to_ascii_uppercase());
+                // Same predicate the cell renderer uses (`assets_row`), NOT the dust-aware
+                // `is_position` above: the displayed value and the summed value must be one
+                // number, so they must also agree on what counts as a position.
+                let display_value = if row.pos_size != 0.0 {
+                    row.pos_size.abs() * row.price
+                } else {
+                    value
+                };
                 out.push(AssetEntry {
                     core: id,
                     core_name: name.clone(),
                     market_exists: cd.assets.markets.contains(&row.market),
                     row,
                     value,
+                    display_value,
                 });
             }
             // Спот-холдинги из КОШЕЛЬКА (`transfer_assets`). У части бирж (Bitget и др.)
@@ -494,6 +533,8 @@ impl AssetsView {
                         market_exists,
                         row,
                         value: held_value,
+                        // Wallet rows carry no position, so the cell shows the held value too.
+                        display_value: held_value,
                     });
                 }
             }
@@ -513,20 +554,32 @@ impl AssetsView {
             .unwrap_or_else(|| "USDT".to_string())
     }
 
-    /// Балансы по каждому ядру охвата (свободно/итого в USDT, посчитаны на ядре).
-    pub(super) fn per_core(&self, b: &Backend) -> Vec<CoreAgg> {
+    /// Per-core free/total USD balances and the store-owned trust state for each figure.
+    /// Missing store entries are represented as `Awaiting` so every scoped core remains visible.
+    fn per_core(&self, b: &Backend) -> Vec<CoreAgg> {
         let store = b.session.store();
         self.scope_cores(b)
             .into_iter()
-            .map(|(id, _name)| {
-                let mut free = 0.0;
-                let mut total = 0.0;
-                if let Some(cd) = store.core(id) {
-                    // USDT-баланс уже посчитан на ядре с учётом базовой валюты.
-                    free = cd.assets.global.free_usdt;
-                    total = cd.assets.global.total_usdt;
+            .map(|(id, name)| {
+                let Some(cd) = store.core(id) else {
+                    return CoreAgg {
+                        id,
+                        name,
+                        free: 0.0,
+                        total: 0.0,
+                        state: BalanceState::Awaiting,
+                    };
+                };
+                CoreAgg {
+                    id,
+                    name,
+                    // The USDT balance is already computed core-side against the base currency.
+                    free: cd.assets.global.free_usdt,
+                    total: cd.assets.global.total_usdt,
+                    // Classified by the core that owns the data, so the shell header and this
+                    // panel cannot disagree about the same number.
+                    state: cd.balance_state(),
                 }
-                CoreAgg { id, free, total }
             })
             .collect()
     }
@@ -571,6 +624,13 @@ impl AssetsView {
         });
     }
 
+    /// Cache identity: every input `collect`/`per_core` read, so a change to any of them forces
+    /// a rebuild. Kept in one place because it is built at two sites (the backend observer and
+    /// `rebuild_cache`) that must not drift apart.
+    fn cache_key(&self, sig: u64) -> (u64, u64) {
+        (sig, self.min_value_usd.to_bits())
+    }
+
     /// Клик по ячейке «Ядро»: выставить фильтр РОВНО на это ядро; повторный клик по уже
     /// единственному выбранному ядру — сброс на «Все». «set-to-single / clear», не мультитогл.
     pub(super) fn filter_to_core(&mut self, id: CoreId, cx: &mut Context<Self>) {
@@ -584,6 +644,7 @@ impl AssetsView {
         cx.notify();
     }
 
+    /// Rebuild all render caches from one backend snapshot.
     fn rebuild_cache(&mut self, b: &Backend) {
         let sig = self.assets_sig(b);
         let cores = self.scope_cores(b);
@@ -595,13 +656,58 @@ impl AssetsView {
             self.cached_wallet_key = None;
         }
         self.cached_cores = cores;
+        // Drop filter entries whose core is gone. Without this, deleting the one selected core
+        // leaves a set that matches nothing, and "empty means all" never resumes — every
+        // remaining core is filtered out and the panel reads as an empty account.
+        if !self.sel_cores.is_empty() {
+            self.sel_cores
+                .retain(|id| self.cached_cores.iter().any(|(cid, _)| cid == id));
+        }
         self.request_missing_transfers(b);
         self.sell_marked = Rc::new(self.collect_sell_marked(b));
         self.cached_entries = Rc::new(self.collect(b));
         self.cached_aggs = Rc::new(self.per_core(b));
+        self.cached_all_futures = self.all_scope_cores_futures(b);
         self.rebuild_wallet_cache(b);
-        self.cached_total_value = self.cached_entries.iter().map(|e| e.value).sum();
-        self.cache_sig = Some((sig, self.min_value_usd.to_bits()));
+        // Skip non-finite row values so one bad price cannot turn the whole Σ into `NaN`, but
+        // COUNT what was skipped — a silently shortened sum is indistinguishable from an honest
+        // one, and the footer needs to say so.
+        // Sum exactly what the rows DISPLAY, so Σ is the sum of the column above it.
+        let (mut sum, mut excluded) = (0.0f64, 0usize);
+        for e in self.cached_entries.iter() {
+            if e.display_value.is_finite() {
+                sum += e.display_value;
+            } else {
+                excluded += 1;
+            }
+        }
+        self.cached_total_value = sum;
+        self.cached_value_excluded = excluded;
+        self.cache_sig = Some(self.cache_key(sig));
+    }
+
+    /// Whether every filtered core is KNOWN to be a futures core (BaseCheck mask).
+    ///
+    /// Requires a snapshot from each one: before the first snapshot `futures_account` is just
+    /// its `false` default, and treating unknown as "not futures" would assert "no assets" for
+    /// an account whose contents are merely not loaded yet. Any missing/unloaded core, or an
+    /// empty set, yields `false` — the caller then keeps the generic message.
+    fn all_scope_cores_futures(&self, b: &Backend) -> bool {
+        let store = b.session.store();
+        let mut seen = false;
+        for (id, _) in &self.cached_cores {
+            if !balances::in_scope(&self.sel_cores, *id) {
+                continue;
+            }
+            let Some(cd) = store.core(*id) else { return false };
+            if cd.assets_rev == 0 || !cd.assets.futures_account {
+                // Unknown counts as "not futures": asserting "no positions" for an account
+                // whose contents merely have not loaded yet would be a guess stated as fact.
+                return false;
+            }
+            seen = true;
+        }
+        seen
     }
 
     /// Дозапрос transfer-активов для ядер охвата, которые ещё НЕ прислали ни одного снимка
@@ -806,6 +912,7 @@ impl Panel for AssetsView {
 }
 
 impl Render for AssetsView {
+    /// Render the always-present table and footer plus the optional window-only Wallets section.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::ASSETS_RENDER);
         // Метка живости окна для feed-потоков: пока панель на экране (рендер ≥1 Гц от
@@ -824,29 +931,38 @@ impl Render for AssetsView {
         } else {
             design::table_head_h(cx) + count as f32 * design::table_row_h(cx)
         };
-        let total_value = self.cached_total_value;
 
-        // ── Две сворачиваемые горизонтальные секции ─────────────────────────────────
-        // 1 «Позиции» (таблица), 2 «Кошельки» (только в отдельном окне). Секции «Ядра»
-        // (плашки) больше НЕТ — балансы ядер видны в списке слева у «Кошельков».
+        // The table and the footer are always present. Separate windows additionally render the
+        // collapsible Wallets section, whose core list breaks the same balances down per core.
         let aggs = self.cached_aggs.clone();
-        // Верхняя полоса — селектор ядер; счётчик/«показать всё»/Σ уехали в нижний футер.
+        // The top bar owns filtering; the footer owns every summary figure the panel produces.
         let core_bar = self.core_bar(&cores, cx);
-        let footer = self.footer(count, total_value, cx);
+        let footer = self.footer(cx);
         // Контейнеры переноса (список ядер + кошельки) — в отдельном ОКНЕ (глобальном или
         // откреплённом); во вкладке дока показываем только позиции/балансы (таблица шире).
         let wallets = self.cached_wallets.clone();
         let tree_section = self
             .show_wallets
-            .then(|| self.bottom(&cores, &aggs, &wallets, cx).into_any_element());
+            .then(|| self.bottom(&aggs, &wallets, cx).into_any_element());
+        // Built only when it will actually be shown — a non-empty table is the common case, and
+        // the message is pure dead work there. Use the position-specific copy only for a fully
+        // loaded futures-only scope while the dust threshold is active; every other state keeps
+        // the generic Assets copy.
+        let empty_msg = if count > 0 {
+            String::new()
+        } else if self.cached_all_futures && self.min_value_usd > 0.0 {
+            t!("assets.empty_no_positions").to_string()
+        } else {
+            t!("assets.empty").to_string()
+        };
         let table = table::assets_table(
             "assets-table",
             entries,
             self.sell_marked.clone(),
             &self.table_state,
+            empty_msg,
             cx,
         );
-
         // Ширина окна для хит-оверлея титлбара (drag/resize/контролы) — как у «Стратегий».
         let chrome_width = match window.window_bounds() {
             WindowBounds::Windowed(bb)
@@ -883,7 +999,7 @@ impl Render for AssetsView {
                 .child(tree)
                 .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
         }
-        // ── Нижний футер: счётчик позиций + порог + Σ ──
+        // Footer: visible-row count and Σ on the left, scope account equity on the right.
         root = root.child(footer);
         if windowed {
             root = root.child(

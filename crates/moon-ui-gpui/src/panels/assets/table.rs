@@ -1,5 +1,8 @@
-//! Верх окна «Активы»: панель управления (счётчик/«показать всё»/итоги), полоса ядер
-//! (баланс USDT), таблица позиций/балансов и нижний список ядер (свободно/итого).
+//! Assets window chrome: the control bar (core selector, dust threshold), the positions/balances
+//! table, the footer, and the "Wallets" section core list (free/total).
+//!
+//! The footer carries both summaries the panel produces — the visible rows on the left, the
+//! scope's account equity on the right — with [`super::balances`] rendering the account side.
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
@@ -59,8 +62,8 @@ fn open_asset_coin_menu(
 
 
 impl AssetsView {
-    /// Верхняя полоса: поле-список выбора ядер (мультивыбор, как в «Ордерах») + справа слайдер
-    /// порога «скрыть дешевле N $» с подписью `≥ N$`. Счётчик/Σ уехали в нижний футер [`Self::footer`].
+    /// Top controls: multi-core selector and dust threshold. Every summary figure — the row
+    /// count, Σ over visible rows, and the scope balance — is rendered by [`Self::footer`].
     pub(super) fn core_bar(
         &self,
         cores: &[(CoreId, String)],
@@ -147,16 +150,50 @@ impl AssetsView {
         )
     }
 
-    /// Нижний футер: счётчик позиций «Позиции N» и Σ-стоимость справа. Единый визуальный
-    /// образец футера (как в «Отчёте»). Порог видимости («показать всё») переехал слайдером
-    /// в верхнюю полосу [`Self::core_bar`].
-    pub(super) fn footer(
-        &self,
-        count: usize,
-        total_value: f64,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+    /// The panel footer: one row carrying two semantically distinct summaries.
+    ///
+    /// LEFT — the rows currently in the TABLE: how many, and Σ of their value after the dust
+    /// filter. RIGHT — the ACCOUNTS: equity across every in-scope core
+    /// ([`super::balances::summary_group`]).
+    ///
+    /// The two share a line but are not the same quantity: a futures core with no open positions
+    /// can have an empty table (Σ = 0) and a fully funded account. Three devices keep them apart:
+    /// the divider between the groups, different nouns ("Позиции" vs "Ядер"), and a tooltip on
+    /// each group naming what it sums. It is also why Σ sits beside its own count rather than at
+    /// the far right:
+    /// tight inner gaps bind a value to its label, the wide outer gap and the spacer separate
+    /// the subjects.
+    ///
+    /// Σ obeys the same honesty rules as the balance side: it is muted once any visible row was
+    /// dropped from it for a non-finite value (the row count still includes that row), and a dash
+    /// when rows exist but none contributes. An actually empty table retains its known Σ of zero.
+    /// The tooltip names any excluded-row count.
+    ///
+    /// Narrow docks clip, never scroll — a scrolling footer hides information behind an
+    /// affordance nobody looks for. The left group and the divider are `flex_none`; the balance
+    /// group yields first and owns its own clipping/tooltip contract (see
+    /// [`super::balances::summary_group`]).
+    pub(super) fn footer(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
+        let count = self.cached_entries.len();
+        let excluded = self.cached_value_excluded;
+        // Σ is muted the moment it stops covering every counted row, and becomes a dash when it
+        // covers none of them — the same "partial is not complete" rule the balance group uses.
+        //
+        // It deliberately does NOT share the balance group's dash rule outright: an EMPTY table
+        // is a known zero (no rows, so their sum really is nothing), while the balance group's
+        // `counted == 0` means the cores have not reported and the figure is unknown. Same glyph,
+        // different question — merging them would print a dash over an honest zero.
+        let sigma = if excluded > 0 && excluded == count {
+            super::balances::DASH.to_string()
+        } else {
+            super::balances::money_or_dash(self.cached_total_value)
+        };
+        let mut table_tip = t!("assets.footer_table_hint").to_string();
+        if excluded > 0 {
+            table_tip.push('\n');
+            table_tip.push_str(&t!("assets.footer_rows_unpriced", n = excluded));
+        }
         h_flex()
             .w_full()
             .flex_none()
@@ -164,34 +201,48 @@ impl AssetsView {
             .items_center()
             .px_2()
             .py_1()
+            .overflow_x_hidden()
             .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("assets.section_positions").to_string()),
-            )
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_muted))
-                    .child(format!("{count}")),
+                h_flex()
+                    .id("assets-footer-table")
+                    .flex_none()
+                    .items_center()
+                    .gap(design::ui_px(cx, 5.0))
+                    .tooltip(move |_window, cx| {
+                        cx.new(|_| moon_ui::MoonTooltipView::new(table_tip.clone()))
+                            .into()
+                    })
+                    .child(
+                        div()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_soft))
+                            .child(t!("assets.section_positions").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_muted))
+                            .child(format!("{count}")),
+                    )
+                    .child(super::balances::amount(
+                        format!("Σ {sigma}"),
+                        if excluded == 0 { p.text_soft } else { p.text_muted },
+                        cx,
+                    )),
             )
             .child(div().flex_1())
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(format!("Σ {}", money(total_value))),
-            )
+            .child(design::vline(12.0, p))
+            .child(super::balances::summary_group(
+                &self.cached_aggs,
+                &self.sel_cores,
+                cx,
+            ))
     }
 
-    /// Секция «Кошельки»: шапка (стрелка + подпись + ↻ refresh), контент — 4 одинаковых
-    /// вертикальных контейнера: список ядер (выбор) + Спот/Фьючерсы/Квартальные с переносом.
-    /// Как и остальные секции — сворачиваемая, развёрнутая делит высоту (никаких фикс. 380px:
-    /// раньше низ не двигался и прятал под собой развёрнутые плашки ядер).
+    /// Collapsible Wallets section: a selectable balance-aware core list plus the Spot,
+    /// Futures, and Quarterly transfer containers. Expanded content shares the available height.
     pub(super) fn bottom(
         &self,
-        cores: &[(CoreId, String)],
         aggs: &[CoreAgg],
         wallets: &[WalletColumnSnapshot],
         cx: &Context<Self>,
@@ -200,8 +251,8 @@ impl AssetsView {
         // Эффективный выбор: сохранённый, если он есть в охвате, иначе первое ядро.
         let selected = self
             .selected_core
-            .filter(|c| cores.iter().any(|(id, _)| id == c))
-            .or_else(|| cores.first().map(|(id, _)| *id));
+            .filter(|c| aggs.iter().any(|a| a.id == *c))
+            .or_else(|| aggs.first().map(|a| a.id));
 
         // ── Шапка секции (в стиле шапок «Позиции»/«Ядра») ──
         let collapsed = self.wallets_collapsed;
@@ -268,14 +319,9 @@ impl AssetsView {
 
         // ── Левая колонка: список ядер (имя + свободно/итого USDT) ──
         let mut list = v_flex().w_full().gap_0();
-        for (id, name) in cores {
-            let cid = *id;
+        for agg in aggs {
+            let cid = agg.id;
             let active = selected == Some(cid);
-            let (free, total) = aggs
-                .iter()
-                .find(|a| a.id == cid)
-                .map(|a| (a.free, a.total))
-                .unwrap_or((0.0, 0.0));
             let mut item = h_flex()
                 .id(SharedString::from(format!("asset-core-{cid}")))
                 .w_full()
@@ -286,13 +332,10 @@ impl AssetsView {
                 .gap_2()
                 .cursor_pointer()
                 .text_color(rgb(p.text))
-                .child(div().flex_1().min_w_0().truncate().child(name.clone()))
-                .child(
-                    div()
-                        .text_size(design::t_body(cx))
-                        .text_color(rgb(p.text_soft))
-                        .child(format!("{} / {}", money(free), money(total))),
-                )
+                .child(div().flex_1().min_w_0().truncate().child(agg.name.clone()))
+                // Per-core trust, rendered by the module that owns the vocabulary — so a core
+                // shown as current here cannot be one the footer total counts as stale.
+                .child(super::balances::figure(Some(agg), p, cx))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if this.selected_core != Some(cid) {
                         this.selected_core = Some(cid);
@@ -390,11 +433,13 @@ fn assets_columns() -> Vec<MoonDataTableColumn> {
     ]
 }
 
+/// Assets table with caller-supplied empty-state copy for the current scope.
 pub(super) fn assets_table(
     id: &'static str,
     rows: Rc<Vec<AssetEntry>>,
     sell_marked: Rc<std::collections::HashSet<(CoreId, String)>>,
     state: &Entity<MoonDataTableState>,
+    empty_msg: String,
     cx: &Context<AssetsView>,
 ) -> impl IntoElement {
     let empty = rows.is_empty();
@@ -406,7 +451,7 @@ pub(super) fn assets_table(
     crate::panels::common::data_table_host(
         SharedString::from(format!("{id}-host")),
         empty,
-        t!("assets.empty").to_string(),
+        empty_msg,
         p,
         cx,
         MoonDataTable::new(id, row_count, move |ix, _window, _app| {
@@ -423,6 +468,7 @@ pub(super) fn assets_table(
     )
 }
 
+/// Build one table row using `display_value` for both the value cell and footer-compatible data.
 fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette, on_sale: bool) -> MoonDataRow {
     let r = &e.row;
     let is_position = r.pos_size != 0.0;
@@ -431,19 +477,20 @@ fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette, on_sale
     // «свободно≈0»; фьюч-позиция — остаток позиции и её стоимость (размер × цена рынка;
     // котируемая у фьючей — USD-стейбл). Кол-во — ограниченная точность по величине
     // (`fmt::qty`: макс. тысячные, мин. десятые), не adaptive.
-    let (qty, sum) = if is_position {
-        (
-            moon_core::util::fmt::qty(r.pos_size),
-            money(r.pos_size.abs() * r.price),
-        )
+    let qty = if is_position {
+        moon_core::util::fmt::qty(r.pos_size)
     } else {
         let held = if r.qty_full.abs() > r.qty.abs() {
             r.qty_full
         } else {
             r.qty
         };
-        (moon_core::util::fmt::qty(held), money(e.value))
+        moon_core::util::fmt::qty(held)
     };
+    // The value column and the footer's Σ read the SAME field — see `AssetEntry::display_value`.
+    // A dash, never `inf,0$`: a broken price must not read as an astronomically valuable row,
+    // and the same non-finite check keeps that row out of Σ with the footer saying so.
+    let sum = super::balances::money_or_dash(e.display_value);
     MoonDataRow::new([
         // Ядро кликабельно → фильтр панели ровно на это ядро (повторный клик — сброс на «Все»).
         MoonDataCell::element(core_cell(e, view, p)),

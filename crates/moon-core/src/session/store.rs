@@ -29,6 +29,57 @@ const MAX_ENGINE_ACTIONS: usize = 64;
 
 pub type CoreId = u64;
 
+/// The store's best available trust classification for a core's USD balance figures.
+///
+/// The classification lives here, next to the inputs it reads, because the raw numbers
+/// alone cannot be rendered honestly: missing pricing can produce a finite zero or partial sum,
+/// and a retained snapshot survives a reconnect. Every consumer of `assets.global` must agree
+/// about that, so they all go through [`CoreData::balance_state`] instead of re-deriving the rule
+/// from `status`/`assets_rev`/`usd_rate_known` on their own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BalanceState {
+    /// A snapshot exists, the connection is ready, no stale marker remains, and the USD
+    /// valuation is valid. See [`CoreData::assets_stale`] for the freshness limit.
+    Live,
+    /// The connection is not ready, or it became ready but still awaits a fresh snapshot.
+    /// Retained figures may be shown only with an explicit stale marker.
+    Stale,
+    /// No snapshot has arrived: the balance is UNKNOWN, not zero.
+    Awaiting,
+    /// A snapshot exists but its free/total USD valuation is incomplete or non-finite.
+    /// The figures must render as unavailable rather than as a zero or partial balance.
+    Unpriced,
+}
+
+impl BalanceState {
+    /// Whether there is a usable number to render and to sum.
+    pub fn has_value(self) -> bool {
+        matches!(self, BalanceState::Live | BalanceState::Stale)
+    }
+
+    /// Whether the store classifies the number as current enough to show without a stale marker.
+    ///
+    /// This is the companion to [`Self::has_value`]: one asks whether there is a figure, the
+    /// other whether the available freshness signals classify it as live. The known limit on
+    /// [`CoreData::assets_stale`] still applies.
+    pub fn is_current(self) -> bool {
+        matches!(self, BalanceState::Live)
+    }
+
+    /// Stable small integer for hashing this state into a render signature.
+    ///
+    /// Exists so consumers do not invent their own numbering: the exhaustive match keeps a new
+    /// variant a compile error here rather than a silently unhashed state somewhere downstream.
+    pub fn code(self) -> u64 {
+        match self {
+            BalanceState::Live => 1,
+            BalanceState::Stale => 2,
+            BalanceState::Awaiting => 3,
+            BalanceState::Unpriced => 4,
+        }
+    }
+}
+
 pub struct CoreData {
     pub status: ConnStatus,
     /// Открытые ордера ядра (все рынки).
@@ -43,6 +94,18 @@ pub struct CoreData {
     pub schema: Option<StrategySchemaModel>,
     /// Активы/позиции ядра (последний снимок; для окна «Активы»).
     pub assets: AssetsSnapshot,
+    /// Whether a non-`Ready` status occurred after the latest assets message. The snapshot and
+    /// `assets_rev` remain retained across reconnect, so returning to `Ready` cannot establish
+    /// freshness by itself.
+    ///
+    /// KNOWN LIMIT: the marker is cleared by the next `FeedMsg::Assets`, and the live feed emits
+    /// those on ANY domain event by REBUILDING the retained snapshot — so arrival proves the core
+    /// is talking, not that the balances behind it are current. After a reconnect the figures can
+    /// therefore read as `Live` while still being pre-outage. The feed requests a balance refresh
+    /// on reconnect, but a failed request or missing response leaves the window unbounded. Closing
+    /// it properly needs a connection generation / balance revision carried on the payload, so
+    /// this flag can be cleared only by data proven to be current.
+    pub assets_stale: bool,
     /// Transfer-активы ядра по кошелькам (для дерева переноса). Пусто, пока не запрошено.
     pub transfer_assets: TransferAssetsSnapshot,
     /// License/Free-PRO/MoonCredits state ядра. None, пока ядро не ответило.
@@ -94,6 +157,7 @@ pub struct CoreData {
 }
 
 impl CoreData {
+    /// Create an empty per-core store in the connecting state.
     pub fn new() -> Self {
         Self {
             status: ConnStatus::Connecting,
@@ -120,6 +184,7 @@ impl CoreData {
             detects_rev: 0,
             strategies_rev: 0,
             schema_rev: 0,
+            assets_stale: false,
             assets_rev: 0,
             transfer_rev: 0,
             license_rev: 0,
@@ -155,7 +220,15 @@ impl CoreData {
     /// маршрутизируются координатором мимо CoreData.
     pub fn apply(&mut self, msg: FeedMsg) {
         match msg {
-            FeedMsg::Status(s) => self.status = s,
+            FeedMsg::Status(s) => {
+                // Any non-Ready status marks the retained snapshot stale, so a reconnect cannot
+                // promote pre-outage figures on the strength of the status alone. What clears the
+                // marker is documented on `assets_stale` — including what it does NOT prove.
+                if !matches!(s, ConnStatus::Ready) {
+                    self.assets_stale = true;
+                }
+                self.status = s;
+            }
             FeedMsg::Orders(orders) => {
                 // Сначала обновляем ретейн-стор линий (трассы/узлы/закрытия) по
                 // свежему снимку, затем перемещаем его в список для таблицы.
@@ -206,6 +279,7 @@ impl CoreData {
             }
             FeedMsg::Assets(assets) => {
                 self.assets = assets;
+                self.assets_stale = false;
                 self.assets_rev = self.assets_rev.wrapping_add(1);
             }
             FeedMsg::TransferAssets(transfer) => {
@@ -289,6 +363,25 @@ impl CoreData {
             FeedMsg::Identity(_) | FeedMsg::CoreBase { .. } | FeedMsg::MarketDataChanged(_) => {}
         }
     }
+
+    /// Best available trust classification for this core's `assets.global` USD figures.
+    ///
+    /// `Unpriced` outranks `Stale`: an unpriced figure has no number to show at all, so its
+    /// freshness is moot. Staleness needs BOTH inputs — `assets_stale` covers the reconnect
+    /// window (status returns to `Ready` before the new snapshot lands), while the `status`
+    /// check covers a snapshot that arrived before the link ever reached `Ready`. The generation
+    /// ambiguity documented on [`Self::assets_stale`] prevents this from proving freshness.
+    pub fn balance_state(&self) -> BalanceState {
+        if self.assets_rev == 0 {
+            BalanceState::Awaiting
+        } else if !self.assets.global.usd_rate_known {
+            BalanceState::Unpriced
+        } else if self.assets_stale || !matches!(self.status, ConnStatus::Ready) {
+            BalanceState::Stale
+        } else {
+            BalanceState::Live
+        }
+    }
 }
 
 impl Default for CoreData {
@@ -345,5 +438,85 @@ impl CoreStore {
         self.cores
             .values()
             .fold(0u64, |a, c| a.wrapping_add(c.log_rev))
+    }
+}
+
+#[cfg(test)]
+/// Checks for the balance trust classifier every UI surface reads through.
+mod tests {
+    use super::{BalanceState, ConnStatus, CoreData};
+
+    /// A core with the given freshness inputs; everything else stays at its default.
+    fn core(assets_rev: u64, rate_known: bool, stale: bool, status: ConnStatus) -> CoreData {
+        let mut cd = CoreData::new();
+        cd.assets_rev = assets_rev;
+        cd.assets.global.usd_rate_known = rate_known;
+        cd.assets_stale = stale;
+        cd.status = status;
+        cd
+    }
+
+    /// No snapshot yet is UNKNOWN, never zero — the distinction the Assets panel exists to make.
+    #[test]
+    fn without_a_snapshot_the_balance_is_awaiting() {
+        let cd = core(0, true, false, ConnStatus::Ready);
+        assert_eq!(cd.balance_state(), BalanceState::Awaiting);
+        assert!(!cd.balance_state().has_value());
+    }
+
+    /// An unvaluable snapshot outranks staleness: there is no number, so its age is moot.
+    #[test]
+    fn unpriced_outranks_stale() {
+        let cd = core(7, false, true, ConnStatus::Disconnected);
+        assert_eq!(cd.balance_state(), BalanceState::Unpriced);
+        assert!(!cd.balance_state().has_value());
+    }
+
+    /// A live connection is not enough on its own. `assets_rev` and the snapshot both survive a
+    /// reconnect, so a core back at `Ready` still carries the retained figure until a new snapshot
+    /// clears the marker — without this the pre-outage balance would be re-promoted to Live.
+    #[test]
+    fn a_reconnected_core_stays_stale_until_the_marker_clears() {
+        let reconnected = core(7, true, true, ConnStatus::Ready);
+        assert_eq!(reconnected.balance_state(), BalanceState::Stale);
+        // A retained figure is still a figure: it is shown, but only with its stale marker.
+        assert!(reconnected.balance_state().has_value());
+        assert!(!reconnected.balance_state().is_current());
+    }
+
+    /// The other half of staleness: a snapshot that arrived before the link ever reached `Ready`.
+    #[test]
+    fn a_snapshot_from_a_not_ready_link_is_stale() {
+        let cd = core(7, true, false, ConnStatus::Connecting);
+        assert_eq!(cd.balance_state(), BalanceState::Stale);
+    }
+
+    /// Ready, priced, and with no stale marker — the only combination that renders at full
+    /// strength.
+    #[test]
+    fn ready_priced_and_unmarked_is_live() {
+        let cd = core(7, true, false, ConnStatus::Ready);
+        assert_eq!(cd.balance_state(), BalanceState::Live);
+        assert!(cd.balance_state().has_value());
+        assert!(cd.balance_state().is_current());
+    }
+
+    /// `code()` must separate every variant: it is hashed into a render signature, so a collision
+    /// would let one trust state be cached as another.
+    #[test]
+    fn every_state_hashes_distinctly() {
+        let all = [
+            BalanceState::Live,
+            BalanceState::Stale,
+            BalanceState::Awaiting,
+            BalanceState::Unpriced,
+        ];
+        let mut codes: Vec<u64> = all.iter().map(|s| s.code()).collect();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), all.len());
+        // Only Live is current, and only Live/Stale carry a number.
+        assert_eq!(all.iter().filter(|s| s.is_current()).count(), 1);
+        assert_eq!(all.iter().filter(|s| s.has_value()).count(), 2);
     }
 }

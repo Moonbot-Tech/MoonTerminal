@@ -17,7 +17,7 @@ pub mod sys_status;
 mod commands;
 mod lifecycle;
 
-pub use store::{CoreId, CoreStore};
+pub use store::{BalanceState, CoreId, CoreStore};
 pub use sys_status::CoreSysStatus;
 
 use std::collections::{HashMap, HashSet};
