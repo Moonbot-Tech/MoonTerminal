@@ -232,9 +232,54 @@ pub fn menu_fit_width<'a>(
         .clamp(min_w, font_w(cx, MENU_MAX_W).max(min_w))
 }
 
-/// Паддинг `MoonPopover` вокруг контента (2×6) — прибавка к ширине меню при задании
-/// ширины поповера (прежде это была ручная константа «+12» у каждого вызова).
-pub const POPOVER_PAD_W: f32 = 12.0;
+/// Outer `MoonPopover::width` that hosts content of intrinsic width `content_w`.
+///
+/// MoonUI renders `.w(px(width)).p(px(tokens.ui(6.0))).border(px(1.0))`. GPUI treats that
+/// width as the border box, leaving `width - 2*ui(6) - 2` for content. The padding tracks
+/// the UI scale, while MoonUI's hard-coded 1px border does not.
+///
+/// `content_w` must already be in the scale its content actually uses — wrap it in `font_w`
+/// for our own font-scaled blocks, pass it raw for a moonui widget with a fixed px width.
+///
+/// Interim (FORK_BUGS): delete when `MoonPopover` grows a fit-to-content mode upstream.
+pub fn popover_outer_width(cx: &App, content_w: f32) -> f32 {
+    content_w + 2.0 * ui_value(cx, 6.0) + 2.0
+}
+
+/// Outer width of a default-size `MoonCalendar` — the value to hand [`popover_outer_width`].
+///
+/// For default `Size::Medium`, MoonUI's month/year grid is 264px wide, while the day grid is
+/// `7*size_9 + 6*gap_0p5` = 16.5rem. The calendar root adds `p_3` (0.75rem per side) and a
+/// 1px border per side. `MoonRoot` sets the window rem from `cx.theme().font_size`, which
+/// `MoonTheme` synchronizes to `base_font_size()`, so the rem-based day grid can exceed 264px.
+///
+/// Interim (FORK_BUGS), same removal trigger as [`popover_outer_width`].
+pub fn calendar_outer_width(cx: &App) -> f32 {
+    // Month/year grid (calendar.rs, Size::Medium) vs the day grid's 7*2.25rem + 6*0.125rem;
+    // the root adds p_3 (0.75rem) per side plus the 1px border.
+    const MONTH_GRID_W: f32 = 264.0;
+    const DAY_GRID_REMS: f32 = 16.5;
+    let rem = MoonTheme::active_tokens(cx).base_font_size();
+    MONTH_GRID_W.max(DAY_GRID_REMS * rem) + 1.5 * rem + 2.0
+}
+
+/// Width of a `MoonPopupMenu` (Compact) row carrying a `MoonMenuItem::right_label`.
+///
+/// [`menu_fit_width`] reserves one item gap. A row with a right label has four children —
+/// check slot, label, flex spacer, and right label — so MoonUI applies three gaps. This helper
+/// conservatively measures the main label at the compact size of 9.5 and weight 600; MoonUI
+/// renders the right label at size 9.0 and weight 400.
+///
+/// Takes the already-chosen widest pair rather than an iterator: measuring one string costs an
+/// uncached `layout_line` per CHARACTER on `&App`, so the caller picks the candidate. In a mono
+/// menu that is simply the longest label by character count.
+pub fn menu_fit_width_2col(cx: &App, label: &str, right_label: &str, min_w: f32) -> f32 {
+    let content = ui_text_width(cx, label, 9.5, 600.0, true)
+        + ui_text_width(cx, right_label, 9.0, 400.0, true);
+    (ui_value(cx, 6.0 * 2.0 + 5.0 * 3.0 + 4.0 * 2.0) + 12.0 + 2.0 + content)
+        .ceil()
+        .clamp(min_w, font_w(cx, MENU_MAX_W).max(min_w))
+}
 
 /// Горизонтальный воздух вокруг метки кнопки-триггера `MoonDropdown`: у `MoonButton`
 /// pad_x=0 (FORK_BUGS), поэтому поля добавляем сами. Масштабируется под кегль. Визуальная

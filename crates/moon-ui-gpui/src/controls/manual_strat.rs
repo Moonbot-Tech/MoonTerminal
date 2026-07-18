@@ -138,7 +138,7 @@ pub fn manual_strategy_controls(
             );
             MoonPopover::new("header-ms-selector")
                 .placement(MoonPopoverPlacement::BottomStart)
-                .width(menu_w + design::POPOVER_PAD_W)
+                .width(design::popover_outer_width(cx, menu_w))
                 .close_on_content_click(true)
                 .trigger(
                     MoonSelectorPill::new("header-ms-pill")

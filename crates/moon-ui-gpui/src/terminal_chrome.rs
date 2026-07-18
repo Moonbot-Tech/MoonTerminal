@@ -63,6 +63,7 @@ pub fn header(
                     shell,
                     core_settings_open,
                     core_settings_content,
+                    cx,
                 ))
                 .child(balance_label(free_usdt, total_usdt, p, cx))
                 // Ручная стратегия: разделитель + тогл MS + пикер + сводка (на месте бывших
@@ -277,7 +278,7 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
     let menu_w = design::menu_fit_width(cx, cores.iter().map(|(_, n)| n.as_str()), 180.0);
     MoonPopover::new("header-core-selector")
         .placement(MoonPopoverPlacement::BottomStart)
-        .width(menu_w + design::POPOVER_PAD_W)
+        .width(design::popover_outer_width(cx, menu_w))
         .close_on_content_click(true)
         .trigger(
             MoonSelectorPill::new("header-core-pill")
@@ -311,11 +312,15 @@ fn core_gear_button(
     shell: Entity<Shell>,
     open: bool,
     content: Option<AnyElement>,
+    cx: &App,
 ) -> impl IntoElement {
     MoonPopover::new("core-gear-popover")
         .placement(MoonPopoverPlacement::BottomStart)
-        // 248 (контент) + 2×6 паддинг попапа + 2 рамка.
-        .width(262.0)
+        // Use the content module's width basis so both boxes follow the same font scale.
+        .width(design::popover_outer_width(
+            cx,
+            design::font_w(cx, crate::core_settings_popup::CONTENT_W),
+        ))
         .open(open)
         .on_open_change(move |open, window, cx| {
             shell.update(cx, |s, cx| s.set_core_settings_open(open, window, cx));

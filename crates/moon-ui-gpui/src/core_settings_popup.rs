@@ -116,6 +116,12 @@ fn def_alert_strategy_row(
     )
 }
 
+/// Unscaled content width shared with the popover host.
+///
+/// [`core_settings_content`] applies the font scale to this value; the terminal chrome uses the
+/// same scaled width when sizing the surrounding `MoonPopover`.
+pub const CONTENT_W: f32 = 248.0;
+
 /// Границы слайдеров параметров «галка + слайдер + поле» (min, max, шаг).
 /// ТП-глоб = g_take_profit (плюс), трейлинг = trailing_drop (минус). Стоп-лосс вынесен в тулбар.
 pub const CORE_GTP_BOUNDS: (f32, f32, f32) = (0.5, 10.0, 0.1);
@@ -295,7 +301,7 @@ pub fn core_settings_content(
     // только контент фикс. ширины.
     let root = v_flex()
         .id("core-settings-popup")
-        .w(design::font_w_px(cx, 248.0))
+        .w(design::font_w_px(cx, CONTENT_W))
         .gap(design::ui_px(cx, 8.0))
         .child(
             h_flex()
