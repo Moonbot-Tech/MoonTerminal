@@ -1,0 +1,95 @@
+# Импорт настроек из MoonBot (Настройки → Общие): кнопка, preview-диалог, статусы.
+_version: 2
+
+import.button:
+  ru: "Импорт из MoonBot"
+  en: "Import from MoonBot"
+  es: "Importar de MoonBot"
+import.hint:
+  ru: "В MoonBot: Настройки → Общие → Скопировать настройки; затем нажми эту кнопку — покажем, что именно будет перенесено."
+  en: "In MoonBot: Settings → General → Copy settings; then press this button — a preview shows what exactly will be transferred."
+  es: "En MoonBot: Ajustes → General → Copiar ajustes; luego pulsa este botón — la vista previa muestra qué se transferirá."
+import.title:
+  ru: "Импорт настроек MoonBot"
+  en: "MoonBot settings import"
+  es: "Importación de ajustes de MoonBot"
+import.loading:
+  ru: "Загрузка…"
+  en: "Loading…"
+  es: "Cargando…"
+import.group.terminal:
+  ru: "Терминал"
+  en: "Terminal"
+  es: "Terminal"
+import.group.chart:
+  ru: "График и линии"
+  en: "Chart & lines"
+  es: "Gráfico y líneas"
+import.group.core:
+  ru: "Ядро (локальные настройки)"
+  en: "Core (local settings)"
+  es: "Núcleo (ajustes locales)"
+import.group.core_commands:
+  ru: "Ядро (команды — пока не отправляются)"
+  en: "Core (commands — not sent yet)"
+  es: "Núcleo (comandos — aún no se envían)"
+import.group.unsupported:
+  ru: "Не перенесено"
+  en: "Not transferred"
+  es: "No transferido"
+import.core_targets:
+  ru: "Применить к ядрам:"
+  en: "Apply to cores:"
+  es: "Aplicar a núcleos:"
+import.all_cores:
+  ru: "Все"
+  en: "All"
+  es: "Todos"
+import.col_light:
+  ru: "Светлая тема"
+  en: "Light theme"
+  es: "Tema claro"
+import.col_dark:
+  ru: "Тёмная тема"
+  en: "Dark theme"
+  es: "Tema oscuro"
+import.core_commands_hint:
+  ru: "Fixed-sell принадлежит ядру: отправка выбранным ядрам появится следующим шагом (ClientSettings)."
+  en: "Fixed-sell belongs to the core: sending to selected cores arrives in a next step (ClientSettings)."
+  es: "Fixed-sell pertenece al núcleo: el envío a los núcleos seleccionados llegará en un próximo paso (ClientSettings)."
+import.group.hotkeys:
+  ru: "Хоткеи"
+  en: "Hotkeys"
+  es: "Atajos"
+import.same:
+  ru: "совпадает"
+  en: "matches"
+  es: "coincide"
+import.hotkeys_empty_note:
+  ru: "Ещё %{n} слотов в MoonBot не назначены — пустые не переносим (свои не стираем)."
+  en: "%{n} more slots are unassigned in MoonBot — empty ones are not transferred (yours are kept)."
+  es: "%{n} ranuras más sin asignar en MoonBot — las vacías no se transfieren (las tuyas se conservan)."
+import.not_transferred_label:
+  ru: "Не перенесено:"
+  en: "Not transferred:"
+  es: "No transferido:"
+import.nothing:
+  ru: "Переносить нечего — все сопоставимые значения уже совпадают."
+  en: "Nothing to transfer — all mapped values already match."
+  es: "Nada que transferir — todos los valores mapeados ya coinciden."
+import.apply:
+  ru: "Применить"
+  en: "Apply"
+  es: "Aplicar"
+import.cancel:
+  ru: "Отмена"
+  en: "Cancel"
+  es: "Cancelar"
+import.applied:
+  ru: "Импортировано пунктов: %{n}. Проверь и нажми «Сохранить»."
+  en: "Imported items: %{n}. Review and press “Save”."
+  es: "Elementos importados: %{n}. Revisa y pulsa «Guardar»."
+import.clipboard_empty:
+  ru: "Буфер обмена пуст — сначала скопируй настройки в MoonBot."
+  en: "Clipboard is empty — copy the settings in MoonBot first."
+  es: "El portapapeles está vacío — copia primero los ajustes en MoonBot."

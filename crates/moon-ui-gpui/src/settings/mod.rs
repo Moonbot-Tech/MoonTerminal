@@ -17,6 +17,7 @@ mod common;
 mod connections;
 mod general;
 mod hotkeys;
+mod import_preview;
 mod interface;
 mod lines;
 mod render;
@@ -147,6 +148,8 @@ pub struct SettingsView {
     /// запоминали (тогда фолбэк на `IDLE_DEFAULT_SECS`). `Cell` — `general_tab(&self)` пишет
     /// сюда при рендере (внутренняя мутабельность, без смены сигнатуры).
     idle_last_secs: std::cell::Cell<u32>,
+    /// Открытый preview импорта настроек MoonBot (None = закрыт). См. [`import_preview`].
+    import: Option<import_preview::ImportState>,
 }
 
 impl SettingsView {
@@ -304,6 +307,7 @@ impl SettingsView {
             picking: None,
             last_sig: initial_sig,
             idle_last_secs: std::cell::Cell::new(0),
+            import: None,
         }
     }
 }

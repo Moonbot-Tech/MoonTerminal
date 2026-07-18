@@ -120,22 +120,49 @@ impl Render for SettingsView {
             )
             .child(status_el)
             .child(div().flex_1())
+            // «Импорт из MoonBot» — в правой зоне футера (где у переносимых вкладок
+            // «Копировать/Вставить»; на «Общих» она свободна). Подсказка — тултипом.
+            .when(self.active == Tab::General, |f| {
+                f.child(
+                    div()
+                        .id("moonbot-import-tip")
+                        .tooltip(|_window, cx| {
+                            cx.new(|_| {
+                                moon_ui::MoonTooltipView::new(t!("import.hint").to_string())
+                                    .max_width(420.0)
+                            })
+                            .into()
+                        })
+                        .child(
+                            MoonButton::new("moonbot-import")
+                                .outline()
+                                .small()
+                                .label(format!("  {}  ", t!("import.button")))
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.start_moonbot_import(cx)),
+                                )
+                                .render(),
+                        ),
+                )
+            })
             // Копировать/Вставить настройки вкладки (только у вкладок со своим
             // переносимым файлом: Интерфейс/Линии/Бейджи/Хоткеи) — см. share.rs.
             .when(self.shareable(), |f| {
+                // .outline() + пробелы в label: видимая рамка кнопки (были ghost —
+                // выглядели серым текстом); пробелы — обход pad_x=0 (FORK_BUGS.md).
                 f.child(
                     MoonButton::new("share-copy")
-                        .ghost()
+                        .outline()
                         .small()
-                        .label(t!("settings.copy").to_string())
+                        .label(format!("  {}  ", t!("settings.copy")))
                         .on_click(cx.listener(|this, _, _, cx| this.copy_tab(cx)))
                         .render(),
                 )
                 .child(
                     MoonButton::new("share-paste")
-                        .ghost()
+                        .outline()
                         .small()
-                        .label(t!("settings.paste").to_string())
+                        .label(format!("  {}  ", t!("settings.paste")))
                         .on_click(cx.listener(|this, _, window, cx| this.paste_tab(window, cx)))
                         .render(),
                 )
@@ -153,6 +180,8 @@ impl Render for SettingsView {
             .child(tabs)
             .child(body)
             .child(footer)
+            // Оверлей preview импорта MoonBot — поверх всего тела окна.
+            .children(self.import_overlay(cx))
             .child(
                 MoonWindowFrame::tool("settings-window-frame-hit", chrome_width)
                     .header_height(SETTINGS_HEADER_H)

@@ -21,6 +21,7 @@ pub mod groups;
 pub mod hotkeys;
 pub mod lang;
 pub mod layout;
+pub mod moonbot_import;
 pub mod orders;
 pub mod paths;
 pub mod secrets;

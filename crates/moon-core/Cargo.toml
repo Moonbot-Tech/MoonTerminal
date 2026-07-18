@@ -50,6 +50,11 @@ bytemuck = { version = "1", features = ["derive"] }
 # Локальная БД отчётов (db/).
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# Импорт настроек MoonBot из буфера MBSC7 (config/moonbot_import/): gzip-распаковка
+# payload и CRC32 сжатых байт. Оба уже в дереве зависимостей (транзитивно).
+flate2 = "1"
+crc32fast = "1"
+
 # Связь с ядром Moonbot (feed/live.rs) — единственный, кто знает транспорт.
 moonproto = { git = "https://github.com/Moonbot-Tech/MoonProtoBeta" }
 
