@@ -411,6 +411,9 @@ pub(super) fn mouse_move(
         let order_hover_changed = if within {
             this.sync_order_hover(pos, cx)
         } else {
+            // Курсор ушёл с чарта: сбросить точку порога, чтобы возврат в ту же
+            // окрестность (<1px) не «застрял» без пересчёта ховера.
+            this.order_hover_probe = None;
             this.set_order_interaction(None, cx)
         };
         if order_hover_changed {

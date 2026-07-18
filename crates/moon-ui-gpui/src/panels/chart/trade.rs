@@ -13,6 +13,23 @@ use super::ChartPanel;
 
 const ORDER_DRAG_PREVIEW_HOLD: Duration = Duration::from_millis(3_000);
 
+/// Порог движения курсора для повторного hit-test линий (Delphi-эталон: перебор линий
+/// запускается, только когда мышь реально сдвинулась ≥1px по X или ≥0.5px по Y — сырые
+/// MouseMove приходят чаще и с суб-пиксельными сдвигами, hit-test на каждый — пустая работа).
+const ORDER_HOVER_MOVE_X: f32 = 1.0;
+const ORDER_HOVER_MOVE_Y: f32 = 0.5;
+
+/// `true` = курсор сдвинулся от точки последнего hit-test достаточно, чтобы пересчитать
+/// ховер линий. `prev = None` (первый заход / возврат на чарт) — всегда пересчёт.
+fn hover_probe_due(prev: Option<(f32, f32)>, pos: (f32, f32)) -> bool {
+    match prev {
+        Some((px, py)) => {
+            (pos.0 - px).abs() >= ORDER_HOVER_MOVE_X || (pos.1 - py).abs() >= ORDER_HOVER_MOVE_Y
+        }
+        None => true,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum TradeMouseButton {
     Left,
@@ -209,7 +226,16 @@ impl ChartPanel {
         placed
     }
 
-    fn hit_order_line(&self, pos: (f32, f32), cx: &mut Context<Self>) -> Option<OrderHit> {
+    /// Hit-test линий ордеров под курсором. `cross_only` — режим раздельных зон вне
+    /// стакана: единственная интерактивная цель там — КРЕСТ НАЧАЛА невыполненного входа
+    /// (клик-отмена), поэтому перебираем только Buy-линии и режем по X у креста, не
+    /// считая Y-дистанции всех пяти видов линий (ранний zone-gate, как в Delphi).
+    fn hit_order_line(
+        &self,
+        pos: (f32, f32),
+        cross_only: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<OrderHit> {
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return None;
         };
@@ -255,13 +281,18 @@ impl ChartPanel {
                 // Перетаскиваемые виды линий: вход/выход (move_order) + SL/Trailing/TakeProfit
                 // (update_stops по абсолютной цене). VStop (объёмный) и pending-условие НЕ тянем
                 // — у них нет ценового уровня, который ставится перетаскиванием.
-                for kind in [
-                    LineKind::Buy,
-                    LineKind::Sell,
-                    LineKind::Stop,
-                    LineKind::Trailing,
-                    LineKind::TakeProfit,
-                ] {
+                let kinds: &[LineKind] = if cross_only {
+                    &[LineKind::Buy]
+                } else {
+                    &[
+                        LineKind::Buy,
+                        LineKind::Sell,
+                        LineKind::Stop,
+                        LineKind::Trailing,
+                        LineKind::TakeProfit,
+                    ]
+                };
+                for &kind in kinds {
                     // Вход (Buy, в т.ч. шорт) переставляем ТОЛЬКО пока ордер не исполнен (живой
                     // входной лимит → move_order = replace). После фила (`fill_pct > 0`) линия
                     // входа — историческая отметка цены входа: реплейсить нечего, не тянем её.
@@ -284,6 +315,12 @@ impl ChartPanel {
                         if pos.0 + threshold < start_x {
                             continue;
                         }
+                        // cross_only: цель — только сам крест, X-полоса вокруг начала.
+                        if cross_only && (pos.0 - start_x).abs() > threshold {
+                            continue;
+                        }
+                    } else if cross_only {
+                        continue;
                     }
                     let rel_y = 0.5 - (price - center) / range;
                     let y = plot.y + rel_y * plot.h;
@@ -333,7 +370,11 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(hit) = self.hit_order_line(pos, cx) else {
+        // Тот же gate, что в ховере: в зоне графика при раздельных зонах цель — только
+        // крест (иначе более близкая Sell-линия «затенит» крест и клик уйдёт в пустоту,
+        // хотя курсор показывал «палец»).
+        let cross_only = self.separate_zones(cx) && self.glass_pane_at(pos).is_none();
+        let Some(hit) = self.hit_order_line(pos, cross_only, cx) else {
             return false;
         };
         if !hit.on_start_cross {
@@ -368,7 +409,7 @@ impl ChartPanel {
         if self.order_hover.is_none() {
             return false;
         }
-        let Some(hit) = self.hit_order_line(local_pos, cx) else {
+        let Some(hit) = self.hit_order_line(local_pos, false, cx) else {
             return false;
         };
         let (core, uid, market, short) = (hit.core, hit.uid, hit.market, hit.short);
@@ -516,19 +557,20 @@ impl ChartPanel {
     }
 
     pub(super) fn sync_order_hover(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
-        // Раздельные зоны: за линии цепляемся только в стакане → и подсветку даём только
-        // там. Исключение — крест начала (клик-отмена): он в зоне чарта и остаётся
-        // активной целью в обоих режимах.
-        let glass_gate = self.separate_zones(cx) && self.glass_pane_at(pos).is_none();
-        let next = self.hit_order_line(pos, cx).and_then(|hit| {
-            if glass_gate && !hit.on_start_cross {
-                return None;
-            }
-            Some(OrderHoverKey {
-                core: hit.core,
-                uid: hit.uid,
-                cancel: hit.on_start_cross,
-            })
+        // Delphi-порог: hit-test не на каждый сырой MouseMove, а только когда курсор
+        // реально сдвинулся от точки последней проверки.
+        if !hover_probe_due(self.order_hover_probe, pos) {
+            return false;
+        }
+        self.order_hover_probe = Some(pos);
+        // Раздельные зоны: за линии цепляемся только в стакане → в зоне графика ищем
+        // ТОЛЬКО крест начала (клик-отмена) урезанным hit-test, а не полный перебор
+        // с отбрасыванием результата.
+        let cross_only = self.separate_zones(cx) && self.glass_pane_at(pos).is_none();
+        let next = self.hit_order_line(pos, cross_only, cx).map(|hit| OrderHoverKey {
+            core: hit.core,
+            uid: hit.uid,
+            cancel: hit.on_start_cross,
         });
         self.set_order_interaction(next, cx)
     }
@@ -538,7 +580,7 @@ impl ChartPanel {
         if self.separate_zones(cx) && self.glass_pane_at(pos).is_none() {
             return false;
         }
-        let Some(hit) = self.hit_order_line(pos, cx) else {
+        let Some(hit) = self.hit_order_line(pos, false, cx) else {
             return false;
         };
         // Крест начала — цель клика-отмены (обрабатывается ДО drag в mouse_down_left);
@@ -678,5 +720,28 @@ impl ChartPanel {
             }
         }
         self.chart.set_cursor(cursor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // НЕ `use super::*`: он затащит `gpui::test` (attr-макрос из `use gpui::*` родителя),
+    // и `#[test]` перестанет быть std-тестом.
+    use super::hover_probe_due;
+
+    /// Норматив горячего пути MouseMove (docs-internal/INPUT_HOTPATH_NORMS.md):
+    /// hit-test линий запускается только при реальном сдвиге курсора ≥1px X или ≥0.5px Y.
+    #[test]
+    fn hover_probe_threshold_matches_delphi() {
+        // Первый заход — всегда пересчёт.
+        assert!(hover_probe_due(None, (10.0, 10.0)));
+        // Суб-пиксельный дрожащий MouseMove — НЕ пересчитываем.
+        assert!(!hover_probe_due(Some((10.0, 10.0)), (10.0, 10.0)));
+        assert!(!hover_probe_due(Some((10.0, 10.0)), (10.9, 10.4)));
+        // Сдвиг ≥1px по X ИЛИ ≥0.5px по Y — пересчёт.
+        assert!(hover_probe_due(Some((10.0, 10.0)), (11.0, 10.0)));
+        assert!(hover_probe_due(Some((10.0, 10.0)), (10.0, 10.5)));
+        assert!(hover_probe_due(Some((10.0, 10.0)), (9.0, 10.0)));
+        assert!(hover_probe_due(Some((10.0, 10.0)), (10.0, 9.5)));
     }
 }

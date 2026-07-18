@@ -179,6 +179,9 @@ pub struct ChartPanel {
     order_drag: Option<OrderDrag>,
     pending_order_drag: Option<PendingOrderDrag>,
     order_hover: Option<OrderHoverKey>,
+    /// Точка последнего hit-test ховера линий. Порог движения (Delphi): сырые MouseMove
+    /// с суб-пиксельным сдвигом не запускают повторный перебор линий.
+    order_hover_probe: Option<(f32, f32)>,
     /// Слой рисования фигур: драфт (режим-карандаш), hover и драг фигуры этой панели.
     fig_draft: Option<figures::FigDraft>,
     /// Экранная точка последней постановки узла драфта — отличить клик от протяжки:
@@ -347,6 +350,7 @@ impl ChartPanel {
             order_drag: None,
             pending_order_drag: None,
             order_hover: None,
+            order_hover_probe: None,
             fig_draft: None,
             fig_draw_down: None,
             fig_hover: None,
@@ -462,6 +466,7 @@ impl ChartPanel {
             order_drag: None,
             pending_order_drag: None,
             order_hover: None,
+            order_hover_probe: None,
             fig_draft: None,
             fig_draw_down: None,
             fig_hover: None,
