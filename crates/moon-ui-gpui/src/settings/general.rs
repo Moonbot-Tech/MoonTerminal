@@ -180,6 +180,21 @@ impl SettingsView {
         };
         let hint = |s: &str| div().text_color(muted).child(s.to_string());
 
+        // Память последнего валидного значения автозакрытия (п.8 UX): пока фича включена
+        // (secs>0), запоминаем его; при повторном включении галки восстановим отсюда, а не
+        // дефолт 120. Ниже 5 быть не может (клампер), но на всякий — фолбэк на дефолт.
+        if idle_secs >= 5 {
+            self.idle_last_secs.set(idle_secs);
+        }
+        let idle_restore = {
+            let last = self.idle_last_secs.get();
+            if last >= 5 {
+                last
+            } else {
+                Self::IDLE_DEFAULT_SECS
+            }
+        };
+
         v_flex()
             .w_full()
             .gap_1()
@@ -274,8 +289,9 @@ impl SettingsView {
             .child(super::separator(p, cx))
             // Авто-закрытие графиков Main при неактивности окна (чекбокс 0↔дефолт + счётчик сек).
             .child(
-                self.draft_checkbox(cx, "idle-close", idle_secs > 0, |p, v| {
-                    let want = if v { Self::IDLE_DEFAULT_SECS } else { 0 };
+                self.draft_checkbox(cx, "idle-close", idle_secs > 0, move |p, v| {
+                    // Вкл: восстанавливаем последнее запомненное значение (не дефолт 120); выкл = 0.
+                    let want = if v { idle_restore } else { 0 };
                     // Вкл при уже выставленном значении не сбрасываем; выкл = 0.
                     let target = if v && p.main_idle_close_secs > 0 {
                         p.main_idle_close_secs

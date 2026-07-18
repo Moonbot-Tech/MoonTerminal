@@ -118,6 +118,18 @@ badges.outline_short:
   ru: "short"
   en: "short"
   es: "short"
+badges.ordinal_tip:
+  ru: "Номер типа детекта (StrategyKind) — ключ соответствия бейджа детекту. Менять только если знаешь, зачем: другой номер = бейдж привяжется к другому типу."
+  en: "Detect type number (StrategyKind) — the key that maps the badge to a detect. Change only if you know why: a different number binds the badge to another type."
+  es: "Número de tipo de detección (StrategyKind) — la clave que asocia la insignia a una detección. Cámbialo solo si sabes por qué."
+badges.code_tip:
+  ru: "Код бейджа (≤3 символа) — что рисуется на бейдже. Для лонга и для обоих направлений, если разделение long/short выключено."
+  en: "Badge code (≤3 chars) shown on the badge. For long and for both directions when long/short split is off."
+  es: "Código de insignia (≤3 caracteres) que se muestra en la insignia. Para long y ambas direcciones si la división long/short está desactivada."
+badges.code_short_tip:
+  ru: "Код бейджа для ШОРТА (≤3 символа) — используется только при включённом разделении long/short (галка L/S)."
+  en: "SHORT badge code (≤3 chars) — used only when the long/short split (L/S) is on."
+  es: "Código de insignia para SHORT (≤3 caracteres) — solo con la división long/short (L/S) activada."
 badges.add:
   ru: "Добавить тип"
   en: "Add type"

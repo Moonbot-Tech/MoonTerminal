@@ -196,10 +196,12 @@ impl SettingsView {
             .sum();
 
         let tool_btn = |id: &'static str, label: String, disabled: bool| {
+            // Боковые пробелы в label — обход форк-бага `MoonButton` pad_x=0 (текст впритык к
+            // рамке .outline); см. FORK_BUGS.md. Даёт горизонтальные гапы у текста.
             MoonButton::new(id)
                 .outline()
                 .small()
-                .label(label)
+                .label(format!("  {label}  "))
                 .disabled(disabled)
         };
 

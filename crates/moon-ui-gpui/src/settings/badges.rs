@@ -12,7 +12,7 @@ use gpui::*;
 use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonCheckboxSize,
     MoonColorPicker, MoonColorPickerState, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
-    StyledExt, h_flex, rgba_from, v_flex,
+    MoonTooltipView, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -324,11 +324,19 @@ impl SettingsView {
                 .text_color(rgba_from(p.text_soft, 1.0))
                 .child(t.to_string())
         };
+        // Тултип-подсказка для криптовых полей строки (у Бейджей нет шапки колонок) — п.29a UX.
+        let tip = |id: &str, key: &'static str, el: gpui::Div| {
+            el.id(SharedString::from(format!("{id}-{idx}")))
+                .tooltip(move |_w, cx| {
+                    cx.new(|_| MoonTooltipView::new(t!(key).to_string()).max_width(320.0))
+                        .into()
+                })
+        };
         let row_el = h_flex()
             .gap(px(6.0))
             .items_center()
             .child(
-                div().flex_none().w(px(42.0)).child(
+                tip("badge-ord-tip", "badges.ordinal_tip", div().flex_none().w(px(42.0))).child(
                     MoonInput::new(SharedString::from(format!("badge-ord-{idx}")))
                         .state(&row.ordinal)
                         .small(),
@@ -343,7 +351,7 @@ impl SettingsView {
             )
             .child(active_chk)
             .child(
-                div().flex_none().w(px(44.0)).child(
+                tip("badge-code-tip", "badges.code_tip", div().flex_none().w(px(44.0))).child(
                     MoonInput::new(SharedString::from(format!("badge-code-{idx}")))
                         .state(&row.code)
                         .small(),
@@ -352,7 +360,12 @@ impl SettingsView {
             .child(distinguish_chk)
             .when(distinguish, |el| {
                 el.child(
-                    div().flex_none().w(px(44.0)).child(
+                    tip(
+                        "badge-codeshort-tip",
+                        "badges.code_short_tip",
+                        div().flex_none().w(px(44.0)),
+                    )
+                    .child(
                         MoonInput::new(SharedString::from(format!("badge-codeshort-{idx}")))
                             .state(&row.code_short)
                             .small(),

@@ -4,8 +4,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonWindowFrame, h_flex, rgba_from,
-    v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonScrollableElement,
+    MoonWindowFrame, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -64,20 +64,26 @@ impl Render for SettingsView {
             Tab::Connections => self.connections_tab(cx).into_any_element(),
             Tab::Storage => self.storage_tab(cx).into_any_element(),
         };
-        // Тело прокручивается (вкладки выше высоты окна): stateful div + overflow_y_scroll.
-        let body = div()
-            .id("settings-body")
-            .flex_1()
-            .w_full()
-            .overflow_y_scroll()
-            .bg(rgba_from(p.shell, 1.0))
-            .child(
-                v_flex()
-                    .w_full()
-                    .p(design::ui_px(cx, 18.0))
-                    .gap(design::ui_px(cx, 10.0))
-                    .child(content),
-            );
+        // Тело прокручивается (вкладки выше высоты окна): stateful div + ВИДИМЫЙ вертикальный
+        // скроллбар (`overflow_y_scrollbar`, п.18 UX). ВАЖНО: `Scrollable` наследует от элемента
+        // только `size` (не `flex_1`) и рендерится `size_full` — сам по себе он занял бы 100%
+        // высоты колонки и вытолкнул футер (п.41 UX). Поэтому кладём его во внешний `flex_1 +
+        // min_h(0)` контейнер (тот тянется в остаток высоты и позволяет ужиматься), а сам
+        // скролл-div — `size_full` внутри него.
+        let body = div().flex_1().min_h(px(0.0)).w_full().child(
+            div()
+                .id("settings-body")
+                .size_full()
+                .bg(rgba_from(p.shell, 1.0))
+                .child(
+                    v_flex()
+                        .w_full()
+                        .p(design::ui_px(cx, 18.0))
+                        .gap(design::ui_px(cx, 10.0))
+                        .child(content),
+                )
+                .overflow_y_scrollbar(),
+        );
 
         // ── Подвал: Сохранить + статус ──────────────────────────────────────
         // Текст статуса резолвим здесь (ключ → текущая локаль), чтобы после

@@ -141,6 +141,12 @@ pub struct SettingsView {
     picking: Option<String>,
     /// Сигнатура данных, которые реально читают настройки: draft/config + статусы.
     last_sig: u64,
+    /// Память последнего валидного значения «Автозакрытие Main, сек» (для восстановления при
+    /// повторном включении галки в этой сессии настроек: снятая галка пишет 0 в конфиг, а
+    /// при обратном включении берём отсюда, а не дефолт 120). Порт п.8 UX-фидбека. 0 = ещё не
+    /// запоминали (тогда фолбэк на `IDLE_DEFAULT_SECS`). `Cell` — `general_tab(&self)` пишет
+    /// сюда при рендере (внутренняя мутабельность, без смены сигнатуры).
+    idle_last_secs: std::cell::Cell<u32>,
 }
 
 impl SettingsView {
@@ -297,6 +303,7 @@ impl SettingsView {
             icons: IconSet::discover(),
             picking: None,
             last_sig: initial_sig,
+            idle_last_secs: std::cell::Cell::new(0),
         }
     }
 }
