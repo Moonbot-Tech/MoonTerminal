@@ -160,6 +160,7 @@ impl SettingsView {
             .filter(|(_, _, on)| *on)
             .map(|(id, _, _)| *id)
             .collect();
+        let theme_selected = state.selected.contains("ui.theme_mode");
         let applied = self.backend.update(cx, |b, bcx| {
             let Some(p) = b.preview.as_mut() else {
                 return 0;
@@ -167,6 +168,12 @@ impl SettingsView {
             let out = moonbot_import::apply_local(p, &state.plan, &state.selected, &core_ids);
             for id in &out.unknown_ids {
                 log::warn!("moonbot import: неизвестный id пункта «{id}» — пропущен");
+            }
+            // Смена темы UI применяется ЖИВЬЁМ (как тогл на «Общих») — иначе до
+            // «Сохранить» палитра не переключится и импорт выглядит несработавшим.
+            // Цвета чарта спец-вызова не требуют: окна читают draft каждый кадр.
+            if out.applied > 0 && theme_selected {
+                crate::install_moon_theme_for_config(p, bcx);
             }
             if out.applied > 0 {
                 bcx.notify();
