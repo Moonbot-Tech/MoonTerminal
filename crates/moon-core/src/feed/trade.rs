@@ -94,6 +94,16 @@ pub(super) fn panic_sell_market(client: &MoonClient, server_id: u64, market: Str
     );
 }
 
+/// Паник-селл КОНКРЕТНОГО ордера (`TTurnPanicSellCommand` по `uid`). Рантайм гейтит
+/// повтор (send-if-changed) против своей живой модели ордеров.
+pub(super) fn turn_order_panic_sell(client: &MoonClient, server_id: u64, uid: u64, on: bool) {
+    report(
+        server_id,
+        format!("turn order panic sell {uid} on={on}"),
+        client.orders().turn_panic_sell(uid, on),
+    );
+}
+
 /// Закрыть ПОЗИЦИЮ рынка по маркету (`TDoClosePositionCommand`, market_sell=true) — кнопка
 /// «Market sell» в Активах у строки с открытой позицией. Рантайм сам определяет сторону.
 pub(super) fn market_sell_position(client: &MoonClient, server_id: u64, market: String) {

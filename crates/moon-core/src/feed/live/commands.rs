@@ -471,6 +471,10 @@ pub(super) fn drain_commands(
                 trade::panic_sell_market(client, server.id, market, on);
                 *orders_mutated = true;
             }
+            Ok(CoreCmd::TurnOrderPanicSell { uid, on }) => {
+                trade::turn_order_panic_sell(client, server.id, uid, on);
+                *orders_mutated = true;
+            }
             Ok(CoreCmd::MarketSellPosition { market }) => {
                 trade::market_sell_position(client, server.id, market);
             }

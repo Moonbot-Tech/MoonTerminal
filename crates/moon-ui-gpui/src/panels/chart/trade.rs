@@ -656,6 +656,31 @@ impl ChartPanel {
         // - Stop/Trailing/TakeProfit → `update_stops` фиксированной ценой.
         let sent = self.backend.update(cx, |b, _| {
             let price = drag.current_price;
+            // Sell-линия ордера под паник-селлом: сначала снимаем panic-флаг ЭТОГО
+            // ордера, иначе паник-воркер ядра держит цену у пола AllowedDrop и
+            // перевыставит её обратно — перенос линии «не работает». Ровно то, что в
+            // MoonBot делается руками: «Stop Panic Sell» → кинуть линию. Команды идут
+            // одной очередью ядра — порядок гарантирован; соседние ордера рынка
+            // остаются в панике (флаг пер-ордерный).
+            if drag.kind == LineKind::Sell
+                && b.session
+                    .store()
+                    .core(drag.core)
+                    .is_some_and(|d| d.order_lines.order_panic_sell(drag.uid))
+            {
+                match b.session.turn_order_panic_sell(drag.core, drag.uid, false) {
+                    Ok(()) => log::info!(
+                        "chart move sell line: dropping panic sell first, core={} uid={}",
+                        drag.core,
+                        drag.uid,
+                    ),
+                    Err(err) => log::warn!(
+                        "chart move sell line: turn panic sell off failed, core={} uid={}: {err:#}",
+                        drag.core,
+                        drag.uid,
+                    ),
+                }
+            }
             let result = match drag.kind {
                 LineKind::Stop => b.session.move_order_stop_price(
                     drag.core,

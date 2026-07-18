@@ -246,6 +246,16 @@ impl SessionManager {
         )
     }
 
+    /// Паник-селл КОНКРЕТНОГО ордера по `uid` — drag sell-линии снимает флаг перед
+    /// move_order (иначе паник-воркер ядра вернёт цену; соседние ордера рынка не трогаем).
+    pub fn turn_order_panic_sell(&self, core: CoreId, uid: u64, on: bool) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::TurnOrderPanicSell { uid, on },
+            "turn order panic sell",
+        )
+    }
+
     /// Закрыть позицию рынка ядра ПО МАРКЕТУ (кнопка «Market sell» у строки с позицией).
     pub fn market_sell_position(&self, core: CoreId, market: String) -> Result<()> {
         self.send_core_cmd(

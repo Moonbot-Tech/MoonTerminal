@@ -34,7 +34,11 @@ fn action_button(
 ) -> MoonButton {
     let (label, variant, selected) = match kind {
         ActKind::CancelBuy => ("Cancel Buy", MoonButtonVariant::Soft, false),
-        ActKind::PanicSell => ("Panic Sell", MoonButtonVariant::Danger, armed),
+        // Взведённый паник — кнопка «Stop Panic» (как в MoonBot: повторный клик =
+        // TTurnPanicSell off): без этого не видно, что тоггл умеет снимать паник,
+        // а снятие — обязательный шаг, чтобы двигать sell ниже пола AllowedDrop.
+        ActKind::PanicSell if armed => ("Stop Panic", MoonButtonVariant::Danger, true),
+        ActKind::PanicSell => ("Panic Sell", MoonButtonVariant::Danger, false),
     };
     MoonButton::new(id)
         .label(label)

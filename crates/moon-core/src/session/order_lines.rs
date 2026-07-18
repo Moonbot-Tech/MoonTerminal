@@ -523,6 +523,13 @@ impl OrderLineStore {
         self.auto_fit_ranges.get(market).copied()
     }
 
+    /// Взведён ли panic-sell у ОТКРЫТОГО ордера (для авто-снятия при drag sell-линии).
+    pub fn order_panic_sell(&self, uid: u64) -> bool {
+        self.orders
+            .get(&uid)
+            .is_some_and(|o| o.closed_ms.is_none() && o.panic_sell)
+    }
+
     pub fn order_state(&self, uid: u64) -> Option<OrderLineState> {
         let order = self.orders.get(&uid)?;
         Some(OrderLineState {

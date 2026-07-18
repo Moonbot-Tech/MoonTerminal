@@ -296,6 +296,10 @@ pub enum CoreCmd {
     /// `orders().switch_panic_sell_by_market(market, on)` — market-level panic sell
     /// button semantics (тоггл panic-sell у ордеров рынка). РЕАЛЬНОЕ действие.
     PanicSellMarket { market: String, on: bool },
+    /// Паник-селл КОНКРЕТНОГО ордера по `uid` (`TTurnPanicSellCommand`). Используется
+    /// drag'ом sell-линии: перед move_order снимаем panic-флаг ЭТОГО ордера, иначе
+    /// паник-воркер ядра перевыставит цену обратно (см. AllowedDrop). РЕАЛЬНОЕ действие.
+    TurnOrderPanicSell { uid: u64, on: bool },
     /// Закрыть ПОЗИЦИЮ рынка ПО МАРКЕТУ (кнопка «Market sell» в Активах у строки с позицией).
     /// moonproto `trade().close_position(ClosePositionParams{market, market_sell:true})`
     /// (`TDoClosePositionCommand`). РЕАЛЬНОЕ действие на бирже.
