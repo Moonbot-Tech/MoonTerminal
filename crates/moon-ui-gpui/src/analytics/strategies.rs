@@ -6,7 +6,9 @@
 //! - «Монеты» — справа таблица по монетам выбранной (или всех сделок).
 
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette, h_flex, v_flex};
+use moon_ui::{
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use super::AnalyticsView;
@@ -30,8 +32,8 @@ impl AnalyticsView {
     /// Смена выбранной стратегии: детализация + скоуп тюнера.
     fn set_sel_strategy(&mut self, sel: Option<(String, String)>, cx: &mut Context<Self>) {
         self.sel_strategy = sel;
-        // detail НЕ обнуляем: старая карточка остаётся до прихода новой —
-        // иначе всё окно «мерцало» вспышками «Загрузка…».
+        // Retain ready detail while another strategy loads to avoid a loading
+        // flash; deselection or a completed non-data result clears it.
         self.reload_detail(cx);
         // Скоуп тюнера сменился — старые расчёты (включая автоподбор) неверны.
         self.tuner.invalidate();
@@ -42,6 +44,7 @@ impl AnalyticsView {
         cx.notify();
     }
 
+    /// Change strategy mode and refresh dirty tuner data when entering Filters.
     fn set_strat_mode(&mut self, mode: StratMode, cx: &mut Context<Self>) {
         if self.strat_mode == mode {
             return;
@@ -144,9 +147,12 @@ impl AnalyticsView {
                                 .text_color(moon(p.text_muted))
                                 .child(t!("analytics.tuner.copy_name_lbl").to_string()),
                         )
-                        .child(div().flex_1().min_w_0().child(
-                            MoonInput::new("tun-copy-name").state(input).small(),
-                        )),
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(MoonInput::new("tun-copy-name").state(input).small()),
+                        ),
                 );
             }
         }
@@ -303,35 +309,23 @@ impl AnalyticsView {
 
     /// Карточка списка: шапка (заголовок + режимы + счётчик), свой скролл.
     fn strat_list_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let (list, total, shown): (AnyElement, usize, usize) = match self.data.clone() {
-            None => (
-                div()
-                    .p(design::ui_px(cx, 18.0))
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.loading").to_string())
-                    .into_any_element(),
-                0,
-                0,
-            ),
-            Some(d) if d.strategies.is_empty() => (
-                div()
-                    .p(design::ui_px(cx, 18.0))
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.empty_period").to_string())
-                    .into_any_element(),
-                0,
-                0,
-            ),
-            Some(d) => {
-                let total = d.strategies.len();
-                let shown = total.min(MAX_ROWS);
-                let mut list = v_flex().w_full().gap_0();
-                for g in d.strategies.iter().take(MAX_ROWS) {
-                    list = list.child(self.strategy_row(g, p, cx));
+        let (list, total, shown): (AnyElement, usize, usize) =
+            match self.data.view(|d| d.strategies.is_empty()) {
+                Ok(d) => {
+                    let total = d.strategies.len();
+                    let shown = total.min(MAX_ROWS);
+                    let mut list = v_flex().w_full().gap_0();
+                    for g in d.strategies.iter().take(MAX_ROWS) {
+                        list = list.child(self.strategy_row(g, p, cx));
+                    }
+                    (list.into_any_element(), total, shown)
                 }
-                (list.into_any_element(), total, shown)
-            }
-        };
+                Err(note) => (
+                    super::note_el("an-strat-list-note", note, 18.0, p, cx),
+                    0,
+                    0,
+                ),
+            };
 
         let mode_btn = |id: &'static str, mode: StratMode, label: String| {
             let on = self.strat_mode == mode;
@@ -483,12 +477,37 @@ impl AnalyticsView {
                             .child(core_label),
                     )
                     .child(num_cell(cx, 56.0, g.n.to_string(), p.text_soft))
-                    .child(num_cell(cx, 56.0, format!("{:.1}%", g.winrate()), p.text_soft))
-                    .child(num_cell(cx, 84.0, fmt_signed(g.profit), sign_color(p, g.profit)))
-                    .child(num_cell(cx, 70.0, fmt_signed(g.avg()), sign_color(p, g.avg())))
+                    .child(num_cell(
+                        cx,
+                        56.0,
+                        format!("{:.1}%", g.winrate()),
+                        p.text_soft,
+                    ))
+                    .child(num_cell(
+                        cx,
+                        84.0,
+                        fmt_signed(g.profit),
+                        sign_color(p, g.profit),
+                    ))
+                    .child(num_cell(
+                        cx,
+                        70.0,
+                        fmt_signed(g.avg()),
+                        sign_color(p, g.avg()),
+                    ))
                     .child(num_cell(cx, 52.0, format!("{:.2}", g.pf), p.text_soft))
-                    .child(num_cell(cx, 70.0, fmt_signed(g.best), sign_color(p, g.best)))
-                    .child(num_cell(cx, 70.0, fmt_signed(g.worst), sign_color(p, g.worst))),
+                    .child(num_cell(
+                        cx,
+                        70.0,
+                        fmt_signed(g.best),
+                        sign_color(p, g.best),
+                    ))
+                    .child(num_cell(
+                        cx,
+                        70.0,
+                        fmt_signed(g.worst),
+                        sign_color(p, g.worst),
+                    )),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 if this.sel_strategy.as_ref().is_some_and(|(k, _)| *k == key) {
@@ -509,14 +528,20 @@ impl AnalyticsView {
 
     /// Правая панель «Монеты»: таблица по монетам выбранной (или всех сделок).
     fn strat_coins_table(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        // Скоуп: детализация выбранной стратегии либо общий разрез по монетам.
-        let (coins, scope): (Option<Vec<GroupStat>>, String) = match &self.sel_strategy {
+        // The selected-strategy detail and the all-strategies summary each keep
+        // their own load note so either read failure remains visible.
+        let (coins, scope): (Result<Vec<GroupStat>, super::Note>, String) = match &self.sel_strategy
+        {
             Some((_, name)) => (
-                self.detail.clone().map(|d| d.coins.clone()),
+                self.detail
+                    .view(|d| d.coins.is_empty())
+                    .map(|d| d.coins.clone()),
                 name.clone(),
             ),
             None => (
-                self.data.clone().map(|d| d.coins.clone()),
+                self.data
+                    .view(|d| d.coins.is_empty())
+                    .map(|d| d.coins.clone()),
                 t!("analytics.strat.scope_all").to_string(),
             ),
         };
@@ -545,17 +570,8 @@ impl AnalyticsView {
             .child(cell(70.0, "analytics.col.worst"));
 
         let body: AnyElement = match coins {
-            None => div()
-                .p(design::ui_px(cx, 10.0))
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.loading").to_string())
-                .into_any_element(),
-            Some(coins) if coins.is_empty() => div()
-                .p(design::ui_px(cx, 10.0))
-                .text_color(moon(p.text_muted))
-                .child(t!("analytics.empty_period").to_string())
-                .into_any_element(),
-            Some(coins) => {
+            Err(note) => super::note_el("an-strat-coins-note", note, 10.0, p, cx),
+            Ok(coins) => {
                 let mut list = v_flex().w_full();
                 for c in coins.iter().take(MAX_ROWS) {
                     list = list.child(
@@ -695,12 +711,7 @@ fn header_row(p: MoonPalette, cx: &Context<AnalyticsView>) -> impl IntoElement {
         )
 }
 
-fn num_cell(
-    cx: &Context<AnalyticsView>,
-    w: f32,
-    text: String,
-    color: u32,
-) -> impl IntoElement {
+fn num_cell(cx: &Context<AnalyticsView>, w: f32, text: String, color: u32) -> impl IntoElement {
     div()
         .w(design::font_w_px(cx, w))
         .flex_none()

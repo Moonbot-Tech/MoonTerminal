@@ -18,17 +18,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonButtonSize, MoonButtonVariant, MoonDataCell,
-    MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonInput,
-    MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTone,
-    Panel, PanelEvent, PanelState, StyledExt, h_flex, v_flex,
+    DockArea, MoonButtonSize, MoonButtonVariant, MoonDataCell, MoonDataRow, MoonDataTable,
+    MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent,
+    MoonInputState, MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonTone, Panel,
+    PanelEvent, PanelState, StyledExt, h_flex, v_flex,
 };
 use rusqlite::Connection;
 use rusqlite::types::Value;
 use rust_i18n::t;
 
+use crate::load_state::{LoadState, Note, note_el};
 use crate::{Backend, design};
-use moon_core::db::{self, ReportFilter, ReportTable, SideFilter};
+use moon_core::db::{self, ReadResult, ReportFilter, SideFilter};
 
 /// Data cap для отчёта: в таблицу грузим только топ-N под текущий фильтр/сортировку,
 /// а «Итого за период» считается ОТДЕЛЬНЫМ SQL-агрегатом по ВСЕМУ фильтру
@@ -89,8 +90,9 @@ impl Period {
     }
 }
 
-/// Фильтр по типу ордера в отчёте (Все / Реальные / Эмуляторные) — как в «Ордерах».
-/// Дефолт «Реальные» (сохраняет прежнее поведение галки «Эмулятор» = выкл).
+/// Report order-type filter: all, real, or emulator orders.
+///
+/// Real orders are selected by default.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReportKind {
     All,
@@ -142,59 +144,73 @@ fn complete_widths(widths: &mut std::collections::HashMap<String, f32>, cols: &[
     }
 }
 
-struct ReportQueryResult {
-    cores: Vec<(u64, String)>,
-    table: ReportTable,
+/// Rows and exact period totals from one completed report read.
+///
+/// The schema is stored separately so a completed failed read cannot collapse
+/// column controls. Rows and totals are discarded because retaining them under
+/// a changed filter would present stale figures as current.
+pub(super) struct ReportData {
+    pub(super) rows: Vec<Vec<Value>>,
+    pub(super) core_uids: Vec<u64>,
+    /// Exact `(profit sum, order count)` over the full filter, not the displayed top N.
     totals: (f64, i64),
 }
 
-fn empty_report_query_result() -> ReportQueryResult {
-    ReportQueryResult {
-        cores: Vec::new(),
-        table: ReportTable {
-            cols: Vec::new(),
-            rows: Vec::new(),
-            core_uids: Vec::new(),
-        },
-        totals: (0.0, 0),
-    }
+/// One completed background batch: data, schema, and optional core refresh.
+///
+/// An empty `cores` vector is also used when the expensive core query is skipped.
+struct ReportRead {
+    cores: Vec<(u64, String)>,
+    cols: Vec<String>,
+    data: ReportData,
 }
 
-/// `with_cores` — тянуть ли список ядер (GROUP BY по всей БД — дорого на сотнях МБ;
-/// панель обновляет его не чаще раза в минуту, состав ядер меняется редко).
+/// Read cores when requested, rows, and totals from one WAL snapshot.
+///
+/// `NotReady` means the reports replica is absent. `Failed` means opening the
+/// connection, pinning the snapshot, probing schema, or running any query failed.
+/// `with_cores` skips the expensive full-database grouping on most rounds.
 fn run_report_query(
     filter: ReportFilter,
     sort_key: String,
     sort_desc: bool,
     with_cores: bool,
-) -> ReportQueryResult {
+) -> ReadResult<ReportRead> {
     let started = std::time::Instant::now();
-    let Some(conn) = db::open_reader() else {
-        return empty_report_query_result();
+    let conn = db::open_reader()?;
+    // Pin one snapshot across cores, rows, and totals. Separate autocommit reads
+    // could straddle a writer commit, including legacy cleanup after sync, and
+    // publish rows and totals from different database states.
+    let snap = db::read_snapshot(&conn)?;
+    let cores = if with_cores {
+        db::distinct_cores(&snap)?
+    } else {
+        Vec::new()
     };
-    let out = ReportQueryResult {
-        cores: if with_cores {
-            db::distinct_cores(&conn)
-        } else {
-            Vec::new()
-        },
-        table: db::query_reports(&conn, &filter, &sort_key, sort_desc, MAX_REPORT_ROWS),
-        totals: db::query_totals(&conn, &filter),
-    };
+    let table = db::query_reports(&snap, &filter, &sort_key, sort_desc, MAX_REPORT_ROWS)?;
+    let totals = db::query_totals(&snap, &filter)?;
     // Замер вместо гаданий: медленный requery виден в логе (частоту задаёт троттл панели).
     let ms = started.elapsed().as_millis();
     if ms > 250 {
         log::warn!(
             "отчёты: медленный query {ms}ms (rows={} cores={} filter: dates={:?}/{:?})",
-            out.table.rows.len(),
+            table.rows.len(),
             with_cores,
             filter.date_from,
             filter.date_to,
         );
     } else {
-        log::debug!("отчёты: query {ms}ms (rows={})", out.table.rows.len());
+        log::debug!("отчёты: query {ms}ms (rows={})", table.rows.len());
     }
-    out
+    Ok(ReportRead {
+        cores,
+        cols: table.cols,
+        data: ReportData {
+            rows: table.rows,
+            core_uids: table.core_uids,
+            totals,
+        },
+    })
 }
 
 pub struct ReportPanel {
@@ -205,8 +221,11 @@ pub struct ReportPanel {
 
     conn: Option<Connection>,
     pub(super) cores: Vec<(u64, String)>,
-    pub(super) table: Rc<ReportTable>,
-    totals: (f64, i64),
+    /// Cached schema, kept outside `data` so failures cannot collapse controls or widths.
+    pub(super) cols: Rc<Vec<String>>,
+    /// Report rows and totals; in-flight refreshes may retain stale data, but
+    /// `NotReady` and `Failed` retain none.
+    data: LoadState<ReportData>,
 
     sort_key: String,
     sort_desc: bool,
@@ -269,8 +288,14 @@ impl ReportPanel {
             .reports
             .as_ref()
             .map(|h| h.generation.clone());
-        let conn = db::open_reader();
-        let cores = conn.as_ref().map(db::distinct_cores).unwrap_or_default();
+        // Keep this connection for panel metadata. Startup core/schema probes
+        // are deliberately lossy because the fallible background batch below
+        // owns user-visible read errors.
+        let conn = db::open_reader().ok();
+        let cores = conn
+            .as_ref()
+            .and_then(|c| db::distinct_cores(c).ok())
+            .unwrap_or_default();
         let last_gen = generation
             .as_ref()
             .map(|g| g.load(Ordering::Relaxed))
@@ -282,7 +307,10 @@ impl ReportPanel {
             .map(|saved| saved.into_iter().collect())
             .unwrap_or_else(|| DEFAULT_VISIBLE.iter().map(|c| c.to_string()).collect());
         // Стартовый список колонок — сразу из БД, чтобы первая отрисовка/меню были полными.
-        let init_cols = conn.as_ref().map(db::display_columns).unwrap_or_default();
+        let init_cols = conn
+            .as_ref()
+            .and_then(|c| db::display_columns(c).ok())
+            .unwrap_or_default();
         let (sort_key, sort_desc) = conn
             .as_ref()
             .and_then(db::load_sort)
@@ -359,12 +387,8 @@ impl ReportPanel {
             last_gen,
             conn,
             cores,
-            table: Rc::new(ReportTable {
-                cols: init_cols,
-                rows: Vec::new(),
-                core_uids: Vec::new(),
-            }),
-            totals: (0.0, 0),
+            cols: Rc::new(init_cols),
+            data: LoadState::default(),
             sort_key,
             sort_desc,
             sel_cores: HashSet::new(),
@@ -422,7 +446,6 @@ impl ReportPanel {
         }
         // Сумма как у движка: видимые колонки, сток из карты либо дефолт колонки.
         let visible: Vec<&String> = self
-            .table
             .cols
             .iter()
             .filter(|c| self.visible.contains(c.as_str()))
@@ -468,7 +491,7 @@ impl ReportPanel {
         self.detached = true;
         self.widths_id = crate::table_persist::ctx_id("report-table", true);
         let mut saved = crate::table_persist::saved(self.backend.read(cx), &self.widths_id);
-        complete_widths(&mut saved, &self.table.cols);
+        complete_widths(&mut saved, &self.cols);
         self.table_state.update(cx, |s, c| {
             s.column_widths = saved;
             c.notify();
@@ -493,7 +516,6 @@ impl ReportPanel {
     /// колонок таблицы. Зовётся из [`Self::toggle_column`].
     fn save_ctx_columns(&self, cx: &mut App) {
         let keys: Vec<String> = self
-            .table
             .cols
             .iter()
             .filter(|c| self.visible.contains(c.as_str()))
@@ -504,12 +526,33 @@ impl ReportPanel {
         }
     }
 
+    /// Return visible columns in runtime-schema order for stable rendering and persistence.
+    pub(super) fn visible_cols(&self) -> Vec<&str> {
+        self.cols
+            .iter()
+            .filter(|c| self.visible.contains(c.as_str()))
+            .map(|c| c.as_str())
+            .collect()
+    }
+
+    /// Return whether every runtime column is enabled in the Columns menu.
+    pub(super) fn all_columns_on(&self) -> bool {
+        !self.cols.is_empty() && self.cols.iter().all(|c| self.visible.contains(c.as_str()))
+    }
+
+    /// Persist visible columns to report metadata and the dock/window table descriptor.
+    fn persist_visible(&self, cx: &mut App) {
+        if let Some(conn) = &self.conn {
+            db::save_visible(conn, &self.visible_cols());
+        }
+        self.save_ctx_columns(cx);
+    }
+
     fn filter(&self, cx: &App) -> ReportFilter {
         // Пресет периода перекрывает ручные даты; «Все» отдаёт даты полям С:/По:.
         let (pfrom, pto) = self.period.range();
         let date_from = pfrom.or_else(|| db::parse_ymd(&self.from.read(cx).value()));
-        let date_to =
-            pto.or_else(|| db::parse_ymd(&self.to.read(cx).value()).map(|d| d + 86_399));
+        let date_to = pto.or_else(|| db::parse_ymd(&self.to.read(cx).value()).map(|d| d + 86_399));
         ReportFilter {
             core_uids: self.sel_cores.iter().copied().collect(),
             date_from,
@@ -567,6 +610,9 @@ impl ReportPanel {
         self.query_inflight = true;
         self.query_seq = self.query_seq.wrapping_add(1);
         self.last_query_start = Some(std::time::Instant::now());
+        // Keep stale rows while a refresh is in flight to avoid flicker. A
+        // completed `NotReady` or `Failed` result discards them through `LoadState`.
+        self.data.begin();
         // Список ядер — не чаще раза в минуту (дорогой GROUP BY по всей БД).
         let with_cores = self
             .last_cores_at
@@ -598,24 +644,32 @@ impl ReportPanel {
                         return;
                     }
 
-                    let cols_changed = this.table.cols != result.table.cols;
-                    if !result.cores.is_empty() {
-                        this.cores = result.cores;
-                    }
-                    this.table = Rc::new(result.table);
-                    this.totals = result.totals;
-                    // Состав колонок вырос (пришла схема ядра / появилось новое поле) —
-                    // достраиваем карту ширин, чтобы новые колонки не «плавали» при
-                    // ресайзе соседей. Только на смену состава: одиночный сброс колонки
-                    // дабл-кликом (движок убирает её ключ) не перетирается.
-                    if cols_changed {
-                        let cols = this.table.cols.clone();
-                        this.table_state.update(cx, |s, c| {
-                            if !s.column_widths.is_empty() {
-                                complete_widths(&mut s.column_widths, &cols);
-                                c.notify();
+                    match result {
+                        Ok(read) => {
+                            // An empty core result never replaces the cached list;
+                            // this also preserves it when the query is skipped.
+                            if !read.cores.is_empty() {
+                                this.cores = read.cores;
                             }
-                        });
+                            let cols_changed = *this.cols != read.cols;
+                            this.cols = Rc::new(read.cols);
+                            this.data.apply(Ok(read.data));
+                            // Complete the width map when schema membership changes
+                            // so new columns stay stable while neighbors resize. A
+                            // double-click reset intentionally removes one entry.
+                            if cols_changed {
+                                let cols = this.cols.clone();
+                                this.table_state.update(cx, |s, c| {
+                                    if !s.column_widths.is_empty() {
+                                        complete_widths(&mut s.column_widths, &cols);
+                                        c.notify();
+                                    }
+                                });
+                            }
+                        }
+                        // Preserve schema and core choices across a failed read;
+                        // only rows and totals disappear so the failure can render.
+                        Err(e) => this.data.apply(Err(e)),
                     }
                     cx.notify();
                 });
@@ -659,24 +713,12 @@ impl ReportPanel {
     /// «Все»-тумблер колонок: включает все колонки; повторный клик по полному набору
     /// оставляет только первую (все скрыть нельзя — таблица опустеет).
     pub(super) fn toggle_all_columns(&mut self, cx: &mut Context<Self>) {
-        let all_on = !self.table.cols.is_empty()
-            && self.table.cols.iter().all(|c| self.visible.contains(c.as_str()));
-        if all_on {
-            self.visible = self.table.cols.first().cloned().into_iter().collect();
+        if self.all_columns_on() {
+            self.visible = self.cols.first().cloned().into_iter().collect();
         } else {
-            self.visible = self.table.cols.iter().cloned().collect();
+            self.visible = self.cols.iter().cloned().collect();
         }
-        if let Some(conn) = &self.conn {
-            let cols: Vec<&str> = self
-                .table
-                .cols
-                .iter()
-                .filter(|c| self.visible.contains(c.as_str()))
-                .map(|c| c.as_str())
-                .collect();
-            db::save_visible(conn, &cols);
-        }
-        self.save_ctx_columns(cx);
+        self.persist_visible(cx);
         cx.notify();
     }
     pub(super) fn set_side(&mut self, s: SideFilter, cx: &mut Context<Self>) {
@@ -713,30 +755,25 @@ impl ReportPanel {
         } else {
             self.visible.insert(name);
         }
-        if let Some(conn) = &self.conn {
-            // Сохраняем в порядке колонок таблицы (стабильно для UI).
-            let cols: Vec<&str> = self
-                .table
-                .cols
-                .iter()
-                .filter(|c| self.visible.contains(c.as_str()))
-                .map(|c| c.as_str())
-                .collect();
-            db::save_visible(conn, &cols);
-        }
-        // Единый per-контекст дескриптор полей (свой набор на :dock/:win).
-        self.save_ctx_columns(cx);
+        self.persist_visible(cx);
         cx.notify();
     }
-    /// Экспорт отчёта в файл (пункты меню «Сохранить»): диалог пути → фоновый запрос
-    /// БД по ТЕКУЩЕМУ фильтру (период/даты/ядра/монета/сторона/эмулятор, сортировка
-    /// как в таблице) → запись CSV/XLSX. `all_cols` — все колонки БД, иначе видимые.
-    fn export_report(&mut self, fmt: export::Format, all_cols: bool, cx: &mut Context<Self>) {
+    /// Prompt for a destination, then export the current filter and sort order.
+    ///
+    /// `all_cols` selects the full runtime schema instead of visible columns. A
+    /// `NotReady` or `Failed` read aborts before any file write; completion or
+    /// failure is reported in the originating window.
+    fn export_report(
+        &mut self,
+        fmt: export::Format,
+        all_cols: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let cols: Vec<String> = if all_cols {
-            self.table.cols.clone()
+            (*self.cols).clone()
         } else {
-            self.table
-                .cols
+            self.cols
                 .iter()
                 .filter(|c| self.visible.contains(c.as_str()))
                 .cloned()
@@ -750,6 +787,7 @@ impl ReportPanel {
         let sort_key = self.sort_key.clone();
         let sort_desc = self.sort_desc;
         let suggested = export::suggested_name(&filter, fmt, all_cols);
+        let handle = window.window_handle();
         let rx = cx.prompt_for_new_path(&export::default_dir(), Some(&suggested));
         cx.spawn(async move |_this, cx| {
             // Диалог отменён/закрыт — тихо выходим.
@@ -759,16 +797,92 @@ impl ReportPanel {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor
                 .spawn(async move {
-                    export::run(&path, fmt, &cols, &filter, &sort_key, sort_desc)
-                        .map(|n| (n, path))
+                    export::run(&path, fmt, &cols, &filter, &sort_key, sort_desc).map(|n| (n, path))
                 })
                 .await;
-            match result {
-                Ok((n, path)) => log::info!("отчёт: экспортировано {n} строк → {}", path.display()),
-                Err(e) => log::warn!("отчёт: экспорт не удался: {e:#}"),
-            }
+            let note = match result {
+                Ok((n, path)) => {
+                    log::info!("отчёт: экспортировано {n} строк → {}", path.display());
+                    MoonNotification::success(t!("report.export.ok", n = n).to_string())
+                }
+                Err(e) => {
+                    log::error!("отчёт: экспорт не выполнен: {e:#}");
+                    // Do not auto-hide: the user must notice that the requested
+                    // export did not complete.
+                    MoonNotification::error(format!("{e}"))
+                        .title(t!("report.export.fail").to_string())
+                        .autohide(false)
+                }
+            };
+            let _ = cx.update(|app| {
+                let _ = handle.update(app, |_, window, app| {
+                    use moon_ui::MoonWindowExt as _;
+                    window.push_notification(note, app);
+                });
+            });
         })
         .detach();
+    }
+
+    /// Render the report table from currently renderable data.
+    ///
+    /// `vis` indexes [`Self::cols`]. Empty rows keep the header and show the
+    /// panel overlay. Loading with stale data may reach this function; loading
+    /// without data, `NotReady`, and `Failed` are replaced by `note_el`.
+    fn table_el(
+        &self,
+        data: Arc<ReportData>,
+        vis: &[usize],
+        p: MoonPalette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let visible = Rc::new(vis.to_vec());
+        let row_count = data.rows.len();
+        let view = cx.entity();
+        // Keep a separate handle for row click callbacks; sorting also captures
+        // the original entity handle.
+        let view_row = view.clone();
+        let backend = self.backend.clone();
+        let table_state = self.table_state.clone();
+        let row_cols = self.cols.clone();
+        let cols = columns::report_columns(&self.cols, vis);
+        // With no explicit filter, the coin menu may act on every core currently
+        // known to the report selector.
+        let selected_cores: Rc<Vec<u64>> = Rc::new(if self.sel_cores.is_empty() {
+            self.cores.iter().map(|(u, _)| *u).collect()
+        } else {
+            self.sel_cores.iter().copied().collect()
+        });
+        // Clip resized columns at the shared table host; an empty successful
+        // result keeps the header and uses the panel overlay.
+        crate::panels::common::data_table_host(
+            "rep-table-host",
+            row_count == 0,
+            t!("report.empty").to_string(),
+            p,
+            cx,
+            MoonDataTable::new("report-table", row_count, move |ri, _window, _app| {
+                columns::report_data_row(
+                    ri,
+                    &row_cols,
+                    &data,
+                    &visible,
+                    &selected_cores,
+                    &backend,
+                    &view_row,
+                    p,
+                )
+            })
+            .state(&table_state)
+            .columns(cols)
+            .header_height(design::TABLE_HEAD_H)
+            .row_height(design::TABLE_ROW_H)
+            .on_sort(move |key, ascending, _window, app| {
+                let key = key.to_string();
+                view.update(app, |t, cx| t.set_report_sort(&key, !ascending, cx));
+            }),
+        )
+        .into_any_element()
     }
 
     fn set_report_sort(&mut self, col: &str, sort_desc: bool, cx: &mut Context<Self>) {
@@ -961,77 +1075,35 @@ impl Render for ReportPanel {
 
         // ── Таблица ──
         let vis: Vec<usize> = self
-            .table
             .cols
             .iter()
             .enumerate()
             .filter(|(_, c)| self.visible.contains(c.as_str()))
             .map(|(i, _)| i)
             .collect();
-        let table_el: AnyElement = if vis.is_empty() {
-            div()
+        // Resolve `LoadState` before inspecting schema or visibility. A failed
+        // or not-ready read can coexist with an empty cached schema and must show
+        // its database note, not the user-preference message for hidden columns.
+        // Loaded empty rows keep the table's header and overlay, so this view
+        // deliberately never classifies `Note::Empty`.
+        let table_el: AnyElement = match self.data.view(|_| false) {
+            Err(note) => note_el("rep-table-note", note, 12.0, p, cx),
+            // A successful read with no report columns means the core schema is
+            // not available yet.
+            Ok(_) if self.cols.is_empty() => note_el("rep-table-note", Note::NotReady, 12.0, p, cx),
+            // Columns exist, so an empty visible set is a user preference.
+            Ok(_) if vis.is_empty() => div()
                 .p_3()
                 .text_color(rgb(p.text_soft))
                 .child(t!("report.all_cols_hidden").to_string())
-                .into_any_element()
-        } else {
-            let table = self.table.clone();
-            let visible = Rc::new(vis.clone());
-            let row_count = table.rows.len();
-            let view = cx.entity();
-            // Клон для замыкания строк (клик по ячейке «Ядро» → filter_to_core); `view` ниже
-            // ещё нужен для on_sort.
-            let view_row = view.clone();
-            let backend = self.backend.clone();
-            let table_state = self.table_state.clone();
-            let cols = columns::report_columns(&self.table, &vis);
-            // «Выбранные ядра» для контекстного меню монеты: пусто = все ядра отчёта.
-            let selected_cores: Rc<Vec<u64>> = Rc::new(if self.sel_cores.is_empty() {
-                self.cores.iter().map(|(u, _)| *u).collect()
-            } else {
-                self.sel_cores.iter().copied().collect()
-            });
-            // Общий хост докнутых таблиц (как Orders/Assets): overflow_hidden не даёт
-            // раздвинутым колонкам распирать layout панели, «пусто» — оверлеем.
-            crate::panels::common::data_table_host(
-                "rep-table-host",
-                row_count == 0,
-                t!("report.empty").to_string(),
-                p,
-                cx,
-                MoonDataTable::new("report-table", row_count, move |ri, _window, _app| {
-                    columns::report_data_row(
-                        ri,
-                        &table,
-                        &visible,
-                        &selected_cores,
-                        &backend,
-                        &view_row,
-                        p,
-                    )
-                })
-                .state(&table_state)
-                .columns(cols)
-                .header_height(design::TABLE_HEAD_H)
-                .row_height(design::TABLE_ROW_H)
-                .on_sort(move |key, ascending, _window, app| {
-                    let key = key.to_string();
-                    view.update(app, |t, cx| t.set_report_sort(&key, !ascending, cx));
-                }),
-            )
-            .into_any_element()
+                .into_any_element(),
+            Ok(data) => self.table_el(data.clone(), &vis, p, cx),
         };
 
         // ── ИТОГО ──
-        let (sum, count) = self.totals;
-        let sum_col = if sum > 0.0 {
-            p.green
-        } else if sum < 0.0 {
-            p.red
-        } else {
-            p.text_soft
-        };
-        let totals = h_flex()
+        // Without current data, never render +0.00 / 0 orders: those values are
+        // indistinguishable from a genuinely empty period.
+        let mut totals = h_flex()
             .w_full()
             .gap_2()
             .items_center()
@@ -1042,30 +1114,52 @@ impl Render for ReportPanel {
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_soft))
                     .child(t!("report.totals").to_string()),
-            )
-            .child(
-                // Профит в долларах: 2 знака + «$» (без «BTC» — сумма в котировке пар,
-                // обычно usdt; 6 знаков «тысячных» были лишними).
-                div()
-                    .font_bold()
-                    .text_color(rgb(sum_col))
-                    .child(format!("{sum:+.2} $")),
-            )
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("report.orders_count", count = count).to_string()),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .justify_end()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("report.shown_top", n = self.table.rows.len()).to_string()),
             );
+        totals = match self.data.data() {
+            Some(d) => {
+                let (sum, count) = d.totals;
+                let sum_col = if sum > 0.0 {
+                    p.green
+                } else if sum < 0.0 {
+                    p.red
+                } else {
+                    p.text_soft
+                };
+                totals
+                    .child(
+                        // The total is in the pair's quote currency, usually USDT,
+                        // so use two decimals and a neutral dollar marker.
+                        div()
+                            .font_bold()
+                            .text_color(rgb(sum_col))
+                            .child(format!("{sum:+.2} $")),
+                    )
+                    .child(
+                        div()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_soft))
+                            .child(t!("report.orders_count", count = count).to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .justify_end()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_soft))
+                            .child(t!("report.shown_top", n = d.rows.len()).to_string()),
+                    )
+            }
+            None => {
+                let failed = matches!(self.data, LoadState::Failed(_));
+                let (text, color) = if failed {
+                    (t!("common.db_read_failed_short").to_string(), p.orange)
+                } else {
+                    ("—".to_string(), p.text_soft)
+                };
+                totals.child(div().font_bold().text_color(rgb(color)).child(text))
+            }
+        };
 
         v_flex()
             .id("report-panel")

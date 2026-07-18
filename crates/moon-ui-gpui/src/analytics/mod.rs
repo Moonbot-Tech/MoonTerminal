@@ -16,8 +16,8 @@ mod strategies;
 mod summary;
 mod tuner;
 mod tuner_actions;
-mod tuner_state;
 mod tuner_hist;
+mod tuner_state;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar,
+    MoonAlert, MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar,
     MoonCalendarEvent, MoonCalendarState, MoonDate, MoonDropdown, MoonMenuSize, MoonPalette,
     MoonPopover, MoonPopoverPlacement, MoonWindowFrame, Root, h_flex, v_flex,
 };
@@ -35,6 +35,9 @@ use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
 use moon_core::db::SideFilter;
 use moon_core::db::analytics::{DayCell, Query, StrategyDetail, Summary};
+use moon_core::db::integrity::Integrity;
+
+use crate::load_state::{LoadState, Note, note_el};
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
 
@@ -170,12 +173,16 @@ pub(super) fn day_of_secs(secs: i64) -> Option<chrono::NaiveDate> {
 
 /// Дата UTC → unix-секунды полуночи этих суток.
 pub(super) fn secs_of_day(d: chrono::NaiveDate) -> i64 {
-    d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp()).unwrap_or(0)
+    d.and_hms_opt(0, 0, 0)
+        .map(|dt| dt.and_utc().timestamp())
+        .unwrap_or(0)
 }
 
 /// «дд.мм.гг» для подписей полей диапазона и инфо тепловой карты.
 pub(super) fn fmt_day(secs: i64) -> String {
-    day_of_secs(secs).map(|d| d.format("%d.%m.%y").to_string()).unwrap_or_default()
+    day_of_secs(secs)
+        .map(|d| d.format("%d.%m.%y").to_string())
+        .unwrap_or_default()
 }
 
 /// Состояние окна «Аналитика».
@@ -190,9 +197,9 @@ pub struct AnalyticsView {
     side: SideFilter,
     /// None — все, Some(false) — реальные, Some(true) — эмуляторные.
     emu: Option<bool>,
-    /// Данные сводки (фоновый расчёт); None — ещё не загружены.
-    pub(super) data: Option<Arc<Summary>>,
-    inflight: bool,
+    /// Background summary state with distinct loading, unavailable, ready, and
+    /// failed outcomes so only a successful empty read appears empty.
+    pub(super) data: LoadState<Summary>,
     /// Счётчик фоновых пересчётов (сводка/тюнер/гистограмма/подбор): >0 —
     /// блокирующий оверлей «Загрузка…» поверх окна. Длинные сканы большой БД
     /// иначе никак не видны, а клики по фильтрам/стратегиям копились в очередь.
@@ -212,7 +219,7 @@ pub struct AnalyticsView {
     /// Вкладка «Стратегии»: выбранная группа `(strategyid текстом, имя)`
     /// + её детализация.
     pub(super) sel_strategy: Option<(String, String)>,
-    pub(super) detail: Option<Arc<StrategyDetail>>,
+    pub(super) detail: LoadState<StrategyDetail>,
     detail_seq: u64,
     /// Вкладка «Календарь»: посуточные ячейки (PnL+сделки+wins) за период.
     pub(super) cal_days: Option<Arc<Vec<DayCell>>>,
@@ -241,6 +248,8 @@ pub struct AnalyticsView {
     cal_to: Entity<MoonCalendarState>,
     cal_from_open: bool,
     cal_to_open: bool,
+    /// Whether the single delayed integrity-status poll is armed.
+    integrity_poll_armed: bool,
     _cal_subs: Vec<Subscription>,
     focus: FocusHandle,
 }
@@ -314,8 +323,7 @@ impl AnalyticsView {
             side: SideFilter::All,
             // Дефолт «Реальные» — как в Отчёте (эмуляторные шумят статистику).
             emu: Some(false),
-            data: None,
-            inflight: false,
+            data: LoadState::default(),
             busy_ops: 0,
             busy_since: None,
             seq: 0,
@@ -323,7 +331,7 @@ impl AnalyticsView {
             hover_core_bucket: None,
             hover_daily_bucket: None,
             sel_strategy: None,
-            detail: None,
+            detail: LoadState::default(),
             detail_seq: 0,
             cal_days: None,
             cal_seq: 0,
@@ -343,6 +351,7 @@ impl AnalyticsView {
             cal_to,
             cal_from_open: false,
             cal_to_open: false,
+            integrity_poll_armed: false,
             _cal_subs: cal_subs,
             focus: cx.focus_handle(),
         };
@@ -412,7 +421,9 @@ impl AnalyticsView {
 
     /// Фоновый расчёт сводки за текущий период/фильтры.
     fn reload(&mut self, cx: &mut Context<Self>) {
-        self.inflight = true;
+        // Mark the request at its start so an error from another period cannot
+        // remain under the current period label.
+        self.data.begin();
         self.op_started();
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
@@ -441,11 +452,13 @@ impl AnalyticsView {
                     if this.seq != req {
                         return; // период/фильтры уже сменили
                     }
-                    this.inflight = false;
-                    if let Some(d) = &data {
+                    // Keep the last known core list when a read produces no
+                    // summary: an empty `cores` makes `cores_selected()` read as
+                    // "no filter", which renders as if every core were selected.
+                    if let Ok(d) = &data {
                         this.cores = d.cores.clone();
                     }
-                    this.data = data.map(Arc::new);
+                    this.data.apply(data);
                     // Детализация стратегии зависит от фильтров — перечитать.
                     if this.sel_strategy.is_some() {
                         this.reload_detail(cx);
@@ -460,13 +473,14 @@ impl AnalyticsView {
     /// Фоновая детализация выбранной стратегии (вкладка «Стратегии»).
     pub(super) fn reload_detail(&mut self, cx: &mut Context<Self>) {
         let Some((key, _)) = self.sel_strategy.clone() else {
-            self.detail = None;
+            self.detail = LoadState::default();
             return;
         };
         let id: i64 = key.parse().unwrap_or(0);
         self.detail_seq = self.detail_seq.wrapping_add(1);
         let req = self.detail_seq;
         let q = self.query();
+        self.detail.begin();
         self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -479,7 +493,7 @@ impl AnalyticsView {
                     if this.detail_seq != req {
                         return;
                     }
-                    this.detail = detail.map(Arc::new);
+                    this.detail.apply(detail);
                     cx.notify();
                 });
             });
@@ -540,11 +554,13 @@ impl AnalyticsView {
                 .spawn(async move {
                     let cur = moon_core::db::analytics::calendar_cells(&q);
                     // Агрегат пред. месяца (profit, trades, wins) для дельт KPI.
-                    let prev = q_prev.and_then(|qp| moon_core::db::analytics::calendar_cells(&qp)).map(|d| {
-                        d.iter().fold((0.0f64, 0i64, 0i64), |a, c| {
-                            (a.0 + c.profit, a.1 + c.trades, a.2 + c.wins)
-                        })
-                    });
+                    let prev = q_prev
+                        .and_then(|qp| moon_core::db::analytics::calendar_cells(&qp))
+                        .map(|d| {
+                            d.iter().fold((0.0f64, 0i64, 0i64), |a, c| {
+                                (a.0 + c.profit, a.1 + c.trades, a.2 + c.wins)
+                            })
+                        });
                     (cur, prev)
                 })
                 .await;
@@ -729,9 +745,21 @@ impl AnalyticsView {
         let view = cx.entity();
         let items = crate::panels::radio_items(
             [
-                (SideFilter::All, "as-all".into(), t!("report.filter.all").to_string().into()),
-                (SideFilter::Long, "as-long".into(), t!("report.side.long").to_string().into()),
-                (SideFilter::Short, "as-short".into(), t!("report.side.short").to_string().into()),
+                (
+                    SideFilter::All,
+                    "as-all".into(),
+                    t!("report.filter.all").to_string().into(),
+                ),
+                (
+                    SideFilter::Long,
+                    "as-long".into(),
+                    t!("report.side.long").to_string().into(),
+                ),
+                (
+                    SideFilter::Short,
+                    "as-short".into(),
+                    t!("report.side.short").to_string().into(),
+                ),
             ],
             self.side,
             crate::panels::RadioMark::Highlight,
@@ -759,9 +787,21 @@ impl AnalyticsView {
         let view = cx.entity();
         let items = crate::panels::radio_items(
             [
-                (None, "ak-all".into(), t!("report.kind.all").to_string().into()),
-                (Some(false), "ak-real".into(), t!("report.kind.real").to_string().into()),
-                (Some(true), "ak-emu".into(), t!("report.kind.emu").to_string().into()),
+                (
+                    None,
+                    "ak-all".into(),
+                    t!("report.kind.all").to_string().into(),
+                ),
+                (
+                    Some(false),
+                    "ak-real".into(),
+                    t!("report.kind.real").to_string().into(),
+                ),
+                (
+                    Some(true),
+                    "ak-emu".into(),
+                    t!("report.kind.emu").to_string().into(),
+                ),
             ],
             self.emu,
             crate::panels::RadioMark::Check,
@@ -821,21 +861,64 @@ impl AnalyticsView {
                 });
             })
             .trigger(
-                MoonButton::new(if is_to { "an-date-to-btn" } else { "an-date-from-btn" })
-                    .variant(if custom_on {
-                        MoonButtonVariant::Amber
-                    } else {
-                        MoonButtonVariant::Soft
-                    })
-                    .size(MoonButtonSize::Micro)
-                    .selected(custom_on)
-                    .label(format!("{lbl} {date_txt}"))
-                    .render(),
+                MoonButton::new(if is_to {
+                    "an-date-to-btn"
+                } else {
+                    "an-date-from-btn"
+                })
+                .variant(if custom_on {
+                    MoonButtonVariant::Amber
+                } else {
+                    MoonButtonVariant::Soft
+                })
+                .size(MoonButtonSize::Micro)
+                .selected(custom_on)
+                .label(format!("{lbl} {date_txt}"))
+                .render(),
             )
             .content(MoonCalendar::new(cal))
     }
 
-    /// Полоса пресетов периода + счётчик закрытых сделок справа.
+    /// Return the background integrity warning as `(title, detail)` when needed.
+    ///
+    /// Polls rather than subscribing, with at most one delayed retry timer armed
+    /// while the check is running. Successful and absent-replica verdicts render
+    /// no warning.
+    fn integrity_note(&mut self, cx: &mut Context<Self>) -> Option<(String, String)> {
+        let Some(verdict) = moon_core::db::integrity::status() else {
+            // Still running. Re-poll once per armed timer; the check cannot
+            // publish before its own startup delay, so the first wait matches
+            // that rather than hammering a repaint every few seconds.
+            if !self.integrity_poll_armed {
+                self.integrity_poll_armed = true;
+                let wait = moon_core::db::integrity::poll_hint();
+                cx.spawn(async move |this, cx| {
+                    let executor = cx.update(|cx| cx.background_executor().clone());
+                    executor.timer(wait).await;
+                    let _ = cx.update(|cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            this.integrity_poll_armed = false;
+                            cx.notify();
+                        });
+                    });
+                })
+                .detach();
+            }
+            return None;
+        };
+        match verdict {
+            Integrity::Damaged(lines) => Some((
+                t!("analytics.integrity_damaged").to_string(),
+                lines.first().cloned().unwrap_or_default(),
+            )),
+            Integrity::CheckFailed(msg) => {
+                Some((t!("analytics.integrity_unchecked").to_string(), msg.clone()))
+            }
+            Integrity::Ok | Integrity::NotPresent => None,
+        }
+    }
+
+    /// Render period presets and the closed-trade or read-failure counter.
     fn period_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let mut seg = h_flex().gap(design::ui_px(cx, 4.0)).items_center();
         for per in Period::ALL {
@@ -860,10 +943,12 @@ impl AnalyticsView {
         seg = seg
             .child(self.date_field(false, p, cx))
             .child(self.date_field(true, p, cx));
-        let counter = match (&self.data, self.inflight) {
-            (_, true) => "…".to_string(),
-            (Some(d), _) => t!("analytics.trades_count", n = d.cur.n).to_string(),
-            (None, _) => String::new(),
+        // Keep read failure distinct from both an empty count and loading.
+        let (counter, counter_failed) = match &self.data {
+            LoadState::Loading { .. } => ("…".to_string(), false),
+            LoadState::Ready(d) => (t!("analytics.trades_count", n = d.cur.n).to_string(), false),
+            LoadState::NotReady => (String::new(), false),
+            LoadState::Failed(_) => (t!("common.db_read_failed_short").to_string(), true),
         };
         h_flex()
             .flex_none()
@@ -877,7 +962,11 @@ impl AnalyticsView {
             .child(
                 div()
                     .text_size(design::t_body(cx))
-                    .text_color(moon(p.text_muted))
+                    .text_color(moon(if counter_failed {
+                        p.orange
+                    } else {
+                        p.text_muted
+                    }))
                     .child(counter),
             )
     }
@@ -906,6 +995,7 @@ impl Render for AnalyticsView {
         // Вкладки делят высоту сами (нижние плашки прибиты к низу окна,
         // содержимое скроллится внутри) — внешнего скролла нет.
         let body_scrolls = false;
+        let integrity = self.integrity_note(cx);
         let busy_overlay = self.busy_overlay_due(cx);
         v_flex()
             .size_full()
@@ -920,7 +1010,23 @@ impl Render for AnalyticsView {
             .child(self.tabs_bar(p, cx))
             // «Календарь» ведёт СВОЮ навигацию по месяцам — период-бар (с/по)
             // на нём скрыт (у него своя строка Назад/месяц/Вперёд в теле).
-            .when(self.tab != Tab::Calendar, |el| el.child(self.period_bar(p, cx)))
+            .when(self.tab != Tab::Calendar, |el| {
+                el.child(self.period_bar(p, cx))
+            })
+            // Баннер целостности — на ЛЮБОЙ вкладке: повреждённая реплика важна
+            // и на «Календаре», который читает ту же базу.
+            .when_some(integrity, |el, (title, detail)| {
+                el.child(
+                    // Do not use `.banner()`: MoonAlert renders the title only in the
+                    // non-banner form (alert.rs `when(!self.banner, ..title..)`),
+                    // so the banner variant would drop the localized heading and
+                    // show the bare SQLite diagnostic line.
+                    div()
+                        .px(design::ui_px(cx, 10.0))
+                        .pb(design::ui_px(cx, 6.0))
+                        .child(MoonAlert::warning("an-integrity-banner", detail).title(title)),
+                )
+            })
             .child(
                 div()
                     .id("analytics-body")
@@ -953,7 +1059,7 @@ impl Render for AnalyticsView {
                                 .border_color(moon(p.border))
                                 .text_size(design::t_body(cx))
                                 .text_color(moon(p.text_soft))
-                                .child(t!("analytics.loading").to_string()),
+                                .child(t!("common.loading").to_string()),
                         ),
                 )
             })

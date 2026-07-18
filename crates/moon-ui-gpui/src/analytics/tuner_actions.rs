@@ -1,6 +1,5 @@
-//! Действия тюнера: автоподбор порогов («Подобрать» / «Подобрать всё») и
-//! запись v1 в параметры выбранной стратегии («В стратегию», с включением
-//! нужных Ignore-классов). Вынесено из tuner.rs (лимит размера файла).
+//! Tuner actions for threshold suggestions and applying v1 to the selected
+//! strategy, including the required ignore-class changes.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,12 +15,16 @@ use super::tuner_state::SaveDialog;
 use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
 impl AnalyticsView {
-    /// «Подобрать всё» — УМНЫЙ подбор (координатный спуск): максимизируем
-    /// суммарный профит комбинации диапазонов ВСЕХ полей сразу; итераций и
-    /// минимум сделок — из конфиг-строки. Результат → v1.
+    /// Suggest all v1 ranges jointly with coordinate descent.
+    ///
+    /// `NotReady` and failed reads are published through the shared KPI load
+    /// state; a valid result updates only fields enabled for search.
     pub(super) fn suggest_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
+        // Suggestion failures share `tuner.stats` with KPI reads, so both the
+        // suggestion and KPI generations must still match before publishing.
+        let stats_req = self.tuner.seq;
         self.tuner.sugg_busy = true;
         let q = self.tuner_query();
         let rounds = self
@@ -63,6 +66,19 @@ impl AnalyticsView {
                         return;
                     }
                     this.tuner.sugg_busy = false;
+                    // A non-successful read must not look like "found nothing": the
+                    // button would just stop spinning and leave no trace.
+                    let sugg = match sugg {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!("аналитика: умный подбор не выполнен — {e}");
+                            if this.tuner.seq == stats_req {
+                                this.tuner.stats.apply(Err(e));
+                            }
+                            cx.notify();
+                            return;
+                        }
+                    };
                     if let Some(res) = sugg {
                         log::info!(
                             "аналитика: умный подбор — профит {:+.2}, сделок {}, попыток {}",
@@ -94,10 +110,15 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// «Подобрать»: лучший диапазон ВЫБРАННОГО поля → его строка v1.
+    /// Suggest the best v1 range for the selected field.
+    ///
+    /// `NotReady` and failed reads are published through the shared KPI load
+    /// state; a valid `None` means no threshold improves on the baseline.
     pub(super) fn suggest_one_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
+        // The shared KPI error channel requires the current KPI generation too.
+        let stats_req = self.tuner.seq;
         self.tuner.sugg_busy = true;
         let fi = self.tuner.sel_field;
         let field = FIELDS[fi].col.to_string();
@@ -120,10 +141,20 @@ impl AnalyticsView {
                         return;
                     }
                     this.tuner.sugg_busy = false;
-                    if let Some(s) = sugg {
-                        let from = s.from.map(fmt_bound).unwrap_or_default();
-                        let to = s.to.map(fmt_bound).unwrap_or_default();
-                        this.apply_bounds(0, fi, from, to, cx);
+                    match sugg {
+                        Ok(Some(s)) => {
+                            let from = s.from.map(fmt_bound).unwrap_or_default();
+                            let to = s.to.map(fmt_bound).unwrap_or_default();
+                            this.apply_bounds(0, fi, from, to, cx);
+                        }
+                        // A genuine "no threshold beats the baseline".
+                        Ok(None) => {}
+                        Err(e) => {
+                            log::warn!("аналитика: подбор порога не выполнен — {e}");
+                            if this.tuner.seq == stats_req {
+                                this.tuner.stats.apply(Err(e));
+                            }
+                        }
                     }
                     cx.notify();
                 });
@@ -214,7 +245,7 @@ impl AnalyticsView {
         }
         self.tuner
             .stats
-            .as_ref()
+            .data()
             .and_then(|s| s.first().map(|f| f.n / 5))
             .unwrap_or(0)
             .max(1)
@@ -232,7 +263,9 @@ impl AnalyticsView {
             return;
         };
         if changes.is_empty() {
-            log::info!("аналитика: «Сохранить» — нет ни порогов с маппингом, ни изменённых игноров");
+            log::info!(
+                "аналитика: «Сохранить» — нет ни порогов с маппингом, ни изменённых игноров"
+            );
             return;
         }
         changes.push(self.analyzer_comment());
@@ -267,9 +300,7 @@ impl AnalyticsView {
         cx.subscribe(&state, |this, st, ev: &MoonInputEvent, cx| {
             if matches!(
                 ev,
-                MoonInputEvent::Change
-                    | MoonInputEvent::Blur
-                    | MoonInputEvent::PressEnter { .. }
+                MoonInputEvent::Change | MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }
             ) {
                 this.tuner.copy_name = st.read(cx).value().to_string();
             }
@@ -281,9 +312,7 @@ impl AnalyticsView {
 
     /// Собрать правки из v1 + стейджей «ignore» (без штампа Comment): пороги
     /// с маппингом, слоты Delta2/3 (+предупреждения), Ignore-флаги.
-    fn build_strategy_changes(
-        &self,
-    ) -> Option<(i64, String, Vec<(String, String)>, Vec<String>)> {
+    fn build_strategy_changes(&self) -> Option<(i64, String, Vec<(String, String)>, Vec<String>)> {
         let (key, name) = self.sel_strategy.clone()?;
         let sid = key.parse::<i64>().ok()?;
 
@@ -323,8 +352,20 @@ impl AnalyticsView {
         // (2h/30m/Pump5m с порогами — «чужой» живой фильтр), перезаписываются
         // ПОСЛЕДНИМИ и с warn. Больше двух не влезает — остальные в лог.
         if !slot_wanted.is_empty() {
-            let cur2 = self.tuner.strat.slots.iter().find(|(n, ..)| *n == 2).map(|(_, f, ..)| *f);
-            let cur3 = self.tuner.strat.slots.iter().find(|(n, ..)| *n == 3).map(|(_, f, ..)| *f);
+            let cur2 = self
+                .tuner
+                .strat
+                .slots
+                .iter()
+                .find(|(n, ..)| *n == 2)
+                .map(|(_, f, ..)| *f);
+            let cur3 = self
+                .tuner
+                .strat
+                .slots
+                .iter()
+                .find(|(n, ..)| *n == 3)
+                .map(|(_, f, ..)| *f);
             let foreign = self.tuner.strat.foreign_slots.clone();
             let mut used = [false, false]; // [Delta2, Delta3]
             for (n, _) in &foreign {
@@ -380,11 +421,17 @@ impl AnalyticsView {
                     dropped.join(", ")
                 );
                 warns.push(
-                    t!("analytics.tuner.warn_slot_drop", fields = dropped.join(", ")).to_string(),
+                    t!(
+                        "analytics.tuner.warn_slot_drop",
+                        fields = dropped.join(", ")
+                    )
+                    .to_string(),
                 );
             }
             for (n, col, lo, hi) in assigned {
-                let Some(ty) = slot_type_for(col) else { continue };
+                let Some(ty) = slot_type_for(col) else {
+                    continue;
+                };
                 // Порядок важен: сначала тип слота, затем его пороги.
                 changes.push((format!("Delta{n}_Type"), ty.to_string()));
                 if let Some(v) = lo {
@@ -499,9 +546,7 @@ impl AnalyticsView {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let olds_map = executor
-                .spawn(async move {
-                    moon_core::db::tuner::strategy_current_values(sid, &keys)
-                })
+                .spawn(async move { moon_core::db::tuner::strategy_current_values(sid, &keys) })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -543,16 +588,27 @@ impl AnalyticsView {
     /// живёт исходная (по живому store). Имя — из инпута окна (пустое =
     /// авто); на каждом ядре дополнительно уникализируется. Копия приходит
     /// ВЫКЛЮЧЕННОЙ (правило create_strategies) — безопасно.
-    fn create_strategy_copy(&mut self, dlg: &super::tuner_state::SaveDialog, cx: &mut Context<Self>) {
+    fn create_strategy_copy(
+        &mut self,
+        dlg: &super::tuner_state::SaveDialog,
+        cx: &mut Context<Self>,
+    ) {
         use crate::strategies::tree_ops::{STRATEGY_NAME_FIELD, set_field, unique_name};
         let sid = dlg.sid as u64;
         let desired = {
             let t = self.tuner.copy_name.trim();
-            if t.is_empty() { dlg.name.clone() } else { t.to_string() }
+            if t.is_empty() {
+                dlg.name.clone()
+            } else {
+                t.to_string()
+            }
         };
         let b = self.backend.read(cx);
-        let mut plans: Vec<(moon_core::session::CoreId, moon_core::feed::NewStrategySpec, String)> =
-            Vec::new();
+        let mut plans: Vec<(
+            moon_core::session::CoreId,
+            moon_core::feed::NewStrategySpec,
+            String,
+        )> = Vec::new();
         for (cid, cd) in b.session.store().cores() {
             let Some(row) = cd.strategies.iter().find(|r| r.id == sid) else {
                 continue;

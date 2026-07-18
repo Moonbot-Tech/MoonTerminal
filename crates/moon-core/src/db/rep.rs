@@ -16,8 +16,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
 use moonproto::{
-    MoonReports, ReportRow as RepRow, ReportSchema, ReportSyncComplete, ReportSyncPage,
-    ReportValue,
+    MoonReports, ReportRow as RepRow, ReportSchema, ReportSyncComplete, ReportSyncPage, ReportValue,
 };
 use rusqlite::types::Value;
 use rusqlite::Connection;
@@ -120,9 +119,9 @@ pub(super) struct RepState {
     /// данные идут typed-потоком, а легаси-вставка после вычистки давала ДУБЛИ строк
     /// (реплика + свежая легаси-копия) в объединённом читателе.
     pub(super) synced: HashSet<u64>,
-    /// Легаси-таблица только что снесена → писателю нужно прогнать VACUUM ПОСЛЕ
-    /// коммита батча (внутри транзакции VACUUM запрещён): без него файл БД остаётся
-    /// прежних сотен МБ.
+    /// The legacy table was dropped, so the writer must VACUUM after committing
+    /// the batch; VACUUM is forbidden inside the transaction, and without it the
+    /// database retains the dropped table's allocated space.
     pub(super) vacuum_pending: bool,
     /// Все индексы реплики гарантированно созданы (не дёргать CREATE на
     /// каждую схему ядра).
@@ -166,8 +165,11 @@ fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> bool {
     done
 }
 
-/// Создаёт скелет таблицы реплики (колонки доращивает схема ядра), считает стартовые
-/// курсоры и наборы открытых строк всех ядер, присутствующих в реплике.
+/// Initialize the replica table, per-core cursors, and open-row sets.
+///
+/// Table-creation, required-schema, and core-scan setup errors return `Err`.
+/// In particular, an unreadable column schema makes the caller disable the
+/// writer for this session rather than acknowledge incompletely written pages.
 pub(super) fn init(
     conn: &Connection,
     cursors: Arc<Mutex<HashMap<u64, i64>>>,
@@ -181,7 +183,14 @@ pub(super) fn init(
         ),
         [],
     )?;
-    let cols = table_cols(conn);
+    // Fatal on purpose: this cache decides which fields every incoming page may
+    // write. Continuing with an empty cache would omit fields while still ACKing
+    // the page, and ACKed pages are not sent again.
+    //
+    // `spawn_writer` therefore disables report recording for this session and
+    // logs the failure. The server-side cursor remains unchanged, so restarting
+    // with a readable replica can resync the page instead of losing its fields.
+    let cols = table_cols_for_init(conn)?;
     {
         let mut map = cursors.lock().unwrap_or_else(|e| e.into_inner());
         let mut open_map = open_rows.lock().unwrap_or_else(|e| e.into_inner());
@@ -242,7 +251,9 @@ fn purge_legacy(conn: &Connection, st: &mut RepState, core_uid: u64) {
         st.legacy_exists = false;
         st.vacuum_pending = true;
         meta_set_i64(conn, "legacy_dropped", 1);
-        log::info!("отчёты(rep): легаси-таблица closed_sell_reports снесена — все ядра на typed-реплике");
+        log::info!(
+            "отчёты(rep): легаси-таблица closed_sell_reports снесена — все ядра на typed-реплике"
+        );
     }
 }
 
@@ -261,7 +272,10 @@ pub(super) fn apply_schema(
             continue;
         }
         if !super::parse::valid_ident(&name) {
-            log::warn!("отчёты(rep): поле схемы «{}» — не идентификатор, пропущено", f.name);
+            log::warn!(
+                "отчёты(rep): поле схемы «{}» — не идентификатор, пропущено",
+                f.name
+            );
             continue;
         }
         match conn.execute(
@@ -269,7 +283,10 @@ pub(super) fn apply_schema(
             [],
         ) {
             Ok(_) => {
-                log::info!("отчёты(rep): колонка «{name}» {} (схема ядра {core_uid})", f.sql_spec);
+                log::info!(
+                    "отчёты(rep): колонка «{name}» {} (схема ядра {core_uid})",
+                    f.sql_spec
+                );
                 st.cols.insert(name);
             }
             Err(e) => log::error!("отчёты(rep): ADD COLUMN {name} не удался: {e}"),
@@ -444,16 +461,53 @@ fn open_row_ids(conn: &Connection, cols: &HashSet<String>, uid: i64) -> Vec<i64>
     out
 }
 
-pub(super) fn table_cols(conn: &Connection) -> HashSet<String> {
+/// Probe replica columns, surfacing SQLite's own error.
+///
+/// The writer needs the raw error to refuse startup; readers wrap it through
+/// [`table_cols_res`].
+fn table_cols_raw(conn: &Connection) -> rusqlite::Result<HashSet<String>> {
     let mut out = HashSet::new();
-    if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({TABLE})")) {
-        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) {
-            for n in rows.flatten() {
-                out.insert(n.to_ascii_lowercase());
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({TABLE})"))?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for n in rows {
+        out.insert(n?.to_ascii_lowercase());
+    }
+    Ok(out)
+}
+
+/// Probe replica columns for [`init`], retrying a transient lock first.
+///
+/// The caller turns a failure into "no writer for the entire session", which is
+/// far too high a price for the 3 s `busy_timeout` expiring under a checkpoint
+/// or a second process. Only a failure that is NOT mere contention is worth
+/// failing closed on — which is exactly the distinction
+/// [`super::read_fail::classify`] exists to make.
+fn table_cols_for_init(conn: &Connection) -> rusqlite::Result<HashSet<String>> {
+    const ATTEMPTS: u32 = 3;
+    let mut last = None;
+    for attempt in 1..=ATTEMPTS {
+        match table_cols_raw(conn) {
+            Ok(cols) => return Ok(cols),
+            Err(e) if super::read_fail::classify(&e) == super::FailKind::Busy => {
+                log::warn!(
+                    "отчёты(rep): PRAGMA table_info занят ({e}) — попытка {attempt} из {ATTEMPTS}"
+                );
+                last = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(250 * u64::from(attempt)));
             }
+            Err(e) => return Err(e),
         }
     }
-    out
+    Err(last.expect("цикл выходит сюда только после ошибки занятости"))
+}
+
+/// Probe replica columns while distinguishing an absent schema from PRAGMA failure.
+pub(super) fn table_cols_res(conn: &Connection) -> super::ReadResult<HashSet<String>> {
+    use super::read_fail::read_fail;
+    // Const, not `format!`: this runs on the healthy path of every schema probe
+    // (2-3 per analytics query plus the writer init).
+    const CTX: &str = "отчёты(rep): PRAGMA table_info(orders_rep)";
+    table_cols_raw(conn).map_err(|e| read_fail(CTX, e))
 }
 
 fn table_exists(conn: &Connection, name: &str) -> bool {

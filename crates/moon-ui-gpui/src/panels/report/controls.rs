@@ -138,15 +138,13 @@ impl ReportPanel {
     /// (пресет «Сегодня» и т.п. или ручные даты С:/По:).
     pub(super) fn export_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        let item = |key: &'static str,
-                    label: String,
-                    fmt: super::export::Format,
-                    all_cols: bool| {
-            let view = view.clone();
-            MoonMenuItem::with_key(key, label).on_click(move |_, _, app| {
-                view.update(app, |t, c| t.export_report(fmt, all_cols, c));
-            })
-        };
+        let item =
+            |key: &'static str, label: String, fmt: super::export::Format, all_cols: bool| {
+                let view = view.clone();
+                MoonMenuItem::with_key(key, label).on_click(move |_, window, app| {
+                    view.update(app, |t, c| t.export_report(fmt, all_cols, window, c));
+                })
+            };
         let items = vec![
             item(
                 "exp-csv",
@@ -196,12 +194,7 @@ impl ReportPanel {
     /// поэтому авто-добавленные поля ядра сразу доступны к показу.
     pub(super) fn columns_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        let all_on = !self.table.cols.is_empty()
-            && self
-                .table
-                .cols
-                .iter()
-                .all(|c| self.visible.contains(c.as_str()));
+        let all_on = self.all_columns_on();
         let all_view = view.clone();
         let mut items: Vec<MoonMenuItem> = vec![
             // «Все» — тумблер: включить все колонки / повторно — оставить одну первую.
@@ -214,7 +207,7 @@ impl ReportPanel {
                     all_view.update(app, |t, c| t.toggle_all_columns(c));
                 }),
         ];
-        items.extend(self.table.cols.iter().enumerate().map(|(i, c)| {
+        items.extend(self.cols.iter().enumerate().map(|(i, c)| {
             let on = self.visible.contains(c.as_str());
             let name = c.clone();
             let view = view.clone();
@@ -230,10 +223,8 @@ impl ReportPanel {
         div()
             .id("rep-cols-tip")
             .tooltip(|_window, cx| {
-                cx.new(|_| {
-                    moon_ui::MoonTooltipView::new(t!("report.columns_menu").to_string())
-                })
-                .into()
+                cx.new(|_| moon_ui::MoonTooltipView::new(t!("report.columns_menu").to_string()))
+                    .into()
             })
             .child(
                 MoonDropdown::new("rep-cols")

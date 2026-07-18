@@ -14,7 +14,8 @@
 
 use rusqlite::Connection;
 
-use super::SideFilter;
+use super::read_fail::read_fail;
+use super::{ReadFail, ReadResult, SideFilter};
 
 /// Фильтры выборки (общие для всех вкладок Аналитики).
 #[derive(Clone, Debug, Default)]
@@ -92,17 +93,20 @@ const UNIFIED_COLS: &[&str] = &[
     "spentbtc",
 ];
 
-/// FROM-источник `o`: реплика + легаси одним UNION ALL, у каждой ветки СВОЙ
-/// WHERE (фильтры пушатся в ветку — работает индекс closedate), отсутствующие
-/// колонки → NULL. None — ни у одного источника ещё нет closedate/profitbtc.
-pub(super) fn unified_from(conn: &Connection, q: &Query) -> Option<String> {
+/// Build the unified replica-and-legacy `FROM` source with filters inside each
+/// branch so the `closedate` indexes remain usable.
+///
+/// Missing columns project as NULL. `Ok(None)` means no source has received the
+/// required schema; a failed schema probe remains an error because opening a
+/// database does not validate its schema b-tree.
+pub(super) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Option<String>> {
     let cols: Vec<&str> = UNIFIED_COLS
         .iter()
         .copied()
         .chain(super::tuner::FIELDS.iter().map(|s| s.col))
         .collect();
     let mut branches = Vec::new();
-    for src in super::read_sources(conn) {
+    for src in super::read_sources_res(conn)? {
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
             continue; // схема ядра ещё не пришла — агрегировать нечего
         }
@@ -124,9 +128,9 @@ pub(super) fn unified_from(conn: &Connection, q: &Query) -> Option<String> {
         ));
     }
     if branches.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(format!("({}) o", branches.join(" UNION ALL ")))
+        Ok(Some(format!("({}) o", branches.join(" UNION ALL "))))
     }
 }
 
@@ -236,7 +240,11 @@ impl GroupStat {
     }
 
     pub fn avg(&self) -> f64 {
-        if self.n > 0 { self.profit / self.n as f64 } else { 0.0 }
+        if self.n > 0 {
+            self.profit / self.n as f64
+        } else {
+            0.0
+        }
     }
 }
 
@@ -253,8 +261,11 @@ pub struct StrategyDetail {
 #[derive(Clone, Debug, Default)]
 pub struct Summary {
     pub cur: PeriodStats,
-    /// Предыдущий период той же длины (сравнение «к пред. периоду»).
-    pub prev: PeriodStats,
+    /// The preceding period of equal length, used for KPI comparisons.
+    ///
+    /// A failed comparison scan is non-fatal and yields `None`, preserving a
+    /// readable current period while making its unavailable deltas explicit.
+    pub prev: Option<PeriodStats>,
     /// Размер ведра серии: сутки; для очень длинных периодов — неделя.
     pub bucket_secs: i64,
     pub days: Vec<DayPoint>,
@@ -280,46 +291,79 @@ pub struct Summary {
 
 const WHERE_PERIOD: &str = "closedate >= ?1 AND closedate < ?2 AND closedate > 0";
 
-/// Сводка за период/фильтры. None — БД ещё нет.
-pub fn summary(q: &Query) -> Option<Summary> {
+/// Aggregate the selected period and filters without collapsing read failures.
+///
+/// Returns `NotReady` when the replica or required core schema is absent, and
+/// `Failed` when a required current-period filesystem or SQLite read fails. A
+/// failed comparison scan leaves `Summary::prev` absent. A successful empty
+/// period has zero current-period counters.
+pub fn summary(q: &Query) -> ReadResult<Summary> {
     let conn = super::open_reader()?;
+    // ATTACH first: it cannot run inside a transaction.
     let has_strat_names = attach_strategies(&conn);
+    // One snapshot for the whole summary. Its counters, series, top trades and
+    // group tables are separate statements, and the writer commits between them
+    // during catch-up — without this they could disagree about which trades the
+    // period contains while being published as one coherent result.
+    let snap = super::read_snapshot(&conn)?;
+    summary_on(&snap, q, has_strat_names)
+}
 
+/// Aggregate a summary on an existing connection for tests and [`summary`].
+///
+/// `has_strat_names` is supplied so tests do not attach the developer's real
+/// strategies database. Missing required source schema returns `NotReady`;
+/// schema, query, and row failures return `Failed`.
+pub(super) fn summary_on(
+    conn: &Connection,
+    q: &Query,
+    has_strat_names: bool,
+) -> ReadResult<Summary> {
     let mut q = q.clone();
     if q.from < 0 {
-        q.from = min_closedate(&conn);
+        q.from = min_closedate(conn)?;
     }
-    let Some(src) = unified_from(&conn, &q) else {
-        // Схемы источников ещё не пришли — пусто, но список ядер отдаём.
-        return Some(Summary { cores: super::distinct_cores(&conn), ..Default::default() });
+    let Some(src) = unified_from(conn, &q)? else {
+        return Err(ReadFail::NotReady);
     };
     let len = (q.to - q.from).max(1);
     // Ведро серии: сутки, на многолетних «Все» — неделя (иначе тысячи баров).
-    let bucket = if len / 86_400 > 400 { 7 * 86_400 } else { 86_400 };
+    let bucket = if len / 86_400 > 400 {
+        7 * 86_400
+    } else {
+        86_400
+    };
 
-    let (cur, days, hours) = scan_period(&conn, &src, q.from, q.to, bucket);
-    let (prev, _, _) = scan_period(&conn, &src, q.from - len, q.from, bucket);
+    let (cur, days, hours) = scan_period(conn, &src, q.from, q.to, bucket)?;
+    // The comparison is best-effort because it must not hide a readable current
+    // period; see `Summary::prev`.
+    let prev = scan_period(conn, &src, q.from - len, q.from, bucket)
+        .map(|(st, _, _)| st)
+        .ok();
 
     let best_hour = hours
         .iter()
         .enumerate()
         .filter(|(_, (p, n))| *n > 0 && *p > 0.0)
-        .max_by(|a, b| a.1.0.total_cmp(&b.1.0))
+        .max_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
         .map(|(h, (p, n))| (h as u32, *p, *n));
 
-    let core_days = core_series(&conn, &src, &q, &days, bucket);
-    Some(Summary {
+    let core_days = core_series(conn, &src, &q, &days, bucket)?;
+    // Shared latch: the first name-related failure turns enrichment off for the
+    // remaining aggregations of THIS summary.
+    let mut names = has_strat_names;
+    Ok(Summary {
         cur,
         prev,
         bucket_secs: bucket,
         days,
         core_days,
-        best: top_trades(&conn, &src, &q, has_strat_names, true),
-        worst: top_trades(&conn, &src, &q, has_strat_names, false),
-        strategies: groups(&conn, &src, &q, has_strat_names, true),
-        coins: groups(&conn, &src, &q, has_strat_names, false),
+        best: with_name_fallback(&mut names, |n| top_trades(conn, &src, &q, n, true))?,
+        worst: with_name_fallback(&mut names, |n| top_trades(conn, &src, &q, n, false))?,
+        strategies: with_name_fallback(&mut names, |n| groups(conn, &src, &q, n, true))?,
+        coins: with_name_fallback(&mut names, |n| groups(conn, &src, &q, n, false))?,
         best_hour,
-        cores: super::distinct_cores(&conn),
+        cores: super::distinct_cores(conn)?,
         from: q.from,
         to: q.to,
     })
@@ -332,8 +376,13 @@ pub fn summary(q: &Query) -> Option<Summary> {
 /// пустые ячейки), чтобы сетка календаря была ровной; в отличие от `summary`
 /// НИКОГДА не укрупняет ведро до недели. None — схемы источников ещё нет;
 /// Some(пусто) — период без закрытых сделок.
+///
+/// NOTE: this surface still collapses a read failure into `None`, the pattern
+/// the rest of this module moved away from. Converting it is left to the owners
+/// of the calendar feature rather than rewritten here; the `.ok()?` calls below
+/// only adapt it to the now-fallible helpers.
 pub fn calendar_cells(q: &Query) -> Option<Vec<DayCell>> {
-    calendar_cells_from(&super::open_reader()?, q)
+    calendar_cells_from(&super::open_reader().ok()?, q)
 }
 
 /// Ядро `calendar_cells` над готовым соединением — точка входа для юнит-тестов
@@ -342,9 +391,9 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
     let mut q = q.clone();
     let all_history = q.from < 0;
     if all_history {
-        q.from = min_closedate(conn);
+        q.from = min_closedate(conn).ok()?;
     }
-    let Some(src) = unified_from(conn, &q) else {
+    let Some(src) = unified_from(conn, &q).ok()? else {
         // Схемы источников ещё не пришли — пустой календарь (как `summary`
         // отдаёт Some(default)), а НЕ None: иначе вкладка висла бы на «Загрузка».
         return Some(Vec::new());
@@ -371,7 +420,15 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
     for (d, profit, n, wins) in rows.flatten() {
         first = first.min(d);
         last = last.max(d);
-        map.insert(d, DayCell { start: d, profit, trades: n, wins });
+        map.insert(
+            d,
+            DayCell {
+                start: d,
+                profit,
+                trades: n,
+                wins,
+            },
+        );
     }
     if map.is_empty() {
         return Some(Vec::new()); // период без сделок — пустой календарь
@@ -381,42 +438,99 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
     // `to` эксклюзивно → последний день = day(to-1); в будущее не заходим.
     let now = crate::util::now_unix_ms_i64() / 1000;
     let today0 = now.div_euclid(86_400) * 86_400;
-    let day0 = if all_history { first } else { q.from.div_euclid(86_400) * 86_400 };
-    let last_grid = ((q.to - 1).div_euclid(86_400) * 86_400).min(today0).max(last);
+    let day0 = if all_history {
+        first
+    } else {
+        q.from.div_euclid(86_400) * 86_400
+    };
+    let last_grid = ((q.to - 1).div_euclid(86_400) * 86_400)
+        .min(today0)
+        .max(last);
     let day0 = day0.min(last_grid);
     let mut out = Vec::with_capacity((((last_grid - day0) / 86_400) + 1).max(1) as usize);
     let mut t = day0;
     while t <= last_grid {
-        out.push(map.remove(&t).unwrap_or(DayCell { start: t, ..Default::default() }));
+        out.push(map.remove(&t).unwrap_or(DayCell {
+            start: t,
+            ..Default::default()
+        }));
         t += 86_400;
     }
     Some(out)
 }
 
-/// Самая ранняя closedate по ОБОИМ источникам (резолв периода «Все»).
-fn min_closedate(conn: &Connection) -> i64 {
+/// Run a query that may join the ATTACHed strategies DB, retrying WITHOUT names
+/// if it fails while names were in play.
+///
+/// `strategies.sqlite` is optional enrichment: a successful ATTACH does not
+/// prove it is readable, and a failing scalar subquery against it must degrade
+/// strategy labels to bare ids — not sink an otherwise healthy reports summary.
+/// A failure of the reports DB itself simply fails again on the retry.
+fn with_name_fallback<T>(
+    names: &mut bool,
+    mut run: impl FnMut(bool) -> ReadResult<T>,
+) -> ReadResult<T> {
+    match run(*names) {
+        // Retry on ANY failure while names are in play, permanent included:
+        // these statements also read the ATTACHed strategies DB, and the error
+        // carries no database provenance, so corruption first met there would
+        // otherwise sink a perfectly readable reports summary. The latch below
+        // caps the cost at ONE extra scan per summary, not four.
+        Err(e) if *names => {
+            log::warn!("analytics: strategy names unavailable, retrying with bare ids: {e}");
+            // Latch it off: without this, all four aggregations of one summary
+            // each pay a failed scan before falling back.
+            *names = false;
+            run(false)
+        }
+        other => other,
+    }
+}
+
+/// Find the earliest `closedate` across both sources for the all-time period.
+///
+/// A failed probe remains an error; `1` is reserved for a genuinely empty history.
+fn min_closedate(conn: &Connection) -> ReadResult<i64> {
+    const CTX: &str = "analytics: min_closedate";
     let mut min = i64::MAX;
-    for src in super::read_sources(conn) {
+    for src in super::read_sources_res(conn)? {
         if !src.cols.contains("closedate") {
             continue;
         }
-        let sql =
-            format!("SELECT MIN(closedate) FROM {} WHERE closedate > 0", src.table);
-        if let Ok(Some(v)) = conn.query_row(&sql, [], |r| r.get::<_, Option<i64>>(0)) {
+        let sql = format!(
+            "SELECT MIN(closedate) FROM {} WHERE closedate > 0",
+            src.table
+        );
+        let got: Option<i64> = conn
+            .query_row(&sql, [], |r| r.get::<_, Option<i64>>(0))
+            .map_err(|e| read_fail(CTX, e))?;
+        if let Some(v) = got {
             min = min.min(v);
         }
     }
-    if min == i64::MAX { 1 } else { min }
+    // No rows anywhere is a legitimate empty history, not a failure.
+    Ok(if min == i64::MAX { 1 } else { min })
 }
 
-/// Детализация стратегии по ID (`strategyid` — ключ группы вкладки «Стратегии»).
-pub fn strategy_detail(q: &Query, strategy_id: i64) -> Option<StrategyDetail> {
+/// Load strategy detail by `strategyid`.
+///
+/// Returns `NotReady` when the replica or required schema is absent and `Failed`
+/// when opening the replica, pinning the snapshot, or reading any row fails.
+/// A healthy period without matching trades returns empty detail lists.
+pub fn strategy_detail(q: &Query, strategy_id: i64) -> ReadResult<StrategyDetail> {
+    const CTX: &str = "analytics: strategy_detail";
     let conn = super::open_reader()?;
+    // One snapshot: the sections below are separate statements presented as one
+    // card, so they must agree about which trades the period contains.
+    let snap = super::read_snapshot(&conn)?;
+    let conn = &*snap;
     let mut q = q.clone();
     if q.from < 0 {
         q.from = 1;
     }
-    let src = unified_from(&conn, &q)?;
+    let Some(src) = unified_from(conn, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
 
     // Вклад по монетам этой стратегии.
     let sql = format!(
@@ -430,12 +544,15 @@ pub fn strategy_detail(q: &Query, strategy_id: i64) -> Option<StrategyDetail> {
          FROM {src} WHERE o.strategyid = ?3
          GROUP BY k ORDER BY 8 DESC"
     );
-    let coins = conn
-        .prepare(&sql)
-        .ok()?
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
         .query_map(rusqlite::params![q.from, q.to, strategy_id], group_from_row)
-        .map(|rows| rows.flatten().collect())
-        .unwrap_or_default();
+        .map_err(|e| read_fail(CTX, e))?;
+    let mut coins = Vec::new();
+    for row in rows {
+        coins.push(row.map_err(|e| read_fail(CTX, e))?);
+    }
+    drop(stmt);
 
     // Последние сделки (новые первыми).
     let sql = format!(
@@ -444,9 +561,8 @@ pub fn strategy_detail(q: &Query, strategy_id: i64) -> Option<StrategyDetail> {
          FROM {src} WHERE o.strategyid = ?3
          ORDER BY o.closedate DESC LIMIT 10"
     );
-    let last = conn
-        .prepare(&sql)
-        .ok()?
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
         .query_map(rusqlite::params![q.from, q.to, strategy_id], |r| {
             Ok(TopTrade {
                 closedate: r.get(0)?,
@@ -457,14 +573,16 @@ pub fn strategy_detail(q: &Query, strategy_id: i64) -> Option<StrategyDetail> {
                 is_short: r.get::<_, i64>(5)? != 0,
             })
         })
-        .map(|rows| rows.flatten().collect())
-        .unwrap_or_default();
+        .map_err(|e| read_fail(CTX, e))?;
+    let mut last = Vec::new();
+    for row in rows {
+        last.push(row.map_err(|e| read_fail(CTX, e))?);
+    }
 
-    Some(StrategyDetail { coins, last })
+    Ok(StrategyDetail { coins, last })
 }
 
-/// Строка группового запроса: k, name, kind, core, cores_n, alive, n, profit,
-/// wins, wsum, lsum, max, min.
+/// Decode one aggregate row ordered as key, labels, counts, profit, and extrema.
 fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
     let wsum: f64 = r.get(9)?;
     let lsum: f64 = r.get(10)?;
@@ -490,7 +608,7 @@ fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
     })
 }
 
-/// ATTACH БД стратегий за именами (может отсутствовать — не ошибка).
+/// Attach the optional strategies database used to enrich strategy names.
 fn attach_strategies(conn: &Connection) -> bool {
     let path = crate::config::paths::strategies_db_path();
     if !path.exists() {
@@ -500,19 +618,29 @@ fn attach_strategies(conn: &Connection) -> bool {
         "ATTACH DATABASE '{}' AS strat",
         path.to_string_lossy().replace('\'', "''")
     );
-    conn.execute(&sql, []).is_ok()
+    // An absent file is normal and silent; failure to attach an existing file
+    // is logged as a real enrichment fault.
+    match conn.execute(&sql, []) {
+        Ok(_) => true,
+        Err(e) => {
+            log::warn!("analytics: strategies.sqlite не подключилась: {e}");
+            false
+        }
+    }
 }
 
-/// Один проход по сделкам периода (порядок по closedate): метрики
-/// последовательности + серия по вёдрам + разбивка по часам UTC.
-/// `src` — объединённый FROM-источник (`unified_from`), WHERE уже внутри.
+/// Scan period trades by `closedate` into sequence metrics, buckets, and UTC hours.
+///
+/// `src` is the filtered source built by [`unified_from`]. Any query or
+/// row-conversion failure aborts the complete aggregation.
 fn scan_period(
     conn: &Connection,
     src: &str,
     from: i64,
     to: i64,
     bucket: i64,
-) -> (PeriodStats, Vec<DayPoint>, [(f64, i64); 24]) {
+) -> ReadResult<(PeriodStats, Vec<DayPoint>, [(f64, i64); 24])> {
+    const CTX: &str = "analytics: scan_period";
     let mut st = PeriodStats::default();
     let mut days: Vec<DayPoint> = Vec::new();
     let mut hours = [(0.0f64, 0i64); 24];
@@ -520,21 +648,25 @@ fn scan_period(
         "SELECT o.closedate, COALESCE(o.buydate, o.closedate), COALESCE(o.profitbtc, 0)
          FROM {src} ORDER BY o.closedate"
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else {
-        return (st, days, hours);
-    };
-    let Ok(rows) = stmt.query_map(rusqlite::params![from, to], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, f64>(2)?))
-    }) else {
-        return (st, days, hours);
-    };
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![from, to], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, f64>(2)?,
+            ))
+        })
+        .map_err(|e| read_fail(CTX, e))?;
 
     let (mut wsum, mut lsum) = (0.0f64, 0.0f64);
     let (mut cum, mut peak) = (0.0f64, 0.0f64);
     let (mut cur_w, mut cur_l) = (0i64, 0i64);
     let mut dur_ms_total = 0i64;
-    for row in rows.flatten() {
-        let (close, buy, profit) = row;
+    for row in rows {
+        // Every column here moves a number, so no row is skippable: dropping
+        // one would silently understate n / profit / pf / max_dd.
+        let (close, buy, profit) = row.map_err(|e| read_fail(CTX, e))?;
         st.n += 1;
         st.profit += profit;
         dur_ms_total += (close - buy).max(0);
@@ -561,7 +693,11 @@ fn scan_period(
                 d.profit += profit;
                 d.trades += 1;
             }
-            _ => days.push(DayPoint { start, profit, trades: 1 }),
+            _ => days.push(DayPoint {
+                start,
+                profit,
+                trades: 1,
+            }),
         }
         let h = close.rem_euclid(86_400) / 3600;
         let slot = &mut hours[h as usize];
@@ -588,26 +724,32 @@ fn scan_period(
             if d.start == t {
                 filled.push(it.next().unwrap());
             } else {
-                filled.push(DayPoint { start: t, profit: 0.0, trades: 0 });
+                filled.push(DayPoint {
+                    start: t,
+                    profit: 0.0,
+                    trades: 0,
+                });
             }
             t += bucket;
         }
         days = filled;
     }
-    (st, days, hours)
+    Ok((st, days, hours))
 }
 
-/// Серии по ядрам: один скан периода, профит раскладывается по вёдрам сетки
-/// `days`; сортировка по итогу (прибыльные первыми).
+/// Scan core profit into the `days` buckets and sort profitable cores first.
+///
+/// Any query or row-conversion failure aborts the complete series.
 fn core_series(
     conn: &Connection,
     src: &str,
     q: &Query,
     days: &[DayPoint],
     bucket: i64,
-) -> Vec<CoreSeries> {
+) -> ReadResult<Vec<CoreSeries>> {
+    const CTX: &str = "analytics: core_series";
     let Some(t0) = days.first().map(|d| d.start) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let nb = days.len();
     let sql = format!(
@@ -615,24 +757,26 @@ fn core_series(
                 COALESCE(o.profitbtc,0)
          FROM {src}"
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else {
-        return Vec::new();
-    };
-    let Ok(rows) = stmt.query_map(rusqlite::params![q.from, q.to], |r| {
-        Ok((
-            r.get::<_, i64>(0)? as u64,
-            r.get::<_, String>(1)?,
-            r.get::<_, i64>(2)?,
-            r.get::<_, f64>(3)?,
-        ))
-    }) else {
-        return Vec::new();
-    };
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((
+                r.get::<_, i64>(0)? as u64,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, f64>(3)?,
+            ))
+        })
+        .map_err(|e| read_fail(CTX, e))?;
     let mut map: std::collections::HashMap<u64, (String, Vec<f64>)> =
         std::collections::HashMap::new();
-    for (uid, name, close, profit) in rows.flatten() {
+    for row in rows {
+        // core_uid / closedate / profitbtc all move numbers here.
+        let (uid, name, close, profit) = row.map_err(|e| read_fail(CTX, e))?;
         let idx = (((close - t0) / bucket).max(0) as usize).min(nb - 1);
-        let e = map.entry(uid).or_insert_with(|| (name.clone(), vec![0.0; nb]));
+        let e = map
+            .entry(uid)
+            .or_insert_with(|| (name.clone(), vec![0.0; nb]));
         if e.0.is_empty() {
             e.0 = name;
         }
@@ -642,11 +786,16 @@ fn core_series(
         .into_iter()
         .map(|(uid, (name, per_bucket))| {
             let total = per_bucket.iter().sum();
-            CoreSeries { uid, name, per_bucket, total }
+            CoreSeries {
+                uid,
+                name,
+                per_bucket,
+                total,
+            }
         })
         .collect();
     out.sort_by(|a, b| b.total.total_cmp(&a.total));
-    out
+    Ok(out)
 }
 
 /// Имя стратегии в SQL: из ATTACH-нутой БД стратегий либо голый id.
@@ -660,14 +809,15 @@ fn strategy_name_expr(has_names: bool) -> &'static str {
     }
 }
 
-/// Топ-5 лучших (`best=true`) или худших сделок периода.
+/// Return the five best or worst period trades, failing if any ranked row is unreadable.
 fn top_trades(
     conn: &Connection,
     src: &str,
     q: &Query,
     has_names: bool,
     best: bool,
-) -> Vec<TopTrade> {
+) -> ReadResult<Vec<TopTrade>> {
+    const CTX: &str = "analytics: top_trades";
     let order = if best { "DESC" } else { "ASC" };
     let name = strategy_name_expr(has_names);
     let sql = format!(
@@ -676,32 +826,40 @@ fn top_trades(
          FROM {src} WHERE o.profitbtc IS NOT NULL
          ORDER BY o.profitbtc {order} LIMIT 5"
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else {
-        return Vec::new();
-    };
-    stmt.query_map(rusqlite::params![q.from, q.to], |r| {
-        Ok(TopTrade {
-            closedate: r.get(0)?,
-            coin: r.get(1)?,
-            strategy: r.get(2)?,
-            core_name: r.get(3)?,
-            profit: r.get(4)?,
-            is_short: r.get::<_, i64>(5)? != 0,
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok(TopTrade {
+                closedate: r.get(0)?,
+                coin: r.get(1)?,
+                strategy: r.get(2)?,
+                core_name: r.get(3)?,
+                profit: r.get(4)?,
+                is_short: r.get::<_, i64>(5)? != 0,
+            })
         })
-    })
-    .map(|rows| rows.flatten().collect())
-    .unwrap_or_default()
+        .map_err(|e| read_fail(CTX, e))?;
+    let mut out = Vec::new();
+    for row in rows {
+        // The ranked row carries closedate/profitbtc/isshort, so it is metric-
+        // bearing end to end: skipping it would silently drop the extreme trade
+        // the user opened this widget to see.
+        out.push(row.map_err(|e| read_fail(CTX, e))?);
+    }
+    Ok(out)
 }
 
-/// Группы периода: по ID стратегии (`by_strategy=true`) или по монете.
-/// Прибыль по убыванию (хвост списка = худшие).
+/// Group the period by strategy id or coin, sorted by descending profit.
+///
+/// Any query or aggregate-row failure aborts the complete grouping.
 fn groups(
     conn: &Connection,
     src: &str,
     q: &Query,
     has_names: bool,
     by_strategy: bool,
-) -> Vec<GroupStat> {
+) -> ReadResult<Vec<GroupStat>> {
+    const CTX: &str = "analytics: groups";
     // Ключ стратегии — id: переименования не плодят группы, одноимённые
     // разные стратегии не сливаются; имя — только подпись.
     let (key, name, kind, alive) = if by_strategy {
@@ -747,12 +905,150 @@ fn groups(
          FROM {src}
          GROUP BY k ORDER BY 8 DESC"
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else {
-        return Vec::new();
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], group_from_row)
+        .map_err(|e| read_fail(CTX, e))?;
+    let mut out = Vec::new();
+    for row in rows {
+        // Each row carries the group's COUNT/SUM, so dropping one would
+        // understate the table the user reads as complete.
+        out.push(row.map_err(|e| read_fail(CTX, e))?);
+    }
+    Ok(out)
+}
+
+/// Regression tests for the read-failure contract: a damaged replica must
+/// surface as an error, never as an empty period.
+#[cfg(test)]
+mod read_failure_tests {
+    use super::super::test_support::{
+        build_replica, corrupt_leaf_page, remove_db, spread_rows, temp_db,
     };
-    stmt.query_map(rusqlite::params![q.from, q.to], group_from_row)
-        .map(|rows| rows.flatten().collect())
-        .unwrap_or_default()
+    use super::*;
+
+    /// Build the minimal real-trade query used by analytics regression tests.
+    fn q(from: i64, to: i64) -> Query {
+        Query {
+            from,
+            to,
+            cores: Vec::new(),
+            side: SideFilter::All,
+            emulator: Some(false),
+            strategy: None,
+        }
+    }
+
+    /// A healthy replica retains exact summary metrics and empty-period semantics.
+    #[test]
+    fn healthy_summary_exact_values() {
+        let path = temp_db("healthy");
+        // Four same-day trades: +10, -4, +6, -2 => profit 10 and two wins.
+        let day = 1_780_000_000i64 / 86_400 * 86_400 + 3_600;
+        let conn = build_replica(
+            &path,
+            &[
+                (day, 10.0, "BTCUSDT"),
+                (day + 60, -4.0, "BTCUSDT"),
+                (day + 120, 6.0, "ETHUSDT"),
+                (day + 180, -2.0, "ETHUSDT"),
+            ],
+        );
+
+        let s = summary_on(&conn, &q(day - 86_400, day + 86_400), false)
+            .expect("здоровая БД должна читаться");
+        assert_eq!(s.cur.n, 4);
+        assert_eq!(s.cur.wins, 2);
+        assert_eq!(s.cur.losses, 2);
+        assert!(
+            (s.cur.profit - 10.0).abs() < 1e-9,
+            "profit={}",
+            s.cur.profit
+        );
+        assert!((s.cur.winrate() - 50.0).abs() < 1e-9);
+        // Profit factor is total wins divided by total losses: 16 / 6.
+        assert!((s.cur.pf - 16.0 / 6.0).abs() < 1e-9, "pf={}", s.cur.pf);
+        // Cumulative profit 10 -> 6 -> 12 -> 10 has a maximum drawdown of 4.
+        assert!((s.cur.max_dd - 4.0).abs() < 1e-9, "max_dd={}", s.cur.max_dd);
+        assert!((s.cur.avg - 2.5).abs() < 1e-9);
+        assert_eq!(s.coins.len(), 2, "две монеты");
+        assert_eq!(s.cores, vec![(1u64, "CORE-A".to_string())]);
+        assert_eq!(s.best.len(), 4);
+
+        // A genuinely empty period succeeds with zero counters.
+        let empty = summary_on(&conn, &q(day - 10 * 86_400, day - 9 * 86_400), false)
+            .expect("пустой период — успешное чтение");
+        assert_eq!(empty.cur.n, 0);
+
+        drop(conn);
+        remove_db(&path);
+    }
+
+    /// Index-page corruption surfaces as an error rather than an empty period.
+    #[test]
+    fn corrupt_replica_surfaces_error_not_empty() {
+        let path = temp_db("corrupt");
+        // Enough rows keep the target index leaf away from the header page so
+        // corruption surfaces during the period scan rather than file opening.
+        let day = 1_780_000_000i64 / 86_400 * 86_400;
+        let conn = build_replica(&path, &spread_rows(day, 2000));
+
+        // Prove the fixture is healthy before introducing damage.
+        let before = summary_on(&conn, &q(day - 86_400, day + 10 * 86_400), false)
+            .expect("до порчи БД читается");
+        assert_eq!(before.cur.n, 2000);
+
+        // The scan must use the index whose leaf page is about to be damaged.
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT closedate FROM orders_rep
+                 WHERE closedate >= 1 AND closedate < 2 AND closedate > 0",
+                [],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(
+            plan.contains("idx_rep_closedate"),
+            "план без индекса: {plan}"
+        );
+
+        corrupt_leaf_page(conn, &path, "idx_rep_closedate");
+
+        // The intact header allows opening; the period read reaches the damage.
+        let conn = Connection::open(&path).expect("битая БД всё ещё открывается");
+        let wide = q(day - 86_400, day + 10 * 86_400);
+
+        // Pin the period scan itself so another query cannot mask skipped rows
+        // by failing later in the summary pipeline.
+        let src = unified_from(&conn, &wide)
+            .expect("схема читается")
+            .expect("источник есть");
+        assert!(
+            scan_period(&conn, &src, wide.from, wide.to, 86_400).is_err(),
+            "скан периода обязан вернуть ошибку, а не усечённую статистику"
+        );
+
+        let res = summary_on(&conn, &wide, false);
+
+        assert!(
+            !matches!(res, Ok(_)),
+            "ошибка чтения не должна превращаться в успешный — в том числе \
+             пустой или частичный — период: это и есть чинимый баг"
+        );
+        match res {
+            Err(ReadFail::Failed { kind, .. }) => assert_eq!(
+                kind,
+                super::super::FailKind::Corrupt,
+                "порча должна классифицироваться как Corrupt"
+            ),
+            Err(ReadFail::NotReady) => {
+                panic!("порча не должна выглядеть как «реплика не готова»")
+            }
+            Ok(_) => unreachable!("уже проверено выше"),
+        }
+
+        remove_db(&path);
+    }
 }
 
 #[cfg(test)]
@@ -789,10 +1085,17 @@ mod tests {
             (D0 + 7_200, 2, 5.0),
             (D0 + 2 * 86_400 + 100, 1, -3.0),
         ]);
-        let q = Query { from: D0, to: D0 + 3 * 86_400, ..Default::default() };
+        let q = Query {
+            from: D0,
+            to: D0 + 3 * 86_400,
+            ..Default::default()
+        };
         let days = calendar_cells_from(&c, &q).unwrap();
         // Плотный диапазон: ровно 3 дня, включая пустой день1.
-        assert_eq!(days.iter().map(|d| d.start).collect::<Vec<_>>(), vec![D0, D0 + 86_400, D0 + 2 * 86_400]);
+        assert_eq!(
+            days.iter().map(|d| d.start).collect::<Vec<_>>(),
+            vec![D0, D0 + 86_400, D0 + 2 * 86_400]
+        );
         assert_eq!((days[0].trades, days[0].wins, days[0].profit), (2, 2, 15.0));
         assert_eq!((days[1].trades, days[1].profit), (0, 0.0)); // дыра заполнена
         assert_eq!((days[2].trades, days[2].wins, days[2].profit), (1, 0, -3.0));
@@ -801,7 +1104,11 @@ mod tests {
     #[test]
     fn empty_period_is_some_empty_not_none() {
         let c = seed(&[]);
-        let q = Query { from: D0, to: D0 + 86_400, ..Default::default() };
+        let q = Query {
+            from: D0,
+            to: D0 + 86_400,
+            ..Default::default()
+        };
         // Схема есть, сделок нет → пустой календарь, а НЕ None и не бесконечный fill.
         assert_eq!(calendar_cells_from(&c, &q).unwrap().len(), 0);
     }
@@ -810,7 +1117,11 @@ mod tests {
     fn respects_period_bounds_excluding_to() {
         // Сделка в день3 вне [from, to) не попадает; хвостовой пустой день2 есть.
         let c = seed(&[(D0 + 100, 1, 7.0), (D0 + 3 * 86_400 + 100, 1, 99.0)]);
-        let q = Query { from: D0, to: D0 + 3 * 86_400, ..Default::default() };
+        let q = Query {
+            from: D0,
+            to: D0 + 3 * 86_400,
+            ..Default::default()
+        };
         let days = calendar_cells_from(&c, &q).unwrap();
         assert_eq!(days.len(), 3);
         assert_eq!(days[0].trades, 1);

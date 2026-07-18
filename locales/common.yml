@@ -1,0 +1,37 @@
+# Строки, общие для нескольких панелей: плейсхолдеры фоновой загрузки и ошибок
+# чтения БД отчётов (см. crates/moon-ui-gpui/src/load_state.rs).
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+common.loading:
+  ru: "Загрузка…"
+  en: "Loading…"
+  es: "Cargando…"
+common.empty_period:
+  ru: "В этом периоде нет закрытых сделок."
+  en: "No closed trades in this period."
+  es: "No hay operaciones cerradas en este período."
+common.db_read_failed:
+  ru: "Не удалось прочитать базу отчётов."
+  en: "Failed to read the reports database."
+  es: "No se pudo leer la base de datos de informes."
+common.db_read_failed_corrupt:
+  ru: "Файл базы повреждён — повтор не поможет. Подробности во вкладке «Лог»."
+  en: "The database file is damaged — retrying will not help. See the Log tab."
+  es: "El archivo de la base está dañado: reintentar no ayudará. Consulte la pestaña Registro."
+common.db_read_failed_other:
+  ru: "Это ошибка чтения, а не отсутствие сделок. Подробности — во вкладке «Лог»."
+  en: "This is a read error, not an absence of trades. See the Log tab for details."
+  es: "Es un error de lectura, no una ausencia de operaciones. Consulte la pestaña Registro."
+common.db_read_failed_retry:
+  ru: "База отчётов сейчас занята. Повторите — период пересчитается."
+  en: "The reports database is busy right now. Retry — the period will recompute."
+  es: "La base de datos de informes está ocupada. Reinténtelo — el período se recalculará."
+common.db_read_failed_short:
+  ru: "Ошибка чтения БД"
+  en: "DB read error"
+  es: "Error de lectura de BD"
+common.db_not_ready:
+  ru: "База отчётов ещё не синхронизирована."
+  en: "The reports database is not synced yet."
+  es: "La base de datos de informes aún no está sincronizada."

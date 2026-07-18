@@ -10,7 +10,9 @@
 
 use rusqlite::Connection;
 
-use super::analytics::{Query, unified_from};
+use super::analytics::{unified_from, Query};
+use super::read_fail::read_fail;
+use super::{ReadFail, ReadResult};
 
 /// Класс поля — каким Ignore-флагом стратегии выключается его фильтр.
 /// `IgnoreFilters` выключает ВСЕ классы; `IgnoreDelta`/`IgnoreVolume` — свои.
@@ -60,7 +62,14 @@ const fn field(
     p_max: Option<&'static str>,
     slot_type: Option<&'static str>,
 ) -> FieldSpec {
-    FieldSpec { col, label, class, p_min, p_max, slot_type }
+    FieldSpec {
+        col,
+        label,
+        class,
+        p_min,
+        p_max,
+        slot_type,
+    }
 }
 
 impl FieldSpec {
@@ -94,41 +103,177 @@ impl FieldClass {
 /// 2h/30m/Pump5m без колонки отчёта непредставимы.
 pub const FIELDS: &[FieldSpec] = &[
     // Filters/Base (IgnoreFilters | IgnoreBase): плечо и дельта mark-цены (±%).
-    field("lev", "Lev", FieldClass::Base, Some("MinLeverage"), Some("MaxLeverage"), None),
-    field("dmark", "dMark", FieldClass::Base, Some("MarkPriceMin"), Some("MarkPriceMax"), None),
+    field(
+        "lev",
+        "Lev",
+        FieldClass::Base,
+        Some("MinLeverage"),
+        Some("MaxLeverage"),
+        None,
+    ),
+    field(
+        "dmark",
+        "dMark",
+        FieldClass::Base,
+        Some("MarkPriceMin"),
+        Some("MarkPriceMax"),
+        None,
+    ),
     // Filters/Ping (IgnoreFilters | IgnorePing).
-    field("pricebug", "PriceBug", FieldClass::Ping, Some("BinancePriceBugMin"), Some("BinancePriceBug"), None),
+    field(
+        "pricebug",
+        "PriceBug",
+        FieldClass::Ping,
+        Some("BinancePriceBugMin"),
+        Some("BinancePriceBug"),
+        None,
+    ),
     // Filters/Volume (IgnoreFilters | IgnoreVolume).
-    field("hvol", "H.Vol", FieldClass::Volume, Some("MinHourlyVolume"), Some("MaxHourlyVolume"), None),
-    field("hvolf", "H.VolF", FieldClass::Volume, Some("MinHourlyVolFast"), Some("MaxHourlyVolFast"), None),
-    field("dvol", "D.Vol", FieldClass::Volume, Some("MinVolume"), Some("MaxVolume"), None),
-    field("vd1m", "Vd1m", FieldClass::Volume, Some("MinuteVolDeltaMin"), Some("MinuteVolDeltaMax"), None),
+    field(
+        "hvol",
+        "H.Vol",
+        FieldClass::Volume,
+        Some("MinHourlyVolume"),
+        Some("MaxHourlyVolume"),
+        None,
+    ),
+    field(
+        "hvolf",
+        "H.VolF",
+        FieldClass::Volume,
+        Some("MinHourlyVolFast"),
+        Some("MaxHourlyVolFast"),
+        None,
+    ),
+    field(
+        "dvol",
+        "D.Vol",
+        FieldClass::Volume,
+        Some("MinVolume"),
+        Some("MaxVolume"),
+        None,
+    ),
+    field(
+        "vd1m",
+        "Vd1m",
+        FieldClass::Volume,
+        Some("MinuteVolDeltaMin"),
+        Some("MinuteVolDeltaMax"),
+        None,
+    ),
     // BV/SV — ПОДГРУППА Volume: свой включатель UseBV_SV_Filter поверх
     // IgnoreVolume; параметры фильтра (не детектора BV_SV_Ratio!).
-    field("bvsvratio", "bvsv", FieldClass::BvSv, Some("BV_SV_FilterRatio"), Some("BV_SV_FilterRatioMax"), None),
+    field(
+        "bvsvratio",
+        "bvsv",
+        FieldClass::BvSv,
+        Some("BV_SV_FilterRatio"),
+        Some("BV_SV_FilterRatioMax"),
+        None,
+    ),
     // Filters/Delta (IgnoreFilters | IgnoreDelta).
-    field("d24h", "d24h", FieldClass::Delta, Some("Delta_24h_Min"), Some("Delta_24h_Max"), None),
-    field("d3h", "d3h", FieldClass::Delta, Some("Delta_3h_Min"), Some("Delta_3h_Max"), None),
+    field(
+        "d24h",
+        "d24h",
+        FieldClass::Delta,
+        Some("Delta_24h_Min"),
+        Some("Delta_24h_Max"),
+        None,
+    ),
+    field(
+        "d3h",
+        "d3h",
+        FieldClass::Delta,
+        Some("Delta_3h_Min"),
+        Some("Delta_3h_Max"),
+        None,
+    ),
     field("da1m", "da1m", FieldClass::Delta, None, None, None),
     field("d5s", "d5s", FieldClass::Delta, None, None, None),
-    field("btc1hdelta", "dBTC", FieldClass::Delta, Some("Delta_BTC_Min"), Some("Delta_BTC_Max"), None),
-    field("exchange1hdelta", "dMarket", FieldClass::Delta, Some("Delta_Market_Min"), Some("Delta_Market_Max"), None),
-    field("btc24hdelta", "d24BTC", FieldClass::Delta, Some("Delta_BTC_24_Min"), Some("Delta_BTC_24_Max"), None),
-    field("exchange24hdelta", "dM24", FieldClass::Delta, Some("Delta_Market_24_Min"), Some("Delta_Market_24_Max"), None),
-    field("btc5mdelta", "dBTC5m", FieldClass::Delta, Some("Delta_BTC_5m_Min"), Some("Delta_BTC_5m_Max"), None),
-    field("dbtc1m", "dBTC1m", FieldClass::Delta, Some("Delta_BTC_1m_Min"), Some("Delta_BTC_1m_Max"), None),
+    field(
+        "btc1hdelta",
+        "dBTC",
+        FieldClass::Delta,
+        Some("Delta_BTC_Min"),
+        Some("Delta_BTC_Max"),
+        None,
+    ),
+    field(
+        "exchange1hdelta",
+        "dMarket",
+        FieldClass::Delta,
+        Some("Delta_Market_Min"),
+        Some("Delta_Market_Max"),
+        None,
+    ),
+    field(
+        "btc24hdelta",
+        "d24BTC",
+        FieldClass::Delta,
+        Some("Delta_BTC_24_Min"),
+        Some("Delta_BTC_24_Max"),
+        None,
+    ),
+    field(
+        "exchange24hdelta",
+        "dM24",
+        FieldClass::Delta,
+        Some("Delta_Market_24_Min"),
+        Some("Delta_Market_24_Max"),
+        None,
+    ),
+    field(
+        "btc5mdelta",
+        "dBTC5m",
+        FieldClass::Delta,
+        Some("Delta_BTC_5m_Min"),
+        Some("Delta_BTC_5m_Max"),
+        None,
+    ),
+    field(
+        "dbtc1m",
+        "dBTC1m",
+        FieldClass::Delta,
+        Some("Delta_BTC_1m_Min"),
+        Some("Delta_BTC_1m_Max"),
+        None,
+    ),
     // Слоты Delta2/Delta3 — ПОДГРУППА Delta (в стратегию — макс 2).
     field("d1h", "d1h", FieldClass::DeltaSlot, None, None, Some("1h")),
-    field("d15m", "d15m", FieldClass::DeltaSlot, None, None, Some("15m")),
+    field(
+        "d15m",
+        "d15m",
+        FieldClass::DeltaSlot,
+        None,
+        None,
+        Some("15m"),
+    ),
     field("d5m", "d5m", FieldClass::DeltaSlot, None, None, Some("5m")),
     field("d1m", "d1m", FieldClass::DeltaSlot, None, None, Some("1m")),
-    field("pump1h", "Pump1H", FieldClass::DeltaSlot, None, None, Some("Pump1h")),
-    field("dump1h", "Dump1H", FieldClass::DeltaSlot, None, None, Some("Dump1h")),
+    field(
+        "pump1h",
+        "Pump1H",
+        FieldClass::DeltaSlot,
+        None,
+        None,
+        Some("Pump1h"),
+    ),
+    field(
+        "dump1h",
+        "Dump1H",
+        FieldClass::DeltaSlot,
+        None,
+        None,
+        Some("Dump1h"),
+    ),
 ];
 
 /// Значение `DeltaN_Type` для поля-слота (None — поле не слот).
 pub fn slot_type_for(field: &str) -> Option<&'static str> {
-    FIELDS.iter().find(|s| s.col == field).and_then(|s| s.slot_type)
+    FIELDS
+        .iter()
+        .find(|s| s.col == field)
+        .and_then(|s| s.slot_type)
 }
 
 /// Диапазон по одному полю; None — граница не задана.
@@ -147,7 +292,9 @@ pub struct Variant {
 
 impl Variant {
     pub fn is_empty(&self) -> bool {
-        self.bounds.iter().all(|b| b.from.is_none() && b.to.is_none())
+        self.bounds
+            .iter()
+            .all(|b| b.from.is_none() && b.to.is_none())
     }
 
     /// Хвост WHERE варианта. Поля гейтятся вайтлистом `FIELDS`; NULL считается
@@ -188,45 +335,59 @@ pub struct VarStats {
 
 impl VarStats {
     pub fn winrate(&self) -> f64 {
-        if self.n > 0 { self.wins as f64 / self.n as f64 * 100.0 } else { 0.0 }
+        if self.n > 0 {
+            self.wins as f64 / self.n as f64 * 100.0
+        } else {
+            0.0
+        }
     }
 }
 
-/// KPI по каждому варианту (тем же индексом, что вход). Пустой вариант = «Факт».
-pub fn variant_stats(q: &Query, variants: &[Variant]) -> Option<Vec<VarStats>> {
+/// Compute KPI values in input order; an empty variant represents the baseline.
+///
+/// A healthy empty period produces one zero-valued KPI result per variant.
+/// Returns `NotReady` when the replica or required schema is absent and `Failed`
+/// when opening the replica, pinning the snapshot, or scanning a variant fails.
+pub fn variant_stats(q: &Query, variants: &[Variant]) -> ReadResult<Vec<VarStats>> {
     let conn = super::open_reader()?;
+    // One snapshot for the whole comparison. Each variant is its own scan, and
+    // this table exists precisely to score variants AGAINST the baseline — a row
+    // computed over a different set of trades than the baseline it is compared
+    // to would still be published as one coherent comparison.
+    let snap = super::read_snapshot(&conn)?;
     let mut q = q.clone();
     if q.from < 0 {
         q.from = 1;
     }
-    let src = unified_from(&conn, &q)?;
-    Some(
-        variants
-            .iter()
-            .map(|v| one_variant(&conn, &src, &q, v))
-            .collect(),
-    )
+    let Some(src) = unified_from(&snap, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
+    variants
+        .iter()
+        .map(|v| one_variant(&snap, &src, &q, v))
+        .collect()
 }
 
-/// Один скан варианта (порядок по closedate — для max drawdown).
-fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> VarStats {
+/// Scan one variant in `closedate` order, failing if any metric row is unreadable.
+fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> ReadResult<VarStats> {
+    const CTX: &str = "tuner: one_variant";
     let mut st = VarStats::default();
     let wh = v.where_sql();
     let sql = format!(
         "SELECT COALESCE(o.profitbtc,0), COALESCE(o.spentbtc,0)
          FROM {src} WHERE 1=1{wh} ORDER BY o.closedate"
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else {
-        return st;
-    };
-    let Ok(rows) = stmt.query_map(rusqlite::params![q.from, q.to], |r| {
-        Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
-    }) else {
-        return st;
-    };
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
+        })
+        .map_err(|e| read_fail(CTX, e))?;
     let (mut wsum, mut lsum, mut spent) = (0.0f64, 0.0f64, 0.0f64);
     let (mut cum, mut peak) = (0.0f64, 0.0f64);
-    for (profit, sp) in rows.flatten() {
+    for row in rows {
+        // profit/spent are the whole point of the variant KPI — never skip.
+        let (profit, sp) = row.map_err(|e| read_fail(CTX, e))?;
         st.n += 1;
         st.profit += profit;
         spent += sp;
@@ -243,9 +404,17 @@ fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> VarStats
     if st.n > 0 {
         st.avg = st.profit / st.n as f64;
         st.avg_spent = spent / st.n as f64;
-        st.avg_win = if st.wins > 0 { wsum / st.wins as f64 } else { 0.0 };
+        st.avg_win = if st.wins > 0 {
+            wsum / st.wins as f64
+        } else {
+            0.0
+        };
         let losses = st.n - st.wins;
-        st.avg_loss = if losses > 0 { lsum / losses as f64 } else { 0.0 };
+        st.avg_loss = if losses > 0 {
+            lsum / losses as f64
+        } else {
+            0.0
+        };
         st.pf = if lsum > 0.0 {
             wsum / lsum
         } else if wsum > 0.0 {
@@ -254,7 +423,7 @@ fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> VarStats
             0.0
         };
     }
-    st
+    Ok(st)
 }
 
 /// Ведро гистограммы: `[lo, hi)` (последнее включает hi).
@@ -269,34 +438,45 @@ pub struct HistBucket {
     pub lsum: f64,
 }
 
-/// Гистограмма распределения сделок/профита по значению поля на входе.
-/// Вёдра квантильные (≈равнонаполненные, ≤`want`); NULL-поля пропускаются.
-pub fn histogram(q: &Query, field: &str, want: usize) -> Option<Vec<HistBucket>> {
+/// Build at most `want` approximately equal-population buckets for one field.
+///
+/// NULL field values are excluded. An unknown field or healthy period without
+/// values returns an empty vector. `NotReady` means the replica or required
+/// schema is absent; `Failed` means opening or scanning it failed.
+pub fn histogram(q: &Query, field: &str, want: usize) -> ReadResult<Vec<HistBucket>> {
+    const CTX: &str = "tuner: histogram";
     if !FIELDS.iter().any(|s| s.col == field) {
-        return None;
+        // Programmer error (unknown field), not a read failure.
+        return Ok(Vec::new());
     }
     let conn = super::open_reader()?;
     let mut q = q.clone();
     if q.from < 0 {
         q.from = 1;
     }
-    let src = unified_from(&conn, &q)?;
+    let Some(src) = unified_from(&conn, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
     let sql = format!(
         "SELECT o.\"{field}\", COALESCE(o.profitbtc,0)
          FROM {src} WHERE o.\"{field}\" IS NOT NULL"
     );
-    let mut pairs: Vec<(f64, f64)> = conn
-        .prepare(&sql)
-        .ok()?
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
         })
-        .ok()?
-        .flatten()
-        .filter(|(v, _)| v.is_finite())
-        .collect();
+        .map_err(|e| read_fail(CTX, e))?;
+    let mut pairs: Vec<(f64, f64)> = Vec::new();
+    for row in rows {
+        let pair = row.map_err(|e| read_fail(CTX, e))?;
+        if pair.0.is_finite() {
+            pairs.push(pair);
+        }
+    }
+    drop(stmt);
     if pairs.is_empty() {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
     pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
 
@@ -341,7 +521,7 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> Option<Vec<HistBucket>>
             b.lsum -= profit;
         }
     }
-    Some(out)
+    Ok(out)
 }
 
 /// Параметры стратегии (min, max) для поля отчёта; (None, None) — маппинга нет.
@@ -360,8 +540,7 @@ pub fn strategy_cores(strategy_id: i64) -> Vec<u64> {
     if !path.exists() {
         return Vec::new();
     }
-    let Ok(conn) =
-        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
     else {
         return Vec::new();
     };
@@ -441,8 +620,7 @@ pub fn strategy_current_values(
     if !path.exists() {
         return out;
     }
-    let Ok(conn) =
-        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
     else {
         return out;
     };
@@ -488,10 +666,8 @@ pub fn strategy_filters(
     if !path.exists() {
         return out;
     }
-    let Ok(conn) = Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ) else {
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
         return out;
     };
     let raw: Option<String> = conn
@@ -509,15 +685,20 @@ pub fn strategy_filters(
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return out;
     };
-    let Some(map) = json.as_object() else { return out };
+    let Some(map) = json.as_object() else {
+        return out;
+    };
     let num = |key: Option<&str>| -> Option<f64> {
         let key = key?;
         let v = map.get(key)?;
         let f = match v {
             serde_json::Value::Number(n) => n.as_f64()?,
-            serde_json::Value::String(s) => {
-                s.trim().trim_end_matches('%').replace(',', ".").parse().ok()?
-            }
+            serde_json::Value::String(s) => s
+                .trim()
+                .trim_end_matches('%')
+                .replace(',', ".")
+                .parse()
+                .ok()?,
             _ => return None,
         };
         if !f.is_finite() {
@@ -604,45 +785,63 @@ pub fn round_bound(v: f64, up: bool) -> f64 {
     }
     let mag = v.abs().log10().floor() as i32;
     let step = 10f64.powi(mag - 2);
-    let r = if up { (v / step).ceil() } else { (v / step).floor() };
+    let r = if up {
+        (v / step).ceil()
+    } else {
+        (v / step).floor()
+    };
     r * step
 }
 
-/// Автоподбор порога ОДНОГО поля (кнопка «Подобрать» у выбранной строки).
-/// `edges` — число квантильных краёв перебора (чем больше, тем тоньше сетка);
-/// `round` — округлить результат наружу (если после округления пара перестаёт
-/// резать данные — остаются сырые значения, найденный фильтр не теряется).
+/// Find the best threshold range for one field.
+///
+/// `edges` controls the quantile search resolution. With `round`, boundaries
+/// round outward unless that would stop the range from filtering data.
+/// `Ok(None)` means the field is unknown, the sample is too small, or no range
+/// beats the baseline.
+/// `NotReady` means the replica or required schema is absent; `Failed` means
+/// opening or scanning it failed.
 pub fn suggest_field(
     q: &Query,
     field: &str,
     min_n: i64,
     edges: usize,
     round: bool,
-) -> Option<Suggestion> {
+) -> ReadResult<Option<Suggestion>> {
+    const CTX: &str = "tuner: suggest_field";
     if !FIELDS.iter().any(|s| s.col == field) {
-        return None;
+        // Programmer error (unknown field), not a read failure.
+        return Ok(None);
     }
     let conn = super::open_reader()?;
     let mut q = q.clone();
     if q.from < 0 {
         q.from = 1;
     }
-    let src = unified_from(&conn, &q)?;
+    let Some(src) = unified_from(&conn, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
     let sql = format!(
         "SELECT o.\"{field}\", COALESCE(o.profitbtc,0)
          FROM {src} WHERE o.\"{field}\" IS NOT NULL"
     );
-    let mut vals: Vec<(f64, f64)> = conn
-        .prepare(&sql)
-        .ok()?
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
         })
-        .ok()?
-        .flatten()
-        .filter(|(v, _)| v.is_finite())
-        .collect();
-    best_range(&mut vals, min_n.max(1) as usize, edges, round)
+        .map_err(|e| read_fail(CTX, e))?;
+    let mut vals: Vec<(f64, f64)> = Vec::new();
+    for row in rows {
+        let pair = row.map_err(|e| read_fail(CTX, e))?;
+        if pair.0.is_finite() {
+            vals.push(pair);
+        }
+    }
+    drop(stmt);
+    // The outer result reports read status; the inner option reports whether a
+    // threshold improves on the baseline.
+    Ok(best_range(&mut vals, min_n.max(1) as usize, edges, round))
 }
 
 /// Лучший диапазон одного поля по выборке `(значение, профит)`.
@@ -687,27 +886,28 @@ fn best_range(
     // «без фильтра» — больше, чем на float-шум суммирования (иначе диапазон,
     // отрезающий только нулевые сделки, «выигрывает» на ~1e-12).
     let margin = total.abs().max(1.0) * 1e-9;
-    best.filter(|(profit, _, _)| *profit > total + margin).map(|(profit, i, j)| {
-        let (a, b) = (pos[i], pos[j]);
-        // Всегда ПАРА от/до: на краях распределения границей становится
-        // фактический min/max данных (открытых диапазонов не выдаём).
-        let (mut from, mut to) = (vals[a].0, vals[b - 1].0);
-        if round {
-            let (rf, rt) = (round_bound(from, false), round_bound(to, true));
-            // Округление наружу у краёв распределения может увести ОБЕ
-            // границы за min/max данных — пара перестала бы резать; в этом
-            // случае оставляем сырые значения (фильтр найден не зря).
-            if rf > vals[0].0 || rt < vals[len - 1].0 {
-                (from, to) = (rf, rt);
+    best.filter(|(profit, _, _)| *profit > total + margin)
+        .map(|(profit, i, j)| {
+            let (a, b) = (pos[i], pos[j]);
+            // Always return both bounds; distribution edges use the observed
+            // minimum or maximum rather than an open interval.
+            let (mut from, mut to) = (vals[a].0, vals[b - 1].0);
+            if round {
+                let (rf, rt) = (round_bound(from, false), round_bound(to, true));
+                // Outward rounding can move both distribution-edge bounds past
+                // the observed range and make the pair filter nothing. Preserve
+                // raw bounds in that case.
+                if rf > vals[0].0 || rt < vals[len - 1].0 {
+                    (from, to) = (rf, rt);
+                }
             }
-        }
-        Suggestion {
-            from: Some(from),
-            to: Some(to),
-            profit,
-            n: (b - a) as i64,
-        }
-    })
+            Suggestion {
+                from: Some(from),
+                to: Some(to),
+                profit,
+                n: (b - a) as i64,
+            }
+        })
 }
 
 #[cfg(test)]
@@ -718,9 +918,21 @@ mod tests {
     fn variant_where_whitelists_fields() {
         let v = Variant {
             bounds: vec![
-                Bound { field: "d1h".into(), from: Some(1.5), to: Some(10.0) },
-                Bound { field: "evil\"; DROP TABLE x;--".into(), from: Some(1.0), to: None },
-                Bound { field: "hvol".into(), from: None, to: None },
+                Bound {
+                    field: "d1h".into(),
+                    from: Some(1.5),
+                    to: Some(10.0),
+                },
+                Bound {
+                    field: "evil\"; DROP TABLE x;--".into(),
+                    from: Some(1.0),
+                    to: None,
+                },
+                Bound {
+                    field: "hvol".into(),
+                    from: None,
+                    to: None,
+                },
             ],
         };
         let w = v.where_sql();
@@ -741,7 +953,10 @@ mod tests {
             .map(|i| (i as f64, if i < 33 { -1.0 } else { 1.0 }))
             .collect();
         let s = best_range(&mut vals, 1, 16, false).expect("фильтр должен найтись");
-        assert!(s.from.unwrap() > 0.0, "нижняя граница должна отрезать минус");
+        assert!(
+            s.from.unwrap() > 0.0,
+            "нижняя граница должна отрезать минус"
+        );
         assert_eq!(s.to.unwrap(), 98.0, "верхняя пара — фактический max данных");
     }
 
@@ -762,7 +977,11 @@ mod tests {
     fn empty_variant_is_fact() {
         assert!(Variant::default().is_empty());
         let v = Variant {
-            bounds: vec![Bound { field: "d1h".into(), from: Some(0.0), to: None }],
+            bounds: vec![Bound {
+                field: "d1h".into(),
+                from: Some(0.0),
+                to: None,
+            }],
         };
         assert!(!v.is_empty());
     }

@@ -18,10 +18,10 @@
 //! поля видны всем модулям крейта — правило «потомок видит приватное предка») и тонкий
 //! `main()`. Методы `Backend` — в [`backend`], тело старта — в [`startup`].
 
+mod analytics;
 mod axes;
 mod backend;
 mod chart_persist;
-mod detect_sound;
 mod chart_tabs;
 mod chartdx;
 mod clock;
@@ -32,20 +32,21 @@ mod crash;
 mod debug_window;
 mod design;
 mod detached;
+mod detect_sound;
 mod diag;
 mod dock_persist;
 mod figures_backend;
 mod firetest;
 mod group_window;
-mod analytics;
 mod hotkeys;
 mod icons;
 mod input;
+mod load_state;
 mod panels;
 mod screener;
 mod settings;
-mod sound;
 mod shell;
+mod sound;
 mod startup;
 mod strategies;
 mod table_persist;
