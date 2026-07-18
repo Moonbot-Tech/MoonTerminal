@@ -390,13 +390,14 @@ impl ScreenerView {
         let items = radio_items(options, self.source, RadioMark::Check, move |app, src| {
             view.update(app, |t, cx| t.set_source(src, cx));
         });
-        // Ширина по контенту (единый расчёт с core_combo): кнопка под текущий выбор (пол 118,
-        // потолок), меню под самый длинный пункт между полом 160 и общим потолком.
+        // Ширина по контенту (единый расчёт с core_combo): кнопка под текущий выбор (пол —
+        // общий `CORES_TRIGGER_MIN_W`, потолок), меню под самый длинный пункт между полом 160
+        // и общим потолком.
         let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
             cx,
             &cur,
             std::iter::once(all_label.as_str()).chain(cores.iter().map(|(_, n)| n.as_str())),
-            118.0,
+            design::CORES_TRIGGER_MIN_W,
             160.0,
         );
         MoonDropdown::new("screener-source")
