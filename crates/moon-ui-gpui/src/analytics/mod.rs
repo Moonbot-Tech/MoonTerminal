@@ -677,7 +677,11 @@ impl AnalyticsView {
         let view = cx.entity();
         MoonPopover::new(if is_to { "an-date-to" } else { "an-date-from" })
             .placement(MoonPopoverPlacement::BottomStart)
-            .width(264.0 + design::POPOVER_PAD_W)
+            // The mirror of MoonCalendar's private layout lives in `calendar_outer_width`.
+            .width(design::popover_outer_width(
+                cx,
+                design::calendar_outer_width(cx),
+            ))
             .open(open)
             .on_open_change(move |o, _, app| {
                 view.update(app, |t, cx| {
