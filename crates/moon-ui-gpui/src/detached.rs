@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use rust_i18n::t;
 
 use crate::Backend;
-use crate::panels::{AssetsView, LogPanel, OrdersPanel, ReportPanel, StubPanel};
+use crate::panels::{AssetsView, CoreStatusView, LogPanel, OrdersPanel, ReportPanel, StubPanel};
 use moon_core::config::paths;
 
 /// Одно откреплённое окно: какая панель (`panel_name`), из какой группы, геометрия окна.
@@ -115,13 +115,17 @@ fn panel_title(name: &str) -> String {
         "Log" => t!("dock.tab.log").to_string(),
         "Report" => t!("dock.tab.report").to_string(),
         "Alerts" => t!("dock.tab.alerts").to_string(),
+        "CoreStatus" => t!("dock.tab.core_status").to_string(),
         _ => t!("dock.tab.generic").to_string(),
     }
 }
 
 /// True for panels that can be moved into a detached OS window.
 pub fn supports_panel(name: &str) -> bool {
-    matches!(name, "Orders" | "Assets" | "Log" | "Report" | "Alerts")
+    matches!(
+        name,
+        "Orders" | "Assets" | "Log" | "Report" | "Alerts" | "CoreStatus"
+    )
 }
 
 /// Свежий экземпляр dock-панели по `panel_name` как `Rc<dyn PanelView>` — для репина
@@ -149,6 +153,9 @@ pub fn build_panel(
             })),
             "Alerts" => Rc::new(cx.new(|cx| {
                 crate::panels::AlertsPanel::new(backend.clone(), group.to_string(), window, cx)
+            })),
+            "CoreStatus" => Rc::new(cx.new(|cx| {
+                CoreStatusView::restored_group(backend.clone(), group.to_string(), window, cx)
             })),
             _ => return None,
         };
@@ -376,6 +383,13 @@ pub fn spawn(
                     AssetsView::detached_group(backend.clone(), spec.group.clone(), window, cx)
                 })
                 .into(),
+            "CoreStatus" => {
+                let p = cx.new(|cx| {
+                    CoreStatusView::detached_group(backend.clone(), spec.group.clone(), window, cx)
+                });
+                widths_reset = Some(("core-status-reset-widths-win", p.read(cx).table_state()));
+                p.into()
+            }
             "Alerts" => cx
                 .new(|cx| {
                     crate::panels::AlertsPanel::new(backend.clone(), spec.group.clone(), window, cx)

@@ -1,0 +1,77 @@
+# Панель «Статус ядер»: системные метрики ядер (CPU/память из строк лога) + статус.
+# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+_version: 2
+
+# --- Верхняя полоса / футер ---
+core_status.all_cores:
+  ru: "Все ядра"
+  en: "All cores"
+  es: "Todos los núcleos"
+core_status.cores_n:
+  ru: "Ядер: %{n}"
+  en: "Cores: %{n}"
+  es: "Núcleos: %{n}"
+core_status.cores:
+  ru: "Ядра"
+  en: "Cores"
+  es: "Núcleos"
+core_status.empty:
+  ru: "Нет данных по ядрам"
+  en: "No core data"
+  es: "Sin datos de núcleos"
+
+# --- Колонки таблицы ---
+core_status.col.core:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+core_status.col.status:
+  ru: "Статус"
+  en: "Status"
+  es: "Estado"
+core_status.col.cpu:
+  ru: "CPU"
+  en: "CPU"
+  es: "CPU"
+core_status.col.cpu_avg:
+  ru: "CPU сред."
+  en: "CPU avg"
+  es: "CPU prom."
+core_status.col.mem_app:
+  ru: "Память прил."
+  en: "Mem app"
+  es: "Mem app"
+core_status.col.mem_sys:
+  ru: "Память сис."
+  en: "Mem sys"
+  es: "Mem sist."
+core_status.col.free_phys:
+  ru: "Своб. физ."
+  en: "Free phys"
+  es: "Libre fís."
+core_status.col.free_page:
+  ru: "Своб. подкач."
+  en: "Free page"
+  es: "Libre pág."
+core_status.col.updated:
+  ru: "Обновлено"
+  en: "Updated"
+  es: "Actualizado"
+
+# --- Единицы / относительное время ---
+core_status.mb:
+  ru: "МБ"
+  en: "MB"
+  es: "MB"
+core_status.ago_s:
+  ru: "%{n}с"
+  en: "%{n}s"
+  es: "%{n}s"
+core_status.ago_m:
+  ru: "%{n}м"
+  en: "%{n}m"
+  es: "%{n}m"
+core_status.ago_h:
+  ru: "%{n}ч"
+  en: "%{n}h"
+  es: "%{n}h"

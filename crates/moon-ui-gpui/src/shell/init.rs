@@ -95,6 +95,20 @@ impl Shell {
                     AssetsView::restored_group(backend.clone(), group.clone(), window, cx)
                 })));
             }
+            // Вкладка «Статус ядер» временно ОТКЛЮЧЕНА: наполнять её из строк лога
+            // нецелесообразно (редко/фрагментарно). Код панели/парсер оставлены — вернём,
+            // когда moonproto начнёт слать системные метрики типизированно. Тогда достаточно
+            // раскомментировать этот блок и вернуть "CoreStatus" в DOCK_TAB_ORDER.
+            // if !detached_set.contains("CoreStatus") {
+            //     bottom_tabs.push(Rc::new(cx.new(|cx| {
+            //         crate::panels::CoreStatusView::restored_group(
+            //             backend.clone(),
+            //             group.clone(),
+            //             window,
+            //             cx,
+            //         )
+            //     })));
+            // }
             if !detached_set.contains("Log") {
                 bottom_tabs.push(Rc::new(
                     cx.new(|cx| LogPanel::new(backend.clone(), group.clone(), window, cx)),

@@ -12,11 +12,13 @@
 pub mod coordinator;
 pub mod order_lines;
 pub mod store;
+pub mod sys_status;
 
 mod commands;
 mod lifecycle;
 
 pub use store::{CoreId, CoreStore};
+pub use sys_status::CoreSysStatus;
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;

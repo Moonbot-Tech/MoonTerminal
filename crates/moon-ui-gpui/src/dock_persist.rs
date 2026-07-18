@@ -18,7 +18,9 @@ use moon_core::config::paths;
 
 use crate::Backend;
 use crate::chart_tabs::ChartTabs;
-use crate::panels::{AlertsPanel, AssetsView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel};
+use crate::panels::{
+    AlertsPanel, AssetsView, CoreStatusView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel,
+};
 use moon_core::session::CoreId;
 
 /// Версия схемы раскладки доков. Поднимаем при несовместимом изменении структуры
@@ -26,7 +28,10 @@ use moon_core::session::CoreId;
 /// v2: убрана панель «Order» (кнопки BUY/SELL справа от чарта) — старые раскладки
 /// с ней давали бы «missing panel»-заглушку, поэтому сбрасываем их к дефолту.
 /// v3: добавлена нижняя вкладка «Алерты» — сброс раскладки, чтобы она появилась.
-pub const DOCK_VERSION: usize = 3;
+/// v4: добавлена нижняя вкладка «Статус ядер» — сброс раскладки, чтобы она появилась.
+/// v5: «Статус ядер» временно ОТКЛЮЧЕНА (данных из логов недостаточно; ждём поля в moonproto)
+///     — сброс раскладки, чтобы уже сохранённая вкладка исчезла из дока.
+pub const DOCK_VERSION: usize = 5;
 
 /// Карта раскладок: группа → состояние её `DockArea`.
 pub type DockMap = HashMap<String, DockAreaState>;
@@ -149,6 +154,15 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
             let group = group_of(info);
             let backend = backend.clone();
             Rc::new(cx.new(|cx| AlertsPanel::new(backend, group, window, cx)))
+        });
+    }
+    // Статус ядер: группа из state; системные метрики ядер (CPU/память из строк лога).
+    {
+        let backend = backend.clone();
+        register_panel(cx, "CoreStatus", move |_s, info, window, cx| {
+            let group = group_of(info);
+            let backend = backend.clone();
+            Rc::new(cx.new(|cx| CoreStatusView::restored_group(backend, group, window, cx)))
         });
     }
 }

@@ -31,6 +31,10 @@ dock.tab.alerts:
   ru: "Алерты"
   en: "Alerts"
   es: "Alertas"
+dock.tab.core_status:
+  ru: "Статус ядер"
+  en: "Core status"
+  es: "Estado de núcleos"
 # Попап-конструктор ⚙ ленты детектов (вкладки размеров, слайдеры, слоты, превью).
 detects.cfg.title:
   ru: "Вид детектов"
