@@ -400,7 +400,7 @@ impl SettingsView {
             .child(self.line_section(
                 cx,
                 "buy",
-                "Buy",
+                "Buy (long)",
                 &l.buy,
                 true,
                 true,
@@ -468,7 +468,7 @@ impl SettingsView {
             .child(self.line_section(
                 cx,
                 "sell",
-                "Sell",
+                "Sell (long)",
                 &l.sell,
                 true,
                 false,

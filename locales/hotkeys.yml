@@ -52,7 +52,7 @@ hotkeys.group.presets:
   en: "Order presets"
   es: "Preajustes de orden"
 hotkeys.group.presets_hint:
-  ru: "Те же F1-F6 и S1-S6, что в Moonbot: размер ручного ордера и fixed sell."
+  ru: "Те же F1-F6 и S1-S6, что в Moonbot: размер ручного ордера и фикс. Sell."
   en: "The same F1-F6 and S1-S6 as Moonbot: manual order size and fixed sell."
   es: "Los mismos F1-F6 y S1-S6 que Moonbot: tamaño de orden manual y venta fija."
 hotkeys.order_size:
@@ -60,7 +60,7 @@ hotkeys.order_size:
   en: "Select manual order size %{n}"
   es: "Seleccionar tamaño de orden manual %{n}"
 hotkeys.sell_preset:
-  ru: "Выбрать fixed sell %{n}"
+  ru: "Выбрать фикс. Sell %{n}"
   en: "Select fixed sell %{n}"
   es: "Seleccionar venta fija %{n}"
 

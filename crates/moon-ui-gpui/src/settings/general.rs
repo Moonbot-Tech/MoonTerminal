@@ -188,7 +188,16 @@ impl SettingsView {
             .child(
                 MoonToggle::new("ui-theme-mode")
                     .checked(ui_theme_mode == UiThemeMode::Light)
-                    .label(t!("iface.light_theme").to_string())
+                    // Подпись отражает активную тему (п.7 UX-фидбека): в тёмной — «Тёмная тема»,
+                    // в светлой — «Светлая тема», а не вечно «Светлая тема».
+                    .label(
+                        if ui_theme_mode == UiThemeMode::Light {
+                            t!("iface.light_theme")
+                        } else {
+                            t!("iface.dark_theme")
+                        }
+                        .to_string(),
+                    )
                     .on_change(cx.listener(|this, checked: &bool, _window, cx| {
                         let mode = if *checked {
                             UiThemeMode::Light

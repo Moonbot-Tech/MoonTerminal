@@ -197,7 +197,7 @@ impl SettingsView {
 
         let tool_btn = |id: &'static str, label: String, disabled: bool| {
             MoonButton::new(id)
-                .ghost()
+                .outline()
                 .small()
                 .label(label)
                 .disabled(disabled)

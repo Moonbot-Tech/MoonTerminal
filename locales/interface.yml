@@ -10,6 +10,10 @@ iface.light_theme:
   ru: "Светлая тема"
   en: "Light theme"
   es: "Tema claro"
+iface.dark_theme:
+  ru: "Тёмная тема"
+  en: "Dark theme"
+  es: "Tema oscuro"
 iface.light_theme_hint:
   ru: "Переключает палитру всего интерфейса MoonUI."
   en: "Switches the whole MoonUI interface palette."

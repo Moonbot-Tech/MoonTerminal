@@ -251,7 +251,8 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
                     div()
                         .text_color(moon(p.accent))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(r.market_display.clone()),
+                        // Формат пары как на графике: `BTC_USDT` → `BTC-USDT` (см. п.27a UX-фидбека).
+                        .child(symbol::display_pair(&r.market_display)),
                 ))
                 .child(info_kv(
                     p,
