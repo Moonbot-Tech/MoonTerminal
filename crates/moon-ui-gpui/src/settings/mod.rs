@@ -29,7 +29,7 @@ use std::hash::{Hash, Hasher};
 
 use gpui::*;
 use moon_ui::{
-    IndexPath, MoonBackgroundPolicy, MoonCheckbox, MoonSelectEvent, MoonSelectItem,
+    IndexPath, MoonBackgroundPolicy, MoonCheckbox, MoonInputState, MoonSelectEvent, MoonSelectItem,
     MoonSelectState, MoonSliderState, Root,
 };
 use rust_i18n::t;
@@ -123,6 +123,8 @@ pub struct SettingsView {
     conn: Vec<ConnRow>,
     /// Слайдер «Шрифт UI» (`ui_font_delta`, личное из settings.toml) — вкладка «Общие».
     ui_font: Entity<MoonSliderState>,
+    /// Числовой ввод «Шрифт UI» — двусторонняя синхронизация со слайдером `ui_font`.
+    ui_font_input: Entity<MoonInputState>,
     /// Выпадающий выбор языка (вкладка «Общие»).
     lang: Entity<MoonSelectState<Language>>,
     /// Выпадающий выбор источника данных (вкладка «Подключения»).
@@ -179,23 +181,10 @@ impl SettingsView {
         let badges = badges::build(&backend, window, cx);
         let conn = connections::build_conn(&backend, window, cx);
 
-        // Слайдер «Шрифт UI» — личная настройка (settings.toml), живёт на вкладке «Общие»;
-        // правка переустанавливает MoonUI-тему живьём (масштаб шрифтов всего UI).
-        let ui_font = {
-            let cur = {
-                let b = backend.read(cx);
-                b.preview.as_ref().unwrap_or(&b.config).ui_font_delta
-            };
-            draft_slider(cx, -2.0, 6.0, 1.0, cur, move |p, f, bcx| {
-                if p.ui_font_delta != f {
-                    p.ui_font_delta = f;
-                    crate::install_moon_theme_for_config(p, bcx);
-                    true
-                } else {
-                    false
-                }
-            })
-        };
+        // Контрол «Шрифт UI» — личная настройка (settings.toml), вкладка «Общие»: ползунок с
+        // метками + числовой ввод, двусторонне синхронные; правка переустанавливает MoonUI-тему
+        // живьём (масштаб шрифтов всего UI). Вся конструкция — в `general::build_font`.
+        let (ui_font, ui_font_input) = general::build_font(&backend, window, cx);
 
         // Сохранять положение/размер окна «Настройки» в layout — чтобы открывалось на прежнем
         // месте. Дебаунс-сейв делает дренаж по `layout_dirty` (как у Стратегий/Активов).
@@ -299,6 +288,7 @@ impl SettingsView {
             badges,
             conn,
             ui_font,
+            ui_font_input,
             lang,
             mode,
             open_lines: HashSet::new(),
