@@ -60,7 +60,6 @@ fn open_asset_coin_menu(
     crate::controls::open_coin_menu(ctx, backend, pos, window, app);
 }
 
-
 impl AssetsView {
     /// Top controls: multi-core selector and dust threshold. Every summary figure — the row
     /// count, Σ over visible rows, and the scope balance — is rendered by [`Self::footer`].
@@ -91,29 +90,27 @@ impl AssetsView {
                         })
                         .into()
                     })
-                    .on_scroll_wheel(cx.listener(
-                        |this, ev: &ScrollWheelEvent, window, cx| {
-                            let dy = match ev.delta {
-                                ScrollDelta::Lines(pt) => pt.y,
-                                ScrollDelta::Pixels(pt) => f32::from(pt.y),
-                            };
-                            if dy == 0.0 {
-                                return;
-                            }
-                            let next = (this.min_value_usd + if dy > 0.0 { 1.0 } else { -1.0 })
-                                .clamp(0.0, 100.0);
-                            if next != this.min_value_usd {
-                                this.min_value_usd = next;
-                                this.min_value_slider.update(cx, |s, c| {
-                                    s.set_value(next as f32, window, c);
-                                });
-                                let backend = this.backend.clone();
-                                this.rebuild_cache(backend.read(cx));
-                                this.persist_min_value(cx);
-                                cx.notify();
-                            }
-                        },
-                    ))
+                    .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, window, cx| {
+                        let dy = match ev.delta {
+                            ScrollDelta::Lines(pt) => pt.y,
+                            ScrollDelta::Pixels(pt) => f32::from(pt.y),
+                        };
+                        if dy == 0.0 {
+                            return;
+                        }
+                        let next = (this.min_value_usd + if dy > 0.0 { 1.0 } else { -1.0 })
+                            .clamp(0.0, 100.0);
+                        if next != this.min_value_usd {
+                            this.min_value_usd = next;
+                            this.min_value_slider.update(cx, |s, c| {
+                                s.set_value(next as f32, window, c);
+                            });
+                            let backend = this.backend.clone();
+                            this.rebuild_cache(backend.read(cx));
+                            this.persist_min_value(cx);
+                            cx.notify();
+                        }
+                    }))
                     .child(
                         MoonSlider::new(&self.min_value_slider)
                             .id("assets-min-value")
@@ -226,12 +223,16 @@ impl AssetsView {
                     )
                     .child(super::balances::amount(
                         format!("Σ {sigma}"),
-                        if excluded == 0 { p.text_soft } else { p.text_muted },
+                        if excluded == 0 {
+                            p.text_soft
+                        } else {
+                            p.text_muted
+                        },
                         cx,
                     )),
             )
             .child(div().flex_1())
-            .child(design::vline(12.0, p))
+            .child(design::vline(cx, 12.0, p))
             .child(super::balances::summary_group(
                 &self.cached_aggs,
                 &self.sel_cores,
@@ -469,7 +470,12 @@ pub(super) fn assets_table(
 }
 
 /// Build one table row using `display_value` for both the value cell and footer-compatible data.
-fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette, on_sale: bool) -> MoonDataRow {
+fn assets_row(
+    e: &AssetEntry,
+    view: &Entity<AssetsView>,
+    p: MoonPalette,
+    on_sale: bool,
+) -> MoonDataRow {
     let r = &e.row;
     let is_position = r.pos_size != 0.0;
     // Кол-во/Сумма: спот — ПОЛНЫЙ удерживаемый остаток (free + заблокированное в открытых
@@ -505,9 +511,10 @@ fn assets_row(e: &AssetEntry, view: &Entity<AssetsView>, p: MoonPalette, on_sale
     .selected(on_sale)
 }
 
-/// Ячейка «Ядро» (имя ядра): левый клик выставляет фильтр панели РОВНО на это ядро (повторный
-/// клик по уже единственному выбранному — сброс на «Все»). ПКМ-меню монеты живёт на тикере —
-/// сюда не добавляем. Текст — прежним тусклым (Muted) стилем.
+/// Render a muted core-name cell that filters the panel to exactly that core when clicked.
+///
+/// Clicking the sole selected core resets the filter to All. The coin context menu belongs to the
+/// ticker cell rather than this one.
 fn core_cell(
     e: &AssetEntry,
     view: &Entity<AssetsView>,
@@ -553,7 +560,10 @@ fn coin_cell(
     // тут колонка узкая, выравнивание держит сама таблица).
     let icon = crate::coin_icons::coin_icon(&coin);
     div()
-        .id(SharedString::from(format!("asset-coin-{core}-{}", e.row.market)))
+        .id(SharedString::from(format!(
+            "asset-coin-{core}-{}",
+            e.row.market
+        )))
         .w_full()
         .h_full()
         .flex()
@@ -692,77 +702,87 @@ fn open_market_sell_confirm(
     window: &mut Window,
     app: &mut App,
 ) {
-    window.open_unique_moon_dialog("assets-market-sell-confirm", app, move |dialog, _window, cx| {
-        let p = MoonPalette::active(cx);
-        let confirm_view = view.clone();
-        let market_c = market.clone();
-        let question = t!("assets.market_sell_q", coin = coin.clone()).to_string();
-        dialog
-            .w(px(320.0))
-            .close_button(true)
-            .overlay(true)
-            .overlay_closable(true)
-            .bg(rgb(p.shell_high))
-            .border_color(rgb(p.border))
-            .rounded(design::r_container(cx))
-            .text_color(rgb(p.text))
-            .header(
-                div()
-                    .w_full()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(rgb(p.border))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(t!("assets.market_sell_confirm").to_string()),
-            )
-            .content(move |content, _window, cx| {
-                let p = MoonPalette::active(cx);
-                content.child(
+    window.open_unique_moon_dialog(
+        "assets-market-sell-confirm",
+        app,
+        move |dialog, _window, cx| {
+            let p = MoonPalette::active(cx);
+            let confirm_view = view.clone();
+            let market_c = market.clone();
+            let question = t!("assets.market_sell_q", coin = coin.clone()).to_string();
+            dialog
+                .w(px(320.0))
+                .close_button(true)
+                .overlay(true)
+                .overlay_closable(true)
+                .bg(rgb(p.shell_high))
+                .border_color(rgb(p.border))
+                .rounded(design::r_container(cx))
+                .text_color(rgb(p.text))
+                .header(
                     div()
-                        .font_family(design::mono())
-                        .text_size(design::t_body(cx))
-                        .text_color(rgb(p.text))
-                        .child(question.clone()),
+                        .w_full()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(rgb(p.border))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(t!("assets.market_sell_confirm").to_string()),
                 )
-            })
-            .footer(
-                h_flex()
-                    .w_full()
-                    .gap_2()
-                    .justify_end()
-                    .child(
-                        MoonButton::new("assets-msell-no")
-                            .outline()
-                            .size(MoonButtonSize::Action)
-                            .label(format!("  {}  ", t!("dialogs.no")))
-                            .on_click(move |_, window, cx| {
-                                window.close_dialog(cx);
-                            })
-                            .render(),
+                .content(move |content, _window, cx| {
+                    let p = MoonPalette::active(cx);
+                    content.child(
+                        div()
+                            .font_family(design::mono())
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text))
+                            .child(question.clone()),
                     )
-                    .child(
-                        MoonButton::new("assets-msell-yes")
-                            .size(MoonButtonSize::Action)
-                            .variant(MoonButtonVariant::Danger)
-                            .label(format!("  {}  ", t!("dialogs.yes")))
-                            .on_click(move |_, window, cx| {
-                                confirm_view.update(cx, |this, cx| {
-                                    let b = this.backend.read(cx);
-                                    // Позиция → закрыть по маркету; спот-токен → продать остаток.
-                                    let res = if is_position {
-                                        b.session.market_sell_position(core, market_c.clone())
-                                    } else {
-                                        b.session.market_sell_token(core, market_c.clone(), size)
-                                    };
-                                    if let Err(err) = res {
-                                        log::warn!("assets market sell {market_c} failed: {err:#}");
-                                    }
-                                    cx.notify();
-                                });
-                                window.close_dialog(cx);
-                            })
-                            .render(),
-                    ),
-            )
-    });
+                })
+                .footer(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .justify_end()
+                        .child(
+                            MoonButton::new("assets-msell-no")
+                                .outline()
+                                .size(MoonButtonSize::Action)
+                                .label(format!("  {}  ", t!("dialogs.no")))
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                })
+                                .render(),
+                        )
+                        .child(
+                            MoonButton::new("assets-msell-yes")
+                                .size(MoonButtonSize::Action)
+                                .variant(MoonButtonVariant::Danger)
+                                .label(format!("  {}  ", t!("dialogs.yes")))
+                                .on_click(move |_, window, cx| {
+                                    confirm_view.update(cx, |this, cx| {
+                                        let b = this.backend.read(cx);
+                                        // Позиция → закрыть по маркету; спот-токен → продать остаток.
+                                        let res = if is_position {
+                                            b.session.market_sell_position(core, market_c.clone())
+                                        } else {
+                                            b.session.market_sell_token(
+                                                core,
+                                                market_c.clone(),
+                                                size,
+                                            )
+                                        };
+                                        if let Err(err) = res {
+                                            log::warn!(
+                                                "assets market sell {market_c} failed: {err:#}"
+                                            );
+                                        }
+                                        cx.notify();
+                                    });
+                                    window.close_dialog(cx);
+                                })
+                                .render(),
+                        ),
+                )
+        },
+    );
 }

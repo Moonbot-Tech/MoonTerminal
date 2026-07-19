@@ -41,6 +41,7 @@ use crate::design;
 use crate::panels::{RenderGate, num};
 use moon_core::feed::{AssetRow, TransferAssetRow, WalletKind};
 use moon_core::session::CoreId;
+use moon_core::util::fmt;
 use rust_i18n::t;
 
 use balances::CoreAgg;
@@ -91,30 +92,16 @@ pub(super) struct WalletColumnSnapshot {
     pub(super) rows: Vec<TransferAssetRow>,
 }
 
-/// Разбить целую часть на тройки пробелом: "1111" → "1 111".
-fn group_thousands(int: &str) -> String {
-    let len = int.len();
-    let mut out = String::with_capacity(len + len / 3);
-    for (i, ch) in int.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
-            out.push(' ');
-        }
-        out.push(ch);
-    }
-    out
-}
-
-/// Денежный формат USDT: тысячи через пробел, дробная через `,`, знак `$` в конце.
-/// Точность — максимум сотые, минимум десятые (`fmt::usd`): `1 111,24$` / `1 111,0$`.
+/// Денежный формат USDT: тысячи через пробел, дробная через `.`, знак `$` в конце.
+/// Точность — максимум сотые, минимум десятые (`fmt::usd`): `1 111.24$` / `1 111.0$`.
+///
+/// The decimal mark matches the header balance and the ticker price: the same account figure is
+/// read across those surfaces, and one shared thousands separator with a differing decimal mark
+/// reads as a single system contradicting itself.
 pub(super) fn money(v: f64) -> String {
-    let neg = v < 0.0;
-    let s = moon_core::util::fmt::usd(v.abs()); // "1111.24" / "1111.0"
-    let (int, frac) = s.split_once('.').unwrap_or((s.as_str(), "0"));
-    format!(
-        "{}{},{frac}$",
-        if neg { "-" } else { "" },
-        group_thousands(int)
-    )
+    let mut s = fmt::usd_grouped(v);
+    s.push('$');
+    s
 }
 
 /// Окно/панель «Активы».
@@ -130,8 +117,8 @@ pub struct AssetsView {
     show_wallets: bool,
     /// Выбранное ядро для нижних контейнеров кошельков.
     pub(super) selected_core: Option<CoreId>,
-    /// Порог «скрыть активы дешевле N $»: показываем только строки со стоимостью ≥ `min_value_usd`
-    /// (плюс открытые позиции всегда). `<= 0.0` = показать всё (аналог прежнего «показать всё»).
+    /// Hide asset rows worth less than this USDT threshold while always retaining open positions.
+    /// A non-positive threshold shows every row.
     pub(super) min_value_usd: f64,
     /// Состояние слайдера порога в верхней полосе (диапазон 0..=100 $, шаг 1, дефолт 1).
     min_value_slider: Entity<MoonSliderState>,
@@ -424,7 +411,14 @@ impl AssetsView {
                 for r in &cd.assets.rows {
                     log::error!(
                         "[assets_diag]   market={} coin={} pos_size={} qty={} qty_full={} value={:.2} min_lot={:.2} price={}",
-                        r.market, r.coin, r.pos_size, r.qty, r.qty_full, r.value_usdt, r.min_lot_usd, r.price
+                        r.market,
+                        r.coin,
+                        r.pos_size,
+                        r.qty,
+                        r.qty_full,
+                        r.value_usdt,
+                        r.min_lot_usd,
+                        r.price
                     );
                 }
                 // Кошельковый спот (Bitget/Hyperliquid и т.п.): value=0 у «@»-имён = баг цены
@@ -432,7 +426,10 @@ impl AssetsView {
                 for w in &cd.transfer_assets.spot {
                     log::error!(
                         "[assets_diag]   wallet-spot currency={} total={} amount={} value={:.2}",
-                        w.currency, w.total, w.amount, w.value_usdt
+                        w.currency,
+                        w.total,
+                        w.amount,
+                        w.value_usdt
                     );
                 }
             }
@@ -457,8 +454,7 @@ impl AssetsView {
                 } else {
                     1.0
                 };
-                let is_position =
-                    row.pos_size != 0.0 && row.pos_size.abs() * row.price >= min_lot;
+                let is_position = row.pos_size != 0.0 && row.pos_size.abs() * row.price >= min_lot;
                 let spot_coin_visible =
                     !cd.assets.futures_account && !row.is_quote_asset && value >= thr;
                 let keep = thr <= 0.0 || is_position || spot_coin_visible;
@@ -699,7 +695,9 @@ impl AssetsView {
             if !balances::in_scope(&self.sel_cores, *id) {
                 continue;
             }
-            let Some(cd) = store.core(*id) else { return false };
+            let Some(cd) = store.core(*id) else {
+                return false;
+            };
             if cd.assets_rev == 0 || !cd.assets.futures_account {
                 // Unknown counts as "not futures": asserting "no positions" for an account
                 // whose contents merely have not loaded yet would be a guess stated as fact.
@@ -730,7 +728,11 @@ impl AssetsView {
             .selected_core
             .and_then(|core| b.session.store().core(core).map(|cd| cd.transfer_rev))
             .unwrap_or(0);
-        (self.selected_core, transfer_rev, self.min_value_usd.to_bits())
+        (
+            self.selected_core,
+            transfer_rev,
+            self.min_value_usd.to_bits(),
+        )
     }
 
     fn rebuild_wallet_cache(&mut self, b: &Backend) {
@@ -781,7 +783,11 @@ impl AssetsView {
 /// «KHYPE»→«@151»): Market sell кошельковых остатков через Moonbot там не работает, и
 /// правильное поведение — кнопку НЕ показывать. Бейдж «в продаже» от рынка не зависит
 /// (матчится по монете, см. `collect_sell_marked`).
-fn resolve_market(markets: &std::collections::HashSet<String>, coin: &str, quote: &str) -> Option<String> {
+fn resolve_market(
+    markets: &std::collections::HashSet<String>,
+    coin: &str,
+    quote: &str,
+) -> Option<String> {
     // Рынок = САМО имя монеты (Hyperliquid спот-индексы «@699» зовутся так, а не «@699USDC»).
     if markets.contains(coin) {
         return Some(coin.to_string());
@@ -986,7 +992,11 @@ impl Render for AssetsView {
         // Таблица позиций (всегда показана). В ОКНЕ с кошельками — высота под контент (кошельки
         // ниже растягиваются); во вкладке дока (кошельков нет) — таблица занимает ВСЮ высоту до
         // футера (flex_1), иначе снизу оставался пустой обрыв.
-        let table_wrap = v_flex().w_full().min_h(px(0.0)).overflow_hidden().child(table);
+        let table_wrap = v_flex()
+            .w_full()
+            .min_h(px(0.0))
+            .overflow_hidden()
+            .child(table);
         root = root.child(if self.show_wallets {
             table_wrap.h(px(table_natural_h))
         } else {

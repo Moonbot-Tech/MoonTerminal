@@ -73,6 +73,11 @@ fn cursor_label_gap(cursor_thickness_dev: f32, sf: f32) -> f32 {
 
 /// «+1.25%» — знаковый процент для подписей курсора (отклонение от текущей цены).
 /// Общий и для подписей ордер-линий (`data_state::orders`).
+///
+/// Deliberately NOT `moon_core::util::fmt::signed_pct`: this runs per label in the GPU frame
+/// path on `f32` cursor deltas, and a deviation that rounds to zero sits at the cursor's own
+/// price line, where the sign carries the direction the reader is dragging toward — the ambiguity
+/// the shared formatter removes is information here.
 pub(in crate::chartdx) fn fmt_pct(v: f32) -> String {
     format!("{v:+.2}%")
 }

@@ -15,11 +15,14 @@ use rust_i18n::t;
 
 use moon_core::feed::ConnStatus;
 use moon_core::session::BalanceState;
+use moon_core::util::fmt;
 
 use crate::shell::Shell;
 use crate::{Backend, design};
 
 /// Compose the terminal header for one group from the current backend and shell state.
+///
+/// `chrome_width` is the window width and controls priority-based ticker collapse on narrow windows.
 pub fn header(
     group: &str,
     backend: Entity<Backend>,
@@ -27,6 +30,7 @@ pub fn header(
     ticker_sel: Option<(moon_core::session::CoreId, String)>,
     core_settings_open: bool,
     core_settings_content: Option<AnyElement>,
+    chrome_width: f32,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
@@ -46,23 +50,29 @@ pub fn header(
             })
             .filter(|(state, ..)| state.has_value())
     };
+    // The manual-strategy cluster is absent when the group has no active trade core; its
+    // preceding separator has to go with it rather than fence off empty space.
+    let manual = crate::controls::manual_strategy_controls(group, &backend, p, cx);
     h_flex()
         .w_full()
         .h(design::fit_h_px(cx, design::HEADER_TOP_H, 14.0, 9.0))
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        .gap(design::ui_px(cx, 12.0))
+        // One spacing rule across the header: 8px inside a group, 8px + rule + 8px between
+        // groups. The brand cluster uses the same token internally, so the seams line up.
+        .gap(design::ui_px(cx, 8.0))
         .bg(rgb(p.shell_high))
+        // Brand draws its OWN trailing separator (MoonWindowFrame::brand_cluster), so the
+        // groups below add only the seams after them.
         .child(
             MoonWindowFrame::main("terminal-header-brand-drag", 0.0)
                 .brand_cluster(cx)
                 .flex_none()
                 .h_full(),
         )
-        // Тикер курса (настраиваемый): «1 BTC = 61 333$ +0.1% +2.0%» (дельты 1ч/24ч с ядра).
-        .child(ticker_readout(ticker_sel, &backend, shell.clone(), p, cx))
-        // Селектор активного ядра (на месте бывшего названия монеты) + баланс. Интерактивные →
-        // НЕ drag-зона (иначе клик по селектору таскал бы окно). Монету (`group · market`) убрали.
+        // Active trade core first: the balance, the manual strategy and even the ticker are all
+        // read through it, so the control everything else depends on leads the row. Interactive
+        // widgets, so NOT a drag zone (a click would otherwise drag the window).
         .child(
             h_flex()
                 .flex_none()
@@ -70,37 +80,60 @@ pub fn header(
                 .items_center()
                 .child(core_selector(group, &backend, p, cx))
                 .child(core_gear_button(
-                    shell,
+                    shell.clone(),
                     core_settings_open,
                     core_settings_content,
                     cx,
-                ))
-                .child(balance_label(balance, p, cx))
-                // Ручная стратегия: разделитель + тогл MS + пикер + сводка (на месте бывших
-                // кнопок Стратегии/Скринер — те переехали в тулбар к Live).
-                .child(crate::controls::manual_strategy_controls(
-                    group, &backend, p, cx,
                 )),
         )
-        // Метрики Session/Real/Unreal/Risk из шапки убраны: сервер (moonproto) не отдаёт
-        // session-профита (его трансляция запрошена у авторов протокола), а остальное
-        // решили не показывать. Остался только баланс у селектора ядра.
+        .child(design::chrome_divider(cx, p))
+        .child(balance_label(balance, p, cx))
+        // Shrinkable: the strategy summary inside truncates, so a long one yields space to the
+        // right-hand readouts instead of pushing them off the window.
+        .children(manual.map(|ms| {
+            h_flex()
+                .min_w_0()
+                .gap(design::ui_px(cx, 8.0))
+                .items_center()
+                .child(design::chrome_divider(cx, p))
+                .child(ms)
+        }))
         .child(
             MoonWindowFrame::main("terminal-header-spacer-drag", 0.0)
                 .drag_handle()
                 .h_full()
                 .flex_1()
+                .min_w_0()
                 .flex(),
         )
+        // Ambient readouts are right-aligned. The ticker is last so its popup, anchored to the
+        // window's right edge, lands under its own trigger.
         .child(
             h_flex()
                 .flex_none()
-                .gap(design::ui_px(cx, 12.0))
+                .gap(design::ui_px(cx, 8.0))
                 .items_center()
-                // Кнопки «Стратегии»/«Скринер»/«Настройки» переехали в тулбар
-                // (правый край строки Live).
-                // Часы UTC(±пояс) в правом углу; клик — попап выбора пояса.
+                // Часы UTC(±пояс); клик — попап выбора пояса.
                 .child(crate::clock::header_clock(&backend, p, cx))
+                // Rate ticker (configurable): "1 BTC = 61 333$ 1h +0.1% 24h +2.0%". Last before
+                // the window controls, so its popup — anchored to the window's right edge past
+                // those controls — opens directly under it. Rule and readout share ONE predicate:
+                // split, they could drift into a divider fencing off nothing.
+                .children(design::ticker_visible(cx, chrome_width).then(|| {
+                    h_flex()
+                        .flex_none()
+                        .gap(design::ui_px(cx, 8.0))
+                        .items_center()
+                        .child(design::chrome_divider(cx, p))
+                        .child(ticker_readout(
+                            ticker_sel,
+                            design::ticker_deltas_visible(cx, chrome_width),
+                            &backend,
+                            shell,
+                            p,
+                            cx,
+                        ))
+                }))
                 .when(design::show_custom_window_controls(), |this| {
                     this.child(
                         MoonWindowFrame::main("terminal-header-controls", 0.0)
@@ -111,11 +144,14 @@ pub fn header(
         )
 }
 
-/// Тикер курса в шапке: «1 BTC = 61 333$ +0.1% +2.0%». Цена и знаковые дельты за 1ч/24ч —
-/// с ядра (`MarketDataSource::market_ticker`, moonproto Coin1hDelta/Coin24hDelta). Клик —
-/// попап выбора ядра+монеты (хостится Shell); выбор персистится (layout, uid ядра).
+/// Render the header ticker as `1 BTC = 61 333$ 1h +0.1% 24h +2.0%`.
+///
+/// Price and signed deltas come from `MarketDataSource::market_ticker`. A click opens the market;
+/// a double-click opens the source popup hosted by [`Shell`]. When `show_deltas` is false, only the
+/// price remains.
 fn ticker_readout(
     sel: Option<(moon_core::session::CoreId, String)>,
+    show_deltas: bool,
     backend: &Entity<Backend>,
     shell: Entity<Shell>,
     p: MoonPalette,
@@ -130,18 +166,40 @@ fn ticker_readout(
         .as_ref()
         .map(|(_, market)| moon_core::symbol::coin_of_market(market).to_string())
         .unwrap_or_else(|| "BTC".to_string());
-    let delta_span = |v: f64| {
-        let color = if v < 0.0 { danger_text(p) } else { positive_text(p) };
-        div()
-            .text_color(rgb(color))
-            .child(format!("{v:+.1}%"))
+    // Each delta carries its window as a label; without one the tooltip is the only place that
+    // says which span a percentage covers.
+    let delta_span = |label: String, v: f64| {
+        let (text, color) = match fmt::signed_pct(v, 1) {
+            // Zero renders neutral: colouring it would report movement that is not there.
+            Some((text, sign)) => (
+                text,
+                sign.pick(
+                    design::positive_color(p),
+                    design::danger_color(p),
+                    p.text_soft,
+                ),
+            ),
+            None => ("—".to_string(), p.text_muted),
+        };
+        h_flex()
+            .gap(design::ui_px(cx, 3.0))
+            .items_center()
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_muted))
+                    .child(label),
+            )
+            .child(div().text_color(rgb(color)).child(text))
             .into_any_element()
     };
     let mut row = h_flex()
         .id("header-ticker")
         .flex_none()
         .items_center()
-        .gap(design::ui_px(cx, 5.0))
+        // Wider than the U+0020 inside a grouped price ("61 333"): with a narrower gap the eye
+        // binds "333$" to the next token and reads the thousands group as a separate number.
+        .gap(design::ui_px(cx, 10.0))
         .font_family(design::mono())
         .text_size(design::t_body(cx))
         .cursor_pointer()
@@ -159,8 +217,14 @@ fn ticker_readout(
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(fmt_ticker_price(t.last)),
                 )
-                .child(delta_span(t.delta_1h_pct))
-                .child(delta_span(t.delta_24h_pct));
+                .children(
+                    show_deltas
+                        .then(|| delta_span(t!("header.delta_1h").to_string(), t.delta_1h_pct)),
+                )
+                .children(
+                    show_deltas
+                        .then(|| delta_span(t!("header.delta_24h").to_string(), t.delta_24h_pct)),
+                );
         }
         None => {
             row = row.child(div().text_color(rgb(p.text_muted)).child("—"));
@@ -197,15 +261,9 @@ fn ticker_readout(
 /// (≥1000 → целое, ≥1 → 2 знака, иначе 4 значащих).
 fn fmt_ticker_price(v: f64) -> String {
     if v >= 1000.0 {
-        let s = format!("{v:.0}");
-        let mut out = String::with_capacity(s.len() + s.len() / 3 + 1);
-        for (i, ch) in s.chars().enumerate() {
-            if i > 0 && (s.len() - i) % 3 == 0 {
-                out.push(' ');
-            }
-            out.push(ch);
-        }
-        format!("{out}$")
+        let mut s = fmt::group_thousands(&format!("{v:.0}"));
+        s.push('$');
+        s
     } else if v >= 1.0 {
         format!("{v:.2}$")
     } else {
@@ -213,20 +271,12 @@ fn fmt_ticker_price(v: f64) -> String {
     }
 }
 
-fn positive_text(p: MoonPalette) -> u32 {
-    if p.is_light() { p.green_text } else { p.green }
-}
-
-fn danger_text(p: MoonPalette) -> u32 {
-    if p.is_light() { p.red_text } else { p.red }
-}
-
 /// Селектор «активного торгового ядра» группы. Список ядер группы; текущий выбор =
 /// `Backend::active_trade_core` (авто-следование за фуллскрин-чартом + sticky-override
 /// при ручном выборе). Все торговые контролы тулбара/шапки читают это же ядро.
 fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> AnyElement {
-    // Геометрия пилюли: высота фикс., полное скругление = ½ высоты, ширина — по контенту
-    // (канон MoonSelectorPill): имя НЕ обрезаем, пилюля тянется под него сама.
+    // The pill keeps a fixed height and full rounding; its content width is capped below so a long
+    // user-defined name cannot displace the header's right-hand readouts.
     const SEL_H: f32 = 26.0;
 
     let b = backend.read(cx);
@@ -249,14 +299,21 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         .map(|c| c.status == ConnStatus::Ready)
         .unwrap_or(false);
     let dot_color = if active_ready {
-        positive_text(p)
+        design::positive_color(p)
     } else {
-        danger_text(p)
+        design::danger_color(p)
     };
-    let active_name = active
-        .and_then(|id| cores.iter().find(|(cid, _)| *cid == id))
-        .map(|(_, n)| n.clone())
-        .unwrap_or_else(|| "—".to_string());
+    // Capped: a core name is arbitrary user text and this pill sizes to its content, so an
+    // uncapped one pushes the clock and the window controls off the header. Full name stays in
+    // the menu below.
+    let active_name = design::fit_label(
+        cx,
+        &active
+            .and_then(|id| cores.iter().find(|(cid, _)| *cid == id))
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| "—".to_string()),
+        design::font_w(cx, design::HEADER_LABEL_MAX_W),
+    );
 
     let mut items = Vec::with_capacity(cores.len());
     for (id, name) in &cores {
@@ -312,10 +369,10 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         .into_any_element()
 }
 
-/// Кнопка ⚙ настроек ядра + попап настроек (MoonPopover, позиционируется к кнопке —
-/// прежний absolute-оверлей с захардкоженными координатами уезжал при изменении состава
-/// шапки). Open контролирует Shell (`set_core_settings_open`: сидирует поля при открытии);
-/// закрытие по клику вне — сам popover. Кнопка icon-only → квадрат с полями вокруг иконки.
+/// Render the core-settings button and its anchored `MoonPopover`.
+///
+/// Shell controls the open state and seeds fields through `set_core_settings_open`; the popover
+/// handles outside-click dismissal. The icon-only button keeps square padding around the glyph.
 fn core_gear_button(
     shell: Entity<Shell>,
     open: bool,
@@ -347,13 +404,15 @@ fn core_gear_button(
 ///
 /// The caller supplies `Some` only for states with a usable value. `None` therefore represents
 /// no core, no snapshot, or no valid valuation and renders as a dash. A `Stale` figure is shown
-/// muted and tagged so a retained pre-outage number is not presented as current.
+/// muted and tagged so a retained pre-outage number is not presented as current. Usable figures
+/// render in `free / total USDT` order with the shared grouped amount format.
 fn balance_label(
     balance: Option<(BalanceState, f64, f64)>,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
     let row = h_flex()
+        .flex_none()
         .gap(px(0.0))
         .font_family(design::mono())
         .text_size(design::t_body(cx))
@@ -363,16 +422,22 @@ fn balance_label(
         return row.child(div().text_color(rgb(p.text_muted)).child("—"));
     };
     let live = state.is_current();
+    // The shared amount format, precision included: the Assets panel renders this same figure,
+    // and a locally formatted string drifts from it on trailing zeros.
+    let free_text = fmt::usd_grouped(free);
     row.child(
         div()
             .text_color(rgb(if live { p.text } else { p.text_muted }))
             .font_weight(FontWeight::SEMIBOLD)
-            .child(format!("{free:.2}")),
+            .child(free_text),
     )
     .child(
+        // Spaces on BOTH sides of the slash: " /19983" reads as a fraction of the free amount.
+        // Same format as the free figure and as Assets — a locally rounded total would disagree
+        // with the very panel this shares a number with.
         div()
             .text_color(rgb(p.text_muted))
-            .child(format!(" /{total:.0} USDT")),
+            .child(format!(" / {} USDT", fmt::usd_grouped(total))),
     )
     .when(!live, |el| {
         el.child(
@@ -382,7 +447,3 @@ fn balance_label(
         )
     })
 }
-
-// Бывший чип `header_action` (иконка+подпись, обход pad_x=0 у MoonButton) удалён:
-// кнопки Стратегии/Скринер/Настройки переехали в тулбар на MoonButton
-// (controls::toolbar::open_window_button).

@@ -12,8 +12,7 @@ use rust_i18n::t;
 
 use moon_ui::{
     MoonMenuItem, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu,
-    MoonSelectorPill, MoonSelectorSegment, MoonToggle, MoonToggleLabelSide, MoonToggleSize,
-    h_flex,
+    MoonSelectorPill, MoonSelectorSegment, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
 };
 
 use moon_core::feed::{ClientSettingsEdit, StrategyRow, StrategySchemaModel};
@@ -24,22 +23,23 @@ use crate::{Backend, design};
 /// Ordinal вида Manual в схеме стратегий Moonbot (см. `strat_kind_name`).
 const MANUAL_KIND: u8 = 12;
 
-/// Геометрия пилюли — как у селектора ядра в шапке (ширина — по контенту, имя не режем).
+/// Pill height shared with the header's core selector; label width is capped separately.
 const PILL_H: f32 = 26.0;
 
-/// Кластер «ручная стратегия» шапки: разделитель + тогл MS + пилюля-пикер + сводка
-/// параметров выбранной стратегии. Нет активного ядра группы → не рисуем ничего
-/// (разделитель внутри — исчезает вместе с контролом).
+/// Header "manual strategy" cluster: the MS toggle, the picker pill, and a summary of the
+/// selected strategy's parameters.
+///
+/// `None` when the group has no active trade core — there is nothing to toggle. The caller owns
+/// the separator that precedes the cluster and must drop it on `None`, otherwise the header keeps
+/// a rule with nothing behind it.
 pub fn manual_strategy_controls(
     group: &str,
     backend: &Entity<Backend>,
     p: MoonPalette,
     cx: &App,
-) -> AnyElement {
+) -> Option<AnyElement> {
     let b = backend.read(cx);
-    let Some(core) = b.active_trade_core(group) else {
-        return div().into_any_element();
-    };
+    let core = b.active_trade_core(group)?;
     let (on, id) = b.manual_strat_state(core);
     let core_data = b.session.store().core(core);
     // Manual-стратегии активного ядра — список пикера.
@@ -61,16 +61,20 @@ pub fn manual_strategy_controls(
 
     // Имя в пилюле: выбранная стратегия / «—» (не выбрана) / «?» (id есть, стратегии нет —
     // удалена или снимок ещё не пришёл).
+    // Capped like the core selector beside it: a strategy name is arbitrary user text and this
+    // pill sizes to its content, so an uncapped one pushes the header's right cluster off-window.
     let display: String = match (sel_row, id) {
-        (Some(r), _) => r.name.clone(),
+        (Some(r), _) => {
+            design::fit_label(cx, &r.name, design::font_w(cx, design::HEADER_LABEL_MAX_W))
+        }
         (None, 0) => t!("header.ms_none").to_string(),
         (None, _) => "?".to_string(),
     };
     let dot_color = if on && sel_row.is_some() {
-        if p.is_light() { p.green_text } else { p.green }
+        design::positive_color(p)
     } else if on {
         // Включено, но стратегия не разрезолвилась — сигналим красным.
-        if p.is_light() { p.red_text } else { p.red }
+        design::danger_color(p)
     } else {
         p.text_muted
     };
@@ -100,11 +104,9 @@ pub fn manual_strategy_controls(
 
     let toggle_backend = backend.clone();
     let mut row = h_flex()
-        .flex_none()
+        .min_w_0()
         .gap(design::ui_px(cx, 8.0))
         .items_center()
-        // Разделитель от баланса (как divider групп тулбара).
-        .child(design::vline(16.0, p))
         .child(
             MoonToggle::new("header-ms-toggle")
                 .label("MS")
@@ -163,13 +165,17 @@ pub fn manual_strategy_controls(
     if let Some(summary) = summary {
         row = row.child(
             div()
+                // The longest thing in the left half of the header; truncating it here keeps a
+                // long strategy summary from pushing the right-hand readouts off a narrow window.
+                .min_w_0()
+                .truncate()
                 .text_size(design::t_caption(cx))
                 .font_family(design::mono())
                 .text_color(rgb(p.text_soft))
                 .child(summary),
         );
     }
-    row.into_any_element()
+    Some(row.into_any_element())
 }
 
 /// Хоткей «Ручная стратегия N»: выбрать `ix`-ю manual-стратегию ядра (тот же порядок,
@@ -243,12 +249,17 @@ fn strat_field(
         .clone()
 }
 
-/// Форматирует процентное поле со знаком («0.5» → «+0.50%»); не число — как есть.
+/// Format a numeric percentage field with an explicit non-zero sign (`"0.5"` -> `"+0.50%"`).
+///
+/// A value rounding to zero prints `"0.00%"`. Non-numeric or non-finite input is returned unchanged.
 fn fmt_pct(v: &str) -> String {
-    v.trim()
-        .parse::<f64>()
-        .map(|f| format!("{f:+.2}%"))
-        .unwrap_or_else(|_| v.to_string())
+    let raw = v.trim();
+    match raw.parse::<f64>() {
+        Ok(f) => moon_core::util::fmt::signed_pct(f, 2)
+            .map(|(text, _)| text)
+            .unwrap_or_else(|| v.to_string()),
+        Err(_) => v.to_string(),
+    }
 }
 
 /// Булево поле («Yes»/«No» из `fmt_field`) → «ON»/«OFF»; отсутствует → «OFF».

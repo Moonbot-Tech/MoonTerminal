@@ -1,5 +1,4 @@
-//! Сборка кадра окна группы (`impl Render for Shell`) + оверлей попапа торговой метрики.
-//! Вынесено из `shell/mod.rs` точь-в-точь.
+//! Compose the group-window frame (`Render for Shell`) and trading-metric popup overlay.
 
 use std::time::Instant;
 
@@ -11,9 +10,9 @@ use super::Shell;
 use crate::{controls, design, terminal_chrome};
 
 impl Shell {
-    /// Слой попапа активной метрики тулбара (TP/SL/Lev): сам попап (absolute, под кнопкой) +
-    /// полноэкранный dismiss-слой под ним. Возвращает `(попап, dismiss)` — оба `None`, если
-    /// попап закрыт. Вынесено из `render` (там это ~70 строк сборки оверлея).
+    /// Build the active toolbar metric popup (TP/SL/leverage) and its full-window dismiss layer.
+    ///
+    /// Returns `(popup, dismiss)`, both `None` when the popup is closed.
     fn metric_popup_layers(
         &self,
         p: MoonPalette,
@@ -138,7 +137,7 @@ impl Render for Shell {
 
         // Тикер курса в шапке: сохранённый выбор или read-only дефолт. Render не мутирует backend.
         let ticker_sel = self.backend.read(cx).header_ticker();
-        let (ticker_overlay, ticker_dismiss) = self.ticker_popup_layers(p, cx);
+        let (ticker_overlay, ticker_dismiss) = self.ticker_popup_layers(chrome_width, p, cx);
 
         // Активность Main для авто-закрытия по неактивности: ОКОННЫЙ слушатель ловит ВСЕ
         // движения мыши, в т.ч. над виджетами/панелями/чартом, которые блокируют hitbox
@@ -166,9 +165,9 @@ impl Render for Shell {
             .relative() // для absolute-позиционирования демо-попапа поверх дока
             // Фокусируемый корень → хоткеи (`on_key_down`) ловятся даже при пустом Main.
             .track_focus(&self.focus)
-            // Активность для авто-закрытия Main по неактивности теперь пишет оконный
-            // `on_mouse_event::<MouseMoveEvent>` выше (gated `.on_mouse_move` на корне не
-            // ловил движение над блокирующими mouse виджетами).
+            // Main inactivity tracking uses the window-level `on_mouse_event::<MouseMoveEvent>`
+            // above because a gated root `.on_mouse_move` cannot see movement over mouse-blocking
+            // widgets.
             // НЕТ корневого .bg(): чарт-регион (центр дока) держим прозрачным «окном» под
             // own-pass (UnderScene). Хром (хедер/тулбар/панели/статус) красит свой фон сам.
             .font_family(design::mono())
@@ -183,6 +182,7 @@ impl Render for Shell {
                 ticker_sel,
                 self.core_settings_open,
                 core_settings_content,
+                chrome_width,
                 p,
                 cx,
             ))

@@ -1,6 +1,5 @@
-//! Карточки тюнера: матрица KPI «Факт vs варианты» и гистограмма (нижняя
-//! плашка режима «Фильтры») — распределение профита/убытка и сделок по
-//! квантильным вёдрам выбранного поля. Вынесено из tuner.rs (лимит размера).
+//! Tuner cards: the actual-versus-variant KPI matrix and the Filters-mode histogram of profit,
+//! loss, and trade counts across quantile buckets for the selected field.
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -51,6 +50,14 @@ impl AnalyticsView {
                 Some(true),
                 false,
             ),
+            // Order mirrors the strategy table on the left of this screen; kept by hand, since
+            // these rows carry comparison flags the table's descriptors have no notion of.
+            (
+                t!("analytics.kpi.avg_short").to_string(),
+                |s| s.avg,
+                Some(true),
+                false,
+            ),
             (
                 t!("analytics.kpi.winrate").to_string(),
                 |s| s.winrate(),
@@ -60,12 +67,6 @@ impl AnalyticsView {
             (
                 t!("analytics.col.pf").to_string(),
                 |s| s.pf,
-                Some(true),
-                false,
-            ),
-            (
-                t!("analytics.kpi.avg_short").to_string(),
-                |s| s.avg,
                 Some(true),
                 false,
             ),

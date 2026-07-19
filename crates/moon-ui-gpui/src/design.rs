@@ -16,6 +16,40 @@ pub const TABLE_HEAD_H: f32 = M.table_header_h;
 pub const TABLE_ROW_H: f32 = M.table_row_h;
 pub const HEADER_PAD_X: f32 = 12.0;
 
+/// Ceiling for a header selector label (core, manual strategy).
+///
+/// Those pills size to their content and both names are arbitrary user text, so without a ceiling
+/// one long name pushes the right-hand cluster — clock and window controls included — off the
+/// window. Matches the other selectors' ceiling; the full name stays in the open menu.
+/// This is the unscaled width passed through [`font_w`].
+pub const HEADER_LABEL_MAX_W: f32 = 260.0;
+
+/// Window widths at which the header ticker drops its per-window deltas, then goes entirely.
+///
+/// It collapses by priority rather than clipping: the readout is monospaced and its informative
+/// part is the tail, so a character-level clip eats the deltas and then the price digits, turning
+/// "61 333$" into "61 33" — a plausible WRONG price stated as fact. Usable only because
+/// [`HEADER_LABEL_MAX_W`] bounds the clusters that would otherwise grow without limit.
+const TICKER_DELTAS_MIN_W: f32 = 1200.0;
+const TICKER_MIN_W: f32 = 1000.0;
+
+/// Return whether the header ticker fits at `chrome_width`.
+///
+/// ONE predicate for the header that renders it and the popup layer that must not outlive its
+/// trigger. Scaled by the UI font: everything beside the ticker is text, so a larger font claims
+/// proportionally more of the same window and the ticker has to yield sooner.
+pub fn ticker_visible(cx: &App, chrome_width: f32) -> bool {
+    chrome_width >= font_w(cx, TICKER_MIN_W)
+}
+
+/// Return whether the ticker's 1h/24h deltas fit at `chrome_width`.
+///
+/// Uses the same font-scaled width policy as [`ticker_visible`], with a higher threshold so the
+/// price remains visible after the deltas collapse.
+pub fn ticker_deltas_visible(cx: &App, chrome_width: f32) -> bool {
+    chrome_width >= font_w(cx, TICKER_DELTAS_MIN_W)
+}
+
 /// Transparent macOS titlebars keep native traffic-light buttons over the client
 /// area. Keep terminal chrome content and drag hitboxes out of that strip.
 pub fn titlebar_leading_inset() -> f32 {
@@ -60,9 +94,21 @@ pub fn moon_alpha(hex: u32, alpha: f32) -> Hsla {
     rgba_from(hex, alpha)
 }
 
-/// Палитра/конфиг хранят цвета как `[u8; 3]`; GPUI-API берёт `0xRRGGBB`. Единый
-/// источник пары конвертеров: до рефактора `u32_to_rgb` дублировался в detects и
-/// connections, а обратный `rgb_to_u32` жил отдельной `fn hex` в корне бинарника.
+/// Return the theme-correct positive colour.
+///
+/// The light theme uses its darker text token for legibility; the dark theme uses its base green.
+pub fn positive_color(p: MoonPalette) -> u32 {
+    if p.is_light() { p.green_text } else { p.green }
+}
+
+/// Return the theme-correct danger colour.
+///
+/// The light theme uses its darker text token for legibility; the dark theme uses its base red.
+pub fn danger_color(p: MoonPalette) -> u32 {
+    if p.is_light() { p.red_text } else { p.red }
+}
+
+/// Convert a palette/config `[u8; 3]` colour to GPUI's `0xRRGGBB` representation.
 pub fn u32_to_rgb(c: u32) -> [u8; 3] {
     [
         ((c >> 16) & 0xff) as u8,
@@ -207,18 +253,12 @@ pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32, mon
         .sum()
 }
 
-/// Ширина `MoonPopupMenu` (size=Compact) под самый длинный пункт: у компонента ширина
-/// только фиксированная, поэтому подбираем её по контенту сами. Зеркалит метрики
-/// Compact-строки меню (dropdown.rs moonui): МОНО-шрифт (`MoonPopupMenu` рисует пункты
-/// `.mono(true)`), кегль 9.5/вес до 600 (selected), pad_x 6×2 + gap 5 + паддинг контейнера
-/// 4×2 (ui-масштаб) + колонка галки 12 + рамка 2 (не масштабируются). `min_w` — нижняя
-/// граница (прежний фикс-вид для коротких списков), `MENU_MAX_W` после масштабирования —
-/// верхняя; если верхняя оказалась меньше `min_w`, нижняя граница имеет приоритет.
-pub fn menu_fit_width<'a>(
-    cx: &App,
-    labels: impl IntoIterator<Item = &'a str>,
-    min_w: f32,
-) -> f32 {
+/// Size a compact `MoonPopupMenu` for its longest label.
+///
+/// The calculation mirrors MoonUI's monospaced compact-row metrics: 9.5px text at up to weight
+/// 600, scaled horizontal padding and gap, plus the unscaled check column and border. `min_w` is
+/// the lower bound; the scaled `MENU_MAX_W` is the upper bound unless it falls below `min_w`.
+pub fn menu_fit_width<'a>(cx: &App, labels: impl IntoIterator<Item = &'a str>, min_w: f32) -> f32 {
     let max_label_w = labels
         .into_iter()
         .map(|l| ui_text_width(cx, l, 9.5, 600.0, true))
@@ -292,10 +332,10 @@ const TRIGGER_PAD_X: f32 = 14.0;
 /// для `font_w`).
 const TRIGGER_MAX_W: f32 = 260.0;
 
-/// Пол ширины кнопки-триггера селектора ЯДЕР (`core_combo` + `screener::source_combo`) —
-/// прежний фикс-вид: ниже кнопка не ужимается, выше растёт под контент до `TRIGGER_MAX_W`.
-/// Общий для обоих вызовов `dropdown_content_widths`; у полей панели «Лог» свои полы.
-/// Немасштабированная база для `font_w`. Визуальная настройка.
+/// Unscaled minimum trigger width for the core selectors used by `dropdown_content_widths`.
+///
+/// The trigger grows with its content up to `TRIGGER_MAX_W`; Log panel fields provide their own
+/// lower bounds.
 pub const CORES_TRIGGER_MIN_W: f32 = 118.0;
 
 /// Грубый верхний предел ширины меню селектора: не даёт вырожденно-длинному имени ядра
@@ -305,13 +345,12 @@ pub const CORES_TRIGGER_MIN_W: f32 = 118.0;
 /// Реальные имена ядер сюда не дотягивают. Немасштабированная база для `font_w`.
 const MENU_MAX_W: f32 = 560.0;
 
-/// Ширины `MoonDropdown`, растущего под контент — ЕДИНЫЙ расчёт для комбобоксов ядер
-/// (`core_combo`, `screener::source_combo`) и полей источника/файла панели «Лог». Возвращает
-/// (метка триггера с кареткой, ширина триггера, ширина меню). `cur` — текущий выбор (без
-/// каретки), `menu_labels` — ВСЕ подписи пунктов меню, `min_trigger_w` / `min_menu_w` — нижние
-/// границы (прежний фикс-вид, у каждого вызова свои). Триггер: пол `min_trigger_w`, потолок
-/// `TRIGGER_MAX_W` (при переполнении подпись усекается с «…»); меню между `min_menu_w` и общим
-/// верхним пределом `MENU_MAX_W`.
+/// Calculate content-driven `MoonDropdown` trigger and menu widths.
+///
+/// Returns the trigger label with its caret, the trigger width, and the menu width. `cur` excludes
+/// the caret; `menu_labels` contains every menu label. The trigger is bounded by `min_trigger_w`
+/// and `TRIGGER_MAX_W`, truncating with an ellipsis at the ceiling; the menu is bounded by
+/// `min_menu_w` and `MENU_MAX_W`.
 pub fn dropdown_content_widths<'a>(
     cx: &App,
     cur: &str,
@@ -319,19 +358,49 @@ pub fn dropdown_content_widths<'a>(
     min_trigger_w: f32,
     min_menu_w: f32,
 ) -> (String, f32, f32) {
-    let (label, trigger_w) =
-        fit_dropdown_trigger(cx, cur, font_w(cx, min_trigger_w), font_w(cx, TRIGGER_MAX_W));
+    let (label, trigger_w) = fit_dropdown_trigger(
+        cx,
+        cur,
+        font_w(cx, min_trigger_w),
+        font_w(cx, TRIGGER_MAX_W),
+    );
     let menu_w = menu_fit_width(cx, menu_labels, font_w(cx, min_menu_w));
     (label, trigger_w, menu_w)
 }
 
-/// Метка (с кареткой ` ▾`) и ширина кнопки-триггера `MoonDropdown` под текущий выбор `cur`.
-/// Ширина растёт по контенту между `min_w` (прежний фикс-вид) и `max_w` (потолок). Метка
-/// одиночного сегмента `MoonButton` наследует МОНО-шрифт родителя-панели (Geist Mono) —
-/// меряем им же (не-моно оценка занижала бы ширину, и длинный текст всё равно резался бы).
-/// При превышении потолка метка усекается с «…»: префикс набирается по ФАКТИЧЕСКОЙ ширине
-/// символов (устойчиво к fallback-глифам вне Geist Mono — CJK/emoji равноширинными не бывают),
-/// каретка сохраняется, полное имя остаётся в раскрытом списке. `cur` передаётся БЕЗ каретки.
+/// Truncate `text` with an ellipsis so it fits `max_w`, measured by ACTUAL glyph widths.
+///
+/// For labels that carry their own chrome (a `MoonSelectorPill` draws its own caret), where
+/// [`fit_dropdown_trigger`]'s caret-and-width contract does not apply. Names are arbitrary
+/// Unicode and equal width is not guaranteed outside Geist Mono, so the prefix is accumulated
+/// character by character against the real budget. Returns `text` unchanged when it already fits;
+/// a budget narrower than the ellipsis itself returns the ellipsis.
+pub fn fit_label(cx: &App, text: &str, max_w: f32) -> String {
+    const ELLIPSIS: &str = "\u{2026}";
+    let tw = |s: &str| ui_text_width(cx, s, 10.5, 400.0, true);
+    if tw(text) <= max_w {
+        return text.to_string();
+    }
+    let budget = max_w - tw(ELLIPSIS);
+    let mut head = String::new();
+    let mut used = 0.0f32;
+    let mut buf = [0u8; 4];
+    for ch in text.chars() {
+        let w = tw(ch.encode_utf8(&mut buf));
+        if used + w > budget {
+            break;
+        }
+        used += w;
+        head.push(ch);
+    }
+    format!("{}{ELLIPSIS}", head.trim_end())
+}
+
+/// Build a `MoonDropdown` trigger label and width for the current selection.
+///
+/// The width grows between `min_w` and `max_w`. At the ceiling, the monospaced label is truncated
+/// by measured glyph width so fallback Unicode glyphs remain within the budget; the ellipsis and
+/// caret remain visible. `cur` excludes the caret.
 fn fit_dropdown_trigger(cx: &App, cur: &str, min_w: f32, max_w: f32) -> (String, f32) {
     const CARET: &str = " \u{25be}"; // пробел + ▾
     let tw = |s: &str| ui_text_width(cx, s, 10.5, 400.0, true);
@@ -419,9 +488,9 @@ pub fn r_container(cx: &App) -> Pixels {
     ui_px(cx, R_CONTAINER_BASE)
 }
 
-/// Брендовый тёмно-синий словесного знака «Moonbot» (брендбук) — для СВЕТЛОЙ темы.
-/// Раньше буквы красились в `p.text` (near-black на светлом фоне) → логотип выглядел
-/// чёрным, а не фирменным navy. На тёмной теме navy не читался бы — там оставляем `p.text`.
+/// Brand-book navy for the Moonbot wordmark in the light theme.
+///
+/// Navy lacks contrast in the dark theme, where the wordmark uses `p.text` instead.
 const LOGO_WORDMARK_NAVY: u32 = 0x0C2C4A;
 
 pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
@@ -493,8 +562,28 @@ pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
     .h(px(frame_w * (LOGO_GLOW_VIEW_H / LOGO_GLOW_VIEW_W)))
 }
 
-pub fn vline(height: f32, p: MoonPalette) -> impl IntoElement {
-    div().w(px(1.0)).h(px(height)).bg(rgb(p.border))
+/// Vertical 1px group separator.
+///
+/// The height scales with the UI font: MoonUI draws its own separators at `tokens.ui(..)` (the
+/// brand cluster in `MoonWindowFrame` is one), and a raw-pixel height stands visibly shorter than
+/// those at any non-default font scale — including the stock config, where `ui_font_delta` is +2.
+/// The 1px width stays raw, matching MoonUI, since a hairline must not thicken with the font.
+pub fn vline(cx: &App, height: f32, p: MoonPalette) -> impl IntoElement {
+    // flex_none: a 1px rule inside a shrinking row would otherwise be the first thing squeezed
+    // to nothing, silently dropping the group boundary it draws.
+    div()
+        .flex_none()
+        .w(px(1.0))
+        .h(ui_px(cx, height))
+        .bg(rgb(p.border))
+}
+
+/// Group separator for the horizontal chrome strips — the toolbar and the window header.
+///
+/// One definition of the chrome-height rule, so those two strips cannot drift apart, and so the
+/// height matches the separator MoonUI's own brand cluster draws.
+pub fn chrome_divider(cx: &App, p: MoonPalette) -> impl IntoElement {
+    vline(cx, 16.0, p)
 }
 
 pub fn status_dot(color: u32, cx: &App) -> impl IntoElement {

@@ -53,7 +53,17 @@ pub(super) fn card(
     is_light: bool,
     cx: &App,
 ) -> Div {
-    card_sized(it, secs, cfg, cfg.size_clamped(), theme, badges, p, is_light, cx)
+    card_sized(
+        it,
+        secs,
+        cfg,
+        cfg.size_clamped(),
+        theme,
+        badges,
+        p,
+        is_light,
+        cx,
+    )
 }
 
 /// Карточка КОНКРЕТНОГО размера — для ленты (активный) и превью попапа (размер вкладки).
@@ -115,13 +125,7 @@ fn base(scfg: &DetectSizeCfg, color: u32, p: MoonPalette, cx: &App) -> Div {
 /// полоска сама изгибается по углу карточки во всю высоту (отдельный брусок торчал бы
 /// углом: клип overflow_hidden прямоугольный, а радиус узкого div клампится к половине
 /// его ширины). Слои с inset 1px — под рамкой карточки.
-pub(super) fn rail_layers(
-    color: u32,
-    rail_w: f32,
-    grad_w: f32,
-    card_w: f32,
-    cx: &App,
-) -> Vec<Div> {
+pub(super) fn rail_layers(color: u32, rail_w: f32, grad_w: f32, card_w: f32, cx: &App) -> Vec<Div> {
     let mut out = Vec::new();
     let inner_w = (design::ui_value(cx, card_w) - 2.0).max(1.0);
     let r = design::ui_px(cx, 5.0);
@@ -164,7 +168,7 @@ fn pad_l(scfg: &DetectSizeCfg, base: f32, cx: &App) -> Pixels {
     design::ui_px(cx, base + f32::from(scfg.rail_w_clamped()))
 }
 
-// --- Чипы полей (переиспользуют прежние стили: MoonText/MoonBadge/дельты) ---
+// --- Field chips use the shared MoonText, MoonBadge, and delta styles. ---
 
 /// Бейдж типа детекта (код long/short + цвет темы + опц. обводка). None — тип неактивен.
 fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<MoonBadge> {
@@ -225,18 +229,18 @@ fn soft(text: String, p: MoonPalette) -> MoonText {
 }
 
 /// Цвета роста/падения (как дельты в шапке терминала).
-fn pos_col(p: MoonPalette) -> u32 {
-    if p.is_light() { p.green_text } else { p.green }
-}
-fn neg_col(p: MoonPalette) -> u32 {
-    if p.is_light() { p.red_text } else { p.red }
-}
+use design::{danger_color as neg_col, positive_color as pos_col};
 
 /// Дельта («+1.23%») жирным моно; `over` — с подложкой (читаемость поверх графика).
 /// `decimals` — знаков после запятой (настройка «Точность» попапа, одна на все размеры).
 fn delta_chip(val: f32, over: bool, decimals: usize, p: MoonPalette, cx: &App) -> Div {
-    let col = if val < 0.0 { neg_col(p) } else { pos_col(p) };
-    let text = MoonText::new(format!("{val:+.prec$}%", prec = decimals))
+    // Same percentage contract as the header deltas: classify by the ROUNDED value, so a small
+    // negative cannot print a minus while being coloured positive.
+    let (label, col) = match moon_core::util::fmt::signed_pct(f64::from(val), decimals) {
+        Some((text, sign)) => (text, sign.pick(pos_col(p), neg_col(p), p.text_soft)),
+        None => ("—".to_string(), p.text_muted),
+    };
+    let text = MoonText::new(label)
         .color(col)
         .weight(700.0)
         .mono(true)
@@ -269,7 +273,9 @@ fn chip(
         DetectField::None => return None,
         DetectField::Coin => coin_text(it, p, coin_px).render().into_any_element(),
         DetectField::Time => muted(format!("{secs}s"), p).render().into_any_element(),
-        DetectField::Badge => type_badge(it, badges, is_light)?.render().into_any_element(),
+        DetectField::Badge => type_badge(it, badges, is_light)?
+            .render()
+            .into_any_element(),
         DetectField::Core => core_badge(it, design::rgb_to_u32(it.color))
             .render()
             .into_any_element(),
@@ -279,13 +285,17 @@ fn chip(
             if it.exchange_name.is_empty() {
                 return None;
             }
-            soft(it.exchange_name.clone(), p).render().into_any_element()
+            soft(it.exchange_name.clone(), p)
+                .render()
+                .into_any_element()
         }
         DetectField::ExchangeKind => {
             if it.exchange_kind.is_empty() {
                 return None;
             }
-            soft(it.exchange_kind.clone(), p).render().into_any_element()
+            soft(it.exchange_kind.clone(), p)
+                .render()
+                .into_any_element()
         }
     };
     // Не-дельтовые чипы поверх графика тоже получают подложку (как в макете).
@@ -317,7 +327,11 @@ fn cluster<'a>(
     cx: &App,
 ) -> Option<Div> {
     let chips: Vec<AnyElement> = slots
-        .filter_map(|s| chip(s.field, over, it, secs, coin_px, decimals, badges, p, is_light, cx))
+        .filter_map(|s| {
+            chip(
+                s.field, over, it, secs, coin_px, decimals, badges, p, is_light, cx,
+            )
+        })
         .collect();
     if chips.is_empty() {
         return None;
@@ -346,9 +360,10 @@ fn chart_el(
     }
 }
 
-/// Векторные ПОЛЫЕ свечи (как прежний битмап-бейк, но квадами по реальной зоне):
-/// фитиль high-low двумя сегментами над/под телом; тело — контур при росте/додже,
-/// заливка при падении. Масштаб по high-low, поля 1px.
+/// Draw hollow vector candles as quads in the element's actual bounds.
+///
+/// The high-low wick has segments above and below the body. Rising and doji bodies are outlined;
+/// falling bodies are filled. Scaling uses the high-low range with a 1px inset.
 fn candle_canvas(
     bars: &[(f32, f32, f32, f32)],
     theme: &moon_core::config::ChartTheme,
@@ -431,9 +446,10 @@ fn candle_canvas(
     )
 }
 
-/// Векторный спарклайн: путь строится в paint по РЕАЛЬНЫМ границам элемента (никакого
-/// растяжения битмапа), stroke фикс. толщины. Сглаживание/поля — как у прежнего бейка
-/// (бины ~1 точка на 3px, hi/lo по сглаженной серии, поля 18%).
+/// Draw a vector sparkline against the element's actual bounds with a fixed-width stroke.
+///
+/// Binning keeps roughly one point per 3px; the high/low range uses the smoothed series with 18%
+/// vertical padding.
 fn line_canvas(line: &[f32], theme: &moon_core::config::ChartTheme) -> Option<AnyElement> {
     if line.len() < 2 {
         return None;

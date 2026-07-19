@@ -1,22 +1,15 @@
-//! Полосы пресетов размера ордера (F1-F6) и fixed-sell (S1-S6) с overlay-взаимодействием
-//! (клик/дабл/колесо) и общий каркас `strip_with_overlay`. Вынесено из `controls.rs` точь-в-точь.
+//! Order-size (F1-F6) and fixed-sell (S1-S6) preset strips with click, double-click, and wheel
+//! interaction, plus their shared `strip_with_overlay` frame.
 
 use gpui::*;
 
-use moon_ui::{
-    MoonAccent, MoonInput, MoonInputState, MoonPalette, MoonSegmentItem, MoonSegmentedControl,
-};
+use moon_ui::{MoonAccent, MoonInput, MoonInputState, MoonSegmentItem, MoonSegmentedControl};
 
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
 
 use super::fmt::{fmt_adaptive, fmt_sell_pct, scroll_up, wheel_step};
-use crate::{Backend, design};
-
-/// Вертикальный разделитель групп (стендовый `.divider`): тонкая линия высотой 16px.
-pub(super) fn divider(p: MoonPalette) -> impl IntoElement {
-    design::vline(16.0, p)
-}
+use crate::Backend;
 
 /// Ширины кнопок размера — единая 62 на все слоты.
 const SIZE_W: [f32; 6] = [62.0, 62.0, 62.0, 62.0, 62.0, 62.0];
