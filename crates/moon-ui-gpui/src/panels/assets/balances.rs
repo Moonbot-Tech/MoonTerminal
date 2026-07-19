@@ -233,7 +233,7 @@ fn facts(t: &ScopeTotals) -> Vec<String> {
     .collect()
 }
 
-/// Full summary text for the tooltip: the amounts, every trailing fact, and what the total is.
+/// Build tooltip text with free first, total after the slash, then every trailing fact.
 ///
 /// The recovery path for a narrow dock. The row clips its least important content from the right,
 /// so on a cramped panel the reason a total is partial can sit off-screen while the total itself
@@ -243,12 +243,13 @@ fn facts(t: &ScopeTotals) -> Vec<String> {
 /// Takes the already-rendered `tail` rather than recomputing it, so "the tooltip repeats the row
 /// verbatim" holds by construction instead of by both sides calling the same function the same way.
 fn summary_tooltip(t: &ScopeTotals, tail: &[String]) -> String {
+    // Same order as the rendered footer and the shell header: free, then total.
     let mut out = format!(
         "{} {} / {} {}",
-        t!("assets.balances_total"),
-        scope_amount_text(t, t.total),
         t!("assets.balances_free"),
         scope_amount_text(t, t.free),
+        t!("assets.balances_total"),
+        scope_amount_text(t, t.total),
     );
     for fact in tail {
         out.push(' ');
@@ -259,7 +260,7 @@ fn summary_tooltip(t: &ScopeTotals, tail: &[String]) -> String {
     out
 }
 
-/// The account side of the panel footer: equity across every in-scope core, one line.
+/// Render the account side of the footer as free then total across every in-scope core.
 ///
 /// Deliberately an aggregate only: this terminal is routinely driven with 60+ cores and up to
 /// ~200, so a chip per core is unreadable at real scale. Per-core figures live in the "Wallets"
@@ -289,30 +290,33 @@ pub(super) fn summary_group(aggs: &[CoreAgg], sel: &HashSet<CoreId>, cx: &App) -
         .min_w_0()
         .gap(design::ui_px(cx, 5.0))
         .tooltip(move |_window, cx| {
-            cx.new(|_| moon_ui::MoonTooltipView::new(tip.clone())).into()
+            cx.new(|_| moon_ui::MoonTooltipView::new(tip.clone()))
+                .into()
         })
+        // Free first, total after the slash — the same reading order as the shell header's
+        // "Balance: free / total", so the two surfaces state one account the same way round.
         // `flex_none` keeps the essential amount from shrinking before the trailing detail.
         .child(
             h_flex()
                 .flex_none()
                 .items_center()
                 .gap(design::ui_px(cx, 5.0))
-                .child(caption(t!("assets.balances_total").to_string(), p, cx).flex_none())
-                .child(figure(totals.total)),
+                .child(caption(t!("assets.balances_free").to_string(), p, cx).flex_none())
+                .child(figure(totals.free)),
         )
         // Yielding tail — ONE clipping box, not two shrinkable siblings. Flex shrink is
-        // distributed proportionally to base size, so siblings would erode the free amount and
-        // the facts simultaneously; with every child `flex_none` inside a single `min_w_0` +
+        // distributed proportionally to base size, so siblings would erode the total and the
+        // facts simultaneously; with every child `flex_none` inside a single `min_w_0` +
         // `overflow_hidden` box, LTR clipping IS the priority order — the rightmost facts go
-        // first, the free amount last. No measurement, no width breakpoints.
+        // first, the total last. No measurement, no width breakpoints.
         .child(
             h_flex()
                 .min_w_0()
                 .overflow_hidden()
                 .items_center()
                 .gap(design::ui_px(cx, 5.0))
-                .child(caption(format!("/ {}", t!("assets.balances_free")), p, cx).flex_none())
-                .child(figure(totals.free))
+                .child(caption(format!("/ {}", t!("assets.balances_total")), p, cx).flex_none())
+                .child(figure(totals.total))
                 .children(tail.into_iter().map(|f| caption(f, p, cx).flex_none())),
         )
 }
@@ -454,7 +458,10 @@ mod tests {
         assert_eq!((t.free, t.total), (3.0, 4.0));
         assert_eq!(t.counted, 1, "an unusable figure is not a contribution");
         assert_eq!(t.unpriced, 1);
-        assert!(!is_complete(&t), "a dropped contribution is not a complete total");
+        assert!(
+            !is_complete(&t),
+            "a dropped contribution is not a complete total"
+        );
         // The scope still covers both cores, so the caption cannot understate what it describes.
         assert_eq!(t.cores(), 2);
         assert_eq!(money_or_dash(f64::NAN), DASH);
@@ -473,7 +480,10 @@ mod tests {
             BalanceState::Awaiting,
             BalanceState::Unpriced,
         ] {
-            let aggs = vec![agg(1, 1.0, 2.0, BalanceState::Live), agg(2, 0.0, 0.0, degraded)];
+            let aggs = vec![
+                agg(1, 1.0, 2.0, BalanceState::Live),
+                agg(2, 0.0, 0.0, degraded),
+            ];
             assert!(
                 !is_complete(&scope_totals(&aggs, &HashSet::new())),
                 "{degraded:?} must not read as a complete total"
@@ -543,6 +553,9 @@ mod tests {
         assert_eq!(scope_amount_text(&t, t.total), DASH);
         let tip = summary_tooltip(&t, &facts(&t));
         assert!(tip.contains(DASH));
-        assert!(!tip.contains("0,0$"), "an unreported scope must not read as an empty one");
+        assert!(
+            !tip.contains("0.0$"),
+            "an unreported scope must not read as an empty one"
+        );
     }
 }
