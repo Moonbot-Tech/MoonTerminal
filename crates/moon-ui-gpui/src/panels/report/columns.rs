@@ -260,8 +260,10 @@ fn is_numeric_report_column(col: &str) -> bool {
         || col.ends_with("ratio")
 }
 
-/// Текст + цвет ячейки по имени колонки и значению (порт `cell`). Только для показа
-/// в таблице — экспорт (export.rs) пишет СЫРЫЕ значения БД, без этого форматирования.
+/// Formats a database value and optional text color for display in a report cell.
+///
+/// Generic text values are trimmed and folded to one line. Report exports bypass this
+/// presentation formatting and use raw database values.
 fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>) {
     match col {
         "buydate" | "closedate" | "sellsetdate" | "last_update_at" => {
@@ -287,7 +289,7 @@ fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>) {
             // totals row owns the marker for the aggregate.
             (n.map(|x| format!("{x:+.2}")).unwrap_or_default(), color)
         }
-        _ => (value_to_string(v), None),
+        _ => (cell_display_text(v), None),
     }
 }
 
@@ -305,6 +307,10 @@ fn as_f64(v: &Value) -> Option<f64> {
         _ => None,
     }
 }
+
+/// Converts a database value to a string without display-only text normalization.
+///
+/// Text is returned verbatim because coin and core callers use it as an identity.
 fn value_to_string(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
@@ -312,6 +318,17 @@ fn value_to_string(v: &Value) -> String {
         Value::Real(r) => moon_core::util::fmt::compact(*r, 8),
         Value::Text(t) => t.clone(),
         Value::Blob(_) => "<blob>".into(),
+    }
+}
+
+/// Converts a database value to display text for a generic report cell.
+///
+/// Text values are trimmed and folded because report rows are fixed-height single-line
+/// surfaces. Non-text values retain [`value_to_string`] formatting.
+fn cell_display_text(v: &Value) -> String {
+    match v {
+        Value::Text(t) => crate::display_text::flatten_lines(t.trim()),
+        other => value_to_string(other),
     }
 }
 
@@ -341,5 +358,36 @@ pub(super) fn width_for(col: &str) -> f32 {
         "profitbtc" | "gainedbtc" | "spentbtc" => 96.0,
         "lev" | "isshort" | "emulator" => 52.0,
         _ => 82.0,
+    }
+}
+
+#[cfg(test)]
+/// Tests for raw identity values and generic report-cell display text.
+mod tests {
+    // Explicit imports on purpose: the parent re-exports `gpui::*`, whose `test` would
+    // shadow the built-in attribute and make `#[test]` expand recursively.
+    use super::{cell_display_text, value_to_string};
+    use rusqlite::types::Value;
+
+    /// A generic text cell uses the shared flattener and trims its edges.
+    #[test]
+    fn drawn_cells_fold_breaks_and_trim_edges() {
+        let raw = Value::Text(" a\r\nb ".to_string());
+        assert_eq!(cell_display_text(&raw), "a ¶ b");
+    }
+
+    /// Text used as an identity remains verbatim.
+    #[test]
+    fn identity_values_are_not_reshaped() {
+        let raw = Value::Text(" SPKUSDT ".to_string());
+        assert_eq!(value_to_string(&raw), " SPKUSDT ");
+    }
+
+    /// Non-text values use the raw conversion formatting.
+    #[test]
+    fn non_text_values_are_untouched() {
+        assert_eq!(cell_display_text(&Value::Null), "");
+        assert_eq!(cell_display_text(&Value::Integer(42)), "42");
+        assert_eq!(cell_display_text(&Value::Real(1.5)), "1.5");
     }
 }

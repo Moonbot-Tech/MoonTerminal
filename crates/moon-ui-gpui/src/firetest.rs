@@ -885,6 +885,11 @@ impl Runtime {
         })
     }
 
+    /// Advances the opt-in order-cancel latency scenario.
+    ///
+    /// Returns `Ok(true)` when the scenario is disabled or complete, `Ok(false)` while it
+    /// is waiting for state, and an error when setup, cancellation, rendering, or latency
+    /// validation fails.
     fn tick_order_cancel_lag(&mut self, backend: &mut Backend) -> Result<bool, String> {
         if !self.config.order_cancel_lag {
             firetest_info(
@@ -1036,7 +1041,7 @@ impl Runtime {
                     opt_i64(server_to_recv_ms),
                     opt_f64(log_recv_to_chart_ms),
                     server_log
-                        .map(|line| line.msg.replace('\n', " ⏎ "))
+                        .map(|line| crate::display_text::flatten_lines(&line.msg))
                         .unwrap_or_else(|| "missing".to_string())
                 ));
                 if display_lag_ms > self.config.order_cancel_max_display_lag_ms {
