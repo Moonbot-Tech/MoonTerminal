@@ -34,6 +34,7 @@ mod design;
 mod detached;
 mod detect_sound;
 mod diag;
+mod display_text;
 mod dock_persist;
 mod figures_backend;
 mod firetest;
