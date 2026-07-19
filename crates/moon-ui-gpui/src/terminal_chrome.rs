@@ -316,8 +316,6 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
 /// прежний absolute-оверлей с захардкоженными координатами уезжал при изменении состава
 /// шапки). Open контролирует Shell (`set_core_settings_open`: сидирует поля при открытии);
 /// закрытие по клику вне — сам popover. Кнопка icon-only → квадрат с полями вокруг иконки.
-/// Иконка чуть левее центра — баг MoonButton (пустой flex-child при 0 сегментов ломает
-/// icon-only режим), записан в FORK_BUGS; чинится в форке, своё не катаем.
 fn core_gear_button(
     shell: Entity<Shell>,
     open: bool,

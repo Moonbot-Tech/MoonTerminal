@@ -299,7 +299,6 @@ pub fn toolbar(
 /// Live (Soft/ToolbarCompact). `labeled_width = None` — только иконка (имя тултипом),
 /// `Some(w)` — иконка + надпись в фикс-ширине `w`. `open` — `strategies::open`/
 /// `screener::open`/`settings::open` (одинаковая сигнатура: дедуп/фокус внутри).
-/// Иконка icon-only чуть левее центра — баг MoonButton (см. FORK_BUGS), чинится в форке.
 #[allow(clippy::too_many_arguments)]
 fn open_window_button(
     id: &'static str,
