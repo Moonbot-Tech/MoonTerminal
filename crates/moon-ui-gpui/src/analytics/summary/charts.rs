@@ -5,7 +5,7 @@
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 
-use super::AnalyticsView;
+use super::super::AnalyticsView;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{CoreSeries, DayPoint};
@@ -222,7 +222,7 @@ pub(super) fn daily_bars(
                     .bottom(px(label_bottom))
                     .text_size(px(8.0))
                     .whitespace_nowrap()
-                    .text_color(moon(super::summary::sign_color(p, d.profit)))
+                    .text_color(moon(super::sign_color(p, d.profit)))
                     .child(
                         div()
                             .w_full()
@@ -436,8 +436,8 @@ fn core_bucket_popup(
                         .child(div().text_color(moon(p.text_muted)).child("Σ"))
                         .child(
                             div()
-                                .text_color(moon(super::summary::sign_color(p, total)))
-                                .child(super::summary::fmt_signed(total)),
+                                .text_color(moon(super::sign_color(p, total)))
+                                .child(super::fmt_signed(total)),
                         ),
                 ),
         );
@@ -468,8 +468,8 @@ fn core_bucket_popup(
                 .child(
                     div()
                         .flex_none()
-                        .text_color(moon(super::summary::sign_color(p, v)))
-                        .child(super::summary::fmt_signed(v)),
+                        .text_color(moon(super::sign_color(p, v)))
+                        .child(super::fmt_signed(v)),
                 ),
         );
     }
@@ -604,8 +604,8 @@ pub(super) fn core_totals_bars(
                         .whitespace_nowrap()
                         .text_size(crate::design::t_body(cx))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(moon(super::summary::sign_color(p, v)))
-                        .child(super::summary::fmt_signed(v)),
+                        .text_color(moon(super::sign_color(p, v)))
+                        .child(super::fmt_signed(v)),
                 ),
         );
     }
@@ -626,8 +626,8 @@ fn axis_row(p: MoonPalette, left: String, right: String, total: Option<f32>) -> 
     if let Some(t) = total {
         row = row.child(
             div()
-                .text_color(moon(super::summary::sign_color(p, t as f64)))
-                .child(super::summary::fmt_signed(t as f64)),
+                .text_color(moon(super::sign_color(p, t as f64)))
+                .child(super::fmt_signed(t as f64)),
         );
     }
     row.child(muted_caption(p, right)).into_any_element()

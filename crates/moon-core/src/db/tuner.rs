@@ -284,10 +284,35 @@ pub struct Bound {
     pub to: Option<f64>,
 }
 
-/// Вариант = набор диапазонов (пустой = «Факт», без доп. условий).
+/// WorkingTime: один диапазон времени стратегии. `Day` — окно времени СУТОК
+/// (минуты 0..1439, поле пишется как "чч:мм-чч:мм"); `Hour` — окно минут В КАЖДОМ
+/// ЧАСЕ (0..59, поле пишется как "N-M"). Оба — единый непрерывный диапазон
+/// (`от > до` = через край: конец суток/часа).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TimeWindow {
+    Day(u16, u16),
+    Hour(u8, u8),
+}
+
+/// Время ОТКРЫТИЯ сделки для расписания: WorkingTime/WorkingWeekTime гейтят ВХОД в
+/// сделку, поэтому день/минуту берём из `buydate` (когда сделка открылась), а не из
+/// `closedate` (закрытие). Fallback на `closedate`, если открытие не записано (0/NULL).
+const OPEN_TS: &str = "COALESCE(NULLIF(o.buydate, 0), o.closedate)";
+
+/// Вариант «что-если» = дополнительные условия к базовой выборке. Пустой = «Факт».
+/// Ось «По фильтру» задаёт `bounds` (диапазоны полей); ось «По времени» — два
+/// НЕЗАВИСИМЫХ поля стратегии, комбинируемых по И: `week_span` (WorkingWeekTime —
+/// непрерывный спан по МИНУТЕ НЕДЕЛИ) и `tod` (WorkingTime — одно окно времени).
+/// Все условия складываются в один WHERE — структура универсальна.
 #[derive(Clone, Debug, Default)]
 pub struct Variant {
     pub bounds: Vec<Bound>,
+    /// WorkingWeekTime: непрерывный спан по МИНУТЕ НЕДЕЛИ `(от, до)`, минута недели
+    /// = `день*1440 + минута_суток` (0..10079, день 0=Пн..6=Вс); включительно,
+    /// `от > до` = через воскресенье→понедельник. `None` — без ограничения.
+    pub week_span: Option<(u16, u16)>,
+    /// WorkingTime: одно окно времени. `None` — без ограничения по времени.
+    pub tod: Option<TimeWindow>,
 }
 
 impl Variant {
@@ -295,11 +320,13 @@ impl Variant {
         self.bounds
             .iter()
             .all(|b| b.from.is_none() && b.to.is_none())
+            && self.week_span.is_none()
+            && self.tod.is_none()
     }
 
     /// Хвост WHERE варианта. Поля гейтятся вайтлистом `FIELDS`; NULL считается
     /// нулём (как в остальных фильтрах отчётов); числа — литералами (f64 из
-    /// формы, инъекции невозможны).
+    /// формы, инъекции невозможны). Часы/дни/минуты — целые (тоже без инъекций).
     fn where_sql(&self) -> String {
         let mut w = String::new();
         for b in &self.bounds {
@@ -313,8 +340,79 @@ impl Variant {
                 w.push_str(&format!(" AND COALESCE(o.\"{}\",0) <= {v}", b.field));
             }
         }
+        if let Some((f, t)) = self.week_span {
+            // Минута недели по времени ОТКРЫТИЯ = день*1440 + минута_суток (0..10079,
+            // день 0=Пн..6=Вс); непрерывный спан, `от > до` = через воскресенье→пн.
+            let wk = format!(
+                "((((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7) * 1440 + ({OPEN_TS} % 86400) / 60)"
+            );
+            let (f, t) = (f.min(10079), t.min(10079));
+            if f <= t {
+                w.push_str(&format!(" AND ({wk} BETWEEN {f} AND {t})"));
+            } else {
+                w.push_str(&format!(" AND ({wk} <= {t} OR {wk} >= {f})"));
+            }
+        }
+        if let Some(tw) = self.tod {
+            w.push_str(&time_window_where(tw));
+        }
         w
     }
+}
+
+/// SQL-условие поля `WorkingTime`. `Day` — минута СУТОК `(closedate%86400)/60` в
+/// окне 0..1439; `Hour` — минута В ЧАСЕ `((closedate%86400)/60)%60` в окне 0..59.
+/// Окно `от <= до` → `BETWEEN`; `от > до` — через край (`<= до` ИЛИ `>= от`, иначе
+/// перевёрнутое окно молча давало бы 0 сделок). Литералы целые — инъекции невозможны.
+fn time_window_where(tw: TimeWindow) -> String {
+    // Минута считается от ВРЕМЕНИ ОТКРЫТИЯ (расписание гейтит вход).
+    let (expr, f, t, hi): (String, u16, u16, u16) = match tw {
+        TimeWindow::Day(f, t) => (format!("(({OPEN_TS} % 86400) / 60)"), f, t, 1439),
+        TimeWindow::Hour(f, t) => (
+            format!("((({OPEN_TS} % 86400) / 60) % 60)"),
+            f as u16,
+            t as u16,
+            59,
+        ),
+    };
+    let (f, t) = (f.min(hi), t.min(hi));
+    if f <= t {
+        format!(" AND ({expr} BETWEEN {f} AND {t})")
+    } else {
+        format!(" AND ({expr} <= {t} OR {expr} >= {f})")
+    }
+}
+
+/// Спан по минуте недели `(от, до)` (0..10079) → строка поля `WorkingWeekTime`
+/// `день.чч:мм-день.чч:мм` (день 1-based 1=Пн..7=Вс). Край на границе суток пишем
+/// коротко: начало дня (мин 0) → просто `день`, конец дня (мин 1439) → просто
+/// `день` — т.е. `1-5` = Пн 00:00 → Пт 23:59, `1.23:44-6.22:22` — с временем.
+/// Полную неделю вызывающий не пишет (== без ограничения).
+pub fn format_week_span((f, t): (u16, u16)) -> String {
+    let ends = |m: u16, at_end: bool| {
+        let (day, tod) = ((m / 1440) % 7 + 1, m % 1440);
+        // Начало дня (0) для «от» и конец дня (1439) для «до» опускаем время.
+        if (!at_end && tod == 0) || (at_end && tod == 1439) {
+            day.to_string()
+        } else {
+            format!("{day}.{}", fmt_min(tod))
+        }
+    };
+    format!("{}-{}", ends(f, false), ends(t, true))
+}
+
+/// `TimeWindow` → строка поля `WorkingTime`. `Day` → "чч:мм-чч:мм"; `Hour` → "N-M"
+/// (минуты в каждом часе — MoonBot различает по отсутствию ":").
+pub fn format_working_time(tw: TimeWindow) -> String {
+    match tw {
+        TimeWindow::Day(f, t) => format!("{}-{}", fmt_min(f), fmt_min(t)),
+        TimeWindow::Hour(f, t) => format!("{f}-{t}"),
+    }
+}
+
+/// Минуты дня → "чч:мм".
+fn fmt_min(m: u16) -> String {
+    format!("{:02}:{:02}", m / 60, m % 60)
 }
 
 /// KPI одной колонки матрицы «Факт vs v1..vN».
@@ -844,6 +942,222 @@ pub fn suggest_field(
     Ok(best_range(&mut vals, min_n.max(1) as usize, edges, round))
 }
 
+/// Результат автоподбора оси «По времени»: два независимых поля стратегии.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TimeSuggest {
+    /// WorkingWeekTime: лучший непрерывный спан по минуте недели (0..10079). `None` — без улучшения.
+    pub week_span: Option<(u16, u16)>,
+    /// WorkingTime: лучшее окно времени (режим выбран сам). `None` — без улучшения.
+    pub tod: Option<TimeWindow>,
+}
+
+/// Автоподбор двух полей расписания по профиту: непрерывный спан дней
+/// (`WorkingWeekTime`) и одно окно времени (`WorkingTime`). Режим WorkingTime
+/// выбирается САМ: пробуем окно времени суток И окно минут-в-часе, берём с бо́льшим
+/// профитом внутри окна (база сравнения одна — вся выборка, поэтому profit сравним).
+/// Поля независимы; каждое `None`, если лучший вариант не улучшает выборку без
+/// ограничения. День недели UTC = `(((closedate/86400)+4)%7+6)%7` (0=Пн..6=Вс),
+/// минута = `(cd%86400)/60`.
+pub fn suggest_time(q: &Query, min_n: i64, edges: usize, round: bool) -> ReadResult<TimeSuggest> {
+    const CTX: &str = "tuner: suggest_time";
+    let conn = super::open_reader()?;
+    let mut q = q.clone();
+    if q.from < 0 {
+        q.from = 1;
+    }
+    let Some(src) = unified_from(&conn, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
+    let sql = format!(
+        "SELECT ((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7 AS wd,
+                ({OPEN_TS} % 86400) / 60 AS mn,
+                COALESCE(o.profitbtc, 0)
+         FROM {src}"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, f64>(2)?,
+            ))
+        })
+        .map_err(|e| read_fail(CTX, e))?;
+    let mut trades: Vec<(i64, i64, f64)> = Vec::new();
+    for row in rows {
+        trades.push(row.map_err(|e| read_fail(CTX, e))?);
+    }
+    Ok(time_suggest_from_rows(&trades, min_n, edges, round))
+}
+
+/// Ядро `suggest_time` над готовыми строками `(день_недели, минута, профит)` —
+/// точка входа для юнит-тестов (без БД). Оси недели/времени подбираются НЕЗАВИСИМО
+/// (каждая — лучшее окно по своей проекции), НО применяются по И. Их пересечение
+/// может дать профит МЕНЬШЕ базового (обе выкидывают разные плюсовые сделки), поэтому
+/// оцениваем ВСЕ комбинации на реальных строках и берём максимум — база тоже
+/// кандидат, так что результат НИКОГДА не хуже «Факта».
+fn time_suggest_from_rows(
+    rows: &[(i64, i64, f64)],
+    min_n: i64,
+    edges: usize,
+    round: bool,
+) -> TimeSuggest {
+    let min_n = min_n.max(1) as usize;
+    // Кандидаты по каждой оси (лучшее окно проекции; None = без ограничения).
+    let week = best_week_span(rows, min_n, edges, round);
+    let mut day_vals: Vec<(f64, f64)> = rows.iter().map(|&(_w, mn, p)| (mn as f64, p)).collect();
+    let mut hour_vals: Vec<(f64, f64)> = rows
+        .iter()
+        .map(|&(_w, mn, p)| ((mn % 60) as f64, p))
+        .collect();
+    let day_w = best_range(&mut day_vals, min_n, edges, round).map(|s| {
+        TimeWindow::Day(
+            s.from.unwrap_or(0.0).clamp(0.0, 1439.0) as u16,
+            s.to.unwrap_or(1439.0).clamp(0.0, 1439.0) as u16,
+        )
+    });
+    let hour_w = best_range(&mut hour_vals, min_n, edges, round).map(|s| {
+        TimeWindow::Hour(
+            s.from.unwrap_or(0.0).clamp(0.0, 59.0) as u8,
+            s.to.unwrap_or(59.0).clamp(0.0, 59.0) as u8,
+        )
+    });
+    // Профит сделки в маске (границы включительно; `от > до` = через край).
+    let span_ok = |v: i64, f: i64, t: i64| {
+        if f <= t {
+            f <= v && v <= t
+        } else {
+            v <= t || v >= f
+        }
+    };
+    let in_tod = |mn: i64, tw: TimeWindow| match tw {
+        TimeWindow::Day(f, t) => span_ok(mn, f as i64, t as i64),
+        TimeWindow::Hour(f, t) => span_ok(mn % 60, f as i64, t as i64),
+    };
+    let prof = |wk: Option<(u16, u16)>, td: Option<TimeWindow>| -> f64 {
+        rows.iter()
+            .filter(|&&(wd, mn, _)| {
+                wk.map_or(true, |(f, t)| span_ok(wd * 1440 + mn, f as i64, t as i64))
+                    && td.map_or(true, |tw| in_tod(mn, tw))
+            })
+            .map(|r| r.2)
+            .sum()
+    };
+    // База (без ограничений) — стартовый кандидат; любой другой должен её ПРЕВЗОЙТИ.
+    let base: f64 = rows.iter().map(|r| r.2).sum();
+    let margin = base.abs().max(1.0) * 1e-9;
+    let mut best: (Option<(u16, u16)>, Option<TimeWindow>, f64) = (None, None, base);
+    for wk in [None, week] {
+        for td in [None, day_w, hour_w] {
+            if wk.is_none() && td.is_none() {
+                continue;
+            }
+            let pr = prof(wk, td);
+            if pr > best.2 + margin {
+                best = (wk, td, pr);
+            }
+        }
+    }
+    TimeSuggest {
+        week_span: best.0,
+        tod: best.1,
+    }
+}
+
+/// Лучшее НЕПРЕРЫВНОЕ окно по минуте недели (0..10079 = день*1440 + минута_суток)
+/// по профиту, через квантильный `best_range`. `None` — если лучшее окно не
+/// улучшает полную неделю. Линейный поиск (`от <= до`) — окно ЧЕРЕЗ воскресенье
+/// автоподбором не предлагается (ручной ползунок это может).
+fn best_week_span(
+    rows: &[(i64, i64, f64)],
+    min_n: usize,
+    edges: usize,
+    round: bool,
+) -> Option<(u16, u16)> {
+    let mut vals: Vec<(f64, f64)> = rows
+        .iter()
+        .filter(|(wd, ..)| (0..7).contains(wd))
+        .map(|&(wd, mn, p)| ((wd * 1440 + mn) as f64, p))
+        .collect();
+    best_range(&mut vals, min_n, edges, round).map(|s| {
+        (
+            s.from.unwrap_or(0.0).clamp(0.0, 10079.0) as u16,
+            s.to.unwrap_or(10079.0).clamp(0.0, 10079.0) as u16,
+        )
+    })
+}
+
+/// Профили среднего профита для раскраски трёх ползунков «По времени»:
+/// `week[168]` (день×час, 0=Пн·00ч), `day[1440]` (минута суток), `hour[60]`
+/// (минута в часе). Значение ячейки = средний профит сделки в ней (0.0 если пусто).
+#[derive(Clone, Copy, Debug)]
+pub struct SliderProfiles {
+    pub week: [f32; 168],
+    pub day: [f32; 1440],
+    pub hour: [f32; 60],
+}
+
+/// Посчитать `SliderProfiles` по тому же скоупу, что и автоподбор (`tuner_query`).
+pub fn slider_profiles(q: &Query) -> ReadResult<SliderProfiles> {
+    const CTX: &str = "tuner: slider_profiles";
+    let conn = super::open_reader()?;
+    let mut q = q.clone();
+    if q.from < 0 {
+        q.from = 1;
+    }
+    let Some(src) = unified_from(&conn, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
+    let sql = format!(
+        "SELECT ((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7 AS wd,
+                ({OPEN_TS} % 86400) / 60 AS mn,
+                COALESCE(o.profitbtc, 0)
+         FROM {src}"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, f64>(2)?,
+            ))
+        })
+        .map_err(|e| read_fail(CTX, e))?;
+    let mut trades: Vec<(i64, i64, f64)> = Vec::new();
+    for row in rows {
+        trades.push(row.map_err(|e| read_fail(CTX, e))?);
+    }
+    Ok(slider_profiles_from_rows(&trades))
+}
+
+/// Ядро `slider_profiles` над строками `(день, минута_суток, профит)` — для тестов.
+fn slider_profiles_from_rows(rows: &[(i64, i64, f64)]) -> SliderProfiles {
+    let (mut ws, mut wc) = ([0f64; 168], [0u32; 168]);
+    let (mut ds, mut dc) = (vec![0f64; 1440], vec![0u32; 1440]);
+    let (mut hs, mut hc) = ([0f64; 60], [0u32; 60]);
+    for &(wd, mn, p) in rows {
+        if !(0..7).contains(&wd) || !(0..1440).contains(&mn) {
+            continue;
+        }
+        let (mi, h, moh) = (mn as usize, (mn / 60) as usize, (mn % 60) as usize);
+        let wk = wd as usize * 24 + h;
+        ws[wk] += p;
+        wc[wk] += 1;
+        ds[mi] += p; // минута суток 0..1439
+        dc[mi] += 1;
+        hs[moh] += p;
+        hc[moh] += 1;
+    }
+    let avg = |s: f64, c: u32| if c > 0 { (s / c as f64) as f32 } else { 0.0 };
+    SliderProfiles {
+        week: std::array::from_fn(|i| avg(ws[i], wc[i])),
+        day: std::array::from_fn(|i| avg(ds[i], dc[i])),
+        hour: std::array::from_fn(|i| avg(hs[i], hc[i])),
+    }
+}
+
 /// Лучший диапазон одного поля по выборке `(значение, профит)`.
 fn best_range(
     vals: &mut Vec<(f64, f64)>,
@@ -851,12 +1165,18 @@ fn best_range(
     edges: usize,
     round: bool,
 ) -> Option<Suggestion> {
-    let edges = edges.clamp(4, 128);
     if vals.len() < min_n.max(1) {
         return None;
     }
     vals.sort_by(|a, b| a.0.total_cmp(&b.0));
     let len = vals.len();
+    // Корзин не больше, чем точек данных (лишние — избыточны). Верхний потолок 512
+    // поднят со 128 ради оси времени: при малом числе сделок на день это даёт
+    // нарезку «по каждой сделке» = максимальная точность окна. На РЕЗУЛЬТАТ фильтра
+    // `min(len)` не влияет: при edges ≥ len позиции `k*len/edges` покрывают ровно
+    // {0..len} — тот же набор различимых границ, что при edges=len, лишь без
+    // дублирующих итераций (у фильтра данных обычно тысячи → ветка и не срабатывает).
+    let edges = edges.clamp(4, 512).min(len.max(4));
     // Префиксные суммы профита + позиции квантильных краёв.
     let mut pre = Vec::with_capacity(len + 1);
     pre.push(0.0f64);
@@ -934,12 +1254,184 @@ mod tests {
                     to: None,
                 },
             ],
+            ..Default::default()
         };
         let w = v.where_sql();
         assert!(w.contains("COALESCE(o.\"d1h\",0) >= 1.5"));
         assert!(w.contains("<= 10"));
         assert!(!w.contains("DROP"));
         assert!(!w.contains("hvol"), "пустые границы не добавляют условий");
+    }
+
+    #[test]
+    fn variant_week_span_predicate() {
+        // Пн 00:00 → Сб 23:59 (мин недели 0..8639): непрерывный → BETWEEN, исключает Вс.
+        let v = Variant {
+            week_span: Some((0, 8639)),
+            ..Default::default()
+        };
+        let w = v.where_sql();
+        // По времени ОТКРЫТИЯ (buydate), не closedate.
+        assert!(
+            w.contains("BETWEEN 0 AND 8639") && w.contains("buydate"),
+            "w={w}"
+        );
+        assert!(!v.is_empty(), "week_span-вариант не равен «Факту»");
+
+        // Через воскресенье→понедельник (от > до): Сб 12:00 (8640-720=7920) → Пн 12:00 (720).
+        let v = Variant {
+            week_span: Some((7920, 720)),
+            ..Default::default()
+        };
+        let w = v.where_sql();
+        assert!(
+            w.contains("<= 720 OR"),
+            "через воскресенье — до Пн 12:00: {w}"
+        );
+        assert!(
+            w.contains(">= 7920"),
+            "через воскресенье — от Сб 12:00: {w}"
+        );
+        assert!(!w.contains("BETWEEN"), "перевёрнутое окно не BETWEEN: {w}");
+    }
+
+    #[test]
+    fn variant_time_window_predicate() {
+        // WorkingTime «Day» 09:00–21:00 → минута суток BETWEEN.
+        let v = Variant {
+            tod: Some(TimeWindow::Day(9 * 60, 21 * 60)),
+            ..Default::default()
+        };
+        let w = v.where_sql();
+        assert!(
+            w.contains("BETWEEN 540 AND 1260") && w.contains("buydate"),
+            "w={w}"
+        );
+        assert!(!v.is_empty());
+
+        // «Day» через полночь (22:00–06:00) → «<= 360 OR >= 1320».
+        let v = Variant {
+            tod: Some(TimeWindow::Day(22 * 60, 6 * 60)),
+            ..Default::default()
+        };
+        let w = v.where_sql();
+        assert!(w.contains("<= 360 OR"), "через полночь до 06:00: {w}");
+        assert!(w.contains(">= 1320"), "через полночь от 22:00: {w}");
+
+        // WorkingTime «Hour» 1–50 → минута В ЧАСЕ (mod 60) BETWEEN.
+        let v = Variant {
+            tod: Some(TimeWindow::Hour(1, 50)),
+            ..Default::default()
+        };
+        let w = v.where_sql();
+        assert!(w.contains("% 60) BETWEEN 1 AND 50"), "w={w}");
+
+        // week_span И tod складываются в один WHERE (обе оси).
+        let v = Variant {
+            week_span: Some((0, 8639)),
+            tod: Some(TimeWindow::Day(1, 1430)),
+            ..Default::default()
+        };
+        let w = v.where_sql();
+        assert!(w.contains("BETWEEN 0 AND 8639"));
+        assert!(w.contains("BETWEEN 1 AND 1430"));
+    }
+
+    #[test]
+    fn working_time_format() {
+        // Минута недели: Пн 00:00 (0) → Сб 23:59 (8639) — края суток пишем коротко → «1-6».
+        assert_eq!(format_week_span((0, 8639)), "1-6");
+        // С временем: Пн 23:44 (1424) → Сб 22:22 (5*1440+1342=8542) → «1.23:44-6.22:22».
+        assert_eq!(format_week_span((1424, 8542)), "1.23:44-6.22:22");
+        // WorkingTime Day → «чч:мм-чч:мм»; Hour → «N-M».
+        assert_eq!(
+            format_working_time(TimeWindow::Day(1, 23 * 60 + 50)),
+            "00:01-23:50"
+        );
+        assert_eq!(format_working_time(TimeWindow::Hour(1, 50)), "1-50");
+    }
+
+    #[test]
+    fn suggest_time_week_span_and_mode() {
+        // Вс (wd6) убыточен, Пн..Сб прибыльны → лучшее окно недели отрезает Вс.
+        let mut rows: Vec<(i64, i64, f64)> = Vec::new();
+        for wd in 0..6 {
+            rows.extend((0..30).map(|i| (wd, i * 40, 1.0)));
+        }
+        rows.extend((0..30).map(|i| (6i64, i * 40, -1.0))); // Вс в минусе
+        let s = time_suggest_from_rows(&rows, 1, 64, false);
+        let (_, to) = s.week_span.expect("окно недели должно найтись");
+        assert!(
+            to < 6 * 1440,
+            "окно должно кончаться до Вс (мин недели < 8640), got {to}"
+        );
+
+        // АВТО-РЕЖИМ: убыток в минутах 0..14 КАЖДОГО часа (минута суток не разделяет,
+        // минута-в-часе — да) → подбор ДОЛЖЕН сам выбрать режим Hour.
+        let rows: Vec<(i64, i64, f64)> = (0..24)
+            .flat_map(|h| (0..60).map(move |m| (0i64, h * 60 + m, if m < 15 { -1.0 } else { 1.0 })))
+            .collect();
+        let s = time_suggest_from_rows(&rows, 1, 32, false);
+        match s.tod {
+            Some(TimeWindow::Hour(f, _t)) => {
+                assert!(f > 0, "Hour-окно должно отрезать минуты 0..14, от={f}")
+            }
+            other => panic!("авто-выбор режима должен дать Hour, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn suggest_time_never_worse_than_base() {
+        // Оси недели и времени по отдельности «улучшают», но их пересечение могло бы
+        // выкинуть разные плюсовые сделки → профит НИЖЕ базового. Проверяем, что
+        // подбор этого не допускает (база — кандидат).
+        let mut rows: Vec<(i64, i64, f64)> = Vec::new();
+        for wd in 0..6i64 {
+            for mn in (0..1440).step_by(20) {
+                rows.push((wd, mn, if mn / 60 == 3 { -2.0 } else { 1.0 })); // час 3 в минусе
+            }
+        }
+        for mn in (0..1440).step_by(20) {
+            rows.push((6, mn, -1.0)); // Вс в минусе
+        }
+        let base: f64 = rows.iter().map(|r| r.2).sum();
+        let s = time_suggest_from_rows(&rows, 1, 64, false);
+        let span_ok = |v: i64, f: i64, t: i64| {
+            if f <= t {
+                f <= v && v <= t
+            } else {
+                v <= t || v >= f
+            }
+        };
+        let got: f64 = rows
+            .iter()
+            .filter(|&&(wd, mn, _)| {
+                s.week_span
+                    .map_or(true, |(f, t)| span_ok(wd * 1440 + mn, f as i64, t as i64))
+                    && s.tod.map_or(true, |tw| match tw {
+                        TimeWindow::Day(f, t) => span_ok(mn, f as i64, t as i64),
+                        TimeWindow::Hour(f, t) => span_ok(mn % 60, f as i64, t as i64),
+                    })
+            })
+            .map(|r| r.2)
+            .sum();
+        assert!(
+            got >= base,
+            "подбор не должен быть хуже базы: got={got} base={base}"
+        );
+    }
+
+    #[test]
+    fn slider_profiles_bucketize() {
+        // Пн (wd0) 00:00 +2; Вт (wd1) 05:30 -4 → раскладка по трём осям.
+        let rows = vec![(0i64, 0i64, 2.0), (1i64, 5 * 60 + 30, -4.0)];
+        let p = slider_profiles_from_rows(&rows);
+        assert_eq!(p.week[0], 2.0, "неделя: Пн·00ч (wd0*24+0)");
+        assert_eq!(p.week[24 + 5], -4.0, "неделя: Вт·05ч (wd1*24+5)");
+        assert_eq!(p.day[0], 2.0, "сутки: минута 0");
+        assert_eq!(p.day[5 * 60 + 30], -4.0, "сутки: минута 330 (05:30)");
+        assert_eq!(p.hour[0], 2.0);
+        assert_eq!(p.hour[30], -4.0);
     }
 
     #[test]
@@ -982,6 +1474,7 @@ mod tests {
                 from: Some(0.0),
                 to: None,
             }],
+            ..Default::default()
         };
         assert!(!v.is_empty());
     }

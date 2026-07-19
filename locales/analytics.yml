@@ -16,9 +16,9 @@ analytics.tab.summary:
   en: "Summary"
   es: "Resumen"
 analytics.tab.strategies:
-  ru: "Стратегии"
-  en: "Strategies"
-  es: "Estrategias"
+  ru: "Тюнинг стратегий"
+  en: "Strategy tuning"
+  es: "Ajuste de estrategias"
 analytics.tab.coins:
   ru: "Монеты"
   en: "Coins"
@@ -35,10 +35,6 @@ analytics.tab.leverage:
   ru: "Плечо"
   en: "Leverage"
   es: "Apalancam."
-analytics.tab.tuner:
-  ru: "Фильтры"
-  en: "Filters"
-  es: "Filtros"
 analytics.stub:
   ru: "Вкладка в разработке — следующий этап плана аналитики."
   en: "Tab under construction — next stage of the analytics plan."
@@ -496,9 +492,87 @@ analytics.ins.best_hour:
   es: "Hora más rentable — %{hour} UTC (%{profit} USDT, %{n} operaciones)."
 
 analytics.strat.title:
-  ru: "Сравнение стратегий"
-  en: "Strategy comparison"
-  es: "Comparación de estrategias"
+  ru: "Тюнинг"
+  en: "Tuning"
+  es: "Ajuste"
+# Режимы правой панели «Тюнинга»: по фильтру (пороги) / по монете / по времени.
+analytics.strat.mode_filter:
+  ru: "По фильтру"
+  en: "By filter"
+  es: "Por filtro"
+analytics.strat.mode_coin:
+  ru: "По монете"
+  en: "By coin"
+  es: "Por moneda"
+analytics.strat.mode_time:
+  ru: "По времени"
+  en: "By time"
+  es: "Por tiempo"
+# Нижняя тепловая карта «По времени»: колонки-периоды профиля «час дня».
+analytics.time.by_hour:
+  ru: "По часам"
+  en: "By hour"
+  es: "Por hora"
+analytics.time.week:
+  ru: "7 дней"
+  en: "7 days"
+  es: "7 días"
+analytics.time.month:
+  ru: "30 дней"
+  en: "30 days"
+  es: "30 días"
+analytics.time.d90:
+  ru: "90 дней"
+  en: "90 days"
+  es: "90 días"
+# Нижняя правая плашка «По времени»: два поля стратегии (WorkingWeekTime — спан
+# дней, WorkingTime — окно времени), каждое одно «от-до», И-комбинируются.
+analytics.time.autopick_title:
+  ru: "Расписание по времени"
+  en: "Time schedule"
+  es: "Horario por tiempo"
+analytics.time.col_day:
+  ru: "День"
+  en: "Day"
+  es: "Día"
+# Заголовок столбца тюнера «По времени»: перечисляет ПОЛЯ (Недельно/Время).
+analytics.time.col_field:
+  ru: "Поле"
+  en: "Field"
+  es: "Campo"
+# Тюнер «По времени»: два поля стратегии (одно от-до каждое), И-комбинируются.
+analytics.time.field_week:
+  ru: "Недельно"
+  en: "Weekly"
+  es: "Semanal"
+analytics.time.field_day:
+  ru: "Сутки"
+  en: "Day"
+  es: "Día"
+analytics.time.field_hour:
+  ru: "В часе"
+  en: "In hour"
+  es: "En hora"
+# Режим WorkingTime: окно времени суток («сутки») либо минуты в каждом часе («в часе»).
+analytics.time.mode_day:
+  ru: "сутки"
+  en: "day"
+  es: "día"
+analytics.time.mode_hour:
+  ru: "в часе"
+  en: "in hour"
+  es: "en hora"
+# Столбец «текущее значение поля стратегии» (сырая строка WorkingTime/WorkingWeekTime).
+analytics.time.cur:
+  ru: "в стратегии"
+  en: "in strategy"
+  es: "en estrategia"
+# Столбец без данных: период ещё грузится ИЛИ чтение реплики не удалось (пустой
+# период даёт нули по 24 часам, а не эту подпись) — потому нейтрально «нет данных».
+analytics.time.no_data:
+  ru: "нет данных"
+  en: "no data"
+  es: "sin datos"
 analytics.strat.hint:
   ru: "клик по строке — детализация"
   en: "click a row for details"

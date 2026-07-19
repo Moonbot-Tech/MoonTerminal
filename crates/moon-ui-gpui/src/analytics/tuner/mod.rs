@@ -1,8 +1,28 @@
-//! Strategy-analysis tab in the Analytics window.
+//! Вкладка «Стратегии» окна «Аналитика» — рабочее место анализа стратегии.
+//! Слева всегда список (сравнение по ID: сделки/WR/прибыль/ср./PF/best/worst,
+//! свой скролл), режимы кнопками в шапке списка (дефолт — «Фильтры»):
+//! - «Фильтры» — справа тюнер порогов (KPI Факт vs v1/v2 + сетка от/до) в
+//!   СКОУПЕ выбранной стратегии, внизу прибитая гистограмма поля;
+//! - «Монеты» — справа таблица по монетам выбранной (или всех сделок).
 //!
-//! The left comparison table is ordered as identity, trades, profit, average, win rate, profit
-//! factor, best, and worst. Its header switches the right side between the selected strategy's
-//! threshold tuner (with the field histogram pinned below) and a per-coin table.
+//! Страница «Тюнинг стратегий» целиком: этот модуль-корень — список стратегий +
+//! диспетчер режимов, подмодули — тюнеры и их общая оболочка:
+//! `state` (состояние + `TunerKind`), `shell` (общий тулбар/строка подбора),
+//! `fields`/`actions`/`hist` — ось «По фильтру», `time`/`grid` — ось «По времени».
+
+// Подмодули страницы тюнинга.
+mod actions;
+mod fields;
+mod grid;
+mod hist;
+mod shell;
+mod sliders;
+mod state;
+mod time;
+
+// Типы состояния, которые держит `AnalyticsView` (родитель).
+pub(super) use grid::TimeTunerState;
+pub(super) use state::TunerState;
 
 use gpui::*;
 use moon_ui::{
@@ -11,6 +31,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::AnalyticsView;
+use super::LoadState;
 use super::summary::{fmt_signed, sign_color};
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -110,11 +131,23 @@ const COIN_PANEL_W: f32 = 460.0;
 const COIN_ROW_PAD_X: f32 = 8.0;
 const COIN_ROW_GAP: f32 = 8.0;
 
-/// Режим правой панели вкладки «Стратегии» (дефолт — «Фильтры»).
+/// Разобрать ключ строки списка стратегий `"strategyid@core_uid"` (список разбит
+/// ПО ЯДРАМ) → `(strategyid, Some(core_uid))`. Легаси без ядра (`"5"`) → `(5, None)`;
+/// нечисловой ключ (не стратегия) → `None`.
+pub(super) fn parse_strat_key(key: &str) -> Option<(i64, Option<u64>)> {
+    match key.split_once('@') {
+        Some((sid, core)) => Some((sid.parse().ok()?, core.parse::<u64>().ok())),
+        None => Some((key.parse().ok()?, None)),
+    }
+}
+
+/// Режим правой панели вкладки «Тюнинг стратегий» (дефолт — «По фильтру»):
+/// по фильтру (пороги), по монете (таблица), по времени (профиль «час дня»).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum StratMode {
     Filters,
     Coins,
+    Time,
 }
 
 impl AnalyticsView {
@@ -124,11 +157,18 @@ impl AnalyticsView {
         // Retain ready detail while another strategy loads to avoid a loading
         // flash; deselection or a completed non-data result clears it.
         self.reload_detail(cx);
-        // Скоуп тюнера сменился — старые расчёты (включая автоподбор) неверны.
+        // Скоуп тюнера/профиля сменился — старые расчёты (включая автоподбор) неверны.
         self.tuner.invalidate();
+        // Сетка расписания «По времени» — СВОЯ на стратегию: сбрасываем, чтобы v1
+        // предыдущей стратегии не «утёк» на новую (иначе Save записал бы чужое).
+        self.time_tuner.reset_grid();
+        self.time_dirty = true;
         if self.strat_mode == StratMode::Filters {
             self.reload_tuner(cx);
             self.reload_hist(cx);
+        }
+        if self.strat_mode == StratMode::Time {
+            self.reload_time(cx);
         }
         cx.notify();
     }
@@ -143,6 +183,9 @@ impl AnalyticsView {
             self.reload_tuner(cx);
             self.reload_hist(cx);
         }
+        if mode == StratMode::Time && (self.time_profiles.is_none() || self.time_dirty) {
+            self.reload_time(cx);
+        }
         cx.notify();
     }
 
@@ -155,6 +198,10 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mode = self.strat_mode;
+        // «По времени» — своя раскладка (список + карта + KPI + сетка расписания).
+        if mode == StratMode::Time {
+            return self.strat_time(p, window, cx);
+        }
         // Левая половина: список; в «Фильтрах» под ним прибитая гистограмма,
         // в «Обзоре» — вклад по монетам. Правая колонка (Фильтры/Монеты) —
         // на ВСЮ высоту вкладки.
@@ -168,6 +215,7 @@ impl AnalyticsView {
         match mode {
             StratMode::Filters => left = left.child(self.hist_card(p, cx)),
             StratMode::Coins => {}
+            StratMode::Time => unreachable!("Time mode returns early above"),
         }
 
         let mut main = h_flex()
@@ -200,6 +248,7 @@ impl AnalyticsView {
             StratMode::Coins => {
                 main = main.child(self.strat_coins_table(p, cx));
             }
+            StratMode::Time => unreachable!("Time mode returns early above"),
         }
         // Окно подтверждения сохранения — оверлеем поверх вкладки.
         let dialog = self.save_dialog_overlay(p, cx);
@@ -397,7 +446,7 @@ impl AnalyticsView {
     }
 
     /// Карточка списка: шапка (заголовок + режимы + счётчик), свой скролл.
-    fn strat_list_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn strat_list_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         // Resolved once for the whole list: this table is not virtualized, so a per-cell lookup
         // would clone the theme tokens twice for each of up to 300 rows × 7 columns.
         let scale = design::font_scale(cx);
@@ -461,12 +510,17 @@ impl AnalyticsView {
                     .child(mode_btn(
                         "sm-filters",
                         StratMode::Filters,
-                        t!("analytics.tab.tuner").to_string(),
+                        t!("analytics.strat.mode_filter").to_string(),
                     ))
                     .child(mode_btn(
                         "sm-coins",
                         StratMode::Coins,
-                        t!("analytics.tab.coins").to_string(),
+                        t!("analytics.strat.mode_coin").to_string(),
+                    ))
+                    .child(mode_btn(
+                        "sm-time",
+                        StratMode::Time,
+                        t!("analytics.strat.mode_time").to_string(),
                     ))
                     .child(div().flex_1())
                     .child(
@@ -825,5 +879,53 @@ mod tests {
             name_w >= 70.0,
             "coin name column squeezed to {name_w}px by the shared descriptors"
         );
+    }
+}
+
+impl AnalyticsView {
+    /// Фоновая детализация выбранной стратегии (перенесена из `analytics::mod` —
+    /// страничная логика при своей странице). Скоуп — фильтры + выбранная строка.
+    pub(super) fn reload_detail(&mut self, cx: &mut Context<Self>) {
+        let Some((key, _)) = self.sel_strategy.clone() else {
+            self.detail = LoadState::default();
+            return;
+        };
+        // Ключ `strategyid@core_uid` — детализация по стратегии НА ЭТОМ ядре.
+        let Some((id, core)) = parse_strat_key(&key) else {
+            self.detail = LoadState::default();
+            return;
+        };
+        self.detail_seq = self.detail_seq.wrapping_add(1);
+        let req = self.detail_seq;
+        let mut q = self.query();
+        q.strat_core = core;
+        self.detail.begin();
+        self.op_started();
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let detail = executor
+                .spawn(async move { moon_core::db::analytics::strategy_detail(&q, id) })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.op_finished(cx);
+                    if this.detail_seq != req {
+                        return;
+                    }
+                    this.detail.apply(detail);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Перечитать данные АКТИВНОЙ оси тюнинга (после записи в стратегию — освежить
+    /// её чипы/KPI: у «По времени» — `reload_time`, иначе — `reload_tuner`).
+    pub(super) fn reload_active_tuner(&mut self, cx: &mut Context<Self>) {
+        match self.strat_mode {
+            StratMode::Time => self.reload_time(cx),
+            _ => self.reload_tuner(cx),
+        }
     }
 }

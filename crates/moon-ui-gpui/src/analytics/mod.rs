@@ -11,13 +11,11 @@
 //! клик активного пресета периода (ручное обновление).
 
 mod calendar;
-mod charts;
-mod strategies;
 mod summary;
+/// Страница «Тюнинг стратегий» целиком (список + тюнеры «По фильтру»/«По времени»
+/// + общая оболочка). Раньше плоский набор `strategies`/`tuner*`/`strat_time`/
+/// `time_tuner` в корне — теперь папка `tuner/`.
 mod tuner;
-mod tuner_actions;
-mod tuner_hist;
-mod tuner_state;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -54,7 +52,8 @@ enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 3] = [Tab::Summary, Tab::Strategies, Tab::Calendar];
+    // Порядок вкладок: Сводка → Календарь → Тюнинг стратегий (последней).
+    const ALL: [Tab; 3] = [Tab::Summary, Tab::Calendar, Tab::Strategies];
     fn id(self) -> &'static str {
         match self {
             Tab::Summary => "an-summary",
@@ -189,7 +188,14 @@ pub(super) fn fmt_day(secs: i64) -> String {
 pub struct AnalyticsView {
     backend: Entity<Backend>,
     tab: Tab,
+    /// Период вкладки «Сводка» (пресеты/«с»–«по»).
     period: Period,
+    /// Период вкладки «Тюнинг стратегий» — НЕЗАВИСИМЫЙ от «Сводки»: у каждой
+    /// вкладки своё окно времени, период-бар редактирует активную (`active_period`).
+    strat_period: Period,
+    /// Период, которым сейчас посчитан `data` (сводка/список стратегий). При
+    /// входе на вкладку с другим окном времени — перечитываем.
+    data_period: Period,
     /// Ядра из реплики (для комбобокса) + мультивыбор (пусто = все) — те же
     /// контролы, что в «Ордерах»/«Отчёте».
     cores: Vec<(u64, String)>,
@@ -239,9 +245,28 @@ pub struct AnalyticsView {
     pub(super) cal_hover: Option<i64>,
     /// Режим вкладки «Стратегии» (Обзор / Фильтры / Монеты). Приватность —
     /// модульная: субмодули вкладок видят поля родителя без pub(super).
-    strat_mode: strategies::StratMode,
+    strat_mode: tuner::StratMode,
     /// Тюнер порогов (режим «Фильтры») — состояние в своём модуле.
     tuner: tuner::TunerState,
+    /// Режим «По времени»: профили «час дня» по столбцам-периодам
+    /// (текущий/неделя/месяц/90д). None до первого расчёта / при ошибке чтения.
+    pub(super) time_profiles: Option<Arc<Vec<[moon_core::db::analytics::HourStat; 24]>>>,
+    /// Профили среднего профита для раскраски ползунков «По времени»
+    /// (неделя×час / час суток / минута в часе). None до расчёта / при ошибке.
+    pub(super) time_slider: Option<Arc<moon_core::db::tuner::SliderProfiles>>,
+    /// KPI «Факт vs варианты» режима «По времени»: столбцы Факт / v1 / v2 по
+    /// недельному расписанию из сетки — универсальная матрица в правом углу.
+    pub(super) time_stats: LoadState<Vec<moon_core::db::tuner::VarStats>>,
+    /// Сетка недельного расписания (7 дней × от/до для v1/v2) режима «По времени».
+    time_tuner: tuner::TimeTunerState,
+    time_seq: u64,
+    /// Профиль устарел относительно текущих фильтров/периода — пересчитать при входе.
+    time_dirty: bool,
+    /// Bounds дорожек трёх ползунков «По времени» (неделя/сутки/час) — захват через
+    /// `canvas` для перевода координаты мыши в значение при drag.
+    slider_track: [Option<gpui::Bounds<gpui::Pixels>>; 3],
+    /// Активный drag ползунка: `(поле 0..2, тянем ли левый хендл `от`)`.
+    slider_drag: Option<(usize, bool)>,
     /// Календари произвольного диапазона «с»/«по» (moonui MoonCalendar в
     /// попапах); выбор даты переключает период в Period::Custom.
     cal_from: Entity<MoonCalendarState>,
@@ -282,6 +307,13 @@ impl AnalyticsView {
             .analytics_period
             .as_deref()
             .and_then(Period::from_id);
+        // Период «Тюнинга» персистится отдельным ключом (независим от «Сводки»).
+        let saved_strat_period = backend
+            .read(cx)
+            .layout
+            .analytics_strat_period
+            .as_deref()
+            .and_then(Period::from_id);
         // Режим календаря из прошлого запуска (дефолт — «Месяц»).
         let saved_mode = backend
             .read(cx)
@@ -318,6 +350,8 @@ impl AnalyticsView {
             backend,
             tab: Tab::Summary,
             period: saved_period.unwrap_or(Period::CurMonth),
+            strat_period: saved_strat_period.unwrap_or(Period::CurMonth),
+            data_period: saved_period.unwrap_or(Period::CurMonth),
             cores: Vec::new(),
             sel_cores: HashSet::new(),
             side: SideFilter::All,
@@ -345,8 +379,16 @@ impl AnalyticsView {
             cal_day: (moon_core::util::now_unix_ms_i64() / 1000).div_euclid(86_400) * 86_400,
             cal_prev: None,
             cal_hover: None,
-            strat_mode: strategies::StratMode::Filters,
+            strat_mode: tuner::StratMode::Filters,
             tuner: tuner::TunerState::load(),
+            time_profiles: None,
+            time_slider: None,
+            time_stats: LoadState::default(),
+            time_tuner: tuner::TimeTunerState::load(),
+            time_seq: 0,
+            time_dirty: true,
+            slider_track: Default::default(),
+            slider_drag: None,
             cal_from,
             cal_to,
             cal_from_open: false,
@@ -359,9 +401,20 @@ impl AnalyticsView {
         this
     }
 
-    /// Текущие фильтры одной структурой (общая для всех вкладок).
+    /// Период активной вкладки: «Тюнинг» ведёт СВОЁ окно времени, отдельное от
+    /// «Сводки». «Календарь» период-баром не пользуется (у него своя навигация),
+    /// но его reload_calendar строит запрос сам — сюда он не заходит.
+    fn active_period(&self) -> Period {
+        match self.tab {
+            Tab::Strategies => self.strat_period,
+            _ => self.period,
+        }
+    }
+
+    /// Текущие фильтры одной структурой (общая для вкладок «Сводка»/«Тюнинг»);
+    /// период — активной вкладки (`active_period`).
     fn query(&self) -> Query {
-        let (from, to) = self.period.range();
+        let (from, to) = self.active_period().range();
         Query {
             from,
             to,
@@ -369,6 +422,7 @@ impl AnalyticsView {
             side: self.side,
             emulator: self.emu,
             strategy: None,
+            strat_core: None,
         }
     }
 
@@ -427,12 +481,23 @@ impl AnalyticsView {
         self.op_started();
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
+        // `data` считается за окно времени АКТИВНОЙ вкладки — фиксируем его.
+        self.data_period = self.active_period();
         // Тюнер зависит от тех же фильтров: сбрасываем; активному режиму —
         // пересчёт сразу, иначе — при следующем входе в режим «Фильтры».
         self.tuner.invalidate();
-        if self.tab == Tab::Strategies && self.strat_mode == strategies::StratMode::Filters {
+        // Ось «По времени» — тот же скоуп: отбросить её автоподбор в полёте, иначе
+        // стейл-результат от СТАРОГО запроса дописался бы в v1 (и стал бы Saveable).
+        self.time_tuner.invalidate_suggest();
+        if self.tab == Tab::Strategies && self.strat_mode == tuner::StratMode::Filters {
             self.reload_tuner(cx);
             self.reload_hist(cx);
+        }
+        // Профиль «По времени» зависит от тех же фильтров/периода: помечаем
+        // устаревшим; активному режиму — пересчёт сразу, иначе при входе.
+        self.time_dirty = true;
+        if self.tab == Tab::Strategies && self.strat_mode == tuner::StratMode::Time {
+            self.reload_time(cx);
         }
         // Календарь зависит от тех же фильтров: помечаем устаревшим;
         // активной вкладке — пересчёт сразу, иначе при входе на неё.
@@ -470,147 +535,59 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Фоновая детализация выбранной стратегии (вкладка «Стратегии»).
-    pub(super) fn reload_detail(&mut self, cx: &mut Context<Self>) {
-        let Some((key, _)) = self.sel_strategy.clone() else {
-            self.detail = LoadState::default();
-            return;
-        };
-        let id: i64 = key.parse().unwrap_or(0);
-        self.detail_seq = self.detail_seq.wrapping_add(1);
-        let req = self.detail_seq;
-        let q = self.query();
-        self.detail.begin();
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let detail = executor
-                .spawn(async move { moon_core::db::analytics::strategy_detail(&q, id) })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    if this.detail_seq != req {
-                        return;
-                    }
-                    this.detail.apply(detail);
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
-    }
-
-    /// Диапазон `[from,to)` календаря по режиму: месяц / все года / один день
-    /// + текущие фильтры ядро/сторона/эму (период-бар окна тут не участвует).
-    fn cal_query(&self) -> Query {
-        let (from, to) = match self.cal_mode {
-            calendar::CalMode::Month => calendar::month_range(self.cal_ym),
-            calendar::CalMode::Year => calendar::all_history_range(),
-            // «День» грузит окно из 7 суток (выбранный день по центру/снизу) —
-            // почасовая сетка строится по ним.
-            calendar::CalMode::Day => {
-                let (top, bottom) = calendar::day_window(self.cal_day);
-                (top, bottom + 86_400)
-            }
-        };
-        Query {
-            from,
-            to,
-            cores: self.cores_selected(),
-            side: self.side,
-            emulator: self.emu,
-            strategy: None,
-        }
-    }
-
-    /// Запрос ПРЕДЫДУЩЕГО месяца (для дельт KPI) — только в режиме «Месяц».
-    fn cal_query_prev(&self) -> Option<Query> {
-        if self.cal_mode != calendar::CalMode::Month {
-            return None;
-        }
-        let (from, to) = calendar::prev_month_range(self.cal_ym);
-        Some(Query {
-            from,
-            to,
-            cores: self.cores_selected(),
-            side: self.side,
-            emulator: self.emu,
-            strategy: None,
-        })
-    }
-
-    /// Фоновый расчёт посуточной серии для вкладки «Календарь».
-    pub(super) fn reload_calendar(&mut self, cx: &mut Context<Self>) {
-        self.cal_dirty = false;
-        // Наведённый день из прежней серии больше не под курсором — гасим
-        // застрявшую подсветку (новая серия могла не содержать тот день).
-        self.cal_hover = None;
-        self.cal_seq = self.cal_seq.wrapping_add(1);
-        let req = self.cal_seq;
-        // Календарь строит СВОЙ запрос по режиму, а не по период-бару окна
-        // (он на этой вкладке скрыт). Фильтры ядро/сторона/эму сохраняются.
-        let q = self.cal_query();
-        let q_prev = self.cal_query_prev();
-        // «День» грузит ПОЧАСОВЫЕ ячейки (сетка 24×7), остальные режимы — суточные.
-        let hourly = self.cal_mode == calendar::CalMode::Day;
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let data = executor
-                .spawn(async move {
-                    let cur = if hourly {
-                        moon_core::db::analytics::calendar_hours(&q)
-                    } else {
-                        moon_core::db::analytics::calendar_cells(&q)
-                    };
-                    // Агрегат пред. месяца (profit, trades, wins) для дельт KPI.
-                    let prev = q_prev
-                        .and_then(|qp| moon_core::db::analytics::calendar_cells(&qp))
-                        .map(|d| {
-                            d.iter().fold((0.0f64, 0i64, 0i64), |a, c| {
-                                (a.0 + c.profit, a.1 + c.trades, a.2 + c.wins)
-                            })
-                        });
-                    (cur, prev)
-                })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    if this.cal_seq != req {
-                        return; // режим/фильтры уже сменили
-                    }
-                    let (cur, prev) = data;
-                    this.cal_days = cur.map(Arc::new);
-                    this.cal_prev = prev;
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
-    }
+    // reload_detail → tuner/mod.rs; cal_query/cal_query_prev/reload_calendar →
+    // calendar/mod.rs (страничные пересчёты живут при своих страницах).
 
     fn set_period(&mut self, p: Period, window: &mut Window, cx: &mut Context<Self>) {
         // Повторный клик по активному пресету = ручное обновление данных
-        // (автоперечитки по новым отчётам нет).
-        self.period = p;
+        // (автоперечитки по новым отчётам нет). Период-бар редактирует окно
+        // времени АКТИВНОЙ вкладки: «Сводка» и «Тюнинг» независимы.
+        let strat = self.tab == Tab::Strategies;
+        if strat {
+            self.strat_period = p;
+        } else {
+            self.period = p;
+        }
         // Пресет побеждает произвольный диапазон: поля «с»/«по» очищаются.
         if !matches!(p, Period::Custom(..)) {
             for cal in [&self.cal_from, &self.cal_to] {
                 cal.update(cx, |s, cx| s.set_date(MoonDate::Single(None), window, cx));
             }
         }
-        // Выбор персистится — окно (и следующий запуск) откроется с ним.
+        // Выбор персистится в СВОЙ ключ — окно (и следующий запуск) откроется с ним.
+        let id = Some(p.persist_id());
         self.backend.update(cx, |b, _| {
-            let id = Some(p.persist_id());
-            if b.layout.analytics_period != id {
-                b.layout.analytics_period = id;
+            let slot = if strat {
+                &mut b.layout.analytics_strat_period
+            } else {
+                &mut b.layout.analytics_period
+            };
+            if *slot != id {
+                *slot = id;
                 b.layout_dirty = true;
             }
         });
         self.reload(cx);
         cx.notify();
+    }
+
+    /// Синхронизировать поля «с»/«по» (общие MoonCalendarState) с периодом
+    /// активной вкладки — при переключении вкладок период-бар должен показывать
+    /// СВОЙ диапазон вкладки, а не оставшийся от предыдущей.
+    fn sync_period_pickers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (from_date, to_date) = match self.active_period() {
+            Period::Custom(f, t) => (
+                if f >= 0 { day_of_secs(f) } else { None },
+                day_of_secs(t - 86_400),
+            ),
+            _ => (None, None),
+        };
+        self.cal_from.update(cx, |s, cx| {
+            s.set_date(MoonDate::Single(from_date), window, cx)
+        });
+        self.cal_to.update(cx, |s, cx| {
+            s.set_date(MoonDate::Single(to_date), window, cx)
+        });
     }
 
     /// Пересчёт периода из календарей «с»/«по». Пустое «с» — вся история;
@@ -703,18 +680,38 @@ impl AnalyticsView {
                     .width(112.0)
                     .selected(on)
                     .label(t.title())
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         if this.tab != t {
                             this.tab = t;
-                            if t == Tab::Strategies
-                                && this.strat_mode == strategies::StratMode::Filters
-                                && this.tuner.needs_reload()
-                            {
-                                this.reload_tuner(cx);
-                                this.reload_hist(cx);
-                            }
-                            if t == Tab::Calendar && (this.cal_days.is_none() || this.cal_dirty) {
-                                this.reload_calendar(cx);
+                            // Каждая вкладка помнит СВОЁ окно времени: период-бар
+                            // и поля «с»/«по» синхронизируем под активную вкладку.
+                            this.sync_period_pickers(window, cx);
+                            // Окно времени новой вкладки отличается от того, которым
+                            // посчитан `data` → перечитать (иначе список стратегий/
+                            // сводка показали бы чужой период). reload() сам поднимет
+                            // вторичные данные активной вкладки (тюнер/профиль).
+                            let period_changed = matches!(t, Tab::Summary | Tab::Strategies)
+                                && this.active_period() != this.data_period;
+                            if period_changed {
+                                this.reload(cx);
+                            } else {
+                                if t == Tab::Strategies
+                                    && this.strat_mode == tuner::StratMode::Filters
+                                    && this.tuner.needs_reload()
+                                {
+                                    this.reload_tuner(cx);
+                                    this.reload_hist(cx);
+                                }
+                                if t == Tab::Strategies
+                                    && this.strat_mode == tuner::StratMode::Time
+                                    && (this.time_profiles.is_none() || this.time_dirty)
+                                {
+                                    this.reload_time(cx);
+                                }
+                                if t == Tab::Calendar && (this.cal_days.is_none() || this.cal_dirty)
+                                {
+                                    this.reload_calendar(cx);
+                                }
                             }
                             cx.notify();
                         }
@@ -851,7 +848,7 @@ impl AnalyticsView {
             t!("analytics.period.from_lbl")
         };
         let set = cal.read(cx).date().is_some();
-        let custom_on = matches!(self.period, Period::Custom(..)) && set;
+        let custom_on = matches!(self.active_period(), Period::Custom(..)) && set;
         let view = cx.entity();
         MoonPopover::new(if is_to { "an-date-to" } else { "an-date-from" })
             .placement(MoonPopoverPlacement::BottomStart)
@@ -932,8 +929,10 @@ impl AnalyticsView {
     /// Render period presets and the closed-trade or read-failure counter.
     fn period_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let mut seg = h_flex().gap(design::ui_px(cx, 4.0)).items_center();
+        // Подсветка — по периоду АКТИВНОЙ вкладки (Сводка/Тюнинг независимы).
+        let active = self.active_period();
         for per in Period::ALL {
-            let on = self.period == per;
+            let on = active == per;
             seg = seg.child(
                 MoonButton::new(per.id())
                     .variant(if on {

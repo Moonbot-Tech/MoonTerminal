@@ -13,6 +13,8 @@ mod day;
 mod month;
 mod year;
 
+use std::sync::Arc;
+
 use chrono::{Datelike, NaiveDate};
 use gpui::*;
 use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
@@ -21,6 +23,7 @@ use rust_i18n::t;
 use super::AnalyticsView;
 use crate::design;
 use crate::design::moon;
+use moon_core::db::analytics::Query;
 
 /// Режим календаря (кнопки-переключатели вкладки).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -331,5 +334,98 @@ impl AnalyticsView {
                     .text_color(moon(p.text))
                     .child(t!("analytics.cal.title").to_string()),
             )
+    }
+}
+
+/// Пересчёты вкладки «Календарь» (перенесены из `analytics::mod` — страничная
+/// логика живёт при своей странице). Запрос строит своё окно по режиму
+/// (месяц/год/день), период-бар окна тут не участвует.
+impl AnalyticsView {
+    /// Диапазон `[from,to)` календаря по режиму + текущие фильтры ядро/сторона/эму.
+    fn cal_query(&self) -> Query {
+        let (from, to) = match self.cal_mode {
+            CalMode::Month => month_range(self.cal_ym),
+            CalMode::Year => all_history_range(),
+            // «День» грузит окно из 7 суток (выбранный день по центру/снизу).
+            CalMode::Day => {
+                let (top, bottom) = day_window(self.cal_day);
+                (top, bottom + 86_400)
+            }
+        };
+        Query {
+            from,
+            to,
+            cores: self.cores_selected(),
+            side: self.side,
+            emulator: self.emu,
+            strategy: None,
+            strat_core: None,
+        }
+    }
+
+    /// Запрос ПРЕДЫДУЩЕГО месяца (для дельт KPI) — только в режиме «Месяц».
+    fn cal_query_prev(&self) -> Option<Query> {
+        if self.cal_mode != CalMode::Month {
+            return None;
+        }
+        let (from, to) = prev_month_range(self.cal_ym);
+        Some(Query {
+            from,
+            to,
+            cores: self.cores_selected(),
+            side: self.side,
+            emulator: self.emu,
+            strategy: None,
+            strat_core: None,
+        })
+    }
+
+    /// Фоновый расчёт посуточной (или почасовой в режиме «День») серии.
+    pub(super) fn reload_calendar(&mut self, cx: &mut Context<Self>) {
+        self.cal_dirty = false;
+        // Наведённый день из прежней серии больше не под курсором — гасим
+        // застрявшую подсветку (новая серия могла не содержать тот день).
+        self.cal_hover = None;
+        self.cal_seq = self.cal_seq.wrapping_add(1);
+        let req = self.cal_seq;
+        let q = self.cal_query();
+        let q_prev = self.cal_query_prev();
+        // «День» грузит ПОЧАСОВЫЕ ячейки (сетка 24×N), остальные — суточные.
+        let hourly = self.cal_mode == CalMode::Day;
+        self.op_started();
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let data = executor
+                .spawn(async move {
+                    let cur = if hourly {
+                        moon_core::db::analytics::calendar_hours(&q)
+                    } else {
+                        moon_core::db::analytics::calendar_cells(&q)
+                    };
+                    // Агрегат пред. месяца (profit, trades, wins) для дельт KPI.
+                    let prev = q_prev
+                        .and_then(|qp| moon_core::db::analytics::calendar_cells(&qp))
+                        .map(|d| {
+                            d.iter().fold((0.0f64, 0i64, 0i64), |a, c| {
+                                (a.0 + c.profit, a.1 + c.trades, a.2 + c.wins)
+                            })
+                        });
+                    (cur, prev)
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.op_finished(cx);
+                    if this.cal_seq != req {
+                        return; // режим/фильтры уже сменили
+                    }
+                    let (cur, prev) = data;
+                    this.cal_days = cur.map(Arc::new);
+                    this.cal_prev = prev;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 }

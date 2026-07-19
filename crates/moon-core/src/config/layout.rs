@@ -147,6 +147,10 @@ pub struct WindowLayout {
     /// (крупные карточки-дни). None = дефолт («Месяц»).
     #[serde(default)]
     pub analytics_heat_mode: Option<String>,
+    /// Выбранный пресет периода вкладки «Тюнинг стратегий» — СВОЙ, независимый
+    /// от «Сводки» (у каждой вкладки своё окно времени). None = дефолт.
+    #[serde(default)]
+    pub analytics_strat_period: Option<String>,
     /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

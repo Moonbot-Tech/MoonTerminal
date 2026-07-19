@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::*;
 use moon_ui::{MoonInputState, MoonPalette, h_flex, v_flex};
 
-use super::{AnalyticsView, LoadState};
+use super::super::{AnalyticsView, LoadState};
 use crate::design;
 use crate::design::moon;
 use moon_core::db::tuner::{
@@ -15,6 +15,16 @@ use moon_core::db::tuner::{
 
 /// Вариантов помимо «Факта» (V3 держит 8 — начинаем с двух).
 pub(super) const N_VAR: usize = 2;
+
+/// Какая ось тюнинга рисует общую оболочку (тулбар + строка подбора). Оболочка
+/// одна на все режимы; действия (Подобрать/Сохранить/Копия) диспатчатся по виду.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum TunerKind {
+    /// «По фильтру» — пороги рыночных полей (полный набор действий).
+    Filter,
+    /// «По времени» — недельное расписание (действия появятся в фазе 2b).
+    Time,
+}
 
 /// Подготовленное сохранение в стратегию: адресат + список правок.
 pub(super) struct SaveDialog {
@@ -33,7 +43,7 @@ pub(super) struct SaveDialog {
 }
 
 /// Состояние тюнера внутри `AnalyticsView`.
-pub(super) struct TunerState {
+pub(in crate::analytics) struct TunerState {
     /// Границы вариантов текстом: `[вариант][индекс поля] = (от, до)`.
     pub(super) bounds: Vec<Vec<(String, String)>>,
     /// Кэш инпутов границ (ленивое создание в render).
@@ -79,7 +89,7 @@ impl TunerState {
     /// полей С МАППИНГОМ на параметры стратегии (немаппленные — da1m/d5s —
     /// автоподбор по умолчанию игнорирует: подобранное некуда записать).
     /// Намеренно не персистятся — каждое открытие окна с чистого листа.
-    pub(super) fn load() -> Self {
+    pub(in crate::analytics) fn load() -> Self {
         let bounds = vec![vec![(String::new(), String::new()); FIELDS.len()]; N_VAR];
         let enabled = FIELDS.iter().map(|s| s.mapped()).collect();
         Self {
@@ -110,7 +120,7 @@ impl TunerState {
     /// Current data remains until recomputation completes to avoid a loading
     /// flash; a completed non-data result clears it. Recompute on mode entry or
     /// an explicit reload.
-    pub(super) fn invalidate(&mut self) {
+    pub(in crate::analytics) fn invalidate(&mut self) {
         self.dirty = true;
         self.save_dialog = None;
         self.staged_ignore.clear();
@@ -126,7 +136,7 @@ impl TunerState {
     }
 
     /// Нужен ли пересчёт при входе в режим «Фильтры».
-    pub(super) fn needs_reload(&self) -> bool {
+    pub(in crate::analytics) fn needs_reload(&self) -> bool {
         self.stats.data().is_none() || self.dirty
     }
 
@@ -147,7 +157,10 @@ impl TunerState {
                     })
                 })
                 .collect();
-            out.push(Variant { bounds });
+            out.push(Variant {
+                bounds,
+                ..Default::default()
+            });
         }
         out
     }

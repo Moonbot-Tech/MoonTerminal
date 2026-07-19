@@ -32,6 +32,9 @@ pub struct Query {
     /// Скоуп по одной стратегии (`strategyid`) — тюнер фильтров в контексте
     /// выбранной строки списка. None = все стратегии.
     pub strategy: Option<i64>,
+    /// Скоуп по КОНКРЕТНОМУ ядру выбранной строки (`core_uid`) — список стратегий
+    /// разбит по ядрам, чтобы видеть работу стратегии на отдельном ядре. None = все ядра.
+    pub strat_core: Option<u64>,
 }
 
 impl Query {
@@ -72,6 +75,10 @@ impl Query {
             if has("strategyid") {
                 w.push_str(&format!(" AND COALESCE(strategyid,0) = {sid}"));
             }
+        }
+        // Скоуп по конкретному ядру строки (список стратегий разбит по ядрам).
+        if let Some(c) = self.strat_core {
+            w.push_str(&format!(" AND core_uid = {}", c as i64));
         }
         w
     }
@@ -490,6 +497,80 @@ pub fn calendar_hours(q: &Query) -> Option<Vec<DayCell>> {
     Some(out)
 }
 
+/// Профиль «час дня» (0..23 UTC): PnL/сделки/прибыльных, агрегированные по
+/// всем дням периода. Ячейка нижней тепловой карты «Тюнинг → По времени».
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HourStat {
+    pub profit: f64,
+    pub trades: i64,
+    pub wins: i64,
+}
+
+/// Профили «по часам дня» сразу для нескольких периодов (текущий/неделя/месяц/
+/// 90д) — нижняя тепловая карта вкладки «Тюнинг → По времени». Один reader и
+/// один снапшот на ВСЕ диапазоны (столбцы одной карты должны видеть одну и ту
+/// же выборку). Фильтры (ядра/сторона/эму/стратегия) берутся из `base`; from/to
+/// каждого диапазона переопределяют период (`from < 0` → вся история). Возврат
+/// выровнен с `ranges`.
+pub fn hourly_profiles(base: &Query, ranges: &[(i64, i64)]) -> ReadResult<Vec<[HourStat; 24]>> {
+    let conn = super::open_reader()?;
+    let snap = super::read_snapshot(&conn)?;
+    let conn = &*snap;
+    let mut out = Vec::with_capacity(ranges.len());
+    for &(from, to) in ranges {
+        out.push(hour_profile_one(conn, base, from, to)?);
+    }
+    Ok(out)
+}
+
+/// Один столбец профиля «час дня» за `[from, to)` на готовом снапшоте.
+fn hour_profile_one(
+    conn: &Connection,
+    base: &Query,
+    from: i64,
+    to: i64,
+) -> ReadResult<[HourStat; 24]> {
+    const CTX: &str = "analytics: hour_profile";
+    let mut q = base.clone();
+    q.from = if from < 0 { min_closedate(conn)? } else { from };
+    q.to = to;
+    let mut prof = [HourStat::default(); 24];
+    // Схема источников ещё не пришла — пустой профиль (как `summary`/календарь).
+    let Some(src) = unified_from(conn, &q)? else {
+        return Ok(prof);
+    };
+    // Час дня по времени ОТКРЫТИЯ сделки (buydate) — согласованно с расписанием и
+    // ползунками тюнера, которые гейтят ВХОД. Fallback на closedate, если открытие
+    // не записано (0/NULL). Период по-прежнему по closedate (окно анализа).
+    let sql = format!(
+        "SELECT ((COALESCE(NULLIF(o.buydate, 0), o.closedate) % 86400) / 3600) AS h,
+                COALESCE(SUM(o.profitbtc), 0), COUNT(*), COALESCE(SUM(o.profitbtc > 0), 0)
+         FROM {src} GROUP BY h ORDER BY h"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, f64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(|e| read_fail(CTX, e))?;
+    for row in rows {
+        let (h, profit, trades, wins) = row.map_err(|e| read_fail(CTX, e))?;
+        if (0..24).contains(&h) {
+            prof[h as usize] = HourStat {
+                profit,
+                trades,
+                wins,
+            };
+        }
+    }
+    Ok(prof)
+}
+
 /// Run a query that may join the ATTACHed strategies DB, retrying WITHOUT names
 /// if it fails while names were in play.
 ///
@@ -891,11 +972,12 @@ fn groups(
     by_strategy: bool,
 ) -> ReadResult<Vec<GroupStat>> {
     const CTX: &str = "analytics: groups";
-    // Ключ стратегии — id: переименования не плодят группы, одноимённые
-    // разные стратегии не сливаются; имя — только подпись.
+    // Ключ стратегии — `id@core_uid`: разбивка ПО ЯДРАМ (видно работу стратегии на
+    // каждом ядре отдельно); переименования не плодят группы, одноимённые разные
+    // стратегии не сливаются; имя — только подпись.
     let (key, name, kind, alive) = if by_strategy {
         (
-            "CAST(o.strategyid AS TEXT)".to_string(),
+            "CAST(o.strategyid AS TEXT) || '@' || CAST(o.core_uid AS TEXT)".to_string(),
             format!("MAX({})", strategy_name_expr(has_names)),
             // Тип (SignalType) из текущей версии стратегии (JSON1 доступен —
             // rusqlite bundled).
@@ -967,6 +1049,7 @@ mod read_failure_tests {
             side: SideFilter::All,
             emulator: Some(false),
             strategy: None,
+            strat_core: None,
         }
     }
 
@@ -1157,5 +1240,34 @@ mod tests {
         assert_eq!(days.len(), 3);
         assert_eq!(days[0].trades, 1);
         assert!(days.iter().all(|d| (d.profit - 99.0).abs() > 1e-9)); // день3 исключён
+    }
+
+    #[test]
+    fn hour_profile_buckets_by_hour_of_day_across_days() {
+        // Час 1: +10 и −4 (день0) и +3 (день1) → агрегат по ЧАСУ ДНЯ обоих суток.
+        // Час 22: +7 (день0). Остальные часы пусты.
+        let c = seed(&[
+            (D0 + 3_600 + 60, 1, 10.0),
+            (D0 + 3_600 + 120, 1, -4.0),
+            (D0 + 22 * 3_600, 1, 7.0),
+            (D0 + 86_400 + 3_600, 1, 3.0),
+        ]);
+        let prof = hour_profile_one(&c, &Query::default(), D0, D0 + 3 * 86_400).unwrap();
+        // Час 1 объединяет оба дня: profit 10−4+3=9, 3 сделки, 2 прибыльных.
+        assert_eq!((prof[1].trades, prof[1].wins), (3, 2));
+        assert!(
+            (prof[1].profit - 9.0).abs() < 1e-9,
+            "profit={}",
+            prof[1].profit
+        );
+        // Час 22: одна сделка +7.
+        assert_eq!((prof[22].trades, prof[22].wins), (1, 1));
+        assert!((prof[22].profit - 7.0).abs() < 1e-9);
+        // Час без сделок — нули (плотный массив 24).
+        assert_eq!((prof[0].trades, prof[0].profit), (0, 0.0));
+        // Сделка вне [from, to) в профиль не попадает: свежий период пуст.
+        let empty =
+            hour_profile_one(&c, &Query::default(), D0 - 5 * 86_400, D0 - 4 * 86_400).unwrap();
+        assert!(empty.iter().all(|h| h.trades == 0));
     }
 }

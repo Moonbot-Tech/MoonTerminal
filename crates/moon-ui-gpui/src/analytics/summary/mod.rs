@@ -10,7 +10,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::AnalyticsView;
-use super::charts;
+mod charts;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{Summary, TopTrade};

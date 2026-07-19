@@ -9,9 +9,9 @@ use gpui::*;
 use moon_ui::{MoonInputEvent, MoonInputState};
 use rust_i18n::t;
 
-use super::AnalyticsView;
-use super::tuner::{fmt_bound, parse_num, staged_dirty};
-use super::tuner_state::SaveDialog;
+use super::super::AnalyticsView;
+use super::fields::{fmt_bound, parse_num, staged_dirty};
+use super::state::SaveDialog;
 use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
 impl AnalyticsView {
@@ -272,6 +272,28 @@ impl AnalyticsView {
         self.open_change_dialog(sid, name, changes, warns, false, cx);
     }
 
+    /// «В стратегию» для оси «По времени»: пишет v1 в поля `WorkingWeekTime`
+    /// (спан дней) и `WorkingTime` (окно времени) выбранной стратегии через ТО ЖЕ
+    /// окно подтверждения (`open_change_dialog`), что и пороги. Пишутся только
+    /// НЕПУСТЫЕ и изменившиеся поля (пустое поле не трогаем, расписание не стираем).
+    /// Форматы полей MoonBot не подтверждены — строки видны в окне подтверждения.
+    pub(super) fn time_open_save_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some((key, name)) = self.sel_strategy.clone() else {
+            return;
+        };
+        let Some((sid, _)) = super::parse_strat_key(&key) else {
+            return;
+        };
+        // Те же поля, что зажигают «Сохранить» янтарным (`is_dirty`), чтобы состояние
+        // кнопки и разрешение записи совпадали.
+        let changes = self.time_tuner.changes();
+        if changes.is_empty() {
+            log::info!("аналитика: «Сохранить» (время) — нечего писать (поля пусты или = текущим)");
+            return;
+        }
+        self.open_change_dialog(sid, name, changes, Vec::new(), false, cx);
+    }
+
     /// «Сделать копию»: та же сборка правок, но адресат — НОВАЯ стратегия
     /// (копия текущей с применёнными порогами) на всех ядрах исходной. Имя
     /// авто-уникальное, правится в окне подтверждения. Пустой список правок
@@ -281,6 +303,36 @@ impl AnalyticsView {
             return;
         };
         changes.push(self.analyzer_comment());
+        self.open_copy_with(sid, name, changes, warns, window, cx);
+    }
+
+    /// «Сделать копию» для оси «По времени»: те же правки, что Save (расписание +
+    /// IgnoreTime/IgnoreFilters), но адресат — НОВАЯ стратегия (копия выбранной).
+    /// Единый путь с фильтром через `open_copy_with`; пустые правки допустимы (дубликат).
+    pub(super) fn time_open_copy_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((key, name)) = self.sel_strategy.clone() else {
+            return;
+        };
+        let Some((sid, _)) = super::parse_strat_key(&key) else {
+            return;
+        };
+        let mut changes = self.time_tuner.changes();
+        changes.push(self.analyzer_comment());
+        self.open_copy_with(sid, name, changes, Vec::new(), window, cx);
+    }
+
+    /// ОБЩИЙ хвост «Сделать копию» (все оси): авто-уникальное имя новой стратегии +
+    /// его инпут в окне подтверждения, затем ОБЩЕЕ окно (`open_change_dialog`,
+    /// is_copy=true). Имя правится пользователем перед записью.
+    fn open_copy_with(
+        &mut self,
+        sid: i64,
+        name: String,
+        changes: Vec<(String, String)>,
+        warns: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Авто-имя: уникальное среди имён стратегий ВСЕХ ядер (имена в
         // Moonbot глобальны в пределах ядра; берём объединение — надёжно).
         let mut taken = std::collections::HashSet::new();
@@ -314,7 +366,7 @@ impl AnalyticsView {
     /// с маппингом, слоты Delta2/3 (+предупреждения), Ignore-флаги.
     fn build_strategy_changes(&self) -> Option<(i64, String, Vec<(String, String)>, Vec<String>)> {
         let (key, name) = self.sel_strategy.clone()?;
-        let sid = key.parse::<i64>().ok()?;
+        let (sid, _) = super::parse_strat_key(&key)?;
 
         let mut changes: Vec<(String, String)> = Vec::new();
         let mut warns: Vec<String> = Vec::new();
@@ -588,11 +640,7 @@ impl AnalyticsView {
     /// живёт исходная (по живому store). Имя — из инпута окна (пустое =
     /// авто); на каждом ядре дополнительно уникализируется. Копия приходит
     /// ВЫКЛЮЧЕННОЙ (правило create_strategies) — безопасно.
-    fn create_strategy_copy(
-        &mut self,
-        dlg: &super::tuner_state::SaveDialog,
-        cx: &mut Context<Self>,
-    ) {
+    fn create_strategy_copy(&mut self, dlg: &super::state::SaveDialog, cx: &mut Context<Self>) {
         use crate::strategies::tree_ops::{STRATEGY_NAME_FIELD, set_field, unique_name};
         let sid = dlg.sid as u64;
         let desired = {
@@ -688,8 +736,9 @@ impl AnalyticsView {
                         "аналитика: правки → стратегия «{name}»: {n_fields} полей, ядер {sent}/{}",
                         cores.len()
                     );
-                    // Эхо снапшота обновит strategies.sqlite — перечитаем чипы.
-                    this.reload_tuner(cx);
+                    // Эхо снапшота обновит strategies.sqlite — перечитаем чипы
+                    // АКТИВНОЙ оси (фильтр/время).
+                    this.reload_active_tuner(cx);
                     cx.notify();
                 });
             });
@@ -700,7 +749,7 @@ impl AnalyticsView {
                     .timer(std::time::Duration::from_millis(delay_ms))
                     .await;
                 let _ = cx.update(|cx| {
-                    let _ = this.update(cx, |this, cx| this.reload_tuner(cx));
+                    let _ = this.update(cx, |this, cx| this.reload_active_tuner(cx));
                 });
             }
         })

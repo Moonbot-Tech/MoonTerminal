@@ -10,15 +10,15 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, h_flex, v_flex,
+    MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
-pub(super) use super::tuner_state::{
-    N_VAR, TunerState, card, flag_of, fmt_bound, parse_num, staged_dirty,
+use super::super::{AnalyticsView, LoadState};
+pub(super) use super::state::{
+    N_VAR, TunerKind, card, flag_of, fmt_bound, parse_num, staged_dirty,
 };
-use super::{AnalyticsView, LoadState};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
@@ -30,15 +30,20 @@ impl AnalyticsView {
     /// Запрос тюнера: общие фильтры + скоуп выбранной стратегии.
     pub(super) fn tuner_query(&self) -> moon_core::db::analytics::Query {
         let mut q = self.query();
-        q.strategy = self
+        // Ключ строки — `strategyid@core_uid`: скоуп по стратегии И конкретному ядру.
+        if let Some((sid, core)) = self
             .sel_strategy
             .as_ref()
-            .and_then(|(k, _)| k.parse::<i64>().ok());
+            .and_then(|(k, _)| super::parse_strat_key(k))
+        {
+            q.strategy = Some(sid);
+            q.strat_core = core;
+        }
         q
     }
 
     /// Фоновый пересчёт матрицы KPI по вариантам (+ пороги выбранной стратегии).
-    pub(super) fn reload_tuner(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::analytics) fn reload_tuner(&mut self, cx: &mut Context<Self>) {
         self.tuner.seq = self.tuner.seq.wrapping_add(1);
         let req = self.tuner.seq;
         let q = self.tuner_query();
@@ -111,7 +116,7 @@ impl AnalyticsView {
     }
 
     /// Фоновая гистограмма выбранного поля.
-    pub(super) fn reload_hist(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::analytics) fn reload_hist(&mut self, cx: &mut Context<Self>) {
         self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
         let req = self.tuner.hist_seq;
         let q = self.tuner_query();
@@ -203,51 +208,6 @@ impl AnalyticsView {
             if matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 let value = state.read(cx).value().to_string();
                 this.commit_bound(vi, fi, is_to, value, cx);
-            }
-        })
-        .detach();
-        self.tuner.inputs.insert(id, state.clone());
-        state
-    }
-
-    /// Инпут настройки подбора: кэш + коммит в поле состояния по Blur/Enter.
-    /// `which`: 0 = попыток, 1 = мин. сделок, 2 = квантилей.
-    fn cfg_input(
-        &mut self,
-        which: usize,
-        placeholder: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<MoonInputState> {
-        let id = format!("cfg-{which}");
-        if let Some(state) = self.tuner.inputs.get(&id) {
-            return state.clone();
-        }
-        let value = match which {
-            1 => self.tuner.min_trades.clone(),
-            _ => self.tuner.iters.clone(),
-        };
-        let ph = placeholder.to_string();
-        let state = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .default_value(value)
-                .placeholder(ph)
-        });
-        cx.subscribe(&state, move |this, state, ev: &MoonInputEvent, cx| {
-            // Change тоже коммитим: значение должно действовать сразу при
-            // клике «Подобрать», без обязательного Enter/выхода из поля.
-            if matches!(
-                ev,
-                MoonInputEvent::Change | MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }
-            ) {
-                let value = state.read(cx).value().to_string();
-                match which {
-                    1 => this.tuner.min_trades = value,
-                    _ => this.tuner.iters = value,
-                }
-                if !matches!(ev, MoonInputEvent::Change) {
-                    cx.notify();
-                }
             }
         })
         .detach();
@@ -549,187 +509,15 @@ impl AnalyticsView {
             }
             grid = grid.child(row);
         }
-        // Строка умного подбора: попытки координатного спуска + минимум
-        // сделок (пусто = авто) + число квантилей + кнопки запуска.
-        let busy = self.tuner.sugg_busy;
-        let it_input = self.cfg_input(0, "20", window, cx);
-        let mn_input = self.cfg_input(1, &t!("analytics.tuner.auto_ph"), window, cx);
-        // Число квантилей — поле со списком (4/8/16/…/128).
-        let ed_view = cx.entity();
-        let ed_items = crate::panels::radio_items(
-            [4usize, 8, 16, 32, 64, 128].map(|n| {
-                (
-                    n,
-                    SharedString::from(format!("tun-ed-{n}")),
-                    SharedString::from(n.to_string()),
-                )
-            }),
-            self.tuner.edges,
-            crate::panels::RadioMark::Highlight,
-            move |app, n| {
-                ed_view.update(app, |this, cx| {
-                    this.tuner.edges = n;
-                    cx.notify();
-                });
-            },
+        // Строка подбора и тулбар — из ОБЩЕЙ оболочки (tuner_shell), ось
+        // «По фильтру»: один код для всех тюнеров, действия диспатчатся по оси.
+        let cfg_row = self.shell_config_row(TunerKind::Filter, p, window, cx);
+        let header = self.shell_toolbar(
+            TunerKind::Filter,
+            t!("analytics.tuner.fields_title").to_string(),
+            p,
+            cx,
         );
-        let ed_combo = MoonDropdown::new("tun-cfg-ed")
-            .label(format!("{} ▾", self.tuner.edges))
-            .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Micro)
-            .menu_width(design::font_w(cx, 64.0))
-            .menu_size(MoonMenuSize::Compact)
-            .items(ed_items);
-        let mut cfg_row = h_flex()
-            .w_full()
-            .px(design::ui_px(cx, 12.0))
-            .pb(design::ui_px(cx, 6.0))
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .text_size(design::t_caption(cx))
-            .child(
-                div()
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.tuner.iters").to_string()),
-            )
-            .child(
-                div()
-                    .w(design::font_w_px(cx, 46.0))
-                    .flex_none()
-                    .child(MoonInput::new("tun-cfg-it").state(&it_input).small()),
-            )
-            .child(
-                div()
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.tuner.min_trades").to_string()),
-            )
-            .child(
-                div()
-                    .w(design::font_w_px(cx, 52.0))
-                    .flex_none()
-                    .child(MoonInput::new("tun-cfg-mn").state(&mn_input).small()),
-            )
-            .child(
-                div()
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.tuner.edges").to_string()),
-            )
-            .child(div().flex_none().child(ed_combo))
-            .child(div().flex_1());
-        // Подбор (как и сохранение) имеет смысл только в скоупе стратегии.
-        if self.sel_strategy.is_some() {
-            cfg_row = cfg_row
-                .child(
-                    MoonButton::new("tun-suggest-one")
-                        .variant(MoonButtonVariant::Soft)
-                        .size(MoonButtonSize::Micro)
-                        .label(if busy {
-                            "…".to_string()
-                        } else {
-                            t!("analytics.tuner.suggest_one").to_string()
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if !this.tuner.sugg_busy {
-                                this.suggest_one_into_v1(cx);
-                                cx.notify();
-                            }
-                        }))
-                        .render(),
-                )
-                .child(
-                    MoonButton::new("tun-suggest-run")
-                        .variant(MoonButtonVariant::Blue)
-                        .size(MoonButtonSize::Micro)
-                        .label(if busy {
-                            "…".to_string()
-                        } else {
-                            t!("analytics.tuner.suggest_run").to_string()
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if !this.tuner.sugg_busy {
-                                this.suggest_into_v1(cx);
-                                cx.notify();
-                            }
-                        }))
-                        .render(),
-                );
-        }
-        // Карточка со своей шапкой: заголовок + кнопки «Подобрать» (выбранное
-        // поле → v1), «Подобрать всё» (все поля → v1) и «В стратегию»
-        // (запись v1 в параметры выбранной стратегии, с подтверждением).
-        let mut header = h_flex()
-            .w_full()
-            .px(design::ui_px(cx, 12.0))
-            .py(design::ui_px(cx, 8.0))
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .child(
-                div()
-                    .text_size(design::t_title(cx))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(t!("analytics.tuner.fields_title").to_string()),
-            )
-            .child(div().flex_1());
-        // «В стратегию» — только при выбранной стратегии; двухкликовое
-        // подтверждение (первый клик — «Подтвердить?»).
-        if self.sel_strategy.is_some() {
-            // «Округление результата»: подпись + чекбокс, прижаты к «Сохранить».
-            header = header
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text_muted))
-                        .child(t!("analytics.tuner.round_lbl").to_string()),
-                )
-                .child(
-                    div().flex_none().child(
-                        MoonCheckbox::new("tun-round")
-                            .checked(self.tuner.round_results)
-                            .size(MoonCheckboxSize::Compact)
-                            .on_change({
-                                let view = cx.entity();
-                                move |ch: &bool, _w, app| {
-                                    let on = *ch;
-                                    view.update(app, |this, cx| {
-                                        this.tuner.round_results = on;
-                                        cx.notify();
-                                    });
-                                }
-                            }),
-                    ),
-                );
-            // «Сделать копию»: новая стратегия = текущая + пороги v1.
-            header = header.child(
-                MoonButton::new("tun-copy-strat")
-                    .variant(MoonButtonVariant::Soft)
-                    .size(MoonButtonSize::Micro)
-                    .label(t!("analytics.tuner.copy_btn").to_string())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_copy_dialog(window, cx);
-                        cx.notify();
-                    }))
-                    .render(),
-            );
-            // Кнопка «загорается», когда есть что записывать: стейджи
-            // «ignore» ИЛИ пороги v1, отличные от текущих параметров
-            // стратегии; сохранение — через окно подтверждения.
-            let dirty = self.save_dirty();
-            header = header.child(
-                MoonButton::new("tun-save-strat")
-                    .variant(if dirty {
-                        MoonButtonVariant::Amber
-                    } else {
-                        MoonButtonVariant::Soft
-                    })
-                    .size(MoonButtonSize::Micro)
-                    .label(t!("analytics.tuner.save_btn").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_save_dialog(cx);
-                        cx.notify();
-                    }))
-                    .render(),
-            );
-        }
         v_flex()
             .w_full()
             .flex_none()
