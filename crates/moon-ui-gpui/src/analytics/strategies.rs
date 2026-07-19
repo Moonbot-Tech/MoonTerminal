@@ -1,9 +1,8 @@
-//! Вкладка «Стратегии» окна «Аналитика» — рабочее место анализа стратегии.
-//! Слева всегда список (сравнение по ID: сделки/WR/прибыль/ср./PF/best/worst,
-//! свой скролл), режимы кнопками в шапке списка (дефолт — «Фильтры»):
-//! - «Фильтры» — справа тюнер порогов (KPI Факт vs v1/v2 + сетка от/до) в
-//!   СКОУПЕ выбранной стратегии, внизу прибитая гистограмма поля;
-//! - «Монеты» — справа таблица по монетам выбранной (или всех сделок).
+//! Strategy-analysis tab in the Analytics window.
+//!
+//! The left comparison table is ordered as identity, trades, profit, average, win rate, profit
+//! factor, best, and worst. Its header switches the right side between the selected strategy's
+//! threshold tuner (with the field histogram pinned below) and a per-coin table.
 
 use gpui::*;
 use moon_ui::{
@@ -20,6 +19,96 @@ use moon_core::db::analytics::GroupStat;
 /// Показываем не больше стольких групп (реплика может держать тысячи имён;
 /// хвост за пределами топа по |прибыли| малоинформативен, а DOM — не резиновый).
 const MAX_ROWS: usize = 300;
+
+/// One NUMERIC column of the comparison tables.
+///
+/// The heading and the body cell come from the SAME descriptor, so such a column cannot exist in
+/// one and not the other, and its value cannot end up rendered under a neighbour's heading — a
+/// misalignment no layout would reveal, since the table renders cleanly either way and only the
+/// titles are wrong.
+///
+/// The two leading identity columns (kind, core) stay hand-paired: they are left-aligned, carry
+/// their own tones and caption size, and modelling that here would add three optional fields for
+/// two columns that no reordering touches.
+#[derive(Clone, Copy)]
+struct MetricCol {
+    /// i18n key of the heading.
+    key: &'static str,
+    /// Column width, in font-scaled px.
+    w: f32,
+    /// Cell text for one aggregate.
+    text: fn(&GroupStat) -> String,
+    /// Value whose sign colours the cell; `None` renders neutral.
+    signed: Option<fn(&GroupStat) -> f64>,
+}
+
+const COL_TRADES: MetricCol = MetricCol {
+    key: "analytics.kpi.trades",
+    w: 56.0,
+    text: |g| g.n.to_string(),
+    signed: None,
+};
+const COL_PROFIT: MetricCol = MetricCol {
+    key: "analytics.col.profit",
+    w: 84.0,
+    text: |g| fmt_signed(g.profit),
+    signed: Some(|g| g.profit),
+};
+const COL_AVG: MetricCol = MetricCol {
+    key: "analytics.kpi.avg_short",
+    w: 70.0,
+    text: |g| fmt_signed(g.avg()),
+    signed: Some(|g| g.avg()),
+};
+const COL_WINRATE: MetricCol = MetricCol {
+    key: "analytics.kpi.winrate",
+    w: 56.0,
+    text: |g| format!("{:.1}%", g.winrate()),
+    signed: None,
+};
+const COL_PF: MetricCol = MetricCol {
+    key: "analytics.col.pf",
+    w: 52.0,
+    text: |g| format!("{:.2}", g.pf),
+    signed: None,
+};
+const COL_BEST: MetricCol = MetricCol {
+    key: "analytics.col.best",
+    w: 70.0,
+    text: |g| fmt_signed(g.best),
+    signed: Some(|g| g.best),
+};
+const COL_WORST: MetricCol = MetricCol {
+    key: "analytics.col.worst",
+    w: 70.0,
+    text: |g| fmt_signed(g.worst),
+    signed: Some(|g| g.worst),
+};
+
+/// Strategy comparison columns, in reading order: identity, then how many trades back the figure,
+/// then the result, then how good it is, then the tails. Profit leads the numbers because the
+/// table is sorted by it — the sort key sitting mid-row leaves the ranking without an anchor, and
+/// winrate placed ahead of it reads a 100%-on-two-trades row as the winner.
+const METRIC_COLS: &[MetricCol] = &[
+    COL_TRADES,
+    COL_PROFIT,
+    COL_AVG,
+    COL_WINRATE,
+    COL_PF,
+    COL_BEST,
+    COL_WORST,
+];
+
+/// Per-coin columns: the same order, minus the per-trade average and the best case. Both tables
+/// are visible at once in "Монеты" mode, so a differing order would cost the reader the position
+/// cue they just learned on the left.
+const COIN_COLS: &[MetricCol] = &[COL_TRADES, COL_PROFIT, COL_WINRATE, COL_PF, COL_WORST];
+
+/// Geometry of the coins panel. The coin-name column is whatever [`COIN_COLS`] leaves over, so
+/// these are the terms a width test has to read rather than re-state.
+const COIN_PANEL_W: f32 = 460.0;
+const COIN_ROW_PAD_X: f32 = 8.0;
+const COIN_ROW_GAP: f32 = 8.0;
 
 /// Режим правой панели вкладки «Стратегии» (дефолт — «Фильтры»).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -309,6 +398,9 @@ impl AnalyticsView {
 
     /// Карточка списка: шапка (заголовок + режимы + счётчик), свой скролл.
     fn strat_list_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+        // Resolved once for the whole list: this table is not virtualized, so a per-cell lookup
+        // would clone the theme tokens twice for each of up to 300 rows × 7 columns.
+        let scale = design::font_scale(cx);
         let (list, total, shown): (AnyElement, usize, usize) =
             match self.data.view(|d| d.strategies.is_empty()) {
                 Ok(d) => {
@@ -316,7 +408,7 @@ impl AnalyticsView {
                     let shown = total.min(MAX_ROWS);
                     let mut list = v_flex().w_full().gap_0();
                     for g in d.strategies.iter().take(MAX_ROWS) {
-                        list = list.child(self.strategy_row(g, p, cx));
+                        list = list.child(self.strategy_row(g, p, scale, cx));
                     }
                     (list.into_any_element(), total, shown)
                 }
@@ -403,7 +495,13 @@ impl AnalyticsView {
     }
 
     /// Строка таблицы сравнения; клик — выбрать/снять группу.
-    fn strategy_row(&self, g: &GroupStat, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
+    fn strategy_row(
+        &self,
+        g: &GroupStat,
+        p: MoonPalette,
+        scale: f32,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let selected = self.sel_strategy.as_ref().is_some_and(|(k, _)| *k == g.key);
         let key = g.key.clone();
         // strategyid=0 = ручные ордера — подпись вместо голого «0» (и в
@@ -476,38 +574,7 @@ impl AnalyticsView {
                             .text_color(moon(p.text_soft))
                             .child(core_label),
                     )
-                    .child(num_cell(cx, 56.0, g.n.to_string(), p.text_soft))
-                    .child(num_cell(
-                        cx,
-                        56.0,
-                        format!("{:.1}%", g.winrate()),
-                        p.text_soft,
-                    ))
-                    .child(num_cell(
-                        cx,
-                        84.0,
-                        fmt_signed(g.profit),
-                        sign_color(p, g.profit),
-                    ))
-                    .child(num_cell(
-                        cx,
-                        70.0,
-                        fmt_signed(g.avg()),
-                        sign_color(p, g.avg()),
-                    ))
-                    .child(num_cell(cx, 52.0, format!("{:.2}", g.pf), p.text_soft))
-                    .child(num_cell(
-                        cx,
-                        70.0,
-                        fmt_signed(g.best),
-                        sign_color(p, g.best),
-                    ))
-                    .child(num_cell(
-                        cx,
-                        70.0,
-                        fmt_signed(g.worst),
-                        sign_color(p, g.worst),
-                    )),
+                    .children(METRIC_COLS.iter().map(|c| metric_cell(c, g, p, scale))),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 if this.sel_strategy.as_ref().is_some_and(|(k, _)| *k == key) {
@@ -530,6 +597,7 @@ impl AnalyticsView {
     fn strat_coins_table(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         // The selected-strategy detail and the all-strategies summary each keep
         // their own load note so either read failure remains visible.
+        let scale = design::font_scale(cx);
         let (coins, scope): (Result<Vec<GroupStat>, super::Note>, String) = match &self.sel_strategy
         {
             Some((_, name)) => (
@@ -545,29 +613,18 @@ impl AnalyticsView {
                 t!("analytics.strat.scope_all").to_string(),
             ),
         };
-        let cell = |w: f32, key: &str| {
-            div()
-                .w(design::font_w_px(cx, w))
-                .flex_none()
-                .text_right()
-                .child(t!(key).to_string())
-        };
         let head = h_flex()
             .w_full()
             .flex_none()
             .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
-            .px(design::ui_px(cx, 8.0))
-            .gap(design::ui_px(cx, 8.0))
+            .px(design::ui_px(cx, COIN_ROW_PAD_X))
+            .gap(design::ui_px(cx, COIN_ROW_GAP))
             .items_center()
             .text_size(design::t_caption(cx))
             .text_color(moon(p.text_soft))
             .bg(moon(p.table_head))
             .child(div().flex_1().child(t!("analytics.col.coin").to_string()))
-            .child(cell(52.0, "analytics.kpi.trades"))
-            .child(cell(56.0, "analytics.kpi.winrate"))
-            .child(cell(84.0, "analytics.col.profit"))
-            .child(cell(52.0, "analytics.col.pf"))
-            .child(cell(70.0, "analytics.col.worst"));
+            .children(COIN_COLS.iter().map(|c| head_cell(c, scale)));
 
         let body: AnyElement = match coins {
             Err(note) => super::note_el("an-strat-coins-note", note, 10.0, p, cx),
@@ -578,32 +635,13 @@ impl AnalyticsView {
                         h_flex()
                             .w_full()
                             .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
-                            .px(design::ui_px(cx, 8.0))
-                            .gap(design::ui_px(cx, 8.0))
+                            .px(design::ui_px(cx, COIN_ROW_PAD_X))
+                            .gap(design::ui_px(cx, COIN_ROW_GAP))
                             .items_center()
                             .border_t_1()
                             .border_color(moon_alpha(p.border, 0.5))
                             .child(div().flex_1().min_w_0().truncate().child(c.name.clone()))
-                            .child(num_cell(cx, 52.0, c.n.to_string(), p.text_soft))
-                            .child(num_cell(
-                                cx,
-                                56.0,
-                                format!("{:.1}%", c.winrate()),
-                                p.text_soft,
-                            ))
-                            .child(num_cell(
-                                cx,
-                                84.0,
-                                fmt_signed(c.profit),
-                                sign_color(p, c.profit),
-                            ))
-                            .child(num_cell(cx, 52.0, format!("{:.2}", c.pf), p.text_soft))
-                            .child(num_cell(
-                                cx,
-                                70.0,
-                                fmt_signed(c.worst),
-                                sign_color(p, c.worst),
-                            )),
+                            .children(COIN_COLS.iter().map(|col| metric_cell(col, c, p, scale))),
                     );
                 }
                 list.into_any_element()
@@ -611,7 +649,7 @@ impl AnalyticsView {
         };
 
         v_flex()
-            .w(design::font_w_px(cx, 460.0))
+            .w(design::font_w_px(cx, COIN_PANEL_W))
             .flex_none()
             .h_full()
             .min_h_0()
@@ -659,13 +697,7 @@ impl AnalyticsView {
 
 /// Шапка таблицы сравнения.
 fn header_row(p: MoonPalette, cx: &Context<AnalyticsView>) -> impl IntoElement {
-    let cell = |w: f32, key: &str| {
-        div()
-            .w(design::font_w_px(cx, w))
-            .flex_none()
-            .text_right()
-            .child(t!(key).to_string())
-    };
+    let scale = design::font_scale(cx);
     h_flex()
         .w_full()
         .flex_none()
@@ -701,21 +733,97 @@ fn header_row(p: MoonPalette, cx: &Context<AnalyticsView>) -> impl IntoElement {
                         .flex_none()
                         .child(t!("analytics.col.core").to_string()),
                 )
-                .child(cell(56.0, "analytics.kpi.trades"))
-                .child(cell(56.0, "analytics.kpi.winrate"))
-                .child(cell(84.0, "analytics.col.profit"))
-                .child(cell(70.0, "analytics.kpi.avg_short"))
-                .child(cell(52.0, "analytics.col.pf"))
-                .child(cell(70.0, "analytics.col.best"))
-                .child(cell(70.0, "analytics.col.worst")),
+                .children(METRIC_COLS.iter().map(|c| head_cell(c, scale))),
         )
 }
 
-fn num_cell(cx: &Context<AnalyticsView>, w: f32, text: String, color: u32) -> impl IntoElement {
+/// Heading cell of a [`MetricCol`], right-aligned over its numbers.
+///
+/// `scale` is the caller's hoisted [`design::font_scale`]: resolving it per cell costs two
+/// by-value theme-token clones each, and this table renders every row (it is not virtualized).
+fn head_cell(col: &MetricCol, scale: f32) -> impl IntoElement {
     div()
-        .w(design::font_w_px(cx, w))
+        .w(px(col.w * scale))
+        .flex_none()
+        .text_right()
+        .child(t!(col.key).to_string())
+}
+
+/// Body cell of a [`MetricCol`]: text and sign colour both derived from the same descriptor, so
+/// a reordered column carries its colouring with it.
+///
+/// `scale` is the caller's hoisted font scale shared by every cell in the rendered table.
+fn metric_cell(col: &MetricCol, g: &GroupStat, p: MoonPalette, scale: f32) -> impl IntoElement {
+    let color = match col.signed {
+        Some(value) => sign_color(p, value(g)),
+        None => p.text_soft,
+    };
+    num_cell(scale, col.w, (col.text)(g), color)
+}
+
+/// Render one right-aligned numeric cell using a caller-hoisted font `scale`.
+fn num_cell(scale: f32, w: f32, text: String, color: u32) -> impl IntoElement {
+    div()
+        .w(px(w * scale))
         .flex_none()
         .text_right()
         .text_color(moon(color))
         .child(text)
+}
+
+// Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
+// shadows the built-in attribute and makes `#[test]` expand recursively.
+#[cfg(test)]
+mod tests {
+    use super::{
+        COIN_COLS, COIN_PANEL_W, COIN_ROW_GAP, COIN_ROW_PAD_X, COL_PROFIT, COL_TRADES, COL_WINRATE,
+        METRIC_COLS, MetricCol,
+    };
+
+    fn position(cols: &[MetricCol], key: &str) -> usize {
+        cols.iter()
+            .position(|c| c.key == key)
+            .unwrap_or_else(|| panic!("column {key} missing"))
+    }
+
+    /// The tables are sorted by profit descending (SQL-side, `db::analytics`). The sort key has
+    /// to lead the numbers: buried mid-row it leaves the ranking without an anchor, and winrate
+    /// ahead of it presents a 100%-on-two-trades row as the top performer.
+    #[test]
+    fn profit_anchors_the_numeric_columns() {
+        assert_eq!(METRIC_COLS[0].key, COL_TRADES.key, "trade count leads");
+        assert_eq!(METRIC_COLS[1].key, COL_PROFIT.key, "profit follows it");
+        assert!(
+            position(METRIC_COLS, COL_PROFIT.key) < position(METRIC_COLS, COL_WINRATE.key),
+            "profit must precede winrate"
+        );
+        // COIN_COLS inherits the ordering via `coin_columns_keep_the_strategy_order`.
+    }
+
+    /// Both tables sit on the same screen in "Монеты" mode, so a metric present in both has to
+    /// keep the same relative position — otherwise the position cue learned on one misreads the
+    /// other.
+    #[test]
+    fn coin_columns_keep_the_strategy_order() {
+        let shared: Vec<&str> = METRIC_COLS
+            .iter()
+            .map(|c| c.key)
+            .filter(|k| COIN_COLS.iter().any(|c| c.key == *k))
+            .collect();
+        let coin_order: Vec<&str> = COIN_COLS.iter().map(|c| c.key).collect();
+        assert_eq!(shared, coin_order);
+    }
+
+    /// The coin panel is a fixed-width box and its name column is the residual, so widening a
+    /// shared descriptor for the roomier strategy table silently eats the coin name here.
+    #[test]
+    fn coin_columns_leave_room_for_the_name() {
+        let numbers: f32 = COIN_COLS.iter().map(|c| c.w).sum();
+        let name_w =
+            COIN_PANEL_W - COIN_ROW_PAD_X * 2.0 - COIN_ROW_GAP * COIN_COLS.len() as f32 - numbers;
+        assert!(
+            name_w >= 70.0,
+            "coin name column squeezed to {name_w}px by the shared descriptors"
+        );
+    }
 }
