@@ -507,7 +507,12 @@ impl AnalyticsView {
         let (from, to) = match self.cal_mode {
             calendar::CalMode::Month => calendar::month_range(self.cal_ym),
             calendar::CalMode::Year => calendar::all_history_range(),
-            calendar::CalMode::Day => (self.cal_day, self.cal_day + 86_400),
+            // «День» грузит окно из 7 суток (выбранный день по центру/снизу) —
+            // почасовая сетка строится по ним.
+            calendar::CalMode::Day => {
+                let (top, bottom) = calendar::day_window(self.cal_day);
+                (top, bottom + 86_400)
+            }
         };
         Query {
             from,
@@ -547,12 +552,18 @@ impl AnalyticsView {
         // (он на этой вкладке скрыт). Фильтры ядро/сторона/эму сохраняются.
         let q = self.cal_query();
         let q_prev = self.cal_query_prev();
+        // «День» грузит ПОЧАСОВЫЕ ячейки (сетка 24×7), остальные режимы — суточные.
+        let hourly = self.cal_mode == calendar::CalMode::Day;
         self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let data = executor
                 .spawn(async move {
-                    let cur = moon_core::db::analytics::calendar_cells(&q);
+                    let cur = if hourly {
+                        moon_core::db::analytics::calendar_hours(&q)
+                    } else {
+                        moon_core::db::analytics::calendar_cells(&q)
+                    };
                     // Агрегат пред. месяца (profit, trades, wins) для дельт KPI.
                     let prev = q_prev
                         .and_then(|qp| moon_core::db::analytics::calendar_cells(&qp))

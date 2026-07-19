@@ -105,6 +105,18 @@ pub(super) fn all_history_range() -> (i64, i64) {
     (-1, today_start() + 86_400)
 }
 
+/// Сколько суток-строк показывает режим «День».
+pub(super) const DAY_ROWS: i64 = 30;
+
+/// Окно суток для режима «День»: выбранный день по центру, но НЕ выше — если
+/// ниже уходило бы будущее, окно прижимается так, что низ = «сегодня»
+/// (выбранный день опускается к нижней строке). Возвращает `(top, bottom)`
+/// day-start; строк ровно `DAY_ROWS`, `bottom = top+(DAY_ROWS-1)д`.
+pub(super) fn day_window(sel: i64) -> (i64, i64) {
+    let bottom = (sel + (DAY_ROWS / 2) * 86_400).min(today_start());
+    (bottom - (DAY_ROWS - 1) * 86_400, bottom)
+}
+
 /// Локализованный список из строки "a,b,c".
 pub(super) fn split_i18n(s: String) -> Vec<String> {
     s.split(',').map(|x| x.trim().to_string()).collect()

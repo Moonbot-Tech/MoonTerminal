@@ -98,6 +98,10 @@ analytics.cal.kpi_profit:
   ru: "Прибыль месяца"
   en: "Month profit"
   es: "Beneficio del mes"
+analytics.cal.kpi_profit_day:
+  ru: "Прибыль дня"
+  en: "Day profit"
+  es: "Beneficio del día"
 analytics.cal.kpi_wins:
   ru: "Плюсовые ордера"
   en: "Winning orders"

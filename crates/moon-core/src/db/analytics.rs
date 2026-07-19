@@ -459,6 +459,37 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
     Some(out)
 }
 
+/// Почасовые ячейки за период (для режима «День» календаря): `start` = начало
+/// ЧАСА UTC, PnL/сделки/wins. Разрежённо (только часы со сделками) — сетку
+/// 24×N строит UI. None — БД недоступна; Some(пусто) — период без сделок/схемы.
+pub fn calendar_hours(q: &Query) -> Option<Vec<DayCell>> {
+    let conn = super::open_reader().ok()?;
+    let src = match unified_from(&conn, q) {
+        Ok(Some(s)) => s,
+        Ok(None) => return Some(Vec::new()), // схема ещё не пришла
+        Err(_) => return None,
+    };
+    let sql = format!(
+        "SELECT (o.closedate / 3600) * 3600 AS h,
+                COALESCE(SUM(o.profitbtc), 0), COUNT(*), COALESCE(SUM(o.profitbtc > 0), 0)
+         FROM {src} GROUP BY h ORDER BY h"
+    );
+    let mut stmt = conn.prepare(&sql).ok()?;
+    let out = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok(DayCell {
+                start: r.get(0)?,
+                profit: r.get(1)?,
+                trades: r.get(2)?,
+                wins: r.get(3)?,
+            })
+        })
+        .ok()?
+        .flatten()
+        .collect();
+    Some(out)
+}
+
 /// Run a query that may join the ATTACHed strategies DB, retrying WITHOUT names
 /// if it fails while names were in play.
 ///
