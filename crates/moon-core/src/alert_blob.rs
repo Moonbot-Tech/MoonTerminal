@@ -230,25 +230,44 @@ mod tests {
 
     #[test]
     fn decode_line_kind() {
-        assert_eq!(decode(&bytes(HLINE_SOLID)).unwrap().line_kind, LineKind::Solid);
+        assert_eq!(
+            decode(&bytes(HLINE_SOLID)).unwrap().line_kind,
+            LineKind::Solid
+        );
         assert_eq!(decode(&bytes(HLINE_DOT)).unwrap().line_kind, LineKind::Dot);
         assert_eq!(
             decode(&bytes(HLINE_DDD)).unwrap().line_kind,
             LineKind::DashDotDot
         );
         // Дефолтные сэмплы (@13=1) = Dash.
-        assert_eq!(decode(&bytes(MINA_HLINE)).unwrap().line_kind, LineKind::Dash);
+        assert_eq!(
+            decode(&bytes(MINA_HLINE)).unwrap().line_kind,
+            LineKind::Dash
+        );
     }
 
     /// Заголовок (тип, kind, uid, цвет, strategy_id, line_kind) кодируется байт-в-байт.
     #[test]
     fn encode_header_byte_exact() {
-        for hx in [MINA_HLINE, BTC_SEGMENT, TRIANGLE, CHANNEL, HLINE_STRAT, HLINE_SOLID, HLINE_DOT]
-        {
+        for hx in [
+            MINA_HLINE,
+            BTC_SEGMENT,
+            TRIANGLE,
+            CHANNEL,
+            HLINE_STRAT,
+            HLINE_SOLID,
+            HLINE_DOT,
+        ] {
             let orig = bytes(hx);
             let d = decode(&orig).unwrap();
             let enc = encode(
-                &d.kind, d.color, d.thickness, d.line_kind, d.created_ms, d.strategy_id, d.uid,
+                &d.kind,
+                d.color,
+                d.thickness,
+                d.line_kind,
+                d.created_ms,
+                d.strategy_id,
+                d.uid,
             );
             assert_eq!(enc.len(), orig.len(), "len {hx}");
             assert_eq!(&enc[0..1], &orig[0..1], "type {hx}");
@@ -263,10 +282,22 @@ mod tests {
     /// encode∘decode — взаимно обратны.
     #[test]
     fn roundtrip_values() {
-        for hx in [MINA_HLINE, BTC_SEGMENT, TRIANGLE, CHANNEL, HLINE_STRAT, HLINE_DOT] {
+        for hx in [
+            MINA_HLINE,
+            BTC_SEGMENT,
+            TRIANGLE,
+            CHANNEL,
+            HLINE_STRAT,
+            HLINE_DOT,
+        ] {
             let d1 = decode(&bytes(hx)).unwrap();
             let d2 = decode(&encode(
-                &d1.kind, d1.color, d1.thickness, d1.line_kind, d1.created_ms, d1.strategy_id,
+                &d1.kind,
+                d1.color,
+                d1.thickness,
+                d1.line_kind,
+                d1.created_ms,
+                d1.strategy_id,
                 d1.uid,
             ))
             .unwrap();

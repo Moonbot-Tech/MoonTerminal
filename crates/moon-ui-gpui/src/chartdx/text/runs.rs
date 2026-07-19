@@ -48,7 +48,11 @@ impl RenderState {
         )
     }
 
-    pub(super) fn measure_text(&mut self, ctx: &GpuCanvasTextContext<'_>, text: &str) -> GpuCanvasTextMetrics {
+    pub(super) fn measure_text(
+        &mut self,
+        ctx: &GpuCanvasTextContext<'_>,
+        text: &str,
+    ) -> GpuCanvasTextMetrics {
         measure_text_run(&mut self.text_runs, self.text_run_cursor, ctx, text)
     }
 
@@ -265,8 +269,15 @@ impl RenderState {
             if let Some(q) =
                 nearest_orderbook_notional(&self.panes[idx].orderbook_levels, price, tol)
             {
-                let m =
-                    self.draw_label_text(ctx, &fmt_amount(q), right_x, cy - gap, 0.0, 1.0, cur_col)?;
+                let m = self.draw_label_text(
+                    ctx,
+                    &fmt_amount(q),
+                    right_x,
+                    cy - gap,
+                    0.0,
+                    1.0,
+                    cur_col,
+                )?;
                 placed.push(PlacedLabel {
                     x: right_x,
                     y: cy - gap,

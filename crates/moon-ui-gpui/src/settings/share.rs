@@ -5,8 +5,8 @@
 //! Вставка пишет в draft (живое превью); на диск попадает по «Сохранить».
 //! Формат/валидация — в moon-core (`to_share_string`/`parse_share` у структур файлов).
 
-use gpui::*;
 use super::{SettingsView, Tab, badges, interface, lines};
+use gpui::*;
 use moon_core::config::{AppConfig, BadgesConfig, ChartThemeSet, HotkeysConfig, OrdersStyleSet};
 
 impl SettingsView {

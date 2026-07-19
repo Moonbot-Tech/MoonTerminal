@@ -32,7 +32,6 @@ impl Default for StrategiesPanels {
     }
 }
 
-
 /// Геометрия+состояние окна группы (ключ карты — имя группы).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GroupLayout {

@@ -153,9 +153,12 @@ fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
     let chart_tabs_mod = fs::read_to_string(root.join("chart_tabs").join("mod.rs")).unwrap();
     let chart_tabs_windows =
         fs::read_to_string(root.join("chart_tabs").join("windows.rs")).unwrap();
-    let chart_detached_host =
-        fs::read_to_string(root.join("chart_tabs").join("detached_host").join("render.rs"))
-            .unwrap();
+    let chart_detached_host = fs::read_to_string(
+        root.join("chart_tabs")
+            .join("detached_host")
+            .join("render.rs"),
+    )
+    .unwrap();
 
     assert!(
         windowing.contains("fn detached_panel_window_options(")

@@ -495,9 +495,11 @@ impl SettingsView {
         if plan.hotkeys.is_empty() && plan.unsupported_hotkeys.is_empty() {
             return None;
         }
-        let mut group = v_flex()
-            .gap_0p5()
-            .child(div().font_bold().child(t!("import.group.hotkeys").to_string()));
+        let mut group = v_flex().gap_0p5().child(
+            div()
+                .font_bold()
+                .child(t!("import.group.hotkeys").to_string()),
+        );
         for item in &plan.hotkeys {
             group = group.child(self.change_row(cx, item, p));
         }

@@ -27,8 +27,24 @@ pub(super) struct AlertParams {
 /// Держим здесь (moon-core), т.к. извлечение идёт в feed-слое; список — зеркало
 /// `moon-ui-gpui::sound::SOUNDS`.
 const SOUND_STEMS: &[&str] = &[
-    "alarm", "babytoy", "bark", "comegetsome", "cork", "ding1", "ding2", "error", "fatality",
-    "gold", "hallo", "letsrock", "milord", "pfiff", "ringin", "ringout", "turnon", "yes_mast",
+    "alarm",
+    "babytoy",
+    "bark",
+    "comegetsome",
+    "cork",
+    "ding1",
+    "ding2",
+    "error",
+    "fatality",
+    "gold",
+    "hallo",
+    "letsrock",
+    "milord",
+    "pfiff",
+    "ringin",
+    "ringout",
+    "turnon",
+    "yes_mast",
 ];
 
 /// Нормализует значение поля к стему звука: трим/нижний регистр + срез расширения
@@ -71,7 +87,10 @@ fn sound_is_none(s: &StrategySnapshot) -> bool {
 /// поля, значение которых равно дефолту схемы (та же грабля, что у остальных полей
 /// стратегий) — стратегия с ДЕФОЛТНЫМ звуком приходит вовсе без поля звука, и скан
 /// снапшота его не видит. Достаём из default_value полей схемы этого вида.
-fn schema_alert_defaults(schema: &StrategySchema, s: &StrategySnapshot) -> (Option<bool>, Option<String>) {
+fn schema_alert_defaults(
+    schema: &StrategySchema,
+    s: &StrategySnapshot,
+) -> (Option<bool>, Option<String>) {
     let mut sound_alert = None;
     let mut sound = None;
     for sec in schema.editor_sections_for_strategy_kind(s.kind()) {

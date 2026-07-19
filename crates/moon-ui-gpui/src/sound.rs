@@ -45,10 +45,7 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// Байты звука по имени (регистр не важен).
 fn bytes_of(name: &str) -> Option<&'static [u8]> {
     let name = name.trim().to_ascii_lowercase();
-    SOUNDS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, b)| *b)
+    SOUNDS.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
 }
 
 /// Проиграть звук по имени (не блокирует; один звук за раз — новый прерывает

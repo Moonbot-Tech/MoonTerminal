@@ -89,9 +89,9 @@ impl StrategiesView {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let list = executor
-                .spawn(async move {
-                    moon_core::strat_db::stats::versions_with_stats(core, id as i64)
-                })
+                .spawn(
+                    async move { moon_core::strat_db::stats::versions_with_stats(core, id as i64) },
+                )
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -173,7 +173,9 @@ impl StrategiesView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
-                    let Some((fields, ignore)) = payload else { return };
+                    let Some((fields, ignore)) = payload else {
+                        return;
+                    };
                     if this.selected != Some((core, id)) {
                         return;
                     }
@@ -199,9 +201,7 @@ impl StrategiesView {
                         let mut out = Vec::new();
                         for sec in &kind.sections {
                             for f in &sec.fields {
-                                if !seen.insert(f.name.to_lowercase())
-                                    || ignore.contains(&f.name)
-                                {
+                                if !seen.insert(f.name.to_lowercase()) || ignore.contains(&f.name) {
                                     continue;
                                 }
                                 let mut target = vmap
@@ -403,11 +403,7 @@ impl StrategiesView {
                 }))
                 .child(div().child("▸"))
                 .when_some(count, |s, n| {
-                    s.child(
-                        div()
-                            .text_size(design::t_caption(cx))
-                            .child(n.to_string()),
-                    )
+                    s.child(div().text_size(design::t_caption(cx)).child(n.to_string()))
                 })
                 .into_any_element();
         }
@@ -455,7 +451,9 @@ impl StrategiesView {
 
         let hint = |s: String| div().mt_2().text_color(moon(p.text_muted)).child(s);
         if self.selected.is_none() {
-            return col.child(hint(t!("strat.no_selection").to_string())).into_any_element();
+            return col
+                .child(hint(t!("strat.no_selection").to_string()))
+                .into_any_element();
         }
         // Мультивыбор: версии недоступны (панели показывают объединение живых).
         if self.sel.len() > 1 {
@@ -510,16 +508,13 @@ impl StrategiesView {
                 )
                 // Дата последней версии (той, что сейчас в ядре) — справа, тускло.
                 .child(
-                    div()
-                        .flex_none()
-                        .text_color(moon(p.text_muted))
-                        .child(
-                            self.versions
-                                .list
-                                .first()
-                                .map(|v| short_date(v.valid_from))
-                                .unwrap_or_default(),
-                        ),
+                    div().flex_none().text_color(moon(p.text_muted)).child(
+                        self.versions
+                            .list
+                            .first()
+                            .map(|v| short_date(v.valid_from))
+                            .unwrap_or_default(),
+                    ),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.select_version(None, cx)));
             if live_on {

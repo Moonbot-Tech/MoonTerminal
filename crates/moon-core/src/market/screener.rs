@@ -136,10 +136,7 @@ impl MarketDataSource {
                     row.high_1h = f64::from(c.high());
                 }
             }
-            if let Some(candles) = snap
-                .market_history_readers(name)
-                .and_then(|r| r.candles_5m)
-            {
+            if let Some(candles) = snap.market_history_readers(name).and_then(|r| r.candles_5m) {
                 candles.with_last(12, |view| {
                     view.for_each(|c| {
                         if c.time().unix_millis() >= hour_cutoff_ms {

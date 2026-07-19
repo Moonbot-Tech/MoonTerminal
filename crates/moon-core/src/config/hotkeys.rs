@@ -304,7 +304,11 @@ impl HotkeysConfig {
         if !path.exists() {
             return None;
         }
-        Some(super::toml_io::load_or_default(&path, "hotkeys.toml", |_| {}))
+        Some(super::toml_io::load_or_default(
+            &path,
+            "hotkeys.toml",
+            |_| {},
+        ))
     }
 
     /// Записать `hotkeys.toml` (открытый человекочитаемый TOML — можно делиться).

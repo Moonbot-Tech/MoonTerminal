@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use gpui::RenderImage;
 use image::{Frame, ImageBuffer, Rgba};
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 
 /// Вшитый набор иконок групп (весь `assets/icons`, ~64 КБ PNG).
 static EMBEDDED: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/icons");

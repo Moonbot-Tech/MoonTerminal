@@ -622,7 +622,10 @@ mod tests {
             view.px_per_ms,
             lo
         );
-        assert!(view.px_per_ms < 1e-6, "тест должен покрывать зону ниже старого флора");
+        assert!(
+            view.px_per_ms < 1e-6,
+            "тест должен покрывать зону ниже старого флора"
+        );
         assert!(view.follow, "зум в live не должен срывать follow");
 
         // Окно НЕ капается старым флором: равно area/ppm (365 суток), а не area/1e-6.

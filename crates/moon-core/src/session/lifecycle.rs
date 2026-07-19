@@ -9,8 +9,8 @@ use crate::feed::{self, ConnStatus, EngineActionResult, FeedHandle, FeedMsg, Fee
 use crate::market::{MarketDataMode, MarketDataSource, MarketStore};
 
 use super::{
-    conn_sig, orderbook_kind_for_exchange, ConnSummary, CoreId, CoreSession, CoreStore,
-    DrainStats, LicenseSummary, SessionManager,
+    conn_sig, orderbook_kind_for_exchange, ConnSummary, CoreId, CoreSession, CoreStore, DrainStats,
+    LicenseSummary, SessionManager,
 };
 
 impl SessionManager {
@@ -395,6 +395,12 @@ impl SessionManager {
             return;
         }
         let sig = conn_sig(&server);
-        self.respawn_session(server, sig, config.chart_memory_percent, reports, "reconnect");
+        self.respawn_session(
+            server,
+            sig,
+            config.chart_memory_percent,
+            reports,
+            "reconnect",
+        );
     }
 }

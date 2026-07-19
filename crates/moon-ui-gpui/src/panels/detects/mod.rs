@@ -343,7 +343,6 @@ impl DetectsPanel {
     fn view_cfg(&self, cx: &App) -> DetectViewCfg {
         self.backend.read(cx).detects_view.group(&self.group)
     }
-
 }
 
 fn detects_sig(b: &Backend, group: &str) -> u64 {

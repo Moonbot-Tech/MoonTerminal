@@ -372,7 +372,8 @@ impl ChartTabs {
         // сохраняется — ей управляет степпер «Прозр.»).
         let fig_color_picker = {
             let init = backend.read(cx).fig_style.color;
-            let hsla: Hsla = gpui::rgb(crate::design::rgb_to_u32([init[0], init[1], init[2]])).into();
+            let hsla: Hsla =
+                gpui::rgb(crate::design::rgb_to_u32([init[0], init[1], init[2]])).into();
             cx.new(|cx| MoonColorPickerState::new(window, cx).default_value(hsla))
         };
         cx.subscribe(

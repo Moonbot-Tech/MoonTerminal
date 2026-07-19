@@ -49,7 +49,10 @@ pub enum DecodedShortcut {
     /// 0 — сочетание не назначено.
     Empty,
     /// Известная клавиша + модификаторы.
-    Key { mods: ShortcutMods, key: ShortcutKey },
+    Key {
+        mods: ShortcutMods,
+        key: ShortcutKey,
+    },
     /// Неизвестный VK или неиспользуемые биты — переносить нельзя, показываем как есть.
     Unsupported { raw: u16 },
 }
@@ -309,7 +312,10 @@ mod tests {
     #[test]
     fn display_labels() {
         assert_eq!(display(decode(0)), "—");
-        assert_eq!(display(decode(MOD_CTRL | MOD_SHIFT | 0x76)), "Ctrl+Shift+F7");
+        assert_eq!(
+            display(decode(MOD_CTRL | MOD_SHIFT | 0x76)),
+            "Ctrl+Shift+F7"
+        );
         assert_eq!(display(decode(MOD_ALT | 0x44)), "Alt+D");
         assert_eq!(display(decode(0x00E5)), "VK 0xE5?");
     }

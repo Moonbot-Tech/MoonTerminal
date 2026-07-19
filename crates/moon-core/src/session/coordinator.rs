@@ -231,7 +231,8 @@ impl SessionManager {
             .values()
             .filter_map(|p| self.core_key.get(p).map(|k| (*p, *k)))
             .collect();
-        self.market_source.set_provider_exchanges(&provider_exchange);
+        self.market_source
+            .set_provider_exchanges(&provider_exchange);
         self.core_provider = new_core_provider;
     }
 }

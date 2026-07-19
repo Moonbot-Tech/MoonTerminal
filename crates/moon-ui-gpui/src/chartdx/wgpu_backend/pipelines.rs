@@ -364,7 +364,10 @@ fn alpha_blend_state() -> wgpu::BlendState {
     }
 }
 
-pub(super) fn create_background_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> BackgroundTexture {
+pub(super) fn create_background_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> BackgroundTexture {
     let image = image::load_from_memory(BACKGROUND_PNG)
         .expect("embedded chart background must decode")
         .to_rgba8();

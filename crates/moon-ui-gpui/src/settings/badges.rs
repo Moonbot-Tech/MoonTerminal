@@ -336,7 +336,12 @@ impl SettingsView {
             .gap(px(6.0))
             .items_center()
             .child(
-                tip("badge-ord-tip", "badges.ordinal_tip", div().flex_none().w(px(42.0))).child(
+                tip(
+                    "badge-ord-tip",
+                    "badges.ordinal_tip",
+                    div().flex_none().w(px(42.0)),
+                )
+                .child(
                     MoonInput::new(SharedString::from(format!("badge-ord-{idx}")))
                         .state(&row.ordinal)
                         .small(),
@@ -351,7 +356,12 @@ impl SettingsView {
             )
             .child(active_chk)
             .child(
-                tip("badge-code-tip", "badges.code_tip", div().flex_none().w(px(44.0))).child(
+                tip(
+                    "badge-code-tip",
+                    "badges.code_tip",
+                    div().flex_none().w(px(44.0)),
+                )
+                .child(
                     MoonInput::new(SharedString::from(format!("badge-code-{idx}")))
                         .state(&row.code)
                         .small(),

@@ -169,7 +169,11 @@ pub fn db_dir() -> PathBuf {
             let new = dir.join(name);
             if old != new && old.exists() && !new.exists() {
                 if let Err(e) = std::fs::rename(&old, &new) {
-                    log::warn!("миграция {} → {} не удалась: {e}", old.display(), new.display());
+                    log::warn!(
+                        "миграция {} → {} не удалась: {e}",
+                        old.display(),
+                        new.display()
+                    );
                 }
             }
         }

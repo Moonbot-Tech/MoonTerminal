@@ -23,8 +23,8 @@
 pub mod stats;
 mod write;
 
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, OnceLock};
 
 use rusqlite::Connection;
@@ -80,7 +80,9 @@ impl StratSink {
         match self.tx.try_send(msg) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
-                log::warn!("стратегии(db): очередь writer'а полна — набор пропущен (догонит следующий)");
+                log::warn!(
+                    "стратегии(db): очередь writer'а полна — набор пропущен (догонит следующий)"
+                );
             }
             Err(TrySendError::Disconnected(_)) => {}
         }
@@ -188,7 +190,12 @@ fn spawn_writer() -> Option<StratSink> {
                         strategies,
                     } => {
                         match write::apply_full_set(
-                            &conn, &mut state, core_uid, &core_name, initial, &strategies,
+                            &conn,
+                            &mut state,
+                            core_uid,
+                            &core_name,
+                            initial,
+                            &strategies,
                         ) {
                             Ok(n) if n > 0 => {
                                 gen_writer.fetch_add(1, Ordering::Relaxed);

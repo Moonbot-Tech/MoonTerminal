@@ -56,11 +56,7 @@ impl ChartDataState {
     /// Сигнатура фигур для гейта пересборки userdata: rev стора + rev интерактива.
     /// u64::MAX не возвращаем (это «принудительно грязно» у панели).
     pub(super) fn figures_sig(&self) -> u64 {
-        let store_rev = self
-            .figures
-            .as_ref()
-            .map(|f| f.borrow().rev())
-            .unwrap_or(0);
+        let store_rev = self.figures.as_ref().map(|f| f.borrow().rev()).unwrap_or(0);
         let sig = store_rev
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
             .wrapping_add(self.figure_visual_rev);

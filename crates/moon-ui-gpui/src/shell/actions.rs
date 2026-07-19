@@ -66,7 +66,9 @@ impl Shell {
                             err = format!("code {}", r.error_code);
                         }
                         moon_ui::MoonNotification::error(format!("{action}: {err}"))
-                            .title(rust_i18n::t!("shell.engine_toast.fail", core = core).to_string())
+                            .title(
+                                rust_i18n::t!("shell.engine_toast.fail", core = core).to_string(),
+                            )
                             .autohide(false)
                     };
                     window.push_notification(note, app);
@@ -205,9 +207,12 @@ fn engine_action_label(kind: &moon_core::feed::EngineActionKind) -> String {
     use rust_i18n::t;
     match kind {
         K::CancelAllOrders => t!("shell.engine_action.cancel_all").to_string(),
-        K::SetLeverage { market, leverage } => {
-            t!("shell.engine_action.set_leverage", market = market, lev = leverage).to_string()
-        }
+        K::SetLeverage { market, leverage } => t!(
+            "shell.engine_action.set_leverage",
+            market = market,
+            lev = leverage
+        )
+        .to_string(),
         K::SetHedgeMode { on: true } => t!("shell.engine_action.hedge_on").to_string(),
         K::SetHedgeMode { on: false } => t!("shell.engine_action.hedge_off").to_string(),
         K::ChangePositionType { market } => {

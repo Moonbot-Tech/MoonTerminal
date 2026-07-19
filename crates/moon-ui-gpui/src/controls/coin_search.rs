@@ -67,12 +67,39 @@ fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<Core
 fn ru_key_to_en(ch: char) -> char {
     let lower = ch.to_lowercase().next().unwrap_or(ch);
     let mapped = match lower {
-        'й' => 'q', 'ц' => 'w', 'у' => 'e', 'к' => 'r', 'е' => 't', 'н' => 'y',
-        'г' => 'u', 'ш' => 'i', 'щ' => 'o', 'з' => 'p', 'х' => '[', 'ъ' => ']',
-        'ф' => 'a', 'ы' => 's', 'в' => 'd', 'а' => 'f', 'п' => 'g', 'р' => 'h',
-        'о' => 'j', 'л' => 'k', 'д' => 'l', 'ж' => ';', 'э' => '\'',
-        'я' => 'z', 'ч' => 'x', 'с' => 'c', 'м' => 'v', 'и' => 'b', 'т' => 'n',
-        'ь' => 'm', 'б' => ',', 'ю' => '.', 'ё' => '`',
+        'й' => 'q',
+        'ц' => 'w',
+        'у' => 'e',
+        'к' => 'r',
+        'е' => 't',
+        'н' => 'y',
+        'г' => 'u',
+        'ш' => 'i',
+        'щ' => 'o',
+        'з' => 'p',
+        'х' => '[',
+        'ъ' => ']',
+        'ф' => 'a',
+        'ы' => 's',
+        'в' => 'd',
+        'а' => 'f',
+        'п' => 'g',
+        'р' => 'h',
+        'о' => 'j',
+        'л' => 'k',
+        'д' => 'l',
+        'ж' => ';',
+        'э' => '\'',
+        'я' => 'z',
+        'ч' => 'x',
+        'с' => 'c',
+        'м' => 'v',
+        'и' => 'b',
+        'т' => 'n',
+        'ь' => 'm',
+        'б' => ',',
+        'ю' => '.',
+        'ё' => '`',
         _ => return ch,
     };
     if ch.is_uppercase() {
@@ -85,7 +112,10 @@ fn ru_key_to_en(ch: char) -> char {
 /// Если в строке есть кириллица — переклад раскладки RU→EN (см. [`ru_key_to_en`]);
 /// иначе строка без изменений (без лишних аллокаций для обычного латинского ввода).
 pub(crate) fn normalize_layout(query: &str) -> std::borrow::Cow<'_, str> {
-    if query.chars().any(|c| ('а'..='я').contains(&c) || ('А'..='Я').contains(&c) || c == 'ё' || c == 'Ё') {
+    if query
+        .chars()
+        .any(|c| ('а'..='я').contains(&c) || ('А'..='Я').contains(&c) || c == 'ё' || c == 'Ё')
+    {
         std::borrow::Cow::Owned(query.chars().map(ru_key_to_en).collect())
     } else {
         std::borrow::Cow::Borrowed(query)

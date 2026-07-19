@@ -277,7 +277,14 @@ impl Render for CoreStatusView {
             .bg(rgb(p.table_body))
             .child(core_bar)
             .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
-            .child(v_flex().w_full().flex_1().min_h(px(0.0)).overflow_hidden().child(table))
+            .child(
+                v_flex()
+                    .w_full()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_hidden()
+                    .child(table),
+            )
             .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
             .child(footer)
     }

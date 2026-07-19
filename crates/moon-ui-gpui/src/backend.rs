@@ -212,7 +212,12 @@ impl Backend {
         self.session
             .store()
             .core(core)
-            .and_then(|cd| cd.orders.iter().find(|o| o.market == market).map(|o| o.is_short))
+            .and_then(|cd| {
+                cd.orders
+                    .iter()
+                    .find(|o| o.market == market)
+                    .map(|o| o.is_short)
+            })
             .unwrap_or(false)
     }
 

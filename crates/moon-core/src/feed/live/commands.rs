@@ -68,7 +68,11 @@ impl LocalStratEdits {
 
     pub(super) fn prune(&mut self) {
         self.ids.retain(|_, t| t.elapsed() < LOCAL_EDIT_TTL);
-        if self.wildcard.map(|t| t.elapsed() >= LOCAL_EDIT_TTL).unwrap_or(false) {
+        if self
+            .wildcard
+            .map(|t| t.elapsed() >= LOCAL_EDIT_TTL)
+            .unwrap_or(false)
+        {
             self.wildcard = None;
         }
     }
@@ -394,7 +398,10 @@ pub(super) fn drain_commands(
                 if let Err(error) = client.balances().refresh() {
                     log::warn!("core {} balance refresh request failed: {error}", server.id);
                 } else {
-                    log::info!("core {} balance refresh requested (assets click)", server.id);
+                    log::info!(
+                        "core {} balance refresh requested (assets click)",
+                        server.id
+                    );
                 }
             }
             Ok(CoreCmd::ConvertDust) => {
@@ -418,7 +425,10 @@ pub(super) fn drain_commands(
                         server.id
                     );
                 } else {
-                    log::info!("core {} chart alert upsert {market} uid={obj_uid}", server.id);
+                    log::info!(
+                        "core {} chart alert upsert {market} uid={obj_uid}",
+                        server.id
+                    );
                 }
             }
             Ok(CoreCmd::ChartAlertDelete { market, obj_uid }) => {
@@ -428,7 +438,10 @@ pub(super) fn drain_commands(
                         server.id
                     );
                 } else {
-                    log::info!("core {} chart alert delete {market} uid={obj_uid}", server.id);
+                    log::info!(
+                        "core {} chart alert delete {market} uid={obj_uid}",
+                        server.id
+                    );
                 }
             }
             // Ордер-мутирующие команды: рантайм moonproto применяет их к ЛОКАЛЬНОЙ модели

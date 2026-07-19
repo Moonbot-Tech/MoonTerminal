@@ -405,7 +405,7 @@ pub(super) mod build {
         b.push(1u8); // ConfirmClose
         b.push(0u8); // NewMarketsOnTop
         b.extend_from_slice(&5i32.to_le_bytes()); // CoinsSortOrder
-        // HotkeysPublic
+                                                  // HotkeysPublic
         b.push(1u8); // Filled
         b.push(2u8); // ver
         for s in order_sizes {
@@ -425,7 +425,11 @@ pub(super) mod build {
         }
         for i in 0..27u16 {
             // 27 shortcut-слотов: детерминированные значения (слот 0 пустой).
-            let v = if i == 0 { 0 } else { 0x2000 | (0x70 + (i % 12)) };
+            let v = if i == 0 {
+                0
+            } else {
+                0x2000 | (0x70 + (i % 12))
+            };
             b.extend_from_slice(&v.to_le_bytes());
         }
         push_string(&mut b, "chapters");
@@ -513,7 +517,10 @@ mod tests {
         let cfg = parse_payload(&full_payload(&[])).unwrap();
         assert_eq!(cfg.config_version, 1234);
         let h = &cfg.ui.hotkeys;
-        assert_eq!(h.order_sizes, [100.0, 500.0, 1000.0, 5000.0, 10000.0, 50000.0]);
+        assert_eq!(
+            h.order_sizes,
+            [100.0, 500.0, 1000.0, 5000.0, 10000.0, 50000.0]
+        );
         assert_eq!(h.order_size_sel, 2);
         assert_eq!(h.order_size_keys, [0x70, 0x71, 0x72, 0x73, 0x74, 0x75]);
         assert_eq!(h.fixed_sell_sel, 1);
@@ -575,11 +582,7 @@ mod tests {
         block(&mut p, 2, &[]);
         block(&mut p, 3, &[]);
         block(&mut p, 4, &theme_body());
-        block(
-            &mut p,
-            6,
-            &ui_body([0.0; 6], [0; 6], [0; 6], [0.0; 6]),
-        );
+        block(&mut p, 6, &ui_body([0.0; 6], [0; 6], [0; 6], [0.0; 6]));
         assert!(matches!(
             parse_payload(&p),
             Err(ImportError::Truncated(ref s)) if s.contains("kind=5")

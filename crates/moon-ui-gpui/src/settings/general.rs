@@ -6,8 +6,8 @@
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState,
-    MoonMenuSize, MoonPalette, MoonSelect, MoonSlider, MoonSliderEvent, MoonSliderState, MoonToggle,
-    StyledExt, h_flex, rgba_from, v_flex,
+    MoonMenuSize, MoonPalette, MoonSelect, MoonSlider, MoonSliderEvent, MoonSliderState,
+    MoonToggle, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -394,7 +394,9 @@ fn parse_font_delta(s: &str) -> Option<f32> {
     if !v.is_finite() {
         return None;
     }
-    let v = v.round().clamp(FONT_DELTA_MIN as f32, FONT_DELTA_MAX as f32);
+    let v = v
+        .round()
+        .clamp(FONT_DELTA_MIN as f32, FONT_DELTA_MAX as f32);
     Some(if v == 0.0 { 0.0 } else { v })
 }
 
@@ -506,8 +508,7 @@ pub(super) fn build_font(
                 let parsed = parse_font_delta(&field.read(cx).value());
                 if let Some(v) = parsed {
                     if this.set_ui_font_delta(v, cx) {
-                        this.ui_font
-                            .update(cx, |st, c| st.set_value(v, window, c));
+                        this.ui_font.update(cx, |st, c| st.set_value(v, window, c));
                     }
                 }
             }

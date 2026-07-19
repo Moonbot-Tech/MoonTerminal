@@ -328,7 +328,11 @@ impl ScreenerView {
                     .map(|&&(key, title, width, right)| {
                         let col = MoonDataTableColumn::new(key, title, width).sortable(true);
                         let col = if right { col.right() } else { col };
-                        if key == "market" { col.fixed_left() } else { col }
+                        if key == "market" {
+                            col.fixed_left()
+                        } else {
+                            col
+                        }
                     })
                     .collect::<Vec<_>>(),
             )
@@ -375,11 +379,8 @@ impl ScreenerView {
                 .unwrap_or_else(|| all_label.clone()),
         };
         let view = cx.entity();
-        let mut options: Vec<(ScrSource, SharedString, SharedString)> = vec![(
-            ScrSource::All,
-            "all".into(),
-            all_label.clone().into(),
-        )];
+        let mut options: Vec<(ScrSource, SharedString, SharedString)> =
+            vec![(ScrSource::All, "all".into(), all_label.clone().into())];
         for (id, name) in &cores {
             options.push((
                 ScrSource::Core(*id),

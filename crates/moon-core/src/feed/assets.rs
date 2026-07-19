@@ -315,10 +315,9 @@ pub(super) fn build_assets(
     };
     // Published sums must also be finite: rates and accumulation can overflow independently of
     // whether the source itself was priced.
-    let usd_rate_known =
-        source_priced(coin_margined, coin_wallet_all_priced, full_corrupt, rate)
-            && total_usdt.is_finite()
-            && free_usdt.is_finite();
+    let usd_rate_known = source_priced(coin_margined, coin_wallet_all_priced, full_corrupt, rate)
+        && total_usdt.is_finite()
+        && free_usdt.is_finite();
     let global = GlobalBalanceRow {
         btc_total: g.btc_balance_total,
         btc_locked: g.btc_balance_locked,

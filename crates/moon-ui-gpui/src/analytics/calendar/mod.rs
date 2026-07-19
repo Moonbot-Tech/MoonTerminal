@@ -152,7 +152,11 @@ impl AnalyticsView {
                 if forward && (y, m) >= (cy, cm) {
                     return; // в будущее не листаем — сделок там нет
                 }
-                self.cal_ym = if forward { next_month(y, m) } else { prev_month(y, m) };
+                self.cal_ym = if forward {
+                    next_month(y, m)
+                } else {
+                    prev_month(y, m)
+                };
             }
             CalMode::Day => {
                 if forward && self.cal_day >= today_start() {
@@ -234,7 +238,11 @@ impl AnalyticsView {
             CalMode::Year => self.calendar_year(&days, p, cx),
             CalMode::Day => self.calendar_day(&days, p, cx),
         };
-        v_flex().size_full().child(self.cal_nav(p, cx)).child(content).into_any_element()
+        v_flex()
+            .size_full()
+            .child(self.cal_nav(p, cx))
+            .child(content)
+            .into_any_element()
     }
 
     // ── Панель навигации (как период-бар Сводки: px10 py8) ───────────────────
@@ -242,7 +250,12 @@ impl AnalyticsView {
     fn cal_nav(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let (y, m) = self.cal_ym;
         let months = split_i18n(t!("analytics.heat.months").to_string());
-        let month_name = |mm: u32| months.get((mm as usize).saturating_sub(1)).cloned().unwrap_or_default();
+        let month_name = |mm: u32| {
+            months
+                .get((mm as usize).saturating_sub(1))
+                .cloned()
+                .unwrap_or_default()
+        };
         let label = match self.cal_mode {
             CalMode::Month => format!("{} {}", month_name(m), y),
             CalMode::Year => t!("analytics.cal.all_years").to_string(),
@@ -267,7 +280,11 @@ impl AnalyticsView {
         let mode_btn = |mode: CalMode| {
             let on = self.cal_mode == mode;
             MoonButton::new(SharedString::from(format!("cm-{}", mode.id())))
-                .variant(if on { MoonButtonVariant::Amber } else { MoonButtonVariant::Soft })
+                .variant(if on {
+                    MoonButtonVariant::Amber
+                } else {
+                    MoonButtonVariant::Soft
+                })
                 .size(MoonButtonSize::Micro)
                 .selected(on)
                 .label(mode.title())
@@ -286,7 +303,12 @@ impl AnalyticsView {
             .child(mode_btn(CalMode::Month))
             .child(mode_btn(CalMode::Day))
             .child(div().w(design::ui_px(cx, 8.0)))
-            .child(nav_btn("cal-prev", t!("analytics.cal.prev").to_string(), false, prev_off))
+            .child(nav_btn(
+                "cal-prev",
+                t!("analytics.cal.prev").to_string(),
+                false,
+                prev_off,
+            ))
             .child(
                 div()
                     .px(design::ui_px(cx, 8.0))
@@ -295,7 +317,12 @@ impl AnalyticsView {
                     .text_color(moon(p.text))
                     .child(label),
             )
-            .child(nav_btn("cal-next", t!("analytics.cal.next").to_string(), true, next_off))
+            .child(nav_btn(
+                "cal-next",
+                t!("analytics.cal.next").to_string(),
+                true,
+                next_off,
+            ))
             .child(div().flex_1())
             .child(
                 div()

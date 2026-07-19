@@ -53,12 +53,12 @@ impl SettingsView {
                     .render(),
             )
             .children([
-                    self.builtin_row(t!("hotkeys.builtin.wheel_zoom").to_string(), cx),
-                    self.builtin_row(t!("hotkeys.builtin.wheel_pan").to_string(), cx),
-                    self.builtin_row(t!("hotkeys.builtin.cancel_hover").to_string(), cx),
-                    self.builtin_row(t!("hotkeys.builtin.esc_close").to_string(), cx),
-                    self.builtin_row(t!("hotkeys.builtin.close_all").to_string(), cx),
-                    self.builtin_row(t!("hotkeys.builtin.reset_windows").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.wheel_zoom").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.wheel_pan").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.cancel_hover").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.esc_close").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.close_all").to_string(), cx),
+                self.builtin_row(t!("hotkeys.builtin.reset_windows").to_string(), cx),
             ]);
 
         // Переключатель групп — тот же контрол, что полоска чарт-вкладок главного окна
@@ -135,285 +135,285 @@ impl SettingsView {
         let hotkeys = hotkeys.clone();
         match group {
             HotkeyGroup::Presets => (0..ORDER_SIZE_KEYS)
-                    .map(|i| {
-                        let title = format!("F{}", i + 1);
-                        let desc = t!("hotkeys.order_size", n = i + 1).to_string();
-                        self.hotkey_row(title, desc, HotkeySlot::OrderSize(i), &hotkeys, cx)
-                    })
-                    .chain((0..SELL_PRESET_KEYS).map(|i| {
-                        let title = format!("S{}", i + 1);
-                        let desc = t!("hotkeys.sell_preset", n = i + 1).to_string();
-                        self.hotkey_row(title, desc, HotkeySlot::SellPreset(i), &hotkeys, cx)
-                    }))
-                    .collect(),
+                .map(|i| {
+                    let title = format!("F{}", i + 1);
+                    let desc = t!("hotkeys.order_size", n = i + 1).to_string();
+                    self.hotkey_row(title, desc, HotkeySlot::OrderSize(i), &hotkeys, cx)
+                })
+                .chain((0..SELL_PRESET_KEYS).map(|i| {
+                    let title = format!("S{}", i + 1);
+                    let desc = t!("hotkeys.sell_preset", n = i + 1).to_string();
+                    self.hotkey_row(title, desc, HotkeySlot::SellPreset(i), &hotkeys, cx)
+                }))
+                .collect(),
             HotkeyGroup::Trading => vec![
-                    self.hotkey_row(
-                        t!("hotkeys.cancel_buy").to_string(),
-                        t!("hotkeys.cancel_buy_hint").to_string(),
-                        HotkeySlot::CancelBuy,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.panic_sell").to_string(),
-                        t!("hotkeys.panic_sell_hint").to_string(),
-                        HotkeySlot::PanicSell,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.panic_sell_one").to_string(),
-                        t!("hotkeys.panic_sell_one_hint").to_string(),
-                        HotkeySlot::PanicSellOne,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.cancel_all_buys").to_string(),
-                        t!("hotkeys.cancel_all_buys_hint").to_string(),
-                        HotkeySlot::CancelAllBuys,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.join_sells").to_string(),
-                        t!("hotkeys.join_sells_hint").to_string(),
-                        HotkeySlot::JoinSells,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.new_long").to_string(),
-                        t!("hotkeys.new_long_hint").to_string(),
-                        HotkeySlot::NewLong,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.new_short").to_string(),
-                        t!("hotkeys.new_short_hint").to_string(),
-                        HotkeySlot::NewShort,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.split_order").to_string(),
-                        t!("hotkeys.split_order_hint").to_string(),
-                        HotkeySlot::SplitOrder,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.split_order_x").to_string(),
-                        t!("hotkeys.split_order_x_hint").to_string(),
-                        HotkeySlot::SplitOrderX,
-                        &hotkeys,
-                        cx,
-                    ),
-                ],
+                self.hotkey_row(
+                    t!("hotkeys.cancel_buy").to_string(),
+                    t!("hotkeys.cancel_buy_hint").to_string(),
+                    HotkeySlot::CancelBuy,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.panic_sell").to_string(),
+                    t!("hotkeys.panic_sell_hint").to_string(),
+                    HotkeySlot::PanicSell,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.panic_sell_one").to_string(),
+                    t!("hotkeys.panic_sell_one_hint").to_string(),
+                    HotkeySlot::PanicSellOne,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.cancel_all_buys").to_string(),
+                    t!("hotkeys.cancel_all_buys_hint").to_string(),
+                    HotkeySlot::CancelAllBuys,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.join_sells").to_string(),
+                    t!("hotkeys.join_sells_hint").to_string(),
+                    HotkeySlot::JoinSells,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.new_long").to_string(),
+                    t!("hotkeys.new_long_hint").to_string(),
+                    HotkeySlot::NewLong,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.new_short").to_string(),
+                    t!("hotkeys.new_short_hint").to_string(),
+                    HotkeySlot::NewShort,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.split_order").to_string(),
+                    t!("hotkeys.split_order_hint").to_string(),
+                    HotkeySlot::SplitOrder,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.split_order_x").to_string(),
+                    t!("hotkeys.split_order_x_hint").to_string(),
+                    HotkeySlot::SplitOrderX,
+                    &hotkeys,
+                    cx,
+                ),
+            ],
             HotkeyGroup::Chart => vec![
-                    self.hotkey_row(
-                        t!("hotkeys.switch_charts").to_string(),
-                        t!("hotkeys.switch_charts_hint").to_string(),
-                        HotkeySlot::SwitchCharts,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.switch_figure").to_string(),
-                        t!("hotkeys.switch_figure_hint").to_string(),
-                        HotkeySlot::SwitchFigure,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.scale_plus").to_string(),
-                        t!("hotkeys.scale_plus_hint").to_string(),
-                        HotkeySlot::ScalePlus,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.scale_minus").to_string(),
-                        t!("hotkeys.scale_minus_hint").to_string(),
-                        HotkeySlot::ScaleMinus,
-                        &hotkeys,
-                        cx,
-                    ),
-                ],
+                self.hotkey_row(
+                    t!("hotkeys.switch_charts").to_string(),
+                    t!("hotkeys.switch_charts_hint").to_string(),
+                    HotkeySlot::SwitchCharts,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.switch_figure").to_string(),
+                    t!("hotkeys.switch_figure_hint").to_string(),
+                    HotkeySlot::SwitchFigure,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.scale_plus").to_string(),
+                    t!("hotkeys.scale_plus_hint").to_string(),
+                    HotkeySlot::ScalePlus,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.scale_minus").to_string(),
+                    t!("hotkeys.scale_minus_hint").to_string(),
+                    HotkeySlot::ScaleMinus,
+                    &hotkeys,
+                    cx,
+                ),
+            ],
             HotkeyGroup::Draw => vec![
-                    self.hotkey_row(
-                        t!("hotkeys.draw_hline").to_string(),
-                        t!("hotkeys.draw_hline_hint").to_string(),
-                        HotkeySlot::DrawHline,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.draw_segment").to_string(),
-                        t!("hotkeys.draw_segment_hint").to_string(),
-                        HotkeySlot::DrawSegment,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.draw_triangle").to_string(),
-                        t!("hotkeys.draw_triangle_hint").to_string(),
-                        HotkeySlot::DrawTriangle,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.draw_channel").to_string(),
-                        t!("hotkeys.draw_channel_hint").to_string(),
-                        HotkeySlot::DrawChannel,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.fig_delete").to_string(),
-                        t!("hotkeys.fig_delete_hint").to_string(),
-                        HotkeySlot::FigDelete,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.fig_alert").to_string(),
-                        t!("hotkeys.fig_alert_hint").to_string(),
-                        HotkeySlot::FigAlert,
-                        &hotkeys,
-                        cx,
-                    ),
-                ],
+                self.hotkey_row(
+                    t!("hotkeys.draw_hline").to_string(),
+                    t!("hotkeys.draw_hline_hint").to_string(),
+                    HotkeySlot::DrawHline,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.draw_segment").to_string(),
+                    t!("hotkeys.draw_segment_hint").to_string(),
+                    HotkeySlot::DrawSegment,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.draw_triangle").to_string(),
+                    t!("hotkeys.draw_triangle_hint").to_string(),
+                    HotkeySlot::DrawTriangle,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.draw_channel").to_string(),
+                    t!("hotkeys.draw_channel_hint").to_string(),
+                    HotkeySlot::DrawChannel,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.fig_delete").to_string(),
+                    t!("hotkeys.fig_delete_hint").to_string(),
+                    HotkeySlot::FigDelete,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.fig_alert").to_string(),
+                    t!("hotkeys.fig_alert_hint").to_string(),
+                    HotkeySlot::FigAlert,
+                    &hotkeys,
+                    cx,
+                ),
+            ],
             HotkeyGroup::OrderMove => vec![
-                    self.hotkey_row(
-                        t!("hotkeys.shift_buy_up").to_string(),
-                        t!("hotkeys.shift_buy_up_hint").to_string(),
-                        HotkeySlot::ShiftBuyUp,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.shift_buy_down").to_string(),
-                        t!("hotkeys.shift_buy_down_hint").to_string(),
-                        HotkeySlot::ShiftBuyDown,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.shift_sell_up").to_string(),
-                        t!("hotkeys.shift_sell_up_hint").to_string(),
-                        HotkeySlot::ShiftSellUp,
-                        &hotkeys,
-                        cx,
-                    ),
-                    self.hotkey_row(
-                        t!("hotkeys.shift_sell_down").to_string(),
-                        t!("hotkeys.shift_sell_down_hint").to_string(),
-                        HotkeySlot::ShiftSellDown,
-                        &hotkeys,
-                        cx,
-                    ),
-                ],
+                self.hotkey_row(
+                    t!("hotkeys.shift_buy_up").to_string(),
+                    t!("hotkeys.shift_buy_up_hint").to_string(),
+                    HotkeySlot::ShiftBuyUp,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.shift_buy_down").to_string(),
+                    t!("hotkeys.shift_buy_down_hint").to_string(),
+                    HotkeySlot::ShiftBuyDown,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.shift_sell_up").to_string(),
+                    t!("hotkeys.shift_sell_up_hint").to_string(),
+                    HotkeySlot::ShiftSellUp,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
+                    t!("hotkeys.shift_sell_down").to_string(),
+                    t!("hotkeys.shift_sell_down_hint").to_string(),
+                    HotkeySlot::ShiftSellDown,
+                    &hotkeys,
+                    cx,
+                ),
+            ],
             HotkeyGroup::Mouse => vec![
-                    self.mouse_row(
-                        t!("hotkeys.mouse.buy_set").to_string(),
-                        t!("hotkeys.mouse.buy_set_hint").to_string(),
-                        MouseSlot::BuySet,
-                        &hotkeys,
-                        false,
-                        cx,
-                    ),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.short_set").to_string(),
-                        t!("hotkeys.mouse.short_set_hint").to_string(),
-                        MouseSlot::ShortSet,
-                        &hotkeys,
-                        false,
-                        cx,
-                    ),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.pending_long").to_string(),
-                        t!("hotkeys.mouse.pending_long_hint").to_string(),
-                        MouseSlot::PendingLong,
-                        &hotkeys,
-                        false,
-                        cx,
-                    ),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.pending_short").to_string(),
-                        t!("hotkeys.mouse.pending_short_hint").to_string(),
-                        MouseSlot::PendingShort,
-                        &hotkeys,
-                        false,
-                        cx,
-                    ),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.buy_move").to_string(),
-                        t!("hotkeys.mouse.buy_move_hint").to_string(),
-                        MouseSlot::BuyMove,
-                        &hotkeys,
-                        false,
-                        cx,
-                    ),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.sell_move").to_string(),
-                        t!("hotkeys.mouse.sell_move_hint").to_string(),
-                        MouseSlot::SellMove,
-                        &hotkeys,
-                        false,
-                        cx,
-                    ),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.buy_move2").to_string(),
-                        t!("hotkeys.mouse.buy_move2_hint").to_string(),
-                        MouseSlot::BuyMove2,
-                        &hotkeys,
-                        false,
-                        cx,
-                    ),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.sell_move2").to_string(),
-                        t!("hotkeys.mouse.sell_move2_hint").to_string(),
-                        MouseSlot::SellMove2,
-                        &hotkeys,
-                        false,
-                        cx,
-                    ),
-                    self.same_move_checkbox(&hotkeys, cx),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.short_buy_move").to_string(),
-                        t!("hotkeys.mouse.short_buy_move_hint").to_string(),
-                        MouseSlot::ShortBuyMove,
-                        &hotkeys,
-                        hotkeys.same_hotkeys_for_move,
-                        cx,
-                    ),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.short_sell_move").to_string(),
-                        t!("hotkeys.mouse.short_sell_move_hint").to_string(),
-                        MouseSlot::ShortSellMove,
-                        &hotkeys,
-                        hotkeys.same_hotkeys_for_move,
-                        cx,
-                    ),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.short_buy_move2").to_string(),
-                        t!("hotkeys.mouse.short_buy_move2_hint").to_string(),
-                        MouseSlot::ShortBuyMove2,
-                        &hotkeys,
-                        hotkeys.same_hotkeys_for_move,
-                        cx,
-                    ),
-                    self.mouse_row(
-                        t!("hotkeys.mouse.short_sell_move2").to_string(),
-                        t!("hotkeys.mouse.short_sell_move2_hint").to_string(),
-                        MouseSlot::ShortSellMove2,
-                        &hotkeys,
-                        hotkeys.same_hotkeys_for_move,
-                        cx,
-                    ),
-                ],
+                self.mouse_row(
+                    t!("hotkeys.mouse.buy_set").to_string(),
+                    t!("hotkeys.mouse.buy_set_hint").to_string(),
+                    MouseSlot::BuySet,
+                    &hotkeys,
+                    false,
+                    cx,
+                ),
+                self.mouse_row(
+                    t!("hotkeys.mouse.short_set").to_string(),
+                    t!("hotkeys.mouse.short_set_hint").to_string(),
+                    MouseSlot::ShortSet,
+                    &hotkeys,
+                    false,
+                    cx,
+                ),
+                self.mouse_row(
+                    t!("hotkeys.mouse.pending_long").to_string(),
+                    t!("hotkeys.mouse.pending_long_hint").to_string(),
+                    MouseSlot::PendingLong,
+                    &hotkeys,
+                    false,
+                    cx,
+                ),
+                self.mouse_row(
+                    t!("hotkeys.mouse.pending_short").to_string(),
+                    t!("hotkeys.mouse.pending_short_hint").to_string(),
+                    MouseSlot::PendingShort,
+                    &hotkeys,
+                    false,
+                    cx,
+                ),
+                self.mouse_row(
+                    t!("hotkeys.mouse.buy_move").to_string(),
+                    t!("hotkeys.mouse.buy_move_hint").to_string(),
+                    MouseSlot::BuyMove,
+                    &hotkeys,
+                    false,
+                    cx,
+                ),
+                self.mouse_row(
+                    t!("hotkeys.mouse.sell_move").to_string(),
+                    t!("hotkeys.mouse.sell_move_hint").to_string(),
+                    MouseSlot::SellMove,
+                    &hotkeys,
+                    false,
+                    cx,
+                ),
+                self.mouse_row(
+                    t!("hotkeys.mouse.buy_move2").to_string(),
+                    t!("hotkeys.mouse.buy_move2_hint").to_string(),
+                    MouseSlot::BuyMove2,
+                    &hotkeys,
+                    false,
+                    cx,
+                ),
+                self.mouse_row(
+                    t!("hotkeys.mouse.sell_move2").to_string(),
+                    t!("hotkeys.mouse.sell_move2_hint").to_string(),
+                    MouseSlot::SellMove2,
+                    &hotkeys,
+                    false,
+                    cx,
+                ),
+                self.same_move_checkbox(&hotkeys, cx),
+                self.mouse_row(
+                    t!("hotkeys.mouse.short_buy_move").to_string(),
+                    t!("hotkeys.mouse.short_buy_move_hint").to_string(),
+                    MouseSlot::ShortBuyMove,
+                    &hotkeys,
+                    hotkeys.same_hotkeys_for_move,
+                    cx,
+                ),
+                self.mouse_row(
+                    t!("hotkeys.mouse.short_sell_move").to_string(),
+                    t!("hotkeys.mouse.short_sell_move_hint").to_string(),
+                    MouseSlot::ShortSellMove,
+                    &hotkeys,
+                    hotkeys.same_hotkeys_for_move,
+                    cx,
+                ),
+                self.mouse_row(
+                    t!("hotkeys.mouse.short_buy_move2").to_string(),
+                    t!("hotkeys.mouse.short_buy_move2_hint").to_string(),
+                    MouseSlot::ShortBuyMove2,
+                    &hotkeys,
+                    hotkeys.same_hotkeys_for_move,
+                    cx,
+                ),
+                self.mouse_row(
+                    t!("hotkeys.mouse.short_sell_move2").to_string(),
+                    t!("hotkeys.mouse.short_sell_move2_hint").to_string(),
+                    MouseSlot::ShortSellMove2,
+                    &hotkeys,
+                    hotkeys.same_hotkeys_for_move,
+                    cx,
+                ),
+            ],
             HotkeyGroup::ManualStrategy => (0..MANUAL_STRATEGY_KEYS)
                 .map(|i| {
                     self.hotkey_row(
@@ -571,23 +571,22 @@ impl SettingsView {
         if wip {
             row = row.child(self.wip_tag(&p, cx));
         }
-        row
-            .child(
-                MoonDropdown::new(SharedString::from(id))
-                    .label(current.label())
-                    .trigger_size(MoonButtonSize::Micro)
-                    .trigger_variant(if current == MouseGestureBinding::None {
-                        MoonButtonVariant::Neutral
-                    } else {
-                        MoonButtonVariant::Blue
-                    })
-                    .trigger_width(design::font_w(cx, 176.0))
-                    .menu_width(design::font_w(cx, 228.0))
-                    .menu_size(MoonMenuSize::Compact)
-                    .disabled(disabled)
-                    .items(items),
-            )
-            .into_any_element()
+        row.child(
+            MoonDropdown::new(SharedString::from(id))
+                .label(current.label())
+                .trigger_size(MoonButtonSize::Micro)
+                .trigger_variant(if current == MouseGestureBinding::None {
+                    MoonButtonVariant::Neutral
+                } else {
+                    MoonButtonVariant::Blue
+                })
+                .trigger_width(design::font_w(cx, 176.0))
+                .menu_width(design::font_w(cx, 228.0))
+                .menu_size(MoonMenuSize::Compact)
+                .disabled(disabled)
+                .items(items),
+        )
+        .into_any_element()
     }
 
     fn same_move_checkbox(&self, hotkeys: &HotkeysConfig, cx: &Context<Self>) -> AnyElement {

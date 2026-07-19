@@ -584,11 +584,7 @@ impl ChartPanel {
     /// ОС-окна (Moonbot): масштаб наведённой панели → запрос в Backend с хендлом окна;
     /// хозяин окна (полоска вкладок / выносной хост) применит ко всем своим стекам и
     /// сохранит (группа → layout, выносное окно → спек вкладки).
-    pub(super) fn sync_x_scale_window(
-        &mut self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub(super) fn sync_x_scale_window(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         let Some(ppm) = self.chart.pane_x_ppm(self.input.hovered_pane) else {
             return false;
         };

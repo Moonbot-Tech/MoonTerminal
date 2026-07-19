@@ -75,7 +75,10 @@ impl Default for StrategiesStoreCfg {
         Self {
             enabled: true,
             version_limit: 0,
-            ignore_fields: DEFAULT_IGNORE_FIELDS.iter().map(|s| s.to_string()).collect(),
+            ignore_fields: DEFAULT_IGNORE_FIELDS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 }

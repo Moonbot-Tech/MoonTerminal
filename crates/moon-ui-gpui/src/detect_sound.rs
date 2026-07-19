@@ -40,19 +40,24 @@ impl Backend {
             // (`sound_name`); `None` = SoundKind=NONE → детект молчит (find_map идёт к
             // следующему). Дефолт — только для алерт-файра БЕЗ стратегии. За тик берём один
             // самый свежий звучащий (новые→старые), чтобы залп не пикал десятки раз.
-            let sound = data.detects.iter().rev().take_while(|d| d.seq > last).find_map(|d| {
-                // Гейт: пикают только is_alert-файры и детекты с SoundAlert=Yes.
-                if !d.is_alert && !d.sound_alert {
-                    return None;
-                }
-                match &d.sound_name {
-                    Some(name) => Some(name.clone()),
-                    // Алерт-файр без снимка стратегии — дефолтный звук; обычный детект с
-                    // SoundKind=NONE — молчит (не даём дефолт).
-                    None if d.is_alert => Some(default_sound.clone()),
-                    None => None,
-                }
-            });
+            let sound = data
+                .detects
+                .iter()
+                .rev()
+                .take_while(|d| d.seq > last)
+                .find_map(|d| {
+                    // Гейт: пикают только is_alert-файры и детекты с SoundAlert=Yes.
+                    if !d.is_alert && !d.sound_alert {
+                        return None;
+                    }
+                    match &d.sound_name {
+                        Some(name) => Some(name.clone()),
+                        // Алерт-файр без снимка стратегии — дефолтный звук; обычный детект с
+                        // SoundKind=NONE — молчит (не даём дефолт).
+                        None if d.is_alert => Some(default_sound.clone()),
+                        None => None,
+                    }
+                });
             self.last_detect_seq.insert(core, cur_max);
             if let Some(name) = sound {
                 moon_core::detect_diag::line(&format!("[sound] core={core} play={name}"));

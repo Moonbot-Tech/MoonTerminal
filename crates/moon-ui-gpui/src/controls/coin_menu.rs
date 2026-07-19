@@ -189,7 +189,8 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
                     .checked(in_strat)
                     .on_click(move |_, window, app| {
                         window.close_context_menu(app);
-                        backend_s.update(app, |b, _| add_to_strategy_blacklist(b, core, sid, &coin_s));
+                        backend_s
+                            .update(app, |b, _| add_to_strategy_blacklist(b, core, sid, &coin_s));
                     }),
             );
         }
