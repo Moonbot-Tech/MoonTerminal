@@ -14,10 +14,16 @@ use super::charts;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{Summary, TopTrade};
-use moon_core::util::fmt::compact;
+use moon_core::util::fmt::{self, compact};
 
-/// Знак+компакт: `+341.2`, `−40.1` (0 → «0»).
+/// Format a compact signed value such as `+341.2`, `-40.1`, or `0`.
+///
+/// Rounding happens before sign selection, so a value that rounds to zero has no minus sign.
+/// Returns an em dash when the input or rounded result is non-finite.
 pub(super) fn fmt_signed(v: f64) -> String {
+    let Some(v) = fmt::round_to(v, 2) else {
+        return "—".to_string();
+    };
     if v > 0.0 {
         format!("+{}", compact(v, 2))
     } else {
@@ -25,14 +31,15 @@ pub(super) fn fmt_signed(v: f64) -> String {
     }
 }
 
-/// Цвет числа по знаку: плюс зелёный, минус оранжевый (тона терминала).
+/// Return the terminal colour for the same rounded sign used by [`fmt_signed`].
+///
+/// Positive values are green, negative values are orange, and zero or a non-finite rounding result
+/// is muted. This keeps the colour consistent with the displayed text or em dash.
 pub(super) fn sign_color(p: MoonPalette, v: f64) -> u32 {
-    if v > 0.0 {
-        p.green
-    } else if v < 0.0 {
-        p.orange
-    } else {
-        p.text_muted
+    match fmt::round_to(v, 2) {
+        Some(v) if v > 0.0 => p.green,
+        Some(v) if v < 0.0 => p.orange,
+        _ => p.text_muted,
     }
 }
 

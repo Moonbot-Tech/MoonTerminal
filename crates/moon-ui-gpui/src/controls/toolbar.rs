@@ -1,4 +1,4 @@
-//! Сборка полосы тулбара (size/Lev/SL/TP+S-слоты/Live). Вынесено из `controls.rs` точь-в-точь.
+//! Compose the trading toolbar: size, leverage, stop loss, TP/S slots, and Live controls.
 
 use gpui::*;
 use rust_i18n::t;
@@ -11,7 +11,7 @@ use moon_ui::{
 use moon_core::session::CoreId;
 
 use super::metric::{metric_button, sl_toggle};
-use super::strips::{SIZE_SEL_DEFAULT, divider, sell_strip, size_strip};
+use super::strips::{SIZE_SEL_DEFAULT, sell_strip, size_strip};
 use super::{TOOLBAR_H, TradeMetric, fmt_field2, fmt_field2_signed};
 use crate::shell::Shell;
 use crate::{Backend, design};
@@ -118,7 +118,7 @@ pub fn toolbar(
     };
     let p = MoonPalette::active(cx);
     let tp_color = if p.is_light() { p.accent } else { p.blue };
-    let sl_color = if p.is_light() { p.red_text } else { p.red };
+    let sl_color = design::danger_color(p);
 
     let mut row = h_flex()
         .id("toolbar")
@@ -144,7 +144,7 @@ pub fn toolbar(
             backend.clone(),
             focus_core,
         ))
-        .child(divider(p))
+        .child(design::chrome_divider(cx, p))
         // Плечо.
         .child(metric_button(
             TradeMetric::Lev,
@@ -158,7 +158,7 @@ pub fn toolbar(
             shell.clone(),
             p,
         ))
-        .child(divider(p))
+        .child(design::chrome_divider(cx, p))
         // Стоп-лосс: тогл вкл/выкл (`panic_if_price_drop`) + кнопка только со значением+попапом.
         .child(sl_toggle(
             sl_on,
@@ -178,7 +178,7 @@ pub fn toolbar(
             shell.clone(),
             p,
         ))
-        .child(divider(p))
+        .child(design::chrome_divider(cx, p))
         // TP + полоса S-слотов рядом (без подписи «sell»): это один и тот же sell-таргет, горит
         // что-то одно — либо TP, либо выбранный S-слот.
         .child(metric_button(
@@ -213,12 +213,12 @@ pub fn toolbar(
                 strip.into_any_element()
             }
         })
-        .child(divider(p));
-    // Масштаб переехал в полоску чарт-вкладок (рядом с ⚙) и теперь per-вкладочный —
-    // см. controls::scale_dropdown_for_tabs / chart_tabs::ChartTabs::pick_active_scale.
+        .child(design::chrome_divider(cx, p));
+    // Scale is configured per tab in the chart-tab strip beside the settings button; see
+    // controls::scale_dropdown_for_tabs / chart_tabs::ChartTabs::pick_active_scale.
 
     let live_tone = if follow {
-        if p.is_light() { p.green_text } else { p.green }
+        design::positive_color(p)
     } else {
         p.text_muted
     };
@@ -252,8 +252,7 @@ pub fn toolbar(
             })
             .render(),
     );
-    // Правый край: «Стратегии»/«Скринер» (иконки) и «Настройки» (иконка+надпись) —
-    // переехали из шапки, стиль как Live.
+    // The right edge holds Strategies, Screener, and Settings actions styled like the Live button.
     row.child(div().flex_1())
         .child(open_window_button(
             "toolbar-strategies",

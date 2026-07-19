@@ -1,11 +1,11 @@
-//! Колонки/строки таблицы скринера: схема колонок, форматирование значений,
-//! сортировка и рендер строки (`MoonDataRow`/ячейки). Вынесено вербатим из `mod.rs`.
+//! Screener table columns and rows: schema, value formatting, sorting, and `MoonDataRow` rendering.
 
 use gpui::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone};
 
 use moon_core::market::ScreenerRow;
 use moon_core::session::CoreId;
+use moon_core::util::fmt::{self, DeltaSign};
 
 use crate::panels::num;
 
@@ -65,7 +65,12 @@ pub(super) fn parse_vol(s: &str) -> f64 {
             None => (lower.as_str(), 1.0),
         },
     };
-    num_part.trim().replace(',', ".").parse::<f64>().unwrap_or(0.0) * mult
+    num_part
+        .trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .unwrap_or(0.0)
+        * mult
 }
 
 /// Короткий объёмный формат Moonbot: 1 712 345 → «1.7m», 320 100 → «320k».
@@ -133,6 +138,27 @@ fn num_key(e: &Entry, key: &str) -> f64 {
     }
 }
 
+/// Signed-percentage cell shared by the delta columns, so the same value cannot render one way
+/// in `d1h` and another in `d24h`.
+///
+/// A value rounding to zero renders unsigned and muted: a raw `{:+.1}` prints "-0.0%" for any
+/// small negative, which reads as a decline that is not there.
+fn signed_pct_cell(v: f64) -> MoonDataCell {
+    pct_cell(fmt::signed_pct(v, 1))
+}
+
+/// Render a formatted percentage with the standard sign→tone mapping.
+fn pct_cell(formatted: Option<(String, DeltaSign)>) -> MoonDataCell {
+    match formatted {
+        Some((text, sign)) => MoonDataCell::text(text).tone(sign.pick(
+            MoonTone::Positive,
+            MoonTone::Danger,
+            MoonTone::Muted,
+        )),
+        None => MoonDataCell::text("—").tone(MoonTone::Muted),
+    }
+}
+
 /// Тон знаковой величины: плюс — зелёный, минус — красный, ноль — приглушённый.
 fn signed_tone(v: f64) -> MoonTone {
     if v > 0.0 {
@@ -151,15 +177,9 @@ pub(super) fn screener_row(
     cols: &[&ColDef],
 ) -> MoonDataRow {
     let r = &e.row;
-    let pct = |v: f64| format!("{v:.1}%");
-    // Беззнаковые derived-дельты: 0 → мьют, иначе обычный текст.
-    let delta_cell = |v: f64| {
-        if v != 0.0 {
-            MoonDataCell::text(pct(v))
-        } else {
-            MoonDataCell::text("0.0%").tone(MoonTone::Muted)
-        }
-    };
+    // Derived deltas omit a forced plus sign but retain negative classification. Shared rounding
+    // keeps their zero case consistent with the explicitly signed columns beside them.
+    let delta_cell = |v: f64| pct_cell(fmt::pct(v, 1));
     let vol_cell = |v: f64| {
         if v > 0.0 {
             MoonDataCell::text(vol_fmt(v))
@@ -186,25 +206,24 @@ pub(super) fn screener_row(
                 }
             }
             "maxord" => vol_cell(r.max_order),
-            "d24h" => MoonDataCell::text(format!("{:+.1}%", r.d_24h)).tone(signed_tone(r.d_24h)),
+            "d24h" => signed_pct_cell(r.d_24h),
             "d3h" => delta_cell(r.d_3h),
-            "d1h" => MoonDataCell::text(format!("{:+.1}%", r.d_1h)).tone(signed_tone(r.d_1h)),
+            "d1h" => signed_pct_cell(r.d_1h),
             "d15m" => delta_cell(r.d_15m),
             "d1m" => delta_cell(r.d_1m),
             "d72h" => delta_cell(r.d_72h),
-            "funding" => {
-                // Как в Moonbot: минусовый фандинг зелёный, плюсовый оранжевый.
-                let tone = if r.funding_pct < 0.0 {
-                    MoonTone::Positive
-                } else if r.funding_pct > 0.0 {
-                    MoonTone::Negative
-                } else {
-                    MoonTone::Muted
-                };
-                MoonDataCell::text(format!("{:+.2}%", r.funding_pct)).tone(tone)
-            }
+            // Moonbot convention: negative funding is green and positive funding is orange; the
+            // first two arguments are swapped to express that inverted sign mapping.
+            "funding" => match fmt::signed_pct(r.funding_pct, 2) {
+                Some((text, sign)) => MoonDataCell::text(text).tone(sign.pick(
+                    MoonTone::Negative,
+                    MoonTone::Positive,
+                    MoonTone::Muted,
+                )),
+                None => MoonDataCell::text("—").tone(MoonTone::Muted),
+            },
             "markd" => match r.mark_delta_pct {
-                Some(v) => MoonDataCell::text(format!("{v:+.1}%")).tone(signed_tone(v)),
+                Some(v) => signed_pct_cell(v),
                 None => MoonDataCell::text("—").tone(MoonTone::Muted),
             },
             "lev" => {
@@ -268,7 +287,11 @@ pub(super) fn screener_row(
 }
 
 /// Ячейка монеты: кликабельна целиком, клик открывает чарт на Main активной вкладки.
-fn market_cell(e: &Entry, view: &Entity<ScreenerView>, p: MoonPalette) -> impl IntoElement + 'static {
+fn market_cell(
+    e: &Entry,
+    view: &Entity<ScreenerView>,
+    p: MoonPalette,
+) -> impl IntoElement + 'static {
     let market = e.row.market.clone();
     let core = e.open_core;
     let view = view.clone();
