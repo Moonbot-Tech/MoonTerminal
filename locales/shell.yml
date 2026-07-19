@@ -30,15 +30,24 @@ header.no_cores:
   ru: "нет ядер"
   en: "no cores"
   es: "sin núcleos"
-# Тикер курса в шапке (слева после логотипа).
+# Тикер курса в шапке (справа, рядом с часами).
 header.ticker_tip:
-  ru: "Курс и дельты за 1ч / 24ч. Клик — выбрать монету и ядро"
-  en: "Price and 1h / 24h deltas. Click to pick coin and core"
-  es: "Precio y deltas 1h / 24h. Clic para elegir moneda y núcleo"
+  ru: "Курс и дельты за 1ч / 24ч. Клик — открыть график, двойной — выбрать монету и ядро"
+  en: "Price and 1h / 24h deltas. Click opens the chart, double-click picks coin and core"
+  es: "Precio y deltas 1h / 24h. Clic abre el gráfico, doble clic elige moneda y núcleo"
 header.ticker_pick:
   ru: "Монета тикера (поиск по ядрам)"
   en: "Ticker coin (search across cores)"
   es: "Moneda del ticker (búsqueda por núcleos)"
+# Подписи окон дельт тикера: без них две процентовки стоят рядом без указания периода.
+header.delta_1h:
+  ru: "1ч"
+  en: "1h"
+  es: "1h"
+header.delta_24h:
+  ru: "24ч"
+  en: "24h"
+  es: "24h"
 # Часы в правом углу шапки.
 header.clock_tip:
   ru: "Часы (UTC). Клик — выбрать пояс; совпал с системным — метка скрыта"

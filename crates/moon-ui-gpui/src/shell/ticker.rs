@@ -1,12 +1,12 @@
-//! Хостинг попапа выбора источника тикера курса в шапке (элемент «1 BTC = …» слева после
-//! логотипа): открытие/закрытие, поле поиска монеты и список «BTC - Bybit1» (реюз
-//! [`crate::chart_tabs::coin_search`]). Выбор строки пишется в Backend
-//! (`set_header_ticker` → layout, по стабильному uid ядра). Overlay+dismiss — тот же
-//! механизм, что попапы метрик/настроек ядра.
+//! Header ticker-source popup hosted beside the right-aligned clock.
+//!
+//! The popup reuses [`crate::chart_tabs::coin_search`] and persists the selected market and stable
+//! core ID through `Backend::set_header_ticker`. Its overlay and dismiss layers follow the other
+//! header popups.
 
 use gpui::*;
 
-use moon_ui::{MoonInput, MoonPalette, v_flex};
+use moon_ui::{MoonInput, MoonPalette, MoonWindowFrame, v_flex};
 use rust_i18n::t;
 
 use crate::chart_tabs::coin_search;
@@ -15,8 +15,7 @@ use crate::design;
 use super::Shell;
 
 impl Shell {
-    /// Открыть/закрыть попап выбора тикера (клик по курсу в шапке). При открытии чистим
-    /// прежний запрос поиска.
+    /// Toggle the ticker-source popup and clear its search query when opening it.
     pub(crate) fn toggle_ticker_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ticker_popup_open {
             self.ticker_popup_open = false;
@@ -36,14 +35,16 @@ impl Shell {
         }
     }
 
-    /// Слой попапа тикера: absolute-бокс под элементом курса + полноэкранный dismiss-слой.
-    /// Возвращает `(попап, dismiss)` — оба `None`, если попап закрыт.
+    /// Build the right-anchored ticker popup and its full-window dismiss layer.
+    ///
+    /// Both elements are `None` when the popup is closed or `chrome_width` hides the ticker trigger.
     pub(super) fn ticker_popup_layers(
         &self,
+        chrome_width: f32,
         p: MoonPalette,
         cx: &mut Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
-        if !self.ticker_popup_open {
+        if !self.ticker_popup_open || !design::ticker_visible(cx, chrome_width) {
             return (None, None);
         }
         let query = self.ticker_input.read(cx).value().to_string();
@@ -71,14 +72,29 @@ impl Shell {
             |_| {},
         );
 
-        // Позиция: под шапкой, слева после бренда (как сам элемент курса).
-        let left = f32::from(design::ui_px(cx, design::titlebar_leading_inset()))
+        // Anchored to the window's RIGHT edge, offset by the window controls: the ticker is the
+        // last header element before them. Anchoring right rather than computing a left offset
+        // keeps the popup under its trigger no matter how wide the clock renders — that width
+        // floats with the selected timezone and its label.
+        let controls_w = if design::show_custom_window_controls() {
+            f32::from(design::ui_px(
+                cx,
+                MoonWindowFrame::main("header-ticker-popup-metrics", 0.0)
+                    .show_controls(true)
+                    .controls_width(),
+            ))
+        } else {
+            0.0
+        };
+        // Plus the cluster gap that sits between the ticker and those controls.
+        let right = f32::from(design::ui_px(cx, design::HEADER_PAD_X))
+            + controls_w
             + f32::from(design::ui_px(cx, 8.0));
         let top = f32::from(design::fit_h_px(cx, design::HEADER_TOP_H, 14.0, 9.0));
         let overlay = div()
             .id("header-ticker-popup-box")
             .absolute()
-            .left(px(left))
+            .right(px(right))
             .top(px(top))
             .on_mouse_down(MouseButton::Left, |_, _w, app| app.stop_propagation())
             .on_hover(cx.listener(|this, hovered: &bool, _w, cx| {
