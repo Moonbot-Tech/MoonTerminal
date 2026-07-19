@@ -18,18 +18,37 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::DayCell;
 
 impl AnalyticsView {
-    pub(super) fn calendar_month(&self, days: &[DayCell], p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn calendar_month(
+        &self,
+        days: &[DayCell],
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let profit: f64 = days.iter().map(|d| d.profit).sum();
         let trades: i64 = days.iter().map(|d| d.trades).sum();
         let wins: i64 = days.iter().map(|d| d.wins).sum();
         let losses = trades - wins;
-        let wr = if trades > 0 { wins as f64 / trades as f64 * 100.0 } else { 0.0 };
-        let pos_days = days.iter().filter(|d| d.trades > 0 && d.profit > 0.0).count();
-        let neg_days = days.iter().filter(|d| d.trades > 0 && d.profit < 0.0).count();
+        let wr = if trades > 0 {
+            wins as f64 / trades as f64 * 100.0
+        } else {
+            0.0
+        };
+        let pos_days = days
+            .iter()
+            .filter(|d| d.trades > 0 && d.profit > 0.0)
+            .count();
+        let neg_days = days
+            .iter()
+            .filter(|d| d.trades > 0 && d.profit < 0.0)
+            .count();
         let active = days.iter().filter(|d| d.trades > 0).count();
         let neutral = active - pos_days - neg_days;
         // Масштаб заливки — максимум |PnL| дня месяца (топ = 30% прозрачности).
-        let month_max = days.iter().filter(|d| d.trades > 0).map(|d| d.profit.abs()).fold(0.0f64, f64::max);
+        let month_max = days
+            .iter()
+            .filter(|d| d.trades > 0)
+            .map(|d| d.profit.abs())
+            .fold(0.0f64, f64::max);
         let today = today_start();
 
         let map: HashMap<i64, &DayCell> = days.iter().map(|d| (d.start, d)).collect();
@@ -40,7 +59,13 @@ impl AnalyticsView {
             .p(design::ui_px(cx, 10.0))
             .gap(design::ui_px(cx, 8.0))
             .child(self.cal_kpi(profit, trades, wins, losses, wr, p, cx))
-            .child(div().flex_1().w_full().min_h(px(0.0)).child(self.cal_grid(&map, month_max, today, p, cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .w_full()
+                    .min_h(px(0.0))
+                    .child(self.cal_grid(&map, month_max, today, p, cx)),
+            )
             .child(self.cal_bottom(pos_days, neg_days, active, neutral, p, cx))
             .into_any_element()
     }
@@ -62,16 +87,60 @@ impl AnalyticsView {
         let dp = move |c: f64, pr: f64| -> Option<f64> {
             (has && pr.abs() > f64::EPSILON).then(|| (c - pr) / pr.abs() * 100.0)
         };
-        let prev_wr = if pt > 0 { pw as f64 / pt as f64 * 100.0 } else { 0.0 };
+        let prev_wr = if pt > 0 {
+            pw as f64 / pt as f64 * 100.0
+        } else {
+            0.0
+        };
         h_flex()
             .w_full()
             .gap(design::ui_px(cx, 8.0))
             .items_stretch()
-            .child(kpi_tile(p, cx, t!("analytics.cal.kpi_profit").to_string(), moon(sign_color(p, profit)), fmt_signed(profit), dp(profit, pp), false))
-            .child(kpi_tile(p, cx, t!("analytics.kpi.trades").to_string(), moon(p.text), trades.to_string(), dp(trades as f64, pt as f64), false))
-            .child(kpi_tile(p, cx, t!("analytics.cal.kpi_wins").to_string(), moon(p.green), wins.to_string(), dp(wins as f64, pw as f64), false))
-            .child(kpi_tile(p, cx, t!("analytics.cal.kpi_losses").to_string(), moon(p.orange), losses.to_string(), dp(losses as f64, (pt - pw) as f64), true))
-            .child(kpi_tile(p, cx, t!("analytics.kpi.winrate").to_string(), moon(p.text), format!("{wr:.1}%"), dp(wr, prev_wr), false))
+            .child(kpi_tile(
+                p,
+                cx,
+                t!("analytics.cal.kpi_profit").to_string(),
+                moon(sign_color(p, profit)),
+                fmt_signed(profit),
+                dp(profit, pp),
+                false,
+            ))
+            .child(kpi_tile(
+                p,
+                cx,
+                t!("analytics.kpi.trades").to_string(),
+                moon(p.text),
+                trades.to_string(),
+                dp(trades as f64, pt as f64),
+                false,
+            ))
+            .child(kpi_tile(
+                p,
+                cx,
+                t!("analytics.cal.kpi_wins").to_string(),
+                moon(p.green),
+                wins.to_string(),
+                dp(wins as f64, pw as f64),
+                false,
+            ))
+            .child(kpi_tile(
+                p,
+                cx,
+                t!("analytics.cal.kpi_losses").to_string(),
+                moon(p.orange),
+                losses.to_string(),
+                dp(losses as f64, (pt - pw) as f64),
+                true,
+            ))
+            .child(kpi_tile(
+                p,
+                cx,
+                t!("analytics.kpi.winrate").to_string(),
+                moon(p.text),
+                format!("{wr:.1}%"),
+                dp(wr, prev_wr),
+                false,
+            ))
     }
 
     fn cal_grid(
@@ -112,11 +181,17 @@ impl AnalyticsView {
                 let in_month = dt.month() == m && dt.year() == y;
                 let is_future = t > today;
                 let day = if in_month { map.get(&t).copied() } else { None };
-                rowel = rowel.child(self.cal_cell(t, dom, day, in_month, is_future, month_max, p, cx));
+                rowel =
+                    rowel.child(self.cal_cell(t, dom, day, in_month, is_future, month_max, p, cx));
             }
             weeks = weeks.child(rowel);
         }
-        v_flex().size_full().gap(cell_gap).child(head).child(weeks).into_any_element()
+        v_flex()
+            .size_full()
+            .gap(cell_gap)
+            .child(head)
+            .child(weeks)
+            .into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -146,7 +221,10 @@ impl AnalyticsView {
             date_el.into_any_element()
         } else {
             let muted = |txt: String| {
-                div().text_size(design::t_caption(cx)).text_color(moon(p.text_muted)).child(txt)
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_muted))
+                    .child(txt)
             };
             let right = if let Some(d) = day.filter(|d| d.trades > 0) {
                 let dwr = d.wins as f64 / d.trades as f64 * 100.0;
@@ -159,24 +237,41 @@ impl AnalyticsView {
                             .text_color(moon(sign_color(p, d.profit)))
                             .child(fmt_signed(d.profit)),
                     )
-                    .child(muted(t!("analytics.heat.trades_full", n = d.trades).to_string()))
+                    .child(muted(
+                        t!("analytics.heat.trades_full", n = d.trades).to_string(),
+                    ))
                     .child(muted(format!("{}W {}L", d.wins, d.trades - d.wins)))
                     .child(muted(format!("WR {dwr:.1}%")))
             } else {
                 v_flex()
                     .items_end()
-                    .child(div().text_size(design::t_title(cx)).text_color(moon(p.text_muted)).child("—"))
+                    .child(
+                        div()
+                            .text_size(design::t_title(cx))
+                            .text_color(moon(p.text_muted))
+                            .child("—"),
+                    )
                     .child(muted(t!("analytics.heat.trades_full", n = 0).to_string()))
                     .child(muted("0W 0L".to_string()))
                     .child(muted("WR —".to_string()))
             };
-            h_flex().w_full().items_start().child(date_el).child(div().flex_1()).child(right).into_any_element()
+            h_flex()
+                .w_full()
+                .items_start()
+                .child(date_el)
+                .child(div().flex_1())
+                .child(right)
+                .into_any_element()
         };
         let tint = (!date_only && trades > 0 && profit != 0.0 && month_max > 0.0).then(|| {
             let a = (profit.abs() / month_max).min(1.0) as f32 * 0.30;
             moon_alpha(if profit > 0.0 { p.green } else { p.red }, a)
         });
-        let bg = if in_month { moon(p.panel) } else { moon(p.shell) };
+        let bg = if in_month {
+            moon(p.panel)
+        } else {
+            moon(p.shell)
+        };
         let border = if !date_only && hovered {
             moon(p.text)
         } else if in_month {
@@ -197,7 +292,11 @@ impl AnalyticsView {
             .border_color(border)
             // Клик по дню → детализация «День».
             .on_click(cx.listener(move |this, _, _, cx| this.cal_goto_day(dsec, cx)));
-        let cell = if date_only { cell } else { cell.on_hover(self.cell_hover(dsec, cx)) };
+        let cell = if date_only {
+            cell
+        } else {
+            cell.on_hover(self.cell_hover(dsec, cx))
+        };
         cell.children(tint.map(|tc| div().absolute().inset_0().rounded(r).bg(tc)))
             .child(div().absolute().inset_0().p(pad).child(inner))
             .into_any_element()
@@ -222,8 +321,16 @@ impl AnalyticsView {
                     .w_full()
                     .justify_between()
                     .text_size(design::t_caption(cx))
-                    .child(div().text_color(moon(p.green)).child(format!("{} {}", t!("analytics.cal.pos_days"), pos)))
-                    .child(div().text_color(moon(p.red)).child(format!("{} {}", t!("analytics.cal.neg_days"), neg))),
+                    .child(div().text_color(moon(p.green)).child(format!(
+                        "{} {}",
+                        t!("analytics.cal.pos_days"),
+                        pos
+                    )))
+                    .child(div().text_color(moon(p.red)).child(format!(
+                        "{} {}",
+                        t!("analytics.cal.neg_days"),
+                        neg
+                    ))),
             )
             .child(
                 h_flex()
@@ -232,8 +339,18 @@ impl AnalyticsView {
                     .rounded(design::ui_px(cx, 3.0))
                     .overflow_hidden()
                     .bg(moon_alpha(p.border, 0.4))
-                    .child(div().h_full().w(relative(pos as f32 / total)).bg(moon(p.green)))
-                    .child(div().h_full().w(relative(neg as f32 / total)).bg(moon(p.red))),
+                    .child(
+                        div()
+                            .h_full()
+                            .w(relative(pos as f32 / total))
+                            .bg(moon(p.green)),
+                    )
+                    .child(
+                        div()
+                            .h_full()
+                            .w(relative(neg as f32 / total))
+                            .bg(moon(p.red)),
+                    ),
             )
             .child(
                 h_flex()
@@ -269,7 +386,11 @@ pub(super) fn kpi_tile(
                     div()
                         .text_size(design::t_caption(cx))
                         .text_color(moon(col))
-                        .child(format!("{} {:.1}%", if d > 0.0 { "▲" } else { "▼" }, d.abs())),
+                        .child(format!(
+                            "{} {:.1}%",
+                            if d > 0.0 { "▲" } else { "▼" },
+                            d.abs()
+                        )),
                 )
                 .child(
                     div()
@@ -295,7 +416,12 @@ pub(super) fn kpi_tile(
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
-        .child(div().text_size(design::t_caption(cx)).text_color(moon(p.text_soft)).child(label))
+        .child(
+            div()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.text_soft))
+                .child(label),
+        )
         .child(
             div()
                 .text_size(design::t_title(cx))

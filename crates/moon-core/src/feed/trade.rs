@@ -257,8 +257,9 @@ pub(super) fn set_order_stop(
                 o.strat_id == 0 && cs_ts != 0.0
             };
             let strat_sl_level = super::strategies::strat_field_double(&snap, strat_id, "StopLoss");
-            let strat_ts_level = super::strategies::strat_field_double(&snap, strat_id, "TrailingStop")
-                .or_else(|| super::strategies::strat_field_double(&snap, strat_id, "Trailing"));
+            let strat_ts_level =
+                super::strategies::strat_field_double(&snap, strat_id, "TrailingStop")
+                    .or_else(|| super::strategies::strat_field_double(&snap, strat_id, "Trailing"));
             let sl_resolve = |forced: Option<bool>| {
                 resolve_stop_group(
                     server_id,
@@ -320,13 +321,15 @@ pub(super) fn set_order_stop(
                     "core {server_id} set order stop {uid} {kind:?}: у соседнего стопа нет уровня — его страта может погаснуть"
                 );
             }
-            let apply_sl = |s: moonproto::StopSettings, g: &Option<(bool, bool, f64, f64)>| match g {
+            let apply_sl = |s: moonproto::StopSettings, g: &Option<(bool, bool, f64, f64)>| match g
+            {
                 Some((true, true, level, spread)) => s.with_stop_loss_fixed(*level, *spread),
                 Some((true, false, level, spread)) => s.with_stop_loss_percent(*level, *spread),
                 Some((false, ..)) => s.without_stop_loss(),
                 None => s, // уровень не найден — оставить провод как есть
             };
-            let apply_ts = |s: moonproto::StopSettings, g: &Option<(bool, bool, f64, f64)>| match g {
+            let apply_ts = |s: moonproto::StopSettings, g: &Option<(bool, bool, f64, f64)>| match g
+            {
                 Some((true, true, level, spread)) => s.with_trailing_fixed(*level, *spread),
                 Some((true, false, level, spread)) => s.with_trailing_percent(*level, *spread),
                 Some((false, ..)) => s.without_trailing(),
@@ -424,7 +427,14 @@ pub(super) fn set_order_stop(
                         );
                     }
                 }
-                remember_stop_params(server_id, uid, kind, o.vstop_fixed, o.vstop_level, o.vstop_vol);
+                remember_stop_params(
+                    server_id,
+                    uid,
+                    kind,
+                    o.vstop_fixed,
+                    o.vstop_level,
+                    o.vstop_vol,
+                );
                 VStopParams::disabled()
             };
             note_stop_override(server_id, uid, kind, on);
@@ -496,8 +506,8 @@ fn restore_from_wire_or_memory(
 /// Явные per-order переопределения стопов, сделанные ИЗ ТЕРМИНАЛА (session-scoped).
 /// Провод не отличает «стоп явно выключен» от «не задан» (оба — нули), а флаг стратегии
 /// иначе маскировал бы наш OFF в таблице. Ключ (ядро, uid) → [Option<целевой_флаг>; 3].
-fn stop_overrides_map()
--> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64), [Option<bool>; 3]>> {
+fn stop_overrides_map(
+) -> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64), [Option<bool>; 3]>> {
     static MEM: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<(u64, u64), [Option<bool>; 3]>>,
     > = std::sync::OnceLock::new();
@@ -536,8 +546,8 @@ pub(super) fn stop_override(
 /// Память параметров стопов, стираемых выключением: ключ (ядро, uid ордера, вид стопа) →
 /// (fixed, level, spread|vol). Живёт до конца процесса; объём — единицы записей на сессию
 /// (пишется только при ручном выключении стопа из таблицы ордеров).
-fn stop_memory() -> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64, u8), (bool, f64, f64)>>
-{
+fn stop_memory(
+) -> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64, u8), (bool, f64, f64)>> {
     static MEM: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<(u64, u64, u8), (bool, f64, f64)>>,
     > = std::sync::OnceLock::new();

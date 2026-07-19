@@ -17,7 +17,12 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::DayCell;
 
 impl AnalyticsView {
-    pub(super) fn calendar_year(&self, days: &[DayCell], p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn calendar_year(
+        &self,
+        days: &[DayCell],
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         // Свёртка посуточной серии всей истории в месячные агрегаты.
         let mut agg: HashMap<(i32, u32), (f64, i64)> = HashMap::new();
         let mut min_year = i32::MAX;
@@ -69,7 +74,10 @@ impl AnalyticsView {
         for m in 1..=12u32 {
             let future = y > cy || (y == cy && m > cm);
             let (profit, trades) = agg.get(&(y, m)).copied().unwrap_or((0.0, 0));
-            let name = months.get((m as usize).saturating_sub(1)).cloned().unwrap_or_default();
+            let name = months
+                .get((m as usize).saturating_sub(1))
+                .cloned()
+                .unwrap_or_default();
             grid = grid.child(self.year_month_cell(y, m, name, profit, trades, future, p, cx));
         }
         v_flex()
@@ -80,7 +88,12 @@ impl AnalyticsView {
                 h_flex()
                     .gap(design::ui_px(cx, 8.0))
                     .items_center()
-                    .child(div().text_size(design::t_title(cx)).font_weight(FontWeight::SEMIBOLD).child(y.to_string()))
+                    .child(
+                        div()
+                            .text_size(design::t_title(cx))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(y.to_string()),
+                    )
                     .child(
                         div()
                             .text_size(design::t_body(cx))
@@ -108,7 +121,11 @@ impl AnalyticsView {
         let r = design::ui_px(cx, 8.0);
         let empty = future || trades == 0;
         let bg = if future { moon(p.shell) } else { moon(p.panel) };
-        let border = if empty { moon_alpha(p.border, 0.35) } else { moon_alpha(sign_color(p, profit), 0.5) };
+        let border = if empty {
+            moon_alpha(p.border, 0.35)
+        } else {
+            moon_alpha(sign_color(p, profit), 0.5)
+        };
         // Не переносим на новую строку — ячейки flex_1 ужимаются под 12 в ряд.
         let mut cell = v_flex()
             .id(("ym", (y as u64) * 100 + m as u64))
@@ -132,7 +149,10 @@ impl AnalyticsView {
             );
         if empty {
             cell = cell.child(div().flex_1()).child(
-                div().text_size(design::t_title(cx)).text_color(moon(p.text_muted)).child("—"),
+                div()
+                    .text_size(design::t_title(cx))
+                    .text_color(moon(p.text_muted))
+                    .child("—"),
             );
         } else {
             cell = cell

@@ -68,12 +68,15 @@ impl AlertsPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let coin_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("BTC, ETH"));
-        cx.subscribe(&coin_input, |this: &mut Self, _, ev: &MoonInputEvent, cx| {
-            if matches!(ev, MoonInputEvent::Change) {
-                this.rebuild(cx);
-                cx.notify();
-            }
-        })
+        cx.subscribe(
+            &coin_input,
+            |this: &mut Self, _, ev: &MoonInputEvent, cx| {
+                if matches!(ev, MoonInputEvent::Change) {
+                    this.rebuild(cx);
+                    cx.notify();
+                }
+            },
+        )
         .detach();
         cx.observe(&backend, |this, _, cx| {
             this.rebuild(cx);
@@ -180,7 +183,10 @@ impl AlertsPanel {
             let backend_open = self.backend.clone();
             let open_market = r.market.clone();
             let coin_cell = div()
-                .id(SharedString::from(format!("alert-open-{core}-{}", r.market)))
+                .id(SharedString::from(format!(
+                    "alert-open-{core}-{}",
+                    r.market
+                )))
                 .w(px(70.0))
                 .cursor_pointer()
                 .text_color(moon(p.accent))
@@ -214,14 +220,15 @@ impl AlertsPanel {
                     bcx.notify();
                 });
             });
-            let strat_dd = MoonDropdown::new(SharedString::from(format!("alert-strat-{core}-{fid}")))
-                .label(format!("{} ▾", self.strategy_name(core, r.strategy_id)))
-                .trigger_variant(MoonButtonVariant::Soft)
-                .trigger_size(MoonButtonSize::Action)
-                .trigger_width(design::font_w(cx, 150.0))
-                .menu_width(design::font_w(cx, 200.0))
-                .menu_size(MoonMenuSize::Compact)
-                .items(items);
+            let strat_dd =
+                MoonDropdown::new(SharedString::from(format!("alert-strat-{core}-{fid}")))
+                    .label(format!("{} ▾", self.strategy_name(core, r.strategy_id)))
+                    .trigger_variant(MoonButtonVariant::Soft)
+                    .trigger_size(MoonButtonSize::Action)
+                    .trigger_width(design::font_w(cx, 150.0))
+                    .menu_width(design::font_w(cx, 200.0))
+                    .menu_size(MoonMenuSize::Compact)
+                    .items(items);
 
             let backend_del = self.backend.clone();
             let dmarket = r.market.clone();
@@ -234,9 +241,10 @@ impl AlertsPanel {
                 .text_color(moon(p.text))
                 .child(cell(r.core_name.clone(), 90.0))
                 .child(coin_cell)
-                .child(cell(r.figure.clone(), 110.0).when(r.from_server, |e| {
-                    e.text_color(moon(p.accent))
-                }))
+                .child(
+                    cell(r.figure.clone(), 110.0)
+                        .when(r.from_server, |e| e.text_color(moon(p.accent))),
+                )
                 .child(cell(fmt_price(r.price), 100.0))
                 .child(cell(fmt_time(r.time_ms), 100.0))
                 .child(div().w(px(160.0)).child(strat_dd))
@@ -364,7 +372,11 @@ impl AlertsPanel {
                 t!("alerts.col.coin").to_string(),
                 div()
                     .w(px(150.0))
-                    .child(MoonInput::new("alerts-coin-filter").state(&self.coin_input).small())
+                    .child(
+                        MoonInput::new("alerts-coin-filter")
+                            .state(&self.coin_input)
+                            .small(),
+                    )
                     .into_any_element(),
             ))
     }
@@ -375,7 +387,13 @@ impl AlertsPanel {
         let cur = self.backend.read(cx).default_alert_sound.clone();
         let backend = self.backend.clone();
         let options: Vec<(&'static str, SharedString, SharedString)> = crate::sound::names()
-            .map(|n| (n, SharedString::from(format!("snd-{n}")), SharedString::from(n)))
+            .map(|n| {
+                (
+                    n,
+                    SharedString::from(format!("snd-{n}")),
+                    SharedString::from(n),
+                )
+            })
             .collect();
         let items = radio_items(
             options,

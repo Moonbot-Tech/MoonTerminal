@@ -126,7 +126,12 @@ impl ChartTabs {
     /// горизонтальную ориентацию (сравнение работает только в ней), замок на якоре и метлу
     /// (соседи — «только стакан»). Повторный ПКМ по той же монете фокусирует уже созданную
     /// вкладку (по имени), не плодя дубли.
-    pub(super) fn open_compare_tab(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+    pub(super) fn open_compare_tab(
+        &mut self,
+        core: CoreId,
+        market: String,
+        cx: &mut Context<Self>,
+    ) {
         let label = moon_core::symbol::coin_of_market(&market).to_string();
         // Вкладка с именем этой монеты уже есть → просто перейти на неё.
         if let Some((n, b)) = self
@@ -152,7 +157,12 @@ impl ChartTabs {
             let mut used = std::collections::HashSet::new();
             used.insert(ms.provider_of(core));
             let mut out = vec![(core, market.clone())];
-            for s in b.session.sessions().iter().filter(|s| s.group == self.group) {
+            for s in b
+                .session
+                .sessions()
+                .iter()
+                .filter(|s| s.group == self.group)
+            {
                 if s.id == core {
                     continue;
                 }
@@ -506,7 +516,6 @@ impl ChartTabs {
             }
         }
     }
-
 }
 
 /// Поиск монеты в полоске вкладок: выбранная монета открывается на АКТИВНОЙ вкладке

@@ -469,8 +469,10 @@ fn flag_toggle_cell(
             view.update(app, |this, cx| {
                 // Оптимизм: рисуем целевое состояние сразу; истина сервера (строки от
                 // feed) перекроет оверлей при расхождении (запись живёт ≤3с).
-                this.stop_overlay
-                    .insert((core, uid, stop_tag(kind)), (!on, std::time::Instant::now()));
+                this.stop_overlay.insert(
+                    (core, uid, stop_tag(kind)),
+                    (!on, std::time::Instant::now()),
+                );
                 this.backend.update(cx, |b, _| {
                     if let Err(err) = b.session.set_order_stop(core, uid, kind, !on) {
                         log::warn!(

@@ -37,8 +37,8 @@ mod toml_io;
 
 pub use badges::{BadgeEntry, BadgesConfig};
 pub use detect_view::{
-    DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI, DetectChart,
-    DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg, DetectViewFile, detect_slot_count,
+    detect_slot_count, DetectChart, DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg,
+    DetectViewFile, DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI,
 };
 pub use groups::GroupConfig;
 pub use hotkeys::{
@@ -128,7 +128,8 @@ impl AppConfig {
         let badges = BadgesConfig::load();
         // Хоткеи — отдельный переносимый файл (с v13); None = ещё не мигрировали.
         let hotkeys_file = HotkeysConfig::load();
-        if let Some(cfg) = Self::load_plaintext_env(theme.clone(), orders.clone(), badges.clone())? {
+        if let Some(cfg) = Self::load_plaintext_env(theme.clone(), orders.clone(), badges.clone())?
+        {
             return Ok(cfg);
         }
         if paths::servers_path().exists() {

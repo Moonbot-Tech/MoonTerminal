@@ -200,7 +200,8 @@ impl BadgesConfig {
     pub fn save(&self) {
         match serde_json::to_string_pretty(self) {
             Ok(s) => {
-                if let Err(e) = write_file_atomic(&paths::badges_path(), s.as_bytes(), "badges.json")
+                if let Err(e) =
+                    write_file_atomic(&paths::badges_path(), s.as_bytes(), "badges.json")
                 {
                     log::warn!("не записал badges.json: {e:#}");
                 }
@@ -235,20 +236,21 @@ impl BadgesConfig {
 
     /// Код бейджа для вида под направление (фолбэк `UNK`).
     pub fn code(&self, ordinal: u8, is_short: bool) -> &str {
-        self.entry(ordinal).map(|e| e.code_for(is_short)).unwrap_or("UNK")
+        self.entry(ordinal)
+            .map(|e| e.code_for(is_short))
+            .unwrap_or("UNK")
     }
 
     /// Цвет бейджа для вида под активную тему (фолбэк — нейтраль).
     pub fn color(&self, ordinal: u8, is_light: bool) -> [u8; 3] {
-        self.entry(ordinal).map(|e| e.color(is_light)).unwrap_or(if is_light {
-            MUTED_LIGHT
-        } else {
-            MUTED_DARK
-        })
+        self.entry(ordinal)
+            .map(|e| e.color(is_light))
+            .unwrap_or(if is_light { MUTED_LIGHT } else { MUTED_DARK })
     }
 
     /// Цвет обводки бейджа под направление/тему (None = обводки нет).
     pub fn outline_color(&self, ordinal: u8, is_short: bool, is_light: bool) -> Option<[u8; 3]> {
-        self.entry(ordinal).and_then(|e| e.outline_color(is_short, is_light))
+        self.entry(ordinal)
+            .and_then(|e| e.outline_color(is_short, is_light))
     }
 }

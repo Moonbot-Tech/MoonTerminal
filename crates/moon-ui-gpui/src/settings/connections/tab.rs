@@ -230,7 +230,10 @@ impl SettingsView {
 
     /// Вкладка «Подключения» — порт egui `settings/connections.rs`: источник данных
     /// (выпадающий), таблица ядер слева, панель групп (с иконками/👁/пикером) справа.
-    pub(in crate::settings) fn connections_tab(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(in crate::settings) fn connections_tab(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         // Живой статус ядер для точек.
         let status = self.backend.read(cx).session.status_map();

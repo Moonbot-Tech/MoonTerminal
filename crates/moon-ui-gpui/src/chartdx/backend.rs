@@ -6,8 +6,8 @@ use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance
 use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
-    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu,
-    CursorParams, GridParams, ReadoutRect,
+    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
+    GridParams, ReadoutRect,
 };
 
 #[cfg(target_os = "macos")]

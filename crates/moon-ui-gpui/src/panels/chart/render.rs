@@ -493,11 +493,23 @@ impl Render for ChartPanel {
                 }
             })
             .on_scroll_wheel(cx.listener(render_input::scroll_wheel))
-            .on_mouse_down(MouseButton::Left, cx.listener(render_input::mouse_down_left))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(render_input::mouse_down_left),
+            )
             .on_mouse_up(MouseButton::Left, cx.listener(render_input::mouse_up_left))
-            .on_mouse_down(MouseButton::Right, cx.listener(render_input::mouse_down_right))
-            .on_mouse_up(MouseButton::Right, cx.listener(render_input::mouse_up_right))
-            .on_mouse_down(MouseButton::Middle, cx.listener(render_input::mouse_down_middle))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(render_input::mouse_down_right),
+            )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(render_input::mouse_up_right),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(render_input::mouse_down_middle),
+            )
             .on_mouse_move(cx.listener(render_input::mouse_move))
             .on_hover(cx.listener(render_input::hover))
             // own-pass: геометрию слота движок берёт синхронно из `GpuFrameInfo.bounds` в

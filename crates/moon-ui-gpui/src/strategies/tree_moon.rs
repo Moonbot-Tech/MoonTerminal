@@ -193,7 +193,13 @@ pub(super) fn build(
                 );
                 dchildren.push(MoonTreeItem::new(dsid, h.name.clone()));
             }
-            data.insert(did.clone(), NodeData::DeletedFolder { core, count: del.len() });
+            data.insert(
+                did.clone(),
+                NodeData::DeletedFolder {
+                    core,
+                    count: del.len(),
+                },
+            );
             children.push(
                 MoonTreeItem::new(did, rust_i18n::t!("strat.deleted_folder").to_string())
                     .folder(true)

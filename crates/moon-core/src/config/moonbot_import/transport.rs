@@ -38,7 +38,9 @@ pub fn decode_transport(text: &str) -> Result<Vec<u8>, ImportError> {
         )));
     }
     if size == 0 {
-        return Err(ImportError::BadHeader("нулевой размер сжатых данных".into()));
+        return Err(ImportError::BadHeader(
+            "нулевой размер сжатых данных".into(),
+        ));
     }
 
     let compressed = base16384_decode(&cleaned[pos..], size)?;
@@ -200,8 +202,7 @@ fn decompress(compressed: &[u8]) -> Result<Vec<u8>, ImportError> {
 pub(super) fn encode_mbsc7(payload: &[u8]) -> String {
     // Тестовый producer: gzip(payload) → CRC32 → Base16384 → текст в fence, как MoonBot.
     use std::io::Write;
-    let mut enc =
-        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     enc.write_all(payload).unwrap();
     let compressed = enc.finish().unwrap();
     let crc = crc32fast::hash(&compressed);
@@ -269,7 +270,10 @@ mod tests {
 
     #[test]
     fn not_found_and_newer_format() {
-        assert_eq!(decode_transport("no header here"), Err(ImportError::NotFound));
+        assert_eq!(
+            decode_transport("no header here"),
+            Err(ImportError::NotFound)
+        );
         assert_eq!(
             decode_transport("MBSC8:00000001:00000000:一"),
             Err(ImportError::NewerFormat { found: 8 })
@@ -348,8 +352,7 @@ mod tests {
     fn truncated_gzip_rejected() {
         // Валидная оболочка (size/CRC пересчитаны) вокруг ОБРЕЗАННЫХ gzip-байт.
         use std::io::Write;
-        let mut enc =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(b"payload payload payload").unwrap();
         let full = enc.finish().unwrap();
         let cut = &full[..full.len() / 2];
@@ -380,7 +383,10 @@ mod tests {
     fn compressed_size_limit_enforced() {
         // Заголовок с размером больше лимита — ошибка ДО каких-либо выделений.
         let text = format!("MBSC7:{:08X}:00000000:一", MAX_COMPRESSED + 1);
-        assert!(matches!(decode_transport(&text), Err(ImportError::TooLarge(_))));
+        assert!(matches!(
+            decode_transport(&text),
+            Err(ImportError::TooLarge(_))
+        ));
     }
 
     #[test]
@@ -396,8 +402,7 @@ mod tests {
     fn decompression_bomb_rejected() {
         // 80 MiB нулей жмутся в мелочь; распаковка должна упереться в лимит 64 MiB.
         use std::io::Write;
-        let mut enc =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         let chunk = vec![0u8; 1024 * 1024];
         for _ in 0..80 {
             enc.write_all(&chunk).unwrap();
@@ -420,6 +425,9 @@ mod tests {
             b16.push(char::from_u32(B16384_BASE + acc).unwrap());
         }
         let text = format!("MBSC7:{:08X}:{crc:08X}:{b16}", compressed.len());
-        assert!(matches!(decode_transport(&text), Err(ImportError::TooLarge(_))));
+        assert!(matches!(
+            decode_transport(&text),
+            Err(ImportError::TooLarge(_))
+        ));
     }
 }

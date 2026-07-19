@@ -358,14 +358,12 @@ impl StrategiesView {
                     window,
                     cx,
                 );
-                let mut input = MoonInput::new(SharedString::from(format!(
-                    "field-input-{row_id}"
-                )))
-                .state(&state)
-                .small()
-                .tone(MoonTone::Warning)
-                .selected(dirty || differ)
-                .disabled(!active);
+                let mut input = MoonInput::new(SharedString::from(format!("field-input-{row_id}")))
+                    .state(&state)
+                    .small()
+                    .tone(MoonTone::Warning)
+                    .selected(dirty || differ)
+                    .disabled(!active);
                 if differ {
                     input = input.placeholder(t!("strat.mixed_values").to_string());
                 }
@@ -514,19 +512,16 @@ impl StrategiesView {
                 let differs = !values_equal(&cur, &version_val);
                 let fname = field_name.clone();
                 let vval = version_val.clone();
-                let mut line = h_flex()
-                    .items_center()
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(design::t_caption(cx))
-                            // Отличие от версии — синим (есть что копировать),
-                            // совпадение — тускло.
-                            .text_color(moon(if differs { p.blue } else { p.text_soft }))
-                            .child(t!("strat.version_cur", v = cur).to_string()),
-                    );
+                let mut line = h_flex().items_center().gap(design::ui_px(cx, 6.0)).child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(design::t_caption(cx))
+                        // Отличие от версии — синим (есть что копировать),
+                        // совпадение — тускло.
+                        .text_color(moon(if differs { p.blue } else { p.text_soft }))
+                        .child(t!("strat.version_cur", v = cur).to_string()),
+                );
                 if differs {
                     line = line.child(
                         MoonButton::new(SharedString::from(format!("copy-cur-{row_id}")))

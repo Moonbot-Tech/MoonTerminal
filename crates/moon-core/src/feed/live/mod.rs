@@ -130,7 +130,10 @@ pub fn run(
                 ReportSyncRequest::fresh(ReportHistoryDepth::All)
             };
             match client.reports().sync(req) {
-                Ok(_) => log::info!("отчёты: core={} sync запрошен (from_rec_id={from})", server.uid),
+                Ok(_) => log::info!(
+                    "отчёты: core={} sync запрошен (from_rec_id={from})",
+                    server.uid
+                ),
                 Err(e) => log::warn!("отчёты: core={} sync не запустился: {e:?}", server.uid),
             }
             // Открытые строки могли закрыться/удалиться в оффлайне НИЖЕ курсора —
@@ -172,8 +175,10 @@ pub fn run(
     // strat_db: дефолты полей схемы по видам (нормализация дампов — сервер не шлёт
     // поля, равные дефолту), кольцо наших правок (origin=local) и флаг первого
     // набора после (ре)коннекта (origin неизвестен — правки могли пройти оффлайн).
-    let mut strat_schema_defaults: std::collections::HashMap<u8, Vec<(String, moonproto::FieldValue)>> =
-        std::collections::HashMap::new();
+    let mut strat_schema_defaults: std::collections::HashMap<
+        u8,
+        Vec<(String, moonproto::FieldValue)>,
+    > = std::collections::HashMap::new();
     let mut local_strat_edits = LocalStratEdits::new();
     let mut strat_db_initial = true;
     // Монотонный per-core номер детекта — курсор ингеста в ленту детектов UI.
@@ -400,7 +405,10 @@ pub fn run(
                 // НЕ сотрёт — дырка на стороне ядра).
                 Ok(()) => {
                     balance_refresh_log_until = Some(Instant::now() + Duration::from_secs(5));
-                    log::info!("core {} balance refresh requested (orders event)", server.id);
+                    log::info!(
+                        "core {} balance refresh requested (orders event)",
+                        server.id
+                    );
                 }
                 Err(error) => {
                     log::warn!("core {} balance refresh request failed: {error}", server.id)
@@ -648,7 +656,9 @@ pub fn run(
             let detect_snap = want_detects.then(|| client.snapshot()).flatten();
             // Схема стратегий — для фолбэка на default_value: поля, равные дефолту
             // схемы, сервер не шлёт (в т.ч. звук/SoundAlert).
-            let detect_schema = detect_snap.as_ref().and_then(|s| s.strats().strategy_schema());
+            let detect_schema = detect_snap
+                .as_ref()
+                .and_then(|s| s.strats().strategy_schema());
             for ev in &events {
                 match ev {
                     Event::ServerLog(l) if want_log => {
@@ -993,8 +1003,7 @@ pub fn run(
                 let futures_account = info
                     .as_ref()
                     .is_some_and(|i| i.supports(moonproto::ExchangeTypeMask::FUTURES));
-                let assets =
-                    build_assets(snap.markets(), snap.balances(), &base, futures_account);
+                let assets = build_assets(snap.markets(), snap.balances(), &base, futures_account);
                 if tx.send(FeedMsg::Assets(assets)).is_err() {
                     break;
                 }

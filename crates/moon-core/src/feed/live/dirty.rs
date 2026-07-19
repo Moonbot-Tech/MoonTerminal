@@ -66,7 +66,11 @@ pub(super) fn market_dirty_from_events(
             // разбудить чарт (новый бакет меняет сигнатуру deep-рядов → пересборка серии;
             // тихие монеты без трейд-событий иначе не проснулись бы вовсе).
             Event::LiveCandle(ev) if ev.applied_to_history => {
-                push_dirty(&mut dirty, ev.market_name.clone(), MarketDirtyFlags::HISTORY);
+                push_dirty(
+                    &mut dirty,
+                    ev.market_name.clone(),
+                    MarketDirtyFlags::HISTORY,
+                );
             }
             Event::Markets(
                 MarketsEvent::MarketsListReplaced { .. }

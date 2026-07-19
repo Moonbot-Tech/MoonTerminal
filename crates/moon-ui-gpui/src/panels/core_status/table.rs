@@ -16,8 +16,16 @@ fn columns() -> Vec<MoonDataTableColumn> {
         numeric("cpu_avg", t!("core_status.col.cpu_avg").to_string(), 90.0),
         numeric("mem_app", t!("core_status.col.mem_app").to_string(), 100.0),
         numeric("mem_sys", t!("core_status.col.mem_sys").to_string(), 100.0),
-        numeric("free_phys", t!("core_status.col.free_phys").to_string(), 110.0),
-        numeric("free_page", t!("core_status.col.free_page").to_string(), 110.0),
+        numeric(
+            "free_phys",
+            t!("core_status.col.free_phys").to_string(),
+            110.0,
+        ),
+        numeric(
+            "free_page",
+            t!("core_status.col.free_page").to_string(),
+            110.0,
+        ),
         numeric("updated", t!("core_status.col.updated").to_string(), 100.0),
     ]
 }
@@ -73,7 +81,10 @@ fn status_cell(status: &ConnStatus, p: MoonPalette) -> impl IntoElement + 'stati
     let (color, label) = match status {
         ConnStatus::Ready => (p.green, t!("conn.status.ready").to_string()),
         ConnStatus::Connecting => (p.amber, t!("conn.status.connecting").to_string()),
-        ConnStatus::Stage(s) => (p.amber, t!("conn.status.stage", stage = s.clone()).to_string()),
+        ConnStatus::Stage(s) => (
+            p.amber,
+            t!("conn.status.stage", stage = s.clone()).to_string(),
+        ),
         ConnStatus::Failed(e) => (p.red, t!("conn.status.failed", err = e.clone()).to_string()),
         ConnStatus::Disconnected => (p.text_soft, t!("conn.status.disconnected").to_string()),
     };
@@ -82,7 +93,14 @@ fn status_cell(status: &ConnStatus, p: MoonPalette) -> impl IntoElement + 'stati
         .h_full()
         .items_center()
         .gap_2()
-        .child(div().w(px(8.0)).h(px(8.0)).flex_none().rounded_full().bg(rgb(color)))
+        .child(
+            div()
+                .w(px(8.0))
+                .h(px(8.0))
+                .flex_none()
+                .rounded_full()
+                .bg(rgb(color)),
+        )
         .child(
             div()
                 .flex_1()
@@ -95,7 +113,8 @@ fn status_cell(status: &ConnStatus, p: MoonPalette) -> impl IntoElement + 'stati
 
 /// Проценты CPU: `97.8%` (одна десятая). `None` → прочерк.
 fn pct(v: Option<f32>) -> String {
-    v.map(|v| format!("{v:.1}%")).unwrap_or_else(|| "—".to_string())
+    v.map(|v| format!("{v:.1}%"))
+        .unwrap_or_else(|| "—".to_string())
 }
 
 /// Мегабайты: целое + « МБ». `None` → прочерк.

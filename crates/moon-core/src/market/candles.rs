@@ -289,10 +289,7 @@ impl CandleSeries {
                 // Частичность первого бакета определяем по покрытию: если серверная база
                 // содержит этот бакет — начинаем со следующего, иначе рискуем дырой и
                 // берём и частичный.
-                let covered = self
-                    .candles
-                    .iter()
-                    .any(|c| c.t_open_ms == first.t_open_ms);
+                let covered = self.candles.iter().any(|c| c.t_open_ms == first.t_open_ms);
                 if covered {
                     first.t_open_ms + tf_ms as f64
                 } else {
@@ -554,10 +551,7 @@ mod tests {
         let (o, h, l, c) = normalize_ohlc(12.0, 10.0, 11.0, 9.0);
         assert_eq!((o, h, l, c), (10.0, 12.0, 9.0, 11.0));
         // Чистое падение без фитилей (o==h, c==l) — неотличимо от корректной и не ломается.
-        assert_eq!(
-            normalize_ohlc(12.0, 12.0, 9.0, 9.0),
-            (12.0, 12.0, 9.0, 9.0)
-        );
+        assert_eq!(normalize_ohlc(12.0, 12.0, 9.0, 9.0), (12.0, 12.0, 9.0, 9.0));
         // Плоская свеча.
         assert_eq!(normalize_ohlc(5.0, 5.0, 5.0, 5.0), (5.0, 5.0, 5.0, 5.0));
         // Мусор: диапазон растягивается, o/c как есть.
@@ -570,9 +564,9 @@ mod tests {
     fn orient_range_rows_by_direction() {
         // Снимочные строки «только диапазон» (open==high, close==low).
         let mut rows = vec![
-            candle(0.0, 12.0, 12.0, 10.0, 10.0, 1.0),      // первая — как пришла (вниз)
-            candle(5.0 * M, 14.0, 14.0, 12.0, 12.0, 1.0),  // mid 13 > 11 → вверх
-            candle(10.0 * M, 12.0, 12.0, 9.0, 9.0, 1.0),   // mid 10.5 < 13 → вниз
+            candle(0.0, 12.0, 12.0, 10.0, 10.0, 1.0), // первая — как пришла (вниз)
+            candle(5.0 * M, 14.0, 14.0, 12.0, 12.0, 1.0), // mid 13 > 11 → вверх
+            candle(10.0 * M, 12.0, 12.0, 9.0, 9.0, 1.0), // mid 10.5 < 13 → вниз
         ];
         orient_range_rows(&mut rows);
         assert_eq!((rows[0].open, rows[0].close), (12.0, 10.0));

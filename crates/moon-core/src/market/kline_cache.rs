@@ -236,7 +236,10 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
                     }
                 }
                 if let Err(e) = tx.commit() {
-                    log::warn!("kline cache batch commit failed ({} items): {e}", items.len());
+                    log::warn!(
+                        "kline cache batch commit failed ({} items): {e}",
+                        items.len()
+                    );
                 }
             }
             Op::Read {
@@ -275,7 +278,10 @@ fn upsert_one(
         if !(r.t_open_ms.is_finite() && r.t_open_ms > 0.0) || !(r.high > 0.0) {
             continue;
         }
-        by_day.entry(r.t_open_ms as i64 / DAY_MS).or_default().push(r);
+        by_day
+            .entry(r.t_open_ms as i64 / DAY_MS)
+            .or_default()
+            .push(r);
     }
     if by_day.is_empty() {
         return Ok(());
@@ -422,14 +428,23 @@ mod tests {
             1,
             vec![candle(day as f64, 5.0), candle((day + 60_000) as f64, 6.0)],
         );
-        cache.merge("7:0".into(), "BTCUSDT".into(), 1, vec![candle(day as f64, 9.0)]);
+        cache.merge(
+            "7:0".into(),
+            "BTCUSDT".into(),
+            1,
+            vec![candle(day as f64, 9.0)],
+        );
         // Дать потоку прожевать очередь: read идёт тем же каналом, порядок сохранён.
         let rows = cache.read_range("7:0", "BTCUSDT", 1, day, day + DAY_MS);
         assert_eq!(rows.len(), 2, "дедуп по t_open внутри дня");
         assert_eq!(rows[0].open, 9.0, "поздняя заливка авторитетнее");
         // Чужой kind/рынок не видны.
-        assert!(cache.read_range("7:0", "BTCUSDT", 5, day, day + DAY_MS).is_empty());
-        assert!(cache.read_range("7:0", "ETHUSDT", 1, day, day + DAY_MS).is_empty());
+        assert!(cache
+            .read_range("7:0", "BTCUSDT", 5, day, day + DAY_MS)
+            .is_empty());
+        assert!(cache
+            .read_range("7:0", "ETHUSDT", 1, day, day + DAY_MS)
+            .is_empty());
         let _ = std::fs::remove_file(&path);
     }
 }

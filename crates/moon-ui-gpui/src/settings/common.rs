@@ -33,7 +33,11 @@ pub(super) fn collapse_block(
             let now_open = !open_ixs.is_empty();
             entity.update(cx, |this, c| {
                 let s = set(this);
-                let changed = if now_open { s.insert(key) } else { s.remove(key) };
+                let changed = if now_open {
+                    s.insert(key)
+                } else {
+                    s.remove(key)
+                };
                 if changed {
                     c.notify();
                 }

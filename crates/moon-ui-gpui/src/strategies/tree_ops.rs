@@ -259,7 +259,10 @@ pub fn clip_to_text(clip: &[ClipItem]) -> String {
         out.push_str(&format!("Kind={}\n", escape_value(&item.kind)));
         out.push_str(&format!("KindOrdinal={}\n", item.kind_ordinal));
         if !item.rel_path.is_empty() {
-            out.push_str(&format!("Path={}\n", escape_value(&join_path(&item.rel_path))));
+            out.push_str(&format!(
+                "Path={}\n",
+                escape_value(&join_path(&item.rel_path))
+            ));
         }
         out.push_str(&format!("Name={}\n", escape_value(&item.name)));
         for (n, v) in &item.fields {

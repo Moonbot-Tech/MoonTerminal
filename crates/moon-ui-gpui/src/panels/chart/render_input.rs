@@ -31,9 +31,7 @@ pub(super) fn scroll_wheel(
     // графиком+стаканом — зум (ниже) + stop_propagation, чтобы стек не скроллился.
     if this.num.is_some() && within {
         if let Some(idx) = this.input.pane_at(pos.0, pos.1) {
-            if let Some((_, rect)) =
-                this.input.pane_rects.iter().find(|(i, _)| *i == idx)
-            {
+            if let Some((_, rect)) = this.input.pane_rects.iter().find(|(i, _)| *i == idx) {
                 if pos.0 <= rect.x + moon_chart::PRICE_AXIS_W * sf {
                     return;
                 }
@@ -109,13 +107,7 @@ pub(super) fn mouse_down_left(
         return;
     }
     if within
-        && this.try_place_order_click(
-            TradeMouseButton::Left,
-            e.modifiers,
-            e.click_count,
-            pos,
-            cx,
-        )
+        && this.try_place_order_click(TradeMouseButton::Left, e.modifiers, e.click_count, pos, cx)
     {
         cx.stop_propagation();
         return;
@@ -204,15 +196,7 @@ pub(super) fn mouse_up_left(
     let changed = {
         let input = &mut this.input;
         this.chart.with_container_mut(|container| {
-            input.mouse_button(
-                input::Btn::Left,
-                false,
-                false,
-                false,
-                container,
-                sf,
-                fb,
-            )
+            input.mouse_button(input::Btn::Left, false, false, false, container, sf, fb)
         })
     };
     if changed {
@@ -257,13 +241,7 @@ pub(super) fn mouse_down_right(
         return;
     }
     if within
-        && this.try_place_order_click(
-            TradeMouseButton::Right,
-            e.modifiers,
-            e.click_count,
-            pos,
-            cx,
-        )
+        && this.try_place_order_click(TradeMouseButton::Right, e.modifiers, e.click_count, pos, cx)
     {
         this.suppress_rmb_up = true;
         cx.stop_propagation();
@@ -278,15 +256,7 @@ pub(super) fn mouse_down_right(
     let changed = {
         let input = &mut this.input;
         this.chart.with_container_mut(|container| {
-            input.mouse_button(
-                input::Btn::Right,
-                true,
-                within,
-                false,
-                container,
-                sf,
-                fb,
-            )
+            input.mouse_button(input::Btn::Right, true, within, false, container, sf, fb)
         })
     };
     if changed {
@@ -317,15 +287,7 @@ pub(super) fn mouse_up_right(
     let changed = {
         let input = &mut this.input;
         this.chart.with_container_mut(|container| {
-            input.mouse_button(
-                input::Btn::Right,
-                false,
-                false,
-                false,
-                container,
-                sf,
-                fb,
-            )
+            input.mouse_button(input::Btn::Right, false, false, false, container, sf, fb)
         })
     };
     if changed {
@@ -452,9 +414,8 @@ pub(super) fn mouse_move(
     let fb = this.chart.slot_dev_width();
     let dragging = {
         let input = &mut this.input;
-        this.chart.with_container_mut(|container| {
-            input.pointer_drag(pos.0, pos.1, container, sf, fb)
-        })
+        this.chart
+            .with_container_mut(|container| input.pointer_drag(pos.0, pos.1, container, sf, fb))
     };
     if dragging {
         this.mark_input_changed(cx);
@@ -500,8 +461,8 @@ pub(super) fn hover(
             this.apply_order_visual(_cx);
             _cx.notify();
         }
-        let changed = this.input.cursor.take().is_some()
-            || this.input.hovered_pane.take().is_some();
+        let changed =
+            this.input.cursor.take().is_some() || this.input.hovered_pane.take().is_some();
         if changed {
             this.sync_native_cursor();
         }

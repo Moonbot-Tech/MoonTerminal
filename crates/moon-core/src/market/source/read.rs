@@ -24,9 +24,8 @@ fn deep_row_candle(r: &moonproto::DeepPrice) -> crate::market::candles::ChartCan
 
 use super::{
     drain_price_line, moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks,
-    trade_price_range, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor,
-    ChartHistoryRead, DetectSnapshot, LatestPriceError, MarketDataSource, MarketRevisions,
-    MarketTickerReadout,
+    trade_price_range, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead,
+    DetectSnapshot, LatestPriceError, MarketDataSource, MarketRevisions, MarketTickerReadout,
 };
 use crate::market::candles::ChartCandle;
 
@@ -207,7 +206,10 @@ impl MarketDataSource {
 
     /// Живой MoonProto-клиент КОНКРЕТНОГО ядра (не его провайдера) — для
     /// аккаунтных полей, которые персональны для ядра (скринер).
-    pub(crate) fn core_client(&self, core: CoreId) -> Option<std::sync::Arc<moonproto::MoonClient>> {
+    pub(crate) fn core_client(
+        &self,
+        core: CoreId,
+    ) -> Option<std::sync::Arc<moonproto::MoonClient>> {
         let inner = self.inner.read().expect("market source poisoned");
         inner.clients.get(&core).and_then(SharedMoonClient::get)
     }
@@ -338,7 +340,10 @@ impl MarketDataSource {
                 });
                 crate::market::candles::orient_range_rows(&mut snap);
                 for c in &snap {
-                    buckets.insert(bucket_key(c.t_open_ms as i64), (c.open, c.high, c.low, c.close));
+                    buckets.insert(
+                        bucket_key(c.t_open_ms as i64),
+                        (c.open, c.high, c.low, c.close),
+                    );
                 }
                 snap5_n = buckets.len();
             }
@@ -346,7 +351,10 @@ impl MarketDataSource {
             if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref()) {
                 for c in cache.read_range(ex, market, 5, from_ms, now_ms) {
                     if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
-                        buckets.insert(bucket_key(c.t_open_ms as i64), (c.open, c.high, c.low, c.close));
+                        buckets.insert(
+                            bucket_key(c.t_open_ms as i64),
+                            (c.open, c.high, c.low, c.close),
+                        );
                     }
                 }
             }
@@ -363,7 +371,10 @@ impl MarketDataSource {
                 crate::market::candles::aggregate_trades(&ticks, tf_ms, &mut candles);
                 for c in &candles {
                     if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
-                        buckets.insert(bucket_key(c.t_open_ms as i64), (c.open, c.high, c.low, c.close));
+                        buckets.insert(
+                            bucket_key(c.t_open_ms as i64),
+                            (c.open, c.high, c.low, c.close),
+                        );
                     }
                 }
             }
@@ -480,8 +491,7 @@ impl MarketDataSource {
         let to_time = moon_time_from_rel_ms(epoch_ms, to_rel_ms.max(from_rel_ms + 1.0));
         // Зона отображения трейдов (последние K свечей): кресты/сканы читаем только от неё.
         // INFINITY = трейды не отображаем вовсе (K=0). Агрегацию свечей это НЕ ограничивает.
-        let display_trades =
-            candle_params.map_or(true, |cp| cp.trades_from_rel_ms.is_finite());
+        let display_trades = candle_params.map_or(true, |cp| cp.trades_from_rel_ms.is_finite());
         let trades_from_rel = candle_params
             .map(|cp| cp.trades_from_rel_ms.max(from_rel_ms))
             .filter(|v| v.is_finite())
@@ -648,15 +658,19 @@ impl MarketDataSource {
                 let mut subs = inner.candle_subs.lock().expect("candle subs poisoned");
                 let now_i = Instant::now();
                 if use_deep {
-                    let entry = subs
-                        .entry((provider, market.to_string()))
-                        .or_insert(super::CandleSubState {
+                    let entry = subs.entry((provider, market.to_string())).or_insert(
+                        super::CandleSubState {
                             kind_min: deep_kind_min,
                             last_want: now_i,
                             subscribed: false,
-                        });
+                        },
+                    );
                     if !entry.subscribed || entry.kind_min != deep_kind_min {
-                        if client.streams().subscribe_candles([market], deep_kind).is_ok() {
+                        if client
+                            .streams()
+                            .subscribe_candles([market], deep_kind)
+                            .is_ok()
+                        {
                             entry.subscribed = true;
                             entry.kind_min = deep_kind_min;
                         }
@@ -682,18 +696,16 @@ impl MarketDataSource {
             // Читается из sqlite ОДИН раз на (рынок, kind, левый край) — ресеты частые
             // (пан/зум), в БД на каждый нельзя; расширение окна влево перечитывает.
             if use_deep {
-                let need_from =
-                    (epoch_ms + (from_rel_ms - cp.tf_ms.max(0) as f32) as f64) as i64;
-                let cache_stale = cursor.cache_kind != Some(native_kind_min)
-                    || need_from < cursor.cache_from_ms;
+                let need_from = (epoch_ms + (from_rel_ms - cp.tf_ms.max(0) as f32) as f64) as i64;
+                let cache_stale =
+                    cursor.cache_kind != Some(native_kind_min) || need_from < cursor.cache_from_ms;
                 if cache_stale {
                     cursor.cache_rows.clear();
                     cursor.cache_rows_5m.clear();
                     cursor.cache_rows_1d.clear();
                     cursor.cache_kind = Some(native_kind_min);
                     cursor.cache_from_ms = need_from;
-                    if let (Some(cache), Some(ex)) =
-                        (kline_cache.as_ref(), exchange_key.as_deref())
+                    if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_deref())
                     {
                         cursor.cache_rows =
                             cache.read_range(ex, market, native_kind_min, need_from, i64::MAX);
@@ -766,8 +778,7 @@ impl MarketDataSource {
             // кэш по собственной сигнатуре и форсим перечитку префикса + пересборку серии,
             // чтобы глубина появилась сразу, а не со следующей сессии.
             if use_deep && native_kind_min > deep_kind_min {
-                if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref())
-                {
+                if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref()) {
                     let native_kind = deep_history_kind(native_kind_min);
                     if let Some(rows) = snapshot.tf_candles(market, native_kind) {
                         if !rows.is_empty() {
@@ -825,14 +836,11 @@ impl MarketDataSource {
                     // ушёл от соседа) — её last_deep_request уже отодвинут выше.
                     let gate_open = {
                         let inner = self.inner.read().expect("market source poisoned");
-                        let mut gate =
-                            inner.deep_req_gate.lock().expect("deep req gate poisoned");
+                        let mut gate = inner.deep_req_gate.lock().expect("deep req gate poisoned");
                         let key = (provider, market.to_string(), deep_kind_min);
                         let now_i = Instant::now();
                         match gate.get(&key) {
-                            Some(t) if now_i.duration_since(*t) < Duration::from_secs(30) => {
-                                false
-                            }
+                            Some(t) if now_i.duration_since(*t) < Duration::from_secs(30) => false,
                             _ => {
                                 gate.insert(key, now_i);
                                 true
@@ -1005,8 +1013,7 @@ impl MarketDataSource {
                         (&cache_part, cursor.cache_rows_kind as i64 * 60_000),
                         (&deep_part, deep_kind_min as i64 * 60_000),
                     ] {
-                        if part.is_empty() || part_tf <= 0 || tf < part_tf || tf % part_tf != 0
-                        {
+                        if part.is_empty() || part_tf <= 0 || tf < part_tf || tf % part_tf != 0 {
                             continue;
                         }
                         crate::market::candles::resample(part, tf, &mut scratch);
@@ -1091,9 +1098,11 @@ impl MarketDataSource {
                     prefix = taken;
                 }
                 if prefix.is_empty() {
-                    out.candles.extend_from_slice(cursor.candle_series.candles());
+                    out.candles
+                        .extend_from_slice(cursor.candle_series.candles());
                 } else {
-                    out.candles.reserve(prefix.len() + cursor.candle_series.candles().len());
+                    out.candles
+                        .reserve(prefix.len() + cursor.candle_series.candles().len());
                     out.candle_tf_ms.reserve(out.candles.capacity());
                     for (c, tf) in &prefix {
                         out.candles.push(*c);
@@ -1168,10 +1177,10 @@ impl MarketDataSource {
             if scan_price {
                 // Авто-Y учитывает high/low видимых свечей (кресты теперь только в зоне —
                 // без этого прошлое за зоной не влияло бы на масштаб).
-                if let Some((lo, hi)) = cursor.candle_series.price_range(
-                    epoch_ms + from_rel_ms as f64,
-                    epoch_ms + to_rel_ms as f64,
-                ) {
+                if let Some((lo, hi)) = cursor
+                    .candle_series
+                    .price_range(epoch_ms + from_rel_ms as f64, epoch_ms + to_rel_ms as f64)
+                {
                     read.tick_price_range = Some(match read.tick_price_range {
                         Some((a, b)) => (a.min(lo), b.max(hi)),
                         None => (lo, hi),

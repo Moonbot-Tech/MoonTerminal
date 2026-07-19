@@ -126,7 +126,11 @@ pub(crate) fn open_order_edit(
     let executed = super::orders::executed(&row);
 
     let init = InitVals {
-        price: if executed { row.sell_price } else { row.buy_price },
+        price: if executed {
+            row.sell_price
+        } else {
+            row.buy_price
+        },
         sl_on: row.sl_on,
         sl_fixed: row.sl_fixed,
         sl_price: row.stop_loss.unwrap_or(0.0),
@@ -295,9 +299,10 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
 
     // ── Условие входа (pending) — read-only, протокол не даёт менять ──
     let cond = r.pending_cond.map(|c| {
-        div().w_full().text_color(moon(p.text_muted)).child(
-            t!("orders.edit.cond", p = crate::panels::num(c)).to_string(),
-        )
+        div()
+            .w_full()
+            .text_color(moon(p.text_muted))
+            .child(t!("orders.edit.cond", p = crate::panels::num(c)).to_string())
     });
 
     // ── Цена активной ноги ──
@@ -316,13 +321,21 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
                 .gap_2()
                 .items_center()
                 .child(
-                    div()
-                        .w(px(150.0))
-                        .child(MoonInput::new("oe-price-input").state(&s.price_input).small()),
+                    div().w(px(150.0)).child(
+                        MoonInput::new("oe-price-input")
+                            .state(&s.price_input)
+                            .small(),
+                    ),
                 )
-                .child(div().text_color(moon(p.text_muted)).child(
-                    t!("orders.edit.current", p = crate::panels::num(r.price as f64)).to_string(),
-                )),
+                .child(
+                    div().text_color(moon(p.text_muted)).child(
+                        t!(
+                            "orders.edit.current",
+                            p = crate::panels::num(r.price as f64)
+                        )
+                        .to_string(),
+                    ),
+                ),
         );
 
     // ── Стопы ──
@@ -437,12 +450,7 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
                 .flex_none()
                 .child(t!("orders.edit.vol_lt").to_string()),
         )
-        .child(num_input(
-            "oe-vs-vol",
-            &s.vstop_vol_input,
-            s.vstop_on,
-            76.0,
-        ));
+        .child(num_input("oe-vs-vol", &s.vstop_vol_input, s.vstop_on, 76.0));
 
     let stops_group = moon_ui::MoonGroupBox::new("oe-stops")
         .title(t!("orders.edit.stops").to_string())
@@ -463,7 +471,9 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
     if let Some(cond) = cond {
         body = body.child(cond);
     }
-    body.child(price_group).child(stops_group).into_any_element()
+    body.child(price_group)
+        .child(stops_group)
+        .into_any_element()
 }
 
 fn dialog_footer(state: Entity<OrderEditState>, p: MoonPalette) -> AnyElement {
@@ -509,8 +519,8 @@ fn apply(state: &Entity<OrderEditState>, cx: &mut App) -> anyhow::Result<()> {
         let val = |input: &Entity<MoonInputState>| parse_num(&input.read(cx).value());
 
         // Цена активной ноги: валидная, изменившаяся → move_order.
-        let new_price = val(&s.price_input)
-            .filter(|p| *p > 0.0 && p.is_finite() && differs(*p, init.price));
+        let new_price =
+            val(&s.price_input).filter(|p| *p > 0.0 && p.is_finite() && differs(*p, init.price));
 
         let mut form = OrderStopsForm::default();
         let sl_price = val(&s.sl_input).unwrap_or(0.0);
@@ -546,7 +556,8 @@ fn apply(state: &Entity<OrderEditState>, cx: &mut App) -> anyhow::Result<()> {
         let vs_vol = val(&s.vstop_vol_input).unwrap_or(0.0);
         if s.vstop_on != init.vstop_on
             || s.vstop_fixed != init.vstop_fixed
-            || (s.vstop_on && (differs(vs_level, init.vstop_level) || differs(vs_vol, init.vstop_vol)))
+            || (s.vstop_on
+                && (differs(vs_level, init.vstop_level) || differs(vs_vol, init.vstop_vol)))
         {
             form.vstop = Some(VStopEdit {
                 on: s.vstop_on,

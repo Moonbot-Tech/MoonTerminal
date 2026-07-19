@@ -211,7 +211,11 @@ fn push_side(out: &mut Vec<RawLevel>, levels: &[crate::feed::Level], is_ask: boo
         // стакан рисовался с чёрными щелями в местах дыр лестницы (>1e-6).
         let span = if span == 0.0 {
             let w = (l.price.abs() * 1e-7).max(f32::MIN_POSITIVE);
-            if is_ask { w } else { -w }
+            if is_ask {
+                w
+            } else {
+                -w
+            }
         } else {
             span
         };

@@ -1,7 +1,7 @@
 //! Синк рыночных данных: история/стакан/авто-Y (вынос из data_state.rs, verbatim).
 
-use super::*;
 use super::orders::refresh_orderbook_label_notionals;
+use super::*;
 
 /// Аварийный рубильник свечей (`MOON_CANDLES_OFF=1`): чарт возвращается к чистому
 /// тик-режиму (кресты на всё окно, слой свечей пуст). Для A/B-замеров GPU/CPU.
@@ -727,7 +727,8 @@ impl ChartDataState {
                 pixels_changed = true;
             }
             let edge_rel = view_time0
-                + (chart_area.w + glass_w) / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
+                + (chart_area.w + glass_w)
+                    / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
             if pr.view.pad != edge_rel {
                 pr.view.pad = edge_rel;
                 pixels_changed = true;

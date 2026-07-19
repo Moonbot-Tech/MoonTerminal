@@ -305,9 +305,19 @@ fn restore_panel_to_home_tabs(
     let strip: Vec<String> = dock.update(app, |area, cx| {
         let state = area.dump(cx);
         strip_names(&state.center)
-            .or_else(|| state.bottom_dock.as_ref().and_then(|d| strip_names(&d.panel)))
+            .or_else(|| {
+                state
+                    .bottom_dock
+                    .as_ref()
+                    .and_then(|d| strip_names(&d.panel))
+            })
             .or_else(|| state.left_dock.as_ref().and_then(|d| strip_names(&d.panel)))
-            .or_else(|| state.right_dock.as_ref().and_then(|d| strip_names(&d.panel)))
+            .or_else(|| {
+                state
+                    .right_dock
+                    .as_ref()
+                    .and_then(|d| strip_names(&d.panel))
+            })
             .unwrap_or_default()
     });
     log::info!(
@@ -428,7 +438,8 @@ fn captured_slot(dock: &Entity<DockArea>, panel_name: &str, app: &mut App) -> Op
                     if is_leaf_target {
                         let horizontal = *axis == 0;
                         // Сосед — соседний слот; сторона панели относительно него (для схлопа 2→1).
-                        let (sib_ix, target_after) = if i > 0 { (i - 1, true) } else { (i + 1, false) };
+                        let (sib_ix, target_after) =
+                            if i > 0 { (i - 1, true) } else { (i + 1, false) };
                         let placement = match (horizontal, target_after) {
                             (true, true) => 1,   // справа от соседа
                             (true, false) => 0,  // слева

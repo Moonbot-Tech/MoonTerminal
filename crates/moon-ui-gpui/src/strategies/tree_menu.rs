@@ -181,16 +181,19 @@ impl StrategiesView {
                 // ордерам продолжаются (join по strategyid не рвётся).
                 let id = *id;
                 items.push(
-                    MoonMenuItem::with_key("restore-strategy", t!("strat.menu_restore").to_string())
-                        .on_click({
-                            let view = view.clone();
-                            move |_, window, app| {
-                                window.close_context_menu(app);
-                                view.update(app, |this, cx| {
-                                    this.restore_deleted_strategy(core, id, cx);
-                                });
-                            }
-                        }),
+                    MoonMenuItem::with_key(
+                        "restore-strategy",
+                        t!("strat.menu_restore").to_string(),
+                    )
+                    .on_click({
+                        let view = view.clone();
+                        move |_, window, app| {
+                            window.close_context_menu(app);
+                            view.update(app, |this, cx| {
+                                this.restore_deleted_strategy(core, id, cx);
+                            });
+                        }
+                    }),
                 );
             }
         }

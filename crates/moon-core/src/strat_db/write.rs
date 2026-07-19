@@ -154,7 +154,12 @@ pub(super) fn apply_full_set(
                 upsert_head(&tx, uid, core_name, d, content_hash, head_hash, now)?;
                 st.heads.insert(
                     key,
-                    Head { content_hash, head_hash, deleted: false, server_ver: d.server_ver },
+                    Head {
+                        content_hash,
+                        head_hash,
+                        deleted: false,
+                        server_ver: d.server_ver,
+                    },
                 );
                 writes += 1;
                 log::info!(
@@ -168,9 +173,11 @@ pub(super) fn apply_full_set(
         let (need_version, change_kind, ver_gap) = match st.heads.get(&key) {
             None => (true, "created", false),
             Some(h) if h.deleted => (true, "restored", false),
-            Some(h) if h.content_hash != content_hash => {
-                (true, "params", d.server_ver > h.server_ver.saturating_add(1))
-            }
+            Some(h) if h.content_hash != content_hash => (
+                true,
+                "params",
+                d.server_ver > h.server_ver.saturating_add(1),
+            ),
             Some(h) if h.head_hash != head_hash => (false, "", false),
             Some(_) => continue, // ничего не изменилось
         };
@@ -204,7 +211,15 @@ pub(super) fn apply_full_set(
             if change_kind == "params" && n_changed == 0 && prev.is_some() {
                 // Ложная тревога хэша: обновим кэш и head, версию не пишем.
                 upsert_head(&tx, uid, core_name, d, content_hash, head_hash, now)?;
-                st.heads.insert(key, Head { content_hash, head_hash, deleted: false, server_ver: d.server_ver });
+                st.heads.insert(
+                    key,
+                    Head {
+                        content_hash,
+                        head_hash,
+                        deleted: false,
+                        server_ver: d.server_ver,
+                    },
+                );
                 writes += 1;
                 continue;
             }
@@ -255,7 +270,15 @@ pub(super) fn apply_full_set(
         }
 
         upsert_head(&tx, uid, core_name, d, content_hash, head_hash, now)?;
-        st.heads.insert(key, Head { content_hash, head_hash, deleted: false, server_ver: d.server_ver });
+        st.heads.insert(
+            key,
+            Head {
+                content_hash,
+                head_hash,
+                deleted: false,
+                server_ver: d.server_ver,
+            },
+        );
         writes += 1;
     }
 
@@ -283,7 +306,9 @@ pub(super) fn apply_full_set(
                 h.deleted = true;
             }
             writes += 1;
-            log::info!("стратегии(db): {core_name} id={sid} удалена на сервере (история сохранена)");
+            log::info!(
+                "стратегии(db): {core_name} id={sid} удалена на сервере (история сохранена)"
+            );
         }
     }
 
@@ -465,7 +490,10 @@ mod tests {
             .unwrap()
                 > 0
         };
-        assert!(!has("idx_sv_lookup"), "дубль UNIQUE-индекса должен сноситься");
+        assert!(
+            !has("idx_sv_lookup"),
+            "дубль UNIQUE-индекса должен сноситься"
+        );
         assert!(has("idx_strat_sid"));
         let plan: String = conn
             .query_row(
@@ -506,7 +534,9 @@ mod tests {
         apply_full_set(&conn, &mut st, 7, "core", false, &[dump(1, "B", 5, "x")]).unwrap();
         assert_eq!(versions(&conn, 1).len(), 1);
         let name: String = conn
-            .query_row("SELECT name FROM strategies WHERE strategy_id=1", [], |r| r.get(0))
+            .query_row("SELECT name FROM strategies WHERE strategy_id=1", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(name, "B");
     }
@@ -520,7 +550,11 @@ mod tests {
         assert!(versions(&conn, 1)[0].2.is_some(), "закрыта при удалении");
         // Вернулась С ТЕМ ЖЕ контентом → НЕ новая версия, старая переоткрыта.
         apply_full_set(
-            &conn, &mut st, 7, "core", false,
+            &conn,
+            &mut st,
+            7,
+            "core",
+            false,
             &[dump(1, "A", 5, "x"), dump(2, "B", 3, "x")],
         )
         .unwrap();
@@ -528,7 +562,11 @@ mod tests {
         assert_eq!(v.len(), 1, "restored-версия не создана");
         assert!(v[0].2.is_none(), "версия переоткрыта (valid_to=NULL)");
         let del: i64 = conn
-            .query_row("SELECT deleted FROM strategies WHERE strategy_id=1", [], |r| r.get(0))
+            .query_row(
+                "SELECT deleted FROM strategies WHERE strategy_id=1",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(del, 0);
     }
@@ -537,20 +575,35 @@ mod tests {
     fn missing_marks_deleted_and_reappear_restores() {
         let (conn, mut st) = setup();
         apply_full_set(
-            &conn, &mut st, 7, "core", true,
+            &conn,
+            &mut st,
+            7,
+            "core",
+            true,
             &[dump(1, "A", 5, "x"), dump(2, "B", 3, "x")],
         )
         .unwrap();
         // Стратегия 2 пропала из полного набора → deleted, версия закрыта.
         apply_full_set(&conn, &mut st, 7, "core", false, &[dump(1, "A", 5, "x")]).unwrap();
         let del: i64 = conn
-            .query_row("SELECT deleted FROM strategies WHERE strategy_id=2", [], |r| r.get(0))
+            .query_row(
+                "SELECT deleted FROM strategies WHERE strategy_id=2",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(del, 1);
-        assert!(versions(&conn, 2)[0].2.is_some(), "версия удалённой закрыта");
+        assert!(
+            versions(&conn, 2)[0].2.is_some(),
+            "версия удалённой закрыта"
+        );
         // Вернулась С ИЗМЕНЕНИЕМ (TP 3→9) → новая версия restored.
         apply_full_set(
-            &conn, &mut st, 7, "core", false,
+            &conn,
+            &mut st,
+            7,
+            "core",
+            false,
             &[dump(1, "A", 5, "x"), dump(2, "B", 9, "x")],
         )
         .unwrap();
@@ -564,7 +617,11 @@ mod tests {
         apply_full_set(&conn, &mut st, 7, "core", true, &[dump(1, "A", 5, "x")]).unwrap();
         apply_full_set(&conn, &mut st, 7, "core", false, &[]).unwrap();
         let del: i64 = conn
-            .query_row("SELECT deleted FROM strategies WHERE strategy_id=1", [], |r| r.get(0))
+            .query_row(
+                "SELECT deleted FROM strategies WHERE strategy_id=1",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(del, 0, "пустой набор не считается «удалили всё»");
     }
@@ -576,6 +633,10 @@ mod tests {
         // «Рестарт writer'а»: state перечитывается с диска, дедуп не ломается.
         let mut st2 = init(&conn, &cfg()).unwrap();
         apply_full_set(&conn, &mut st2, 7, "core", false, &[dump(1, "A", 5, "x")]).unwrap();
-        assert_eq!(versions(&conn, 1).len(), 1, "эхо после рестарта не плодит версию");
+        assert_eq!(
+            versions(&conn, 1).len(),
+            1,
+            "эхо после рестарта не плодит версию"
+        );
     }
 }

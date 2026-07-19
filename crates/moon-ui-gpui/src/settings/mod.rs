@@ -35,13 +35,15 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use crate::icons::IconSet;
 use crate::Backend;
+use crate::icons::IconSet;
 use moon_core::config::{AppConfig, Language};
 use moon_core::market::MarketDataMode;
 
 use badges::BadgesEd;
-use common::{collapse_block, color_row, draft_color, draft_slider, section, separator, slider_row};
+use common::{
+    collapse_block, color_row, draft_color, draft_slider, section, separator, slider_row,
+};
 use connections::ConnRow;
 use interface::Iface;
 use lines::Lines;

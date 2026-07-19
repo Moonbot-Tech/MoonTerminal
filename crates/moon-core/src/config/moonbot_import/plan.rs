@@ -237,13 +237,7 @@ fn hotkey_field(cfg: &HotkeysConfig, field: &str) -> String {
 /// Один хоткей-пункт (группа «Хоткеи»): MoonBot `TShortCut` → gpui-строка; показываем
 /// ВСЕ, включая совпадающие (`same`). Empty пропускаем (перенос назначает, а не
 /// стирает; считаем в сводку), Unsupported — в `unsupported_hotkeys` с причиной.
-fn push_hotkey(
-    plan: &mut MoonBotImportPlan,
-    id: String,
-    label: String,
-    raw: u16,
-    current: &str,
-) {
+fn push_hotkey(plan: &mut MoonBotImportPlan, id: String, label: String, raw: u16, current: &str) {
     let decoded = shortcut::decode(raw);
     match shortcut::to_gpui_keystroke(decoded) {
         Some(ks) => {
@@ -586,10 +580,10 @@ fn collect_static_unsupported(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) 
 
 #[cfg(test)]
 mod tests {
+    use super::super::reader::IniSection;
     use super::super::schema_v7::{
         HotkeysPublic, IniBlock, MarketsTable, MoonBotConfig, Shortcuts, ThemeBlock, UiBlock,
     };
-    use super::super::reader::IniSection;
     use super::*;
     use crate::config::hotkeys::HotkeysConfig;
     use crate::config::orders::OrdersStyleSet;
@@ -762,10 +756,7 @@ mod tests {
             .iter()
             .any(|u| u.name.starts_with("BuyOrder") && u.reason.contains("не разобрано")));
         // Секция Charts без таблицы — целиком в unsupported.
-        assert!(plan
-            .unsupported
-            .iter()
-            .any(|u| u.name.contains("Charts")));
+        assert!(plan.unsupported.iter().any(|u| u.name.contains("Charts")));
     }
 
     #[test]
@@ -791,7 +782,9 @@ mod tests {
         // Fixed-sell — в core_commands (ClientSettings), не в per_core.
         assert!(find(&plan.core_commands, "core.fixed_sell_prices").is_some());
         assert_eq!(
-            find(&plan.core_commands, "core.fixed_sell_sel").unwrap().new,
+            find(&plan.core_commands, "core.fixed_sell_sel")
+                .unwrap()
+                .new,
             "S2"
         );
 

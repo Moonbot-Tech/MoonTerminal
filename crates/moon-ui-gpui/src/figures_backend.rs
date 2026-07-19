@@ -108,17 +108,20 @@ impl Backend {
                 let Some(d) = alert_blob::decode(blob) else {
                     continue;
                 };
-                server.entry((core, market.clone())).or_default().push(Figure {
-                    id: *obj_uid,
-                    kind: d.kind,
-                    color: d.color,
-                    thickness: d.thickness,
-                    line_kind: d.line_kind,
-                    created_ms: d.created_ms as i64,
-                    alert: true,
-                    strategy_id: d.strategy_id,
-                    from_server: true,
-                });
+                server
+                    .entry((core, market.clone()))
+                    .or_default()
+                    .push(Figure {
+                        id: *obj_uid,
+                        kind: d.kind,
+                        color: d.color,
+                        thickness: d.thickness,
+                        line_kind: d.line_kind,
+                        created_ms: d.created_ms as i64,
+                        alert: true,
+                        strategy_id: d.strategy_id,
+                        from_server: true,
+                    });
             }
         }
         self.figures.borrow_mut().set_server_figures(server);

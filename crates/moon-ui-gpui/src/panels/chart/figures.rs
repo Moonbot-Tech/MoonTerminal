@@ -421,14 +421,19 @@ impl ChartPanel {
                     time_ms: map.time_at_x(pos.0) - drag.grab_off_time,
                     price: map.price_at_y(pos.1) - drag.grab_off_price,
                 };
-                let (core, market, id, grab, dpane) =
-                    (drag.core, drag.market.clone(), drag.id, drag.grab, drag.pane);
-                let edited = self.backend.read(cx).figures.borrow_mut().edit(
-                    core,
-                    &market,
-                    id,
-                    |fig| apply_drag(fig, grab, target),
+                let (core, market, id, grab, dpane) = (
+                    drag.core,
+                    drag.market.clone(),
+                    drag.id,
+                    drag.grab,
+                    drag.pane,
                 );
+                let edited =
+                    self.backend
+                        .read(cx)
+                        .figures
+                        .borrow_mut()
+                        .edit(core, &market, id, |fig| apply_drag(fig, grab, target));
                 if edited {
                     self.fig_resync(cx);
                     cx.notify();
@@ -583,16 +588,8 @@ impl ChartPanel {
             .fig_draft
             .as_ref()
             .map(|d| (d.core, d.market.clone()))
-            .or_else(|| {
-                b.fig_selected
-                    .as_ref()
-                    .map(|(c, m, _)| (*c, m.clone()))
-            })
-            .or_else(|| {
-                self.input
-                    .hovered_pane
-                    .and_then(|p| self.fig_pane_key(p))
-            });
+            .or_else(|| b.fig_selected.as_ref().map(|(c, m, _)| (*c, m.clone())))
+            .or_else(|| self.input.hovered_pane.and_then(|p| self.fig_pane_key(p)));
         let draft = self.fig_draft.as_ref().and_then(draft_preview);
         let selected = b
             .fig_selected
@@ -637,11 +634,7 @@ fn draft_preview(d: &FigDraft) -> Option<Figure> {
         },
         // Треугольник: после 1-го клика — ребро a→курсор; после 2-го — треугольник.
         (FigureTool::Triangle, Some(a), None) => FigureKind::Segment { a, b: d.cursor },
-        (FigureTool::Triangle, Some(a), Some(b)) => FigureKind::Triangle {
-            a,
-            b,
-            c: d.cursor,
-        },
+        (FigureTool::Triangle, Some(a), Some(b)) => FigureKind::Triangle { a, b, c: d.cursor },
         _ => return None,
     };
     Some(Figure {
@@ -668,11 +661,9 @@ fn hit_body(fig: &Figure, pos: (f32, f32), map: &Map) -> f32 {
                 .min(seg_dist(pos, pb, pc))
                 .min(seg_dist(pos, pc, pa))
         }
-        FigureKind::Channel { price1, price2 } => {
-            (pos.1 - map.y_of_price(*price1))
-                .abs()
-                .min((pos.1 - map.y_of_price(*price2)).abs())
-        }
+        FigureKind::Channel { price1, price2 } => (pos.1 - map.y_of_price(*price1))
+            .abs()
+            .min((pos.1 - map.y_of_price(*price2)).abs()),
     }
 }
 

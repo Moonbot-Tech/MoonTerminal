@@ -135,9 +135,7 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
         };
         for row in rows.flatten() {
             let (mut info, as_of) = row;
-            let stale = as_of != Some(max_lu)
-                || info.open_left > 0
-                || info.valid_to.is_none();
+            let stale = as_of != Some(max_lu) || info.open_left > 0 || info.valid_to.is_none();
             if stale && has_rep {
                 // buydate в реплике — unix-СЕКУНДЫ, границы версии — ms.
                 let from_s = info.valid_from / 1000;

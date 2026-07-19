@@ -737,7 +737,11 @@ impl StrategiesView {
             }
             list = list.child(all_row);
             for (i, sec) in sections.iter().enumerate() {
-                if !sec.fields.iter().any(|f| ch.contains(&f.name.to_lowercase())) {
+                if !sec
+                    .fields
+                    .iter()
+                    .any(|f| ch.contains(&f.name.to_lowercase()))
+                {
                     continue;
                 }
                 let on = self.versions.section == Some(i);
@@ -864,8 +868,12 @@ impl StrategiesView {
         self.panels = p;
         self.backend.update(cx, |b, _| {
             let cur = b.layout.strategies_panels;
-            if (cur.tree_w, cur.versions_w, cur.sections_w, cur.versions_collapsed)
-                != (p.tree_w, p.versions_w, p.sections_w, p.versions_collapsed)
+            if (
+                cur.tree_w,
+                cur.versions_w,
+                cur.sections_w,
+                cur.versions_collapsed,
+            ) != (p.tree_w, p.versions_w, p.sections_w, p.versions_collapsed)
             {
                 b.layout.strategies_panels = p;
                 b.layout_dirty = true;
@@ -1014,13 +1022,13 @@ impl Render for StrategiesView {
                 this.handle_tree_key(ev, window, cx);
             }))
             // Перетаскивание сплиттеров панелей (ширины персистятся в layout).
-            .on_drag_move(cx.listener(
-                |this, e: &DragMoveEvent<PanelResizeDrag>, _window, cx| {
+            .on_drag_move(
+                cx.listener(|this, e: &DragMoveEvent<PanelResizeDrag>, _window, cx| {
                     let which = e.drag(cx).which;
                     let x = f32::from(e.event.position.x);
                     this.on_panel_split_drag(x, which, cx);
-                },
-            ))
+                }),
+            )
             .child(strategies_header(p, cx))
             .child(
                 h_flex()

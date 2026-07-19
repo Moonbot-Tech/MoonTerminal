@@ -304,8 +304,8 @@ impl RenderState {
                 // текущего Y-масштаба — левее блока: ширина (с зазором) добавляется слева,
                 // высота может превышать строки подписи (крупный кегль) — берём максимум.
                 let cap_w = pr.caption_w.max(pr.caption_delta_w) + pr.caption_scale_w;
-                let cap_h =
-                    (lines as f32 * super::text::LINE_H + pr.caption_delta_h).max(pr.caption_scale_h);
+                let cap_h = (lines as f32 * super::text::LINE_H + pr.caption_delta_h)
+                    .max(pr.caption_scale_h);
                 if cap_h > 0.0 {
                     let right_edge = if pr.orderbook_enabled {
                         pane_right
@@ -371,8 +371,7 @@ impl RenderState {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0.0, |d| d.as_millis() as f64);
                 // Не сегодняшний день → «ДД.ММ ЧЧ:ММ:СС» (большие ТФ/окна).
-                let label =
-                    moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, true, now_ms);
+                let label = moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, true, now_ms);
                 let text_w = readout_text_width(&label, pr.readout_time_width);
                 let line_h = pr.readout_time_line_h.max(1.0);
                 let half_w = text_w * 0.5;

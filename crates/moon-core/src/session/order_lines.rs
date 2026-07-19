@@ -452,7 +452,10 @@ impl OrderLineStore {
             ] {
                 if let Some(p) = o.lines[idx].current_price() {
                     if p.is_finite() && p > 0.0 {
-                        let e = self.auto_fit_ranges.entry(o.market.clone()).or_insert((p, p));
+                        let e = self
+                            .auto_fit_ranges
+                            .entry(o.market.clone())
+                            .or_insert((p, p));
                         e.0 = e.0.min(p);
                         e.1 = e.1.max(p);
                     }
@@ -545,7 +548,8 @@ impl OrderLineStore {
     /// после drag держим новую цену визуально, пока ядро не прислало echo той же цены.
     pub fn current_line_price(&self, uid: u64, kind: LineKind) -> Option<f32> {
         let order = self.orders.get(&uid)?;
-        order.lines
+        order
+            .lines
             .get(kind as usize)
             .and_then(LineTrace::current_price)
     }

@@ -9,11 +9,11 @@ use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance
 use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
-    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu,
-    CursorParams, DEFAULT_VOLUME_ALPHA, GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu,
-    ZoneGpu, append_cross_ring, cross_append_ranges, cross_volume_max, evicted_cross_ranges,
-    hl_of, mk_of, ordered_cross_ring, ranges_have_entries, ranges_touch_volume_max,
-    reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
+    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
+    DEFAULT_VOLUME_ALPHA, GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu,
+    append_cross_ring, cross_append_ranges, cross_volume_max, evicted_cross_ranges, hl_of, mk_of,
+    ordered_cross_ring, ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, seg_of,
+    update_cross_volume_max, zone_of,
 };
 
 const BACKGROUND_SHADER: &str = include_str!("shaders/native_background.wgsl");

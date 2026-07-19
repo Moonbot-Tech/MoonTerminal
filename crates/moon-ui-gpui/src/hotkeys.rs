@@ -45,7 +45,10 @@ pub enum HotkeyAction {
     /// Сдвинуть ордера рынка активного чарта на один шаг цены (`chart_price_step`)
     /// через `move_order`: `sell=false` — входные buy-линии (только незалитые, тот же
     /// гард, что у перетаскивания), `sell=true` — выходные sell-линии.
-    ShiftOrder { sell: bool, up: bool },
+    ShiftOrder {
+        sell: bool,
+        up: bool,
+    },
     /// Разбить sell-ордер рынка активного чарта на части.
     SplitOrder,
     /// Поставить ручной ордер по цене ПОД КУРСОРОМ на чарте (long/short). Исполняет
@@ -189,16 +192,28 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
         return Some(A::NewShort);
     }
     if p(&hk.shift_buy_up) {
-        return Some(A::ShiftOrder { sell: false, up: true });
+        return Some(A::ShiftOrder {
+            sell: false,
+            up: true,
+        });
     }
     if p(&hk.shift_buy_down) {
-        return Some(A::ShiftOrder { sell: false, up: false });
+        return Some(A::ShiftOrder {
+            sell: false,
+            up: false,
+        });
     }
     if p(&hk.shift_sell_up) {
-        return Some(A::ShiftOrder { sell: true, up: true });
+        return Some(A::ShiftOrder {
+            sell: true,
+            up: true,
+        });
     }
     if p(&hk.shift_sell_down) {
-        return Some(A::ShiftOrder { sell: true, up: false });
+        return Some(A::ShiftOrder {
+            sell: true,
+            up: false,
+        });
     }
     if p(&hk.switch_charts) {
         return Some(A::SwitchCharts);
@@ -364,10 +379,15 @@ pub fn apply(
         // Масштаб, постановка по курсору и переключение активного чарта — забота вызывающего
         // окна: масштаб/активный чарт свои у каждого окна (rev-механизм группы), а цену ордера
         // знает только чарт под курсором (`Backend::hovered_chart`).
-        A::ScalePlus | A::ScaleMinus | A::NewLong | A::NewShort | A::SwitchCharts
-        | A::ResetWindows | A::CancelHoveredOrder | A::CloseAllCharts | A::CloseActiveChart => {
-            false
-        }
+        A::ScalePlus
+        | A::ScaleMinus
+        | A::NewLong
+        | A::NewShort
+        | A::SwitchCharts
+        | A::ResetWindows
+        | A::CancelHoveredOrder
+        | A::CloseAllCharts
+        | A::CloseActiveChart => false,
     }
 }
 

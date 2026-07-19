@@ -23,8 +23,8 @@ pub mod cursor;
 mod data_state;
 mod engine;
 mod figures_sync;
-pub(crate) use figures_sync::FigureVisual;
 pub use engine::ChartGhostCursor;
+pub(crate) use figures_sync::FigureVisual;
 #[cfg(windows)]
 pub mod gpu;
 #[cfg(windows)]
@@ -72,9 +72,9 @@ use windows::Win32::Graphics::Direct3D11::{
 use backend::PlatformLayers;
 use pane::{Container, ContainerKind};
 use types::{
-    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu,
-    CursorParams, GridParams, ReadoutRect, cover_uv, fill_candle_upload, fill_cross_upload,
-    fill_liq_upload, fill_price_upload, rgb4,
+    BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
+    GridParams, ReadoutRect, cover_uv, fill_candle_upload, fill_cross_upload, fill_liq_upload,
+    fill_price_upload, rgb4,
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;

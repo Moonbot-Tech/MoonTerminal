@@ -131,9 +131,7 @@ impl ChartPanel {
         // Анти-ордер дебаунс: только что закрыли график крестиком → второй клик даблклика
         // по «×» ОС засчитывает как даблклик уже по новому фулскрин-графику. Клики постановки
         // в окне подавления игнорируем (иначе случайный ордер при быстром закрытии вкладок).
-        if moon_chart::paint::now_unix_ms() - self.last_pane_close_ms
-            < super::ORDER_SUPPRESS_MS
-        {
+        if moon_chart::paint::now_unix_ms() - self.last_pane_close_ms < super::ORDER_SUPPRESS_MS {
             return false;
         }
         // Сторона ордера — из мышиного жеста конфига (buy_set/short_set). Не наш жест → не ордер.
@@ -301,9 +299,7 @@ impl ChartPanel {
                         continue;
                     }
                     let line = &order.lines[kind as usize];
-                    let Some(price) = line
-                        .current_price()
-                        .filter(|p| p.is_finite() && *p > 0.0)
+                    let Some(price) = line.current_price().filter(|p| p.is_finite() && *p > 0.0)
                     else {
                         continue;
                     };
@@ -381,14 +377,13 @@ impl ChartPanel {
             return false;
         }
         let (core, uid) = (hit.core, hit.uid);
-        self.backend.update(cx, |b, _| {
-            match b.session.cancel_order(core, uid) {
+        self.backend
+            .update(cx, |b, _| match b.session.cancel_order(core, uid) {
                 Ok(()) => log::info!("chart start-cross cancel: core={core} uid={uid}"),
                 Err(error) => {
                     log::warn!("chart start-cross cancel failed: core={core} uid={uid}: {error}")
                 }
-            }
-        });
+            });
         true
     }
 
@@ -567,11 +562,13 @@ impl ChartPanel {
         // ТОЛЬКО крест начала (клик-отмена) урезанным hit-test, а не полный перебор
         // с отбрасыванием результата.
         let cross_only = self.separate_zones(cx) && self.glass_pane_at(pos).is_none();
-        let next = self.hit_order_line(pos, cross_only, cx).map(|hit| OrderHoverKey {
-            core: hit.core,
-            uid: hit.uid,
-            cancel: hit.on_start_cross,
-        });
+        let next = self
+            .hit_order_line(pos, cross_only, cx)
+            .map(|hit| OrderHoverKey {
+                core: hit.core,
+                uid: hit.uid,
+                cancel: hit.on_start_cross,
+            });
         self.set_order_interaction(next, cx)
     }
 

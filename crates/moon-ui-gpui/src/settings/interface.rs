@@ -115,7 +115,14 @@ pub(super) fn build(
             1.0,
             0.01,
         ),
-        cross: color_field(backend, window, cx, is_light, |t| t.cross, |t, v| t.cross = v),
+        cross: color_field(
+            backend,
+            window,
+            cx,
+            is_light,
+            |t| t.cross,
+            |t, v| t.cross = v,
+        ),
         cross_alpha: num_field(
             backend,
             cx,

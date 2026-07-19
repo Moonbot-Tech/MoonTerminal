@@ -21,7 +21,11 @@ pub fn compact_db(path: &Path) -> anyhow::Result<()> {
 /// Консистентный бэкап одним файлом (`VACUUM INTO`): работает на живой БД, не
 /// останавливая writer. Целевой файл не должен существовать.
 pub fn backup_db(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    anyhow::ensure!(!dst.exists(), "файл бэкапа уже существует: {}", dst.display());
+    anyhow::ensure!(
+        !dst.exists(),
+        "файл бэкапа уже существует: {}",
+        dst.display()
+    );
     let conn = Connection::open(src)?;
     let _ = conn.busy_timeout(Duration::from_secs(30));
     let dst_sql = dst.to_string_lossy().replace('\'', "''");

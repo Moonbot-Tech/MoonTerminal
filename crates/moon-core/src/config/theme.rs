@@ -172,7 +172,6 @@ impl ChartTheme {
         self.readout_border_alpha = 0.0;
         self.readout_border_px = 0.0;
     }
-
 }
 
 /// Тема чарта ОТДЕЛЬНО для тёмного и светлого режима UI (per-theme, как
@@ -197,10 +196,18 @@ impl Default for ChartThemeSet {
 impl ChartThemeSet {
     /// Набор для активного режима: `light=true` → светлый, иначе тёмный.
     pub fn get(&self, light: bool) -> &ChartTheme {
-        if light { &self.light } else { &self.dark }
+        if light {
+            &self.light
+        } else {
+            &self.dark
+        }
     }
     pub fn get_mut(&mut self, light: bool) -> &mut ChartTheme {
-        if light { &mut self.light } else { &mut self.dark }
+        if light {
+            &mut self.light
+        } else {
+            &mut self.dark
+        }
     }
 
     /// Прочитать `theme.toml`. Новый формат — таблицы `[dark]`/`[light]`. СТАРЫЙ плоский
