@@ -1,7 +1,8 @@
-//! Режим «День» календаря: почасовая сетка 24 (часы) × 7 (дни). Выбранный день
-//! по центру, но не выше — у края «сегодня» опускается к нижней строке
-//! (`day_window`). Сверху KPI-плашки как в «Месяце», но к ПРЕДЫДУЩЕМУ дню.
-//! Столбцы подписаны часами, строки — датой и днём недели. Ячейки тянутся.
+//! Calendar "Day" mode: an hourly grid of 24 (hours) × 7 (days). The selected
+//! day sits in the middle, but never higher — near the "today" edge it drops
+//! to the bottom row (`day_window`). KPI tiles on top as in "Month", but
+//! against the PREVIOUS day. Columns are labelled with hours, rows with the
+//! date and weekday. Cells stretch.
 
 use std::collections::HashMap;
 
@@ -19,7 +20,7 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::DayCell;
 use moon_core::util::fmt::compact;
 
-/// Знак+компакт без дробей — узкие часовые ячейки.
+/// Sign + compact form with no fraction — the hour cells are narrow.
 fn hour_pnl(v: f64) -> String {
     if v > 0.0 {
         format!("+{}", compact(v, 0))
@@ -36,7 +37,7 @@ impl AnalyticsView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let map: HashMap<i64, &DayCell> = hours.iter().map(|c| (c.start, c)).collect();
-        // Агрегат суток (по почасовым ячейкам окна).
+        // Daily aggregate (over the window's hourly cells).
         let day_agg = |d0: i64| -> (f64, i64, i64) {
             hours
                 .iter()
@@ -156,8 +157,9 @@ impl AnalyticsView {
         let wdays = split_i18n(t!("analytics.heat.weekdays").to_string());
         let (top, bottom) = day_window(self.cal_day);
 
-        // Максимум |PnL| часа (заливка) + средний профит по часу за видимые дни
-        // (по дням, где в этот час были сделки) — подпись под часом в шапке.
+        // Largest hourly |PnL| (for the fill) + the average profit per hour
+        // across the visible days (only days that traded in that hour) — shown
+        // under the hour in the header.
         let mut hour_max = 0.0f64;
         let mut hour_sum = [0.0f64; 24];
         let mut hour_cnt = [0i64; 24];
@@ -177,7 +179,7 @@ impl AnalyticsView {
             }
         }
 
-        // Шапка: пустой левый угол + часы 00..23 со средним профитом под ними.
+        // Header: empty left corner + hours 00..23 with the average below each.
         let mut head = h_flex().w_full().flex_none().gap(cell_gap);
         head = head.child(div().w(gutter_w).flex_none());
         for h in 0..24usize {
@@ -200,7 +202,7 @@ impl AnalyticsView {
             head = head.child(hc);
         }
 
-        // 7 строк-дней (сверху вниз, хронологически).
+        // 7 day rows (top to bottom, chronological).
         let mut rows = v_flex().flex_1().min_h_0().w_full().gap(cell_gap);
         let mut d = top;
         while d <= bottom {
@@ -210,8 +212,8 @@ impl AnalyticsView {
                 .get(dt.weekday().num_days_from_monday() as usize)
                 .cloned()
                 .unwrap_or_default();
-            // Дата + день недели В ОДНУ строку; вся колонка кликабельна —
-            // выбор ЛЮБОЙ видимой даты (не только Назад/Вперёд).
+            // Date + weekday on ONE line; the whole column is clickable, so
+            // ANY visible date can be picked (not just via Prev/Next).
             let gutter = h_flex()
                 .id(("gd", d as u64))
                 .w(gutter_w)
@@ -246,7 +248,8 @@ impl AnalyticsView {
                         .child(wd),
                 );
 
-            // min_h_0 — иначе строки не сжимаются ниже контента и 30 не влезают.
+            // min_h_0 — without it rows refuse to shrink below their content
+            // and all 30 of them do not fit.
             let mut rowel = h_flex()
                 .flex_1()
                 .min_h_0()
@@ -293,7 +296,7 @@ impl AnalyticsView {
             let a = (profit.abs() / hour_max).min(1.0) as f32 * 0.35;
             moon_alpha(if profit > 0.0 { p.green } else { p.red }, a)
         });
-        // Строку выбранного дня выделяем: фон светлее + янтарная рамка ячеек.
+        // The selected day's row stands out: lighter background + amber cell border.
         let bg = if sel_day {
             moon(p.panel_high)
         } else {

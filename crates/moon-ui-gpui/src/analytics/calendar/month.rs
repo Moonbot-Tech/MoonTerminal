@@ -1,7 +1,7 @@
-//! Режим «Месяц» календаря: крупные карточки-дни (дата слева сверху, справа —
-//! PnL + сделки + W/L + winrate), серый фон + красно/зелёный оверлей
-//! прозрачностью по |PnL| (топ месяца = 30%). Сверху ряд KPI с дельтой к
-//! предыдущему месяцу, снизу — полоса плюс/минус-дней. Клик по дню → «День».
+//! Calendar "Month" mode: large day cards (date top-left, PnL + trades + W/L +
+//! winrate on the right), grey background + red/green overlay whose alpha
+//! tracks |PnL| (the month's top day = 30%). A KPI row with the delta to the
+//! previous month on top, a plus/minus-day bar below. Click a day → "Day".
 
 use std::collections::HashMap;
 
@@ -43,7 +43,7 @@ impl AnalyticsView {
             .count();
         let active = days.iter().filter(|d| d.trades > 0).count();
         let neutral = active - pos_days - neg_days;
-        // Масштаб заливки — максимум |PnL| дня месяца (топ = 30% прозрачности).
+        // Fill scale — the month's largest daily |PnL| (top day = 30% alpha).
         let month_max = days
             .iter()
             .filter(|d| d.trades > 0)
@@ -81,7 +81,8 @@ impl AnalyticsView {
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        // Дельты — к ПРЕДЫДУЩЕМУ месяцу (не 30 дней); None — прошлого нет/ноль.
+        // Deltas are against the PREVIOUS month (not 30 days); None when the
+        // previous month is missing or zero.
         let (pp, pt, pw) = self.cal_prev.unwrap_or((0.0, 0, 0));
         let has = self.cal_prev.is_some();
         let dp = move |c: f64, pr: f64| -> Option<f64> {
@@ -167,7 +168,7 @@ impl AnalyticsView {
 
         let first = month_start(y, m);
         let lead = date_of(first).weekday().num_days_from_monday() as i64;
-        let anchor = first - lead * 86_400; // понедельник недели 1-го числа
+        let anchor = first - lead * 86_400; // Monday of the week the 1st falls in
         let ndays = days_in_month(y, m) as usize;
         let n_rows = (lead as usize + ndays).div_ceil(7);
 
@@ -290,7 +291,7 @@ impl AnalyticsView {
             .bg(bg)
             .border_1()
             .border_color(border)
-            // Клик по дню → детализация «День».
+            // Click a day → the "Day" breakdown.
             .on_click(cx.listener(move |this, _, _, cx| this.cal_goto_day(dsec, cx)));
         let cell = if date_only {
             cell
@@ -364,8 +365,9 @@ impl AnalyticsView {
     }
 }
 
-/// KPI-плитка календаря: подпись + крупное значение + дельта к пред. периоду.
-/// `invert` — рост метрики это плохо (минусовые ордера). Общая для Месяц/День.
+/// Calendar KPI tile: label + large value + delta to the previous period.
+/// `invert` — growth in this metric is bad (losing orders). Shared by
+/// Month/Day.
 pub(super) fn kpi_tile(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,

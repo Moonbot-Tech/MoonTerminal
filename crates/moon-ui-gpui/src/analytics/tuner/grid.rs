@@ -1,14 +1,14 @@
-//! Сетка режима «По времени»: ТРИ строки-поля, каждое — одно «от-до».
-//!   - «Недельно» (`WorkingWeekTime`): непрерывный спан по МИНУТЕ НЕДЕЛИ, шаг 1 мин,
-//!     ввод/вывод `день.чч:мм` (день 1..7); напр. `1.23:44-6.22:22`.
-//!   - «Сутки» (`WorkingTime`, режим времени суток): окно `чч:мм-чч:мм`.
-//!   - «В часе» (`WorkingTime`, режим минут-в-часе): окно `N-M` (0..59).
-//! «Сутки» и «В часе» — ДВА вида ОДНОГО поля WorkingTime → ВЗАИМОИСКЛЮЧАЮЩИЕ:
-//! заполнил/подобрал одно — другое чистится (тумблера режима нет).
+//! Grid of the "By time" mode: THREE field rows, each one a single "from-to".
+//!   - "Weekly" (`WorkingWeekTime`): a continuous span over the MINUTE OF THE WEEK, step 1 min,
+//!     input/output `day.hh:mm` (day 1..7); e.g. `1.23:44-6.22:22`.
+//!   - "Day" (`WorkingTime`, time-of-day mode): window `hh:mm-hh:mm`.
+//!   - "In hour" (`WorkingTime`, minute-of-hour mode): window `N-M` (0..59).
+//! "Day" and "In hour" are TWO views of the SAME WorkingTime field → MUTUALLY EXCLUSIVE:
+//! filling in / auto-suggesting one clears the other (there is no mode switch).
 //!
-//! Текущее значение полей стратегии просто ПОКАЗЫВАЕМ сырой строкой (парсинг
-//! ненадёжен) — янтарным «в стратегии». v1/v2 — свежий ввод/автоподбор; Save пишет
-//! непустые изменившиеся поля. Оболочка (тулбар + строка подбора) — ОБЩАЯ с фильтром.
+//! The current value of the strategy fields is simply DISPLAYED as a raw string (parsing
+//! is unreliable) — in amber as "in strategy". v1/v2 are fresh input / auto-suggestion; Save writes
+//! the non-empty changed fields. The shell (toolbar + suggestion row) is SHARED with the filter.
 
 use std::collections::HashMap;
 
@@ -17,44 +17,44 @@ use moon_ui::{MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex, v_
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
-use super::state::TunerKind;
+use super::state::{TunerKind, glyph_btn};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::{TimeWindow, Variant, format_week_span, format_working_time};
 
-/// Вариантов помимо «Факта» (v1, v2) — как N_VAR тюнера фильтров.
+/// Variants besides the "Fact" one (v1, v2) — same as the filter tuner's N_VAR.
 pub(super) const TIME_N_VAR: usize = 2;
-/// Полей: 0 = Недельно (WorkingWeekTime), 1 = Сутки, 2 = В часе (оба — WorkingTime).
+/// Fields: 0 = Weekly (WorkingWeekTime), 1 = Day, 2 = In hour (both are WorkingTime).
 const N_FIELD: usize = 3;
-/// Минут в неделе (7 дней × 1440) — максимум минуты недели + 1.
+/// Minutes in a week (7 days × 1440) — the maximum minute of the week + 1.
 pub(super) const WEEK_MIN: u16 = 7 * 1440;
 
-/// Состояние тюнера «По времени» внутри `AnalyticsView`.
+/// State of the "By time" tuner inside `AnalyticsView`.
 pub(in crate::analytics) struct TimeTunerState {
-    /// `[вариант 0..TIME_N_VAR][поле 0..N_FIELD] = (от, до)` строками.
+    /// `[variant 0..TIME_N_VAR][field 0..N_FIELD] = (from, to)` as strings.
     pub(super) bounds: Vec<[(String, String); N_FIELD]>,
-    /// СЫРЫЕ текущие значения полей стратегии `[WorkingWeekTime, WorkingTime]`.
+    /// RAW current values of the strategy fields `[WorkingWeekTime, WorkingTime]`.
     pub(super) current_raw: [String; 2],
-    /// Текущий `IgnoreTime` стратегии (расписание игнорируется, если YES).
+    /// The strategy's current `IgnoreTime` (the schedule is ignored when YES).
     pub(super) ignore_cur: bool,
-    /// Текущий `IgnoreFilters` (ОБЩИЙ игнор — тоже гейтит время; должен быть NO).
+    /// Current `IgnoreFilters` (the GLOBAL ignore — it gates time too; must be NO).
     pub(super) ign_filters_cur: bool,
-    /// Ручной тумблер `IgnoreTime` (None = следовать авто-логике).
+    /// Manual `IgnoreTime` switch (None = follow the automatic logic).
     pub(super) ignore_staged: Option<bool>,
-    /// Ленивый кэш инпутов (создаются в render, как в тюнере фильтров).
+    /// Lazy input cache (created in render, as in the filter tuner).
     pub(super) inputs: HashMap<String, Entity<MoonInputState>>,
-    // Настройки общей оболочки — параллельно `TunerState` (у времени часть скрыта).
+    // Shared-shell settings — parallel to `TunerState` (time hides some of them).
     pub(super) iters: String,
     pub(super) min_trades: String,
     pub(super) edges: usize,
     pub(super) round_results: bool,
     pub(super) sugg_busy: bool,
-    /// Поколение автоподбора — устаревший результат отбрасывается.
+    /// Auto-suggestion generation — a stale result is discarded.
     pub(super) sugg_seq: u64,
 }
 
 impl TimeTunerState {
-    /// Свежий тюнер: все поля пусты.
+    /// A fresh tuner: all fields empty.
     pub(in crate::analytics) fn load() -> Self {
         Self {
             bounds: vec![std::array::from_fn(|_| (String::new(), String::new())); TIME_N_VAR],
@@ -72,8 +72,8 @@ impl TimeTunerState {
         }
     }
 
-    /// Спан варианта `vi` по минуте недели (поле 0). Пусто → None; пропуск края →
-    /// начало (0) / конец (WEEK_MIN-1) недели.
+    /// Span of variant `vi` over the minute of the week (field 0). Empty → None; a missing edge →
+    /// start (0) / end (WEEK_MIN-1) of the week.
     pub(super) fn week_span(&self, vi: usize) -> Option<(u16, u16)> {
         let (from, to) = &self.bounds[vi][0];
         if from.trim().is_empty() && to.trim().is_empty() {
@@ -85,26 +85,26 @@ impl TimeTunerState {
         ))
     }
 
-    /// Окно WorkingTime варианта `vi`: из строки «Сутки» (поле 1 → `Day`) ЛИБО
-    /// «В часе» (поле 2 → `Hour`). Заполнены оба (не должно быть) → приоритет «Сутки».
+    /// WorkingTime window of variant `vi`: from the "Day" row (field 1 → `Day`) OR the
+    /// "In hour" row (field 2 → `Hour`). Both filled (shouldn't happen) → "Day" wins.
     pub(super) fn tod(&self, vi: usize) -> Option<TimeWindow> {
         let (df, dt) = &self.bounds[vi][1];
         if !df.trim().is_empty() || !dt.trim().is_empty() {
             let w = (parse_time(df).unwrap_or(0), parse_time(dt).unwrap_or(1439));
-            // Полные сутки (00:00–23:59) = без ограничения (симметрично полной неделе).
+            // A full day (00:00–23:59) = no restriction (symmetric with a full week).
             return (w != (0, 1439)).then_some(TimeWindow::Day(w.0, w.1));
         }
         let (hf, ht) = &self.bounds[vi][2];
         if !hf.trim().is_empty() || !ht.trim().is_empty() {
             let w = (parse_moh(hf).unwrap_or(0), parse_moh(ht).unwrap_or(59));
-            // Весь час (0–59) = без ограничения.
+            // The whole hour (0–59) = no restriction.
             return (w != (0, 59)).then_some(TimeWindow::Hour(w.0, w.1));
         }
         None
     }
 
-    /// Какое поле WorkingTime задано в v1 (для затемнения неиспользуемой строки/
-    /// полосы): `Some(1)`=Сутки, `Some(2)`=В часе, `None`=обе пусты.
+    /// Which WorkingTime field is set in v1 (used to dim the unused row /
+    /// slider): `Some(1)`=Day, `Some(2)`=In hour, `None`=both empty.
     pub(super) fn active_wt(&self) -> Option<usize> {
         let d = &self.bounds[0][1];
         if !d.0.trim().is_empty() || !d.1.trim().is_empty() {
@@ -117,8 +117,8 @@ impl TimeTunerState {
         None
     }
 
-    /// Строка поля стратегии из варианта `vi`: `which` 0 = WorkingWeekTime (спан
-    /// недели; полная неделя = «без ограничения» → ""), 1 = WorkingTime. Пусто → "".
+    /// Strategy field string built from variant `vi`: `which` 0 = WorkingWeekTime (week
+    /// span; a full week = "no restriction" → ""), 1 = WorkingTime. Empty → "".
     pub(super) fn field_value(&self, vi: usize, which: usize) -> String {
         if which == 0 {
             self.week_span(vi)
@@ -130,12 +130,12 @@ impl TimeTunerState {
         }
     }
 
-    /// Варианты для KPI: `[Факт, v1, v2]`. Каждый несёт week_span И tod.
+    /// Variants for the KPIs: `[Fact, v1, v2]`. Each carries both week_span AND tod.
     pub(super) fn variants(&self) -> Vec<Variant> {
         let mut out = vec![Variant::default()];
         for vi in 0..self.bounds.len() {
             out.push(Variant {
-                // Полная неделя == без ограничения (== «Факт»).
+                // A full week == no restriction (== "Fact").
                 week_span: self.week_span(vi).filter(|&s| s != (0, WEEK_MIN - 1)),
                 tod: self.tod(vi),
                 ..Default::default()
@@ -144,7 +144,8 @@ impl TimeTunerState {
         out
     }
 
-    /// Меняем ли расписание: хоть одно поле v1 непусто И отличается от текущего.
+    /// Whether we are changing the schedule: at least one v1 field is non-empty AND differs
+    /// from the current value.
     pub(super) fn has_schedule_change(&self) -> bool {
         [0usize, 1].iter().any(|&which| {
             let v = self.field_value(0, which);
@@ -152,8 +153,9 @@ impl TimeTunerState {
         })
     }
 
-    /// Эффективное значение `IgnoreTime` для показа/записи: ручной тумблер, иначе
-    /// авто — при заданном расписании NO (иначе MoonBot игнорит окна), без него — текущее.
+    /// Effective `IgnoreTime` value for display/writing: the manual switch, otherwise
+    /// automatic — NO when a schedule is set (else Moonbot ignores the windows), current value
+    /// when it is not.
     pub(super) fn ignore_effective(&self) -> bool {
         self.ignore_staged.unwrap_or(if self.has_schedule_change() {
             false
@@ -162,15 +164,16 @@ impl TimeTunerState {
         })
     }
 
-    /// Есть ли что записывать (Save горит): расписание, `IgnoreTime` или общий игнор.
+    /// Whether there is anything to write (Save lights up): the schedule, `IgnoreTime` or the
+    /// global ignore.
     pub(super) fn is_dirty(&self) -> bool {
         !self.changes().is_empty()
     }
 
-    /// Правки в стратегию: изменившиеся `WorkingWeekTime`/`WorkingTime` + флаги игнора,
-    /// которые надо погасить, чтобы расписание применилось (`IgnoreTime`, а также
-    /// ОБЩИЙ `IgnoreFilters` — при записи расписания, если он сейчас YES). Пишем только
-    /// то, что реально меняется.
+    /// Edits to the strategy: the changed `WorkingWeekTime`/`WorkingTime` plus the ignore flags
+    /// that must be cleared for the schedule to take effect (`IgnoreTime`, and also the
+    /// GLOBAL `IgnoreFilters` — when writing a schedule, if it is currently YES). We write only
+    /// what actually changes.
     pub(super) fn changes(&self) -> Vec<(String, String)> {
         const NAMES: [&str; 2] = ["WorkingWeekTime", "WorkingTime"];
         let yesno = |b: bool| if b { "YES" } else { "NO" }.to_string();
@@ -182,20 +185,39 @@ impl TimeTunerState {
             })
             .collect();
         let schedule = !out.is_empty();
-        // IgnoreTime — тумблер/авто; пишем, если отличается от текущего.
+        // IgnoreTime — switch/automatic; written only if it differs from the current value.
         let ig_time = self.ignore_effective();
         if ig_time != self.ignore_cur {
             out.push(("IgnoreTime".to_string(), yesno(ig_time)));
         }
-        // Общий IgnoreFilters тоже гейтит время — при записи расписания гасим, если YES.
+        // The global IgnoreFilters gates time as well — when writing a schedule we clear it if YES.
         if schedule && self.ign_filters_cur {
             out.push(("IgnoreFilters".to_string(), "NO".to_string()));
         }
         out
     }
 
-    /// Сбросить сетку при смене стратегии (v1/v2 + инпуты + текущее + тумблер игнора),
-    /// отбросить автоподбор в полёте.
+    /// Bulk (multi-select) change set: push the schedule fields whenever they are non-empty
+    /// — NOT gated on the anchor's current values, since the other targets differ — and always
+    /// disable IgnoreTime + IgnoreFilters so the schedule actually applies on every target.
+    /// Writing NO to a target that already had NO is idempotent, so this is safe to fan out.
+    pub(super) fn changes_forced(&self) -> Vec<(String, String)> {
+        const NAMES: [&str; 2] = ["WorkingWeekTime", "WorkingTime"];
+        let mut out: Vec<(String, String)> = (0..2)
+            .filter_map(|which| {
+                let v = self.field_value(0, which);
+                (!v.is_empty()).then(|| (NAMES[which].to_string(), v))
+            })
+            .collect();
+        if !out.is_empty() {
+            out.push(("IgnoreTime".to_string(), "NO".to_string()));
+            out.push(("IgnoreFilters".to_string(), "NO".to_string()));
+        }
+        out
+    }
+
+    /// Reset the grid when the strategy changes (v1/v2 + inputs + current values + the ignore
+    /// switch), and discard an in-flight auto-suggestion.
     pub(super) fn reset_grid(&mut self) {
         self.bounds = vec![std::array::from_fn(|_| (String::new(), String::new())); TIME_N_VAR];
         self.current_raw = Default::default();
@@ -205,22 +227,22 @@ impl TimeTunerState {
         self.sugg_busy = false;
     }
 
-    /// Отбросить автоподбор В ПОЛЁТЕ при смене ЗАПРОСА (период/фильтр) — как
-    /// `TunerState::invalidate` у фильтра: бампим поколение и гасим busy, НЕ трогая
-    /// v1. Иначе стейл-результат от старого запроса дописался бы в v1 (и стал бы Saveable).
+    /// Discard an IN-FLIGHT auto-suggestion when the QUERY changes (period/filter) — just like the
+    /// filter's `TunerState::invalidate`: bump the generation and clear busy WITHOUT touching
+    /// v1. Otherwise a stale result from the old query would land in v1 (and become Saveable).
     pub(in crate::analytics) fn invalidate_suggest(&mut self) {
         self.sugg_seq = self.sugg_seq.wrapping_add(1);
         self.sugg_busy = false;
     }
 }
 
-/// Минуты дня → "чч:мм".
+/// Minutes of the day → "hh:mm".
 pub(super) fn fmt_min(m: u16) -> String {
     format!("{:02}:{:02}", m / 60, m % 60)
 }
 
-/// Край спана недели `(от, до)` строкой инпута «день.чч:мм» (или «день» на границе
-/// суток): начало недели/суток для «от» и конец — коротко без времени.
+/// One edge of a week span `(from, to)` as the input string "day.hh:mm" (or just "day" on a
+/// day boundary): the start of the week/day for "from" and the end for "to" — short, no time.
 pub(super) fn fmt_week_ep(wm: u16, is_to: bool) -> String {
     let (day, tod) = (wm / 1440 % 7 + 1, wm % 1440);
     if (!is_to && tod == 0) || (is_to && tod == 1439) {
@@ -230,9 +252,9 @@ pub(super) fn fmt_week_ep(wm: u16, is_to: bool) -> String {
     }
 }
 
-/// Разобрать край спана недели из поля: «день» или «день.чч:мм» (день 1..7) →
-/// минута недели 0..WEEK_MIN-1. Без времени: «от» → начало дня, «до» → конец дня.
-/// Пусто/мусор/вне 1..7 → None.
+/// Parse one edge of a week span from the field: "day" or "day.hh:mm" (day 1..7) →
+/// minute of the week 0..WEEK_MIN-1. Without a time: "from" → start of the day, "to" → end of
+/// the day. Empty/garbage/outside 1..7 → None.
 fn parse_week_ep(s: &str, is_to: bool) -> Option<u16> {
     let s = s.trim();
     if s.is_empty() {
@@ -249,12 +271,12 @@ fn parse_week_ep(s: &str, is_to: bool) -> Option<u16> {
     Some((day - 1) * 1440 + tod)
 }
 
-/// Минута в часе 0..59 из поля. Пусто/мусор → None; больше 59 зажимаем к 59.
+/// Minute of the hour 0..59 from the field. Empty/garbage → None; above 59 is clamped to 59.
 pub(super) fn parse_moh(s: &str) -> Option<u8> {
     s.trim().parse::<u8>().ok().map(|v| v.min(59))
 }
 
-/// Время суток из поля: "чч:мм" или минуты дня; пусто/мусор = None.
+/// Time of day from the field: "hh:mm" or minutes of the day; empty/garbage = None.
 pub(super) fn parse_time(s: &str) -> Option<u16> {
     let s = s.trim();
     if s.is_empty() {
@@ -273,7 +295,7 @@ pub(super) fn parse_time(s: &str) -> Option<u16> {
 }
 
 impl AnalyticsView {
-    /// Коммит границы поля (Blur/Enter): состояние → взаимоисключение WT → KPI.
+    /// Commit a field bound (Blur/Enter): state → WT mutual exclusion → KPIs.
     fn commit_time(
         &mut self,
         vi: usize,
@@ -288,7 +310,7 @@ impl AnalyticsView {
             return;
         }
         *cur = value;
-        // «Сутки» и «В часе» — одно поле WorkingTime: заполнил одно → чистим другое.
+        // "Day" and "In hour" are one WorkingTime field: filling one clears the other.
         if field == 1 {
             self.clear_field(vi, 2);
         } else if field == 2 {
@@ -298,43 +320,35 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Очистить обе границы поля `field` варианта `vi` (без пересчёта — служебное).
+    /// Clear both bounds of field `field` in variant `vi` (no recompute — internal helper).
     pub(super) fn clear_field(&mut self, vi: usize, field: usize) {
         self.time_tuner.bounds[vi][field] = (String::new(), String::new());
         self.time_tuner.inputs.remove(&format!("tt{vi}f{field}a"));
         self.time_tuner.inputs.remove(&format!("tt{vi}f{field}b"));
     }
 
-    /// Очистить поле `field` варианта `vi` (крестик ячейки) + пересчёт.
+    /// Clear field `field` of variant `vi` (the cell's ✕) + recompute.
     fn time_clear_cell(&mut self, vi: usize, field: usize, cx: &mut Context<Self>) {
         self.clear_field(vi, field);
         self.reload_time(cx);
         cx.notify();
     }
 
-    /// Копировать поле `field` v1 → v2 (стрелка между вариантами).
-    fn time_copy_row(&mut self, field: usize, cx: &mut Context<Self>) {
-        let v = self.time_tuner.bounds[0][field].clone();
-        if self.time_tuner.bounds[1][field] != v {
-            let non_empty = !v.0.trim().is_empty() || !v.1.trim().is_empty();
-            self.time_tuner.bounds[1][field] = v;
-            self.time_tuner.inputs.remove(&format!("tt1f{field}a"));
-            self.time_tuner.inputs.remove(&format!("tt1f{field}b"));
-            // WT-строки взаимоисключаемы и в v2: копия непустой одной чистит другую.
-            if non_empty && field == 1 {
-                self.clear_field(1, 2);
-            }
-            if non_empty && field == 2 {
-                self.clear_field(1, 1);
-            }
-            self.reload_time(cx);
+    /// Copy the WHOLE v2 column → v1 (the ← in the header) — all fields. Mirror of `time_copy_all`.
+    fn time_copy_all_back(&mut self, cx: &mut Context<Self>) {
+        for field in 0..N_FIELD {
+            let v = self.time_tuner.bounds[1][field].clone();
+            self.set_v1_cell(field, v.0, v.1);
         }
+        self.reload_time(cx);
         cx.notify();
     }
 
-    /// Автоподбор в v1 (фон): окно недели (WorkingWeekTime) + окно WorkingTime,
-    /// причём режим (Сутки vs В часе) подбор выбирает САМ — заполняет ОДНУ из строк
-    /// «Сутки»/«В часе», другую чистит. Скоуп — `tuner_query`. Нет улучшения → пусто.
+    /// Auto-suggestion into v1 (background): the week window (WorkingWeekTime) + the
+    /// WorkingTime window, where the mode (Day vs In hour) is chosen BY the auto-suggestion
+    /// itself — it fills ONE of the "Day"/"In hour" rows and clears the other. Scope is
+    /// `tuner_query`. No improvement
+    /// → empty.
     pub(super) fn time_suggest(&mut self, cx: &mut Context<Self>) {
         if self.time_tuner.sugg_busy {
             return;
@@ -351,8 +365,8 @@ impl AnalyticsView {
             .unwrap_or(5)
             .max(1);
         let edges = 512usize;
-        // Время: точные минуты. round_bound (3-значное окр.) для минут суток/недели
-        // пересекал бы границы суток/часа (напр. 23:59→24:00) — потому НЕ округляем.
+        // Time: exact minutes. round_bound (3-significant-digit rounding) on minutes of the
+        // day/week would cross day/hour boundaries (e.g. 23:59→24:00) — so we do NOT round.
         let round = false;
         self.op_started();
         cx.spawn(async move |this, cx| {
@@ -364,19 +378,19 @@ impl AnalyticsView {
                 let _ = this.update(cx, |this, cx| {
                     this.op_finished(cx);
                     if this.time_tuner.sugg_seq != req {
-                        return; // устаревший подбор (стратегия/скоуп сменились)
+                        return; // stale auto-suggestion (the strategy/scope changed)
                     }
                     this.time_tuner.sugg_busy = false;
                     match sugg {
                         Ok(s) => {
-                            // Поле 0: окно недели в «день.чч:мм».
+                            // Field 0: the week window as "day.hh:mm".
                             let (w0, w1) = s
                                 .week_span
                                 .map(|(f, t)| (fmt_week_ep(f, false), fmt_week_ep(t, true)))
                                 .unwrap_or_default();
                             this.set_v1_cell(0, w0, w1);
-                            // WorkingTime: подбор сам выбрал режим → заполняем ЕГО строку,
-                            // другую чистим (взаимоисключение).
+                            // WorkingTime: the auto-suggestion chose the mode itself → fill ITS row
+                            // and clear the other one (mutual exclusion).
                             match s.tod {
                                 Some(TimeWindow::Day(f, t)) => {
                                     this.set_v1_cell(1, fmt_min(f), fmt_min(t));
@@ -393,7 +407,7 @@ impl AnalyticsView {
                             }
                             this.reload_time(cx);
                         }
-                        Err(e) => log::warn!("аналитика: автоподбор времени не выполнен — {e}"),
+                        Err(e) => log::warn!("analytics: time auto-suggestion failed — {e}"),
                     }
                     cx.notify();
                 });
@@ -402,14 +416,14 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Записать `(от, до)` в v1 поля `field` и сбросить его кэш-инпуты.
+    /// Write `(from, to)` into v1 of field `field` and drop its cached inputs.
     pub(super) fn set_v1_cell(&mut self, field: usize, from: String, to: String) {
         self.time_tuner.bounds[0][field] = (from, to);
         self.time_tuner.inputs.remove(&format!("tt0f{field}a"));
         self.time_tuner.inputs.remove(&format!("tt0f{field}b"));
     }
 
-    /// Очистить ВСЮ колонку варианта (✕ в шапке) — все поля от/до этого vi.
+    /// Clear the WHOLE variant column (the ✕ in the header) — every from/to field of that vi.
     fn time_clear_variant(&mut self, vi: usize, cx: &mut Context<Self>) {
         for field in 0..N_FIELD {
             self.clear_field(vi, field);
@@ -418,7 +432,7 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Копировать ВСЮ колонку v1 → v2 (→ в шапке) — все поля.
+    /// Copy the WHOLE v1 column → v2 (the → in the header) — all fields.
     fn time_copy_all(&mut self, cx: &mut Context<Self>) {
         for field in 0..N_FIELD {
             self.time_tuner.bounds[1][field] = self.time_tuner.bounds[0][field].clone();
@@ -429,8 +443,8 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Тумблер `IgnoreTime` (YES/NO). Клик переключает ручной стейдж; если вернулись
-    /// к текущему значению — стейдж снимаем (авто-логика). Влияет на Save (не KPI).
+    /// `IgnoreTime` switch (YES/NO). A click toggles the manual stage; if we land back on the
+    /// current value the stage is dropped (automatic logic). Affects Save, not the KPIs.
     fn toggle_ignore_time(&mut self, cx: &mut Context<Self>) {
         let cur = self.time_tuner.ignore_cur;
         let next = !self.time_tuner.ignore_effective();
@@ -438,14 +452,14 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Строка флагов игнора: тумблер `IgnoreTime` + наблюдаемый ОБЩИЙ `IgnoreFilters`
-    /// (при заданном расписании YES → будет погашен в NO). Чтобы расписание работало,
-    /// оба должны быть NO.
+    /// Ignore-flags row: the `IgnoreTime` switch + the observed GLOBAL `IgnoreFilters`
+    /// (with a schedule set, YES → it will be cleared to NO). For the schedule to work,
+    /// both must be NO.
     fn time_ignore_row(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         let ig_time = self.time_tuner.ignore_effective();
         let ig_filters = self.time_tuner.ign_filters_cur;
-        // Стиль как подзаголовки «По фильтру»: table_head-фон, зелёный = работает
-        // (ignore=NO), серый = игнорируется (ignore=YES). Клик по IgnoreTime переключает.
+        // Styled like the "By filter" subheadings: table_head background, green = active
+        // (ignore=NO), grey = ignored (ignore=YES). Clicking IgnoreTime toggles it.
         let col = |ignored: bool| {
             if ignored {
                 moon_alpha(p.text_muted, 0.7)
@@ -473,7 +487,7 @@ impl AnalyticsView {
                     .child(if ig_time { "ignore=YES" } else { "ignore=NO" })
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_ignore_time(cx))),
             );
-        // Общий IgnoreFilters — тоже гейтит время; наблюдаемый (при расписании YES → NO).
+        // The global IgnoreFilters gates time as well; shown read-only (with a schedule YES → NO).
         if ig_filters {
             row = row
                 .child(div().text_color(moon(p.text_soft)).child("IgnoreFilters"))
@@ -482,7 +496,7 @@ impl AnalyticsView {
         row.into_any_element()
     }
 
-    /// Инпут границы поля с ленивым кэшем (паттерн `bound_input` тюнера).
+    /// Field-bound input with a lazy cache (the tuner's `bound_input` pattern).
     fn time_input(
         &mut self,
         vi: usize,
@@ -519,15 +533,15 @@ impl AnalyticsView {
         state
     }
 
-    /// Нижняя правая плашка «По времени»: ОБЩАЯ оболочка (тулбар + строка подбора)
-    /// + 3 строки-поля. Шапка: Поле | в стратегии | v1 от|до|✕ | v2 от|→|до|✕.
+    /// The bottom-right "By time" card: the SHARED shell (toolbar + suggestion row)
+    /// + 3 field rows. Header: Field | in strategy | v1 from|to|✕ | v2 from|→|to|✕.
     pub(super) fn time_grid(
         &mut self,
         p: MoonPalette,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let in_w = 66.0; // шире — вмещает «д.чч:мм» недельного поля
+        let in_w = 60.0; // fits the weekly field's "d.hh:mm" without leaving slack
         let header = self.shell_toolbar(
             TunerKind::Time,
             t!("analytics.time.autopick_title").to_string(),
@@ -550,60 +564,76 @@ impl AnalyticsView {
             .px(design::ui_px(cx, 8.0))
             .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
             .items_center()
-            .gap(design::ui_px(cx, 6.0))
+            // Must match the row gap below, or the columns drift apart.
+            .gap(design::ui_px(cx, 4.0))
             .text_size(design::t_caption(cx))
             .text_color(moon(p.text_soft))
             .bg(moon(p.table_head))
             .child(
+                // Matches the row's field-name column width (fits "WorkingWeekTime").
                 div()
-                    .w(design::font_w_px(cx, 60.0))
+                    .w(design::font_w_px(cx, 118.0))
                     .flex_none()
                     .child(t!("analytics.time.col_field").to_string()),
             )
             .child(div().flex_1().child(t!("analytics.time.cur").to_string()))
             .child(head_cell(format!("v1 {}", t!("analytics.tuner.from"))))
+            // The ONLY two copy buttons, both "copy the whole column": → inside the v1 pair
+            // carries v1→v2, ← inside the v2 pair carries v2→v1. Rows have no copy buttons —
+            // they keep a matching 12px spacer so the columns stay aligned.
+            .child(
+                glyph_btn(
+                    "tt-cp-col",
+                    "→",
+                    t!("analytics.time.tip_to_v2").to_string(),
+                    p.amber,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.time_copy_all(cx))),
+            )
             .child(head_cell(t!("analytics.tuner.to").to_string()))
             .child(
-                div()
-                    .id("tt-clr-col-0")
-                    .w(design::ui_px(cx, 12.0))
-                    .flex_none()
-                    .cursor_pointer()
-                    .text_color(moon(p.text_muted))
-                    .hover(move |s| s.text_color(moon(p.orange)))
-                    .child("✕")
-                    .on_click(cx.listener(|this, _, _, cx| this.time_clear_variant(0, cx))),
+                glyph_btn(
+                    "tt-clr-col-0",
+                    "✕",
+                    t!("analytics.time.tip_clear_all").to_string(),
+                    p.orange,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.time_clear_variant(0, cx))),
             )
             .child(head_cell(format!("v2 {}", t!("analytics.tuner.from"))))
             .child(
-                div()
-                    .id("tt-cp-col")
-                    .w(design::ui_px(cx, 12.0))
-                    .flex_none()
-                    .cursor_pointer()
-                    .text_color(moon(p.text_muted))
-                    .hover(move |s| s.text_color(moon(p.amber)))
-                    .child("→")
-                    .on_click(cx.listener(|this, _, _, cx| this.time_copy_all(cx))),
+                glyph_btn(
+                    "tt-cpb-col",
+                    "←",
+                    t!("analytics.time.tip_to_v1").to_string(),
+                    p.amber,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.time_copy_all_back(cx))),
             )
             .child(head_cell(t!("analytics.tuner.to").to_string()))
             .child(
-                div()
-                    .id("tt-clr-col-1")
-                    .w(design::ui_px(cx, 12.0))
-                    .flex_none()
-                    .cursor_pointer()
-                    .text_color(moon(p.text_muted))
-                    .hover(move |s| s.text_color(moon(p.orange)))
-                    .child("✕")
-                    .on_click(cx.listener(|this, _, _, cx| this.time_clear_variant(1, cx))),
+                glyph_btn(
+                    "tt-clr-col-1",
+                    "✕",
+                    t!("analytics.time.tip_clear_all").to_string(),
+                    p.orange,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.time_clear_variant(1, cx))),
             );
 
         let mut grid = v_flex().w_full().child(head);
         for field in 0..N_FIELD {
             grid = grid.child(self.time_row(field, in_w, p, window, cx));
         }
-        // Три heatmap-ползунка под строками (Недельно / Сутки / В часе).
+        // Three heatmap sliders under the rows (Weekly / Day / In hour).
         let sliders = self.time_sliders(p, cx);
 
         v_flex()
@@ -615,17 +645,24 @@ impl AnalyticsView {
             .border_1()
             .border_color(moon(p.border))
             .overflow_hidden()
+            // Toolbar/config/ignore stay pinned; the parameter rows + heatmap sliders scroll so a
+            // short panel can't clip them off the bottom (they used to just disappear past the edge).
             .child(header)
             .child(cfg_row)
             .child(ignore_row)
-            .child(grid)
-            // Распорка: ползунки прижаты к НИЗУ контейнера (тянется к нижней карте).
-            .child(div().flex_1())
-            .child(sliders)
+            .child(
+                div()
+                    .id("tt-params-scroll")
+                    .w_full()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(v_flex().w_full().child(grid).child(sliders)),
+            )
             .into_any_element()
     }
 
-    /// Одна строка-поле (0 Недельно · 1 Сутки · 2 В часе). Плейсхолдер по полю.
+    /// A single field row (0 Weekly · 1 Day · 2 In hour). Placeholder depends on the field.
     fn time_row(
         &mut self,
         field: usize,
@@ -635,12 +672,14 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (label_key, ph, cur_idx) = match field {
-            0 => ("analytics.time.field_week", "д.чч:мм", 0usize),
-            1 => ("analytics.time.field_day", "чч:мм", 1usize),
+            0 => ("analytics.time.field_week", "d.hh:mm", 0usize),
+            1 => ("analytics.time.field_day", "hh:mm", 1usize),
             _ => ("analytics.time.field_hour", "0..59", 1usize),
         };
-        let cur = self.time_tuner.current_raw[cur_idx].trim().to_string();
-        // Неиспользуемую из пары Сутки/Час затемняем (одно поле WorkingTime).
+        // `current_if_single` centralizes the rule: the "in strategy" value is the anchor's, so
+        // show it only for a lone selection; several selected → None → "varies" (each differs).
+        let cur = self.current_if_single(self.time_tuner.current_raw[cur_idx].trim().to_string());
+        // Dim whichever of the Day/Hour pair is unused (they are one WorkingTime field).
         let dim = matches!(
             (field, self.time_tuner.active_wt()),
             (1, Some(2)) | (2, Some(1))
@@ -651,56 +690,48 @@ impl AnalyticsView {
             .px(design::ui_px(cx, 8.0))
             .py(design::ui_px(cx, 3.0))
             .items_center()
-            .gap(design::ui_px(cx, 6.0))
+            // Must match the header gap, or the columns drift apart.
+            .gap(design::ui_px(cx, 4.0))
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.5))
             .opacity(if dim { 0.45 } else { 1.0 })
             .child(
+                // Field name column — wide enough for the full "WorkingWeekTime" on one line;
+                // truncates as a safety net.
                 div()
-                    .w(design::font_w_px(cx, 60.0))
+                    .w(design::font_w_px(cx, 118.0))
                     .flex_none()
+                    .truncate()
                     .text_color(moon(p.text))
                     .child(t!(label_key).to_string()),
             )
-            // «в стратегии» — сырое текущее значение поля (янтарным).
+            // "in strategy" — the field's raw current value (in amber); on multi-select — "varies".
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
                     .text_size(design::t_caption(cx))
-                    .text_color(moon(if cur.is_empty() {
-                        p.text_muted
-                    } else {
-                        p.amber
+                    .text_color(moon(match &cur {
+                        Some(c) if !c.is_empty() => p.amber,
+                        _ => p.text_muted,
                     }))
-                    .child(if cur.is_empty() {
-                        "—".to_string()
-                    } else {
-                        cur
+                    .child(match cur {
+                        Some(c) if !c.is_empty() => c,
+                        Some(_) => "—".to_string(),
+                        None => t!("analytics.time.cur_varies").to_string(),
                     }),
             );
         for vi in [0usize, 1usize] {
             for is_to in [false, true] {
-                if vi == 1 && is_to {
-                    row = row.child(
-                        div()
-                            .id(SharedString::from(format!("tt-cp-{field}")))
-                            .w(design::ui_px(cx, 12.0))
-                            .flex_none()
-                            .cursor_pointer()
-                            .text_size(design::t_caption(cx))
-                            .text_color(moon(p.text_muted))
-                            .hover(move |s| s.text_color(moon(p.amber)))
-                            .child("→")
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.time_copy_row(field, cx)),
-                            ),
-                    );
+                // Spacer under the header's copy arrow (it sits between "from" and "to"), so the
+                // row columns stay aligned with the header.
+                if is_to {
+                    row = row.child(div().w(design::ui_px(cx, 12.0)).flex_none());
                 }
                 let input = self.time_input(vi, field, is_to, ph, window, cx);
-                // Поле СО значением обводим акцентной рамкой — чтобы явно отличать от
-                // пустого (где виден лишь плейсхолдер). Пустое → прозрачная рамка (без сдвига).
+                // A filled field gets an accent border to stand out from an empty one (which shows
+                // only the placeholder). Empty → transparent border (no layout shift).
                 let filled = {
                     let slot = &self.time_tuner.bounds[vi][field];
                     let v = if is_to { &slot.1 } else { &slot.0 };
@@ -727,18 +758,15 @@ impl AnalyticsView {
                 );
             }
             row = row.child(
-                div()
-                    .id(SharedString::from(format!("tt-clr-{vi}-{field}")))
-                    .w(design::ui_px(cx, 12.0))
-                    .flex_none()
-                    .cursor_pointer()
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    .hover(move |s| s.text_color(moon(p.orange)))
-                    .child("✕")
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.time_clear_cell(vi, field, cx)),
-                    ),
+                glyph_btn(
+                    SharedString::from(format!("tt-clr-{vi}-{field}")),
+                    "✕",
+                    t!("analytics.time.tip_clear").to_string(),
+                    p.orange,
+                    p,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.time_clear_cell(vi, field, cx))),
             );
         }
         row.into_any_element()

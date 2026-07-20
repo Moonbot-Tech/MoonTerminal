@@ -711,6 +711,7 @@ impl StratFilters {
 /// (булевы — YES/NO). Ходит в strategies.sqlite — вызывать с bg executor.
 pub fn strategy_current_values(
     strategy_id: i64,
+    core: Option<u64>,
     keys: &[String],
 ) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
@@ -722,17 +723,26 @@ pub fn strategy_current_values(
     else {
         return out;
     };
-    let raw: Option<String> = conn
-        .query_row(
-            "SELECT v.raw_json FROM strategies s
+    // Rows are per-core (`strategyid@core_uid`): scope to the exact core when known, so the
+    // "now" preview reflects the SAME core the write targets, not the newest-checked core.
+    let core_clause = if core.is_some() {
+        " AND s.core_uid = ?2"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT v.raw_json FROM strategies s
              JOIN strategy_versions v
                ON v.core_uid = s.core_uid AND v.strategy_id = s.strategy_id
-             WHERE s.strategy_id = ?1 AND s.deleted = 0 AND v.valid_to IS NULL
-             ORDER BY s.checked DESC LIMIT 1",
-            [strategy_id],
-            |r| r.get(0),
-        )
-        .ok();
+             WHERE s.strategy_id = ?1{core_clause} AND s.deleted = 0 AND v.valid_to IS NULL
+             ORDER BY s.checked DESC LIMIT 1"
+    );
+    let raw: Option<String> = match core {
+        Some(c) => conn
+            .query_row(&sql, rusqlite::params![strategy_id, c as i64], |r| r.get(0))
+            .ok(),
+        None => conn.query_row(&sql, [strategy_id], |r| r.get(0)).ok(),
+    };
     let Some(raw) = raw else { return out };
     let Ok(serde_json::Value::Object(map)) = serde_json::from_str(&raw) else {
         return out;
@@ -757,6 +767,7 @@ pub fn strategy_current_values(
 /// осознанный порог (…100T и т.п.). `found=false` — БД нет / не найдена.
 pub fn strategy_filters(
     strategy_id: i64,
+    core: Option<u64>,
     defaults: &std::collections::HashMap<String, f64>,
 ) -> StratFilters {
     let mut out = StratFilters::default();
@@ -768,17 +779,26 @@ pub fn strategy_filters(
     else {
         return out;
     };
-    let raw: Option<String> = conn
-        .query_row(
-            "SELECT v.raw_json FROM strategies s
+    // Rows are per-core: scope the strategy card (Ignore flags, thresholds) to the SELECTED
+    // core so the save diff is computed against the exact core the write targets.
+    let core_clause = if core.is_some() {
+        " AND s.core_uid = ?2"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT v.raw_json FROM strategies s
              JOIN strategy_versions v
                ON v.core_uid = s.core_uid AND v.strategy_id = s.strategy_id
-             WHERE s.strategy_id = ?1 AND s.deleted = 0 AND v.valid_to IS NULL
-             ORDER BY s.checked DESC LIMIT 1",
-            [strategy_id],
-            |r| r.get(0),
-        )
-        .ok();
+             WHERE s.strategy_id = ?1{core_clause} AND s.deleted = 0 AND v.valid_to IS NULL
+             ORDER BY s.checked DESC LIMIT 1"
+    );
+    let raw: Option<String> = match core {
+        Some(c) => conn
+            .query_row(&sql, rusqlite::params![strategy_id, c as i64], |r| r.get(0))
+            .ok(),
+        None => conn.query_row(&sql, [strategy_id], |r| r.get(0)).ok(),
+    };
     let Some(raw) = raw else { return out };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return out;

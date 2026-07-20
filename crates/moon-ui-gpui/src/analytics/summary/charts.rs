@@ -1,6 +1,6 @@
-//! Графики вкладки «Сводка»: накопительная прибыль (векторная область+линия,
-//! canvas — путь строится по реальным границам элемента, как спарклайны
-//! детектов) и дневные бары (div'ы, зелёный/оранжевый по знаку).
+//! Charts of the "Summary" tab: cumulative profit (a vector area + line on
+//! canvas — the path is built from the element's real bounds, like the detect
+//! sparklines) and daily bars (divs, green/orange by sign).
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -12,9 +12,10 @@ use moon_core::db::analytics::{CoreSeries, DayPoint};
 
 const CHART_H: f32 = 170.0;
 
-/// ФОЛБЭК-цвет серии ядра (циклом из палитры) — когда у сервера нет цвета в
-/// настройках (например, ядро уже удалено из конфига). Основной источник —
-/// `ServerConfig.color` (см. core_colors в summary.rs).
+/// FALLBACK color for a core's series (cycled from the palette) — used when
+/// the server has no color in its settings (e.g. the core is already gone from
+/// the config). The primary source is `ServerConfig.color` (see core_colors in
+/// summary.rs).
 pub(super) fn fallback_core_color(p: MoonPalette, i: usize) -> u32 {
     [
         p.blue,
@@ -28,7 +29,7 @@ pub(super) fn fallback_core_color(p: MoonPalette, i: usize) -> u32 {
     ][i % 8]
 }
 
-/// «дд.мм» из unix-секунд (подписи осей).
+/// "dd.mm" from unix seconds (axis labels).
 fn dm(secs: i64) -> String {
     let s = moon_core::db::fmt_unix(secs);
     if s.len() >= 10 {
@@ -38,7 +39,7 @@ fn dm(secs: i64) -> String {
     }
 }
 
-/// Накопительная прибыль: заливка области + линия-штрих сверху.
+/// Cumulative profit: an area fill with a stroked line on top.
 pub(super) fn cumulative_area(days: &[DayPoint], p: MoonPalette) -> AnyElement {
     if days.is_empty() {
         return div().h(px(CHART_H)).into_any_element();
@@ -72,8 +73,8 @@ pub(super) fn cumulative_area(days: &[DayPoint], p: MoonPalette) -> AnyElement {
             let n = pts_fill.len();
             let x = |k: usize| bounds.origin.x + px(k as f32 / (n - 1) as f32 * w);
             let y = |v: f32| bounds.origin.y + px((vmax - v) / span * (h - 2.0) + 1.0);
-            let y0 = y(vmin.min(0.0).max(vmin)); // базовая линия области = низ (min, но не выше 0)
-            // Область до низа.
+            let y0 = y(vmin.min(0.0).max(vmin)); // area baseline = the bottom (min, but never above 0)
+            // The area down to the baseline.
             let mut fill = PathBuilder::fill();
             fill.move_to(gpui::point(x(0), y0));
             for (k, &v) in pts_fill.iter().enumerate() {
@@ -83,7 +84,7 @@ pub(super) fn cumulative_area(days: &[DayPoint], p: MoonPalette) -> AnyElement {
             if let Ok(path) = fill.build() {
                 window.paint_path(path, fill_col);
             }
-            // Нулевая линия, если кривая уходила в минус.
+            // Zero line, if the curve ever went negative.
             if vmin < 0.0 {
                 window.paint_quad(gpui::fill(
                     Bounds::new(
@@ -93,7 +94,7 @@ pub(super) fn cumulative_area(days: &[DayPoint], p: MoonPalette) -> AnyElement {
                     moon_alpha(p.text_muted, 0.5),
                 ));
             }
-            // Линия поверх области.
+            // The line on top of the area.
             let mut pb = PathBuilder::stroke(px(2.0));
             for (k, &v) in pts_fill.iter().enumerate() {
                 let pt = gpui::point(x(k), y(v));
@@ -119,9 +120,9 @@ pub(super) fn cumulative_area(days: &[DayPoint], p: MoonPalette) -> AnyElement {
         .into_any_element()
 }
 
-/// Дневные бары профита: зелёный вверх / оранжевый вниз от нулевой линии,
-/// подпись значения над зелёным / под красным (пока баров немного), ховер
-/// колонки — тот же попап по ядрам, что у левого чарта.
+/// Daily profit bars: green upward / orange downward from the zero line, with
+/// the value labelled above a green bar / below a red one (while the bars are
+/// few). Hovering a column shows the same per-core popup as the left chart.
 pub(super) fn daily_bars(
     days: &[DayPoint],
     cores: &[CoreSeries],
@@ -144,12 +145,13 @@ pub(super) fn daily_bars(
         .fold(0.0f64, f64::min)
         .min(0.0);
     let span = (vmax - vmin).max(1e-6);
-    let up_frac = (vmax / span) as f32; // доля высоты над нулевой линией
-    // Подписи значений читаемы только пока баров немного.
+    let up_frac = (vmax / span) as f32; // share of the height above the zero line
+    // Value labels stay readable only while the bars are few.
     let labels_on = days.len() <= 45;
-    // Резерв под подписи: сверху всегда (над самым высоким зелёным), снизу —
-    // только если есть минус (подпись ПОД красным). Бары масштабируются в
-    // оставшуюся высоту — цифры не перекрываются столбцами.
+    // Space reserved for the labels: always on top (above the tallest green
+    // bar), on the bottom only when there is a negative value (the label goes
+    // BELOW a red bar). Bars scale into the remaining height, so the numbers
+    // are never covered by a column.
     let pad_top = if labels_on { 13.0f32 } else { 0.0 };
     let pad_bottom = if labels_on && vmin < 0.0 {
         13.0f32
@@ -168,7 +170,7 @@ pub(super) fn daily_bars(
     for (bi, d) in days.iter().enumerate() {
         let frac = (d.profit.abs() / span) as f32;
         let bar_h = (frac * area_h).max(if d.trades > 0 { 1.5 } else { 0.0 });
-        // Положительные растут от нулевой линии вверх, отрицательные — вниз.
+        // Positives grow up from the zero line, negatives grow down.
         let bottom = if d.profit >= 0.0 {
             zero_from_bottom
         } else {
@@ -204,16 +206,16 @@ pub(super) fn daily_bars(
             col = col.bg(moon_alpha(p.text_muted, 0.07));
         }
         if labels_on && d.trades > 0 {
-            // Подпись: над зелёным баром / под красным (место зарезервировано
-            // pad_top/pad_bottom — бар цифру не перекрывает).
+            // Label: above a green bar / below a red one (the space is
+            // reserved by pad_top/pad_bottom, so no bar covers the number).
             let label_bottom = if d.profit >= 0.0 {
                 bottom + bar_h + 2.0
             } else {
                 (bottom - 12.0).max(0.0)
             };
-            // Подпись шире колонки (±24px по бокам) и без переносов — иначе
-            // «333» обрезалось в «33»; соседние подписи могут чуть касаться,
-            // но числа читаемы целиком.
+            // The label is wider than its column (±24px on each side) and does
+            // not wrap — otherwise "333" got clipped to "33". Neighbouring
+            // labels may touch slightly, but every number stays fully readable.
             col = col.child(
                 div()
                     .absolute()
@@ -252,10 +254,10 @@ pub(super) fn daily_bars(
         .into_any_element()
 }
 
-/// Накопительная прибыль ПО ЯДРАМ: линия на ядро (той же сеткой вёдер, что
-/// суммарная накопительная) + легенда с итогами. `h` — высота полотна.
-/// `hover` — ведро под мышью: колонка ловится невидимым оверлеем, попап
-/// показывает профит каждого ядра в эту дату.
+/// Cumulative profit PER CORE: one line per core (on the same bucket grid as
+/// the total cumulative chart) + a legend with the totals. `h` is the canvas
+/// height. `hover` is the bucket under the mouse: the column is caught by an
+/// invisible overlay, and the popup shows each core's profit on that date.
 pub(super) fn core_lines(
     days: &[DayPoint],
     cores: &[CoreSeries],
@@ -268,7 +270,7 @@ pub(super) fn core_lines(
     if days.is_empty() || cores.is_empty() {
         return div().h(px(h)).into_any_element();
     }
-    // Кумулятив по каждому ядру + общий диапазон Y.
+    // Cumulative curve per core + the shared Y range.
     let curves: Vec<Vec<f32>> = cores
         .iter()
         .map(|c| {
@@ -304,7 +306,7 @@ pub(super) fn core_lines(
                 return;
             }
             let y = |v: f32| bounds.origin.y + px((vmax - v) / span * (ch - 2.0) + 1.0);
-            // Нулевая линия.
+            // Zero line.
             if vmin < 0.0 {
                 window.paint_quad(gpui::fill(
                     Bounds::new(
@@ -340,7 +342,7 @@ pub(super) fn core_lines(
 
     let first = days.first().map(|d| d.start).unwrap_or(0);
     let last = days.last().map(|d| d.start).unwrap_or(0);
-    // Невидимые колонки-ловушки ховера поверх полотна (по ведру на колонку).
+    // Invisible hover-catcher columns over the canvas (one bucket per column).
     let n = days.len();
     let mut hover_row = h_flex().absolute().inset_0().gap_0();
     for bi in 0..n {
@@ -367,7 +369,7 @@ pub(super) fn core_lines(
     let popup = hover
         .filter(|bi| *bi < n)
         .map(|bi| core_bucket_popup(days, cores, colors, bi, p, cx));
-    // Общий итог всех ядер — в подписи оси (как у суммарной области).
+    // Grand total of all cores goes in the axis label (as on the total area).
     let total_all: f64 = cores.iter().map(|c| c.total).sum();
     div()
         .relative()
@@ -384,16 +386,16 @@ pub(super) fn core_lines(
                         .child(canvas_el)
                         .child(hover_row),
                 )
-                // Легенды тут нет намеренно: имена/итоги ядер видны в
-                // попапе по датам и в нижнем чарте «Прибыль по ядрам».
+                // No legend here on purpose: core names and totals are visible
+                // in the per-date popup and in the bottom "Profit by core" chart.
                 .child(axis_row(p, dm(first), dm(last), Some(total_all as f32))),
         )
         .children(popup)
         .into_any_element()
 }
 
-/// Попап значений ведра `bi`: дата + профит каждого ядра (по модулю, убыв.)
-/// + итог. Якорится к колонке даты внутри relative-контейнера чарта.
+/// Popup of bucket `bi`'s values: the date + each core's profit (descending)
+/// + the total. Anchored to the date column inside the chart's relative container.
 fn core_bucket_popup(
     days: &[DayPoint],
     cores: &[CoreSeries],
@@ -408,10 +410,11 @@ fn core_bucket_popup(
         .map(|(ci, c)| (ci, c.per_bucket[bi]))
         .filter(|(_, v)| v.abs() > 1e-9)
         .collect();
-    // Сортировка ПО ПРОФИТУ: прибыльные сверху, убыточные внизу.
+    // Sorted BY PROFIT: profitable cores on top, losing ones at the bottom.
     items.sort_by(|a, b| b.1.total_cmp(&a.1));
     let total: f64 = items.iter().map(|(_, v)| *v).sum();
-    // Итог дня — В ШАПКЕ попапа (при десятках ядер низ списка не виден).
+    // The day's total goes IN THE POPUP HEADER (with dozens of cores the
+    // bottom of the list is off screen).
     let mut card = v_flex()
         .gap(px(2.0))
         .px(design::ui_px(cx, 8.0))
@@ -473,9 +476,9 @@ fn core_bucket_popup(
                 ),
         );
     }
-    // Якорь к колонке даты: в правой трети — слева от неё, иначе справа.
-    // deferred — попап рисуется ПОВЕРХ всего (иначе прятался под нижними
-    // карточками, отрисованными позже).
+    // Anchored to the date column: in the right third it goes to the left of
+    // it, otherwise to the right. deferred — the popup paints ON TOP of
+    // everything (otherwise it hid under the bottom cards, drawn later).
     let frac = bi as f32 / days.len().max(1) as f32;
     let mut holder = div()
         .absolute()
@@ -489,9 +492,10 @@ fn core_bucket_popup(
     deferred(holder.child(card)).into_any_element()
 }
 
-/// Итог периода ПО ЯДРАМ: один столбик на ядро (СУММА профита за период),
-/// под столбиком — имя ядра и число. Полотно РЕЗИНОВОЕ: бары рисуются
-/// canvas'ом и тянутся на всю высоту, которую даёт прибитая к низу плашка.
+/// Period total PER CORE: one bar per core (the SUM of profit over the
+/// period), with the core's name and number under it. The canvas is ELASTIC:
+/// the bars are painted on canvas and stretch across the full height the
+/// bottom-pinned panel gives them.
 pub(super) fn core_totals_bars(
     cores: &[CoreSeries],
     colors: &[Hsla],
@@ -514,8 +518,8 @@ pub(super) fn core_totals_bars(
     let span = (vmax - vmin).max(1e-6);
     let up_frac = (vmax / span) as f32;
     let gap = f32::from(design::ui_px(cx, 8.0));
-    // Цвет бара — по знаку (профит/убыток), как на дневной диаграмме;
-    // цвет ядра живёт в кружке подписи под баром.
+    // Bar color follows the sign (profit/loss), as on the daily chart; the
+    // core's own color lives in the dot of the label under the bar.
     let bars: Vec<f32> = cores.iter().map(|c| c.total as f32).collect();
     let up_col = moon(p.green);
     let down_col = moon(p.orange);
@@ -531,7 +535,7 @@ pub(super) fn core_totals_bars(
             }
             let col_w = ((w - gap * (n as f32 - 1.0)) / n as f32).max(1.0);
             let zero_y = bounds.origin.y + px(up_frac * (h - 1.0));
-            // Нулевая линия при наличии убыточных.
+            // Zero line when there are losing cores.
             if vmin < 0.0 {
                 window.paint_quad(gpui::fill(
                     Bounds::new(
@@ -561,7 +565,7 @@ pub(super) fn core_totals_bars(
     .flex_1()
     .min_h(px(60.0));
 
-    // Подписи под барами — той же сеткой колонок (flex_1 + тот же gap).
+    // Labels under the bars use the same column grid (flex_1 + the same gap).
     let mut labels = h_flex().w_full().flex_none().gap(px(gap));
     for (ci, c) in cores.iter().enumerate() {
         let v = c.total;
@@ -599,7 +603,7 @@ pub(super) fn core_totals_bars(
                         ),
                 )
                 .child(
-                    // Итог — крупнее имени (главная цифра диаграммы).
+                    // The total is larger than the name (the chart's headline number).
                     div()
                         .whitespace_nowrap()
                         .text_size(crate::design::t_body(cx))
@@ -617,7 +621,8 @@ pub(super) fn core_totals_bars(
         .into_any_element()
 }
 
-/// Подписи оси X: первая/последняя дата (+ итог справа у накопительной).
+/// X-axis labels: the first/last date (+ the total on the right for the
+/// cumulative chart).
 fn axis_row(p: MoonPalette, left: String, right: String, total: Option<f32>) -> AnyElement {
     let mut row = h_flex()
         .w_full()

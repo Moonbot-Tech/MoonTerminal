@@ -1,14 +1,16 @@
-//! Три heatmap-ползунка «По времени» под сеткой строк: цветная дорожка (средний
-//! профит по ячейкам 🟢/🟠) + два перетаскиваемых хендла (от/до) + подсветка
-//! выбранного участка. Как триммер в видео.
-//!   - «Недельно» (поле 0): 168 ячеек день×час; тянет `WorkingWeekTime` (минута недели).
-//!   - «Сутки»    (поле 1): 24 ячейки час суток; тянет WorkingTime (режим суток).
-//!   - «В часе»   (поле 2): 60 ячеек минута-в-часе; тянет WorkingTime (режим часа).
-//! «Сутки» и «В часе» — одно поле WorkingTime → активный чистит другой (взаимоискл.).
+//! The three 'By time' heatmap sliders below the row grid: a colored track (average
+//! profit per cell 🟢/🟠) + two draggable handles (from/to) + a highlight of the
+//! selected span. Like a video trimmer.
+//!   - 'Weekly'  (field 0): 168 day×hour cells; drives `WorkingWeekTime` (minute of week).
+//!   - 'Day'     (field 1): 24 hour-of-day cells; drives WorkingTime (day mode).
+//!   - 'In hour' (field 2): 60 minute-of-hour cells; drives WorkingTime (hour mode).
+//! 'Day' and 'In hour' share the single WorkingTime field → the active one clears the
+//! other (mutually exclusive).
 //!
-//! Значение = ПОЛЯ строки (источник истины): полный диапазон = «без ограничения» =
-//! пусто. Drag читает захваченные `slider_track` bounds (через `canvas`) и пишет поля;
-//! движение мыши ловит overlay в `strat_time`, чтобы не терять курсор за дорожкой.
+//! The value lives in the ROW's fields (the source of truth): the full range = 'no
+//! restriction' = empty. Dragging reads the captured `slider_track` bounds (via `canvas`)
+//! and writes the fields; mouse movement is caught by an overlay in `strat_time` so the
+//! cursor is not lost once it leaves the track.
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -21,7 +23,7 @@ use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::SliderProfiles;
 
-/// Цвет ячейки по среднему профиту `v` и максимуму `cmax` (🟢 плюс / 🟠 минус).
+/// Cell color from the average profit `v` and the maximum `cmax` (🟢 plus / 🟠 minus).
 fn cell_color(v: f32, cmax: f32, p: MoonPalette) -> Hsla {
     let a = (v.abs() / cmax * 0.9).min(0.9);
     if v > 0.0 {
@@ -33,18 +35,24 @@ fn cell_color(v: f32, cmax: f32, p: MoonPalette) -> Hsla {
     }
 }
 
-/// Полоса-heatmap: `data` (профит по ячейкам) в `n≤maxcells` сегментов, КАЖДЫЙ —
-/// 2-стоповый градиент от цвета соседа слева к своему → плавные переходы без граней
-/// (форк-градиент держит только 2 стопа). Крупные оси (сутки 1440) прорежаются.
+/// Heatmap strip: `data` (per-cell profit) laid out in `n≤maxcells` segments, EACH a
+/// 2-stop gradient from the left neighbour's color to its own → smooth transitions with
+/// no seams (the fork's gradient supports only 2 stops). Large axes (day, 1440) are
+/// downsampled.
 fn heat_gradient_row(data: &[f32], maxcells: usize, p: MoonPalette) -> Div {
     let len = data.len().max(1);
     let n = len.min(maxcells.max(1));
-    let cmax = data.iter().fold(0f32, |m, &v| m.max(v.abs())).max(1e-9);
     let bucket = |i: usize| -> f32 {
         let a = i * len / n;
         let b = ((i + 1) * len / n).max(a + 1).min(len);
         data[a..b].iter().sum::<f32>() / (b - a) as f32
     };
+    // Normalize by the DISPLAYED (bucketed) cells, NOT the raw data: a downsampled axis (day:
+    // 1440→288, averaged) would otherwise be measured against an un-averaged single-minute peak
+    // and come out systematically faint. Averaging first, then taking the max, keeps every axis
+    // reaching full intensity at its own brightest cell.
+    let cells: Vec<f32> = (0..n).map(bucket).collect();
+    let cmax = cells.iter().fold(0f32, |m, &v| m.max(v.abs())).max(1e-9);
     let sign = |v: f32| {
         if v > 0.0 {
             1i8
@@ -55,14 +63,13 @@ fn heat_gradient_row(data: &[f32], maxcells: usize, p: MoonPalette) -> Div {
         }
     };
     let mut row = h_flex().size_full();
-    let mut prev_c = cell_color(bucket(0), cmax, p);
-    let mut prev_s = sign(bucket(0));
-    for i in 0..n {
-        let v = bucket(i);
+    let mut prev_c = cell_color(cells[0], cmax, p);
+    let mut prev_s = sign(cells[0]);
+    for &v in &cells {
         let c = cell_color(v, cmax, p);
         let s = sign(v);
-        // Блендим ТОЛЬКО внутри одного знака (🟢→🟢 / 🟠→🟠); на смене знака — резко,
-        // иначе градиент green↔orange проходит через жёлтую грязь.
+        // Blend ONLY within one sign (🟢→🟢 / 🟠→🟠); on a sign change cut hard,
+        // otherwise a green↔orange gradient passes through muddy yellow.
         let from = if s != 0 && s == prev_s { prev_c } else { c };
         row = row.child(div().flex_1().h_full().bg(linear_gradient(
             90.0,
@@ -75,7 +82,7 @@ fn heat_gradient_row(data: &[f32], maxcells: usize, p: MoonPalette) -> Div {
     row
 }
 
-/// Ряд тик-подписей над дорожкой (день/час/минута), выровнены по левым краям сегментов.
+/// Row of tick labels above the track (day/hour/minute), aligned to the segments' left edges.
 fn tick_row(
     labels: Vec<String>,
     boundaries: bool,
@@ -88,11 +95,11 @@ fn tick_row(
         .text_size(design::t_caption(cx))
         .text_color(moon(p.text_muted));
     if boundaries {
-        // Метки на ГРАНИЦАХ (0,3,…,24 / 0,5,…,60): justify_between = ровно на долях k/(n-1).
+        // Labels on the BOUNDARIES (0,3,…,24 / 0,5,…,60): justify_between = exactly at k/(n-1).
         base.justify_between()
             .children(labels.into_iter().map(|l| div().flex_none().child(l)))
     } else {
-        // Подписи ПО СЕГМЕНТАМ (дни недели): по центру своей 1/n доли.
+        // Labels PER SEGMENT (weekdays): centered within their own 1/n share.
         let mut row = base;
         for l in labels {
             row = row.child(div().flex_1().min_w_0().truncate().text_center().child(l));
@@ -101,7 +108,7 @@ fn tick_row(
     }
 }
 
-/// Ячейки профиля ползунка `field` (0 неделя×час, 1 час суток, 2 минута в часе).
+/// Profile cells of slider `field` (0 week×hour, 1 hour of day, 2 minute of hour).
 fn slider_cells(pr: &SliderProfiles, field: usize) -> &[f32] {
     match field {
         0 => &pr.week,
@@ -110,7 +117,7 @@ fn slider_cells(pr: &SliderProfiles, field: usize) -> &[f32] {
     }
 }
 
-/// Вертикальный хендл ползунка на доле `frac` (0..1) ширины дорожки.
+/// Vertical slider handle at fraction `frac` (0..1) of the track's width.
 fn handle_bar(frac: f32, p: MoonPalette, cx: &Context<AnalyticsView>) -> impl IntoElement {
     div()
         .absolute()
@@ -122,7 +129,7 @@ fn handle_bar(frac: f32, p: MoonPalette, cx: &Context<AnalyticsView>) -> impl In
 }
 
 impl AnalyticsView {
-    /// Максимум ползунка `field` в его единицах (минута недели / минута суток / минута часа).
+    /// Maximum of slider `field` in its own units (minute of week / of day / of hour).
     pub(super) fn slider_max(field: usize) -> u16 {
         match field {
             0 => WEEK_MIN - 1,
@@ -131,7 +138,7 @@ impl AnalyticsView {
         }
     }
 
-    /// Текущий диапазон ползунка `field` из полей строки; пусто → полный диапазон.
+    /// Current range of slider `field` from the row's fields; empty → the full range.
     fn slider_range(&self, field: usize) -> (u16, u16) {
         match field {
             0 => self.time_tuner.week_span(0).unwrap_or((0, WEEK_MIN - 1)),
@@ -149,7 +156,7 @@ impl AnalyticsView {
         }
     }
 
-    /// Значение в единицах ползунка по X мыши (через захваченные bounds дорожки).
+    /// Value in the slider's units from the mouse X (via the captured track bounds).
     fn slider_value_at(&self, field: usize, x: Pixels) -> u16 {
         let Some(b) = self.slider_track[field] else {
             return 0;
@@ -162,8 +169,8 @@ impl AnalyticsView {
         (frac * Self::slider_max(field) as f32).round() as u16
     }
 
-    /// Записать диапазон ползунка в поля строки. Полный диапазон → очистка («без
-    /// ограничения»). WT-строки (1/2) взаимоисключаем. Пересчёт KPI.
+    /// Write the slider's range into the row's fields. A full range → clear it ('no
+    /// restriction'). The WT rows (1/2) are mutually exclusive. Recomputes the KPIs.
     fn set_slider_range(&mut self, field: usize, from: u16, to: u16, cx: &mut Context<Self>) {
         let max = Self::slider_max(field);
         let (from, to) = (from.min(to), from.max(to));
@@ -178,19 +185,19 @@ impl AnalyticsView {
             };
             self.set_v1_cell(field, a, b);
         }
-        // «Сутки»↔«В часе» — одно поле WorkingTime: активная строка чистит другую.
+        // 'Day'↔'In hour' share the single WorkingTime field: the active row clears the other.
         if !full && field == 1 {
             self.clear_field(0, 2);
         }
         if !full && field == 2 {
             self.clear_field(0, 1);
         }
-        // БЕЗ reload_time: во время drag только двигаем поля/полосу; KPI пересчитаем
-        // ОДИН раз на отпускании (`slider_release`) — иначе шторм SQL-запросов.
+        // NO reload_time: while dragging we only move the fields/strip; the KPIs are
+        // recomputed ONCE on release (`slider_release`) — otherwise a storm of SQL queries.
         cx.notify();
     }
 
-    /// Завершить drag ползунка: снять флаг и пересчитать KPI ОДИН раз (на отпускании).
+    /// Finish a slider drag: clear the flag and recompute the KPIs ONCE (on release).
     fn slider_release(&mut self, cx: &mut Context<Self>) {
         if self.slider_drag.take().is_some() {
             self.reload_time(cx);
@@ -198,7 +205,7 @@ impl AnalyticsView {
         }
     }
 
-    /// Обновить перетаскиваемый край (`is_from`) ползунка `field` до значения `value`.
+    /// Move the dragged edge (`is_from`) of slider `field` to `value`.
     pub(super) fn slider_drag_to(
         &mut self,
         field: usize,
@@ -215,7 +222,7 @@ impl AnalyticsView {
         self.set_slider_range(field, from, to, cx);
     }
 
-    /// ЛКМ down по дорожке: выбрать ближний хендл, начать drag и сразу подвинуть.
+    /// LMB down on the track: pick the nearest handle, start the drag and move it at once.
     fn slider_mouse_down(&mut self, field: usize, x: Pixels, cx: &mut Context<Self>) {
         let value = self.slider_value_at(field, x);
         let (from, to) = self.slider_range(field);
@@ -224,7 +231,7 @@ impl AnalyticsView {
         self.slider_drag_to(field, is_from, value, cx);
     }
 
-    /// Блок трёх ползунков под сеткой строк.
+    /// The block of three sliders below the row grid.
     pub(super) fn time_sliders(&mut self, p: MoonPalette, cx: &mut Context<Self>) -> AnyElement {
         let prof = self.time_slider.clone();
         let mut col = v_flex()
@@ -241,7 +248,7 @@ impl AnalyticsView {
         col.into_any_element()
     }
 
-    /// Одна строка-ползунок: подпись + цветная дорожка с хендлами.
+    /// A single slider row: the label + the colored track with its handles.
     fn time_slider_row(
         &self,
         field: usize,
@@ -252,14 +259,16 @@ impl AnalyticsView {
         let max = Self::slider_max(field) as f32;
         let (from, to) = self.slider_range(field);
         let (ff, tf) = (from as f32 / max, to as f32 / max);
-        // Регион без инверсии (wrap-спан от>до вводится вручную — не рисуем внахлёст).
+        // Region without inversion (a wrapping span from>to is entered by hand — we don't
+        // overlap-draw it).
         let (rl, rr) = (ff.min(tf), ff.max(tf));
-        // Пара «Сутки»/«Час» — одно поле WorkingTime: неиспользуемую строку приглушаем.
+        // The 'Day'/'Hour' pair shares one WorkingTime field: the unused row is dimmed.
         let active = self.time_tuner.active_wt();
         let dim = matches!((field, active), (2, Some(1)));
-        // Тайлинг-каскад: маска активного НИЖЕЛЕЖАЩЕГО поля проецируется на ЭТУ дорожку —
-        // «В часе» → на «Сутки» И «Недельно» (в каждом часе); «Сутки» → на «Недельно»
-        // (в каждом дне). ЗАТЕНЯЕМ ИСКЛЮЧЁННОЕ (не в окне) — активное показывает heatmap.
+        // Tiling cascade: the mask of the active FINER field is projected onto THIS track —
+        // 'In hour' → onto 'Day' AND 'Weekly' (within every hour); 'Day' → onto 'Weekly'
+        // (within every day). We SHADE WHAT IS EXCLUDED (outside the window) — what is
+        // active keeps showing the heatmap.
         let total = Self::slider_max(field) as u32 + 1;
         let dark_bands: Vec<(u16, u16)> = match active {
             Some(2) if field != 2 => {
@@ -268,10 +277,10 @@ impl AnalyticsView {
                 for h in 0..(total / 60) as u16 {
                     let base = h * 60;
                     if hf > 0 {
-                        v.push((base, base + hf - 1)); // до окна часа
+                        v.push((base, base + hf - 1)); // before the hour window
                     }
                     if ht < 59 {
-                        v.push((base + ht + 1, base + 59)); // после окна часа
+                        v.push((base + ht + 1, base + 59)); // after the hour window
                     }
                 }
                 v
@@ -282,10 +291,10 @@ impl AnalyticsView {
                 for d in 0..7u16 {
                     let base = d * 1440;
                     if df > 0 {
-                        v.push((base, base + df - 1)); // до окна суток
+                        v.push((base, base + df - 1)); // before the day window
                     }
                     if dt < 1439 {
-                        v.push((base + dt + 1, base + 1439)); // после окна суток
+                        v.push((base + dt + 1, base + 1439)); // after the day window
                     }
                 }
                 v
@@ -297,17 +306,17 @@ impl AnalyticsView {
             1 => "analytics.time.field_day",
             _ => "analytics.time.field_hour",
         };
-        // Ячейки-градиент; сутки (1440) прорежаем до 240 для перфа.
+        // Gradient cells; the day (1440 minutes) gets 5 minutes per cell = 288.
         let maxcells = match field {
             0 => 168usize,
-            1 => 240,
+            1 => 288,
             _ => 60,
         };
         let empty = [0.0f32];
         let data = prof.map(|pr| slider_cells(pr, field)).unwrap_or(&empty);
         let cells_row = heat_gradient_row(data, maxcells, p);
-        // Тики над дорожкой: неделя — дни (по сегментам); сутки — часы 0..24 (каждые 3);
-        // час — минуты 0..60 (каждые 5). `bound` = метки на границах (justify_between).
+        // Ticks above the track: week — days (per segment); day — hours 0..24 (every 3);
+        // hour — minutes 0..60 (every 5). `bound` = labels on the boundaries (justify_between).
         let (ticks, tick_bound): (Vec<String>, bool) = match field {
             0 => (split_i18n(t!("analytics.heat.weekdays").to_string()), false),
             1 => ((0..=8u16).map(|k| (k * 3).to_string()).collect(), true),
@@ -325,8 +334,8 @@ impl AnalyticsView {
             .cursor(CursorStyle::OpenHand)
             .bg(moon(p.panel_high))
             .child(cells_row);
-        // Затенить ИСКЛЮЧЁННЫЕ интервалы маски (тайлинг-каскад) — тёмная штриховка;
-        // активное время остаётся heatmap. Рисуем ПОД своим выделением/хендлами.
+        // Shade the mask's EXCLUDED intervals (the tiling cascade) — dark hatching;
+        // the active time stays a heatmap. Drawn UNDER this row's selection/handles.
         let total_f = total as f32;
         for (a, b) in &dark_bands {
             let l = *a as f32 / total_f;
@@ -342,7 +351,7 @@ impl AnalyticsView {
             );
         }
         track = track
-            // Своё выделение (недельный спан / окно) — ПОВЕРХ затенения, только рамка.
+            // This row's own selection (week span / window) — ON TOP of the shading, border only.
             .child(
                 div()
                     .absolute()
@@ -353,11 +362,11 @@ impl AnalyticsView {
                     .border_2()
                     .border_color(moon(p.accent)),
             )
-            // Два хендла (от/до).
+            // The two handles (from/to).
             .child(handle_bar(ff, p, cx))
             .child(handle_bar(tf, p, cx));
         let track = track
-            // Захват bounds дорожки для перевода X мыши в значение.
+            // Capture the track's bounds so the mouse X can be turned into a value.
             .child(
                 canvas(
                     move |bounds, _window, app| {
@@ -381,16 +390,18 @@ impl AnalyticsView {
             .gap(design::ui_px(cx, 6.0))
             .opacity(if dim { 0.5 } else { 1.0 })
             .child(
+                // Matches the grid's field-name column so the slider labels line up under it.
                 div()
-                    .w(design::font_w_px(cx, 60.0))
+                    .w(design::font_w_px(cx, 118.0))
                     .flex_none()
+                    .truncate()
                     .pb(design::ui_px(cx, 3.0))
                     .text_size(design::t_caption(cx))
                     .text_color(moon(p.text_soft))
                     .child(t!(label_key).to_string()),
             )
             .child(
-                // Тики над дорожкой + сама дорожка (выровнены по ширине).
+                // The ticks above the track + the track itself (matched in width).
                 v_flex()
                     .flex_1()
                     .min_w_0()
@@ -401,8 +412,9 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// Прозрачный overlay на всё тело «По времени» на время drag ползунка: ловит
-    /// движение мыши (даже за дорожкой) и отпускание. Рисуется только пока тянем.
+    /// A transparent overlay over the whole 'By time' body for the duration of a slider
+    /// drag: it catches mouse movement (even off the track) and the release. Drawn only
+    /// while dragging.
     pub(super) fn slider_drag_overlay(&self, cx: &Context<Self>) -> Option<AnyElement> {
         self.slider_drag?;
         Some(
@@ -419,8 +431,8 @@ impl AnalyticsView {
                         this.slider_drag_to(field, is_from, v, cx);
                     }
                 }))
-                // Отпускание внутри тела И вне его (`_out`, не hover-гейтится) — иначе
-                // релиз за пределами overlay/окна оставил бы drag «залипшим».
+                // Release inside the body AND outside it (`_out`, not hover-gated) — otherwise
+                // a release beyond the overlay/window would leave the drag 'stuck'.
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, _e, _w, cx| this.slider_release(cx)),

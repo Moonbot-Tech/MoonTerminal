@@ -1,8 +1,8 @@
-//! Тюнер порогов по рыночным полям отчёта (приём из «Аналитики V3») — режим
-//! «Фильтры» вкладки «Стратегии»: матрица KPI «Факт vs варианты», конструктор
-//! диапазонов от/до по полям и гистограмма профита по квантильным вёдрам
-//! выбранного поля. Скоуп — выбранная в списке стратегия (или все). Границы
-//! персистятся в layout (строками, как ввёл юзер).
+//! Threshold tuner over the report's market fields (carried over from 'Analytics V3') —
+//! the 'Filters' mode of the 'Strategies' tab: a 'Fact vs variants' KPI matrix, a
+//! from/to range builder per field and a profit histogram over the quantile buckets of
+//! the selected field. The scope is the strategy selected in the list (or all). Bounds
+//! are persisted in the layout (as strings, exactly as the user typed them).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,20 +17,20 @@ use rust_i18n::t;
 
 use super::super::{AnalyticsView, LoadState};
 pub(super) use super::state::{
-    N_VAR, TunerKind, card, flag_of, fmt_bound, parse_num, staged_dirty,
+    N_VAR, TunerKind, card, flag_of, fmt_bound, glyph_btn, parse_num, staged_dirty,
 };
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
 
-/// Вёдер гистограммы.
+/// Histogram buckets.
 const HIST_BUCKETS: usize = 14;
 
 impl AnalyticsView {
-    /// Запрос тюнера: общие фильтры + скоуп выбранной стратегии.
+    /// Tuner query: the shared filters plus the selected strategy's scope.
     pub(super) fn tuner_query(&self) -> moon_core::db::analytics::Query {
         let mut q = self.query();
-        // Ключ строки — `strategyid@core_uid`: скоуп по стратегии И конкретному ядру.
+        // The row key is `strategyid@core_uid`: scope by strategy AND by the specific core.
         if let Some((sid, core)) = self
             .sel_strategy
             .as_ref()
@@ -42,15 +42,18 @@ impl AnalyticsView {
         q
     }
 
-    /// Фоновый пересчёт матрицы KPI по вариантам (+ пороги выбранной стратегии).
+    /// Background recompute of the per-variant KPI matrix (+ the selected strategy's thresholds).
     pub(in crate::analytics) fn reload_tuner(&mut self, cx: &mut Context<Self>) {
         self.tuner.seq = self.tuner.seq.wrapping_add(1);
         let req = self.tuner.seq;
         let q = self.tuner_query();
         let sid = q.strategy;
+        // Per-core row: scope the strategy card to the selected core (the save diff must be
+        // computed against the core the write targets).
+        let core = q.strat_core;
         let variants = self.tuner.variants();
-        // Дефолты схемы ядра (числовые поля): чипы прячут значения, равные
-        // дефолту — «фильтр не настроен» порогом не является.
+        // Core schema defaults (numeric fields): the chips hide values equal to the
+        // default — 'filter not configured' is not a threshold.
         let defaults: HashMap<String, f64> = {
             let b = self.backend.read(cx);
             let store = b.session.store();
@@ -76,12 +79,12 @@ impl AnalyticsView {
                         }
                     }
                 }
-                break; // схемы ядер совпадают — одной достаточно
+                break; // the cores' schemas are identical — one is enough
             }
             out
         };
-        // Автоподбор НЕ сбрасываем: правка границ не меняет распределение
-        // факта, по которому он считался (сброс — в invalidate()).
+        // We do NOT reset the auto-suggestion: editing the bounds does not change the fact
+        // distribution it was computed from (the reset lives in invalidate()).
         // Carry current numbers as stale during recomputation; any completed
         // non-data result drops them.
         self.tuner.stats.begin();
@@ -92,7 +95,7 @@ impl AnalyticsView {
                 .spawn(async move {
                     let stats = moon_core::db::tuner::variant_stats(&q, &variants);
                     let sf = sid
-                        .map(|sid| moon_core::db::tuner::strategy_filters(sid, &defaults))
+                        .map(|sid| moon_core::db::tuner::strategy_filters(sid, core, &defaults))
                         .unwrap_or_default();
                     (stats, sf)
                 })
@@ -115,7 +118,7 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Фоновая гистограмма выбранного поля.
+    /// Background histogram of the selected field.
     pub(in crate::analytics) fn reload_hist(&mut self, cx: &mut Context<Self>) {
         self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
         let req = self.tuner.hist_seq;
@@ -142,7 +145,7 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Коммит границы (Blur/Enter инпута): состояние → layout → пересчёт.
+    /// Commit a bound (on input Blur/Enter): state → layout → recompute.
     fn commit_bound(
         &mut self,
         vi: usize,
@@ -161,8 +164,8 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Программная установка ОБЕИХ границ поля (чип стратегии / очистка /
-    /// автоподбор): состояние + тихая синхронизация инпутов + пересчёт.
+    /// Programmatic set of BOTH bounds of a field (strategy chip / clear /
+    /// auto-suggestion): state + a silent resync of the inputs + recompute.
     pub(super) fn apply_bounds(
         &mut self,
         vi: usize,
@@ -175,16 +178,16 @@ impl AnalyticsView {
             return;
         }
         self.tuner.bounds[vi][fi] = (from, to);
-        // Пересоздаём инпуты (сброс кэша): свежий default_value рисуется с
-        // НАЧАЛА строки; sync_value оставлял курсор в конце — длинное значение
-        // «уезжало» вправо и виден был только хвост.
+        // Recreate the inputs (drop the cache): a fresh default_value is drawn from
+        // the START of the string; sync_value left the caret at the end — a long value
+        // 'scrolled off' to the right and only its tail was visible.
         self.tuner.inputs.remove(&format!("tv{vi}f{fi}a"));
         self.tuner.inputs.remove(&format!("tv{vi}f{fi}b"));
         self.reload_tuner(cx);
         cx.notify();
     }
 
-    /// Инпут границы с ленивым кэшем (паттерн field_input_state Стратегий).
+    /// Bound input with a lazy cache (the field_input_state pattern from Strategies).
     fn bound_input(
         &mut self,
         vi: usize,
@@ -215,7 +218,7 @@ impl AnalyticsView {
         state
     }
 
-    /// Конструктор диапазонов: строки-поля, клик по имени — гистограмма поля.
+    /// Range builder: one row per field, clicking a name shows that field's histogram.
     pub(super) fn fields_grid(
         &mut self,
         p: MoonPalette,
@@ -235,8 +238,8 @@ impl AnalyticsView {
             .child(
                 div().flex_none().child(
                     MoonCheckbox::new("tun-en-all")
-                        // Немаппленные поля (нет параметра в стратегии) мастер
-                        // игнорирует: «все включены» = все МАППЛЕННЫЕ.
+                        // The master checkbox ignores unmapped fields (no matching
+                        // strategy parameter): 'all enabled' = all MAPPED ones.
                         .checked(
                             FIELDS
                                 .iter()
@@ -265,7 +268,7 @@ impl AnalyticsView {
                     .flex_none()
                     .child(t!("analytics.tuner.field").to_string()),
             )
-            // Колонка чипа: пороги выбранной стратегии (клик — в v1).
+            // Chip column: the selected strategy's thresholds (click sends them to v1).
             .child(
                 div()
                     .flex_1()
@@ -280,21 +283,29 @@ impl AnalyticsView {
                         .text_center()
                         .child(format!("v{} {}", vi + 1, t!("analytics.tuner.from"))),
                 )
-                // v2: копирование ВСЕЙ колонки v1 → v2 (между «от» и «до»).
-                .when(vi == 1, |el| {
-                    el.child(
-                        div()
-                            .id("tun-cp-col")
-                            .w(design::ui_px(cx, 12.0))
-                            .flex_none()
-                            .cursor_pointer()
-                            .text_color(moon(p.text_muted))
-                            .hover(move |st| st.text_color(moon(p.amber)))
-                            .child("→")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.copy_v1_to_v2(None, cx);
-                            })),
+                // The only two copy buttons, both "copy the WHOLE column", each between its
+                // variant's "from" and "to": → carries v1→v2, ← carries v2→v1. Rows have none —
+                // they keep a matching spacer so the columns stay aligned.
+                .child(if vi == 0 {
+                    glyph_btn(
+                        "tun-cp-col",
+                        "→",
+                        t!("analytics.time.tip_to_v2").to_string(),
+                        p.amber,
+                        p,
+                        cx,
                     )
+                    .on_click(cx.listener(|this, _, _, cx| this.copy_v1_to_v2(None, cx)))
+                } else {
+                    glyph_btn(
+                        "tun-cpb-col",
+                        "←",
+                        t!("analytics.time.tip_to_v1").to_string(),
+                        p.amber,
+                        p,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.copy_v2_to_v1(None, cx)))
                 })
                 .child(
                     div()
@@ -303,29 +314,33 @@ impl AnalyticsView {
                         .text_center()
                         .child(t!("analytics.tuner.to").to_string()),
                 )
-                // Очистка ВСЕЙ колонки варианта — над строчными крестиками.
+                // Clear the WHOLE variant column — above the per-row crosses.
                 .child(
-                    div()
-                        .id(SharedString::from(format!("tun-clr-col-{vi}")))
-                        .w(design::ui_px(cx, 12.0))
-                        .flex_none()
-                        .cursor_pointer()
-                        .text_color(moon(p.text_muted))
-                        .hover(move |st| st.text_color(moon(p.orange)))
-                        .child("✕")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.clear_variant(vi, cx);
-                        })),
+                    glyph_btn(
+                        SharedString::from(format!("tun-clr-col-{vi}")),
+                        "✕",
+                        t!("analytics.time.tip_clear_all").to_string(),
+                        p.orange,
+                        p,
+                        cx,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.clear_variant(vi, cx))),
                 );
         }
 
-        let strat = self.tuner.strat.clone();
+        // The per-field "in strategy" chips and the group ignore=YES/NO labels are the ANCHOR's
+        // only; in multi-select each selected strategy differs, so `current_if_single` yields
+        // None and we render from an empty card (found=false hides both). Display-only — the
+        // write still reads `self.tuner.strat`.
+        let strat = self
+            .current_if_single(self.tuner.strat.clone())
+            .unwrap_or_else(|| Arc::new(StratFilters::default()));
         let mut grid = v_flex().w_full().child(head);
         let mut last_class: Option<FieldClass> = None;
         for fi in 0..FIELDS.len() {
             let class = FIELDS[fi].class;
-            // Заголовки: секция MoonBot (родитель), затем подгруппа с
-            // отступом (BV/SV внутри Объёмов, слоты Δ2/Δ3 внутри Дельт).
+            // Headers: the MoonBot section (the parent), then the indented
+            // subgroup (BV/SV inside Volumes, the Δ2/Δ3 slots inside Deltas).
             let sub = class.parent() != class;
             if last_class != Some(class) {
                 if sub && last_class.map(|c| c.parent()) != Some(class.parent()) {
@@ -372,7 +387,7 @@ impl AnalyticsView {
                         .text_color(if selected {
                             moon(p.amber)
                         } else if unmapped {
-                            // Поле без параметров стратегии — приглушаем.
+                            // Field with no strategy parameter — dim it.
                             moon(p.text_muted)
                         } else {
                             moon(p.text)
@@ -392,10 +407,10 @@ impl AnalyticsView {
             if selected {
                 row = row.bg(moon_alpha(p.amber, 0.08));
             }
-            // Чип: НЕдефолтные пороги выбранной стратегии (справочно). Поля-
-            // слоты показывают назначение «Δ2/Δ3» + пороги слота. Если класс
-            // игнорируется флагами — значений НЕ показываем (метка «ignore»
-            // стоит на подзаголовке группы).
+            // Chip: the selected strategy's NON-default thresholds (informational).
+            // Slot fields show the 'Δ2/Δ3' assignment plus the slot's thresholds. If
+            // the class is ignored by the flags we show NO values (the 'ignore' label
+            // sits on the group's subheader).
             let chip: Option<(Option<u8>, Option<f64>, Option<f64>)> =
                 if strat.found && !strat.class_ignored(class) {
                     if class == FieldClass::DeltaSlot {
@@ -414,7 +429,7 @@ impl AnalyticsView {
                 };
             row = row.child(match chip {
                 Some((slot, lo, hi)) => {
-                    // Диапазон компактно: «(от…до)»; открытая сторона пустая.
+                    // Compact range: '(from…to)'; an open side stays empty.
                     let range = (lo.is_some() || hi.is_some()).then(|| {
                         format!(
                             "({}…{})",
@@ -427,9 +442,9 @@ impl AnalyticsView {
                         .flatten()
                         .collect::<Vec<_>>()
                         .join(" ");
-                    // Клик по чипу: значения стратегии → v1 (замена) + снять
-                    // галку участия — поле становится ФИКСИРОВАННЫМ фильтром,
-                    // перебор его не трогает.
+                    // Clicking the chip: the strategy's values → v1 (replacing them) +
+                    // clear the participation checkbox — the field becomes a FIXED
+                    // filter that the sweep leaves alone.
                     let (from_s, to_s) = (
                         lo.map(fmt_bound).unwrap_or_default(),
                         hi.map(fmt_bound).unwrap_or_default(),
@@ -451,8 +466,8 @@ impl AnalyticsView {
                         }))
                         .into_any_element()
                 }
-                // Немаппленное поле: вместо чипа — пометка, что подобранный
-                // порог записать в стратегию нечем (параметра нет).
+                // Unmapped field: instead of a chip, a note that there is nothing to
+                // write the fitted threshold into on the strategy (no such parameter).
                 None if unmapped => div()
                     .flex_1()
                     .min_w_0()
@@ -465,22 +480,10 @@ impl AnalyticsView {
             });
             for vi in 0..N_VAR {
                 for is_to in [false, true] {
-                    // v2: копирование строки v1 → v2 (между «от» и «до»).
-                    if vi == 1 && is_to {
-                        row = row.child(
-                            div()
-                                .id(SharedString::from(format!("tun-cp-{fi}")))
-                                .flex_none()
-                                .px(design::ui_px(cx, 2.0))
-                                .cursor_pointer()
-                                .text_size(design::t_caption(cx))
-                                .text_color(moon(p.text_muted))
-                                .hover(move |st| st.text_color(moon(p.amber)))
-                                .child("→")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.copy_v1_to_v2(Some(fi), cx);
-                                })),
-                        );
+                    // Spacer under the header's copy arrow (it sits between "from" and "to"), so
+                    // the row columns stay aligned with the header.
+                    if is_to {
+                        row = row.child(div().w(design::ui_px(cx, 12.0)).flex_none());
                     }
                     let input = self.bound_input(vi, fi, is_to, window, cx);
                     row = row.child(
@@ -491,26 +494,25 @@ impl AnalyticsView {
                         ),
                     );
                 }
-                // Очистка обеих границ варианта в этой строке.
+                // Clear both bounds of this variant in this row.
                 row = row.child(
-                    div()
-                        .id(SharedString::from(format!("tun-clr-{vi}-{fi}")))
-                        .flex_none()
-                        .px(design::ui_px(cx, 2.0))
-                        .cursor_pointer()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text_muted))
-                        .hover(move |s| s.text_color(moon(p.orange)))
-                        .child("✕")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.apply_bounds(vi, fi, String::new(), String::new(), cx);
-                        })),
+                    glyph_btn(
+                        SharedString::from(format!("tun-clr-{vi}-{fi}")),
+                        "✕",
+                        t!("analytics.time.tip_clear").to_string(),
+                        p.orange,
+                        p,
+                        cx,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.apply_bounds(vi, fi, String::new(), String::new(), cx)
+                    })),
                 );
             }
             grid = grid.child(row);
         }
-        // Строка подбора и тулбар — из ОБЩЕЙ оболочки (tuner_shell), ось
-        // «По фильтру»: один код для всех тюнеров, действия диспатчатся по оси.
+        // The suggestion row and the toolbar come from the SHARED shell (tuner_shell), axis
+        // 'By filter': one code path for every tuner, actions dispatched by axis.
         let cfg_row = self.shell_config_row(TunerKind::Filter, p, window, cx);
         let header = self.shell_toolbar(
             TunerKind::Filter,
@@ -520,7 +522,10 @@ impl AnalyticsView {
         );
         v_flex()
             .w_full()
-            .flex_none()
+            // Fill the column and scroll the field rows internally (toolbar/config pinned), so
+            // the parameters never spill off the bottom of a short panel.
+            .flex_1()
+            .min_h_0()
             .rounded(design::ui_px(cx, 8.0))
             .bg(moon(p.panel))
             .border_1()
@@ -528,14 +533,22 @@ impl AnalyticsView {
             .overflow_hidden()
             .child(header)
             .child(cfg_row)
-            .child(grid)
+            .child(
+                div()
+                    .id("an-fields-scroll")
+                    .w_full()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(grid),
+            )
             .into_any_element()
     }
 
-    /// Подзаголовок группы: подпись + кликабельное «ignore» (стейджится) и
-    /// «применить», когда стейдж отличается от текущего флага стратегии —
-    /// пишет В СТРАТЕГИЮ только этот флаг (вернуть игнор назад так же легко,
-    /// как снять его сохранением порогов).
+    /// Group subheader: the label plus a clickable 'ignore' (which is staged) and an
+    /// 'apply' when the staged value differs from the strategy's current flag — it
+    /// writes ONLY that flag TO THE STRATEGY (putting the ignore back is as easy as
+    /// clearing it by saving thresholds).
     fn group_header(
         &self,
         class: FieldClass,
@@ -553,9 +566,9 @@ impl AnalyticsView {
             FieldClass::Volume => t!("analytics.tuner.grp_volume"),
         }
         .to_string();
-        // Подгруппа секции MoonBot (BV/SV в Объёмах, слоты Δ2/Δ3 в Дельтах):
-        // отступ + бледнее фон. У слотов НЕТ своего флага (гейт — IgnoreDelta
-        // родителя), кликабельный ignore не рисуем; у BV/SV — свой включатель.
+        // Subgroup of a MoonBot section (BV/SV in Volumes, the Δ2/Δ3 slots in Deltas):
+        // indented + a paler background. Slots have NO flag of their own (the gate is
+        // the parent's IgnoreDelta), so no clickable ignore; BV/SV has its own toggle.
         let sub = class.parent() != class;
         let mut hdr = h_flex()
             .w_full()
@@ -578,10 +591,10 @@ impl AnalyticsView {
                     .id(SharedString::from(format!("tun-ign-{flag}")))
                     .cursor_pointer()
                     .text_color(if shown {
-                        // Фильтры класса ИГНОРИРУЮТСЯ — тёмно-серый.
+                        // The class's filters are IGNORED — dark grey.
                         moon_alpha(p.text_muted, 0.7)
                     } else {
-                        // Фильтры работают — зелёный.
+                        // The filters are live — green.
                         moon(p.green)
                     })
                     .child(if shown { "ignore=YES" } else { "ignore=NO" })

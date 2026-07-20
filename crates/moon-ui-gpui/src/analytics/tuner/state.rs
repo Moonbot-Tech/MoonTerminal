@@ -1,10 +1,10 @@
-//! Состояние тюнера и общие хелперы (вынесено из tuner.rs — лимит размера).
+//! Tuner state and shared helpers (split out of tuner.rs — file size limit).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::*;
-use moon_ui::{MoonInputState, MoonPalette, h_flex, v_flex};
+use moon_ui::{MoonInputState, MoonPalette, MoonTooltipView, h_flex, v_flex};
 
 use super::super::{AnalyticsView, LoadState};
 use crate::design;
@@ -13,71 +13,84 @@ use moon_core::db::tuner::{
     Bound, FIELDS, FieldClass, HistBucket, StratFilters, VarStats, Variant,
 };
 
-/// Вариантов помимо «Факта» (V3 держит 8 — начинаем с двух).
+/// Variants besides "Fact" (V3 holds 8 — we start with two).
 pub(super) const N_VAR: usize = 2;
 
-/// Какая ось тюнинга рисует общую оболочку (тулбар + строка подбора). Оболочка
-/// одна на все режимы; действия (Подобрать/Сохранить/Копия) диспатчатся по виду.
+/// Which tuning axis draws the shared shell (toolbar + suggestion row). The shell
+/// is one for every mode; the actions (Search/Save/Copy) are dispatched by kind.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum TunerKind {
-    /// «По фильтру» — пороги рыночных полей (полный набор действий).
+    /// "By filter" — thresholds of the market fields (the full set of actions).
     Filter,
-    /// «По времени» — недельное расписание (действия появятся в фазе 2b).
+    /// "By time" — the weekly schedule (actions arrive in phase 2b).
     Time,
 }
 
-/// Подготовленное сохранение в стратегию: адресат + список правок.
-pub(super) struct SaveDialog {
+/// A write target: a strategy ON A SPECIFIC core. `core` is the list row's `core_uid`,
+/// which equals the live store's `CoreId` (identity verified: the report ingest writes
+/// `core_uid: server.uid`, and strategies.sqlite `core_uid` is already used as a CoreId).
+/// `None` is a legacy key without a core: write to every core of the strategy (back-compat).
+#[derive(Clone)]
+pub(super) struct SaveTarget {
     pub(super) sid: i64,
+    pub(super) core: Option<u64>,
     pub(super) name: String,
+}
+
+/// A prepared save: target(s) + the list of changes. Single selection = 1 target;
+/// multi-select (Ctrl) = N targets (the same changes into each one's core). Copy = always 1.
+pub(super) struct SaveDialog {
+    pub(super) targets: Vec<SaveTarget>,
     pub(super) changes: Vec<(String, String)>,
-    /// Текущие значения параметров стратегии тем же индексом, что `changes`
-    /// (окно показывает «сейчас → будет»); None — параметра нет в стратегии.
+    /// Current parameter values of the FIRST (anchor) target, indexed like `changes`
+    /// (the dialog shows "now → next"); in multi-select the preview reflects the anchor
+    /// and the rest are written blind. None — the parameter is absent from the strategy.
     pub(super) olds: Vec<Option<String>>,
-    /// true — окно «Сделать копию»: подтверждение создаёт НОВУЮ стратегию
-    /// с этими полями (имя из инпута), а не правит исходную.
+    /// true — the "Make a copy" dialog: confirming creates a NEW strategy with these
+    /// fields (name from the input) rather than editing the source.
     pub(super) copy: bool,
-    /// Предупреждения (перезапись чужого слот-типа, не вошедшие поля) —
-    /// показываются в окне подтверждения, не только в логе.
+    /// Warnings (overwriting a foreign slot type, fields that did not fit) — shown in
+    /// the confirmation dialog, not only in the log.
     pub(super) warns: Vec<String>,
 }
 
-/// Состояние тюнера внутри `AnalyticsView`.
+/// Tuner state inside `AnalyticsView`.
 pub(in crate::analytics) struct TunerState {
-    /// Границы вариантов текстом: `[вариант][индекс поля] = (от, до)`.
+    /// Variant bounds as text: `[variant][field index] = (from, to)`.
     pub(super) bounds: Vec<Vec<(String, String)>>,
-    /// Кэш инпутов границ (ленивое создание в render).
+    /// Cache of the bound inputs (created lazily in render).
     pub(super) inputs: HashMap<String, Entity<MoonInputState>>,
-    /// Поле гистограммы (индекс в `FIELDS`).
+    /// Histogram field (index into `FIELDS`).
     pub(super) sel_field: usize,
     /// KPI matrix load state; `dirty` separately marks retained data for recomputation.
     pub(super) stats: LoadState<Vec<VarStats>>,
     /// Selected-field histogram read state.
     pub(super) hist: LoadState<Vec<HistBucket>>,
-    /// Фильтровая карточка выбранной стратегии (Ignore-флаги + пороги).
+    /// Filter card of the selected strategy (Ignore flags + thresholds).
     pub(super) strat: Arc<StratFilters>,
-    /// Автоподбор (кнопки «Подобрать») выполняется в фоне.
+    /// Auto-suggestion (the "Search" buttons) is running in the background.
     pub(super) sugg_busy: bool,
-    /// Открытое окно подтверждения сохранения (список правок).
+    /// The open save confirmation dialog (the list of changes).
     pub(super) save_dialog: Option<Arc<SaveDialog>>,
-    /// Данные устарели (сменился скоуп/фильтры) — показываем старое без
-    /// «Загрузка…» (не мерцаем), но при входе в режим пересчитываем.
+    /// Data is stale (the scope/filters changed) — we keep showing the old one
+    /// without a "Loading…" flash, but recompute on entering the mode.
     pub(super) dirty: bool,
-    /// Стейдж кликабельных «ignore» подзаголовков: флаг → желаемое состояние
-    /// игнора (семантика «игнорировать», для UseBV_SV_Filter инверсна).
+    /// Staged state of the clickable "ignore" subheadings: flag → the desired
+    /// ignore state (semantics: "ignore"; inverted for UseBV_SV_Filter).
     pub(super) staged_ignore: HashMap<&'static str, bool>,
-    /// Параметры умного подбора: попыток, минимум сделок (пусто = авто 1/5)
-    /// и число квантильных краёв перебора (список 4..128, деф. 64).
+    /// Smart-suggestion parameters: attempts, the minimum trade count (empty =
+    /// auto 1/5) and the number of quantile edges to search (4..128, def. 64).
     pub(super) iters: String,
     pub(super) min_trades: String,
     pub(super) edges: usize,
-    /// Участие поля в автопереборе (чекбоксы); выключенное с границами —
-    /// фиксированный фильтр.
+    /// Whether the field takes part in the auto search (checkboxes); one that is
+    /// off but has bounds acts as a fixed filter.
     pub(super) enabled: Vec<bool>,
-    /// «Округление результата»: границы из подбора округляются до 3 значащих
-    /// цифр НАРУЖУ (from вниз, to вверх) — диапазон не теряет найденных сделок.
+    /// "Round the result": bounds coming out of the suggestion are rounded to 3
+    /// significant digits OUTWARDS (from down, to up) — so the range does not
+    /// lose the trades it found.
     pub(super) round_results: bool,
-    /// Имя создаваемой копии (инпут окна «Сделать копию»).
+    /// Name of the copy being created (the "Make a copy" dialog input).
     pub(super) copy_name: String,
     pub(super) seq: u64,
     pub(super) hist_seq: u64,
@@ -85,10 +98,11 @@ pub(in crate::analytics) struct TunerState {
 }
 
 impl TunerState {
-    /// Свежее состояние: границы ПУСТЫЕ, чекбоксы участия включены у всех
-    /// полей С МАППИНГОМ на параметры стратегии (немаппленные — da1m/d5s —
-    /// автоподбор по умолчанию игнорирует: подобранное некуда записать).
-    /// Намеренно не персистятся — каждое открытие окна с чистого листа.
+    /// A fresh state: bounds are EMPTY, the participation checkboxes are on for
+    /// every field that MAPS onto a strategy parameter (the unmapped ones —
+    /// da1m/d5s — are ignored by the auto search by default: there is nowhere to
+    /// write the result). Deliberately not persisted — every window opening
+    /// starts from a clean slate.
     pub(in crate::analytics) fn load() -> Self {
         let bounds = vec![vec![(String::new(), String::new()); FIELDS.len()]; N_VAR];
         let enabled = FIELDS.iter().map(|s| s.mapped()).collect();
@@ -135,12 +149,12 @@ impl TunerState {
         self.sugg_busy = false;
     }
 
-    /// Нужен ли пересчёт при входе в режим «Фильтры».
+    /// Whether entering the "Filters" mode requires a recomputation.
     pub(in crate::analytics) fn needs_reload(&self) -> bool {
         self.stats.data().is_none() || self.dirty
     }
 
-    /// Варианты для запроса: [пустой «Факт», v1..vN].
+    /// Variants for the query: [the empty "Fact", v1..vN].
     pub(super) fn variants(&self) -> Vec<Variant> {
         let mut out = vec![Variant::default()];
         for v in &self.bounds {
@@ -166,8 +180,8 @@ impl TunerState {
     }
 }
 
-/// Число из поля ввода: запятая как точка, суффиксы k/M/B/T (и кириллические
-/// к/м), пусто/мусор = None.
+/// A number out of an input field: comma reads as a dot, k/M/B/T suffixes (and
+/// the Cyrillic к/м), empty/garbage = None.
 pub(super) fn parse_num(s: &str) -> Option<f64> {
     let s = s.trim().replace(',', ".");
     if s.is_empty() {
@@ -194,8 +208,8 @@ pub(super) fn parse_num(s: &str) -> Option<f64> {
         .filter(|v| v.is_finite())
 }
 
-/// Формат числа для границ/чипов: крупные — с суффиксом k/M/B/T (обратно
-/// понимается `parse_num`), прочие — до 4 знаков без хвостовых нулей.
+/// Number formatting for bounds/chips: large ones carry a k/M/B/T suffix (read
+/// back by `parse_num`), the rest get up to 4 decimals with no trailing zeros.
 pub(super) fn fmt_bound(v: f64) -> String {
     let a = v.abs();
     let (div, suf) = if a >= 1e12 {
@@ -227,7 +241,7 @@ pub(super) fn fmt_bound(v: f64) -> String {
     s
 }
 
-/// Карточка с заголовком и подзаголовком (общий вид карточек Аналитики).
+/// A card with a title and a subtitle (the shared look of the Analytics cards).
 pub(super) fn card(
     title: String,
     sub: String,
@@ -257,7 +271,7 @@ pub(super) fn card(
     }
     v_flex()
         .w_full()
-        // В скролл-колонке карточки не должны ужиматься под высоту вьюпорта.
+        // Inside a scrolling column the cards must not shrink to the viewport height.
         .flex_none()
         .rounded(design::ui_px(cx, 8.0))
         .bg(moon(p.panel))
@@ -269,7 +283,7 @@ pub(super) fn card(
         .into_any_element()
 }
 
-/// Есть ли стейджи «ignore», отличающиеся от текущих флагов стратегии.
+/// Whether any staged "ignore" differs from the strategy's current flags.
 pub(super) fn staged_dirty(f: &StratFilters, staged: &HashMap<&'static str, bool>) -> bool {
     staged.iter().any(|(flag, want)| {
         let cur = match *flag {
@@ -285,8 +299,31 @@ pub(super) fn staged_dirty(f: &StratFilters, staged: &HashMap<&'static str, bool
     })
 }
 
-/// Флаг игнора группы + его ТЕКУЩЕЕ состояние у стратегии (семантика
-/// «игнорируется»; UseBV_SV_Filter инверсный — включатель).
+/// A tuner-grid glyph button (→ / ← / ✕) with a hover tooltip `tip`; `hover` is the hover
+/// color. SHARED by both axes ("By filter" and "By time") — the caller adds its own `.on_click`.
+/// Returns a stateful div.
+pub(super) fn glyph_btn(
+    id: impl Into<ElementId>,
+    glyph: &'static str,
+    tip: String,
+    hover: u32,
+    p: MoonPalette,
+    cx: &Context<AnalyticsView>,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w(design::ui_px(cx, 12.0))
+        .flex_none()
+        .cursor_pointer()
+        .text_size(design::t_caption(cx))
+        .text_color(moon(p.text_muted))
+        .hover(move |s| s.text_color(moon(hover)))
+        .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
+        .child(glyph)
+}
+
+/// The group's ignore flag + its CURRENT state on the strategy (semantics:
+/// "is ignored"; UseBV_SV_Filter is inverted — it is an enabler).
 pub(super) fn flag_of(class: FieldClass, f: &StratFilters) -> (&'static str, bool) {
     match class {
         FieldClass::Filter => ("IgnoreFilters", f.ignore_filters),
