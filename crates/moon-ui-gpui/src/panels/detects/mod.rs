@@ -14,16 +14,14 @@ mod popup;
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
-use gpui::*;
-use moon_ui::{
-    MoonPalette, MoonSliderEvent, MoonSliderState, Panel, PanelEvent, PanelState, h_flex, v_flex,
-};
-use rust_i18n::t;
-
 use crate::Backend;
+use gpui::*;
 use moon_chart::paint::now_unix_ms;
 use moon_core::config::{DETECT_RAIL_MAX, DetectViewCfg};
 use moon_core::session::CoreId;
+use moon_ui::{
+    MoonPalette, MoonSliderEvent, MoonSliderState, Panel, PanelEvent, PanelState, h_flex, v_flex,
+};
 
 /// Сколько закрытых 5м-свечей морозим для мини-чарта карточки (≈2ч истории). Под ПОЛЫЕ свечи
 /// при типовой ширине зоны ~75-130px: ~24 свечи → 3-5px на свечу (тело 1px контур + просвет),
@@ -365,8 +363,12 @@ impl Panel for DetectsPanel {
     fn panel_name(&self) -> &'static str {
         "Detects"
     }
+    /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
+    fn tab_name(&self, _cx: &App) -> Option<SharedString> {
+        crate::panel_meta::tab_label(self.panel_name())
+    }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        SharedString::from(t!("dock.tab.detects").to_string())
+        crate::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
         crate::dock_persist::panel_state_with_group("Detects", &self.group)

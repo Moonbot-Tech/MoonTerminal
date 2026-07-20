@@ -797,6 +797,10 @@ impl Panel for OrdersPanel {
     fn panel_name(&self) -> &'static str {
         "Orders"
     }
+    /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
+    fn tab_name(&self, _cx: &App) -> Option<SharedString> {
+        crate::panel_meta::tab_label(self.panel_name())
+    }
     // × не удаляет панель, а возвращает её в нижнюю строку (см. Shell: PanelCloseRequested).
     fn closable(&self, _cx: &App) -> bool {
         true
@@ -807,7 +811,7 @@ impl Panel for OrdersPanel {
         true
     }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        SharedString::from(t!("dock.tab.orders").to_string())
+        crate::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, cx: &App) -> PanelState {
         // Группа (для реконструкции) + состояние вида: сортировка/тип/фильтр. `source`

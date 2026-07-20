@@ -25,6 +25,16 @@ status.connected_count:
   ru: "подключено"
   en: "connected"
   es: "conectado"
+# Подпись статус-бара переводится ЦЕЛИКОМ вместе с двоеточием: порядок слов и пунктуация —
+# забота переводчика, а не склейки в коде. %{value} — «OK» либо пара чисел «готово/всего».
+status.connection:
+  ru: "Соединение: %{value}"
+  en: "Connection: %{value}"
+  es: "Conexión: %{value}"
+status.license:
+  ru: "Лицензия: %{value}"
+  en: "License: %{value}"
+  es: "Licencia: %{value}"
 # Селектор активного торгового ядра в шапке: текст, когда в группе нет ядер.
 header.no_cores:
   ru: "нет ядер"
@@ -55,10 +65,16 @@ header.clock_tip:
   es: "Reloj (UTC). Clic para elegir zona; igual al sistema → etiqueta oculta"
 
 # --- Тулбар ---
-toolbar.size:
-  ru: "Размер"
-  en: "Size"
-  es: "Tamaño"
+# Тултипы полос пресетов. Сама подпись группы — литерал (Size/Sell), как соседние
+# Lev/SL/TP; переводится подсказка, потому что это проза, а не тех-токен.
+toolbar.size_hint:
+  ru: "Размер ордера F%{n} · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить"
+  en: "Order size F%{n} · click to select · double-click to edit · Ctrl+wheel to change"
+  es: "Tamaño de orden F%{n} · clic para seleccionar · doble clic para editar · Ctrl+rueda para cambiar"
+toolbar.sell_hint:
+  ru: "Фиксированная продажа S%{n} · клик — задействовать · двойной клик — правка · Ctrl+колесо — изменить"
+  en: "Fixed sell S%{n} · click to engage · double-click to edit · Ctrl+wheel to change"
+  es: "Venta fija S%{n} · clic para activar · doble clic para editar · Ctrl+rueda para cambiar"
 toolbar.scale:
   ru: "Масштаб"
   en: "Scale"

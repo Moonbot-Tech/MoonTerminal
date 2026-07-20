@@ -48,6 +48,40 @@ pub fn default_ui_scale() -> f32 {
     1.0
 }
 
+/// Repair a stored UI scale on the way in, touching ONLY values that cannot mean anything.
+///
+/// `MoonScale::ui` multiplies control heights, gaps, paddings and hit areas, and MoonUI's
+/// `MoonThemeTokens::ui` floors the factor at `0.25`. So a stored `0.0` does not blank the
+/// interface — it renders everything at a quarter size, which still paints text at its own font
+/// metric while shrinking every hit rectangle to the point where clicks stop landing. A
+/// `settings.toml` written before the loader applied schema defaults holds exactly that.
+///
+/// Only non-finite and non-positive values are repaired. There is deliberately NO upper or lower
+/// bound beyond that: `ui_scale` has no settings-UI control, so hand-editing the file is the only
+/// way to set it, and the repaired value is persisted by the next `save()` — clamping a merely
+/// unusual number would silently destroy a deliberate choice with no way to get it back.
+pub fn repair_ui_scale(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        default_ui_scale()
+    }
+}
+
+/// Repair a stored UI font delta, preserving every value that can mean something.
+///
+/// `0.0` is a legitimate choice here — it is "no adjustment", not a missing value — so unlike a
+/// scale it is passed through untouched. Only non-finite values are repaired: TOML parses `nan`
+/// and `inf` happily, so they survive the loader, and MoonUI adds this delta straight into text
+/// metrics (`MoonThemeTokens::font`), where an infinity propagates into layout dimensions.
+pub fn repair_ui_font_delta(value: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        default_ui_font_delta()
+    }
+}
+
 pub fn default_chart_memory_percent() -> u16 {
     100
 }

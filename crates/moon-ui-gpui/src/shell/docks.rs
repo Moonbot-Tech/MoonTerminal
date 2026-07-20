@@ -16,13 +16,30 @@ use super::Shell;
 /// Имена dock-панелей нижней строки в порядке их «домашних» позиций. Возврат
 /// откреплённой/закрытой панели вставляет её в TabPanel на индекс, сохраняющий этот
 /// порядок (см. [`dock_home_priority`]).
+///
+/// The array must list ALL bottom-row tabs (`shell/init.rs`), not only those whose order seems to
+/// matter: [`strip_names`] identifies the "home" strip by the presence of any name from here, so a
+/// missing panel left alone in the strip makes that strip unfindable — restoring a detached panel
+/// then falls back to `add_panel(Bottom)` and creates a second bottom zone instead of inserting
+/// into the existing one.
+///
+/// The identification is a heuristic, and completeness cuts both ways: because it matches the FIRST
+/// strip holding any of these names, a user who has dragged one of them into a different strip that
+/// comes earlier in depth-first order makes that strip win. Restoring by a stable strip identity
+/// rather than by name would remove the ambiguity, but that is a MoonUI-side change.
 // «CoreStatus» временно убран из строки вкладок (панель отключена до появления метрик в
 // moonproto; см. shell/init.rs). Вернуть сюда при повторном включении.
-pub(super) const DOCK_TAB_ORDER: [&str; 4] = ["Orders", "Assets", "Log", "Report"];
+pub(super) const DOCK_TAB_ORDER: [&str; 5] = ["Orders", "Assets", "Report", "Alerts", "Log"];
 
-/// «Домашний» индекс панели в нижней строке (Orders<Assets<Log<Report). Используется как
-/// позиция вставки при возврате; форк клампит её к числу вкладок, поэтому при частично
-/// откреплённом наборе панель встаёт примерно на своё место (порядок сохраняется).
+/// Home index of a bottom-row panel (`Orders < Assets < Report < Alerts < Log`).
+///
+/// The returning panel is inserted at this position, clamped to the current tab count, so a
+/// partially detached set still preserves the configured relative order.
+///
+/// The order must mirror the push order in `shell/init.rs`, which is what a FRESH layout renders.
+/// An existing user is unaffected either way: a saved layout whose `DOCK_VERSION` still matches is
+/// restored verbatim, so changing this array reorders nothing already on screen — closing a tab and
+/// letting it come back is what re-seats it here.
 fn dock_home_priority(name: &str) -> usize {
     DOCK_TAB_ORDER
         .iter()
@@ -500,4 +517,26 @@ fn captured_slot(dock: &Entity<DockArea>, panel_name: &str, app: &mut App) -> Op
                 .as_ref()
                 .and_then(|d| walk(&d.panel, panel_name))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    // NOT `use super::*`: the glob would pull in the `gpui::test` macro, and `#[test]` would
+    // expand into itself (recursion limit).
+    use super::DOCK_TAB_ORDER;
+    use crate::panel_meta::tab_label;
+
+    #[test]
+    fn every_home_tab_has_a_localized_label() {
+        // Pins the link between TWO files rather than the map's own behaviour: adding a panel
+        // touches nine places (see CLAUDE.md), and "added the name to DOCK_TAB_ORDER, forgot the
+        // label" reddens here. It does NOT claim every panel calls this helper, and it does not
+        // check translation completeness in locales/.
+        for name in DOCK_TAB_ORDER {
+            assert!(
+                tab_label(name).is_some(),
+                "{name} is a home dock tab but has no entry in panel_meta::tab_label"
+            );
+        }
+    }
 }

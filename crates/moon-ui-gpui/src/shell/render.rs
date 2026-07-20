@@ -197,6 +197,7 @@ impl Render for Shell {
                 &self.sell_input,
                 &cx.entity(),
                 self.open_metric_popup,
+                chrome_width,
                 cx,
             ))
             // ── Центр: единый DockArea (чарт=center, детекты+ордер=right, вкладки=bottom) ──

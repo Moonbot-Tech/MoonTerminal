@@ -99,6 +99,10 @@ pub fn header(
                 .child(ms)
         }))
         .child(
+            // A dual role, both required: this is BOTH the `flex_1` spacer that pins the cluster
+            // after it (ticker, clock, window buttons) to the right edge, AND the region that
+            // drags the window by the empty part of the header. Swapping it for a plain
+            // `div().flex_1()` looks like a harmless simplification but silently removes dragging.
             MoonWindowFrame::main("terminal-header-spacer-drag", 0.0)
                 .drag_handle()
                 .h_full()
@@ -106,25 +110,23 @@ pub fn header(
                 .min_w_0()
                 .flex(),
         )
-        // Ambient readouts are right-aligned. The ticker is last so its popup, anchored to the
-        // window's right edge, lands under its own trigger.
+        // Ambient readouts are right-aligned: rate ticker, then the clock, then the window controls.
         .child(
             h_flex()
                 .flex_none()
                 .gap(design::ui_px(cx, 8.0))
                 .items_center()
-                // Часы UTC(±пояс); клик — попап выбора пояса.
-                .child(crate::clock::header_clock(&backend, p, cx))
-                // Rate ticker (configurable): "1 BTC = 61 333$ 1h +0.1% 24h +2.0%". Last before
-                // the window controls, so its popup — anchored to the window's right edge past
-                // those controls — opens directly under it. Rule and readout share ONE predicate:
+                // Rate ticker (configurable): "1 BTC = 61 333$ 1h +0.1% 24h +2.0%". Its popup is
+                // positioned by hand in `shell::ticker` from the window's right edge inward, so it
+                // has to account for EVERYTHING standing to the ticker's right — the divider below,
+                // the clock, the gaps, and the window controls. Move or resize anything in this
+                // cluster and that offset must follow. Divider and readout share ONE predicate:
                 // split, they could drift into a divider fencing off nothing.
                 .children(design::ticker_visible(cx, chrome_width).then(|| {
                     h_flex()
                         .flex_none()
                         .gap(design::ui_px(cx, 8.0))
                         .items_center()
-                        .child(design::chrome_divider(cx, p))
                         .child(ticker_readout(
                             ticker_sel,
                             design::ticker_deltas_visible(cx, chrome_width),
@@ -133,7 +135,12 @@ pub fn header(
                             p,
                             cx,
                         ))
+                        .child(design::chrome_divider(cx, p))
                 }))
+                // UTC clock with an optional offset label; clicking opens the timezone picker. Its
+                // MoonPopover is anchored to this trigger, so unlike the ticker it needs no offset
+                // arithmetic.
+                .child(crate::clock::header_clock(&backend, p, cx))
                 .when(design::show_custom_window_controls(), |this| {
                     this.child(
                         MoonWindowFrame::main("terminal-header-controls", 0.0)

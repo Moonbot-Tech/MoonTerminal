@@ -52,6 +52,30 @@ fn tz_label(off_min: i32) -> String {
     }
 }
 
+/// Gap between the time and the optional timezone label.
+///
+/// Shared by [`header_clock`] and [`header_clock_width`] rather than written twice: the ticker
+/// popup is positioned by summing what sits between its trigger and the window edge, and the clock
+/// is part of that span, so a measurement that disagrees with what was drawn lands the popup
+/// off its trigger — with nothing to catch it at compile time.
+const CLOCK_GAP: f32 = 5.0;
+
+/// Font weight of the clock's time text.
+const CLOCK_TIME_WEIGHT: f32 = 600.0;
+
+/// Font weight of the clock's optional timezone label.
+const CLOCK_TZ_WEIGHT: f32 = 400.0;
+
+/// The strings the header clock shows: the time, plus the timezone label when it is displayed.
+///
+/// One source for the renderer and the width measurement, including the label rule — the label is
+/// hidden when the selected offset already matches the system one, since then the readout is just
+/// local time.
+fn clock_parts(off_min: i32, sys_min: i32) -> (String, Option<String>) {
+    let tz = (off_min != sys_min).then(|| format!("({})", tz_label(off_min)));
+    (hms(off_min), tz)
+}
+
 /// Смещение системного пояса от UTC в минутах (восток положителен). Нужно для правила
 /// «скрыть метку, если выбранное = системному».
 #[cfg(windows)]
@@ -80,11 +104,34 @@ fn system_offset_min() -> i32 {
 }
 
 /// Часы правого угла шапки: время + (опционально) метка пояса, клик — попап выбора пояса.
+/// Rendered width of the header clock, in the units the header lays its children out with.
+///
+/// `shell::ticker` positions the rate ticker's popup by summing everything between the ticker and
+/// the window's right edge, and because the ticker sits to the left of the clock, the clock is part
+/// of that span. Reads [`clock_parts`] and the `CLOCK_*` constants, exactly so it cannot disagree
+/// with what [`header_clock`] draws.
+///
+/// Glyph advances only, no kerning (see `design::ui_text_width`) — a close estimate, not an exact
+/// measurement.
+pub fn header_clock_width(backend: &Entity<Backend>, cx: &App) -> f32 {
+    let off = backend.read(cx).header_clock_offset_min();
+    let (time, tz) = clock_parts(off, system_offset_min());
+    let mut width = design::mono_body_text_width(cx, &time, CLOCK_TIME_WEIGHT);
+    if let Some(tz) = tz {
+        width += design::ui_value(cx, CLOCK_GAP)
+            + design::mono_body_text_width(cx, &tz, CLOCK_TZ_WEIGHT);
+    }
+    width
+}
+
+/// Render the header clock and its timezone-selection popover.
+///
+/// The timezone label is omitted when the selected offset matches the system offset; both the
+/// rendered strings and [`header_clock_width`] are derived through [`clock_parts`].
 pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl IntoElement {
     let off = backend.read(cx).header_clock_offset_min();
     let sys = system_offset_min();
-    // Отображаемое = системному → метку пояса прячем (на экране локальное время).
-    let show_tz = off != sys;
+    let (time, tz) = clock_parts(off, sys);
 
     // Список смещений меню: целые часы + системный пояс (если дробный и ещё не в списке), чтобы
     // на India/Nepal можно было прийти к «= системному» и погасить метку.
@@ -126,7 +173,7 @@ pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl
         .id("header-clock")
         .flex_none()
         .items_center()
-        .gap(design::ui_px(cx, 5.0))
+        .gap(design::ui_px(cx, CLOCK_GAP))
         .font_family(design::mono())
         .text_size(design::t_body(cx))
         .cursor_pointer()
@@ -137,14 +184,15 @@ pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl
         .child(
             div()
                 .text_color(rgb(p.text))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(hms(off)),
+                .font_weight(FontWeight(CLOCK_TIME_WEIGHT))
+                .child(time),
         );
-    if show_tz {
+    if let Some(tz) = tz {
         row = row.child(
             div()
                 .text_color(rgb(p.text_soft))
-                .child(format!("({})", tz_label(off))),
+                .font_weight(FontWeight(CLOCK_TZ_WEIGHT))
+                .child(tz),
         );
     }
 

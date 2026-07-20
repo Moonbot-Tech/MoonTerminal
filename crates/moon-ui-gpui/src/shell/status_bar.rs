@@ -57,16 +57,28 @@ impl Shell {
             .collect::<Vec<_>>()
             .join("\n");
 
+        // The caption is translated WHOLE, colon included (`%{value}`), rather than glued together
+        // as "label + ': ' + tail": punctuation and word order are the translator's business. The
+        // tail itself is "OK" or a pair of numbers, identical in every locale.
         let status_text = if all_ok {
-            "Connection: OK".to_string()
+            t!("status.connection", value = "OK").to_string()
         } else {
-            format!("Connection: {}/{}", conn.ready, conn.total)
+            t!(
+                "status.connection",
+                value = format!("{}/{}", conn.ready, conn.total)
+            )
+            .to_string()
         };
+        // PRO/FREE are plan names, on the deliberately-untranslated list (locales/README.md).
         let (license_text, license_color) = if license.total == 0 || license.known == 0 {
-            ("License: …".to_string(), p.text_muted)
+            (t!("status.license", value = "…").to_string(), p.text_muted)
         } else if license.known < license.total {
             (
-                format!("License: {}/{}", license.known, license.total),
+                t!(
+                    "status.license",
+                    value = format!("{}/{}", license.known, license.total)
+                )
+                .to_string(),
                 p.amber,
             )
         } else if license.paid == license.total {
@@ -94,13 +106,6 @@ impl Shell {
                         MoonStatusItem::new(status_text)
                             .color(badge_col)
                             .weight(600.0)
-                            .gap_after(10.0),
-                        MoonStatusItem::separator().gap_after(10.0),
-                        MoonStatusItem::new("ping")
-                            .color(p.text_muted)
-                            .gap_after(6.0),
-                        MoonStatusItem::new("32ms")
-                            .color(p.text_soft)
                             .gap_after(10.0),
                         MoonStatusItem::separator().gap_after(10.0),
                         MoonStatusItem::new(license_text)

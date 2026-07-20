@@ -43,6 +43,7 @@ mod hotkeys;
 mod icons;
 mod input;
 mod load_state;
+mod panel_meta;
 mod panels;
 mod screener;
 mod settings;

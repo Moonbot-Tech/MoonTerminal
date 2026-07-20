@@ -39,12 +39,21 @@ impl Shell {
     ///
     /// Both elements are `None` when the popup is closed or `chrome_width` hides the ticker trigger.
     pub(super) fn ticker_popup_layers(
-        &self,
+        &mut self,
         chrome_width: f32,
         p: MoonPalette,
         cx: &mut Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
-        if !self.ticker_popup_open || !design::ticker_visible(cx, chrome_width) {
+        // Narrowing past the threshold takes the trigger away, so the open state has to go with it:
+        // returning the layers as `None` while leaving the flag set means widening the window later
+        // resurrects the popup — full-window dismiss layer and all — with no user action.
+        // No `notify` needed: this frame renders nothing either way, and the flag only decides
+        // subsequent frames.
+        if !design::ticker_visible(cx, chrome_width) {
+            self.ticker_popup_open = false;
+            return (None, None);
+        }
+        if !self.ticker_popup_open {
             return (None, None);
         }
         let query = self.ticker_input.read(cx).value().to_string();
@@ -72,24 +81,40 @@ impl Shell {
             |_| {},
         );
 
-        // Anchored to the window's RIGHT edge, offset by the window controls: the ticker is the
-        // last header element before them. Anchoring right rather than computing a left offset
-        // keeps the popup under its trigger no matter how wide the clock renders — that width
-        // floats with the selected timezone and its label.
+        // Anchored to the window's RIGHT edge and offset inward past everything that stands to the
+        // ticker's right in the header cluster (see `terminal_chrome`): the divider, the gaps, the
+        // clock, and the window controls when they are shown.
+        //
+        // TEMPORARY, and deliberately so: hand-summing a chain of layout terms is fragile — every
+        // one of them is a place a future header tweak can silently desync the popup from its
+        // trigger, and nothing here can fail at compile time. The right shape is a MoonUI
+        // Root-owned anchored layer that follows the trigger, which would delete this arithmetic
+        // outright. `MoonPopover` alone does not fit: it cannot preserve this popup's
+        // double-click-only opening, so that migration needs a MoonUI-side API first.
+        let cluster_gap = f32::from(design::ui_px(cx, 8.0));
         let controls_w = if design::show_custom_window_controls() {
-            f32::from(design::ui_px(
-                cx,
-                MoonWindowFrame::main("header-ticker-popup-metrics", 0.0)
-                    .show_controls(true)
-                    .controls_width(),
-            ))
+            // The controls themselves, plus the cluster gap between them and the clock. That gap
+            // exists only when the controls do — adding it unconditionally shifted the popup a
+            // full gap left on builds that hide them.
+            cluster_gap
+                + f32::from(design::ui_px(
+                    cx,
+                    MoonWindowFrame::main("header-ticker-popup-metrics", 0.0)
+                        .show_controls(true)
+                        .controls_width(),
+                ))
         } else {
             0.0
         };
-        // Plus the cluster gap that sits between the ticker and those controls.
+        // The clock's rendered width floats with the selected timezone and the Font slider, so it
+        // is measured rather than assumed. `vline` is a fixed `px(1.0)` and is deliberately NOT
+        // font-scaled, so the divider term stays raw.
         let right = f32::from(design::ui_px(cx, design::HEADER_PAD_X))
             + controls_w
-            + f32::from(design::ui_px(cx, 8.0));
+            + crate::clock::header_clock_width(&self.backend, cx)
+            + cluster_gap
+            + 1.0
+            + cluster_gap;
         let top = f32::from(design::fit_h_px(cx, design::HEADER_TOP_H, 14.0, 9.0));
         let overlay = div()
             .id("header-ticker-popup-box")

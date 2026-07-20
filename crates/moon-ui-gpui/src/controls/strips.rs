@@ -1,5 +1,5 @@
-//! Order-size (F1-F6) and fixed-sell (S1-S6) preset strips with click, double-click, and wheel
-//! interaction, plus their shared `strip_with_overlay` frame.
+//! Order-size (F1-F6) and fixed-sell (S1-S6) preset strips with click, double-click, and
+//! Ctrl+wheel interaction, plus their shared `strip_with_overlay` frame.
 
 use gpui::*;
 
@@ -7,9 +7,32 @@ use moon_ui::{MoonAccent, MoonInput, MoonInputState, MoonSegmentItem, MoonSegmen
 
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
+use rust_i18n::t;
 
-use super::fmt::{fmt_adaptive, fmt_sell_pct, scroll_up, wheel_step};
+use super::fmt::{fmt_adaptive, fmt_sell_pct, scroll_dy, wheel_step};
 use crate::Backend;
+
+/// Direction of one preset step for a wheel gesture, or `None` for "leave the value alone".
+///
+/// Two conditions, both required.
+///
+/// **Ctrl**, because the strips sit in a dense toolbar where a bare wheel would silently rewrite
+/// trading parameters: the order size goes into the core's config, the sell percentage straight
+/// into the core. An accidental scroll over the toolbar must not do that, and it has no undo.
+///
+/// **Non-zero Y**, because `ScrollDelta` is two-dimensional: a horizontal gesture (trackpad,
+/// shift-scroll) carries `y == 0`, and a naive `y > 0.0` would read it as "down" and shrink the
+/// parameter from sideways movement.
+fn wheel_step_dir(modifiers: Modifiers, delta: ScrollDelta) -> Option<bool> {
+    if !modifiers.control {
+        return None;
+    }
+    let dy = scroll_dy(delta);
+    if dy == 0.0 {
+        return None;
+    }
+    Some(dy > 0.0)
+}
 
 /// Ширины кнопок размера — единая 62 на все слоты.
 const SIZE_W: [f32; 6] = [62.0, 62.0, 62.0, 62.0, 62.0, 62.0];
@@ -20,9 +43,9 @@ pub(super) const SIZE_SEL_DEFAULT: usize = 2;
 /// Полоса пресетов размера ордера (значения, без подписей F1-F6). Значения — из конфига ядра
 /// (или дефолт по базе BTC/USDT), выбор хранится per-core в `Backend::order_size_sel`.
 /// Взаимодействие — прозрачным overlay поверх каждой кнопки (MoonSegmentedControl сам колесо
-/// не умеет): одиночный клик = выбор; дабл-клик = инлайн-правка (`order_size_edit_req`); КОЛЕСО
-/// = ±значение с шагом по порядку величины (наведи и крути, не нажимая). `core=None` → без
-/// взаимодействия.
+/// does not handle the wheel itself): single click = select; double click = inline edit
+/// (`order_size_edit_req`); CTRL+WHEEL = step the value by its order of magnitude (see
+/// [`wheel_step_dir`] — a bare wheel leaves it alone). `core=None` → no interaction.
 pub(super) fn size_strip(
     values: [f64; 6],
     sel: usize,
@@ -54,6 +77,7 @@ pub(super) fn size_strip(
         "toolbar-size-edit",
         input,
         core.is_some(),
+        |i| t!("toolbar.size_hint", n = i + 1).to_string(),
         // Одиночный клик = выбор пресета; дабл = инлайн-правка (`order_size_edit_req`).
         move |i, dbl, cx| {
             let Some(core) = core else { return };
@@ -126,6 +150,7 @@ pub(super) fn sell_strip(
         "toolbar-sell-edit",
         input,
         core.is_some(),
+        |i| t!("toolbar.sell_hint", n = i + 1).to_string(),
         // Одиночный клик = задействовать слот (гасит TP); повторный клик по активному слоту
         // = вернуть TP (гасит S, не трогая значение TP); дабл = инлайн-правка %.
         move |i, dbl, cx| {
@@ -177,8 +202,13 @@ pub(super) fn sell_strip(
 
 /// Общий каркас полос пресетов (size/sell): сегментированный контрол + прозрачные overlay
 /// поверх каждой кнопки (MoonSegmentedControl сам клик/дабл/колесо не различает) + инлайн-инпут
-/// поверх редактируемой кнопки. Отличия size/sell — только в `on_click`/`on_wheel` (наведи и
-/// крути, не нажимая). `overlay=false` (нет ядра) → без взаимодействия.
+/// over the editable button. Size and sell differ only in `on_click`/`on_wheel`; the wheel gate
+/// ([`wheel_step_dir`]) itself is shared, so Ctrl is required on both strips.
+/// `overlay=false` (no core) → no interaction.
+///
+/// `tooltip` supplies the hint BY SLOT NUMBER: the overlay covers the cell and swallows hover, so
+/// `MoonSegmentedControl` cannot carry its own hint — and has no tooltip in its API anyway. It is
+/// also the only place the user learns that Ctrl+wheel exists.
 #[allow(clippy::too_many_arguments)]
 fn strip_with_overlay(
     seg: impl IntoElement,
@@ -188,6 +218,7 @@ fn strip_with_overlay(
     edit_input_id: &'static str,
     input: &Entity<MoonInputState>,
     overlay: bool,
+    tooltip: impl Fn(usize) -> String + Clone + 'static,
     on_click: impl Fn(usize, bool, &mut App) + Clone + 'static,
     on_wheel: impl Fn(usize, bool, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
@@ -198,6 +229,7 @@ fn strip_with_overlay(
             let left: f32 = widths.iter().take(i).sum();
             let on_click = on_click.clone();
             let on_wheel = on_wheel.clone();
+            let hint = tooltip(i);
             root = root.child(
                 div()
                     .id(SharedString::from(format!("{id_prefix}-hit-{i}")))
@@ -206,11 +238,20 @@ fn strip_with_overlay(
                     .top(px(0.0))
                     .w(px(widths[i]))
                     .h_full()
+                    // The cell is clickable, but the overlay swallows the segment's hover — the
+                    // cursor is the only sign of interactivity until the tooltip appears.
+                    .cursor_pointer()
+                    .tooltip(move |_window, cx| {
+                        cx.new(|_| moon_ui::MoonTooltipView::new(hint.clone()))
+                            .into()
+                    })
                     .on_mouse_down(MouseButton::Left, move |ev, _w, cx| {
                         on_click(i, ev.click_count >= 2, cx);
                     })
                     .on_scroll_wheel(move |ev, _w, cx| {
-                        on_wheel(i, scroll_up(ev), cx);
+                        if let Some(up) = wheel_step_dir(ev.modifiers, ev.delta) {
+                            on_wheel(i, up, cx);
+                        }
                     }),
             );
         }
@@ -230,4 +271,65 @@ fn strip_with_overlay(
         );
     }
     root
+}
+
+#[cfg(test)]
+mod tests {
+    // NOT `use super::*`: the glob would pull in the `gpui::test` macro, and `#[test]` would
+    // expand into itself (recursion limit).
+    use super::wheel_step_dir;
+    use gpui::{Modifiers, Point, ScrollDelta};
+
+    fn lines(y: f32) -> ScrollDelta {
+        ScrollDelta::Lines(Point { x: 0.0, y })
+    }
+
+    fn ctrl() -> Modifiers {
+        Modifiers {
+            control: true,
+            ..Modifiers::default()
+        }
+    }
+
+    #[test]
+    fn bare_wheel_never_changes_a_preset() {
+        // Removing the modifier gate would let scrolling over the toolbar silently rewrite the
+        // order size in the config and the sell percentage in the core.
+        assert_eq!(wheel_step_dir(Modifiers::default(), lines(1.0)), None);
+        assert_eq!(wheel_step_dir(Modifiers::default(), lines(-1.0)), None);
+    }
+
+    #[test]
+    fn ctrl_wheel_reports_direction() {
+        // Reversing the Y comparison or rejecting Ctrl-modified input makes one of these assertions
+        // fail before a preset is adjusted in the wrong direction or not adjusted at all.
+        assert_eq!(wheel_step_dir(ctrl(), lines(1.0)), Some(true));
+        assert_eq!(wheel_step_dir(ctrl(), lines(-1.0)), Some(false));
+    }
+
+    #[test]
+    fn horizontal_gesture_is_not_a_downward_step() {
+        // ScrollDelta is two-dimensional: a sideways gesture carries y == 0. A naive `y > 0.0`
+        // would return "down" and SHRINK a trading parameter from horizontal scrolling.
+        assert_eq!(wheel_step_dir(ctrl(), lines(0.0)), None);
+    }
+
+    #[test]
+    fn wheel_handler_consults_the_gate_rather_than_the_raw_delta() {
+        // Guards the CALL SITE, which the three tests above cannot reach: they all exercise the
+        // pure `wheel_step_dir` helper, so reading the raw delta directly in `on_scroll_wheel`
+        // would defeat the Ctrl gate entirely and leave every one of them green. The gate is only
+        // effective if the handler actually calls it.
+        let source = include_str!("strips.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap_or(source);
+        let handler = implementation
+            .split(".on_scroll_wheel(")
+            .nth(1)
+            .expect("the strip overlay must still install a scroll-wheel handler");
+
+        assert!(
+            handler.contains("wheel_step_dir(ev.modifiers, ev.delta)"),
+            "the wheel handler must route through wheel_step_dir, not read the delta directly"
+        );
+    }
 }
