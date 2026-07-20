@@ -1,6 +1,7 @@
-//! Вкладка «Сводка» окна «Аналитика»: KPI-карточки со сравнением к предыдущему
-//! периоду, графики (накопительная прибыль + дневные бары), топ-5 лучших/худших
-//! сделок и автоматические «инсайты». Макет — артефакт analytics-mock.
+//! "Summary" tab of the "Analytics" window: KPI cards compared against the
+//! previous period, charts (cumulative profit + daily bars), the top 5
+//! best/worst trades and automatic "insights". Layout follows the
+//! analytics-mock artifact.
 
 use gpui::*;
 use moon_ui::{
@@ -50,8 +51,9 @@ impl AnalyticsView {
             Ok(d) => d.clone(),
             Err(note) => return super::note_el("an-summary-note", note, 18.0, p, cx),
         };
-        // Цвета серий ядер — из НАСТРОЕК сервера (ServerConfig.color, как в
-        // селекторе ядер); фолбэк-палитра только для ядер без конфига.
+        // Core series colors come from the server's SETTINGS (ServerConfig.color,
+        // as in the core selector); the fallback palette is only for cores with
+        // no config entry.
         let core_colors: Vec<Hsla> = {
             let b = self.backend.read(cx);
             data.core_days
@@ -74,8 +76,9 @@ impl AnalyticsView {
                 })
                 .collect()
         };
-        // Верх (KPI/чарты/топы) скроллится сам; чарт «Прибыль по ядрам»
-        // ПРИБИТ к нижнему краю окна (как нижняя плашка «Стратегий»).
+        // The top part (KPI/charts/tops) scrolls on its own; the "Profit by
+        // core" chart is PINNED to the bottom edge of the window (like the
+        // bottom bar of "Strategies").
         let top = v_flex()
             .w_full()
             .p(design::ui_px(cx, 10.0))
@@ -87,8 +90,8 @@ impl AnalyticsView {
                     .gap(design::ui_px(cx, 8.0))
                     .items_start()
                     .child({
-                        // Верхний левый: суммарная накопительная ИЛИ по
-                        // ядрам (галка «по ядрам», вкл по умолчанию).
+                        // Top left: the total cumulative curve OR one per core
+                        // (the "by cores" checkbox, on by default).
                         let by_core = self.sum_by_core;
                         let toggle = h_flex()
                             .gap(design::ui_px(cx, 5.0))
@@ -173,11 +176,11 @@ impl AnalyticsView {
             );
         v_flex()
             .size_full()
-            // Верх — естественной высоты, при нехватке места ужимается и
-            // скроллится внутри (basis auto + min_h_0 + overflow).
+            // The top is its natural height; when space runs short it shrinks
+            // and scrolls inside (basis auto + min_h_0 + overflow).
             .child(
-                // Дефолт flex (grow 0, shrink 1, basis auto): естественная
-                // высота, при нехватке места ужимается и скроллится.
+                // Default flex (grow 0, shrink 1, basis auto): natural height,
+                // shrinking and scrolling when space runs short.
                 div()
                     .id("an-sum-scroll")
                     .min_h_0()
@@ -185,9 +188,10 @@ impl AnalyticsView {
                     .overflow_y_scroll()
                     .child(top),
             )
-            // Нижний чарт РЕЗИНОВЫЙ: прижат к низу окна и тянется вверх до
-            // ближайшей карточки (flex_1), бары рисуются canvas'ом на всю
-            // доступную высоту; минимум — чтобы не схлопнуться.
+            // The bottom chart is ELASTIC: pinned to the bottom of the window
+            // and stretching up to the nearest card (flex_1); the bars are
+            // painted on canvas across the whole available height, with a
+            // minimum so it cannot collapse.
             .child(
                 div()
                     .flex_1()
@@ -206,7 +210,7 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// Ряд KPI-плиток с дельтами к предыдущему периоду.
+    /// Row of KPI tiles with deltas against the previous period.
     fn kpi_row(&self, d: &Summary, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let (cur, prev) = (&d.cur, &d.prev);
         // A missing or zero comparison value has no meaningful percentage
@@ -301,8 +305,8 @@ fn colored_value(p: MoonPalette, v: f64, text: String) -> AnyElement {
         .into_any_element()
 }
 
-/// KPI-плитка: подпись (caption, muted) + крупное значение + дельта ▲▼.
-/// `invert` — рост метрики это плохо (просадка, длительность).
+/// KPI tile: label (caption, muted) + large value + a ▲▼ delta.
+/// `invert` — growth in this metric is bad (drawdown, duration).
 fn kpi(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
@@ -367,7 +371,7 @@ fn kpi(
         .child(delta_el)
 }
 
-/// Карточка графика: заголовок + подпись + тело.
+/// Chart card: title + subtitle + body.
 fn chart_card(
     title: String,
     sub: String,
@@ -378,7 +382,7 @@ fn chart_card(
     chart_card_ex(title, sub, None, body, p, cx)
 }
 
-/// Карточка графика с необязательным контролом в шапке (галка режима и т.п.).
+/// Chart card with an optional header control (a mode checkbox and the like).
 fn chart_card_ex(
     title: String,
     sub: String,
@@ -406,8 +410,8 @@ fn chart_card_ex(
     v_flex()
         .flex_1()
         .min_w_0()
-        // В резиновом низе карточка заполняет данную ей высоту; в верхних
-        // рядах (высота по контенту) h_full вырождается в auto.
+        // In the elastic bottom the card fills the height it is given; in the
+        // top rows (content-sized height) h_full degenerates into auto.
         .h_full()
         .gap(design::ui_px(cx, 2.0))
         .px(design::ui_px(cx, 12.0))
@@ -435,7 +439,7 @@ fn top_card(
     cx: &Context<AnalyticsView>,
 ) -> impl IntoElement {
     let mut list = v_flex().w_full().gap_0();
-    // Шапка.
+    // Header.
     list = list.child(
         h_flex()
             .w_full()
@@ -534,7 +538,7 @@ fn top_card(
         .child(list)
 }
 
-/// «Инсайты»: автоматические выводы по агрегатам периода.
+/// "Insights": automatic conclusions drawn from the period's aggregates.
 fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> impl IntoElement {
     let mut lines: Vec<String> = Vec::new();
     if let Some(best) = d.strategies.first().filter(|g| g.profit > 0.0) {
@@ -642,11 +646,11 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
         .child(list)
 }
 
-/// «дд.мм.гг чч:мм» UTC для топ-таблиц — полная дата: на месячных периодах
-/// одно время без числа ни о чём не говорит.
+/// "dd.mm.yy hh:mm" UTC for the top tables — the full date: over monthly
+/// periods a bare time with no day says nothing.
 pub(super) fn fmt_dm_hm(secs: i64) -> String {
     let s = moon_core::db::fmt_unix(secs);
-    // fmt_unix → "ГГГГ-ММ-ДД ЧЧ:ММ"; берём «ДД.ММ.ГГ ЧЧ:ММ».
+    // fmt_unix → "YYYY-MM-DD HH:MM"; we take "DD.MM.YY HH:MM".
     if s.len() >= 16 {
         format!("{}.{}.{} {}", &s[8..10], &s[5..7], &s[2..4], &s[11..16])
     } else {
@@ -654,8 +658,8 @@ pub(super) fn fmt_dm_hm(secs: i64) -> String {
     }
 }
 
-/// Отображаемое имя стратегии: `strategyid = 0` — ручные ордера (без
-/// стратегии), голый «0» заменяем на человеческую подпись.
+/// Display name of a strategy: `strategyid = 0` means manual orders (no
+/// strategy), so the bare "0" is replaced with a human-readable label.
 pub(super) fn strat_display(name: &str) -> String {
     if name == "0" {
         t!("analytics.manual_orders").to_string()

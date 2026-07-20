@@ -1,8 +1,8 @@
-//! ОБЩАЯ оболочка тюнеров: тулбар (округление / Сделать копию / Сохранить) и
-//! строка подбора (попыток / сделок ≥ / сложность / Подобрать / Подобрать всё).
-//! Рисуется ОДНИМ кодом для всех осей («По фильтру», «По времени», …) —
-//! различаются лишь строки сетки и действия. Действия диспатчатся по `TunerKind`
-//! в конкретный тюнер; у «По времени» они появятся в фазе 2b (пока disabled).
+//! The SHARED tuner shell: the toolbar (rounding / Make a copy / Save) and the
+//! suggestion row (restarts / trades ≥ / depth / Search / Search all).
+//! Rendered by ONE piece of code for every axis ("By filter", "By time", …) —
+//! only the grid rows and the actions differ. Actions are dispatched by `TunerKind`
+//! to the concrete tuner; for "By time" they arrive in phase 2b (disabled for now).
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -18,8 +18,8 @@ use crate::design;
 use crate::design::moon;
 
 impl AnalyticsView {
-    /// Общий тулбар карточки тюнера: заголовок + (при выбранной стратегии)
-    /// «округление результата» + «Сделать копию» + «Сохранить». Действия — по оси.
+    /// The shared toolbar of the tuner card: the title + (when a strategy is selected)
+    /// "round results" + "Make a copy" + "Save". The actions are per-axis.
     pub(super) fn shell_toolbar(
         &self,
         kind: TunerKind,
@@ -35,6 +35,8 @@ impl AnalyticsView {
         };
         let mut header = h_flex()
             .w_full()
+            // Pinned above the scrollable rows in both tuner panels — must not shrink.
+            .flex_none()
             .px(design::ui_px(cx, 12.0))
             .py(design::ui_px(cx, 8.0))
             .items_center()
@@ -46,8 +48,8 @@ impl AnalyticsView {
                     .child(title),
             )
             .child(div().flex_1());
-        // Округление результата влияет на ПОДБОР — показываем всегда (подбор доступен
-        // и без выбранной стратегии, на текущем скоупе).
+        // Rounding the result affects the SUGGESTION — always shown (the suggestion is
+        // available without a selected strategy too, over the current scope).
         header = header
             .child(
                 div()
@@ -75,16 +77,18 @@ impl AnalyticsView {
                         }),
                 ),
             );
-        // Запись (Копия / Сохранить) — ТОЛЬКО в выбранную стратегию.
+        // Writing (Copy / Save) — ONLY into a selected strategy.
         if self.sel_strategy.is_some() {
-            header = header
-                .child(
+            // Copy is single-target only — hidden in multi-select (many addressees, no
+            // per-target preview); bulk Save is the multi path.
+            if !self.is_multi() {
+                header = header.child(
                     MoonButton::new(SharedString::from(format!("tun-copy-{k}")))
                         .variant(MoonButtonVariant::Soft)
                         .size(MoonButtonSize::Micro)
                         .label(t!("analytics.tuner.copy_btn").to_string())
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            // Единая «копия» для всех осей: правки оси → в НОВУЮ стратегию.
+                            // One "copy" for all axes: axis changes → a NEW strategy.
                             match kind {
                                 TunerKind::Filter => this.open_copy_dialog(window, cx),
                                 TunerKind::Time => this.time_open_copy_dialog(window, cx),
@@ -92,39 +96,40 @@ impl AnalyticsView {
                             cx.notify();
                         }))
                         .render(),
-                )
-                .child({
-                    // «Сохранить» горит янтарным, когда есть что записывать (пороги
-                    // фильтра ИЛИ расписание времени, отличное от текущего). Работает
-                    // для обеих осей; действие диспатчится по `kind`.
-                    let dirty = match kind {
-                        TunerKind::Filter => self.save_dirty(),
-                        TunerKind::Time => self.time_tuner.is_dirty(),
-                    };
-                    MoonButton::new(SharedString::from(format!("tun-save-{k}")))
-                        .variant(if dirty {
-                            MoonButtonVariant::Amber
-                        } else {
-                            MoonButtonVariant::Soft
-                        })
-                        .size(MoonButtonSize::Micro)
-                        .label(t!("analytics.tuner.save_btn").to_string())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            match kind {
-                                TunerKind::Filter => this.open_save_dialog(cx),
-                                TunerKind::Time => this.time_open_save_dialog(cx),
-                            }
-                            cx.notify();
-                        }))
-                        .render()
-                });
+                );
+            }
+            header = header.child({
+                // "Save" lights up amber when there is something to write (filter
+                // thresholds OR a time schedule that differs from the current one).
+                // Works for both axes; the action is dispatched by `kind`.
+                let dirty = match kind {
+                    TunerKind::Filter => self.save_dirty(),
+                    TunerKind::Time => self.time_tuner.is_dirty(),
+                };
+                MoonButton::new(SharedString::from(format!("tun-save-{k}")))
+                    .variant(if dirty {
+                        MoonButtonVariant::Amber
+                    } else {
+                        MoonButtonVariant::Soft
+                    })
+                    .size(MoonButtonSize::Micro)
+                    .label(t!("analytics.tuner.save_btn").to_string())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        match kind {
+                            TunerKind::Filter => this.open_save_dialog(cx),
+                            TunerKind::Time => this.time_open_save_dialog(cx),
+                        }
+                        cx.notify();
+                    }))
+                    .render()
+            });
         }
         header.into_any_element()
     }
 
-    /// Общая строка подбора: попыток / сделок ≥ / сложность (квантилей) +
-    /// «Подобрать» / «Подобрать всё». Настройки — из состояния оси; кнопки
-    /// диспатчатся в её автоподбор (у «По времени» пока disabled — фаза 2b).
+    /// The shared suggestion row: restarts / trades ≥ / depth (quantiles) +
+    /// "Search" / "Search all". The settings come from the axis state; the buttons
+    /// dispatch into its auto-suggestion (for "By time" still disabled — phase 2b).
     pub(super) fn shell_config_row(
         &mut self,
         kind: TunerKind,
@@ -143,7 +148,7 @@ impl AnalyticsView {
         };
         let it_input = self.shell_cfg_input(kind, 0, "20", window, cx);
         let mn_input = self.shell_cfg_input(kind, 1, &t!("analytics.tuner.auto_ph"), window, cx);
-        // Число квантилей — поле со списком (4/8/…/128).
+        // The number of quantiles — a combo box (4/8/…/128).
         let ed_view = cx.entity();
         let ed_items = crate::panels::radio_items(
             [4usize, 8, 16, 32, 64, 128].map(|n| {
@@ -177,12 +182,14 @@ impl AnalyticsView {
         .items(ed_items);
         let mut cfg_row = h_flex()
             .w_full()
+            // Pinned above the scrollable rows — must not shrink.
+            .flex_none()
             .px(design::ui_px(cx, 12.0))
             .pb(design::ui_px(cx, 6.0))
             .items_center()
             .gap(design::ui_px(cx, 6.0))
             .text_size(design::t_caption(cx))
-            // «попыток» — координатный спуск фильтра; у времени не используется (скрыто).
+            // "restarts" — the filter's coordinate descent; unused for time (hidden).
             .when(!time, |el| {
                 el.child(
                     div()
@@ -212,7 +219,7 @@ impl AnalyticsView {
                     .small(),
                 ),
             )
-            // «сложность» (квантили) — у времени скрыта: там макс. точность фикс.
+            // "depth" (quantiles) — hidden for time: there the max precision is fixed.
             .when(!time, |el| {
                 el.child(
                     div()
@@ -222,12 +229,12 @@ impl AnalyticsView {
                 .child(div().flex_none().child(ed_combo))
             })
             .child(div().flex_1());
-        // Кнопки подбора видны ВСЕГДА — подбор можно запустить на текущем скоупе (без
-        // выбранной стратегии = по всем показанным). «Подобрать» (по одному полю) —
-        // только у фильтра; «Подобрать всё» — обе оси. Записать результат можно лишь
-        // в выбранную стратегию (гейт — на Копия/Сохранить в тулбаре).
+        // The suggestion buttons are ALWAYS visible — a suggestion can be run over the current
+        // scope (no selected strategy = over everything shown). "Search" (a single field) exists
+        // only for the filter; "Search all" — for both axes. The result can only be written
+        // into a selected strategy (that gate sits on Copy/Save in the toolbar).
         cfg_row = cfg_row
-            // «Подобрать» (по одному полю) — только у фильтра; у времени скрыта.
+            // "Search" (a single field) — filter only; hidden for time.
             .when(!time, |el| {
                 el.child(
                     MoonButton::new(SharedString::from("tun-suggest-one-f"))
@@ -267,7 +274,7 @@ impl AnalyticsView {
                                 cx.notify();
                             }
                         }
-                        // time_suggest сам гейтит по своему sugg_busy.
+                        // time_suggest gates on its own sugg_busy itself.
                         TunerKind::Time => {
                             this.time_suggest(cx);
                             cx.notify();
@@ -279,8 +286,8 @@ impl AnalyticsView {
         cfg_row.into_any_element()
     }
 
-    /// Инпут настройки подбора (попыток / мин. сделок) для оси `kind`, с ленивым
-    /// кэшем в её состоянии. `which`: 0 = попыток, 1 = мин. сделок.
+    /// A suggestion settings input (restarts / min. trades) for the `kind` axis, with a
+    /// lazy cache in its state. `which`: 0 = restarts, 1 = min. trades.
     fn shell_cfg_input(
         &mut self,
         kind: TunerKind,
@@ -313,7 +320,7 @@ impl AnalyticsView {
                 .placeholder(ph)
         });
         cx.subscribe(&state, move |this, state, ev: &MoonInputEvent, cx| {
-            // Change тоже коммитим: значение действует сразу при клике «Подобрать».
+            // Change is committed too: the value takes effect right away on a "Search" click.
             if matches!(
                 ev,
                 MoonInputEvent::Change | MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }

@@ -1,8 +1,9 @@
-//! Режим «По времени» вкладки «Тюнинг стратегий». Слева — тот же список
-//! стратегий, что в «По фильтру» (клик = скоуп профиля); в правом верхнем углу
-//! пока пустой контейнер (зарезервирован); внизу на всю ширину — тепловая карта
-//! «по часам дня»: 4 столбца-периода (текущий/7д/30д/90д), в каждом 24 строки
-//! (час → бар PnL от центра + значение). Данные — `hourly_profiles`.
+//! "By time" mode of the "Strategy tuning" tab. On the left — the same strategy
+//! list as in "By filter" (a click sets the profile scope); on the right — KPI +
+//! the schedule grid; at the bottom, full width — a SINGLE "by hour of day" chart
+//! for the SELECTED period: 24 hour columns left to right, each with a vertical
+//! PnL bar growing from the center line (green up / orange down) + the value.
+//! Data comes from `hourly_profiles` (one range = the selected period).
 
 use std::sync::Arc;
 
@@ -19,37 +20,31 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{HourStat, hourly_profiles};
 use moon_core::db::tuner::variant_stats;
 
-/// Число столбцов-периодов тепловой карты.
-const COLS: usize = 4;
-
 impl AnalyticsView {
-    /// Фоновый расчёт профилей «час дня» для всех столбцов сразу (один снапшот).
-    /// База — фильтры «Тюнинга» + скоуп выбранной стратегии (`tuner_query`);
-    /// столбцы: активный период вкладки, 7д, 30д, 90д.
+    /// Background computation of the "hour of day" profiles for all columns at once
+    /// (a single snapshot). The base is the "Tuning" filters + the scope of the
+    /// selected strategy (`tuner_query`); columns: the tab's active period, 7d, 30d, 90d.
     pub(in crate::analytics) fn reload_time(&mut self, cx: &mut Context<Self>) {
         self.time_dirty = false;
         self.time_seq = self.time_seq.wrapping_add(1);
         let req = self.time_seq;
         self.time_stats.begin();
         let base = self.tuner_query();
-        let now = moon_core::util::now_unix_ms_i64() / 1000;
-        let tomorrow = now.div_euclid(86_400) * 86_400 + 86_400;
-        // Порядок столбцов = порядок подписей в `time_heatmap`.
-        let ranges = vec![
-            (base.from, base.to),
-            (tomorrow - 7 * 86_400, tomorrow),
-            (tomorrow - 30 * 86_400, tomorrow),
-            (tomorrow - 90 * 86_400, tomorrow),
-        ];
-        // Варианты KPI строит СЕТКА расписания (грид), а не профиль — выборки
-        // независимы: профили для тепловой карты, variant_stats для «Факт vs v1/v2».
+        // One "by hour" profile for the SELECTED period only (the bottom chart is a single
+        // full-width chart now, not the old 7/30/90-day columns).
+        let ranges = vec![(base.from, base.to)];
+        // The KPI variants are built by the schedule GRID, not by the profile — the two
+        // queries are independent: profiles feed the heatmap, variant_stats feeds
+        // "Fact vs v1/v2".
         let variants = self.time_tuner.variants();
-        // sid выбранной стратегии — для чтения сырых текущих значений полей.
-        let sid = self
+        // (sid, core) of the selected per-core row — the raw current values must be read from
+        // the SAME core the schedule save targets, not the newest-checked one.
+        let sid_core = self
             .sel_strategy
             .as_ref()
-            .and_then(|(k, _)| super::parse_strat_key(k))
-            .map(|(s, _)| s);
+            .and_then(|(k, _)| super::parse_strat_key(k));
+        let sid = sid_core.map(|(s, _)| s);
+        let core = sid_core.and_then(|(_, c)| c);
         self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -57,13 +52,14 @@ impl AnalyticsView {
                 .spawn(async move {
                     let profiles = hourly_profiles(&base, &ranges);
                     let stats = variant_stats(&base, &variants);
-                    // Профили раскраски ползунков (неделя×час / час / минута в часе).
+                    // Coloring profiles for the sliders (week×hour / hour / minute of hour).
                     let slider = moon_core::db::tuner::slider_profiles(&base);
-                    // Сырые значения полей + флаги игнора (для показа и Save-логики).
+                    // Raw field values + the ignore flags (for display and the Save logic).
                     let (current, ig_time, ig_filters): ([String; 2], bool, bool) = sid
                         .map(|sid| {
                             let m = moon_core::db::tuner::strategy_current_values(
                                 sid,
+                                core,
                                 &[
                                     "WorkingWeekTime".to_string(),
                                     "WorkingTime".to_string(),
@@ -94,10 +90,10 @@ impl AnalyticsView {
                 let _ = this.update(cx, |this, cx| {
                     this.op_finished(cx);
                     if this.time_seq != req {
-                        return; // период/фильтры/стратегия/сетка уже сменили
+                        return; // the period/filters/strategy/grid have already changed
                     }
-                    // Профиль (heatmap) и KPI независимы: ошибку профиля показываем
-                    // как «нет данных», ошибку KPI — как Failed в матрице.
+                    // The profile (heatmap) and the KPI are independent: a profile error is
+                    // shown as "no data", a KPI error as Failed in the matrix.
                     this.time_profiles = profiles.ok().map(Arc::new);
                     this.time_slider = slider.ok().map(Arc::new);
                     this.time_stats.apply(stats);
@@ -111,32 +107,32 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Тело режима «По времени» — раскладка ЗЕРКАЛИТ «По фильтру»: слева список
-    /// (верх) + тепловая карта (низ, на месте гистограммы); справа на всю высоту
-    /// колонка — KPI «Факт vs варианты» (верх) + сетка расписания (низ).
+    /// Body of the "By time" mode — the layout MIRRORS "By filter": on the left the
+    /// list (top) + the heatmap (bottom, where the histogram sits); on the right a
+    /// full-height column — the "Fact vs variants" KPI (top) + the schedule grid (bottom).
     pub(super) fn strat_time(
         &mut self,
         p: MoonPalette,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // Элементы в локали: &self-виджеты считаем до &mut-сетки (time_grid лениво
-        // создаёт инпуты), чтобы заимствования не пересекались.
-        let list = self.strat_list_card(p, cx);
+        // Elements built up front: the &self widgets are computed before the &mut grid
+        // (time_grid lazily creates inputs) so the borrows do not overlap.
+        let list = self.strat_list_card(p, window, cx);
         let heatmap = self.time_heatmap(p, cx);
         let kpi = self.time_kpi(p, cx);
         let grid = self.time_grid(p, window, cx);
-        // Окно подтверждения записи — ОБЩЕЕ с «По фильтру» (`save_dialog_overlay`);
-        // рисуем его и здесь, т.к. «По времени» выходит из `strategies_tab` раньше,
-        // чем тот путь добавляет оверлей.
+        // The write-confirmation dialog is SHARED with "By filter" (`save_dialog_overlay`);
+        // we render it here too, because "By time" returns from `strategies_tab` earlier
+        // than the point where that path adds the overlay.
         let dialog = self.save_dialog_overlay(p, cx);
-        // Overlay ловли мыши на время drag ползунка (поверх всего тела).
+        // Mouse-capture overlay for the duration of a slider drag (on top of the whole body).
         let drag_overlay = self.slider_drag_overlay(cx);
         let body = v_flex()
             .size_full()
             .p(design::ui_px(cx, 10.0))
             .gap(design::ui_px(cx, 8.0))
-            // Верх: список стратегий (слева) + KPI/сетка/ползунки (справа, 470).
+            // Top: the strategy list (left) + KPI/grid/sliders (right, 470).
             .child(
                 h_flex()
                     .w_full()
@@ -145,8 +141,10 @@ impl AnalyticsView {
                     .gap(design::ui_px(cx, 8.0))
                     .child(div().flex_1().min_w_0().h_full().min_h_0().child(list))
                     .child(
+                        // Just wide enough for the "WorkingWeekTime" name column plus the v1/v2
+                        // inputs on one line — no slack for the "in strategy" column to inflate.
                         v_flex()
-                            .w(design::font_w_px(cx, 500.0))
+                            .w(design::font_w_px(cx, 540.0))
                             .flex_none()
                             .h_full()
                             .min_h_0()
@@ -155,7 +153,7 @@ impl AnalyticsView {
                             .child(grid),
                     ),
             )
-            // Низ: тепловая карта «По часам» на ВСЮ ширину (высота как гистограмма фильтра).
+            // Bottom: the "By hour" heatmap at FULL width (same height as the filter histogram).
             .child(
                 div()
                     .w_full()
@@ -172,41 +170,55 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// Верх правой колонки: УНИВЕРСАЛЬНАЯ KPI-матрица «Факт vs варианты» (Факт /
-    /// v1 / v2 по недельному расписанию из сетки) по активному периоду и скоупу
-    /// выбранной стратегии. Тот же виджет, что в «По фильтру».
+    /// Top of the right column: the UNIVERSAL "Fact vs variants" KPI matrix (Fact /
+    /// v1 / v2 over the weekly schedule taken from the grid) for the active period and
+    /// the scope of the selected strategy. The same widget as in "By filter".
     fn time_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         let scope = self
             .sel_strategy
             .as_ref()
             .map(|(_, n)| n.clone())
             .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
-        // Пустой список подписей → «v1»/«v2» (как в «По фильтру»).
+        // An empty label list → "v1"/"v2" (as in "By filter").
         kpi_matrix_card(&self.time_stats, scope, &[], p, cx)
     }
 
-    /// Нижняя тепловая карта «по часам»: шапка + 4 столбца-периода со скроллом.
+    /// The bottom "by hour" chart for the selected period: header + 24 hour columns at full width.
     fn time_heatmap(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        // Подписи столбцов = порядок диапазонов в `reload_time`.
-        let labels: [String; COLS] = [
-            self.strat_period.title(),
-            t!("analytics.time.week").to_string(),
-            t!("analytics.time.month").to_string(),
-            t!("analytics.time.d90").to_string(),
-        ];
-        let profiles = self.time_profiles.clone();
-        // Скоуп: имя выбранной стратегии либо «все стратегии».
+        // The single profile = the selected period (see `reload_time`).
+        let prof = self.time_profiles.as_ref().and_then(|v| v.first()).copied();
+        // Scope: the name of the selected strategy, or "all strategies".
         let scope = self
             .sel_strategy
             .as_ref()
             .map(|(_, name)| name.clone())
             .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
+        // Bar scale — max |PnL| across the 24 hours of the selected period.
+        let max = prof.map_or(0.0, |pr| {
+            pr.iter().fold(0.0f64, |m, h| m.max(h.profit.abs()))
+        });
 
-        let mut cols = h_flex().w_full().gap(design::ui_px(cx, 8.0));
-        for (idx, label) in labels.into_iter().enumerate() {
-            let prof = profiles.as_ref().and_then(|v| v.get(idx)).copied();
-            cols = cols.child(time_column(label, prof, p, cx));
-        }
+        let body: AnyElement = match prof {
+            None => h_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.text_muted))
+                .child(t!("analytics.time.no_data").to_string())
+                .into_any_element(),
+            Some(pr) => {
+                let mut row = h_flex()
+                    .w_full()
+                    .flex_1()
+                    .min_h_0()
+                    .gap(design::ui_px(cx, 2.0));
+                for (h, stat) in pr.iter().enumerate() {
+                    row = row.child(hour_column(h, *stat, max, p, cx));
+                }
+                row.into_any_element()
+            }
+        };
 
         v_flex()
             .size_full()
@@ -247,64 +259,18 @@ impl AnalyticsView {
                     .min_h_0()
                     .px(design::ui_px(cx, 8.0))
                     .pb(design::ui_px(cx, 8.0))
-                    .overflow_y_scroll()
-                    .child(cols),
+                    .child(body),
             )
             .into_any_element()
     }
 }
 
-/// Один столбец-период: подпись + 24 строки-часа (или прочерк «нет данных»).
-fn time_column(
-    label: String,
-    prof: Option<[HourStat; 24]>,
-    p: MoonPalette,
-    cx: &Context<AnalyticsView>,
-) -> AnyElement {
-    // Масштаб бара — по максимуму |PnL| часа В ЭТОМ столбце (каждый период свой).
-    let max = prof.map_or(0.0, |pr| {
-        pr.iter().fold(0.0f64, |m, h| m.max(h.profit.abs()))
-    });
-    let mut col = v_flex()
-        .flex_1()
-        .min_w_0()
-        .gap(design::ui_px(cx, 2.0))
-        .child(
-            // Фикс. высота + truncate: длинная подпись «Custom» (дд.мм.гг – дд.мм.гг)
-            // в узком столбце иначе переносится на 2 строки и сбивает выравнивание
-            // строк-часов относительно соседних столбцов.
-            div()
-                .w_full()
-                .flex_none()
-                .h(design::fit_h_px(cx, 16.0, 11.0, 3.0))
-                .min_w_0()
-                .truncate()
-                .text_size(design::t_caption(cx))
-                .text_color(moon(p.text_soft))
-                .child(label),
-        );
-    match prof {
-        None => {
-            col = col.child(
-                div()
-                    .py(design::ui_px(cx, 6.0))
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.time.no_data").to_string()),
-            );
-        }
-        Some(pr) => {
-            for (h, stat) in pr.iter().enumerate() {
-                col = col.child(time_row(h, *stat, max, p, cx));
-            }
-        }
-    }
-    col.into_any_element()
-}
+/// Height of a column's bar area (px before font scaling); the bar grows from the center by ≤ half.
+const BAR_H: f32 = 108.0;
 
-/// Строка часа: «HH | бар от центра | +PnL$ (n)». Бар вправо = прибыль (зелёный),
-/// влево = убыток (красный); длина ∝ |PnL| / максимум столбца.
-fn time_row(
+/// A single hour column: value (+PnL$) · trade count · vertical bar from the center · hour.
+/// Bar up = profit (green), down = loss (orange); length ∝ |PnL| / maximum.
+fn hour_column(
     h: usize,
     stat: HourStat,
     max: f64,
@@ -318,53 +284,76 @@ fn time_row(
     } else {
         0.0
     };
-    // Убыток = оранжевый (как sign_color и бары «Сводки»), НЕ красный.
+    // Loss = orange (same as sign_color and the "Summary" bars), NOT red.
     let bar_color = if profit > 0.0 { p.green } else { p.orange };
     let value = if has {
-        format!("{}$ ({})", fmt_signed(profit), stat.trades)
+        format!("{}$", fmt_signed(profit))
     } else {
         "—".to_string()
     };
+    let count = if has {
+        format!("({})", stat.trades)
+    } else {
+        String::new()
+    };
     let r = design::ui_px(cx, 2.0);
-    h_flex()
-        .w_full()
-        .h(design::fit_h_px(cx, 18.0, 11.0, 3.5))
+    let half = BAR_H / 2.0;
+    v_flex()
+        .flex_1()
+        .min_w_0()
         .items_center()
-        .gap(design::ui_px(cx, 4.0))
+        .gap(design::ui_px(cx, 1.0))
+        // Value (on top).
         .child(
             div()
                 .flex_none()
-                .w(design::font_w_px(cx, 18.0))
+                .w_full()
+                .truncate()
+                .text_center()
                 .text_size(design::t_caption(cx))
-                .text_color(moon(p.text_muted))
-                .child(format!("{h:02}")),
+                .text_color(moon(if has {
+                    sign_color(p, profit)
+                } else {
+                    p.text_muted
+                }))
+                .child(value),
         )
+        // Trade count (smaller, muted).
+        .child(
+            div()
+                .flex_none()
+                .w_full()
+                .truncate()
+                .text_center()
+                .text_size(design::t_caption(cx))
+                .text_color(moon_alpha(p.text_muted, 0.7))
+                .child(count),
+        )
+        // Fixed-height bar area: the center tick + the bar up/down (px, not a relative
+        // height — that one is unreliable inside a flex context).
         .child(
             div()
                 .relative()
-                .flex_1()
-                .min_w_0()
-                .h(design::ui_px(cx, 12.0))
-                .rounded(r)
-                .bg(moon_alpha(p.panel_high, 0.6))
-                // Центральная риска (ноль).
+                .w_full()
+                .flex_none()
+                .h(design::ui_px(cx, BAR_H))
                 .child(
                     div()
                         .absolute()
-                        .top(px(0.0))
-                        .bottom(px(0.0))
-                        .left(relative(0.5))
-                        .w(px(1.0))
+                        .left(px(0.0))
+                        .right(px(0.0))
+                        .top(design::ui_px(cx, half))
+                        .h(px(1.0))
                         .bg(moon_alpha(p.border, 0.8)),
                 )
                 .when(has && frac > 0.0 && profit > 0.0, |el| {
                     el.child(
                         div()
                             .absolute()
-                            .top(px(0.0))
-                            .bottom(px(0.0))
-                            .left(relative(0.5))
-                            .w(relative(0.5 * frac))
+                            .left(relative(0.2))
+                            .right(relative(0.2))
+                            .bottom(design::ui_px(cx, half))
+                            .h(design::ui_px(cx, half * frac))
                             .rounded(r)
                             .bg(moon(bar_color)),
                     )
@@ -373,26 +362,23 @@ fn time_row(
                     el.child(
                         div()
                             .absolute()
-                            .top(px(0.0))
-                            .bottom(px(0.0))
-                            .right(relative(0.5))
-                            .w(relative(0.5 * frac))
+                            .left(relative(0.2))
+                            .right(relative(0.2))
+                            .top(design::ui_px(cx, half))
+                            .h(design::ui_px(cx, half * frac))
                             .rounded(r)
                             .bg(moon(bar_color)),
                     )
                 }),
         )
+        // Hour (at the bottom).
         .child(
             div()
                 .flex_none()
-                .w(design::font_w_px(cx, 92.0))
-                .text_right()
+                .w_full()
+                .text_center()
                 .text_size(design::t_caption(cx))
-                .text_color(moon(if has {
-                    sign_color(p, profit)
-                } else {
-                    p.text_muted
-                }))
-                .child(value),
+                .text_color(moon(p.text_muted))
+                .child(format!("{h:02}")),
         )
 }

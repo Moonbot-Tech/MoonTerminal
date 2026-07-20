@@ -1,13 +1,15 @@
-//! Вкладка «Календарь прибыли» окна «Аналитика».
-//! Три режима (кнопки-переключатели, как пресеты периода Сводки):
-//! - «Месяц» — крупные карточки-дни (дата слева, PnL+сделки+W/L+winrate справа),
-//!   серый фон + красно/зелёный оверлей прозрачностью по |PnL|; ряд KPI сверху
-//!   (с дельтой к пред. месяцу), полоса плюс/минус-дней снизу. Клик по дню →
-//!   режим «День»;
-//! - «Год» — все года разом, каждый = сетка 12 месяцев-квадратов (текущий год
-//!   сверху, будущие месяцы серым). Клик по месяцу → режим «Месяц». См. `year`;
-//! - «День» — детализация одного дня (пока заглушка). См. `day`.
-//! Свои запросы по режиму (`cal_query` в mod.rs); период-бар окна тут скрыт.
+//! "Profit calendar" tab of the "Analytics" window.
+//! Three modes (toggle buttons, like the Summary period presets):
+//! - "Month" — large day cards (date on the left, PnL + trades + W/L + winrate
+//!   on the right), grey background + red/green overlay whose alpha tracks
+//!   |PnL|; a KPI row on top (with the delta to the previous month), a
+//!   plus/minus-day bar below. Clicking a day switches to "Day" mode;
+//! - "Year" — every year at once, each one a grid of 12 month squares (current
+//!   year on top, future months greyed out). Clicking a month switches to
+//!   "Month" mode. See `year`;
+//! - "Day" — hour-by-hour detail of a single day. See `day`.
+//! Each mode builds its own query (`cal_query` in mod.rs); the window's period
+//! bar is hidden here.
 
 mod day;
 mod month;
@@ -25,7 +27,7 @@ use crate::design;
 use crate::design::moon;
 use moon_core::db::analytics::Query;
 
-/// Режим календаря (кнопки-переключатели вкладки).
+/// Calendar mode (the tab's toggle buttons).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CalMode {
     Day,
@@ -55,25 +57,25 @@ impl CalMode {
     }
 }
 
-// ── Календарные хелперы дат (UTC) ───────────────────────────────────────────
+// ── Calendar date helpers (UTC) ─────────────────────────────────────────────
 
-/// unix-секунды (полночь UTC) → дата (тонкая обёртка над общим хелпером окна).
+/// unix seconds (UTC midnight) → date (thin wrapper over the window's helper).
 pub(super) fn date_of(secs: i64) -> NaiveDate {
     super::day_of_secs(secs).unwrap_or_default()
 }
 
-/// Текущий (реальный) месяц — граница, за которую «Вперёд» не листает.
+/// Current (real) month — the boundary "Next" refuses to page past.
 pub(super) fn now_ym() -> (i32, u32) {
     let d = date_of(moon_core::util::now_unix_ms_i64() / 1000);
     (d.year(), d.month())
 }
 
-/// Полночь текущих суток (UTC) — граница «будущего» дня в сетке.
+/// Midnight of the current day (UTC) — the grid's "future" day boundary.
 pub(super) fn today_start() -> i64 {
     (moon_core::util::now_unix_ms_i64() / 1000).div_euclid(86_400) * 86_400
 }
 
-/// Полночь 1-го числа месяца (unix-сек UTC).
+/// Midnight of the 1st of the month (unix seconds, UTC).
 pub(super) fn month_start(y: i32, m: u32) -> i64 {
     super::secs_of_day(NaiveDate::from_ymd_opt(y, m, 1).unwrap_or_default())
 }
@@ -86,47 +88,48 @@ fn prev_month(y: i32, m: u32) -> (i32, u32) {
     if m == 1 { (y - 1, 12) } else { (y, m - 1) }
 }
 
-/// Число дней в месяце (разность полуночей 1-х чисел).
+/// Days in a month (difference between the two 1st-of-month midnights).
 fn days_in_month(y: i32, m: u32) -> u32 {
     let (ny, nm) = next_month(y, m);
     ((month_start(ny, nm) - month_start(y, m)) / 86_400).max(28) as u32
 }
 
-/// Диапазон `[from, to)` месяца — для `cal_query` (mod.rs).
+/// The month's `[from, to)` range — for `cal_query` (mod.rs).
 pub(super) fn month_range((y, m): (i32, u32)) -> (i64, i64) {
     let (ny, nm) = next_month(y, m);
     (month_start(y, m), month_start(ny, nm))
 }
 
-/// Диапазон `[from, to)` ПРЕДЫДУЩЕГО месяца — для дельт KPI (mod.rs).
+/// The PREVIOUS month's `[from, to)` range — for the KPI deltas (mod.rs).
 pub(super) fn prev_month_range((y, m): (i32, u32)) -> (i64, i64) {
     month_range(prev_month(y, m))
 }
 
-/// Вся история `[-1, завтра)` — режим «Год» показывает все года разом.
+/// The whole history `[-1, tomorrow)` — "Year" mode shows every year at once.
 pub(super) fn all_history_range() -> (i64, i64) {
     (-1, today_start() + 86_400)
 }
 
-/// Сколько суток-строк показывает режим «День».
+/// How many day rows "Day" mode shows.
 pub(super) const DAY_ROWS: i64 = 30;
 
-/// Окно суток для режима «День»: выбранный день по центру, но НЕ выше — если
-/// ниже уходило бы будущее, окно прижимается так, что низ = «сегодня»
-/// (выбранный день опускается к нижней строке). Возвращает `(top, bottom)`
-/// day-start; строк ровно `DAY_ROWS`, `bottom = top+(DAY_ROWS-1)д`.
+/// Day window for "Day" mode: the selected day sits in the middle, but NEVER
+/// higher — if the rows below it would run into the future, the window is
+/// pinned so that its bottom is "today" (the selected day drops toward the
+/// bottom row). Returns `(top, bottom)` day-starts; exactly `DAY_ROWS` rows,
+/// `bottom = top + (DAY_ROWS - 1) days`.
 pub(super) fn day_window(sel: i64) -> (i64, i64) {
     let bottom = (sel + (DAY_ROWS / 2) * 86_400).min(today_start());
     (bottom - (DAY_ROWS - 1) * 86_400, bottom)
 }
 
-/// Локализованный список из строки "a,b,c".
+/// Localized list parsed out of an "a,b,c" string.
 pub(super) fn split_i18n(s: String) -> Vec<String> {
     s.split(',').map(|x| x.trim().to_string()).collect()
 }
 
 impl AnalyticsView {
-    /// Смена режима (+ персист) — диапазон запроса меняется, перечитываем.
+    /// Mode switch (+ persist) — the query range changes, so we refetch.
     fn set_cal_mode(&mut self, m: CalMode, cx: &mut Context<Self>) {
         if self.cal_mode == m {
             return;
@@ -144,8 +147,8 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Навигация Назад/Вперёд: «Месяц» — на месяц, «День» — на сутки, «Год» —
-    /// не листается (показаны все года).
+    /// Prev/Next navigation: "Month" steps a month, "Day" steps a day, "Year"
+    /// does not page at all (every year is already on screen).
     fn cal_shift(&mut self, forward: bool, cx: &mut Context<Self>) {
         match self.cal_mode {
             CalMode::Year => return,
@@ -153,7 +156,7 @@ impl AnalyticsView {
                 let (cy, cm) = now_ym();
                 let (y, m) = self.cal_ym;
                 if forward && (y, m) >= (cy, cm) {
-                    return; // в будущее не листаем — сделок там нет
+                    return; // no paging into the future — no trades there
                 }
                 self.cal_ym = if forward {
                     next_month(y, m)
@@ -173,7 +176,7 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Переход на конкретный месяц (клик по ячейке года).
+    /// Jump to a specific month (click on a year cell).
     pub(super) fn cal_goto_month(&mut self, y: i32, m: u32, cx: &mut Context<Self>) {
         self.cal_ym = (y, m);
         self.cal_mode = CalMode::Month;
@@ -183,7 +186,7 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Переход на конкретный день (клик по ячейке месяца).
+    /// Jump to a specific day (click on a month cell).
     fn cal_goto_day(&mut self, dsec: i64, cx: &mut Context<Self>) {
         self.cal_day = dsec;
         self.cal_mode = CalMode::Day;
@@ -203,7 +206,7 @@ impl AnalyticsView {
         });
     }
 
-    /// Ховер-листенер клетки: держит `cal_hover` = день под курсором.
+    /// Cell hover listener: keeps `cal_hover` at the day under the cursor.
     fn cell_hover(
         &self,
         secs: i64,
@@ -235,7 +238,7 @@ impl AnalyticsView {
                 )
                 .into_any_element();
         };
-        // Кадр: панель навигации (как период-бар Сводки) + содержимое режима.
+        // Frame: the nav bar (like Summary's period bar) + the mode's content.
         let content = match self.cal_mode {
             CalMode::Month => self.calendar_month(&days, p, cx),
             CalMode::Year => self.calendar_year(&days, p, cx),
@@ -248,7 +251,7 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    // ── Панель навигации (как период-бар Сводки: px10 py8) ───────────────────
+    // ── Nav bar (like Summary's period bar: px10 py8) ────────────────────────
 
     fn cal_nav(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let (y, m) = self.cal_ym;
@@ -264,7 +267,7 @@ impl AnalyticsView {
             CalMode::Year => t!("analytics.cal.all_years").to_string(),
             CalMode::Day => super::fmt_day(self.cal_day),
         };
-        // «Вперёд» гаснет: в «Год» — обе, в «Месяц/День» — на текущем/будущем.
+        // "Next" greys out: both in "Year", on the current/future one otherwise.
         let (cy, cm) = now_ym();
         let (prev_off, next_off) = match self.cal_mode {
             CalMode::Year => (true, true),
@@ -294,7 +297,7 @@ impl AnalyticsView {
                 .on_click(cx.listener(move |this, _, _, cx| this.set_cal_mode(mode, cx)))
                 .render()
         };
-        // Слева: Год · Месяц · День · Назад · <период> · Вперёд; заголовок справа.
+        // Left: Year · Month · Day · Prev · <period> · Next; title on the right.
         h_flex()
             .flex_none()
             .w_full()
@@ -337,16 +340,16 @@ impl AnalyticsView {
     }
 }
 
-/// Пересчёты вкладки «Календарь» (перенесены из `analytics::mod` — страничная
-/// логика живёт при своей странице). Запрос строит своё окно по режиму
-/// (месяц/год/день), период-бар окна тут не участвует.
+/// Recomputes for the "Calendar" tab (moved out of `analytics::mod` — page
+/// logic lives next to its page). The query builds its own window from the
+/// mode (month/year/day); the window's period bar plays no part here.
 impl AnalyticsView {
-    /// Диапазон `[from,to)` календаря по режиму + текущие фильтры ядро/сторона/эму.
+    /// Calendar `[from,to)` range per mode + the current core/side/emu filters.
     fn cal_query(&self) -> Query {
         let (from, to) = match self.cal_mode {
             CalMode::Month => month_range(self.cal_ym),
             CalMode::Year => all_history_range(),
-            // «День» грузит окно из 7 суток (выбранный день по центру/снизу).
+            // "Day" loads a 7-day window (selected day centered/at the bottom).
             CalMode::Day => {
                 let (top, bottom) = day_window(self.cal_day);
                 (top, bottom + 86_400)
@@ -363,7 +366,7 @@ impl AnalyticsView {
         }
     }
 
-    /// Запрос ПРЕДЫДУЩЕГО месяца (для дельт KPI) — только в режиме «Месяц».
+    /// PREVIOUS month's query (for the KPI deltas) — "Month" mode only.
     fn cal_query_prev(&self) -> Option<Query> {
         if self.cal_mode != CalMode::Month {
             return None;
@@ -380,17 +383,17 @@ impl AnalyticsView {
         })
     }
 
-    /// Фоновый расчёт посуточной (или почасовой в режиме «День») серии.
+    /// Background recompute of the daily (or hourly, in "Day" mode) series.
     pub(super) fn reload_calendar(&mut self, cx: &mut Context<Self>) {
         self.cal_dirty = false;
-        // Наведённый день из прежней серии больше не под курсором — гасим
-        // застрявшую подсветку (новая серия могла не содержать тот день).
+        // The hovered day from the old series is no longer under the cursor —
+        // clear the stuck highlight (the new series may not contain that day).
         self.cal_hover = None;
         self.cal_seq = self.cal_seq.wrapping_add(1);
         let req = self.cal_seq;
         let q = self.cal_query();
         let q_prev = self.cal_query_prev();
-        // «День» грузит ПОЧАСОВЫЕ ячейки (сетка 24×N), остальные — суточные.
+        // "Day" loads HOURLY cells (a 24×N grid); the other modes load daily.
         let hourly = self.cal_mode == CalMode::Day;
         self.op_started();
         cx.spawn(async move |this, cx| {
@@ -402,7 +405,7 @@ impl AnalyticsView {
                     } else {
                         moon_core::db::analytics::calendar_cells(&q)
                     };
-                    // Агрегат пред. месяца (profit, trades, wins) для дельт KPI.
+                    // Previous month's aggregate (profit, trades, wins) for the KPI deltas.
                     let prev = q_prev
                         .and_then(|qp| moon_core::db::analytics::calendar_cells(&qp))
                         .map(|d| {
@@ -417,7 +420,7 @@ impl AnalyticsView {
                 let _ = this.update(cx, |this, cx| {
                     this.op_finished(cx);
                     if this.cal_seq != req {
-                        return; // режим/фильтры уже сменили
+                        return; // mode/filters already changed
                     }
                     let (cur, prev) = data;
                     this.cal_days = cur.map(Arc::new);

@@ -2,7 +2,6 @@
 //! strategy, including the required ignore-class changes.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use gpui::*;
 
@@ -11,7 +10,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::fields::{fmt_bound, parse_num, staged_dirty};
-use super::state::SaveDialog;
+use super::state::SaveTarget;
 use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
 impl AnalyticsView {
@@ -37,8 +36,8 @@ impl AnalyticsView {
         let min_n = self.suggest_min_n();
         let edges = self.suggest_edges();
         let round = self.tuner.round_results;
-        // Снятые чекбоксы: поле не перебирается; с заполненными границами —
-        // участвует фиксированным фильтром.
+        // Unchecked boxes: the field is not searched; with bounds filled in it
+        // still participates as a fixed filter.
         let locked: Vec<Option<(Option<f64>, Option<f64>)>> = (0..FIELDS.len())
             .map(|fi| {
                 if self.tuner.enabled[fi] {
@@ -71,7 +70,7 @@ impl AnalyticsView {
                     let sugg = match sugg {
                         Ok(v) => v,
                         Err(e) => {
-                            log::warn!("аналитика: умный подбор не выполнен — {e}");
+                            log::warn!("analytics: smart suggestion failed — {e}");
                             if this.tuner.seq == stats_req {
                                 this.tuner.stats.apply(Err(e));
                             }
@@ -81,7 +80,7 @@ impl AnalyticsView {
                     };
                     if let Some(res) = sugg {
                         log::info!(
-                            "аналитика: умный подбор — профит {:+.2}, сделок {}, попыток {}",
+                            "analytics: smart suggestion — profit {:+.2}, trades {}, rounds {}",
                             res.profit,
                             res.n,
                             res.rounds
@@ -89,7 +88,7 @@ impl AnalyticsView {
                         let by_field: HashMap<&str, _> =
                             res.fields.into_iter().map(|f| (f.field, f)).collect();
                         for fi in 0..FIELDS.len() {
-                            // Не перебиравшиеся поля не трогаем (фикс/выкл).
+                            // Leave fields that were not searched alone (fixed/disabled).
                             if !this.tuner.enabled[fi] {
                                 continue;
                             }
@@ -150,7 +149,7 @@ impl AnalyticsView {
                         // A genuine "no threshold beats the baseline".
                         Ok(None) => {}
                         Err(e) => {
-                            log::warn!("аналитика: подбор порога не выполнен — {e}");
+                            log::warn!("analytics: threshold suggestion failed — {e}");
                             if this.tuner.seq == stats_req {
                                 this.tuner.stats.apply(Err(e));
                             }
@@ -163,7 +162,7 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Копировать границы v1 → v2: строку `fi` или (None) всю колонку.
+    /// Copy bounds v1 → v2: row `fi`, or the whole column with (None).
     pub(super) fn copy_v1_to_v2(&mut self, fi: Option<usize>, cx: &mut Context<Self>) {
         let range: Vec<usize> = match fi {
             Some(fi) => vec![fi],
@@ -182,8 +181,28 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Очистить колонку варианта (крестик в шапке сетки) — только строки с
-    /// ВКЛЮЧЁННЫМ чекбоксом: снятые = фиксированные фильтры, их не трогаем.
+    /// Copy bounds v2 → v1: row `fi`, or the whole column with `None`. Mirror of
+    /// [`Self::copy_v1_to_v2`] — drives the ← button in the fields grid header.
+    pub(super) fn copy_v2_to_v1(&mut self, fi: Option<usize>, cx: &mut Context<Self>) {
+        let range: Vec<usize> = match fi {
+            Some(fi) => vec![fi],
+            None => (0..FIELDS.len()).collect(),
+        };
+        for fi in range {
+            let v = self.tuner.bounds[1][fi].clone();
+            if self.tuner.bounds[0][fi] == v {
+                continue;
+            }
+            self.tuner.bounds[0][fi] = v;
+            self.tuner.inputs.remove(&format!("tv0f{fi}a"));
+            self.tuner.inputs.remove(&format!("tv0f{fi}b"));
+        }
+        self.reload_tuner(cx);
+        cx.notify();
+    }
+
+    /// Clear a variant column (the cross in the grid header) — only rows whose
+    /// checkbox is ENABLED: unchecked ones are fixed filters, we leave them alone.
     pub(super) fn clear_variant(&mut self, vi: usize, cx: &mut Context<Self>) {
         for fi in 0..FIELDS.len() {
             if !self.tuner.enabled[fi] {
@@ -197,13 +216,13 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Число квантильных краёв перебора (поле со списком 4/8/…/128).
+    /// Number of quantile edges for the suggestion (the 4/8/…/128 dropdown).
     fn suggest_edges(&self) -> usize {
         self.tuner.edges.clamp(4, 128)
     }
 
-    /// Есть ли что записывать: стейджи «ignore» ИЛИ пороги v1, отличающиеся
-    /// от текущих параметров стратегии (кнопка «Сохранить» горит янтарным).
+    /// Is there anything to write: staged "ignore" toggles OR v1 thresholds that
+    /// differ from the strategy's current parameters (the "Save" button lights amber).
     pub(super) fn save_dirty(&self) -> bool {
         if staged_dirty(&self.tuner.strat, &self.tuner.staged_ignore) {
             return true;
@@ -220,7 +239,7 @@ impl AnalyticsView {
             if lo.is_none() && hi.is_none() {
                 continue;
             }
-            // Немаппленные поля в стратегию не пишутся — не считаются.
+            // Unmapped fields are never written to the strategy — they don't count.
             if !spec.mapped() {
                 continue;
             }
@@ -237,8 +256,8 @@ impl AnalyticsView {
         false
     }
 
-    /// Минимум сделок для автоподбора: из конфиг-строки; пусто = авто (1/5
-    /// фактических сделок скоупа).
+    /// Minimum trades for auto-suggestion: from the config string; empty = auto (1/5
+    /// of the scope's actual trades).
     fn suggest_min_n(&self) -> i64 {
         if let Ok(v) = self.tuner.min_trades.trim().parse::<i64>() {
             return v.max(1);
@@ -251,90 +270,103 @@ impl AnalyticsView {
             .max(1)
     }
 
-    /// «В стратегию»: пороги v1 → параметры выбранной стратегии на всех её
-    /// ядрах (sync шлёт полный набор — правки одной командой на ядро). Если
-    /// классы затронутых полей игнорировались (IgnoreFilters/IgnoreDelta/
-    /// IgnoreVolume) — соответствующие флаги выключаются, иначе пороги не
-    /// имели бы эффекта. Пишутся поля с маппингом на параметры; поля-слоты
-    /// (d1h/d15m/d5m/d1m/Pump1H/Dump1H) — через Delta2/Delta3: сначала
-    /// `DeltaN_Type`, затем `DeltaN_Min/Max`; слотов два — лишние в лог.
+    /// "To strategy": v1 thresholds → the selected strategy's parameters on all of
+    /// its cores (sync sends the full set — the edits go in one command per core). If
+    /// the classes of the touched fields were being ignored (IgnoreFilters/IgnoreDelta/
+    /// IgnoreVolume) — the corresponding flags are turned off, otherwise the thresholds
+    /// would have no effect. Fields mapped onto parameters are written; slot fields
+    /// (d1h/d15m/d5m/d1m/Pump1H/Dump1H) go through Delta2/Delta3: first
+    /// `DeltaN_Type`, then `DeltaN_Min/Max`; there are two slots — the rest go to the log.
     pub(super) fn open_save_dialog(&mut self, cx: &mut Context<Self>) {
-        let Some((sid, name, mut changes, warns)) = self.build_strategy_changes() else {
-            return;
-        };
-        if changes.is_empty() {
-            log::info!(
-                "аналитика: «Сохранить» — нет ни порогов с маппингом, ни изменённых игноров"
-            );
+        let targets = self.selected_targets();
+        if targets.is_empty() {
             return;
         }
-        changes.push(self.analyzer_comment());
-        self.open_change_dialog(sid, name, changes, warns, false, cx);
+        // Multi-select is a blind fan-out (no per-target preview), so force the enabling
+        // Ignore flags on so the thresholds actually take effect on every target.
+        let bulk = targets.len() > 1;
+        let (mut changes, warns) = self.build_strategy_changes(bulk);
+        if changes.is_empty() {
+            log::info!("analytics: 'Save' — neither mapped thresholds nor changed ignore flags");
+            return;
+        }
+        // The analyzer Comment stamp is built from the ANCHOR's Comment text; writing it to a
+        // bulk fan-out would overwrite every other strategy's own description. Single-target only.
+        if !bulk {
+            changes.push(self.analyzer_comment());
+        }
+        self.open_change_dialog(targets, changes, warns, false, cx);
     }
 
-    /// «В стратегию» для оси «По времени»: пишет v1 в поля `WorkingWeekTime`
-    /// (спан дней) и `WorkingTime` (окно времени) выбранной стратегии через ТО ЖЕ
-    /// окно подтверждения (`open_change_dialog`), что и пороги. Пишутся только
-    /// НЕПУСТЫЕ и изменившиеся поля (пустое поле не трогаем, расписание не стираем).
-    /// Форматы полей MoonBot не подтверждены — строки видны в окне подтверждения.
+    /// "To strategy" for the "By time" axis: writes v1 into the `WorkingWeekTime`
+    /// (day span) and `WorkingTime` (time window) fields of the selected strategy through
+    /// the SAME confirmation dialog (`open_change_dialog`) as the thresholds. Only
+    /// NON-EMPTY and changed fields are written (an empty field is left alone, the
+    /// schedule is never wiped). The MoonBot field formats are unconfirmed — the strings
+    /// are visible in the confirmation dialog.
     pub(super) fn time_open_save_dialog(&mut self, cx: &mut Context<Self>) {
-        let Some((key, name)) = self.sel_strategy.clone() else {
-            return;
-        };
-        let Some((sid, _)) = super::parse_strat_key(&key) else {
-            return;
-        };
-        // Те же поля, что зажигают «Сохранить» янтарным (`is_dirty`), чтобы состояние
-        // кнопки и разрешение записи совпадали.
-        let changes = self.time_tuner.changes();
-        if changes.is_empty() {
-            log::info!("аналитика: «Сохранить» (время) — нечего писать (поля пусты или = текущим)");
+        let targets = self.selected_targets();
+        if targets.is_empty() {
             return;
         }
-        self.open_change_dialog(sid, name, changes, Vec::new(), false, cx);
+        // Single: same fields that light "Save" amber (`is_dirty`) so the button state and
+        // the write permission agree. Multi: the forced set pushes the schedule to every
+        // target regardless of the anchor's current values, and disables IgnoreTime/
+        // IgnoreFilters so it actually applies.
+        let bulk = targets.len() > 1;
+        let changes = if bulk {
+            self.time_tuner.changes_forced()
+        } else {
+            self.time_tuner.changes()
+        };
+        if changes.is_empty() {
+            log::info!("analytics: 'Save' (time) — nothing to write (fields empty or = current)");
+            return;
+        }
+        self.open_change_dialog(targets, changes, Vec::new(), false, cx);
     }
 
-    /// «Сделать копию»: та же сборка правок, но адресат — НОВАЯ стратегия
-    /// (копия текущей с применёнными порогами) на всех ядрах исходной. Имя
-    /// авто-уникальное, правится в окне подтверждения. Пустой список правок
-    /// допустим — это просто копия.
+    /// "Make a copy": the same change set, but the target is a NEW strategy
+    /// (a copy of the current one with the thresholds applied) on all of the original's
+    /// cores. The name is auto-uniqued and editable in the confirmation dialog. An
+    /// empty change list is fine — that is just a copy.
     pub(super) fn open_copy_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((sid, name, mut changes, warns)) = self.build_strategy_changes() else {
+        // Copy is single-target only (the button is hidden in multi-select) — take the anchor.
+        let Some(target) = self.selected_targets().into_iter().next() else {
             return;
         };
+        let (mut changes, warns) = self.build_strategy_changes(false);
         changes.push(self.analyzer_comment());
-        self.open_copy_with(sid, name, changes, warns, window, cx);
+        self.open_copy_with(target, changes, warns, window, cx);
     }
 
-    /// «Сделать копию» для оси «По времени»: те же правки, что Save (расписание +
-    /// IgnoreTime/IgnoreFilters), но адресат — НОВАЯ стратегия (копия выбранной).
-    /// Единый путь с фильтром через `open_copy_with`; пустые правки допустимы (дубликат).
+    /// "Make a copy" for the "By time" axis: the same changes as Save (schedule +
+    /// IgnoreTime/IgnoreFilters), but the target is a NEW strategy (a copy of the selected
+    /// one). Shares the filter path through `open_copy_with`; empty changes are fine (a
+    /// plain duplicate).
     pub(super) fn time_open_copy_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((key, name)) = self.sel_strategy.clone() else {
-            return;
-        };
-        let Some((sid, _)) = super::parse_strat_key(&key) else {
+        // Copy is single-target only (button hidden in multi-select) — take the anchor.
+        let Some(target) = self.selected_targets().into_iter().next() else {
             return;
         };
         let mut changes = self.time_tuner.changes();
         changes.push(self.analyzer_comment());
-        self.open_copy_with(sid, name, changes, Vec::new(), window, cx);
+        self.open_copy_with(target, changes, Vec::new(), window, cx);
     }
 
-    /// ОБЩИЙ хвост «Сделать копию» (все оси): авто-уникальное имя новой стратегии +
-    /// его инпут в окне подтверждения, затем ОБЩЕЕ окно (`open_change_dialog`,
-    /// is_copy=true). Имя правится пользователем перед записью.
+    /// The SHARED tail of "Make a copy" (all axes): an auto-uniqued name for the new
+    /// strategy + its input in the confirmation dialog, then the SHARED dialog
+    /// (`open_change_dialog`, is_copy=true). The user can edit the name before the write.
     fn open_copy_with(
         &mut self,
-        sid: i64,
-        name: String,
+        target: SaveTarget,
         changes: Vec<(String, String)>,
         warns: Vec<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Авто-имя: уникальное среди имён стратегий ВСЕХ ядер (имена в
-        // Moonbot глобальны в пределах ядра; берём объединение — надёжно).
+        // Auto name: unique among strategy names on ALL cores (Moonbot names are global
+        // within a core; the union is the safe superset).
         let mut taken = std::collections::HashSet::new();
         {
             let b = self.backend.read(cx);
@@ -344,9 +376,9 @@ impl AnalyticsView {
                 }
             }
         }
-        let proposed = crate::strategies::tree_ops::unique_name(&taken, &name);
+        let proposed = crate::strategies::tree_ops::unique_name(&taken, &target.name);
         self.tuner.copy_name = proposed.clone();
-        // Свежий инпут имени на каждое открытие (дефолт рисуется с начала).
+        // A fresh name input on every open (so the default is rendered from its start).
         self.tuner.inputs.remove("copy-name");
         let state = cx.new(|cx| MoonInputState::new(window, cx).default_value(proposed));
         cx.subscribe(&state, |this, st, ev: &MoonInputEvent, cx| {
@@ -359,21 +391,22 @@ impl AnalyticsView {
         })
         .detach();
         self.tuner.inputs.insert("copy-name".to_string(), state);
-        self.open_change_dialog(sid, name, changes, warns, true, cx);
+        self.open_change_dialog(vec![target], changes, warns, true, cx);
     }
 
-    /// Собрать правки из v1 + стейджей «ignore» (без штампа Comment): пороги
-    /// с маппингом, слоты Delta2/3 (+предупреждения), Ignore-флаги.
-    fn build_strategy_changes(&self) -> Option<(i64, String, Vec<(String, String)>, Vec<String>)> {
-        let (key, name) = self.sel_strategy.clone()?;
-        let (sid, _) = super::parse_strat_key(&key)?;
-
+    /// Build the changes from v1 + the staged "ignore" toggles (without the Comment stamp):
+    /// mapped thresholds, Delta2/3 slots (+warnings), and the Ignore flags.
+    ///
+    /// `force_enable` (bulk / multi-select): emit the enabling Ignore flags for every
+    /// touched class unconditionally, not only when the anchor currently ignores it — so
+    /// the thresholds take effect on targets whose current flags differ from the anchor's.
+    fn build_strategy_changes(&self, force_enable: bool) -> (Vec<(String, String)>, Vec<String>) {
         let mut changes: Vec<(String, String)> = Vec::new();
         let mut warns: Vec<String> = Vec::new();
         let (mut delta_touched, mut volume_touched, mut bvsv_touched, mut ping_touched) =
             (false, false, false, false);
         let mut base_touched = false;
-        // Поля-слоты с порогами v1 — кандидаты в Delta2/Delta3.
+        // Slot fields with v1 thresholds — candidates for Delta2/Delta3.
         let mut slot_wanted: Vec<(&'static str, Option<f64>, Option<f64>)> = Vec::new();
         for (fi, spec) in FIELDS.iter().enumerate() {
             let (from, to) = &self.tuner.bounds[0][fi];
@@ -399,10 +432,10 @@ impl AnalyticsView {
                 }
             }
         }
-        // Раздача слотов: своё прежнее место (если тип уже стоит) — иначе
-        // свободный по порядку. Слоты, занятые типом без колонки отчёта
-        // (2h/30m/Pump5m с порогами — «чужой» живой фильтр), перезаписываются
-        // ПОСЛЕДНИМИ и с warn. Больше двух не влезает — остальные в лог.
+        // Slot assignment: its own previous place (if the type is already set) —
+        // otherwise the first free one in order. Slots held by a type with no report
+        // column (2h/30m/Pump5m with thresholds — a 'foreign' live filter) are
+        // overwritten LAST and with a warn. Only two fit — the rest go to the log.
         if !slot_wanted.is_empty() {
             let cur2 = self
                 .tuner
@@ -425,7 +458,7 @@ impl AnalyticsView {
             }
             let mut assigned: Vec<(u8, &'static str, Option<f64>, Option<f64>)> = Vec::new();
             let mut dropped: Vec<&'static str> = Vec::new();
-            // Сначала — поля, уже сидящие в своих слотах.
+            // First — the fields already sitting in their own slots.
             for (col, lo, hi) in &slot_wanted {
                 if cur2 == Some(*col) && !used[0] {
                     used[0] = true;
@@ -435,7 +468,7 @@ impl AnalyticsView {
                     assigned.push((3, col, *lo, *hi));
                 }
             }
-            // Затем — свободные слоты; в конце — перезапись «чужих».
+            // Then — the free slots; last — overwriting the 'foreign' ones.
             for overwrite_foreign in [false, true] {
                 for (col, lo, hi) in &slot_wanted {
                     if assigned.iter().any(|(_, f, ..)| f == col) {
@@ -456,8 +489,8 @@ impl AnalyticsView {
                     if let Some((_, ty)) = foreign.iter().find(|(n, _)| *n == i as u8 + 2) {
                         let slot = format!("Delta{}", i + 2);
                         log::warn!(
-                            "аналитика: «Сохранить» — {slot} был занят типом «{ty}» (в отчёте \
-                             колонки нет), перезаписываем на «{col}»"
+                            "analytics: 'Save' — {slot} was held by type '{ty}' (no such \
+                             column in the report), overwriting with '{col}'"
                         );
                         warns.push(
                             t!("analytics.tuner.warn_slot_replace", slot = slot, old = ty)
@@ -469,7 +502,7 @@ impl AnalyticsView {
             }
             if !dropped.is_empty() {
                 log::warn!(
-                    "аналитика: «В стратегию» — слотов Delta2/Delta3 только два, не вошли: {}",
+                    "analytics: 'To strategy' — only two Delta2/Delta3 slots, did not fit: {}",
                     dropped.join(", ")
                 );
                 warns.push(
@@ -484,7 +517,7 @@ impl AnalyticsView {
                 let Some(ty) = slot_type_for(col) else {
                     continue;
                 };
-                // Порядок важен: сначала тип слота, затем его пороги.
+                // Order matters: the slot type first, then its thresholds.
                 changes.push((format!("Delta{n}_Type"), ty.to_string()));
                 if let Some(v) = lo {
                     changes.push((format!("Delta{n}_Min"), fmt_plain(v)));
@@ -495,28 +528,34 @@ impl AnalyticsView {
                 delta_touched = true;
             }
         }
-        // Флаги игноров: автовключение классов, чьи пороги пишем, ПЛЮС явные
-        // клики «ignore» на подзаголовках (стейдж приоритетнее автологики).
+        // Ignore flags: auto-enable the classes whose thresholds we write, PLUS explicit
+        // 'ignore' clicks on the subheaders (the staged value wins over the auto logic).
+        // `force` only fires when we ACTUALLY wrote at least one threshold — otherwise a bulk
+        // Save with a clean anchor would fan IgnoreFilters=NO to every target (flipping filters
+        // on where they were ignored) with nothing to justify it, and the empty-guard at the
+        // caller would never trip.
+        let has_params = !changes.is_empty();
+        let force = force_enable && has_params;
         let f = self.tuner.strat.clone();
-        let mut flags: Vec<(&'static str, bool)> = Vec::new(); // (флаг, игнорировать)
-        if f.ignore_filters {
+        let mut flags: Vec<(&'static str, bool)> = Vec::new(); // (flag, ignore)
+        if force || f.ignore_filters {
             flags.push(("IgnoreFilters", false));
         }
-        if delta_touched && f.ignore_delta {
+        if delta_touched && (force || f.ignore_delta) {
             flags.push(("IgnoreDelta", false));
         }
-        // BV/SV — подгруппа Filters/Volume: его пороги требуют снять и
-        // IgnoreVolume, и включить сам фильтр.
-        if (volume_touched || bvsv_touched) && f.ignore_volume {
+        // BV/SV is a Filters/Volume subgroup: its thresholds need IgnoreVolume cleared AND
+        // the filter itself enabled.
+        if (volume_touched || bvsv_touched) && (force || f.ignore_volume) {
             flags.push(("IgnoreVolume", false));
         }
-        if bvsv_touched && !f.use_bvsv {
+        if bvsv_touched && (force || !f.use_bvsv) {
             flags.push(("UseBV_SV_Filter", false));
         }
-        if ping_touched && f.ignore_ping {
+        if ping_touched && (force || f.ignore_ping) {
             flags.push(("IgnorePing", false));
         }
-        if base_touched && f.ignore_base {
+        if base_touched && (force || f.ignore_base) {
             flags.push(("IgnoreBase", false));
         }
         for (flag, want) in self.tuner.staged_ignore.clone() {
@@ -535,7 +574,7 @@ impl AnalyticsView {
             }
         }
         for (flag, ignore) in flags {
-            // UseBV_SV_Filter — включатель (инверсная семантика игнора).
+            // UseBV_SV_Filter is an enabler (inverted ignore semantics).
             let value = if flag == "UseBV_SV_Filter" {
                 if ignore { "NO" } else { "YES" }
             } else if ignore {
@@ -545,12 +584,12 @@ impl AnalyticsView {
             };
             changes.push((flag.to_string(), value.to_string()));
         }
-        Some((sid, name, changes, warns))
+        (changes, warns)
     }
 
-    /// Штамп анализатора для Comment: «дд.мм.гггг чч:мм:сс (Save from
-    /// analyzer)» UTC. Описание пользователя сохраняется — заменяется только
-    /// предыдущий штамп (сегменты через «; »).
+    /// The analyzer stamp for Comment: "dd.mm.yyyy hh:mm:ss (Save from
+    /// analyzer)" UTC. The user's own description is preserved — only the previous
+    /// stamp is replaced (segments are separated by "; ").
     fn analyzer_comment(&self) -> (String, String) {
         const MARK: &str = "(Save from analyzer)";
         let now = std::time::SystemTime::now()
@@ -581,183 +620,9 @@ impl AnalyticsView {
         };
         ("Comment".to_string(), comment)
     }
-
-    /// Открыть окно подтверждения (запись/копия): текущие значения параметров
-    /// («сейчас → будет») тянутся фоном из strategies.sqlite.
-    fn open_change_dialog(
-        &mut self,
-        sid: i64,
-        name: String,
-        changes: Vec<(String, String)>,
-        warns: Vec<String>,
-        copy: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let keys: Vec<String> = changes.iter().map(|(k, _)| k.clone()).collect();
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let olds_map = executor
-                .spawn(async move { moon_core::db::tuner::strategy_current_values(sid, &keys) })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    let olds = changes
-                        .iter()
-                        .map(|(k, _)| olds_map.get(k).cloned())
-                        .collect();
-                    this.tuner.save_dialog = Some(Arc::new(SaveDialog {
-                        sid,
-                        name,
-                        changes,
-                        olds,
-                        warns,
-                        copy,
-                    }));
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
-    }
-
-    /// «Да» в окне подтверждения: запись в стратегию или создание копии.
-    pub(super) fn confirm_save_dialog(&mut self, cx: &mut Context<Self>) {
-        let Some(dlg) = self.tuner.save_dialog.take() else {
-            return;
-        };
-        if dlg.copy {
-            self.create_strategy_copy(&dlg, cx);
-        } else {
-            self.tuner.staged_ignore.clear();
-            self.send_strategy_changes(dlg.sid, dlg.name.clone(), dlg.changes.clone(), cx);
-        }
-        cx.notify();
-    }
-
-    /// Создать копию стратегии с применёнными правками на всех ядрах, где
-    /// живёт исходная (по живому store). Имя — из инпута окна (пустое =
-    /// авто); на каждом ядре дополнительно уникализируется. Копия приходит
-    /// ВЫКЛЮЧЕННОЙ (правило create_strategies) — безопасно.
-    fn create_strategy_copy(&mut self, dlg: &super::state::SaveDialog, cx: &mut Context<Self>) {
-        use crate::strategies::tree_ops::{STRATEGY_NAME_FIELD, set_field, unique_name};
-        let sid = dlg.sid as u64;
-        let desired = {
-            let t = self.tuner.copy_name.trim();
-            if t.is_empty() {
-                dlg.name.clone()
-            } else {
-                t.to_string()
-            }
-        };
-        let b = self.backend.read(cx);
-        let mut plans: Vec<(
-            moon_core::session::CoreId,
-            moon_core::feed::NewStrategySpec,
-            String,
-        )> = Vec::new();
-        for (cid, cd) in b.session.store().cores() {
-            let Some(row) = cd.strategies.iter().find(|r| r.id == sid) else {
-                continue;
-            };
-            let taken: std::collections::HashSet<String> =
-                cd.strategies.iter().map(|r| r.name.clone()).collect();
-            let name = unique_name(&taken, &desired);
-            let mut fields = row.fields.clone();
-            for (k, v) in &dlg.changes {
-                set_field(&mut fields, k, v);
-            }
-            set_field(&mut fields, STRATEGY_NAME_FIELD, &name);
-            plans.push((
-                cid,
-                moon_core::feed::NewStrategySpec {
-                    kind_ordinal: row.kind_ordinal,
-                    folder_path: row.folder_path.clone(),
-                    fields,
-                },
-                name,
-            ));
-        }
-        if plans.is_empty() {
-            log::warn!(
-                "аналитика: «Сделать копию» — стратегия {} не найдена в живом store",
-                dlg.sid
-            );
-            return;
-        }
-        let total = plans.len();
-        let mut sent = 0usize;
-        for (cid, spec, name) in plans {
-            match b.session.create_strategies(cid, vec![spec]) {
-                Ok(()) => {
-                    sent += 1;
-                    log::info!("аналитика: копия «{name}» создана на ядре {cid}");
-                }
-                Err(e) => log::warn!("аналитика: копия на ядро {cid} не ушла: {e:#}"),
-            }
-        }
-        log::info!("аналитика: «Сделать копию» — ядер {sent}/{total}");
-    }
-
-    /// Общий хвост записи в стратегию: ядра из strategies.sqlite (не на
-    /// UI-потоке), затем правки обычным путём окна Стратегий (edit_strategies,
-    /// одна команда на ядро), после — перечитка чипов.
-    fn send_strategy_changes(
-        &mut self,
-        sid: i64,
-        name: String,
-        changes: Vec<(String, String)>,
-        cx: &mut Context<Self>,
-    ) {
-        let n_fields = changes.len();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let cores = executor
-                .spawn(async move { moon_core::db::tuner::strategy_cores(sid) })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    let changes = Arc::new(changes);
-                    let mut sent = 0usize;
-                    {
-                        let b = this.backend.read(cx);
-                        for core in &cores {
-                            let edits = vec![(sid as u64, changes.as_ref().clone())];
-                            match b.session.edit_strategies(*core, edits) {
-                                Ok(()) => sent += 1,
-                                Err(e) => log::warn!(
-                                    "аналитика: правки → «{name}» ядро {core} не ушли: {e:#}"
-                                ),
-                            }
-                        }
-                    }
-                    log::info!(
-                        "аналитика: правки → стратегия «{name}»: {n_fields} полей, ядер {sent}/{}",
-                        cores.len()
-                    );
-                    // Эхо снапшота обновит strategies.sqlite — перечитаем чипы
-                    // АКТИВНОЙ оси (фильтр/время).
-                    this.reload_active_tuner(cx);
-                    cx.notify();
-                });
-            });
-            // Эхо ядра приходит с лагом — перечитываем ещё дважды, чтобы
-            // чипы/игноры показали ФАКТИЧЕСКИ применённое состояние.
-            for delay_ms in [1500u64, 3500] {
-                executor
-                    .timer(std::time::Duration::from_millis(delay_ms))
-                    .await;
-                let _ = cx.update(|cx| {
-                    let _ = this.update(cx, |this, cx| this.reload_active_tuner(cx));
-                });
-            }
-        })
-        .detach();
-    }
 }
 
-/// Число для параметра стратегии: простой десятичный формат без суффиксов.
+/// A number for a strategy parameter: plain decimal format, no suffixes.
 fn fmt_plain(v: f64) -> String {
     let mut s = format!("{v:.4}");
     if s.contains('.') {

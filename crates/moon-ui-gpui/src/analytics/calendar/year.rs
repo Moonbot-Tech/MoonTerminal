@@ -1,6 +1,6 @@
-//! Режим «Год» календаря: ВСЕ года разом — на каждый год сетка 12 месяцев-
-//! квадратов (текущий год сверху, будущие месяцы серым). Клик по месяцу →
-//! режим «Месяц». Навигация Назад/Вперёд в этом режиме не работает.
+//! Calendar "Year" mode: EVERY year at once — each year is a grid of 12 month
+//! squares (current year on top, future months greyed out). Click a month →
+//! "Month" mode. Prev/Next navigation does nothing in this mode.
 
 use std::collections::HashMap;
 
@@ -23,7 +23,7 @@ impl AnalyticsView {
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        // Свёртка посуточной серии всей истории в месячные агрегаты.
+        // Fold the whole history's daily series into monthly aggregates.
         let mut agg: HashMap<(i32, u32), (f64, i64)> = HashMap::new();
         let mut min_year = i32::MAX;
         for d in days {
@@ -38,7 +38,7 @@ impl AnalyticsView {
             min_year = cy;
         }
 
-        // Года сверху вниз: текущий первым, дальше в прошлое.
+        // Years top to bottom: the current one first, then back into the past.
         let mut list = v_flex().w_full().gap(design::ui_px(cx, 18.0));
         for y in (min_year..=cy).rev() {
             list = list.child(self.year_block(y, cy, cm, &agg, p, cx));
@@ -69,7 +69,7 @@ impl AnalyticsView {
     ) -> impl IntoElement {
         let months = split_i18n(t!("analytics.heat.months").to_string());
         let year_total: f64 = (1..=12).filter_map(|m| agg.get(&(y, m))).map(|a| a.0).sum();
-        // 1 год = 1 строка из всех 12 месяцев (без переноса; ячейки тянутся).
+        // 1 year = 1 row of all 12 months (no wrapping; the cells stretch).
         let mut grid = h_flex().w_full().gap(design::ui_px(cx, 8.0));
         for m in 1..=12u32 {
             let future = y > cy || (y == cy && m > cm);
@@ -126,7 +126,7 @@ impl AnalyticsView {
         } else {
             moon_alpha(sign_color(p, profit), 0.5)
         };
-        // Не переносим на новую строку — ячейки flex_1 ужимаются под 12 в ряд.
+        // No wrapping — flex_1 cells squeeze down to fit 12 in a row.
         let mut cell = v_flex()
             .id(("ym", (y as u64) * 100 + m as u64))
             .flex_1()

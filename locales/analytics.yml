@@ -162,9 +162,9 @@ analytics.tuner.avg_loss:
   en: "Avg loss"
   es: "Pérdida media"
 analytics.tuner.fields_title:
-  ru: "Пороги"
-  en: "Thresholds"
-  es: "Umbrales"
+  ru: "Параметры"
+  en: "Parameters"
+  es: "Parámetros"
 analytics.tuner.fields_sub:
   ru: "клик по полю — гистограмма"
   en: "click a field for its histogram"
@@ -213,6 +213,10 @@ analytics.tuner.save_title:
   ru: "Записать в «%{name}»"
   en: "Write to “%{name}”"
   es: "Escribir en «%{name}»"
+analytics.tuner.save_title_bulk:
+  ru: "Записать в выбранные (%{n})"
+  en: "Write to %{n} strategies"
+  es: "Escribir en las seleccionadas (%{n})"
 analytics.tuner.save_yes:
   ru: "Сохранить"
   en: "Save"
@@ -441,6 +445,10 @@ analytics.col.kind:
   ru: "Тип"
   en: "Kind"
   es: "Tipo"
+analytics.col.lastedit:
+  ru: "Изменена"
+  en: "Last edit"
+  es: "Editada"
 analytics.col.profit:
   ru: "Профит"
   en: "Profit"
@@ -513,46 +521,34 @@ analytics.time.by_hour:
   ru: "По часам"
   en: "By hour"
   es: "Por hora"
-analytics.time.week:
-  ru: "7 дней"
-  en: "7 days"
-  es: "7 días"
-analytics.time.month:
-  ru: "30 дней"
-  en: "30 days"
-  es: "30 días"
-analytics.time.d90:
-  ru: "90 дней"
-  en: "90 days"
-  es: "90 días"
 # Нижняя правая плашка «По времени»: два поля стратегии (WorkingWeekTime — спан
 # дней, WorkingTime — окно времени), каждое одно «от-до», И-комбинируются.
 analytics.time.autopick_title:
-  ru: "Расписание по времени"
-  en: "Time schedule"
-  es: "Horario por tiempo"
+  ru: "Параметры"
+  en: "Parameters"
+  es: "Parámetros"
 analytics.time.col_day:
   ru: "День"
   en: "Day"
   es: "Día"
-# Заголовок столбца тюнера «По времени»: перечисляет ПОЛЯ (Недельно/Время).
+# Заголовок столбца-имени поля тюнера «По времени».
 analytics.time.col_field:
   ru: "Поле"
   en: "Field"
   es: "Campo"
 # Тюнер «По времени»: два поля стратегии (одно от-до каждое), И-комбинируются.
 analytics.time.field_week:
-  ru: "Недельно"
-  en: "Weekly"
-  es: "Semanal"
+  ru: "WorkingWeekTime"
+  en: "WorkingWeekTime"
+  es: "WorkingWeekTime"
 analytics.time.field_day:
-  ru: "Сутки"
-  en: "Day"
-  es: "Día"
+  ru: "WorkingTime(d)"
+  en: "WorkingTime(d)"
+  es: "WorkingTime(d)"
 analytics.time.field_hour:
-  ru: "В часе"
-  en: "In hour"
-  es: "En hora"
+  ru: "WorkingTime(h)"
+  en: "WorkingTime(h)"
+  es: "WorkingTime(h)"
 # Режим WorkingTime: окно времени суток («сутки») либо минуты в каждом часе («в часе»).
 analytics.time.mode_day:
   ru: "сутки"
@@ -567,20 +563,56 @@ analytics.time.cur:
   ru: "в стратегии"
   en: "in strategy"
   es: "en estrategia"
+analytics.time.cur_varies:
+  ru: "разное"
+  en: "varies"
+  es: "varía"
 # Столбец без данных: период ещё грузится ИЛИ чтение реплики не удалось (пустой
 # период даёт нули по 24 часам, а не эту подпись) — потому нейтрально «нет данных».
 analytics.time.no_data:
   ru: "нет данных"
   en: "no data"
   es: "sin datos"
+analytics.time.tip_to_v1:
+  ru: "перенести в v1"
+  en: "copy to v1"
+  es: "copiar a v1"
+analytics.time.tip_to_v2:
+  ru: "перенести в v2"
+  en: "copy to v2"
+  es: "copiar a v2"
+analytics.time.tip_clear:
+  ru: "очистить"
+  en: "clear"
+  es: "limpiar"
+analytics.time.tip_clear_all:
+  ru: "очистить всё"
+  en: "clear all"
+  es: "limpiar todo"
 analytics.strat.hint:
-  ru: "клик по строке — детализация"
-  en: "click a row for details"
-  es: "clic en una fila para detalles"
+  ru: "клик по строке — детализация · Ctrl — мультивыбор"
+  en: "click a row for details · Ctrl to multi-select"
+  es: "clic en una fila para detalles · Ctrl para multiselección"
 analytics.strat.shown:
   ru: "показано %{shown} из %{total}"
   en: "showing %{shown} of %{total}"
   es: "mostrando %{shown} de %{total}"
+analytics.strat.selected_n:
+  ru: "выбрано: %{n}"
+  en: "selected: %{n}"
+  es: "seleccionadas: %{n}"
+analytics.strat.search_ph:
+  ru: "поиск по имени"
+  en: "search by name"
+  es: "buscar por nombre"
+analytics.strat.active_only:
+  ru: "активные"
+  en: "active"
+  es: "activas"
+analytics.strat.no_match:
+  ru: "нет совпадений — измените фильтр/поиск"
+  en: "no matches — adjust the filter/search"
+  es: "sin coincidencias — ajusta el filtro/búsqueda"
 analytics.strat.by_coins:
   ru: "%{name} — по монетам"
   en: "%{name} — by coins"

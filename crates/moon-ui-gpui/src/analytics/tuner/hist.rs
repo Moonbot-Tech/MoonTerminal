@@ -1,9 +1,10 @@
-//! Карточки тюнера: матрица KPI «Факт vs варианты» и гистограмма (нижняя
-//! плашка режима «Фильтры») — распределение профита/убытка и сделок по
-//! квантильным вёдрам выбранного поля. Вынесено из tuner.rs (лимит размера).
+//! Tuner cards: the "Fact vs variants" KPI matrix and the histogram (the bottom
+//! strip of the "Filters" mode) — the distribution of profit/loss and trades
+//! across the quantile buckets of the selected field. Split out of tuner.rs
+//! (file size limit).
 //!
-//! `kpi_matrix_card` — УНИВЕРСАЛЬНАЯ (свободная функция): рисуется чисто из
-//! `VarStats`, потому переиспользуется всеми режимами тюнинга (Фильтр/Время/…).
+//! `kpi_matrix_card` is UNIVERSAL (a free function): it draws purely out of
+//! `VarStats`, so every tuning mode reuses it (Filter/Time/…).
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -17,20 +18,20 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::{FIELDS, VarStats};
 
 impl AnalyticsView {
-    /// Матрица KPI режима «По фильтру»: скоуп — выбранная стратегия, столбцы v1/v2.
+    /// KPI matrix of the "By filter" mode: scope is the selected strategy, columns v1/v2.
     pub(super) fn kpi_matrix(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         let scope = self
             .sel_strategy
             .as_ref()
             .map(|(_, n)| n.clone())
             .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
-        // Пустой список подписей → фолбэк «v{i}» (как было исторически).
+        // An empty label list → the "v{i}" fallback (as it historically was).
         kpi_matrix_card(&self.tuner.stats, scope, &[], p, cx)
     }
 
-    /// Гистограмма выбранного поля: выигрыши вверх, убытки вниз, счётчик и края.
+    /// Histogram of the selected field: wins up, losses down, the count and the edges.
     pub(super) fn hist_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        // В заголовке — поле и скоуп (имя стратегии / все).
+        // The title carries the field and the scope (strategy name / all).
         let scope = self
             .sel_strategy
             .as_ref()
@@ -57,7 +58,7 @@ impl AnalyticsView {
                             .min_w_0()
                             .items_center()
                             .gap(px(2.0))
-                            // Выигрыши (вверх от оси).
+                            // Wins (up from the axis).
                             .child(
                                 div()
                                     .w_full()
@@ -77,7 +78,7 @@ impl AnalyticsView {
                                             .bg(moon(p.green)),
                                     ),
                             )
-                            // Убытки (вниз от оси).
+                            // Losses (down from the axis).
                             .child(
                                 div()
                                     .w_full()
@@ -137,10 +138,11 @@ impl AnalyticsView {
     }
 }
 
-/// УНИВЕРСАЛЬНАЯ матрица KPI «Факт vs варианты»: рисуется ЧИСТО из `VarStats`,
-/// не зная про поля/часы/монеты — потому одна на все режимы тюнинга. `scope` —
-/// подзаголовок (обычно имя стратегии); `var_labels` — подписи столбцов v1..vN
-/// (столбец 0 всегда «Факт»); короче набора вариантов — фолбэк «v{i}».
+/// The UNIVERSAL "Fact vs variants" KPI matrix: drawn PURELY out of `VarStats`,
+/// knowing nothing about fields/hours/coins — hence one for every tuning mode.
+/// `scope` is the subtitle (usually the strategy name); `var_labels` are the
+/// v1..vN column labels (column 0 is always "Fact"); shorter than the variant
+/// set falls back to "v{i}".
 pub(super) fn kpi_matrix_card(
     stats: &LoadState<Vec<VarStats>>,
     scope: String,
@@ -162,7 +164,7 @@ pub(super) fn kpi_matrix_card(
             );
         }
     };
-    // (подпись, значение, больше=лучше; None — без сравнения с фактом)
+    // (label, value, higher=better; None — no comparison against the fact)
     type Row = (String, fn(&VarStats) -> f64, Option<bool>, bool);
     let rows: Vec<Row> = vec![
         (
@@ -232,7 +234,7 @@ pub(super) fn kpi_matrix_card(
                 .child(t!("analytics.tuner.metric").to_string()),
         );
     for i in 0..stats.len() {
-        // Столбец 0 — всегда «Факт»; далее — переданные подписи, иначе «v{i}».
+        // Column 0 is always "Fact"; then the supplied labels, otherwise "v{i}".
         let name = if i == 0 {
             t!("analytics.tuner.fact").to_string()
         } else {
@@ -270,7 +272,7 @@ pub(super) fn kpi_matrix_card(
                 fmt_signed(v)
             };
             let color = match better {
-                // Вариант красим относительно факта; сам факт — по знаку.
+                // A variant is coloured against the fact; the fact itself by sign.
                 Some(hb) if i > 0 => {
                     if (v > fact) == hb && v != fact {
                         p.green
@@ -303,7 +305,7 @@ pub(super) fn kpi_matrix_card(
     )
 }
 
-/// Короткий формат числа для краёв вёдер (объёмы до миллиардов).
+/// Short number format for the bucket edges (volumes up to billions).
 fn short_num(v: f64) -> String {
     let a = v.abs();
     if a >= 1e9 {

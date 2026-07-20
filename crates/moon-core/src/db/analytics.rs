@@ -235,6 +235,9 @@ pub struct GroupStat {
     pub pf: f64,
     pub best: f64,
     pub worst: f64,
+    /// Strategy's last edit date — the `LastEditDate` field from the current version's
+    /// raw_json (strategies.sqlite). Empty for coins / when the strategy DB is absent.
+    pub lastedit: String,
 }
 
 impl GroupStat {
@@ -652,7 +655,8 @@ pub fn strategy_detail(q: &Query, strategy_id: i64) -> ReadResult<StrategyDetail
                 COALESCE(SUM(o.profitbtc > 0),0),
                 COALESCE(SUM(CASE WHEN o.profitbtc > 0 THEN o.profitbtc END),0),
                 COALESCE(SUM(CASE WHEN o.profitbtc <= 0 THEN -o.profitbtc END),0),
-                COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0)
+                COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0),
+                ''
          FROM {src} WHERE o.strategyid = ?3
          GROUP BY k ORDER BY 8 DESC"
     );
@@ -717,6 +721,7 @@ fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
         },
         best: r.get(11)?,
         worst: r.get(12)?,
+        lastedit: r.get::<_, Option<String>>(13)?.unwrap_or_default(),
     })
 }
 
@@ -975,7 +980,7 @@ fn groups(
     // Ключ стратегии — `id@core_uid`: разбивка ПО ЯДРАМ (видно работу стратегии на
     // каждом ядре отдельно); переименования не плодят группы, одноимённые разные
     // стратегии не сливаются; имя — только подпись.
-    let (key, name, kind, alive) = if by_strategy {
+    let (key, name, kind, alive, lastedit) = if by_strategy {
         (
             "CAST(o.strategyid AS TEXT) || '@' || CAST(o.core_uid AS TEXT)".to_string(),
             format!("MAX({})", strategy_name_expr(has_names)),
@@ -1002,10 +1007,20 @@ fn groups(
             } else {
                 "NULL"
             },
+            // Last edit date: the `LastEditDate` field of the strategy's current version.
+            if has_names {
+                "MAX(COALESCE((SELECT json_extract(v.raw_json, '$.LastEditDate')
+                               FROM strat.strategy_versions v
+                               WHERE v.core_uid = o.core_uid
+                                 AND v.strategy_id = o.strategyid
+                                 AND v.valid_to IS NULL), ''))"
+            } else {
+                "''"
+            },
         )
     } else {
         let coin = "COALESCE(o.coin,'')".to_string();
-        (coin.clone(), coin, "''", "NULL")
+        (coin.clone(), coin, "''", "NULL", "''")
     };
     let sql = format!(
         "SELECT {key} AS k, {name}, {kind}, MAX(o.core_name), COUNT(DISTINCT o.core_uid),
@@ -1014,7 +1029,8 @@ fn groups(
                 COALESCE(SUM(o.profitbtc > 0),0),
                 COALESCE(SUM(CASE WHEN o.profitbtc > 0 THEN o.profitbtc END),0),
                 COALESCE(SUM(CASE WHEN o.profitbtc <= 0 THEN -o.profitbtc END),0),
-                COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0)
+                COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0),
+                {lastedit}
          FROM {src}
          GROUP BY k ORDER BY 8 DESC"
     );

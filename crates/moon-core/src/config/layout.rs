@@ -151,6 +151,10 @@ pub struct WindowLayout {
     /// от «Сводки» (у каждой вкладки своё окно времени). None = дефолт.
     #[serde(default)]
     pub analytics_strat_period: Option<String>,
+    /// Bitmask of the visible columns in the Tuning strategy list (the ▦ selector).
+    /// None = default (all columns).
+    #[serde(default)]
+    pub analytics_strat_cols: Option<u16>,
     /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,
