@@ -234,7 +234,7 @@ impl AnalyticsView {
                     div()
                         .p(design::ui_px(cx, 18.0))
                         .text_color(moon(p.text_muted))
-                        .child(t!("analytics.loading").to_string()),
+                        .child(t!("common.loading").to_string()),
                 )
                 .into_any_element();
         };
