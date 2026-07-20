@@ -4,14 +4,12 @@
 //! analytics-mock artifact.
 
 use gpui::*;
-use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
-    MoonTone, h_flex, v_flex,
-};
+use moon_ui::{MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonTone, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::AnalyticsView;
 mod charts;
+mod cumulative;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{Summary, TopTrade};
@@ -90,70 +88,96 @@ impl AnalyticsView {
                     .gap(design::ui_px(cx, 8.0))
                     .items_start()
                     .child({
-                        // Top left: the total cumulative curve OR one per core
-                        // (the "by cores" checkbox, on by default).
-                        let by_core = self.sum_by_core;
-                        let toggle = h_flex()
-                            .gap(design::ui_px(cx, 5.0))
+                        // Top left: the total cumulative curve with the per-core curves
+                        // drawn inside it — always, there is no mode switch. The period
+                        // total moved into the header slot the old checkbox occupied, so
+                        // the axis row below the chart is free for the date ticks.
+                        let total: f64 = data.days.iter().map(|d| d.profit).sum();
+                        let shown = data.core_days.len().min(cumulative::MAX_CORE_LINES);
+                        let head = h_flex()
+                            .gap(design::ui_px(cx, 8.0))
                             .items_center()
-                            .child(
+                            // The line cap is never silent: say so when it bites.
+                            .children((data.core_days.len() > shown).then(|| {
                                 div()
                                     .text_size(design::t_caption(cx))
                                     .text_color(moon(p.text_muted))
-                                    .child(t!("analytics.by_cores").to_string()),
-                            )
+                                    .child(
+                                        t!(
+                                            "analytics.cores_shown",
+                                            n = shown,
+                                            total = data.core_days.len()
+                                        )
+                                        .to_string(),
+                                    )
+                            }))
                             .child(
-                                MoonCheckbox::new("sum-by-core")
-                                    .checked(by_core)
-                                    .size(MoonCheckboxSize::Compact)
-                                    .on_change({
-                                        let view = cx.entity();
-                                        move |ch: &bool, _w, app| {
-                                            let on = *ch;
-                                            view.update(app, |this, cx| {
-                                                this.sum_by_core = on;
-                                                cx.notify();
-                                            });
-                                        }
-                                    }),
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(moon(sign_color(p, total)))
+                                    .child(fmt_signed(total)),
                             )
                             .into_any_element();
-                        let body = if by_core {
-                            charts::core_lines(
+                        chart_card_ex(
+                            t!("analytics.cum_title").to_string(),
+                            // The subtitle names the grid the DB actually chose: on a
+                            // single-day period the curve is hourly, not per day.
+                            if data.bucket_secs < 86_400 {
+                                t!("analytics.cum_sub_hours").to_string()
+                            } else {
+                                t!("analytics.cum_sub").to_string()
+                            },
+                            Some(head),
+                            cumulative::cumulative_area(
                                 &data.days,
                                 &data.core_days,
                                 &core_colors,
-                                170.0,
-                                self.hover_core_bucket,
+                                self.hover_cum_bucket,
+                                data.bucket_secs,
                                 p,
                                 cx,
-                            )
-                        } else {
-                            charts::cumulative_area(&data.days, p)
-                        };
-                        chart_card_ex(
-                            t!("analytics.cum_title").to_string(),
-                            t!("analytics.cum_sub").to_string(),
-                            Some(toggle),
-                            body,
+                            ),
                             p,
                             cx,
                         )
                     })
-                    .child(chart_card(
-                        t!("analytics.daily_title").to_string(),
-                        t!("analytics.daily_sub").to_string(),
-                        charts::daily_bars(
-                            &data.days,
-                            &data.core_days,
-                            &core_colors,
-                            self.hover_daily_bucket,
-                            p,
-                            cx,
-                        ),
-                        p,
-                        cx,
-                    )),
+                    .child({
+                        // On a single day the per-day series is ONE bar, so this card
+                        // switches dimension: profit per strategy type, with the cores
+                        // behind each type in its popup. The AUTHORITATIVE signal is the
+                        // grid the DB layer chose — an hourly bucket IS "a single day";
+                        // `kinds` can be empty simply because nothing traded.
+                        let by_kind = data.bucket_secs < 86_400;
+                        let (title, sub, body) = if by_kind {
+                            (
+                                t!("analytics.kinds_title").to_string(),
+                                t!("analytics.kinds_sub").to_string(),
+                                charts::kind_bars(
+                                    &data.kinds,
+                                    &data.core_days,
+                                    &core_colors,
+                                    self.hover_kind,
+                                    p,
+                                    cx,
+                                ),
+                            )
+                        } else {
+                            (
+                                t!("analytics.daily_title").to_string(),
+                                t!("analytics.daily_sub").to_string(),
+                                charts::daily_bars(
+                                    &data.days,
+                                    &data.core_days,
+                                    &core_colors,
+                                    self.hover_daily_bucket,
+                                    data.bucket_secs,
+                                    p,
+                                    cx,
+                                ),
+                            )
+                        };
+                        chart_card(title, sub, body, p, cx)
+                    }),
             )
             .child(
                 h_flex()

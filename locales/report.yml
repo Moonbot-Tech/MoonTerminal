@@ -124,10 +124,17 @@ report.period.week:
   ru: "Неделя"
   en: "Week"
   es: "Semana"
+# Calendar month from the 1st. The wording matches Analytics
+# (analytics.period.cur_month / .month) so the two windows do not disagree.
+report.period.cur_month:
+  ru: "Тек. месяц"
+  en: "This month"
+  es: "Mes actual"
+# A rolling 30-day window — NOT a calendar month, which is why it is labelled by number.
 report.period.month:
-  ru: "Месяц"
-  en: "Month"
-  es: "Mes"
+  ru: "30 дней"
+  en: "30 days"
+  es: "30 días"
 report.period.year:
   ru: "Год"
   en: "Year"

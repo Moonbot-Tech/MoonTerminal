@@ -198,7 +198,12 @@ pub struct CoreSeries {
     pub uid: u64,
     pub name: String,
     pub per_bucket: Vec<f64>,
+    /// Trades in the SAME bucket — same grid and same length as `per_bucket`, filled in
+    /// one pass with it (the Summary popups print profit and count on one line).
+    pub per_bucket_trades: Vec<i64>,
     pub total: f64,
+    /// The core's trades over the whole period = sum of `per_bucket_trades`.
+    pub trades: i64,
 }
 
 /// Строка топ-сделок (лучшие/худшие за период).
@@ -291,12 +296,41 @@ pub struct Summary {
     pub core_days: Vec<CoreSeries>,
     /// Самый прибыльный час UTC: (час, профит, сделок).
     pub best_hour: Option<(u32, f64, i64)>,
+    /// Profit per strategy type, descending. Filled ONLY for a day or less: on such a
+    /// period the per-day series is a single bar, so the chart groups by type instead.
+    /// Empty = a longer period, where the chart stays daily.
+    pub kinds: Vec<KindStat>,
     /// Ядра, встречающиеся в реплике (для комбобокса фильтра) — БЕЗ учёта
     /// фильтров, чтобы выбор не «схлопывал» список.
     pub cores: Vec<(u64, String)>,
     /// Фактические границы периода (после резолва «Все»).
     pub from: i64,
     pub to: i64,
+}
+
+/// One core's share of a strategy type — the popup behind a `KindStat` bar.
+#[derive(Clone, Debug)]
+pub struct KindCore {
+    pub uid: u64,
+    pub name: String,
+    pub profit: f64,
+    pub trades: i64,
+}
+
+/// Profit of ONE strategy type (`SignalType`) over the period, with the per-core split
+/// behind it. Built only for single-day periods, where a per-day series would be one bar:
+/// the chart then groups by type instead of by day, and the popup opens the cores.
+///
+/// The type comes from the strategies DB; without it every trade lands in one unnamed
+/// group (`kind` empty) rather than the chart disappearing.
+#[derive(Clone, Debug)]
+pub struct KindStat {
+    /// `SignalType` of the strategy; empty when unknown (UI shows a dash).
+    pub kind: String,
+    pub profit: f64,
+    pub trades: i64,
+    /// Cores that traded this type, most profitable first.
+    pub cores: Vec<KindCore>,
 }
 
 const WHERE_PERIOD: &str = "closedate >= ?1 AND closedate < ?2 AND closedate > 0";
@@ -337,8 +371,15 @@ pub(super) fn summary_on(
         return Err(ReadFail::NotReady);
     };
     let len = (q.to - q.from).max(1);
+    // A day or less: a daily series would be a single bar and a cumulative curve a single
+    // point, so the grid drops to HOURS — the same series, the same charts, just a scale
+    // that has something to show. `core_series` follows this bucket, so the per-core lines
+    // and every popup come along for free.
+    let one_day = len <= 86_400;
     // Ведро серии: сутки, на многолетних «Все» — неделя (иначе тысячи баров).
-    let bucket = if len / 86_400 > 400 {
+    let bucket = if one_day {
+        3_600
+    } else if len / 86_400 > 400 {
         7 * 86_400
     } else {
         86_400
@@ -373,10 +414,83 @@ pub(super) fn summary_on(
         strategies: with_name_fallback(&mut names, |n| groups(conn, &src, &q, n, true))?,
         coins: with_name_fallback(&mut names, |n| groups(conn, &src, &q, n, false))?,
         best_hour,
+        // Only for a day or less — on a longer period the daily chart works and this
+        // aggregation's per-row subquery would be paid for nothing.
+        kinds: if one_day {
+            with_name_fallback(&mut names, |n| kind_stats(conn, &src, &q, n))?
+        } else {
+            Vec::new()
+        },
         cores: super::distinct_cores(conn)?,
         from: q.from,
         to: q.to,
     })
+}
+
+/// Profit per strategy type (`SignalType`) with the per-core split behind each one, in ONE
+/// pass: the bars and their popups can never disagree about a number.
+///
+/// Without the strategies DB the type expression is a constant empty string, so every trade
+/// folds into one unnamed group instead of the chart vanishing.
+fn kind_stats(
+    conn: &Connection,
+    src: &str,
+    q: &Query,
+    has_names: bool,
+) -> ReadResult<Vec<KindStat>> {
+    const CTX: &str = "analytics: kind_stats";
+    let kind = if has_names {
+        "COALESCE((SELECT json_extract(v.raw_json, '$.SignalType')
+                   FROM strat.strategy_versions v
+                   WHERE v.core_uid = o.core_uid
+                     AND v.strategy_id = o.strategyid
+                     AND v.valid_to IS NULL), '')"
+    } else {
+        "''"
+    };
+    let sql = format!(
+        "SELECT {kind} AS k, o.core_uid, MAX(COALESCE(o.core_name,'')),
+                COUNT(*), COALESCE(SUM(o.profitbtc),0)
+         FROM {src} GROUP BY k, o.core_uid"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                // NULL core_uid: a source without the column projects it as NULL, and a
+                // hard read would abort the whole summary over one unattributable row.
+                r.get::<_, Option<i64>>(1)?.unwrap_or(0) as u64,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, f64>(4)?,
+            ))
+        })
+        .map_err(|e| read_fail(CTX, e))?;
+    let mut map: std::collections::HashMap<String, KindStat> = std::collections::HashMap::new();
+    for row in rows {
+        let (kind, uid, name, trades, profit) = row.map_err(|e| read_fail(CTX, e))?;
+        let e = map.entry(kind.clone()).or_insert_with(|| KindStat {
+            kind,
+            profit: 0.0,
+            trades: 0,
+            cores: Vec::new(),
+        });
+        e.profit += profit;
+        e.trades += trades;
+        e.cores.push(KindCore {
+            uid,
+            name,
+            profit,
+            trades,
+        });
+    }
+    let mut out: Vec<KindStat> = map.into_values().collect();
+    for k in &mut out {
+        k.cores.sort_by(|a, b| b.profit.total_cmp(&a.profit));
+    }
+    out.sort_by(|a, b| b.profit.total_cmp(&a.profit));
+    Ok(out)
 }
 
 /// Плотная посуточная серия ячеек за период — для календарных тепловых карт
@@ -854,7 +968,9 @@ fn scan_period(
     Ok((st, days, hours))
 }
 
-/// Scan core profit into the `days` buckets and sort profitable cores first.
+/// Scan core profit AND trade count into the `days` buckets, sorting profitable cores
+/// first. Both series share one pass and one grid, so a bucket's profit and its count can
+/// never come from different rows.
 ///
 /// Any query or row-conversion failure aborts the complete series.
 fn core_series(
@@ -877,15 +993,18 @@ fn core_series(
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
+            // core_uid as Option: `unified_from` projects NULL for a source that has no
+            // such column, and a hard i64 read there aborts core_series — which throws the
+            // WHOLE summary away, `days` included, over one unattributable row.
             Ok((
-                r.get::<_, i64>(0)? as u64,
+                r.get::<_, Option<i64>>(0)?.unwrap_or(0) as u64,
                 r.get::<_, String>(1)?,
                 r.get::<_, i64>(2)?,
                 r.get::<_, f64>(3)?,
             ))
         })
         .map_err(|e| read_fail(CTX, e))?;
-    let mut map: std::collections::HashMap<u64, (String, Vec<f64>)> =
+    let mut map: std::collections::HashMap<u64, (String, Vec<f64>, Vec<i64>)> =
         std::collections::HashMap::new();
     for row in rows {
         // core_uid / closedate / profitbtc all move numbers here.
@@ -893,21 +1012,25 @@ fn core_series(
         let idx = (((close - t0) / bucket).max(0) as usize).min(nb - 1);
         let e = map
             .entry(uid)
-            .or_insert_with(|| (name.clone(), vec![0.0; nb]));
+            .or_insert_with(|| (name.clone(), vec![0.0; nb], vec![0i64; nb]));
         if e.0.is_empty() {
             e.0 = name;
         }
         e.1[idx] += profit;
+        e.2[idx] += 1;
     }
     let mut out: Vec<CoreSeries> = map
         .into_iter()
-        .map(|(uid, (name, per_bucket))| {
+        .map(|(uid, (name, per_bucket, per_bucket_trades))| {
             let total = per_bucket.iter().sum();
+            let trades = per_bucket_trades.iter().sum();
             CoreSeries {
                 uid,
                 name,
                 per_bucket,
+                per_bucket_trades,
                 total,
+                trades,
             }
         })
         .collect();
@@ -1067,6 +1190,72 @@ mod read_failure_tests {
             strategy: None,
             strat_core: None,
         }
+    }
+
+    /// A single-day period switches the series grid to HOURS and reports the profit split
+    /// by strategy type — and that split must reconcile with the period total, or the two
+    /// charts on screen contradict each other.
+    #[test]
+    fn single_day_uses_hourly_grid_and_kinds_reconcile() {
+        let path = temp_db("oneday");
+        let day = 1_780_000_000i64 / 86_400 * 86_400;
+        // Four trades spread across three different hours of ONE day.
+        let conn = build_replica(
+            &path,
+            &[
+                (day + 3_600, 10.0, "BTCUSDT"),
+                (day + 3_700, -4.0, "BTCUSDT"),
+                (day + 7_200, 6.0, "ETHUSDT"),
+                (day + 18_000, -2.0, "ETHUSDT"),
+            ],
+        );
+
+        let s = summary_on(&conn, &q(day, day + 86_400), false).expect("healthy DB reads");
+        assert_eq!(s.bucket_secs, 3_600, "a day or less → hourly grid");
+        // The grid steps by exactly an hour with no holes (empty hours are zero-filled —
+        // a chart's X axis has to be continuous), and three of them hold the trades.
+        assert!(
+            s.days.windows(2).all(|w| w[1].start - w[0].start == 3_600),
+            "grid step must be one hour: {:?}",
+            s.days
+        );
+        assert_eq!(
+            s.days.iter().filter(|d| d.trades > 0).count(),
+            3,
+            "three hours with trades: {:?}",
+            s.days
+        );
+
+        // Without the strategies DB every trade folds into ONE unnamed type — the chart
+        // still has something to draw instead of vanishing.
+        assert_eq!(s.kinds.len(), 1, "no strategies DB → a single group");
+        assert_eq!(s.kinds[0].kind, "");
+
+        // The split must add up to the period total, both in money and in count.
+        let ksum: f64 = s.kinds.iter().map(|k| k.profit).sum();
+        let kn: i64 = s.kinds.iter().map(|k| k.trades).sum();
+        assert!(
+            (ksum - s.cur.profit).abs() < 1e-9,
+            "Σ of types {ksum} != period total {}",
+            s.cur.profit
+        );
+        assert_eq!(kn, s.cur.n, "Σ of type trades != the period's n");
+
+        // And inside a type, the per-core rows the popup lists must add up to its own bar.
+        let csum: f64 = s.kinds[0].cores.iter().map(|c| c.profit).sum();
+        assert!(
+            (csum - s.kinds[0].profit).abs() < 1e-9,
+            "Σ of cores {csum} != the type's profit {}",
+            s.kinds[0].profit
+        );
+
+        // A longer period keeps the daily grid and computes no type split at all.
+        let wide = summary_on(&conn, &q(day - 86_400, day + 86_400), false).expect("reads");
+        assert_eq!(wide.bucket_secs, 86_400, "two days → daily grid");
+        assert!(wide.kinds.is_empty(), "no type split on a long period");
+
+        drop(conn);
+        remove_db(&path);
     }
 
     /// A healthy replica retains exact summary metrics and empty-period semantics.

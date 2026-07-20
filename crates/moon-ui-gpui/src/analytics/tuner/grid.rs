@@ -3,296 +3,37 @@
 //!     input/output `day.hh:mm` (day 1..7); e.g. `1.23:44-6.22:22`.
 //!   - "Day" (`WorkingTime`, time-of-day mode): window `hh:mm-hh:mm`.
 //!   - "In hour" (`WorkingTime`, minute-of-hour mode): window `N-M` (0..59).
-//! "Day" and "In hour" are TWO views of the SAME WorkingTime field → MUTUALLY EXCLUSIVE:
-//! filling in / auto-suggesting one clears the other (there is no mode switch).
+//! "Day" and "In hour" are TWO views of the SAME WorkingTime field → their VALUES are
+//! mutually exclusive: filling in / auto-suggesting one clears the other.
+//! The row CHECKBOXES are independent of that — each only says "consider this field in the
+//! sweep". Ticking both WorkingTime rows offers the sweep both formats as competing
+//! candidates for the one field, and it keeps whichever earns more; so a full sweep yields
+//! at most TWO windows — a week span plus one WorkingTime window.
 //!
 //! The current value of the strategy fields is simply DISPLAYED as a raw string (parsing
 //! is unreliable) — in amber as "in strategy". v1/v2 are fresh input / auto-suggestion; Save writes
 //! the non-empty changed fields. The shell (toolbar + suggestion row) is SHARED with the filter.
 
-use std::collections::HashMap;
-
 use gpui::*;
-use moon_ui::{MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex, v_flex};
+use moon_ui::{
+    MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
+    MoonTooltipView, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::state::{TunerKind, glyph_btn};
+use super::time_state::{N_FIELD, fmt_min, fmt_week_ep};
 use crate::design;
 use crate::design::{moon, moon_alpha};
-use moon_core::db::tuner::{TimeWindow, Variant, format_week_span, format_working_time};
+use moon_core::db::tuner::TimeWindow;
 
-/// Variants besides the "Fact" one (v1, v2) — same as the filter tuner's N_VAR.
-pub(super) const TIME_N_VAR: usize = 2;
-/// Fields: 0 = Weekly (WorkingWeekTime), 1 = Day, 2 = In hour (both are WorkingTime).
-const N_FIELD: usize = 3;
-/// Minutes in a week (7 days × 1440) — the maximum minute of the week + 1.
-pub(super) const WEEK_MIN: u16 = 7 * 1440;
-
-/// State of the "By time" tuner inside `AnalyticsView`.
-pub(in crate::analytics) struct TimeTunerState {
-    /// `[variant 0..TIME_N_VAR][field 0..N_FIELD] = (from, to)` as strings.
-    pub(super) bounds: Vec<[(String, String); N_FIELD]>,
-    /// RAW current values of the strategy fields `[WorkingWeekTime, WorkingTime]`.
-    pub(super) current_raw: [String; 2],
-    /// The strategy's current `IgnoreTime` (the schedule is ignored when YES).
-    pub(super) ignore_cur: bool,
-    /// Current `IgnoreFilters` (the GLOBAL ignore — it gates time too; must be NO).
-    pub(super) ign_filters_cur: bool,
-    /// Manual `IgnoreTime` switch (None = follow the automatic logic).
-    pub(super) ignore_staged: Option<bool>,
-    /// Lazy input cache (created in render, as in the filter tuner).
-    pub(super) inputs: HashMap<String, Entity<MoonInputState>>,
-    // Shared-shell settings — parallel to `TunerState` (time hides some of them).
-    pub(super) iters: String,
-    pub(super) min_trades: String,
-    pub(super) edges: usize,
-    pub(super) round_results: bool,
-    pub(super) sugg_busy: bool,
-    /// Auto-suggestion generation — a stale result is discarded.
-    pub(super) sugg_seq: u64,
-}
-
-impl TimeTunerState {
-    /// A fresh tuner: all fields empty.
-    pub(in crate::analytics) fn load() -> Self {
-        Self {
-            bounds: vec![std::array::from_fn(|_| (String::new(), String::new())); TIME_N_VAR],
-            current_raw: Default::default(),
-            ignore_cur: false,
-            ign_filters_cur: false,
-            ignore_staged: None,
-            inputs: HashMap::new(),
-            iters: "20".to_string(),
-            min_trades: String::new(),
-            edges: 64,
-            round_results: true,
-            sugg_busy: false,
-            sugg_seq: 0,
-        }
-    }
-
-    /// Span of variant `vi` over the minute of the week (field 0). Empty → None; a missing edge →
-    /// start (0) / end (WEEK_MIN-1) of the week.
-    pub(super) fn week_span(&self, vi: usize) -> Option<(u16, u16)> {
-        let (from, to) = &self.bounds[vi][0];
-        if from.trim().is_empty() && to.trim().is_empty() {
-            return None;
-        }
-        Some((
-            parse_week_ep(from, false).unwrap_or(0),
-            parse_week_ep(to, true).unwrap_or(WEEK_MIN - 1),
-        ))
-    }
-
-    /// WorkingTime window of variant `vi`: from the "Day" row (field 1 → `Day`) OR the
-    /// "In hour" row (field 2 → `Hour`). Both filled (shouldn't happen) → "Day" wins.
-    pub(super) fn tod(&self, vi: usize) -> Option<TimeWindow> {
-        let (df, dt) = &self.bounds[vi][1];
-        if !df.trim().is_empty() || !dt.trim().is_empty() {
-            let w = (parse_time(df).unwrap_or(0), parse_time(dt).unwrap_or(1439));
-            // A full day (00:00–23:59) = no restriction (symmetric with a full week).
-            return (w != (0, 1439)).then_some(TimeWindow::Day(w.0, w.1));
-        }
-        let (hf, ht) = &self.bounds[vi][2];
-        if !hf.trim().is_empty() || !ht.trim().is_empty() {
-            let w = (parse_moh(hf).unwrap_or(0), parse_moh(ht).unwrap_or(59));
-            // The whole hour (0–59) = no restriction.
-            return (w != (0, 59)).then_some(TimeWindow::Hour(w.0, w.1));
-        }
-        None
-    }
-
-    /// Which WorkingTime field is set in v1 (used to dim the unused row /
-    /// slider): `Some(1)`=Day, `Some(2)`=In hour, `None`=both empty.
-    pub(super) fn active_wt(&self) -> Option<usize> {
-        let d = &self.bounds[0][1];
-        if !d.0.trim().is_empty() || !d.1.trim().is_empty() {
-            return Some(1);
-        }
-        let h = &self.bounds[0][2];
-        if !h.0.trim().is_empty() || !h.1.trim().is_empty() {
-            return Some(2);
-        }
-        None
-    }
-
-    /// Strategy field string built from variant `vi`: `which` 0 = WorkingWeekTime (week
-    /// span; a full week = "no restriction" → ""), 1 = WorkingTime. Empty → "".
-    pub(super) fn field_value(&self, vi: usize, which: usize) -> String {
-        if which == 0 {
-            self.week_span(vi)
-                .filter(|&s| s != (0, WEEK_MIN - 1))
-                .map(format_week_span)
-                .unwrap_or_default()
-        } else {
-            self.tod(vi).map(format_working_time).unwrap_or_default()
-        }
-    }
-
-    /// Variants for the KPIs: `[Fact, v1, v2]`. Each carries both week_span AND tod.
-    pub(super) fn variants(&self) -> Vec<Variant> {
-        let mut out = vec![Variant::default()];
-        for vi in 0..self.bounds.len() {
-            out.push(Variant {
-                // A full week == no restriction (== "Fact").
-                week_span: self.week_span(vi).filter(|&s| s != (0, WEEK_MIN - 1)),
-                tod: self.tod(vi),
-                ..Default::default()
-            });
-        }
-        out
-    }
-
-    /// Whether we are changing the schedule: at least one v1 field is non-empty AND differs
-    /// from the current value.
-    pub(super) fn has_schedule_change(&self) -> bool {
-        [0usize, 1].iter().any(|&which| {
-            let v = self.field_value(0, which);
-            !v.is_empty() && v != self.current_raw[which].trim()
-        })
-    }
-
-    /// Effective `IgnoreTime` value for display/writing: the manual switch, otherwise
-    /// automatic — NO when a schedule is set (else Moonbot ignores the windows), current value
-    /// when it is not.
-    pub(super) fn ignore_effective(&self) -> bool {
-        self.ignore_staged.unwrap_or(if self.has_schedule_change() {
-            false
-        } else {
-            self.ignore_cur
-        })
-    }
-
-    /// Whether there is anything to write (Save lights up): the schedule, `IgnoreTime` or the
-    /// global ignore.
-    pub(super) fn is_dirty(&self) -> bool {
-        !self.changes().is_empty()
-    }
-
-    /// Edits to the strategy: the changed `WorkingWeekTime`/`WorkingTime` plus the ignore flags
-    /// that must be cleared for the schedule to take effect (`IgnoreTime`, and also the
-    /// GLOBAL `IgnoreFilters` — when writing a schedule, if it is currently YES). We write only
-    /// what actually changes.
-    pub(super) fn changes(&self) -> Vec<(String, String)> {
-        const NAMES: [&str; 2] = ["WorkingWeekTime", "WorkingTime"];
-        let yesno = |b: bool| if b { "YES" } else { "NO" }.to_string();
-        let mut out: Vec<(String, String)> = (0..2)
-            .filter_map(|which| {
-                let v = self.field_value(0, which);
-                (!v.is_empty() && v != self.current_raw[which].trim())
-                    .then(|| (NAMES[which].to_string(), v))
-            })
-            .collect();
-        let schedule = !out.is_empty();
-        // IgnoreTime — switch/automatic; written only if it differs from the current value.
-        let ig_time = self.ignore_effective();
-        if ig_time != self.ignore_cur {
-            out.push(("IgnoreTime".to_string(), yesno(ig_time)));
-        }
-        // The global IgnoreFilters gates time as well — when writing a schedule we clear it if YES.
-        if schedule && self.ign_filters_cur {
-            out.push(("IgnoreFilters".to_string(), "NO".to_string()));
-        }
-        out
-    }
-
-    /// Bulk (multi-select) change set: push the schedule fields whenever they are non-empty
-    /// — NOT gated on the anchor's current values, since the other targets differ — and always
-    /// disable IgnoreTime + IgnoreFilters so the schedule actually applies on every target.
-    /// Writing NO to a target that already had NO is idempotent, so this is safe to fan out.
-    pub(super) fn changes_forced(&self) -> Vec<(String, String)> {
-        const NAMES: [&str; 2] = ["WorkingWeekTime", "WorkingTime"];
-        let mut out: Vec<(String, String)> = (0..2)
-            .filter_map(|which| {
-                let v = self.field_value(0, which);
-                (!v.is_empty()).then(|| (NAMES[which].to_string(), v))
-            })
-            .collect();
-        if !out.is_empty() {
-            out.push(("IgnoreTime".to_string(), "NO".to_string()));
-            out.push(("IgnoreFilters".to_string(), "NO".to_string()));
-        }
-        out
-    }
-
-    /// Reset the grid when the strategy changes (v1/v2 + inputs + current values + the ignore
-    /// switch), and discard an in-flight auto-suggestion.
-    pub(super) fn reset_grid(&mut self) {
-        self.bounds = vec![std::array::from_fn(|_| (String::new(), String::new())); TIME_N_VAR];
-        self.current_raw = Default::default();
-        self.ignore_staged = None;
-        self.inputs.clear();
-        self.sugg_seq = self.sugg_seq.wrapping_add(1);
-        self.sugg_busy = false;
-    }
-
-    /// Discard an IN-FLIGHT auto-suggestion when the QUERY changes (period/filter) — just like the
-    /// filter's `TunerState::invalidate`: bump the generation and clear busy WITHOUT touching
-    /// v1. Otherwise a stale result from the old query would land in v1 (and become Saveable).
-    pub(in crate::analytics) fn invalidate_suggest(&mut self) {
-        self.sugg_seq = self.sugg_seq.wrapping_add(1);
-        self.sugg_busy = false;
-    }
-}
-
-/// Minutes of the day → "hh:mm".
-pub(super) fn fmt_min(m: u16) -> String {
-    format!("{:02}:{:02}", m / 60, m % 60)
-}
-
-/// One edge of a week span `(from, to)` as the input string "day.hh:mm" (or just "day" on a
-/// day boundary): the start of the week/day for "from" and the end for "to" — short, no time.
-pub(super) fn fmt_week_ep(wm: u16, is_to: bool) -> String {
-    let (day, tod) = (wm / 1440 % 7 + 1, wm % 1440);
-    if (!is_to && tod == 0) || (is_to && tod == 1439) {
-        day.to_string()
-    } else {
-        format!("{day}.{}", fmt_min(tod))
-    }
-}
-
-/// Parse one edge of a week span from the field: "day" or "day.hh:mm" (day 1..7) →
-/// minute of the week 0..WEEK_MIN-1. Without a time: "from" → start of the day, "to" → end of
-/// the day. Empty/garbage/outside 1..7 → None.
-fn parse_week_ep(s: &str, is_to: bool) -> Option<u16> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    let (day_s, tod) = match s.split_once('.') {
-        Some((d, t)) => (d, parse_time(t)?),
-        None => (s, if is_to { 1439 } else { 0 }),
-    };
-    let day: u16 = day_s.trim().parse().ok()?;
-    if !(1..=7).contains(&day) {
-        return None;
-    }
-    Some((day - 1) * 1440 + tod)
-}
-
-/// Minute of the hour 0..59 from the field. Empty/garbage → None; above 59 is clamped to 59.
-pub(super) fn parse_moh(s: &str) -> Option<u8> {
-    s.trim().parse::<u8>().ok().map(|v| v.min(59))
-}
-
-/// Time of day from the field: "hh:mm" or minutes of the day; empty/garbage = None.
-pub(super) fn parse_time(s: &str) -> Option<u16> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    if let Some((h, m)) = s.split_once(':') {
-        let h: u16 = h.trim().parse().ok()?;
-        let m: u16 = m.trim().parse().ok()?;
-        if h > 23 || m > 59 {
-            return None;
-        }
-        Some(h * 60 + m)
-    } else {
-        s.parse::<u16>().ok().map(|v| v.min(1439))
-    }
-}
+/// Width of the row-checkbox column, in `design::ui_px` units. The header spacer and the
+/// slider lead-in reuse it so the field names stay in one line down the card; it is sized
+/// above the compact checkbox's own box, which moonui draws at a fixed size.
+pub(super) const CHECK_COL: f32 = 16.0;
+/// Field-name column: fits "WorkingWeekTime" on one line next to the checkbox.
+pub(super) const NAME_COL: f32 = 110.0;
 
 impl AnalyticsView {
     /// Commit a field bound (Blur/Enter): state → WT mutual exclusion → KPIs.
@@ -344,13 +85,18 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Auto-suggestion into v1 (background): the week window (WorkingWeekTime) + the
-    /// WorkingTime window, where the mode (Day vs In hour) is chosen BY the auto-suggestion
-    /// itself — it fills ONE of the "Day"/"In hour" rows and clears the other. Scope is
-    /// `tuner_query`. No improvement
-    /// → empty.
+    /// Auto-suggestion into v1 (background): the CHECKED rows only. With both WorkingTime
+    /// formats ticked the sweep compares them and answers in the better one; an unchecked
+    /// row keeps its value and, for a field nothing may search, pins the sweep to it. Scope
+    /// is `tuner_query`. No improvement → the searched rows are cleared.
     pub(super) fn time_suggest(&mut self, cx: &mut Context<Self>) {
         if self.time_tuner.sugg_busy {
+            return;
+        }
+        let axes = self.time_tuner.axes();
+        // Nothing checked: spinning the button to write nothing reads as "found nothing".
+        if axes.is_empty() {
+            log::info!("analytics: time sweep skipped — no row is checked");
             return;
         }
         self.time_tuner.sugg_seq = self.time_tuner.sugg_seq.wrapping_add(1);
@@ -371,9 +117,12 @@ impl AnalyticsView {
         self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            let sugg = executor
-                .spawn(async move { moon_core::db::tuner::suggest_time(&q, min_n, edges, round) })
-                .await;
+            let sugg =
+                executor
+                    .spawn(async move {
+                        moon_core::db::tuner::suggest_time(&q, min_n, edges, round, axes)
+                    })
+                    .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.op_finished(cx);
@@ -383,26 +132,43 @@ impl AnalyticsView {
                     this.time_tuner.sugg_busy = false;
                     match sugg {
                         Ok(s) => {
-                            // Field 0: the week window as "day.hh:mm".
-                            let (w0, w1) = s
-                                .week_span
-                                .map(|(f, t)| (fmt_week_ep(f, false), fmt_week_ep(t, true)))
-                                .unwrap_or_default();
-                            this.set_v1_cell(0, w0, w1);
-                            // WorkingTime: the auto-suggestion chose the mode itself → fill ITS row
-                            // and clear the other one (mutual exclusion).
-                            match s.tod {
-                                Some(TimeWindow::Day(f, t)) => {
-                                    this.set_v1_cell(1, fmt_min(f), fmt_min(t));
-                                    this.clear_field(0, 2);
-                                }
-                                Some(TimeWindow::Hour(f, t)) => {
-                                    this.set_v1_cell(2, f.to_string(), t.to_string());
-                                    this.clear_field(0, 1);
-                                }
-                                None => {
-                                    this.clear_field(0, 1);
-                                    this.clear_field(0, 2);
+                            // Write ONLY into the FIELDS that were searched. WorkingWeekTime
+                            // is its own field: unchecked → untouched, its value pinned the
+                            // sweep. WorkingTime is one field behind two rows, so if either
+                            // format was searched its answer replaces the pair.
+                            if axes.week {
+                                // Field 0: the week window as "day.hh:mm".
+                                let (w0, w1) = s
+                                    .week_span
+                                    .map(|(f, t)| (fmt_week_ep(f, false), fmt_week_ep(t, true)))
+                                    .unwrap_or_default();
+                                this.set_v1_cell(0, w0, w1);
+                            }
+                            // WorkingTime: the sweep picked the format among the ticked ones,
+                            // so its answer names the row — fill it and clear the other view
+                            // of the same field. Both unticked → the field is left alone.
+                            if axes.day || axes.hour {
+                                match s.tod {
+                                    Some(TimeWindow::Day(f, t)) => {
+                                        this.set_v1_cell(1, fmt_min(f), fmt_min(t));
+                                        this.clear_field(0, 2);
+                                    }
+                                    Some(TimeWindow::Hour(f, t)) => {
+                                        this.set_v1_cell(2, f.to_string(), t.to_string());
+                                        this.clear_field(0, 1);
+                                    }
+                                    // Nothing beat the baseline: clear only the formats the
+                                    // sweep was allowed to search. An unchecked row keeps
+                                    // the value the user put there — the sweep never judged
+                                    // it, so it is not ours to delete.
+                                    None => {
+                                        if axes.day {
+                                            this.clear_field(0, 1);
+                                        }
+                                        if axes.hour {
+                                            this.clear_field(0, 2);
+                                        }
+                                    }
                                 }
                             }
                             this.reload_time(cx);
@@ -423,12 +189,29 @@ impl AnalyticsView {
         self.time_tuner.inputs.remove(&format!("tt0f{field}b"));
     }
 
-    /// Clear the WHOLE variant column (the ✕ in the header) — every from/to field of that vi.
+    /// Clear the WHOLE variant column (the ✕ in the header). In v1 — the column the sweep
+    /// owns — an unchecked row holds a value the user pinned on purpose, so ✕ leaves it
+    /// alone (mirrors the filter tuner's `clear_variant`). v2 is a what-if column nothing
+    /// sweeps, so its ✕ clears everything; gating it on a sweep flag would leave rows that
+    /// cannot be cleared at all.
     fn time_clear_variant(&mut self, vi: usize, cx: &mut Context<Self>) {
         for field in 0..N_FIELD {
+            if vi == 0 && !self.time_tuner.enabled[field] {
+                continue;
+            }
             self.clear_field(vi, field);
         }
         self.reload_time(cx);
+        cx.notify();
+    }
+
+    /// Row checkbox: "consider this field in the sweep" — the filter tuner's rule, and the
+    /// three rows are independent. Ticking both WorkingTime formats is meaningful: they
+    /// become competing candidates for that one field. No value moves, so the KPIs need no
+    /// recompute; only an in-flight sweep, started under the old set, becomes stale.
+    fn toggle_time_field(&mut self, field: usize, on: bool, cx: &mut Context<Self>) {
+        self.time_tuner.enabled[field] = on;
+        self.time_tuner.invalidate_suggest();
         cx.notify();
     }
 
@@ -569,10 +352,31 @@ impl AnalyticsView {
             .text_size(design::t_caption(cx))
             .text_color(moon(p.text_soft))
             .bg(moon(p.table_head))
+            // Master checkbox over the rows' column — the filter tuner's "all on/off".
+            .child(
+                div().w(design::ui_px(cx, CHECK_COL)).flex_none().child(
+                    MoonCheckbox::new("tt-en-all")
+                        .checked(self.time_tuner.enabled.iter().all(|&e| e))
+                        .size(MoonCheckboxSize::Compact)
+                        .on_change({
+                            let view = cx.entity();
+                            move |ch: &bool, _w, app| {
+                                let on = *ch;
+                                view.update(app, |this, cx| {
+                                    this.time_tuner.enabled = [on; N_FIELD];
+                                    // Values do not move → no KPI recompute; only an
+                                    // in-flight sweep is now stale.
+                                    this.time_tuner.invalidate_suggest();
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                ),
+            )
             .child(
                 // Matches the row's field-name column width (fits "WorkingWeekTime").
                 div()
-                    .w(design::font_w_px(cx, 118.0))
+                    .w(design::font_w_px(cx, NAME_COL))
                     .flex_none()
                     .child(t!("analytics.time.col_field").to_string()),
             )
@@ -685,21 +489,40 @@ impl AnalyticsView {
             (1, Some(2)) | (2, Some(1))
         );
 
+        let enabled = self.time_tuner.enabled[field];
+        // The checkbox lives OUTSIDE the dimmable content: a row is dimmed when the other
+        // half of the WorkingTime pair holds the value, but its box still governs whether
+        // that format is swept — so it must stay fully legible and clickable.
+        let tip = t!("analytics.time.tip_pick").to_string();
+        let check = div()
+            .id(SharedString::from(format!("tt-en-w-{field}")))
+            .flex_none()
+            .w(design::ui_px(cx, CHECK_COL))
+            .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
+            .child(
+                MoonCheckbox::new(SharedString::from(format!("tt-en-{field}")))
+                    .checked(enabled)
+                    .size(MoonCheckboxSize::Compact)
+                    .on_change({
+                        let view = cx.entity();
+                        move |ch: &bool, _w, app| {
+                            let on = *ch;
+                            view.update(app, |this, cx| this.toggle_time_field(field, on, cx));
+                        }
+                    }),
+            );
         let mut row = h_flex()
-            .w_full()
-            .px(design::ui_px(cx, 8.0))
-            .py(design::ui_px(cx, 3.0))
+            .flex_1()
+            .min_w_0()
             .items_center()
             // Must match the header gap, or the columns drift apart.
             .gap(design::ui_px(cx, 4.0))
-            .border_t_1()
-            .border_color(moon_alpha(p.border, 0.5))
             .opacity(if dim { 0.45 } else { 1.0 })
             .child(
                 // Field name column — wide enough for the full "WorkingWeekTime" on one line;
                 // truncates as a safety net.
                 div()
-                    .w(design::font_w_px(cx, 118.0))
+                    .w(design::font_w_px(cx, NAME_COL))
                     .flex_none()
                     .truncate()
                     .text_color(moon(p.text))
@@ -769,6 +592,17 @@ impl AnalyticsView {
                 .on_click(cx.listener(move |this, _, _, cx| this.time_clear_cell(vi, field, cx))),
             );
         }
-        row.into_any_element()
+        // Outer shell carries the row chrome; the checkbox sits before the dimmable content.
+        h_flex()
+            .w_full()
+            .px(design::ui_px(cx, 8.0))
+            .py(design::ui_px(cx, 3.0))
+            .items_center()
+            .gap(design::ui_px(cx, 4.0))
+            .border_t_1()
+            .border_color(moon_alpha(p.border, 0.5))
+            .child(check)
+            .child(row)
+            .into_any_element()
     }
 }

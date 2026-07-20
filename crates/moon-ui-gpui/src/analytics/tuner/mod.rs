@@ -10,7 +10,8 @@
 //! submodules: `list` (the strategy list — filter bar, sort, column selector, table),
 //! `columns` (the comparison-table descriptors and cells), `save` (the write-confirmation
 //! dialog), `state` (state + `TunerKind`), `shell` (the shared toolbar/suggest row),
-//! `fields`/`actions`/`hist` — the "By filter" axis, `time`/`grid`/`sliders` — "By time".
+//! `fields`/`actions`/`hist` — the "By filter" axis, `time`/`time_state`/`grid`/`sliders` —
+//! "By time" (`time_state` holds its values and parsers, `grid` renders them).
 
 // Submodules of the tuning page.
 mod actions;
@@ -25,10 +26,11 @@ mod shell;
 mod sliders;
 mod state;
 mod time;
+mod time_state;
 
 // State types held by `AnalyticsView` (the parent).
-pub(super) use grid::TimeTunerState;
 pub(super) use state::TunerState;
+pub(super) use time_state::TimeTunerState;
 
 // Column descriptors of the comparison tables — re-exported so the submodules (`list`) take
 // them via the usual `super::…` instead of reaching into `columns` directly. Visibility is

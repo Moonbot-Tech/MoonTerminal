@@ -46,16 +46,20 @@ pub(super) enum Period {
     Today,
     Yesterday,
     Week,
+    /// The calendar month from the 1st to today (UTC) — unlike `Month`, which counts 30
+    /// days back regardless of where the month boundary falls.
+    CurMonth,
     Month,
     Year,
 }
 
 impl Period {
-    pub(super) const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 7] = [
         Self::All,
         Self::Today,
         Self::Yesterday,
         Self::Week,
+        Self::CurMonth,
         Self::Month,
         Self::Year,
     ];
@@ -66,6 +70,7 @@ impl Period {
             Self::Today => t!("report.period.today"),
             Self::Yesterday => t!("report.period.yesterday"),
             Self::Week => t!("report.period.week"),
+            Self::CurMonth => t!("report.period.cur_month"),
             Self::Month => t!("report.period.month"),
             Self::Year => t!("report.period.year"),
         }
@@ -84,6 +89,17 @@ impl Period {
             Self::Today => (Some(day), None),
             Self::Yesterday => (Some(day - 86_400), Some(day - 1)),
             Self::Week => (Some(day - 6 * 86_400), None),
+            Self::CurMonth => {
+                // Midnight of the 1st of the current month, UTC — derived exactly as the
+                // Analytics period bar does it (`analytics::period`): "YYYY-MM" from the DB
+                // formatter + "-01", no calendar arithmetic of our own. Unparseable → today.
+                let ym = moon_core::db::fmt_unix(now);
+                let start = moon_core::db::parse_ymd(&format!("{}-01", &ym[..7.min(ym.len())]))
+                    .unwrap_or(day);
+                (Some(start), None)
+            }
+            // 30 days back including today (like Week = 7, Year = 365) — a ROLLING window,
+            // not the calendar month: that one is CurMonth.
             Self::Month => (Some(day - 29 * 86_400), None),
             Self::Year => (Some(day - 364 * 86_400), None),
         }
@@ -549,7 +565,9 @@ impl ReportPanel {
     }
 
     fn filter(&self, cx: &App) -> ReportFilter {
-        // Пресет периода перекрывает ручные даты; «Все» отдаёт даты полям С:/По:.
+        // A preset overrides the manual date only on the edge it SETS itself. Every preset
+        // but "All" sets the lower one; only "Yesterday" sets the upper one — for the rest
+        // `to = None`, and then the upper edge comes from the "To:" field if it holds a date.
         let (pfrom, pto) = self.period.range();
         let date_from = pfrom.or_else(|| db::parse_ymd(&self.from.read(cx).value()));
         let date_to = pto.or_else(|| db::parse_ymd(&self.to.read(cx).value()).map(|d| d + 86_399));

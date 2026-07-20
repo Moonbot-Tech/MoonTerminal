@@ -265,10 +265,18 @@ analytics.cores_sub:
   ru: "итоговая прибыль каждого ядра за выбранный период"
   en: "total profit of each core over the selected period"
   es: "beneficio total de cada núcleo en el período"
-analytics.by_cores:
-  ru: "по ядрам"
-  en: "by core"
-  es: "por núcleo"
+# The popup lists the top cores by absolute contribution, not all of them — the tail is
+# labelled, or the rows would silently fail to add up to the total in the popup's header.
+analytics.popup_more:
+  ru: "…ещё %{n}"
+  en: "…%{n} more"
+  es: "…%{n} más"
+# The cumulative chart draws lines for the top cores by contribution, not all of them —
+# the cap is stated in the card header so that it is never silent.
+analytics.cores_shown:
+  ru: "линии: %{n} из %{total} ядер"
+  en: "lines: %{n} of %{total} cores"
+  es: "líneas: %{n} de %{total} núcleos"
 analytics.tuner.copy_btn:
   ru: "Сделать копию"
   en: "Make a copy"
@@ -408,6 +416,21 @@ analytics.cum_sub:
   ru: "USDT, по дням закрытия"
   en: "USDT, by close date"
   es: "USDT, por fecha de cierre"
+# On a period of a day or less the series grid is hours, and the caption has to say so.
+analytics.cum_sub_hours:
+  ru: "USDT, по часам закрытия"
+  en: "USDT, by close hour"
+  es: "USDT, por hora de cierre"
+# Stands in for the daily chart on a period of a day or less, where "by day" is a single
+# bar: split by strategy type (SignalType) instead, and move the cores into the popup.
+analytics.kinds_title:
+  ru: "Прибыль по типам стратегий"
+  en: "Profit by strategy type"
+  es: "Beneficio por tipo de estrategia"
+analytics.kinds_sub:
+  ru: "USDT за период, наведи — ядра типа"
+  en: "USDT for the period, hover for its cores"
+  es: "USDT del período, pasa el cursor para ver sus núcleos"
 analytics.daily_title:
   ru: "Дневная прибыль"
   en: "Daily profit"
@@ -589,6 +612,13 @@ analytics.time.tip_clear_all:
   ru: "очистить всё"
   en: "clear all"
   es: "limpiar todo"
+# "By time" row checkbox: whether the field takes part in the sweep. The three rows are
+# independent; "Day" and "In hour" are two formats of ONE field, WorkingTime, so ticking
+# both makes the sweep compare them and keep whichever turns out more profitable.
+analytics.time.tip_pick:
+  ru: "участвует в подборе"
+  en: "included in the sweep"
+  es: "incluido en la búsqueda"
 analytics.strat.hint:
   ru: "клик по строке — детализация · Ctrl — мультивыбор"
   en: "click a row for details · Ctrl to multi-select"

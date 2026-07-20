@@ -18,7 +18,8 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::super::calendar::split_i18n;
-use super::grid::{WEEK_MIN, fmt_min, fmt_week_ep, parse_moh, parse_time};
+use super::grid::{CHECK_COL, NAME_COL};
+use super::time_state::{WEEK_MIN, fmt_min, fmt_week_ep, parse_moh, parse_time};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::SliderProfiles;
@@ -156,6 +157,17 @@ impl AnalyticsView {
         }
     }
 
+    /// Does slider `field` hold NO window — i.e. the field restricts nothing? Blank bounds,
+    /// but also a span covering the whole axis: that is the same "no restriction" rule
+    /// `week_span`/`tod` apply before emitting a value, and exactly what `set_slider_range`
+    /// writes back as a cleared field. Unparseable bounds fall into it too, since
+    /// `slider_range` widens them to the full axis.
+    fn slider_no_window(&self, field: usize) -> bool {
+        let (from, to) = &self.time_tuner.bounds[0][field];
+        (from.trim().is_empty() && to.trim().is_empty())
+            || self.slider_range(field) == (0, Self::slider_max(field))
+    }
+
     /// Value in the slider's units from the mouse X (via the captured track bounds).
     fn slider_value_at(&self, field: usize, x: Pixels) -> u16 {
         let Some(b) = self.slider_track[field] else {
@@ -185,7 +197,9 @@ impl AnalyticsView {
             };
             self.set_v1_cell(field, a, b);
         }
-        // 'Day'↔'In hour' share the single WorkingTime field: the active row clears the other.
+        // 'Day'↔'In hour' share the single WorkingTime field: the active row clears the
+        // other. Only on a real (non-full) window — a full range means "no restriction",
+        // which must not wipe the other view's value.
         if !full && field == 1 {
             self.clear_field(0, 2);
         }
@@ -262,9 +276,12 @@ impl AnalyticsView {
         // Region without inversion (a wrapping span from>to is entered by hand — we don't
         // overlap-draw it).
         let (rl, rr) = (ff.min(tf), ff.max(tf));
-        // The 'Day'/'Hour' pair shares one WorkingTime field: the unused row is dimmed.
+        // Shade a strip that is not in effect: either its field holds no window (it
+        // restricts nothing) or it is the unused half of the Day/Hour pair, which shares
+        // one WorkingTime field.
+        let no_window = self.slider_no_window(field);
         let active = self.time_tuner.active_wt();
-        let dim = matches!((field, active), (2, Some(1)));
+        let dim = no_window || matches!((field, active), (1, Some(2)) | (2, Some(1)));
         // Tiling cascade: the mask of the active FINER field is projected onto THIS track —
         // 'In hour' → onto 'Day' AND 'Weekly' (within every hour); 'Day' → onto 'Weekly'
         // (within every day). We SHADE WHAT IS EXCLUDED (outside the window) — what is
@@ -350,21 +367,27 @@ impl AnalyticsView {
                     .bg(moon_alpha(p.shell, 0.72)),
             );
         }
-        track = track
-            // This row's own selection (week span / window) — ON TOP of the shading, border only.
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(relative(rl))
-                    .right(relative(1.0 - rr))
-                    .border_2()
-                    .border_color(moon(p.accent)),
-            )
-            // The two handles (from/to).
-            .child(handle_bar(ff, p, cx))
-            .child(handle_bar(tf, p, cx));
+        // No window → no selection to draw: a frame over the full range would claim a
+        // restriction the field does not hold. The track stays draggable — pressing it
+        // picks the nearer edge and creates the window.
+        if !no_window {
+            track = track
+                // This row's own selection (week span / window) — ON TOP of the shading,
+                // border only.
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(relative(rl))
+                        .right(relative(1.0 - rr))
+                        .border_2()
+                        .border_color(moon(p.accent)),
+                )
+                // The two handles (from/to).
+                .child(handle_bar(ff, p, cx))
+                .child(handle_bar(tf, p, cx));
+        }
         let track = track
             // Capture the track's bounds so the mouse X can be turned into a value.
             .child(
@@ -387,12 +410,15 @@ impl AnalyticsView {
         h_flex()
             .w_full()
             .items_end()
-            .gap(design::ui_px(cx, 6.0))
+            // Gap 4 (not 6) plus a CHECK_COL lead-in: together they reproduce the grid
+            // row's checkbox column, so the slider labels stay under the field names.
+            .gap(design::ui_px(cx, 4.0))
             .opacity(if dim { 0.5 } else { 1.0 })
+            .child(div().w(design::ui_px(cx, CHECK_COL)).flex_none())
             .child(
                 // Matches the grid's field-name column so the slider labels line up under it.
                 div()
-                    .w(design::font_w_px(cx, 118.0))
+                    .w(design::font_w_px(cx, NAME_COL))
                     .flex_none()
                     .truncate()
                     .pb(design::ui_px(cx, 3.0))
