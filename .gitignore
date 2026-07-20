@@ -27,3 +27,8 @@ render_diag.log
 /CLAUDE.md
 /AGENTS.md
 /DisQuestions
+# Personal bits of .claude/: per-machine settings, runtime locks and local-only skills.
+# The team's shared .claude/settings.json and .claude/hooks/ STAY tracked.
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock
+/.claude/skills/
