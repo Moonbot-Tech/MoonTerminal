@@ -967,19 +967,65 @@ pub fn suggest_field(
 pub struct TimeSuggest {
     /// WorkingWeekTime: лучший непрерывный спан по минуте недели (0..10079). `None` — без улучшения.
     pub week_span: Option<(u16, u16)>,
-    /// WorkingTime: лучшее окно времени (режим выбран сам). `None` — без улучшения.
+    /// WorkingTime: the best window in the requested format. `None` — no improvement.
     pub tod: Option<TimeWindow>,
 }
 
-/// Автоподбор двух полей расписания по профиту: непрерывный спан дней
-/// (`WorkingWeekTime`) и одно окно времени (`WorkingTime`). Режим WorkingTime
-/// выбирается САМ: пробуем окно времени суток И окно минут-в-часе, берём с бо́льшим
-/// профитом внутри окна (база сравнения одна — вся выборка, поэтому profit сравним).
-/// Поля независимы; каждое `None`, если лучший вариант не улучшает выборку без
-/// ограничения. День недели UTC = `(((closedate/86400)+4)%7+6)%7` (0=Пн..6=Вс),
-/// минута = `(cd%86400)/60`.
-pub fn suggest_time(q: &Query, min_n: i64, edges: usize, round: bool) -> ReadResult<TimeSuggest> {
+/// What the "By time" sweep may search, straight from the row checkboxes: a CHECKED row is
+/// searched and may be rewritten; an UNCHECKED one is never rewritten.
+///
+/// `day` and `hour` are two FORMATS of the single `WorkingTime` field, so they are two
+/// competing candidates, not two fields: with both checked the sweep tries each and keeps
+/// whichever earns more, which is why the result is at most TWO windows (a week span plus
+/// one `WorkingTime` window) no matter how many boxes are ticked.
+///
+/// Hence pinning is per FIELD, not per row. `WorkingWeekTime` is its own field, so an
+/// unchecked "Weekly" row holding a value pins the sweep inside it (`fixed_week`). For
+/// `WorkingTime` a pin only exists when NEITHER format may be searched (`fixed_tod`): with
+/// either box ticked the sweep owns that field and its answer REPLACES whatever is in the
+/// pair — a value there is a candidate being replaced, not a constraint, since the two
+/// formats cannot both be written to one field.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TimeAxes {
+    /// The "Weekly" row is checked → search `WorkingWeekTime`.
+    pub week: bool,
+    /// The "Day" row is checked → try `WorkingTime` as `hh:mm-hh:mm` (minute of the day).
+    pub day: bool,
+    /// The "In hour" row is checked → try `WorkingTime` as `N-M` (minute of the hour).
+    pub hour: bool,
+    /// Week span pinned by an UNCHECKED "Weekly" row (`None` — the row is empty).
+    pub fixed_week: Option<(u16, u16)>,
+    /// `WorkingTime` window pinned when NEITHER of its two rows is checked.
+    pub fixed_tod: Option<TimeWindow>,
+}
+
+impl TimeAxes {
+    /// Is there anything at all to search (otherwise the whole read is pointless).
+    pub fn is_empty(&self) -> bool {
+        !self.week && !self.day && !self.hour
+    }
+}
+
+/// Profit sweep over the schedule fields: a continuous span of days (`WorkingWeekTime`)
+/// and one time window (`WorkingTime`). What to search is dictated by `axes` (the row
+/// checkboxes); with both `WorkingTime` formats checked the sweep tries each and keeps the
+/// better one, and a row that is unchecked but already holds a value pins the sweep inside
+/// it. The two fields are independent; each is `None` when the best candidate does not
+/// improve on the unrestricted sample. UTC weekday =
+/// `(((closedate/86400)+4)%7+6)%7` (0=Mon..6=Sun), minute = `(cd%86400)/60`.
+pub fn suggest_time(
+    q: &Query,
+    min_n: i64,
+    edges: usize,
+    round: bool,
+    axes: TimeAxes,
+) -> ReadResult<TimeSuggest> {
     const CTX: &str = "tuner: suggest_time";
+    // Nothing is checked → nothing to search; skip the scan instead of reading the whole
+    // period only to throw it away.
+    if axes.is_empty() {
+        return Ok(TimeSuggest::default());
+    }
     let conn = super::open_reader()?;
     let mut q = q.clone();
     if q.from < 0 {
@@ -1008,42 +1054,34 @@ pub fn suggest_time(q: &Query, min_n: i64, edges: usize, round: bool) -> ReadRes
     for row in rows {
         trades.push(row.map_err(|e| read_fail(CTX, e))?);
     }
-    Ok(time_suggest_from_rows(&trades, min_n, edges, round))
+    Ok(time_suggest_from_rows(&trades, min_n, edges, round, axes))
 }
 
-/// Ядро `suggest_time` над готовыми строками `(день_недели, минута, профит)` —
-/// точка входа для юнит-тестов (без БД). Оси недели/времени подбираются НЕЗАВИСИМО
-/// (каждая — лучшее окно по своей проекции), НО применяются по И. Их пересечение
-/// может дать профит МЕНЬШЕ базового (обе выкидывают разные плюсовые сделки), поэтому
-/// оцениваем ВСЕ комбинации на реальных строках и берём максимум — база тоже
-/// кандидат, так что результат НИКОГДА не хуже «Факта».
+/// Core of `suggest_time` over ready rows `(weekday, minute, profit)` — the entry point
+/// for unit tests (no DB). Only the axes opened by `axes` are searched; rows cut off by
+/// the pinned windows (`fixed_*`) are dropped BEFORE the sweep, so the free axis is
+/// optimized inside them. The week and time axes are searched INDEPENDENTLY (each the
+/// best window of its own projection) but applied with AND. Their intersection can yield
+/// LESS profit than the baseline (each drops different winning trades), so we score every
+/// combination on the real rows and take the maximum — the baseline is a candidate too,
+/// which is why the result is NEVER worse than it.
+///
+/// NB: with a `fixed_*` window the baseline is the PINNED subset, not the whole sample —
+/// the pin is a constraint the sweep may not lift, so "never worse" is measured against
+/// what the user fixed. Without pins the baseline is the full sample, i.e. the "Fact"
+/// column the UI shows.
 fn time_suggest_from_rows(
     rows: &[(i64, i64, f64)],
     min_n: i64,
     edges: usize,
     round: bool,
+    axes: TimeAxes,
 ) -> TimeSuggest {
+    if axes.is_empty() {
+        return TimeSuggest::default();
+    }
     let min_n = min_n.max(1) as usize;
-    // Кандидаты по каждой оси (лучшее окно проекции; None = без ограничения).
-    let week = best_week_span(rows, min_n, edges, round);
-    let mut day_vals: Vec<(f64, f64)> = rows.iter().map(|&(_w, mn, p)| (mn as f64, p)).collect();
-    let mut hour_vals: Vec<(f64, f64)> = rows
-        .iter()
-        .map(|&(_w, mn, p)| ((mn % 60) as f64, p))
-        .collect();
-    let day_w = best_range(&mut day_vals, min_n, edges, round).map(|s| {
-        TimeWindow::Day(
-            s.from.unwrap_or(0.0).clamp(0.0, 1439.0) as u16,
-            s.to.unwrap_or(1439.0).clamp(0.0, 1439.0) as u16,
-        )
-    });
-    let hour_w = best_range(&mut hour_vals, min_n, edges, round).map(|s| {
-        TimeWindow::Hour(
-            s.from.unwrap_or(0.0).clamp(0.0, 59.0) as u8,
-            s.to.unwrap_or(59.0).clamp(0.0, 59.0) as u8,
-        )
-    });
-    // Профит сделки в маске (границы включительно; `от > до` = через край).
+    // Is a trade inside the mask (bounds inclusive; `from > to` = wraps past the edge).
     let span_ok = |v: i64, f: i64, t: i64| {
         if f <= t {
             f <= v && v <= t
@@ -1055,16 +1093,68 @@ fn time_suggest_from_rows(
         TimeWindow::Day(f, t) => span_ok(mn, f as i64, t as i64),
         TimeWindow::Hour(f, t) => span_ok(mn % 60, f as i64, t as i64),
     };
+    // An unchecked row with a value pins the sweep: drop everything outside it, so both the
+    // candidates and the baseline below are measured on the subset the user fixed. Nothing
+    // pinned → work on the original slice (no copy).
+    let pinned: Option<Vec<(i64, i64, f64)>> =
+        (axes.fixed_week.is_some() || axes.fixed_tod.is_some()).then(|| {
+            rows.iter()
+                .copied()
+                .filter(|&(wd, mn, _)| {
+                    axes.fixed_week
+                        .is_none_or(|(f, t)| span_ok(wd * 1440 + mn, f as i64, t as i64))
+                        && axes.fixed_tod.is_none_or(|tw| in_tod(mn, tw))
+                })
+                .collect()
+        });
+    let rows: &[(i64, i64, f64)] = pinned.as_deref().unwrap_or(rows);
+    // Candidates for the opened axes (best window of the projection; None = unrestricted).
+    let week = axes
+        .week
+        .then(|| best_week_span(rows, min_n, edges, round))
+        .flatten();
+    // The two WorkingTime formats are separate CANDIDATES for one field: each checked row
+    // contributes one, and the comparison below keeps whichever earns more. Unchecked → no
+    // candidate, so that format can never come out of the sweep.
+    let day_w = axes
+        .day
+        .then(|| {
+            let mut vals: Vec<(f64, f64)> =
+                rows.iter().map(|&(_w, mn, p)| (mn as f64, p)).collect();
+            best_range(&mut vals, min_n, edges, round).map(|s| {
+                TimeWindow::Day(
+                    s.from.unwrap_or(0.0).clamp(0.0, 1439.0) as u16,
+                    s.to.unwrap_or(1439.0).clamp(0.0, 1439.0) as u16,
+                )
+            })
+        })
+        .flatten();
+    let hour_w = axes
+        .hour
+        .then(|| {
+            let mut vals: Vec<(f64, f64)> = rows
+                .iter()
+                .map(|&(_w, mn, p)| ((mn % 60) as f64, p))
+                .collect();
+            best_range(&mut vals, min_n, edges, round).map(|s| {
+                TimeWindow::Hour(
+                    s.from.unwrap_or(0.0).clamp(0.0, 59.0) as u8,
+                    s.to.unwrap_or(59.0).clamp(0.0, 59.0) as u8,
+                )
+            })
+        })
+        .flatten();
     let prof = |wk: Option<(u16, u16)>, td: Option<TimeWindow>| -> f64 {
         rows.iter()
             .filter(|&&(wd, mn, _)| {
-                wk.map_or(true, |(f, t)| span_ok(wd * 1440 + mn, f as i64, t as i64))
-                    && td.map_or(true, |tw| in_tod(mn, tw))
+                wk.is_none_or(|(f, t)| span_ok(wd * 1440 + mn, f as i64, t as i64))
+                    && td.is_none_or(|tw| in_tod(mn, tw))
             })
             .map(|r| r.2)
             .sum()
     };
-    // База (без ограничений) — стартовый кандидат; любой другой должен её ПРЕВЗОЙТИ.
+    // The baseline (no window of our own, but already inside any pin) is the starting
+    // candidate; every other one has to BEAT it.
     let base: f64 = rows.iter().map(|r| r.2).sum();
     let margin = base.abs().max(1.0) * 1e-9;
     let mut best: (Option<(u16, u16)>, Option<TimeWindow>, f64) = (None, None, base);
@@ -1371,33 +1461,129 @@ mod tests {
         assert_eq!(format_working_time(TimeWindow::Hour(1, 50)), "1-50");
     }
 
+    /// Opened axes with nothing pinned — the plain "search these" case.
+    fn axes_of(week: bool, day: bool, hour: bool) -> TimeAxes {
+        TimeAxes {
+            week,
+            day,
+            hour,
+            ..Default::default()
+        }
+    }
+
+    /// Minute 0..14 of EVERY hour loses. Separable by the minute-of-hour projection;
+    /// over the minute of the DAY the losses are scattered across the whole range.
+    fn rows_bad_first_minutes() -> Vec<(i64, i64, f64)> {
+        (0..24)
+            .flat_map(|h| (0..60).map(move |m| (0i64, h * 60 + m, if m < 15 { -1.0 } else { 1.0 })))
+            .collect()
+    }
+
     #[test]
     fn suggest_time_week_span_and_mode() {
-        // Вс (wd6) убыточен, Пн..Сб прибыльны → лучшее окно недели отрезает Вс.
+        // Sun (wd6) loses, Mon..Sat win → the best week window cuts Sunday off.
         let mut rows: Vec<(i64, i64, f64)> = Vec::new();
         for wd in 0..6 {
             rows.extend((0..30).map(|i| (wd, i * 40, 1.0)));
         }
-        rows.extend((0..30).map(|i| (6i64, i * 40, -1.0))); // Вс в минусе
-        let s = time_suggest_from_rows(&rows, 1, 64, false);
-        let (_, to) = s.week_span.expect("окно недели должно найтись");
+        rows.extend((0..30).map(|i| (6i64, i * 40, -1.0))); // Sunday in the red
+        let s = time_suggest_from_rows(&rows, 1, 64, false, axes_of(true, false, false));
+        let (_, to) = s.week_span.expect("a week window must be found");
         assert!(
             to < 6 * 1440,
-            "окно должно кончаться до Вс (мин недели < 8640), got {to}"
+            "the window must end before Sunday (minute of week < 8640), got {to}"
         );
 
-        // АВТО-РЕЖИМ: убыток в минутах 0..14 КАЖДОГО часа (минута суток не разделяет,
-        // минута-в-часе — да) → подбор ДОЛЖЕН сам выбрать режим Hour.
-        let rows: Vec<(i64, i64, f64)> = (0..24)
-            .flat_map(|h| (0..60).map(move |m| (0i64, h * 60 + m, if m < 15 { -1.0 } else { 1.0 })))
-            .collect();
-        let s = time_suggest_from_rows(&rows, 1, 32, false);
+        // Every box ticked — the "just sweep everything" case: the two WorkingTime formats
+        // compete and the sweep keeps the one that actually separates the loss (Hour).
+        let rows = rows_bad_first_minutes();
+        let s = time_suggest_from_rows(&rows, 1, 32, false, axes_of(true, true, true));
         match s.tod {
             Some(TimeWindow::Hour(f, _t)) => {
-                assert!(f > 0, "Hour-окно должно отрезать минуты 0..14, от={f}")
+                assert!(f > 0, "the Hour window must cut minutes 0..14, from={f}")
             }
-            other => panic!("авто-выбор режима должен дать Hour, got {other:?}"),
+            other => panic!("with both formats offered the better (Hour) must win, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn suggest_time_respects_axes() {
+        let rows = rows_bad_first_minutes();
+
+        // No row checked → no sweep at all (and no reason to read the DB).
+        let none = time_suggest_from_rows(&rows, 1, 32, false, axes_of(false, false, false));
+        assert_eq!(none, TimeSuggest::default(), "no checkbox, no sweep");
+
+        // The gate that matters: on the SAME data "In hour" checked yields an Hour window,
+        // while with only "Day" checked that window may not appear — an unchecked format is
+        // never produced, however profitable it would be.
+        let hour = time_suggest_from_rows(&rows, 1, 32, false, axes_of(false, false, true));
+        assert!(
+            matches!(hour.tod, Some(TimeWindow::Hour(..))),
+            "the checked Hour format must be searched, got {:?}",
+            hour.tod
+        );
+        let day = time_suggest_from_rows(&rows, 1, 32, false, axes_of(false, true, false));
+        assert!(
+            !matches!(day.tod, Some(TimeWindow::Hour(..))),
+            "an unchecked Hour format may not come out of the sweep, got {:?}",
+            day.tod
+        );
+
+        // "Weekly" unchecked → its field stays untouched even when cutting it clearly pays.
+        let mut wk_rows: Vec<(i64, i64, f64)> = Vec::new();
+        for wd in 0..6 {
+            wk_rows.extend((0..30).map(|i| (wd, i * 40, 1.0)));
+        }
+        wk_rows.extend((0..30).map(|i| (6i64, i * 40, -1.0)));
+        let s = time_suggest_from_rows(&wk_rows, 1, 64, false, axes_of(false, true, true));
+        assert_eq!(s.week_span, None, "an unchecked week is not searched");
+    }
+
+    #[test]
+    fn suggest_time_pins_unchecked_row() {
+        // Every day is profitable overall, but inside HOUR 0 Sunday alone loses. This is
+        // the reachable UI state: "Weekly" checked while neither WorkingTime row is, so
+        // the WorkingTime window already in the grid pins the sweep.
+        let rows: Vec<(i64, i64, f64)> = (0..7i64)
+            .flat_map(|wd| {
+                (0..24i64).map(move |h| {
+                    let p = match (h, wd) {
+                        (0, 6) => -5.0, // Sunday, hour 0 — the only loss
+                        (0, _) => 1.0,
+                        (_, 6) => 3.0, // Sunday is the best day everywhere else
+                        _ => 1.0,
+                    };
+                    (wd, h * 60, p)
+                })
+            })
+            .collect();
+
+        // Unpinned: every day is in the black, so no week window improves on the whole week.
+        let free = time_suggest_from_rows(&rows, 1, 64, false, axes_of(true, false, false));
+        assert_eq!(
+            free.week_span, None,
+            "over the full sample no week window beats the baseline"
+        );
+
+        // Pinned to hour 0 — the sweep must work INSIDE it, where Sunday is the loss.
+        let pinned = time_suggest_from_rows(
+            &rows,
+            1,
+            64,
+            false,
+            TimeAxes {
+                week: true,
+                day: false,
+                hour: false,
+                fixed_week: None,
+                fixed_tod: Some(TimeWindow::Day(0, 59)),
+            },
+        );
+        let (_, to) = pinned
+            .week_span
+            .expect("inside the pinned hour, cutting Sunday pays");
+        assert!(to < 6 * 1440, "the window must end before Sunday, got {to}");
     }
 
     #[test]
@@ -1415,7 +1601,7 @@ mod tests {
             rows.push((6, mn, -1.0)); // Вс в минусе
         }
         let base: f64 = rows.iter().map(|r| r.2).sum();
-        let s = time_suggest_from_rows(&rows, 1, 64, false);
+        let s = time_suggest_from_rows(&rows, 1, 64, false, axes_of(true, true, true));
         let span_ok = |v: i64, f: i64, t: i64| {
             if f <= t {
                 f <= v && v <= t

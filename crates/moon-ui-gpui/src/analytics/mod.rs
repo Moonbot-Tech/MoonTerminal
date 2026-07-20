@@ -78,13 +78,14 @@ pub struct AnalyticsView {
     busy_since: Option<std::time::Instant>,
     /// Номер запроса — устаревшие результаты отбрасываются.
     seq: u64,
-    /// Summary: the top-left chart in "by cores" mode (checkbox, default OFF).
-    pub(super) sum_by_core: bool,
-    /// Ховер-ведро левого чарта по ядрам (индекс в `days`) — попап значений.
-    pub(super) hover_core_bucket: Option<usize>,
-    /// Ховер-ведро правого чарта «Дневная прибыль» — свой попап (иначе один
-    /// стейт рисовал бы попапы на обоих чартах разом).
+    /// Hovered bucket of the "Daily profit" chart — popup of that DAY's per-core values.
     pub(super) hover_daily_bucket: Option<usize>,
+    /// Hovered bucket of the cumulative chart — popup of the per-core RUNNING TOTALS. Its
+    /// own state: one shared field would pop both charts open at once.
+    pub(super) hover_cum_bucket: Option<usize>,
+    /// Hovered bar of the "by strategy type" chart (single-day periods only) — popup of the
+    /// cores behind that type.
+    pub(super) hover_kind: Option<usize>,
     /// Вкладка «Стратегии»: выбранная группа `(strategyid текстом, имя)`
     /// + её детализация.
     pub(super) sel_strategy: Option<(String, String)>,
@@ -245,9 +246,9 @@ impl AnalyticsView {
             busy_ops: 0,
             busy_since: None,
             seq: 0,
-            sum_by_core: false,
-            hover_core_bucket: None,
             hover_daily_bucket: None,
+            hover_cum_bucket: None,
+            hover_kind: None,
             sel_strategy: None,
             sel_extra: Vec::new(),
             strat_search: String::new(),
@@ -369,6 +370,13 @@ impl AnalyticsView {
         // Mark the request at its start so an error from another period cannot
         // remain under the current period label.
         self.data.begin();
+        // Drop every chart hover: the bars/columns under the cursor are about to be
+        // replaced (and on a single-day period the right card swaps its whole element
+        // tree), so they never fire `hovered = false` and a stale index would re-open a
+        // popup with no cursor on it — pointing at another period's bucket.
+        self.hover_daily_bucket = None;
+        self.hover_cum_bucket = None;
+        self.hover_kind = None;
         self.op_started();
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
