@@ -120,7 +120,8 @@ fn def_alert_strategy_row(
 ///
 /// [`core_settings_content`] applies the font scale to this value; the terminal chrome uses the
 /// same scaled width when sizing the surrounding `MoonPopover`.
-pub const CONTENT_W: f32 = 248.0;
+/// 268: вмещает шапку «заголовок + Запущен/Автодетект» в EN/RU без обрезания (ES режет truncate).
+pub const CONTENT_W: f32 = 268.0;
 
 /// Границы слайдеров параметров «галка + слайдер + поле» (min, max, шаг).
 /// ТП-глоб = g_take_profit (плюс), трейлинг = trailing_drop (минус). Стоп-лосс вынесен в тулбар.
@@ -309,12 +310,16 @@ pub fn core_settings_content(
                 .items_center()
                 .gap(design::ui_px(cx, 8.0))
                 .child(
+                    // flex_1+min_w_0+truncate: заголовок ужимается, иначе строка шире CONTENT_W
+                    // и подписи статуса вылезают за правый край попапа.
                     div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
                         .text_size(design::t_caption(cx))
                         .text_color(rgb(p.text_muted))
                         .child(t!("core_settings.title").to_string()),
                 )
-                .child(div().flex_1())
                 .child(runtime_status(rt, p, cx)),
         );
 
