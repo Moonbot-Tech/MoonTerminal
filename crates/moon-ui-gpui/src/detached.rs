@@ -107,19 +107,6 @@ pub fn save_all(list: &[DetachedSpec]) {
     }
 }
 
-/// Заголовок (локализованный) и панель по `panel_name` — единый источник для окна/репина.
-fn panel_title(name: &str) -> String {
-    match name {
-        "Orders" => t!("dock.tab.orders").to_string(),
-        "Assets" => t!("dock.tab.assets").to_string(),
-        "Log" => t!("dock.tab.log").to_string(),
-        "Report" => t!("dock.tab.report").to_string(),
-        "Alerts" => t!("dock.tab.alerts").to_string(),
-        "CoreStatus" => t!("dock.tab.core_status").to_string(),
-        _ => t!("dock.tab.generic").to_string(),
-    }
-}
-
 /// True for panels that can be moved into a detached OS window.
 pub fn supports_panel(name: &str) -> bool {
     matches!(
@@ -273,7 +260,11 @@ impl Render for DetachedWindow {
             });
         }
         let p = MoonPalette::active(cx);
-        let title = format!("{} · {}", panel_title(&self.panel), self.group);
+        let title = format!(
+            "{} · {}",
+            crate::panel_meta::panel_title(&self.panel),
+            self.group
+        );
         v_flex()
             .size_full()
             .bg(rgb(p.shell))
@@ -348,7 +339,10 @@ pub fn spawn(
     let display_id =
         crate::windowing::saved_or_owner_display_id(Some(bounds.origin), owner, None, app);
     let opts = crate::windowing::detached_panel_window_options(
-        format!("{} — MoonTerminal", panel_title(&spec.panel)),
+        format!(
+            "{} — MoonTerminal",
+            crate::panel_meta::panel_title(&spec.panel)
+        ),
         WindowBounds::Windowed(bounds),
         display_id,
         owner,

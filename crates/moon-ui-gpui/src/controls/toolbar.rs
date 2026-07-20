@@ -5,7 +5,7 @@ use rust_i18n::t;
 
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonSize, MoonButtonVariant,
-    MoonInputState, MoonPalette, h_flex,
+    MoonInputState, MoonLabel, MoonPalette, h_flex,
 };
 
 use moon_core::session::CoreId;
@@ -16,9 +16,57 @@ use super::{TOOLBAR_H, TradeMetric, fmt_field2, fmt_field2_signed};
 use crate::shell::Shell;
 use crate::{Backend, design};
 
+/// Caption for a preset group, muted and one step below the strip's own cells — those render their
+/// labels at 11, so 10 reads as a label naming the group rather than as another value in it.
+///
+/// A SIBLING of the strip, never a child: `strips::strip_with_overlay` places its hit overlays
+/// absolutely, off RAW pixel sums from its own `.relative()` root, so anything inserted inside
+/// would shift every overlay off its cell.
+///
+/// `MoonLabel` rather than a hand-rolled text div: it applies the theme's mono family and runs the
+/// size through `tokens.font()` itself, so the caption follows the Font slider like every other
+/// MoonUI text. Pass the BASE size — a pre-scaled `design::t_*` value would be scaled twice.
+///
+/// The text is a literal, not `t!`: `Size`/`Sell` are on the deliberately-untranslated list
+/// (`locales/README.md`), as are the neighbouring `Lev`/`SL`/`TP`. The tooltip is translated, the
+/// caption is not.
+fn strip_caption(text: &'static str, p: MoonPalette) -> impl IntoElement {
+    div().flex_none().child(
+        MoonLabel::new(text)
+            .mono(true)
+            .color(p.text_muted)
+            .font_size(10.0)
+            .uppercase(false)
+            .render(),
+    )
+}
+
+/// A preset strip with its caption in front, as one flex group.
+///
+/// Both preset groups are laid out identically and only differ in caption text, collapse predicate
+/// and the strip itself; keeping the grouping in one place is what stops a gap or ordering tweak
+/// from being applied to Size and forgotten on Sell, a drift that only shows up once a window is
+/// narrow enough to render both differently.
+fn captioned_strip(
+    text: &'static str,
+    caption_visible: bool,
+    p: MoonPalette,
+    strip: impl IntoElement,
+    cx: &App,
+) -> impl IntoElement {
+    h_flex()
+        .flex_none()
+        .gap(design::ui_px(cx, 4.0))
+        .children(caption_visible.then(|| strip_caption(text, p)))
+        .child(strip)
+}
+
 /// Полоса тулбара: рисуется как обычный child `Shell` (между шапкой и доком), не dock-панель.
 /// Читает текущий масштаб/follow из `backend`, клики пишут обратно (+notify → перерисовка).
-#[allow(clippy::too_many_arguments)]
+///
+/// `chrome_width` is the window width: the preset-strip captions collapse by priority against it
+/// (`design::size_caption_visible` / `sell_caption_visible`), because the row's left run has no
+/// slack and would otherwise push the trailing icon cluster off the edge.
 #[allow(clippy::too_many_arguments)]
 pub fn toolbar(
     backend: &Entity<Backend>,
@@ -29,6 +77,7 @@ pub fn toolbar(
     sell_input: &Entity<MoonInputState>,
     shell: &Entity<Shell>,
     open_metric: Option<TradeMetric>,
+    chrome_width: f32,
     cx: &App,
 ) -> impl IntoElement {
     let (
@@ -132,17 +181,24 @@ pub fn toolbar(
         .border_color(rgb(p.border));
 
     row = row
-        // Размер ордера первым, без подписи «size» — s1-s6 говорят сами за себя.
-        .child(size_strip(
-            size_values,
-            size_sel,
-            // Редактируем инпутом только если запрос относится к ФОКУСНОМУ ядру тулбара.
-            size_edit
-                .filter(|(c, _)| Some(*c) == focus_core)
-                .map(|(_, i)| i),
-            size_input,
-            backend.clone(),
-            focus_core,
+        // Order size first. The "Size" caption is a sibling of the strip and collapses on a narrow
+        // window.
+        .child(captioned_strip(
+            "Size",
+            design::size_caption_visible(cx, chrome_width),
+            p,
+            size_strip(
+                size_values,
+                size_sel,
+                // Show the editor only when the request belongs to the toolbar's focused core.
+                size_edit
+                    .filter(|(c, _)| Some(*c) == focus_core)
+                    .map(|(_, i)| i),
+                size_input,
+                backend.clone(),
+                focus_core,
+            ),
+            cx,
         ))
         .child(design::chrome_divider(cx, p))
         // Плечо.
@@ -179,8 +235,9 @@ pub fn toolbar(
             p,
         ))
         .child(design::chrome_divider(cx, p))
-        // TP + полоса S-слотов рядом (без подписи «sell»): это один и тот же sell-таргет, горит
-        // что-то одно — либо TP, либо выбранный S-слот.
+        // TP and the S-slot strip sit together: one and the same sell target, and exactly one of
+        // them is lit — either TP or the selected S slot. The "Sell" caption is the first of the
+        // two to yield, since the TP button beside it already names the same concept.
         .child(metric_button(
             TradeMetric::Tp,
             tp_str,
@@ -207,10 +264,17 @@ pub fn toolbar(
                 // Ручная стратегия: гасим взаимодействие (клик/колесо/дабл) целиком.
                 focus_core.filter(|_| !manual_on),
             );
+            let labelled = captioned_strip(
+                "Sell",
+                design::sell_caption_visible(cx, chrome_width),
+                p,
+                strip,
+                cx,
+            );
             if manual_on {
-                div().opacity(0.55).child(strip).into_any_element()
+                div().opacity(0.55).child(labelled).into_any_element()
             } else {
-                strip.into_any_element()
+                labelled.into_any_element()
             }
         })
         .child(design::chrome_divider(cx, p));

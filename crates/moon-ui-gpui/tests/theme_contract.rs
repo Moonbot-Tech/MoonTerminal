@@ -369,3 +369,98 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
         "docs/FIRETEST.md должен описывать FireTest как runtime/perf сценарий, а не статическую проверку исходников"
     );
 }
+
+/// Read one production source file for the static bans below, with line endings normalized to LF.
+///
+/// The normalization is load-bearing, not tidiness: these checkouts carry CRLF on disk, so any
+/// pattern written with a bare `\n` — see [`fn_body`]'s closing-brace delimiter — silently matches
+/// nothing and hands back a span far larger than intended. A ban that quietly stops bounding
+/// anything still reports PASS.
+fn read_src(rel: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(rel);
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    text.replace("\r\n", "\n")
+}
+
+#[test]
+fn status_bar_states_no_latency_it_did_not_measure() {
+    // The banned "ping 32ms" readout is a literal: nothing in the code measures RTT, and in a
+    // trading terminal an invented latency is worse than none, because people act on it.
+    // The ban is narrow on purpose — it forbids bringing back the PLACEHOLDER specifically, while
+    // a real RTT would arrive through a format! over live metrics and never match it.
+    let text = read_src("shell/status_bar.rs");
+    for banned in ["MoonStatusItem::new(\"ping\")", "\"32ms\""] {
+        assert!(
+            !text.contains(banned),
+            "status_bar.rs must not hard-code a latency readout: found {banned}"
+        );
+    }
+}
+
+#[test]
+fn header_ticker_popup_accounts_for_the_clock_beside_it() {
+    // The ticker sits to the LEFT of the clock, while its popup is positioned by hand from the
+    // window's right edge inward — so the offset has to include the clock's width. The plausible
+    // edit this catches is dropping the clock-width term while simplifying the popup offset, which
+    // makes the popup silently open under the wrong element.
+    //
+    // It pins the COUPLING, not the arithmetic: this harness reads source text and has no gpui
+    // `App`, so the actual pixel offset cannot be evaluated here and alignment stays a
+    // confirm-on-a-real-window item. Nor does it endorse the hand-positioning — delete this test
+    // when the popup moves to a MoonUI Root-owned anchored layer and the offset goes away.
+    let text = read_src("shell/ticker.rs");
+    assert!(
+        text.contains("header_clock_width"),
+        "ticker.rs positions its popup from the window edge, so it must account for the clock's \
+         measured width — see terminal_chrome's header cluster order"
+    );
+
+    // And the measurement must still agree with what the clock draws. Asserting on the two
+    // BODIES, not merely that the functions exist: either one could quietly stop calling
+    // `clock_parts` and reimplement the strings or the timezone-visibility rule for itself, which
+    // is exactly the drift that puts the popup off its trigger, and a name-only check stays green
+    // through it.
+    let clock = read_src("clock.rs");
+    for signature in ["fn header_clock_width", "fn header_clock("] {
+        let body = fn_body(&clock, signature);
+        assert!(
+            body.contains("clock_parts("),
+            "clock.rs: {signature} must derive its strings from clock_parts — the renderer and the \
+             width measurement share one model so they cannot drift apart"
+        );
+    }
+}
+
+/// The body of a top-level `fn`, from its signature to the closing brace in column 0.
+///
+/// Deliberately excludes the doc comment above the signature: a rule about what a function CALLS
+/// must not be satisfiable by prose that merely mentions the callee.
+fn fn_body<'a>(source: &'a str, signature: &str) -> &'a str {
+    let after = source
+        .split_once(signature)
+        .unwrap_or_else(|| panic!("expected to find `{signature}` in the source"))
+        .1;
+    after.split("\n}\n").next().unwrap_or(after)
+}
+
+#[test]
+fn status_bar_connection_and_license_are_localized() {
+    // Neither caption is on the deliberately-untranslated list in locales/README.md, so an English
+    // literal here is a localization regression rather than policy. The status bar does carry
+    // entries from that list — the ticks/book/fps/CPU/RAM metrics string and the PRO/FREE plan
+    // names — which is exactly why the ban names these two keys instead of banning English text.
+    let text = read_src("shell/status_bar.rs");
+    for key in ["status.connection", "status.license"] {
+        assert!(
+            text.contains(&format!("t!(\"{key}\"")),
+            "status_bar.rs must render its label through t!(\"{key}\")"
+        );
+    }
+    for banned in ["\"Connection:", "\"License:"] {
+        assert!(
+            !text.contains(banned),
+            "status_bar.rs must not hard-code the English label {banned}"
+        );
+    }
+}

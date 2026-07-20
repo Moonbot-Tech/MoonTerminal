@@ -109,11 +109,6 @@ impl Shell {
             //         )
             //     })));
             // }
-            if !detached_set.contains("Log") {
-                bottom_tabs.push(Rc::new(
-                    cx.new(|cx| LogPanel::new(backend.clone(), group.clone(), window, cx)),
-                ));
-            }
             if !detached_set.contains("Report") {
                 bottom_tabs.push(Rc::new(
                     cx.new(|cx| ReportPanel::new(backend.clone(), group.clone(), window, cx)),
@@ -123,6 +118,15 @@ impl Shell {
                 bottom_tabs.push(Rc::new(cx.new(|cx| {
                     crate::panels::AlertsPanel::new(backend.clone(), group.clone(), window, cx)
                 })));
+            }
+            // Log LAST: it is the diagnostic surface, read on demand, while the tabs before it are
+            // the trading ones. Push order here is the left-to-right tab order, and it must match
+            // `DOCK_TAB_ORDER` — that array decides where a closed or re-docked panel comes back,
+            // so a disagreement makes a returning tab land somewhere it was never shown.
+            if !detached_set.contains("Log") {
+                bottom_tabs.push(Rc::new(
+                    cx.new(|cx| LogPanel::new(backend.clone(), group.clone(), window, cx)),
+                ));
             }
 
             // ВСЁ — в center-сплите: размеры панелей меняются split-handle'ами,

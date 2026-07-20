@@ -1,7 +1,7 @@
 //! Форматирование значений тулбара (поля метрик, size/sell) и шаги колеса мыши.
 //! Вынесено из `controls.rs` точь-в-точь.
 
-use gpui::{ScrollDelta, ScrollWheelEvent};
+use gpui::ScrollDelta;
 
 /// Формат значения с сотыми, точка-разделитель: `50` → "50.00".
 pub fn fmt_field2(v: f32) -> String {
@@ -86,11 +86,14 @@ pub(super) fn wheel_step(value: f64, up: bool, frac: f64) -> f64 {
     (raw * 1e8).round() / 1e8
 }
 
-/// Направление колеса (вверх = +Y). Если в реале инвертировано — поменять знак сравнения.
-pub(super) fn scroll_up(ev: &ScrollWheelEvent) -> bool {
-    let y = match ev.delta {
+/// Vertical component of a wheel gesture (up = +Y).
+///
+/// `ScrollDelta` is two-dimensional, and the sign alone decides nothing: a zero Y is a horizontal
+/// gesture, not "down". The caller (`strips::wheel_step_dir`) owns the interpretation of direction;
+/// this only extracts the magnitude.
+pub(super) fn scroll_dy(delta: ScrollDelta) -> f32 {
+    match delta {
         ScrollDelta::Lines(p) => p.y,
         ScrollDelta::Pixels(p) => f32::from(p.y),
-    };
-    y > 0.0
+    }
 }

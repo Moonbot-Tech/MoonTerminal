@@ -50,6 +50,39 @@ pub fn ticker_deltas_visible(cx: &App, chrome_width: f32) -> bool {
     chrome_width >= font_w(cx, TICKER_DELTAS_MIN_W)
 }
 
+/// Window widths at which the toolbar's preset-strip captions ("Size", "Sell") drop out.
+///
+/// The toolbar's left run has no slack — its only `flex_1` sits after the Live pill — so the
+/// captions genuinely widen it and would otherwise push the trailing icon cluster off a narrow
+/// window. They collapse rather than clip for the same reason the ticker does, and the choice of
+/// what to sacrifice is easy here: the caption is pure decoration, while the cells beside it carry
+/// live order size and sell percentages.
+///
+/// Sell yields FIRST — its strip sits directly beside the `TP` button, which already names the
+/// concept, so it is the more redundant of the two. Hence `SELL > SIZE`.
+///
+/// The numbers are DERIVED from this toolbar's fixed widths — the size strip's 372 and the sell
+/// strip's 240 are the sums of `controls::strips::SIZE_W` and `SELL_W`, so a change to either array
+/// invalidates these constants with nothing to catch it — plus the metric buttons, the 6px gaps,
+/// the 12px row padding, the trailing icon cluster, and roughly 28px per caption: about 1200
+/// without captions, about 1260 with. Arithmetic, not a measurement:
+/// the layout they model is font-scaled at runtime, so treat them as a bound to raise if the
+/// trailing icon cluster is still squeezed at these widths.
+const SIZE_CAPTION_MIN_W: f32 = 1240.0;
+
+/// Minimum window width at which the fixed-sell strip keeps its caption.
+const SELL_CAPTION_MIN_W: f32 = 1300.0;
+
+/// Return whether the order-size strip's "Size" caption fits at `chrome_width`.
+pub fn size_caption_visible(cx: &App, chrome_width: f32) -> bool {
+    chrome_width >= font_w(cx, SIZE_CAPTION_MIN_W)
+}
+
+/// Return whether the fixed-sell strip's "Sell" caption fits at `chrome_width`.
+pub fn sell_caption_visible(cx: &App, chrome_width: f32) -> bool {
+    chrome_width >= font_w(cx, SELL_CAPTION_MIN_W)
+}
+
 /// Transparent macOS titlebars keep native traffic-light buttons over the client
 /// area. Keep terminal chrome content and drag hitboxes out of that strip.
 pub fn titlebar_leading_inset() -> f32 {
@@ -229,6 +262,16 @@ pub fn t_title(cx: &App) -> Pixels {
 
 pub fn fit_h_px(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f32) -> Pixels {
     px(fit_h_value(cx, base_height, base_line_height, base_pad_y))
+}
+
+/// Width of mono text drawn at the terminal's body size — [`ui_text_width`] with the theme's body
+/// base filled in.
+///
+/// Exists so a caller measuring text it drew with `t_body()` + [`mono`] cannot reach for
+/// `t_body(cx)` as the size argument: that value is ALREADY scaled, and `ui_text_width` scales its
+/// input again, so the estimate would come out font-scaled twice. Keeps the base itself private.
+pub fn mono_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
+    ui_text_width(cx, text, base_text(cx), weight, true)
 }
 
 /// Ширина строки UI-шрифтом темы данного БАЗОВОГО кегля (масштаб «Шрифт» применяется

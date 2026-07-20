@@ -784,8 +784,12 @@ impl Panel for ChartTabs {
     fn panel_name(&self) -> &'static str {
         "ChartTabs"
     }
+    /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
+    fn tab_name(&self, _cx: &App) -> Option<SharedString> {
+        crate::panel_meta::tab_label(self.panel_name())
+    }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        SharedString::from(t!("dock.tab.charts").to_string())
+        crate::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
         // AddToChart-вкладки не сохраняем: они пересоздаются из детектов при работе.

@@ -863,6 +863,10 @@ impl Panel for AssetsView {
     fn panel_name(&self) -> &'static str {
         "Assets"
     }
+    /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
+    fn tab_name(&self, _cx: &App) -> Option<SharedString> {
+        crate::panel_meta::tab_label(self.panel_name())
+    }
     fn closable(&self, _cx: &App) -> bool {
         true
     }
@@ -870,7 +874,7 @@ impl Panel for AssetsView {
         true
     }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        SharedString::from(t!("dock.tab.assets").to_string())
+        crate::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
         let group = match &self.scope {
@@ -1040,7 +1044,7 @@ fn assets_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .border_color(rgb(p.border))
         .child(
             MoonWindowFrame::tool("assets-titlebar-title", 0.0)
-                .title_cluster(t!("dock.tab.assets").to_string(), cx)
+                .title_cluster(crate::panel_meta::panel_title("Assets").to_string(), cx)
                 .h_full()
                 .flex_1()
                 .min_w_0(),
