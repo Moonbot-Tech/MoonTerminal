@@ -32,7 +32,8 @@ rust-i18n мёржит **все** файлы в этой папке в одно 
 Отраслевой стандарт / тех-метрики оставляем как есть на всех языках:
 
     BUY · SELL · Cancel Buy · PANIC SELL · LONG · SHORT · ON · OFF · Live
-    Size · Sell · SL · TS · VStop · Buy · Fill · Strat · Host · Port
+    Size · Sell · SL · TP · Lev · TS · VStop · Buy · Fill · Strat · Host · Port
+    тикеры валют в подписях (Size, USDT / Size, BTC) — приходят с биржи как есть
     PRO · FREE (названия тарифов)
     строку метрик статус-бара (ticks / book / fps / present / CPU / RAM)
     вкладка Настройки → «Линии» целиком (Buy/Sell/Stop/dashed/knots/…)

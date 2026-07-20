@@ -67,7 +67,13 @@ header.clock_tip:
 # --- Тулбар ---
 # Тултипы полос пресетов. Сама подпись группы — литерал (Size/Sell), как соседние
 # Lev/SL/TP; переводится подсказка, потому что это проза, а не тех-токен.
+# `unit` — базовая валюта счёта; несёт единицу измерения на узком окне, где подпись группы
+# «Size, USDT» схлопнулась. Нет активного ядра — валюта неизвестна, работает вариант _nounit.
 toolbar.size_hint:
+  ru: "Размер ордера F%{n} в %{unit} · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить"
+  en: "Order size F%{n} in %{unit} · click to select · double-click to edit · Ctrl+wheel to change"
+  es: "Tamaño de orden F%{n} en %{unit} · clic para seleccionar · doble clic para editar · Ctrl+rueda para cambiar"
+toolbar.size_hint_nounit:
   ru: "Размер ордера F%{n} · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить"
   en: "Order size F%{n} · click to select · double-click to edit · Ctrl+wheel to change"
   es: "Tamaño de orden F%{n} · clic para seleccionar · doble clic para editar · Ctrl+rueda para cambiar"
@@ -101,18 +107,6 @@ toolbar.live_tip:
   ru: "Live: график бежит за рынком. Пауза: заморожен, можно листать (ЛКМ-перетаскивание, колесо)."
   en: "Live: the chart follows the market. Pause: frozen, you can scroll (LMB drag, wheel)."
   es: "Live: el gráfico sigue al mercado. Pausa: congelado, puedes desplazarte (arrastrar con clic izquierdo, rueda)."
-toolbar.close_chart:
-  ru: "Закрыть график"
-  en: "Close chart"
-  es: "Cerrar gráfico"
-toolbar.reports:
-  ru: "Отчёты"
-  en: "Reports"
-  es: "Informes"
-toolbar.help:
-  ru: "Справка"
-  en: "Help"
-  es: "Ayuda"
 toolbar.strategies:
   ru: "Стратегии"
   en: "Strategies"

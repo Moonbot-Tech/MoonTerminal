@@ -1,7 +1,9 @@
-//! Торговый тулбар: прикладная сборка терминала поверх MoonPalette.
+//! Trading toolbar: the terminal's own composition on top of MoonPalette.
 //!
-//! Логика остаётся терминальной: size/sell пока логируют todo, scale/live пишут в
-//! `Backend`. Визуальные контролы берём из палитры, выведенной из HTML-эталона.
+//! The row is built from five semantic sections — size, leverage, risk, exit, session — plus the
+//! window launchers at the trailing edge; `design::chrome_divider` draws the section boundaries.
+//! Edits go where they belong: order sizes into the core's config, TP/SL/sell into the core via
+//! `ClientSettingsEdit`, leverage to the exchange, `follow` into `Backend`.
 //!
 //! Разнесено по подмодулям (mod.rs = границы слайдеров + re-export'ы):
 //! - [`coin_search`] — поиск монеты + выпадающий список «COIN - Server» (общий: чарт-вкладки,
@@ -29,11 +31,9 @@ pub(crate) use core_combo::core_combo;
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use manual_strat::manual_strategy_controls;
 pub(crate) use manual_strat::select_manual_strategy;
-pub use metric::{TradeMetric, metric_popup_content};
+pub use metric::{MetricTarget, TradeMetric, metric_popup_content};
 pub(crate) use scale::{scale_dropdown_for_add_stack, scale_dropdown_for_tabs, step_scale};
 pub use toolbar::toolbar;
-
-use crate::design;
 
 /// Границы слайдеров торговых метрик `(min, max, step)` (по смыслу ядра). Использует и
 /// `Shell` при создании состояний слайдеров.
@@ -49,6 +49,3 @@ pub const TP_FINE_CAP: f32 = 1.99;
 pub const TP_EXT: (f32, f32, f32) = (100.0, 900.0, 10.0); // x_tmode on («s9»): 100..900%
 pub const SL_BOUNDS: (f32, f32, f32) = (-20.0, 1.0, 0.01); // знаковый: -20..+1%
 pub const LEV_BOUNDS: (f32, f32, f32) = (1.0, 125.0, 1.0);
-
-/// Высота полосы тулбара: 2-я строка header из HTML-эталона.
-pub const TOOLBAR_H: f32 = design::TOOLBAR_H;

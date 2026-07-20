@@ -1,4 +1,5 @@
-//! Compose the group-window frame (`Render for Shell`) and trading-metric popup overlay.
+//! Compose the group-window frame (`Render for Shell`) and the content of the open trading-metric
+//! popup.
 
 use std::time::Instant;
 
@@ -10,90 +11,53 @@ use super::Shell;
 use crate::{controls, design, terminal_chrome};
 
 impl Shell {
-    /// Build the active toolbar metric popup (TP/SL/leverage) and its full-window dismiss layer.
+    /// Build the CONTENT of the open trading-metric popup (TP/SL/leverage), or `None` when closed.
     ///
-    /// Returns `(popup, dismiss)`, both `None` when the popup is closed.
-    fn metric_popup_layers(
-        &self,
-        p: MoonPalette,
-        cx: &mut Context<Self>,
-    ) -> (Option<AnyElement>, Option<AnyElement>) {
-        let metric_overlay = self.open_metric_popup.map(|metric| {
-            use controls::TradeMetric;
-            let extended = self.active_tp_extended(cx);
-            let (slider, input) = match metric {
-                TradeMetric::Tp => (
-                    if extended {
-                        &self.tp_slider_ext
-                    } else {
-                        &self.tp_slider_normal
-                    },
-                    &self.tp_input,
-                ),
-                TradeMetric::Sl => (&self.sl_slider, &self.sl_input),
-                TradeMetric::Lev => (&self.lev_slider, &self.lev_input),
-            };
-            let hedge_on = {
-                let b = self.backend.read(cx);
-                b.active_trade_core(&self.group)
-                    .and_then(|c| b.session.store().core(c))
-                    .and_then(|d| d.hedge_mode)
-                    .unwrap_or(false)
-            };
-            let content = controls::metric_popup_content(
-                metric,
-                slider,
-                &self.tp_fine_slider,
-                input,
-                extended,
-                hedge_on,
-                &self.backend,
-                &self.group,
-                p,
-                cx,
-            );
-            let (left, top) = self.metric_popup_pos(metric, cx);
-            div()
-                .id("metric-popup")
-                .absolute()
-                .left(left)
-                .top(top)
-                // Клик/драг внутри попапа НЕ закрывает (иначе нельзя тянуть слайдер): гасим
-                // на mouse_down, чтобы не дошло до dismiss-слоя. Закрытие — клик вне или по кнопке.
-                .on_mouse_down(MouseButton::Left, |_, _w, app| app.stop_propagation())
-                // Авто-выход по уводу мыши — НО не во время drag слайдера: gpui на время
-                // `on_drag` слайдера гасит hover родителя (hovered=false), и без этой проверки
-                // попап закрывался бы прямо при перетаскивании ползунка. `has_active_drag()` —
-                // штатный публичный запрос gpui (форк править не нужно).
-                .on_hover(cx.listener(|this, hovered: &bool, _w, cx| {
-                    if *hovered {
-                        this.metric_popup_hovered = true;
-                    } else if this.metric_popup_hovered && !cx.has_active_drag() {
-                        this.close_metric_popup(cx);
-                    }
-                }))
-                .child(content)
-                .into_any_element()
-        });
-        let metric_dismiss = self.open_metric_popup.map(|_| {
-            div()
-                .id("metric-popup-dismiss")
-                .absolute()
-                .inset_0()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _ev, _w, cx| {
-                        this.close_metric_popup(cx);
-                        cx.stop_propagation();
-                    }),
-                )
-                .into_any_element()
-        });
-        (metric_overlay, metric_dismiss)
+    /// Content only. The box around it — frame, background, width, and above all its POSITION —
+    /// belongs to the anchored `MoonPopover` that `controls::toolbar` wraps around the matching
+    /// metric button. That is the whole point of the arrangement: the popup follows its trigger by
+    /// construction, so no layout term in the toolbar can desync it.
+    fn open_metric_content(&self, p: MoonPalette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (metric, target) = self.open_metric_popup.clone()?;
+        use controls::TradeMetric;
+        let extended = self.active_tp_extended(cx);
+        let (slider, input) = match metric {
+            TradeMetric::Tp => (
+                if extended {
+                    &self.tp_slider_ext
+                } else {
+                    &self.tp_slider_normal
+                },
+                &self.tp_input,
+            ),
+            TradeMetric::Sl => (&self.sl_slider, &self.sl_input),
+            TradeMetric::Lev => (&self.lev_slider, &self.lev_input),
+        };
+        let hedge_on = {
+            let b = self.backend.read(cx);
+            b.active_trade_core(&self.group)
+                .and_then(|c| b.session.store().core(c))
+                .and_then(|d| d.hedge_mode)
+                .unwrap_or(false)
+        };
+        Some(controls::metric_popup_content(
+            metric,
+            &target,
+            slider,
+            &self.tp_fine_slider,
+            input,
+            extended,
+            hedge_on,
+            &self.backend,
+            &self.group,
+            p,
+            cx,
+        ))
     }
 }
 
 impl Render for Shell {
+    /// Render the group window with its two chrome rows, dock, status bar, and anchored popovers.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::SHELL_RENDER);
 
@@ -124,10 +88,15 @@ impl Render for Shell {
         let chrome_width = f32::from(window.viewport_size().width);
         let p = MoonPalette::active(cx);
 
-        // Overlay-попап активной метрики тулбара (TP/SL/Lev): абсолютный бокс под кнопкой +
-        // полноэкранный dismiss-слой (как попап раскладки чарта). Клик внутри не закрывает
-        // (stop_propagation), клик вне или увод мыши — закрывает.
-        let (metric_overlay, metric_dismiss) = self.metric_popup_layers(p, cx);
+        // Reconcile an orphaned metric popup before building content for the remaining open one.
+        // The toolbar's `MoonPopover` owns the box and trigger-relative position. Keeping the metric
+        // and content paired prevents the row from attaching one metric's editor to another button.
+        self.reconcile_metric_popup(cx);
+        let metric_popup = self
+            .open_metric_popup
+            .as_ref()
+            .map(|(metric, _)| *metric)
+            .zip(self.open_metric_content(p, cx));
 
         // Попап настроек ядра — MoonPopover у кнопки ⚙ (контролируемый open в Shell):
         // контент строим только при открытом попапе, позиционирование к кнопке — от popover.
@@ -186,8 +155,8 @@ impl Render for Shell {
                 p,
                 cx,
             ))
-            // ── Тулбар: тонкая фикс. полоса (Размеры/Продажа/Масштаб+Live), порт верхней
-            //    полосы стенда. Не dock-панель — единый ряд на высоту кнопки. ──
+            // Trading toolbar: fixed-height size, leverage, risk, exit, Live, and window-launch
+            // sections. It is one chrome row rather than a dock panel.
             .child(controls::toolbar(
                 &self.backend,
                 &self.group,
@@ -196,7 +165,7 @@ impl Render for Shell {
                 self.sell_edit,
                 &self.sell_input,
                 &cx.entity(),
-                self.open_metric_popup,
+                metric_popup,
                 chrome_width,
                 cx,
             ))
@@ -227,9 +196,6 @@ impl Render for Shell {
                     .show_controls(design::show_custom_window_controls())
                     .hit_overlay(),
             )
-            // Попап метрики поверх всего: dismiss-слой (ловит клик вне) под самим попапом.
-            .children(metric_dismiss)
-            .children(metric_overlay)
             // Попап выбора источника тикера курса (клик по «1 BTC = …» в шапке).
             .children(ticker_dismiss)
             .children(ticker_overlay)

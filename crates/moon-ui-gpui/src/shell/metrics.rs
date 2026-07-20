@@ -1,7 +1,5 @@
-//! Попапы торговых метрик тулбара (TP/SL/Lev): открытие/закрытие, засев слайдера+поля
-//! значением активного ядра и коммит правок в ядро. Вынесено из `shell.rs`.
-//! Методы, дёргаемые из `mod.rs` (`new`/`render`), помечены `pub(super)` — приватный
-//! `fn` в `impl Shell` этого подмодуля иначе не виден родителю `shell`.
+//! Toolbar metric popups (TP/SL/Lev): open-state reconciliation, editor seeding, and guarded edits
+//! bound to the core and optional market captured when the popup opened.
 
 use gpui::*;
 
@@ -9,29 +7,126 @@ use moon_ui::{MoonInputState, MoonSliderEvent, MoonSliderState};
 
 use moon_core::feed::ClientSettingsEdit;
 
-use crate::{controls, design};
+use crate::controls;
 
 use super::Shell;
 
 impl Shell {
-    /// Открыть/закрыть попап метрики тулбара (клик по кнопке TP/SL/Lev). При открытии сидирует
-    /// слайдер/поле текущим значением активного ядра (Context есть — без backend-замыканий).
-    pub(crate) fn toggle_metric_popup(
+    /// Drop an open metric popup that no longer belongs where it was opened.
+    ///
+    /// Two classes of change can orphan it, neither of which produces an event to hang this on, so
+    /// both are reconciled at render time like the state polled by the panels:
+    ///
+    /// * **the metric stopped being editable** (its SL toggle switched off, the manual strategy
+    ///   armed). `MoonPopover` then renders only a disabled trigger and fires no `on_open_change`,
+    ///   so the popup vanishes while the state stays `Some` — and pops back open, unclicked, the
+    ///   moment the metric is available again, holding values seeded before the change.
+    /// * **the edit target changed underneath it.** A different active core moves every metric;
+    ///   changing the Main chart market moves leverage alone. Event handlers resolve that address
+    ///   when they fire, so availability alone cannot distinguish the stale popup from a live one.
+    ///
+    /// Lives beside the state it guards rather than in the frame-composition module, so the next
+    /// rule added to [`controls::TradeMetric`] is edited within sight of it.
+    pub(super) fn reconcile_metric_popup(&mut self, cx: &App) {
+        let stale = self
+            .open_metric_popup
+            .as_ref()
+            .is_some_and(|(metric, target)| {
+                let b = self.backend.read(cx);
+                !target.is_live(*metric, b, &self.group) || !metric.available(b, &self.group)
+            });
+        if stale {
+            self.open_metric_popup = None;
+        }
+    }
+
+    /// Send a `ClientSettings` edit ON BEHALF OF the open metric popup.
+    ///
+    /// Refuses when the popup is not open for `metric`, or when the address it was seeded from is
+    /// no longer the one this metric resolves to. That check has to happen HERE, at event time:
+    /// [`Self::reconcile_metric_popup`] takes a stale popup off the screen, but only at the next
+    /// render, and repaints pass three stacked throttles. A slider drag inside that window would
+    /// otherwise continue changing the no-longer-visible core or leverage market.
+    ///
+    /// Distinct from [`Self::commit_client_edit`], which the core-settings gear popup uses and which
+    /// still resolves the active core at event time. That is a KNOWN GAP, not a design decision:
+    /// `seed_core_settings_popup` freezes Global TP, TrailingDrop and V-Stop from the core active
+    /// when the gear popup opened, so it has this same defect and wants this same treatment. It is
+    /// left alone here only because its files are outside this change.
+    pub(super) fn commit_metric_edit(
+        &self,
+        metric: controls::TradeMetric,
+        edit: ClientSettingsEdit,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((open, target)) = self.open_metric_popup.as_ref() else {
+            return;
+        };
+        let b = self.backend.read(cx);
+        if *open != metric || !target.is_live(metric, b, &self.group) {
+            return;
+        }
+        if let Err(error) = b.session.edit_client_settings(target.core, edit) {
+            log::warn!("toolbar metric edit failed: {error:#}");
+        }
+    }
+
+    /// Open or close a toolbar metric's popup — the `on_open_change` of its anchored `MoonPopover`.
+    ///
+    /// Opening seeds the slider and the field with the active core's current value.
+    ///
+    /// The `EngageMainTakeProfit` edit goes out ONLY on OPENING TP. `MoonPopover` fires
+    /// `on_open_change` for every close — a click elsewhere, Escape, a second click on the trigger —
+    /// and none of those is the user acting on TP. Sending a trading command from there is doubly
+    /// unsafe: `edit_client_settings` transmits the WHOLE last accepted `ClientSettings` snapshot,
+    /// so closing the popup right after editing TP — before the core echoed the new value back —
+    /// would roll that edit back. Closing now only clears UI state.
+    ///
+    /// Opening is a no-op unless both the target and its seed value exist. Every edit needs a core,
+    /// leverage also needs a Main-chart market, and a missing value would leave the long-lived
+    /// editor showing stale data from the previous target.
+    pub(crate) fn set_metric_popup_open(
         &mut self,
         metric: controls::TradeMetric,
+        open: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Клик по TP возвращает управление главному TP (гасит активный S-слот), не меняя значение TP.
-        if metric == controls::TradeMetric::Tp {
-            self.commit_client_edit(ClientSettingsEdit::EngageMainTakeProfit, cx);
-        }
-        if self.open_metric_popup == Some(metric) {
-            self.open_metric_popup = None;
-        } else {
-            self.open_metric_popup = Some(metric);
-            self.metric_popup_hovered = false;
+        if open {
+            let b = self.backend.read(cx);
+            // BOTH an address and a value to show, or the popup does not open at all.
+            //
+            // The editors are long-lived entities: they keep whatever the LAST popup left in them.
+            // `seed_metric_popup` gives up silently when the value is missing — no client settings
+            // yet, or a market with no leverage entry — so an editor opened in that state would
+            // display the previous core's or the previous coin's number as if it were this one's.
+            // For leverage that is not merely misleading: Apply sends the FIELD, which the user need
+            // never have touched, straight to the exchange.
+            //
+            // This is a backstop, not the user-facing rule: the toolbar folds the same readiness
+            // into the button's enabled state, so a button that cannot open is drawn disabled rather
+            // than swallowing the click.
+            let Some(target) = metric.target(b, &self.group) else {
+                return;
+            };
+            if metric.seed_value(b, &self.group).is_none() {
+                return;
+            }
+            // Recorded BEFORE the seed and before any edit goes out, so both address the same place
+            // — see [`Self::reconcile_metric_popup`] and [`Self::commit_metric_edit`].
+            self.open_metric_popup = Some((metric, target));
+            // Clicking TP hands control back to the main take profit (extinguishing the active S
+            // slot) without changing the TP value itself.
+            if metric == controls::TradeMetric::Tp {
+                self.commit_metric_edit(metric, ClientSettingsEdit::EngageMainTakeProfit, cx);
+            }
             self.seed_metric_popup(metric, window, cx);
+        } else if self
+            .open_metric_popup
+            .as_ref()
+            .is_some_and(|(m, _)| *m == metric)
+        {
+            self.open_metric_popup = None;
         }
         cx.notify();
     }
@@ -49,46 +144,16 @@ impl Shell {
         cx.subscribe(&s, |this, _e, ev: &MoonSliderEvent, cx| {
             if let MoonSliderEvent::Change(v) = ev {
                 let v = v.end();
-                this.commit_client_edit(ClientSettingsEdit::ScalpTakeProfit(v as f64), cx);
+                this.commit_metric_edit(
+                    controls::TradeMetric::Tp,
+                    ClientSettingsEdit::ScalpTakeProfit(v as f64),
+                    cx,
+                );
                 this.live_set_field(this.tp_input.clone(), controls::fmt_field2(v), cx);
             }
         })
         .detach();
         s
-    }
-
-    /// Левый/верхний отступ overlay-попапа метрики: под её кнопкой в тулбаре. Ширины метрик
-    /// фиксированы (TP/SL=74.6, Lev=61.6); top = высота шапки + тулбара (те же fit-формулы).
-    pub(super) fn metric_popup_pos(
-        &self,
-        metric: controls::TradeMetric,
-        cx: &App,
-    ) -> (Pixels, Pixels) {
-        use controls::TradeMetric;
-        let pad = f32::from(design::ui_px(cx, 12.0));
-        let gap = f32::from(design::ui_px(cx, 6.0));
-        // Раскладка: TP(74.6) → sell-полоса(6×44) → divider(1px) → SL-тогл → кнопка SL(58) →
-        // Lev(61.6), с зазором `gap` между каждым. Координаты приблизительные — выверить визуально.
-        const SELL_STRIP_W: f32 = 6.0 * 44.0;
-        const SL_TOGGLE_W: f32 = 46.0; // MoonToggle Compact + подпись «SL»
-        const SL_BTN_W: f32 = 58.0;
-        // До кнопки SL: TP + sell + divider + тогл и 4 зазора между ними.
-        let sl_off = 74.6 + SELL_STRIP_W + 1.0 + SL_TOGGLE_W + 4.0 * gap;
-        let left = pad
-            + match metric {
-                TradeMetric::Tp => 0.0,
-                TradeMetric::Sl => sl_off,
-                TradeMetric::Lev => sl_off + SL_BTN_W + gap,
-            };
-        let header_h = f32::from(design::fit_h_px(cx, design::HEADER_TOP_H, 14.0, 9.0));
-        let toolbar_h = f32::from(design::fit_h_px(cx, controls::TOOLBAR_H, 13.0, 9.5));
-        (px(left), px(header_h + toolbar_h))
-    }
-
-    pub(super) fn close_metric_popup(&mut self, cx: &mut Context<Self>) {
-        if self.open_metric_popup.take().is_some() {
-            cx.notify();
-        }
     }
 
     /// Засеять слайдер+поле попапа значением активного ядра. Для TP выбирает обычный/

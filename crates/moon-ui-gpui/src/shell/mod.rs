@@ -5,7 +5,7 @@
 //! Разнесено по подмодулям:
 //! - [`init`] — конструктор `Shell::new` (сборка дока + observe/subscribe-плумбинг);
 //! - [`actions`] — дренаж запросов правок/тостов Engine-действий и хоткеи окна;
-//! - [`render`] — сборка кадра (`impl Render`) и оверлей попапа метрик;
+//! - [`render`] — сборка кадра (`impl Render`) и контент открытого попапа метрики;
 //! - [`metrics`] — попапы торговых метрик тулбара (TP/SL/Lev) и коммит правок в ядро;
 //! - [`docks`] — отцепление/возврат панелей и персист геометрии ОС-окна;
 //! - [`status_bar`] — нижняя строка состояния (соединение/лицензия/диагностика).
@@ -95,12 +95,14 @@ pub(crate) struct Shell {
     /// Поле поиска стратегии в списке «Стратегия алертов» попапа настроек ядра (сотни
     /// стратегий → фильтр + скролл; выпадашка внутри поповера ловится как клик-вне).
     def_strategy_input: Entity<MoonInputState>,
-    /// Какой попап метрики тулбара открыт (TP/SL/Lev). Overlay рисуется поверх дока, закрытие
-    /// по клику вне (dismiss-слой), уводу мыши или повторному клику по кнопке. None = закрыт.
-    open_metric_popup: Option<controls::TradeMetric>,
-    /// Был ли курсор уже над попапом метрики (как `layout_popup_hovered`): авто-выход по
-    /// уводу мыши только после реального захода внутрь.
-    metric_popup_hovered: bool,
+    /// The open toolbar-metric popup and the address from which its slider and field were seeded.
+    ///
+    /// One field keeps TP, SL, and leverage mutually exclusive. The address travels with the open
+    /// metric because handlers resolve their live target when an event fires, not when the popup
+    /// opened; comparing both prevents a stale editor from continuing to write to an old core or
+    /// market after the visible context moves.
+    /// `None` means all three anchored popovers are closed.
+    open_metric_popup: Option<(controls::TradeMetric, controls::MetricTarget)>,
     /// Фокус корня окна — чтобы хоткеи (`on_key_down` на корне) ловились даже когда ничего
     /// другого не сфокусировано (пустой Main). Фокусируем на старте; клик по чарту/инпуту
     /// уводит фокус туда, но F-клавиши всплывают обратно к корню.

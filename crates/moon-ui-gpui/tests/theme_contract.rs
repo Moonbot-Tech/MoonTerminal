@@ -464,3 +464,36 @@ fn status_bar_connection_and_license_are_localized() {
         );
     }
 }
+
+#[test]
+fn toolbar_row_budget_counts_every_rule_it_draws() {
+    // `controls::toolbar::row_fit` decides which of the row's labels collapse by summing the row's
+    // fixed width, and it restates the row's structure to do so — the rule count among it. The row
+    // itself is built 250 lines below, so the two are coupled only by hand.
+    //
+    // Plausible future edit, and the reason this test exists: a sixth section is added to the row
+    // with its `design::chrome_divider` sibling, and `row_fit` is not touched. Nothing fails to
+    // compile, and at any comfortable window width nothing looks wrong — the budget is short by one
+    // rule plus its gaps, so at some narrow width a label stays on screen after the row has already
+    // outgrown the window and the trailing window buttons clip off the right edge. That is the
+    // exact failure `row_fit` exists to prevent, so an undercount defeats the mechanism silently.
+    //
+    // Static, because this harness has no gpui `App` and cannot lay a row out; it pins the COUPLING
+    // rather than any pixel value, the same way the header ticker's popup test does.
+    let text = read_src("controls/toolbar.rs");
+    let drawn = fn_body(&text, "pub fn toolbar(")
+        .matches("design::chrome_divider(cx, p)")
+        .count();
+    let budgeted = fn_body(&text, "fn row_fit(")
+        .split_once("let rules = ")
+        .and_then(|(_, rest)| rest.split_once(';'))
+        .and_then(|(value, _)| value.trim().trim_end_matches("f32").parse::<f32>().ok())
+        .expect("row_fit must state its rule count as `let rules = <number>;`");
+
+    assert_eq!(
+        budgeted, drawn as f32,
+        "row_fit budgets {budgeted} rules while toolbar() draws {drawn}: the collapse thresholds \
+         are off by the difference, which shows up only as the trailing cluster clipping at a \
+         narrow window"
+    );
+}

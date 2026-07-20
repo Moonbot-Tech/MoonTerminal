@@ -55,12 +55,13 @@ pub fn header(
     let manual = crate::controls::manual_strategy_controls(group, &backend, p, cx);
     h_flex()
         .w_full()
-        .h(design::fit_h_px(cx, design::HEADER_TOP_H, 14.0, 9.0))
+        .h(design::header_height_px(cx))
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        // One spacing rule across the header: 8px inside a group, 8px + rule + 8px between
-        // groups. The brand cluster uses the same token internally, so the seams line up.
-        .gap(design::ui_px(cx, 8.0))
+        // One spacing rule across BOTH chrome strips — see `design::CHROME_GAP`: 8px inside a
+        // group, 8px + rule + 8px between groups. The brand cluster uses the same token
+        // internally, so the seams line up.
+        .gap(design::ui_px(cx, design::CHROME_GAP))
         .bg(rgb(p.shell_high))
         // Brand draws its OWN trailing separator (MoonWindowFrame::brand_cluster), so the
         // groups below add only the seams after them.
@@ -74,10 +75,7 @@ pub fn header(
         // read through it, so the control everything else depends on leads the row. Interactive
         // widgets, so NOT a drag zone (a click would otherwise drag the window).
         .child(
-            h_flex()
-                .flex_none()
-                .gap(design::ui_px(cx, 8.0))
-                .items_center()
+            design::chrome_section(cx)
                 .child(core_selector(group, &backend, p, cx))
                 .child(core_gear_button(
                     shell.clone(),
@@ -93,7 +91,7 @@ pub fn header(
         .children(manual.map(|ms| {
             h_flex()
                 .min_w_0()
-                .gap(design::ui_px(cx, 8.0))
+                .gap(design::ui_px(cx, design::CHROME_GAP))
                 .items_center()
                 .child(design::chrome_divider(cx, p))
                 .child(ms)
@@ -112,10 +110,7 @@ pub fn header(
         )
         // Ambient readouts are right-aligned: rate ticker, then the clock, then the window controls.
         .child(
-            h_flex()
-                .flex_none()
-                .gap(design::ui_px(cx, 8.0))
-                .items_center()
+            design::chrome_section(cx)
                 // Rate ticker (configurable): "1 BTC = 61 333$ 1h +0.1% 24h +2.0%". Its popup is
                 // positioned by hand in `shell::ticker` from the window's right edge inward, so it
                 // has to account for EVERYTHING standing to the ticker's right — the divider below,
@@ -123,10 +118,7 @@ pub fn header(
                 // cluster and that offset must follow. Divider and readout share ONE predicate:
                 // split, they could drift into a divider fencing off nothing.
                 .children(design::ticker_visible(cx, chrome_width).then(|| {
-                    h_flex()
-                        .flex_none()
-                        .gap(design::ui_px(cx, 8.0))
-                        .items_center()
+                    design::chrome_section(cx)
                         .child(ticker_readout(
                             ticker_sel,
                             design::ticker_deltas_visible(cx, chrome_width),

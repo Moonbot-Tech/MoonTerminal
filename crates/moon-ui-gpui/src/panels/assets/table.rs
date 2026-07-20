@@ -232,7 +232,7 @@ impl AssetsView {
                     )),
             )
             .child(div().flex_1())
-            .child(design::vline(cx, 12.0, p))
+            .child(design::vline(cx, 12.0, p.border))
             .child(super::balances::summary_group(
                 &self.cached_aggs,
                 &self.sel_cores,

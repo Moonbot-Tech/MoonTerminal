@@ -23,6 +23,7 @@ use crate::panels::{AssetsView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel
 use crate::{Backend, controls, core_settings_popup};
 
 impl Shell {
+    /// Construct a group window shell, restore or create its dock, and wire its long-lived inputs.
     pub(crate) fn new(
         backend: Entity<Backend>,
         group: String,
@@ -542,7 +543,6 @@ impl Shell {
             blacklist_area,
             def_strategy_input,
             open_metric_popup: None,
-            metric_popup_hovered: false,
             focus,
             window_active: true,
             core_settings_open: false,
@@ -554,10 +554,11 @@ impl Shell {
         }
     }
 
-    /// Подписки слайдеров/полей попапов торговых метрик (TP/SL/Lev): на каждое изменение
-    /// шлём правку активному ядру и обновляем numeric-поле попапа. moonproto коалесит pending
-    /// settings → драг не штормит провод. Регистрируется из `new` (self ещё строится, поэтому
-    /// сущности приходят параметрами; `this` в замыканиях даёт сам `cx.subscribe`).
+    /// Subscribe the TP/SL/leverage popup editors to guarded writes and live field updates.
+    ///
+    /// Each callback writes only while its metric popup is still open for the core and market from
+    /// which it was seeded. The entities are passed in because `new` registers these subscriptions
+    /// before `Shell` itself has been assembled.
     fn wire_metric_subscriptions(
         cx: &mut Context<Self>,
         tp_slider_normal: &Entity<MoonSliderState>,
@@ -571,7 +572,8 @@ impl Shell {
         cx.subscribe(tp_slider_normal, |this, _e, ev: &MoonSliderEvent, cx| {
             if let MoonSliderEvent::Change(v) = ev {
                 let v = v.end();
-                this.commit_client_edit(
+                this.commit_metric_edit(
+                    controls::TradeMetric::Tp,
                     ClientSettingsEdit::TakeProfit {
                         pct: v as f64,
                         extended: false,
@@ -589,7 +591,8 @@ impl Shell {
         cx.subscribe(tp_slider_ext, |this, _e, ev: &MoonSliderEvent, cx| {
             if let MoonSliderEvent::Change(v) = ev {
                 let v = v.end();
-                this.commit_client_edit(
+                this.commit_metric_edit(
+                    controls::TradeMetric::Tp,
                     ClientSettingsEdit::TakeProfit {
                         pct: v as f64,
                         extended: true,
@@ -603,7 +606,11 @@ impl Shell {
         cx.subscribe(sl_slider, |this, _e, ev: &MoonSliderEvent, cx| {
             if let MoonSliderEvent::Change(v) = ev {
                 let v = v.end();
-                this.commit_client_edit(ClientSettingsEdit::StopLossPct(v), cx);
+                this.commit_metric_edit(
+                    controls::TradeMetric::Sl,
+                    ClientSettingsEdit::StopLossPct(v),
+                    cx,
+                );
                 this.live_set_field(this.sl_input.clone(), controls::fmt_field2_signed(v), cx);
             }
         })
@@ -626,7 +633,11 @@ impl Shell {
             }
             if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
                 let extended = this.active_tp_extended(cx);
-                this.commit_client_edit(ClientSettingsEdit::TakeProfit { pct: v, extended }, cx);
+                this.commit_metric_edit(
+                    controls::TradeMetric::Tp,
+                    ClientSettingsEdit::TakeProfit { pct: v, extended },
+                    cx,
+                );
             }
         })
         .detach();
@@ -635,7 +646,11 @@ impl Shell {
                 return;
             }
             if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f32>() {
-                this.commit_client_edit(ClientSettingsEdit::StopLossPct(v), cx);
+                this.commit_metric_edit(
+                    controls::TradeMetric::Sl,
+                    ClientSettingsEdit::StopLossPct(v),
+                    cx,
+                );
             }
         })
         .detach();

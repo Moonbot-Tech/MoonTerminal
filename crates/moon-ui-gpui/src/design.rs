@@ -16,6 +16,47 @@ pub const TABLE_HEAD_H: f32 = M.table_header_h;
 pub const TABLE_ROW_H: f32 = M.table_row_h;
 pub const HEADER_PAD_X: f32 = 12.0;
 
+/// One spacing rule across both chrome strips: 8px inside a group, 8px + rule + 8px between
+/// groups.
+///
+/// The header and the toolbar are one visual block on one `shell_high` background, so a gap that
+/// differs between them reads as a seam. [`chrome_divider`] is this token's partner — the group
+/// boundary comes from the RULE, not from extra space, which is why the same value serves both
+/// positions.
+pub const CHROME_GAP: f32 = 8.0;
+
+/// Height of the toolbar strip.
+///
+/// The one home of its fit triple, matching [`header_height`] and the
+/// `table_row_h`/`table_head_h` pair below. Centralizing the formula prevents callers that size or
+/// position adjacent chrome from drifting away from the row that is actually rendered.
+pub fn toolbar_height(cx: &App) -> f32 {
+    fit_h_value(cx, TOOLBAR_H, 13.0, 9.5)
+}
+
+/// Height of the window header strip — the companion to [`toolbar_height`].
+pub fn header_height(cx: &App) -> f32 {
+    fit_h_value(cx, HEADER_TOP_H, 14.0, 9.0)
+}
+
+/// [`header_height`] as `Pixels`, for the row that draws itself.
+pub fn header_height_px(cx: &App) -> Pixels {
+    px(header_height(cx))
+}
+
+/// One group of controls inside a chrome strip — the header or the toolbar.
+///
+/// The partner of [`CHROME_GAP`] and [`chrome_divider`]: a group carries the gap INSIDE it, and the
+/// boundary between two groups is drawn by a rule standing between them. One builder so the two
+/// strips cannot drift into different spacing, which would read as a seam across what is one
+/// visual block on one background.
+pub fn chrome_section(cx: &App) -> Div {
+    moon_ui::h_flex()
+        .flex_none()
+        .items_center()
+        .gap(ui_px(cx, CHROME_GAP))
+}
+
 /// Ceiling for a header selector label (core, manual strategy).
 ///
 /// Those pills size to their content and both names are arbitrary user text, so without a ceiling
@@ -48,39 +89,6 @@ pub fn ticker_visible(cx: &App, chrome_width: f32) -> bool {
 /// price remains visible after the deltas collapse.
 pub fn ticker_deltas_visible(cx: &App, chrome_width: f32) -> bool {
     chrome_width >= font_w(cx, TICKER_DELTAS_MIN_W)
-}
-
-/// Window widths at which the toolbar's preset-strip captions ("Size", "Sell") drop out.
-///
-/// The toolbar's left run has no slack — its only `flex_1` sits after the Live pill — so the
-/// captions genuinely widen it and would otherwise push the trailing icon cluster off a narrow
-/// window. They collapse rather than clip for the same reason the ticker does, and the choice of
-/// what to sacrifice is easy here: the caption is pure decoration, while the cells beside it carry
-/// live order size and sell percentages.
-///
-/// Sell yields FIRST — its strip sits directly beside the `TP` button, which already names the
-/// concept, so it is the more redundant of the two. Hence `SELL > SIZE`.
-///
-/// The numbers are DERIVED from this toolbar's fixed widths — the size strip's 372 and the sell
-/// strip's 240 are the sums of `controls::strips::SIZE_W` and `SELL_W`, so a change to either array
-/// invalidates these constants with nothing to catch it — plus the metric buttons, the 6px gaps,
-/// the 12px row padding, the trailing icon cluster, and roughly 28px per caption: about 1200
-/// without captions, about 1260 with. Arithmetic, not a measurement:
-/// the layout they model is font-scaled at runtime, so treat them as a bound to raise if the
-/// trailing icon cluster is still squeezed at these widths.
-const SIZE_CAPTION_MIN_W: f32 = 1240.0;
-
-/// Minimum window width at which the fixed-sell strip keeps its caption.
-const SELL_CAPTION_MIN_W: f32 = 1300.0;
-
-/// Return whether the order-size strip's "Size" caption fits at `chrome_width`.
-pub fn size_caption_visible(cx: &App, chrome_width: f32) -> bool {
-    chrome_width >= font_w(cx, SIZE_CAPTION_MIN_W)
-}
-
-/// Return whether the fixed-sell strip's "Sell" caption fits at `chrome_width`.
-pub fn sell_caption_visible(cx: &App, chrome_width: f32) -> bool {
-    chrome_width >= font_w(cx, SELL_CAPTION_MIN_W)
 }
 
 /// Transparent macOS titlebars keep native traffic-light buttons over the client
@@ -411,32 +419,49 @@ pub fn dropdown_content_widths<'a>(
     (label, trigger_w, menu_w)
 }
 
-/// Truncate `text` with an ellipsis so it fits `max_w`, measured by ACTUAL glyph widths.
+/// Truncate `text` with an ellipsis to the available prefix budget, returning the result and width.
 ///
-/// For labels that carry their own chrome (a `MoonSelectorPill` draws its own caret), where
-/// [`fit_dropdown_trigger`]'s caret-and-width contract does not apply. Names are arbitrary
-/// Unicode and equal width is not guaranteed outside Geist Mono, so the prefix is accumulated
-/// character by character against the real budget. Returns `text` unchanged when it already fits;
-/// a budget narrower than the ellipsis itself returns the ellipsis.
-pub fn fit_label(cx: &App, text: &str, max_w: f32) -> String {
+/// Text is arbitrary Unicode and equal glyph width is not guaranteed outside Geist Mono, so the
+/// prefix is accumulated character by character against the real budget rather than by counting
+/// characters. Returns `text` unchanged when it already fits. A budget narrower than the ellipsis
+/// returns the ellipsis alone even though no non-empty marker can fit that budget.
+///
+/// The width comes back because every caller needs it and measuring costs an uncached glyph layout
+/// PER CHARACTER (see [`ui_text_width`]) — a caller that re-measured the result would pay for the
+/// same string twice, and these run per frame.
+///
+/// `measure` is passed in rather than taken from the theme: the caller draws its text at its own
+/// size and weight, and truncating against a narrower font underestimates the width and overflows
+/// anyway. Pure, so it is unit-testable without an `App`.
+pub fn fit_text(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> (String, f32) {
     const ELLIPSIS: &str = "\u{2026}";
-    let tw = |s: &str| ui_text_width(cx, s, 10.5, 400.0, true);
-    if tw(text) <= max_w {
-        return text.to_string();
+    let full = measure(text);
+    if full <= max_w {
+        return (text.to_string(), full);
     }
-    let budget = max_w - tw(ELLIPSIS);
+    let budget = max_w - measure(ELLIPSIS);
     let mut head = String::new();
     let mut used = 0.0f32;
     let mut buf = [0u8; 4];
     for ch in text.chars() {
-        let w = tw(ch.encode_utf8(&mut buf));
+        let w = measure(ch.encode_utf8(&mut buf));
         if used + w > budget {
             break;
         }
         used += w;
         head.push(ch);
     }
-    format!("{}{ELLIPSIS}", head.trim_end())
+    let out = format!("{}{ELLIPSIS}", head.trim_end());
+    let width = measure(&out);
+    (out, width)
+}
+
+/// [`fit_text`] at the size a selector pill draws its label.
+///
+/// For labels that carry their own chrome (a `MoonSelectorPill` draws its own caret), where
+/// [`fit_dropdown_trigger`]'s caret-and-width contract does not apply.
+pub fn fit_label(cx: &App, text: &str, max_w: f32) -> String {
+    fit_text(text, max_w, |s| ui_text_width(cx, s, 10.5, 400.0, true)).0
 }
 
 /// Build a `MoonDropdown` trigger label and width for the current selection.
@@ -607,26 +632,33 @@ pub fn logo_glow_sized(cx: &App, width: f32) -> impl IntoElement {
 
 /// Vertical 1px group separator.
 ///
-/// The height scales with the UI font: MoonUI draws its own separators at `tokens.ui(..)` (the
-/// brand cluster in `MoonWindowFrame` is one), and a raw-pixel height stands visibly shorter than
-/// those at any non-default font scale — including the stock config, where `ui_font_delta` is +2.
-/// The 1px width stays raw, matching MoonUI, since a hairline must not thicken with the font.
-pub fn vline(cx: &App, height: f32, p: MoonPalette) -> impl IntoElement {
+/// The height goes through `ui()`, which tracks the UI SCALE but NOT the Font slider — matching
+/// MoonUI, which draws its own separators the same way (the brand cluster in `MoonWindowFrame` is
+/// one). So the rule keeps its height while a larger font grows the row around it; standing beside
+/// a MoonUI separator that did move is the worse of the two mismatches. The 1px width stays raw,
+/// also matching MoonUI, since a hairline must not thicken with the font.
+pub fn vline(cx: &App, height: f32, color: u32) -> impl IntoElement {
     // flex_none: a 1px rule inside a shrinking row would otherwise be the first thing squeezed
     // to nothing, silently dropping the group boundary it draws.
     div()
         .flex_none()
         .w(px(1.0))
         .h(ui_px(cx, height))
-        .bg(rgb(p.border))
+        .bg(rgb(color))
 }
 
 /// Group separator for the horizontal chrome strips — the toolbar and the window header.
 ///
 /// One definition of the chrome-height rule, so those two strips cannot drift apart, and so the
 /// height matches the separator MoonUI's own brand cluster draws.
+///
+/// Drawn in `border_hover` rather than `border`: against `shell_high`, `border` measures about
+/// 1.2:1 in the dark palette and 1.3:1 in the light palette. These rules are the only thing marking
+/// where one group ends and the next begins because spacing inside and between groups is identical.
+/// `border_hover` is one step stronger in both palettes (about 1.5:1 dark and 1.7:1 light), which
+/// reads as a boundary without reading as a frame.
 pub fn chrome_divider(cx: &App, p: MoonPalette) -> impl IntoElement {
-    vline(cx, 16.0, p)
+    vline(cx, 16.0, p.border_hover)
 }
 
 pub fn status_dot(color: u32, cx: &App) -> impl IntoElement {

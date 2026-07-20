@@ -91,7 +91,7 @@ impl Shell {
         // Root-owned anchored layer that follows the trigger, which would delete this arithmetic
         // outright. `MoonPopover` alone does not fit: it cannot preserve this popup's
         // double-click-only opening, so that migration needs a MoonUI-side API first.
-        let cluster_gap = f32::from(design::ui_px(cx, 8.0));
+        let cluster_gap = f32::from(design::ui_px(cx, design::CHROME_GAP));
         let controls_w = if design::show_custom_window_controls() {
             // The controls themselves, plus the cluster gap between them and the clock. That gap
             // exists only when the controls do — adding it unconditionally shifted the popup a
@@ -115,7 +115,7 @@ impl Shell {
             + cluster_gap
             + 1.0
             + cluster_gap;
-        let top = f32::from(design::fit_h_px(cx, design::HEADER_TOP_H, 14.0, 9.0));
+        let top = design::header_height(cx);
         let overlay = div()
             .id("header-ticker-popup-box")
             .absolute()
