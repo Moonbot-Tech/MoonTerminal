@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_moon_sync.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
