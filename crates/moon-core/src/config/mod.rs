@@ -196,6 +196,9 @@ impl AppConfig {
             cfg.ui_font_delta = schema::default_ui_font_delta();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
+            // Same reason as the fresh-config path: schema default `true`, derived `Default`
+            // `false`, and the `save()` below would persist whichever one wins.
+            cfg.separate_control_zones = servers::default_true();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.save()?;
@@ -214,6 +217,9 @@ impl AppConfig {
             cfg.ui_font_delta = schema::default_ui_font_delta();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
+            // Same reason as the fresh-config path: schema default `true`, derived `Default`
+            // `false`, and the `save()` below would persist whichever one wins.
+            cfg.separate_control_zones = servers::default_true();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.save()?;
@@ -235,6 +241,11 @@ impl AppConfig {
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             hotkeys: hotkeys_file.unwrap_or_default(),
+            // Listed explicitly, unlike its `..Self::default()` neighbours, because its schema
+            // default is `true`: the derived `Default` would hand back `false` and the first
+            // settings save would persist that, silently inverting control zones on a fresh
+            // install. Every other field this struct update covers defaults to zero anyway.
+            separate_control_zones: servers::default_true(),
             ..Self::default()
         })
     }
