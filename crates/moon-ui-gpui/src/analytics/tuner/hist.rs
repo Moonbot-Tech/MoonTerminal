@@ -18,25 +18,16 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::{FIELDS, VarStats};
 
 impl AnalyticsView {
-    /// KPI matrix of the "By filter" mode: scope is the selected strategy, columns v1/v2.
+    /// KPI matrix of the "By filter" mode: scope is the SELECTION, columns v1/v2.
     pub(super) fn kpi_matrix(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let scope = self
-            .sel_strategy
-            .as_ref()
-            .map(|(_, n)| n.clone())
-            .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
         // An empty label list → the "v{i}" fallback (as it historically was).
-        kpi_matrix_card(&self.tuner.stats, scope, &[], p, cx)
+        kpi_matrix_card(&self.tuner.stats, self.scope_label(), &[], p, cx)
     }
 
     /// Histogram of the selected field: wins up, losses down, the count and the edges.
     pub(super) fn hist_card(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        // The title carries the field and the scope (strategy name / all).
-        let scope = self
-            .sel_strategy
-            .as_ref()
-            .map(|(_, n)| n.clone())
-            .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
+        // The title carries the field and the scope (strategy name / count / all).
+        let scope = self.scope_label();
         let title = format!(
             "{} — {} — {}",
             t!("analytics.tuner.hist_title"),

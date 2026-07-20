@@ -27,18 +27,19 @@ use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
 const HIST_BUCKETS: usize = 14;
 
 impl AnalyticsView {
-    /// Tuner query: the shared filters plus the selected strategy's scope.
+    /// Tuner query: the shared filters plus the scope of EVERY selected strategy.
+    ///
+    /// The whole selection, not just the clicked row — with Ctrl multi-select the KPI
+    /// matrix, the histogram and the sweep have to describe the same set the user sees
+    /// highlighted, and the same set Save writes to.
     pub(super) fn tuner_query(&self) -> moon_core::db::analytics::Query {
         let mut q = self.query();
-        // The row key is `strategyid@core_uid`: scope by strategy AND by the specific core.
-        if let Some((sid, core)) = self
-            .sel_strategy
-            .as_ref()
-            .and_then(|(k, _)| super::parse_strat_key(k))
-        {
-            q.strategy = Some(sid);
-            q.strat_core = core;
-        }
+        // Row keys are `strategyid@core_uid`, so the scope is per strategy AND per core.
+        q.strategies = self
+            .selected_targets()
+            .into_iter()
+            .map(|t| (t.sid, t.core))
+            .collect();
         q
     }
 
@@ -47,10 +48,16 @@ impl AnalyticsView {
         self.tuner.seq = self.tuner.seq.wrapping_add(1);
         let req = self.tuner.seq;
         let q = self.tuner_query();
-        let sid = q.strategy;
-        // Per-core row: scope the strategy card to the selected core (the save diff must be
-        // computed against the core the write targets).
-        let core = q.strat_core;
+        // The "in strategy" chips are the ANCHOR's own thresholds — a per-strategy value
+        // that only means something for a lone selection (`current_if_single` blanks them
+        // otherwise). So they are read from the anchor, NOT from the multi-strategy scope
+        // of `q`: the diff Save computes must be against the core the write targets.
+        let anchor = self
+            .sel_strategy
+            .as_ref()
+            .and_then(|(k, _)| super::parse_strat_key(k));
+        let sid = anchor.map(|(s, _)| s);
+        let core = anchor.and_then(|(_, c)| c);
         let variants = self.tuner.variants();
         // Core schema defaults (numeric fields): the chips hide values equal to the
         // default — 'filter not configured' is not a threshold.

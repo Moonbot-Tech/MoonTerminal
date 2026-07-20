@@ -659,6 +659,12 @@ analytics.strat.scope_all:
   ru: "все стратегии"
   en: "all strategies"
   es: "todas las estrategias"
+# Мультивыбор: числа считаются по ВСЕМУ набору, поэтому в заголовке стоит их количество —
+# имя одной стратегии над суммой по N штукам было бы враньём.
+analytics.strat.scope_many:
+  ru: "выбрано: %{n}"
+  en: "%{n} selected"
+  es: "%{n} seleccionadas"
 analytics.kpi.avg_short:
   ru: "Ср./сделка"
   en: "Avg"

@@ -361,8 +361,7 @@ impl AnalyticsView {
             cores: self.cores_selected(),
             side: self.side,
             emulator: self.emu,
-            strategy: None,
-            strat_core: None,
+            strategies: Vec::new(),
         }
     }
 
@@ -378,8 +377,7 @@ impl AnalyticsView {
             cores: self.cores_selected(),
             side: self.side,
             emulator: self.emu,
-            strategy: None,
-            strat_core: None,
+            strategies: Vec::new(),
         })
     }
 

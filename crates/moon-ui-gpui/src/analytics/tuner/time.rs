@@ -174,25 +174,16 @@ impl AnalyticsView {
     /// v1 / v2 over the weekly schedule taken from the grid) for the active period and
     /// the scope of the selected strategy. The same widget as in "By filter".
     fn time_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let scope = self
-            .sel_strategy
-            .as_ref()
-            .map(|(_, n)| n.clone())
-            .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
         // An empty label list → "v1"/"v2" (as in "By filter").
-        kpi_matrix_card(&self.time_stats, scope, &[], p, cx)
+        kpi_matrix_card(&self.time_stats, self.scope_label(), &[], p, cx)
     }
 
     /// The bottom "by hour" chart for the selected period: header + 24 hour columns at full width.
     fn time_heatmap(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         // The single profile = the selected period (see `reload_time`).
         let prof = self.time_profiles.as_ref().and_then(|v| v.first()).copied();
-        // Scope: the name of the selected strategy, or "all strategies".
-        let scope = self
-            .sel_strategy
-            .as_ref()
-            .map(|(_, name)| name.clone())
-            .unwrap_or_else(|| t!("analytics.strat.scope_all").to_string());
+        // Scope: the selected strategy's name, their count, or "all strategies".
+        let scope = self.scope_label();
         // Bar scale — max |PnL| across the 24 hours of the selected period.
         let max = prof.map_or(0.0, |pr| {
             pr.iter().fold(0.0f64, |m, h| m.max(h.profit.abs()))

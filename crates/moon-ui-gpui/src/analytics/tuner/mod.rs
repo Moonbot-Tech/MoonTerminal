@@ -125,6 +125,20 @@ impl AnalyticsView {
         !self.sel_extra.is_empty()
     }
 
+    /// Label for "what these numbers cover", used by every card title on the page.
+    ///
+    /// The numbers are computed over the WHOLE selection (`tuner_query`), so naming the
+    /// anchor while several rows are highlighted would assert one strategy over N
+    /// strategies' figures — a count is the only honest label there.
+    pub(super) fn scope_label(&self) -> String {
+        let n = self.selected_targets().len();
+        match self.sel_strategy.as_ref() {
+            None => t!("analytics.strat.scope_all").to_string(),
+            Some((_, name)) if n <= 1 => name.clone(),
+            _ => t!("analytics.strat.scope_many", n = n).to_string(),
+        }
+    }
+
     /// THE rule for every "in strategy" / "now" current-value display: a per-strategy current
     /// value is meaningful only when exactly ONE strategy is selected. With several selected
     /// each has its own value, so this returns `None` and callers render a neutral "varies" /
@@ -132,6 +146,27 @@ impl AnalyticsView {
     /// the save dialog go through this so the behavior can't drift between them.
     pub(super) fn current_if_single<T>(&self, value: T) -> Option<T> {
         (!self.is_multi()).then_some(value)
+    }
+
+    /// The SET of selected strategies changed while the anchor stayed put (Ctrl added or
+    /// removed a row). Every number on the page — the KPI matrix, the histogram, the time
+    /// profile — is computed over that set by `tuner_query`, so all of it is now stale.
+    ///
+    /// Deliberately NOT `set_sel_strategy`: that resets the schedule grid, and multi-select
+    /// exists precisely to tune values once and write them to many strategies. The anchor's
+    /// own coin detail does not change either.
+    fn selection_scope_changed(&mut self, cx: &mut Context<Self>) {
+        self.tuner.invalidate();
+        self.time_dirty = true;
+        match self.strat_mode {
+            StratMode::Filters => {
+                self.reload_tuner(cx);
+                self.reload_hist(cx);
+            }
+            StratMode::Time => self.reload_time(cx),
+            StratMode::Coins => {}
+        }
+        cx.notify();
     }
 
     /// Plain click: single-select this row (clear the multi-set). Clicking the current anchor
@@ -144,9 +179,10 @@ impl AnalyticsView {
                 self.set_sel_strategy(None, cx); // sole selection → toggle off
             } else {
                 // Anchor unchanged: drop the extras only, so set_sel_strategy's scope reset
-                // (which wipes the tuned schedule) does not fire.
+                // (which wipes the tuned schedule) does not fire. The scope still NARROWED
+                // from N strategies to one, so the numbers have to be recomputed.
                 self.sel_extra.clear();
-                cx.notify();
+                self.selection_scope_changed(cx);
             }
         } else {
             self.sel_extra.clear();
@@ -179,7 +215,9 @@ impl AnalyticsView {
         } else {
             self.sel_extra.push((key, name));
         }
-        cx.notify();
+        // The selected SET just changed — recompute over it, or the page would keep showing
+        // the previous set's numbers under the new highlight.
+        self.selection_scope_changed(cx);
     }
 
     /// Change strategy mode and refresh dirty tuner data when entering Filters.
@@ -381,7 +419,9 @@ impl AnalyticsView {
         self.detail_seq = self.detail_seq.wrapping_add(1);
         let req = self.detail_seq;
         let mut q = self.query();
-        q.strat_core = core;
+        // Detail is the ANCHOR row's own coin table: scope to that one strategy on that
+        // one core, whatever else is Ctrl-selected.
+        q.strategies = vec![(id, core)];
         self.detail.begin();
         self.op_started();
         cx.spawn(async move |this, cx| {
