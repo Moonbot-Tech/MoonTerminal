@@ -92,8 +92,11 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   the instant it lands, with CI reporting only afterwards. Branch from fresh `main`, open a PR,
   squash-merge — history stays linear.
 - **CI runs neither `fmt` nor `clippy`.** Run `make fmt` yourself before pushing.
-- The CI gate is the Windows `.exe` job (~15 min). The macOS job is diagnostic
-  (`continue-on-error`) — read its log, but it does not block.
+- Two CI gates, both on every PR and both meant to be green before you merge: the Windows
+  `.exe` job (~15 min) and `Tests (x86_64-msvc)`, which runs `cargo test --workspace`. They
+  run in parallel. The macOS job is diagnostic (`continue-on-error`) — read its log, but it
+  does not block. "Gate" is a convention here, not enforcement: with no branch protection
+  nothing stops a red merge except you reading the checks.
 - Never force-push or reset a shared `main` — fix forward with a new commit or a revert.
 
 ## Build and checks
@@ -108,7 +111,8 @@ make build | run | release | check | fmt
   PowerShell 5.1 turns that into a terminating error — it reads as "the code does not compile"
   when nothing is wrong. Judge by the exit code.
 - Tests: `cargo test -p moon-core` / `-p moon-ui-gpui`. A single test:
-  `cargo test -p <crate> <name> -- --exact --nocapture`.
+  `cargo test -p <crate> <name> -- --exact --nocapture`. CI runs the whole workspace, so a
+  crate you did not build locally still has to compile and pass.
 - Live behaviour check is FireTest: `moonterminal --debug-script chart-smoke`
   (see [`docs/FIRETEST.md`](docs/FIRETEST.md)).
 - Unit tests inside a `moon-ui-gpui` panel module need **explicit imports**, never `use super::*`:
