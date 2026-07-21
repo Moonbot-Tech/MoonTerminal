@@ -1,120 +1,121 @@
-# Соглашения по коду
+# Code conventions
 
-Коротко и по пунктам. Подробности архитектуры — в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-здесь только правила, которые касаются каждого PR.
+Short and to the point. Architecture lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md);
+this file is only the rules that apply to every PR.
 
-## Тесты
+## Tests
 
-Три вида тестов, три места. Это диктует cargo, а не вкус:
+Three kinds of test, three homes. The toolchain dictates this, not taste:
 
-| вид | видит | лежит |
+| kind | sees | lives in |
 |---|---|---|
-| unit | приватные элементы | **соседний файл модуля** |
-| integration | только публичный API | `crates/<крейт>/tests/*.rs` |
-| doc-test | публичный API | в примере внутри `///` |
+| unit | private items | the module's **sibling file** |
+| integration | public API only | `crates/<crate>/tests/*.rs` |
+| doc-test | public API | inline in the `///` example |
 
-- **Не пишите `#[cfg(test)] mod tests { ... }` внутри файла с логикой** — при любом размере.
-  В файле логики остаётся только объявление, тела уезжают в соседний файл. Иначе модуль
-  на 300 строк логики превращается в файл на 1–2k строк, где логику не найти.
+- **Do not write `#[cfg(test)] mod tests { ... }` inside a file that carries logic** — at any
+  size. The logic file keeps only the declaration; the bodies move to the sibling file.
+  Otherwise a 300-line module becomes a 1–2k-line file you cannot navigate.
 
   ```rust
-  // src/config/backup.rs — только логика
+  // src/config/backup.rs — logic only
   fn is_snapshot_name(name: &str) -> bool { /* ... */ }
 
   #[cfg(test)]
   mod tests;
   ```
   ```rust
-  // src/config/backup/tests.rs — видит приватное через super
+  // src/config/backup/tests.rs — reaches private items through super
   use super::*;
 
   #[test]
   fn rejects_a_user_folder() { assert!(!is_snapshot_name("2026-07-21")); }
   ```
 
-- Куда именно ложится соседний файл: объявление в `src/parser.rs` **или** в
-  `src/parser/mod.rs` — оба резолвятся в `src/parser/tests.rs`.
-- **В корнях крейта (`main.rs`, `lib.rs`, `src/bin/*.rs`) unit-тестов нет** — `mod tests;`
-  там резолвится в общий `src/tests.rs`, один файл на два крейта. Держите корни тонкими,
-  логику — в модулях.
-- **`moon-ui-gpui` — бинарный крейт**, у него нет `[lib]`. Интеграционный тест не может
-  импортировать из него ничего и умеет только запускать собранный бинарник. Поэтому
-  `tests/theme_contract.rs` проверяет инварианты **грепом по исходникам** — это обход
-  ограничения, а не стиль.
-- Тестовые файлы **коммитятся** — и `src/**/tests.rs`, и `crates/*/tests/*.rs`.
+- Where the sibling file lands: a declaration in `src/parser.rs` **or** in `src/parser/mod.rs`
+  both resolve to `src/parser/tests.rs`.
+- **Crate roots (`main.rs`, `lib.rs`, `src/bin/*.rs`) carry no unit tests** — `mod tests;` there
+  resolves to a shared `src/tests.rs`, one file compiled into two crates. Keep roots thin and put
+  logic in modules.
+- **`moon-ui-gpui` is a binary crate** — it has no `[lib]`. An integration test cannot import
+  anything from it and can only execute the built binary. That is why `tests/theme_contract.rs`
+  checks its invariants by grepping the sources: a workaround for that limitation, not a style
+  choice.
+- Test files **are committed** — both `src/**/tests.rs` and `crates/*/tests/*.rs`.
 
-### Что такое хороший тест
+### What makes a test worth keeping
 
-- Тест должен **краснеть на реальной поломке**. Если не можете назвать правку, которая его
-  свалит, — тест не нужен.
-- Не пишите очевидное: `match` из трёх веток, который проверяет, что вернулись те же три
-  ветки, не поймает ничего и стоит времени на каждом ревью.
-- Оракул должен быть **независим от проверяемого кода**. Сравнение константы с её же
-  литералом, чтение поля, которое тест сам и записал, `> 0` на подкрученном пороге —
-  всё это не проверки.
+- A test must **fail on a real regression**. If you cannot name the edit that would break it,
+  it does not belong.
+- Do not test the obvious. A three-arm `match` asserted to return its three arms catches nothing
+  and costs a read on every review.
+- The oracle must be **independent of the code under test**. A constant compared against its own
+  literal, a field read back after the test set it, `> 0` on a tuned threshold — none of those
+  are checks.
 
-## Комментарии и строки
+## Comments and strings
 
-- **Комментарии и докстринги — на английском.** Каждый, который вы пишете или переписываете:
-  `//!`, `///`, `//`. Существующие русские не трогаем массово — только если уже переписываете
-  этот блок.
-- **UI-строки — только через `t!("ключ")`**, ключи в `locales/*.yml`. Литералов в панелях нет.
-- Ключ добавляется **сразу в три языка** — ru/en/es. Правила словарей —
-  [`locales/README.md`](locales/README.md), он обязателен к прочтению: там список намеренно
-  непереводимых строк и запрет на глифы в значениях.
-- Каждая новая или изменённая функция, структура и модуль получает докстринг — и публичные,
-  и приватные. Неочевидное объясняем **почему**, а не только что.
+- **Comments and docstrings are in English.** Every one you write or rewrite: `//!`, `///`, `//`.
+  Existing Russian comments are left alone — translate one only if you are already rewriting
+  that block.
+- **UI strings go through `t!("key")`**, with the keys in `locales/*.yml`. No literals in panels.
+- A key is added in **all three languages at once** — ru/en/es. [`locales/README.md`](locales/README.md)
+  is binding, not background: it holds the deliberately-untranslated list and the rule that glyphs
+  never live in dictionary values.
+- Every new or changed function, struct and module gets a docstring — public and private alike.
+  For anything non-obvious, say **why**, not just what.
 
-## Пути и данные
+## Paths and data
 
-- Все пути к файлам — в `moon_core::config::paths`. Литералов `data/...` по коду быть не должно.
-- Никогда не коммитьте `servers.enc`, `cfg/`, `data/`, `backups/` — там ключи и локальные данные.
+- Every filesystem path lives in `moon_core::config::paths`. No `data/...` literals scattered
+  through the code.
+- Never commit `servers.enc`, `cfg/`, `data/` or `backups/` — they hold keys and local state.
 
 ## UI
 
-- **Сначала MoonUI.** Не рисуйте руками виджет, который уже есть в стеке; нужное расширяйте
-  апстримом в MoonUI и потребляйте через `moon_ui::*`.
-- Попапы и меню — через `window.open_moon_context_menu(...)`, не дочерним элементом панели:
-  z-order и закрытие принадлежат MoonUI `Root`.
-- Панели живут в доке, в откреплённом окне и в окне группы, на ширинах от узкого дока до
-  полного экрана. Задавайте панели явное поведение при узкой ширине; горизонтальный
-  скроллбар — не решение.
+- **MoonUI first.** Do not hand-roll a widget the stack already has; extend MoonUI upstream and
+  consume it through `moon_ui::*`.
+- Popups and menus go through `window.open_moon_context_menu(...)`, never as a child of a panel:
+  z-order and dismissal belong to MoonUI's `Root`.
+- Panels ship as a dock tab, a detached window and a group-window host, at widths from a narrow
+  side dock to full screen. Give each panel a defined narrow behaviour; a horizontal scrollbar is
+  not one.
 
-## Коммиты и PR
+## Commits and PRs
 
-- Формат коммита: `<тип>(<область>): <тема>` — `feat`, `fix`, `refactor`, `docs`, `test`,
-  `chore`. Пример: `fix(report): flatten embedded line breaks in table cells`.
-- **Всё, что не проза, идёт через PR.** Прямо в `main` можно только `README.md`,
-  `README.en.md` и `docs/**` (кроме `docs/FIRETEST.md` — на его текст завязан тест).
-  Всё остальное меняет бинарник, сборку, тесты или CI.
-- У `main` нет защиты и нет обязательных проверок: прямой пуш становится публичным и
-  непроверенным сразу, CI отчитается уже потом. Ветка от свежей `main`, PR, squash-merge —
-  история линейная.
-- **`fmt` и `clippy` в CI не запускаются.** Прогоняйте `make fmt` сами перед пушем.
-- Гейт в CI — job сборки Windows `.exe` (~15 минут). Job macOS диагностический
-  (`continue-on-error`), его лог читаем, но он не блокирует.
-- Не форс-пушьте и не ресетьте общий `main` — только новый коммит или revert.
+- Commit format: `<type>(<scope>): <subject>` — `feat`, `fix`, `refactor`, `docs`, `test`,
+  `chore`. Example: `fix(report): flatten embedded line breaks in table cells`.
+- **Anything that is not prose goes through a PR.** Direct-to-`main` is limited to `README.md`,
+  `README.en.md` and `docs/**` (except `docs/FIRETEST.md` — a test asserts on its text).
+  Everything else can change the binary, the build, the tests or CI.
+- `main` has no branch protection and no required checks: a direct push is public and untested
+  the instant it lands, with CI reporting only afterwards. Branch from fresh `main`, open a PR,
+  squash-merge — history stays linear.
+- **CI runs neither `fmt` nor `clippy`.** Run `make fmt` yourself before pushing.
+- The CI gate is the Windows `.exe` job (~15 min). The macOS job is diagnostic
+  (`continue-on-error`) — read its log, but it does not block.
+- Never force-push or reset a shared `main` — fix forward with a new commit or a revert.
 
-## Сборка и проверки
+## Build and checks
 
 ```
 make build | run | release | check | fmt
 ```
 
-- Windows: нужен **VS 2022 Build Tools** (`vcvars64`). Резолвьте его через
-  `vswhere -latest -find '**\vcvars64.bat'` — на машинах стоят и BuildTools, и Community.
-- **Не оборачивайте сборку в `2>&1`.** `vcvars64.bat` пишет в stderr на здоровом запуске, а
-  PowerShell 5.1 превращает это в терминирующую ошибку — выглядит как «код не компилируется»,
-  хотя всё в порядке. Судите по коду возврата.
-- Тесты: `cargo test -p moon-core` / `-p moon-ui-gpui`. Один тест —
-  `cargo test -p <крейт> <имя> -- --exact --nocapture`.
-- Живая проверка поведения — FireTest: `moonterminal --debug-script chart-smoke`
-  (см. [`docs/FIRETEST.md`](docs/FIRETEST.md)).
-- Юнит-тесты внутри модуля панели `moon-ui-gpui` требуют **явных импортов**, не `use super::*`:
-  родитель реэкспортирует `gpui::*`, чей `test` перекрывает встроенный атрибут, и `#[test]`
-  раскрывается рекурсивно («recursion limit reached»).
+- Windows needs **VS 2022 Build Tools** (`vcvars64`). Resolve it with
+  `vswhere -latest -find '**\vcvars64.bat'` — machines here carry both BuildTools and Community.
+- **Never wrap a build in `2>&1`.** `vcvars64.bat` writes to stderr on a healthy run, and
+  PowerShell 5.1 turns that into a terminating error — it reads as "the code does not compile"
+  when nothing is wrong. Judge by the exit code.
+- Tests: `cargo test -p moon-core` / `-p moon-ui-gpui`. A single test:
+  `cargo test -p <crate> <name> -- --exact --nocapture`.
+- Live behaviour check is FireTest: `moonterminal --debug-script chart-smoke`
+  (see [`docs/FIRETEST.md`](docs/FIRETEST.md)).
+- Unit tests inside a `moon-ui-gpui` panel module need **explicit imports**, never `use super::*`:
+  the parent re-exports `gpui::*`, whose own `test` shadows the built-in attribute and makes
+  `#[test]` expand recursively ("recursion limit reached").
 
-## Файлы
+## Files
 
-LF, UTF-8, 4 пробела, перевод строки в конце (`.gitattributes` + `.editorconfig`).
-Запись с CRLF даст диффом весь файл.
+LF, UTF-8, 4-space indent, trailing newline (`.gitattributes` + `.editorconfig`).
+A CRLF write shows up as a whole-file diff.
