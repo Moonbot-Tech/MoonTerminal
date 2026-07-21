@@ -1,3 +1,5 @@
+//! Tests for applying selected MoonBot import changes to a runtime config.
+
 use super::super::plan::{PlannedValue, SettingChange};
 use super::*;
 
@@ -34,9 +36,10 @@ fn all_ids(plan: &MoonBotImportPlan) -> HashSet<String> {
         .collect()
 }
 
+/// Protects mapping selected theme, hotkey, and color changes to their config destinations.
 #[test]
 fn applies_theme_hotkeys_and_colors() {
-    let mut cfg = AppConfig::default();
+    let mut cfg = AppConfig::blank(None);
     let plan = plan_with(
         vec![
             change("ui.theme_mode", PlannedValue::UiThemeLight(true)),
@@ -71,9 +74,10 @@ fn applies_theme_hotkeys_and_colors() {
     assert_ne!(cfg.theme.get(false).axis_label, [1, 2, 3]);
 }
 
+/// Protects selection filtering and reporting of selected but unsupported setting ids.
 #[test]
 fn selection_filter_and_unknown_ids() {
-    let mut cfg = AppConfig::default();
+    let mut cfg = AppConfig::blank(None);
     let plan = plan_with(
         vec![
             change("hotkey.cancel_buy", PlannedValue::Keystroke("alt-z".into())),
@@ -93,9 +97,10 @@ fn selection_filter_and_unknown_ids() {
     assert!(cfg.hotkeys.panic_sell.is_empty()); // не выбран — не тронут
 }
 
+/// Protects per-core changes from modifying cores outside the selected uid set.
 #[test]
 fn per_core_targets_only_selected_cores() {
-    let mut cfg = AppConfig::default();
+    let mut cfg = AppConfig::blank(None);
     // Три ядра; целимся в id 1 и 3.
     for id in 1..=3u64 {
         cfg.servers.push(crate::config::ServerConfig {

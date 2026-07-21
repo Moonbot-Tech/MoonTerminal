@@ -25,15 +25,6 @@ fn server(id: u64, uid: u64, name: &str) -> ServerConfig {
     }
 }
 
-/// Build an app config for one ordering mode.
-fn config(mode: CoreSortMode, servers: Vec<ServerConfig>) -> AppConfig {
-    AppConfig {
-        servers,
-        core_sort: mode,
-        ..Default::default()
-    }
-}
-
 /// Cores that exist only in `reports.sqlite`, not in the current config, must land AFTER every
 /// configured core and keep the order the query returned them in.
 ///
@@ -44,10 +35,8 @@ fn config(mode: CoreSortMode, servers: Vec<ServerConfig>) -> AppConfig {
 /// is the plausible "faster sort" edit that breaks it.
 #[test]
 fn historical_cores_form_a_stable_tail_after_the_configured_ones() {
-    let order = CoreOrder::new(&config(
-        CoreSortMode::AddedOldest,
-        vec![server(1, 1, "Alpha"), server(2, 2, "Bravo")],
-    ));
+    let servers = vec![server(1, 1, "Alpha"), server(2, 2, "Bravo")];
+    let order = CoreOrder::from_parts(&servers, CoreSortMode::AddedOldest);
     let ordered = order.from_db(vec![
         (77, "Deleted-B".to_string()),
         (2, "Bravo".to_string()),
@@ -62,14 +51,12 @@ fn historical_cores_form_a_stable_tail_after_the_configured_ones() {
 /// ranking `0` as a real uid would jump an unsaved row to the top of every list.
 #[test]
 fn an_unsaved_server_sorts_last_in_oldest_first_mode() {
-    let order = CoreOrder::new(&config(
-        CoreSortMode::AddedOldest,
-        vec![
-            server(9, 0, "Unsaved"),
-            server(2, 2, "Second"),
-            server(1, 1, "First"),
-        ],
-    ));
+    let servers = vec![
+        server(9, 0, "Unsaved"),
+        server(2, 2, "Second"),
+        server(1, 1, "First"),
+    ];
+    let order = CoreOrder::from_parts(&servers, CoreSortMode::AddedOldest);
     assert!(order.rank(1) < order.rank(2), "uid 1 predates uid 2");
     assert!(order.rank(2) < order.rank(9), "an unsaved server is newest");
 }
@@ -82,14 +69,12 @@ fn an_unsaved_server_sorts_last_in_oldest_first_mode() {
 /// the BOTTOM of every list in the mode whose whole promise is "newest first".
 #[test]
 fn an_unsaved_server_sorts_first_in_newest_first_mode() {
-    let order = CoreOrder::new(&config(
-        CoreSortMode::AddedNewest,
-        vec![
-            server(9, 0, "Unsaved"),
-            server(2, 2, "Second"),
-            server(1, 1, "First"),
-        ],
-    ));
+    let servers = vec![
+        server(9, 0, "Unsaved"),
+        server(2, 2, "Second"),
+        server(1, 1, "First"),
+    ];
+    let order = CoreOrder::from_parts(&servers, CoreSortMode::AddedNewest);
     assert!(order.rank(9) < order.rank(2), "an unsaved server leads");
     assert!(order.rank(2) < order.rank(1), "uid 2 postdates uid 1");
 }
@@ -112,8 +97,8 @@ fn the_two_insertion_modes_are_exact_mirrors() {
     ];
     let ids = [1u64, 2, 3, 4, 5];
 
-    let oldest = CoreOrder::new(&config(CoreSortMode::AddedOldest, servers.clone()));
-    let newest = CoreOrder::new(&config(CoreSortMode::AddedNewest, servers));
+    let oldest = CoreOrder::from_parts(&servers, CoreSortMode::AddedOldest);
+    let newest = CoreOrder::from_parts(&servers, CoreSortMode::AddedNewest);
 
     let mut by_oldest: Vec<u64> = ids.to_vec();
     by_oldest.sort_by_key(|id| oldest.rank(*id));
@@ -130,9 +115,7 @@ fn the_two_insertion_modes_are_exact_mirrors() {
 /// Equal names use uid order so Name mode stays independent of the servers Vec order.
 #[test]
 fn duplicate_names_rank_deterministically_by_uid() {
-    let order = CoreOrder::new(&config(
-        CoreSortMode::Name,
-        vec![server(5, 5, "Same"), server(3, 3, "Same")],
-    ));
+    let servers = vec![server(5, 5, "Same"), server(3, 3, "Same")];
+    let order = CoreOrder::from_parts(&servers, CoreSortMode::Name);
     assert!(order.rank(3) < order.rank(5));
 }

@@ -10,8 +10,11 @@ use super::secrets::Secret;
 use super::servers::{self, FeedFlags};
 use super::{AppConfig, GroupConfig, ServerConfig};
 
-/// Старый объединённый зашифрованный config.enc: { servers:[…], groups:[…] }.
-pub fn from_legacy_enc() -> anyhow::Result<AppConfig> {
+/// Migrate the legacy combined encrypted `config.enc` format.
+///
+/// The legacy format has no durable counter, so construction still names `uid_floor`; see
+/// [`super::uid_counter::UidCounter`] for the invariant and best-effort boundary.
+pub fn from_legacy_enc(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
     // host/port из старого формата игнорируем — endpoint берётся из ключа.
     #[derive(Deserialize, Default)]
     struct OldServer {
@@ -62,12 +65,14 @@ pub fn from_legacy_enc() -> anyhow::Result<AppConfig> {
         servers,
         groups: old.groups,
         language: super::Language::default(),
-        ..Default::default()
+        ..AppConfig::blank(uid_floor)
     })
 }
 
-/// Совсем старый открытый config.toml (один сервер).
-pub fn from_legacy_toml() -> anyhow::Result<AppConfig> {
+/// Migrate the oldest plaintext `config.toml` format containing one server.
+///
+/// Construction names `uid_floor` for the same reason as [`from_legacy_enc`].
+pub fn from_legacy_toml(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
     // host/port игнорируем — endpoint берётся из ключа.
     #[derive(Deserialize)]
     struct Legacy {
@@ -103,6 +108,6 @@ pub fn from_legacy_toml() -> anyhow::Result<AppConfig> {
         }],
         groups: Vec::new(),
         language: super::Language::default(),
-        ..Default::default()
+        ..AppConfig::blank(uid_floor)
     })
 }

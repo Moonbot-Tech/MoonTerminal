@@ -7,7 +7,7 @@ fn config(mode: CoreSortMode, servers: Vec<ServerConfig>) -> AppConfig {
     AppConfig {
         servers,
         core_sort: mode,
-        ..Default::default()
+        ..AppConfig::blank(None)
     }
 }
 
