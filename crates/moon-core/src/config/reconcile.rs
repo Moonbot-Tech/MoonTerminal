@@ -269,9 +269,10 @@ pub fn ensure_uids(servers: &mut [ServerConfig], counter: &mut u64) {
 fn next_free_uid(sf: &ServersFile, meta: &SettingsFile, uid_floor: Option<u64>) -> u64 {
     let from_entries = sf.servers.iter().map(|e| e.uid).max().unwrap_or(0);
     let from_meta = meta.servers.iter().map(|m| m.uid).max().unwrap_or(0);
-    let mut next = meta.next_uid.max(from_entries.max(from_meta) + 1);
-    raise_uid_floor(&mut next, uid_floor);
-    next
+    uid_floor_raised(
+        meta.next_uid.max(from_entries.max(from_meta) + 1),
+        uid_floor,
+    )
 }
 
 /// Raise a durable uid counter clear of every uid a store has already recorded.
@@ -284,14 +285,19 @@ fn next_free_uid(sf: &ServersFile, meta: &SettingsFile, uid_floor: Option<u64>) 
 /// A floor with no representable successor means the store holds `u64::MAX`, which no allocator
 /// could have issued; that is corrupt data, so the counter is left alone and the damage is
 /// logged rather than wrapped around into reissuing a live uid.
-pub(super) fn raise_uid_floor(counter: &mut u64, uid_floor: Option<u64>) {
-    let Some(seen) = uid_floor else { return };
+pub(super) fn uid_floor_raised(counter: u64, uid_floor: Option<u64>) -> u64 {
+    let Some(seen) = uid_floor else {
+        return counter;
+    };
     match seen.checked_add(1) {
-        Some(raised) => *counter = (*counter).max(raised),
-        None => log::error!(
-            "uid floor: хранилище содержит uid без преемника ({seen}) — данные повреждены, \
-             счётчик uid не поднят"
-        ),
+        Some(raised) => counter.max(raised),
+        None => {
+            log::error!(
+                "uid floor: хранилище содержит uid без преемника ({seen}) — данные повреждены, \
+                 счётчик uid не поднят"
+            );
+            counter
+        }
     }
 }
 

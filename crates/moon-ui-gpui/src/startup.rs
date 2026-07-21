@@ -57,6 +57,19 @@ pub(crate) fn install_moon_theme_for_config(cfg: &AppConfig, cx: &mut App) {
     MoonTheme::install_config(moon_theme_config_for(cfg), cx);
 }
 
+/// Fold one store's read into the uid floor, keeping an absent store quiet and a broken one loud.
+fn store_floor(label: &str, read: moon_core::db::ReadResult<Option<u64>>) -> Option<u64> {
+    match read {
+        Ok(max) => max,
+        // An absent store is the ordinary fresh-install state, not a failure.
+        Err(moon_core::db::ReadFail::NotReady) => None,
+        Err(e) => {
+            log::warn!("uid floor: {label} не прочитаны ({e}) — счётчик uid не поднят по ним");
+            None
+        }
+    }
+}
+
 /// Highest core uid any durable store has ever recorded.
 ///
 /// The uid counter in `settings.toml` only arrived in `SCHEMA_VERSION` 15 and is seeded from the
@@ -65,34 +78,24 @@ pub(crate) fn install_moon_theme_for_config(cfg: &AppConfig, cx: &mut App) {
 /// stops a new core from taking a deleted one's identity and inheriting its trades, P&L,
 /// strategy versions and figures.
 ///
-/// A store that cannot be read contributes nothing and says so in the log. That is a best-effort
-/// repair, not a guarantee: the mark may only ever rise, so a missing contribution leaves the
-/// previous behaviour intact rather than making it worse, and the next boot retries.
+/// A store that cannot be read contributes nothing. That is a best-effort repair, not a
+/// guarantee: the mark may only ever rise, so a missing contribution leaves the previous
+/// behaviour intact rather than making it worse, and the next boot retries. Only the two SQLite
+/// sources can tell "empty" from "unreadable"; the three file-backed ones log their own parse
+/// failure and then read as empty, so a corrupt one is a silent non-contribution here.
 fn observed_uid_floor(
     layout: &WindowLayout,
     chart_specs: &[chart_persist::ChartTabSpec],
     figures: &moon_core::figures::FigureStore,
 ) -> Option<u64> {
-    let reports = match moon_core::db::open_reader() {
-        Ok(conn) => moon_core::db::max_core_uid(&conn).unwrap_or_else(|e| {
-            log::warn!("uid floor: отчёты не прочитались ({e}) — счётчик uid не поднят по ним");
-            None
-        }),
-        // An absent replica is the ordinary fresh-install state, not a failure.
-        Err(moon_core::db::ReadFail::NotReady) => None,
-        Err(e) => {
-            log::warn!(
-                "uid floor: реплика отчётов недоступна ({e}) — счётчик uid не поднят по ней"
-            );
-            None
-        }
-    };
-    let strategies = moon_core::strat_db::max_core_uid().unwrap_or_else(|e| {
-        log::warn!(
-            "uid floor: история стратегий не прочиталась ({e}) — счётчик uid не поднят по ней"
-        );
-        None
-    });
+    // NOT `db::open_reader`: that opens read-write, and this probe runs before `spawn_writer`,
+    // so it would be the file's only connection — closing it would checkpoint the whole WAL
+    // inline, before the first window.
+    let reports = store_floor(
+        "отчёты",
+        moon_core::db::open_readonly().and_then(|conn| moon_core::db::max_core_uid(&conn)),
+    );
+    let strategies = store_floor("история стратегий", moon_core::strat_db::max_core_uid());
     [
         reports,
         strategies,

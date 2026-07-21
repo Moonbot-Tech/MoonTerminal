@@ -159,6 +159,10 @@ impl AppConfig {
     /// The `settings.toml` read status is computed before choosing a load branch so every
     /// construction path sets `settings_unreadable` and blocks an unsafe write-back.
     ///
+    /// Runs the two storage migrations itself so it stays self-contained, even though the caller
+    /// must already have run them to resolve `uid_floor` against the post-move paths. Both are
+    /// idempotent, so the second pass costs a handful of `exists` checks.
+    ///
     /// `uid_floor` is the highest core uid observed in the durable stores that outlive this
     /// config — reports, strategy history, and the persisted UI state keyed by core. The caller
     /// reads them, so config keeps no dependency on the database. It must be supplied HERE
@@ -285,7 +289,7 @@ impl AppConfig {
             cfg.settings_unreadable = settings_unreadable;
             // A legacy config predates the durable counter entirely, while the stores it is
             // migrated alongside may still hold uids from cores deleted long ago.
-            reconcile::raise_uid_floor(&mut cfg.next_uid, uid_floor);
+            cfg.next_uid = reconcile::uid_floor_raised(cfg.next_uid, uid_floor);
             if settings_unreadable {
                 log::error!(
                     "settings.toml есть, но не прочитался — миграция из config.enc НЕ записана"
@@ -315,7 +319,7 @@ impl AppConfig {
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.settings_unreadable = settings_unreadable;
             // Same reasoning as the config.enc branch above.
-            reconcile::raise_uid_floor(&mut cfg.next_uid, uid_floor);
+            cfg.next_uid = reconcile::uid_floor_raised(cfg.next_uid, uid_floor);
             if settings_unreadable {
                 log::error!(
                     "settings.toml есть, но не прочитался — миграция из config.toml НЕ записана"
@@ -354,7 +358,7 @@ impl AppConfig {
             settings_unreadable,
             ..Self::default()
         };
-        reconcile::raise_uid_floor(&mut fresh.next_uid, uid_floor);
+        fresh.next_uid = reconcile::uid_floor_raised(fresh.next_uid, uid_floor);
         Ok(fresh)
     }
 
@@ -433,11 +437,7 @@ impl AppConfig {
             // The plaintext config issues uid 1 above, so the counter starts at 2 — then clears
             // whatever the stores hold. This mode is not test-only: it is how a Linux box with
             // no Secret Service runs, so its cores share `data/` with everyone else's.
-            next_uid: {
-                let mut next = 2;
-                reconcile::raise_uid_floor(&mut next, uid_floor);
-                next
-            },
+            next_uid: reconcile::uid_floor_raised(2, uid_floor),
             hotkeys: HotkeysConfig::default(),
             theme,
             orders,

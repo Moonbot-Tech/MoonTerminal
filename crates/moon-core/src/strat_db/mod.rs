@@ -229,46 +229,34 @@ const CORE_UID_TABLES: [&str; 3] = ["strategies", "strategy_versions", "version_
 /// absent or empty; a read failure stays an error so the caller can refuse to treat an
 /// unreadable store as "nothing to avoid".
 ///
-/// Opens its own read-only connection rather than reusing [`open_reader`], which collapses an
-/// absent file and a failed open into the same `None`.
+/// Reports a failed open rather than reusing [`open_reader`], which collapses an absent file and
+/// a failed open into the same `None`.
 pub fn max_core_uid() -> crate::db::ReadResult<Option<u64>> {
-    use crate::db::read_fail::read_fail;
     const CTX: &str = "стратегии: max_core_uid";
-
     let path = paths::strategies_db_path();
     if !path.exists() {
         // The writer is lazy — no strategy snapshot has arrived yet on a fresh install.
         return Ok(None);
     }
-    let conn = Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|e| read_fail(CTX, e))?;
-    let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
-
+    let conn = open_ro(&path).map_err(|e| crate::db::read_fail::read_fail(CTX, e))?;
     let mut max: Option<u64> = None;
     for table in CORE_UID_TABLES {
-        let exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-                [table],
-                |r| r.get(0),
-            )
-            .map_err(|e| read_fail(CTX, e))?;
-        if exists == 0 {
-            continue;
-        }
-        let found: Option<i64> = conn
-            .query_row(&format!("SELECT MAX(core_uid) FROM {table}"), [], |r| {
-                r.get::<_, Option<i64>>(0)
-            })
-            .map_err(|e| read_fail(CTX, e))?;
-        if let Some(uid) = found.and_then(|v| u64::try_from(v).ok()) {
-            max = Some(max.map_or(uid, |m| m.max(uid)));
-        }
+        max = max.max(crate::db::max_core_uid_in(&conn, table, CTX)?);
     }
     Ok(max)
+}
+
+/// Read-only connection to the strategies file, with the store's shared busy timeout.
+///
+/// The one place the open flags live: [`open_reader`] swallows the error, [`max_core_uid`]
+/// reports it, and both need the connection opened the same way.
+fn open_ro(path: &std::path::Path) -> rusqlite::Result<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
+    Ok(conn)
 }
 
 /// Read-only соединение (история версий, вкладка «Хранилище», аналитика).
@@ -278,14 +266,8 @@ pub fn open_reader() -> Option<Connection> {
     if !path.exists() {
         return None;
     }
-    match Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) {
-        Ok(c) => {
-            let _ = c.busy_timeout(std::time::Duration::from_secs(3));
-            Some(c)
-        }
+    match open_ro(&path) {
+        Ok(c) => Some(c),
         Err(e) => {
             log::warn!("стратегии(db): reader не открылся: {e}");
             None
