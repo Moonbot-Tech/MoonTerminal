@@ -33,7 +33,7 @@ const FEED_FLAGS: [(&str, fn(&FeedFlags) -> bool, fn(&mut FeedFlags, bool)); 8] 
 
 /// Render a connection-status dot with a localized tooltip, including failure details.
 /// Inactive rows are always gray; live states use ready, connecting, and failure colors.
-pub(super) fn status_dot(
+fn status_dot(
     i: usize,
     active: bool,
     status: Option<&ConnStatus>,

@@ -141,8 +141,6 @@ pub struct SettingsView {
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Core-order selector shared by every core list on the Connections tab.
     core_sort: Entity<MoonSelectState<CoreSortMode>>,
-    /// State for the flat drag-and-drop editor used in `Manual` mode.
-    order_tree: Entity<moon_ui::MoonTreeState>,
     /// Какие блоки-линии раскрыты (вкладка «Линии», порт CollapsingHeader).
     open_lines: HashSet<&'static str>,
     /// Активная группа вкладки «Хоткеи» (саб-вкладки, как страницы хоткеев Moonbot).
@@ -313,9 +311,6 @@ impl SettingsView {
         )
         .detach();
 
-        // Flat drag-and-drop state for manual ordering.
-        let order_tree = cx.new(|cx| moon_ui::MoonTreeState::new(cx));
-
         let initial_sig = settings_sig(backend.read(cx));
         cx.observe(&backend, |this, backend, cx| {
             let sig = settings_sig(backend.read(cx));
@@ -350,7 +345,6 @@ impl SettingsView {
             lang,
             mode,
             core_sort,
-            order_tree,
             open_lines: HashSet::new(),
             hotkeys_group: hotkeys::HotkeyGroup::Presets,
             storage: storage::build(),

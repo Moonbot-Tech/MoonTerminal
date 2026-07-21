@@ -266,7 +266,7 @@ impl SettingsView {
         // Живой статус ядер для точек.
         let status = self.backend.read(cx).session.status_map();
         // Снимки серверов (id, active, группа) и групп (name, active, icon).
-        // Rank from the draft so a drag is visible before settings are applied.
+        // Rank from the draft so a pending sort-mode change is visible before it is applied.
         let (order, servers, mut groups) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
@@ -389,8 +389,6 @@ impl SettingsView {
             .child(self.market_src_selector(cx))
             // The selected order applies to every core list.
             .child(self.core_sort_selector(cx))
-            // Flat drag-and-drop editor for Manual order.
-            .children(self.core_order_editor(cx))
             .child(list_col)
     }
 }

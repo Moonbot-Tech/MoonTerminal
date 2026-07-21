@@ -43,14 +43,6 @@ conn.core_sort.added:
   ru: "По добавлению — сначала старые"
   en: "By insertion — oldest first"
   es: "Por inserción — más antiguos primero"
-conn.order_heading:
-  ru: "Свой порядок ядер"
-  en: "Manual core order"
-  es: "Orden manual de núcleos"
-conn.order_tip:
-  ru: "Перетащите ядро мышью на место, где оно должно стоять. Этот порядок применяется ко всем спискам ядер приложения. Ядра можно переставлять между группами — порядок общий, а не внутри группы."
-  en: "Drag a core onto the position where it should sit. This order applies to every core list in the app. Cores can be moved across groups — the order is global, not per group."
-  es: "Arrastre un núcleo a la posición donde debe estar. Este orden se aplica a todas las listas de núcleos de la aplicación. Los núcleos pueden moverse entre grupos — el orden es global, no por grupo."
 conn.groups_heading:
   ru: "Группы"
   en: "Groups"
