@@ -1,8 +1,21 @@
 name: release
 
 # Publishes a GitHub Release with downloadable .exe + .dmg when a v* tag is
-# pushed. The build.yml workflow only gates compilation; THIS one ships artifacts
-# users can download from the Releases page.
+# pushed. The build.yml workflow gates compilation and the test suite; THIS one
+# ships artifacts users can download from the Releases page.
+#
+# Note it does NOT re-run those gates: publishing trusts whatever build.yml
+# reported on the commit being tagged.
+#
+# Every job here caches restore-only (`save-if: false`). A run's ref is a tag, and a
+# tag-scoped cache is readable only from that same tag, which never builds twice — so
+# anything saved here is written once and read never, at ~0.9 GiB against a 10 GB repo
+# quota. Nothing is lost by not writing it.
+#
+# What restores: the cache key includes the job id, so the `windows` job below shares a
+# key with build.yml's `windows` and warm-starts from what `main` wrote. The `macos` job
+# does not — build.yml's macOS job is `macos-probe` — so a macOS release compiles cold.
+# It always did; only the pointless write is gone.
 on:
   push:
     tags: ["v*", "[0-9]*"]
@@ -29,6 +42,8 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
       - name: Build release binary
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --target x86_64-pc-windows-msvc
       - name: Stage artifact
@@ -51,6 +66,8 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
       - name: Build release binary
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --target aarch64-apple-darwin
       - name: Package .app + .dmg

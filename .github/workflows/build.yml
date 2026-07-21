@@ -1,9 +1,11 @@
 name: build
 
-# Windows — реальный релизный .exe (артефакт).
-# macOS  — диагностический зонд: собирает chartdx Metal-бэкенд на нативном
-#          раннере, чтобы выявить настоящие ошибки компиляции (с Windows это
-#          невозможно — нет macOS SDK / Apple-линкера).
+# Three jobs, two of which gate a merge:
+#   Windows .exe — the real release binary, uploaded as an artifact.
+#   Tests        — `cargo test --workspace`. Blocking: a red suite is a red PR.
+#   macOS probe  — diagnostic only (`continue-on-error`). Compiles the chartdx Metal
+#                  backend on a native runner, which Windows cannot do at all: no
+#                  macOS SDK and no Apple linker. Read its log; it never blocks.
 on:
   push:
     branches: [main]
@@ -21,6 +23,11 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
+# Every job restores the cargo cache but only `main` writes it (`save-if` below).
+# A cache saved from a branch is readable only by that branch, so on any run whose
+# manifest hash is new it is written once and never read again. Three jobs at ~1 GiB
+# a piece fill the repository's 10 GB Actions quota fast, and once over it GitHub
+# evicts by least-recent-use — which takes the live caches, not the dead ones.
 jobs:
   windows:
     name: Windows .exe (x86_64-msvc)
@@ -31,6 +38,8 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build release binary
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --target x86_64-pc-windows-msvc
       - uses: actions/upload-artifact@v7
@@ -38,6 +47,29 @@ jobs:
           name: moonterminal-windows-x86_64
           path: target/x86_64-pc-windows-msvc/release/moonterminal.exe
           if-no-files-found: error
+
+  tests:
+    name: Tests (x86_64-msvc)
+    runs-on: windows-latest
+    # A gate, not a probe: no `continue-on-error`, so a red suite is a red PR.
+    #
+    # Its own job rather than a step in the .exe job, because that one builds
+    # `--release` and this one the `dev` profile — separate target dirs, so
+    # bolting it on would serialise a second full compile onto the exe job
+    # instead of running beside it.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `--no-fail-fast`: without it the first red binary hides the other four,
+      # costing a push-and-wait cycle per breakage. Default features only — that
+      # is the set that ships; `debug-tools` is opt-in and gated separately.
+      - name: Run test suite
+        run: cargo test --workspace --no-fail-fast --target x86_64-pc-windows-msvc
 
   macos-probe:
     name: macOS probe (aarch64-darwin) — diagnostic
@@ -51,5 +83,7 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Probe-compile chartdx Metal backend
         run: cargo build -p moon-ui-gpui --target aarch64-apple-darwin
