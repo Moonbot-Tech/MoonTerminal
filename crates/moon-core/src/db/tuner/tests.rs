@@ -29,6 +29,47 @@ fn variant_where_whitelists_fields() {
     assert!(!w.contains("hvol"), "пустые границы не добавляют условий");
 }
 
+/// The variant's only STRING condition: a coin name reaches SQL as a literal,
+/// so its apostrophe must be doubled — otherwise one such coin breaks the whole
+/// WHERE and "Fact vs v1" quietly scores a different set of trades.
+#[test]
+fn variant_coins_quote_is_escaped() {
+    let v = Variant {
+        coins_in: Some(vec!["BTC".into(), "O'BRIEN' OR 1=1--".into()]),
+        ..Default::default()
+    };
+    let w = v.where_sql();
+    assert!(w.contains("IN ('BTC','O''BRIEN'' OR 1=1--')"), "w={w}");
+    assert!(!v.is_empty(), "a coin variant is not the fact");
+    // No dangling quote: their count in the condition stays even.
+    assert_eq!(w.matches('\'').count() % 2, 0, "unbalanced quote: {w}");
+    assert!(
+        Variant::default().where_sql().is_empty(),
+        "an empty coin list adds no condition"
+    );
+    // The blacklist side EXCLUDES, and both sides may apply at once.
+    let both = Variant {
+        coins_in: Some(vec!["BTC".into()]),
+        coins_out: vec!["ETH".into()],
+        ..Default::default()
+    };
+    let w = both.where_sql();
+    assert!(w.contains("IN ('BTC')"), "w={w}");
+    assert!(w.contains("NOT IN ('ETH')"), "w={w}");
+
+    // A whitelist that no traded coin satisfies keeps NOTHING — it must not quietly
+    // degrade into "no whitelist", which would score the untouched fact as the plan.
+    let unmatched = Variant {
+        coins_in: Some(Vec::new()),
+        ..Default::default()
+    };
+    assert!(unmatched.where_sql().contains("0=1"));
+    assert!(
+        !unmatched.is_empty(),
+        "an unmatched whitelist is not the fact"
+    );
+}
+
 #[test]
 fn variant_week_span_predicate() {
     // Пн 00:00 → Сб 23:59 (мин недели 0..8639): непрерывный → BETWEEN, исключает Вс.

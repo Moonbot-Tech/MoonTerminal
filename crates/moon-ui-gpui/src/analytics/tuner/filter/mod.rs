@@ -5,6 +5,14 @@
 //! the raw strings the user typed and start empty on every open because they describe one
 //! strategy's search. Only restart count and depth persist.
 
+// Files of this axis.
+/// Its auto-suggestion and the write it produces.
+mod actions;
+/// Its histogram of the selected field.
+mod hist;
+/// Its own state: the threshold grid, the staged ignore flags, the suggestion settings.
+pub(in crate::analytics::tuner) mod state;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -17,12 +25,11 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::super::{AnalyticsView, LoadState};
-pub(super) use super::state::{
-    N_VAR, TunerKind, card, flag_of, fmt_bound, glyph_btn, parse_num, staged_dirty,
-};
+pub(in crate::analytics::tuner) use super::shared::{N_VAR, TunerKind, card, glyph_btn};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
+pub(in crate::analytics::tuner) use state::{flag_of, fmt_bound, parse_num, staged_dirty};
 
 /// Histogram buckets.
 const HIST_BUCKETS: usize = 14;
@@ -33,7 +40,7 @@ impl AnalyticsView {
     /// The whole selection, not just the clicked row — with Ctrl multi-select the KPI
     /// matrix, the histogram and the sweep have to describe the same set the user sees
     /// highlighted, and the same set Save writes to.
-    pub(super) fn tuner_query(&self) -> moon_core::db::analytics::Query {
+    pub(in crate::analytics::tuner) fn tuner_query(&self) -> moon_core::db::analytics::Query {
         let mut q = self.query();
         // Row keys are `strategyid@core_uid`, so the scope is per strategy AND per core.
         q.strategies = self
@@ -177,7 +184,7 @@ impl AnalyticsView {
 
     /// Programmatic set of BOTH bounds of a field (strategy chip / clear /
     /// auto-suggestion): state + a silent resync of the inputs + recompute.
-    pub(super) fn apply_bounds(
+    pub(in crate::analytics::tuner) fn apply_bounds(
         &mut self,
         vi: usize,
         fi: usize,
@@ -230,7 +237,7 @@ impl AnalyticsView {
     }
 
     /// Range builder: one row per field, clicking a name shows that field's histogram.
-    pub(super) fn fields_grid(
+    pub(in crate::analytics::tuner) fn fields_grid(
         &mut self,
         p: MoonPalette,
         window: &mut Window,

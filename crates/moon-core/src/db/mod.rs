@@ -13,6 +13,7 @@
 //! Пишет ОДИН поток-writer; читает окно «Отчёты» отдельным соединением (WAL).
 
 pub mod analytics;
+pub mod coin_lists;
 pub mod integrity;
 pub mod maint;
 mod parse;
@@ -743,6 +744,16 @@ pub fn open_reader() -> ReadResult<Connection> {
     }
     let conn = Connection::open(&path).map_err(|e| read_fail("отчёты(reader)", e))?;
     let _ = conn.busy_timeout(Duration::from_secs(3));
+    // The strategy database rides along on EVERY reader.
+    //
+    // It used to be attached by `analytics::summary` alone, while `unified_from` — which is
+    // what actually needs it — is reached from fourteen places (the whole tuner, the calendar,
+    // the coin groups). Anything depending on it therefore worked on the summary and silently
+    // did not elsewhere: the strategy list and that same strategy's KPI would have disagreed
+    // about which trades belong to it. Attaching where the connection is born is the only
+    // place that covers every reader, and it must happen BEFORE any transaction is opened —
+    // ATTACH cannot run inside one.
+    analytics::attach_strategies(&conn);
     Ok(conn)
 }
 
@@ -1229,6 +1240,19 @@ pub fn fmt_unix(secs: i64) -> String {
     let (h, mi) = (rem / 3600, (rem % 3600) / 60);
     let (y, m, d) = crate::util::time::civil_from_days(days);
     format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}")
+}
+
+/// unix-seconds → "YYYY-MM-DD" in UTC. EMPTY for <= 0 — callers rendering a date column
+/// must turn that into their own "not known" marker rather than a blank cell.
+///
+/// A function of its own rather than a substring of [`fmt_unix`]: the time is part of that
+/// one's contract, and a column slicing it off would drift silently on any format change.
+pub fn fmt_unix_date(secs: i64) -> String {
+    if secs <= 0 {
+        return String::new();
+    }
+    let (y, m, d) = crate::util::time::civil_from_days(secs.div_euclid(86_400));
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// unix-секунды → "YYYY-MM-DD HH:MM:SS" в UTC (для лога команд).

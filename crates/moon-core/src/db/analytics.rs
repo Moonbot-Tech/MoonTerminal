@@ -38,6 +38,22 @@ pub struct Query {
     /// and that Save writes to. Scoping to the clicked row alone was the bug where
     /// "plan vs fact" compared one strategy while N were selected.
     pub strategies: Vec<(i64, Option<u64>)>,
+    /// Attribute LIQUIDATION rows to a strategy by the name the core leaves in the row.
+    ///
+    /// A liquidation arrives with `strategyid = 0` and `channelname = 'LIQUIDATION'`, so it
+    /// lands in "Manual (no strategy)" and the strategy that actually took the loss never
+    /// sees it. The name IS there — `signaltype`/`comment` carry `MainShotS  ( MoonShot )` —
+    /// and matching it against `strat.strategies` by `(core_uid, name)` recovers the owner.
+    ///
+    /// Off by default and switchable, because turning it on MOVES money between strategies
+    /// retroactively: measured on the real database, 291 of 319 liquidations attach and
+    /// −4582.89 USDT leaves "Manual". The 28 that do not attach (a deleted strategy, or no
+    /// parseable name) stay there rather than being guessed at.
+    ///
+    /// Deliberately NOT mirrored in the Report window: it reads through its own queries, and
+    /// the two panels are allowed to disagree here. Anyone "fixing" that divergence should
+    /// know it was chosen.
+    pub attribute_liq: bool,
 }
 
 impl Query {
@@ -45,9 +61,29 @@ impl Query {
     /// которые у него ЕСТЬ (как `build_where` Отчёта — условие по отсутствующей
     /// колонке валило бы весь SELECT). Плейсхолдеры ?1/?2 = from/to;
     /// ядра/сторона/эму — литералами (целые из конфига, инъекции невозможны).
-    fn where_sql(&self, cols: &std::collections::HashSet<String>) -> String {
+    fn where_sql(&self, cols: &std::collections::HashSet<String>, sid: &str) -> String {
+        self.where_with(WHERE_PERIOD, cols, sid)
+    }
+
+    /// The same filters under a DIFFERENT row predicate.
+    ///
+    /// Split out because one reader asks the opposite question of every other: which rows the
+    /// period predicate throws away (see [`undated_closes`]). Sharing the filter tail is what
+    /// keeps that count describing the same cores, side and emulator setting the figures
+    /// beside it were computed under.
+    /// `sid` is the SQL that yields a row's strategy id — plain `COALESCE(strategyid,0)`, or
+    /// the liquidation-aware form. It is passed in rather than built here so the scope filter
+    /// and the projected column cannot disagree about which strategy a row belongs to: a row
+    /// attributed in the projection but not in the filter would show up in a strategy's list
+    /// and vanish from its own detail.
+    fn where_with(
+        &self,
+        period: &str,
+        cols: &std::collections::HashSet<String>,
+        sid: &str,
+    ) -> String {
         let has = |n: &str| cols.contains(n);
-        let mut w = String::from(WHERE_PERIOD);
+        let mut w = String::from(period);
         if has("deleted") {
             w.push_str(" AND COALESCE(deleted,0) = 0");
         }
@@ -81,12 +117,11 @@ impl Query {
                 let terms: Vec<String> = self
                     .strategies
                     .iter()
-                    .map(|(sid, core)| match core {
-                        Some(c) => format!(
-                            "(COALESCE(strategyid,0) = {sid} AND core_uid = {})",
-                            *c as i64
-                        ),
-                        None => format!("COALESCE(strategyid,0) = {sid}"),
+                    .map(|(want, core)| match core {
+                        Some(c) => {
+                            format!("(COALESCE({sid},0) = {want} AND core_uid = {})", *c as i64)
+                        }
+                        None => format!("COALESCE({sid},0) = {want}"),
                     })
                     .collect();
                 w.push_str(&format!(" AND ({})", terms.join(" OR ")));
@@ -117,6 +152,75 @@ const UNIFIED_COLS: &[&str] = &[
     "spentbtc",
 ];
 
+/// A row's strategy id, with LIQUIDATION rows attributed to the strategy named in them.
+///
+/// THE ONE PLACE. It is applied inside [`unified_from`] — both in the projection and in the
+/// scope filter — so the column every outer query already reads as `o.strategyid` carries the
+/// attributed value, and none of them needed changing. Two readers cannot drift because there
+/// is only one definition of "which strategy is this row".
+///
+/// A liquidation arrives with `strategyid = 0` and `channelname = 'LIQUIDATION'` exactly. The
+/// exactness matters: a substring test matches 15 696 rows on the real database against 319
+/// real ones, because a strategy is NAMED `Liquidations_Short_250620_184426_318` and its name
+/// appears both in `channelname` and inside the `sellreason` text of its ordinary trades.
+///
+/// The owner's name is in `signaltype` (`MainShotS  ( MoonShot )`), with `comment` as the
+/// fallback — measured at 288/319 and 304/319. Cutting at the first bracket is enough; no
+/// regex, and it evaluates only for rows the CASE has already narrowed.
+///
+/// Returns the plain column whenever attribution is off, the strategy database is not
+/// attached, or the source lacks a column this needs — a source that cannot answer must not
+/// be made to guess.
+fn effective_sid_expr(alias: &str, cols: &std::collections::HashSet<String>, on: bool) -> String {
+    let plain = format!("{alias}.\"strategyid\"");
+    // EVERY column the expression names. `core_uid` belongs here as much as the rest: a legacy
+    // source can lack it (the projection right below emits `NULL AS "core_uid"` for exactly
+    // that case), and naming it anyway makes the branch fail to PREPARE — sinking the whole
+    // window the moment the switch is turned on.
+    const NEEDED: [&str; 3] = ["strategyid", "channelname", "core_uid"];
+    if !on || NEEDED.iter().any(|c| !cols.contains(*c)) {
+        return plain;
+    }
+    let mut sources = Vec::new();
+    for c in ["signaltype", "comment"] {
+        if cols.contains(c) {
+            sources.push(format!("NULLIF({alias}.\"{c}\",'')"));
+        }
+    }
+    if sources.is_empty() {
+        return plain;
+    }
+    sources.push("''".to_string());
+    let raw = format!("COALESCE({})", sources.join(", "));
+    // "MainShotS  ( MoonShot )" -> "MainShotS". The WHOLE trimmed value is tried first, so a
+    // strategy whose own name contains a bracket matches itself instead of being truncated to
+    // its prefix — and then possibly matching a DIFFERENT strategy that is named that prefix.
+    let whole = format!("trim({raw})");
+    let cut = format!(
+        "trim(substr({raw}, 1, CASE WHEN instr({raw},'(') > 0 \
+         THEN instr({raw},'(') - 1 ELSE length({raw}) END))"
+    );
+    // A name that matches nothing (a deleted strategy, or no name at all) yields 0 and the row
+    // stays in "Manual" — the same place it was, which is the honest answer.
+    // Preference expressed as NESTED COALESCE, not as `IN (…) ORDER BY <match> DESC`: SQLite
+    // rejects a correlated reference inside a subquery's ORDER BY ("no such column: r.comment"),
+    // so that form compiled, passed every string-matching test, and would have failed at
+    // runtime the first time the switch was turned on.
+    let lookup = |n: &str| {
+        format!(
+            "(SELECT st.strategy_id FROM strat.strategies st \
+             WHERE st.core_uid = {alias}.\"core_uid\" AND st.deleted = 0 AND st.name = {n})"
+        )
+    };
+    format!(
+        "CASE WHEN COALESCE({alias}.\"strategyid\",0) = 0 \
+         AND upper(trim(COALESCE({alias}.\"channelname\",''))) = 'LIQUIDATION' \
+         THEN COALESCE({}, {}, 0) ELSE {plain} END",
+        lookup(&whole),
+        lookup(&cut)
+    )
+}
+
 /// Build the unified replica-and-legacy `FROM` source with filters inside each
 /// branch so the `closedate` indexes remain usable.
 ///
@@ -129,16 +233,27 @@ pub(super) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Option<St
         .copied()
         .chain(super::tuner::FIELDS.iter().map(|s| s.col))
         .collect();
+    // Is the strategy database attached? Probed rather than passed down: the callers that
+    // attach it do so on this same connection, and the tests deliberately do not.
+    let has_names = q.attribute_liq && strategies_attached(conn);
     let mut branches = Vec::new();
     for src in super::read_sources_res(conn)? {
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
             continue; // схема ядра ещё не пришла — агрегировать нечего
         }
+        // The branch table is aliased so the attribution's correlated subquery can name the
+        // OUTER row explicitly. Unqualified `core_uid` inside it would bind to `strat.strategies`
+        // and silently match every strategy of that name on any core.
+        let sid = effective_sid_expr("r", &src.cols, has_names);
         let proj = cols
             .iter()
             .map(|c| {
-                if src.cols.contains(*c) {
-                    format!("\"{c}\"")
+                if *c == "strategyid" && src.cols.contains(*c) {
+                    // The attributed value is published UNDER THE ORIGINAL NAME, so every
+                    // query outside this source keeps reading `o.strategyid` and gets it.
+                    format!("{sid} AS \"strategyid\"")
+                } else if src.cols.contains(*c) {
+                    format!("r.\"{c}\"")
                 } else {
                     format!("NULL AS \"{c}\"")
                 }
@@ -146,9 +261,9 @@ pub(super) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Option<St
             .collect::<Vec<_>>()
             .join(", ");
         branches.push(format!(
-            "SELECT {proj} FROM {} WHERE {}",
+            "SELECT {proj} FROM {} r WHERE {}",
             src.table,
-            q.where_sql(&src.cols)
+            q.where_sql(&src.cols, &sid)
         ));
     }
     if branches.is_empty() {
@@ -235,7 +350,10 @@ pub struct TopTrade {
 }
 
 /// Агрегат группы (стратегия по id / монета).
-#[derive(Clone, Debug)]
+///
+/// `Default` is "a group with no trades": every field is already zero/empty/None, and callers
+/// need it to show a coin that is PRESENT in the set but was not traded in the current scope.
+#[derive(Clone, Debug, Default)]
 pub struct GroupStat {
     /// Ключ группы: для стратегий — `strategyid` текстом, для монет — имя.
     pub key: String,
@@ -260,6 +378,16 @@ pub struct GroupStat {
     /// Strategy's last edit date — the `LastEditDate` field from the current version's
     /// raw_json (strategies.sqlite). Empty for coins / when the strategy DB is absent.
     pub lastedit: String,
+    /// How many DISTINCT coins the strategy's `CoinsBlackList` / `CoinsWhiteList` name.
+    ///
+    /// Counted over normalized tokens, not raw entries: a list may repeat a coin in two
+    /// spellings (`BTC`, `btc_rp`), and reporting the raw entry count would overstate what
+    /// the list actually covers.
+    ///
+    /// Zero means BOTH "the list is empty" and "we cannot see it" (no strategy DB, deleted
+    /// strategy) — callers that filter on it must not present the second as the first.
+    pub bl: i64,
+    pub wl: i64,
 }
 
 impl GroupStat {
@@ -278,15 +406,6 @@ impl GroupStat {
             0.0
         }
     }
-}
-
-/// Детализация стратегии (drill-down вкладки «Стратегии»).
-#[derive(Clone, Debug, Default)]
-pub struct StrategyDetail {
-    /// Вклад по монетам, прибыль по убыванию.
-    pub coins: Vec<GroupStat>,
-    /// Последние сделки (новые первыми).
-    pub last: Vec<TopTrade>,
 }
 
 /// Данные вкладки «Сводка» одним заходом.
@@ -352,6 +471,63 @@ pub struct KindStat {
 
 const WHERE_PERIOD: &str = "closedate >= ?1 AND closedate < ?2 AND closedate > 0";
 
+/// Rows a period can never contain: the close date is absent or non-positive.
+const WHERE_UNDATED: &str = "(closedate IS NULL OR closedate <= 0)";
+
+/// Closed trades the core never dated, and the money they carry.
+///
+/// Every analytics figure is computed under [`WHERE_PERIOD`], which ends in `closedate > 0`.
+/// So these rows are in NO period — not even "all history" — and their profit is simply
+/// absent from every number this window shows. On a real replica that was 370 trades and
+/// -434 USDT: closed for certain (they carry a sell price and a sell reason) and invisible
+/// everywhere.
+///
+/// This is a CORE-side omission, not a replica bug: `db::rep::open_row_ids` already reports
+/// such rows back for re-checking and they stay undated regardless. The terminal cannot
+/// invent the missing timestamp — the only honest thing it can do is say how much is missing,
+/// which is what this returns.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct UndatedCloses {
+    pub n: i64,
+    pub profit: f64,
+}
+
+impl UndatedCloses {
+    /// Nothing to report — the usual case, and the one the UI must stay silent about.
+    pub fn is_empty(&self) -> bool {
+        self.n == 0
+    }
+}
+
+/// Count them under the CURRENT filters but outside any period — see [`UndatedCloses`].
+pub fn undated_closes(q: &Query) -> ReadResult<UndatedCloses> {
+    const CTX: &str = "analytics: trades with no close date";
+    let conn = super::open_reader()?;
+    let mut out = UndatedCloses::default();
+    for src in super::read_sources_res(&conn)? {
+        // A source without these columns cannot hold such a row, and asking would fail the
+        // whole statement rather than contribute zero.
+        if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
+            continue;
+        }
+        // Attribution deliberately OFF here: the banner counts rows the PERIOD threw away,
+        // and which strategy they belong to changes nothing about that count. (The caller
+        // passes no strategy scope either, so the expression is never consulted.)
+        let sid = effective_sid_expr("r", &src.cols, false);
+        let sql = format!(
+            "SELECT COUNT(*), COALESCE(SUM(r.profitbtc), 0) FROM {} r WHERE {}",
+            src.table,
+            q.where_with(WHERE_UNDATED, &src.cols, &sid)
+        );
+        let (n, profit): (i64, f64) = conn
+            .query_row(&sql, [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| read_fail(CTX, e))?;
+        out.n += n;
+        out.profit += profit;
+    }
+    Ok(out)
+}
+
 /// Aggregate the selected period and filters without collapsing read failures.
 ///
 /// Returns `NotReady` when the replica or required core schema is absent, and
@@ -360,8 +536,8 @@ const WHERE_PERIOD: &str = "closedate >= ?1 AND closedate < ?2 AND closedate > 0
 /// period has zero current-period counters.
 pub fn summary(q: &Query) -> ReadResult<Summary> {
     let conn = super::open_reader()?;
-    // ATTACH first: it cannot run inside a transaction.
-    let has_strat_names = attach_strategies(&conn);
+    // `open_reader` has already attached it (a second ATTACH under the same alias fails).
+    let has_strat_names = strategies_attached(&conn);
     // One snapshot for the whole summary. Its counters, series, top trades and
     // group tables are separate statements, and the writer commits between them
     // during catch-up — without this they could disagree about which trades the
@@ -758,75 +934,77 @@ fn min_closedate(conn: &Connection) -> ReadResult<i64> {
     Ok(if min == i64::MAX { 1 } else { min })
 }
 
-/// Load strategy detail by `strategyid`.
+/// Which STRATEGIES traded any of `coins`, as the very keys the strategy list rows carry
+/// (`strategyid@core_uid`).
 ///
-/// Returns `NotReady` when the replica or required schema is absent and `Failed`
-/// when opening the replica, pinning the snapshot, or reading any row fails.
-/// A healthy period without matching trades returns empty detail lists.
-pub fn strategy_detail(q: &Query, strategy_id: i64) -> ReadResult<StrategyDetail> {
-    const CTX: &str = "analytics: strategy_detail";
+/// Answers "who is behind this coin?" for the coin table's selection, so the two panels agree
+/// by construction: the key is built by the same expression [`groups`] builds it with, and a
+/// row highlighted here is the row the user is looking at.
+///
+/// An empty `coins` selects nothing and is answered without touching the database.
+pub fn strategies_for_coins(q: &Query, coins: &[String]) -> ReadResult<Vec<String>> {
+    const CTX: &str = "analytics: strategies_for_coins";
+    if coins.is_empty() {
+        return Ok(Vec::new());
+    }
     let conn = super::open_reader()?;
-    // One snapshot: the sections below are separate statements presented as one
-    // card, so they must agree about which trades the period contains.
     let snap = super::read_snapshot(&conn)?;
     let conn = &*snap;
     let mut q = q.clone();
+    // The same floor the coin table and the KPI use — one screen, one period.
     if q.from < 0 {
         q.from = 1;
     }
     let Some(src) = unified_from(conn, &q)? else {
         return Err(ReadFail::NotReady);
     };
-
-    // Вклад по монетам этой стратегии.
+    // Coin names come from the same replica column the caller read them out of, and still go
+    // through the shared escaper rather than being interpolated here.
+    let list = super::tuner::sql_str_list(coins);
     let sql = format!(
-        "SELECT COALESCE(o.coin,'') AS k, COALESCE(o.coin,''), '',
-                MAX(o.core_name), COUNT(DISTINCT o.core_uid), NULL,
-                COUNT(*), COALESCE(SUM(o.profitbtc),0),
-                COALESCE(SUM(o.profitbtc > 0),0),
-                COALESCE(SUM(CASE WHEN o.profitbtc > 0 THEN o.profitbtc END),0),
-                COALESCE(SUM(CASE WHEN o.profitbtc <= 0 THEN -o.profitbtc END),0),
-                COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0),
-                ''
-         FROM {src} WHERE o.strategyid = ?3
-         GROUP BY k ORDER BY 8 DESC"
+        "SELECT DISTINCT CAST(o.strategyid AS TEXT) || '@' || CAST(o.core_uid AS TEXT)
+         FROM {src} WHERE COALESCE(o.coin,'') IN ({list})"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
     let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to, strategy_id], group_from_row)
+        .query_map(rusqlite::params![q.from, q.to], |r| r.get::<_, String>(0))
         .map_err(|e| read_fail(CTX, e))?;
-    let mut coins = Vec::new();
+    let mut out = Vec::new();
     for row in rows {
-        coins.push(row.map_err(|e| read_fail(CTX, e))?);
+        out.push(row.map_err(|e| read_fail(CTX, e))?);
     }
-    drop(stmt);
+    Ok(out)
+}
 
-    // Последние сделки (новые первыми).
-    let sql = format!(
-        "SELECT o.closedate, COALESCE(o.coin,''), o.core_name, o.core_name,
-                COALESCE(o.profitbtc,0), COALESCE(o.isshort,0)
-         FROM {src} WHERE o.strategyid = ?3
-         ORDER BY o.closedate DESC LIMIT 10"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
-    let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to, strategy_id], |r| {
-            Ok(TopTrade {
-                closedate: r.get(0)?,
-                coin: r.get(1)?,
-                strategy: r.get(2)?, // в детализации поле «стратегия» = ядро
-                core_name: r.get(3)?,
-                profit: r.get(4)?,
-                is_short: r.get::<_, i64>(5)? != 0,
-            })
-        })
-        .map_err(|e| read_fail(CTX, e))?;
-    let mut last = Vec::new();
-    for row in rows {
-        last.push(row.map_err(|e| read_fail(CTX, e))?);
+/// Per-coin aggregates for exactly the trades `q` selects.
+///
+/// The same grouping [`summary`] publishes as `Summary::coins`, but callable on
+/// its own query — the coin panel needs it TWICE per refresh over two different
+/// scopes (every coin the selected cores traded vs. the numbers of the selected
+/// strategies), and re-running a whole summary for one `GROUP BY` would pay for
+/// the series, the top trades and the strategy table as well.
+///
+/// Names never come from the strategies DB here — the group key IS the coin. It is attached
+/// all the same (`open_reader` does it for every reader) because liquidation attribution
+/// decides WHICH strategy's coins these are, and this must agree with the panel beside it.
+/// `NotReady` when no source has the required schema.
+pub fn coin_groups(q: &Query) -> ReadResult<Vec<GroupStat>> {
+    let conn = super::open_reader()?;
+    // One snapshot, like every other aggregation: the writer commits between
+    // statements during catch-up.
+    let snap = super::read_snapshot(&conn)?;
+    let conn = &*snap;
+    let mut q = q.clone();
+    // The same floor `variant_stats` uses, NOT `min_closedate`: the coin table and the
+    // "Fact vs v1" matrix sit on one screen and must cover the same span — resolving
+    // "all history" differently here would let the two halves describe two periods.
+    if q.from < 0 {
+        q.from = 1;
     }
-
-    Ok(StrategyDetail { coins, last })
+    let Some(src) = unified_from(conn, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
+    groups(conn, &src, &q, false, false)
 }
 
 /// Decode one aggregate row ordered as key, labels, counts, profit, and extrema.
@@ -853,11 +1031,44 @@ fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
         best: r.get(11)?,
         worst: r.get(12)?,
         lastedit: r.get::<_, Option<String>>(13)?.unwrap_or_default(),
+        // The lists arrive as their raw field text; counting distinct tokens is the same
+        // rule the analytics coin table matches by, so the number here and the markers
+        // there can never disagree about what a list covers.
+        bl: count_list(r.get::<_, Option<String>>(14)?),
+        wl: count_list(r.get::<_, Option<String>>(15)?),
     })
 }
 
+/// Distinct coins named by a raw `CoinsBlackList` / `CoinsWhiteList` field value.
+fn count_list(text: Option<String>) -> i64 {
+    text.map_or(0, |t| crate::symbol::parse_coin_list(&t).len() as i64)
+}
+
+/// Is the strategy database available on this connection?
+///
+/// Probed rather than tracked: `open_reader` attaches it, but a caller may hand us a
+/// connection it opened itself, and a second ATTACH under the same alias fails. Asking the
+/// connection is the only answer that cannot go stale.
+pub(super) fn strategies_attached(conn: &Connection) -> bool {
+    // EXECUTED, not merely prepared. `prepare` validates the schema and nothing else, so a
+    // corrupt or unreadable strategies.sqlite passed this check and then failed mid-scan —
+    // and because the attribution subquery is baked into the unified source, that failure
+    // sank the whole summary instead of degrading to "no attribution". Running the statement
+    // is what turns a broken strategy database back into a silently absent one.
+    match conn.query_row("SELECT 1 FROM strat.strategies LIMIT 1", [], |_| Ok(())) {
+        Ok(()) => true,
+        // An EMPTY table is still a usable one: nothing will match, every liquidation stays
+        // in "Manual", and that is a correct answer rather than a failure.
+        Err(rusqlite::Error::QueryReturnedNoRows) => true,
+        Err(e) => {
+            log::debug!("analytics: strategies.sqlite unreadable, attribution off: {e}");
+            false
+        }
+    }
+}
+
 /// Attach the optional strategies database used to enrich strategy names.
-fn attach_strategies(conn: &Connection) -> bool {
+pub(super) fn attach_strategies(conn: &Connection) -> bool {
     let path = crate::config::paths::strategies_db_path();
     if !path.exists() {
         return false;
@@ -871,7 +1082,11 @@ fn attach_strategies(conn: &Connection) -> bool {
     match conn.execute(&sql, []) {
         Ok(_) => true,
         Err(e) => {
-            log::warn!("analytics: strategies.sqlite не подключилась: {e}");
+            // Logged ONCE. It now runs per reader (every Report refresh included), and a
+            // permanently broken file would otherwise write a warn line forever.
+            use std::sync::Once;
+            static SAID: Once = Once::new();
+            SAID.call_once(|| log::warn!("analytics: strategies.sqlite did not attach: {e}"));
             false
         }
     }
@@ -1120,6 +1335,36 @@ fn groups(
     // Ключ стратегии — `id@core_uid`: разбивка ПО ЯДРАМ (видно работу стратегии на
     // каждом ядре отдельно); переименования не плодят группы, одноимённые разные
     // стратегии не сливаются; имя — только подпись.
+    // Raw text of a strategy field from its current version, or a NULL literal when the
+    // strategies DB is not attached.
+    let field = |name: &str| {
+        if has_names {
+            // CAST because `json_extract` returns the value's own type: a list stored as a
+            // number or a bool would otherwise come back as INTEGER/REAL and fail the row
+            // decode, taking the WHOLE grouping down over one odd field.
+            //
+            // `st.deleted = 0` mirrors `db::tuner::strategy_current_values`, which is what
+            // the coin table reads the same lists through. Without it a deleted strategy
+            // shows a count in this column that its own coin table cannot produce.
+            format!(
+                "MAX((SELECT CAST(json_extract(v.raw_json, '$.{name}') AS TEXT)
+                      FROM strat.strategy_versions v
+                      JOIN strat.strategies st
+                        ON st.core_uid = v.core_uid AND st.strategy_id = v.strategy_id
+                      WHERE v.core_uid = o.core_uid
+                        AND v.strategy_id = o.strategyid
+                        AND v.valid_to IS NULL
+                        AND st.deleted = 0))"
+            )
+        } else {
+            "NULL".to_string()
+        }
+    };
+    let (blacklist, whitelist) = if by_strategy {
+        (field("CoinsBlackList"), field("CoinsWhiteList"))
+    } else {
+        ("NULL".to_string(), "NULL".to_string())
+    };
     let (key, name, kind, alive, lastedit) = if by_strategy {
         (
             "CAST(o.strategyid AS TEXT) || '@' || CAST(o.core_uid AS TEXT)".to_string(),
@@ -1170,7 +1415,7 @@ fn groups(
                 COALESCE(SUM(CASE WHEN o.profitbtc > 0 THEN o.profitbtc END),0),
                 COALESCE(SUM(CASE WHEN o.profitbtc <= 0 THEN -o.profitbtc END),0),
                 COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0),
-                {lastedit}
+                {lastedit}, {blacklist}, {whitelist}
          FROM {src}
          GROUP BY k ORDER BY 8 DESC"
     );
@@ -1187,6 +1432,12 @@ fn groups(
     Ok(out)
 }
 
+/// The liquidation-attribution flag must reach the generated SQL from every call site.
+#[cfg(test)]
+mod liq_wiring_tests;
+/// What attributing a LIQUIDATION row to its named strategy does to the figures.
+#[cfg(test)]
+mod liq_attribution_tests;
 /// The strategy scope of a query — the tuner's Ctrl multi-select depends on it entirely.
 #[cfg(test)]
 mod scope_tests;

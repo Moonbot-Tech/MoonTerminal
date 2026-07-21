@@ -1,11 +1,16 @@
-//! Column descriptors of the tuner's comparison tables (strategy list + per-coin panel):
-//! the metric columns, their sort ids and visibility bits, the coin-panel geometry, and the
-//! shared header/body cell renderers. Kept apart from the rendering so a column cannot exist
-//! in the heading and not in the body — both read the SAME descriptor.
+//! What BOTH comparison tables of the tuner share: the [`MetricCol`] descriptor, the pool of
+//! metric columns they pick from, the body-cell renderer and the click-to-sort rule.
+//!
+//! Which columns each table actually shows — and how wide it lays them out — belongs to that
+//! table: `strat_columns` for the strategy list, `coin_columns` for the coin table. Only the
+//! things that MUST be identical in both live here, so a change meant for one table cannot
+//! quietly reshape the other.
+//!
+//! Kept apart from the rendering so a column cannot exist in the heading and not in the body —
+//! both read the SAME descriptor.
 
 use gpui::*;
 use moon_ui::MoonPalette;
-use rust_i18n::t;
 
 use super::super::summary::{fmt_signed, sign_color};
 use crate::design::moon;
@@ -25,8 +30,14 @@ use moon_core::db::analytics::GroupStat;
 pub(super) struct MetricCol {
     /// i18n key of the heading; doubles as the stable sort id for this column.
     pub(super) key: &'static str,
-    /// Column width, in font-scaled px.
+    /// Preferred column width, in font-scaled px — what it takes when there is room.
     pub(super) w: f32,
+    /// Narrowest it may be squeezed to before its own values stop fitting (font-scaled px).
+    ///
+    /// Per column, not a shared fraction of `w`: "+1795.21" and "187" do not stop fitting at
+    /// the same proportion, and one number silently clipped is worse than a table that has to
+    /// give up a column.
+    pub(super) min_w: f32,
     /// Cell text for one aggregate.
     pub(super) text: fn(&GroupStat) -> String,
     /// Value whose sign colours the cell; `None` renders neutral.
@@ -35,113 +46,113 @@ pub(super) struct MetricCol {
     pub(super) sort: fn(&GroupStat) -> f64,
 }
 
-const COL_TRADES: MetricCol = MetricCol {
+pub(super) const COL_TRADES: MetricCol = MetricCol {
     key: "analytics.kpi.trades",
     w: 56.0,
+    min_w: 38.0,
     text: |g| g.n.to_string(),
     signed: None,
     sort: |g| g.n as f64,
 };
-const COL_PROFIT: MetricCol = MetricCol {
+pub(super) const COL_PROFIT: MetricCol = MetricCol {
     key: "analytics.col.profit",
     w: 84.0,
+    min_w: 62.0,
     text: |g| fmt_signed(g.profit),
     signed: Some(|g| g.profit),
     sort: |g| g.profit,
 };
-const COL_AVG: MetricCol = MetricCol {
+pub(super) const COL_AVG: MetricCol = MetricCol {
     key: "analytics.kpi.avg_short",
     w: 70.0,
+    min_w: 48.0,
     text: |g| fmt_signed(g.avg()),
     signed: Some(|g| g.avg()),
     sort: |g| g.avg(),
 };
-const COL_WINRATE: MetricCol = MetricCol {
+pub(super) const COL_WINRATE: MetricCol = MetricCol {
     key: "analytics.kpi.winrate",
     w: 56.0,
+    min_w: 44.0,
     text: |g| format!("{:.1}%", g.winrate()),
     signed: None,
     sort: |g| g.winrate(),
 };
-const COL_PF: MetricCol = MetricCol {
+pub(super) const COL_PF: MetricCol = MetricCol {
     key: "analytics.col.pf",
     w: 52.0,
+    min_w: 38.0,
     text: |g| format!("{:.2}", g.pf),
     signed: None,
     sort: |g| g.pf,
 };
-const COL_BEST: MetricCol = MetricCol {
+pub(super) const COL_BEST: MetricCol = MetricCol {
     key: "analytics.col.best",
     w: 70.0,
+    min_w: 52.0,
     text: |g| fmt_signed(g.best),
     signed: Some(|g| g.best),
     sort: |g| g.best,
 };
-const COL_WORST: MetricCol = MetricCol {
+/// How many coins the strategy's blacklist / whitelist name. Zero renders EMPTY, not "0":
+/// most strategies list nothing, and a column of zeros reads as data where there is none.
+pub(super) const COL_BL: MetricCol = MetricCol {
+    key: "analytics.coins.black",
+    w: 40.0,
+    min_w: 26.0,
+    text: |g| blank_if_zero(g.bl),
+    signed: None,
+    sort: |g| g.bl as f64,
+};
+pub(super) const COL_WL: MetricCol = MetricCol {
+    key: "analytics.coins.white",
+    w: 40.0,
+    min_w: 26.0,
+    text: |g| blank_if_zero(g.wl),
+    signed: None,
+    sort: |g| g.wl as f64,
+};
+
+/// A count that renders as nothing when it is zero.
+pub(super) fn blank_if_zero(n: i64) -> String {
+    if n > 0 { n.to_string() } else { String::new() }
+}
+
+pub(super) const COL_WORST: MetricCol = MetricCol {
     key: "analytics.col.worst",
     w: 70.0,
+    min_w: 52.0,
     text: |g| fmt_signed(g.worst),
     signed: Some(|g| g.worst),
     sort: |g| g.worst,
 };
 
-/// Strategy comparison columns, in reading order: identity, then how many trades back the figure,
-/// then the result, then how good it is, then the tails. Profit leads the numbers because the
-/// table is sorted by it — the sort key sitting mid-row leaves the ranking without an anchor, and
-/// winrate placed ahead of it reads a 100%-on-two-trades row as the winner.
-pub(super) const METRIC_COLS: &[MetricCol] = &[
-    COL_TRADES,
-    COL_PROFIT,
-    COL_AVG,
-    COL_WINRATE,
-    COL_PF,
-    COL_BEST,
-    COL_WORST,
-];
-
-/// Sort ids for the columns METRIC_COLS doesn't cover (name, the two identity columns, lastedit).
-pub(super) const SORT_NAME: &str = "name";
-pub(super) const SORT_KIND: &str = "kind";
-pub(super) const SORT_CORE: &str = "core";
-pub(super) const SORT_LASTEDIT: &str = "lastedit";
-
-/// Visible-column bit layout: kind at bit 0, core at bit 1, then METRIC_COLS[i] at bit 2+i, and
-/// lastedit just above the metrics. The strategy name column is identity and always shown (no bit).
-pub(super) const COL_BIT_KIND: u16 = 1 << 0;
-pub(super) const COL_BIT_CORE: u16 = 1 << 1;
-/// Visibility bit of `METRIC_COLS[i]`.
-pub(super) fn metric_bit(i: usize) -> u16 {
-    1u16 << (2 + i)
-}
-/// Visibility bit of the "last edit" column (sits above the metric bits).
-pub(super) const COL_BIT_LASTEDIT: u16 = 1u16 << (2 + METRIC_COLS.len() as u16);
-/// Width (font-scaled px) of the "last edit" column — fits a `dd.mm.yyyy hh:mm` stamp.
-pub(super) const LASTEDIT_W: f32 = 110.0;
-/// Full mask — every toggleable column visible (kind, core, all metric columns, lastedit).
-pub(in crate::analytics) const STRAT_COLS_ALL: u16 = (COL_BIT_LASTEDIT << 1) - 1;
-
-/// Per-coin columns: the same order, minus the per-trade average and the best case. Both tables
-/// are visible at once in "Coins" mode, so a differing order would cost the reader the position
-/// cue they just learned on the left.
-pub(super) const COIN_COLS: &[MetricCol] =
-    &[COL_TRADES, COL_PROFIT, COL_WINRATE, COL_PF, COL_WORST];
-
-/// Geometry of the coins panel. The coin-name column is whatever [`COIN_COLS`] leaves over, so
-/// these are the terms a width test has to read rather than re-state.
-pub(super) const COIN_PANEL_W: f32 = 460.0;
-pub(super) const COIN_ROW_PAD_X: f32 = 8.0;
-pub(super) const COIN_ROW_GAP: f32 = 8.0;
-
-/// Heading cell of a [`MetricCol`], right-aligned over its numbers.
+/// Click a sortable column heading: the first click sorts descending, clicking the column that
+/// is already the key flips it to ascending.
 ///
-/// `scale` is the caller's hoisted [`crate::design::font_scale`]: resolving it per cell costs two
-/// by-value theme-token clones each, and this table renders every row (it is not virtualized).
-pub(super) fn head_cell(col: &MetricCol, scale: f32) -> impl IntoElement {
-    div()
-        .w(px(col.w * scale))
-        .flex_none()
-        .text_right()
-        .child(t!(col.key).to_string())
+/// A free function over the state slot rather than a method, because both comparison tables on
+/// this page keep their own `(key, descending)` and the rule for turning a click into one must
+/// not be able to differ between them.
+pub(super) fn toggle_sort_key(sort: &mut Option<(String, bool)>, key: &str) {
+    let desc = match sort {
+        Some((k, d)) if k == key => !*d,
+        _ => true,
+    };
+    *sort = Some((key.to_string(), desc));
+}
+
+/// Arrow suffix for a heading (`" ▼"` / `" ▲"`), empty when that column is not the sort key.
+pub(super) fn sort_arrow_of(sort: &Option<(String, bool)>, key: &str) -> &'static str {
+    match sort {
+        Some((k, d)) if k == key => {
+            if *d {
+                " ▼"
+            } else {
+                " ▲"
+            }
+        }
+        _ => "",
+    }
 }
 
 /// Body cell of a [`MetricCol`]: text and sign colour both derived from the same descriptor, so
@@ -158,20 +169,21 @@ pub(super) fn metric_cell(
         Some(value) => sign_color(p, value(g)),
         None => p.text_soft,
     };
-    num_cell(scale, col.w, (col.text)(g), color)
+    num_cell(scale, col, (col.text)(g), color)
 }
 
 /// Render one right-aligned numeric cell using a caller-hoisted font `scale`.
-fn num_cell(scale: f32, w: f32, text: String, color: u32) -> impl IntoElement {
+///
+/// Shrinkable down to the column's own floor: when the row runs out of width every column
+/// gives a little, rather than the whole rigid cluster sliding off the right edge. Below the
+/// floor it stops — a number squeezed past legibility is worse than an honest overflow.
+fn num_cell(scale: f32, col: &MetricCol, text: String, color: u32) -> impl IntoElement {
     div()
-        .w(px(w * scale))
-        .flex_none()
+        .w(px(col.w * scale))
+        .min_w(px(col.min_w * scale))
+        .flex_shrink_1()
+        .truncate()
         .text_right()
         .text_color(moon(color))
         .child(text)
 }
-
-// Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
-// shadows the built-in attribute and makes `#[test]` expand recursively.
-#[cfg(test)]
-mod tests;

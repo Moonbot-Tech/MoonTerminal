@@ -362,6 +362,14 @@ analytics.trades_count:
   ru: "%{n} закрытых сделок"
   en: "%{n} closed trades"
   es: "%{n} operaciones cerradas"
+analytics.undated_title:
+  ru: "Сделки без даты закрытия"
+  en: "Trades with no close date"
+  es: "Operaciones sin fecha de cierre"
+analytics.undated_detail:
+  ru: "%{n} закрытых сделок (PnL %{pnl}) не входят НИ В ОДИН период — ядро не прислало дату закрытия. Ни одна цифра в этом окне их не учитывает."
+  en: "%{n} closed trades (PnL %{pnl}) fall into NO period — the core never sent a close date. No figure in this window counts them."
+  es: "%{n} operaciones cerradas (PnL %{pnl}) no entran en NINGÚN período: el núcleo no envió la fecha de cierre. Ninguna cifra de esta ventana las cuenta."
 analytics.integrity_damaged:
   ru: "Реплика отчётов повреждена (проверка целостности SQLite)."
   en: "The reports replica is damaged (SQLite integrity check)."
@@ -643,18 +651,6 @@ analytics.strat.no_match:
   ru: "нет совпадений — измените фильтр/поиск"
   en: "no matches — adjust the filter/search"
   es: "sin coincidencias — ajusta el filtro/búsqueda"
-analytics.strat.by_coins:
-  ru: "%{name} — по монетам"
-  en: "%{name} — by coins"
-  es: "%{name} — por monedas"
-analytics.strat.mode_overview:
-  ru: "Обзор"
-  en: "Overview"
-  es: "Resumen"
-analytics.strat.pick:
-  ru: "Выбери стратегию в списке — здесь появится её вклад по монетам."
-  en: "Pick a strategy in the list to see its per-coin contribution here."
-  es: "Elige una estrategia en la lista para ver su aporte por moneda."
 analytics.strat.scope_all:
   ru: "все стратегии"
   en: "all strategies"
@@ -681,3 +677,156 @@ analytics.col.worst:
   ru: "Worst"
   en: "Worst"
   es: "Worst"
+
+# "Strategy tuning" → the "By coin" axis: the coin table and its filters, the
+# "Fact vs ticked coins" matrix, and the picker field (CoinsBlackList).
+analytics.coins.search_ph:
+  ru: "поиск монеты"
+  en: "search coin"
+  es: "buscar moneda"
+analytics.coins.black:
+  ru: "ЧС"
+  en: "BL"
+  es: "LN"
+analytics.coins.white:
+  ru: "БС"
+  en: "WL"
+  es: "LB"
+analytics.coins.pending:
+  ru: "не сохранено"
+  en: "not saved"
+  es: "sin guardar"
+analytics.coins.more:
+  ru: "…ещё %{n}"
+  en: "…%{n} more"
+  es: "…%{n} más"
+analytics.coins.no_date:
+  ru: "дата неизвестна"
+  en: "date unknown"
+  es: "fecha desconocida"
+analytics.coins.list_empty:
+  ru: "У выбранных стратегий этот список пуст."
+  en: "The selected strategies keep this list empty."
+  es: "Las estrategias seleccionadas mantienen esta lista vacía."
+analytics.coins.list_pick:
+  ru: "Выберите стратегию, чтобы увидеть её список."
+  en: "Select a strategy to see its list."
+  es: "Seleccione una estrategia para ver su lista."
+analytics.coins.pick_title:
+  ru: "Список монет"
+  en: "Coin list"
+  es: "Lista de monedas"
+analytics.coins.changed:
+  ru: "Изменённые"
+  en: "Changed"
+  es: "Cambiadas"
+analytics.coins.changed_n:
+  ru: "изменено %{n}"
+  en: "%{n} changed"
+  es: "%{n} cambiadas"
+analytics.coins.revert:
+  ru: "Вернуть"
+  en: "Revert"
+  es: "Revertir"
+analytics.strat.with_bl:
+  ru: "С ЧС"
+  en: "With BL"
+  es: "Con LN"
+analytics.strat.with_wl:
+  ru: "С БС"
+  en: "With WL"
+  es: "Con LB"
+analytics.coins.v1:
+  ru: "v1"
+  en: "v1"
+  es: "v1"
+analytics.coins.v1_lists:
+  ru: "ЧС %{bl} / БС %{wl}"
+  en: "BL %{bl} / WL %{wl}"
+  es: "LN %{bl} / LB %{wl}"
+
+# Write path: what happens when a save reaches no core, and what the confirmation dialog
+# says about a value that empties a field.
+analytics.write_failed_title:
+  ru: "Запись не прошла"
+  en: "The write did not go through"
+  es: "La escritura no se realizó"
+analytics.write_failed:
+  ru: "Изменения НЕ записаны — правка сохранена в панели, повторите. %{err}"
+  en: "Nothing was written — the edit is kept in the panel, try again. %{err}"
+  es: "No se escribió nada — el cambio sigue en el panel, reinténtelo. %{err}"
+analytics.write_failed_stale:
+  ru: "ни одна из выбранных стратегий больше не числится на своём ядре (пропущено: %{n})"
+  en: "none of the selected strategies is on its core any more (skipped: %{n})"
+  es: "ninguna de las estrategias seleccionadas sigue en su núcleo (omitidas: %{n})"
+analytics.write_partial:
+  ru: "Часть ядер не приняла запись: %{err}"
+  en: "Some cores did not accept the write: %{err}"
+  es: "Algunos núcleos no aceptaron la escritura: %{err}"
+analytics.tuner.save_clears:
+  ru: "(поле будет очищено)"
+  en: "(the field will be cleared)"
+  es: "(el campo se vaciará)"
+analytics.undated_hide:
+  ru: "Скрыть"
+  en: "Hide"
+  es: "Ocultar"
+analytics.undated_show:
+  ru: "Показать"
+  en: "Show"
+  es: "Mostrar"
+analytics.undated_collapsed:
+  ru: "Сделок без даты закрытия: %{n} — не входят ни в один период"
+  en: "Closed trades with no date: %{n} — in no period"
+  es: "Operaciones sin fecha de cierre: %{n} — en ningún período"
+analytics.coins.save_not_loaded:
+  ru: "Списки стратегий ещё не прочитаны — запись отменена, чтобы не потерять записи вида BTC_0626."
+  en: "The strategies' lists have not been read yet — the write was cancelled so entries like BTC_0626 are not lost."
+  es: "Las listas de las estrategias aún no se han leído — escritura cancelada."
+analytics.write_failed_ok:
+  ru: "Понятно"
+  en: "Got it"
+  es: "Entendido"
+analytics.copy_failed:
+  ru: "Копия НЕ создана: %{err}"
+  en: "The copy was NOT created: %{err}"
+  es: "No se creó la copia: %{err}"
+analytics.copy_failed_missing:
+  ru: "Копия НЕ создана: стратегия %{sid} не найдена среди живых на ядре %{core}."
+  en: "The copy was NOT created: strategy %{sid} is not among the live ones on core %{core}."
+  es: "No se creó la copia: la estrategia %{sid} no está entre las activas del núcleo %{core}."
+# The liquidation-attribution switch: it reinterprets whose trade a liquidation was, so the
+# label says what is happening rather than just naming a setting.
+analytics.attr_liq:
+  ru: "парсер ликвидаций"
+  en: "liquidation parser"
+  es: "parser de liquidaciones"
+analytics.coins.save_edit:
+  ru: "%{plus} · %{minus}"
+  en: "%{plus} · %{minus}"
+  es: "%{plus} · %{minus}"
+# Multi-select: the same edit is applied to each strategy ON TOP OF its own list, so nothing
+# a strategy already holds is disturbed and no list is copied onto another.
+analytics.coins.save_each:
+  ru: "каждой из %{n} поверх её списка"
+  en: "to each of %{n}, on top of its own list"
+  es: "a cada una de %{n}, sobre su propia lista"
+analytics.coins.save_unreadable:
+  ru: "Запись отменена: не удалось прочитать текущий список у %{n} стратегий, а без него правка стёрла бы всё остальное."
+  en: "Write cancelled: the current list of %{n} strategies could not be read, and without it the edit would erase everything else."
+  es: "Escritura cancelada: no se pudo leer la lista actual de %{n} estrategias."
+
+analytics.coins.save_skipped:
+  ru: "Пропущено стратегий: %{n} — не удалось прочитать их текущий список"
+  en: "Skipped %{n} strategies — their current list could not be read"
+  es: "Omitidas %{n} estrategias — no se pudo leer su lista actual"
+
+analytics.write_skipped:
+  ru: "Пропущено стратегий: %{n} — им запись не ушла. Остальные записаны."
+  en: "Skipped %{n} strategies — no write went out to them. The rest were written."
+  es: "Omitidas %{n} estrategias — no se les escribió. El resto sí."
+
+analytics.coins.save_moved:
+  ru: "Списки изменились, пока готовилась запись — правка не отправлена. Повторите."
+  en: "The lists moved while the write was being prepared — nothing was sent. Try again."
+  es: "Las listas cambiaron mientras se preparaba la escritura — no se envió nada."

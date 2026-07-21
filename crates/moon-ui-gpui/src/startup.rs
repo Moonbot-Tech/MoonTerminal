@@ -722,6 +722,14 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 b.detached_dirty = true;
             });
         }
+        // Observation channel for the Analytics coin table, gated by env exactly like
+        // `MOON_RENDER_DIAG` (see `diag.rs`): open the window straight onto that panel so it
+        // can be driven and read back without clicking through the UI by hand. Inert in every
+        // build unless the variable is set — a normal run never opens this window on startup.
+        if crate::analytics::probe_enabled() {
+            let backend = backend.clone();
+            cx.defer(move |cx| crate::analytics::open(backend, None, None, cx));
+        }
     });
     Ok(())
 }

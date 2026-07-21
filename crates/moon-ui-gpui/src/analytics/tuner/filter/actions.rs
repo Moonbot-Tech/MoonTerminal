@@ -8,9 +8,10 @@ use gpui::*;
 use moon_ui::{MoonInputEvent, MoonInputState};
 use rust_i18n::t;
 
-use super::super::AnalyticsView;
-use super::fields::{fmt_bound, parse_num, staged_dirty};
-use super::state::{SaveTarget, edges_of, iters_of};
+use super::super::super::AnalyticsView;
+use super::super::shared::SaveTarget;
+use super::state::{edges_of, iters_of};
+use super::{fmt_bound, parse_num, staged_dirty};
 use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
 impl AnalyticsView {
@@ -18,7 +19,7 @@ impl AnalyticsView {
     ///
     /// `NotReady` and failed reads are published through the shared KPI load
     /// state; a valid result updates only fields enabled for search.
-    pub(super) fn suggest_into_v1(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn suggest_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
         // Suggestion failures share `tuner.stats` with KPI reads, so both the
@@ -107,7 +108,7 @@ impl AnalyticsView {
     ///
     /// `NotReady` and failed reads are published through the shared KPI load
     /// state; a valid `None` means no threshold improves on the baseline.
-    pub(super) fn suggest_one_into_v1(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn suggest_one_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
         // The shared KPI error channel requires the current KPI generation too.
@@ -157,7 +158,11 @@ impl AnalyticsView {
     }
 
     /// Copy bounds v1 → v2: row `fi`, or the whole column with (None).
-    pub(super) fn copy_v1_to_v2(&mut self, fi: Option<usize>, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn copy_v1_to_v2(
+        &mut self,
+        fi: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
         let range: Vec<usize> = match fi {
             Some(fi) => vec![fi],
             None => (0..FIELDS.len()).collect(),
@@ -177,7 +182,11 @@ impl AnalyticsView {
 
     /// Copy bounds v2 → v1: row `fi`, or the whole column with `None`. Mirror of
     /// [`Self::copy_v1_to_v2`] — drives the ← button in the fields grid header.
-    pub(super) fn copy_v2_to_v1(&mut self, fi: Option<usize>, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn copy_v2_to_v1(
+        &mut self,
+        fi: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
         let range: Vec<usize> = match fi {
             Some(fi) => vec![fi],
             None => (0..FIELDS.len()).collect(),
@@ -197,7 +206,7 @@ impl AnalyticsView {
 
     /// Clear a variant column (the cross in the grid header) — only rows whose
     /// checkbox is ENABLED: unchecked ones are fixed filters, we leave them alone.
-    pub(super) fn clear_variant(&mut self, vi: usize, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn clear_variant(&mut self, vi: usize, cx: &mut Context<Self>) {
         for fi in 0..FIELDS.len() {
             if !self.tuner.enabled[fi] {
                 continue;
@@ -217,7 +226,7 @@ impl AnalyticsView {
 
     /// Is there anything to write: staged "ignore" toggles OR v1 thresholds that
     /// differ from the strategy's current parameters (the "Save" button lights amber).
-    pub(super) fn save_dirty(&self) -> bool {
+    pub(in crate::analytics::tuner) fn save_dirty(&self) -> bool {
         if staged_dirty(&self.tuner.strat, &self.tuner.staged_ignore) {
             return true;
         }
@@ -271,7 +280,7 @@ impl AnalyticsView {
     /// would have no effect. Fields mapped onto parameters are written; slot fields
     /// (d1h/d15m/d5m/d1m/Pump1H/Dump1H) go through Delta2/Delta3: first
     /// `DeltaN_Type`, then `DeltaN_Min/Max`; there are two slots — the rest go to the log.
-    pub(super) fn open_save_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn open_save_dialog(&mut self, cx: &mut Context<Self>) {
         let targets = self.selected_targets();
         if targets.is_empty() {
             return;
@@ -289,7 +298,8 @@ impl AnalyticsView {
         if !bulk {
             changes.push(self.analyzer_comment());
         }
-        self.open_change_dialog(targets, changes, warns, false, cx);
+        // No notes: a threshold reads perfectly well as "now → next".
+        self.open_change_dialog(targets, changes, None, Vec::new(), warns, false, cx);
     }
 
     /// "To strategy" for the "By time" axis: writes v1 into the `WorkingWeekTime`
@@ -298,7 +308,7 @@ impl AnalyticsView {
     /// NON-EMPTY and changed fields are written (an empty field is left alone, the
     /// schedule is never wiped). The MoonBot field formats are unconfirmed — the strings
     /// are visible in the confirmation dialog.
-    pub(super) fn time_open_save_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn time_open_save_dialog(&mut self, cx: &mut Context<Self>) {
         let targets = self.selected_targets();
         if targets.is_empty() {
             return;
@@ -317,14 +327,18 @@ impl AnalyticsView {
             log::info!("analytics: 'Save' (time) — nothing to write (fields empty or = current)");
             return;
         }
-        self.open_change_dialog(targets, changes, Vec::new(), false, cx);
+        self.open_change_dialog(targets, changes, None, Vec::new(), Vec::new(), false, cx);
     }
 
     /// "Make a copy": the same change set, but the target is a NEW strategy
     /// (a copy of the current one with the thresholds applied) on all of the original's
     /// cores. The name is auto-uniqued and editable in the confirmation dialog. An
     /// empty change list is fine — that is just a copy.
-    pub(super) fn open_copy_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn open_copy_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Copy is single-target only (the button is hidden in multi-select) — take the anchor.
         let Some(target) = self.selected_targets().into_iter().next() else {
             return;
@@ -338,7 +352,11 @@ impl AnalyticsView {
     /// IgnoreTime/IgnoreFilters), but the target is a NEW strategy (a copy of the selected
     /// one). Shares the filter path through `open_copy_with`; empty changes are fine (a
     /// plain duplicate).
-    pub(super) fn time_open_copy_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn time_open_copy_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Copy is single-target only (button hidden in multi-select) — take the anchor.
         let Some(target) = self.selected_targets().into_iter().next() else {
             return;
@@ -351,7 +369,7 @@ impl AnalyticsView {
     /// The SHARED tail of "Make a copy" (all axes): an auto-uniqued name for the new
     /// strategy + its input in the confirmation dialog, then the SHARED dialog
     /// (`open_change_dialog`, is_copy=true). The user can edit the name before the write.
-    fn open_copy_with(
+    pub(in crate::analytics::tuner) fn open_copy_with(
         &mut self,
         target: SaveTarget,
         changes: Vec<(String, String)>,
@@ -385,7 +403,7 @@ impl AnalyticsView {
         })
         .detach();
         self.tuner.inputs.insert("copy-name".to_string(), state);
-        self.open_change_dialog(vec![target], changes, warns, true, cx);
+        self.open_change_dialog(vec![target], changes, None, Vec::new(), warns, true, cx);
     }
 
     /// Build the changes from v1 + the staged "ignore" toggles (without the Comment stamp):
