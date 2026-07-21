@@ -180,7 +180,8 @@ impl AppConfig {
         let badges = BadgesConfig::load();
         // Хоткеи — отдельный переносимый файл (с v13); None = ещё не мигрировали.
         let hotkeys_file = HotkeysConfig::load();
-        if let Some(cfg) = Self::load_plaintext_env(theme.clone(), orders.clone(), badges.clone())?
+        if let Some(cfg) =
+            Self::load_plaintext_env(uid_floor, theme.clone(), orders.clone(), badges.clone())?
         {
             return Ok(cfg);
         }
@@ -282,6 +283,9 @@ impl AppConfig {
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.settings_unreadable = settings_unreadable;
+            // A legacy config predates the durable counter entirely, while the stores it is
+            // migrated alongside may still hold uids from cores deleted long ago.
+            reconcile::raise_uid_floor(&mut cfg.next_uid, uid_floor);
             if settings_unreadable {
                 log::error!(
                     "settings.toml есть, но не прочитался — миграция из config.enc НЕ записана"
@@ -310,6 +314,8 @@ impl AppConfig {
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.settings_unreadable = settings_unreadable;
+            // Same reasoning as the config.enc branch above.
+            reconcile::raise_uid_floor(&mut cfg.next_uid, uid_floor);
             if settings_unreadable {
                 log::error!(
                     "settings.toml есть, но не прочитался — миграция из config.toml НЕ записана"
@@ -322,7 +328,10 @@ impl AppConfig {
         }
 
         log::warn!("конфиг не найден — добавь сервера в Настройках");
-        Ok(Self {
+        // No servers yet, but the stores may be full: deleting the config while keeping `data/`
+        // and re-adding cores is exactly how a fresh counter starts handing out uids whose
+        // report and strategy history is still on disk.
+        let mut fresh = Self {
             theme,
             orders,
             badges,
@@ -344,10 +353,13 @@ impl AppConfig {
             // branch must not overwrite it either.
             settings_unreadable,
             ..Self::default()
-        })
+        };
+        reconcile::raise_uid_floor(&mut fresh.next_uid, uid_floor);
+        Ok(fresh)
     }
 
     fn load_plaintext_env(
+        uid_floor: Option<u64>,
         theme: ChartThemeSet,
         orders: OrdersStyleSet,
         badges: BadgesConfig,
@@ -418,8 +430,14 @@ impl AppConfig {
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             core_sort: CoreSortMode::default(),
-            // The plaintext test config issues uid 1 above, so the counter starts at 2.
-            next_uid: 2,
+            // The plaintext config issues uid 1 above, so the counter starts at 2 — then clears
+            // whatever the stores hold. This mode is not test-only: it is how a Linux box with
+            // no Secret Service runs, so its cores share `data/` with everyone else's.
+            next_uid: {
+                let mut next = 2;
+                reconcile::raise_uid_floor(&mut next, uid_floor);
+                next
+            },
             hotkeys: HotkeysConfig::default(),
             theme,
             orders,

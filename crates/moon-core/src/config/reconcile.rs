@@ -269,10 +269,30 @@ pub fn ensure_uids(servers: &mut [ServerConfig], counter: &mut u64) {
 fn next_free_uid(sf: &ServersFile, meta: &SettingsFile, uid_floor: Option<u64>) -> u64 {
     let from_entries = sf.servers.iter().map(|e| e.uid).max().unwrap_or(0);
     let from_meta = meta.servers.iter().map(|m| m.uid).max().unwrap_or(0);
-    let from_stores = uid_floor.map_or(0, |m| m.saturating_add(1));
-    meta.next_uid
-        .max(from_entries.max(from_meta) + 1)
-        .max(from_stores)
+    let mut next = meta.next_uid.max(from_entries.max(from_meta) + 1);
+    raise_uid_floor(&mut next, uid_floor);
+    next
+}
+
+/// Raise a durable uid counter clear of every uid a store has already recorded.
+///
+/// The single place the floor is folded in, so a config load path that skips it is a visible
+/// omission rather than a silently different rule. The counter may only ever RISE: a store that
+/// reports a lower maximum — a truncated or partially synced replica — must not drag the mark
+/// back over uids already issued.
+///
+/// A floor with no representable successor means the store holds `u64::MAX`, which no allocator
+/// could have issued; that is corrupt data, so the counter is left alone and the damage is
+/// logged rather than wrapped around into reissuing a live uid.
+pub(super) fn raise_uid_floor(counter: &mut u64, uid_floor: Option<u64>) {
+    let Some(seen) = uid_floor else { return };
+    match seen.checked_add(1) {
+        Some(raised) => *counter = (*counter).max(raised),
+        None => log::error!(
+            "uid floor: хранилище содержит uid без преемника ({seen}) — данные повреждены, \
+             счётчик uid не поднят"
+        ),
+    }
 }
 
 #[cfg(test)]
