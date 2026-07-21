@@ -10,6 +10,7 @@ fn merged_with(ui_scale: f32, ui_font_delta: f32) -> Merged {
             ui_font_delta,
             ..Default::default()
         },
+        None,
     )
 }
 

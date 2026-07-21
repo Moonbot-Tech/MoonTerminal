@@ -55,8 +55,8 @@ pub struct Merged {
     /// Legacy-хоткеи из settings.toml (schema < v13) — только для одноразовой
     /// миграции в `hotkeys.toml`; при существующем hotkeys.toml игнорируются.
     pub hotkeys: HotkeysConfig,
-    /// Нужно пере-сохранить на диск: присвоены новые uid и/или версия схемы
-    /// устарела (надо дослоить дефолты новых полей в settings.toml).
+    /// Whether the merged config must be persisted because the schema, assigned uids, or durable
+    /// uid counter changed.
     pub dirty: bool,
     /// Конфиг был версии < `COREID_UID_VERSION` → `charts.json` хранит ПОЗИЦИОННЫЕ
     /// CoreId, их надо один раз перепривязать к стабильным uid (делает UI на старте,
@@ -65,11 +65,16 @@ pub struct Merged {
     pub chart_core_remap_needed: bool,
 }
 
-/// servers.enc + settings.toml → рантайм-серверы. Привязка меты по uid,
-/// с одноразовым fallback на имя для старых файлов без uid.
-pub fn merge(sf: ServersFile, meta: SettingsFile) -> Merged {
-    let mut next_uid = next_free_uid(&sf, &meta);
-    let mut dirty = meta.version < SCHEMA_VERSION;
+/// Merge server secrets and settings into runtime server records.
+///
+/// Metadata binds by uid, with a one-time name fallback for files that carry no uid. The initial
+/// counter is raised above `uid_floor` before any missing uids are assigned, and a raised counter
+/// marks the result dirty so the high-water mark is persisted.
+pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Merged {
+    let mut next_uid = next_free_uid(&sf, &meta, uid_floor);
+    // A counter that had to be raised is written back, so the repair survives a later boot on
+    // which the stores cannot be read.
+    let mut dirty = meta.version < SCHEMA_VERSION || next_uid > meta.next_uid;
     // До v11 рантайм-CoreId был позиционным → charts.json хранит позиционные id.
     let chart_core_remap_needed = meta.version < COREID_UID_VERSION;
     let language = meta.language;
@@ -253,13 +258,50 @@ pub fn ensure_uids(servers: &mut [ServerConfig], counter: &mut u64) {
     *counter = next;
 }
 
-/// Return the next uid from the durable counter and the maxima in both config files.
+/// Return the next uid from the durable counter, the maxima in both config files, and the
+/// floor observed in stores that outlive the config.
 ///
 /// See `SettingsFile::next_uid` for the persistence boundary of this high-water mark.
-fn next_free_uid(sf: &ServersFile, meta: &SettingsFile) -> u64 {
+///
+/// `uid_floor` is the highest uid any durable store has ever recorded (reports and strategy
+/// history, plus the persisted UI state keyed by core). The counter alone cannot see those: it
+/// only arrived in `SCHEMA_VERSION` 15, so an older config seeds it from the servers that still
+/// exist — and a deleted server's rows are never purged. Without the floor the next core takes
+/// the deleted one's uid and inherits its trades, P&L and figures. `None` means no store
+/// contributed a uid, which leaves the config-derived counter unchanged.
+fn next_free_uid(sf: &ServersFile, meta: &SettingsFile, uid_floor: Option<u64>) -> u64 {
     let from_entries = sf.servers.iter().map(|e| e.uid).max().unwrap_or(0);
     let from_meta = meta.servers.iter().map(|m| m.uid).max().unwrap_or(0);
-    meta.next_uid.max(from_entries.max(from_meta) + 1)
+    uid_floor_raised(
+        meta.next_uid.max(from_entries.max(from_meta) + 1),
+        uid_floor,
+    )
+}
+
+/// Raise a durable uid counter clear of every uid a store has already recorded.
+///
+/// The single place the floor is folded in, so a config load path that skips it is a visible
+/// omission rather than a silently different rule. The counter may only ever RISE: a store that
+/// reports a lower maximum — a truncated or partially synced replica — must not drag the mark
+/// back over uids already issued.
+///
+/// A floor of `u64::MAX` has no representable successor and therefore violates the counter's
+/// next-free-uid invariant. `checked_add` detects that corrupt state; the counter is left alone
+/// and the damage is logged rather than wrapped around into reissuing a live uid.
+pub(super) fn uid_floor_raised(counter: u64, uid_floor: Option<u64>) -> u64 {
+    let Some(seen) = uid_floor else {
+        return counter;
+    };
+    match seen.checked_add(1) {
+        Some(raised) => counter.max(raised),
+        None => {
+            log::error!(
+                "uid floor: хранилище содержит uid без преемника ({seen}) — данные повреждены, \
+                 счётчик uid не поднят"
+            );
+            counter
+        }
+    }
 }
 
 #[cfg(test)]

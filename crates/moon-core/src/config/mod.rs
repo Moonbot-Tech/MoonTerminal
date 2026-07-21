@@ -127,7 +127,7 @@ pub struct AppConfig {
     pub chart_memory_percent: u16,
     /// Order of every core list in the application (`settings.toml`). Defaults to `Name`.
     pub core_sort: CoreSortMode,
-    /// Upper bound for the next uid from `SettingsFile::next_uid`.
+    /// Next uid candidate after config entries and durable-store references are reconciled.
     pub next_uid: u64,
     /// Горячие клавиши терминала (settings.toml, открытый формат).
     pub hotkeys: HotkeysConfig,
@@ -158,7 +158,19 @@ impl AppConfig {
     ///
     /// The `settings.toml` read status is computed before choosing a load branch so every
     /// construction path sets `settings_unreadable` and blocks an unsafe write-back.
-    pub fn load() -> anyhow::Result<Self> {
+    ///
+    /// Runs the two storage migrations itself so it stays self-contained, even though the caller
+    /// must already have run them to resolve `uid_floor` against the post-move paths. Both are
+    /// idempotent, so the second pass costs a handful of `exists` checks.
+    ///
+    /// `uid_floor` is the highest core uid observed in the durable stores that outlive this
+    /// config — reports, strategy history, and the persisted UI state keyed by core. The caller
+    /// reads them, so config keeps no dependency on the database. It must be supplied HERE
+    /// rather than raised afterwards: this function already assigns uids to entries that carry
+    /// none and persists them, so a floor applied later would arrive after the collision it
+    /// exists to prevent. `None` means no durable store contributed a uid, whether because the
+    /// stores were absent, empty, or unreadable.
+    pub fn load(uid_floor: Option<u64>) -> anyhow::Result<Self> {
         // macOS/Linux: при первом запуске после переезда хранилища перенести
         // конфиги из бандла (рядом с exe) в пользовательскую директорию данных.
         // На Windows это no-op (data_dir == exe_dir).
@@ -173,7 +185,8 @@ impl AppConfig {
         let badges = BadgesConfig::load();
         // Хоткеи — отдельный переносимый файл (с v13); None = ещё не мигрировали.
         let hotkeys_file = HotkeysConfig::load();
-        if let Some(cfg) = Self::load_plaintext_env(theme.clone(), orders.clone(), badges.clone())?
+        if let Some(cfg) =
+            Self::load_plaintext_env(uid_floor, theme.clone(), orders.clone(), badges.clone())?
         {
             return Ok(cfg);
         }
@@ -196,7 +209,7 @@ impl AppConfig {
             if schema_upgrade {
                 backup::snapshot(backup::Trigger::SchemaMigration);
             }
-            let merged = reconcile::merge(sf, meta);
+            let merged = reconcile::merge(sf, meta, uid_floor);
             // hotkeys.toml приоритетен; нет файла → одноразовая миграция legacy-секции
             // из settings.toml (или дефолта) на диск в новый файл.
             let hotkeys = hotkeys_file.unwrap_or_else(|| {
@@ -275,6 +288,9 @@ impl AppConfig {
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.settings_unreadable = settings_unreadable;
+            // A legacy config predates the durable counter entirely, while the stores it is
+            // migrated alongside may still hold uids from cores deleted long ago.
+            cfg.next_uid = reconcile::uid_floor_raised(cfg.next_uid, uid_floor);
             if settings_unreadable {
                 log::error!(
                     "settings.toml есть, но не прочитался — миграция из config.enc НЕ записана"
@@ -303,6 +319,8 @@ impl AppConfig {
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.settings_unreadable = settings_unreadable;
+            // Same reasoning as the config.enc branch above.
+            cfg.next_uid = reconcile::uid_floor_raised(cfg.next_uid, uid_floor);
             if settings_unreadable {
                 log::error!(
                     "settings.toml есть, но не прочитался — миграция из config.toml НЕ записана"
@@ -315,7 +333,10 @@ impl AppConfig {
         }
 
         log::warn!("конфиг не найден — добавь сервера в Настройках");
-        Ok(Self {
+        // No servers yet, but the stores may be full: deleting the config while keeping `data/`
+        // and re-adding cores is exactly how a fresh counter starts handing out uids whose
+        // report and strategy history is still on disk.
+        let mut fresh = Self {
             theme,
             orders,
             badges,
@@ -337,10 +358,17 @@ impl AppConfig {
             // branch must not overwrite it either.
             settings_unreadable,
             ..Self::default()
-        })
+        };
+        fresh.next_uid = reconcile::uid_floor_raised(fresh.next_uid, uid_floor);
+        Ok(fresh)
     }
 
+    /// Build the environment-backed plaintext config when that mode is enabled.
+    ///
+    /// The fixed core uses uid 1, while `uid_floor` advances its counter past identities retained
+    /// by the shared durable stores. Returns `Ok(None)` when plaintext mode is disabled.
     fn load_plaintext_env(
+        uid_floor: Option<u64>,
         theme: ChartThemeSet,
         orders: OrdersStyleSet,
         badges: BadgesConfig,
@@ -411,8 +439,10 @@ impl AppConfig {
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             core_sort: CoreSortMode::default(),
-            // The plaintext test config issues uid 1 above, so the counter starts at 2.
-            next_uid: 2,
+            // The plaintext config issues uid 1 above, so the counter starts at 2 and then moves
+            // past whatever the stores hold. This mode is not test-only: it is how a Linux box with
+            // no Secret Service runs, so its cores share `data/` with everyone else's.
+            next_uid: reconcile::uid_floor_raised(2, uid_floor),
             hotkeys: HotkeysConfig::default(),
             theme,
             orders,

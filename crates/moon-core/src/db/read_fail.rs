@@ -86,7 +86,7 @@ static WARN_SEEN: OnceLock<Mutex<HashMap<(&'static str, FailKind), (Option<Insta
 /// `ctx` names the query that failed (e.g. `"analytics: scan_period prepare"`).
 ///
 /// Repeats of the same `(ctx, kind)` are collapsed — see [`WARN_REPEAT_GAP`].
-pub(super) fn read_fail(ctx: &'static str, e: rusqlite::Error) -> ReadFail {
+pub(crate) fn read_fail(ctx: &'static str, e: rusqlite::Error) -> ReadFail {
     let kind = classify(&e);
     log_throttled(ctx, kind, &e);
     ReadFail::Failed {

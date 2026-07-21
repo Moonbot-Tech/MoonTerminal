@@ -16,7 +16,7 @@ pub mod analytics;
 pub mod integrity;
 pub mod maint;
 mod parse;
-mod read_fail;
+pub(crate) mod read_fail;
 mod rep;
 #[cfg(test)]
 mod test_support;
@@ -1100,6 +1100,81 @@ pub fn query_reports(
         rows,
         core_uids,
     })
+}
+
+/// Open the replica strictly read-only, for a probe that must not own the file.
+///
+/// [`open_reader`] opens read-WRITE despite its name, which is harmless for its own callers
+/// because the writer connection is alive by then. A probe that runs BEFORE `spawn_writer` would
+/// instead be the only connection, and closing the last read-write connection makes SQLite run
+/// its final WAL checkpoint and delete `-wal`/`-shm` — a WAL left by a killed run reaches
+/// hundreds of MB, so that would land as a synchronous copy on the pre-window startup path. A
+/// read-only last connection does not perform that close-time checkpoint or cleanup.
+pub fn open_readonly() -> ReadResult<Connection> {
+    let path = paths::reports_db_path();
+    // Same reasoning as `open_reader`: only a genuine absence may report `NotReady`.
+    match std::fs::metadata(&path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(ReadFail::NotReady),
+        Err(e) => return Err(read_fail::io_fail("отчёты(ro): доступ к файлу", &e)),
+    }
+    Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| read_fail("отчёты(ro)", e))
+}
+
+/// Highest `core_uid` in one table, or `Ok(None)` when it is absent or holds no rows.
+///
+/// Shared by both stores keyed on `core_uid`, so the negative-value drop and the
+/// absent-versus-failed distinction have one definition rather than one per caller.
+pub(crate) fn max_core_uid_in(
+    conn: &Connection,
+    table: &str,
+    ctx: &'static str,
+) -> ReadResult<Option<u64>> {
+    let present: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+            [table],
+            |r| r.get(0),
+        )
+        .map_err(|e| read_fail(ctx, e))?;
+    if present == 0 {
+        return Ok(None);
+    }
+    let found: Option<i64> = conn
+        .query_row(&format!("SELECT MAX(core_uid) FROM {table}"), [], |r| {
+            r.get::<_, Option<i64>>(0)
+        })
+        .map_err(|e| read_fail(ctx, e))?;
+    // A negative value cannot be a uid; dropping it beats wrapping into a huge `u64`.
+    Ok(found.and_then(|v| u64::try_from(v).ok()))
+}
+
+/// Highest `core_uid` any report row has ever carried, across both schemas.
+///
+/// Feeds the durable uid high-water mark: rows here outlive the server that wrote them, so a
+/// uid still present in this replica must never be handed to a new core. `Ok(None)` means the
+/// read succeeded and found no rows — the caller must keep that distinct from a failure, since
+/// only the former is safe to treat as "this store contributes nothing".
+///
+/// A source whose schema lacks `core_uid` is skipped rather than queried: `read_sources_res`
+/// always reports the modern table, which does not exist until `rep::init` has run. Negative
+/// values cannot be uids and are dropped instead of wrapping into a huge `u64`.
+pub fn max_core_uid(conn: &Connection) -> ReadResult<Option<u64>> {
+    const CTX: &str = "отчёты: max_core_uid";
+    let mut max: Option<u64> = None;
+    for src in read_sources_res(conn)? {
+        if !src.cols.contains("core_uid") {
+            continue;
+        }
+        // MAX over the leading PK column is an index seek. The selector-shaped GROUP BY in
+        // `distinct_cores` would instead scan every row of a replica that reaches hundreds of MB.
+        max = max.max(max_core_uid_in(conn, src.table, CTX)?);
+    }
+    Ok(max)
 }
 
 /// Load cores for the filter selector.

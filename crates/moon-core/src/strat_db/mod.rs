@@ -217,6 +217,48 @@ fn spawn_writer() -> Option<StratSink> {
     Some(StratSink { tx, generation })
 }
 
+/// Tables in this store keyed by `core_uid`. `version_stats` is created lazily on the first
+/// stats read, so its absence is an ordinary state rather than a damaged schema.
+const CORE_UID_TABLES: [&str; 3] = ["strategies", "strategy_versions", "version_stats"];
+
+/// Highest `core_uid` this store has ever recorded, across all three keyed tables.
+///
+/// Version history is the single copy and is never purged when a server is deleted, so a uid
+/// surviving here must not be reissued — a new core would otherwise inherit the deleted one's
+/// version history and cached per-version profit. Once the path passes its existence check, open
+/// and query failures stay errors; `Ok(None)` means no accessible file or no rows in its keyed
+/// tables.
+///
+/// Reports a failed open rather than reusing [`open_reader`], which collapses an absent file and
+/// a failed open into the same `None`.
+pub fn max_core_uid() -> crate::db::ReadResult<Option<u64>> {
+    const CTX: &str = "стратегии: max_core_uid";
+    let path = paths::strategies_db_path();
+    if !path.exists() {
+        // The writer is lazy — no strategy snapshot has arrived yet on a fresh install.
+        return Ok(None);
+    }
+    let conn = open_ro(&path).map_err(|e| crate::db::read_fail::read_fail(CTX, e))?;
+    let mut max: Option<u64> = None;
+    for table in CORE_UID_TABLES {
+        max = max.max(crate::db::max_core_uid_in(&conn, table, CTX)?);
+    }
+    Ok(max)
+}
+
+/// Read-only connection to the strategies file, with the store's shared busy timeout.
+///
+/// The one place the open flags live: [`open_reader`] swallows the error, [`max_core_uid`]
+/// reports it, and both need the connection opened the same way.
+fn open_ro(path: &std::path::Path) -> rusqlite::Result<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
+    Ok(conn)
+}
+
 /// Read-only соединение (история версий, вкладка «Хранилище», аналитика).
 /// Для кросс-БД запросов к отчётам читатель отчётов делает ATTACH этого файла.
 pub fn open_reader() -> Option<Connection> {
@@ -224,14 +266,8 @@ pub fn open_reader() -> Option<Connection> {
     if !path.exists() {
         return None;
     }
-    match Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) {
-        Ok(c) => {
-            let _ = c.busy_timeout(std::time::Duration::from_secs(3));
-            Some(c)
-        }
+    match open_ro(&path) {
+        Ok(c) => Some(c),
         Err(e) => {
             log::warn!("стратегии(db): reader не открылся: {e}");
             None
