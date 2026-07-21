@@ -28,6 +28,9 @@ use moon_core::session::CoreId;
 pub(crate) const COIN_SEARCH_LIMIT: usize = 8;
 
 /// Ядра, чей market-юниверс питает поле монеты этой вкладки. `bucket = None` → Main.
+///
+/// Returned in canonical order: the search popup groups its hits per core and renders them
+/// in the order given, so this order is what the user reads as `COIN — Server` rows.
 fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<CoreId> {
     let group_cores = || {
         b.session
@@ -37,7 +40,8 @@ fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<Core
             .map(|s| s.id)
             .collect::<Vec<_>>()
     };
-    match bucket {
+    let order = crate::core_order::CoreOrder::new(&b.config);
+    let mut ids = match bucket {
         None | Some(ChartBucket::Shared) => group_cores(),
         Some(ChartBucket::Core(id)) => vec![*id],
         Some(ChartBucket::Bundle(name)) => {
@@ -57,7 +61,9 @@ fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<Core
                 .map(|s| s.id)
                 .collect()
         }
-    }
+    };
+    order.sort_by(&mut ids, |id| *id);
+    ids
 }
 
 /// Латинская буква на той же физической клавише QWERTY, что и кириллическая ЙЦУКЕН

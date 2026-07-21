@@ -951,14 +951,11 @@ impl Render for StrategiesView {
         // дренаж ДО построения дерева, чтобы фильтры/раскрытие/выбор попали в этот кадр.
         let goto = self.drain_goto(window, cx);
 
-        // Список ядер (id, имя) — все подключённые, как egui (session.sessions()).
-        let cores: Vec<(CoreId, String)> = {
+        // Root nodes are connected cores in canonical order.
+        let cores = {
             let b = self.backend.read(cx);
-            b.session
-                .sessions()
-                .iter()
-                .map(|s| (s.id, s.name.clone()))
-                .collect()
+            crate::core_order::CoreOrder::new(&b.config)
+                .from_sessions(b.session.sessions(), |_| true)
         };
 
         // Адаптер MoonTree (owned, без заимствования стора наружу), затем синк состояния дерева.

@@ -95,7 +95,7 @@ pub(super) struct MoonTreeBuild {
 pub(super) fn build(
     view: &StrategiesView,
     store: &CoreStore,
-    cores: &[(CoreId, String)],
+    cores: &crate::core_order::OrderedCores,
 ) -> MoonTreeBuild {
     let filter = &view.filter;
     let searching = filter.searching();
@@ -104,7 +104,7 @@ pub(super) fn build(
     let mut expanded: Vec<SharedString> = Vec::new();
     let mut flat: Vec<Key> = Vec::new();
 
-    for (core_id, core_name) in cores {
+    for (core_id, core_name) in cores.iter() {
         let core = *core_id;
         let Some(cd) = store.core(core) else { continue };
         if cd.strategies.is_empty() || !cd.strategies.iter().any(|r| filter.matches(r)) {

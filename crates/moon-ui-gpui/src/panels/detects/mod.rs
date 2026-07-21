@@ -177,7 +177,11 @@ impl DetectsPanel {
         // Цвет + quote ядра берём из его сервера в конфиге: quote выводим из рынка по
         // умолчанию (`server.market`), чтобы резать суффикс монеты (`ADAUSDT` → `ADA`),
         // как egui `CoreInfo.quote`.
-        let cores: Vec<(CoreId, String, [u8; 3], String)> = b
+        // Canonical order: fresh events are appended core by core and rendered back in
+        // reverse insertion order, with no chronological re-sort anywhere — so this order is
+        // what decides how detects of the same instant read on screen.
+        let order = crate::core_order::CoreOrder::new(&b.config);
+        let mut cores: Vec<(CoreId, String, [u8; 3], String)> = b
             .session
             .sessions()
             .iter()
@@ -193,6 +197,7 @@ impl DetectsPanel {
                 (s.id, s.name.clone(), color, quote)
             })
             .collect();
+        order.sort_by(&mut cores, |(id, _, _, _)| *id);
         for (id, name, color, _quote) in cores {
             let Some(d) = b.session.store().core(id) else {
                 continue;

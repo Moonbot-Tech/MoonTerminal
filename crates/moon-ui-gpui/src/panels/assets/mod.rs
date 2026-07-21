@@ -37,6 +37,7 @@ use moon_ui::{
 };
 
 use crate::Backend;
+use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::panels::{RenderGate, num};
 use moon_core::feed::{AssetRow, TransferAssetRow, WalletKind};
@@ -322,17 +323,12 @@ impl AssetsView {
         Self::new(backend, AssetsScope::Group(group), false, true, window, cx)
     }
 
-    /// Ядра охвата (id, имя): группа → ядра группы; глобально → все подключённые.
-    pub(super) fn scope_cores(&self, b: &Backend) -> Vec<(CoreId, String)> {
-        b.session
-            .sessions()
-            .iter()
-            .filter(|s| match &self.scope {
-                AssetsScope::Group(g) => &s.group == g,
-                AssetsScope::All => true,
-            })
-            .map(|s| (s.id, s.name.clone()))
-            .collect()
+    /// Return connected scope cores in canonical order: one group or all groups.
+    pub(super) fn scope_cores(&self, b: &Backend) -> OrderedCores {
+        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| match &self.scope {
+            AssetsScope::Group(g) => &s.group == g,
+            AssetsScope::All => true,
+        })
     }
 
     /// Render-gate signature for asset, transfer, sale-marker, and balance-freshness inputs.
@@ -340,8 +336,13 @@ impl AssetsView {
         let store = b.session.store();
         self.scope_cores(b)
             .iter()
-            .filter_map(|(id, _)| store.core(*id))
-            .fold(0u64, |a, c| {
+            // Include CoreId so canonical reordering invalidates the cache when state is unchanged.
+            .map(|(id, _)| (*id, store.core(*id)))
+            .fold(0u64, |a, (id, core)| {
+                let a = a.wrapping_mul(31).wrapping_add(id);
+                let Some(c) = core else {
+                    return a;
+                };
                 a.wrapping_mul(31)
                     .wrapping_add(c.assets_rev)
                     .wrapping_mul(31)
@@ -643,7 +644,8 @@ impl AssetsView {
     /// Rebuild all render caches from one backend snapshot.
     fn rebuild_cache(&mut self, b: &Backend) {
         let sig = self.assets_sig(b);
-        let cores = self.scope_cores(b);
+        // Cache membership data; the dropdown ranks again at render time.
+        let cores: Vec<(CoreId, String)> = self.scope_cores(b).into_iter().collect();
         let selected_valid = self
             .selected_core
             .is_some_and(|core| cores.iter().any(|(id, _)| *id == core));
@@ -928,7 +930,7 @@ impl Render for AssetsView {
         // Метка живости окна для feed-потоков: пока панель на экране (рендер ≥1 Гц от
         // RenderGate), build_assets идёт 1 Гц; без рендеров метка стареет → 1 раз в 5 с.
         moon_core::feed::note_assets_view_render();
-        let cores = self.cached_cores.clone();
+        let cores = self.scope_cores(self.backend.read(cx));
         let entries = self.cached_entries.clone();
         let p = MoonPalette::active(cx);
         let windowed = self.windowed;

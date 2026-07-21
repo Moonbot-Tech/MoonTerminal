@@ -63,11 +63,7 @@ fn open_asset_coin_menu(
 impl AssetsView {
     /// Top controls: multi-core selector and dust threshold. Every summary figure — the row
     /// count, Σ over visible rows, and the scope balance — is rendered by [`Self::footer`].
-    pub(super) fn core_bar(
-        &self,
-        cores: &[(CoreId, String)],
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+    pub(super) fn core_bar(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         h_flex()
             .w_full()
@@ -125,13 +121,8 @@ impl AssetsView {
             )
     }
 
-    /// Поле-список ядер — МУЛЬТИВЫБОР (общий виджет [`crate::controls::core_combo`], как в
-    /// «Ордерах»/«Отчёте»). Подпись: «Все ядра» (пусто/все) / имя единственного / «Ядер: N».
-    pub(super) fn core_combo(
-        &self,
-        cores: &[(CoreId, String)],
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+    /// Render the shared searchable core multi-selector with its localized summary label.
+    pub(super) fn core_combo(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         crate::controls::core_combo(
             cx,

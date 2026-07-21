@@ -27,6 +27,7 @@ mod chartdx;
 mod clock;
 mod coin_icons;
 mod controls;
+mod core_order;
 mod core_settings_popup;
 mod crash;
 mod debug_window;

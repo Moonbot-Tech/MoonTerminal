@@ -8,7 +8,7 @@ impl OrdersPanel {
     /// «Отчёте»/«Активах»). Подпись: «Все ядра» (пусто/все) / имя единственного / «Ядер: N».
     pub(super) fn source_combo(
         &self,
-        cores: &[(CoreId, String)],
+        cores: &OrderedCores,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity();

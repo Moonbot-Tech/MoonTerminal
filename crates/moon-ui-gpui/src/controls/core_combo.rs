@@ -13,6 +13,7 @@ use std::collections::HashSet;
 
 use gpui::App;
 
+use crate::core_order::OrderedCores;
 use crate::design;
 use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize};
 
@@ -29,7 +30,7 @@ use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, Moo
 pub(crate) fn core_combo<F>(
     cx: &App,
     id: &'static str,
-    cores: &[(u64, String)],
+    cores: &OrderedCores,
     selected: &HashSet<u64>,
     all_label: String,
     cores_n: impl Fn(usize) -> String,

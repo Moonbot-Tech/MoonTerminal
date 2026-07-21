@@ -98,10 +98,14 @@ impl AnalyticsView {
     /// Cores combo — multi-select (the shared widget, as in Orders/Report).
     fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        // Raw DB result (names from `reports.sqlite`, possibly including cores whose server was
+        // deleted) — ranked here, on render, against the current config.
+        let cores = crate::core_order::CoreOrder::new(&self.backend.read(cx).config)
+            .from_db(self.cores.clone());
         crate::controls::core_combo(
             cx,
             "an-core",
-            &self.cores,
+            &cores,
             &self.sel_cores,
             t!("report.all_cores").to_string(),
             |n| t!("report.cores_n", n = n).to_string(),

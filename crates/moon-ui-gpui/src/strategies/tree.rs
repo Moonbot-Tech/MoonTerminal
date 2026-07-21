@@ -9,7 +9,7 @@ impl StrategiesView {
     pub(super) fn tree_panel(
         &self,
         store: &CoreStore,
-        cores: &[(CoreId, String)],
+        cores: &crate::core_order::OrderedCores,
         node_data: std::rc::Rc<std::collections::HashMap<SharedString, super::tree_moon::NodeData>>,
         cx: &Context<Self>,
     ) -> AnyElement {

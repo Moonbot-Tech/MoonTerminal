@@ -9,10 +9,13 @@ impl ReportPanel {
     /// «Ордерах»/«Активах»). Подпись: «Все ядра» (пусто/все) / имя единственного / «Ядер: N».
     pub(super) fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        // Rank the raw DB result at render time; the query has no config and may include
+        // deleted cores with database-owned names.
+        let cores = CoreOrder::new(&self.backend.read(cx).config).from_db(self.cores.clone());
         crate::controls::core_combo(
             cx,
             "rep-core",
-            &self.cores,
+            &cores,
             &self.sel_cores,
             t!("report.all_cores").to_string(),
             |n| t!("report.cores_n", n = n).to_string(),

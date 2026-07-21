@@ -360,13 +360,10 @@ impl ScreenerView {
 
     /// Поле-список ядра (Все ядра + подключённые) — как источник в Ордерах.
     fn source_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        let cores: Vec<(CoreId, String)> = {
+        let cores = {
             let b = self.backend.read(cx);
-            b.session
-                .sessions()
-                .iter()
-                .map(|s| (s.id, s.name.clone()))
-                .collect()
+            crate::core_order::CoreOrder::new(&b.config)
+                .from_sessions(b.session.sessions(), |_| true)
         };
         // Одна привязка локализованной подписи «Все ядра» на все её употребления.
         let all_label = t!("screener.all_cores").to_string();
@@ -381,7 +378,7 @@ impl ScreenerView {
         let view = cx.entity();
         let mut options: Vec<(ScrSource, SharedString, SharedString)> =
             vec![(ScrSource::All, "all".into(), all_label.clone().into())];
-        for (id, name) in &cores {
+        for (id, name) in cores.iter() {
             options.push((
                 ScrSource::Core(*id),
                 format!("core-{id}").into(),

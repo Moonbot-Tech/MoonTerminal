@@ -17,6 +17,7 @@ use moon_ui::{
 };
 
 use crate::Backend;
+use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::panels::RenderGate;
 use moon_core::feed::ConnStatus;
@@ -126,17 +127,14 @@ impl CoreStatusView {
         self.table_state.clone()
     }
 
-    /// Ядра охвата (id, имя): ядра группы панели.
-    pub(super) fn scope_cores(&self, b: &Backend) -> Vec<(CoreId, String)> {
-        b.session
-            .sessions()
-            .iter()
-            .filter(|s| s.group == self.group)
-            .map(|s| (s.id, s.name.clone()))
-            .collect()
+    /// Return this panel group's cores in canonical order.
+    pub(super) fn scope_cores(&self, b: &Backend) -> OrderedCores {
+        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
     }
 
-    /// Сигнатура: fold sys_rev + дискриминант статуса по всем ядрам охвата — гейт перерисовки.
+    /// Fold CoreId, system revision, and status into the ordered-cache signature.
+    ///
+    /// Include CoreId so canonical reordering invalidates the cache when state is unchanged.
     fn sys_sig(&self, b: &Backend) -> u64 {
         let store = b.session.store();
         self.scope_cores(b).iter().fold(0u64, |a, (id, _)| {
@@ -145,6 +143,8 @@ impl CoreStatusView {
                 .map(|c| (c.sys_rev, status_ord(&c.status)))
                 .unwrap_or((0, 0));
             a.wrapping_mul(31)
+                .wrapping_add(*id)
+                .wrapping_mul(31)
                 .wrapping_add(sys_rev)
                 .wrapping_mul(31)
                 .wrapping_add(st)
@@ -295,8 +295,8 @@ impl Render for CoreStatusView {
 }
 
 impl CoreStatusView {
-    /// Верхняя полоса: поле-список выбора ядер (мультивыбор, как в «Активах»).
-    fn core_bar(&self, cores: &[(CoreId, String)], cx: &Context<Self>) -> impl IntoElement {
+    /// Render the core multi-selector in the top bar.
+    fn core_bar(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let combo = crate::controls::core_combo(
             cx,

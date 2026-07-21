@@ -9,6 +9,7 @@ use gpui::Context;
 
 use crate::Backend;
 use crate::chartdx::ChartDataHandle;
+use crate::core_order::{CoreOrder, OrderedCores};
 use moon_core::session::CoreId;
 
 impl Backend {
@@ -351,13 +352,8 @@ impl Backend {
         }
         self.main_chart_target(group)
             .map(|(core, _)| core)
-            .or_else(|| {
-                self.session
-                    .sessions()
-                    .iter()
-                    .find(|s| s.group == group)
-                    .map(|s| s.id)
-            })
+            // Match the visible first core so the trade fallback and header selector agree.
+            .or_else(|| self.group_cores(group).first().map(|(id, _)| *id))
     }
 
     /// Записать ручной выбор активного торгового ядра (клик в селекторе шапки).
@@ -365,13 +361,15 @@ impl Backend {
         self.trade_core_override.insert(group.to_string(), core);
     }
 
+    /// Refresh the cached fallback ticker from the first canonical live core.
+    ///
+    /// `force` recomputes immediately when sorting changes the first core.
     pub(crate) fn refresh_header_ticker_default(&mut self, force: bool) {
-        if self.layout.header_ticker.is_some() {
-            return;
-        }
-        if let Some((core, _)) = &self.header_ticker_default {
-            if self.session.sessions().iter().any(|s| s.id == *core) {
-                return;
+        if !force {
+            if let Some((core, _)) = &self.header_ticker_default {
+                if self.session.sessions().iter().any(|s| s.id == *core) {
+                    return;
+                }
             }
         }
         let now = Instant::now();
@@ -383,7 +381,9 @@ impl Backend {
             return;
         }
         self.last_header_ticker_refresh = Some(now);
-        let Some(core) = self.session.sessions().first().map(|s| s.id) else {
+        // Match the first core shown by canonical selectors.
+        let all = CoreOrder::new(&self.config).from_sessions(self.session.sessions(), |_| true);
+        let Some(core) = all.first().map(|(id, _)| *id) else {
             self.header_ticker_default = None;
             return;
         };
@@ -453,14 +453,9 @@ impl Backend {
         }
     }
 
-    /// Ядра группы (id, имя) для селектора в шапке. Порядок — как в конфиге/сессиях.
-    pub(crate) fn group_cores(&self, group: &str) -> Vec<(CoreId, String)> {
-        self.session
-            .sessions()
-            .iter()
-            .filter(|s| s.group == group)
-            .map(|s| (s.id, s.name.clone()))
-            .collect()
+    /// Return the group's cores in canonical order for the header selector.
+    pub(crate) fn group_cores(&self, group: &str) -> OrderedCores {
+        CoreOrder::new(&self.config).from_sessions(self.session.sessions(), |s| s.group == group)
     }
 
     pub(crate) fn retain_chart_market(&mut self, core: CoreId, market: &str) {
