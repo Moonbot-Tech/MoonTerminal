@@ -107,9 +107,9 @@ const MODE_LABELS: [(&str, MarketDataMode); 2] = [
 
 /// Labels and values for the global core-order selector.
 const CORE_SORT_LABELS: [(&str, CoreSortMode); 3] = [
-    ("conn.core_sort.manual", CoreSortMode::Manual),
     ("conn.core_sort.name", CoreSortMode::Name),
-    ("conn.core_sort.added", CoreSortMode::Added),
+    ("conn.core_sort.added", CoreSortMode::AddedOldest),
+    ("conn.core_sort.added_newest", CoreSortMode::AddedNewest),
 ];
 
 /// Сообщение статуса подвала: ключ i18n (резолвится на РЕНДЕРЕ — не кэшируем

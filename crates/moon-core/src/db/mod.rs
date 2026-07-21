@@ -1406,4 +1406,3 @@ mod tests {
         test_support::remove_db(&path);
     }
 }
-

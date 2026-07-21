@@ -109,7 +109,7 @@ pub struct AppConfig {
     pub ui_scale: f32,
     /// Множитель RAM-budget для retained market history. 100 = авто-база, 800 = 8x.
     pub chart_memory_percent: u16,
-    /// How every core list in the app is ordered (settings.toml). Default `Manual`.
+    /// How every core list in the app is ordered (settings.toml). Default `Name`.
     pub core_sort: CoreSortMode,
     /// Next uid high-water mark loaded from `SettingsFile::next_uid`.
     pub next_uid: u64,
@@ -494,8 +494,9 @@ impl AppConfig {
             UiThemeMode::default(),
             schema::default_ui_scale(),
             schema::default_chart_memory_percent(),
-            // Sort mode is presentation-only. Manual reordering remains structural because
-            // this signature still includes the servers Vec order.
+            // Sort mode is presentation-only. The servers Vec order stays in this signature
+            // because `SessionManager::config_order` is built from it and decides where a
+            // reactivated session lands — a session-layer concern, not a presentation one.
             CoreSortMode::default(),
             // The uid counter advances on save; it describes no structure of its own.
             0,
@@ -523,7 +524,7 @@ impl AppConfig {
 
 #[cfg(test)]
 mod structural_sig_tests {
-    //! Structural-signature tests for presentation-only and manual-order changes.
+    //! Structural-signature tests for presentation-only and server-order changes.
 
     use super::{AppConfig, CoreSortMode, ServerConfig};
 
@@ -551,25 +552,26 @@ mod structural_sig_tests {
     #[test]
     fn changing_only_the_sort_mode_is_not_structural() {
         let servers = vec![server(1, "Alpha"), server(2, "Bravo")];
-        let manual = config(CoreSortMode::Manual, servers.clone());
+        let by_added = config(CoreSortMode::AddedOldest, servers.clone());
         let by_name = config(CoreSortMode::Name, servers);
         assert_eq!(
-            manual.structural_sig(),
+            by_added.structural_sig(),
             by_name.structural_sig(),
             "a sort-mode change must not trigger a session reconcile"
         );
     }
 
-    /// Protects `AppConfig::structural_sig`: changing manual server order remains structural
-    /// because session reconciliation rebuilds its rank table from that order.
+    /// Protects `AppConfig::structural_sig`: reordering the servers Vec remains structural
+    /// because `SessionManager::config_order` is built from that order and decides where a
+    /// reactivated session is inserted.
     #[test]
-    fn a_manual_reorder_stays_structural() {
+    fn a_server_list_reorder_stays_structural() {
         let forward = config(
-            CoreSortMode::Manual,
+            CoreSortMode::AddedOldest,
             vec![server(1, "Alpha"), server(2, "Bravo")],
         );
         let reversed = config(
-            CoreSortMode::Manual,
+            CoreSortMode::AddedOldest,
             vec![server(2, "Bravo"), server(1, "Alpha")],
         );
         assert_ne!(

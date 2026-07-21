@@ -74,7 +74,10 @@ pub(super) fn snapshot(trigger: Trigger) {
             trigger.label(),
             dir.file_name().unwrap_or_default().to_string_lossy()
         ),
-        Ok(None) => log::debug!("конфиг: снимок ({}) пропущен — нечего копировать", trigger.label()),
+        Ok(None) => log::debug!(
+            "конфиг: снимок ({}) пропущен — нечего копировать",
+            trigger.label()
+        ),
         Err(e) => log::warn!("конфиг: снимок ({}) не удался: {e:#}", trigger.label()),
     }
 }
@@ -182,9 +185,7 @@ fn publish(staging: &Path, backups: &Path, now_ms: i64) -> anyhow::Result<PathBu
 fn is_snapshot_name(name: &str) -> bool {
     let digits_at = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
     match name.len() {
-        15 => {
-            name.as_bytes()[8] == b'-' && digits_at(&name[..8]) && digits_at(&name[9..])
-        }
+        15 => name.as_bytes()[8] == b'-' && digits_at(&name[..8]) && digits_at(&name[9..]),
         18 => {
             name.as_bytes()[8] == b'-'
                 && name.as_bytes()[15] == b'-'
@@ -329,8 +330,14 @@ mod tests {
             .expect("second snapshot")
             .expect("a file existed");
 
-        assert_eq!(std::fs::read_to_string(first.join("settings.toml")).unwrap(), "v1");
-        assert_eq!(std::fs::read_to_string(second.join("settings.toml")).unwrap(), "v2");
+        assert_eq!(
+            std::fs::read_to_string(first.join("settings.toml")).unwrap(),
+            "v1"
+        );
+        assert_eq!(
+            std::fs::read_to_string(second.join("settings.toml")).unwrap(),
+            "v2"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -363,7 +370,11 @@ mod tests {
         assert_eq!(removed, 3, "33 snapshots minus keep=30");
 
         let survivors = snapshot_names(&backups);
-        assert_eq!(survivors, names[3..].to_vec(), "the three OLDEST must be gone");
+        assert_eq!(
+            survivors,
+            names[3..].to_vec(),
+            "the three OLDEST must be gone"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -412,7 +423,10 @@ mod tests {
         let removed = prune(&backups, 0, &["settings.toml"]);
 
         assert_eq!(removed, 0, "the directory was not empty, so it must remain");
-        assert!(dir.join("заметка.txt").exists(), "the foreign file must survive");
+        assert!(
+            dir.join("заметка.txt").exists(),
+            "the foreign file must survive"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -434,8 +448,14 @@ mod tests {
         let b = snapshot_into(&[&src], &backups, ms, 30).unwrap().unwrap();
 
         assert_ne!(a, b, "the second snapshot must take a different directory");
-        assert_eq!(std::fs::read_to_string(a.join("settings.toml")).unwrap(), "first");
-        assert_eq!(std::fs::read_to_string(b.join("settings.toml")).unwrap(), "second");
+        assert_eq!(
+            std::fs::read_to_string(a.join("settings.toml")).unwrap(),
+            "first"
+        );
+        assert_eq!(
+            std::fs::read_to_string(b.join("settings.toml")).unwrap(),
+            "second"
+        );
         assert_eq!(snapshot_names(&backups).len(), 2);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -455,7 +475,10 @@ mod tests {
             .expect("an absent source is not an error");
 
         assert!(made.is_none(), "nothing to copy means no snapshot");
-        assert!(!backups.exists(), "backups/ must not be created speculatively");
+        assert!(
+            !backups.exists(),
+            "backups/ must not be created speculatively"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -485,7 +508,10 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.starts_with(STAGING_PREFIX))
             .collect();
-        assert!(leftovers.is_empty(), "staging dirs must never survive: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "staging dirs must never survive: {leftovers:?}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

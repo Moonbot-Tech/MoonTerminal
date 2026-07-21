@@ -34,6 +34,17 @@ impl IntoIterator for OrderedCores {
     }
 }
 
+/// Insertion-order key, shared by both `Added*` modes so they cannot drift apart.
+///
+/// A server added in the Settings draft has no uid yet, so it ranks as the newest possible one —
+/// last in oldest-first and first in newest-first, which is what both modes promise. `id` breaks
+/// ties between several unsaved rows, which makes the key INJECTIVE: distinct servers always get
+/// distinct keys, so `Reverse` produces an exact mirror rather than something that depends on
+/// whether the sort happens to be stable.
+fn insertion_key(s: &moon_core::config::ServerConfig) -> (u64, u64) {
+    (if s.uid == 0 { u64::MAX } else { s.uid }, s.id)
+}
+
 /// A rank table built from the current config for one render pass.
 ///
 /// Rebuilding is cheap for these short lists and prevents stale order.
@@ -49,17 +60,16 @@ impl CoreOrder {
     pub(crate) fn new(cfg: &AppConfig) -> Self {
         let mut ordered: Vec<&moon_core::config::ServerConfig> = cfg.servers.iter().collect();
         match cfg.core_sort {
-            // The Vec order IS the manual order — nothing to sort.
-            CoreSortMode::Manual => {}
             // Lexicographic order of lowercase Unicode names, matching the group sort. Cache
-            // each key on render; uid makes equal names independent of manual order.
+            // each key on render; uid makes equal names independent of the servers Vec order.
             CoreSortMode::Name => {
                 ordered.sort_by_cached_key(|s| (s.name.to_lowercase(), s.uid));
             }
-            // Durable uid order is insertion order. Unsaved uid zero ranks newest, and id
-            // breaks ties between multiple unsaved servers without relying on sort stability.
-            CoreSortMode::Added => {
-                ordered.sort_by_key(|s| (if s.uid == 0 { u64::MAX } else { s.uid }, s.id));
+            CoreSortMode::AddedOldest => ordered.sort_by_key(|s| insertion_key(s)),
+            // Reversing is well-defined WITHOUT relying on sort stability because
+            // `insertion_key` is injective — see its doc comment.
+            CoreSortMode::AddedNewest => {
+                ordered.sort_by_key(|s| std::cmp::Reverse(insertion_key(s)))
             }
         }
         let rank = ordered
@@ -176,7 +186,7 @@ mod tests {
     #[test]
     fn historical_cores_form_a_stable_tail_after_the_configured_ones() {
         let order = CoreOrder::new(&config(
-            CoreSortMode::Manual,
+            CoreSortMode::AddedOldest,
             vec![server(1, 1, "Alpha"), server(2, 2, "Bravo")],
         ));
         let ordered = order.from_db(vec![
@@ -192,9 +202,9 @@ mod tests {
     /// A server added in the Settings draft has no uid yet. It must rank newest, not oldest —
     /// ranking `0` as a real uid would jump an unsaved row to the top of every list.
     #[test]
-    fn an_unsaved_server_sorts_newest_in_added_mode() {
+    fn an_unsaved_server_sorts_last_in_oldest_first_mode() {
         let order = CoreOrder::new(&config(
-            CoreSortMode::Added,
+            CoreSortMode::AddedOldest,
             vec![
                 server(9, 0, "Unsaved"),
                 server(2, 2, "Second"),
@@ -205,7 +215,60 @@ mod tests {
         assert!(order.rank(2) < order.rank(9), "an unsaved server is newest");
     }
 
-    /// Equal names use uid order so Name mode remains independent of manual server order.
+    /// The same unsaved row must lead the list in newest-first mode.
+    ///
+    /// Protects the `uid == 0 -> u64::MAX` mapping inside `insertion_key`. The plausible edit:
+    /// writing `AddedNewest` directly as `sort_by_key(|s| Reverse(s.uid))`, which reads as an
+    /// obvious mirror and drops the mapping. A row being edited in Settings would then sink to
+    /// the BOTTOM of every list in the mode whose whole promise is "newest first".
+    #[test]
+    fn an_unsaved_server_sorts_first_in_newest_first_mode() {
+        let order = CoreOrder::new(&config(
+            CoreSortMode::AddedNewest,
+            vec![
+                server(9, 0, "Unsaved"),
+                server(2, 2, "Second"),
+                server(1, 1, "First"),
+            ],
+        ));
+        assert!(order.rank(9) < order.rank(2), "an unsaved server leads");
+        assert!(order.rank(2) < order.rank(1), "uid 2 postdates uid 1");
+    }
+
+    /// The two insertion modes must be exact mirrors of each other.
+    ///
+    /// Protects the shared `insertion_key`. The plausible edit: inlining one arm's key while
+    /// leaving the other alone, after which the two drift on the tie-break or the unsaved rule
+    /// and "newest first" stops being the reverse of "oldest first" for some inputs.
+    #[test]
+    fn the_two_insertion_modes_are_exact_mirrors() {
+        // Includes an UNSAVED row (uid 0): without it both arms agree even when one drops the
+        // `uid == 0 -> u64::MAX` mapping, and the mirror property would pass a broken build.
+        let servers = vec![
+            server(4, 40, "D"),
+            server(1, 10, "A"),
+            server(5, 0, "Unsaved"),
+            server(3, 30, "C"),
+            server(2, 20, "B"),
+        ];
+        let ids = [1u64, 2, 3, 4, 5];
+
+        let oldest = CoreOrder::new(&config(CoreSortMode::AddedOldest, servers.clone()));
+        let newest = CoreOrder::new(&config(CoreSortMode::AddedNewest, servers));
+
+        let mut by_oldest: Vec<u64> = ids.to_vec();
+        by_oldest.sort_by_key(|id| oldest.rank(*id));
+        let mut by_newest: Vec<u64> = ids.to_vec();
+        by_newest.sort_by_key(|id| newest.rank(*id));
+
+        by_newest.reverse();
+        assert_eq!(
+            by_oldest, by_newest,
+            "newest-first must be the exact reverse of oldest-first"
+        );
+    }
+
+    /// Equal names use uid order so Name mode stays independent of the servers Vec order.
     #[test]
     fn duplicate_names_rank_deterministically_by_uid() {
         let order = CoreOrder::new(&config(

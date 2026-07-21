@@ -126,7 +126,10 @@ mod tests {
         let now = utc_stamp_compact(base);
 
         assert!(now < one_second, "{now} should sort before {one_second}");
-        assert!(one_second < one_year, "{one_second} should sort before {one_year}");
+        assert!(
+            one_second < one_year,
+            "{one_second} should sort before {one_year}"
+        );
     }
 
     /// A timestamp outside years 0000-9999 must clamp, never emit a different-length name.

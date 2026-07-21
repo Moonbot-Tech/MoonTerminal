@@ -213,11 +213,15 @@ mod tests {
     #[test]
     fn a_missing_file_reports_absent() {
         let missing = Path::new("no-such-dir-4f21c8/no-such-settings.toml");
-        assert!(!missing.exists(), "the fixture path must genuinely not exist");
+        assert!(
+            !missing.exists(),
+            "the fixture path must genuinely not exist"
+        );
 
-        let (_cfg, status) = load_or_default_status::<SettingsFile>(missing, "settings.toml", |_| {
-            panic!("on_corrupt must not fire for a file that is merely absent")
-        });
+        let (_cfg, status) =
+            load_or_default_status::<SettingsFile>(missing, "settings.toml", |_| {
+                panic!("on_corrupt must not fire for a file that is merely absent")
+            });
 
         assert_eq!(status, ConfigLoad::Absent);
     }

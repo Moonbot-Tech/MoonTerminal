@@ -121,31 +121,41 @@ pub struct ServerConfig {
 /// The stored choice is global; the UI crate's `core_order` module performs the ranking.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CoreSortMode {
-    /// The position in `AppConfig::servers`, edited by dragging rows in Settings.
-    #[default]
-    Manual,
     /// Lexicographic order of lowercase Unicode names, with uid as a tie-breaker.
+    #[default]
     Name,
     /// Insertion order, oldest first (by `ServerConfig::uid`).
-    Added,
+    AddedOldest,
+    /// Insertion order, newest first (by `ServerConfig::uid`).
+    AddedNewest,
 }
 
 impl CoreSortMode {
     /// Stable on-disk code.
+    ///
+    /// `AddedOldest` keeps the older `"added"` code on purpose: that mode already meant
+    /// oldest-first, so every user who selected it keeps exactly what they selected. Only the
+    /// variant name changed, to state the direction now that there are two.
     pub fn code(self) -> &'static str {
         match self {
-            CoreSortMode::Manual => "manual",
             CoreSortMode::Name => "name",
-            CoreSortMode::Added => "added",
+            CoreSortMode::AddedOldest => "added",
+            CoreSortMode::AddedNewest => "added_newest",
         }
     }
 
     /// Parse an on-disk code; `None` for anything unrecognized.
+    ///
+    /// `"manual"` was retired together with the drag-and-drop editor and is deliberately NOT
+    /// mapped here: an unrecognized code falls through `Deserialize` to `Default` (= `Name`),
+    /// which is the intended landing spot. Mapping it onto `"added"` to "approximate" what the
+    /// user used to see would be arbitrary rather than conservative — the servers Vec order that
+    /// `"manual"` referred to is no longer a sort key anywhere.
     pub fn from_code(s: &str) -> Option<Self> {
         match s {
-            "manual" => Some(CoreSortMode::Manual),
             "name" => Some(CoreSortMode::Name),
-            "added" => Some(CoreSortMode::Added),
+            "added" => Some(CoreSortMode::AddedOldest),
+            "added_newest" => Some(CoreSortMode::AddedNewest),
             _ => None,
         }
     }
@@ -167,7 +177,7 @@ impl<'de> Deserialize<'de> for CoreSortMode {
             type Value = CoreSortMode;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("a core sort mode (manual / name / added)")
+                f.write_str("a core sort mode (name / added / added_newest)")
             }
 
             fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
@@ -318,18 +328,35 @@ mod core_sort_parse_tests {
             let toml = format!("{bad}\nkeep = \"server meta\"\n");
             let probe: Probe = toml::from_str(&toml)
                 .unwrap_or_else(|e| panic!("`{bad}` must not fail the whole file: {e}"));
-            assert_eq!(probe.core_sort, CoreSortMode::Manual, "for `{bad}`");
+            assert_eq!(probe.core_sort, CoreSortMode::Name, "for `{bad}`");
             assert_eq!(probe.keep, "server meta", "for `{bad}`");
         }
+    }
+
+    /// A settings file still holding the retired `"manual"` must land on the new default.
+    ///
+    /// The plausible edit this catches: someone adds `"manual" => Some(CoreSortMode::AddedOldest)`
+    /// to `from_code`, reasoning that insertion order "is closer to what the user used to see".
+    /// It compiles, it is silent, and it contradicts the shipped decision — the Vec order that
+    /// `"manual"` meant is no longer a sort key, so insertion order is not an approximation of
+    /// it, just a different arbitrary answer.
+    ///
+    /// The sibling field pins the other half: a retired value must cost only its own field.
+    #[test]
+    fn a_retired_manual_setting_lands_on_the_new_default() {
+        let probe: Probe = toml::from_str("core_sort = \"manual\"\nkeep = \"server meta\"\n")
+            .expect("a retired code must not fail the file");
+        assert_eq!(probe.core_sort, CoreSortMode::Name);
+        assert_eq!(probe.keep, "server meta");
     }
 
     /// Protects the valid-code mapping used by `CoreSortMode` serialization.
     #[test]
     fn every_mode_round_trips_through_its_code() {
         for mode in [
-            CoreSortMode::Manual,
             CoreSortMode::Name,
-            CoreSortMode::Added,
+            CoreSortMode::AddedOldest,
+            CoreSortMode::AddedNewest,
         ] {
             let toml = format!("core_sort = \"{}\"\nkeep = \"\"\n", mode.code());
             let probe: Probe = toml::from_str(&toml).expect("a valid code must parse");

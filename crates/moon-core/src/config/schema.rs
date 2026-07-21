@@ -17,7 +17,12 @@ use crate::market::MarketDataMode;
 /// Current `settings.toml` schema version.
 ///
 /// Increment when persisted fields require a serde-default backfill save.
-pub const SCHEMA_VERSION: u32 = 14;
+///
+/// v15 retired the `"manual"` core-sort mode. The bump earns its keep twice: the backfill save
+/// rewrites that dead code to the new default instead of leaving a meaningless token on disk,
+/// and it makes `config::backup` take one snapshot for every existing user — captured before the
+/// default-order change reshuffles their lists, so there is something to roll back to.
+pub const SCHEMA_VERSION: u32 = 15;
 
 /// Версия схемы, начиная с которой рантайм-`CoreId == uid` (стабильный). Конфиги
 /// старее неё хранили в `charts.json` ПОЗИЦИОННЫЕ CoreId — их надо один раз
@@ -216,7 +221,7 @@ pub struct SettingsFile {
     pub hotkeys: HotkeysConfig,
     #[serde(default)]
     pub groups: Vec<GroupConfig>,
-    /// How core lists are ordered app-wide; missing values default to `Manual`.
+    /// How core lists are ordered app-wide; missing values default to `Name`.
     #[serde(default)]
     pub core_sort: CoreSortMode,
     /// Next uid to issue, persisted so deleted identities are not reused.

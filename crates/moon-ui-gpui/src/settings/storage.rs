@@ -363,4 +363,3 @@ impl SettingsView {
             .child(hint(t!("storage.klines_hint").to_string()))
     }
 }
-
