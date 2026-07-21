@@ -1,21 +1,22 @@
-//! Снимки конфига в `<data_dir>/backups/` — защита от одностороннего перезаписывания.
+//! Config snapshots in `<data_dir>/backups/` protect against one-way overwrites.
 //!
-//! Копируются РОВНО два файла, единственные невосстановимые:
-//! - `servers.enc` — зашифрованные ключи API (потеря = потеря доступа к ядрам);
-//! - `cfg/settings.toml` — группы, галки ядер, привязки чартов, счётчик uid.
+//! EXACTLY two files are copied, the only ones that cannot be reconstructed:
+//! - `servers.enc` — encrypted API keys (losing it means losing access to the cores);
+//! - `cfg/settings.toml` — groups, enabled cores, chart bindings, and the uid counter.
 //!
-//! Всё остальное в `cfg/` (тема, раскладка, доки, хоткеи) пересоздаётся руками за минуты, а БД
-//! в `data/` сюда НЕ входят по размеру. Оговорка про `strategies.sqlite`: это не реплика — по
-//! `paths::strategies_db_path` это единственный экземпляр истории версий стратегий, и у него
-//! СВОЯ кнопка резервного копирования на вкладке «Хранилище». Здесь его нет намеренно: снимок
-//! должен оставаться килобайтным, чтобы сниматься на каждое сохранение.
+//! Everything else in `cfg/` (theme, layout, docks, hotkeys) can be recreated manually within
+//! minutes, while the databases in `data/` are excluded because of their size. One caveat is
+//! `strategies.sqlite`: according to `paths::strategies_db_path`, it is the sole copy of the
+//! strategy version history, not a replica, and it has its OWN backup button on the Storage tab.
+//! It is deliberately excluded here: snapshots must remain kilobytes in size so every deliberate
+//! save can take one.
 //!
-//! Триггеры ровно два (см. [`Trigger`]): миграция схемы и сохранение из окна Настроек. Рутинный
-//! слив `config_dirty` в 100-мс цикле, до-сохранение на выходе и правки из шапки идут обычным
-//! `save()` БЕЗ снимка — они срабатывают на мелочах вроде пресетов размера ордера и за минуты
-//! вытеснили бы из 30 слотов те снимки, ради которых всё затевалось.
+//! There are exactly two triggers (see [`Trigger`]): schema migration and a save from the Settings
+//! window. The routine `config_dirty` drain in the 100-ms loop, the final save on exit, and header
+//! edits use ordinary `save()` WITHOUT a snapshot. They fire for small changes such as order-size
+//! presets and would evict the valuable snapshots from all 30 slots within minutes.
 //!
-//! Снимок НИКОГДА не ломает операцию, которую защищает: [`snapshot`] не возвращает ошибку вовсе.
+//! A snapshot NEVER breaks the operation it protects: [`snapshot`] does not return an error at all.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -25,38 +26,38 @@ use crate::util::time::{now_unix_ms_i64, utc_stamp_compact};
 use super::paths;
 use super::SnapshotOutcome;
 
-/// Сколько снимков хранить. Старые удаляются автоматически.
+/// Number of snapshots to retain. Older snapshots are removed automatically.
 pub const SNAPSHOT_KEEP: usize = 30;
 
-/// Префикс каталога, в котором снимок СОБИРАЕТСЯ. Намеренно не проходит
-/// [`is_snapshot_name`], поэтому недособранный снимок не виден ни чистке, ни пользователю
-/// как готовая копия.
+/// Prefix of the directory where a snapshot is ASSEMBLED.
+///
+/// It deliberately fails [`is_snapshot_name`], so neither pruning nor the user can see an
+/// incomplete snapshot as a finished copy.
 const STAGING_PREFIX: &str = ".incoming-";
 
-/// Счётчик для уникальности staging-каталога внутри процесса.
+/// Counter that makes staging directories unique within the process.
 static STAGING_SEQ: AtomicU32 = AtomicU32::new(0);
 
-/// Префикс staging-каталогов ЭТОГО процесса: `.incoming-<pid>-`.
+/// Prefix for staging directories owned by THIS process: `.incoming-<pid>-`.
 ///
-/// Чистка удаляет только их. Сносить любой `.incoming-*` нельзя: второй экземпляр
-/// терминала над той же переносимой папкой прямо сейчас может копировать в свой каталог,
-/// и мы бы уничтожили его снимок на полпути.
+/// Pruning removes only these. Removing every `.incoming-*` is unsafe: another terminal instance
+/// using the same portable directory may currently be copying into its own directory, and pruning
+/// it would destroy that snapshot halfway through construction.
 fn own_staging_prefix() -> String {
     format!("{STAGING_PREFIX}{}-", std::process::id())
 }
 
-/// Что вызвало снимок — попадает в лог, чтобы по журналу было видно, какой снимок
-/// миграционный, а какой от ручного сохранения.
+/// Reason a snapshot was taken, logged to distinguish migrations from deliberate saves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Trigger {
-    /// Версия схемы на диске устарела, сейчас будет автоматическое пере-сохранение.
+    /// The on-disk schema is outdated and is about to be saved automatically.
     SchemaMigration,
-    /// Пользователь нажал «Сохранить» в окне Настроек.
+    /// The user clicked Save in the Settings window.
     SettingsSave,
 }
 
 impl Trigger {
-    /// Короткая метка для лога.
+    /// Short label used in log messages.
     fn label(self) -> &'static str {
         match self {
             Trigger::SchemaMigration => "миграция схемы",
@@ -65,12 +66,12 @@ impl Trigger {
     }
 }
 
-/// Снять копию обоих файлов конфига и подчистить старые снимки.
+/// Copy both config files and prune old snapshots.
 ///
-/// Возвращает [`SnapshotOutcome`], а НЕ `Result`, намеренно: резервная копия не имеет права
-/// сломать операцию, которую она защищает, и отсутствие канала ошибок делает это свойством
-/// сигнатуры, а не соглашением, которое следующий `?` тихо нарушит. Но и молчать нельзя —
-/// иначе Настройки покажут «Сохранено», хотя копии для отката не появилось.
+/// Deliberately returns [`SnapshotOutcome`], NOT `Result`: a backup must not break the operation it
+/// protects, and removing the error channel makes that a property of the signature rather than a
+/// convention that the next `?` can silently violate. Failure cannot be silent either, because
+/// Settings would otherwise report success when no rollback copy was created.
 pub(super) fn snapshot(trigger: Trigger) -> SnapshotOutcome {
     let sources = [paths::servers_path(), paths::settings_path()];
     let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
@@ -88,7 +89,7 @@ pub(super) fn snapshot(trigger: Trigger) -> SnapshotOutcome {
             );
             SnapshotOutcome::Ok
         }
-        // Копировать было нечего (первый запуск) — это не сбой.
+        // Nothing existed to copy on first launch; this is not a failure.
         Ok(None) => {
             log::debug!(
                 "конфиг: снимок ({}) пропущен — нечего копировать",
@@ -103,23 +104,23 @@ pub(super) fn snapshot(trigger: Trigger) -> SnapshotOutcome {
     }
 }
 
-/// Тестируемое ядро [`snapshot`]: все пути инжектируются, `paths::` не используется.
+/// Testable core of [`snapshot`]: every path is injected and `paths::` is not used.
 ///
-/// Принимает ПОЛНЫЕ пути источников, а не корневые каталоги, чтобы не воспроизводить здесь
-/// имена файлов — ими владеет `config::paths`.
+/// Accepts FULL source paths rather than root directories so this module does not duplicate file
+/// names owned by `config::paths`.
 ///
-/// Возвращает `Ok(None)`, если ни одного источника нет на диске (первый запуск): каталог
-/// `backups/` в этом случае не создаётся вовсе.
+/// Returns `Ok(None)` when no source exists on disk, as on first launch. In that case the
+/// `backups/` directory is not created at all.
 fn snapshot_into(
     sources: &[&Path],
     backups: &Path,
     now_ms: i64,
     keep: usize,
 ) -> anyhow::Result<Option<PathBuf>> {
-    // НЕ `is_file()`: он возвращает `false` и когда файла нет, и когда метаданные не
-    // прочитались (права, шара, невыгруженный облачный плейсхолдер). Молча выбросив
-    // нечитаемый источник, мы опубликовали бы снимок с ОДНИМ файлом как успешный, а следом
-    // сохранение перезаписало бы оба. Отсутствие — не сбой; всё остальное — сбой.
+    // Do NOT use `is_file()`: it returns `false` both when a file is absent and when metadata
+    // cannot be read (permissions, a share, or an unhydrated cloud placeholder). Silently dropping
+    // an unreadable source would publish a ONE-file snapshot as successful, after which saving
+    // would overwrite both files. Absence is not a failure; every other outcome is.
     let mut present: Vec<&Path> = Vec::new();
     for src in sources.iter().copied() {
         match std::fs::metadata(src) {
@@ -138,9 +139,9 @@ fn snapshot_into(
 
     std::fs::create_dir_all(backups)?;
 
-    // Собираем во временном каталоге и публикуем только целиком. Иначе сбой на втором
-    // копировании оставил бы каталог, который проходит `is_snapshot_name`, занимает слот
-    // хранения и способен вытеснить ПОЛНЫЙ снимок.
+    // Assemble in a temporary directory and publish only as a complete unit. Otherwise, failure
+    // during the second copy would leave a directory that passes `is_snapshot_name`, consumes a
+    // retention slot, and can evict a COMPLETE snapshot.
     let staging = backups.join(format!(
         "{}{}",
         own_staging_prefix(),
@@ -169,8 +170,8 @@ fn snapshot_into(
     }
     let dir = published?;
 
-    // Из ВСЕХ источников, а не только присутствовавших сейчас: чистке нужен набор имён,
-    // которые этот модуль вообще когда-либо пишет, а не срез одного запуска.
+    // Use ALL sources, not only those present now: pruning needs every name this module can ever
+    // write, not the subset observed during one run.
     let expected: Vec<&str> = sources
         .iter()
         .filter_map(|p| p.file_name()?.to_str())
@@ -180,26 +181,26 @@ fn snapshot_into(
     Ok(Some(dir))
 }
 
-/// Опубликовать собранный staging-каталог под финальным именем со штампом времени.
+/// Publish an assembled staging directory under its final timestamped name.
 ///
-/// Публикация — ОДНО переименование каталога целиком, а не создание финального каталога с
-/// последующим переносом файлов по одному: сбой после первого переноса оставил бы каталог с
-/// правильным именем и неполным содержимым, который проходит [`is_snapshot_name`], занимает
-/// слот хранения и способен вытеснить ПОЛНЫЙ снимок. Одно `rename` этого не допускает: снимок
-/// либо виден целиком, либо не виден вовсе.
+/// Publication is ONE rename of the entire directory rather than creation of the final directory
+/// followed by moving files individually. A failure after the first move would leave a correctly
+/// named directory with incomplete contents that passes [`is_snapshot_name`], consumes a retention
+/// slot, and can evict a COMPLETE snapshot. A single `rename` prevents this: the snapshot is either
+/// visible in full or not visible at all.
 ///
-/// `fs::rename` каталога поверх СУЩЕСТВУЮЩЕГО имени падает и на Windows, и (для непустого
-/// каталога) на unix — то есть служит и атомарным захватом имени.
+/// Renaming a directory onto an EXISTING name fails on Windows and, for a non-empty directory, on
+/// Unix, so `fs::rename` also acts as an atomic claim on the name.
 ///
-/// ОСТАТОЧНЫЙ РИСК, принят осознанно: на unix `rename` МОЖЕТ заменить существующий ПУСТОЙ
-/// каталог, а проверка `exists()` перед ним — TOCTOU. Чтобы это выстрелило, нужен пустой
-/// каталог с именем-штампом, а его не создаёт никто: единственный производитель финальных
-/// имён — эта функция, и она создаёт их переименованием уже НАПОЛНЕННОГО staging. Остаются
-/// каталог, сделанный пользователем руками, и второй процесс на старой версии кода.
-/// Альтернатива — сначала захватывать имя через `fs::create_dir`, а потом наполнять — меняет
-/// узкую гонку между версиями на широкую: падение процесса посреди наполнения оставит
-/// каталог с правильным именем и неполным содержимым. Смерть процесса вероятнее, чем
-/// одновременная работа двух версий, поэтому выбран `rename`.
+/// ACCEPTED RESIDUAL RISK: on Unix, `rename` MAY replace an existing EMPTY directory, and the
+/// preceding `exists()` check is a TOCTOU race. Triggering it requires an empty timestamp-named
+/// directory, which this code never creates: this function is the sole producer of final names and
+/// creates them by renaming an already POPULATED staging directory. The remaining possibilities are
+/// a directory created manually by the user or a second process running an older code version.
+/// Claiming the name first with `fs::create_dir` and then filling it would trade this narrow
+/// cross-version race for a broad one: process death during population would leave a correctly
+/// named directory with incomplete contents. Process death is more likely than two versions running
+/// concurrently, so `rename` is the chosen tradeoff.
 fn publish(staging: &Path, backups: &Path, now_ms: i64) -> anyhow::Result<PathBuf> {
     let stamp = utc_stamp_compact(now_ms);
     let mut last: Option<std::io::Error> = None;
@@ -207,8 +208,8 @@ fn publish(staging: &Path, backups: &Path, now_ms: i64) -> anyhow::Result<PathBu
         let name = if attempt == 0 {
             stamp.clone()
         } else {
-            // `20260721-134501` < `20260721-134501-01` < `20260721-134502` как строки, поэтому
-            // суффикс не ломает инвариант «лексикографический порядок = хронологический».
+            // As strings, `20260721-134501` < `20260721-134501-01` < `20260721-134502`, so the
+            // suffix preserves the invariant that lexicographic order equals chronological order.
             format!("{stamp}-{attempt:02}")
         };
         let dst = backups.join(&name);
@@ -217,7 +218,7 @@ fn publish(staging: &Path, backups: &Path, now_ms: i64) -> anyhow::Result<PathBu
         }
         match std::fs::rename(staging, &dst) {
             Ok(()) => return Ok(dst),
-            // Имя заняли между проверкой и переименованием — берём следующее.
+            // Another writer claimed the name between the check and rename; try the next one.
             Err(e) => last = Some(e),
         }
     }
@@ -229,10 +230,10 @@ fn publish(staging: &Path, backups: &Path, now_ms: i64) -> anyhow::Result<PathBu
     }
 }
 
-/// Похоже ли имя каталога на снимок, который создали МЫ.
+/// Return whether a directory name looks like a snapshot created by THIS module.
 ///
-/// Строго: `YYYYMMDD-HHMMSS` (15) либо то же с суффиксом столкновения `-NN` (18). Всё
-/// остальное — папка пользователя, и чистка её не видит.
+/// Strictly accepts `YYYYMMDD-HHMMSS` (15 characters) or the same name with a collision suffix
+/// `-NN` (18 characters). Everything else is a user directory and remains invisible to pruning.
 fn is_snapshot_name(name: &str) -> bool {
     let digits_at = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
     match name.len() {
@@ -248,18 +249,17 @@ fn is_snapshot_name(name: &str) -> bool {
     }
 }
 
-/// Оставить `keep` новейших снимков, удалив остальные; попутно убрать брошенные
-/// staging-каталоги.
+/// Keep the newest `keep` snapshots, remove older ones, and clean up abandoned staging directories.
 ///
-/// Возвращает число удалённых снимков.
+/// Returns the number of snapshots removed.
 ///
-/// Осторожность здесь важнее краткости — каталог живёт в пользовательской папке:
-/// - корень-симлинк не обрабатывается: `read_dir` по нему увёл бы чистку в чужое дерево
-///   ДО любых проверок потомков;
-/// - тип потомка берётся из `DirEntry::file_type`, который НЕ разыменовывает симлинки;
-/// - удаляются только ОЖИДАЕМЫЕ имена файлов, после чего каталог убирается
-///   НЕрекурсивным `remove_dir`. Он откажется удалять непустой каталог — поэтому что-либо
-///   положенное туда пользователем (или облачным клиентом) сохраняет и файл, и сам снимок.
+/// Caution matters more than brevity because this directory lives in the user's folder:
+/// - a symlinked root is ignored because `read_dir` would enter an unrelated tree BEFORE any child
+///   checks;
+/// - child types come from `DirEntry::file_type`, which does NOT follow symlinks;
+/// - only EXPECTED file names are removed, after which the directory is removed with non-recursive
+///   `remove_dir`. It refuses to remove a non-empty directory, so anything placed there by the user
+///   or a cloud client preserves both itself and the snapshot.
 fn prune(backups: &Path, keep: usize, expected: &[&str]) -> usize {
     let Ok(meta) = std::fs::symlink_metadata(backups) else {
         return 0;
@@ -279,8 +279,8 @@ fn prune(backups: &Path, keep: usize, expected: &[&str]) -> usize {
     let mut stale_staging: Vec<PathBuf> = Vec::new();
     let own_prefix = own_staging_prefix();
     for entry in rd.flatten() {
-        // Не разыменовывает симлинки: подставленная ссылка на чужой каталог не будет
-        // классифицирована как каталог и не попадёт в чистку.
+        // This does not follow symlinks: a substituted link to an unrelated directory is not
+        // classified as a directory and therefore never enters pruning.
         let Ok(ft) = entry.file_type() else { continue };
         if !ft.is_dir() {
             continue;
@@ -293,10 +293,10 @@ fn prune(backups: &Path, keep: usize, expected: &[&str]) -> usize {
         }
     }
 
-    // Только НАШ брошенный staging: он остаётся, если предыдущий вызов в этом же процессе
-    // упал ровно во время сборки. Каталоги чужих pid не трогаем — там может идти живая
-    // работа второго экземпляра; они остаются мусором, но мусором безопасным (неполная
-    // копия конфига в папке пользователя, невидимая для перечисления снимков).
+    // Remove only OUR abandoned staging directory, left when an earlier call in this process
+    // failed during assembly. Directories owned by other pids may contain live work from another
+    // instance and remain untouched. They are litter, but safe litter: an incomplete config copy
+    // in the user's folder that snapshot enumeration cannot see.
     for path in stale_staging {
         let _ = std::fs::remove_dir_all(path);
     }
@@ -304,8 +304,8 @@ fn prune(backups: &Path, keep: usize, expected: &[&str]) -> usize {
     if snapshots.len() <= keep {
         return 0;
     }
-    // Имена фиксированной ширины, поэтому сортировка по имени = сортировка по времени.
-    // Намеренно НЕ по mtime: копирование файла и облачная синхронизация его переписывают.
+    // Fixed-width names make name order equal time order. Deliberately do NOT use mtime because
+    // file copying and cloud synchronization rewrite it.
     snapshots.sort_unstable();
     let doomed = snapshots.len() - keep;
     let mut removed = 0usize;
@@ -326,11 +326,11 @@ fn prune(backups: &Path, keep: usize, expected: &[&str]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    //! Поведение снимков на путях, где ошибка стоит данных пользователя.
+    //! Snapshot behavior on paths where an error can cost user data.
 
     use super::*;
 
-    /// Уникальный временный корень на один тест (без dev-зависимости на `tempfile`).
+    /// Create a unique temporary root for one test without a dev-dependency on `tempfile`.
     fn temp_root(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "moonterminal-backup-{}-{tag}-{}",
@@ -342,7 +342,7 @@ mod tests {
         dir
     }
 
-    /// Записать файл, создав родителя.
+    /// Write a file after creating its parent directory.
     fn write(path: &Path, body: &str) {
         if let Some(p) = path.parent() {
             std::fs::create_dir_all(p).expect("parent");
@@ -350,7 +350,7 @@ mod tests {
         std::fs::write(path, body).expect("write");
     }
 
-    /// Имена снимков в каталоге, отсортированные.
+    /// Return the sorted snapshot names in a directory.
     fn snapshot_names(backups: &Path) -> Vec<String> {
         let mut v: Vec<String> = std::fs::read_dir(backups)
             .map(|rd| {
@@ -364,12 +364,12 @@ mod tests {
         v
     }
 
-    /// Каждый снимок обязан перечитывать файл, а не переиспользовать прочитанное ранее.
+    /// Every snapshot must reread the file rather than reuse previously read contents.
     ///
-    /// Мутация, которую это ловит: закэшировать содержимое источника (например, вынести
-    /// чтение из цикла или запомнить его в статике «чтобы не ходить на диск дважды»).
-    /// Второй снимок тогда сохранит байты ПЕРВОГО — то есть резервная копия будет отставать
-    /// на одно сохранение, и откат вернёт не то состояние, которое пользователь ожидает.
+    /// The plausible mutation this catches is caching source contents, for example by moving the
+    /// read outside the loop or storing it statically to avoid reading the disk twice. The second
+    /// snapshot would then preserve the FIRST snapshot's bytes, leaving every backup one save
+    /// behind and restoring a different state from the one the user expects.
     #[test]
     fn each_snapshot_rereads_the_file_from_disk() {
         let root = temp_root("bytes");
@@ -396,19 +396,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Хранение отсекает по ИМЕНИ, а не по времени изменения.
+    /// Retention prunes by NAME rather than modification time.
     ///
-    /// Каталоги создаются в ОБРАТНОМ хронологическом порядке, поэтому порядок mtime
-    /// противоположен порядку имён: реализация «удалять по mtime» снесла бы три САМЫХ НОВЫХ
-    /// снимка. Так же это ломает любую опору на порядок выдачи `read_dir`.
+    /// Directories are created in REVERSE chronological order, making mtime order the opposite of
+    /// name order. An implementation that prunes by mtime would remove the three NEWEST snapshots.
+    /// This construction also catches any reliance on the enumeration order of `read_dir`.
     #[test]
     fn retention_keeps_the_newest_by_name_not_by_mtime() {
         let root = temp_root("retention");
         let backups = root.join("backups");
         std::fs::create_dir_all(&backups).unwrap();
 
-        // Реальные подряд идущие даты (июль + начало августа): имена должны быть валидными
-        // штампами, а не просто возрастающими строками.
+        // Real consecutive dates spanning July and early August ensure that names are valid
+        // timestamps rather than merely increasing strings.
         let names: Vec<String> = (0..33)
             .map(|i| {
                 let (mo, d) = if i < 31 { (7, i + 1) } else { (8, i - 30) };
@@ -433,10 +433,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Чистка не трогает ничего, что приложение не создавало.
+    /// Pruning never touches anything the application did not create.
     ///
-    /// Мутация: ослабить `is_snapshot_name` до «начинается с цифры» ради поддержки старой
-    /// схемы имён — и папка пользователя `2026-07-21` уедет в небытие.
+    /// The plausible mutation is weakening `is_snapshot_name` to "starts with a digit" to support
+    /// an older naming scheme, which would delete the user's `2026-07-21` directory.
     #[test]
     fn pruning_never_touches_what_the_app_did_not_write() {
         let root = temp_root("foreign");
@@ -461,11 +461,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Снимок с посторонним файлом внутри не удаляется целиком.
+    /// A snapshot containing an unexpected file is not removed wholesale.
     ///
-    /// Нерекурсивный `remove_dir` отказывается чистить непустой каталог, поэтому файл,
-    /// положенный туда пользователем или облачным клиентом, сохраняет и себя, и снимок.
-    /// Мутация — заменить его на `remove_dir_all`.
+    /// Non-recursive `remove_dir` refuses to remove a non-empty directory, so a file placed there
+    /// by the user or a cloud client preserves both itself and the snapshot. The plausible mutation
+    /// is replacing it with `remove_dir_all`.
     #[test]
     fn a_snapshot_holding_an_unexpected_file_survives_pruning() {
         let root = temp_root("unexpected");
@@ -485,11 +485,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Два снимка в одну и ту же секунду не затирают друг друга.
+    /// Two snapshots taken in the same second do not overwrite each other.
     ///
-    /// Мутация — убрать суффикс столкновения: `create_dir_all` спокойно принимает уже
-    /// существующий каталог, а `fs::copy` перезаписывает, так что второе сохранение уничтожило
-    /// бы снимок, только что снятый первым. Видно это станет в тот день, когда снимок понадобится.
+    /// The plausible mutation is removing the collision suffix: `create_dir_all` accepts an
+    /// existing directory and `fs::copy` overwrites files, so the second save would destroy the
+    /// snapshot taken by the first. The defect becomes visible only when that snapshot is needed.
     #[test]
     fn two_snapshots_in_one_second_do_not_overwrite_each_other() {
         let root = temp_root("collision");
@@ -515,12 +515,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Отсутствие конфига — не сбой, и каталог `backups/` при этом не появляется.
+    /// A missing config is not a failure and does not create the `backups/` directory.
     ///
-    /// Мутация: безусловный `fs::copy(src, dst)?`. Тогда КАЖДЫЙ первый запуск (и каждый запуск
-    /// после увода битого файла в `.bak`) превращается в залогированную ошибку — и следующий
-    /// автор «чинит» это, пробрасывая ошибку через `?` из сохранения, после чего упавший бэкап
-    /// начинает ломать то сохранение, которое обязан был защитить.
+    /// The plausible mutation is an unconditional `fs::copy(src, dst)?`. It turns EVERY first
+    /// launch, and every launch after a corrupt file is moved to `.bak`, into a logged error. A
+    /// later author may then "fix" it by propagating the error with `?` from saving, causing a
+    /// failed backup to break the very save it must protect.
     #[test]
     fn a_missing_config_is_not_a_backup_failure() {
         let root = temp_root("absent");
@@ -537,16 +537,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Источник, который ЕСТЬ, но не является читаемым файлом, обязан свалить снимок
-    /// целиком — а не выпасть из него молча.
+    /// A source that EXISTS but is not a readable file must fail the entire snapshot rather than
+    /// disappear from it silently.
     ///
-    /// Мутация, которую это ловит (и которая тут была): отбирать источники через
-    /// `p.is_file()`. Он возвращает `false` и когда файла нет, и когда метаданные не
-    /// прочитались, поэтому нечитаемый `servers.enc` тихо исчезал из набора, а снимок с
-    /// ОДНИМ файлом публиковался как успешный. Следом сохранение перезаписывало оба файла —
-    /// и «копия для отката» оказывалась без ключей API ровно тогда, когда за ней придут.
+    /// The plausible mutation this catches, and one that existed here, is filtering sources with
+    /// `p.is_file()`. It returns `false` both when a file is absent and when metadata cannot be
+    /// read, so an unreadable `servers.enc` silently disappeared while a ONE-file snapshot was
+    /// published as successful. Saving then overwrote both files, leaving the rollback copy without
+    /// API keys precisely when it was needed.
     ///
-    /// Каталог на месте файла — переносимый способ получить «существует, но не файл».
+    /// A directory in place of a file is a portable way to produce "exists, but is not a file."
     #[test]
     fn an_unreadable_source_fails_instead_of_publishing_a_partial_snapshot() {
         let root = temp_root("partial");

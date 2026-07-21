@@ -8,51 +8,54 @@ use anyhow::Context;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-/// Результат загрузки конфига, по которому вызывающий решает, безопасна ли обратная запись.
-/// Четыре исхода НЕ взаимозаменяемы.
+/// Config-load outcome used by the caller to decide whether writing back is safe.
+///
+/// The four outcomes are NOT interchangeable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfigLoad {
-    /// Файл прочитан и разобран; состояние в памяти отражает его содержимое.
+    /// The file was read and parsed; in-memory state reflects its contents.
     Present,
-    /// Файла нет — первый запуск; дефолты можно безопасно сохранить.
+    /// The file is absent on first launch; defaults can be saved safely.
     Absent,
-    /// Файл есть, но не разбирается, и `on_corrupt` успешно увёл его в `.bak`.
-    /// Исходные байты сохранены, поэтому отсутствующий путь можно заполнить дефолтами.
+    /// The file exists but does not parse, and `on_corrupt` moved it to `.bak` successfully.
+    /// The original bytes are preserved, so defaults can fill the now-absent path.
     ///
-    /// Неудачный карантин даёт [`ConfigLoad::Unreadable`]: файл пользователя остаётся на месте,
-    /// и разрешение записи уничтожило бы его.
+    /// Failed quarantine yields [`ConfigLoad::Unreadable`]: the user's file remains in place and
+    /// permitting a write would destroy it.
     Corrupt,
-    /// Файл может существовать и содержать корректные данные, но не читаться из-за прав,
-    /// sharing-ошибки или невыгруженного облачного плейсхолдера.
+    /// The file may exist and contain valid data but be unreadable because of permissions, a
+    /// sharing violation, or an unhydrated cloud placeholder.
     ///
-    /// Возвращённые дефолты можно использовать в памяти, но нельзя сохранять: временная ошибка
-    /// чтения не должна приводить к перезаписи исправного конфига.
+    /// Returned defaults may be used in memory but must not be saved: a temporary read failure must
+    /// not overwrite a valid config.
     Unreadable,
 }
 
 impl ConfigLoad {
-    /// Можно ли записывать поверх этого файла.
+    /// Return whether this file may be overwritten.
     ///
-    /// Намеренно ИСЧЕРПЫВАЮЩИЙ `match`, а не сравнение с одним «плохим» вариантом. Сравнение
-    /// вида `== Unreadable` открыто по умолчанию: пятый вариант, добавленный позже (обрыв
-    /// чтения, сбой расшифровки, таймаут выгрузки облачного плейсхолдера), молча посчитался
-    /// бы пригодным для записи — то есть ровно тот отказ, против которого всё это и сделано.
-    /// Здесь новый вариант не соберётся, пока автор не укажет его сторону.
+    /// Deliberately uses an EXHAUSTIVE `match` rather than comparing with one "bad" variant. A
+    /// check such as `== Unreadable` is open by default: a fifth variant added later for an
+    /// interrupted read, decryption failure, or cloud-placeholder hydration timeout would silently
+    /// become writable, precisely the failure this design prevents. A new variant cannot compile
+    /// here until its author assigns it to one side.
     pub fn permits_overwrite(self) -> bool {
         match self {
-            // Файл прочитан, отсутствует или уже уведён в `.bak` — исходных байтов под
-            // записью либо нет, либо они сохранены.
+            // The file was read, is absent, or was moved to `.bak`; original bytes are either
+            // absent from the destination or preserved.
             ConfigLoad::Present | ConfigLoad::Absent | ConfigLoad::Corrupt => true,
-            // Файл пользователя на месте и не прочитан: писать нельзя.
+            // The user's file remains in place and was not read, so writing is forbidden.
             ConfigLoad::Unreadable => false,
         }
     }
 }
 
-/// Прочитать TOML в `T`, сообщив КАК он прочитался. Нет файла → дефолт (первый
-/// запуск). Битый файл → лог, `on_corrupt(path)` (например, увод в `.bak`) и дефолт.
-/// Нечитаемый файл → дефолт + [`ConfigLoad::Unreadable`], чтобы вызывающий не
-/// перезаписал живой конфиг (см. `ConfigLoad`).
+/// Read TOML into `T` and report HOW it was read.
+///
+/// A missing file yields defaults for first launch. A corrupt file is logged, passed to
+/// `on_corrupt(path)` for quarantine such as a move to `.bak`, and replaced with defaults. An
+/// unreadable file yields defaults plus [`ConfigLoad::Unreadable`] so the caller cannot overwrite
+/// the live config; see [`ConfigLoad`].
 pub fn load_or_default_status<T: Default + DeserializeOwned>(
     path: &Path,
     label: &str,
@@ -63,8 +66,8 @@ pub fn load_or_default_status<T: Default + DeserializeOwned>(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return (defaults_for_absent_file(label), ConfigLoad::Absent);
         }
-        // Это НЕ отсутствие файла: различие не даёт вызывающему превратить временный сбой чтения
-        // в постоянную перезапись при досейве.
+        // This is NOT file absence: the distinction prevents the caller from turning a temporary
+        // read failure into a permanent overwrite during write-back.
         Err(e) => {
             log::error!(
                 "{label}: файл есть, но не читается ({e}); работаю на дефолтах В ПАМЯТИ и НЕ \
@@ -77,8 +80,8 @@ pub fn load_or_default_status<T: Default + DeserializeOwned>(
         Ok(v) => (v, ConfigLoad::Present),
         Err(e) => {
             log::warn!("{label} повреждён ({e}); беру дефолт");
-            // Провалившийся карантин НЕ даёт права на запись: файл пользователя остался на
-            // месте, и сохранение дефолтов уничтожило бы его.
+            // Failed quarantine does NOT permit writing: the user's file remains in place and
+            // saving defaults would destroy it.
             let status = if on_corrupt(path) {
                 ConfigLoad::Corrupt
             } else {
@@ -90,8 +93,8 @@ pub fn load_or_default_status<T: Default + DeserializeOwned>(
     }
 }
 
-/// Как [`load_or_default_status`], но без статуса — для файлов раскладки/темы, где
-/// нечитаемый файл не приводит к автоматической перезаписи.
+/// Like [`load_or_default_status`] without the status, for layout/theme files whose unreadable
+/// state does not trigger an automatic overwrite.
 pub fn load_or_default<T: Default + DeserializeOwned>(
     path: &Path,
     label: &str,
@@ -104,16 +107,16 @@ pub fn load_or_default<T: Default + DeserializeOwned>(
     .0
 }
 
-/// Построить дефолты отсутствующего или нечитаемого файла десериализацией ПУСТОГО TOML,
-/// а не вызовом `T::default()`.
+/// Build defaults for an absent or unreadable file by deserializing EMPTY TOML rather than calling
+/// `T::default()`.
 ///
-/// Эти пути не взаимозаменяемы. Поле с `#[serde(default = "...")]` получает заданное значение
-/// только при ДЕСЕРИАЛИЗАЦИИ, а производный `Default` возвращает `0` / `false` / `""`. Поэтому
-/// прямой `T::default()` для отсутствующего файла дал бы, например, `ui_scale = 0.0` вместо `1.0`
-/// и схлопнул бы все области клика UI до нулевого размера.
+/// These paths are not interchangeable. A field with `#[serde(default = "...")]` receives that
+/// value only during DESERIALIZATION, while derived `Default` returns `0`, `false`, or `""`.
+/// Calling `T::default()` for an absent file would, for example, produce `ui_scale = 0.0` instead
+/// of `1.0` and collapse every UI hit target to zero size.
 ///
-/// Разбор пустого документа запускает тот же путь дефолтов, что и неполный существующий файл.
-/// `T::default()` остаётся запасным вариантом для типа, который нельзя построить из пустого TOML.
+/// Parsing an empty document follows the same defaulting path as an incomplete existing file.
+/// `T::default()` remains a fallback for a type that cannot be built from empty TOML.
 fn defaults_for_absent_file<T: Default + DeserializeOwned>(label: &str) -> T {
     toml::from_str("").unwrap_or_else(|e| {
         log::warn!("{label}: пустой документ не разбирается ({e}); беру Default");
@@ -167,22 +170,21 @@ fn atomic_tmp_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
-/// Контракт дефолтов для отсутствующих на диске файлов конфига.
+/// Defaulting contract for config files absent from disk.
 mod tests {
     use super::super::schema::{default_ui_font_delta, default_ui_scale, SettingsFile};
     use super::{load_or_default, load_or_default_status, ConfigLoad};
     use std::path::{Path, PathBuf};
 
-    /// Привязывает ветку отсутствующего файла в [`load_or_default`] к
-    /// `defaults_for_absent_file`.
+    /// Bind the absent-file branch in [`load_or_default`] to `defaults_for_absent_file`.
     ///
-    /// Возможная поломка: счесть `defaults_for_absent_file` лишней обёрткой и заменить её на
-    /// `T::default()`. Это компилируется, но `#[serde(default = "...")]` работает только при
-    /// десериализации, поэтому производный `Default` обнулит поля с настоящим serde-дефолтом;
-    /// `ui_scale = 0.0` оставит видимый UI без областей клика.
+    /// The plausible breakage is treating `defaults_for_absent_file` as a redundant wrapper and
+    /// replacing it with `T::default()`. This compiles, but `#[serde(default = "...")]` applies
+    /// only during deserialization, so derived `Default` zeroes fields that have real serde
+    /// defaults; `ui_scale = 0.0` leaves visible UI without hit targets.
     ///
-    /// Оракул независим от загрузчика: `schema::default_*` — те же функции, которые использует
-    /// ветка свежего конфига в `config::mod`, поэтому два пути не могут разойтись.
+    /// The oracle is independent of the loader: `schema::default_*` are the same functions used by
+    /// the fresh-config branch in `config::mod`, so the two paths cannot drift apart.
     #[test]
     fn an_absent_file_yields_the_schema_defaults_not_zeroes() {
         let missing = PathBuf::from("no-such-dir-4f21c8/no-such-settings.toml");
@@ -207,18 +209,18 @@ mod tests {
         );
     }
 
-    /// Существующий, но НЕЧИТАЕМЫЙ файл нельзя считать отсутствующим.
+    /// An existing but UNREADABLE file must not be treated as absent.
     ///
-    /// Конструкция `let Ok(text) = read_to_string(..) else { default }` сводит любую ошибку —
-    /// отказ в доступе, sharing violation или невыгруженный облачный плейсхолдер — к ответу
-    /// «первый запуск». Получившийся `version = 0` помечает конфиг грязным и запускает досейв в
-    /// `AppConfig::load`, который заменил бы исправный `settings.toml` дефолтами.
+    /// A construction such as `let Ok(text) = read_to_string(..) else { default }` maps every
+    /// error, including access denial, a sharing violation, or an unhydrated cloud placeholder, to
+    /// "first launch." The resulting `version = 0` marks the config dirty and triggers write-back
+    /// in `AppConfig::load`, which would replace a valid `settings.toml` with defaults.
     ///
-    /// Возможная поломка: свернуть `match` в более короткий `let Ok(..) else`. На машине, где
-    /// файл читается исправно, такой вариант ведёт себя одинаково и не выдаёт риск при проверке.
+    /// The plausible breakage is collapsing the `match` into a shorter `let Ok(..) else`. On a
+    /// machine where the file reads normally, both versions behave identically and hide the risk.
     ///
-    /// Каталог — переносимый способ получить ошибку чтения не типа `NotFound`: ни одна платформа
-    /// не сообщает `NotFound` для существующего пути, который не является файлом.
+    /// A directory is a portable way to obtain a read error other than `NotFound`: no platform
+    /// reports `NotFound` for an existing path that is not a file.
     #[test]
     fn an_unreadable_file_is_not_reported_as_absent() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -235,7 +237,7 @@ mod tests {
         );
     }
 
-    /// Действительно отсутствующий файл даёт `Absent`, чтобы первый запуск мог сохранить дефолты.
+    /// A genuinely missing file reports `Absent` so first launch can save defaults.
     #[test]
     fn a_missing_file_reports_absent() {
         let missing = Path::new("no-such-dir-4f21c8/no-such-settings.toml");

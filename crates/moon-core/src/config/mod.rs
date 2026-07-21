@@ -12,8 +12,8 @@
 //! - `schema`    — структуры файлов на диске (serde) + версия схемы;
 //! - `store`     — чтение/запись файлов (шифрование, бэкап битого settings.toml);
 //! - `reconcile` — слияние файлов ↔ рантайм + стабильные uid;
-//! - `migrate`   — одноразовые миграции со старых форматов;
-//! - `backup`    — снимки обоих файлов в `backups/` перед миграцией и сохранением.
+//! - `migrate`   — one-time migrations from legacy formats;
+//! - `backup`    — snapshots of both files in `backups/` before migration and saving.
 
 pub mod badges;
 pub mod crypto;
@@ -65,28 +65,28 @@ pub fn write_file_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Resu
     toml_io::write_atomic(path, bytes, label)
 }
 
-/// Удался ли снимок, сопровождавший сохранение.
+/// Outcome of the snapshot accompanying a save.
 ///
-/// Отдельно от `Result`: провал снимка НЕ отменяет запись конфига, но и не должен
-/// теряться — «Сохранено» без копии для отката вводит пользователя в заблуждение.
+/// Kept separate from `Result`: snapshot failure does NOT cancel the config write, but it must not
+/// disappear either, because reporting success without a rollback copy would mislead the user.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SnapshotOutcome {
-    /// Копия снята, либо копировать было нечего (первый запуск).
+    /// A copy was taken, or nothing existed to copy on first launch.
     Ok,
-    /// Копию снять не удалось. Конфиг записан, отката нет.
+    /// The copy failed. The config was written, but no rollback is available.
     Failed,
 }
 
-/// Зачем идёт запись конфига — рутинный слив или осознанное сохранение.
+/// Intent of a config write: a routine drain or a deliberate save.
 ///
-/// Названо по НАЗНАЧЕНИЮ, а не по механизму («снимать ли копию»): снимок — сегодняшнее
-/// следствие этого различия, а не его суть. Ядро не может вывести намерение само, поэтому
-/// его передаёт вызывающий.
+/// Named after PURPOSE rather than mechanism ("whether to take a snapshot"): snapshots are the
+/// current consequence of this distinction, not its essence. The core cannot infer intent, so the
+/// caller supplies it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SaveKind {
-    /// Фоновая запись: слив `config_dirty`, выход из приложения, правка из шапки.
+    /// Background write from the `config_dirty` drain, application exit, or a header edit.
     Routine,
-    /// Пользователь осознанно сохранил — тот случай, когда может понадобиться откат.
+    /// A deliberate user save for which rollback may be needed.
     Deliberate,
 }
 
@@ -125,9 +125,9 @@ pub struct AppConfig {
     pub ui_scale: f32,
     /// Множитель RAM-budget для retained market history. 100 = авто-база, 800 = 8x.
     pub chart_memory_percent: u16,
-    /// Порядок всех списков ядер в приложении (settings.toml). Дефолт — `Name`.
+    /// Order of every core list in the application (`settings.toml`). Defaults to `Name`.
     pub core_sort: CoreSortMode,
-    /// Верхняя граница следующего uid из `SettingsFile::next_uid`.
+    /// Upper bound for the next uid from `SettingsFile::next_uid`.
     pub next_uid: u64,
     /// Горячие клавиши терминала (settings.toml, открытый формат).
     pub hotkeys: HotkeysConfig,
@@ -137,15 +137,15 @@ pub struct AppConfig {
     pub orders: OrdersStyleSet,
     /// Бейджи типов детектов (код+цвета по видам, на тему) — отдельный переносимый badges.json.
     pub badges: BadgesConfig,
-    /// Рантайм-флаг (НЕ сериализуется): `settings.toml` СУЩЕСТВУЕТ, но прочитать его не
-    /// удалось (права, шара, невыгруженный облачный плейсхолдер), поэтому в памяти лежат
-    /// ДЕФОЛТЫ, а не настройки пользователя.
+    /// Runtime flag (NOT serialized): `settings.toml` EXISTS but could not be read because of
+    /// permissions, a share, or an unhydrated cloud placeholder, so memory holds DEFAULTS rather
+    /// than the user's settings.
     ///
-    /// Пока флаг взведён, ЛЮБАЯ запись конфига запрещена — см. `save_impl`. Гасить только
-    /// автоматический досейв на старте недостаточно: рутинный слив `config_dirty` из 100-мс
-    /// цикла, запись на выходе из приложения и кнопка «Сохранить» в Настройках — три
-    /// независимых пути, каждый из которых так же превратил бы временную ошибку чтения в
-    /// безвозвратную замену живого конфига дефолтами.
+    /// While set, EVERY config write is forbidden; see `save_impl`. Suppressing only the automatic
+    /// startup save is insufficient: the routine `config_dirty` drain from the 100-ms loop, the
+    /// application-exit write, and the Save button in Settings are three independent paths, each of
+    /// which could turn a temporary read failure into irreversible replacement of the live config
+    /// with defaults.
     pub settings_unreadable: bool,
     /// Рантайм-флаг (НЕ сериализуется): конфиг загружен из версии < `COREID_UID_VERSION`,
     /// где `charts.json` хранил позиционные CoreId. UI на старте один раз перепривяжет их
@@ -154,10 +154,10 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// Загрузить и объединить секреты серверов, настройки и отдельные UI-конфиги.
+    /// Load and merge server secrets, settings, and separate UI config files.
     ///
-    /// Статус чтения `settings.toml` вычисляется до выбора ветки загрузки, чтобы любой путь
-    /// построения выставлял `settings_unreadable` и запрещал опасную обратную запись.
+    /// The `settings.toml` read status is computed before choosing a load branch so every
+    /// construction path sets `settings_unreadable` and blocks an unsafe write-back.
     pub fn load() -> anyhow::Result<Self> {
         // macOS/Linux: при первом запуске после переезда хранилища перенести
         // конфиги из бандла (рядом с exe) в пользовательскую директорию данных.
@@ -177,22 +177,22 @@ impl AppConfig {
         {
             return Ok(cfg);
         }
-        // Прочитано ОДИН раз и ДО выбора ветки: статус чтения settings.toml решает, вправе ли
-        // писать на диск ЛЮБАЯ из веток ниже, а не только основная. Читать его внутри ветки
-        // `servers.enc` было мало: при отсутствующем servers.enc и нечитаемом settings.toml
-        // (частичная синхронизация, ручное удаление, восстановление) миграционные и
-        // свежая ветки оставляли флаг сброшенным — и следующее сохранение из Настроек
-        // заменяло непрочитанные настройки дефолтами.
+        // Read ONCE and BEFORE branch selection: the settings.toml status decides whether ANY
+        // branch below may write to disk, not only the primary branch. Reading it only inside the
+        // `servers.enc` branch misses an absent servers.enc paired with an unreadable settings.toml
+        // after partial sync, manual deletion, or restoration. Migration and fresh-config branches
+        // would then leave the flag clear, allowing the next Settings save to replace unread
+        // settings with defaults.
         let (meta, meta_load) = store::read_settings();
         let settings_unreadable = !meta_load.permits_overwrite();
 
         if paths::servers_path().exists() {
             let sf = store::read_servers()?;
-            // Взято ДО того, как `merge` поглотит `meta`: `Merged` из-за этого не приходится
-            // расширять полем, которое здесь и так уже известно.
+            // Capture this BEFORE `merge` consumes `meta`, avoiding an extra `Merged` field for a
+            // value already known here.
             let schema_upgrade = meta.version < schema::SCHEMA_VERSION;
-            // Снимок ДО любой записи в этом пути: пере-сохранение ниже заменит оба файла
-            // атомарным переименованием, после чего до-миграционных байтов уже не достать.
+            // Snapshot BEFORE any write on this path: the save below replaces both files by atomic
+            // rename, after which the pre-migration bytes cannot be recovered.
             if schema_upgrade {
                 backup::snapshot(backup::Trigger::SchemaMigration);
             }
@@ -240,9 +240,9 @@ impl AppConfig {
             // Дослоить новые дефолты / зафиксировать свежие uid на диск.
             // Не фатально: при ошибке продолжаем с тем, что уже в памяти.
             //
-            // FAIL CLOSED: при `settings_unreadable` сам `save` откажет (см. `save_impl`) —
-            // здесь только явный лог, чтобы причина была видна в журнале, а не выглядела
-            // как загадочный отказ записи.
+            // FAIL CLOSED: `save` itself rejects `settings_unreadable` (see `save_impl`). This
+            // explicit log makes the reason visible instead of presenting a mysterious write
+            // failure.
             if merged.dirty {
                 if cfg.settings_unreadable {
                     log::error!(
@@ -269,8 +269,8 @@ impl AppConfig {
             cfg.ui_font_delta = schema::default_ui_font_delta();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
-            // Как и в ветке свежего конфига: serde-дефолт равен `true`, производный `Default` —
-            // `false`, а `save()` ниже запишет победившее значение.
+            // As in the fresh-config branch, the serde default is `true` while derived `Default` is
+            // `false`; `save()` below writes the selected value.
             cfg.separate_control_zones = servers::default_true();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
@@ -297,8 +297,8 @@ impl AppConfig {
             cfg.ui_font_delta = schema::default_ui_font_delta();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
-            // Как и в ветке свежего конфига: serde-дефолт равен `true`, производный `Default` —
-            // `false`, а `save()` ниже запишет победившее значение.
+            // As in the fresh-config branch, the serde default is `true` while derived `Default` is
+            // `false`; `save()` below writes the selected value.
             cfg.separate_control_zones = servers::default_true();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
@@ -328,13 +328,13 @@ impl AppConfig {
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             hotkeys: hotkeys_file.unwrap_or_default(),
-            // Указано явно, в отличие от соседей под `..Self::default()`, потому что serde-дефолт
-            // равен `true`: производный `Default` вернул бы `false`, и первое сохранение настроек
-            // молча инвертировало бы зоны управления. Остальные поля этого обновления структуры
-            // всё равно имеют нулевые дефолты.
+            // Set explicitly instead of inheriting `..Self::default()` because the serde default is
+            // `true`. Derived `Default` would return `false`, causing the first Settings save to
+            // invert the control zones silently. The other fields introduced with this struct
+            // update all have zero defaults.
             separate_control_zones: servers::default_true(),
-            // Файлов ядер нет, но settings.toml может существовать и не читаться — тогда
-            // писать поверх него нельзя и на этой ветке.
+            // Core files are absent, but settings.toml may still exist and be unreadable; this
+            // branch must not overwrite it either.
             settings_unreadable,
             ..Self::default()
         })
@@ -417,7 +417,7 @@ impl AppConfig {
             theme,
             orders,
             badges,
-            // Плейнтекст-режим не читает settings.toml вовсе, писать нечего и нечем испортить.
+            // Plaintext mode never reads settings.toml, so there is nothing to overwrite or damage.
             settings_unreadable: false,
             chart_core_remap_needed: false,
         }))
@@ -426,29 +426,29 @@ impl AppConfig {
     /// Сохраняет в два файла. Проставляет стабильные uid, валидирует уникальность
     /// имени и host:port. `&mut self` — т.к. может присвоить uid новым ядрам.
     ///
-    /// БЕЗ снимка: этот путь зовёт рутинный слив `config_dirty` (100-мс цикл, выход из
-    /// приложения, правки из шапки), который срабатывает на мелочах и за минуты вытеснил бы
-    /// полезные снимки из хранилища. Осознанное сохранение — [`Self::save_with_snapshot`].
+    /// WITHOUT a snapshot: this path serves the routine `config_dirty` drain (the 100-ms loop,
+    /// application exit, and header edits), which fires for small changes and would evict useful
+    /// snapshots from retention within minutes. Deliberate saves use [`Self::save_with_snapshot`].
     pub fn save(&mut self) -> anyhow::Result<()> {
         self.save_impl(SaveKind::Routine).map(|_| ())
     }
 
-    /// Как [`Self::save`], но сначала снимает копию текущих файлов в `backups/`.
+    /// Like [`Self::save`], but first copies the current files into `backups/`.
     ///
-    /// Для осознанных сохранений (окно Настроек), где пользователю может понадобиться откат.
-    /// Имя описывает ПОВЕДЕНИЕ записи, а не UI-поверхность: `moon-core` не знает про окна.
+    /// Used for deliberate saves from Settings where the user may need a rollback. The name
+    /// describes write BEHAVIOR rather than a UI surface because `moon-core` knows nothing about
+    /// windows.
     ///
-    /// `Ok(SnapshotOutcome::Failed)` означает: конфиг ЗАПИСАН, но копии для отката нет.
-    /// Вызывающий обязан это показать — иначе «Сохранено» соврёт о наличии защиты.
+    /// `Ok(SnapshotOutcome::Failed)` means the config WAS WRITTEN but no rollback copy exists. The
+    /// caller must surface this or a success message would falsely promise protection.
     pub fn save_with_snapshot(&mut self) -> anyhow::Result<SnapshotOutcome> {
         self.save_impl(SaveKind::Deliberate)
     }
 
-    /// Общая реализация сохранения; `kind` решает, снимать ли копию перед записью.
+    /// Shared save implementation; `kind` decides whether to snapshot before writing.
     ///
-    /// ЕДИНСТВЕННАЯ точка записи конфига, поэтому запрет на запись стоит здесь: так он
-    /// накрывает и Настройки, и слив по таймеру, и запись на выходе, и миграцию — а не
-    /// один путь, о котором вспомнили.
+    /// This is the ONLY config write point, so the write block belongs here. It covers Settings,
+    /// the timer drain, the exit write, and migration rather than only one remembered path.
     fn save_impl(&mut self, kind: SaveKind) -> anyhow::Result<SnapshotOutcome> {
         if self.settings_unreadable {
             anyhow::bail!(
@@ -479,10 +479,10 @@ impl AppConfig {
             self.core_sort,
             self.next_uid,
         );
-        // Снимок ПОСЛЕ валидации и ровно перед первой записью. Раньше — и каждое отклонённое
-        // сохранение (кнопка активна всегда, а дубль имени ядра валится именно в `validate`)
-        // тратило бы слот хранения, ничего при этом не записав: тридцати таких хватило бы,
-        // чтобы вытеснить миграционный снимок.
+        // Snapshot AFTER validation and immediately before the first write. Taking it earlier
+        // would consume a retention slot for every rejected save without writing anything: the
+        // button is always enabled and duplicate core names fail only in `validate`. Thirty such
+        // attempts would be enough to evict a migration snapshot.
         let outcome = match kind {
             SaveKind::Deliberate => backup::snapshot(backup::Trigger::SettingsSave),
             SaveKind::Routine => SnapshotOutcome::Ok,
@@ -565,11 +565,11 @@ impl AppConfig {
             UiThemeMode::default(),
             schema::default_ui_scale(),
             schema::default_chart_memory_percent(),
-            // Режим сортировки относится только к представлению. Порядок Vec серверов остаётся в
-            // сигнатуре: из него строится `SessionManager::config_order`, который определяет место
-            // повторно активированной сессии, то есть влияет уже на слой сессий.
+            // Sort mode affects presentation only. The server Vec order remains in the signature:
+            // it builds `SessionManager::config_order`, which determines a reactivated session's
+            // position and therefore affects the session layer.
             CoreSortMode::default(),
-            // Счётчик uid растёт при сохранении и сам по себе структуру не описывает.
+            // The uid counter advances on save and does not describe structure by itself.
             0,
         );
         let a = toml::to_string(&sf).unwrap_or_default();
@@ -599,7 +599,7 @@ mod structural_sig_tests {
 
     use super::{AppConfig, CoreSortMode, ServerConfig};
 
-    /// Построить `AppConfig` с выбранным порядком и серверами.
+    /// Build an `AppConfig` with the selected order and servers.
     fn config(mode: CoreSortMode, servers: Vec<ServerConfig>) -> AppConfig {
         AppConfig {
             servers,
@@ -608,7 +608,7 @@ mod structural_sig_tests {
         }
     }
 
-    /// Построить минимальную фикстуру сервера.
+    /// Build a minimal server fixture.
     fn server(id: u64, name: &str) -> ServerConfig {
         ServerConfig {
             id,
@@ -618,8 +618,8 @@ mod structural_sig_tests {
         }
     }
 
-    /// Проверяет `AppConfig::structural_sig`: смена сортировки представления не должна
-    /// переподключать ядра или пересобирать окна групп.
+    /// Protect `AppConfig::structural_sig`: changing presentation order must not reconnect cores
+    /// or rebuild group windows.
     #[test]
     fn changing_only_the_sort_mode_is_not_structural() {
         let servers = vec![server(1, "Alpha"), server(2, "Bravo")];
@@ -632,9 +632,8 @@ mod structural_sig_tests {
         );
     }
 
-    /// Проверяет `AppConfig::structural_sig`: перестановка Vec серверов остаётся структурной,
-    /// потому что из неё строится `SessionManager::config_order`, определяющий место повторно
-    /// активированной сессии.
+    /// Protect `AppConfig::structural_sig`: reordering the server Vec remains structural because it
+    /// builds `SessionManager::config_order`, which positions a reactivated session.
     #[test]
     fn a_server_list_reorder_stays_structural() {
         let forward = config(

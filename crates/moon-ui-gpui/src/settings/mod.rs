@@ -1,9 +1,9 @@
 //! Окно настроек (порт egui `src/settings/*` + `window/settings_window.rs`).
 //! Отдельное ОС-окно, редактирует ЖИВОЙ `Backend.config`: правки темы применяются
 //! к чарту сразу (группы-окна читают config каждый кадр и пере-рендерят offscreen),
-//! «Сохранить» пишет на диск через `AppConfig::save_with_snapshot` — осознанное сохранение,
-//! перед которым снимается копия конфига в `backups/` (обычный `save` без снимка остаётся
-//! за рутинным сливом `config_dirty`).
+//! Save writes to disk through `AppConfig::save_with_snapshot`, a deliberate save preceded by a
+//! config copy in `backups/`; ordinary `save` without a snapshot serves the routine `config_dirty`
+//! drain.
 //!
 //! Разбито по вкладкам (как egui-оригинал): [`interface`] (тема), [`general`] (общие),
 //! [`lines`] (стиль ордер-линий), [`connections`] (ядра/группы). Здесь — каркас:
@@ -107,7 +107,7 @@ const MODE_LABELS: [(&str, MarketDataMode); 2] = [
     ("conn.market_percore", MarketDataMode::PerCore),
 ];
 
-/// Подписи и значения глобального селектора порядка ядер.
+/// Labels and values for the global core-order selector.
 const CORE_SORT_LABELS: [(&str, CoreSortMode); 3] = [
     ("conn.core_sort.name", CoreSortMode::Name),
     ("conn.core_sort.added", CoreSortMode::AddedOldest),
@@ -141,7 +141,7 @@ pub struct SettingsView {
     lang: Entity<MoonSelectState<Language>>,
     /// Выпадающий выбор источника данных (вкладка «Подключения»).
     mode: Entity<MoonSelectState<MarketDataMode>>,
-    /// Селектор порядка, общий для всех списков ядер на вкладке «Подключения».
+    /// Order selector shared by every core list on the Connections tab.
     core_sort: Entity<MoonSelectState<CoreSortMode>>,
     /// Какие блоки-линии раскрыты (вкладка «Линии», порт CollapsingHeader).
     open_lines: HashSet<&'static str>,
@@ -197,7 +197,7 @@ impl SettingsView {
             }))
     }
 
-    /// Построить состояние окна Настроек и синхронизированные селекторы из текущего черновика.
+    /// Build Settings window state and synchronized selectors from the current draft.
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let iface = interface::build(&backend, window, cx);
         let lines = lines::build(&backend, window, cx);
@@ -281,7 +281,7 @@ impl SettingsView {
         )
         .detach();
 
-        // Один режим порядка управляет всеми списками ядер.
+        // One order mode controls every core list.
         let core_sort_items = CORE_SORT_LABELS
             .iter()
             .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
@@ -360,7 +360,7 @@ impl SettingsView {
     }
 }
 
-/// Хеш настроек, изменение которых требует обновить editor-state открытого окна.
+/// Hash settings whose changes require refreshing the open window's editor state.
 fn settings_sig(b: &Backend) -> u64 {
     let cfg = b.preview.as_ref().unwrap_or(&b.config);
     let mut h = DefaultHasher::new();

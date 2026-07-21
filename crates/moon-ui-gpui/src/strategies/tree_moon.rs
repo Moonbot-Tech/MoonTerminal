@@ -329,18 +329,19 @@ impl StrategiesView {
         data: Rc<HashMap<SharedString, NodeData>>,
         cx: &Context<Self>,
     ) -> AnyElement {
-        // Только WEAK, не сильный `cx.entity()`. На каждом кадре `MoonTree` переносит И рендерер
-        // строки, И декораторы в долгоживущий `MoonTreeState` (MoonUI `tree.rs`,
-        // `impl RenderOnce for Tree`), а state лежит в ЭТОМ view. Сильный handle в любой closure
-        // замыкает цикл `StrategiesView -> tree_state -> closure -> StrategiesView`, и view вместе
-        // с подписками не удаляется. Обе обратные ссылки должны быть слабыми: одной недостаточно.
+        // WEAK only, never a strong `cx.entity()`. On every frame, `MoonTree` moves BOTH the row
+        // renderer AND decorators into long-lived `MoonTreeState` (MoonUI `tree.rs`,
+        // `impl RenderOnce for Tree`), while that state lives in THIS view. A strong handle in
+        // either closure closes `StrategiesView -> tree_state -> closure -> StrategiesView`, so
+        // the view and its subscriptions never drop. Both back-references must be weak; one is not
+        // enough.
         let view = cx.entity().downgrade();
 
         // ── рендер строки ──
         let row_data = data.clone();
         let row_view = view.clone();
         let tree = MoonTree::custom(&self.tree_state, move |entry, meta, _window, app| {
-            // Мёртвый handle означает, что view уже нет; рисуем пустую строку.
+            // A dead handle means the view is gone; render an empty row.
             let Some(row_view) = row_view.upgrade() else {
                 return div().into_any_element();
             };
@@ -411,8 +412,8 @@ impl StrategiesView {
                     .drag_over::<FolderDrag>(move |s, _d, _w, _a| s.bg(hl))
                     .on_drop::<StratDrag>(move |drag: &StratDrag, _w, app| {
                         let d = drag.clone();
-                        // Декоратор живёт дольше кадра; мёртвый handle означает, что view уже нет
-                        // и применять drop некуда.
+                        // The decorator outlives the frame; a dead handle means the view is gone
+                        // and there is nowhere to apply the drop.
                         let Some(vs) = vs.upgrade() else {
                             return;
                         };
