@@ -166,6 +166,14 @@ pub(crate) fn run() -> anyhow::Result<()> {
         }));
     }
 
+    // Settle the storage layout FIRST. `AppConfig::load` runs these itself, but `layout.toml`
+    // and `charts.json` are among the files `migrate_flat_to_cfg` moves into `cfg/`, and both
+    // are read just below through their post-move paths — reading before the move would see
+    // nothing on exactly the old installs the uid floor exists to repair. Both migrations are
+    // idempotent, so the call inside `AppConfig::load` stays a no-op.
+    moon_core::config::paths::migrate_bundle_data();
+    moon_core::config::paths::migrate_flat_to_cfg();
+
     // Read the core-keyed stores BEFORE the config: `AppConfig::load` assigns uids to entries
     // that carry none and persists them, so the floor has to be known by then. These loads are
     // config-independent and their values are reused below rather than read twice.
