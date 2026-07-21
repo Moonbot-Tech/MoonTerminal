@@ -116,6 +116,129 @@ pub struct ServerConfig {
     pub default_alert_strategy: u64,
 }
 
+/// User-selected order for every core list in the application.
+///
+/// The choice is stored globally; the UI crate's `core_order` module performs ranking.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CoreSortMode {
+    /// Lexicographic order by lowercase Unicode name, with uid as a tie-breaker.
+    #[default]
+    Name,
+    /// In insertion order, oldest first, using `ServerConfig::uid`.
+    AddedOldest,
+    /// In insertion order, newest first, using `ServerConfig::uid`.
+    AddedNewest,
+}
+
+impl CoreSortMode {
+    /// Stable code persisted in `settings.toml`.
+    ///
+    /// `AddedOldest` deliberately serializes as `"added"`: this fixed format value means insertion
+    /// order from oldest to newest.
+    pub fn code(self) -> &'static str {
+        match self {
+            CoreSortMode::Name => "name",
+            CoreSortMode::AddedOldest => "added",
+            CoreSortMode::AddedNewest => "added_newest",
+        }
+    }
+
+    /// Parse a `settings.toml` code, returning `None` for an unknown code.
+    ///
+    /// Unknown values are deliberately not approximated to a mode based on their contents;
+    /// `Deserialize` conservatively maps them to `Default` (`Name`).
+    pub fn from_code(s: &str) -> Option<Self> {
+        match s {
+            "name" => Some(CoreSortMode::Name),
+            "added" => Some(CoreSortMode::AddedOldest),
+            "added_newest" => Some(CoreSortMode::AddedNewest),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for CoreSortMode {
+    /// Serialize the stable lowercase code used by `settings.toml`.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for CoreSortMode {
+    /// Map an unknown string, i64/u64/f64/bool/unit, sequence, or map to the default.
+    ///
+    /// These forms are covered explicitly so a cosmetic field cannot reject the remaining
+    /// settings. Other data forms use the standard `serde::de::Visitor` rejection.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        /// Visitor for TOML forms that have a safe default sort mode.
+        struct AnyScalar;
+
+        impl<'de> serde::de::Visitor<'de> for AnyScalar {
+            type Value = CoreSortMode;
+
+            /// Describe accepted string codes for serde diagnostics.
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a core sort mode (name / added / added_newest)")
+            }
+
+            /// Parse a string code, mapping an unknown code to the default.
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::from_code(v).unwrap_or_default())
+            }
+
+            // Invalid scalar values affect only this cosmetic field.
+            /// Map a signed 64-bit integer to the default.
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::default())
+            }
+
+            /// Map an unsigned 64-bit integer to the default.
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::default())
+            }
+
+            /// Map a floating-point value to the default.
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::default())
+            }
+
+            /// Map a Boolean value to the default.
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::default())
+            }
+
+            /// Map unit/null to the default.
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::default())
+            }
+
+            // Consume the entire invalid container so deserialization stays synchronized.
+            /// Consume an entire sequence and return the default.
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(CoreSortMode::default())
+            }
+
+            /// Consume an entire map and return the default.
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(CoreSortMode::default())
+            }
+        }
+
+        d.deserialize_any(AnyScalar)
+    }
+}
+
 /// Ключ чарт-вкладки AddToChart внутри группы — куда сводить графики ядра.
 /// Резолвится из `ServerConfig::chart_bucket` (см.). Сериализуется в charts.json.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -181,4 +304,79 @@ pub fn default_true() -> bool {
 /// Дефолт срока хранения файлов лога (дней). См. SettingsFile::log_retention_days.
 pub fn default_log_retention_days() -> u32 {
     14
+}
+
+#[cfg(test)]
+mod core_sort_parse_tests {
+    //! Robustness checks for parsing the global core-order setting.
+
+    use super::CoreSortMode;
+    use serde::Deserialize;
+
+    /// Minimal settings wrapper used to verify that parsing preserves an adjacent field.
+    #[derive(Deserialize)]
+    struct Probe {
+        #[serde(default)]
+        core_sort: CoreSortMode,
+        #[serde(default)]
+        keep: String,
+    }
+
+    /// Protect `CoreSortMode::deserialize`: an invalid word or type resets only this field while
+    /// preserving the rest of `SettingsFile`.
+    #[test]
+    fn a_bad_core_sort_value_never_costs_the_rest_of_the_file() {
+        for bad in [
+            r#"core_sort = "typo""#,
+            "core_sort = 1",
+            "core_sort = 1.5",
+            "core_sort = true",
+            "core_sort = []",
+            "core_sort = {}",
+        ] {
+            let toml = format!("{bad}\nkeep = \"server meta\"\n");
+            let probe: Probe = toml::from_str(&toml)
+                .unwrap_or_else(|e| panic!("`{bad}` must not fail the whole file: {e}"));
+            assert_eq!(probe.core_sort, CoreSortMode::Name, "for `{bad}`");
+            assert_eq!(probe.keep, "server meta", "for `{bad}`");
+        }
+    }
+
+    /// An unsupported mode code maps to `Name` without affecting adjacent fields.
+    ///
+    /// The plausible breakage is adding a special mapping from an unknown code to one of the
+    /// insertion-order modes, producing an arbitrary result instead of the conservative default.
+    #[test]
+    fn a_retired_manual_setting_lands_on_the_new_default() {
+        let probe: Probe = toml::from_str("core_sort = \"manual\"\nkeep = \"server meta\"\n")
+            .expect("a retired code must not fail the file");
+        assert_eq!(probe.core_sort, CoreSortMode::Name);
+        assert_eq!(probe.keep, "server meta");
+    }
+
+    /// On-disk codes are fixed format values, not free-form identifiers.
+    ///
+    /// The round-trip check below cannot catch this because it passes `code()` back into
+    /// `from_code()`. Changing both sides together stays green while an existing on-disk `"added"`
+    /// begins mapping to `Name`. These literals pin the contract independently.
+    #[test]
+    fn the_on_disk_codes_are_frozen() {
+        assert_eq!(CoreSortMode::Name.code(), "name");
+        assert_eq!(CoreSortMode::AddedOldest.code(), "added");
+        assert_eq!(CoreSortMode::AddedNewest.code(), "added_newest");
+    }
+
+    /// Protect the accepted-code mapping used by `CoreSortMode` serialization.
+    #[test]
+    fn every_mode_round_trips_through_its_code() {
+        for mode in [
+            CoreSortMode::Name,
+            CoreSortMode::AddedOldest,
+            CoreSortMode::AddedNewest,
+        ] {
+            let toml = format!("core_sort = \"{}\"\nkeep = \"\"\n", mode.code());
+            let probe: Probe = toml::from_str(&toml).expect("a valid code must parse");
+            assert_eq!(probe.core_sort, mode);
+        }
+    }
 }

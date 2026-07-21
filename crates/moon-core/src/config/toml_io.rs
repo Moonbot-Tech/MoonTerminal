@@ -8,40 +8,115 @@ use anyhow::Context;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-/// Прочитать TOML в `T`. Нет файла → дефолт (первый запуск). Битый файл →
-/// лог, `on_corrupt(path)` (например, увод в `.bak`) и дефолт — не падаем и
-/// не теряем данные молча.
+/// Config-load outcome used by the caller to decide whether writing back is safe.
+///
+/// The four outcomes are NOT interchangeable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfigLoad {
+    /// The file was read and parsed; in-memory state reflects its contents.
+    Present,
+    /// The file is absent on first launch; defaults can be saved safely.
+    Absent,
+    /// The file exists but does not parse, and `on_corrupt` moved it to `.bak` successfully.
+    /// The original bytes are preserved, so defaults can fill the now-absent path.
+    ///
+    /// Failed quarantine yields [`ConfigLoad::Unreadable`]: the user's file remains in place and
+    /// permitting a write would destroy it.
+    Corrupt,
+    /// The file may exist and contain valid data but be unreadable because of permissions, a
+    /// sharing violation, or an unhydrated cloud placeholder.
+    ///
+    /// Returned defaults may be used in memory but must not be saved: a temporary read failure must
+    /// not overwrite a valid config.
+    Unreadable,
+}
+
+impl ConfigLoad {
+    /// Return whether this file may be overwritten.
+    ///
+    /// Deliberately uses an EXHAUSTIVE `match` rather than comparing with one "bad" variant. A
+    /// check such as `== Unreadable` is open by default: a fifth variant added later for an
+    /// interrupted read, decryption failure, or cloud-placeholder hydration timeout would silently
+    /// become writable, precisely the failure this design prevents. A new variant cannot compile
+    /// here until its author assigns it to one side.
+    pub fn permits_overwrite(self) -> bool {
+        match self {
+            // The file was read, is absent, or was moved to `.bak`; original bytes are either
+            // absent from the destination or preserved.
+            ConfigLoad::Present | ConfigLoad::Absent | ConfigLoad::Corrupt => true,
+            // The user's file remains in place and was not read, so writing is forbidden.
+            ConfigLoad::Unreadable => false,
+        }
+    }
+}
+
+/// Read TOML into `T` and report HOW it was read.
+///
+/// A missing file yields defaults for first launch. A corrupt file is logged, passed to
+/// `on_corrupt(path)` for quarantine such as a move to `.bak`, and replaced with defaults. An
+/// unreadable file yields defaults plus [`ConfigLoad::Unreadable`] so the caller cannot overwrite
+/// the live config; see [`ConfigLoad`].
+pub fn load_or_default_status<T: Default + DeserializeOwned>(
+    path: &Path,
+    label: &str,
+    on_corrupt: impl FnOnce(&Path) -> bool,
+) -> (T, ConfigLoad) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (defaults_for_absent_file(label), ConfigLoad::Absent);
+        }
+        // This is NOT file absence: the distinction prevents the caller from turning a temporary
+        // read failure into a permanent overwrite during write-back.
+        Err(e) => {
+            log::error!(
+                "{label}: файл есть, но не читается ({e}); работаю на дефолтах В ПАМЯТИ и НЕ \
+                 перезаписываю файл"
+            );
+            return (defaults_for_absent_file(label), ConfigLoad::Unreadable);
+        }
+    };
+    match toml::from_str(&text) {
+        Ok(v) => (v, ConfigLoad::Present),
+        Err(e) => {
+            log::warn!("{label} повреждён ({e}); беру дефолт");
+            // Failed quarantine does NOT permit writing: the user's file remains in place and
+            // saving defaults would destroy it.
+            let status = if on_corrupt(path) {
+                ConfigLoad::Corrupt
+            } else {
+                log::error!("{label}: карантин не удался — запись файла запрещена");
+                ConfigLoad::Unreadable
+            };
+            (defaults_for_absent_file(label), status)
+        }
+    }
+}
+
+/// Like [`load_or_default_status`] without the status, for layout/theme files whose unreadable
+/// state does not trigger an automatic overwrite.
 pub fn load_or_default<T: Default + DeserializeOwned>(
     path: &Path,
     label: &str,
     on_corrupt: impl FnOnce(&Path),
 ) -> T {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return defaults_for_absent_file(label);
-    };
-    match toml::from_str(&text) {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!("{label} повреждён ({e}); беру дефолт");
-            on_corrupt(path);
-            defaults_for_absent_file(label)
-        }
-    }
+    load_or_default_status(path, label, |p| {
+        on_corrupt(p);
+        true
+    })
+    .0
 }
 
-/// Defaults for a file that is absent or unreadable, built by deserializing an EMPTY TOML
-/// document rather than by calling `T::default()`.
+/// Build defaults for an absent or unreadable file by deserializing EMPTY TOML rather than calling
+/// `T::default()`.
 ///
-/// The two are not interchangeable, and the difference is a silent data bug. A field whose real
-/// default is declared as `#[serde(default = "...")]` gets that value only while DESERIALIZING —
-/// a derived `Default` hands back `0` / `false` / `""` instead. So a config file that merely
-/// LACKED a field came out correct, while a config file that was MISSING ENTIRELY came out zeroed.
-/// That is how an absent `settings.toml` produced `ui_scale = 0.0` instead of `1.0` and collapsed
-/// every hit rectangle in the UI to zero size.
+/// These paths are not interchangeable. A field with `#[serde(default = "...")]` receives that
+/// value only during DESERIALIZATION, while derived `Default` returns `0`, `false`, or `""`.
+/// Calling `T::default()` for an absent file would, for example, produce `ui_scale = 0.0` instead
+/// of `1.0` and collapse every UI hit target to zero size.
 ///
-/// Parsing an empty document runs the exact same defaulting path a present-but-incomplete file
-/// takes, so "no file" and "empty file" can no longer disagree. `T::default()` stays as the
-/// fallback for a type that genuinely cannot be built from nothing.
+/// Parsing an empty document follows the same defaulting path as an incomplete existing file.
+/// `T::default()` remains a fallback for a type that cannot be built from empty TOML.
 fn defaults_for_absent_file<T: Default + DeserializeOwned>(label: &str) -> T {
     toml::from_str("").unwrap_or_else(|e| {
         log::warn!("{label}: пустой документ не разбирается ({e}); беру Default");
@@ -95,23 +170,21 @@ fn atomic_tmp_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
-/// Defaulting contract for config files that are absent from disk.
+/// Defaulting contract for config files absent from disk.
 mod tests {
     use super::super::schema::{default_ui_font_delta, default_ui_scale, SettingsFile};
-    use super::load_or_default;
-    use std::path::PathBuf;
+    use super::{load_or_default, load_or_default_status, ConfigLoad};
+    use std::path::{Path, PathBuf};
 
-    /// Pins the absent-file branch of [`load_or_default`] to `defaults_for_absent_file`.
+    /// Bind the absent-file branch in [`load_or_default`] to `defaults_for_absent_file`.
     ///
-    /// The plausible edit: someone reads `defaults_for_absent_file` as a pointless wrapper and
-    /// collapses it back to `T::default()`. That compiles, reads as a simplification, and is
-    /// wrong — `#[serde(default = "...")]` runs only while deserializing, so a derived `Default`
-    /// zeroes every field whose real default lives in such an attribute. Shipped once already:
-    /// an absent `settings.toml` loaded `ui_scale` as `0.0` instead of `1.0`, which scaled every
-    /// hit rectangle to zero size and left the UI visible but unclickable.
+    /// The plausible breakage is treating `defaults_for_absent_file` as a redundant wrapper and
+    /// replacing it with `T::default()`. This compiles, but `#[serde(default = "...")]` applies
+    /// only during deserialization, so derived `Default` zeroes fields that have real serde
+    /// defaults; `ui_scale = 0.0` leaves visible UI without hit targets.
     ///
-    /// The oracle is independent of the loader: `schema::default_*` are the same functions the
-    /// fresh-config path in `config::mod` uses, so loader and fresh-config cannot drift apart.
+    /// The oracle is independent of the loader: `schema::default_*` are the same functions used by
+    /// the fresh-config branch in `config::mod`, so the two paths cannot drift apart.
     #[test]
     fn an_absent_file_yields_the_schema_defaults_not_zeroes() {
         let missing = PathBuf::from("no-such-dir-4f21c8/no-such-settings.toml");
@@ -134,5 +207,50 @@ mod tests {
             default_ui_font_delta(),
             "an absent settings.toml must load the schema default font delta, not f32::default()"
         );
+    }
+
+    /// An existing but UNREADABLE file must not be treated as absent.
+    ///
+    /// A construction such as `let Ok(text) = read_to_string(..) else { default }` maps every
+    /// error, including access denial, a sharing violation, or an unhydrated cloud placeholder, to
+    /// "first launch." The resulting `version = 0` marks the config dirty and triggers write-back
+    /// in `AppConfig::load`, which would replace a valid `settings.toml` with defaults.
+    ///
+    /// The plausible breakage is collapsing the `match` into a shorter `let Ok(..) else`. On a
+    /// machine where the file reads normally, both versions behave identically and hide the risk.
+    ///
+    /// A directory is a portable way to obtain a read error other than `NotFound`: no platform
+    /// reports `NotFound` for an existing path that is not a file.
+    #[test]
+    fn an_unreadable_file_is_not_reported_as_absent() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        assert!(dir.is_dir(), "the fixture must be a directory that exists");
+
+        let (_cfg, status) = load_or_default_status::<SettingsFile>(&dir, "settings.toml", |_| {
+            panic!("on_corrupt must not fire for a file that could not be read at all")
+        });
+
+        assert_eq!(
+            status,
+            ConfigLoad::Unreadable,
+            "a path that exists but does not read must report Unreadable, never Absent"
+        );
+    }
+
+    /// A genuinely missing file reports `Absent` so first launch can save defaults.
+    #[test]
+    fn a_missing_file_reports_absent() {
+        let missing = Path::new("no-such-dir-4f21c8/no-such-settings.toml");
+        assert!(
+            !missing.exists(),
+            "the fixture path must genuinely not exist"
+        );
+
+        let (_cfg, status) =
+            load_or_default_status::<SettingsFile>(missing, "settings.toml", |_| {
+                panic!("on_corrupt must not fire for a file that is merely absent")
+            });
+
+        assert_eq!(status, ConfigLoad::Absent);
     }
 }

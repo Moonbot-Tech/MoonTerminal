@@ -12,7 +12,7 @@ use super::schema::{
     ServerEntry, ServerMeta, ServersFile, SettingsFile, UiThemeMode, COREID_UID_VERSION,
     SCHEMA_VERSION,
 };
-use super::servers;
+use super::servers::{self, CoreSortMode};
 use super::ServerConfig;
 use crate::market::MarketDataMode;
 
@@ -48,6 +48,10 @@ pub struct Merged {
     pub ui_scale: f32,
     /// Множитель бюджета retained chart history.
     pub chart_memory_percent: u16,
+    /// How core lists are ordered app-wide.
+    pub core_sort: CoreSortMode,
+    /// Durable uid counter, already advanced past any uid handed out during this merge.
+    pub next_uid: u64,
     /// Legacy-хоткеи из settings.toml (schema < v13) — только для одноразовой
     /// миграции в `hotkeys.toml`; при существующем hotkeys.toml игнорируются.
     pub hotkeys: HotkeysConfig,
@@ -82,6 +86,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile) -> Merged {
     let ui_theme_mode = meta.ui_theme_mode;
     let ui_scale = repair_ui_scale(meta.ui_scale);
     let chart_memory_percent = clamp_chart_memory_percent(meta.chart_memory_percent);
+    let core_sort = meta.core_sort;
     let hotkeys = meta.hotkeys;
 
     let servers = sf
@@ -147,6 +152,8 @@ pub fn merge(sf: ServersFile, meta: SettingsFile) -> Merged {
         ui_theme_mode,
         ui_scale,
         chart_memory_percent,
+        core_sort,
+        next_uid,
         hotkeys,
         dirty,
         chart_core_remap_needed,
@@ -172,6 +179,8 @@ pub fn split(
     ui_theme_mode: UiThemeMode,
     ui_scale: f32,
     chart_memory_percent: u16,
+    core_sort: CoreSortMode,
+    next_uid: u64,
 ) -> (ServersFile, SettingsFile) {
     let sf = ServersFile {
         servers: servers
@@ -202,6 +211,8 @@ pub fn split(
         // Legacy-поле: с v13 живёт в hotkeys.toml, в settings.toml не сериализуется.
         hotkeys: HotkeysConfig::default(),
         groups: groups.to_vec(),
+        core_sort,
+        next_uid,
         servers: servers
             .iter()
             .map(|s| ServerMeta {
@@ -223,23 +234,86 @@ pub fn split(
     (sf, meta)
 }
 
-/// Проставить стабильный uid всем серверам без него (uid == 0). Вызывается перед
-/// записью, чтобы у только что добавленных в UI ядер сразу был стабильный id.
-pub fn ensure_uids(servers: &mut [ServerConfig]) {
-    let mut next = servers.iter().map(|s| s.uid).max().unwrap_or(0) + 1;
+/// Assign stable ids to servers with `uid == 0` and advance the durable counter.
+///
+/// The existing maximum supports a zero counter; the counter prevents reuse of deleted
+/// identities referenced by insertion order and `reports.sqlite`.
+pub fn ensure_uids(servers: &mut [ServerConfig], counter: &mut u64) {
+    let highest = servers.iter().map(|s| s.uid).max().unwrap_or(0);
+    let mut next = (*counter).max(highest + 1);
     for s in servers.iter_mut() {
         if s.uid == 0 {
             s.uid = next;
+            // Keep runtime CoreId equal to uid before reconcile; otherwise layout/session
+            // state and reports.sqlite would refer to different identities until restart.
+            s.id = next;
             next += 1;
         }
     }
+    *counter = next;
 }
 
-/// Первый свободный uid с учётом обоих файлов (чтобы не выдать занятый).
+/// Return the next uid from the durable counter and the maxima in both config files.
+///
+/// See `SettingsFile::next_uid` for the persistence boundary of this high-water mark.
 fn next_free_uid(sf: &ServersFile, meta: &SettingsFile) -> u64 {
     let from_entries = sf.servers.iter().map(|e| e.uid).max().unwrap_or(0);
     let from_meta = meta.servers.iter().map(|m| m.uid).max().unwrap_or(0);
-    from_entries.max(from_meta) + 1
+    meta.next_uid.max(from_entries.max(from_meta) + 1)
+}
+
+#[cfg(test)]
+mod uid_tests {
+    //! Durable uid allocation tests.
+
+    use super::ensure_uids;
+    use crate::config::ServerConfig;
+
+    /// Build a server fixture with matching runtime and durable ids.
+    fn server(uid: u64) -> ServerConfig {
+        ServerConfig {
+            id: uid,
+            uid,
+            ..deserialize_default()
+        }
+    }
+
+    /// Build a `ServerConfig` with every serde default applied.
+    fn deserialize_default() -> ServerConfig {
+        toml::from_str("id = 0").expect("ServerConfig must deserialize from defaults")
+    }
+
+    /// Protects `ensure_uids`: deriving from surviving servers would reuse a deleted uid and
+    /// attach its `reports.sqlite` history to a new server.
+    #[test]
+    fn a_deleted_servers_uid_is_never_handed_out_again() {
+        let mut counter = 0u64;
+        let mut servers = vec![server(0), server(0), server(0)];
+        ensure_uids(&mut servers, &mut counter);
+        let issued: Vec<u64> = servers.iter().map(|s| s.uid).collect();
+        assert_eq!(issued, [1, 2, 3], "fresh config issues from 1");
+        assert_eq!(counter, 4);
+
+        // Delete the highest-uid server, then add a new one.
+        servers.pop();
+        servers.push(server(0));
+        ensure_uids(&mut servers, &mut counter);
+        let fresh = servers.last().expect("just pushed").uid;
+        assert!(
+            fresh > 3,
+            "uid {fresh} reuses a deleted server's identity; reports.sqlite keys on it"
+        );
+    }
+
+    /// Protects `ensure_uids`: a zero counter must fall back to `max_existing + 1`.
+    #[test]
+    fn a_config_without_a_counter_keeps_the_old_issuing_behaviour() {
+        let mut counter = 0u64;
+        let mut servers = vec![server(7), server(0)];
+        ensure_uids(&mut servers, &mut counter);
+        assert_eq!(servers[1].uid, 8);
+        assert_eq!(counter, 9);
+    }
 }
 
 #[cfg(test)]

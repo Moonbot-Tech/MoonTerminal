@@ -31,7 +31,7 @@ impl Shell {
         let any_failed = conn
             .down
             .iter()
-            .any(|(_, s)| matches!(s, ConnStatus::Failed(_) | ConnStatus::Disconnected));
+            .any(|(_, _, s)| matches!(s, ConnStatus::Failed(_) | ConnStatus::Disconnected));
         let p = MoonPalette::active(cx);
         let badge_col = if all_ok {
             p.green
@@ -44,7 +44,7 @@ impl Shell {
         let down_text: String = conn
             .down
             .iter()
-            .filter_map(|(name, st)| {
+            .filter_map(|(_, name, st)| {
                 let reason = match st {
                     ConnStatus::Connecting => t!("status.connecting").to_string(),
                     ConnStatus::Stage(s) => s.clone(),

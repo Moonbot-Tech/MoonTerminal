@@ -73,7 +73,10 @@ impl Render for Shell {
 
         let (conn, license, snap, book_levels) = {
             let b = self.backend.read(cx);
-            let conn = b.session.conn_summary_group(&self.group);
+            let mut conn = b.session.conn_summary_group(&self.group);
+            // The disconnected-cores tooltip is a core list like any other — rank it the same
+            // way, or it reads in a different order than the header pill right above it.
+            crate::core_order::CoreOrder::new(&b.config).sort_by(&mut conn.down, |(id, _, _)| *id);
             let license = b.session.license_summary_group(&self.group);
             let snap = b.snap;
             // Для статус-бара нужно лишь число уровней стакана текущего Main-чарта.

@@ -24,6 +24,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::Backend;
+use crate::core_order::CoreOrder;
 use moon_core::applog::{self, LogLine};
 use moon_core::session::{CoreId, CoreStore};
 
@@ -170,14 +171,20 @@ impl LogPanel {
                 file_label: "app".into(),
             },
         ];
-        for s in &b.config.servers {
-            if scoped && s.group != self.group {
-                continue;
-            }
+        // Sort configured cores without changing membership; pseudo-items remain pinned above.
+        let mut cores: Vec<(CoreId, String)> = b
+            .config
+            .servers
+            .iter()
+            .filter(|s| !scoped || s.group == self.group)
+            .map(|s| (s.id, s.name.clone()))
+            .collect();
+        CoreOrder::new(&b.config).sort_by(&mut cores, |(id, _)| *id);
+        for (id, name) in cores {
             v.push(LogSourceItem {
-                source: LogSource::Core(s.id),
-                display: s.name.clone(),
-                file_label: applog::sanitize_label(&s.name),
+                source: LogSource::Core(id),
+                file_label: applog::sanitize_label(&name),
+                display: name,
             });
         }
         v

@@ -4,8 +4,9 @@
 //! (fixed-sell) сюда НЕ входит: она уходит ядрам отдельным шагом через
 //! существующий ClientSettings-путь (ТЗ §10/§12).
 //!
-//! Функция мутирует переданный конфиг В ПАМЯТИ и ничего не пишет на диск —
-//! запись делает обычный `AppConfig::save()` по кнопке «Сохранить» (ТЗ §12).
+//! The function mutates the supplied config IN MEMORY and writes nothing to disk. The Save button
+//! calls `AppConfig::save_with_snapshot()` (spec section 12). A snapshot is required because import
+//! changes many settings at once, which is precisely when rollback is needed.
 
 use std::collections::HashSet;
 

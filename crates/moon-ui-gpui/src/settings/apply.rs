@@ -1,6 +1,5 @@
-//! Сохранение и применение настроек: коммит draft → config + запись на диск
-//! («Сохранить»), живое применение (язык/лог/тема/режим рынка) и рестарт/реконсайл
-//! сессий и окон групп при структурных изменениях.
+//! Saving a Settings draft and applying presentation, logging, market, session, and window
+//! changes at their appropriate boundaries.
 
 use std::collections::HashSet;
 
@@ -8,25 +7,44 @@ use gpui::*;
 use moon_ui::Root;
 
 use super::SettingsView;
-use moon_core::config::AppConfig;
+use moon_core::config::{AppConfig, SnapshotOutcome};
 
 impl SettingsView {
-    /// Коммит draft → config + запись на диск (валидация внутри AppConfig::save).
-    /// draft остаётся (правки продолжаются), как egui (Save не закрывает окно). При
-    /// успехе — применяем изменения (порт egui `App::render_settings`).
+    /// Validate and save the draft, then apply it without closing the Settings window.
+    ///
+    /// A failed save changes neither the active config nor the draft.
     pub(super) fn save(&mut self, cx: &mut Context<Self>) {
-        // Снимок «до» для diff (структура/режим/язык/лог/чарты). Коммитим draft, пишем
-        // на диск (save может выровнять uid'ы), затем сравниваем с актуальным config.
+        // Compare the saved candidate with this snapshot to select live updates and required
+        // rebuilds.
         let before = self.backend.read(cx).config.clone();
         let res = self.backend.update(cx, |b, _| {
-            if let Some(p) = &b.preview {
-                b.config = p.clone();
+            // Commit the candidate only after validation and I/O succeed. Otherwise the config
+            // would change without corresponding session and window reconciliation.
+            let mut candidate = b.preview.as_ref().unwrap_or(&b.config).clone();
+            // Preserve the preceding on-disk files in `backups/` first: this is a deliberate user
+            // save for which rollback must be available.
+            let res = candidate.save_with_snapshot();
+            if res.is_ok() {
+                // Propagate uid normalization from the save back into the draft so the next save
+                // cannot roll back `next_uid` and reuse an id from reports.sqlite history.
+                if let Some(p) = b.preview.as_mut() {
+                    *p = candidate.clone();
+                }
+                b.config = candidate;
             }
-            b.config.save()
+            res
         });
         match res {
-            Ok(()) => {
-                self.status = Some((super::StatusMsg::Key("settings.saved"), false));
+            Ok(outcome) => {
+                // Snapshot failure does NOT cancel the save, but a normal success message would
+                // promise a nonexistent rollback copy precisely when the user relies on one.
+                let snapshot_failed = outcome == SnapshotOutcome::Failed;
+                let msg = if snapshot_failed {
+                    super::StatusMsg::Key("settings.saved_no_backup")
+                } else {
+                    super::StatusMsg::Key("settings.saved")
+                };
+                self.status = Some((msg, snapshot_failed));
                 self.apply_settings(&before, cx);
             }
             Err(e) => self.status = Some((super::StatusMsg::Text(e.to_string()), true)),
@@ -34,21 +52,30 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Применить сохранённые настройки (порт egui `App::render_settings` хвост).
-    /// • лог-настройки — живо (set_file_logging + чистка);
-    /// • структурные изменения серверов/групп → рестарт `SessionManager` + пересоздание
-    ///   окон групп; • смена режима рынка — живо (`set_market_mode`); • смена «чарт на
-    ///   ядро» без структурных изменений → тоже пересборка окон (новые чарт-вкладки).
-    /// • смена языка — живо: ставим локаль rust-i18n и помечаем ВСЕ окна на перерисовку
-    ///   (`refresh_windows`). Окна/подключения/раскладка не трогаются — строки через `t!`
-    ///   читают локаль на рендере, поэтому достаточно одного redraw.
+    /// Apply saved settings at the narrowest required boundary.
+    ///
+    /// Presentation, logging, and market-mode changes apply live. Structural server or group
+    /// changes reconcile sessions, while chart-topology changes rebuild group windows.
     fn apply_settings(&mut self, before: &AppConfig, cx: &mut Context<Self>) {
         let after = self.backend.read(cx).config.clone();
 
-        // Язык — применяем живо: глобальная локаль + перерисовка всех окон (БЕЗ пересоздания
-        // окон и рестарта сессий). `t!` подхватит новую локаль на ближайшем рендере.
-        if before.language != after.language {
+        // Presentation settings are read during rendering, so update locale/order and redraw
+        // without recreating windows or sessions.
+        let lang_changed = before.language != after.language;
+        let sort_changed = before.core_sort != after.core_sort;
+        if lang_changed {
             rust_i18n::set_locale(after.language.code());
+        }
+        if lang_changed || sort_changed {
+            // Notify Backend before redrawing so signature-gated panels recompute their order.
+            self.backend.update(cx, |b, bcx| {
+                // An order change can replace the canonical first core while the cached core is
+                // still live, so bypass the usual liveness early return.
+                if sort_changed {
+                    b.refresh_header_ticker_default(true);
+                }
+                bcx.notify();
+            });
             cx.refresh_windows();
         }
 

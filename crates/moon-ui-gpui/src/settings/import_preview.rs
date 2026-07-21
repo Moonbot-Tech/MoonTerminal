@@ -81,7 +81,18 @@ impl SettingsView {
         let (hotkeys, theme, orders, ui_light, order_sizes, order_size_sel, cores) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
-            let first_active = d.servers.iter().find(|s| s.active).or(d.servers.first());
+            // Rank first, then choose the default target from canonical order. Selecting from raw
+            // `servers` would choose the config's first core, which differs from the user's top row
+            // in Name or AddedNewest mode. That core also owns the order-size presets, so import
+            // would overwrite presets for a core the user was not viewing.
+            let order = crate::core_order::CoreOrder::new(d);
+            let mut ranked: Vec<&moon_core::config::ServerConfig> = d.servers.iter().collect();
+            order.sort_by(&mut ranked, |s| s.id);
+            let first_active = ranked
+                .iter()
+                .copied()
+                .find(|s| s.active)
+                .or_else(|| ranked.first().copied());
             let first_active_id = first_active.map(|s| s.id);
             (
                 d.hotkeys.clone(),
@@ -92,10 +103,10 @@ impl SettingsView {
                     .map(|s| s.order_sizes_or_default("USDT"))
                     .unwrap_or_else(|| default_order_sizes("USDT")),
                 first_active.and_then(|s| s.order_size_sel),
-                d.servers
+                ranked
                     .iter()
                     .map(|s| (s.id, s.name.clone(), Some(s.id) == first_active_id))
-                    .collect::<Vec<_>>(),
+                    .collect::<Vec<(u64, String, bool)>>(),
             )
         };
         cx.spawn(async move |this, cx| {

@@ -31,9 +31,8 @@ const FEED_FLAGS: [(&str, fn(&FeedFlags) -> bool, fn(&mut FeedFlags, bool)); 8] 
     ("conn.tip.arb", |f| f.arb, |f, v| f.arb = v),
 ];
 
-/// Кружок статуса подключения ядра (порт egui `status_dot`): зелёный=Ready, акцент=
-/// подключается, красный=ошибка, серый=неактивно/нет. `active=false` → всегда серый.
-/// Тултип поясняет состояние (для Failed — текст ошибки), как egui `on_hover_text`.
+/// Render a connection-status dot with a localized tooltip, including failure details.
+/// Inactive rows are always gray; live states use ready, connecting, and failure colors.
 fn status_dot(
     i: usize,
     active: bool,

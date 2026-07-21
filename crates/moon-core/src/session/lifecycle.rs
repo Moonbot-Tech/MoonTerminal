@@ -1,5 +1,4 @@
-//! Жизненный цикл сессий: старт/reconcile/reconnect, дренаж каналов ядер и сводки
-//! (подключения/лицензии) для статус-баров.
+//! Session startup, config reconciliation, reconnects, feed draining, and status summaries.
 
 use std::collections::{HashMap, HashSet};
 
@@ -13,9 +12,74 @@ use super::{
     LicenseSummary, SessionManager,
 };
 
+#[cfg(test)]
+mod order_tests {
+    //! Config-order insertion tests that avoid constructing live feed handles.
+
+    use super::{insert_index, rank_of};
+
+    /// Protects `SessionManager::insert_session`: replacing ranked insertion with `push`
+    /// moves a reactivated core to the end of every panel list.
+    #[test]
+    fn a_reactivated_core_returns_to_its_configured_place() {
+        let order = vec![10u64, 20, 30];
+        // Core 20 is absent while inactive.
+        let live = vec![10u64, 30];
+        // Reactivation restores its configured position.
+        assert_eq!(insert_index(&live, &order, 20), 1);
+    }
+
+    /// Protects `insert_index`: empty, head, and tail insertions pin its boundary behavior.
+    #[test]
+    fn insertion_handles_both_ends() {
+        let order = vec![10u64, 20, 30];
+        assert_eq!(insert_index(&[], &order, 20), 0, "first core goes at 0");
+        assert_eq!(insert_index(&[20, 30], &order, 10), 0, "lowest rank leads");
+        assert_eq!(
+            insert_index(&[10, 20], &order, 30),
+            2,
+            "highest rank trails"
+        );
+    }
+
+    /// A core absent from the config (removed while its session lingers) must sink to the
+    /// tail rather than displace a configured one.
+    #[test]
+    fn an_unconfigured_core_sinks_to_the_tail() {
+        let order = vec![10u64, 20];
+        assert_eq!(rank_of(&order, 99), order.len());
+        assert_eq!(insert_index(&[10, 20], &order, 99), 2);
+    }
+}
+
+/// Position of `id` in the configured order; ids missing from `order` rank last.
+pub(super) fn rank_of(order: &[CoreId], id: CoreId) -> usize {
+    order.iter().position(|o| *o == id).unwrap_or(order.len())
+}
+
+/// Where `id` must be inserted into `existing` to keep it ranked by the configured order.
+///
+/// Operates on ids so ordering can be checked without constructing live feed handles.
+/// Unranked ids tie at the tail and do not displace configured cores.
+pub(super) fn insert_index(existing: &[CoreId], order: &[CoreId], id: CoreId) -> usize {
+    let target = rank_of(order, id);
+    existing
+        .iter()
+        .position(|core| rank_of(order, *core) > target)
+        .unwrap_or(existing.len())
+}
+
 impl SessionManager {
-    /// Поднимает live-сессии по всем серверам конфига. Нет серверов — нет сессий.
-    /// `reports` — общий канал к SQLite-writer'у (клонируется на каждое ядро).
+    /// Register a session at its configured position for every insertion path.
+    fn insert_session(&mut self, session: CoreSession) {
+        let existing: Vec<CoreId> = self.sessions.iter().map(|s| s.id).collect();
+        let at = insert_index(&existing, &self.config_order, session.id);
+        self.sessions.insert(at, session);
+    }
+
+    /// Start sessions for every active server in an active group, preserving config order.
+    ///
+    /// The optional report channel is cloned into each feed.
     pub fn start(
         config: &AppConfig,
         epoch_ms: f64,
@@ -24,11 +88,11 @@ impl SessionManager {
     ) -> Self {
         let market = MarketStore::shared(epoch_ms);
         let market_source = MarketDataSource::new(market.clone());
-        // Локальный kline-кэш (klines.sqlite в db_dir): глубина свечей переживает
-        // рестарты и «один ТФ на ядро». Опционален — без него чарты живут как раньше.
+        // The optional local kline cache preserves candle history across restarts.
         market_source.init_kline_cache(crate::config::paths::klines_db_path());
         let mut mgr = Self {
             sessions: Vec::new(),
+            config_order: config.servers.iter().map(|s| s.id).collect(),
             feed_wake,
             store: CoreStore::default(),
             market,
@@ -79,16 +143,21 @@ impl SessionManager {
         self.last_cmd.remove(&id);
     }
 
-    /// Инкрементально приводит набор живых сессий к конфигу БЕЗ полного рестарта:
-    /// добавляет новые ядра, гасит удалённые/деактивированные, переподнимает только те,
-    /// у кого сменились connection-поля (key/feed/synthetic). Неизменные ядра не трогает —
-    /// их feed-поток, данные и подписки сохраняются (нет реконнект-флика и потери истории
-    /// при добавлении соседнего сервера). Имя/группу обновляет на месте.
+    /// Reconcile live sessions with the config without restarting unaffected feeds.
     ///
-    /// Заменяет прежний `SessionManager::start` в пути применения настроек: раньше любое
-    /// структурное изменение пере-поднимало ВСЕ ядра.
+    /// Adds active cores, removes inactive or deleted cores, respawns feeds whose connection
+    /// fields changed, updates metadata in place, and restores config order.
     pub fn reconcile(&mut self, config: &AppConfig, reports: Option<&ReportTx>) {
         let mem = config.chart_memory_percent;
+        // Refresh the rank table first: a reorder or a newly added server must be visible to
+        // every insertion made below.
+        self.config_order = config.servers.iter().map(|s| s.id).collect();
+        // An existing session may now rank differently — a server was added, removed, or the
+        // import rewrote the list — and reordering touches no feed thread. This is CONFIG
+        // order, which decides where a reactivated session is inserted; the order the user
+        // sees is applied separately by the UI's `core_order` module.
+        let order = self.config_order.clone();
+        self.sessions.sort_by_key(|s| rank_of(&order, s.id));
         let desired: Vec<ServerConfig> = config
             .servers
             .iter()
@@ -97,7 +166,7 @@ impl SessionManager {
             .collect();
         let desired_ids: HashSet<CoreId> = desired.iter().map(|s| s.id).collect();
 
-        // 1) Выбывшие ядра (удалены / сняли active / выключили группу) → погасить и вычистить.
+        // Stop cores removed from the active server and group set.
         let removed: Vec<CoreId> = self
             .sessions
             .iter()
@@ -108,7 +177,7 @@ impl SessionManager {
             self.drop_core(id);
         }
 
-        // 2) Новые ядра поднять, изменённые — переподнять, прочим обновить мету на месте.
+        // Start new cores, respawn changed connections, and update other metadata in place.
         for s in &desired {
             let sig = conn_sig(s);
             match self.sessions.iter().position(|x| x.id == s.id) {
@@ -117,7 +186,7 @@ impl SessionManager {
                     self.sessions[idx].name = s.name.clone();
                     self.sessions[idx].group = s.group.clone();
                     if self.sessions[idx].conn_sig != sig {
-                        // Сменились connection-поля → пере-поднять feed-поток ядра.
+                        // Connection changes require a fresh feed handle.
                         self.respawn_session(
                             s.clone(),
                             sig,
@@ -131,12 +200,18 @@ impl SessionManager {
         }
     }
 
-    /// Поднять feed-поток нового ядра и зарегистрировать его.
+    /// Start and register a new core at its configured position.
     fn spawn_core(&mut self, s: &ServerConfig, sig: u64, mem: u16, reports: Option<&ReportTx>) {
         let id = s.id;
+        // Reject duplicate CoreIds before `spawn_feed` registers a market client. Dropping a
+        // rejected handle afterwards would clear the existing session's client slot.
+        if self.sessions.iter().any(|x| x.id == id) {
+            log::warn!("duplicate CoreId {id} — вторая сессия не поднята");
+            return;
+        }
         self.store.ensure(id);
         let handle = self.spawn_feed(s.clone(), mem, reports);
-        self.sessions.push(CoreSession {
+        self.insert_session(CoreSession {
             id,
             name: s.name.clone(),
             group: s.group.clone(),
@@ -146,9 +221,7 @@ impl SessionManager {
         log::info!("session up: core={id}");
     }
 
-    /// Пере-поднять feed-поток ядра: заменяет хэндл (дроп старого завершает его поток;
-    /// если сессии не было — регистрирует новую), ставит Connecting и сбрасывает
-    /// координацию под переизбор провайдера. Общее тело respawn-по-конфигу и reconnect.
+    /// Replace a core feed or insert the missing session, then reset provider coordination.
     fn respawn_session(
         &mut self,
         server: ServerConfig,
@@ -163,12 +236,12 @@ impl SessionManager {
         let handle = self.spawn_feed(server, mem, reports);
         match self.sessions.iter_mut().find(|s| s.id == id) {
             Some(sess) => {
-                sess.handle = handle; // дроп старого хэндла → старый поток завершится
+                sess.handle = handle; // Dropping the old handle stops its feed thread.
                 sess.conn_sig = sig;
                 sess.name = name;
                 sess.group = group;
             }
-            None => self.sessions.push(CoreSession {
+            None => self.insert_session(CoreSession {
                 id,
                 name,
                 group,
@@ -353,7 +426,7 @@ impl SessionManager {
             if st == ConnStatus::Ready {
                 ready += 1;
             } else {
-                down.push((s.name.clone(), st));
+                down.push((s.id, s.name.clone(), st));
             }
         }
         ConnSummary { ready, total, down }
@@ -384,9 +457,7 @@ impl SessionManager {
         out
     }
 
-    /// Переподключить одно ядро: гасит старый backend-поток (дроп хэндла закрывает
-    /// его каналы) и поднимает новый по текущему конфигу. Сбрасывает рыночную роль
-    /// ядра, чтобы провайдер переизбрался. Неактивные ядра/группы игнорирует.
+    /// Reconnect one active core from the current config and reset its provider role.
     pub fn reconnect(&mut self, id: CoreId, config: &AppConfig, reports: Option<&ReportTx>) {
         let Some(server) = config.servers.iter().find(|s| s.id == id).cloned() else {
             return;
@@ -394,6 +465,8 @@ impl SessionManager {
         if !(server.active && config.group(&server.group).active) {
             return;
         }
+        // Refresh ranks because reconnect may insert a missing session without reconciliation.
+        self.config_order = config.servers.iter().map(|s| s.id).collect();
         let sig = conn_sig(&server);
         self.respawn_session(
             server,

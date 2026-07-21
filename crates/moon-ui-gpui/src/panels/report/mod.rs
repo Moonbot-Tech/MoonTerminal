@@ -27,6 +27,7 @@ use rusqlite::Connection;
 use rusqlite::types::Value;
 use rust_i18n::t;
 
+use crate::core_order::CoreOrder;
 use crate::load_state::{LoadState, Note, note_el};
 use crate::{Backend, design};
 use moon_core::db::{self, ReadResult, ReportFilter, SideFilter};

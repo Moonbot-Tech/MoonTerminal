@@ -344,7 +344,9 @@ impl SettingsView {
                                 this.storage_op(cx, "storage.op_backup", || {
                                     let src = paths::strategies_db_path();
                                     anyhow::ensure!(src.exists(), "БД стратегий ещё не создана");
-                                    let stamp = chrono_like_stamp();
+                                    let stamp = moon_core::util::utc_stamp_compact(
+                                        moon_core::util::now_unix_ms_i64(),
+                                    );
                                     let dst = paths::db_dir()
                                         .join(format!("strategies-backup-{stamp}.sqlite"));
                                     moon_core::db::maint::backup_db(&src, &dst)
@@ -360,25 +362,4 @@ impl SettingsView {
             .child(hint(size_line(info.klines)))
             .child(hint(t!("storage.klines_hint").to_string()))
     }
-}
-
-/// UTC timestamp for backup names in `YYYYMMDD-HHMMSS` form without a date dependency.
-fn chrono_like_stamp() -> String {
-    let ms = moon_core::util::now_unix_ms_i64();
-    let secs = ms / 1000;
-    // Convert days since the Unix epoch with the civil_from_days algorithm.
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if mo <= 2 { y + 1 } else { y };
-    format!("{y:04}{mo:02}{d:02}-{h:02}{m:02}{s:02}")
 }

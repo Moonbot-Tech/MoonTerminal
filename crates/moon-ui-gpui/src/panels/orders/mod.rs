@@ -26,6 +26,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::Backend;
+use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::panels::{RenderGate, num};
 use moon_core::feed::OrderRow;
@@ -298,7 +299,6 @@ pub struct OrdersPanel {
     /// `RenderGate` (сигнатура ИЛИ 1 Гц-тик, пол 250мс) экономит UI-поток на холостом ходу.
     gate: RenderGate,
     cache_key: Option<OrdersCacheKey>,
-    cached_cores: Vec<(CoreId, String)>,
     cached_entries: Rc<Vec<OrderEntry>>,
     /// Retained-стейт таблицы (порядок/ширины колонок). Владеем сами — иначе порядок
     /// жил бы в анонимном `use_keyed_state` окна и его нельзя было бы ни засеять из
@@ -379,7 +379,6 @@ impl OrdersPanel {
             sel_cores: HashSet::new(),
             gate: RenderGate::default(),
             cache_key: None,
-            cached_cores: Vec::new(),
             cached_entries: Rc::new(Vec::new()),
             table_state,
             widths_id,
@@ -446,14 +445,11 @@ impl OrdersPanel {
         }
     }
 
-    /// Имена ядер группы (id, имя) — для поля-списка источника.
-    fn group_cores(&self, b: &Backend) -> Vec<(CoreId, String)> {
-        b.session
-            .sessions()
-            .iter()
-            .filter(|s| s.group == self.group)
-            .map(|s| (s.id, s.name.clone()))
-            .collect()
+    /// Return the group's cores in canonical order for the source selector.
+    ///
+    /// Built on render so an open panel immediately reflects sort-mode changes.
+    fn group_cores(&self, b: &Backend) -> OrderedCores {
+        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
     }
 
     /// Тумблер выбранного ядра фильтра (мультивыбор, как в «Отчёте»). `None` — пункт «Все»
@@ -537,7 +533,6 @@ impl OrdersPanel {
 
     fn rebuild_cache(&mut self, b: &Backend) {
         let key = self.cache_key(b);
-        self.cached_cores = self.group_cores(b);
         self.main_open = Rc::new(key.main_open.iter().cloned().collect());
         // Базовый порядок (первичная + новые/старые) + счётчики real/emu для футера.
         let (mut entries, count_real, count_emu) = self.build_entries(b, &key.view, &key.current);
@@ -875,7 +870,7 @@ impl Render for OrdersPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::ORDERS_RENDER);
         let view = self.view;
-        let cores = self.cached_cores.clone();
+        let cores = self.group_cores(self.backend.read(cx));
         let entries = self.cached_entries.clone();
         let p = MoonPalette::active(cx);
 

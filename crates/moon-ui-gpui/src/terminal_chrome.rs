@@ -315,7 +315,7 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
     );
 
     let mut items = Vec::with_capacity(cores.len());
-    for (id, name) in &cores {
+    for (id, name) in cores.iter() {
         let id = *id;
         let backend = backend.clone();
         let group = group.to_string();

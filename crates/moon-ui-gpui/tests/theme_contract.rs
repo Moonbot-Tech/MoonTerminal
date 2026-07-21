@@ -497,3 +497,34 @@ fn toolbar_row_budget_counts_every_rule_it_draws() {
          narrow window"
     );
 }
+
+/// A closure handed to `MoonTree` must never capture a STRONG handle to the view that owns the
+/// tree state.
+///
+/// `MoonTree` moves both the row renderer and the row decorators into the long-lived
+/// `MoonTreeState` on every frame (MoonUI `tree.rs`, `impl RenderOnce for Tree`). When that state
+/// is a field of the same view, a strong capture closes the cycle
+/// `View -> tree_state -> closure -> View`: the view never drops, so its `on_release` never runs
+/// and its subscriptions are never released.
+///
+/// This already shipped once as a user-visible bug — the Settings window silently refused to
+/// reopen, because its `on_release` was what cleared the draft that `settings::open` gates on.
+/// `strategies/tree_moon.rs` has the same shape with a different symptom: `strategies::open` has
+/// no such gate, so it leaks a view plus its subscriptions on every open/close cycle instead.
+///
+/// The plausible edit this catches: someone reads the `upgrade()` dance as ceremony and
+/// "simplifies" it back to `cx.entity()`, which compiles and behaves correctly for one session.
+#[test]
+fn moon_tree_closures_hold_weak_view_handles() {
+    let text = read_src("strategies/tree_moon.rs");
+
+    assert!(
+        text.contains("cx.entity().downgrade()"),
+        "tree_moon.rs must downgrade the view handle before handing closures to MoonTree"
+    );
+    assert!(
+        !text.contains("let view = cx.entity();"),
+        "tree_moon.rs captures a STRONG view handle: MoonTree retains its renderer and decorators \
+         in MoonTreeState, which this view owns, so the view can never drop"
+    );
+}

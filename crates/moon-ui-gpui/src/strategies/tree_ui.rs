@@ -110,7 +110,7 @@ impl StrategiesView {
     pub(super) fn default_target(
         &self,
         store: &CoreStore,
-        cores: &[(CoreId, String)],
+        cores: &crate::core_order::OrderedCores,
     ) -> (CoreId, String) {
         if let Some((core, id)) = self.selected {
             if let Some(r) = row(store, core, id) {
@@ -196,16 +196,12 @@ impl StrategiesView {
             self.copy_selection(cx);
         } else if m.control && key == "v" {
             let (core, target) = {
-                let store = self.backend.read(cx).session.store();
-                let cores: Vec<(CoreId, String)> = self
-                    .backend
-                    .read(cx)
-                    .session
-                    .sessions()
-                    .iter()
-                    .map(|s| (s.id, s.name.clone()))
-                    .collect();
-                self.default_target(store, &cores)
+                let b = self.backend.read(cx);
+                // Canonical order, so `default_target`'s "first core" means the first one the
+                // user actually sees rather than whichever session happens to lead the vec.
+                let cores = crate::core_order::CoreOrder::new(&b.config)
+                    .from_sessions(b.session.sessions(), |_| true);
+                self.default_target(b.session.store(), &cores)
             };
             self.paste_into(core, target, cx);
         } else if key == "delete" {
@@ -253,16 +249,10 @@ impl StrategiesView {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     // вставка в папку первичной стратегии (или корень).
                                     let (core, target) = {
-                                        let store = this.backend.read(cx).session.store();
-                                        let cores: Vec<(CoreId, String)> = this
-                                            .backend
-                                            .read(cx)
-                                            .session
-                                            .sessions()
-                                            .iter()
-                                            .map(|s| (s.id, s.name.clone()))
-                                            .collect();
-                                        this.default_target(store, &cores)
+                                        let b = this.backend.read(cx);
+                                        let cores = crate::core_order::CoreOrder::new(&b.config)
+                                            .from_sessions(b.session.sessions(), |_| true);
+                                        this.default_target(b.session.store(), &cores)
                                     };
                                     this.paste_into(core, target, cx);
                                 }))

@@ -95,7 +95,7 @@ pub(super) struct MoonTreeBuild {
 pub(super) fn build(
     view: &StrategiesView,
     store: &CoreStore,
-    cores: &[(CoreId, String)],
+    cores: &crate::core_order::OrderedCores,
 ) -> MoonTreeBuild {
     let filter = &view.filter;
     let searching = filter.searching();
@@ -104,7 +104,7 @@ pub(super) fn build(
     let mut expanded: Vec<SharedString> = Vec::new();
     let mut flat: Vec<Key> = Vec::new();
 
-    for (core_id, core_name) in cores {
+    for (core_id, core_name) in cores.iter() {
         let core = *core_id;
         let Some(cd) = store.core(core) else { continue };
         if cd.strategies.is_empty() || !cd.strategies.iter().any(|r| filter.matches(r)) {
@@ -329,12 +329,22 @@ impl StrategiesView {
         data: Rc<HashMap<SharedString, NodeData>>,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let view = cx.entity();
+        // WEAK only, never a strong `cx.entity()`. On every frame, `MoonTree` moves BOTH the row
+        // renderer AND decorators into long-lived `MoonTreeState` (MoonUI `tree.rs`,
+        // `impl RenderOnce for Tree`), while that state lives in THIS view. A strong handle in
+        // either closure closes `StrategiesView -> tree_state -> closure -> StrategiesView`, so
+        // the view and its subscriptions never drop. Both back-references must be weak; one is not
+        // enough.
+        let view = cx.entity().downgrade();
 
         // ── рендер строки ──
         let row_data = data.clone();
         let row_view = view.clone();
         let tree = MoonTree::custom(&self.tree_state, move |entry, meta, _window, app| {
+            // A dead handle means the view is gone; render an empty row.
+            let Some(row_view) = row_view.upgrade() else {
+                return div().into_any_element();
+            };
             render_row(&row_data, &row_view, entry, meta, app)
         })
         // ── DnD: стратегии ──
@@ -402,12 +412,20 @@ impl StrategiesView {
                     .drag_over::<FolderDrag>(move |s, _d, _w, _a| s.bg(hl))
                     .on_drop::<StratDrag>(move |drag: &StratDrag, _w, app| {
                         let d = drag.clone();
+                        // The decorator outlives the frame; a dead handle means the view is gone
+                        // and there is nowhere to apply the drop.
+                        let Some(vs) = vs.upgrade() else {
+                            return;
+                        };
                         vs.update(app, |this, cx| {
                             this.drop_strategies(core, ts.clone(), &d, cx)
                         });
                     })
                     .on_drop::<FolderDrag>(move |drag: &FolderDrag, _w, app| {
                         let d = drag.clone();
+                        let Some(vf) = vf.upgrade() else {
+                            return;
+                        };
                         vf.update(app, |this, cx| this.drop_folder(core, tf.clone(), &d, cx));
                     })
             }

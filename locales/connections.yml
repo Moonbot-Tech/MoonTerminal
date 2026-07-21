@@ -23,6 +23,26 @@ conn.market_percore:
   ru: "Раздельно — своё ядро на каждый чарт"
   en: "Separate — each chart its own core"
   es: "Separado — cada gráfico su propio núcleo"
+conn.core_sort:
+  ru: "Порядок ядер"
+  en: "Core order"
+  es: "Orden de núcleos"
+conn.core_sort_tip:
+  ru: "В каком порядке ядра идут во ВСЕХ списках приложения: шапка, Ордера, Активы, Отчёт, Аналитика, Скринер, Стратегии, Лог. Отключённые ядра остаются на своих местах — их состояние видно по точке статуса."
+  en: "The order cores appear in across EVERY list in the app: header, Orders, Assets, Report, Analytics, Screener, Strategies, Log. Disconnected cores keep their place — their state shows in the status dot."
+  es: "El orden en que aparecen los núcleos en TODAS las listas de la aplicación: encabezado, Órdenes, Activos, Informe, Analítica, Escáner, Estrategias, Registro. Los núcleos desconectados mantienen su lugar — su estado se ve en el punto de estado."
+conn.core_sort.name:
+  ru: "По имени — по алфавиту"
+  en: "By name — alphabetical"
+  es: "Por nombre — alfabético"
+conn.core_sort.added:
+  ru: "По добавлению — сначала старые"
+  en: "By insertion — oldest first"
+  es: "Por inserción — más antiguos primero"
+conn.core_sort.added_newest:
+  ru: "По добавлению — сначала новые"
+  en: "By insertion — newest first"
+  es: "Por inserción — más recientes primero"
 conn.groups_heading:
   ru: "Группы"
   en: "Groups"
