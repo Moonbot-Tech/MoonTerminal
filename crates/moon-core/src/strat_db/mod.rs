@@ -225,9 +225,9 @@ const CORE_UID_TABLES: [&str; 3] = ["strategies", "strategy_versions", "version_
 ///
 /// Version history is the single copy and is never purged when a server is deleted, so a uid
 /// surviving here must not be reissued — a new core would otherwise inherit the deleted one's
-/// version history and cached per-version profit. `Ok(None)` means the store is genuinely
-/// absent or empty; a read failure stays an error so the caller can refuse to treat an
-/// unreadable store as "nothing to avoid".
+/// version history and cached per-version profit. Once the path passes its existence check, open
+/// and query failures stay errors; `Ok(None)` means no accessible file or no rows in its keyed
+/// tables.
 ///
 /// Reports a failed open rather than reusing [`open_reader`], which collapses an absent file and
 /// a failed open into the same `None`.

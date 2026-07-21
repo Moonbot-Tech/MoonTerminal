@@ -70,7 +70,7 @@ fn store_floor(label: &str, read: moon_core::db::ReadResult<Option<u64>>) -> Opt
     }
 }
 
-/// Highest core uid any durable store has ever recorded.
+/// Highest core uid observed across the durable stores loaded during startup.
 ///
 /// The uid counter in `settings.toml` only arrived in `SCHEMA_VERSION` 15 and is seeded from the
 /// servers that still exist, but nothing purges a deleted server's rows from the report replica,
@@ -80,9 +80,10 @@ fn store_floor(label: &str, read: moon_core::db::ReadResult<Option<u64>>) -> Opt
 ///
 /// A store that cannot be read contributes nothing. That is a best-effort repair, not a
 /// guarantee: the mark may only ever rise, so a missing contribution leaves the previous
-/// behaviour intact rather than making it worse, and the next boot retries. Only the two SQLite
-/// sources can tell "empty" from "unreadable"; the three file-backed ones log their own parse
-/// failure and then read as empty, so a corrupt one is a silent non-contribution here.
+/// behaviour intact rather than making it worse, and the next boot retries. The reports probe
+/// distinguishes absence from metadata, open, and query failures. The strategies probe preserves
+/// open and query failures after a lossy existence check. The three file loaders collapse absent,
+/// unreadable, and empty states into empty values, although parse failures are logged first.
 fn observed_uid_floor(
     layout: &WindowLayout,
     chart_specs: &[chart_persist::ChartTabSpec],
@@ -108,6 +109,10 @@ fn observed_uid_floor(
     .max()
 }
 
+/// Initialize persistence, configuration, application services, and the GPUI event loop.
+///
+/// Core-keyed durable state is loaded before configuration because config loading may assign and
+/// persist missing uids; observing the floor afterwards would be too late to prevent reuse.
 pub(crate) fn run() -> anyhow::Result<()> {
     // Строим env_logger как Logger (не .init()) и оборачиваем в TeeLogger — он
     // дублирует напечатанные записи в in-memory кольцо вкладки «Лог» (порт egui main).

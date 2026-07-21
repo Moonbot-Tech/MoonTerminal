@@ -1106,10 +1106,10 @@ pub fn query_reports(
 ///
 /// [`open_reader`] opens read-WRITE despite its name, which is harmless for its own callers
 /// because the writer connection is alive by then. A probe that runs BEFORE `spawn_writer` would
-/// instead be the only connection, and closing a read-write connection makes SQLite checkpoint
-/// the WAL and delete `-wal`/`-shm` on the spot — a WAL left by a killed run reaches hundreds of
-/// MB, so that would land as a synchronous copy on the pre-window startup path. A read-only
-/// connection never checkpoints on close.
+/// instead be the only connection, and closing the last read-write connection makes SQLite run
+/// its final WAL checkpoint and delete `-wal`/`-shm` — a WAL left by a killed run reaches
+/// hundreds of MB, so that would land as a synchronous copy on the pre-window startup path. A
+/// read-only last connection does not perform that close-time checkpoint or cleanup.
 pub fn open_readonly() -> ReadResult<Connection> {
     let path = paths::reports_db_path();
     // Same reasoning as `open_reader`: only a genuine absence may report `NotReady`.

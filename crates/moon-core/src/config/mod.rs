@@ -127,7 +127,7 @@ pub struct AppConfig {
     pub chart_memory_percent: u16,
     /// Order of every core list in the application (`settings.toml`). Defaults to `Name`.
     pub core_sort: CoreSortMode,
-    /// Upper bound for the next uid from `SettingsFile::next_uid`.
+    /// Next uid candidate after config entries and durable-store references are reconciled.
     pub next_uid: u64,
     /// Горячие клавиши терминала (settings.toml, открытый формат).
     pub hotkeys: HotkeysConfig,
@@ -168,7 +168,8 @@ impl AppConfig {
     /// reads them, so config keeps no dependency on the database. It must be supplied HERE
     /// rather than raised afterwards: this function already assigns uids to entries that carry
     /// none and persists them, so a floor applied later would arrive after the collision it
-    /// exists to prevent. `None` means nothing could be read and contributes nothing.
+    /// exists to prevent. `None` means no durable store contributed a uid, whether because the
+    /// stores were absent, empty, or unreadable.
     pub fn load(uid_floor: Option<u64>) -> anyhow::Result<Self> {
         // macOS/Linux: при первом запуске после переезда хранилища перенести
         // конфиги из бандла (рядом с exe) в пользовательскую директорию данных.
@@ -362,6 +363,10 @@ impl AppConfig {
         Ok(fresh)
     }
 
+    /// Build the environment-backed plaintext config when that mode is enabled.
+    ///
+    /// The fixed core uses uid 1, while `uid_floor` advances its counter past identities retained
+    /// by the shared durable stores. Returns `Ok(None)` when plaintext mode is disabled.
     fn load_plaintext_env(
         uid_floor: Option<u64>,
         theme: ChartThemeSet,
@@ -434,8 +439,8 @@ impl AppConfig {
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             core_sort: CoreSortMode::default(),
-            // The plaintext config issues uid 1 above, so the counter starts at 2 — then clears
-            // whatever the stores hold. This mode is not test-only: it is how a Linux box with
+            // The plaintext config issues uid 1 above, so the counter starts at 2 and then moves
+            // past whatever the stores hold. This mode is not test-only: it is how a Linux box with
             // no Secret Service runs, so its cores share `data/` with everyone else's.
             next_uid: reconcile::uid_floor_raised(2, uid_floor),
             hotkeys: HotkeysConfig::default(),

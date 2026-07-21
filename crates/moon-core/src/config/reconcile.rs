@@ -55,8 +55,8 @@ pub struct Merged {
     /// Legacy-хоткеи из settings.toml (schema < v13) — только для одноразовой
     /// миграции в `hotkeys.toml`; при существующем hotkeys.toml игнорируются.
     pub hotkeys: HotkeysConfig,
-    /// Нужно пере-сохранить на диск: присвоены новые uid и/или версия схемы
-    /// устарела (надо дослоить дефолты новых полей в settings.toml).
+    /// Whether the merged config must be persisted because the schema, assigned uids, or durable
+    /// uid counter changed.
     pub dirty: bool,
     /// Конфиг был версии < `COREID_UID_VERSION` → `charts.json` хранит ПОЗИЦИОННЫЕ
     /// CoreId, их надо один раз перепривязать к стабильным uid (делает UI на старте,
@@ -65,8 +65,11 @@ pub struct Merged {
     pub chart_core_remap_needed: bool,
 }
 
-/// servers.enc + settings.toml → рантайм-серверы. Привязка меты по uid,
-/// с одноразовым fallback на имя для старых файлов без uid.
+/// Merge server secrets and settings into runtime server records.
+///
+/// Metadata binds by uid, with a one-time name fallback for files that carry no uid. The initial
+/// counter is raised above `uid_floor` before any missing uids are assigned, and a raised counter
+/// marks the result dirty so the high-water mark is persisted.
 pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Merged {
     let mut next_uid = next_free_uid(&sf, &meta, uid_floor);
     // A counter that had to be raised is written back, so the repair survives a later boot on
@@ -264,8 +267,8 @@ pub fn ensure_uids(servers: &mut [ServerConfig], counter: &mut u64) {
 /// history, plus the persisted UI state keyed by core). The counter alone cannot see those: it
 /// only arrived in `SCHEMA_VERSION` 15, so an older config seeds it from the servers that still
 /// exist — and a deleted server's rows are never purged. Without the floor the next core takes
-/// the deleted one's uid and inherits its trades, P&L and figures. `None` means no store could
-/// be read, which contributes nothing rather than lowering the mark.
+/// the deleted one's uid and inherits its trades, P&L and figures. `None` means no store
+/// contributed a uid, which leaves the config-derived counter unchanged.
 fn next_free_uid(sf: &ServersFile, meta: &SettingsFile, uid_floor: Option<u64>) -> u64 {
     let from_entries = sf.servers.iter().map(|e| e.uid).max().unwrap_or(0);
     let from_meta = meta.servers.iter().map(|m| m.uid).max().unwrap_or(0);
@@ -282,9 +285,9 @@ fn next_free_uid(sf: &ServersFile, meta: &SettingsFile, uid_floor: Option<u64>) 
 /// reports a lower maximum — a truncated or partially synced replica — must not drag the mark
 /// back over uids already issued.
 ///
-/// A floor with no representable successor means the store holds `u64::MAX`, which no allocator
-/// could have issued; that is corrupt data, so the counter is left alone and the damage is
-/// logged rather than wrapped around into reissuing a live uid.
+/// A floor of `u64::MAX` has no representable successor and therefore violates the counter's
+/// next-free-uid invariant. `checked_add` detects that corrupt state; the counter is left alone
+/// and the damage is logged rather than wrapped around into reissuing a live uid.
 pub(super) fn uid_floor_raised(counter: u64, uid_floor: Option<u64>) -> u64 {
     let Some(seen) = uid_floor else {
         return counter;

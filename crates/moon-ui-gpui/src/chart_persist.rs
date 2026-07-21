@@ -283,8 +283,8 @@ pub fn remap_core_ids(specs: &mut [ChartTabSpec], servers: &[ServerConfig]) {
 /// silently reopen the deleted core's chart state against the new core.
 ///
 /// A file written before `COREID_UID_VERSION` holds POSITIONAL ids rather than uids. They are
-/// folded in regardless: positional ids are small, and the mark may only ever rise, so the worst
-/// case is skipping a few uid numbers — whereas leaving them out risks reissuing a live one.
+/// folded in regardless: the floor is monotonic, so these small legacy values can only cause a
+/// conservative skip of a few uid numbers before the file is remapped.
 pub fn max_core_uid(specs: &[ChartTabSpec]) -> Option<u64> {
     specs
         .iter()
