@@ -35,6 +35,15 @@ const STAGING_PREFIX: &str = ".incoming-";
 /// Счётчик для уникальности staging-каталога внутри процесса.
 static STAGING_SEQ: AtomicU32 = AtomicU32::new(0);
 
+/// Префикс staging-каталогов ЭТОГО процесса: `.incoming-<pid>-`.
+///
+/// Чистка удаляет только их. Сносить любой `.incoming-*` нельзя: второй экземпляр
+/// терминала над той же переносимой папкой прямо сейчас может копировать в свой каталог,
+/// и мы бы уничтожили его снимок на полпути.
+fn own_staging_prefix() -> String {
+    format!("{STAGING_PREFIX}{}-", std::process::id())
+}
+
 /// Что вызвало снимок — попадает в лог, чтобы по журналу было видно, какой снимок
 /// миграционный, а какой от ручного сохранения.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,10 +66,12 @@ impl Trigger {
 
 /// Снять копию обоих файлов конфига и подчистить старые снимки.
 ///
-/// Возвращает `()` НАМЕРЕННО: резервная копия не имеет права сломать операцию, которую она
-/// защищает, и отсутствие канала ошибок делает это свойством сигнатуры, а не соглашением,
-/// которое следующий `?` тихо нарушит. Все сбои логируются и глотаются здесь.
-pub(super) fn snapshot(trigger: Trigger) {
+/// Возвращает `bool`, а НЕ `Result`, намеренно: резервная копия не имеет права сломать
+/// операцию, которую она защищает, и отсутствие канала ошибок делает это свойством
+/// сигнатуры, а не соглашением, которое следующий `?` тихо нарушит. Но и молчать нельзя —
+/// иначе Настройки покажут «Сохранено», хотя копии для отката не появилось. `false` =
+/// снимок не удался; сохранение при этом продолжается.
+pub(super) fn snapshot(trigger: Trigger) -> bool {
     let sources = [paths::servers_path(), paths::settings_path()];
     let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
     match snapshot_into(
@@ -69,16 +80,26 @@ pub(super) fn snapshot(trigger: Trigger) {
         now_unix_ms_i64(),
         SNAPSHOT_KEEP,
     ) {
-        Ok(Some(dir)) => log::info!(
-            "конфиг: снимок ({}) → {}",
-            trigger.label(),
-            dir.file_name().unwrap_or_default().to_string_lossy()
-        ),
-        Ok(None) => log::debug!(
-            "конфиг: снимок ({}) пропущен — нечего копировать",
-            trigger.label()
-        ),
-        Err(e) => log::warn!("конфиг: снимок ({}) не удался: {e:#}", trigger.label()),
+        Ok(Some(dir)) => {
+            log::info!(
+                "конфиг: снимок ({}) → {}",
+                trigger.label(),
+                dir.file_name().unwrap_or_default().to_string_lossy()
+            );
+            true
+        }
+        // Копировать было нечего (первый запуск) — это не сбой.
+        Ok(None) => {
+            log::debug!(
+                "конфиг: снимок ({}) пропущен — нечего копировать",
+                trigger.label()
+            );
+            true
+        }
+        Err(e) => {
+            log::warn!("конфиг: снимок ({}) не удался: {e:#}", trigger.label());
+            false
+        }
     }
 }
 
@@ -95,7 +116,22 @@ fn snapshot_into(
     now_ms: i64,
     keep: usize,
 ) -> anyhow::Result<Option<PathBuf>> {
-    let present: Vec<&Path> = sources.iter().copied().filter(|p| p.is_file()).collect();
+    // НЕ `is_file()`: он возвращает `false` и когда файла нет, и когда метаданные не
+    // прочитались (права, шара, невыгруженный облачный плейсхолдер). Молча выбросив
+    // нечитаемый источник, мы опубликовали бы снимок с ОДНИМ файлом как успешный, а следом
+    // сохранение перезаписало бы оба. Отсутствие — не сбой; всё остальное — сбой.
+    let mut present: Vec<&Path> = Vec::new();
+    for src in sources.iter().copied() {
+        match std::fs::metadata(src) {
+            Ok(m) if m.is_file() => present.push(src),
+            Ok(_) => anyhow::bail!("источник снимка не файл: {}", src.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(anyhow::Error::from(e)
+                    .context(format!("источник снимка не читается: {}", src.display())))
+            }
+        }
+    }
     if present.is_empty() {
         return Ok(None);
     }
@@ -106,8 +142,8 @@ fn snapshot_into(
     // копировании оставил бы каталог, который проходит `is_snapshot_name`, занимает слот
     // хранения и способен вытеснить ПОЛНЫЙ снимок.
     let staging = backups.join(format!(
-        "{STAGING_PREFIX}{}-{}",
-        std::process::id(),
+        "{}{}",
+        own_staging_prefix(),
         STAGING_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&staging);
@@ -144,13 +180,21 @@ fn snapshot_into(
     Ok(Some(dir))
 }
 
-/// Переселить собранный staging-каталог под финальное имя со штампом времени.
+/// Опубликовать собранный staging-каталог под финальным именем со штампом времени.
 ///
-/// Имя захватывается через `fs::create_dir`, который АТОМАРНО падает с `AlreadyExists`, если
-/// каталог уже есть. Проверка `exists()` с последующим созданием была бы гонкой: два процесса
-/// над одной переносимой папкой выбрали бы одно имя и затёрли снимок друг друга.
+/// Публикация — ОДНО переименование каталога целиком. Раньше здесь создавался финальный
+/// каталог, а файлы переносились в него по одному: сбой после первого переноса оставлял
+/// каталог с правильным именем и неполным содержимым, который проходил [`is_snapshot_name`],
+/// занимал слот хранения и мог вытеснить ПОЛНЫЙ снимок. Одно `rename` этого не допускает:
+/// снимок либо виден целиком, либо не виден вовсе.
+///
+/// `fs::rename` каталога поверх СУЩЕСТВУЮЩЕГО имени падает и на Windows, и (для непустого
+/// каталога) на unix — то есть служит и атомарным захватом имени. Проверка `exists()` с
+/// последующим созданием была бы гонкой: два процесса над одной переносимой папкой выбрали
+/// бы одно имя и затёрли снимок друг друга.
 fn publish(staging: &Path, backups: &Path, now_ms: i64) -> anyhow::Result<PathBuf> {
     let stamp = utc_stamp_compact(now_ms);
+    let mut last: Option<std::io::Error> = None;
     for attempt in 0..=99u32 {
         let name = if attempt == 0 {
             stamp.clone()
@@ -160,22 +204,21 @@ fn publish(staging: &Path, backups: &Path, now_ms: i64) -> anyhow::Result<PathBu
             format!("{stamp}-{attempt:02}")
         };
         let dst = backups.join(&name);
-        match std::fs::create_dir(&dst) {
-            Ok(()) => {
-                // Каталог захвачен и пуст: переносим содержимое внутрь. Переименование в
-                // пределах одной папки — операция метаданных, окно между захватом и
-                // наполнением измеряется микросекундами.
-                for entry in std::fs::read_dir(staging)?.flatten() {
-                    std::fs::rename(entry.path(), dst.join(entry.file_name()))?;
-                }
-                std::fs::remove_dir(staging)?;
-                return Ok(dst);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e.into()),
+        if dst.exists() {
+            continue;
+        }
+        match std::fs::rename(staging, &dst) {
+            Ok(()) => return Ok(dst),
+            // Имя заняли между проверкой и переименованием — берём следующее.
+            Err(e) => last = Some(e),
         }
     }
-    anyhow::bail!("все 100 имён снимка на секунду {stamp} заняты")
+    match last {
+        Some(e) => {
+            Err(anyhow::Error::from(e).context(format!("публикация снимка {stamp} не удалась")))
+        }
+        None => anyhow::bail!("все 100 имён снимка на секунду {stamp} заняты"),
+    }
 }
 
 /// Похоже ли имя каталога на снимок, который создали МЫ.
@@ -226,6 +269,7 @@ fn prune(backups: &Path, keep: usize, expected: &[&str]) -> usize {
 
     let mut snapshots: Vec<String> = Vec::new();
     let mut stale_staging: Vec<PathBuf> = Vec::new();
+    let own_prefix = own_staging_prefix();
     for entry in rd.flatten() {
         // Не разыменовывает симлинки: подставленная ссылка на чужой каталог не будет
         // классифицирована как каталог и не попадёт в чистку.
@@ -236,12 +280,15 @@ fn prune(backups: &Path, keep: usize, expected: &[&str]) -> usize {
         let name = entry.file_name().to_string_lossy().into_owned();
         if is_snapshot_name(&name) {
             snapshots.push(name);
-        } else if name.starts_with(STAGING_PREFIX) {
+        } else if name.starts_with(&own_prefix) {
             stale_staging.push(entry.path());
         }
     }
 
-    // Брошенный staging остаётся только после падения процесса ровно во время сборки.
+    // Только НАШ брошенный staging: он остаётся, если предыдущий вызов в этом же процессе
+    // упал ровно во время сборки. Каталоги чужих pid не трогаем — там может идти живая
+    // работа второго экземпляра; они остаются мусором, но мусором безопасным (неполная
+    // копия конфига в папке пользователя, невидимая для перечисления снимков).
     for path in stale_staging {
         let _ = std::fs::remove_dir_all(path);
     }
@@ -309,14 +356,14 @@ mod tests {
         v
     }
 
-    /// Снимок обязан копировать БАЙТЫ С ДИСКА, а не то, что лежит в памяти.
+    /// Каждый снимок обязан перечитывать файл, а не переиспользовать прочитанное ранее.
     ///
-    /// Мутация, которую это ловит: реализовать снимок сериализацией текущего `AppConfig`
-    /// («структура уже под рукой, зачем трогать диск»). Компилируется, кладёт правдоподобные
-    /// файлы — и каждая резервная копия молча становится копией НОВОГО состояния вместо
-    /// старого, то есть сохраняет ровно то, что пользователь хотел отменить.
+    /// Мутация, которую это ловит: закэшировать содержимое источника (например, вынести
+    /// чтение из цикла или запомнить его в статике «чтобы не ходить на диск дважды»).
+    /// Второй снимок тогда сохранит байты ПЕРВОГО — то есть резервная копия будет отставать
+    /// на одно сохранение, и откат вернёт не то состояние, которое пользователь ожидает.
     #[test]
-    fn a_snapshot_captures_the_bytes_on_disk() {
+    fn each_snapshot_rereads_the_file_from_disk() {
         let root = temp_root("bytes");
         let src = root.join("settings.toml");
         let backups = root.join("backups");
@@ -482,32 +529,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Частично собранный снимок не публикуется и не занимает слот хранения.
+    /// Источник, который ЕСТЬ, но не является читаемым файлом, обязан свалить снимок
+    /// целиком — а не выпасть из него молча.
     ///
-    /// Источник существует как файл на момент проверки, но копирование падает (подсовываем
-    /// каталог вторым источником). Публикации быть не должно, staging обязан исчезнуть.
+    /// Мутация, которую это ловит (и которая тут была): отбирать источники через
+    /// `p.is_file()`. Он возвращает `false` и когда файла нет, и когда метаданные не
+    /// прочитались, поэтому нечитаемый `servers.enc` тихо исчезал из набора, а снимок с
+    /// ОДНИМ файлом публиковался как успешный. Следом сохранение перезаписывало оба файла —
+    /// и «копия для отката» оказывалась без ключей API ровно тогда, когда за ней придут.
+    ///
+    /// Каталог на месте файла — переносимый способ получить «существует, но не файл».
     #[test]
-    fn a_failed_copy_publishes_nothing_and_leaves_no_staging() {
+    fn an_unreadable_source_fails_instead_of_publishing_a_partial_snapshot() {
         let root = temp_root("partial");
         let good = root.join("settings.toml");
         let backups = root.join("backups");
         write(&good, "v1");
-
-        // Второй «источник» — существующий каталог: `is_file()` его пропустит, поэтому
-        // дотянемся до сбоя копирования через прямой вызов с подменённым именем.
         let bogus = root.join("servers.enc");
         std::fs::create_dir_all(&bogus).unwrap();
 
-        // Каталог не проходит `is_file`, так что снимок соберётся только из `good`.
-        let made = snapshot_into(&[&good, &bogus], &backups, 0, 30).unwrap();
-        assert!(made.is_some(), "the readable source still snapshots");
+        let res = snapshot_into(&[&good, &bogus], &backups, 0, 30);
 
+        assert!(
+            res.is_err(),
+            "a source that exists but is not a file must fail the snapshot"
+        );
+        assert!(
+            snapshot_names(&backups).is_empty(),
+            "nothing may be published when a source could not be read"
+        );
         let leftovers: Vec<String> = std::fs::read_dir(&backups)
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with(STAGING_PREFIX))
-            .collect();
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| n.starts_with(STAGING_PREFIX))
+                    .collect()
+            })
+            .unwrap_or_default();
         assert!(
             leftovers.is_empty(),
             "staging dirs must never survive: {leftovers:?}"

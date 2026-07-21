@@ -16,8 +16,11 @@ pub enum ConfigLoad {
     Present,
     /// No such file — a first run. Defaults are correct and saving them is correct.
     Absent,
-    /// Present but unparseable. `on_corrupt` has moved it aside (`.bak`), so the original bytes
-    /// survive and writing defaults over the now-absent path is safe.
+    /// Present but unparseable, AND successfully quarantined by `on_corrupt` (moved to `.bak`).
+    /// The original bytes survive, so writing defaults over the now-absent path is safe.
+    ///
+    /// A quarantine that FAILED reports [`ConfigLoad::Unreadable`] instead: the user's file is
+    /// still sitting there, and authorizing a write over it would destroy it.
     Corrupt,
     /// The file may well exist and hold good data, but reading it FAILED — a permission or
     /// sharing error, or a cloud placeholder that could not be hydrated.
@@ -34,7 +37,7 @@ pub enum ConfigLoad {
 pub fn load_or_default_status<T: Default + DeserializeOwned>(
     path: &Path,
     label: &str,
-    on_corrupt: impl FnOnce(&Path),
+    on_corrupt: impl FnOnce(&Path) -> bool,
 ) -> (T, ConfigLoad) {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -55,8 +58,15 @@ pub fn load_or_default_status<T: Default + DeserializeOwned>(
         Ok(v) => (v, ConfigLoad::Present),
         Err(e) => {
             log::warn!("{label} повреждён ({e}); беру дефолт");
-            on_corrupt(path);
-            (defaults_for_absent_file(label), ConfigLoad::Corrupt)
+            // Провалившийся карантин НЕ даёт права на запись: файл пользователя остался на
+            // месте, и сохранение дефолтов уничтожило бы его.
+            let status = if on_corrupt(path) {
+                ConfigLoad::Corrupt
+            } else {
+                log::error!("{label}: карантин не удался — запись файла запрещена");
+                ConfigLoad::Unreadable
+            };
+            (defaults_for_absent_file(label), status)
         }
     }
 }
@@ -68,7 +78,11 @@ pub fn load_or_default<T: Default + DeserializeOwned>(
     label: &str,
     on_corrupt: impl FnOnce(&Path),
 ) -> T {
-    load_or_default_status(path, label, on_corrupt).0
+    load_or_default_status(path, label, |p| {
+        on_corrupt(p);
+        true
+    })
+    .0
 }
 
 /// Defaults for a file that is absent or unreadable, built by deserializing an EMPTY TOML

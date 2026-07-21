@@ -65,6 +65,18 @@ pub fn write_file_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Resu
     toml_io::write_atomic(path, bytes, label)
 }
 
+/// Удался ли снимок, сопровождавший сохранение.
+///
+/// Отдельно от `Result`: провал снимка НЕ отменяет запись конфига, но и не должен
+/// теряться — «Сохранено» без копии для отката вводит пользователя в заблуждение.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapshotOutcome {
+    /// Копия снята, либо копировать было нечего (первый запуск).
+    Ok,
+    /// Копию снять не удалось. Конфиг записан, отката нет.
+    Failed,
+}
+
 /// Снимать ли резервную копию конфига перед записью (см. `AppConfig::save_impl`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SnapshotPolicy {
@@ -121,6 +133,16 @@ pub struct AppConfig {
     pub orders: OrdersStyleSet,
     /// Бейджи типов детектов (код+цвета по видам, на тему) — отдельный переносимый badges.json.
     pub badges: BadgesConfig,
+    /// Рантайм-флаг (НЕ сериализуется): `settings.toml` СУЩЕСТВУЕТ, но прочитать его не
+    /// удалось (права, шара, невыгруженный облачный плейсхолдер), поэтому в памяти лежат
+    /// ДЕФОЛТЫ, а не настройки пользователя.
+    ///
+    /// Пока флаг взведён, ЛЮБАЯ запись конфига запрещена — см. `save_impl`. Гасить только
+    /// автоматический досейв на старте недостаточно: рутинный слив `config_dirty` из 100-мс
+    /// цикла, запись на выходе из приложения и кнопка «Сохранить» в Настройках — три
+    /// независимых пути, каждый из которых так же превратил бы временную ошибку чтения в
+    /// безвозвратную замену живого конфига дефолтами.
+    pub settings_unreadable: bool,
     /// Рантайм-флаг (НЕ сериализуется): конфиг загружен из версии < `COREID_UID_VERSION`,
     /// где `charts.json` хранил позиционные CoreId. UI на старте один раз перепривяжет их
     /// к стабильным uid (см. `chart_persist::remap_core_ids`). Дефолт false.
@@ -191,6 +213,7 @@ impl AppConfig {
                 theme,
                 orders,
                 badges,
+                settings_unreadable: meta_load == toml_io::ConfigLoad::Unreadable,
                 chart_core_remap_needed: merged.chart_core_remap_needed,
             };
             log::info!(
@@ -201,14 +224,13 @@ impl AppConfig {
             // Дослоить новые дефолты / зафиксировать свежие uid на диск.
             // Не фатально: при ошибке продолжаем с тем, что уже в памяти.
             //
-            // FAIL CLOSED: если settings.toml есть, но НЕ ПРОЧИТАЛСЯ (права, шара, невыгруженный
-            // облачный плейсхолдер), в памяти сейчас дефолты — и запись превратила бы временную
-            // ошибку чтения в безвозвратную потерю групп, галок ядер и счётчика uid. Работаем
-            // на дефолтах, файл не трогаем; следующий запуск прочитает его нормально.
+            // FAIL CLOSED: при `settings_unreadable` сам `save` откажет (см. `save_impl`) —
+            // здесь только явный лог, чтобы причина была видна в журнале, а не выглядела
+            // как загадочный отказ записи.
             if merged.dirty {
-                if meta_load == toml_io::ConfigLoad::Unreadable {
+                if cfg.settings_unreadable {
                     log::error!(
-                        "settings.toml не прочитался — пере-сохранение конфига ОТМЕНЕНО, \
+                        "settings.toml не прочитался — запись конфига отключена на весь сеанс, \
                          чтобы не затереть настройки дефолтами"
                     );
                 } else if let Err(e) = cfg.save() {
@@ -362,6 +384,8 @@ impl AppConfig {
             theme,
             orders,
             badges,
+            // Плейнтекст-режим не читает settings.toml вовсе, писать нечего и нечем испортить.
+            settings_unreadable: false,
             chart_core_remap_needed: false,
         }))
     }
@@ -373,19 +397,32 @@ impl AppConfig {
     /// приложения, правки из шапки), который срабатывает на мелочах и за минуты вытеснил бы
     /// полезные снимки из хранилища. Осознанное сохранение — [`Self::save_with_snapshot`].
     pub fn save(&mut self) -> anyhow::Result<()> {
-        self.save_impl(SnapshotPolicy::No)
+        self.save_impl(SnapshotPolicy::No).map(|_| ())
     }
 
     /// Как [`Self::save`], но сначала снимает копию текущих файлов в `backups/`.
     ///
     /// Для осознанных сохранений (окно Настроек), где пользователю может понадобиться откат.
     /// Имя описывает ПОВЕДЕНИЕ записи, а не UI-поверхность: `moon-core` не знает про окна.
-    pub fn save_with_snapshot(&mut self) -> anyhow::Result<()> {
+    ///
+    /// `Ok(SnapshotOutcome::Failed)` означает: конфиг ЗАПИСАН, но копии для отката нет.
+    /// Вызывающий обязан это показать — иначе «Сохранено» соврёт о наличии защиты.
+    pub fn save_with_snapshot(&mut self) -> anyhow::Result<SnapshotOutcome> {
         self.save_impl(SnapshotPolicy::Yes)
     }
 
     /// Общая реализация сохранения; `snapshot` решает, снимать ли копию перед записью.
-    fn save_impl(&mut self, snapshot: SnapshotPolicy) -> anyhow::Result<()> {
+    ///
+    /// ЕДИНСТВЕННАЯ точка записи конфига, поэтому запрет на запись стоит здесь: так он
+    /// накрывает и Настройки, и слив по таймеру, и запись на выходе, и миграцию — а не
+    /// один путь, о котором вспомнили.
+    fn save_impl(&mut self, snapshot: SnapshotPolicy) -> anyhow::Result<SnapshotOutcome> {
+        if self.settings_unreadable {
+            anyhow::bail!(
+                "settings.toml не был прочитан при старте — запись запрещена, чтобы не \
+                 заменить настройки дефолтами; перезапустите приложение"
+            );
+        }
         reconcile::ensure_uids(&mut self.servers, &mut self.next_uid);
         self.prune_orphan_groups();
         self.validate()?;
@@ -413,9 +450,13 @@ impl AppConfig {
         // сохранение (кнопка активна всегда, а дубль имени ядра валится именно в `validate`)
         // тратило бы слот хранения, ничего при этом не записав: тридцати таких хватило бы,
         // чтобы вытеснить миграционный снимок.
-        if snapshot == SnapshotPolicy::Yes {
-            backup::snapshot(backup::Trigger::SettingsSave);
-        }
+        let outcome = if snapshot == SnapshotPolicy::Yes
+            && !backup::snapshot(backup::Trigger::SettingsSave)
+        {
+            SnapshotOutcome::Failed
+        } else {
+            SnapshotOutcome::Ok
+        };
         store::write_servers(&sf)?;
         store::write_settings(&meta)?;
         // Тема, стиль линий, бейджи детектов и хоткеи — в свои переносимые файлы,
@@ -424,7 +465,7 @@ impl AppConfig {
         self.orders.save()?;
         self.badges.save();
         self.hotkeys.save()?;
-        Ok(())
+        Ok(outcome)
     }
 
     /// Тема чарта активного режима UI (тёмная/светлая — по `ui_theme_mode`).

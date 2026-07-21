@@ -7,7 +7,7 @@ use gpui::*;
 use moon_ui::Root;
 
 use super::SettingsView;
-use moon_core::config::AppConfig;
+use moon_core::config::{AppConfig, SnapshotOutcome};
 
 impl SettingsView {
     /// Validate and persist the draft, then apply it without closing the settings window.
@@ -39,8 +39,17 @@ impl SettingsView {
             res
         });
         match res {
-            Ok(()) => {
-                self.status = Some((super::StatusMsg::Key("settings.saved"), false));
+            Ok(outcome) => {
+                // A failed snapshot does NOT fail the save — but reporting a bare "saved" would
+                // claim a rollback copy exists when it does not, which is exactly the moment the
+                // user would rely on it.
+                self.snapshot_failed = outcome == SnapshotOutcome::Failed;
+                let msg = if self.snapshot_failed {
+                    super::StatusMsg::Key("settings.saved_no_backup")
+                } else {
+                    super::StatusMsg::Key("settings.saved")
+                };
+                self.status = Some((msg, self.snapshot_failed));
                 self.apply_settings(&before, cx);
             }
             Err(e) => self.status = Some((super::StatusMsg::Text(e.to_string()), true)),

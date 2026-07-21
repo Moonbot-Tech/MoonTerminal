@@ -1,7 +1,9 @@
 //! Окно настроек (порт egui `src/settings/*` + `window/settings_window.rs`).
 //! Отдельное ОС-окно, редактирует ЖИВОЙ `Backend.config`: правки темы применяются
 //! к чарту сразу (группы-окна читают config каждый кадр и пере-рендерят offscreen),
-//! «Сохранить» пишет на диск (`AppConfig::save`).
+//! «Сохранить» пишет на диск через `AppConfig::save_with_snapshot` — осознанное сохранение,
+//! перед которым снимается копия конфига в `backups/` (обычный `save` без снимка остаётся
+//! за рутинным сливом `config_dirty`).
 //!
 //! Разбито по вкладкам (как egui-оригинал): [`interface`] (тема), [`general`] (общие),
 //! [`lines`] (стиль ордер-линий), [`connections`] (ядра/группы). Здесь — каркас:
@@ -141,6 +143,9 @@ pub struct SettingsView {
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Core-order selector shared by every core list on the Connections tab.
     core_sort: Entity<MoonSelectState<CoreSortMode>>,
+    /// Снимок конфига перед последним сохранением не удался — показать предупреждение.
+    /// Само сохранение при этом состоялось: бэкап намеренно не может его уронить.
+    snapshot_failed: bool,
     /// Какие блоки-линии раскрыты (вкладка «Линии», порт CollapsingHeader).
     open_lines: HashSet<&'static str>,
     /// Активная группа вкладки «Хоткеи» (саб-вкладки, как страницы хоткеев Moonbot).
@@ -345,6 +350,7 @@ impl SettingsView {
             lang,
             mode,
             core_sort,
+            snapshot_failed: false,
             open_lines: HashSet::new(),
             hotkeys_group: hotkeys::HotkeyGroup::Presets,
             storage: storage::build(),

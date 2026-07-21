@@ -47,9 +47,18 @@ pub fn write_settings(sf: &SettingsFile) -> anyhow::Result<()> {
 }
 
 /// Переименовать битый settings.toml → settings.toml.bak (не затираем молча).
-fn backup_corrupt(path: &Path) {
+///
+/// Возвращает `false`, если карантин НЕ удался. Разница принципиальна: удавшийся карантин
+/// означает, что исходные байты сохранены в `.bak` и записывать дефолты поверх (уже
+/// отсутствующего) пути безопасно. Провалившийся — что файл пользователя всё ещё на месте,
+/// и разрешать поверх него запись нельзя.
+fn backup_corrupt(path: &Path) -> bool {
     let bak = path.with_extension("toml.bak");
-    if let Err(e) = std::fs::rename(path, &bak) {
-        log::warn!("не удалось увести битый settings.toml в .bak: {e}");
+    match std::fs::rename(path, &bak) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("не удалось увести битый settings.toml в .bak: {e}");
+            false
+        }
     }
 }
