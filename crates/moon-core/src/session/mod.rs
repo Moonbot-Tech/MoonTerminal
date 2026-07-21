@@ -68,8 +68,8 @@ fn conn_sig(server: &ServerConfig) -> u64 {
 pub struct ConnSummary {
     pub ready: usize,
     pub total: usize,
-    /// Не-Ready ядра: (имя, статус). Для тултипа «кто не подключён и почему».
-    pub down: Vec<(String, ConnStatus)>,
+    /// Non-ready cores as `(id, name, status)` for canonically ordered status tooltips.
+    pub down: Vec<(CoreId, String, ConnStatus)>,
 }
 
 /// Сводка лицензий ядер одной группы для статус-бара окна.
@@ -86,6 +86,9 @@ pub struct LicenseSummary {
 
 pub struct SessionManager {
     sessions: Vec<CoreSession>,
+    /// Config ranks for active and inactive cores, keeping reactivated sessions in place.
+    /// Refreshed by every path that can insert a session.
+    config_order: Vec<CoreId>,
     feed_wake: Option<FeedWakeTx>,
     /// Аккаунтный план: статус/ордера/детекты/стратегии по ядру. Снаружи —
     /// только чтение через [`SessionManager::store`]; мутирует лишь сам менеджер.

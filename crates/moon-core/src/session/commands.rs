@@ -414,7 +414,9 @@ impl SessionManager {
         &self.store
     }
 
-    /// Живые сессии ядер (id/имя/группа) — read-only срез для UI.
+    /// Live core sessions in `AppConfig::servers` order, independent of connection timing.
+    ///
+    /// This is raw config order; the UI applies the selected `CoreSortMode` separately.
     pub fn sessions(&self) -> &[CoreSession] {
         &self.sessions
     }
