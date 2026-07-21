@@ -67,9 +67,11 @@ pub struct Merged {
 
 /// servers.enc + settings.toml → рантайм-серверы. Привязка меты по uid,
 /// с одноразовым fallback на имя для старых файлов без uid.
-pub fn merge(sf: ServersFile, meta: SettingsFile) -> Merged {
-    let mut next_uid = next_free_uid(&sf, &meta);
-    let mut dirty = meta.version < SCHEMA_VERSION;
+pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Merged {
+    let mut next_uid = next_free_uid(&sf, &meta, uid_floor);
+    // A counter that had to be raised is written back, so the repair survives a later boot on
+    // which the stores cannot be read.
+    let mut dirty = meta.version < SCHEMA_VERSION || next_uid > meta.next_uid;
     // До v11 рантайм-CoreId был позиционным → charts.json хранит позиционные id.
     let chart_core_remap_needed = meta.version < COREID_UID_VERSION;
     let language = meta.language;
@@ -253,13 +255,24 @@ pub fn ensure_uids(servers: &mut [ServerConfig], counter: &mut u64) {
     *counter = next;
 }
 
-/// Return the next uid from the durable counter and the maxima in both config files.
+/// Return the next uid from the durable counter, the maxima in both config files, and the
+/// floor observed in stores that outlive the config.
 ///
 /// See `SettingsFile::next_uid` for the persistence boundary of this high-water mark.
-fn next_free_uid(sf: &ServersFile, meta: &SettingsFile) -> u64 {
+///
+/// `uid_floor` is the highest uid any durable store has ever recorded (reports and strategy
+/// history, plus the persisted UI state keyed by core). The counter alone cannot see those: it
+/// only arrived in `SCHEMA_VERSION` 15, so an older config seeds it from the servers that still
+/// exist — and a deleted server's rows are never purged. Without the floor the next core takes
+/// the deleted one's uid and inherits its trades, P&L and figures. `None` means no store could
+/// be read, which contributes nothing rather than lowering the mark.
+fn next_free_uid(sf: &ServersFile, meta: &SettingsFile, uid_floor: Option<u64>) -> u64 {
     let from_entries = sf.servers.iter().map(|e| e.uid).max().unwrap_or(0);
     let from_meta = meta.servers.iter().map(|m| m.uid).max().unwrap_or(0);
-    meta.next_uid.max(from_entries.max(from_meta) + 1)
+    let from_stores = uid_floor.map_or(0, |m| m.saturating_add(1));
+    meta.next_uid
+        .max(from_entries.max(from_meta) + 1)
+        .max(from_stores)
 }
 
 #[cfg(test)]

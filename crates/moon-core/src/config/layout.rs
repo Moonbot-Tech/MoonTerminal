@@ -252,6 +252,14 @@ impl WindowLayout {
         super::toml_io::load_or_default(&paths::layout_path(), "layout.toml", |_| {})
     }
 
+    /// Highest core uid this layout still references.
+    ///
+    /// Feeds the durable uid high-water mark: the header ticker is stored by uid, so reissuing
+    /// one a saved layout still names would silently rebind that ticker to the new core.
+    pub fn max_core_uid(&self) -> Option<u64> {
+        self.header_ticker.as_ref().map(|t| t.core_uid)
+    }
+
     /// Записать layout.toml (не фатально: при ошибке только лог).
     pub fn save(&self) {
         if let Err(e) = super::toml_io::save(&paths::layout_path(), self, "layout.toml") {

@@ -325,6 +325,15 @@ impl FigureStore {
 
     // ── Персист ──────────────────────────────────────────────────────────────
 
+    /// Highest core uid this store still holds figures for.
+    ///
+    /// Feeds the durable uid high-water mark: figures are keyed by `(CoreId, market)`, so a
+    /// reissued uid would surface a deleted core's figures on the new core — and any edit or
+    /// alert toggle made there would then target the new core.
+    pub fn max_core_uid(&self) -> Option<u64> {
+        self.by_key.keys().map(|(core, _)| *core).max()
+    }
+
     /// Загрузка из `figures.json` (нет/битый → пусто).
     pub fn load() -> Self {
         let path = paths::figures_path();

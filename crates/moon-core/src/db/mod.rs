@@ -16,7 +16,7 @@ pub mod analytics;
 pub mod integrity;
 pub mod maint;
 mod parse;
-mod read_fail;
+pub(crate) mod read_fail;
 mod rep;
 #[cfg(test)]
 mod test_support;
@@ -1100,6 +1100,39 @@ pub fn query_reports(
         rows,
         core_uids,
     })
+}
+
+/// Highest `core_uid` any report row has ever carried, across both schemas.
+///
+/// Feeds the durable uid high-water mark: rows here outlive the server that wrote them, so a
+/// uid still present in this replica must never be handed to a new core. `Ok(None)` means the
+/// read succeeded and found no rows — the caller must keep that distinct from a failure, since
+/// only the former is safe to treat as "this store contributes nothing".
+///
+/// A source whose schema lacks `core_uid` is skipped rather than queried: `read_sources_res`
+/// always reports the modern table, which does not exist until `rep::init` has run. Negative
+/// values cannot be uids and are dropped instead of wrapping into a huge `u64`.
+pub fn max_core_uid(conn: &Connection) -> ReadResult<Option<u64>> {
+    const CTX: &str = "отчёты: max_core_uid";
+    let mut max: Option<u64> = None;
+    for src in read_sources_res(conn)? {
+        if !src.cols.contains("core_uid") {
+            continue;
+        }
+        // MAX over the leading PK column is an index seek. The selector-shaped GROUP BY in
+        // `distinct_cores` would instead scan every row of a replica that reaches hundreds of MB.
+        let found: Option<i64> = conn
+            .query_row(
+                &format!("SELECT MAX(core_uid) FROM {}", src.table),
+                [],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .map_err(|e| read_fail(CTX, e))?;
+        if let Some(uid) = found.and_then(|v| u64::try_from(v).ok()) {
+            max = Some(max.map_or(uid, |m| m.max(uid)));
+        }
+    }
+    Ok(max)
 }
 
 /// Load cores for the filter selector.

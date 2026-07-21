@@ -158,7 +158,14 @@ impl AppConfig {
     ///
     /// The `settings.toml` read status is computed before choosing a load branch so every
     /// construction path sets `settings_unreadable` and blocks an unsafe write-back.
-    pub fn load() -> anyhow::Result<Self> {
+    ///
+    /// `uid_floor` is the highest core uid observed in the durable stores that outlive this
+    /// config — reports, strategy history, and the persisted UI state keyed by core. The caller
+    /// reads them, so config keeps no dependency on the database. It must be supplied HERE
+    /// rather than raised afterwards: this function already assigns uids to entries that carry
+    /// none and persists them, so a floor applied later would arrive after the collision it
+    /// exists to prevent. `None` means nothing could be read and contributes nothing.
+    pub fn load(uid_floor: Option<u64>) -> anyhow::Result<Self> {
         // macOS/Linux: при первом запуске после переезда хранилища перенести
         // конфиги из бандла (рядом с exe) в пользовательскую директорию данных.
         // На Windows это no-op (data_dir == exe_dir).
@@ -196,7 +203,7 @@ impl AppConfig {
             if schema_upgrade {
                 backup::snapshot(backup::Trigger::SchemaMigration);
             }
-            let merged = reconcile::merge(sf, meta);
+            let merged = reconcile::merge(sf, meta, uid_floor);
             // hotkeys.toml приоритетен; нет файла → одноразовая миграция legacy-секции
             // из settings.toml (или дефолта) на диск в новый файл.
             let hotkeys = hotkeys_file.unwrap_or_else(|| {

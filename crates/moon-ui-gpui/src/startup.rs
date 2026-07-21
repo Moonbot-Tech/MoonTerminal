@@ -57,6 +57,54 @@ pub(crate) fn install_moon_theme_for_config(cfg: &AppConfig, cx: &mut App) {
     MoonTheme::install_config(moon_theme_config_for(cfg), cx);
 }
 
+/// Highest core uid any durable store has ever recorded.
+///
+/// The uid counter in `settings.toml` only arrived in `SCHEMA_VERSION` 15 and is seeded from the
+/// servers that still exist, but nothing purges a deleted server's rows from the report replica,
+/// the strategy history, or the persisted UI state. Feeding this floor into `AppConfig::load`
+/// stops a new core from taking a deleted one's identity and inheriting its trades, P&L,
+/// strategy versions and figures.
+///
+/// A store that cannot be read contributes nothing and says so in the log. That is a best-effort
+/// repair, not a guarantee: the mark may only ever rise, so a missing contribution leaves the
+/// previous behaviour intact rather than making it worse, and the next boot retries.
+fn observed_uid_floor(
+    layout: &WindowLayout,
+    chart_specs: &[chart_persist::ChartTabSpec],
+    figures: &moon_core::figures::FigureStore,
+) -> Option<u64> {
+    let reports = match moon_core::db::open_reader() {
+        Ok(conn) => moon_core::db::max_core_uid(&conn).unwrap_or_else(|e| {
+            log::warn!("uid floor: отчёты не прочитались ({e}) — счётчик uid не поднят по ним");
+            None
+        }),
+        // An absent replica is the ordinary fresh-install state, not a failure.
+        Err(moon_core::db::ReadFail::NotReady) => None,
+        Err(e) => {
+            log::warn!(
+                "uid floor: реплика отчётов недоступна ({e}) — счётчик uid не поднят по ней"
+            );
+            None
+        }
+    };
+    let strategies = moon_core::strat_db::max_core_uid().unwrap_or_else(|e| {
+        log::warn!(
+            "uid floor: история стратегий не прочиталась ({e}) — счётчик uid не поднят по ней"
+        );
+        None
+    });
+    [
+        reports,
+        strategies,
+        layout.max_core_uid(),
+        figures.max_core_uid(),
+        chart_persist::max_core_uid(chart_specs),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
 pub(crate) fn run() -> anyhow::Result<()> {
     // Строим env_logger как Logger (не .init()) и оборачиваем в TeeLogger — он
     // дублирует напечатанные записи в in-memory кольцо вкладки «Лог» (порт egui main).
@@ -118,7 +166,15 @@ pub(crate) fn run() -> anyhow::Result<()> {
         }));
     }
 
-    let cfg = AppConfig::load()?;
+    // Read the core-keyed stores BEFORE the config: `AppConfig::load` assigns uids to entries
+    // that carry none and persists them, so the floor has to be known by then. These loads are
+    // config-independent and their values are reused below rather than read twice.
+    let layout = WindowLayout::load();
+    let saved_chart_specs = chart_persist::load_all();
+    let figures = moon_core::figures::FigureStore::load();
+    let uid_floor = observed_uid_floor(&layout, &saved_chart_specs, &figures);
+
+    let cfg = AppConfig::load(uid_floor)?;
     // Язык интерфейса из конфига → глобальная локаль rust-i18n (для t! здесь и в MoonUI).
     rust_i18n::set_locale(cfg.language.code());
     // Файловый лог: режим из конфига + одноразовая чистка старых файлов при старте.
@@ -140,7 +196,6 @@ pub(crate) fn run() -> anyhow::Result<()> {
             .add_fonts(embedded_fonts())
             .expect("failed to add embedded Moonbot fonts");
 
-        let layout = WindowLayout::load();
         let dock_states = dock_persist::load_all();
         let detached = detached::load_all();
 
@@ -148,7 +203,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         // а теперь CoreId = стабильный uid. Перепривязываем, пока порядок серверов тот же,
         // что был при записи файла (флаг взводится только при апгрейде со старой версии).
         let chart_specs = {
-            let mut specs = chart_persist::load_all();
+            let mut specs = saved_chart_specs;
             if cfg.chart_core_remap_needed {
                 chart_persist::remap_core_ids(&mut specs, &cfg.servers);
                 chart_persist::save_all(&specs);
@@ -265,9 +320,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             chart_consumers: Vec::new(),
             chart_specs,
             chart_specs_dirty: false,
-            figures: std::rc::Rc::new(std::cell::RefCell::new(
-                moon_core::figures::FigureStore::load(),
-            )),
+            figures: std::rc::Rc::new(std::cell::RefCell::new(figures)),
             fig_draw_mode: true,
             fig_tool: moon_core::figures::FigureTool::HLine,
             fig_style: moon_core::figures::DrawStyle::default(),

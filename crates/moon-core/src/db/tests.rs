@@ -210,3 +210,53 @@ fn corrupt_replica_fails_report_totals_instead_of_zeroing() {
     drop(conn);
     test_support::remove_db(&path);
 }
+
+/// Protects `max_core_uid`: it must fold BOTH report schemas, and a source whose table does not
+/// exist yet must read as "nothing here" rather than failing the probe.
+///
+/// The plausible edit: dropping the `core_uid` column guard and querying every source
+/// `read_sources_res` reports. That function always reports the modern table, which does not
+/// exist until `rep::init` has run, so a replica that has only ever held legacy rows would turn
+/// a healthy "no rows" into a hard read failure.
+///
+/// Consequence: the caller treats a failure as "this store contributes nothing", which is
+/// precisely the state in which a deleted core's uid gets handed to a new core along with its
+/// trades and P&L.
+#[test]
+fn max_core_uid_folds_both_report_schemas() {
+    let conn = Connection::open_in_memory().unwrap();
+    init_db(&conn).unwrap();
+
+    // `init_db` creates the legacy table but not `orders_rep`; an empty store is not a failure.
+    assert!(
+        matches!(max_core_uid(&conn), Ok(None)),
+        "an empty replica must read as no rows, never as a read failure"
+    );
+
+    conn.execute(
+        "INSERT INTO closed_sell_reports (core_uid, core_name, db_id, created_ms, updated_ms)
+         VALUES (12, 'legacy', 1, 0, 0)",
+        [],
+    )
+    .unwrap();
+    assert!(
+        matches!(max_core_uid(&conn), Ok(Some(12))),
+        "a uid living only in the legacy schema still has to raise the mark"
+    );
+
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (core_uid INTEGER NOT NULL,
+            core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+            PRIMARY KEY (core_uid, newrecid));
+         INSERT INTO orders_rep VALUES (7, 'modern', 1);",
+    )
+    .unwrap();
+    assert!(
+        matches!(max_core_uid(&conn), Ok(Some(12))),
+        "the mark is the maximum ACROSS schemas, not the last one queried"
+    );
+
+    conn.execute("INSERT INTO orders_rep VALUES (30, 'modern', 2)", [])
+        .unwrap();
+    assert!(matches!(max_core_uid(&conn), Ok(Some(30))));
+}

@@ -276,6 +276,33 @@ pub fn remap_core_ids(specs: &mut [ChartTabSpec], servers: &[ServerConfig]) {
     );
 }
 
+/// Highest core uid any saved chart tab still references.
+///
+/// Feeds the durable uid high-water mark. Every one of these fields keys a tab, a custom coin
+/// list or a comparison anchor by core, so reissuing a uid a saved tab still names would
+/// silently reopen the deleted core's chart state against the new core.
+///
+/// A file written before `COREID_UID_VERSION` holds POSITIONAL ids rather than uids. They are
+/// folded in regardless: positional ids are small, and the mark may only ever rise, so the worst
+/// case is skipping a few uid numbers — whereas leaving them out risks reissuing a live one.
+pub fn max_core_uid(specs: &[ChartTabSpec]) -> Option<u64> {
+    specs
+        .iter()
+        .flat_map(|s| {
+            let bucket = match s.bucket {
+                Some(ChartBucket::Core(core)) => Some(core),
+                _ => None,
+            };
+            let coins = s.custom_coins.iter().flatten().map(|(core, _)| *core);
+            s.core
+                .into_iter()
+                .chain(bucket)
+                .chain(s.compare_anchor.iter().map(|(core, _)| *core))
+                .chain(coins)
+        })
+        .max()
+}
+
 /// Загрузить из `charts.json` (нет/битый → пусто).
 pub fn load_all() -> Vec<ChartTabSpec> {
     match std::fs::read_to_string(paths::charts_path()) {
