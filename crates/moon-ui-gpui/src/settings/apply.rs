@@ -19,22 +19,17 @@ impl SettingsView {
         let res = self.backend.update(cx, |b, _| {
             // Commit the candidate only after validation and I/O succeed; otherwise config
             // would change without the matching session/window reconciliation.
-            let mut candidate = match &b.preview {
-                Some(p) => p.clone(),
-                None => b.config.clone(),
-            };
+            let mut candidate = b.preview.as_ref().unwrap_or(&b.config).clone();
             // Snapshots the previous on-disk files into `backups/` first: this is a deliberate
             // user save, the one place a rollback is worth keeping.
             let res = candidate.save_with_snapshot();
             if res.is_ok() {
-                b.config = candidate;
-            }
-            // Copy save-time uid normalization back to the draft so a later save cannot roll
-            // back `next_uid` or reuse an identity tied to reports.sqlite history.
-            if res.is_ok() {
+                // Copy save-time uid normalization back to the draft so a later save cannot
+                // roll back `next_uid` or reuse an identity tied to reports.sqlite history.
                 if let Some(p) = b.preview.as_mut() {
-                    *p = b.config.clone();
+                    *p = candidate.clone();
                 }
+                b.config = candidate;
             }
             res
         });
@@ -43,13 +38,13 @@ impl SettingsView {
                 // A failed snapshot does NOT fail the save — but reporting a bare "saved" would
                 // claim a rollback copy exists when it does not, which is exactly the moment the
                 // user would rely on it.
-                self.snapshot_failed = outcome == SnapshotOutcome::Failed;
-                let msg = if self.snapshot_failed {
+                let snapshot_failed = outcome == SnapshotOutcome::Failed;
+                let msg = if snapshot_failed {
                     super::StatusMsg::Key("settings.saved_no_backup")
                 } else {
                     super::StatusMsg::Key("settings.saved")
                 };
-                self.status = Some((msg, self.snapshot_failed));
+                self.status = Some((msg, snapshot_failed));
                 self.apply_settings(&before, cx);
             }
             Err(e) => self.status = Some((super::StatusMsg::Text(e.to_string()), true)),
@@ -66,12 +61,13 @@ impl SettingsView {
 
         // Presentation settings are read at render time; update locale/order state and redraw
         // without rebuilding windows or sessions.
-        if before.language != after.language {
+        let lang_changed = before.language != after.language;
+        let sort_changed = before.core_sort != after.core_sort;
+        if lang_changed {
             rust_i18n::set_locale(after.language.code());
         }
-        if before.language != after.language || before.core_sort != after.core_sort {
+        if lang_changed || sort_changed {
             // Notify Backend before redraw so signature-gated panels re-evaluate their order.
-            let sort_changed = before.core_sort != after.core_sort;
             self.backend.update(cx, |b, bcx| {
                 // A sort change can replace the canonical first core while the cached one
                 // remains live, so bypass the normal liveness-based early return.

@@ -77,13 +77,17 @@ pub enum SnapshotOutcome {
     Failed,
 }
 
-/// Снимать ли резервную копию конфига перед записью (см. `AppConfig::save_impl`).
+/// Зачем идёт запись конфига — рутинный слив или осознанное сохранение.
+///
+/// Названо по НАЗНАЧЕНИЮ, а не по механизму («снимать ли копию»): снимок — сегодняшнее
+/// следствие этого различия, а не его суть. Ядро не может вывести намерение само, поэтому
+/// его передаёт вызывающий.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SnapshotPolicy {
-    /// Рутинная запись — снимок не нужен.
-    No,
-    /// Осознанное сохранение — снять копию перед перезаписью.
-    Yes,
+enum SaveKind {
+    /// Фоновая запись: слив `config_dirty`, выход из приложения, правка из шапки.
+    Routine,
+    /// Пользователь осознанно сохранил — тот случай, когда может понадобиться откат.
+    Deliberate,
 }
 
 /// Рантайм-конфиг (смерженный из двух файлов).
@@ -213,7 +217,7 @@ impl AppConfig {
                 theme,
                 orders,
                 badges,
-                settings_unreadable: meta_load == toml_io::ConfigLoad::Unreadable,
+                settings_unreadable: !meta_load.permits_overwrite(),
                 chart_core_remap_needed: merged.chart_core_remap_needed,
             };
             log::info!(
@@ -397,7 +401,7 @@ impl AppConfig {
     /// приложения, правки из шапки), который срабатывает на мелочах и за минуты вытеснил бы
     /// полезные снимки из хранилища. Осознанное сохранение — [`Self::save_with_snapshot`].
     pub fn save(&mut self) -> anyhow::Result<()> {
-        self.save_impl(SnapshotPolicy::No).map(|_| ())
+        self.save_impl(SaveKind::Routine).map(|_| ())
     }
 
     /// Как [`Self::save`], но сначала снимает копию текущих файлов в `backups/`.
@@ -408,15 +412,15 @@ impl AppConfig {
     /// `Ok(SnapshotOutcome::Failed)` означает: конфиг ЗАПИСАН, но копии для отката нет.
     /// Вызывающий обязан это показать — иначе «Сохранено» соврёт о наличии защиты.
     pub fn save_with_snapshot(&mut self) -> anyhow::Result<SnapshotOutcome> {
-        self.save_impl(SnapshotPolicy::Yes)
+        self.save_impl(SaveKind::Deliberate)
     }
 
-    /// Общая реализация сохранения; `snapshot` решает, снимать ли копию перед записью.
+    /// Общая реализация сохранения; `kind` решает, снимать ли копию перед записью.
     ///
     /// ЕДИНСТВЕННАЯ точка записи конфига, поэтому запрет на запись стоит здесь: так он
     /// накрывает и Настройки, и слив по таймеру, и запись на выходе, и миграцию — а не
     /// один путь, о котором вспомнили.
-    fn save_impl(&mut self, snapshot: SnapshotPolicy) -> anyhow::Result<SnapshotOutcome> {
+    fn save_impl(&mut self, kind: SaveKind) -> anyhow::Result<SnapshotOutcome> {
         if self.settings_unreadable {
             anyhow::bail!(
                 "settings.toml не был прочитан при старте — запись запрещена, чтобы не \
@@ -450,12 +454,9 @@ impl AppConfig {
         // сохранение (кнопка активна всегда, а дубль имени ядра валится именно в `validate`)
         // тратило бы слот хранения, ничего при этом не записав: тридцати таких хватило бы,
         // чтобы вытеснить миграционный снимок.
-        let outcome = if snapshot == SnapshotPolicy::Yes
-            && !backup::snapshot(backup::Trigger::SettingsSave)
-        {
-            SnapshotOutcome::Failed
-        } else {
-            SnapshotOutcome::Ok
+        let outcome = match kind {
+            SaveKind::Deliberate => backup::snapshot(backup::Trigger::SettingsSave),
+            SaveKind::Routine => SnapshotOutcome::Ok,
         };
         store::write_servers(&sf)?;
         store::write_settings(&meta)?;

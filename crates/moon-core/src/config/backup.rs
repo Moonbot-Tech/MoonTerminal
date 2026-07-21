@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use crate::util::time::{now_unix_ms_i64, utc_stamp_compact};
 
 use super::paths;
+use super::SnapshotOutcome;
 
 /// Сколько снимков хранить. Старые удаляются автоматически.
 pub const SNAPSHOT_KEEP: usize = 30;
@@ -66,12 +67,11 @@ impl Trigger {
 
 /// Снять копию обоих файлов конфига и подчистить старые снимки.
 ///
-/// Возвращает `bool`, а НЕ `Result`, намеренно: резервная копия не имеет права сломать
-/// операцию, которую она защищает, и отсутствие канала ошибок делает это свойством
+/// Возвращает [`SnapshotOutcome`], а НЕ `Result`, намеренно: резервная копия не имеет права
+/// сломать операцию, которую она защищает, и отсутствие канала ошибок делает это свойством
 /// сигнатуры, а не соглашением, которое следующий `?` тихо нарушит. Но и молчать нельзя —
-/// иначе Настройки покажут «Сохранено», хотя копии для отката не появилось. `false` =
-/// снимок не удался; сохранение при этом продолжается.
-pub(super) fn snapshot(trigger: Trigger) -> bool {
+/// иначе Настройки покажут «Сохранено», хотя копии для отката не появилось.
+pub(super) fn snapshot(trigger: Trigger) -> SnapshotOutcome {
     let sources = [paths::servers_path(), paths::settings_path()];
     let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
     match snapshot_into(
@@ -86,7 +86,7 @@ pub(super) fn snapshot(trigger: Trigger) -> bool {
                 trigger.label(),
                 dir.file_name().unwrap_or_default().to_string_lossy()
             );
-            true
+            SnapshotOutcome::Ok
         }
         // Копировать было нечего (первый запуск) — это не сбой.
         Ok(None) => {
@@ -94,11 +94,11 @@ pub(super) fn snapshot(trigger: Trigger) -> bool {
                 "конфиг: снимок ({}) пропущен — нечего копировать",
                 trigger.label()
             );
-            true
+            SnapshotOutcome::Ok
         }
         Err(e) => {
             log::warn!("конфиг: снимок ({}) не удался: {e:#}", trigger.label());
-            false
+            SnapshotOutcome::Failed
         }
     }
 }
@@ -169,13 +169,13 @@ fn snapshot_into(
     }
     let dir = published?;
 
-    let expected: Vec<String> = present
+    // Из ВСЕХ источников, а не только присутствовавших сейчас: чистке нужен набор имён,
+    // которые этот модуль вообще когда-либо пишет, а не срез одного запуска.
+    let expected: Vec<&str> = sources
         .iter()
-        .filter_map(|p| p.file_name())
-        .map(|n| n.to_string_lossy().into_owned())
+        .filter_map(|p| p.file_name()?.to_str())
         .collect();
-    let expected_refs: Vec<&str> = expected.iter().map(String::as_str).collect();
-    prune(backups, keep, &expected_refs);
+    prune(backups, keep, &expected);
 
     Ok(Some(dir))
 }

@@ -143,9 +143,6 @@ pub struct SettingsView {
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Core-order selector shared by every core list on the Connections tab.
     core_sort: Entity<MoonSelectState<CoreSortMode>>,
-    /// Снимок конфига перед последним сохранением не удался — показать предупреждение.
-    /// Само сохранение при этом состоялось: бэкап намеренно не может его уронить.
-    snapshot_failed: bool,
     /// Какие блоки-линии раскрыты (вкладка «Линии», порт CollapsingHeader).
     open_lines: HashSet<&'static str>,
     /// Активная группа вкладки «Хоткеи» (саб-вкладки, как страницы хоткеев Moonbot).
@@ -350,7 +347,6 @@ impl SettingsView {
             lang,
             mode,
             core_sort,
-            snapshot_failed: false,
             open_lines: HashSet::new(),
             hotkeys_group: hotkeys::HotkeyGroup::Presets,
             storage: storage::build(),

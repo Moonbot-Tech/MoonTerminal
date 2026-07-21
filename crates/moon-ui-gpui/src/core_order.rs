@@ -109,27 +109,12 @@ impl CoreOrder {
 
     /// Order rows that came from the reports database, whose names are the DB's own.
     ///
-    /// Database-only cores have no config rank, so they receive distinct tail ranks in input
-    /// order. Their order therefore does not depend on sort stability.
-    pub(crate) fn from_db(&self, rows: Vec<(u64, String)>) -> OrderedCores {
-        let known = self.rank.len() as u32;
-        let mut unknown_seen = 0u32;
-        let mut keyed: Vec<(u32, (CoreId, String))> = rows
-            .into_iter()
-            .map(|(id, name)| {
-                let rank = match self.rank.get(&id) {
-                    Some(rank) => *rank,
-                    None => {
-                        let rank = known.saturating_add(unknown_seen);
-                        unknown_seen += 1;
-                        rank
-                    }
-                };
-                (rank, (id, name))
-            })
-            .collect();
-        keyed.sort_by_key(|(rank, _)| *rank);
-        OrderedCores(keyed.into_iter().map(|(_, core)| core).collect())
+    /// Database-only cores (their server was deleted) share the `u32::MAX` rank `rank` hands
+    /// out for anything the config does not know, so they land after every configured core and
+    /// keep the order the query returned them in — `sort_by_key` is a STABLE sort.
+    pub(crate) fn from_db(&self, mut rows: Vec<(CoreId, String)>) -> OrderedCores {
+        rows.sort_by_key(|(id, _)| self.rank(*id));
+        OrderedCores(rows)
     }
 
     /// Sort any slice whose items carry a `CoreId` into canonical order.
@@ -181,14 +166,11 @@ mod tests {
     /// Cores that only exist in `reports.sqlite` (their server was deleted) must land AFTER
     /// every configured core and keep the order the query returned them in.
     ///
-    /// Protects `CoreOrder::from_db`'s tail BASE: dropping the `known +` offset gives unknown
-    /// cores rank 0, which floats deleted cores ABOVE every configured one in the Report and
-    /// Analytics core filters.
-    ///
-    /// Note what this does NOT prove: collapsing the distinct tail ranks to one shared value
-    /// leaves the result unchanged, because `sort_by_key` is documented stable and the rows
-    /// keep their input order. The distinct ranks are still the safer construction — they make
-    /// the tail independent of that guarantee — but this test is not what pins them.
+    /// Protects `CoreOrder::from_db` on two counts: unknown cores must rank LAST (giving them
+    /// rank 0 instead of `u32::MAX` floats deleted cores above every configured one in the
+    /// Report and Analytics filters), and the tail must keep the query's own order, which
+    /// relies on `sort_by_key` being a stable sort — swapping it for `sort_unstable_by_key`
+    /// is the plausible "faster sort" edit that breaks it.
     #[test]
     fn historical_cores_form_a_stable_tail_after_the_configured_ones() {
         let order = CoreOrder::new(&config(
