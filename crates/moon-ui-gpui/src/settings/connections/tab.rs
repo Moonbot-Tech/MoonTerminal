@@ -228,6 +228,34 @@ impl SettingsView {
             )
     }
 
+    /// Render the global core-order selector used by every core list.
+    fn core_sort_selector(&self, cx: &App) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .items_center()
+            .child(
+                div()
+                    .id("core-sort-lbl")
+                    .font_bold()
+                    .child(t!("conn.core_sort").to_string())
+                    .tooltip(|_window, cx| {
+                        cx.new(|_| {
+                            MoonTooltipView::new(t!("conn.core_sort_tip").to_string())
+                                .max_width(420.0)
+                        })
+                        .into()
+                    }),
+            )
+            .child(
+                div().w(px(260.0)).child(
+                    MoonSelect::new(&self.core_sort)
+                        .trigger_size(MoonButtonSize::Action)
+                        .menu_width(design::font_w(cx, 260.0))
+                        .menu_size(MoonMenuSize::Compact),
+                ),
+            )
+    }
+
     /// Вкладка «Подключения» — порт egui `settings/connections.rs`: источник данных
     /// (выпадающий), таблица ядер слева, панель групп (с иконками/👁/пикером) справа.
     pub(in crate::settings) fn connections_tab(
@@ -238,10 +266,12 @@ impl SettingsView {
         // Живой статус ядер для точек.
         let status = self.backend.read(cx).session.status_map();
         // Снимки серверов (id, active, группа) и групп (name, active, icon).
-        let (servers, mut groups) = {
+        // Rank from the draft so a drag is visible before settings are applied.
+        let (order, servers, mut groups) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             (
+                crate::core_order::CoreOrder::new(d),
                 d.servers
                     .iter()
                     .map(|s| (s.id, s.active, s.group.clone()))
@@ -313,14 +343,14 @@ impl SettingsView {
             list_col =
                 list_col.child(self.group_header_row(name, *active, ico_el, member_count, p, cx));
             // ── Ядра-листья этой группы (с отступом + вертикальная линия ветки) ──
-            // Неактивные сервера — вниз (стабильная сортировка: порядок внутри групп сохраняется).
+            // Keep inactive cores at their canonical position; the status dot shows state.
             // `i` — исходный индекс в config.servers (нужен для мутаций draft), его сохраняем.
             let mut members: Vec<(usize, &(u64, bool, String))> = servers
                 .iter()
                 .enumerate()
                 .filter(|(_, (_, _, g))| g == name)
                 .collect();
-            members.sort_by_key(|(_, (_, active, _))| !*active);
+            order.sort_by(&mut members, |(_, (id, _, _))| *id);
             for (i, (id, srv_active, _g)) in members {
                 if let Some(row) = self.conn.get(i) {
                     let st = status.get(id).cloned();
@@ -357,6 +387,10 @@ impl SettingsView {
             .gap_2()
             // Источник рыночных данных — выпадающий список (порт egui ComboBox).
             .child(self.market_src_selector(cx))
+            // The selected order applies to every core list.
+            .child(self.core_sort_selector(cx))
+            // Flat drag-and-drop editor for Manual order.
+            .children(self.core_order_editor(cx))
             .child(list_col)
     }
 }

@@ -37,7 +37,7 @@ use rust_i18n::t;
 
 use crate::Backend;
 use crate::icons::IconSet;
-use moon_core::config::{AppConfig, Language};
+use moon_core::config::{AppConfig, CoreSortMode, Language};
 use moon_core::market::MarketDataMode;
 
 use badges::BadgesEd;
@@ -105,6 +105,13 @@ const MODE_LABELS: [(&str, MarketDataMode); 2] = [
     ("conn.market_percore", MarketDataMode::PerCore),
 ];
 
+/// Labels and values for the global core-order selector.
+const CORE_SORT_LABELS: [(&str, CoreSortMode); 3] = [
+    ("conn.core_sort.manual", CoreSortMode::Manual),
+    ("conn.core_sort.name", CoreSortMode::Name),
+    ("conn.core_sort.added", CoreSortMode::Added),
+];
+
 /// Сообщение статуса подвала: ключ i18n (резолвится на РЕНДЕРЕ — не кэшируем
 /// готовую строку, иначе после смены языка «Сохранено» оставалось хвостом
 /// прошлой локали) либо готовый текст (ошибки I/O, не локализуются).
@@ -132,6 +139,10 @@ pub struct SettingsView {
     lang: Entity<MoonSelectState<Language>>,
     /// Выпадающий выбор источника данных (вкладка «Подключения»).
     mode: Entity<MoonSelectState<MarketDataMode>>,
+    /// Core-order selector shared by every core list on the Connections tab.
+    core_sort: Entity<MoonSelectState<CoreSortMode>>,
+    /// State for the flat drag-and-drop editor used in `Manual` mode.
+    order_tree: Entity<moon_ui::MoonTreeState>,
     /// Какие блоки-линии раскрыты (вкладка «Линии», порт CollapsingHeader).
     open_lines: HashSet<&'static str>,
     /// Активная группа вкладки «Хоткеи» (саб-вкладки, как страницы хоткеев Moonbot).
@@ -214,10 +225,10 @@ impl SettingsView {
         .detach();
 
         // Язык — выпадающий список (порт egui ComboBox). Init = текущий язык draft.
-        let (cur_lang, cur_mode) = {
+        let (cur_lang, cur_mode, cur_core_sort) = {
             let b = backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
-            (d.language, d.market_mode)
+            (d.language, d.market_mode, d.core_sort)
         };
         let lang_items = Language::ALL
             .iter()
@@ -269,6 +280,42 @@ impl SettingsView {
         )
         .detach();
 
+        // One ordering mode drives every core list.
+        let core_sort_items = CORE_SORT_LABELS
+            .iter()
+            .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
+            .collect::<Vec<_>>();
+        let core_sort_idx = CORE_SORT_LABELS
+            .iter()
+            .position(|(_, m)| *m == cur_core_sort)
+            .unwrap_or(0);
+        let core_sort = cx.new(|cx| {
+            MoonSelectState::new(
+                core_sort_items,
+                Some(IndexPath::new(core_sort_idx)),
+                window,
+                cx,
+            )
+        });
+        cx.subscribe(
+            &core_sort,
+            |this, _e, ev: &MoonSelectEvent<CoreSortMode>, cx| {
+                if let MoonSelectEvent::Confirm(Some(mode)) = ev {
+                    let mode = *mode;
+                    this.backend.update(cx, |b, bcx| {
+                        if let Some(p) = b.preview.as_mut() {
+                            p.core_sort = mode;
+                            bcx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+
+        // Flat drag-and-drop state for manual ordering.
+        let order_tree = cx.new(|cx| moon_ui::MoonTreeState::new(cx));
+
         let initial_sig = settings_sig(backend.read(cx));
         cx.observe(&backend, |this, backend, cx| {
             let sig = settings_sig(backend.read(cx));
@@ -302,6 +349,8 @@ impl SettingsView {
             ui_font_input,
             lang,
             mode,
+            core_sort,
+            order_tree,
             open_lines: HashSet::new(),
             hotkeys_group: hotkeys::HotkeyGroup::Presets,
             storage: storage::build(),
@@ -320,6 +369,7 @@ fn settings_sig(b: &Backend) -> u64 {
 
     cfg.language.code().hash(&mut h);
     cfg.market_mode.code().hash(&mut h);
+    cfg.core_sort.hash(&mut h);
     cfg.charts_split_by_core.hash(&mut h);
     cfg.charts_stack_scroll.hash(&mut h);
     cfg.charts_stack_compress.hash(&mut h);

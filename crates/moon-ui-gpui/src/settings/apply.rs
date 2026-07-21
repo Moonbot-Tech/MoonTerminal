@@ -1,6 +1,5 @@
-//! Сохранение и применение настроек: коммит draft → config + запись на диск
-//! («Сохранить»), живое применение (язык/лог/тема/режим рынка) и рестарт/реконсайл
-//! сессий и окон групп при структурных изменениях.
+//! Persist settings drafts and apply saved presentation, logging, market, session, and window
+//! changes at their appropriate boundaries.
 
 use std::collections::HashSet;
 
@@ -11,18 +10,31 @@ use super::SettingsView;
 use moon_core::config::AppConfig;
 
 impl SettingsView {
-    /// Коммит draft → config + запись на диск (валидация внутри AppConfig::save).
-    /// draft остаётся (правки продолжаются), как egui (Save не закрывает окно). При
-    /// успехе — применяем изменения (порт egui `App::render_settings`).
+    /// Validate and persist the draft, then apply it without closing the settings window.
+    ///
+    /// A failed save leaves both the active config and draft unchanged.
     pub(super) fn save(&mut self, cx: &mut Context<Self>) {
-        // Снимок «до» для diff (структура/режим/язык/лог/чарты). Коммитим draft, пишем
-        // на диск (save может выровнять uid'ы), затем сравниваем с актуальным config.
+        // Compare the persisted candidate with this snapshot to choose live updates and rebuilds.
         let before = self.backend.read(cx).config.clone();
         let res = self.backend.update(cx, |b, _| {
-            if let Some(p) = &b.preview {
-                b.config = p.clone();
+            // Commit the candidate only after validation and I/O succeed; otherwise config
+            // would change without the matching session/window reconciliation.
+            let mut candidate = match &b.preview {
+                Some(p) => p.clone(),
+                None => b.config.clone(),
+            };
+            let res = candidate.save();
+            if res.is_ok() {
+                b.config = candidate;
             }
-            b.config.save()
+            // Copy save-time uid normalization back to the draft so a later save cannot roll
+            // back `next_uid` or reuse an identity tied to reports.sqlite history.
+            if res.is_ok() {
+                if let Some(p) = b.preview.as_mut() {
+                    *p = b.config.clone();
+                }
+            }
+            res
         });
         match res {
             Ok(()) => {
@@ -34,21 +46,29 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Применить сохранённые настройки (порт egui `App::render_settings` хвост).
-    /// • лог-настройки — живо (set_file_logging + чистка);
-    /// • структурные изменения серверов/групп → рестарт `SessionManager` + пересоздание
-    ///   окон групп; • смена режима рынка — живо (`set_market_mode`); • смена «чарт на
-    ///   ядро» без структурных изменений → тоже пересборка окон (новые чарт-вкладки).
-    /// • смена языка — живо: ставим локаль rust-i18n и помечаем ВСЕ окна на перерисовку
-    ///   (`refresh_windows`). Окна/подключения/раскладка не трогаются — строки через `t!`
-    ///   читают локаль на рендере, поэтому достаточно одного redraw.
+    /// Apply saved settings at the narrowest boundary each setting requires.
+    ///
+    /// Presentation, logging, and market-mode changes apply live. Structural server or group
+    /// changes reconcile sessions, while chart topology changes rebuild group windows.
     fn apply_settings(&mut self, before: &AppConfig, cx: &mut Context<Self>) {
         let after = self.backend.read(cx).config.clone();
 
-        // Язык — применяем живо: глобальная локаль + перерисовка всех окон (БЕЗ пересоздания
-        // окон и рестарта сессий). `t!` подхватит новую локаль на ближайшем рендере.
+        // Presentation settings are read at render time; update locale/order state and redraw
+        // without rebuilding windows or sessions.
         if before.language != after.language {
             rust_i18n::set_locale(after.language.code());
+        }
+        if before.language != after.language || before.core_sort != after.core_sort {
+            // Notify Backend before redraw so signature-gated panels re-evaluate their order.
+            let sort_changed = before.core_sort != after.core_sort;
+            self.backend.update(cx, |b, bcx| {
+                // A sort change can replace the canonical first core while the cached one
+                // remains live, so bypass the normal liveness-based early return.
+                if sort_changed {
+                    b.refresh_header_ticker_default(true);
+                }
+                bcx.notify();
+            });
             cx.refresh_windows();
         }
 

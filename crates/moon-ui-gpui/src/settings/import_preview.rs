@@ -92,10 +92,17 @@ impl SettingsView {
                     .map(|s| s.order_sizes_or_default("USDT"))
                     .unwrap_or_else(|| default_order_sizes("USDT")),
                 first_active.and_then(|s| s.order_size_sel),
-                d.servers
-                    .iter()
-                    .map(|s| (s.id, s.name.clone(), Some(s.id) == first_active_id))
-                    .collect::<Vec<_>>(),
+                {
+                    // Canonicalize the checkbox list only; `first_active_id` seeds preset values.
+                    let order = crate::core_order::CoreOrder::new(d);
+                    let mut cores: Vec<(u64, String, bool)> = d
+                        .servers
+                        .iter()
+                        .map(|s| (s.id, s.name.clone(), Some(s.id) == first_active_id))
+                        .collect();
+                    order.sort_by(&mut cores, |(id, _, _)| *id);
+                    cores
+                },
             )
         };
         cx.spawn(async move |this, cx| {

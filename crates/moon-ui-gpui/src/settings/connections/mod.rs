@@ -7,6 +7,7 @@
 //! групп из серверов; [`table`] — таблица ядер (строки/колонки/шапка/add/del);
 //! [`tab`] — панель групп, пикер иконок и сборка вкладки (`connections_tab`).
 
+mod order_editor;
 mod tab;
 mod table;
 
