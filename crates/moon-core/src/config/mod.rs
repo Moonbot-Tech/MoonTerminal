@@ -173,9 +173,17 @@ impl AppConfig {
         {
             return Ok(cfg);
         }
+        // Прочитано ОДИН раз и ДО выбора ветки: статус чтения settings.toml решает, вправе ли
+        // писать на диск ЛЮБАЯ из веток ниже, а не только основная. Читать его внутри ветки
+        // `servers.enc` было мало: при отсутствующем servers.enc и нечитаемом settings.toml
+        // (частичная синхронизация, ручное удаление, восстановление) миграционные и
+        // свежая ветки оставляли флаг сброшенным — и следующее сохранение из Настроек
+        // заменяло непрочитанные настройки дефолтами.
+        let (meta, meta_load) = store::read_settings();
+        let settings_unreadable = !meta_load.permits_overwrite();
+
         if paths::servers_path().exists() {
             let sf = store::read_servers()?;
-            let (meta, meta_load) = store::read_settings();
             // Взято ДО того, как `merge` поглотит `meta`: `Merged` из-за этого не приходится
             // расширять полем, которое здесь и так уже известно.
             let schema_upgrade = meta.version < schema::SCHEMA_VERSION;
@@ -217,7 +225,7 @@ impl AppConfig {
                 theme,
                 orders,
                 badges,
-                settings_unreadable: !meta_load.permits_overwrite(),
+                settings_unreadable,
                 chart_core_remap_needed: merged.chart_core_remap_needed,
             };
             log::info!(
@@ -262,8 +270,15 @@ impl AppConfig {
             cfg.separate_control_zones = servers::default_true();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
-            cfg.save()?;
-            log::info!("мигрировано из config.enc → servers.enc + settings.toml");
+            cfg.settings_unreadable = settings_unreadable;
+            if settings_unreadable {
+                log::error!(
+                    "settings.toml есть, но не прочитался — миграция из config.enc НЕ записана"
+                );
+            } else {
+                cfg.save()?;
+                log::info!("мигрировано из config.enc → servers.enc + settings.toml");
+            }
             return Ok(cfg);
         }
         if paths::legacy_toml_path().exists() {
@@ -283,8 +298,15 @@ impl AppConfig {
             cfg.separate_control_zones = servers::default_true();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
-            cfg.save()?;
-            log::info!("мигрировано из config.toml → servers.enc + settings.toml");
+            cfg.settings_unreadable = settings_unreadable;
+            if settings_unreadable {
+                log::error!(
+                    "settings.toml есть, но не прочитался — миграция из config.toml НЕ записана"
+                );
+            } else {
+                cfg.save()?;
+                log::info!("мигрировано из config.toml → servers.enc + settings.toml");
+            }
             return Ok(cfg);
         }
 
@@ -307,6 +329,9 @@ impl AppConfig {
             // settings save would persist that, silently inverting control zones on a fresh
             // install. Every other field this struct update covers defaults to zero anyway.
             separate_control_zones: servers::default_true(),
+            // Файлов ядер нет, но settings.toml может существовать и не читаться — тогда
+            // писать поверх него нельзя и на этой ветке.
+            settings_unreadable,
             ..Self::default()
         })
     }
