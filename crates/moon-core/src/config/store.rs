@@ -11,6 +11,7 @@ use anyhow::Context;
 use super::crypto;
 use super::paths;
 use super::schema::{ServersFile, SettingsFile};
+use super::toml_io::ConfigLoad;
 
 /// Расшифровать и разобрать servers.enc. Ошибка чтения/дешифровки — фатальна
 /// (это секреты пользователя, молча терять нельзя).
@@ -29,10 +30,15 @@ pub fn write_servers(sf: &ServersFile) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Прочитать settings.toml. Нет файла → дефолт (первый запуск). Битый файл →
-/// увести в `.bak`, залогировать и вернуть дефолт (данные не теряются молча).
-pub fn read_settings() -> SettingsFile {
-    super::toml_io::load_or_default(&paths::settings_path(), "settings.toml", backup_corrupt)
+/// Прочитать settings.toml вместе со СТАТУСОМ чтения. Нет файла → дефолт (первый
+/// запуск). Битый файл → увести в `.bak`, залогировать и вернуть дефолт (данные не
+/// теряются молча). Нечитаемый файл → дефолт + [`ConfigLoad::Unreadable`].
+///
+/// Статус обязателен именно здесь: `AppConfig::load` автоматически пере-сохраняет
+/// конфиг, когда версия схемы устарела, и без этого различия одна временная ошибка
+/// чтения приводила бы к перезаписи живого конфига дефолтами.
+pub fn read_settings() -> (SettingsFile, ConfigLoad) {
+    super::toml_io::load_or_default_status(&paths::settings_path(), "settings.toml", backup_corrupt)
 }
 
 /// Записать settings.toml (открытый, человекочитаемый TOML, без секретов).

@@ -23,7 +23,9 @@ impl SettingsView {
                 Some(p) => p.clone(),
                 None => b.config.clone(),
             };
-            let res = candidate.save();
+            // Snapshots the previous on-disk files into `backups/` first: this is a deliberate
+            // user save, the one place a rollback is worth keeping.
+            let res = candidate.save_with_snapshot();
             if res.is_ok() {
                 b.config = candidate;
             }

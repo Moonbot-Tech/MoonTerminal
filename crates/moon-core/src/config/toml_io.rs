@@ -8,25 +8,67 @@ use anyhow::Context;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-/// Прочитать TOML в `T`. Нет файла → дефолт (первый запуск). Битый файл →
-/// лог, `on_corrupt(path)` (например, увод в `.bak`) и дефолт — не падаем и
-/// не теряем данные молча.
+/// How a config file loaded. The caller needs this to decide whether writing the file back is
+/// safe — the four cases are NOT interchangeable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfigLoad {
+    /// Read and parsed. Whatever is in memory reflects the file.
+    Present,
+    /// No such file — a first run. Defaults are correct and saving them is correct.
+    Absent,
+    /// Present but unparseable. `on_corrupt` has moved it aside (`.bak`), so the original bytes
+    /// survive and writing defaults over the now-absent path is safe.
+    Corrupt,
+    /// The file may well exist and hold good data, but reading it FAILED — a permission or
+    /// sharing error, or a cloud placeholder that could not be hydrated.
+    ///
+    /// The defaults returned alongside this are safe to USE but must never be SAVED: the caller
+    /// would overwrite a healthy config with defaults on the strength of a transient read error.
+    Unreadable,
+}
+
+/// Прочитать TOML в `T`, сообщив КАК он прочитался. Нет файла → дефолт (первый
+/// запуск). Битый файл → лог, `on_corrupt(path)` (например, увод в `.bak`) и дефолт.
+/// Нечитаемый файл → дефолт + [`ConfigLoad::Unreadable`], чтобы вызывающий не
+/// перезаписал живой конфиг (см. `ConfigLoad`).
+pub fn load_or_default_status<T: Default + DeserializeOwned>(
+    path: &Path,
+    label: &str,
+    on_corrupt: impl FnOnce(&Path),
+) -> (T, ConfigLoad) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (defaults_for_absent_file(label), ConfigLoad::Absent);
+        }
+        // NOT the same as "absent". Distinguishing them is what stops a transient read failure
+        // from being laundered into a permanent overwrite by the caller's re-save.
+        Err(e) => {
+            log::error!(
+                "{label}: файл есть, но не читается ({e}); работаю на дефолтах В ПАМЯТИ и НЕ \
+                 перезаписываю файл"
+            );
+            return (defaults_for_absent_file(label), ConfigLoad::Unreadable);
+        }
+    };
+    match toml::from_str(&text) {
+        Ok(v) => (v, ConfigLoad::Present),
+        Err(e) => {
+            log::warn!("{label} повреждён ({e}); беру дефолт");
+            on_corrupt(path);
+            (defaults_for_absent_file(label), ConfigLoad::Corrupt)
+        }
+    }
+}
+
+/// Как [`load_or_default_status`], но без статуса — для файлов раскладки/темы, где
+/// нечитаемый файл не приводит к автоматической перезаписи.
 pub fn load_or_default<T: Default + DeserializeOwned>(
     path: &Path,
     label: &str,
     on_corrupt: impl FnOnce(&Path),
 ) -> T {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return defaults_for_absent_file(label);
-    };
-    match toml::from_str(&text) {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!("{label} повреждён ({e}); беру дефолт");
-            on_corrupt(path);
-            defaults_for_absent_file(label)
-        }
-    }
+    load_or_default_status(path, label, on_corrupt).0
 }
 
 /// Defaults for a file that is absent or unreadable, built by deserializing an EMPTY TOML
@@ -98,8 +140,8 @@ fn atomic_tmp_path(path: &Path) -> PathBuf {
 /// Defaulting contract for config files that are absent from disk.
 mod tests {
     use super::super::schema::{default_ui_font_delta, default_ui_scale, SettingsFile};
-    use super::load_or_default;
-    use std::path::PathBuf;
+    use super::{load_or_default, load_or_default_status, ConfigLoad};
+    use std::path::{Path, PathBuf};
 
     /// Pins the absent-file branch of [`load_or_default`] to `defaults_for_absent_file`.
     ///
@@ -134,5 +176,49 @@ mod tests {
             default_ui_font_delta(),
             "an absent settings.toml must load the schema default font delta, not f32::default()"
         );
+    }
+
+    /// A file that exists but cannot be READ must not be reported as absent.
+    ///
+    /// The two used to be indistinguishable: `let Ok(text) = read_to_string(..) else { default }`
+    /// mapped every error — permission denied, a sharing violation, a cloud placeholder that
+    /// failed to hydrate — onto the same "first run" answer. Downstream that yields `version = 0`,
+    /// which marks the config dirty, which drives the automatic re-save in `AppConfig::load` — so
+    /// one transient read failure silently replaced a healthy `settings.toml` (groups, per-core
+    /// active flags, chart bundles, the uid counter) with defaults.
+    ///
+    /// The plausible edit this catches: collapsing the match back to `let Ok(..) else` because it
+    /// reads more cleanly. That compiles and behaves identically on every machine where the file
+    /// reads fine, which is every developer machine.
+    ///
+    /// A directory is the portable way to force a non-`NotFound` read error: no platform returns
+    /// `NotFound` for a path that exists but is not a file.
+    #[test]
+    fn an_unreadable_file_is_not_reported_as_absent() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        assert!(dir.is_dir(), "the fixture must be a directory that exists");
+
+        let (_cfg, status) = load_or_default_status::<SettingsFile>(&dir, "settings.toml", |_| {
+            panic!("on_corrupt must not fire for a file that could not be read at all")
+        });
+
+        assert_eq!(
+            status,
+            ConfigLoad::Unreadable,
+            "a path that exists but does not read must report Unreadable, never Absent"
+        );
+    }
+
+    /// A genuinely missing file still reports `Absent`, so the first run can save its defaults.
+    #[test]
+    fn a_missing_file_reports_absent() {
+        let missing = Path::new("no-such-dir-4f21c8/no-such-settings.toml");
+        assert!(!missing.exists(), "the fixture path must genuinely not exist");
+
+        let (_cfg, status) = load_or_default_status::<SettingsFile>(missing, "settings.toml", |_| {
+            panic!("on_corrupt must not fire for a file that is merely absent")
+        });
+
+        assert_eq!(status, ConfigLoad::Absent);
     }
 }

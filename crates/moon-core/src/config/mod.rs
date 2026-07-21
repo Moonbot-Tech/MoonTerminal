@@ -12,7 +12,8 @@
 //! - `schema`    — структуры файлов на диске (serde) + версия схемы;
 //! - `store`     — чтение/запись файлов (шифрование, бэкап битого settings.toml);
 //! - `reconcile` — слияние файлов ↔ рантайм + стабильные uid;
-//! - `migrate`   — одноразовые миграции со старых форматов.
+//! - `migrate`   — одноразовые миграции со старых форматов;
+//! - `backup`    — снимки обоих файлов в `backups/` перед миграцией и сохранением.
 
 pub mod badges;
 pub mod crypto;
@@ -29,6 +30,7 @@ pub mod servers;
 pub mod storage;
 pub mod theme;
 
+mod backup;
 mod migrate;
 mod reconcile;
 mod schema;
@@ -61,6 +63,15 @@ use crate::market::MarketDataMode;
 /// Используется и для TOML, и для JSON-персиста UI.
 pub fn write_file_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
     toml_io::write_atomic(path, bytes, label)
+}
+
+/// Снимать ли резервную копию конфига перед записью (см. `AppConfig::save_impl`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SnapshotPolicy {
+    /// Рутинная запись — снимок не нужен.
+    No,
+    /// Осознанное сохранение — снять копию перед перезаписью.
+    Yes,
 }
 
 /// Рантайм-конфиг (смерженный из двух файлов).
@@ -138,7 +149,15 @@ impl AppConfig {
         }
         if paths::servers_path().exists() {
             let sf = store::read_servers()?;
-            let meta = store::read_settings();
+            let (meta, meta_load) = store::read_settings();
+            // Взято ДО того, как `merge` поглотит `meta`: `Merged` из-за этого не приходится
+            // расширять полем, которое здесь и так уже известно.
+            let schema_upgrade = meta.version < schema::SCHEMA_VERSION;
+            // Снимок ДО любой записи в этом пути: пере-сохранение ниже заменит оба файла
+            // атомарным переименованием, после чего до-миграционных байтов уже не достать.
+            if schema_upgrade {
+                backup::snapshot(backup::Trigger::SchemaMigration);
+            }
             let merged = reconcile::merge(sf, meta);
             // hotkeys.toml приоритетен; нет файла → одноразовая миграция legacy-секции
             // из settings.toml (или дефолта) на диск в новый файл.
@@ -181,8 +200,18 @@ impl AppConfig {
             );
             // Дослоить новые дефолты / зафиксировать свежие uid на диск.
             // Не фатально: при ошибке продолжаем с тем, что уже в памяти.
+            //
+            // FAIL CLOSED: если settings.toml есть, но НЕ ПРОЧИТАЛСЯ (права, шара, невыгруженный
+            // облачный плейсхолдер), в памяти сейчас дефолты — и запись превратила бы временную
+            // ошибку чтения в безвозвратную потерю групп, галок ядер и счётчика uid. Работаем
+            // на дефолтах, файл не трогаем; следующий запуск прочитает его нормально.
             if merged.dirty {
-                if let Err(e) = cfg.save() {
+                if meta_load == toml_io::ConfigLoad::Unreadable {
+                    log::error!(
+                        "settings.toml не прочитался — пере-сохранение конфига ОТМЕНЕНО, \
+                         чтобы не затереть настройки дефолтами"
+                    );
+                } else if let Err(e) = cfg.save() {
                     log::warn!("не удалось дослоить конфиг на диск: {e}");
                 }
             }
@@ -339,7 +368,24 @@ impl AppConfig {
 
     /// Сохраняет в два файла. Проставляет стабильные uid, валидирует уникальность
     /// имени и host:port. `&mut self` — т.к. может присвоить uid новым ядрам.
+    ///
+    /// БЕЗ снимка: этот путь зовёт рутинный слив `config_dirty` (100-мс цикл, выход из
+    /// приложения, правки из шапки), который срабатывает на мелочах и за минуты вытеснил бы
+    /// полезные снимки из хранилища. Осознанное сохранение — [`Self::save_with_snapshot`].
     pub fn save(&mut self) -> anyhow::Result<()> {
+        self.save_impl(SnapshotPolicy::No)
+    }
+
+    /// Как [`Self::save`], но сначала снимает копию текущих файлов в `backups/`.
+    ///
+    /// Для осознанных сохранений (окно Настроек), где пользователю может понадобиться откат.
+    /// Имя описывает ПОВЕДЕНИЕ записи, а не UI-поверхность: `moon-core` не знает про окна.
+    pub fn save_with_snapshot(&mut self) -> anyhow::Result<()> {
+        self.save_impl(SnapshotPolicy::Yes)
+    }
+
+    /// Общая реализация сохранения; `snapshot` решает, снимать ли копию перед записью.
+    fn save_impl(&mut self, snapshot: SnapshotPolicy) -> anyhow::Result<()> {
         reconcile::ensure_uids(&mut self.servers, &mut self.next_uid);
         self.prune_orphan_groups();
         self.validate()?;
@@ -363,6 +409,13 @@ impl AppConfig {
             self.core_sort,
             self.next_uid,
         );
+        // Снимок ПОСЛЕ валидации и ровно перед первой записью. Раньше — и каждое отклонённое
+        // сохранение (кнопка активна всегда, а дубль имени ядра валится именно в `validate`)
+        // тратило бы слот хранения, ничего при этом не записав: тридцати таких хватило бы,
+        // чтобы вытеснить миграционный снимок.
+        if snapshot == SnapshotPolicy::Yes {
+            backup::snapshot(backup::Trigger::SettingsSave);
+        }
         store::write_servers(&sf)?;
         store::write_settings(&meta)?;
         // Тема, стиль линий, бейджи детектов и хоткеи — в свои переносимые файлы,

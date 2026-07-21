@@ -14,8 +14,9 @@
 //! Настройки и раскладка UI (открытые `settings.toml`/`theme.toml`/`orders.toml`/
 //! `layout.toml`/`docks.json`/`detached.json`/`charts.json`) лежат в подпапке
 //! `cfg/` внутри `data_dir`. В корне остаются только секрет `servers.enc`, БД
-//! отчётов `reports.sqlite` и логи `logs/`. Старые плоские файлы один раз
-//! переносятся в `cfg/` при старте (см. `migrate_flat_to_cfg`).
+//! отчётов `reports.sqlite`, логи `logs/` и снимки конфига `backups/`
+//! (см. `config::backup`). Старые плоские файлы один раз переносятся в `cfg/`
+//! при старте (см. `migrate_flat_to_cfg`).
 
 use std::path::PathBuf;
 
@@ -71,8 +72,9 @@ pub fn data_dir() -> PathBuf {
 }
 
 /// Подпапка `cfg/` внутри данных — настройки и раскладка UI (открытые TOML/JSON).
-/// Сюда уезжает всё, КРОМЕ секрета `servers.enc`, БД отчётов `reports.sqlite` и
-/// логов `logs/` — те остаются в корне `data_dir`. Создаётся при первом обращении.
+/// Сюда уезжает всё, КРОМЕ секрета `servers.enc`, БД отчётов `reports.sqlite`,
+/// логов `logs/` и снимков `backups/` — те остаются в корне `data_dir`.
+/// Создаётся при первом обращении.
 pub fn cfg_dir() -> PathBuf {
     let dir = data_dir().join("cfg");
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -210,6 +212,23 @@ pub fn logs_dir() -> PathBuf {
     data_dir().join("logs")
 }
 
+/// Snapshot folder for the irreplaceable configuration files (see `config::backup`).
+///
+/// Sits at the `data_dir` root beside `logs/` and `servers.enc`, NOT inside `cfg/` — a snapshot
+/// holds a copy OF `cfg/`, so nesting it there would make the next snapshot copy the previous one.
+///
+/// Deliberately does NOT create the directory, unlike [`cfg_dir`]: on Windows `data_dir` is the
+/// folder next to the exe, so every user would otherwise get an empty `backups/` there (often
+/// cloud-synced) even when no snapshot is ever taken. `config::backup` creates it lazily, and only
+/// once it actually has bytes to write.
+pub fn backups_dir() -> PathBuf {
+    data_dir().join(BACKUPS_DIR_NAME)
+}
+
+/// Имя папки снимков. Отдельная константа, чтобы миграционные списки могли доказать
+/// в тесте, что не содержат её (см. `the_migration_lists_never_carry_the_backup_directory`).
+const BACKUPS_DIR_NAME: &str = "backups";
+
 /// Старый объединённый зашифрованный конфиг (для одноразовой миграции). Читаем из
 /// каталога рядом с exe — там его оставляли прежние сборки.
 pub fn legacy_enc_path() -> PathBuf {
@@ -239,9 +258,8 @@ pub fn migrate_bundle_data() {
     // `dst.exists()` по корню «не видел» бы уже переехавший в `cfg/` файл и копировал
     // бы заново на каждом старте). legacy config.enc/config.toml мигрируются отдельно
     // в AppConfig::load — они читаются из exe_dir напрямую.
-    let root_files: &[&str] = &["servers.enc", "reports.sqlite"];
     let cfg_root = cfg_dir();
-    let targets = root_files
+    let targets = ROOT_FILES
         .iter()
         .map(|n| (*n, dst_dir.clone()))
         .chain(CFG_FILES.iter().map(|n| (*n, cfg_root.clone())));
@@ -264,6 +282,13 @@ pub fn migrate_bundle_data() {
         );
     }
 }
+
+/// Файлы, остающиеся в корне `data_dir` при миграции из бандла.
+///
+/// Оба списка (этот и [`CFG_FILES`]) содержат ТОЛЬКО имена файлов: `migrate_bundle_data` и
+/// `migrate_flat_to_cfg` работают через `fs::copy`/`fs::rename` и не рекурсируют в каталоги —
+/// имя каталога здесь не было бы no-op, а молча переехало бы вместе со всем содержимым.
+const ROOT_FILES: &[&str] = &["servers.enc", "reports.sqlite"];
 
 /// Файлы настроек/раскладки, переехавшие из корня `data_dir` в подпапку `cfg/`.
 /// `.bak` тоже переносим, чтобы аварийная копия битого settings.toml не осталась
@@ -304,5 +329,37 @@ pub fn migrate_flat_to_cfg() {
     }
     if moved > 0 {
         log::info!("настройки перенесены в {}", cfg.display());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Guards on the one-time migration lists.
+
+    use super::{BACKUPS_DIR_NAME, CFG_FILES, ROOT_FILES};
+
+    /// Neither migration list may name the snapshot DIRECTORY.
+    ///
+    /// `migrate_bundle_data` and `migrate_flat_to_cfg` walk their lists with `fs::copy` and
+    /// `fs::rename`. Neither recurses, but neither refuses a directory either: on Windows
+    /// `fs::rename(data_dir/backups, cfg/backups)` succeeds and moves the whole snapshot tree
+    /// somewhere `backups_dir()` never looks again — every backup the user has would silently
+    /// disappear on the next launch.
+    ///
+    /// The plausible edit this catches: someone notices `settings.toml.bak` already in
+    /// `CFG_FILES`, concludes that "backups belong with the other backup-ish entries", and adds
+    /// `"backups"`. It compiles, and the damage only shows up on a machine that HAS snapshots.
+    ///
+    /// The oracle is `BACKUPS_DIR_NAME` itself — the same constant `backups_dir()` builds the
+    /// path from — so the test cannot drift away from the real folder name.
+    #[test]
+    fn the_migration_lists_never_carry_the_backup_directory() {
+        for (label, list) in [("ROOT_FILES", ROOT_FILES), ("CFG_FILES", CFG_FILES)] {
+            assert!(
+                !list.contains(&BACKUPS_DIR_NAME),
+                "{label} names the snapshot directory `{BACKUPS_DIR_NAME}`; the migration would \
+                 move the whole backup tree out from under backups_dir()"
+            );
+        }
     }
 }
