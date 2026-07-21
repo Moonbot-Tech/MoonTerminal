@@ -24,6 +24,25 @@ use super::{ReadFail, ReadResult};
 /// Число краёв ≤128 — индексы бинов не сталкиваются с сентинелом.
 const BELOW: u8 = u8::MAX;
 
+/// Minimum accepted restart count. Shared with the UI so displayed and executed counts agree.
+pub const RESTARTS_MIN: usize = 1;
+/// Maximum accepted restart count: the bound on a run nobody can stop.
+///
+/// There is no deadline and no cancel path here, and the Analytics window sits under a blocking
+/// overlay until the call returns, so this ceiling is what a user can be asked to wait through.
+/// It is set from measured cost. Work is strictly linear in the count — one restart is
+/// `FIELDS.len()` fields × up to 16 passes × (`n` trades + ~`ne²/2` edge pairs) — and the
+/// workspace crates compile unoptimized in the dev profile that ships. Measured there at the
+/// maximum depth: ~17 ms per restart over a few hundred trades, ~33 ms over five thousand. The
+/// ceiling therefore costs well under a minute on a small report and a few minutes on a large
+/// one. Going higher needs a cancel path first, not a bigger number.
+pub const RESTARTS_MAX: usize = 2000;
+
+/// Minimum quantile-edge count accepted by the search and exposed to the UI.
+pub const EDGES_MIN: usize = 4;
+/// Maximum quantile-edge count; keeps bin indices clear of the `BELOW` sentinel.
+pub const EDGES_MAX: usize = 128;
+
 /// Итоговый диапазон одного поля.
 #[derive(Clone, Debug)]
 pub struct SmartField {
@@ -64,7 +83,8 @@ impl Rng {
 /// Maximize combined profit with random-restart coordinate descent while
 /// retaining at least `min_n` trades.
 ///
-/// `restarts` is clamped to 1..=1000, and each attempt runs at most 16 passes.
+/// `restarts` is clamped to `RESTARTS_MIN..=RESTARTS_MAX`, and each attempt runs at most 16
+/// passes.
 /// `edges_want` controls quantile resolution per field. At most two Delta2/3
 /// slot fields may carry ranges because the strategy format cannot store more.
 /// `locked[fi]` is `None` for a searched field, a fixed range for an active
@@ -81,7 +101,7 @@ pub fn smart_suggest(
     round: bool,
 ) -> ReadResult<Option<SmartResult>> {
     const CTX: &str = "tuner: smart_suggest";
-    let ne = edges_want.clamp(4, 128);
+    let ne = edges_want.clamp(EDGES_MIN, EDGES_MAX);
     let conn = super::open_reader()?;
     let mut q = q.clone();
     if q.from < 0 {
@@ -157,7 +177,7 @@ pub fn smart_suggest(
 
     // Мульти-старт: рестарт 0 — жадный с пустого состояния, дальше —
     // случайная инициализация + перетасованный порядок полей.
-    let restarts = restarts.clamp(1, 1000);
+    let restarts = restarts.clamp(RESTARTS_MIN, RESTARTS_MAX);
     let is_slot: Vec<bool> = FIELDS
         .iter()
         .map(|s| s.class == FieldClass::DeltaSlot)

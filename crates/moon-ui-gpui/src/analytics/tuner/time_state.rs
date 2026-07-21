@@ -34,11 +34,11 @@ pub(in crate::analytics) struct TimeTunerState {
     pub(super) ignore_staged: Option<bool>,
     /// Lazy input cache (created in render, as in the filter tuner).
     pub(super) inputs: HashMap<String, Entity<MoonInputState>>,
-    // Shared-shell settings — parallel to `TunerState` (time hides some of them).
-    pub(super) iters: String,
+    /// Minimum trade count as raw input text; empty selects the automatic threshold.
     pub(super) min_trades: String,
-    pub(super) edges: usize,
+    /// Whether suggested bounds are rounded outward.
     pub(super) round_results: bool,
+    /// Whether an auto-suggestion is in flight.
     pub(super) sugg_busy: bool,
     /// Auto-suggestion generation — a stale result is discarded.
     pub(super) sugg_seq: u64,
@@ -57,9 +57,7 @@ impl TimeTunerState {
             ign_filters_cur: false,
             ignore_staged: None,
             inputs: HashMap::new(),
-            iters: "20".to_string(),
             min_trades: String::new(),
-            edges: 64,
             round_results: true,
             sugg_busy: false,
             sugg_seq: 0,

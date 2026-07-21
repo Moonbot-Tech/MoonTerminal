@@ -12,9 +12,54 @@ use crate::design::moon;
 use moon_core::db::tuner::{
     Bound, FIELDS, FieldClass, HistBucket, StratFilters, VarStats, Variant,
 };
+use moon_core::db::tuner_smart::{RESTARTS_MAX, RESTARTS_MIN};
 
 /// Variants besides "Fact" (V3 holds 8 — we start with two).
 pub(super) const N_VAR: usize = 2;
+
+/// Selectable quantile depths, restricted to values the search accepts.
+pub(super) const EDGE_OPTIONS: [usize; 6] = [4, 8, 16, 32, 64, 128];
+
+/// Depth used when nothing is chosen or a stored value is not on offer.
+pub(super) const DEFAULT_EDGES: usize = 64;
+
+/// Restarts used when the box is empty or unparseable.
+pub(super) const DEFAULT_ITERS: usize = 20;
+
+/// Convert raw "restarts" text to the count used by both the search and persistence.
+///
+/// Bounds come from the search module so the displayed and executed counts cannot drift.
+pub(super) fn iters_of(text: &str) -> usize {
+    text.trim()
+        .parse::<usize>()
+        .unwrap_or(DEFAULT_ITERS)
+        .clamp(RESTARTS_MIN, RESTARTS_MAX)
+}
+
+/// Box text to open the tuner with for a persisted restart count.
+///
+/// Missing values use the default; out-of-range values are clamped to the search bounds.
+pub(super) fn restore_iters(saved: Option<u32>) -> String {
+    saved
+        .map_or(DEFAULT_ITERS, |v| {
+            (v as usize).clamp(RESTARTS_MIN, RESTARTS_MAX)
+        })
+        .to_string()
+}
+
+/// Return `v` when the dropdown offers it, otherwise the default depth.
+pub(super) fn edges_of(v: usize) -> usize {
+    if EDGE_OPTIONS.contains(&v) {
+        v
+    } else {
+        DEFAULT_EDGES
+    }
+}
+
+/// Depth to open the tuner with for a persisted value.
+pub(super) fn restore_edges(saved: Option<u32>) -> usize {
+    saved.map_or(DEFAULT_EDGES, |v| edges_of(v as usize))
+}
 
 /// Which tuning axis draws the shared shell (toolbar + suggestion row). The shell
 /// is one for every mode; the actions (Search/Save/Copy) are dispatched by kind.
@@ -78,10 +123,11 @@ pub(in crate::analytics) struct TunerState {
     /// Staged state of the clickable "ignore" subheadings: flag → the desired
     /// ignore state (semantics: "ignore"; inverted for UseBV_SV_Filter).
     pub(super) staged_ignore: HashMap<&'static str, bool>,
-    /// Smart-suggestion parameters: attempts, the minimum trade count (empty =
-    /// auto 1/5) and the number of quantile edges to search (4..128, def. 64).
+    /// Restart count as raw input text; persistence stores its normalized value.
     pub(super) iters: String,
+    /// Minimum trade count as raw input text; empty selects one fifth of the sample.
     pub(super) min_trades: String,
+    /// Quantile depth, always one of `EDGE_OPTIONS` and persisted across window opens.
     pub(super) edges: usize,
     /// Whether the field takes part in the auto search (checkboxes); one that is
     /// off but has bounds acts as a fixed filter.
@@ -98,12 +144,11 @@ pub(in crate::analytics) struct TunerState {
 }
 
 impl TunerState {
-    /// A fresh state: bounds are EMPTY, the participation checkboxes are on for
-    /// every field that MAPS onto a strategy parameter (the unmapped ones —
-    /// da1m/d5s — are ignored by the auto search by default: there is nowhere to
-    /// write the result). Deliberately not persisted — every window opening
-    /// starts from a clean slate.
-    pub(in crate::analytics) fn load() -> Self {
+    /// Build state for a newly opened window.
+    ///
+    /// Bounds reset and only mapped fields participate because both belong to a
+    /// strategy-specific search. Restart count and depth are normalized from saved preferences.
+    pub(in crate::analytics) fn load(saved_iters: Option<u32>, saved_edges: Option<u32>) -> Self {
         let bounds = vec![vec![(String::new(), String::new()); FIELDS.len()]; N_VAR];
         let enabled = FIELDS.iter().map(|s| s.mapped()).collect();
         Self {
@@ -117,9 +162,9 @@ impl TunerState {
             save_dialog: None,
             dirty: false,
             staged_ignore: HashMap::new(),
-            iters: "20".to_string(),
+            iters: restore_iters(saved_iters),
             min_trades: String::new(),
-            edges: 64,
+            edges: restore_edges(saved_edges),
             round_results: true,
             copy_name: String::new(),
             enabled,
@@ -334,3 +379,7 @@ pub(super) fn flag_of(class: FieldClass, f: &StratFilters) -> (&'static str, boo
         FieldClass::Volume => ("IgnoreVolume", f.ignore_volume),
     }
 }
+
+// The sibling uses explicit imports because the parent's `gpui::*` re-export shadows `#[test]`.
+#[cfg(test)]
+mod tests;

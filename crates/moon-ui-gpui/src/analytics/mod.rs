@@ -199,6 +199,9 @@ impl AnalyticsView {
             .layout
             .analytics_strat_cols
             .unwrap_or(tuner::STRAT_COLS_ALL);
+        // Persisted "By filter" search knobs; `TunerState::load` owns their normalization.
+        let saved_tuner_iters = backend.read(cx).layout.analytics_tuner_iters;
+        let saved_tuner_edges = backend.read(cx).layout.analytics_tuner_edges;
         // Режим календаря из прошлого запуска (дефолт — «Месяц»).
         let saved_mode = backend
             .read(cx)
@@ -272,7 +275,7 @@ impl AnalyticsView {
             cal_prev: None,
             cal_hover: None,
             strat_mode: tuner::StratMode::Filters,
-            tuner: tuner::TunerState::load(),
+            tuner: tuner::TunerState::load(saved_tuner_iters, saved_tuner_edges),
             time_profiles: None,
             time_slider: None,
             time_stats: LoadState::default(),
