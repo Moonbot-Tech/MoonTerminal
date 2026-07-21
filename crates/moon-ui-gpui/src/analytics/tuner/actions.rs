@@ -10,7 +10,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::fields::{fmt_bound, parse_num, staged_dirty};
-use super::state::SaveTarget;
+use super::state::{SaveTarget, edges_of, iters_of};
 use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
 impl AnalyticsView {
@@ -26,13 +26,7 @@ impl AnalyticsView {
         let stats_req = self.tuner.seq;
         self.tuner.sugg_busy = true;
         let q = self.tuner_query();
-        let rounds = self
-            .tuner
-            .iters
-            .trim()
-            .parse::<usize>()
-            .unwrap_or(20)
-            .clamp(1, 1000);
+        let rounds = iters_of(&self.tuner.iters);
         let min_n = self.suggest_min_n();
         let edges = self.suggest_edges();
         let round = self.tuner.round_results;
@@ -218,7 +212,7 @@ impl AnalyticsView {
 
     /// Number of quantile edges for the suggestion (the 4/8/…/128 dropdown).
     fn suggest_edges(&self) -> usize {
-        self.tuner.edges.clamp(4, 128)
+        edges_of(self.tuner.edges)
     }
 
     /// Is there anything to write: staged "ignore" toggles OR v1 thresholds that

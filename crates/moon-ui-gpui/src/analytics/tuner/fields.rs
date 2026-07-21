@@ -1,8 +1,9 @@
 //! Threshold tuner over the report's market fields (carried over from 'Analytics V3') —
 //! the 'Filters' mode of the 'Strategies' tab: a 'Fact vs variants' KPI matrix, a
 //! from/to range builder per field and a profit histogram over the quantile buckets of
-//! the selected field. The scope is the strategy selected in the list (or all). Bounds
-//! are persisted in the layout (as strings, exactly as the user typed them).
+//! the selected field. The scope is the strategy selected in the list (or all). Bounds retain
+//! the raw strings the user typed and start empty on every open because they describe one
+//! strategy's search. Only restart count and depth persist.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -152,7 +153,10 @@ impl AnalyticsView {
         .detach();
     }
 
-    /// Commit a bound (on input Blur/Enter): state → layout → recompute.
+    /// Commit a bound (on input Blur/Enter): store it in the tuner state and recompute.
+    ///
+    /// The bound lives only in memory — it describes the search for one strategy, so it is not
+    /// persisted and starts empty on the next window open.
     fn commit_bound(
         &mut self,
         vi: usize,

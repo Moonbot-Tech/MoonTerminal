@@ -102,6 +102,13 @@ pub struct DetachedLayout {
 }
 
 /// Полная раскладка окон.
+///
+/// Every field is `Option` or carries `#[serde(default)]` on purpose, and prefers a type wider
+/// than its values need. This struct is deserialized as a WHOLE, so a single value that does not
+/// fit its field's type fails the entire layout — and `load` below passes a no-op corruption
+/// handler, so nothing quarantines the file and the first dirty save rewrites it with defaults.
+/// One out-of-type integer therefore costs every window position, column width and detached
+/// window slot in the file, permanently. Keep that in mind when adding a field.
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct WindowLayout {
     /// Окна групп по имени группы.
@@ -155,6 +162,15 @@ pub struct WindowLayout {
     /// None = default (all columns).
     #[serde(default)]
     pub analytics_strat_cols: Option<u16>,
+    /// Restart count of the "By filter" tuner's threshold search. None = the tuner's default.
+    /// Values from an externally edited file are clamped to the range owned by
+    /// `db::tuner_smart` when the tuner loads.
+    #[serde(default)]
+    pub analytics_tuner_iters: Option<u32>,
+    /// Quantile depth of the "By filter" tuner's threshold search. None or a value absent from
+    /// the dropdown selects the tuner's default.
+    #[serde(default)]
+    pub analytics_tuner_edges: Option<u32>,
     /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,
