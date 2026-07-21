@@ -299,11 +299,12 @@ pub enum TimeWindow {
 /// `closedate` (закрытие). Fallback на `closedate`, если открытие не записано (0/NULL).
 const OPEN_TS: &str = "COALESCE(NULLIF(o.buydate, 0), o.closedate)";
 
-/// Вариант «что-если» = дополнительные условия к базовой выборке. Пустой = «Факт».
-/// Ось «По фильтру» задаёт `bounds` (диапазоны полей); ось «По времени» — два
-/// НЕЗАВИСИМЫХ поля стратегии, комбинируемых по И: `week_span` (WorkingWeekTime —
-/// непрерывный спан по МИНУТЕ НЕДЕЛИ) и `tod` (WorkingTime — одно окно времени).
-/// Все условия складываются в один WHERE — структура универсальна.
+/// A "what-if" variant = extra conditions on top of the base selection. Empty = "Fact".
+/// The "By filter" axis sets `bounds` (field ranges); "By time" — two INDEPENDENT
+/// strategy fields combined with AND: `week_span` (WorkingWeekTime — a continuous span
+/// over the MINUTE OF THE WEEK) and `tod` (WorkingTime — a single time window);
+/// "By coin" — `coins` (a set of coins). Every condition folds into ONE WHERE, which is
+/// what keeps this struct universal across the axes.
 #[derive(Clone, Debug, Default)]
 pub struct Variant {
     pub bounds: Vec<Bound>,
@@ -313,15 +314,28 @@ pub struct Variant {
     pub week_span: Option<(u16, u16)>,
     /// WorkingTime: одно окно времени. `None` — без ограничения по времени.
     pub tod: Option<TimeWindow>,
+    /// The "By coin" axis, whitelist side: `Some(list)` keeps ONLY those coins, `None`
+    /// places no restriction. Names are exactly as the `coin` column holds them — the
+    /// caller expands its coin tokens against the very grouping that draws the table.
+    ///
+    /// `Some(empty)` is NOT the same as `None`: it means an active whitelist that no
+    /// traded coin satisfies, which must keep nothing. Modelled as an option precisely so
+    /// that case cannot collapse into "no whitelist at all" and score the fact instead.
+    pub coins_in: Option<Vec<String>>,
+    /// The "By coin" axis, blacklist side: trades of these coins are EXCLUDED. Applied on
+    /// top of `coins_in`, mirroring how a strategy evaluates its two lists.
+    pub coins_out: Vec<String>,
 }
 
 impl Variant {
+    /// Does this variant add nothing, i.e. is it the "Fact" column?
+    ///
+    /// Asked of `where_sql` rather than re-listing the dimensions: a second listing is a
+    /// second place to remember a new axis, and the two had already drifted — `where_sql`
+    /// gates `bounds` through the `FIELDS` whitelist while a hand-written check did not,
+    /// so a bound on an unknown field claimed "not the fact" over an EMPTY condition.
     pub fn is_empty(&self) -> bool {
-        self.bounds
-            .iter()
-            .all(|b| b.from.is_none() && b.to.is_none())
-            && self.week_span.is_none()
-            && self.tod.is_none()
+        self.where_sql().is_empty()
     }
 
     /// Хвост WHERE варианта. Поля гейтятся вайтлистом `FIELDS`; NULL считается
@@ -356,8 +370,51 @@ impl Variant {
         if let Some(tw) = self.tod {
             w.push_str(&time_window_where(tw));
         }
+        // The variant's only STRING terms — every other one is a number from the form. The
+        // names come out of the same replica's `coin` column, but they still go through the
+        // shared escaper rather than being interpolated here.
+        if let Some(list) = &self.coins_in {
+            if list.is_empty() {
+                // An active whitelist matching nothing keeps nothing. `IN ()` is not valid
+                // SQL, so the impossible predicate is written out explicitly.
+                w.push_str(" AND 0=1");
+            } else {
+                w.push_str(" AND COALESCE(o.coin,'') IN (");
+                w.push_str(&sql_str_list(list));
+                w.push(')');
+            }
+        }
+        if !self.coins_out.is_empty() {
+            w.push_str(" AND COALESCE(o.coin,'') NOT IN (");
+            w.push_str(&sql_str_list(&self.coins_out));
+            w.push(')');
+        }
         w
     }
+}
+
+/// A comma-separated list of SQL string literals, each quote doubled per SQLite.
+///
+/// The variant's only STRING literals live here so the escaping rule sits in ONE place
+/// rather than inside whichever axis happened to need it first.
+pub(super) fn sql_str_list(items: &[String]) -> String {
+    let mut out = String::new();
+    for (i, s) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('\'');
+        // Doubling is the whole escape: one raw apostrophe would end the literal early
+        // and break the WHOLE WHERE, not just its own term.
+        for ch in s.chars() {
+            if ch == '\'' {
+                out.push('\'');
+            }
+            out.push(ch);
+        }
+        out.push('\'');
+    }
+    out
 }
 
 /// SQL-условие поля `WorkingTime`. `Day` — минута СУТОК `(closedate%86400)/60` в
@@ -714,15 +771,39 @@ pub fn strategy_current_values(
     core: Option<u64>,
     keys: &[String],
 ) -> std::collections::HashMap<String, String> {
+    strategy_current_values_opt(strategy_id, core, keys).unwrap_or_default()
+}
+
+/// The same read, but able to say "I could not look".
+///
+/// `None` — the strategy's row could not be read at all (no database file, the file would not
+/// open, no live row for this `(strategy_id, core)`, unparseable `raw_json`). `Some(map)` — the
+/// row WAS read, and a key missing from the map means the field is genuinely absent from the
+/// strategy, i.e. empty.
+///
+/// The flattened form above collapses those two into an empty map, which is fine for filling
+/// a "now → next" preview but not for anything that must not guess. A caller checking whether
+/// an overwrite destroys data has to tell "this strategy lists no coins" from "I have no idea
+/// what this strategy lists" — reporting the second as the first says a whole-field overwrite
+/// was verified safe when nothing was verified at all.
+pub fn strategy_current_values_opt(
+    strategy_id: i64,
+    core: Option<u64>,
+    keys: &[String],
+) -> Option<std::collections::HashMap<String, String>> {
     let mut out = std::collections::HashMap::new();
     let path = crate::config::paths::strategies_db_path();
     if !path.exists() {
-        return out;
+        return None;
     }
     let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
     else {
-        return out;
+        return None;
     };
+    // The strat_db writer commits on its own thread; without this a write landing under our
+    // read is an instant SQLITE_BUSY, which a caller would then have to read as "could not
+    // verify" on an ordinary healthy database.
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
     // Rows are per-core (`strategyid@core_uid`): scope to the exact core when known, so the
     // "now" preview reflects the SAME core the write targets, not the newest-checked core.
     let core_clause = if core.is_some() {
@@ -743,9 +824,9 @@ pub fn strategy_current_values(
             .ok(),
         None => conn.query_row(&sql, [strategy_id], |r| r.get(0)).ok(),
     };
-    let Some(raw) = raw else { return out };
+    let raw = raw?;
     let Ok(serde_json::Value::Object(map)) = serde_json::from_str(&raw) else {
-        return out;
+        return None;
     };
     for key in keys {
         let Some(v) = map.get(key) else { continue };
@@ -753,11 +834,23 @@ pub fn strategy_current_values(
             serde_json::Value::String(s) => s.clone(),
             serde_json::Value::Number(n) => n.to_string(),
             serde_json::Value::Bool(b) => if *b { "YES" } else { "NO" }.to_string(),
+            // A list-valued field (a coin list spelled as a JSON array) flattens to the
+            // comma form the callers parse. Dropping it here while the SQL column reads it
+            // is what makes one screen count coins the other cannot see.
+            serde_json::Value::Array(items) => items
+                .iter()
+                .filter_map(|i| match i {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    serde_json::Value::Number(n) => Some(n.to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(","),
             _ => continue,
         };
         out.insert(key.clone(), s);
     }
-    out
+    Some(out)
 }
 
 /// Пороговые параметры ВЫБРАННОЙ стратегии по полям тюнера.

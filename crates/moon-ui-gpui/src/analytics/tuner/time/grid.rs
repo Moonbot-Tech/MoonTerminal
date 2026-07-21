@@ -21,9 +21,9 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::super::AnalyticsView;
-use super::state::{TunerKind, glyph_btn};
-use super::time_state::{N_FIELD, fmt_min, fmt_week_ep};
+use super::super::super::AnalyticsView;
+use super::super::shared::{TunerKind, glyph_btn};
+use super::state::{N_FIELD, fmt_min, fmt_week_ep};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::TimeWindow;
@@ -31,9 +31,9 @@ use moon_core::db::tuner::TimeWindow;
 /// Width of the row-checkbox column, in `design::ui_px` units. The header spacer and the
 /// slider lead-in reuse it so the field names stay in one line down the card; it is sized
 /// above the compact checkbox's own box, which moonui draws at a fixed size.
-pub(super) const CHECK_COL: f32 = 16.0;
+pub(in crate::analytics::tuner) const CHECK_COL: f32 = 16.0;
 /// Field-name column: fits "WorkingWeekTime" on one line next to the checkbox.
-pub(super) const NAME_COL: f32 = 110.0;
+pub(in crate::analytics::tuner) const NAME_COL: f32 = 110.0;
 
 impl AnalyticsView {
     /// Commit a field bound (Blur/Enter): state → WT mutual exclusion → KPIs.
@@ -62,7 +62,7 @@ impl AnalyticsView {
     }
 
     /// Clear both bounds of field `field` in variant `vi` (no recompute — internal helper).
-    pub(super) fn clear_field(&mut self, vi: usize, field: usize) {
+    pub(in crate::analytics::tuner) fn clear_field(&mut self, vi: usize, field: usize) {
         self.time_tuner.bounds[vi][field] = (String::new(), String::new());
         self.time_tuner.inputs.remove(&format!("tt{vi}f{field}a"));
         self.time_tuner.inputs.remove(&format!("tt{vi}f{field}b"));
@@ -89,7 +89,7 @@ impl AnalyticsView {
     /// formats ticked the sweep compares them and answers in the better one; an unchecked
     /// row keeps its value and, for a field nothing may search, pins the sweep to it. Scope
     /// is `tuner_query`. No improvement → the searched rows are cleared.
-    pub(super) fn time_suggest(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::analytics::tuner) fn time_suggest(&mut self, cx: &mut Context<Self>) {
         if self.time_tuner.sugg_busy {
             return;
         }
@@ -183,7 +183,12 @@ impl AnalyticsView {
     }
 
     /// Write `(from, to)` into v1 of field `field` and drop its cached inputs.
-    pub(super) fn set_v1_cell(&mut self, field: usize, from: String, to: String) {
+    pub(in crate::analytics::tuner) fn set_v1_cell(
+        &mut self,
+        field: usize,
+        from: String,
+        to: String,
+    ) {
         self.time_tuner.bounds[0][field] = (from, to);
         self.time_tuner.inputs.remove(&format!("tt0f{field}a"));
         self.time_tuner.inputs.remove(&format!("tt0f{field}b"));
@@ -318,7 +323,7 @@ impl AnalyticsView {
 
     /// The bottom-right "By time" card: the SHARED shell (toolbar + suggestion row)
     /// + 3 field rows. Header: Field | in strategy | v1 from|to|✕ | v2 from|→|to|✕.
-    pub(super) fn time_grid(
+    pub(in crate::analytics::tuner) fn time_grid(
         &mut self,
         p: MoonPalette,
         window: &mut Window,

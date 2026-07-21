@@ -3,58 +3,73 @@
 //! its own scroll), the modes are buttons in the list header (default — "Filters"):
 //! - "Filters" — the threshold tuner on the right (KPI Fact vs v1/v2 + a from/to grid)
 //!   SCOPED to the selected strategy, with the field histogram pinned at the bottom;
-//! - "Coins" — a per-coin table on the right for the selected strategy (or all trades).
+//! - "Coins" — the coin table UNDER the list, with the "Fact vs picked coins" KPI and the
+//!   coin picker on the right.
 //!
 //! The whole "Strategy tuning" page. This root module keeps the selection state (anchor +
-//! Ctrl multi-select), the mode dispatcher and the per-coin table; everything else lives in
-//! submodules: `list` (the strategy list — filter bar, sort, column selector, table),
-//! `columns` (the comparison-table descriptors and cells), `save` (the write-confirmation
-//! dialog), `state` (state + `TunerKind`), `shell` (the shared toolbar/suggest row),
-//! `fields`/`actions`/`hist` — the "By filter" axis, `time`/`time_state`/`grid`/`sliders` —
-//! "By time" (`time_state` holds its values and parsers, `grid` renders them).
+//! Ctrl multi-select) and the mode dispatcher; everything else lives in submodules. Shared by
+//! every axis: `list` (the strategy list — filter bar, sort, column selector, table),
+//! `columns` + `strat_columns` (the comparison-table descriptors and cells), `kpi` (the
+//! "Fact vs variants" matrix), `save` (the write-confirmation dialog), `shared` (`TunerKind`,
+//! the write targets, the two common widgets), `shell` (the toolbar and suggestion row). One
+//! folder per axis: `filter/` — "By filter", `time/` — "By time", `coins/` — "By coin".
 
-// Submodules of the tuning page.
-mod actions;
+// The page splits three ways: what EVERY axis uses sits here at the root, and each axis owns a
+// folder. A helper that only one axis calls belongs in that folder — kept at the root it stops
+// being reviewable as shared, and the next axis inherits a dependency nobody chose.
+
+// ————— shared by every axis —————
+/// Its column descriptors: the metric pool both comparison tables draw from …
 mod columns;
-mod fields;
-mod grid;
-mod hist;
+/// The "Fact vs variants" KPI matrix, rendered by every axis out of plain `VarStats`.
+mod kpi;
+/// The strategy list — it stands beside all three axes, so it is not any one of them.
 mod list;
-/// The write-confirmation dialog (assemble → render → execute), shared by both axes.
+/// The write-confirmation dialog (assemble → render → execute).
 mod save;
+/// The axis tag, the write targets, and the two widgets all three axes draw with.
+mod shared;
+/// The common toolbar and suggestion row, dispatched by `TunerKind`.
 mod shell;
-mod sliders;
-mod state;
+/// … and the subset plus visibility bits that belong to the strategy list itself.
+mod strat_columns;
+
+// ————— one folder per axis —————
+/// "By coin": the coin table, its row cache, its loads and its working coin lists.
+mod coins;
+/// "By filter": the threshold grid, its histogram and its auto-suggestion.
+mod filter;
+/// "By time": the weekly schedule grid, the hour profile and the sliders.
 mod time;
-mod time_state;
 
 // State types held by `AnalyticsView` (the parent).
-pub(super) use state::TunerState;
-pub(super) use time_state::TimeTunerState;
+pub(super) use coins::picker::CoinListsState;
+pub(super) use coins::state::CoinsState;
+pub(super) use filter::state::TunerState;
+pub(super) use list::StratListFilter;
+pub(super) use time::state::TimeTunerState;
 
 // Column descriptors of the comparison tables — re-exported so the submodules (`list`) take
 // them via the usual `super::…` instead of reaching into `columns` directly. Visibility is
 // exactly `tuner`.
-/// The default visible-column mask is read by the parent too (`analytics::mod`, when it
-/// creates the view).
-pub(super) use columns::STRAT_COLS_ALL;
-pub(in crate::analytics::tuner) use columns::{
-    COIN_COLS, COIN_PANEL_W, COIN_ROW_GAP, COIN_ROW_PAD_X, COL_BIT_CORE, COL_BIT_KIND,
-    COL_BIT_LASTEDIT, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME,
-    head_cell, metric_bit, metric_cell,
+pub(in crate::analytics::tuner) use coins::columns::{
+    COIN_COLS, COIN_DEFAULT_SORT, COIN_NAME_MIN_W, COIN_ROW_GAP, COIN_ROW_PAD_X, COIN_TICK_W,
 };
-// The row cap for both comparison tables lives with the list — the coin table takes the same.
-use list::MAX_ROWS;
-
+pub(in crate::analytics::tuner) use columns::{metric_cell, sort_arrow_of, toggle_sort_key};
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
+pub(in crate::analytics::tuner) use strat_columns::{
+    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS,
+    SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_NAME_MIN_W, metric_bit,
+};
+/// The default visible-column mask is read by the parent too (`analytics::mod`, when it
+/// creates the view).
+pub(super) use strat_columns::{STRAT_COLS_ALL, STRAT_COLS_DEFAULT, STRAT_COLS_DEFAULT_COINS};
 
 use super::AnalyticsView;
-use super::LoadState;
 use crate::design;
-use crate::design::{moon, moon_alpha};
-use moon_core::db::analytics::GroupStat;
+use moon_core::config::layout::StratColsByMode;
 
 /// Parse a strategy-list row key `"strategyid@core_uid"` (the list is split PER CORE)
 /// → `(strategyid, Some(core_uid))`. Legacy without a core (`"5"`) → `(5, None)`;
@@ -75,36 +90,68 @@ pub(super) enum StratMode {
     Time,
 }
 
+/// Every axis, for the code that has to touch all of them (seeding the per-axis column masks).
+///
+/// A fourth axis added to `StratMode` without a slot in `cols_slot` fails to compile, and
+/// without an entry here fails this array's length — so neither can be forgotten silently.
+pub(super) const STRAT_MODES: [StratMode; 3] =
+    [StratMode::Filters, StratMode::Coins, StratMode::Time];
+
+impl StratMode {
+    /// This axis' slot in the persisted per-axis column masks.
+    ///
+    /// Reading and writing go through the SAME accessor, so an axis cannot end up saving into
+    /// one slot and restoring from another.
+    pub(super) fn cols_slot(self, m: &mut StratColsByMode) -> &mut u16 {
+        match self {
+            StratMode::Filters => &mut m.filter,
+            StratMode::Coins => &mut m.coins,
+            StratMode::Time => &mut m.time,
+        }
+    }
+
+    /// What this axis shows before the user chooses: only "By coin" spends width on the
+    /// strategy's coin-list counts, because only there are they the subject.
+    pub(super) fn default_cols(self) -> u16 {
+        match self {
+            StratMode::Coins => STRAT_COLS_DEFAULT_COINS,
+            _ => STRAT_COLS_DEFAULT,
+        }
+    }
+}
+
 impl AnalyticsView {
     /// Change the selected strategy: detail + tuner scope.
     fn set_sel_strategy(&mut self, sel: Option<(String, String)>, cx: &mut Context<Self>) {
         self.sel_strategy = sel;
-        // Retain ready detail while another strategy loads to avoid a loading
-        // flash; deselection or a completed non-data result clears it.
-        self.reload_detail(cx);
         // The tuner/profile scope changed — the old computations (suggest included) are wrong.
         self.tuner.invalidate();
         // The "By time" schedule grid is PER strategy: reset it so the previous strategy's
         // v1 does not leak onto the new one (otherwise Save would write foreign values).
         self.time_tuner.reset_grid();
         self.time_dirty = true;
-        if self.strat_mode == StratMode::Filters {
-            self.reload_tuner(cx);
-            self.reload_hist(cx);
-        }
-        if self.strat_mode == StratMode::Time {
-            self.reload_time(cx);
+        // The coin lists were edited against the PREVIOUS strategy; carried over they would
+        // read as "this strategy's coins". `invalidate` retires them along with the numbers.
+        self.coins.invalidate();
+        self.coin_lists.invalidate();
+        match self.strat_mode {
+            StratMode::Filters => {
+                self.reload_tuner(cx);
+                self.reload_hist(cx);
+            }
+            StratMode::Time => self.reload_time(cx),
+            StratMode::Coins => self.reload_coins(cx),
         }
         cx.notify();
     }
 
     /// All currently selected strategies as write targets: the anchor first, then the
     /// Ctrl-selected extras. Each key `strategyid@core_uid` → `(sid, core, name)`.
-    fn selected_targets(&self) -> Vec<state::SaveTarget> {
+    fn selected_targets(&self) -> Vec<shared::SaveTarget> {
         let mut out = Vec::new();
         let mut push = |key: &str, name: &str| {
             if let Some((sid, core)) = parse_strat_key(key) {
-                out.push(state::SaveTarget {
+                out.push(shared::SaveTarget {
                     sid,
                     core,
                     name: name.to_string(),
@@ -118,6 +165,60 @@ impl AnalyticsView {
             push(k, n);
         }
         out
+    }
+
+    /// The shared filters WITHOUT the strategy scope — the query for questions asked ABOUT
+    /// strategies rather than within a chosen set ("who traded this coin?").
+    pub(in crate::analytics::tuner) fn tuner_query_all(&self) -> moon_core::db::analytics::Query {
+        self.query()
+    }
+
+    /// Observation channel only (`MOON_ANALYTICS_PROBE=select`): adopt the first strategy
+    /// that actually carries a coin list, so the "By coin" panels can be read in their
+    /// loaded state without a human clicking a row. Never called in a normal run.
+    ///
+    /// Goes through `set_sel_strategy` rather than assigning the field, so the probe drives
+    /// the SAME path a click does — a shortcut here would observe a state the app cannot
+    /// otherwise reach.
+    /// Returns whether it adopted one, so the caller can skip its own reload: adopting a
+    /// strategy starts that pass already, and running both leaves two full scans racing.
+    pub(super) fn probe_select_first(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.sel_strategy.is_some() {
+            return false;
+        }
+        // Addressed by the row KEY — `strategyid@core_uid`, the identity the whole page uses
+        // — not by name: a name is a label, and the same one routinely sits on several cores
+        // with entirely different lists, so naming one picks whichever copy comes first.
+        // A bare `strategyid` is accepted too and takes the first core carrying it.
+        let want = super::probe_select_spec().unwrap_or("");
+        let pick = self.data.data().and_then(|d| {
+            if want.is_empty() {
+                // Nothing addressed: take the BIGGEST blacklist, since the unnamed form
+                // exists to exercise the field's ordering and shading at once, and a
+                // strategy holding one coin observes neither.
+                d.strategies
+                    .iter()
+                    .filter(|g| g.bl > 0)
+                    .max_by_key(|g| g.bl)
+            } else {
+                // The exact key first; failing that, the strategy id on any core. Taken as
+                // asked, empty list included — putting the "this list is empty" state on
+                // screen is one of the reasons to address a specific strategy.
+                d.strategies.iter().find(|g| g.key == want).or_else(|| {
+                    d.strategies
+                        .iter()
+                        .find(|g| g.key.split('@').next() == Some(want))
+                })
+            }
+            .map(|g| (g.key.clone(), g.name.clone()))
+        });
+        match pick {
+            Some(sel) => {
+                self.set_sel_strategy(Some(sel), cx);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Multi-select active — Ctrl added extra strategies beyond the anchor.
@@ -158,13 +259,22 @@ impl AnalyticsView {
     fn selection_scope_changed(&mut self, cx: &mut Context<Self>) {
         self.tuner.invalidate();
         self.time_dirty = true;
+        // The coin table's numbers AND its lists are scoped to the whole selection, so
+        // adding or removing a strategy retires both — including any unsaved tick, whose
+        // baseline (the union of the selected strategies' saved lists) just changed.
+        self.coins.invalidate();
+        self.coin_lists.invalidate();
+        // The write banner speaks about an edit that was kept for a retry. `invalidate` has
+        // just thrown that edit away with the scope it belonged to, so the banner would go on
+        // promising something recoverable that no longer exists.
+        self.write_error = None;
         match self.strat_mode {
             StratMode::Filters => {
                 self.reload_tuner(cx);
                 self.reload_hist(cx);
             }
             StratMode::Time => self.reload_time(cx),
-            StratMode::Coins => {}
+            StratMode::Coins => self.reload_coins(cx),
         }
         cx.notify();
     }
@@ -233,6 +343,9 @@ impl AnalyticsView {
         if mode == StratMode::Time && (self.time_profiles.is_none() || self.time_dirty) {
             self.reload_time(cx);
         }
+        if mode == StratMode::Coins && self.coins.needs_reload() {
+            self.reload_coins(cx);
+        }
         cx.notify();
     }
 
@@ -249,10 +362,13 @@ impl AnalyticsView {
         if mode == StratMode::Time {
             return self.strat_time(p, window, cx);
         }
-        // Left half: the list; in "Filters" a pinned histogram sits below it,
-        // in "Overview" — the per-coin contribution. The right column (Filters/Coins)
-        // spans the FULL height of the tab.
+        // Left half: the list, with the axis' own detail pinned below it — the field
+        // histogram in "Filters", the coin table in "Coins". The right column spans the
+        // FULL height of the tab.
         let list_card = self.strat_list_card(p, window, cx);
+        // "Coins" builds its table before the immutable reads of the right column
+        // (the lazy search input needs &mut self).
+        let coins_card = (mode == StratMode::Coins).then(|| self.coins_card(p, window, cx));
         let mut left = v_flex()
             .flex_1()
             .min_w_0()
@@ -262,7 +378,9 @@ impl AnalyticsView {
             .child(list_card);
         match mode {
             StratMode::Filters => left = left.child(self.hist_card(p, cx)),
-            StratMode::Coins => {}
+            // The coin table sits UNDER the list, where the histogram sits in "Filters":
+            // both are "the detail behind the selected strategy".
+            StratMode::Coins => left = left.children(coins_card),
             StratMode::Time => unreachable!("Time mode returns early above"),
         }
 
@@ -287,7 +405,20 @@ impl AnalyticsView {
                 );
             }
             StratMode::Coins => {
-                main = main.child(self.strat_coins_table(p, cx));
+                // Same right column as every other axis: the shared "Fact vs variants"
+                // matrix on top, the axis' own tool below it — here the list field, which
+                // now owns the whole remaining height.
+                let pick = self.coins_field_card(p, cx);
+                main = main.child(
+                    v_flex()
+                        .w(design::font_w_px(cx, 470.0))
+                        .flex_none()
+                        .h_full()
+                        .min_h_0()
+                        .gap(design::ui_px(cx, 8.0))
+                        .child(self.coins_kpi(p, cx))
+                        .child(pick),
+                );
             }
             StratMode::Time => unreachable!("Time mode returns early above"),
         }
@@ -300,155 +431,56 @@ impl AnalyticsView {
             .children(dialog)
             .into_any_element()
     }
-
-    /// The "Coins" right panel: a per-coin table for the selected strategy (or all trades).
-    fn strat_coins_table(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        // The selected-strategy detail and the all-strategies summary each keep
-        // their own load note so either read failure remains visible.
-        let scale = design::font_scale(cx);
-        let (coins, scope): (Result<Vec<GroupStat>, super::Note>, String) = match &self.sel_strategy
-        {
-            Some((_, name)) => (
-                self.detail
-                    .view(|d| d.coins.is_empty())
-                    .map(|d| d.coins.clone()),
-                name.clone(),
-            ),
-            None => (
-                self.data
-                    .view(|d| d.coins.is_empty())
-                    .map(|d| d.coins.clone()),
-                t!("analytics.strat.scope_all").to_string(),
-            ),
-        };
-        let head = h_flex()
-            .w_full()
-            .flex_none()
-            .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
-            .px(design::ui_px(cx, COIN_ROW_PAD_X))
-            .gap(design::ui_px(cx, COIN_ROW_GAP))
-            .items_center()
-            .text_size(design::t_caption(cx))
-            .text_color(moon(p.text_soft))
-            .bg(moon(p.table_head))
-            .child(div().flex_1().child(t!("analytics.col.coin").to_string()))
-            .children(COIN_COLS.iter().map(|c| head_cell(c, scale)));
-
-        let body: AnyElement = match coins {
-            Err(note) => super::note_el("an-strat-coins-note", note, 10.0, p, cx),
-            Ok(coins) => {
-                let mut list = v_flex().w_full();
-                for c in coins.iter().take(MAX_ROWS) {
-                    list = list.child(
-                        h_flex()
-                            .w_full()
-                            .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
-                            .px(design::ui_px(cx, COIN_ROW_PAD_X))
-                            .gap(design::ui_px(cx, COIN_ROW_GAP))
-                            .items_center()
-                            .border_t_1()
-                            .border_color(moon_alpha(p.border, 0.5))
-                            .child(div().flex_1().min_w_0().truncate().child(c.name.clone()))
-                            .children(COIN_COLS.iter().map(|col| metric_cell(col, c, p, scale))),
-                    );
-                }
-                list.into_any_element()
-            }
-        };
-
-        v_flex()
-            .w(design::font_w_px(cx, COIN_PANEL_W))
-            .flex_none()
-            .h_full()
-            .min_h_0()
-            .rounded(design::ui_px(cx, 8.0))
-            .bg(moon(p.panel))
-            .border_1()
-            .border_color(moon(p.border))
-            .overflow_hidden()
-            .child(
-                h_flex()
-                    .w_full()
-                    .flex_none()
-                    .px(design::ui_px(cx, 12.0))
-                    .py(design::ui_px(cx, 8.0))
-                    .items_center()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(
-                        div()
-                            .text_size(design::t_title(cx))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(t!("analytics.tab.coins").to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(design::t_caption(cx))
-                            .text_color(moon(p.text_muted))
-                            .min_w_0()
-                            .truncate()
-                            .child(scope),
-                    ),
-            )
-            .child(head)
-            .child(
-                div()
-                    .id("an-strat-coins")
-                    .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(body),
-            )
-            .into_any_element()
-    }
 }
 
 impl AnalyticsView {
-    /// Background detail load for the selected strategy (moved out of `analytics::mod` —
-    /// page logic belongs with its own page). Scope — the filters + the selected row.
-    pub(super) fn reload_detail(&mut self, cx: &mut Context<Self>) {
-        let Some((key, _)) = self.sel_strategy.clone() else {
-            self.detail = LoadState::default();
-            return;
-        };
-        // The key `strategyid@core_uid` — detail for the strategy ON THAT CORE.
-        let Some((id, core)) = parse_strat_key(&key) else {
-            self.detail = LoadState::default();
-            return;
-        };
-        self.detail_seq = self.detail_seq.wrapping_add(1);
-        let req = self.detail_seq;
-        let mut q = self.query();
-        // Detail is the ANCHOR row's own coin table: scope to that one strategy on that
-        // one core, whatever else is Ctrl-selected.
-        q.strategies = vec![(id, core)];
-        self.detail.begin();
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let detail = executor
-                .spawn(async move { moon_core::db::analytics::strategy_detail(&q, id) })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    if this.detail_seq != req {
-                        return;
-                    }
-                    this.detail.apply(detail);
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
-    }
-
     /// Reload the data of the ACTIVE tuning axis (after writing to a strategy — refresh
     /// its chips/KPI: for "By time" — `reload_time`, otherwise — `reload_tuner`).
     pub(super) fn reload_active_tuner(&mut self, cx: &mut Context<Self>) {
+        // Exhaustive on purpose — no wildcard. A fourth axis must fail to compile here
+        // instead of silently reloading the filter tuner's data under its own name.
         match self.strat_mode {
+            StratMode::Filters => self.reload_tuner(cx),
             StratMode::Time => self.reload_time(cx),
-            _ => self.reload_tuner(cx),
+            StratMode::Coins => self.reload_coins(cx),
         }
+    }
+}
+
+// Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
+// shadows the built-in attribute and makes `#[test]` expand recursively.
+#[cfg(test)]
+mod tests {
+    use super::{STRAT_MODES, StratMode};
+    use moon_core::config::layout::StratColsByMode;
+
+    /// Each axis must address its OWN slot. Two axes sharing one is the copy-paste that makes
+    /// the whole per-axis layout pointless — and it would look like "my columns keep changing
+    /// when I switch tabs", which is exactly what this feature exists to stop.
+    #[test]
+    fn each_axis_owns_its_column_slot() {
+        let mut cols = StratColsByMode::default();
+        for (i, mode) in STRAT_MODES.into_iter().enumerate() {
+            *mode.cols_slot(&mut cols) = i as u16 + 1;
+        }
+        assert_eq!((cols.filter, cols.coins, cols.time), (1, 2, 3));
+        // And reading back returns what that axis wrote, not a neighbour's.
+        for (i, mode) in STRAT_MODES.into_iter().enumerate() {
+            assert_eq!(*mode.cols_slot(&mut cols), i as u16 + 1);
+        }
+    }
+
+    /// Only the coin axis spends width on the coin-list columns — that difference is the
+    /// reason the mask is per axis at all.
+    #[test]
+    fn coin_axis_defaults_to_showing_the_lists() {
+        assert_ne!(
+            StratMode::Coins.default_cols(),
+            StratMode::Filters.default_cols()
+        );
+        assert_eq!(
+            StratMode::Filters.default_cols(),
+            StratMode::Time.default_cols()
+        );
     }
 }

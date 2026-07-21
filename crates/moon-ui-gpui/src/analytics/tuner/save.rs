@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette, h_flex, v_flex,
@@ -13,17 +14,22 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
-use super::state::{SaveDialog, SaveTarget};
+use super::shared::{SaveDialog, SaveTarget};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 
 impl AnalyticsView {
     /// Open the confirmation dialog (write/copy): the parameters' current values
     /// ("now → next") are pulled from strategies.sqlite in the background.
+    /// `notes` is indexed like `changes` and may be shorter or empty — an axis whose fields
+    /// read fine as "now → next" supplies nothing.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn open_change_dialog(
         &mut self,
         targets: Vec<SaveTarget>,
         changes: Vec<(String, String)>,
+        per_target: Option<Vec<Vec<(String, String)>>>,
+        notes: Vec<Option<String>>,
         warns: Vec<String>,
         copy: bool,
         cx: &mut Context<Self>,
@@ -33,7 +39,30 @@ impl AnalyticsView {
         let Some((sid, core)) = targets.first().map(|t| (t.sid, t.core)) else {
             return;
         };
+        // A row that carries a NOTE never draws the "now" side, so reading it would be a
+        // round trip whose result is discarded. The coins axis annotates every row.
+        let needs_olds =
+            notes.len() < changes.len() || notes.iter().any(std::option::Option::is_none);
+        if !needs_olds {
+            let olds = vec![None; changes.len()];
+            self.tuner.save_dialog = Some(Arc::new(SaveDialog {
+                targets,
+                changes,
+                per_target,
+                olds,
+                notes,
+                warns,
+                copy,
+            }));
+            cx.notify();
+            return;
+        }
         let keys: Vec<String> = changes.iter().map(|(k, _)| k.clone()).collect();
+        // The scope this dialog belongs to. `TunerState::invalidate` — fired by any selection
+        // or filter change — drops `save_dialog` and advances this. Without the check, a
+        // selection change during the read RESURRECTED the dialog afterwards, on targets the
+        // panel had already discarded, and confirming wrote an edit that was no longer shown.
+        let req = self.tuner.seq;
         self.op_started();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -44,7 +73,12 @@ impl AnalyticsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    // Before the generation check: a retired request still owes its decrement.
                     this.op_finished(cx);
+                    if this.tuner.seq != req {
+                        log::info!("analytics: the confirmation's scope changed, dialog dropped");
+                        return;
+                    }
                     let olds = changes
                         .iter()
                         .map(|(k, _)| olds_map.get(k).cloned())
@@ -52,7 +86,9 @@ impl AnalyticsView {
                     this.tuner.save_dialog = Some(Arc::new(SaveDialog {
                         targets,
                         changes,
+                        per_target,
                         olds,
+                        notes,
                         warns,
                         copy,
                     }));
@@ -68,11 +104,22 @@ impl AnalyticsView {
         let Some(dlg) = self.tuner.save_dialog.take() else {
             return;
         };
+        // A new attempt supersedes the previous complaint — it is about to be answered by
+        // this write's own outcome.
+        self.write_error = None;
         if dlg.copy {
             self.create_strategy_copy(&dlg, cx);
         } else {
-            self.tuner.staged_ignore.clear();
-            self.send_bulk_changes(dlg.targets.clone(), dlg.changes.clone(), cx);
+            // NOT `staged_ignore.clear()` here: clearing before the send destroyed the filter
+            // axis's staged toggles even when the write reached no core at all, which is the
+            // one case the whole path exists to leave recoverable. It is cleared inside
+            // `send_bulk_changes`, once something has actually gone out.
+            self.send_bulk_changes(
+                dlg.targets.clone(),
+                dlg.changes.clone(),
+                dlg.per_target.clone(),
+                cx,
+            );
         }
         cx.notify();
     }
@@ -81,7 +128,7 @@ impl AnalyticsView {
     /// the original lives (per the live store). The name comes from the dialog input
     /// (empty = auto); it is additionally uniqued on each core. The copy arrives
     /// DISABLED (the create_strategies rule) — which is safe.
-    fn create_strategy_copy(&mut self, dlg: &super::state::SaveDialog, cx: &mut Context<Self>) {
+    fn create_strategy_copy(&mut self, dlg: &super::shared::SaveDialog, cx: &mut Context<Self>) {
         use crate::strategies::tree_ops::{STRATEGY_NAME_FIELD, set_field, unique_name};
         let Some(target) = dlg.targets.first() else {
             return;
@@ -131,25 +178,45 @@ impl AnalyticsView {
             ));
         }
         if plans.is_empty() {
-            log::warn!(
-                "analytics: 'Make a copy' — strategy {} not found in the live store (core {:?})",
-                target.sid,
-                target_core
+            let (sid, core) = (target.sid, target_core);
+            // Same rule as Save: a copy that was never created must not look like one that
+            // was. The dialog has already closed, so the log alone would leave the user
+            // believing a new strategy exists.
+            self.set_write_error(
+                t!(
+                    "analytics.copy_failed_missing",
+                    sid = sid,
+                    core = format!("{core:?}")
+                )
+                .to_string(),
+                cx,
             );
             return;
         }
         let total = plans.len();
         let mut sent = 0usize;
+        let mut failed: Vec<String> = Vec::new();
         for (cid, spec, name) in plans {
             match b.session.create_strategies(cid, vec![spec]) {
                 Ok(()) => {
                     sent += 1;
                     log::info!("analytics: copy '{name}' created on core {cid}");
                 }
-                Err(e) => log::warn!("analytics: copy to core {cid} was not sent: {e:#}"),
+                Err(e) => {
+                    log::warn!("analytics: copy to core {cid} was not sent: {e:#}");
+                    failed.push(format!("{cid}: {e:#}"));
+                }
             }
         }
         log::info!("analytics: 'Make a copy' — cores {sent}/{total}");
+        if failed.is_empty() {
+            self.write_error = None;
+        } else {
+            self.set_write_error(
+                t!("analytics.copy_failed", err = failed.join("; ")).to_string(),
+                cx,
+            );
+        }
     }
 
     /// Write the same changes to one OR MANY targets, grouped BY core. `edit_strategies`
@@ -162,6 +229,7 @@ impl AnalyticsView {
         &mut self,
         targets: Vec<SaveTarget>,
         changes: Vec<(String, String)>,
+        per_target: Option<Vec<Vec<(String, String)>>>,
         cx: &mut Context<Self>,
     ) {
         if targets.is_empty() {
@@ -181,14 +249,15 @@ impl AnalyticsView {
                         .collect()
                 })
                 .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
+            let wrote =
+                cx.update(|cx| {
+                    this.update(cx, |this, cx| {
                     let changes = Arc::new(changes);
                     // Group validated targets by core: one edit command per core.
                     let mut by_core: HashMap<u64, Vec<(u64, Vec<(String, String)>)>> =
                         HashMap::new();
                     let mut skipped = 0usize;
-                    for t in &targets {
+                    for (i, t) in targets.iter().enumerate() {
                         let live_cores = live.get(&t.sid).map(Vec::as_slice).unwrap_or(&[]);
                         let cores: Vec<u64> = match t.core {
                             Some(c) if live_cores.contains(&c) => vec![c],
@@ -203,24 +272,50 @@ impl AnalyticsView {
                             }
                             None => live_cores.to_vec(),
                         };
+                        // Each target's OWN value when the axis supplied one — the coin
+                        // lists differ per strategy, and one shared value would copy the
+                        // first strategy's list onto all of them.
+                        //
+                        // A missing entry is an INVARIANT BREACH, not a default: falling back
+                        // to the shared value would write the anchor's list onto this target,
+                        // which is precisely the defect per-target values exist to prevent.
+                        // Refuse this target and say so.
+                        let mine = match per_target.as_ref() {
+                            None => changes.as_ref().clone(),
+                            Some(v) => match v.get(i) {
+                                Some(m) => m.clone(),
+                                None => {
+                                    log::error!(
+                                        "analytics: no value for target '{}' ({} of {}) — \
+                                         skipped rather than written with another's value",
+                                        t.name,
+                                        i,
+                                        v.len()
+                                    );
+                                    skipped += 1;
+                                    continue;
+                                }
+                            },
+                        };
                         for c in cores {
-                            by_core
-                                .entry(c)
-                                .or_default()
-                                .push((t.sid as u64, changes.as_ref().clone()));
+                            by_core.entry(c).or_default().push((t.sid as u64, mine.clone()));
                         }
                     }
                     let mut sent_cores = 0usize;
+                    let mut failed: Vec<String> = Vec::new();
                     {
                         let b = this.backend.read(cx);
                         for (core, edits) in &by_core {
                             let n = edits.len();
                             match b.session.edit_strategies(*core, edits.clone()) {
                                 Ok(()) => sent_cores += 1,
-                                Err(e) => log::warn!(
-                                    "analytics: changes → core {core} ({n} strategies) \
-                                     not sent: {e:#}"
-                                ),
+                                Err(e) => {
+                                    log::warn!(
+                                        "analytics: changes → core {core} ({n} strategies) \
+                                         not sent: {e:#}"
+                                    );
+                                    failed.push(format!("{core}: {e:#}"));
+                                }
                             }
                         }
                     }
@@ -229,12 +324,65 @@ impl AnalyticsView {
                          skipped {skipped}",
                         targets.len()
                     );
-                    // The snapshot echo will refresh strategies.sqlite — re-read the chips
-                    // of the ACTIVE axis (filter/time).
+                    // NOTHING left the terminal — every core refused, or every target was
+                    // filtered out as stale. Reloading now would put the strategies' current
+                    // values back over the pending edit, which is precisely what a SUCCESSFUL
+                    // write looks like: the user would be shown a saved-looking panel with
+                    // their change silently discarded. Keep the edit, say what happened.
+                    if sent_cores == 0 {
+                        let detail = if failed.is_empty() {
+                            t!("analytics.write_failed_stale", n = skipped).to_string()
+                        } else {
+                            failed.join("; ")
+                        };
+                        this.set_write_error(
+                            t!("analytics.write_failed", err = detail).to_string(),
+                            cx,
+                        );
+                        return false;
+                    }
+                    // Something went out, so the staged toggles it carried are spent.
+                    this.tuner.staged_ignore.clear();
+                    // Skipped targets and refusing cores are INDEPENDENT: reporting one as
+                    // an alternative to the other hid the refusals behind a sentence claiming
+                    // everything else went through. Both are said, or neither.
+                    if skipped > 0 || !failed.is_empty() {
+                        let mut parts = Vec::new();
+                        if !failed.is_empty() {
+                            parts.push(
+                                t!("analytics.write_partial", err = failed.join("; ")).to_string(),
+                            );
+                        }
+                        if skipped > 0 {
+                            parts.push(t!("analytics.write_skipped", n = skipped).to_string());
+                        }
+                        this.set_write_error(parts.join(" · "), cx);
+                    } else {
+                        // WHAT "sent" ACTUALLY PROVES, so nobody reads more into it than it
+                        // carries: `edit_strategies` returns as soon as the command is queued
+                        // on the core's channel (`session::commands::send_core_cmd`). It
+                        // catches a core that is gone from the session set and a closed
+                        // channel — not a connected core that receives the command and never
+                        // applies it. For that, the only real evidence is the echo the
+                        // reloads below re-read.
+                        //
+                        // A clean write clears the previous complaint; leaving it up would
+                        // outlive the problem it describes.
+                        this.write_error = None;
+                    }
+                    // The snapshot echo will refresh strategies.sqlite — re-read the ACTIVE
+                    // axis (filters, time, or the coin lists).
                     this.reload_active_tuner(cx);
                     cx.notify();
+                    true
+                })
+                .unwrap_or(false)
                 });
-            });
+            // Nothing was sent, so there is no echo coming and nothing to re-read. Running
+            // the follow-up reloads anyway would erase the edit the failure just preserved.
+            if !wrote {
+                return;
+            }
             // The core's echo arrives with a lag — re-read twice more so the
             // chips/ignores show the state that was ACTUALLY applied.
             for delay_ms in [1500u64, 3500] {
@@ -319,36 +467,78 @@ impl AnalyticsView {
         for (i, (k, v)) in dlg.changes.iter().enumerate() {
             // Single: "now → next" (current muted, new amber). Bulk: the "now" differs per
             // target, so show only the value written to all of them (no misleading anchor "now").
-            let old = dlg.olds.get(i).cloned().flatten();
+            // An EMPTY value is a real edit — "erase this field" — and it used to render as a
+            // blank cell, which reads as "nothing happens here". A coin list wiped by an
+            // accidental untick-all went out looking like a no-op.
+            let blank = |s: &str| s.trim().is_empty();
+            let note = dlg.notes.get(i).cloned().flatten();
+            let old = dlg
+                .olds
+                .get(i)
+                .cloned()
+                .flatten()
+                .filter(|s| !blank(s))
+                .unwrap_or_else(|| "—".to_string());
             let mut row = h_flex()
+                // MIN height, not fixed: a long value (a blacklist runs to hundreds of
+                // coins) wraps over several lines, and a fixed height would clip it.
+                .min_h(design::fit_h_px(cx, 22.0, 13.0, 4.5))
                 .w_full()
-                .h(design::fit_h_px(cx, 22.0, 13.0, 4.5))
                 .px(design::ui_px(cx, 10.0))
+                .py(design::ui_px(cx, 3.0))
                 .gap(design::ui_px(cx, 6.0))
-                .items_center()
+                .items_start()
                 .border_t_1()
                 .border_color(moon_alpha(p.border, 0.5))
-                .child(div().flex_1().min_w_0().truncate().child(k.clone()));
-            if !bulk {
-                row = row
-                    .child(
-                        div()
-                            .flex_none()
-                            .max_w(design::font_w_px(cx, 90.0))
-                            .truncate()
-                            .text_color(moon(p.text_muted))
-                            .child(old.unwrap_or_else(|| "—".to_string())),
-                    )
-                    .child(div().flex_none().text_color(moon(p.text_muted)).child("→"));
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(design::font_w_px(cx, 110.0))
+                        .truncate()
+                        .child(k.clone()),
+                );
+            if let Some(note) = note {
+                // A field the axis can describe in words: print WHAT changed and nothing
+                // else. For a SET this is the only readable form — two 376-entry lists that
+                // differ by one coin wrap differently on every line, so putting them side by
+                // side showed that something changed while hiding what.
+                row = row.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(moon(p.amber))
+                        .child(note),
+                );
+            } else {
+                if !bulk {
+                    row = row
+                        .child(
+                            // Wraps like the new value beside it. Truncating only one side
+                            // let a long value be confirmed against a 90px stub of the one it
+                            // replaces — the comparison the dialog exists to make.
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_color(moon(p.text_muted))
+                                .child(old),
+                        )
+                        .child(div().flex_none().text_color(moon(p.text_muted)).child("→"));
+                }
+                row = row.child(
+                    // Wraps instead of truncating: this is the value about to be written, and
+                    // a 120px prefix of it confirms nothing. The dialog scrolls.
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .when(blank(v), |el| el.text_color(moon(p.orange)))
+                        .when(!blank(v), |el| el.text_color(moon(p.amber)))
+                        .child(if blank(v) {
+                            t!("analytics.tuner.save_clears").to_string()
+                        } else {
+                            v.clone()
+                        }),
+                );
             }
-            row = row.child(
-                div()
-                    .flex_none()
-                    .max_w(design::font_w_px(cx, 120.0))
-                    .truncate()
-                    .text_color(moon(p.amber))
-                    .child(v.clone()),
-            );
             list = list.child(row);
         }
         // Warnings (overwriting a foreign slot type and the like) — in orange,

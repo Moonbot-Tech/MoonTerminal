@@ -5,6 +5,14 @@
 //! PnL bar growing from the center line (green up / orange down) + the value.
 //! Data comes from `hourly_profiles` (one range = the selected period).
 
+// Files of this axis.
+/// Its weekly schedule grid.
+mod grid;
+/// Its three colour-profiled range sliders.
+mod sliders;
+/// Its own state: the schedule values, their parsers and the suggestion settings.
+pub(in crate::analytics::tuner) mod state;
+
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
@@ -14,7 +22,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::super::summary::{fmt_signed, sign_color};
-use super::hist::kpi_matrix_card;
+use super::kpi::kpi_matrix_card;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{HourStat, hourly_profiles};
@@ -110,7 +118,7 @@ impl AnalyticsView {
     /// Body of the "By time" mode — the layout MIRRORS "By filter": on the left the
     /// list (top) + the heatmap (bottom, where the histogram sits); on the right a
     /// full-height column — the "Fact vs variants" KPI (top) + the schedule grid (bottom).
-    pub(super) fn strat_time(
+    pub(in crate::analytics::tuner) fn strat_time(
         &mut self,
         p: MoonPalette,
         window: &mut Window,

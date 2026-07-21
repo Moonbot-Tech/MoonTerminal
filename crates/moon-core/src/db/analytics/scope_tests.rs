@@ -15,7 +15,7 @@ fn scope_covers_every_selected_strategy() {
         strategies: vec![(5, Some(7))],
         ..Default::default()
     };
-    let w = one.where_sql(&c);
+    let w = one.where_sql(&c, "strategyid");
     assert!(w.contains("COALESCE(strategyid,0) = 5"), "{w}");
     assert!(w.contains("core_uid = 7"), "{w}");
 
@@ -23,7 +23,7 @@ fn scope_covers_every_selected_strategy() {
         strategies: vec![(5, Some(7)), (9, Some(8)), (11, None)],
         ..Default::default()
     };
-    let w = many.where_sql(&c);
+    let w = many.where_sql(&c, "strategyid");
     for sid in ["= 5", "= 9", "= 11"] {
         assert!(
             w.contains(sid),
@@ -36,7 +36,7 @@ fn scope_covers_every_selected_strategy() {
 
     // No selection = every strategy: no strategy predicate at all.
     let all = Query::default();
-    let w = all.where_sql(&c);
+    let w = all.where_sql(&c, "strategyid");
     assert!(
         !w.contains("strategyid"),
         "unscoped query must not filter: {w}"
@@ -52,7 +52,7 @@ fn scope_excludes_a_source_that_cannot_attribute() {
         strategies: vec![(5, Some(7))],
         ..Default::default()
     };
-    let w = q.where_sql(&c);
+    let w = q.where_sql(&c, "strategyid");
     assert!(w.contains("1=0"), "{w}");
     assert!(
         !w.contains("strategyid"),

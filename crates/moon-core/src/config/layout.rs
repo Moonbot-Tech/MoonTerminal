@@ -79,6 +79,32 @@ fn def_true() -> bool {
     true
 }
 
+/// Visible-column masks of the Tuning strategy list, ONE PER AXIS.
+///
+/// The list stands beside a different tool in each mode, so it is asked a different question in
+/// each: "By coin" wants the strategy's coin-list counts, the other two want the width those
+/// columns take. Named fields rather than an array — the axes are an enum, and an index would
+/// silently re-point every saved mask the day their order changes.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StratColsByMode {
+    pub filter: u16,
+    pub coins: u16,
+    pub time: u16,
+}
+
+impl Default for StratColsByMode {
+    /// Zero is a legitimate mask ("no toggleable column"), so the absent-key default cannot be
+    /// `0` — the UI substitutes its own defaults when the whole key is missing instead.
+    fn default() -> Self {
+        Self {
+            filter: 0,
+            coins: 0,
+            time: 0,
+        }
+    }
+}
+
 /// Прямоугольник окна (внешняя позиция + внутренний размер, физ. пиксели).
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct GeomRect {
@@ -160,8 +186,18 @@ pub struct WindowLayout {
     pub analytics_strat_period: Option<String>,
     /// Bitmask of the visible columns in the Tuning strategy list (the ▦ selector).
     /// None = default (all columns).
+    ///
+    /// Version 2 of the key. The bit layout is positional (metric columns sit at
+    /// `2 + index`), so adding the coin-list columns MOVED every bit above them: a mask
+    /// saved under the old layout would silently switch columns on and off rather than
+    /// restore what the user chose. A new key is the honest migration — an old config
+    /// still loads, and simply falls back to "all columns" once.
+    ///
+    /// Superseded by [`Self::analytics_strat_cols_modes`], which keeps one mask PER AXIS.
+    /// Kept as its seed: a user who already picked their columns carries that pick into all
+    /// three axes instead of being reset a second time.
     #[serde(default)]
-    pub analytics_strat_cols: Option<u16>,
+    pub analytics_strat_cols2: Option<u16>,
     /// Restart count of the "By filter" tuner's threshold search. None = the tuner's default.
     /// Values from an externally edited file are clamped to the range owned by
     /// `db::tuner_smart` when the tuner loads.
@@ -171,6 +207,24 @@ pub struct WindowLayout {
     /// the dropdown selects the tuner's default.
     #[serde(default)]
     pub analytics_tuner_edges: Option<u32>,
+    /// Visible columns of the Tuning strategy list, per axis. None = the UI's own defaults.
+    #[serde(default)]
+    pub analytics_strat_cols_modes: Option<StratColsByMode>,
+    /// Analytics: attribute LIQUIDATION trades to the strategy named in the row.
+    ///
+    /// Off by default. It moves money between strategies retroactively (measured: 291 of 319
+    /// liquidations attach, −4582.89 USDT leaves "Manual"), so it is a decision the user makes
+    /// rather than something that quietly changes their history on an update. The Report
+    /// window deliberately does NOT follow it.
+    #[serde(default)]
+    pub analytics_attribute_liq: bool,
+    /// The "closed trades the core never dated" banner: the count it was dismissed at.
+    ///
+    /// `None` — never dismissed, so it shows whenever there is anything to say. Otherwise it
+    /// comes back only once MORE such trades appear: the same count is the same news, already
+    /// read and put away.
+    #[serde(default)]
+    pub analytics_undated_hidden_n: Option<i64>,
     /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

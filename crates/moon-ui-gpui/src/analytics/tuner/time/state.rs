@@ -9,39 +9,42 @@ use moon_ui::MoonInputState;
 
 use moon_core::db::tuner::{TimeAxes, TimeWindow, Variant, format_week_span, format_working_time};
 /// Variants besides the "Fact" one (v1, v2) — same as the filter tuner's N_VAR.
-pub(super) const TIME_N_VAR: usize = 2;
+pub(in crate::analytics::tuner) const TIME_N_VAR: usize = 2;
 /// Fields: 0 = Weekly (WorkingWeekTime), 1 = Day, 2 = In hour (both are WorkingTime).
-pub(super) const N_FIELD: usize = 3;
+pub(in crate::analytics::tuner) const N_FIELD: usize = 3;
 /// Minutes in a week (7 days × 1440) — the maximum minute of the week + 1.
-pub(super) const WEEK_MIN: u16 = 7 * 1440;
+pub(in crate::analytics::tuner) const WEEK_MIN: u16 = 7 * 1440;
 
 /// State of the "By time" tuner inside `AnalyticsView`.
 pub(in crate::analytics) struct TimeTunerState {
     /// `[variant 0..TIME_N_VAR][field 0..N_FIELD] = (from, to)` as strings.
-    pub(super) bounds: Vec<[(String, String); N_FIELD]>,
+    pub(in crate::analytics::tuner) bounds: Vec<[(String, String); N_FIELD]>,
     /// Row checkboxes — "consider this field in the sweep", as in the filter tuner. All
     /// three are independent, and an unchecked row is never rewritten. Ticking both
     /// WorkingTime rows lets the sweep pick the better FORMAT for that one field; pinning
     /// is therefore per field, not per row — see `TimeAxes`.
-    pub(super) enabled: [bool; N_FIELD],
+    pub(in crate::analytics::tuner) enabled: [bool; N_FIELD],
     /// RAW current values of the strategy fields `[WorkingWeekTime, WorkingTime]`.
-    pub(super) current_raw: [String; 2],
+    pub(in crate::analytics::tuner) current_raw: [String; 2],
     /// The strategy's current `IgnoreTime` (the schedule is ignored when YES).
-    pub(super) ignore_cur: bool,
+    pub(in crate::analytics::tuner) ignore_cur: bool,
     /// Current `IgnoreFilters` (the GLOBAL ignore — it gates time too; must be NO).
-    pub(super) ign_filters_cur: bool,
+    pub(in crate::analytics::tuner) ign_filters_cur: bool,
     /// Manual `IgnoreTime` switch (None = follow the automatic logic).
-    pub(super) ignore_staged: Option<bool>,
+    pub(in crate::analytics::tuner) ignore_staged: Option<bool>,
     /// Lazy input cache (created in render, as in the filter tuner).
-    pub(super) inputs: HashMap<String, Entity<MoonInputState>>,
+    pub(in crate::analytics::tuner) inputs: HashMap<String, Entity<MoonInputState>>,
+    // Shared-shell settings — parallel to `TunerState` (time hides some of them).
+    pub(in crate::analytics::tuner) iters: String,
     /// Minimum trade count as raw input text; empty selects the automatic threshold.
-    pub(super) min_trades: String,
+    pub(in crate::analytics::tuner) min_trades: String,
+    pub(in crate::analytics::tuner) edges: usize,
     /// Whether suggested bounds are rounded outward.
-    pub(super) round_results: bool,
+    pub(in crate::analytics::tuner) round_results: bool,
     /// Whether an auto-suggestion is in flight.
-    pub(super) sugg_busy: bool,
+    pub(in crate::analytics::tuner) sugg_busy: bool,
     /// Auto-suggestion generation — a stale result is discarded.
-    pub(super) sugg_seq: u64,
+    pub(in crate::analytics::tuner) sugg_seq: u64,
 }
 
 impl TimeTunerState {
@@ -57,7 +60,11 @@ impl TimeTunerState {
             ign_filters_cur: false,
             ignore_staged: None,
             inputs: HashMap::new(),
+            // The time sweep fixes its own depth and restart count — they are not persisted
+            // per axis, so they open at the shared defaults rather than a saved value.
+            iters: super::super::filter::state::DEFAULT_ITERS.to_string(),
             min_trades: String::new(),
+            edges: 0,
             round_results: true,
             sugg_busy: false,
             sugg_seq: 0,
@@ -66,7 +73,7 @@ impl TimeTunerState {
 
     /// Span of variant `vi` over the minute of the week (field 0). Empty → None; a missing edge →
     /// start (0) / end (WEEK_MIN-1) of the week.
-    pub(super) fn week_span(&self, vi: usize) -> Option<(u16, u16)> {
+    pub(in crate::analytics::tuner) fn week_span(&self, vi: usize) -> Option<(u16, u16)> {
         let (from, to) = &self.bounds[vi][0];
         if from.trim().is_empty() && to.trim().is_empty() {
             return None;
@@ -81,7 +88,7 @@ impl TimeTunerState {
     /// "In hour" row (field 2 → `Hour`). Only one of them ever holds a value — every write
     /// path clears the sibling — so this reads the live one. Both filled (shouldn't
     /// happen) → "Day" wins.
-    pub(super) fn tod(&self, vi: usize) -> Option<TimeWindow> {
+    pub(in crate::analytics::tuner) fn tod(&self, vi: usize) -> Option<TimeWindow> {
         let (df, dt) = &self.bounds[vi][1];
         if !df.trim().is_empty() || !dt.trim().is_empty() {
             let w = (parse_time(df).unwrap_or(0), parse_time(dt).unwrap_or(1439));
@@ -101,7 +108,7 @@ impl TimeTunerState {
     /// row + its slider): `Some(1)`=Day, `Some(2)`=In hour, `None`=both empty. This follows
     /// the value, not the checkbox — the checkboxes only decide what the sweep may try, and
     /// both of them can be ticked at once.
-    pub(super) fn active_wt(&self) -> Option<usize> {
+    pub(in crate::analytics::tuner) fn active_wt(&self) -> Option<usize> {
         let d = &self.bounds[0][1];
         if !d.0.trim().is_empty() || !d.1.trim().is_empty() {
             return Some(1);
@@ -115,7 +122,7 @@ impl TimeTunerState {
 
     /// Axes for the sweep, straight from the row checkboxes: what to search, and what an
     /// unchecked-but-filled row pins it to.
-    pub(super) fn axes(&self) -> TimeAxes {
+    pub(in crate::analytics::tuner) fn axes(&self) -> TimeAxes {
         TimeAxes {
             week: self.enabled[0],
             day: self.enabled[1],
@@ -135,7 +142,7 @@ impl TimeTunerState {
 
     /// Strategy field string built from variant `vi`: `which` 0 = WorkingWeekTime (week
     /// span; a full week = "no restriction" → ""), 1 = WorkingTime. Empty → "".
-    pub(super) fn field_value(&self, vi: usize, which: usize) -> String {
+    pub(in crate::analytics::tuner) fn field_value(&self, vi: usize, which: usize) -> String {
         if which == 0 {
             self.week_span(vi)
                 .filter(|&s| s != (0, WEEK_MIN - 1))
@@ -147,7 +154,7 @@ impl TimeTunerState {
     }
 
     /// Variants for the KPIs: `[Fact, v1, v2]`. Each carries both week_span AND tod.
-    pub(super) fn variants(&self) -> Vec<Variant> {
+    pub(in crate::analytics::tuner) fn variants(&self) -> Vec<Variant> {
         let mut out = vec![Variant::default()];
         for vi in 0..self.bounds.len() {
             out.push(Variant {
@@ -162,7 +169,7 @@ impl TimeTunerState {
 
     /// Whether we are changing the schedule: at least one v1 field is non-empty AND differs
     /// from the current value.
-    pub(super) fn has_schedule_change(&self) -> bool {
+    pub(in crate::analytics::tuner) fn has_schedule_change(&self) -> bool {
         [0usize, 1].iter().any(|&which| {
             let v = self.field_value(0, which);
             !v.is_empty() && v != self.current_raw[which].trim()
@@ -172,7 +179,7 @@ impl TimeTunerState {
     /// Effective `IgnoreTime` value for display/writing: the manual switch, otherwise
     /// automatic — NO when a schedule is set (else Moonbot ignores the windows), current value
     /// when it is not.
-    pub(super) fn ignore_effective(&self) -> bool {
+    pub(in crate::analytics::tuner) fn ignore_effective(&self) -> bool {
         self.ignore_staged.unwrap_or(if self.has_schedule_change() {
             false
         } else {
@@ -182,7 +189,7 @@ impl TimeTunerState {
 
     /// Whether there is anything to write (Save lights up): the schedule, `IgnoreTime` or the
     /// global ignore.
-    pub(super) fn is_dirty(&self) -> bool {
+    pub(in crate::analytics::tuner) fn is_dirty(&self) -> bool {
         !self.changes().is_empty()
     }
 
@@ -190,7 +197,7 @@ impl TimeTunerState {
     /// that must be cleared for the schedule to take effect (`IgnoreTime`, and also the
     /// GLOBAL `IgnoreFilters` — when writing a schedule, if it is currently YES). We write only
     /// what actually changes.
-    pub(super) fn changes(&self) -> Vec<(String, String)> {
+    pub(in crate::analytics::tuner) fn changes(&self) -> Vec<(String, String)> {
         const NAMES: [&str; 2] = ["WorkingWeekTime", "WorkingTime"];
         let yesno = |b: bool| if b { "YES" } else { "NO" }.to_string();
         let mut out: Vec<(String, String)> = (0..2)
@@ -217,7 +224,7 @@ impl TimeTunerState {
     /// — NOT gated on the anchor's current values, since the other targets differ — and always
     /// disable IgnoreTime + IgnoreFilters so the schedule actually applies on every target.
     /// Writing NO to a target that already had NO is idempotent, so this is safe to fan out.
-    pub(super) fn changes_forced(&self) -> Vec<(String, String)> {
+    pub(in crate::analytics::tuner) fn changes_forced(&self) -> Vec<(String, String)> {
         const NAMES: [&str; 2] = ["WorkingWeekTime", "WorkingTime"];
         let mut out: Vec<(String, String)> = (0..2)
             .filter_map(|which| {
@@ -234,7 +241,7 @@ impl TimeTunerState {
 
     /// Reset the grid when the strategy changes (v1/v2 + inputs + current values + the ignore
     /// switch), and discard an in-flight auto-suggestion.
-    pub(super) fn reset_grid(&mut self) {
+    pub(in crate::analytics::tuner) fn reset_grid(&mut self) {
         self.bounds = vec![std::array::from_fn(|_| (String::new(), String::new())); TIME_N_VAR];
         self.current_raw = Default::default();
         self.ignore_staged = None;
@@ -253,13 +260,13 @@ impl TimeTunerState {
 }
 
 /// Minutes of the day → "hh:mm".
-pub(super) fn fmt_min(m: u16) -> String {
+pub(in crate::analytics::tuner) fn fmt_min(m: u16) -> String {
     format!("{:02}:{:02}", m / 60, m % 60)
 }
 
 /// One edge of a week span `(from, to)` as the input string "day.hh:mm" (or just "day" on a
 /// day boundary): the start of the week/day for "from" and the end for "to" — short, no time.
-pub(super) fn fmt_week_ep(wm: u16, is_to: bool) -> String {
+pub(in crate::analytics::tuner) fn fmt_week_ep(wm: u16, is_to: bool) -> String {
     let (day, tod) = (wm / 1440 % 7 + 1, wm % 1440);
     if (!is_to && tod == 0) || (is_to && tod == 1439) {
         day.to_string()
@@ -288,12 +295,12 @@ fn parse_week_ep(s: &str, is_to: bool) -> Option<u16> {
 }
 
 /// Minute of the hour 0..59 from the field. Empty/garbage → None; above 59 is clamped to 59.
-pub(super) fn parse_moh(s: &str) -> Option<u8> {
+pub(in crate::analytics::tuner) fn parse_moh(s: &str) -> Option<u8> {
     s.trim().parse::<u8>().ok().map(|v| v.min(59))
 }
 
 /// Time of day from the field: "hh:mm" or minutes of the day; empty/garbage = None.
-pub(super) fn parse_time(s: &str) -> Option<u16> {
+pub(in crate::analytics::tuner) fn parse_time(s: &str) -> Option<u16> {
     let s = s.trim();
     if s.is_empty() {
         return None;

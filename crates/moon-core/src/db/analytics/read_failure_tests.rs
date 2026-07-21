@@ -12,6 +12,7 @@ fn q(from: i64, to: i64) -> Query {
         side: SideFilter::All,
         emulator: Some(false),
         strategies: Vec::new(),
+        attribute_liq: false,
     }
 }
 

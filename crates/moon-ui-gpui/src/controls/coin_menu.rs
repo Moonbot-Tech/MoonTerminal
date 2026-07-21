@@ -359,6 +359,18 @@ fn add_to_strategy_blacklist(b: &Backend, core: CoreId, sid: u64, coin: &str) {
 }
 
 /// Есть ли монета в списке (запятая-разделённом, без учёта регистра/пробелов).
+///
+/// Deliberately a LITERAL comparison, not `symbol::coin_match_key`. The list is being
+/// WRITTEN for the core here, and how the core matches an entry against its own
+/// `market_currency` — whether it folds `BTC_RP` to `BTC` — has never been verified. Folding
+/// here would let us claim "the coin is already listed" about an entry the core may not
+/// associate with that coin at all, turning the click into a silent no-op.
+///
+/// The Analytics coin axis DOES fold, and it now writes too (`analytics::tuner::coins`), so
+/// the two paths disagree: a coin ticked there that the strategy did not already list is sent
+/// as the folded token. That is the same unverified assumption, on the other side of the
+/// bet — recorded here rather than silently equalised, because guessing which behaviour the
+/// core has would break whichever list is currently working.
 fn blacklist_contains(text: &str, coin: &str) -> bool {
     text.split(',').any(|s| s.trim().eq_ignore_ascii_case(coin))
 }

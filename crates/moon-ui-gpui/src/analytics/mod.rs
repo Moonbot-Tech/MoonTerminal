@@ -38,11 +38,53 @@ use rust_i18n::t;
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
 use moon_core::db::SideFilter;
-use moon_core::db::analytics::{DayCell, Query, StrategyDetail, Summary};
+use moon_core::db::analytics::{DayCell, Query, Summary};
 
-use crate::load_state::{LoadState, Note, note_el};
+use crate::load_state::{LoadState, note_el};
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
+
+/// Is the coin-table observation channel armed (`MOON_ANALYTICS_PROBE`, any value)?
+///
+/// A GUI panel has no observation channel by default, so this mirrors the convention
+/// `diag.rs` already established for render counters: gated on an env var rather than
+/// on `cfg(debug_assertions)` (this workspace builds dev with debug-assertions off),
+/// read once, and inert in EVERY build unless it is set. Armed, it makes startup open
+/// this window straight on the coin table and makes that table log what it renders —
+/// which is the only way to observe the panel without clicking through the UI by hand.
+pub(crate) fn probe_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MOON_ANALYTICS_PROBE").is_some())
+}
+
+/// `MOON_ANALYTICS_PROBE=select` — additionally adopt the first strategy that actually
+/// carries a coin list, once the summary lands.
+///
+/// The interesting state of the "By coin" panels is the one WITH a strategy chosen, and
+/// reaching it otherwise means clicking a row by hand — which is not an observation channel.
+/// Inert unless the variable starts with `select`.
+pub(crate) fn probe_selects_strategy() -> bool {
+    probe_select_spec().is_some()
+}
+
+/// The selection spec, so any particular case — an empty list, one with no datable history —
+/// can be put on screen without a human hunting for it in the list:
+///
+/// - `select` — the strategy with the biggest blacklist;
+/// - `select:ID@CORE` — that exact strategy, addressed by the row key the page itself uses;
+/// - `select:ID` — that strategy id on whichever core carries it first.
+pub(crate) fn probe_select_spec() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static SPEC: OnceLock<Option<String>> = OnceLock::new();
+    SPEC.get_or_init(|| {
+        std::env::var("MOON_ANALYTICS_PROBE")
+            .ok()
+            .filter(|v| v == "select" || v.starts_with("select:"))
+            .map(|v| v.strip_prefix("select:").unwrap_or("").to_string())
+    })
+    .as_deref()
+}
 
 /// Задержка показа оверлея занятости: быстрые пересчёты не мигают затемнением.
 const BUSY_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
@@ -69,6 +111,25 @@ pub struct AnalyticsView {
     /// Background summary state with distinct loading, unavailable, ready, and
     /// failed outcomes so only a successful empty read appears empty.
     pub(super) data: LoadState<Summary>,
+    /// Closed trades the core never dated, under the CURRENT filters.
+    ///
+    /// `None` while unknown (not read yet, or the read failed — logged at the origin): the
+    /// banner is a claim about missing money, and it must not appear on a guess. Read on
+    /// every filter change alongside the summary, since it shares the same filters and is
+    /// deliberately outside the period.
+    pub(super) undated: Option<moon_core::db::analytics::UndatedCloses>,
+    /// Attribute LIQUIDATION trades to the strategy named in the row (see
+    /// `db::analytics::Query::attribute_liq`).
+    ///
+    /// Cached on the view rather than read from the layout per query, because `query()` has no
+    /// `cx` — and because it must not change under a reload that is already in flight.
+    pub(super) attr_liq: bool,
+    /// The last write that did not reach a single core, in the user's words.
+    ///
+    /// A failed `edit_strategies` used to be a log line and nothing else, while the panel
+    /// reloaded and put the strategy's OLD values back — which is exactly what a successful
+    /// write looks like. The edit was gone and the user had been told it was saved.
+    pub(super) write_error: Option<String>,
     /// Счётчик фоновых пересчётов (сводка/тюнер/гистограмма/подбор): >0 —
     /// блокирующий оверлей «Загрузка…» поверх окна. Длинные сканы большой БД
     /// иначе никак не видны, а клики по фильтрам/стратегиям копились в очередь.
@@ -98,14 +159,15 @@ pub struct AnalyticsView {
     pub(super) strat_search: String,
     pub(super) strat_type: Option<String>,
     pub(super) strat_active_only: bool,
+    /// Show only strategies that name coins in a list (blacklist / whitelist), or all.
+    pub(in crate::analytics) strat_lists: tuner::StratListFilter,
     /// Lazily-created search input backing `strat_search`.
     pub(super) strat_search_input: Option<Entity<MoonInputState>>,
     /// List sort: `(column key, descending)`. None → the default profit-descending order.
     pub(super) strat_sort: Option<(String, bool)>,
-    /// Visible-column bitmask for the strategy list (kind, core, then the metric columns).
-    pub(super) strat_cols: u16,
-    pub(super) detail: LoadState<StrategyDetail>,
-    detail_seq: u64,
+    /// Visible-column bitmask of the strategy list, PER axis: the list sits beside a
+    /// different tool in each mode and is asked a different question there.
+    pub(super) strat_cols: moon_core::config::layout::StratColsByMode,
     /// Вкладка «Календарь»: посуточные ячейки (PnL+сделки+wins) за период.
     pub(super) cal_days: Option<Arc<Vec<DayCell>>>,
     cal_seq: u64,
@@ -127,6 +189,12 @@ pub struct AnalyticsView {
     strat_mode: tuner::StratMode,
     /// Тюнер порогов (режим «Фильтры») — состояние в своём модуле.
     tuner: tuner::TunerState,
+    /// The "By coin" mode: the table's view controls, the picked coins that define
+    /// variant v1, and the two background results it renders from.
+    coins: tuner::CoinsState,
+    /// The coin picker's read: the selected strategies' blacklist, with the core each coin
+    /// belongs to and when it was added.
+    coin_lists: tuner::CoinListsState,
     /// Режим «По времени»: профили «час дня» по столбцам-периодам
     /// (текущий/неделя/месяц/90д). None до первого расчёта / при ошибке чтения.
     pub(super) time_profiles: Option<Arc<Vec<[moon_core::db::analytics::HourStat; 24]>>>,
@@ -186,6 +254,8 @@ impl AnalyticsView {
             .analytics_period
             .as_deref()
             .and_then(Period::from_id);
+        // Read before `backend` is moved into the struct below.
+        let attr_liq = backend.read(cx).layout.analytics_attribute_liq;
         // Период «Тюнинга» персистится отдельным ключом (независим от «Сводки»).
         let saved_strat_period = backend
             .read(cx)
@@ -193,15 +263,25 @@ impl AnalyticsView {
             .analytics_strat_period
             .as_deref()
             .and_then(Period::from_id);
-        // Visible strategy-list columns from the previous run (default — all of them).
-        let saved_strat_cols = backend
-            .read(cx)
-            .layout
-            .analytics_strat_cols
-            .unwrap_or(tuner::STRAT_COLS_ALL);
         // Persisted "By filter" search knobs; `TunerState::load` owns their normalization.
         let saved_tuner_iters = backend.read(cx).layout.analytics_tuner_iters;
         let saved_tuner_edges = backend.read(cx).layout.analytics_tuner_edges;
+        // Visible strategy-list columns from the previous run, one mask per axis. An older
+        // config holding the single-mask key seeds all three, so a choice already made is
+        // carried over instead of reset; absent entirely, each axis takes its own default.
+        let saved_strat_cols = {
+            let layout = &backend.read(cx).layout;
+            layout.analytics_strat_cols_modes.unwrap_or_else(|| {
+                let seed = layout.analytics_strat_cols2;
+                let mut by_mode = moon_core::config::layout::StratColsByMode::default();
+                // Each axis through its OWN accessor and its OWN default, so this seeding
+                // cannot disagree with what the selector reads back.
+                for mode in tuner::STRAT_MODES {
+                    *mode.cols_slot(&mut by_mode) = seed.unwrap_or(mode.default_cols());
+                }
+                by_mode
+            })
+        };
         // Режим календаря из прошлого запуска (дефолт — «Месяц»).
         let saved_mode = backend
             .read(cx)
@@ -234,9 +314,12 @@ impl AnalyticsView {
                 this.apply_custom_range(window, cx);
             }),
         ];
+        // Armed probe → open straight on the surface under observation, so the channel
+        // reports the coin table rather than the summary nobody asked about.
+        let probe = probe_enabled();
         let mut this = Self {
             backend,
-            tab: Tab::Summary,
+            tab: if probe { Tab::Strategies } else { Tab::Summary },
             period: saved_period.unwrap_or(Period::CurMonth),
             strat_period: saved_strat_period.unwrap_or(Period::CurMonth),
             data_period: saved_period.unwrap_or(Period::CurMonth),
@@ -246,6 +329,9 @@ impl AnalyticsView {
             // Дефолт «Реальные» — как в Отчёте (эмуляторные шумят статистику).
             emu: Some(false),
             data: LoadState::default(),
+            undated: None,
+            attr_liq,
+            write_error: None,
             busy_ops: 0,
             busy_since: None,
             seq: 0,
@@ -257,11 +343,10 @@ impl AnalyticsView {
             strat_search: String::new(),
             strat_type: None,
             strat_active_only: true,
+            strat_lists: tuner::StratListFilter::All,
             strat_search_input: None,
             strat_sort: Some(("analytics.col.profit".to_string(), true)),
             strat_cols: saved_strat_cols,
-            detail: LoadState::default(),
-            detail_seq: 0,
             cal_days: None,
             cal_seq: 0,
             cal_dirty: true,
@@ -274,8 +359,14 @@ impl AnalyticsView {
             cal_day: (moon_core::util::now_unix_ms_i64() / 1000).div_euclid(86_400) * 86_400,
             cal_prev: None,
             cal_hover: None,
-            strat_mode: tuner::StratMode::Filters,
+            strat_mode: if probe {
+                tuner::StratMode::Coins
+            } else {
+                tuner::StratMode::Filters
+            },
             tuner: tuner::TunerState::load(saved_tuner_iters, saved_tuner_edges),
+            coins: tuner::CoinsState::default(),
+            coin_lists: tuner::CoinListsState::default(),
             time_profiles: None,
             time_slider: None,
             time_stats: LoadState::default(),
@@ -317,6 +408,7 @@ impl AnalyticsView {
             side: self.side,
             emulator: self.emu,
             strategies: Vec::new(),
+            attribute_liq: self.attr_liq,
         }
     }
 
@@ -337,6 +429,17 @@ impl AnalyticsView {
             self.busy_since = Some(std::time::Instant::now());
         }
     }
+    /// Raise a write failure where the user is looking, and log it.
+    ///
+    /// Shown until dismissed rather than for a few seconds: this is the difference between
+    /// "your strategies were changed" and "they were not", and it must not be possible to
+    /// miss by looking away.
+    pub(super) fn set_write_error(&mut self, msg: String, cx: &mut Context<Self>) {
+        log::warn!("analytics: {msg}");
+        self.write_error = Some(msg);
+        cx.notify();
+    }
+
     pub(super) fn op_finished(&mut self, cx: &mut Context<Self>) {
         self.busy_ops = self.busy_ops.saturating_sub(1);
         if self.busy_ops == 0 {
@@ -400,6 +503,15 @@ impl AnalyticsView {
         if self.tab == Tab::Strategies && self.strat_mode == tuner::StratMode::Time {
             self.reload_time(cx);
         }
+        // The "By coin" axis lives on the same scope (its "Fact vs v1" matrix included):
+        // mark it stale. It is NOT started here, unlike the other axes: it expands its coin
+        // lists against the base coin set that this very request is about to replace, so
+        // starting it now would plan against the PREVIOUS period's coins (or, on a first
+        // show, against none at all). It is armed from the completion handler below.
+        self.coins.invalidate();
+        // The list panels ride the same reload, so they are retired with it — otherwise a
+        // reply already in flight for the previous scope lands under the new heading.
+        self.coin_lists.invalidate();
         // Календарь зависит от тех же фильтров: помечаем устаревшим;
         // активной вкладке — пересчёт сразу, иначе при входе на неё.
         self.cal_dirty = true;
@@ -407,10 +519,17 @@ impl AnalyticsView {
             self.reload_calendar(cx);
         }
         let q = self.query();
+        let undated_q = q.clone();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            let data = executor
-                .spawn(async move { moon_core::db::analytics::summary(&q) })
+            let (data, undated) = executor
+                .spawn(async move {
+                    let d = moon_core::db::analytics::summary(&q);
+                    // Rides the same pass: it answers a question ABOUT this filter set, and
+                    // a second round trip would let the two disagree about which cores.
+                    let u = moon_core::db::analytics::undated_closes(&undated_q);
+                    (d, u)
+                })
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -425,9 +544,22 @@ impl AnalyticsView {
                         this.cores = d.cores.clone();
                     }
                     this.data.apply(data);
-                    // Детализация стратегии зависит от фильтров — перечитать.
-                    if this.sel_strategy.is_some() {
-                        this.reload_detail(cx);
+                    // A failed read leaves it unknown rather than "nothing missing": the
+                    // origin already logged why, and a silent zero here would be the very
+                    // thing this banner exists to stop.
+                    this.undated = undated.ok();
+                    // Observation channel only — see `probe_selects_strategy`. It adopts a
+                    // strategy, which starts the coin reload itself; the arm below is then
+                    // skipped so the two do not race two full passes over the same period.
+                    let probe_took_over = probe_selects_strategy() && this.probe_select_first(cx);
+                    // Now that the base coin set belongs to this scope, the coin axis can
+                    // plan against it.
+                    if !probe_took_over
+                        && this.tab == Tab::Strategies
+                        && this.strat_mode == tuner::StratMode::Coins
+                        && this.coins.needs_reload()
+                    {
+                        this.reload_coins(cx);
                     }
                     cx.notify();
                 });
@@ -436,8 +568,8 @@ impl AnalyticsView {
         .detach();
     }
 
-    // reload_detail → tuner/mod.rs; cal_query/cal_query_prev/reload_calendar →
-    // calendar/mod.rs (страничные пересчёты живут при своих страницах).
+    // cal_query/cal_query_prev/reload_calendar live in calendar/mod.rs — a page's
+    // recomputation belongs beside that page.
 
     fn set_period(&mut self, p: Period, window: &mut Window, cx: &mut Context<Self>) {
         // Повторный клик по активному пресету = ручное обновление данных
@@ -575,6 +707,8 @@ impl Render for AnalyticsView {
         // содержимое скроллится внутри) — внешнего скролла нет.
         let body_scrolls = false;
         let integrity = self.integrity_note(cx);
+        let undated = self.undated_note(cx);
+        let write_error = self.write_error.clone();
         let busy_overlay = self.busy_overlay_due(cx);
         v_flex()
             .size_full()
@@ -606,6 +740,42 @@ impl Render for AnalyticsView {
                         .child(MoonAlert::warning("an-integrity-banner", detail).title(title)),
                 )
             })
+            // A write that reached nobody. Above the undated note deliberately: that one is
+            // about numbers being incomplete, this one is about the user's strategies not
+            // having changed when they were told they had.
+            .when_some(write_error, |el, msg| {
+                el.child(
+                    div()
+                        .px(design::ui_px(cx, 10.0))
+                        .pb(design::ui_px(cx, 6.0))
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap(design::ui_px(cx, 6.0))
+                                .items_start()
+                                .child(
+                                    div().flex_1().min_w_0().child(
+                                        MoonAlert::error("an-write-error", msg)
+                                            .title(t!("analytics.write_failed_title").to_string()),
+                                    ),
+                                )
+                                .child(
+                                    moon_ui::MoonButton::new("an-write-error-x")
+                                        .variant(moon_ui::MoonButtonVariant::Ghost)
+                                        .size(moon_ui::MoonButtonSize::Micro)
+                                        .label(t!("analytics.write_failed_ok").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.write_error = None;
+                                            cx.notify();
+                                        }))
+                                        .render(),
+                                ),
+                        ),
+                )
+            })
+            // Money that is in NO figure on this window, plus the liquidation-attribution
+            // switch — one strip, always present: see `notice_strip`.
+            .child(self.notice_strip(undated, p, cx))
             .child(
                 div()
                     .id("analytics-body")

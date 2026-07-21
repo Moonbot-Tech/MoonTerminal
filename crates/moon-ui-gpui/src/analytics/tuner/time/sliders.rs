@@ -16,10 +16,10 @@ use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
-use super::super::AnalyticsView;
-use super::super::calendar::split_i18n;
+use super::super::super::AnalyticsView;
+use super::super::super::calendar::split_i18n;
 use super::grid::{CHECK_COL, NAME_COL};
-use super::time_state::{WEEK_MIN, fmt_min, fmt_week_ep, parse_moh, parse_time};
+use super::state::{WEEK_MIN, fmt_min, fmt_week_ep, parse_moh, parse_time};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::SliderProfiles;
@@ -131,7 +131,7 @@ fn handle_bar(frac: f32, p: MoonPalette, cx: &Context<AnalyticsView>) -> impl In
 
 impl AnalyticsView {
     /// Maximum of slider `field` in its own units (minute of week / of day / of hour).
-    pub(super) fn slider_max(field: usize) -> u16 {
+    pub(in crate::analytics::tuner) fn slider_max(field: usize) -> u16 {
         match field {
             0 => WEEK_MIN - 1,
             1 => 1439,
@@ -220,7 +220,7 @@ impl AnalyticsView {
     }
 
     /// Move the dragged edge (`is_from`) of slider `field` to `value`.
-    pub(super) fn slider_drag_to(
+    pub(in crate::analytics::tuner) fn slider_drag_to(
         &mut self,
         field: usize,
         is_from: bool,
@@ -246,7 +246,11 @@ impl AnalyticsView {
     }
 
     /// The block of three sliders below the row grid.
-    pub(super) fn time_sliders(&mut self, p: MoonPalette, cx: &mut Context<Self>) -> AnyElement {
+    pub(in crate::analytics::tuner) fn time_sliders(
+        &mut self,
+        p: MoonPalette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let prof = self.time_slider.clone();
         let mut col = v_flex()
             .w_full()
@@ -441,7 +445,10 @@ impl AnalyticsView {
     /// A transparent overlay over the whole 'By time' body for the duration of a slider
     /// drag: it catches mouse movement (even off the track) and the release. Drawn only
     /// while dragging.
-    pub(super) fn slider_drag_overlay(&self, cx: &Context<Self>) -> Option<AnyElement> {
+    pub(in crate::analytics::tuner) fn slider_drag_overlay(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
         self.slider_drag?;
         Some(
             div()

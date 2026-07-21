@@ -14,12 +14,55 @@ use std::cmp::Ordering;
 
 use super::super::AnalyticsView;
 use super::{
-    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND,
-    SORT_LASTEDIT, SORT_NAME, STRAT_COLS_ALL, StratMode, metric_bit, metric_cell,
+    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS,
+    SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_COLS_ALL, STRAT_NAME_MIN_W, StratMode,
+    metric_bit, metric_cell, sort_arrow_of, toggle_sort_key,
 };
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::GroupStat;
+
+/// "Which strategies name coins in a list?" — the list filter of the strategy table.
+///
+/// Its own enum rather than a pair of booleans: the three states are exclusive, and a
+/// `(bool, bool)` would admit a fourth that means nothing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::analytics) enum StratListFilter {
+    All,
+    /// Has at least one coin in its blacklist.
+    Black,
+    /// Has at least one coin in its whitelist.
+    White,
+}
+
+impl StratListFilter {
+    /// Does this strategy pass? Reads the counts the aggregate already carries, so the
+    /// filter and the two columns can never disagree about what "has a list" means.
+    fn keeps(self, g: &GroupStat) -> bool {
+        match self {
+            StratListFilter::All => true,
+            StratListFilter::Black => g.bl > 0,
+            StratListFilter::White => g.wl > 0,
+        }
+    }
+
+    /// Stable, locale-independent element key.
+    fn key(self) -> &'static str {
+        match self {
+            StratListFilter::All => "all",
+            StratListFilter::Black => "bl",
+            StratListFilter::White => "wl",
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            StratListFilter::All => t!("report.filter.all").to_string(),
+            StratListFilter::Black => t!("analytics.strat.with_bl").to_string(),
+            StratListFilter::White => t!("analytics.strat.with_wl").to_string(),
+        }
+    }
+}
 
 impl AnalyticsView {
     /// The strategy list after the filter bar (active-only, kind, name search) and the current
@@ -38,6 +81,16 @@ impl AnalyticsView {
                     && (q.is_empty() || g.name.to_lowercase().contains(&q))
             })
             .collect();
+        // The coin-list views need the strategies DB to say anything: without it every
+        // row reads bl = wl = 0, and filtering on that would present "we cannot see the
+        // lists" as "no strategy has one". Same shape as the active-only fallback below.
+        let base: Vec<&GroupStat> = if base.iter().any(|g| g.bl > 0 || g.wl > 0) {
+            base.into_iter()
+                .filter(|g| self.strat_lists.keeps(g))
+                .collect()
+        } else {
+            base
+        };
         // Apply active-only ONLY when aliveness is actually known (at least one row has it). If
         // every row is alive = None (strategies replica absent), the filter has nothing to go on
         // and would blank the list — so skip it. When alive IS known, filter normally; a genuinely
@@ -75,48 +128,43 @@ impl AnalyticsView {
         out
     }
 
+    /// The visible-column mask of the axis currently on screen.
+    pub(super) fn strat_cols(&self) -> u16 {
+        let mut cols = self.strat_cols;
+        *self.strat_mode.cols_slot(&mut cols)
+    }
+
     /// Is the column with visibility `bit` currently shown?
     pub(super) fn col_shown(&self, bit: u16) -> bool {
-        self.strat_cols & bit != 0
+        self.strat_cols() & bit != 0
     }
 
     /// Set the visible-column mask and PERSIST it (layout), so the choice survives restart —
-    /// same mechanism as the tuning period (`layout.analytics_strat_cols`).
+    /// same mechanism as the tuning period (`layout.analytics_strat_cols2`).
     fn set_strat_cols(&mut self, cols: u16, cx: &mut Context<Self>) {
-        if self.strat_cols == cols {
+        let mode = self.strat_mode;
+        if *mode.cols_slot(&mut self.strat_cols) == cols {
             return;
         }
-        self.strat_cols = cols;
+        *mode.cols_slot(&mut self.strat_cols) = cols;
+        let all = self.strat_cols;
         self.backend.update(cx, |b, _| {
-            b.layout.analytics_strat_cols = Some(cols);
+            b.layout.analytics_strat_cols_modes = Some(all);
             b.layout_dirty = true;
         });
         cx.notify();
     }
 
-    /// Click a column header: first click sorts descending, clicking the active column again
-    /// flips to ascending.
+    /// Click a column header — the shared rule (`toggle_sort_key`), so this table and the
+    /// coin table below it cannot disagree about what a click means.
     pub(super) fn toggle_sort(&mut self, key: &str, cx: &mut Context<Self>) {
-        let desc = match &self.strat_sort {
-            Some((k, d)) if k == key => !d,
-            _ => true,
-        };
-        self.strat_sort = Some((key.to_string(), desc));
+        toggle_sort_key(&mut self.strat_sort, key);
         cx.notify();
     }
 
     /// Sort arrow suffix for a header (`" ▼"`/`" ▲"`), or empty when this column isn't the key.
     pub(super) fn sort_arrow(&self, key: &str) -> &'static str {
-        match &self.strat_sort {
-            Some((k, d)) if k == key => {
-                if *d {
-                    " ▼"
-                } else {
-                    " ▲"
-                }
-            }
-            _ => "",
-        }
+        sort_arrow_of(&self.strat_sort, key)
     }
 
     /// Distinct strategy kinds present in the loaded list (sorted, for the type dropdown).
@@ -192,6 +240,7 @@ impl AnalyticsView {
                     .child(MoonInput::new("an-strat-search").state(&search).small()),
             )
             .child(self.strat_type_menu(cx))
+            .child(self.strat_lists_menu(cx))
             .child(
                 MoonCheckbox::new("an-strat-active")
                     .checked(self.strat_active_only)
@@ -256,12 +305,46 @@ impl AnalyticsView {
         menu
     }
 
+    /// Coin-list dropdown ("All" / has a blacklist / has a whitelist), between the type
+    /// selector and the "active only" toggle.
+    fn strat_lists_menu(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
+        let cur = self.strat_lists;
+        let view = cx.entity();
+        let mut menu = MoonDropdown::new("an-strat-lists")
+            .label(format!("{} ▾", cur.label()))
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Micro)
+            .trigger_width(design::font_w(cx, 96.0))
+            .menu_width(design::font_w(cx, 130.0))
+            .menu_size(MoonMenuSize::Compact);
+        for f in [
+            StratListFilter::All,
+            StratListFilter::Black,
+            StratListFilter::White,
+        ] {
+            let view = view.clone();
+            menu = menu.item(
+                // Keyed by the VARIANT, not the label: a localized key changes the
+                // element's identity when the language does.
+                MoonMenuItem::with_key(format!("lists-{}", f.key()), f.label())
+                    .checked(cur == f)
+                    .on_click(move |_, _, app| {
+                        view.update(app, |this, cx| {
+                            this.strat_lists = f;
+                            cx.notify();
+                        });
+                    }),
+            );
+        }
+        menu
+    }
+
     /// Visible-column selector (glyph "▦"); each item toggles a column bit, "All" toggles all.
     /// The menu stays open across clicks; the name column is always shown, so hiding every
     /// toggleable column is allowed (unlike Orders, which locks the last one).
     fn strat_column_menu(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let view = cx.entity();
-        let cur = self.strat_cols;
+        let cur = self.strat_cols();
         let mut menu = MoonDropdown::new("an-strat-cols")
             .segment(MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
@@ -276,7 +359,7 @@ impl AnalyticsView {
                 .checked(cur == STRAT_COLS_ALL)
                 .on_click(move |_, _, app| {
                     all_view.update(app, |this, cx| {
-                        let next = if this.strat_cols == STRAT_COLS_ALL {
+                        let next = if this.strat_cols() == STRAT_COLS_ALL {
                             0
                         } else {
                             STRAT_COLS_ALL
@@ -292,7 +375,7 @@ impl AnalyticsView {
                     .checked(cur & bit != 0)
                     .on_click(move |_, _, app| {
                         view.update(app, |this, cx| {
-                            let next = this.strat_cols ^ bit;
+                            let next = this.strat_cols() ^ bit;
                             this.set_strat_cols(next, cx);
                         });
                     }),
@@ -508,17 +591,27 @@ impl AnalyticsView {
             .child(
                 h_flex()
                     .flex_1()
-                    .min_w_0()
+                    // The floor belongs on the FLEX ITEM, not on the text inside it. On the
+                    // text it does nothing: the cluster still shrinks to zero, and the name
+                    // then paints outside its own box — straight over the type column, which
+                    // is what "the name runs under the type" was. Matching floor in the
+                    // header, or the heading drifts off the column it labels.
+                    .min_w(design::font_w_px(cx, STRAT_NAME_MIN_W))
                     .gap(design::ui_px(cx, 6.0))
                     .items_center()
                     .children(alive_dot)
                     // flex_1 is mandatory: a div with truncate() and no flex basis
                     // collapses to "…" (that is how strategy names used to vanish).
+                    // min_w_0 lets it truncate INSIDE the floor its parent now holds.
                     .child(div().flex_1().min_w_0().truncate().child(name.clone())),
             )
             .child(
                 h_flex()
-                    .flex_none()
+                    // Shrinkable, not rigid: the columns inside carry their own floors, so the
+                    // row squeezes them evenly and only overflows once every one is at its
+                    // floor — instead of sliding off the edge at full width.
+                    .flex_shrink_1()
+                    .min_w_0()
                     .gap(design::ui_px(cx, 8.0))
                     .items_center()
                     // Each identity/metric column renders only when its visibility bit is set
@@ -526,7 +619,8 @@ impl AnalyticsView {
                     .children(self.col_shown(COL_BIT_KIND).then(|| {
                         div()
                             .w(design::font_w_px(cx, 72.0))
-                            .flex_none()
+                            .min_w(design::font_w_px(cx, 48.0))
+                            .flex_shrink_1()
                             .truncate()
                             .text_size(design::t_caption(cx))
                             .text_color(moon(p.text_muted))
@@ -535,7 +629,8 @@ impl AnalyticsView {
                     .children(self.col_shown(COL_BIT_CORE).then(|| {
                         div()
                             .w(design::font_w_px(cx, 88.0))
-                            .flex_none()
+                            .min_w(design::font_w_px(cx, 56.0))
+                            .flex_shrink_1()
                             .truncate()
                             .text_color(moon(p.text_soft))
                             .child(core_label)
@@ -550,7 +645,8 @@ impl AnalyticsView {
                     .children(self.col_shown(COL_BIT_LASTEDIT).then(|| {
                         div()
                             .w(design::font_w_px(cx, LASTEDIT_W))
-                            .flex_none()
+                            .min_w(design::font_w_px(cx, LASTEDIT_MIN_W))
+                            .flex_shrink_1()
                             .truncate()
                             .text_size(design::t_caption(cx))
                             .text_color(moon(p.text_muted))
@@ -566,10 +662,17 @@ impl AnalyticsView {
                     this.select_single(key.clone(), name.clone(), cx);
                 }
             }));
+        // BLUE marks "this strategy traded the coin you clicked below" — an answer to a
+        // question, not a selection, so it never overrides the amber the user chose.
+        let traded_picked = self.coins.picked_strats.contains(&g.key);
         if is_anchor {
             row = row
                 .bg(moon_alpha(p.amber, 0.12))
                 .border_color(moon_alpha(p.amber, 0.5));
+        } else if traded_picked {
+            row = row
+                .bg(moon_alpha(p.blue, 0.16))
+                .border_color(moon_alpha(p.blue, 0.45));
         } else if is_extra {
             row = row
                 .bg(moon_alpha(p.amber, 0.06))
@@ -588,29 +691,34 @@ impl AnalyticsView {
     fn header_row(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement + use<> {
         let scale = design::font_scale(cx);
         // One clickable sort header. `w = None` → flexible (the name column).
-        let sortable =
-            |id: SharedString, title: String, key: &'static str, w: Option<f32>, right: bool| {
-                let arrow = self.sort_arrow(key);
-                let mut d = div()
-                    .id(id)
-                    .flex_none()
-                    .truncate()
-                    .cursor_pointer()
-                    .text_color(if arrow.is_empty() {
-                        moon(p.text_soft)
-                    } else {
-                        moon(p.amber)
-                    })
-                    .child(format!("{title}{arrow}"))
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_sort(key, cx)));
-                if right {
-                    d = d.text_right();
-                }
-                match w {
-                    Some(w) => d.w(px(w * scale)),
-                    None => d.flex_1().min_w_0(),
-                }
-            };
+        let sortable = |id: SharedString,
+                        title: String,
+                        key: &'static str,
+                        w: Option<(f32, f32)>,
+                        right: bool| {
+            let arrow = self.sort_arrow(key);
+            let mut d = div()
+                .id(id)
+                .flex_none()
+                .truncate()
+                .cursor_pointer()
+                .text_color(if arrow.is_empty() {
+                    moon(p.text_soft)
+                } else {
+                    moon(p.amber)
+                })
+                .child(format!("{title}{arrow}"))
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_sort(key, cx)));
+            if right {
+                d = d.text_right();
+            }
+            match w {
+                // Shrinks exactly like the body cell under it, floor included, or the
+                // heading drifts off the column it labels the moment space runs short.
+                Some((w, min)) => d.w(px(w * scale)).min_w(px(min * scale)).flex_shrink_1(),
+                None => d.flex_1().min_w(px(STRAT_NAME_MIN_W * scale)),
+            }
+        };
         h_flex()
             .w_full()
             .flex_none()
@@ -632,7 +740,8 @@ impl AnalyticsView {
             // Cluster of fixed columns — mirrors the rows (justify_between).
             .child(
                 h_flex()
-                    .flex_none()
+                    .flex_shrink_1()
+                    .min_w_0()
                     .gap(design::ui_px(cx, 8.0))
                     .items_center()
                     .children(self.col_shown(COL_BIT_KIND).then(|| {
@@ -640,7 +749,7 @@ impl AnalyticsView {
                             "an-hdr-kind".into(),
                             t!("analytics.col.kind").to_string(),
                             SORT_KIND,
-                            Some(72.0),
+                            Some((72.0, 48.0)),
                             false,
                         )
                     }))
@@ -649,7 +758,7 @@ impl AnalyticsView {
                             "an-hdr-core".into(),
                             t!("analytics.col.core").to_string(),
                             SORT_CORE,
-                            Some(88.0),
+                            Some((88.0, 56.0)),
                             false,
                         )
                     }))
@@ -663,7 +772,7 @@ impl AnalyticsView {
                                     c.key.into(),
                                     t!(c.key).to_string(),
                                     c.key,
-                                    Some(c.w),
+                                    Some((c.w, c.min_w)),
                                     true,
                                 )
                             }),
@@ -673,7 +782,7 @@ impl AnalyticsView {
                             "an-hdr-le".into(),
                             t!("analytics.col.lastedit").to_string(),
                             SORT_LASTEDIT,
-                            Some(LASTEDIT_W),
+                            Some((LASTEDIT_W, LASTEDIT_MIN_W)),
                             false,
                         )
                     })),
