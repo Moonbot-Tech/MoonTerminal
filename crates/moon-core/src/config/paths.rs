@@ -1,7 +1,6 @@
 //! Пути конфигов и пользовательских данных.
 //!
-//! - **Windows**: файлы лежат рядом с исполняемым файлом — переносимая сборка
-//!   (как было исторически).
+//! - **Windows**: файлы лежат рядом с исполняемым файлом — переносимая сборка.
 //! - **macOS / Linux**: файлы лежат в пользовательской writable-директории *вне*
 //!   бандла приложения, чтобы обновление (замена `.app` через DMG / пакета) не
 //!   удаляло ядра и настройки:
@@ -15,8 +14,8 @@
 //! `layout.toml`/`docks.json`/`detached.json`/`charts.json`) лежат в подпапке
 //! `cfg/` внутри `data_dir`. В корне остаются только секрет `servers.enc`, БД
 //! отчётов `reports.sqlite`, логи `logs/` и снимки конфига `backups/`
-//! (см. `config::backup`). Старые плоские файлы один раз переносятся в `cfg/`
-//! при старте (см. `migrate_flat_to_cfg`).
+//! (см. `config::backup`). Плоские файлы в корне при старте однократно переносятся в `cfg/`
+//! (см. `migrate_flat_to_cfg`).
 
 use std::path::PathBuf;
 
@@ -212,15 +211,14 @@ pub fn logs_dir() -> PathBuf {
     data_dir().join("logs")
 }
 
-/// Snapshot folder for the irreplaceable configuration files (see `config::backup`).
+/// Папка снимков невосстановимых файлов конфига (см. `config::backup`).
 ///
-/// Sits at the `data_dir` root beside `logs/` and `servers.enc`, NOT inside `cfg/` — a snapshot
-/// holds a copy OF `cfg/`, so nesting it there would make the next snapshot copy the previous one.
+/// Лежит в корне `data_dir` рядом с `logs/` и `servers.enc`, а НЕ внутри `cfg/`: снимок содержит
+/// копию файла ИЗ `cfg/`, поэтому вложение туда заставило бы следующий снимок копировать предыдущий.
 ///
-/// Deliberately does NOT create the directory, unlike [`cfg_dir`]: on Windows `data_dir` is the
-/// folder next to the exe, so every user would otherwise get an empty `backups/` there (often
-/// cloud-synced) even when no snapshot is ever taken. `config::backup` creates it lazily, and only
-/// once it actually has bytes to write.
+/// В отличие от [`cfg_dir`], намеренно НЕ создаёт каталог: на Windows `data_dir` — папка рядом с
+/// exe, часто синхронизируемая с облаком, и пустой `backups/` там не нужен до первого снимка.
+/// `config::backup` создаёт каталог лениво, только когда есть что записать.
 pub fn backups_dir() -> PathBuf {
     data_dir().join(BACKUPS_DIR_NAME)
 }
@@ -334,24 +332,22 @@ pub fn migrate_flat_to_cfg() {
 
 #[cfg(test)]
 mod tests {
-    //! Guards on the one-time migration lists.
+    //! Проверки списков одноразовой миграции.
 
     use super::{BACKUPS_DIR_NAME, CFG_FILES, ROOT_FILES};
 
-    /// Neither migration list may name the snapshot DIRECTORY.
+    /// Ни один список миграции не должен содержать КАТАЛОГ снимков.
     ///
-    /// `migrate_bundle_data` and `migrate_flat_to_cfg` walk their lists with `fs::copy` and
-    /// `fs::rename`. Neither recurses, but neither refuses a directory either: on Windows
-    /// `fs::rename(data_dir/backups, cfg/backups)` succeeds and moves the whole snapshot tree
-    /// somewhere `backups_dir()` never looks again — every backup the user has would silently
-    /// disappear on the next launch.
+    /// `migrate_bundle_data` и `migrate_flat_to_cfg` обходят списки через `fs::copy` и
+    /// `fs::rename`. Они не рекурсируют, но и не отвергают каталог: на Windows
+    /// `fs::rename(data_dir/backups, cfg/backups)` успешно перенесёт всё дерево туда, где
+    /// `backups_dir()` его не ищет, и снимки пропадут из приложения.
     ///
-    /// The plausible edit this catches: someone notices `settings.toml.bak` already in
-    /// `CFG_FILES`, concludes that "backups belong with the other backup-ish entries", and adds
-    /// `"backups"`. It compiles, and the damage only shows up on a machine that HAS snapshots.
+    /// Возможная поломка: увидеть `settings.toml.bak` в `CFG_FILES` и добавить рядом `"backups"`.
+    /// Это компилируется, а ущерб проявляется только на машине, где снимки уже есть.
     ///
-    /// The oracle is `BACKUPS_DIR_NAME` itself — the same constant `backups_dir()` builds the
-    /// path from — so the test cannot drift away from the real folder name.
+    /// Оракул — сам `BACKUPS_DIR_NAME`, из которого `backups_dir()` строит путь, поэтому тест не
+    /// может разойтись с настоящим именем каталога.
     #[test]
     fn the_migration_lists_never_carry_the_backup_directory() {
         for (label, list) in [("ROOT_FILES", ROOT_FILES), ("CFG_FILES", CFG_FILES)] {

@@ -1,5 +1,5 @@
-//! Persist settings drafts and apply saved presentation, logging, market, session, and window
-//! changes at their appropriate boundaries.
+//! Сохранение черновика Настроек и применение изменений представления, логов, рынка, сессий
+//! и окон на соответствующих границах.
 
 use std::collections::HashSet;
 
@@ -10,22 +10,23 @@ use super::SettingsView;
 use moon_core::config::{AppConfig, SnapshotOutcome};
 
 impl SettingsView {
-    /// Validate and persist the draft, then apply it without closing the settings window.
+    /// Проверить и сохранить черновик, затем применить его, не закрывая окно Настроек.
     ///
-    /// A failed save leaves both the active config and draft unchanged.
+    /// Неудачное сохранение не меняет ни активный конфиг, ни черновик.
     pub(super) fn save(&mut self, cx: &mut Context<Self>) {
-        // Compare the persisted candidate with this snapshot to choose live updates and rebuilds.
+        // Сравниваем сохранённого кандидата с этим снимком, чтобы выбрать живые обновления
+        // и необходимые пересборки.
         let before = self.backend.read(cx).config.clone();
         let res = self.backend.update(cx, |b, _| {
-            // Commit the candidate only after validation and I/O succeed; otherwise config
-            // would change without the matching session/window reconciliation.
+            // Коммитим кандидата только после успешных валидации и I/O, иначе конфиг изменился бы
+            // без соответствующего реконсайла сессий и окон.
             let mut candidate = b.preview.as_ref().unwrap_or(&b.config).clone();
-            // Snapshots the previous on-disk files into `backups/` first: this is a deliberate
-            // user save, the one place a rollback is worth keeping.
+            // Сначала сохраняем предыдущие файлы с диска в `backups/`: это осознанное сохранение
+            // пользователя, для которого нужна возможность отката.
             let res = candidate.save_with_snapshot();
             if res.is_ok() {
-                // Copy save-time uid normalization back to the draft so a later save cannot
-                // roll back `next_uid` or reuse an identity tied to reports.sqlite history.
+                // Возвращаем нормализацию uid из сохранения в черновик, чтобы следующий save не
+                // откатил `next_uid` и не переиспользовал id из истории reports.sqlite.
                 if let Some(p) = b.preview.as_mut() {
                     *p = candidate.clone();
                 }
@@ -35,9 +36,8 @@ impl SettingsView {
         });
         match res {
             Ok(outcome) => {
-                // A failed snapshot does NOT fail the save — but reporting a bare "saved" would
-                // claim a rollback copy exists when it does not, which is exactly the moment the
-                // user would rely on it.
+                // Провал снимка НЕ отменяет save, но обычное «сохранено» обещало бы несуществующую
+                // копию для отката именно тогда, когда пользователь рассчитывает на неё.
                 let snapshot_failed = outcome == SnapshotOutcome::Failed;
                 let msg = if snapshot_failed {
                     super::StatusMsg::Key("settings.saved_no_backup")
@@ -52,25 +52,25 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Apply saved settings at the narrowest boundary each setting requires.
+    /// Применить сохранённые настройки на самой узкой требуемой границе.
     ///
-    /// Presentation, logging, and market-mode changes apply live. Structural server or group
-    /// changes reconcile sessions, while chart topology changes rebuild group windows.
+    /// Представление, логирование и режим рынка меняются живьём. Структурные изменения серверов
+    /// или групп реконсайлят сессии, а изменения топологии чартов пересобирают окна групп.
     fn apply_settings(&mut self, before: &AppConfig, cx: &mut Context<Self>) {
         let after = self.backend.read(cx).config.clone();
 
-        // Presentation settings are read at render time; update locale/order state and redraw
-        // without rebuilding windows or sessions.
+        // Настройки представления читаются при рендере: обновляем локаль/порядок и перерисовываем,
+        // не пересоздавая окна и сессии.
         let lang_changed = before.language != after.language;
         let sort_changed = before.core_sort != after.core_sort;
         if lang_changed {
             rust_i18n::set_locale(after.language.code());
         }
         if lang_changed || sort_changed {
-            // Notify Backend before redraw so signature-gated panels re-evaluate their order.
+            // Уведомляем Backend до перерисовки, чтобы панели с сигнатурным гейтом пересчитали порядок.
             self.backend.update(cx, |b, bcx| {
-                // A sort change can replace the canonical first core while the cached one
-                // remains live, so bypass the normal liveness-based early return.
+                // Смена порядка может заменить каноническое первое ядро при живом кэшированном,
+                // поэтому обходим обычный ранний выход по liveness.
                 if sort_changed {
                     b.refresh_header_ticker_default(true);
                 }

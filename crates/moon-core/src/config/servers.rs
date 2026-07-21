@@ -116,26 +116,25 @@ pub struct ServerConfig {
     pub default_alert_strategy: u64,
 }
 
-/// How every core list in the app is ordered, chosen once by the user in Settings.
+/// Порядок всех списков ядер в приложении, выбранный пользователем в Настройках.
 ///
-/// The stored choice is global; the UI crate's `core_order` module performs the ranking.
+/// Выбор хранится глобально; ранжирование выполняет модуль `core_order` UI-крейта.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CoreSortMode {
-    /// Lexicographic order of lowercase Unicode names, with uid as a tie-breaker.
+    /// Лексикографически по Unicode-именам в нижнем регистре, с uid для разрешения равенства.
     #[default]
     Name,
-    /// Insertion order, oldest first (by `ServerConfig::uid`).
+    /// По порядку добавления, сначала старые (по `ServerConfig::uid`).
     AddedOldest,
-    /// Insertion order, newest first (by `ServerConfig::uid`).
+    /// По порядку добавления, сначала новые (по `ServerConfig::uid`).
     AddedNewest,
 }
 
 impl CoreSortMode {
-    /// Stable on-disk code.
+    /// Стабильный код для `settings.toml`.
     ///
-    /// `AddedOldest` keeps the older `"added"` code on purpose: that mode already meant
-    /// oldest-first, so every user who selected it keeps exactly what they selected. Only the
-    /// variant name changed, to state the direction now that there are two.
+    /// `AddedOldest` намеренно сериализуется как `"added"`: это закреплённое значение формата,
+    /// которое означает порядок добавления от старых к новым.
     pub fn code(self) -> &'static str {
         match self {
             CoreSortMode::Name => "name",
@@ -144,13 +143,10 @@ impl CoreSortMode {
         }
     }
 
-    /// Parse an on-disk code; `None` for anything unrecognized.
+    /// Разобрать код из `settings.toml`; неизвестный код возвращает `None`.
     ///
-    /// `"manual"` was retired together with the drag-and-drop editor and is deliberately NOT
-    /// mapped here: an unrecognized code falls through `Deserialize` to `Default` (= `Name`),
-    /// which is the intended landing spot. Mapping it onto `"added"` to "approximate" what the
-    /// user used to see would be arbitrary rather than conservative — the servers Vec order that
-    /// `"manual"` referred to is no longer a sort key anywhere.
+    /// Неизвестные значения намеренно не приближаются к одному из режимов по содержимому:
+    /// `Deserialize` консервативно сводит их к `Default` (= `Name`).
     pub fn from_code(s: &str) -> Option<Self> {
         match s {
             "name" => Some(CoreSortMode::Name),
@@ -162,50 +158,62 @@ impl CoreSortMode {
 }
 
 impl Serialize for CoreSortMode {
-    /// Serialize the stable lowercase code used in `settings.toml`.
+    /// Сериализовать стабильный строчный код для `settings.toml`.
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(self.code())
     }
 }
 
 impl<'de> Deserialize<'de> for CoreSortMode {
-    /// Default any unrecognized value so this cosmetic field cannot reject server metadata.
+    /// Свести неизвестную строку, i64/u64/f64/bool/unit, последовательность или map к дефолту.
+    ///
+    /// Эти формы покрываются явно, чтобы косметическое поле не отвергало остальные настройки;
+    /// прочие формы данных обрабатываются стандартным отказом `serde::de::Visitor`.
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        /// Посетитель форм TOML, для которых задан безопасный дефолт режима сортировки.
         struct AnyScalar;
 
         impl<'de> serde::de::Visitor<'de> for AnyScalar {
             type Value = CoreSortMode;
 
+            /// Описать допустимые строковые коды для диагностик serde.
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str("a core sort mode (name / added / added_newest)")
             }
 
+            /// Разобрать строковый код, сводя неизвестный к дефолту.
             fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
                 Ok(CoreSortMode::from_code(v).unwrap_or_default())
             }
 
-            // Invalid scalar values affect only this cosmetic field.
+            // Недопустимые скалярные значения затрагивают только это косметическое поле.
+            /// Свести знаковое 64-битное число к дефолту.
             fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
                 Ok(CoreSortMode::default())
             }
 
+            /// Свести беззнаковое 64-битное число к дефолту.
             fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
                 Ok(CoreSortMode::default())
             }
 
+            /// Свести число с плавающей точкой к дефолту.
             fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
                 Ok(CoreSortMode::default())
             }
 
+            /// Свести логическое значение к дефолту.
             fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
                 Ok(CoreSortMode::default())
             }
 
+            /// Свести unit/null к дефолту.
             fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
                 Ok(CoreSortMode::default())
             }
 
-            // Drain invalid containers before defaulting so deserialization stays synchronized.
+            // Вычитываем недопустимый контейнер целиком, чтобы десериализация не рассинхронизировалась.
+            /// Вычитать последовательность целиком и вернуть дефолт.
             fn visit_seq<A: serde::de::SeqAccess<'de>>(
                 self,
                 mut seq: A,
@@ -214,6 +222,7 @@ impl<'de> Deserialize<'de> for CoreSortMode {
                 Ok(CoreSortMode::default())
             }
 
+            /// Вычитать map целиком и вернуть дефолт.
             fn visit_map<A: serde::de::MapAccess<'de>>(
                 self,
                 mut map: A,
@@ -299,12 +308,12 @@ pub fn default_log_retention_days() -> u32 {
 
 #[cfg(test)]
 mod core_sort_parse_tests {
-    //! Resilient parsing tests for the global core-order setting.
+    //! Проверки устойчивого разбора глобальной настройки порядка ядер.
 
     use super::CoreSortMode;
     use serde::Deserialize;
 
-    /// Minimal enclosing settings shape used to prove sibling data survives parsing.
+    /// Минимальная оболочка настроек для проверки сохранности соседнего поля при разборе.
     #[derive(Deserialize)]
     struct Probe {
         #[serde(default)]
@@ -313,8 +322,8 @@ mod core_sort_parse_tests {
         keep: String,
     }
 
-    /// Protects `CoreSortMode::deserialize`: invalid words and types must default only this
-    /// field while preserving the rest of `SettingsFile`.
+    /// Проверяет `CoreSortMode::deserialize`: неверное слово или тип сбрасывает только это поле,
+    /// сохраняя остальные данные `SettingsFile`.
     #[test]
     fn a_bad_core_sort_value_never_costs_the_rest_of_the_file() {
         for bad in [
@@ -333,15 +342,10 @@ mod core_sort_parse_tests {
         }
     }
 
-    /// A settings file still holding the retired `"manual"` must land on the new default.
+    /// Неподдерживаемый код режима сводится к `Name`, не затрагивая соседние поля.
     ///
-    /// The plausible edit this catches: someone adds `"manual" => Some(CoreSortMode::AddedOldest)`
-    /// to `from_code`, reasoning that insertion order "is closer to what the user used to see".
-    /// It compiles, it is silent, and it contradicts the shipped decision — the Vec order that
-    /// `"manual"` meant is no longer a sort key, so insertion order is not an approximation of
-    /// it, just a different arbitrary answer.
-    ///
-    /// The sibling field pins the other half: a retired value must cost only its own field.
+    /// Возможная поломка: добавить особое отображение неизвестного кода в один из режимов
+    /// добавления. Это дало бы произвольный результат вместо консервативного дефолта.
     #[test]
     fn a_retired_manual_setting_lands_on_the_new_default() {
         let probe: Probe = toml::from_str("core_sort = \"manual\"\nkeep = \"server meta\"\n")
@@ -350,14 +354,11 @@ mod core_sort_parse_tests {
         assert_eq!(probe.keep, "server meta");
     }
 
-    /// The on-disk codes are FROZEN wire values, not free-form identifiers.
+    /// Коды на диске — закреплённые значения формата, а не свободные идентификаторы.
     ///
-    /// The round-trip test below cannot catch this: it feeds `code()`'s own output back in, so
-    /// renaming a code in BOTH `code()` and `from_code()` keeps it green. That rename is the
-    /// actual data loss — `AddedOldest` deliberately keeps the legacy `"added"` string so that
-    /// users who chose insertion order keep it, and every existing `settings.toml` carrying
-    /// `"added"` would silently fall back to `Name` if it were renamed to, say,
-    /// `"added_oldest"`. These literals are the only thing pinning that decision.
+    /// Проверка round-trip ниже этого не ловит: она подаёт результат `code()` обратно в
+    /// `from_code()`, поэтому синхронное изменение обеих сторон останется зелёным, но существующий
+    /// `"added"` на диске начнёт сводиться к `Name`. Эти литералы независимо фиксируют контракт.
     #[test]
     fn the_on_disk_codes_are_frozen() {
         assert_eq!(CoreSortMode::Name.code(), "name");
@@ -365,7 +366,7 @@ mod core_sort_parse_tests {
         assert_eq!(CoreSortMode::AddedNewest.code(), "added_newest");
     }
 
-    /// Protects the valid-code mapping used by `CoreSortMode` serialization.
+    /// Проверяет отображение допустимых кодов, используемое сериализацией `CoreSortMode`.
     #[test]
     fn every_mode_round_trips_through_its_code() {
         for mode in [

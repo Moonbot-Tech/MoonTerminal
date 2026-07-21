@@ -25,11 +25,11 @@ pub fn now_unix_ms_i64() -> i64 {
         .unwrap_or(0)
 }
 
-/// Days since the unix epoch -> `(year, month, day)` in the proleptic Gregorian calendar (UTC).
+/// Перевести дни от unix epoch в `(год, месяц, день)` пролептического григорианского календаря.
 ///
-/// Howard Hinnant's civil-from-days algorithm. The one copy in this crate: `db::fmt_unix*`,
-/// `strat_db::stats::short_date` and `config::backup` all route through it, so a date rendered in
-/// a report, a strategy version label and a backup folder name cannot disagree.
+/// Алгоритм civil-from-days Говарда Хиннанта, единственная копия в крейте. Через неё работают
+/// `db::fmt_unix*`, `strat_db::stats::short_date` и `config::backup`, поэтому дата в отчёте,
+/// подписи версии стратегии и имени папки снимка не расходится.
 pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -43,25 +43,25 @@ pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// Lowest stamp `utc_stamp_compact` will emit — the clamp for a pre-year-0 timestamp.
+/// Нижняя метка `utc_stamp_compact` для времени до года 0.
 const STAMP_MIN: &str = "00000101-000000";
-/// Highest stamp `utc_stamp_compact` will emit — the clamp for a post-year-9999 timestamp.
+/// Верхняя метка `utc_stamp_compact` для времени после года 9999.
 const STAMP_MAX: &str = "99991231-235959";
 
-/// unix-ms -> `YYYYMMDD-HHMMSS` in UTC: a filename-legal, fixed-width timestamp.
+/// Преобразовать unix-мс в допустимую для имени файла UTC-метку `YYYYMMDD-HHMMSS`.
 ///
-/// Two properties callers depend on, both load-bearing for `config::backup`:
-/// - **Filename-legal on Windows**, which forbids `:` — so no `HH:MM:SS` form can be used.
-/// - **Lexicographic order equals chronological order**, because the output is fixed-width,
-///   zero-padded and most-significant-first. That is what lets snapshot pruning sort by NAME and
-///   never consult mtime (which a file copy or a cloud sync can rewrite).
+/// Два свойства обязательны для `config::backup`:
+/// - **Допустимость в Windows**, где `:` запрещён, поэтому форма `HH:MM:SS` не подходит.
+/// - **Лексикографический порядок равен хронологическому** благодаря фиксированной ширине,
+///   ведущим нулям и старшим компонентам слева. Поэтому чистка сортирует снимки по ИМЕНИ,
+///   не используя mtime, который меняют копирование и облачная синхронизация.
 ///
-/// UTC rather than local time on purpose: local time runs BACKWARDS for an hour at a DST
-/// fall-back, which would break the ordering property once a year.
+/// Используется UTC, а не локальное время: при переходе с летнего времени локальные часы идут
+/// назад на час и нарушают порядок.
 ///
-/// Supported range is years 0000-9999. `{y:04}` is a MINIMUM width, not a fixed one, so a year
-/// outside that range would change the string LENGTH and silently destroy both properties above;
-/// such timestamps clamp to a boundary stamp instead of emitting a malformed name.
+/// Поддерживаются годы 0000-9999. `{y:04}` задаёт минимальную, а не фиксированную ширину, поэтому
+/// год за пределами диапазона изменил бы ДЛИНУ строки и нарушил оба свойства. Такое время
+/// прижимается к граничной метке вместо выдачи неверного имени.
 pub fn utc_stamp_compact(ms: i64) -> String {
     let secs = ms.div_euclid(1000);
     let days = secs.div_euclid(86_400);
@@ -79,17 +79,15 @@ pub fn utc_stamp_compact(ms: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    //! Contract for the compact UTC stamp used to name backup snapshots.
+    //! Контракт компактной UTC-метки для имён папок снимков.
 
     use super::{utc_stamp_compact, STAMP_MAX, STAMP_MIN};
 
-    /// The stamp must be fixed-width with the separator at a fixed offset.
+    /// Метка имеет фиксированную ширину и разделитель на фиксированной позиции.
     ///
-    /// Protects the layout against the plausible edit: someone reformats this to the
-    /// human-readable `DD.MM.YYYY_HH-MM-SS` used elsewhere in the app (`analytics/period.rs`,
-    /// `analytics/toolbar.rs`) because it reads nicer in a folder listing. That form is
-    /// day-major, so snapshot pruning — which sorts by name — would start deleting by day of
-    /// month rather than by date.
+    /// Возможная поломка: перейти ради читаемости на `DD.MM.YYYY_HH-MM-SS`, используемый в
+    /// `analytics/period.rs` и `analytics/toolbar.rs`. В нём первым идёт день, поэтому чистка по
+    /// имени начала бы удалять по числу месяца, а не по дате.
     #[test]
     fn the_stamp_is_fixed_width_with_the_separator_at_a_fixed_offset() {
         for ms in [0_i64, 1, 1_753_100_000_000, 4_102_444_800_000] {
@@ -105,36 +103,33 @@ mod tests {
         }
     }
 
-    /// The epoch renders as a known constant, pinning the calendar conversion itself.
+    /// Unix epoch отображается известной константой, фиксируя и календарное преобразование.
     ///
-    /// The oracle is independent of this code: 1970-01-01T00:00:00Z is the definition of the
-    /// unix epoch, not a value read back from the function.
+    /// Оракул независим от кода: 1970-01-01T00:00:00Z — определение unix epoch, а не значение,
+    /// прочитанное обратно из функции.
     #[test]
     fn the_epoch_renders_as_the_start_of_1970() {
         assert_eq!(utc_stamp_compact(0), "19700101-000000");
     }
 
-    /// Sorting stamps as STRINGS must equal sorting the instants they came from.
+    /// Сортировка меток как СТРОК совпадает с сортировкой исходных моментов времени.
     ///
-    /// This is the property snapshot pruning relies on to keep the newest N.
+    /// На этом свойстве чистка снимков оставляет новейшие N.
     ///
-    /// The instants are chosen so the DAY-OF-MONTH DECREASES across the boundary
-    /// (31 Jan -> 1 Feb). That is what makes the test discriminating: where the day number
-    /// increases, a day-major format like `DD.MM.YYYY_HH-MM-SS` — the one used elsewhere in
-    /// this app, and therefore the likely copy-paste — still happens to sort correctly, and
-    /// the test would pass a broken build. Across this boundary it yields
-    /// `31.01.2026` > `01.02.2026` and reddens. Dropping the zero-padding reverses the same
-    /// pair, so that mutation is covered too.
+    /// Моменты выбраны так, чтобы ЧИСЛО МЕСЯЦА уменьшалось на границе (31 янв -> 1 фев).
+    /// Это отличает форматы: при росте числа `DD.MM.YYYY_HH-MM-SS` случайно сортируется верно,
+    /// а здесь даёт `31.01.2026` > `01.02.2026` и красит тест. Удаление ведущих нулей также
+    /// разворачивает эту пару.
     #[test]
     fn string_order_matches_chronological_order_across_a_month_boundary() {
-        // 2026-01-31 12:00:00Z, then the next day.
+        // 2026-01-31 12:00:00Z, затем следующий день.
         let jan31 = 1_769_860_800_000_i64;
         let feb01 = jan31 + 86_400_000;
 
         let a = utc_stamp_compact(jan31);
         let b = utc_stamp_compact(feb01);
 
-        // Pins the conversion too, so a mis-computed fixture cannot satisfy the ordering by luck.
+        // Фиксирует и преобразование, чтобы ошибочная фикстура не прошла проверку случайно.
         assert_eq!(a, "20260131-120000");
         assert_eq!(b, "20260201-120000");
         assert!(
@@ -143,11 +138,10 @@ mod tests {
         );
     }
 
-    /// A timestamp outside years 0000-9999 must clamp, never emit a different-length name.
+    /// Время вне годов 0000-9999 прижимается к границе, не меняя длину имени.
     ///
-    /// A 16-char name would be rejected by the snapshot reader and would sort wrongly against
-    /// every 15-char sibling; a negative year would emit a leading `-`, which sorts BEFORE every
-    /// digit and would make the oldest-looking entry the newest.
+    /// Имя из 16 символов отвергается читателем снимков и неверно сортируется рядом с 15-символьным;
+    /// отрицательный год добавляет ведущий `-`, который идёт ДО цифр и делает старую запись новой.
     #[test]
     fn a_year_outside_the_supported_range_clamps_instead_of_changing_width() {
         assert_eq!(utc_stamp_compact(i64::MIN / 2), STAMP_MIN);

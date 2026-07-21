@@ -109,9 +109,9 @@ impl CoreOrder {
 
     /// Order rows that came from the reports database, whose names are the DB's own.
     ///
-    /// Database-only cores (their server was deleted) share the `u32::MAX` rank `rank` hands
-    /// out for anything the config does not know, so they land after every configured core and
-    /// keep the order the query returned them in — `sort_by_key` is a STABLE sort.
+    /// Database-only cores whose server is absent from the current config share the `u32::MAX`
+    /// rank `rank` hands out for anything unknown, so they land after every configured core and
+    /// keep the query order — `sort_by_key` is a STABLE sort.
     pub(crate) fn from_db(&self, mut rows: Vec<(CoreId, String)>) -> OrderedCores {
         rows.sort_by_key(|(id, _)| self.rank(*id));
         OrderedCores(rows)
@@ -163,8 +163,8 @@ mod tests {
         }
     }
 
-    /// Cores that only exist in `reports.sqlite` (their server was deleted) must land AFTER
-    /// every configured core and keep the order the query returned them in.
+    /// Cores that exist only in `reports.sqlite`, not in the current config, must land AFTER every
+    /// configured core and keep the order the query returned them in.
     ///
     /// Protects `CoreOrder::from_db` on two counts: unknown cores must rank LAST (giving them
     /// rank 0 instead of `u32::MAX` floats deleted cores above every configured one in the

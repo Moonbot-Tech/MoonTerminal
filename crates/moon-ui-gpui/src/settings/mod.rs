@@ -107,7 +107,7 @@ const MODE_LABELS: [(&str, MarketDataMode); 2] = [
     ("conn.market_percore", MarketDataMode::PerCore),
 ];
 
-/// Labels and values for the global core-order selector.
+/// Подписи и значения глобального селектора порядка ядер.
 const CORE_SORT_LABELS: [(&str, CoreSortMode); 3] = [
     ("conn.core_sort.name", CoreSortMode::Name),
     ("conn.core_sort.added", CoreSortMode::AddedOldest),
@@ -141,7 +141,7 @@ pub struct SettingsView {
     lang: Entity<MoonSelectState<Language>>,
     /// Выпадающий выбор источника данных (вкладка «Подключения»).
     mode: Entity<MoonSelectState<MarketDataMode>>,
-    /// Core-order selector shared by every core list on the Connections tab.
+    /// Селектор порядка, общий для всех списков ядер на вкладке «Подключения».
     core_sort: Entity<MoonSelectState<CoreSortMode>>,
     /// Какие блоки-линии раскрыты (вкладка «Линии», порт CollapsingHeader).
     open_lines: HashSet<&'static str>,
@@ -197,6 +197,7 @@ impl SettingsView {
             }))
     }
 
+    /// Построить состояние окна Настроек и синхронизированные селекторы из текущего черновика.
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let iface = interface::build(&backend, window, cx);
         let lines = lines::build(&backend, window, cx);
@@ -280,7 +281,7 @@ impl SettingsView {
         )
         .detach();
 
-        // One ordering mode drives every core list.
+        // Один режим порядка управляет всеми списками ядер.
         let core_sort_items = CORE_SORT_LABELS
             .iter()
             .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
@@ -359,6 +360,7 @@ impl SettingsView {
     }
 }
 
+/// Хеш настроек, изменение которых требует обновить editor-state открытого окна.
 fn settings_sig(b: &Backend) -> u64 {
     let cfg = b.preview.as_ref().unwrap_or(&b.config);
     let mut h = DefaultHasher::new();

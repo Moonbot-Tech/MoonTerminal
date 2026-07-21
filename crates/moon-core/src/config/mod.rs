@@ -125,9 +125,9 @@ pub struct AppConfig {
     pub ui_scale: f32,
     /// Множитель RAM-budget для retained market history. 100 = авто-база, 800 = 8x.
     pub chart_memory_percent: u16,
-    /// How every core list in the app is ordered (settings.toml). Default `Name`.
+    /// Порядок всех списков ядер в приложении (settings.toml). Дефолт — `Name`.
     pub core_sort: CoreSortMode,
-    /// Next uid high-water mark loaded from `SettingsFile::next_uid`.
+    /// Верхняя граница следующего uid из `SettingsFile::next_uid`.
     pub next_uid: u64,
     /// Горячие клавиши терминала (settings.toml, открытый формат).
     pub hotkeys: HotkeysConfig,
@@ -154,6 +154,10 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    /// Загрузить и объединить секреты серверов, настройки и отдельные UI-конфиги.
+    ///
+    /// Статус чтения `settings.toml` вычисляется до выбора ветки загрузки, чтобы любой путь
+    /// построения выставлял `settings_unreadable` и запрещал опасную обратную запись.
     pub fn load() -> anyhow::Result<Self> {
         // macOS/Linux: при первом запуске после переезда хранилища перенести
         // конфиги из бандла (рядом с exe) в пользовательскую директорию данных.
@@ -265,8 +269,8 @@ impl AppConfig {
             cfg.ui_font_delta = schema::default_ui_font_delta();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
-            // Same reason as the fresh-config path: schema default `true`, derived `Default`
-            // `false`, and the `save()` below would persist whichever one wins.
+            // Как и в ветке свежего конфига: serde-дефолт равен `true`, производный `Default` —
+            // `false`, а `save()` ниже запишет победившее значение.
             cfg.separate_control_zones = servers::default_true();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
@@ -293,8 +297,8 @@ impl AppConfig {
             cfg.ui_font_delta = schema::default_ui_font_delta();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
-            // Same reason as the fresh-config path: schema default `true`, derived `Default`
-            // `false`, and the `save()` below would persist whichever one wins.
+            // Как и в ветке свежего конфига: serde-дефолт равен `true`, производный `Default` —
+            // `false`, а `save()` ниже запишет победившее значение.
             cfg.separate_control_zones = servers::default_true();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
@@ -324,10 +328,10 @@ impl AppConfig {
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             hotkeys: hotkeys_file.unwrap_or_default(),
-            // Listed explicitly, unlike its `..Self::default()` neighbours, because its schema
-            // default is `true`: the derived `Default` would hand back `false` and the first
-            // settings save would persist that, silently inverting control zones on a fresh
-            // install. Every other field this struct update covers defaults to zero anyway.
+            // Указано явно, в отличие от соседей под `..Self::default()`, потому что serde-дефолт
+            // равен `true`: производный `Default` вернул бы `false`, и первое сохранение настроек
+            // молча инвертировало бы зоны управления. Остальные поля этого обновления структуры
+            // всё равно имеют нулевые дефолты.
             separate_control_zones: servers::default_true(),
             // Файлов ядер нет, но settings.toml может существовать и не читаться — тогда
             // писать поверх него нельзя и на этой ветке.
@@ -561,11 +565,11 @@ impl AppConfig {
             UiThemeMode::default(),
             schema::default_ui_scale(),
             schema::default_chart_memory_percent(),
-            // Sort mode is presentation-only. The servers Vec order stays in this signature
-            // because `SessionManager::config_order` is built from it and decides where a
-            // reactivated session lands — a session-layer concern, not a presentation one.
+            // Режим сортировки относится только к представлению. Порядок Vec серверов остаётся в
+            // сигнатуре: из него строится `SessionManager::config_order`, который определяет место
+            // повторно активированной сессии, то есть влияет уже на слой сессий.
             CoreSortMode::default(),
-            // The uid counter advances on save; it describes no structure of its own.
+            // Счётчик uid растёт при сохранении и сам по себе структуру не описывает.
             0,
         );
         let a = toml::to_string(&sf).unwrap_or_default();
@@ -595,7 +599,7 @@ mod structural_sig_tests {
 
     use super::{AppConfig, CoreSortMode, ServerConfig};
 
-    /// Build an `AppConfig` with the selected order and servers.
+    /// Построить `AppConfig` с выбранным порядком и серверами.
     fn config(mode: CoreSortMode, servers: Vec<ServerConfig>) -> AppConfig {
         AppConfig {
             servers,
@@ -604,7 +608,7 @@ mod structural_sig_tests {
         }
     }
 
-    /// Build a minimal server fixture.
+    /// Построить минимальную фикстуру сервера.
     fn server(id: u64, name: &str) -> ServerConfig {
         ServerConfig {
             id,
@@ -614,8 +618,8 @@ mod structural_sig_tests {
         }
     }
 
-    /// Protects `AppConfig::structural_sig`: a presentation-only sort change must not
-    /// reconnect cores or rebuild group windows.
+    /// Проверяет `AppConfig::structural_sig`: смена сортировки представления не должна
+    /// переподключать ядра или пересобирать окна групп.
     #[test]
     fn changing_only_the_sort_mode_is_not_structural() {
         let servers = vec![server(1, "Alpha"), server(2, "Bravo")];
@@ -628,9 +632,9 @@ mod structural_sig_tests {
         );
     }
 
-    /// Protects `AppConfig::structural_sig`: reordering the servers Vec remains structural
-    /// because `SessionManager::config_order` is built from that order and decides where a
-    /// reactivated session is inserted.
+    /// Проверяет `AppConfig::structural_sig`: перестановка Vec серверов остаётся структурной,
+    /// потому что из неё строится `SessionManager::config_order`, определяющий место повторно
+    /// активированной сессии.
     #[test]
     fn a_server_list_reorder_stays_structural() {
         let forward = config(

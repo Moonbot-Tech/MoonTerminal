@@ -81,11 +81,10 @@ impl SettingsView {
         let (hotkeys, theme, orders, ui_light, order_sizes, order_size_sel, cores) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
-            // Rank FIRST, then pick the default target from the canonical order. Taking it from
-            // the raw `servers` order pre-checked whichever core happened to sit first in the
-            // config, which under Name or AddedNewest is not the row the user sees at the top —
-            // and that same core seeds the order-size presets, so the import would rewrite
-            // trading presets on a core they never looked at.
+            // Сначала ранжируем, затем берём цель по умолчанию из канонического порядка. Выбор из
+            // сырого `servers` отметил бы первое ядро конфига, которое в режимах Name или
+            // AddedNewest не совпадает с верхней строкой пользователя; это же ядро задаёт пресеты
+            // размера ордера, поэтому импорт переписал бы пресеты не просмотренного ядра.
             let order = crate::core_order::CoreOrder::new(d);
             let mut ranked: Vec<&moon_core::config::ServerConfig> = d.servers.iter().collect();
             order.sort_by(&mut ranked, |s| s.id);

@@ -14,14 +14,12 @@ use super::secrets::Secret;
 use super::servers::{self, CoreSortMode, FeedFlags};
 use crate::market::MarketDataMode;
 
-/// Current `settings.toml` schema version.
+/// Текущая версия схемы `settings.toml`.
 ///
-/// Increment when persisted fields require a serde-default backfill save.
+/// Увеличивается, когда сохранённым полям нужен досейв serde-дефолтов.
 ///
-/// v15 retired the `"manual"` core-sort mode. The bump earns its keep twice: the backfill save
-/// rewrites that dead code to the new default instead of leaving a meaningless token on disk,
-/// and it makes `config::backup` take one snapshot for every existing user — captured before the
-/// default-order change reshuffles their lists, so there is something to roll back to.
+/// Версия 15 фиксирует нормализацию недопустимого `core_sort` к `Name`. Досейв записывает
+/// нормализованное значение, а `config::backup` перед ним сохраняет исходный порядок для отката.
 pub const SCHEMA_VERSION: u32 = 15;
 
 /// Версия схемы, начиная с которой рантайм-`CoreId == uid` (стабильный). Конфиги
