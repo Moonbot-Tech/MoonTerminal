@@ -58,8 +58,16 @@ impl CoreOrder {
     /// Inactive cores are ranked too: they hold their place so that switching one off and
     /// back on returns it to the same position instead of the end of the list.
     pub(crate) fn new(cfg: &AppConfig) -> Self {
-        let mut ordered: Vec<&moon_core::config::ServerConfig> = cfg.servers.iter().collect();
-        match cfg.core_sort {
+        Self::from_parts(&cfg.servers, cfg.core_sort)
+    }
+
+    /// Rank a server list and sort mode directly for focused ordering tests.
+    ///
+    /// Production callers use [`CoreOrder::new`]; this private seam accepts exactly the config
+    /// data consumed by the ordering algorithm.
+    fn from_parts(servers: &[moon_core::config::ServerConfig], sort: CoreSortMode) -> Self {
+        let mut ordered: Vec<&moon_core::config::ServerConfig> = servers.iter().collect();
+        match sort {
             // Lexicographic order of lowercase Unicode names, matching the group sort. Cache
             // each key on render; uid makes equal names independent of the servers Vec order.
             CoreSortMode::Name => {

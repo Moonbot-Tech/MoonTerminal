@@ -1,19 +1,20 @@
-//! Конфиг приложения в ДВУХ файлах рядом с exe:
-//! - `servers.enc` (зашифрован): uid/name/key — переносимый секрет (скопировал
-//!   файл — и ключи на месте). host/port/transport зашиты в самом ключе Moonbot.
-//! - `settings.toml` (открытый): версия схемы + группы + по-серверная мета
-//!   (галки active/show_window/feed, группа, рынок, цвет). Привязка к серверу — по uid.
+//! Primary server configuration split across two files below [`paths::data_dir`]:
+//! - `servers.enc` in the data root (encrypted): uid/name/key as portable secrets; host, port, and
+//!   transport are encoded in the Moonbot key itself;
+//! - `cfg/settings.toml` (plaintext): schema version, groups, and per-server metadata such as
+//!   active/show_window/feed flags, group, market, and color, joined to servers by uid.
 //!
-//! Обновление версии программы: старый settings.toml без новых полей читается
-//! без потерь (serde-дефолты), а `version` < `SCHEMA_VERSION` запускает один
-//! досейв — новые галки дописываются в файл с дефолтами, старые сохраняются.
+//! An older `settings.toml` without newer fields remains readable through serde defaults. A
+//! `version` below `SCHEMA_VERSION` triggers one write that adds defaulted fields while retaining
+//! existing values.
 //!
-//! Раскладка по модулям (не валим всё в один файл):
-//! - `schema`    — структуры файлов на диске (serde) + версия схемы;
-//! - `store`     — чтение/запись файлов (шифрование, бэкап битого settings.toml);
-//! - `reconcile` — слияние файлов ↔ рантайм + стабильные uid;
-//! - `migrate`   — one-time migrations from legacy formats;
-//! - `backup`    — snapshots of both files in `backups/` before migration and saving.
+//! Module responsibilities:
+//! - `schema` defines the serde file structures and schema version;
+//! - `store` reads and writes files, including encryption and damaged-settings backups;
+//! - `reconcile` merges file data into runtime state and assigns stable uids;
+//! - `migrate` performs one-time migrations from legacy formats;
+//! - `backup` snapshots both files in `backups/` before migration and deliberate saves;
+//! - `uid_counter` requires every counter construction path to name the optional store floor.
 
 pub mod badges;
 pub mod crypto;
@@ -36,6 +37,7 @@ mod reconcile;
 mod schema;
 mod store;
 mod toml_io;
+mod uid_counter;
 
 pub use badges::{BadgeEntry, BadgesConfig};
 pub use detect_view::{
@@ -53,6 +55,8 @@ pub use schema::UiThemeMode;
 pub use secrets::Secret;
 pub use servers::{ChartBucket, CoreSortMode, FeedFlags, ServerConfig};
 pub use theme::{ChartTheme, ChartThemeSet};
+// Keep the counter private to `config` so external code cannot construct or replace it.
+use uid_counter::UidCounter;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -90,8 +94,12 @@ enum SaveKind {
     Deliberate,
 }
 
-/// Рантайм-конфиг (смерженный из двух файлов).
-#[derive(Clone, Debug, Default)]
+/// Runtime configuration merged from the persisted config files.
+///
+/// This type is deliberately not `Default`; config-internal construction goes through
+/// [`AppConfig::blank`] so every path names an optional durable-store uid floor. See
+/// [`UidCounter`] for the invariant.
+#[derive(Clone, Debug)]
 pub struct AppConfig {
     pub servers: Vec<ServerConfig>,
     pub groups: Vec<GroupConfig>,
@@ -127,8 +135,11 @@ pub struct AppConfig {
     pub chart_memory_percent: u16,
     /// Order of every core list in the application (`settings.toml`). Defaults to `Name`.
     pub core_sort: CoreSortMode,
-    /// Next uid candidate after config entries and durable-store references are reconciled.
-    pub next_uid: u64,
+    /// Next uid candidate after config entries and the supplied durable-store floor are reconciled.
+    ///
+    /// Private to `config`: a `pub` field could be overwritten with a stale counter from
+    /// outside, undoing the floor without ever calling a constructor.
+    pub(in crate::config) next_uid: UidCounter,
     /// Горячие клавиши терминала (settings.toml, открытый формат).
     pub hotkeys: HotkeysConfig,
     /// Тема оформления чарта per-режим UI (тёмная/светлая) — отдельный переносимый theme.toml.
@@ -154,6 +165,42 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    /// Build a default-valued config whose uid counter incorporates `uid_floor`.
+    ///
+    /// Confined to `config` so code elsewhere cannot create and persist a config without naming
+    /// the optional floor. See [`UidCounter`] for the guarantee and its best-effort boundary.
+    ///
+    /// Every other field uses its `Default` implementation, and spelling out every field makes a
+    /// newly added field a compile error until its initialization is considered here.
+    pub(in crate::config) fn blank(uid_floor: Option<u64>) -> Self {
+        Self {
+            next_uid: UidCounter::new(0, uid_floor),
+            servers: Default::default(),
+            groups: Default::default(),
+            language: Default::default(),
+            market_mode: Default::default(),
+            charts_split_by_core: Default::default(),
+            charts_stack_scroll: Default::default(),
+            charts_stack_compress: Default::default(),
+            chart_stack_height: Default::default(),
+            separate_control_zones: Default::default(),
+            main_idle_close_secs: Default::default(),
+            log_to_file: Default::default(),
+            log_retention_days: Default::default(),
+            ui_font_delta: Default::default(),
+            ui_theme_mode: Default::default(),
+            ui_scale: Default::default(),
+            chart_memory_percent: Default::default(),
+            core_sort: Default::default(),
+            hotkeys: Default::default(),
+            theme: Default::default(),
+            orders: Default::default(),
+            badges: Default::default(),
+            settings_unreadable: Default::default(),
+            chart_core_remap_needed: Default::default(),
+        }
+    }
+
     /// Load and merge server secrets, settings, and separate UI config files.
     ///
     /// The `settings.toml` read status is computed before choosing a load branch so every
@@ -271,7 +318,7 @@ impl AppConfig {
 
         // Миграции со старых форматов (один раз → save() пишет новые файлы).
         if paths::legacy_enc_path().exists() {
-            let mut cfg = migrate::from_legacy_enc()?;
+            let mut cfg = migrate::from_legacy_enc(uid_floor)?;
             cfg.theme = theme;
             cfg.orders = orders;
             cfg.badges = badges.clone();
@@ -282,15 +329,12 @@ impl AppConfig {
             cfg.ui_font_delta = schema::default_ui_font_delta();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
-            // As in the fresh-config branch, the serde default is `true` while derived `Default` is
-            // `false`; `save()` below writes the selected value.
+            // The serde default is `true` while the field's `Default` is `false`; `save()` below
+            // persists the selected value.
             cfg.separate_control_zones = servers::default_true();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.settings_unreadable = settings_unreadable;
-            // A legacy config predates the durable counter entirely, while the stores it is
-            // migrated alongside may still hold uids from cores deleted long ago.
-            cfg.next_uid = reconcile::uid_floor_raised(cfg.next_uid, uid_floor);
             if settings_unreadable {
                 log::error!(
                     "settings.toml есть, но не прочитался — миграция из config.enc НЕ записана"
@@ -302,7 +346,7 @@ impl AppConfig {
             return Ok(cfg);
         }
         if paths::legacy_toml_path().exists() {
-            let mut cfg = migrate::from_legacy_toml()?;
+            let mut cfg = migrate::from_legacy_toml(uid_floor)?;
             cfg.theme = theme;
             cfg.orders = orders;
             cfg.badges = badges.clone();
@@ -313,14 +357,12 @@ impl AppConfig {
             cfg.ui_font_delta = schema::default_ui_font_delta();
             cfg.ui_theme_mode = UiThemeMode::default();
             cfg.ui_scale = schema::default_ui_scale();
-            // As in the fresh-config branch, the serde default is `true` while derived `Default` is
-            // `false`; `save()` below writes the selected value.
+            // The serde default is `true` while the field's `Default` is `false`; `save()` below
+            // persists the selected value.
             cfg.separate_control_zones = servers::default_true();
             cfg.chart_memory_percent = schema::default_chart_memory_percent();
             cfg.hotkeys = hotkeys_file.unwrap_or_default();
             cfg.settings_unreadable = settings_unreadable;
-            // Same reasoning as the config.enc branch above.
-            cfg.next_uid = reconcile::uid_floor_raised(cfg.next_uid, uid_floor);
             if settings_unreadable {
                 log::error!(
                     "settings.toml есть, но не прочитался — миграция из config.toml НЕ записана"
@@ -333,10 +375,8 @@ impl AppConfig {
         }
 
         log::warn!("конфиг не найден — добавь сервера в Настройках");
-        // No servers yet, but the stores may be full: deleting the config while keeping `data/`
-        // and re-adding cores is exactly how a fresh counter starts handing out uids whose
-        // report and strategy history is still on disk.
-        let mut fresh = Self {
+        // Even an empty config must name the optional store floor; see `UidCounter` for why.
+        let fresh = Self {
             theme,
             orders,
             badges,
@@ -349,24 +389,23 @@ impl AppConfig {
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             hotkeys: hotkeys_file.unwrap_or_default(),
-            // Set explicitly instead of inheriting `..Self::default()` because the serde default is
-            // `true`. Derived `Default` would return `false`, causing the first Settings save to
-            // invert the control zones silently. The other fields introduced with this struct
-            // update all have zero defaults.
+            // Set explicitly instead of inheriting it from `blank` because the serde default is
+            // `true` while the field's own `Default` is `false`, which would make the first
+            // Settings save invert the control zones silently. The other fields introduced with
+            // this struct update all have zero defaults.
             separate_control_zones: servers::default_true(),
             // Core files are absent, but settings.toml may still exist and be unreadable; this
             // branch must not overwrite it either.
             settings_unreadable,
-            ..Self::default()
+            ..Self::blank(uid_floor)
         };
-        fresh.next_uid = reconcile::uid_floor_raised(fresh.next_uid, uid_floor);
         Ok(fresh)
     }
 
     /// Build the environment-backed plaintext config when that mode is enabled.
     ///
-    /// The fixed core uses uid 1, while `uid_floor` advances its counter past identities retained
-    /// by the shared durable stores. Returns `Ok(None)` when plaintext mode is disabled.
+    /// The fixed core uses uid 1, while `uid_floor` supplies the optional lower bound for its next
+    /// uid. Returns `Ok(None)` when plaintext mode is disabled.
     fn load_plaintext_env(
         uid_floor: Option<u64>,
         theme: ChartThemeSet,
@@ -439,10 +478,9 @@ impl AppConfig {
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             core_sort: CoreSortMode::default(),
-            // The plaintext config issues uid 1 above, so the counter starts at 2 and then moves
-            // past whatever the stores hold. This mode is not test-only: it is how a Linux box with
-            // no Secret Service runs, so its cores share `data/` with everyone else's.
-            next_uid: reconcile::uid_floor_raised(2, uid_floor),
+            // The plaintext config issues uid 1 above, so the counter starts at 2 before applying
+            // the optional store floor. This mode can share `data/` with encrypted-config runs.
+            next_uid: UidCounter::new(2, uid_floor),
             hotkeys: HotkeysConfig::default(),
             theme,
             orders,
@@ -507,7 +545,7 @@ impl AppConfig {
             self.ui_scale,
             self.chart_memory_percent,
             self.core_sort,
-            self.next_uid,
+            self.next_uid.get(),
         );
         // Snapshot AFTER validation and immediately before the first write. Taking it earlier
         // would consume a retention slot for every rejected save without writing anything: the
