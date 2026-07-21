@@ -181,8 +181,14 @@ mod tests {
     /// Cores that only exist in `reports.sqlite` (their server was deleted) must land AFTER
     /// every configured core and keep the order the query returned them in.
     ///
-    /// Protects `CoreOrder::from_db`: assigning one shared rank to unknown cores lets an
-    /// unstable sort reorder the historical tail.
+    /// Protects `CoreOrder::from_db`'s tail BASE: dropping the `known +` offset gives unknown
+    /// cores rank 0, which floats deleted cores ABOVE every configured one in the Report and
+    /// Analytics core filters.
+    ///
+    /// Note what this does NOT prove: collapsing the distinct tail ranks to one shared value
+    /// leaves the result unchanged, because `sort_by_key` is documented stable and the rows
+    /// keep their input order. The distinct ranks are still the safer construction — they make
+    /// the tail independent of that guarantee — but this test is not what pins them.
     #[test]
     fn historical_cores_form_a_stable_tail_after_the_configured_ones() {
         let order = CoreOrder::new(&config(

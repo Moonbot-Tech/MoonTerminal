@@ -350,6 +350,21 @@ mod core_sort_parse_tests {
         assert_eq!(probe.keep, "server meta");
     }
 
+    /// The on-disk codes are FROZEN wire values, not free-form identifiers.
+    ///
+    /// The round-trip test below cannot catch this: it feeds `code()`'s own output back in, so
+    /// renaming a code in BOTH `code()` and `from_code()` keeps it green. That rename is the
+    /// actual data loss — `AddedOldest` deliberately keeps the legacy `"added"` string so that
+    /// users who chose insertion order keep it, and every existing `settings.toml` carrying
+    /// `"added"` would silently fall back to `Name` if it were renamed to, say,
+    /// `"added_oldest"`. These literals are the only thing pinning that decision.
+    #[test]
+    fn the_on_disk_codes_are_frozen() {
+        assert_eq!(CoreSortMode::Name.code(), "name");
+        assert_eq!(CoreSortMode::AddedOldest.code(), "added");
+        assert_eq!(CoreSortMode::AddedNewest.code(), "added_newest");
+    }
+
     /// Protects the valid-code mapping used by `CoreSortMode` serialization.
     #[test]
     fn every_mode_round_trips_through_its_code() {

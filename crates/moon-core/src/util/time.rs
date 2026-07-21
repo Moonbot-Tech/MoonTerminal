@@ -116,19 +116,30 @@ mod tests {
 
     /// Sorting stamps as STRINGS must equal sorting the instants they came from.
     ///
-    /// This is the property snapshot pruning relies on to keep the newest N. The mutation that
-    /// breaks it is any variable-width or non-most-significant-first format.
+    /// This is the property snapshot pruning relies on to keep the newest N.
+    ///
+    /// The instants are chosen so the DAY-OF-MONTH DECREASES across the boundary
+    /// (31 Jan -> 1 Feb). That is what makes the test discriminating: where the day number
+    /// increases, a day-major format like `DD.MM.YYYY_HH-MM-SS` — the one used elsewhere in
+    /// this app, and therefore the likely copy-paste — still happens to sort correctly, and
+    /// the test would pass a broken build. Across this boundary it yields
+    /// `31.01.2026` > `01.02.2026` and reddens. Dropping the zero-padding reverses the same
+    /// pair, so that mutation is covered too.
     #[test]
-    fn string_order_matches_chronological_order() {
-        let base = 1_753_100_000_000_i64;
-        let one_second = utc_stamp_compact(base + 1_000);
-        let one_year = utc_stamp_compact(base + 366 * 86_400 * 1_000);
-        let now = utc_stamp_compact(base);
+    fn string_order_matches_chronological_order_across_a_month_boundary() {
+        // 2026-01-31 12:00:00Z, then the next day.
+        let jan31 = 1_769_860_800_000_i64;
+        let feb01 = jan31 + 86_400_000;
 
-        assert!(now < one_second, "{now} should sort before {one_second}");
+        let a = utc_stamp_compact(jan31);
+        let b = utc_stamp_compact(feb01);
+
+        // Pins the conversion too, so a mis-computed fixture cannot satisfy the ordering by luck.
+        assert_eq!(a, "20260131-120000");
+        assert_eq!(b, "20260201-120000");
         assert!(
-            one_second < one_year,
-            "{one_second} should sort before {one_year}"
+            a < b,
+            "{a} must sort before {b} despite the smaller day number"
         );
     }
 
