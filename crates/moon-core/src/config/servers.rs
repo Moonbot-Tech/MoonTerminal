@@ -116,6 +116,110 @@ pub struct ServerConfig {
     pub default_alert_strategy: u64,
 }
 
+/// How every core list in the app is ordered, chosen once by the user in Settings.
+///
+/// The stored choice is global; the UI crate's `core_order` module performs the ranking.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CoreSortMode {
+    /// The position in `AppConfig::servers`, edited by dragging rows in Settings.
+    #[default]
+    Manual,
+    /// Lexicographic order of lowercase Unicode names, with uid as a tie-breaker.
+    Name,
+    /// Insertion order, oldest first (by `ServerConfig::uid`).
+    Added,
+}
+
+impl CoreSortMode {
+    /// Stable on-disk code.
+    pub fn code(self) -> &'static str {
+        match self {
+            CoreSortMode::Manual => "manual",
+            CoreSortMode::Name => "name",
+            CoreSortMode::Added => "added",
+        }
+    }
+
+    /// Parse an on-disk code; `None` for anything unrecognized.
+    pub fn from_code(s: &str) -> Option<Self> {
+        match s {
+            "manual" => Some(CoreSortMode::Manual),
+            "name" => Some(CoreSortMode::Name),
+            "added" => Some(CoreSortMode::Added),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for CoreSortMode {
+    /// Serialize the stable lowercase code used in `settings.toml`.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for CoreSortMode {
+    /// Default any unrecognized value so this cosmetic field cannot reject server metadata.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct AnyScalar;
+
+        impl<'de> serde::de::Visitor<'de> for AnyScalar {
+            type Value = CoreSortMode;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a core sort mode (manual / name / added)")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::from_code(v).unwrap_or_default())
+            }
+
+            // Invalid scalar values affect only this cosmetic field.
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::default())
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::default())
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::default())
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::default())
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(CoreSortMode::default())
+            }
+
+            // Drain invalid containers before defaulting so deserialization stays synchronized.
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(CoreSortMode::default())
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(CoreSortMode::default())
+            }
+        }
+
+        d.deserialize_any(AnyScalar)
+    }
+}
+
 /// Ключ чарт-вкладки AddToChart внутри группы — куда сводить графики ядра.
 /// Резолвится из `ServerConfig::chart_bucket` (см.). Сериализуется в charts.json.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -181,4 +285,55 @@ pub fn default_true() -> bool {
 /// Дефолт срока хранения файлов лога (дней). См. SettingsFile::log_retention_days.
 pub fn default_log_retention_days() -> u32 {
     14
+}
+
+#[cfg(test)]
+mod core_sort_parse_tests {
+    //! Resilient parsing tests for the global core-order setting.
+
+    use super::CoreSortMode;
+    use serde::Deserialize;
+
+    /// Minimal enclosing settings shape used to prove sibling data survives parsing.
+    #[derive(Deserialize)]
+    struct Probe {
+        #[serde(default)]
+        core_sort: CoreSortMode,
+        #[serde(default)]
+        keep: String,
+    }
+
+    /// Protects `CoreSortMode::deserialize`: invalid words and types must default only this
+    /// field while preserving the rest of `SettingsFile`.
+    #[test]
+    fn a_bad_core_sort_value_never_costs_the_rest_of_the_file() {
+        for bad in [
+            r#"core_sort = "typo""#,
+            "core_sort = 1",
+            "core_sort = 1.5",
+            "core_sort = true",
+            "core_sort = []",
+            "core_sort = {}",
+        ] {
+            let toml = format!("{bad}\nkeep = \"server meta\"\n");
+            let probe: Probe = toml::from_str(&toml)
+                .unwrap_or_else(|e| panic!("`{bad}` must not fail the whole file: {e}"));
+            assert_eq!(probe.core_sort, CoreSortMode::Manual, "for `{bad}`");
+            assert_eq!(probe.keep, "server meta", "for `{bad}`");
+        }
+    }
+
+    /// Protects the valid-code mapping used by `CoreSortMode` serialization.
+    #[test]
+    fn every_mode_round_trips_through_its_code() {
+        for mode in [
+            CoreSortMode::Manual,
+            CoreSortMode::Name,
+            CoreSortMode::Added,
+        ] {
+            let toml = format!("core_sort = \"{}\"\nkeep = \"\"\n", mode.code());
+            let probe: Probe = toml::from_str(&toml).expect("a valid code must parse");
+            assert_eq!(probe.core_sort, mode);
+        }
+    }
 }

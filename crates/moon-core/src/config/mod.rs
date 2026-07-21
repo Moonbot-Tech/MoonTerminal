@@ -49,7 +49,7 @@ pub use layout::{DetachedLayout, GeomRect, GroupLayout, WindowLayout};
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use schema::UiThemeMode;
 pub use secrets::Secret;
-pub use servers::{ChartBucket, FeedFlags, ServerConfig};
+pub use servers::{ChartBucket, CoreSortMode, FeedFlags, ServerConfig};
 pub use theme::{ChartTheme, ChartThemeSet};
 
 use std::collections::HashSet;
@@ -98,6 +98,10 @@ pub struct AppConfig {
     pub ui_scale: f32,
     /// Множитель RAM-budget для retained market history. 100 = авто-база, 800 = 8x.
     pub chart_memory_percent: u16,
+    /// How every core list in the app is ordered (settings.toml). Default `Manual`.
+    pub core_sort: CoreSortMode,
+    /// Next uid high-water mark loaded from `SettingsFile::next_uid`.
+    pub next_uid: u64,
     /// Горячие клавиши терминала (settings.toml, открытый формат).
     pub hotkeys: HotkeysConfig,
     /// Тема оформления чарта per-режим UI (тёмная/светлая) — отдельный переносимый theme.toml.
@@ -162,6 +166,8 @@ impl AppConfig {
                 ui_theme_mode: merged.ui_theme_mode,
                 ui_scale: merged.ui_scale,
                 chart_memory_percent: merged.chart_memory_percent,
+                core_sort: merged.core_sort,
+                next_uid: merged.next_uid,
                 hotkeys,
                 theme,
                 orders,
@@ -320,6 +326,9 @@ impl AppConfig {
             ui_theme_mode: UiThemeMode::default(),
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
+            core_sort: CoreSortMode::default(),
+            // The plaintext test config issues uid 1 above, so the counter starts at 2.
+            next_uid: 2,
             hotkeys: HotkeysConfig::default(),
             theme,
             orders,
@@ -331,7 +340,7 @@ impl AppConfig {
     /// Сохраняет в два файла. Проставляет стабильные uid, валидирует уникальность
     /// имени и host:port. `&mut self` — т.к. может присвоить uid новым ядрам.
     pub fn save(&mut self) -> anyhow::Result<()> {
-        reconcile::ensure_uids(&mut self.servers);
+        reconcile::ensure_uids(&mut self.servers, &mut self.next_uid);
         self.prune_orphan_groups();
         self.validate()?;
         let (sf, meta) = reconcile::split(
@@ -351,6 +360,8 @@ impl AppConfig {
             self.ui_theme_mode,
             self.ui_scale,
             self.chart_memory_percent,
+            self.core_sort,
+            self.next_uid,
         );
         store::write_servers(&sf)?;
         store::write_settings(&meta)?;
@@ -430,6 +441,11 @@ impl AppConfig {
             UiThemeMode::default(),
             schema::default_ui_scale(),
             schema::default_chart_memory_percent(),
+            // Sort mode is presentation-only. Manual reordering remains structural because
+            // this signature still includes the servers Vec order.
+            CoreSortMode::default(),
+            // The uid counter advances on save; it describes no structure of its own.
+            0,
         );
         let a = toml::to_string(&sf).unwrap_or_default();
         let b = toml::to_string(&meta).unwrap_or_default();
@@ -449,5 +465,64 @@ impl AppConfig {
     /// запуск (ещё ничего не вводили) — показываем только окно Настроек.
     pub fn has_keyed_server(&self) -> bool {
         self.servers.iter().any(|s| !s.key.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod structural_sig_tests {
+    //! Structural-signature tests for presentation-only and manual-order changes.
+
+    use super::{AppConfig, CoreSortMode, ServerConfig};
+
+    /// Build an `AppConfig` with the selected order and servers.
+    fn config(mode: CoreSortMode, servers: Vec<ServerConfig>) -> AppConfig {
+        AppConfig {
+            servers,
+            core_sort: mode,
+            ..Default::default()
+        }
+    }
+
+    /// Build a minimal server fixture.
+    fn server(id: u64, name: &str) -> ServerConfig {
+        ServerConfig {
+            id,
+            uid: id,
+            name: name.to_string(),
+            ..toml::from_str("id = 0").expect("ServerConfig must deserialize from defaults")
+        }
+    }
+
+    /// Protects `AppConfig::structural_sig`: a presentation-only sort change must not
+    /// reconnect cores or rebuild group windows.
+    #[test]
+    fn changing_only_the_sort_mode_is_not_structural() {
+        let servers = vec![server(1, "Alpha"), server(2, "Bravo")];
+        let manual = config(CoreSortMode::Manual, servers.clone());
+        let by_name = config(CoreSortMode::Name, servers);
+        assert_eq!(
+            manual.structural_sig(),
+            by_name.structural_sig(),
+            "a sort-mode change must not trigger a session reconcile"
+        );
+    }
+
+    /// Protects `AppConfig::structural_sig`: changing manual server order remains structural
+    /// because session reconciliation rebuilds its rank table from that order.
+    #[test]
+    fn a_manual_reorder_stays_structural() {
+        let forward = config(
+            CoreSortMode::Manual,
+            vec![server(1, "Alpha"), server(2, "Bravo")],
+        );
+        let reversed = config(
+            CoreSortMode::Manual,
+            vec![server(2, "Bravo"), server(1, "Alpha")],
+        );
+        assert_ne!(
+            forward.structural_sig(),
+            reversed.structural_sig(),
+            "reordering servers must reach the session layer"
+        );
     }
 }

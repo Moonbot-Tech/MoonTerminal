@@ -11,22 +11,13 @@ use super::groups::GroupConfig;
 use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::secrets::Secret;
-use super::servers::{self, FeedFlags};
+use super::servers::{self, CoreSortMode, FeedFlags};
 use crate::market::MarketDataMode;
 
-/// Текущая версия схемы settings.toml. Поднимай на +1, когда добавил новое поле
-/// и хочешь, чтобы старые файлы один раз пере-сохранились с его дефолтом.
-/// v2: добавлено поле `language`. v3: добавлено `market_mode`.
-/// v4: добавлено `charts_split_by_core`. v5: добавлены `log_to_file` + `log_retention_days`.
-/// v6: добавлены `ui_font_delta` + `ui_scale`.
-/// v7: добавлен `chart_memory_percent`. v8: добавлен per-server `chart_bundle`.
-/// v9: добавлен `charts_stack_scroll`. v10: добавлен блок `hotkeys`.
-/// v11: рантайм-`CoreId` стал стабильным (= `uid`, а не позиция) → одноразовый
-///      ремап legacy позиционных CoreId в `charts.json` (см. `COREID_UID_VERSION`).
-/// v12: добавлен `ui_theme_mode` (dark/light для MoonUI, открытый settings.toml).
-/// v13: хоткеи переехали в отдельный переносимый `hotkeys.toml` — секция `hotkeys`
-///      в settings.toml больше не пишется (читается как legacy для миграции).
-pub const SCHEMA_VERSION: u32 = 13;
+/// Current `settings.toml` schema version.
+///
+/// Increment when persisted fields require a serde-default backfill save.
+pub const SCHEMA_VERSION: u32 = 14;
 
 /// Версия схемы, начиная с которой рантайм-`CoreId == uid` (стабильный). Конфиги
 /// старее неё хранили в `charts.json` ПОЗИЦИОННЫЕ CoreId — их надо один раз
@@ -225,6 +216,15 @@ pub struct SettingsFile {
     pub hotkeys: HotkeysConfig,
     #[serde(default)]
     pub groups: Vec<GroupConfig>,
+    /// How core lists are ordered app-wide; missing values default to `Manual`.
+    #[serde(default)]
+    pub core_sort: CoreSortMode,
+    /// Next uid to issue, persisted so deleted identities are not reused.
+    ///
+    /// Zero falls back to one past the highest surviving uid. This field is the only durable
+    /// record of deleted high-water marks, so losing it also loses that history.
+    #[serde(default)]
+    pub next_uid: u64,
     #[serde(default)]
     pub servers: Vec<ServerMeta>,
 }
