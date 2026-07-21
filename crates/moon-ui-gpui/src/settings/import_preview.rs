@@ -81,7 +81,19 @@ impl SettingsView {
         let (hotkeys, theme, orders, ui_light, order_sizes, order_size_sel, cores) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
-            let first_active = d.servers.iter().find(|s| s.active).or(d.servers.first());
+            // Rank FIRST, then pick the default target from the canonical order. Taking it from
+            // the raw `servers` order pre-checked whichever core happened to sit first in the
+            // config, which under Name or AddedNewest is not the row the user sees at the top —
+            // and that same core seeds the order-size presets, so the import would rewrite
+            // trading presets on a core they never looked at.
+            let order = crate::core_order::CoreOrder::new(d);
+            let mut ranked: Vec<&moon_core::config::ServerConfig> = d.servers.iter().collect();
+            order.sort_by(&mut ranked, |s| s.id);
+            let first_active = ranked
+                .iter()
+                .copied()
+                .find(|s| s.active)
+                .or_else(|| ranked.first().copied());
             let first_active_id = first_active.map(|s| s.id);
             (
                 d.hotkeys.clone(),
@@ -92,17 +104,10 @@ impl SettingsView {
                     .map(|s| s.order_sizes_or_default("USDT"))
                     .unwrap_or_else(|| default_order_sizes("USDT")),
                 first_active.and_then(|s| s.order_size_sel),
-                {
-                    // Canonicalize the checkbox list only; `first_active_id` seeds preset values.
-                    let order = crate::core_order::CoreOrder::new(d);
-                    let mut cores: Vec<(u64, String, bool)> = d
-                        .servers
-                        .iter()
-                        .map(|s| (s.id, s.name.clone(), Some(s.id) == first_active_id))
-                        .collect();
-                    order.sort_by(&mut cores, |(id, _, _)| *id);
-                    cores
-                },
+                ranked
+                    .iter()
+                    .map(|s| (s.id, s.name.clone(), Some(s.id) == first_active_id))
+                    .collect::<Vec<(u64, String, bool)>>(),
             )
         };
         cx.spawn(async move |this, cx| {
