@@ -152,8 +152,10 @@ impl SessionManager {
         // Refresh the rank table first: a reorder or a newly added server must be visible to
         // every insertion made below.
         self.config_order = config.servers.iter().map(|s| s.id).collect();
-        // An existing session may now rank differently (the user dragged rows in Settings),
-        // and reordering touches no feed thread — only the presentation order.
+        // An existing session may now rank differently — a server was added, removed, or the
+        // import rewrote the list — and reordering touches no feed thread. This is CONFIG
+        // order, which decides where a reactivated session is inserted; the order the user
+        // sees is applied separately by the UI's `core_order` module.
         let order = self.config_order.clone();
         self.sessions.sort_by_key(|s| rank_of(&order, s.id));
         let desired: Vec<ServerConfig> = config
