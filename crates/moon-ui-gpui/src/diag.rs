@@ -1,16 +1,18 @@
-//! ПОСТОЯННАЯ диагностика частоты перерисовок. Глобальные атомарные счётчики дёргаются в
-//! render/observe/notify; раз в ~1с дренаж-цикл снимает их и пишет строку в `render_diag.log`
-//! (Hz по каждому пункту) + в log::info. Вопрос «где рисуем чаще чем надо» = РАНТАЙМ → читаем
-//! этот лог, не гадаем по коду.
+//! Persistent render-frequency diagnostics. Global atomic counters are bumped from render,
+//! observe, and notify paths. About once per second, the startup drain loop snapshots and resets
+//! them, converts each value to hertz, and writes one line to `render_diag.log` and `log::info`.
+//! Use the runtime log, rather than code inspection alone, to find excessive rendering.
 //!
-//! ⚠️ ГРАБЛИ: гейт — env `MOON_RENDER_DIAG`, а НЕ `#[cfg(debug_assertions)]`! В этом проекте
-//! `[profile.dev] debug-assertions = false` (Cargo.toml — снимают DX12 validation-слой ради
-//! плавности), т.е. в рабочей dev-сборке `cfg(debug_assertions)` = false и счётчики бы исчезли.
-//! Поэтому off-by-default через env (см. `enabled()`): инертно в dev и release, включаешь явно
-//! `MOON_RENDER_DIAG=1` на время отладки — публичная сборка чистая, файл не пишется.
+//! Important: the gate is the `MOON_RENDER_DIAG` environment variable or an explicit
+//! [`force_enable`] call, not `#[cfg(debug_assertions)]`. This project's `[profile.dev]` disables
+//! debug assertions in `Cargo.toml` to avoid the DX12 validation layer, so a debug-assertion gate
+//! would remove the counters from normal development builds. Without the environment variable or
+//! a force-enable call, diagnostics are inert in both development and release builds and do not
+//! create the log file.
 //!
-//! NB: это РУЧНАЯ инструментация по узлам (забывается на новом узле). Целевое — чокпоинт во
-//! фреймворке (render каждой вьюхи по имени типа) + own-pass-слои руками. Пока — вот так.
+//! This remains manual instrumentation at selected call sites, so new paths can be missed. A
+//! framework checkpoint that records each view render by type would cover view rendering more
+//! completely; custom own-pass layers would still require manual counters.
 
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
@@ -36,16 +38,17 @@ diag_counters!(
     CHART_FRAME_SKIP_NOT_PRESENTABLE => "chart_frame_skip_not_presentable",
     CHART_FRAME_SKIP_IDLE => "chart_frame_skip_idle",
     CHART_GPU_PREPARE => "chart_gpu_prepare",
-    // gpu_canvas present (реальная частота показа чарта) — раньше СЛЕПАЯ зона: present-rate
-    // не измерялся вообще. CHART_CAM_STEP = сколько present'ов реально сдвинули камеру на
-    // ≥1 пиксель ("рабочие" кадры). Соотношение CAM_STEP/PRESENT = экономия пиксельного
-    // рубильника (адаптивна к зуму: на мелком масштабе почти все кадры пропускаются).
+    // `CHART_PRESENT` counts actual gpu_canvas draw calls. `CHART_CAM_STEP` counts active-pane
+    // camera advances that moved at least one pixel during frame decisions. Compare the rates to
+    // assess pixel-threshold suppression, while accounting for multiple active panes per present;
+    // finer zoom levels normally suppress more subpixel camera advances.
     CHART_PRESENT     => "chart_present",
     CHART_CAM_STEP    => "chart_cam_step",
-    // ПОСЛОЙНЫЕ счётчики gpu_canvas (мандат AGENTS.md «UI Render Diagnostics»): canvas ВНЕ
-    // GPUI-рендера → считаем руками в одной точке-чокпоинте (backend::render_d3d). *_DRAW =
-    // отрисовка/блит слоя (раз на present); *_BAKE = перепекание текстуры-кэша (combo/стакан),
-    // должно быть РЕДКО (по приходу данных/смене вида). BAKE ≈ DRAW = кэш не работает.
+    // Per-layer gpu_canvas counters required by the AGENTS.md UI Render Diagnostics contract.
+    // The canvas runs outside GPUI view rendering, so each platform backend bumps these counters
+    // manually. `*_DRAW` and `*_BLIT` count actual layer operations; `*_BAKE` counts texture-cache
+    // rebuilds for cached layers such as combo and order book. Rebuilds should normally follow
+    // data or view changes rather than every draw; similar BAKE and DRAW rates indicate poor reuse.
     CHART_BG_DRAW     => "bg_draw",
     CHART_GRID_DRAW   => "grid_draw",
     CHART_CURSOR_DRAW => "cursor_draw",
@@ -53,8 +56,9 @@ diag_counters!(
     CHART_BASE_BLIT   => "base_blit",
     CHART_COMBO_DRAW  => "combo_draw",
     CHART_COMBO_BAKE  => "combo_bake",
-    // Слой свечей: дроу раз на base-проход; UPLOAD_LEN — строк залито по смене ревизии серии
-    // (живой край бампает ревизию на каждый батч трейдов — это ожидаемо и дёшево).
+    // The candle layer draws during each base pass. `UPLOAD_LEN` counts rows uploaded after a
+    // candle-series revision; live-edge trade batches advance that revision, which is expected and
+    // inexpensive because the instance buffer contains only hundreds of rows.
     CHART_CANDLE_DRAW => "candle_draw",
     CHART_CANDLE_UPLOAD_LEN => "candle_upload_len",
     CHART_HISTORY_RESET_ROWS => "history_reset_rows",
@@ -79,31 +83,35 @@ diag_counters!(
     CHART_MOUSE_MOVE_ENTITY => "chart_mouse_move_entity",
     CHART_MOUSE_FAST_STOP => "chart_mouse_fast_stop",
     CHART_CURSOR_UPDATE => "chart_cursor_update",
-    // Призрак перекрестия compare-режима: сколько раз/с соседям реально переписали цену
-    // (каждая запись = их present). Сравнивать с chart_cursor_update наведённого чарта.
+    // Comparison-mode ghost crosshair updates: successful price changes written to sibling charts
+    // per second. Each change requests a present, although multiple writes can coalesce before the
+    // draw. Compare this with `chart_cursor_update` on the hovered chart.
     CHART_GHOST_UPDATE => "chart_ghost_update",
     FIRETEST_MOUSE_SENT => "firetest_mouse_sent",
     FIRETEST_MOUSE_POST_FAIL => "firetest_mouse_post_fail",
     FIRETEST_TEXT_DRAW => "firetest_text_draw",
     FIRETEST_TEXT_COLD => "firetest_text_cold",
-    // Расследование фонового CPU (2026-07): счётчики «кто просыпается без изменившегося
-    // входа». Hz каждого = частота срабатывания; вместе с контекстом строки (cpu/окна/чарты)
-    // видно, ЧТО было открыто и ЧТО тикало в момент роста CPU.
-    // 1Гц-таймер часов шапки: Hz ≈ числу открытых Shell-окон (по таймеру на окно).
+    // Background CPU investigation counters added in 2026-07. Each rate shows which path wakes
+    // without changed input; the diagnostic line also records CPU, window count, and chart count
+    // so the log identifies what was open and ticking during a CPU increase.
+    // The header clock has one roughly 1 Hz timer per Shell window, so its rate approximates the
+    // number of open Shell windows.
     CLOCK_NOTIFY => "clock_notify",
-    // Снапшоты «Активов», собранные feed-потоками (дельта assets_rev по всем ядрам).
-    // assets_apply > 0 при закрытом окне Активов = работа без потребителя.
+    // Asset snapshots collected by feed threads, measured as the summed `assets_rev` delta across
+    // all cores. A positive rate while the Assets window is closed indicates work without a UI
+    // consumer.
     ASSETS_APPLY => "assets_apply",
-    // Рендер окна «Активы»: >0 = окно открыто и перерисовывается.
+    // Assets-window renders; a positive rate means the window is open and redrawing.
     ASSETS_RENDER => "assets_render",
-    // Ребилд скринера (полный проход по всем рынкам): >0 = окно скринера открыто.
+    // Screener rebuilds, each a full pass over all markets; a positive rate means it is open.
     SCREENER_REBUILD => "screener_rebuild",
-    // Реальные сканы детектов ядра в play_detect_sounds (после гейта по detects_rev).
-    // До гейта = частота пробуждений дренажа (~250/с), после — только на новые детекты.
+    // Actual core-detect scans in `play_detect_sounds`, after its `detects_rev` gate. Counting before
+    // that gate would show the feed-drain wake rate of roughly 250 Hz; this counts only revisions.
     DETECT_SCAN => "detect_scan",
-    // sync_orders_from_backend_notify в observe чарт-панелей (× число открытых чартов).
+    // `sync_orders_from_backend_notify` calls from chart-panel observers, multiplied by the number
+    // of open charts observing each backend notification.
     CHART_ORDER_SYNC => "chart_order_sync",
-    // Самопере-армящийся 1Гц таймер компакции чарт-стека (× число стеков с графиками).
+    // Self-rearming roughly 1 Hz chart-stack compaction timers, one per non-empty Add/Custom stack.
     COMPACT_TICK => "compact_tick",
 );
 
@@ -117,10 +125,13 @@ static FORCE_ON: AtomicBool = AtomicBool::new(false);
 static GPU_FRAME_US_SUM: AtomicU64 = AtomicU64::new(0);
 static GPU_FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Диагностика включается ТОЛЬКО при заданной env `MOON_RENDER_DIAG` (любое значение). По
-/// умолчанию инертна в ЛЮБОЙ сборке (dev и release): ни счётчиков, ни файла render_diag.log —
-/// включаешь явно на время отладки. (`cfg(debug_assertions)` тут НЕ годится: dev-профиль ставит
-/// `debug-assertions = false` ради DX12 validation, см. шапку.) Читается один раз через OnceLock.
+/// Return whether render diagnostics have been enabled explicitly.
+///
+/// [`force_enable`] takes effect immediately. Otherwise, the first call caches whether
+/// `MOON_RENDER_DIAG` exists; any value enables diagnostics. Without either mechanism, counters
+/// and `render_diag.log` remain inactive in every build profile. This cannot use
+/// `cfg(debug_assertions)` because the development profile disables debug assertions to avoid the
+/// DX12 validation layer.
 fn enabled() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
@@ -151,7 +162,9 @@ pub fn bump_by(c: &AtomicU64, n: u64) {
     }
 }
 
-/// Снять счётчики за прошедший интервал (no-op без env/force_enable).
+/// Snapshot and reset all counters for the elapsed interval, returning their rates in hertz.
+///
+/// Returns `None` without `MOON_RENDER_DIAG` or [`force_enable`].
 pub fn take_sample(elapsed_ms: f64) -> Option<Vec<DiagRate>> {
     if !enabled() {
         return None;
@@ -196,8 +209,10 @@ pub fn format_sample(elapsed_ms: f64, sample: &[DiagRate]) -> String {
     line
 }
 
-/// `ctx` — контекст момента (cpu процесса/системы, число окон/чартов): пишется в начало
-/// строки, чтобы по логу было видно, что было открыто и сколько CPU это стоило.
+/// Write a sample to the application log and append it to `render_diag.log` when possible.
+///
+/// `ctx` describes the sampling moment, including process/system CPU and open window/chart counts.
+/// It is inserted after the diagnostic prefix so the log shows what was open at the measured load.
 pub fn write_sample(elapsed_ms: f64, sample: &[DiagRate], ctx: &str) {
     use std::io::Write;
     let mut line = format_sample(elapsed_ms, sample);
