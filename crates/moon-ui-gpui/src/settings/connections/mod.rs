@@ -1,15 +1,20 @@
 //! Connections tab, ported from egui `settings/connections.rs`. It renders market-data and core
-//! order selectors above a group-to-core tree. Group branches provide activation, icon, window,
-//! picker, and add-core controls; core leaves provide editable connection fields, feed flags,
-//! color, delete, reconnect, and status controls. Edits update the draft, while live status and
-//! reconnect requests use [`Backend`].
+//! order selectors above pending cores and a window-group-to-exchange-to-core tree. Group branches
+//! provide activation, icon, window, picker, and add-core controls; exchange branches come from
+//! each live core's own server identity; core leaves provide editable connection fields, feed
+//! flags, color, delete, reconnect, and status controls. Edits update the draft, while live status
+//! and reconnect requests use [`Backend`].
 //!
 //! This module owns per-row editor state through [`ConnRow`] and [`build_conn`], plus group
 //! synchronization from servers. [`table`] owns core rows, columns, headers, feed controls, and
-//! add/delete actions; [`tab`] owns group branches, icon picking, selectors, and tab assembly.
+//! add/delete actions; [`tab`] owns pending/group/exchange branches, icon picking, selectors, and
+//! tab assembly.
 
 mod tab;
 mod table;
+
+#[cfg(test)]
+mod tests;
 
 use gpui::*;
 use moon_ui::{MoonColorPickerState, MoonInputEvent, MoonInputState};

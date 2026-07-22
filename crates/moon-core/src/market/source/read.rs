@@ -4,6 +4,7 @@ use crate::data::OrderBookModel;
 use crate::feed::SharedMoonClient;
 use crate::session::CoreId;
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use moonproto::DeepHistoryKind;
@@ -23,9 +24,9 @@ fn deep_row_candle(r: &moonproto::DeepPrice) -> crate::market::candles::ChartCan
 }
 
 use super::{
-    drain_price_line, moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks,
-    trade_price_range, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead,
-    DetectSnapshot, LatestPriceError, MarketDataSource, MarketRevisions, MarketTickerReadout,
+    CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, DetectSnapshot,
+    LatestPriceError, MarketDataSource, MarketRevisions, MarketTickerReadout, drain_price_line,
+    moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks, trade_price_range,
 };
 use crate::market::candles::ChartCandle;
 
@@ -219,6 +220,30 @@ impl MarketDataSource {
     ) -> Option<std::sync::Arc<moonproto::MoonClient>> {
         let inner = self.inner.read().expect("market source poisoned");
         inner.clients.get(&core).and_then(SharedMoonClient::get)
+    }
+
+    /// Return trimmed display exchange names for live cores whose own clients reported one.
+    ///
+    /// This reads each core's direct client rather than its deduplicated market-data provider, so
+    /// connection rows retain their own identity. Missing clients, snapshots, and blank names are
+    /// omitted from the returned map.
+    pub fn core_exchange_names(&self) -> HashMap<CoreId, String> {
+        let clients: Vec<(CoreId, std::sync::Arc<moonproto::MoonClient>)> = {
+            let inner = self.inner.read().expect("market source poisoned");
+            inner
+                .clients
+                .iter()
+                .filter_map(|(&core, client)| client.get().map(|client| (core, client)))
+                .collect()
+        };
+        clients
+            .into_iter()
+            .filter_map(|(core, client)| {
+                let name = client.snapshot()?.server_info().exchange_name.clone()?;
+                let name = name.trim();
+                (!name.is_empty()).then(|| (core, name.to_string()))
+            })
+            .collect()
     }
 
     /// Return the market price step from MoonProto's `chart_price_step`.

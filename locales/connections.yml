@@ -48,9 +48,9 @@ conn.groups_heading:
   en: "Groups"
   es: "Grupos"
 conn.no_groups:
-  ru: "добавь ядро ниже и впиши ему «Группу» — появится ветка группы"
-  en: "add a core below and give it a “Group” — a group branch will appear"
-  es: "añade un núcleo abajo y asígnale un «Grupo» — aparecerá una rama de grupo"
+  ru: "добавь ядро выше и впиши ему «Группу» — появится ветка группы"
+  en: "add a core above and give it a “Group” — a group branch will appear"
+  es: "añade un núcleo arriba y asígnale un «Grupo» — aparecerá una rama de grupo"
 conn.show_group:
   ru: "Показать окно группы"
   en: "Show group window"
@@ -65,13 +65,21 @@ conn.add_core_short:
   en: "core"
   es: "núcleo"
 conn.groups_panel_heading:
-  ru: "Ядра по группам"
-  en: "Cores by group"
-  es: "Núcleos por grupo"
+  ru: "Ядра по группам и биржам"
+  en: "Cores by group and exchange"
+  es: "Núcleos por grupo y bolsa"
 conn.groups_panel_tip:
-  ru: "Группа = отдельное главное окно (ядра группы в одном окне). Колонка «Чарты» сводит детекты с нескольких ядер группы в один график."
-  en: "A group = a separate main window (the group's cores live in one window). The “Charts” column merges detects from several cores of a group into one chart."
-  es: "Un grupo = una ventana principal aparte (los núcleos del grupo viven en una ventana). La columna «Gráficos» une las detecciones de varios núcleos de un grupo en un solo gráfico."
+  ru: "Группа = отдельное главное окно. Внутри группы ядра автоматически собраны по бирже, которую сообщает подключение. Колонка «Чарты» сводит детекты с нескольких ядер группы в один график."
+  en: "A group = a separate main window. Within each group, cores are collected automatically by the exchange reported by their connection. The “Charts” column merges detects from several group cores into one chart."
+  es: "Un grupo = una ventana principal aparte. Dentro de cada grupo, los núcleos se agrupan automáticamente por la bolsa indicada por su conexión. La columna «Gráficos» une las detecciones de varios núcleos del grupo en un solo gráfico."
+conn.exchange_unknown:
+  ru: "Биржа не определена"
+  en: "Exchange not identified"
+  es: "Bolsa sin identificar"
+conn.pending_cores:
+  ru: "Новые ядра — настройте перед сохранением"
+  en: "New cores — configure before saving"
+  es: "Núcleos nuevos — configúralos antes de guardar"
 conn.member_count:
   ru: "%{n} ядр."
   en: "%{n} cores"

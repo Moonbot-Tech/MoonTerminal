@@ -1,7 +1,7 @@
-//! Connections tab assembly: group branch headers, icon picker, market-data and core-order
-//! selectors, and the group-to-core tree with its global add button.
+//! Connections tab assembly: pending-core, group, and exchange branch headers; icon picker;
+//! market-data and core-order selectors; and the editable hierarchy with its top add button.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use gpui::*;
@@ -13,6 +13,51 @@ use rust_i18n::t;
 
 use super::SettingsView;
 use crate::design;
+use moon_core::session::CoreId;
+
+/// Draft server metadata needed to assemble the Connections hierarchy.
+pub(super) type ServerRowMeta = (CoreId, u64, bool, String, Option<String>);
+
+/// Return draft indices for unsaved cores that must stay in the top pending section.
+pub(super) fn pending_server_indices(servers: &[ServerRowMeta]) -> Vec<usize> {
+    servers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (_, uid, _, _, _))| (*uid == 0).then_some(index))
+        .collect()
+}
+
+/// Group one window group's server indices into an unknown-first exchange hierarchy.
+///
+/// Known exchange names use stable alphabetical order. Member indices retain draft order here and
+/// are ranked through `CoreOrder` by the renderer, keeping membership and user ordering separate.
+pub(super) fn exchange_sections<'a>(
+    servers: &'a [ServerRowMeta],
+    group: &str,
+) -> Vec<(Option<&'a str>, Vec<usize>)> {
+    let mut unknown = Vec::new();
+    let mut known: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, (_, uid, _, server_group, exchange)) in servers.iter().enumerate() {
+        if *uid == 0 || server_group != group {
+            continue;
+        }
+        match exchange.as_deref() {
+            Some(name) => known.entry(name).or_default().push(index),
+            None => unknown.push(index),
+        }
+    }
+
+    let mut sections = Vec::with_capacity(known.len() + usize::from(!unknown.is_empty()));
+    if !unknown.is_empty() {
+        sections.push((None, unknown));
+    }
+    sections.extend(
+        known
+            .into_iter()
+            .map(|(name, members)| (Some(name), members)),
+    );
+    sections
+}
 
 impl SettingsView {
     /// Render a group branch header with active state, icon, name, member count, window action,
@@ -118,6 +163,48 @@ impl SettingsView {
                         cx.listener(move |this, _, w, cx| this.add_server(nm_add.clone(), w, cx)),
                     )
                     .render(),
+            )
+    }
+
+    /// Render a compact pending-core or exchange subsection above its editable rows.
+    fn subsection_header_row(
+        id: SharedString,
+        name: String,
+        member_count: usize,
+        highlighted: bool,
+        p: MoonPalette,
+        cx: &App,
+    ) -> impl IntoElement {
+        h_flex()
+            .id(id)
+            .w_full()
+            .gap_2()
+            .items_center()
+            .pl(px(20.0))
+            .pr_1()
+            .py_0p5()
+            .child(
+                div()
+                    .w(px(6.0))
+                    .h(px(6.0))
+                    .rounded_full()
+                    .bg(rgb(if highlighted { p.accent } else { p.text_soft })),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_bold()
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(if highlighted { p.text } else { p.text_soft }))
+                    .child(name),
+            )
+            .child(
+                div()
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(p.text_soft))
+                    .child(t!("conn.member_count", n = member_count).to_string()),
             )
     }
 
@@ -258,7 +345,7 @@ impl SettingsView {
             )
     }
 
-    /// Render the Connections tab with source and ordering selectors plus the group-to-core tree.
+    /// Render the Connections tab with selectors, pending cores, and the group/exchange tree.
     pub(in crate::settings) fn connections_tab(
         &mut self,
         cx: &mut Context<Self>,
@@ -266,16 +353,25 @@ impl SettingsView {
         let p = MoonPalette::active(cx);
         // Snapshot live core status for the status dots.
         let status = self.backend.read(cx).session.status_map();
-        // Snapshot servers as (id, active, group) and groups as (name, active, icon).
+        // Snapshot server row metadata and groups as (name, active, icon).
         // Rank from the draft so a pending sort-mode change is visible before it is applied.
         let (order, servers, mut groups) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
+            let exchange_names = b.session.market_source().core_exchange_names();
             (
                 crate::core_order::CoreOrder::new(d),
                 d.servers
                     .iter()
-                    .map(|s| (s.id, s.active, s.group.clone()))
+                    .map(|s| {
+                        (
+                            s.id,
+                            s.uid,
+                            s.active,
+                            s.group.clone(),
+                            exchange_names.get(&s.id).cloned(),
+                        )
+                    })
                     .collect::<Vec<_>>(),
                 d.groups
                     .iter()
@@ -305,9 +401,9 @@ impl SettingsView {
                 .or_insert_with(|| self.icons.texture(*id));
         }
 
-        // Build one tree-like list: each group branch header is followed by its core leaves. It is
-        // not an expandable tree; indentation expresses the hierarchy. The column header uses the
-        // same left inset as leaves so core columns stay aligned.
+        // Build one tree-like list: pending rows come first, then each group and exchange branch.
+        // It is not expandable; indentation expresses hierarchy. The column header uses the same
+        // left inset as leaves so core columns stay aligned.
         let mut list_col = v_flex()
             .w_full()
             .min_w_0()
@@ -320,40 +416,21 @@ impl SettingsView {
             ))
             .child(Self::conn_col_head_row(p, cx));
 
-        // Explain the empty state when no server contributes a group.
-        if groups.is_empty() {
-            list_col = list_col.child(
-                div()
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("conn.no_groups").to_string()),
-            );
-        }
-
-        for (name, active, icon) in &groups {
-            let member_count = servers.iter().filter(|(_, _, g)| g == name).count();
-            let ico_el: AnyElement = match icon_tex.get(icon).and_then(|t| t.clone()) {
-                Some(arc) => img(arc)
-                    .w(design::ui_px(cx, 20.0))
-                    .h(design::ui_px(cx, 20.0))
-                    .into_any_element(),
-                None => div()
-                    .w(design::ui_px(cx, 20.0))
-                    .h(design::ui_px(cx, 20.0))
-                    .into_any_element(),
-            };
-            list_col =
-                list_col.child(self.group_header_row(name, *active, ico_el, member_count, p, cx));
-            // Render this group's core leaves with indentation and a vertical branch line.
-            // Keep inactive cores at their canonical position; the status dot shows state.
-            // Preserve `i`, the original index in this draft-derived `servers` snapshot. It is the
-            // corresponding index in `preview.servers` used by row mutations.
-            let mut members: Vec<(usize, &(u64, bool, String))> = servers
-                .iter()
-                .enumerate()
-                .filter(|(_, (_, _, g))| g == name)
-                .collect();
-            order.sort_by(&mut members, |(_, (id, _, _))| *id);
-            for (i, (id, srv_active, _g)) in members {
+        // Keep every newly added row directly below the column header until Save assigns its uid.
+        // Ranking still goes through CoreOrder, but no persisted group can precede this section.
+        let mut pending = pending_server_indices(&servers);
+        order.sort_by(&mut pending, |index| servers[*index].0);
+        if !pending.is_empty() {
+            list_col = list_col.child(Self::subsection_header_row(
+                "pending-cores".into(),
+                t!("conn.pending_cores").to_string(),
+                pending.len(),
+                true,
+                p,
+                cx,
+            ));
+            for i in pending {
+                let (id, _, srv_active, _, _) = &servers[i];
                 if let Some(row) = self.conn.get(i) {
                     let st = status.get(id).cloned();
                     list_col = list_col.child(
@@ -366,6 +443,68 @@ impl SettingsView {
                     );
                 }
             }
+        }
+
+        // Explain the empty state when no server contributes a group.
+        if groups.is_empty() {
+            list_col = list_col.child(
+                div()
+                    .text_color(rgb(p.text_soft))
+                    .child(t!("conn.no_groups").to_string()),
+            );
+        }
+
+        for (group_index, (name, active, icon)) in groups.iter().enumerate() {
+            let member_count = servers
+                .iter()
+                .filter(|(_, _, _, group, _)| group == name)
+                .count();
+            let ico_el: AnyElement = match icon_tex.get(icon).and_then(|t| t.clone()) {
+                Some(arc) => img(arc)
+                    .w(design::ui_px(cx, 20.0))
+                    .h(design::ui_px(cx, 20.0))
+                    .into_any_element(),
+                None => div()
+                    .w(design::ui_px(cx, 20.0))
+                    .h(design::ui_px(cx, 20.0))
+                    .into_any_element(),
+            };
+            list_col =
+                list_col.child(self.group_header_row(name, *active, ico_el, member_count, p, cx));
+            // Render exchange branches with their core leaves. Keep inactive cores at their
+            // canonical position; the status dot shows state. Each member index is also the index
+            // in `preview.servers` used by row mutations.
+            for (exchange_index, (exchange, mut members)) in
+                exchange_sections(&servers, name).into_iter().enumerate()
+            {
+                let identified = exchange.is_some();
+                let exchange_name = exchange
+                    .map(str::to_string)
+                    .unwrap_or_else(|| t!("conn.exchange_unknown").to_string());
+                list_col = list_col.child(Self::subsection_header_row(
+                    SharedString::from(format!("exchange-{group_index}-{exchange_index}")),
+                    exchange_name,
+                    members.len(),
+                    identified,
+                    p,
+                    cx,
+                ));
+                order.sort_by(&mut members, |index| servers[*index].0);
+                for i in members {
+                    let (id, _, srv_active, _, _) = &servers[i];
+                    if let Some(row) = self.conn.get(i) {
+                        let st = status.get(id).cloned();
+                        list_col = list_col.child(
+                            div()
+                                .ml(px(8.0))
+                                .pl(px(11.0))
+                                .border_l_1()
+                                .border_color(rgb(p.border))
+                                .child(self.server_row(cx, i, row, *id, *srv_active, st)),
+                        );
+                    }
+                }
+            }
             // Insert the icon picker directly below its selected group.
             if picking.as_deref() == Some(name.as_str()) {
                 list_col =
@@ -373,24 +512,32 @@ impl SettingsView {
             }
         }
 
-        // The global button adds a core to `default`; the Group field can be edited afterward.
-        list_col = list_col.child(
-            MoonButton::new("add-srv")
-                .outline()
-                .small()
-                .width(220.0)
-                .label(format!("+ {}", t!("conn.add_core")))
-                .on_click(cx.listener(|this, _, w, cx| this.add_server("default".into(), w, cx)))
-                .render(),
-        );
-
         v_flex()
             .w_full()
             .gap_2()
             // Market-data source dropdown ported from the egui ComboBox.
             .child(self.market_src_selector(cx))
-            // The selected order applies to every core list.
-            .child(self.core_sort_selector(cx))
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_center()
+                    // The selected order applies to every core list.
+                    .child(div().flex_1().min_w_0().child(self.core_sort_selector(cx)))
+                    // New rows remain in the pending section above every persisted group until Save.
+                    .child(
+                        MoonButton::new("add-srv")
+                            .outline()
+                            .small()
+                            // Content-driven width keeps localized text inside the outline. The
+                            // spaces compensate for the fork's zero horizontal button padding.
+                            .label(format!("  + {}  ", t!("conn.add_core")))
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                this.add_server("default".into(), w, cx)
+                            }))
+                            .render(),
+                    ),
+            )
             .child(list_col)
     }
 }
