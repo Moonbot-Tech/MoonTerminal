@@ -1,9 +1,9 @@
-//! Per-core АККАУНТНЫЕ данные: статус, ордера, детекты, стратегии. Свои у каждого
-//! ядра. Рыночные данные (крестики/стакан) — общие для биржи и живут отдельно в
-//! `crate::market::MarketStore` (дедуп по ядру-провайдеру), сюда не попадают.
+//! Per-core account data: status, orders, detects, and strategies. Each core has its own state.
+//! Market data such as price ticks and order books is shared per exchange and lives separately in
+//! `crate::market::MarketStore`, deduplicated through a provider core; it never enters this store.
 //!
-//! Версии (revision) заменяют dirty-флаги: каждая панель сама решает, когда
-//! перезаливать данные (важно, когда одно ядро показано в нескольких панелях).
+//! Revision counters replace dirty flags: each panel decides when to reload its data, which matters
+//! when one core is displayed in multiple panels.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -16,15 +16,15 @@ use crate::feed::{
 use crate::session::order_lines::OrderLineStore;
 use crate::util::now_unix_ms_i64;
 
-/// Сколько последних детектов держим в памяти на ядро.
+/// Maximum number of recent detects retained in memory for each core.
 const MAX_DETECTS: usize = 2000;
 
-/// Сколько последних строк серверного лога держим в памяти на ядро (для живого
-/// просмотра/поиска). История глубже — в файлах logs/<дата>_<ядро>.log.
+/// Maximum number of recent server-log lines retained per core for live viewing and search.
+/// Older history remains in `logs/<date>_<core>.log` files.
 const MAX_LOG: usize = 5000;
 
-/// Кап очереди недоставленных тостов Engine-действий (копятся, пока ни одно окно
-/// не активно; потребитель — Shell активного окна).
+/// Maximum number of undelivered Engine action toasts queued while no window is active.
+/// The active window's shell consumes the queue.
 const MAX_ENGINE_ACTIONS: usize = 64;
 
 pub type CoreId = u64;
@@ -82,17 +82,20 @@ impl BalanceState {
 
 pub struct CoreData {
     pub status: ConnStatus,
-    /// Открытые ордера ядра (все рынки).
+    /// Latest combined core order rows across all markets.
+    ///
+    /// A live batch starts from the open-order snapshot and can briefly include captured terminal
+    /// event rows that disappeared before the application drained the feed queue.
     pub orders: Vec<OrderRow>,
-    /// Ретейн-стор линий ордеров для чарта (история + закрытые, всю сессию).
+    /// Retained chart order-line store, including history and up to 5000 closed orders per core.
     pub order_lines: OrderLineStore,
-    /// Последние детекты ядра (кольцо, обрезается до MAX_DETECTS).
+    /// Recent core detects, trimmed as a ring buffer to `MAX_DETECTS`.
     pub detects: VecDeque<DetectRow>,
-    /// Стратегии ядра (последний снимок; для окна стратегий).
+    /// Latest core strategy snapshot for the Strategies window.
     pub strategies: Vec<StrategyRow>,
-    /// Схема стратегий ядра (секции/поля по видам). None пока не пришла.
+    /// Core strategy schema with sections and per-kind fields, or `None` until it arrives.
     pub schema: Option<StrategySchemaModel>,
-    /// Активы/позиции ядра (последний снимок; для окна «Активы»).
+    /// Latest core assets and positions snapshot for the Assets window.
     pub assets: AssetsSnapshot,
     /// Whether a non-`Ready` status occurred after the latest assets message. The snapshot and
     /// `assets_rev` remain retained across reconnect, so returning to `Ready` cannot establish
@@ -106,39 +109,40 @@ pub struct CoreData {
     /// it properly needs a connection generation / balance revision carried on the payload, so
     /// this flag can be cleared only by data proven to be current.
     pub assets_stale: bool,
-    /// Transfer-активы ядра по кошелькам (для дерева переноса). Пусто, пока не запрошено.
+    /// Core transfer assets by wallet for the transfer tree. Empty until requested.
     pub transfer_assets: TransferAssetsSnapshot,
-    /// License/Free-PRO/MoonCredits state ядра. None, пока ядро не ответило.
+    /// Core license, Free/PRO, and MoonCredits state, or `None` until the core responds.
     pub license: Option<LicenseState>,
-    /// Снимок настроек клиента ядра (TP/SL/sell/iceberg/…). None, пока не пришёл.
+    /// Core client-settings snapshot, including TP, SL, sell, and iceberg settings, or `None` until
+    /// it arrives.
     pub client_settings: Option<ClientSettings>,
-    /// Снимок управления плечом ядра. None, пока не пришёл.
+    /// Core leverage-management snapshot, or `None` until it arrives.
     pub lev_manage: Option<LevManageState>,
-    /// Runtime/passive-mode state ядра. None, пока не пришёл.
+    /// Core runtime and passive-mode state, or `None` until it arrives.
     pub runtime_state: Option<RuntimeState>,
-    /// Hedge-mode аккаунта (dual-side позиции). None, пока ядро не ответило.
+    /// Account hedge mode for dual-side positions, or `None` until the core responds.
     pub hedge_mode: Option<bool>,
-    /// Непоказанные результаты Engine-действий (для тостов). Дренируется Shell'ом
-    /// активного окна через [`CoreData::take_engine_actions`].
+    /// Unshown Engine action results for toasts. The active window's shell drains them through
+    /// [`CoreData::take_engine_actions`].
     engine_actions: VecDeque<EngineActionResult>,
-    /// Авторитетные chart-алерты ядра: (market, obj_uid) → blob (`TChartObject.Save()`,
-    /// непрозрачный). Набор ведёт сервер; после реконнекта фид запрашивает снапшот,
-    /// который приходит теми же Upserted (перезапись по ключу). Blob нужен для
-    /// re-upsert (вкл/выкл алерта) и реверса формата.
+    /// Authoritative core chart alerts keyed by `(market, obj_uid)`, with opaque
+    /// `TChartObject.Save()` blobs. The server owns the set; after reconnect, the feed requests a
+    /// snapshot delivered through the same `Upserted` updates that overwrite entries by key. The
+    /// blob is retained for re-upserts when toggling alerts and for format round-tripping.
     pub chart_alerts: HashMap<(String, u64), Vec<u8>>,
-    /// Последние строки серверного лога ядра (кольцо, обрезается до MAX_LOG).
+    /// Recent core server-log lines, trimmed as a ring buffer to `MAX_LOG`.
     pub log: VecDeque<LogLine>,
-    /// Сырые строки серверного лога с временем приёма терминалом. Нужны diagnostic/FireTest
-    /// замерам; UI продолжает читать форматированный `log`.
+    /// Raw server-log lines with terminal receipt times for diagnostics and FireTest measurements.
+    /// The UI continues to read the formatted `log`.
     pub server_log_raw: VecDeque<crate::feed::CoreLogLine>,
     /// Latest typed core resource telemetry from protocol-v4 `Event::KernelHealth`.
     /// The Core Status table observes it through `sys_rev`.
     pub sys: crate::feed::CoreSysStatus,
-    /// Растёт при каждом новом снимке открытых ордеров; этим гейтится таблица Orders.
+    /// Advances for every new combined order-row batch and gates the Orders table.
     pub orders_table_rev: u64,
-    /// Растёт только при изменении геометрии/состояния ордерных линий на графике.
+    /// Advances only when chart order-line geometry or state changes.
     pub order_lines_rev: u64,
-    /// Локальное время последнего bump `order_lines_rev`.
+    /// Local time of the latest `order_lines_rev` increment.
     pub order_lines_rev_ms: i64,
     pub detects_rev: u64,
     pub strategies_rev: u64,
@@ -199,26 +203,29 @@ impl CoreData {
         }
     }
 
-    /// Снимок последних `max` строк лога ядра (старые→новые) для панели лога.
+    /// Return the latest `max` core log lines from oldest to newest for the Log panel.
     pub fn log_snapshot(&self, max: usize) -> Vec<LogLine> {
         let start = self.log.len().saturating_sub(max);
         self.log.iter().skip(start).cloned().collect()
     }
 
-    /// Забирает накопленные результаты Engine-действий (очередь дренируется:
-    /// потребитель один — Shell активного окна, тосты показываются один раз).
+    /// Drain queued Engine action results for the active window's shell.
+    ///
+    /// There is a single consumer, so each toast is shown exactly once.
     pub fn take_engine_actions(&mut self) -> Vec<EngineActionResult> {
         self.engine_actions.drain(..).collect()
     }
 
-    /// Снимок сырых строк серверного лога (старые→новые) для diagnostic замеров.
+    /// Return the latest raw server-log lines from oldest to newest for diagnostic measurements.
     pub fn raw_server_log_snapshot(&self, max: usize) -> Vec<crate::feed::CoreLogLine> {
         let start = self.server_log_raw.len().saturating_sub(max);
         self.server_log_raw.iter().skip(start).cloned().collect()
     }
 
-    /// Применяет только аккаунтные сообщения. Identity/CoreBase/MarketDataChanged
-    /// маршрутизируются координатором мимо CoreData.
+    /// Apply an account-plane message to this core.
+    ///
+    /// The coordinator routes `Identity`, `CoreBase`, and `MarketDataChanged` without applying them
+    /// to `CoreData`.
     pub fn apply(&mut self, msg: FeedMsg) {
         match msg {
             FeedMsg::Status(s) => {
@@ -231,10 +238,10 @@ impl CoreData {
                 self.status = s;
             }
             FeedMsg::Orders(orders) => {
-                // Сначала обновляем ретейн-стор линий (трассы/узлы/закрытия) по
-                // свежему снимку, затем перемещаем его в список для таблицы.
-                // Таблица и график гейтятся разными revision: таблице важен любой
-                // новый snapshot, графику — только изменение линий.
+                // Update the retained line store (traces, nodes, and closures) from the fresh
+                // combined row batch before moving it into the table list. Separate revisions gate
+                // the table and chart: every batch matters to the table, while only render-affecting
+                // order-line changes matter to the chart.
                 let changed = self.order_lines.update(&orders);
                 self.orders = orders;
                 self.orders_table_rev = self.orders_table_rev.wrapping_add(1);
@@ -252,8 +259,9 @@ impl CoreData {
             }
             FeedMsg::Detects(detects) => {
                 if !detects.is_empty() {
-                    // detect-diag: дошли до стора (CoreData) и бампаем detects_rev — этот rev
-                    // дальше гейтит ChartTabs::ingest через chart_tabs_sig. (env MOON_DETECT_DIAG.)
+                    // The detect diagnostic reached `CoreData` and is about to increment
+                    // `detects_rev`, which gates `ChartTabs::ingest` through `chart_tabs_sig`.
+                    // Enable this path with `MOON_DETECT_DIAG`.
                     crate::detect_diag::line(&format!(
                         "[store] +{} detects → rev={}",
                         detects.len(),
@@ -366,7 +374,7 @@ impl CoreData {
                     self.log_rev = self.log_rev.wrapping_add(1);
                 }
             }
-            // Идентификационные/рыночные wake-сообщения сюда не маршрутизируются.
+            // Identity and market wake-up messages are not routed into this store.
             FeedMsg::Identity(_) | FeedMsg::CoreBase { .. } | FeedMsg::MarketDataChanged(_) => {}
         }
     }
@@ -407,8 +415,9 @@ impl CoreStore {
         self.cores.entry(id).or_default();
     }
 
-    /// Удалить аккаунтные данные ядра (сервер убран из конфига). Live-подписки/окна
-    /// чистит вызывающий (`SessionManager::reconcile`).
+    /// Remove account data for a core whose server was removed from configuration.
+    /// The session lifecycle separately removes its feed handle, market client, and coordination
+    /// state.
     pub fn remove(&mut self, id: CoreId) {
         self.cores.remove(&id);
     }
@@ -421,26 +430,30 @@ impl CoreStore {
         self.cores.get_mut(&id)
     }
 
-    /// Снимок статусов всех ядер (id → клон статуса) — для бейджей в Настройках.
+    /// Iterate over owned snapshots of every core's status for Settings badges.
     pub fn statuses(&self) -> impl Iterator<Item = (CoreId, ConnStatus)> + '_ {
         self.cores.iter().map(|(id, d)| (*id, d.status.clone()))
     }
 
-    /// Итератор по ядрам (id, данные) — для реконсиляции chart-алертов и т.п.
+    /// Iterate over core ids and data for chart-alert reconciliation and similar consumers.
     pub fn cores(&self) -> impl Iterator<Item = (CoreId, &CoreData)> + '_ {
         self.cores.iter().map(|(id, d)| (*id, d))
     }
 
-    /// Суммарная ревизия chart-алертов всех ядер — дёшево ловит «серверный набор
-    /// алертов изменился хоть у какого-то ядра» (гейт реконсиляции remote-фигур).
+    /// Return the combined chart-alert revision across all cores.
+    ///
+    /// This cheaply detects whether any server-owned alert set changed and gates remote-figure
+    /// reconciliation.
     pub fn chart_alerts_activity(&self) -> u64 {
         self.cores
             .values()
             .fold(0u64, |a, c| a.wrapping_add(c.chart_alerts_rev))
     }
 
-    /// Суммарная ревизия лога всех ядер — дёшево ловит «появились новые строки лога
-    /// хоть у какого-то ядра» (App форсит кадр окнам с активной вкладкой «Лог»).
+    /// Return the combined log revision across all cores.
+    ///
+    /// This cheaply detects new log lines on any core so the application can request a frame for
+    /// windows whose Log tab is active.
     pub fn log_activity(&self) -> u64 {
         self.cores
             .values()

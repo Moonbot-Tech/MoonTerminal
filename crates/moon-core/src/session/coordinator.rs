@@ -1,8 +1,8 @@
-//! Координатор рыночного плана: выбор ядра-провайдера на биржу, failover, расчёт
-//! обслуживаемых рынков (union открытых чартов + linger) и рассылка ядрам рыночной
-//! роли. Вынесено из `mod.rs`, потому что это новая логика поверх существующего
-//! пер-ядерного потока. Логика живёт как методы `SessionManager` (доступ к её полям
-//! из дочернего модуля разрешён).
+//! Market-plan coordinator: in `Dedup` mode it elects one provider core per exchange and handles
+//! failover, while in `PerCore` mode every core is its own provider. It computes served markets
+//! from the union of open charts plus linger and distributes market roles to cores. This logic
+//! extends the existing per-core feed and lives as `SessionManager` methods so the child module
+//! can access the manager's fields.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -11,8 +11,8 @@ use super::{CoreId, SessionManager};
 use crate::feed::{ConnStatus, CoreCmd, ExchangeId};
 use crate::market::MarketDataMode;
 
-/// Рынок держим обслуживаемым ещё этот срок после закрытия последнего чарта — чтобы
-/// быстрое переоткрытие не рвало подписку/чтение и не перевыгружало историю заново.
+/// Keep serving a market for this long after its last chart closes so a quick reopen does not
+/// interrupt subscriptions or reads and reload history from scratch.
 const UNSUB_DELAY: Duration = Duration::from_secs(5);
 
 fn market_diag_enabled() -> bool {
@@ -26,10 +26,10 @@ fn market_diag(msg: impl std::fmt::Display) {
 }
 
 impl SessionManager {
-    /// Сообщает, какие рынки сейчас удерживаются открытыми (ядро → рынок).
-    /// Вызывается по dirty-флагу `desired` и страховочно по редкому wall-clock fallback,
-    /// но не на каждый present/render кадр. Перевыбирает провайдеров, считает
-    /// обслуживаемые рынки на провайдера и шлёт ядрам рыночную роль только при изменении.
+    /// Reconcile the markets currently held open as `(core, market)` pairs.
+    /// This runs when desired market or order-book state is dirty and as an infrequent wall-clock
+    /// fallback, not on every present or render frame. It re-elects providers, computes served
+    /// markets per provider, and sends each core a market role only when that role changes.
     pub fn set_open(
         &mut self,
         desired: &[(CoreId, String)],
@@ -38,17 +38,18 @@ impl SessionManager {
         let now = Instant::now();
         self.reconcile_providers();
 
-        // 1. Желаемые рынки на провайдера = union открытых чартов ядер этого
-        //    провайдера. Принимаем СПИСОК пар (ядро может иметь несколько открытых
-        //    рынков — мульти-панель), агрегируем в множество на провайдера.
+        // 1. A provider's desired markets are the union of open charts for cores assigned to that
+        //    provider. The input is a list of pairs because one core may have several open markets
+        //    across multiple panels; aggregate them into one set per provider.
         let mut desired_pm: HashMap<CoreId, HashSet<String>> = HashMap::new();
         for (core, market) in desired {
             if let Some(&p) = self.core_provider.get(core) {
                 desired_pm.entry(p).or_default().insert(market.clone());
             }
         }
-        // Рынки, которым нужен стакан, агрегированные на провайдера (OR по всем окнам). Подписку
-        // стакана держим только на них (без linger — стакан можно дёргать быстро).
+        // Aggregate markets requiring an order book per provider across all windows. Retain
+        // order-book subscriptions only for this set, with no linger, so demand changes take effect
+        // immediately.
         let mut orderbook_pm: HashMap<CoreId, HashSet<String>> = HashMap::new();
         for (core, market) in desired_orderbook {
             if let Some(&p) = self.core_provider.get(core) {
@@ -56,8 +57,8 @@ impl SessionManager {
             }
         }
 
-        // 2a. Новые желаемые рынки → в wanted + чистый view (провайдер перечитает
-        //     retained-историю с начала); отложенный сброс отменяем.
+        // 2a. Add newly desired markets to `wanted` and reset their views so the provider rereads
+        //     retained history from the beginning. Cancel any pending drop.
         for (p, mkts) in &desired_pm {
             let w = self.wanted.entry(*p).or_default();
             for m in mkts {
@@ -69,7 +70,7 @@ impl SessionManager {
             }
         }
 
-        // 2b. Рынки в wanted, которых больше никто не хочет → отложенный сброс (linger).
+        // 2b. Schedule a delayed drop for markets in `wanted` that no consumer still wants.
         let mut to_schedule: Vec<(CoreId, String)> = Vec::new();
         for (p, w) in &self.wanted {
             for m in w {
@@ -83,7 +84,7 @@ impl SessionManager {
             self.pending_drop.entry(key).or_insert(now + UNSUB_DELAY);
         }
 
-        // 2c. Истёкшие отложенные сбросы → реально убрать из wanted и освободить view.
+        // 2c. Remove expired delayed drops from `wanted` and release their views.
         let expired: Vec<(CoreId, String)> = self
             .pending_drop
             .iter()
@@ -98,8 +99,8 @@ impl SessionManager {
             self.market_source.drop_market(p, &m);
         }
 
-        // 3. Рассылаем ядрам роль. Провайдер (значение в core_provider) → (true, его
-        //    рынки); остальные → (false, []). Шлём только при изменении роли.
+        // 3. Distribute roles to cores. A provider named in `core_provider` receives `(true, its
+        //    markets)`; all other cores receive `(false, [])`. Send only changed roles.
         let provider_cores: HashSet<CoreId> = self.core_provider.values().copied().collect();
         let mut cmds: Vec<(CoreId, bool, Vec<String>, Vec<String>)> = Vec::new();
         for sess in &self.sessions {
@@ -113,8 +114,8 @@ impl SessionManager {
             } else {
                 Vec::new()
             };
-            markets.sort(); // стабильный порядок для сравнения с last_cmd
-                            // Стакан: подмножество markets, которым нужен стакан (без linger — снимаем сразу).
+            markets.sort(); // Stable ordering allows direct comparison with `last_cmd`.
+                            // Order books are the subset of markets with current demand; removal is immediate.
             let mut orderbook_markets: Vec<String> = if is_prov {
                 let obk = orderbook_pm.get(&id);
                 markets
@@ -149,11 +150,12 @@ impl SessionManager {
         }
     }
 
-    /// Перестраивает `core_provider` (ядро → ядро-провайдер) и `providers` (биржа →
-    /// провайдер). В Dedup избирает по одному здоровому Ready-ядру на биржу с
-    /// удержанием текущего и failover; в PerCore каждое ядро — свой провайдер.
+    /// Rebuild `core_provider` (core to provider core) and `providers` (exchange to provider).
+    /// `Dedup` prefers one Ready core per exchange, retaining the current Ready provider when
+    /// possible and falling back to the exchange's first available core when none are Ready. In
+    /// `PerCore`, every core is its own provider.
     fn reconcile_providers(&mut self) {
-        // Снимок (id, биржа, Ready?) — без удержания заимствований self во время мутаций.
+        // Snapshot `(id, exchange, Ready?)` so later mutations do not retain borrows of `self`.
         let infos: Vec<(CoreId, Option<ExchangeId>, bool)> = self
             .sessions
             .iter()
@@ -178,7 +180,7 @@ impl SessionManager {
                 self.providers.clear();
             }
             MarketDataMode::Dedup => {
-                // Группируем ядра по бирже (только с известной идентичностью).
+                // Group cores by exchange, excluding cores whose exchange identity is unknown.
                 let mut by_key: HashMap<ExchangeId, Vec<CoreId>> = HashMap::new();
                 for (id, key, _) in &infos {
                     if let Some(k) = key {
@@ -192,8 +194,8 @@ impl SessionManager {
                         .map(|(_, _, r)| *r)
                         .unwrap_or(false)
                 };
-                // Удерживаем текущего провайдера, если он жив и Ready; иначе берём
-                // первое Ready-ядро биржи (fallback — первое любое).
+                // Keep the current provider when it is present and Ready; otherwise choose the
+                // exchange's first Ready core, falling back to its first core of any status.
                 let mut elected: HashMap<ExchangeId, CoreId> = HashMap::new();
                 for (k, cores) in &by_key {
                     let cur = self.providers.get(k).copied();
@@ -208,8 +210,8 @@ impl SessionManager {
                         }
                     }
                 }
-                // Провайдер биржи сменился → сбрасываем данные старого, его wanted и
-                // last_cmd (получит свежее (false,[]) и снимет all-trades).
+                // When an exchange changes provider, clear the old provider's data, `wanted`, and
+                // `last_cmd`. It will receive a fresh `(false, [])` role and unsubscribe all trades.
                 for (k, &p) in &elected {
                     if self.providers.get(k).copied() != Some(p) {
                         if let Some(old) = self.providers.get(k).copied() {
@@ -225,8 +227,8 @@ impl SessionManager {
         }
 
         self.market_source.set_provider_map(&new_core_provider);
-        // Стабильные идентичности бирж провайдеров — ключ локального kline-кэша
-        // (ядра одной биржи делят кэш; CoreId между сессиями нестабилен).
+        // Stable provider exchange identities key the local kline cache, allowing cores on one
+        // exchange to share cached data and preserving that cache across provider elections.
         let provider_exchange: HashMap<CoreId, ExchangeId> = new_core_provider
             .values()
             .filter_map(|p| self.core_key.get(p).map(|k| (*p, *k)))
