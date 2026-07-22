@@ -1,7 +1,8 @@
-//! Debug/perf окна (gated `debug_assertions`/`moon_profile_debug`/feature `debug-tools`):
-//! окно статистики (DebugPerfWindow) + хост debug-чарта (DebugChartHost) + спавн/закрытие
-//! пачки debug-чартов. Вынесено из main.rs. `Backend` живёт в крейт-руте (доступ к приватным
-//! полям сохраняется по правилу видимости предка из потомка).
+//! Debug and performance windows gated by `debug_assertions`, `moon_profile_debug`, or the
+//! `debug-tools` feature. This module provides the statistics window (`DebugPerfWindow`), the debug
+//! chart host (`DebugChartHost`), and batch opening and closing of debug chart windows. It was
+//! extracted from `main.rs`. `Backend` remains in the crate root, and Rust's descendant visibility
+//! rule allows this child module to access its private fields.
 
 use std::time::Duration;
 
