@@ -1,6 +1,6 @@
-//! `impl Render for ChartPanel` — own-pass canvas под сценой + слой ввода (колесо/кнопки/
-//! движение мыши/ховер) + GPUI-оверлеи (логотип пустого слота, FireTest-probe, риска зоны
-//! управления, кнопки ✕/пин). Вынесено из `chart.rs` без изменения поведения.
+//! `ChartPanel` rendering: an own-pass canvas beneath the scene, an input layer for wheel/button/
+//! pointer/hover events, and GPUI overlays for the empty-slot logo, FireTest probe, control-zone
+//! marker, and chart controls.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -14,16 +14,17 @@ use super::render_input;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};
 use crate::chart_persist::ChartBtnPos;
 
-/// Тип кнопки рыночного действия в оверлее чарта.
+/// Market-action button type for the chart overlay.
 #[derive(Clone, Copy)]
 enum ActKind {
     CancelBuy,
     PanicSell,
 }
 
-/// Кнопка Cancel Buy / Panic Sell — общий конструктор per-pane ветки и
-/// fullscreen-оверлея (label/variant/on_click идентичны; вызывающие добавляют
-/// только id и `.full_width()`). Бренд-термины Moonbot — НЕ локализуем.
+/// Builds a Cancel Buy or Panic Sell button shared by per-pane and fullscreen overlays.
+///
+/// Labels, variants, and click handling are identical; callers supply only the ID and optionally
+/// add `.full_width()`. Moonbot product terms remain intentionally untranslated.
 fn action_button(
     kind: ActKind,
     id: SharedString,
@@ -34,9 +35,9 @@ fn action_button(
 ) -> MoonButton {
     let (label, variant, selected) = match kind {
         ActKind::CancelBuy => ("Cancel Buy", MoonButtonVariant::Soft, false),
-        // Взведённый паник — кнопка «Stop Panic» (как в MoonBot: повторный клик =
-        // TTurnPanicSell off): без этого не видно, что тоггл умеет снимать паник,
-        // а снятие — обязательный шаг, чтобы двигать sell ниже пола AllowedDrop.
+        // An armed panic becomes "Stop Panic", matching MoonBot's second-click
+        // `TTurnPanicSell off` behavior. This exposes the ability to disarm panic, which is
+        // required before moving sell below the AllowedDrop floor.
         ActKind::PanicSell if armed => ("Stop Panic", MoonButtonVariant::Danger, true),
         ActKind::PanicSell => ("Panic Sell", MoonButtonVariant::Danger, false),
     };
@@ -70,7 +71,7 @@ impl Render for ChartPanel {
         self.chart
             .set_market_source(Some(self.backend.read(cx).session.market_source()));
         let ppp = window.scale_factor();
-        // Запоминаем DPI для data prepare path (у него нет window). DPI меняется редко.
+        // Cache DPI for the data-prepare path, which has no Window. DPI changes infrequently.
         self.last_ppp = ppp;
         self.chart.set_last_ppp(ppp);
         let palette = MoonPalette::active(cx);
@@ -85,27 +86,28 @@ impl Render for ChartPanel {
             60.0
         };
         self.chart.set_present_rate_hz(effective_present_rate_hz);
-        // ВАЖНО: НЕТ request_animation_frame/continuous-present. `gpu_canvas.frame()` решает
-        // present на platform tick без dirty GPUI tree; `draw()` рисует в тот же tick.
+        // IMPORTANT: there is no request_animation_frame or continuous present. `gpu_canvas.frame()`
+        // decides whether to present on the platform tick without dirtying the GPUI tree, and
+        // `draw()` renders during that same tick.
         let (theme, orders_style, follow, prospective_usd, candle_view) = {
             let b = self.backend.read(cx);
             let eff = b.preview.as_ref().unwrap_or(&b.config);
-            // Прогнозный размер ордера (s1-s6) активной монеты в $ — для подписи на перекрестии.
+            // Prospective s1-s6 order size in dollars for the active coin's crosshair label.
             let prospective = self
                 .chart
                 .active_target()
                 .and_then(|(core, _)| b.prospective_order_usd(core));
-            // Наборы темы чарта и стилей линий — по активной теме (светлая/тёмная).
-            // Светлый набор теперь полноценный (theme.toml `[light]`) — никаких
-            // перекрытий палитрой на лету, цвета редактируются как у тёмного.
+            // Select chart-theme and line-style sets from the active light/dark theme. The light
+            // set is complete in theme.toml `[light]`, with no runtime palette overrides, so its
+            // colors are editable in the same way as the dark set.
             let orders = eff.orders.get(palette.is_light()).clone();
             let theme = eff.theme.get(palette.is_light()).clone();
-            // Свечи: per-вкладочный override панели, иначе глобальный дефолт из layout.
+            // Candles use the panel's per-tab override or the global layout default.
             let candle_view = self.candle_view.unwrap_or(b.layout.candle_view);
             (theme, orders, b.follow, prospective, candle_view)
         };
-        // Масштаб — ПО-ВКЛАДОЧНЫЙ: берём self.scale (его правят set_scale из тулбара активной
-        // вкладки / шапки выносного окна), а не глобальный backend.price_scale.
+        // Scale is PER TAB: use self.scale, updated through set_scale by the active-tab toolbar or
+        // detached-window header, rather than the global backend.price_scale.
         let mut settings_changed = self.chart.set_theme(theme)
             | self.chart.set_orders(orders_style)
             | self.chart.set_scale(self.scale)
@@ -121,8 +123,9 @@ impl Render for ChartPanel {
             | self.chart.set_cursor_labels(self.cursor_labels)
             | self.chart.set_prospective_usd(prospective_usd)
             | self.chart.set_follow(follow, now_unix_ms());
-        // Режим сравнения: пока активен lock, держим Y-окно якоря (перебивает scale каждый кадр —
-        // set_locked_y идемпотентен, без изменений вернёт false). Снятие lock — в set_locked_y.
+        // While compare lock is active, preserve the anchor's Y window, overriding scale each
+        // frame. The engine's set_locked_y is idempotent and returns false when unchanged; the
+        // panel's set_locked_y handles clearing the lock and restoring configured/automatic scale.
         if let Some((center, range)) = self.locked_y {
             settings_changed |= self.chart.set_locked_y(center, range);
         }
@@ -138,31 +141,31 @@ impl Render for ChartPanel {
             self.sync_orders_if_visible(cx, true);
         }
 
-        // axis_panes (раскладка панелей + снимок) считаем ОДИН раз за кадр и переиспользуем
-        // и для hit-теста ввода (pane_rects), и для отрисовки осей — раньше layout панелей
-        // гонялся дважды (внутри гейта prepare ради pane_rects + здесь ради отрисовки).
+        // Snapshot visible pane layout once and reuse its rectangles for pane-positioned GPUI
+        // overlays. The single-pane action overlay uses GPUI layout, while FireTest uses its canvas
+        // bounds. Input hit testing receives the engine's current pane rectangles separately.
         let axis_panes = self.chart.axis_panes(axes::local_offset_sec());
         self.input.pane_rects = self.chart.pane_rects();
-        // Хит-тест ввода должен знать сторону оси (отступ/ширина плота). Метла прячет ось.
+        // Input hit testing needs the axis side to account for plot inset/width. Broom mode hides it.
         self.input.price_axis_pos = if self.orderbook_only {
             crate::chart_persist::PriceAxisPos::Hide
         } else {
             self.price_axis_pos
         };
-        // Угловой ✕ закрытия монеты — на панели графика (и Main, и AddToChart):
-        // закрыл монету на Main → вернулись к лого. Позиция из раскладки панелей (девайс-px →
-        // лог.px слота); собираем ДО canvas, который забирает axis_panes по move.
+        // Place each corner close button on its graph pane in Main and AddToChart. Closing Main's
+        // coin returns it to the logo. Convert pane-layout device pixels to slot logical pixels,
+        // and collect these positions once for the overlay list.
         let close_btns: Vec<(usize, f32, f32)> = axis_panes
             .iter()
             .map(|(idx, rect, _)| (*idx, (rect.x + rect.w) / ppp, rect.y / ppp))
             .collect();
         // Cursor-only motion is handled by the chart-slot hitbox below. It updates retained
         // gpu_canvas cursor/readout directly and does not notify the GPUI tree.
-        // П.2: кнопка «пин» в левом верхнем углу ВНУТРИ области графика (правее ценовой оси,
-        // не на самой оси) — ТОЛЬКО на AddToChart-панелях (с TTL). Пин отменяет авто-закрытие.
-        // (idx, pinned, left_px, top_px). PRICE_AXIS_W — логическая ширина оси (rect в девайс-px).
-        // Кнопки (пин/замок/метла) у ЛЕВОГО края плота → сдвиг на ось нужен ТОЛЬКО когда ось слева.
-        // При оси справа/скрытой (и в режиме метлы) плот начинается у края слота → сдвига нет.
+        // Put the pin at the graph area's top-left plot edge, clear of the configured price-axis
+        // gutter, only on TTL-enabled AddToChart panes. Pinning cancels automatic closure. Fields are
+        // (idx, pinned, left_px, top_px). PRICE_AXIS_W is logical while pane rects use device px.
+        // Pin/lock/broom buttons sit at the plot's LEFT edge, so offset only for a left-side axis.
+        // With a right/hidden axis or broom mode, the plot begins at the slot edge with no offset.
         let axis_off = if matches!(
             self.price_axis_pos,
             crate::chart_persist::PriceAxisPos::Left
@@ -184,9 +187,9 @@ impl Render for ChartPanel {
                 )
             })
             .collect();
-        // Кнопка-замок режима сравнения — ТОЛЬКО когда вкладка горизонтальная (`compare_eligible`),
-        // рядом с пином. Горит на якоре (`is_compare_anchor`). Клик переносит чарт влево и делает
-        // его ведущим по цене (обрабатывает стек по `take_compare_lock_request`).
+        // Show the compare-lock button beside the pin only for horizontal, compare-eligible tabs.
+        // It is selected on the anchor. Clicking the active anchor requests comparison shutdown;
+        // clicking another chart requests that the stack move it left and make it the price leader.
         let compare_anchor = self.is_compare_anchor;
         let compare_broom_on = self.compare_broom_on;
         let lock_btns: Vec<(usize, f32, f32)> = if self.compare_eligible {
@@ -197,8 +200,8 @@ impl Render for ChartPanel {
         } else {
             Vec::new()
         };
-        // Кнопка-метла — ТОЛЬКО на якоре (рядом с горящим замком). Переключает «только стакан»
-        // у соседей якоря.
+        // Show the broom only on the anchor beside its selected lock; it toggles book-only mode for
+        // the anchor's neighbors.
         let broom_btns: Vec<(usize, f32, f32)> = if self.compare_eligible && compare_anchor {
             axis_panes
                 .iter()
@@ -207,17 +210,18 @@ impl Render for ChartPanel {
         } else {
             Vec::new()
         };
-        // Риска зоны управления: при раздельных зонах И СКРЫТОМ стакане рисуем границу зоны
-        // ордеров (справа поверх чарта), чтобы было видно, где клики ставят ордера, а где
-        // дабл-клик уходит на Main. Стакан виден → его видно и так, риску не дублируем.
-        // (idx, left_лог, top_лог, w_лог, h_лог) — device-px из axis_panes делим на ppp, как ✕.
+        // With separate zones and a hidden order book, shade the right-side order control zone so
+        // users can distinguish order-placement clicks from chart double-clicks that open Main.
+        // A visible book already marks this area, so do not duplicate it. Tuple fields are
+        // (idx, logical left, logical top, logical width, logical height), converted from axis_panes
+        // device pixels by dividing by ppp, like the close buttons.
         let show_zone_marker = self.show_zone && self.separate_zones(cx) && !self.orderbook_enabled;
         let zone_markers: Vec<(usize, f32, f32, f32, f32)> = if show_zone_marker {
             axis_panes
                 .iter()
                 .map(|(idx, rect, _)| {
                     let zone_w = moon_chart::GLASS_ZONE_PX.min(rect.w * 0.5);
-                    // Ось времени скрыта → жёлоб под подписи не резервируем, зона до низа слота.
+                    // A hidden time axis reserves no label gutter, so the zone reaches the slot bottom.
                     let time_axis_h = if self.time_axis_visible {
                         moon_chart::TIME_AXIS_H * ppp
                     } else {
@@ -236,26 +240,28 @@ impl Render for ChartPanel {
         } else {
             Vec::new()
         };
-        // Кнопки рыночных действий (Cancel Buy / Panic Sell) — GPUI-оверлей внизу тела графика,
-        // НАД строкой оси времени (OverScene-текст осей рисуется поверх GPUI, в его зону
-        // не лезем). Позиция каждой кнопки (Hide/Left/Center/Right) —
-        // из настроек вкладки. Кладём СТРОГО в зону чарта: слева режем ось цены, справа — зону
-        // стакана/управления (даже когда стакан выключен). Не влезает — ужимаем кнопки (текст
-        // обрежется справа overflow_hidden). Список: (kind, x, top, w, h, core, market, armed).
+        // Render Cancel Buy / Panic Sell as a GPUI overlay at the bottom of the graph body, ABOVE
+        // the time-axis row. OverScene axis text renders above GPUI, so avoid its area. Each tab's
+        // setting chooses Hide/Left/Center/Right. Keep buttons strictly inside the chart zone:
+        // exclude the price-axis gutter on its configured side and the book/control zone on the
+        // right even when the book is disabled. Shrink buttons when needed; overflow_hidden clips
+        // text on the right.
+        // Tuple fields: (kind, x, top, width, height, core, market, armed).
         const ACT_BTN_W: f32 = 92.0;
         const ACT_GAP: f32 = 8.0;
         const ACT_MIN_W: f32 = 30.0;
-        // Кнопки — MoonButton размера Micro (маленькие, как close/pin/lock-оверлей чарта). Их
-        // высоту для раскладки берём ИЗ ТЕМЫ (масштабируется ползунком шрифта, как сама кнопка),
-        // а не хардкод-числом: базовые метрики Micro (h18/line12/pad3) — те же, что moonui считает
-        // в height_for_size → MoonTheme::fit_height. Ширину кнопок задаём мы (зона чарта).
+        // These use MoonButton Micro, like the chart's close/pin/lock overlays. Derive layout height
+        // FROM THE THEME so it follows the font slider just like the button, rather than hard-coding
+        // it. Micro's base h18/line12/pad3 metrics match moonui's height_for_size path through
+        // MoonTheme::fit_height. This layout controls button width from the available chart zone.
         let act_btn_h = crate::design::fit_h_value(cx, 18.0, 12.0, 3.0);
         let cancel_pos = self.cancel_buy_pos;
         let panic_pos = self.panic_sell_pos;
-        // Одиночный пейн (фулскрин Main) → кнопки кладём GPUI-раскладкой ниже (`action_overlay`):
-        // GPUI ресайзит их синхронно со слотом. Per-pane позиции из `axis_panes` берут own-pass
-        // геометрию (`data.w/h`), которая обновляется на present-тике и при фулскрин-тогле отстаёт
-        // на кадры — отсюда «прыжок» кнопок. Несколько пейнов (стек/сравнение) → per-pane.
+        // For the container's populated pane, place buttons through the GPUI `action_overlay` below
+        // so they resize synchronously with the slot. Positions from axis_panes use own-pass
+        // geometry (`data.w/h`), which updates on the present tick and can lag a fullscreen toggle
+        // by several frames, making buttons jump. Stack/compare layouts compose separate ChartPanels;
+        // each chart container itself holds at most one pane.
         let single_pane =
             !self.orderbook_only && axis_panes.len() == 1 && self.chart.pane_target(0).is_some();
         let mut action_btns: Vec<(
@@ -275,9 +281,9 @@ impl Render for ChartPanel {
                 };
                 let pane_left = rect.x / ppp;
                 let pane_w = rect.w / ppp;
-                // Зона чарта: [ось цены .. начало зоны стакана/управления]. Стакан-зону резервируем
-                // всегда (и при выключенном стакане), как просит ТЗ. Жёлоб оси режем с той стороны,
-                // где она стоит: слева (axis_off) или справа за стаканом (доп. резерв справа).
+                // Chart zone spans from the price axis to the start of the book/control zone.
+                // Always reserve the book zone, even when disabled. Remove the axis gutter from its
+                // actual side: left via axis_off, or right beyond the book via an extra reserve.
                 let glass_reserve = moon_chart::GLASS_ZONE_PX.min(pane_w * 0.5);
                 let right_axis_reserve = if matches!(
                     self.price_axis_pos,
@@ -300,7 +306,7 @@ impl Render for ChartPanel {
                 };
                 let top = (rect.y + rect.h) / ppp - time_axis_reserve - act_btn_h - 10.0;
                 let armed = self.backend.read(cx).is_panic_armed(core, &market);
-                // Видимые кнопки (kind, anchor) в стабильном порядке.
+                // Visible buttons as (kind, anchor), in stable order.
                 let mut vis: Vec<(ActKind, ChartBtnPos)> = Vec::new();
                 if cancel_pos != ChartBtnPos::Hide {
                     vis.push((ActKind::CancelBuy, cancel_pos));
@@ -311,8 +317,8 @@ impl Render for ChartPanel {
                 if vis.is_empty() {
                     continue;
                 }
-                // Глобальный шринк: ВСЕ кнопки должны помещаться в зону одним рядом — иначе при
-                // разных якорях (лево+право) на узком чарте они бы наложились.
+                // Shrink globally so ALL buttons fit in one row; otherwise different left/right
+                // anchors overlap on a narrow chart.
                 let n = vis.len() as f32;
                 let bw = if n * ACT_BTN_W + (n - 1.0) * ACT_GAP > zone_w {
                     ((zone_w - (n - 1.0) * ACT_GAP) / n).max(ACT_MIN_W)
@@ -341,7 +347,7 @@ impl Render for ChartPanel {
                 if vis.len() == 1 {
                     placed.push((vis[0].0, anchor_x(vis[0].1)));
                 } else if vis[0].1 == vis[1].1 {
-                    // Одинаковый якорь — ряд из двух кнопок у этого якоря.
+                    // Same anchor: place both buttons in a row at that anchor.
                     let total = 2.0 * bw + ACT_GAP;
                     let start = match vis[0].1 {
                         ChartBtnPos::Center => zone_left + (zone_w - total) * 0.5,
@@ -352,7 +358,7 @@ impl Render for ChartPanel {
                     placed.push((vis[0].0, start));
                     placed.push((vis[1].0, start + bw + ACT_GAP));
                 } else {
-                    // Разные якоря — слева-направо по порядку якоря, без наложения.
+                    // Different anchors: place left-to-right by anchor order without overlap.
                     let (mut a, mut b) = (vis[0], vis[1]);
                     if order(a.1) > order(b.1) {
                         std::mem::swap(&mut a, &mut b);
@@ -367,10 +373,11 @@ impl Render for ChartPanel {
                 }
             }
         }
-        // Оверлей кнопок для ОДИНОЧНОГО пейна — чистая GPUI-раскладка (insets + flex), без
-        // own-pass геометрии, поэтому позиция синхронна со слотом (нет «прыжка» при фулскрине).
-        // Зона чарта = слот минус ось цены (слева), зона стакана/управления (справа), ось времени
-        // (снизу). Три региона = якоря Left/Center/Right.
+        // The SINGLE-pane action overlay uses pure GPUI layout (insets + flex), without own-pass
+        // geometry, keeping positions synchronized with the slot and preventing fullscreen jumps.
+        // The chart zone is the slot minus the configured-side price-axis gutter, right
+        // book/control zone, and bottom time axis. Its regions correspond to Left/Center/Right
+        // anchors.
         let action_overlay = if single_pane {
             self.chart.pane_target(0).and_then(|(core, market)| {
                 let armed = self.backend.read(cx).is_panic_armed(core, &market);
@@ -408,10 +415,10 @@ impl Render for ChartPanel {
                 if left.is_empty() && center.is_empty() && right.is_empty() {
                     return None;
                 }
-                // Регионы по СОДЕРЖИМОМУ (не flex_1): кнопки держат свою ширину и не режутся, когда
-                // на одном якоре их две (дефолт — обе справа). Якорение L/C/R даёт пара flex-спейсеров
-                // между регионами. Левый отступ = ось цены ТОЛЬКО когда она слева; правый = зона
-                // стакана + жёлоб оси, если она справа (за стаканом).
+                // Size regions by CONTENT rather than flex_1 so buttons retain their width when two
+                // share an anchor (both default to Right). Two flex spacers establish L/C/R anchoring.
+                // Left padding is the price axis only when it is on the left; right padding is the
+                // book zone plus the axis gutter when the axis is on the right beyond the book.
                 let region = |btns: Vec<AnyElement>| {
                     div().flex().items_center().gap(px(ACT_GAP)).children(btns)
                 };
@@ -474,11 +481,10 @@ impl Render for ChartPanel {
             .overflow_hidden()
             .relative()
             .track_focus(&self.focus)
-            // Над перетаскиваемой линией ордера (ховер ИЛИ активный drag) — вертикальная
-            // стрелка «вверх-вниз»: линию двигают только по цене (Y), это сразу читается как
-            // «можно тянуть». Отдельный grab/grabbing не используем — ns-resize точнее
-            // отражает одномерную (вертикальную) природу перетаскивания.
-            // Над КРЕСТОМ НАЧАЛА невыполненного входа — «палец»: клик отменяет ордер.
+            // Over a draggable order line, whether hovered or actively dragged, use the vertical
+            // resize cursor because the line moves only along price (Y). Avoid separate grab/grabbing
+            // cursors; ns-resize communicates the one-dimensional motion more precisely. Over the
+            // START CROSS of an unfilled entry, use a pointer because clicking cancels the order.
             .map(|this| {
                 if self.order_drag.is_some() {
                     this.cursor_ns_resize()
@@ -512,13 +518,13 @@ impl Render for ChartPanel {
             )
             .on_mouse_move(cx.listener(render_input::mouse_move))
             .on_hover(cx.listener(render_input::hover))
-            // own-pass: геометрию слота движок берёт синхронно из `GpuFrameInfo.bounds` в
-            // `frame()` (см. data_state::apply_slot_geometry) — поэтому уже первый present рисует
-            // в реальном слоте, без «распахивания» дефолтного размера и без лага при рефлоу.
+            // The own-pass engine synchronously obtains slot geometry from `GpuFrameInfo.bounds`
+            // in `frame()`; see data_state::apply_slot_geometry. The first present therefore uses
+            // the real slot, without expanding to a default size or lagging during reflow.
             .child(self.chart.canvas().text_under().absolute().size_full())
             .when(show_empty_logo, |this| {
-                // Непрозрачный фон поверх own-pass: пустой слот = логотип на фоне чарта, без
-                // просвечивания старого графика (own-pass рисуется ПОД сценой GPUI).
+                // Cover the own pass with an opaque chart background in an empty slot so its logo
+                // does not reveal a stale graph rendered beneath the GPUI scene.
                 this.child(
                     div()
                         .absolute()
@@ -530,8 +536,8 @@ impl Render for ChartPanel {
                         .child(crate::design::logo_glow_sized(cx, logo_w)),
                 )
             })
-            // FireTest probe only. Геометрию самого чарта не берём из GPUI-probe: единственный
-            // source of truth для input/own-pass — `GpuFrameInfo.bounds`.
+            // FireTest probe only. Do not source chart geometry from this GPUI probe;
+            // `GpuFrameInfo.bounds` is the sole source of truth for input and own-pass rendering.
             .child({
                 let is_main = self.num.is_none();
                 let backend = self.backend.clone();
@@ -562,7 +568,7 @@ impl Render for ChartPanel {
                 .size_full()
             })
             .children(zone_markers.into_iter().map(|(_idx, left, top, w, h)| {
-                // Тусклая заливка зоны управления (стакан скрыт) — без линии-границы.
+                // Faintly shade the control zone while the order book is hidden, without a border line.
                 div()
                     .absolute()
                     .left(px(left))
@@ -574,14 +580,14 @@ impl Render for ChartPanel {
             .children(close_btns.into_iter().map(|(idx, right, top)| {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-close-{idx}")))
-                    // Крестик ярче и жирнее (было приглушённый ghost-fg text_muted@0.78):
-                    // `text_segment` задаёт цвет (полный `text`) и вес (700). Подложка/ховер — как
-                    // у Ghost (прозрачно по умолчанию, лёгкий фон на наведении).
+                    // Make the close glyph brighter and heavier than the former muted
+                    // text_muted@0.78 Ghost foreground. `text_segment` supplies full `text` color
+                    // and weight 700; backdrop and hover still follow Ghost (transparent by
+                    // default, with a light hover background).
                     .text_segment("×", palette.text, 700.0)
                     .size(MoonButtonSize::Micro)
                     .variant(MoonButtonVariant::Ghost)
-                    // 22×22 — чтобы не мискликнуть мимо на стакан при быстром закрытии нескольких
-                    // графиков подряд.
+                    // Use a 22×22 hit area to avoid missing into the book when closing charts quickly.
                     .bounds(MoonRect::new(right - 26.0, top + 3.0, 22.0, 22.0))
                     .on_click(move |_, _w, app| {
                         entity.update(app, |this, cx| this.remove_pane(idx, cx));
@@ -589,7 +595,7 @@ impl Render for ChartPanel {
                     .render()
             }))
             .children(pin_btns.into_iter().map(|(idx, pinned, left, top)| {
-                // Пин-кнопка в левом верхнем углу: заполненный кружок = приколото, контур = нет (П.2).
+                // Top-left pin button: filled circle means pinned; outline means unpinned.
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-pin-{idx}")))
                     .label(if pinned { "●" } else { "○" })
@@ -607,7 +613,8 @@ impl Render for ChartPanel {
                     .render()
             }))
             .children(lock_btns.into_iter().map(|(idx, left, top)| {
-                // Замок справа от пина: клик → этот чарт в начало ряда + ведущий по цене.
+                // Lock to the right of the pin: click the anchor to disable comparison, or click a
+                // non-anchor chart to move it first and make it the price leader.
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-lock-{idx}")))
                     .label("🔒")
@@ -625,7 +632,7 @@ impl Render for ChartPanel {
                     .render()
             }))
             .children(broom_btns.into_iter().map(|(idx, left, top)| {
-                // Метла справа от замка (на якоре): «только стакан» у соседей.
+                // Broom to the right of the anchor's lock: toggle book-only neighbors.
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-broom-{idx}")))
                     .label("🧹")
@@ -658,9 +665,9 @@ impl Render for ChartPanel {
                     )
                     .full_width()
                     .render();
-                    // Контейнер задаёт ширину для обрезки текста (overflow клипует к bounds по
-                    // ОБЕИМ осям). Высоту берём с запасом (h+4), чтобы низ кнопки не срезался —
-                    // кнопка прижата к верху и целиком внутри.
+                    // The container sets text-clipping width; overflow clips to bounds on BOTH axes.
+                    // Add 4 px of height so the top-aligned button remains fully inside and its
+                    // bottom is not cut off.
                     div()
                         .absolute()
                         .left(px(x))

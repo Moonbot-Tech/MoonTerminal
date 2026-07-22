@@ -1,5 +1,6 @@
-//! Геометрия/хит-тест панели чарта: перевод оконных координат в локальные device-px,
-//! раскладка pane → plot/glass/зона управления, цена по Y. Вынесено из `chart.rs`.
+//! Chart-panel geometry and hit-testing: window coordinates to local device pixels, pane layout
+//! into plot, glass, and control zones, and Y coordinate to price conversion. Numbered AddToChart
+//! and Custom panels share these paths. Split from `chart.rs`.
 
 use gpui::*;
 
@@ -10,10 +11,9 @@ impl ChartPanel {
         self.chart.chart_local_from_window_pos(pos)
     }
 
-    /// Раздельные зоны управления (ордера/линии только в зоне стакана). На Add-вкладках и
-    /// выносных окнах (`num.is_some()`) — ВСЕГДА вкл: там всегда две зоны (стакан справа +
-    /// чарт слева, дабл-клик по чарту → на Main). Галка в Настройках управляет ТОЛЬКО
-    /// вкладкой Main (`num.is_none()`).
+    /// Returns whether trading controls are confined to the order-book zone. Numbered AddToChart and
+    /// Custom panels, including detached ones, always separate the book on the right from chart
+    /// navigation on the left. The Settings toggle controls only Main, where `num` is `None`.
     pub(super) fn separate_zones(&self, cx: &App) -> bool {
         if self.num.is_some() {
             return true;
@@ -46,12 +46,11 @@ impl ChartPanel {
         })
     }
 
-    /// Окно-позиция в ЗОНЕ УПРАВЛЕНИЯ при включённых раздельных зонах: стакан (если виден)
-    /// или резерв-полоса справа (если стакан скрыт) — то же `control_zone_rect`, что и для
-    /// постановки ордеров. В этой зоне работает ТОЛЬКО торговля (постановка/перетаскивание/
-    /// меню ордеров + хоткеи); обычную навигацию чарта (пан/зум, дабл-клик «на Main», ПКМ-тоггл
-    /// fullscreen) здесь подавляем. Вне режима раздельных зон (`separate_zones=false` на Main) —
-    /// всегда false: поведение чарта прежнее.
+    /// Returns whether a window position lies in the trading control zone while zones are separate:
+    /// the visible order book or the reserved right strip when it is hidden. This is the same
+    /// `control_zone_rect` used for order placement. Trading actions, order dragging, order menus,
+    /// and hotkeys remain active there, while pan, zoom, Main navigation, and fullscreen toggling are
+    /// suppressed. Returns false when Main uses unified zones.
     pub(crate) fn window_pos_in_control_zone(&self, pos: Point<Pixels>, cx: &App) -> bool {
         if !self.separate_zones(cx) {
             return false;
@@ -62,9 +61,9 @@ impl ChartPanel {
         within && self.glass_pane_at(local).is_some()
     }
 
-    /// Позиция внутри любой pane-области панели, включая glass/orderbook-зону.
-    /// Main stack использует это для ПКМ fullscreen ↔ stack: зона стакана не является
-    /// отдельным UI-исключением, пока такая настройка явно не вынесена в UI.
+    /// Returns whether a position is inside any pane rectangle, including its glass/order-book zone.
+    /// This method performs only the pane-bounds test; the Main-stack caller separately excludes
+    /// positions for which [`Self::window_pos_in_control_zone`] is true before toggling fullscreen.
     pub(crate) fn window_pos_allows_main_stack_toggle(&self, pos: Point<Pixels>) -> bool {
         let Some(((x, y), within)) = self.chart_local(pos) else {
             return false;
@@ -80,7 +79,7 @@ impl ChartPanel {
         local_pos_in_any_pane_rect(x, y, &rects)
     }
 
-    /// Был ли последний ПКМ зум-перетаскиванием цены (а не коротким кликом).
+    /// Returns whether the latest right-button gesture moved the price scale rather than clicking.
     pub(crate) fn rmb_was_moved(&self) -> bool {
         self.input.rmb_moved()
     }
@@ -105,8 +104,10 @@ impl ChartPanel {
         pane: usize,
     ) -> Option<(moon_chart::view::Rect, moon_chart::view::Rect)> {
         let rect = self.local_pane_rect(pane)?;
-        // Раскладка зеркалит ChartDataState: позиция оси (Left/Right/Hide) сдвигает плот/стакан/жёлоб.
-        // Режим метлы (orderbook_only) принудительно прячет ось — как в движке.
+        // Approximate the ordinary pane split for input hit-testing: Left, Right, or Hide shifts the
+        // plot, book, and axis gutter. Broom mode hides the local axis, but unlike ChartDataState
+        // this helper still derives glass width from `orderbook_enabled` and does not model the
+        // engine's full-width book-only rendering.
         use crate::chart_persist::PriceAxisPos;
         let axis_pos = if self.orderbook_only {
             PriceAxisPos::Hide
@@ -169,9 +170,10 @@ impl ChartPanel {
         self.local_pane_areas(pane).map(|(_, glass)| glass)
     }
 
-    /// Зона управления ордерами панели (device-px, как `chart_local`/`pane_rects`). Стакан
-    /// виден → его glass-полоса; стакан СКРЫТ → резервируем полосу той же ширины справа поверх
-    /// чарта, чтобы место под ордера (и риска границы) оставалось и при свёрнутом стакане.
+    /// Returns a pane's order-control zone in device pixels. With the book visible on a narrow pane,
+    /// the local glass width is `(GLASS_ZONE_PX * 0.8).min(rect.w * 0.5)`. With the book hidden it
+    /// reserves the full capped base width, `GLASS_ZONE_PX.min(rect.w * 0.5)`, over the chart's right
+    /// edge so order interaction and the boundary marker remain available.
     fn control_zone_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {
         if self.orderbook_enabled {
             return self.local_glass_rect(pane).filter(|g| g.w > 0.0);

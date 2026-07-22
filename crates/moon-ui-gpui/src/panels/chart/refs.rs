@@ -1,5 +1,6 @@
-//! Рефкаунт рынков/стаканов в backend и time-based таймеры панели чарта: TTL авто-закрытия
-//! AddToChart-графиков и авто-возврат в live после пана. Вынесено из `chart.rs`.
+//! Chart-panel backend refcounts for markets and order books, plus wall-clock timers for unpinned
+//! pane TTL auto-close in numbered AddToChart and Custom panels and automatic live rejoin after a
+//! pan. Custom panes are normally pinned after population. Split from `chart.rs`.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -65,6 +66,8 @@ impl ChartPanel {
 
     fn sync_market_ref_epoch(&mut self, cx: &mut App) {
         let epoch = self.backend.read(cx).chart_market_refs_epoch;
+        // This guard reconciles local ownership if a future runtime advances the epoch. The current
+        // runtime initializes it once and does not clear the backend registry after startup.
         if self.market_ref_epoch != epoch {
             self.registered_markets.clear();
             self.registered_orderbook.clear();
@@ -72,8 +75,8 @@ impl ChartPanel {
         }
     }
 
-    /// Привести orderbook-ref backend к состоянию «рынки этой панели, если стакан включён».
-    /// Зовётся после любых изменений рынков и при переключении стакана. Без borrow самого view.
+    /// Synchronizes backend order-book references to this panel's markets when the book is enabled,
+    /// or to an empty set when disabled. Called after market-set changes and book toggles.
     pub(super) fn sync_orderbook_refs(&mut self, cx: &mut App) {
         let want: HashSet<(CoreId, String)> = if self.orderbook_enabled {
             self.registered_markets.clone()
@@ -144,9 +147,9 @@ impl ChartPanel {
             .map(|deadline| Duration::from_millis((deadline - now_ms).max(1.0).ceil() as u64))
     }
 
-    /// One-shot таймер авто-возврата в live (П.9): мирроринг `arm_ttl_timer`. Армится из
-    /// `mark_input_changed` после пана; по срабатыванию двигает live и пере-армится на
-    /// следующий дедлайн (или гаснет, если возвращать больше нечего).
+    /// Arms a one-shot auto-live timer, mirroring [`Self::arm_ttl_timer`]. Input changes call this
+    /// after a pan; on expiry it rejoins due panes to live and re-arms for the next deadline, or
+    /// remains idle when no pane has a pending return.
     pub(super) fn arm_auto_live_timer(&mut self, cx: &mut Context<Self>) {
         if self.auto_live_timer_armed {
             return;

@@ -1,5 +1,7 @@
-//! Ручная торговля на чарте: постановка ордера кликом по жесту, хит-тест линий ордеров,
-//! подсветка/перетаскивание линий (move_order) и нативный курсор. Вынесено из `chart.rs`.
+//! Manual chart trading: order placement from configured mouse gestures or cursor hotkeys,
+//! order-line hit testing and cancellation, hover/drag visuals, command routing, and native cursor
+//! synchronization. Buy/Sell drags use `move_order`; stop and take-profit drags use
+//! `move_order_stop_price`. This module was extracted from `chart.rs`.
 
 use gpui::*;
 use std::time::{Duration, Instant};
@@ -13,14 +15,16 @@ use super::ChartPanel;
 
 const ORDER_DRAG_PREVIEW_HOLD: Duration = Duration::from_millis(3_000);
 
-/// Порог движения курсора для повторного hit-test линий (Delphi-эталон: перебор линий
-/// запускается, только когда мышь реально сдвинулась ≥1px по X или ≥0.5px по Y — сырые
-/// MouseMove приходят чаще и с суб-пиксельными сдвигами, hit-test на каждый — пустая работа).
+/// Cursor movement thresholds for repeating order-line hit testing.
+///
+/// The Delphi reference scans only after movement of at least one X pixel or half a Y pixel. Raw
+/// mouse-move events arrive more often with subpixel jitter, for which rescanning is wasted work.
 const ORDER_HOVER_MOVE_X: f32 = 1.0;
 const ORDER_HOVER_MOVE_Y: f32 = 0.5;
 
-/// `true` = курсор сдвинулся от точки последнего hit-test достаточно, чтобы пересчитать
-/// ховер линий. `prev = None` (первый заход / возврат на чарт) — всегда пересчёт.
+/// Return whether the cursor moved far enough since the previous probe to recompute line hover.
+///
+/// A missing previous point, on first entry or return to the chart, always requires a probe.
 fn hover_probe_due(prev: Option<(f32, f32)>, pos: (f32, f32)) -> bool {
     match prev {
         Some((px, py)) => {
@@ -59,8 +63,8 @@ pub(super) struct PendingOrderDrag {
 pub(super) struct OrderHoverKey {
     core: CoreId,
     uid: u64,
-    /// Курсор на кресте начала (клик-отмена): рендер показывает «палец» вместо
-    /// вертикальной стрелки перетаскивания.
+    /// Whether the cursor is over the click-to-cancel start cross, selecting a pointer cursor
+    /// instead of the vertical drag cursor.
     pub(super) cancel: bool,
 }
 
@@ -70,12 +74,13 @@ struct OrderHit {
     kind: LineKind,
     pane: usize,
     price: f32,
-    /// Рынок ордера (для join/split — они per-market в moonproto).
+    /// Order market used by MoonProto's per-market join and split actions.
     market: String,
-    /// Сторона позиции ордера (для выбора `OrderSide` в join).
+    /// Order position direction used by the join-sells action.
     short: bool,
-    /// Курсор на КРЕСТЕ НАЧАЛА линии невыполненного входа (Buy, fill=0) —
-    /// клик по нему отменяет ордер (как в Moonbot), а не начинает drag.
+    /// Whether the cursor is on the start cross of an unfilled Buy line.
+    ///
+    /// Clicking this target cancels the order, as in Moonbot, instead of starting a drag.
     on_start_cross: bool,
 }
 
@@ -128,13 +133,14 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
-        // Анти-ордер дебаунс: только что закрыли график крестиком → второй клик даблклика
-        // по «×» ОС засчитывает как даблклик уже по новому фулскрин-графику. Клики постановки
-        // в окне подавления игнорируем (иначе случайный ордер при быстром закрытии вкладок).
+        // Suppress placement just after closing a chart. The OS can deliver the second click of a
+        // close-button double-click to the newly exposed fullscreen chart, which would otherwise
+        // create an accidental order while tabs are being closed quickly.
         if moon_chart::paint::now_unix_ms() - self.last_pane_close_ms < super::ORDER_SUPPRESS_MS {
             return false;
         }
-        // Сторона ордера — из мышиного жеста конфига (buy_set/short_set). Не наш жест → не ордер.
+        // Resolve Long/Short from the configured buy-set and short-set gestures; unrelated gestures
+        // are not order placement.
         let short = {
             let b = self.backend.read(cx);
             let cfg = b.preview.as_ref().unwrap_or(&b.config);
@@ -157,9 +163,10 @@ impl ChartPanel {
         self.place_order_at_pos(pos, short, cx)
     }
 
-    /// Поставить ручной ордер по цене под КУРСОРОМ (хоткей new_long/new_short). Цену знает
-    /// только чарт (пиксель Y → цена пейна), поэтому постановка живёт здесь, а не в общем
-    /// диспетчере хоткеев. Нет курсора над пейном → ничего не делаем.
+    /// Place a manual order at the price under the chart cursor for the new-long/new-short hotkey.
+    ///
+    /// The chart owns pane-Y-to-price conversion, so placement remains here rather than in the
+    /// shared hotkey dispatcher. Returns `false` when the cursor is not over a pane.
     pub(crate) fn place_order_at_cursor(&mut self, short: bool, cx: &mut Context<Self>) -> bool {
         match self.input.cursor {
             Some(pos) => self.place_order_at_pos(pos, short, cx),
@@ -167,11 +174,12 @@ impl ChartPanel {
         }
     }
 
-    /// Поставить ручной ордер стороны `short` по позиции `pos` (пиксель слота): pane →
-    /// цена → таргет (ядро, рынок) → `place_order` с размером из настроек ядра. Общий путь
-    /// клика мышью и курсор-хоткея.
+    /// Place a manual order at slot-pixel position `pos`, using `short` to select its position side.
+    ///
+    /// `false` selects Long and `true` selects Short. This shared mouse/hotkey path resolves pane,
+    /// price, and `(core, market)`, then calls `place_order` with the core's configured manual size.
     fn place_order_at_pos(&mut self, pos: (f32, f32), short: bool, cx: &mut Context<Self>) -> bool {
-        // Раздельные зоны: ордер ставим только в стакане; иначе — по любой pane-области графика.
+        // In separate-zone mode place only from the order-book zone; otherwise accept any pane area.
         let pane = if self.separate_zones(cx) {
             self.glass_pane_at(pos)
         } else {
@@ -192,8 +200,8 @@ impl ChartPanel {
 
         let placed = self.backend.update(cx, |b, _| {
             let size = b.manual_order_size(core);
-            // Селл/стоп новому ордеру ставит САМО ЯДРО из своих ClientSettings (ROE). Терминал
-            // ничего не переставляет — показываем то, что прислало ядро.
+            // The core derives the new order's sell and stop settings from its own ROE
+            // `ClientSettings`; the terminal sends no follow-up adjustment and renders core state.
             match b.session.place_order(core, market.clone(), short, price, size, None) {
                 Ok(()) => {
                     log::info!(
@@ -210,8 +218,8 @@ impl ChartPanel {
                 }
             }
         });
-        // Авто-пин при выставлении ордера (per-окно/вкладка): успешный ордер закрепляет этот
-        // график, чтобы он не закрылся по TTL/неактивности, пока пользователь в позиции.
+        // Per-window/tab auto-pin keeps a chart that accepted an order from expiring through TTL
+        // or inactivity.
         if placed
             && self.auto_pin
             && self.chart.pane_is_pinnable(pane)
@@ -224,10 +232,11 @@ impl ChartPanel {
         placed
     }
 
-    /// Hit-test линий ордеров под курсором. `cross_only` — режим раздельных зон вне
-    /// стакана: единственная интерактивная цель там — КРЕСТ НАЧАЛА невыполненного входа
-    /// (клик-отмена), поэтому перебираем только Buy-линии и режем по X у креста, не
-    /// считая Y-дистанции всех пяти видов линий (ранний zone-gate, как в Delphi).
+    /// Hit-test interactive order lines under the cursor.
+    ///
+    /// `cross_only` applies outside the order book in separate-zone mode, where the only target is
+    /// an unfilled Buy line's click-to-cancel start cross. It scans only Buy lines and gates on the
+    /// cross's X range before computing unnecessary distances for all draggable kinds, as in Delphi.
     fn hit_order_line(
         &self,
         pos: (f32, f32),
@@ -265,7 +274,7 @@ impl ChartPanel {
         if plot.h <= 1.0 || !(range > 0.0) || !(window_ms > 0.0) {
             return None;
         }
-        // X начала линии (первая ступень трассы) — тем же маппингом, что рендер.
+        // Map the line's first step to its starting X with the same transform as rendering.
         let x_of_time =
             |t_ms: f64| plot.x + ((t_ms - epoch_ms) as f32 - left_rel) / window_ms * plot.w;
         let threshold = (6.0 * self.last_ppp).max(6.0);
@@ -276,9 +285,9 @@ impl ChartPanel {
                 .iter_market(&market)
                 .filter(|order| order.closed_ms.is_none())
             {
-                // Перетаскиваемые виды линий: вход/выход (move_order) + SL/Trailing/TakeProfit
-                // (update_stops по абсолютной цене). VStop (объёмный) и pending-условие НЕ тянем
-                // — у них нет ценового уровня, который ставится перетаскиванием.
+                // Drag Buy/Sell through `move_order` and SL/Trailing/TakeProfit through absolute
+                // `move_order_stop_price` updates. VStop and pending-condition lines have no price
+                // level set by dragging and are therefore excluded.
                 let kinds: &[LineKind] = if cross_only {
                     &[LineKind::Buy]
                 } else {
@@ -291,10 +300,9 @@ impl ChartPanel {
                     ]
                 };
                 for &kind in kinds {
-                    // Вход (Buy, в т.ч. шорт) переставляем ТОЛЬКО пока ордер не исполнен (живой
-                    // входной лимит → move_order = replace). После фила (`fill_pct > 0`) линия
-                    // входа — историческая отметка цены входа: реплейсить нечего, не тянем её.
-                    // Управление залитой позицией идёт через выход (Sell) и стопы.
+                    // A Buy entry, including a short entry, is draggable only while unfilled: its
+                    // live limit can be replaced through `move_order`. After any fill, the Buy line
+                    // is historical; manage the position through its Sell exit and stops instead.
                     if kind == LineKind::Buy && order.fill_pct > 0.0 {
                         continue;
                     }
@@ -303,15 +311,14 @@ impl ChartPanel {
                     else {
                         continue;
                     };
-                    // Линия существует от своей ПЕРВОЙ ступени до правого края — левее её
-                    // начала цепляться нельзя (раньше drag ловился в любом месте этой цены,
-                    // даже там, где линии нет).
+                    // A line exists only from its first step to the right edge. Reject points left
+                    // of that start so dragging cannot latch onto an unrendered extension.
                     let start_x = line.steps.first().map(|&(t, _)| x_of_time(t));
                     if let Some(start_x) = start_x {
                         if pos.0 + threshold < start_x {
                             continue;
                         }
-                        // cross_only: цель — только сам крест, X-полоса вокруг начала.
+                        // In `cross_only` mode, accept only the X band around the start cross.
                         if cross_only && (pos.0 - start_x).abs() > threshold {
                             continue;
                         }
@@ -338,9 +345,9 @@ impl ChartPanel {
             }
         }
         let (uid, kind, price, short, dist, start_x, fill_pct) = best?;
-        // Крест начала невыполненного входа: клик-цель отмены. Радиус = тот же threshold
-        // (крест ~7px). Только Buy-линия (вход, в т.ч. шорт) с fill=0 — исполненный вход
-        // отменять нечем, его крест исторический.
+        // The unfilled entry's start cross is a cancel target using the same roughly seven-pixel
+        // threshold. Only an unfilled Buy entry, including short, can be cancelled; a filled entry's
+        // cross is historical.
         let on_start_cross = kind == LineKind::Buy
             && fill_pct <= 0.0
             && start_x.is_finite()
@@ -358,17 +365,17 @@ impl ChartPanel {
         })
     }
 
-    /// ЛКМ по КРЕСТУ НАЧАЛА линии невыполненного входа → отмена ордера (как в Moonbot).
-    /// Работает и в режиме раздельных зон (крест — точная цель в зоне чарта, в отличие
-    /// от drag, который там ограничен стаканом). `true` = клик съеден.
+    /// Cancel an unfilled entry by left-clicking its start cross, matching Moonbot.
+    ///
+    /// The precise cross target remains active in the chart area under separate-zone mode, unlike
+    /// dragging, which is restricted to the order book. Returns whether the click was consumed.
     pub(super) fn try_cancel_order_click(
         &mut self,
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
-        // Тот же gate, что в ховере: в зоне графика при раздельных зонах цель — только
-        // крест (иначе более близкая Sell-линия «затенит» крест и клик уйдёт в пустоту,
-        // хотя курсор показывал «палец»).
+        // Use the hover gate in separate-zone chart space so only the start cross competes. A nearer
+        // Sell line must not shadow a cross that was presented with the pointer cursor.
         let cross_only = self.separate_zones(cx) && self.glass_pane_at(pos).is_none();
         let Some(hit) = self.hit_order_line(pos, cross_only, cx) else {
             return false;
@@ -387,10 +394,11 @@ impl ChartPanel {
         true
     }
 
-    /// ПКМ по линии ордера → контекстное меню. Buy/Buy short → «Редактировать…» + «Cancel»
-    /// (этого ордера). Sell/Sell short → «Редактировать…» + «Join all sells» + «Split order»
-    /// (per-market в moonproto).
-    /// Возвращает `true`, если меню открыто (вызывающий гасит дальнейшую обработку ПКМ).
+    /// Open the shared coin/order context menu for a right-clicked Buy or Sell line.
+    ///
+    /// The context supplies order UID, position direction, strategy, core, and market so the shared
+    /// menu can expose its side-specific edit/cancel or join/split actions. Other line kinds have no
+    /// coin menu. Returns whether the menu opened so the caller can suppress further right-click handling.
     pub(super) fn try_open_order_menu(
         &mut self,
         local_pos: (f32, f32),
@@ -398,9 +406,8 @@ impl ChartPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        // Меню — ТОЛЬКО когда курсор уже в состоянии перетаскивания линии (наведён на линию
-        // ордера, `order_hover` активен и курсор сменился). В прочих позициях ПКМ работает
-        // как обычно (зум / возврат из фулскрина) — меню не зовём.
+        // Open a menu only while order hover already marks an interactive line and has changed the
+        // cursor. Elsewhere right-click retains its normal zoom or fullscreen-exit behavior.
         if self.order_hover.is_none() {
             return false;
         }
@@ -411,10 +418,10 @@ impl ChartPanel {
         let side = match hit.kind {
             LineKind::Buy => crate::controls::OrderSide::Buy,
             LineKind::Sell => crate::controls::OrderSide::Sell,
-            // Прочие виды линий (стопы/трейл/…) не несут монетного меню.
+            // Stops, trailing lines, and other kinds do not expose the coin/order menu.
             _ => return false,
         };
-        // strat_id ордера (0 — ручной/join) — из строки открытых ордеров ядра.
+        // Read the strategy ID from the core's open-order row; zero denotes manual/join orders.
         let b = self.backend.read(cx);
         let strat_id = b
             .session
@@ -456,9 +463,10 @@ impl ChartPanel {
         true
     }
 
-    /// Встроенный Tab/Del: отменить ордер ПОД КУРСОРОМ на этой панели. `order_hover` держит
-    /// (ядро, uid) наведённой линии. Нет наведённого ордера → `false` (клавиша не наша,
-    /// всплывает дальше — напр. Tab-навигация фокуса).
+    /// Cancel the order under this panel's cursor for the built-in Tab/Delete route.
+    ///
+    /// `order_hover` identifies the hovered `(core, uid)`. Returns `false` when no order is hovered
+    /// so the key can continue propagating, for example to Tab focus navigation.
     pub fn cancel_hovered_order(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(hover) = self.order_hover else {
             return false;
@@ -552,15 +560,13 @@ impl ChartPanel {
     }
 
     pub(super) fn sync_order_hover(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
-        // Delphi-порог: hit-test не на каждый сырой MouseMove, а только когда курсор
-        // реально сдвинулся от точки последней проверки.
+        // Apply the Delphi threshold instead of hit-testing every raw mouse-move event.
         if !hover_probe_due(self.order_hover_probe, pos) {
             return false;
         }
         self.order_hover_probe = Some(pos);
-        // Раздельные зоны: за линии цепляемся только в стакане → в зоне графика ищем
-        // ТОЛЬКО крест начала (клик-отмена) урезанным hit-test, а не полный перебор
-        // с отбрасыванием результата.
+        // In separate-zone mode, full line interaction belongs to the order book. In chart space,
+        // use the reduced hit test for the click-to-cancel start cross only.
         let cross_only = self.separate_zones(cx) && self.glass_pane_at(pos).is_none();
         let next = self
             .hit_order_line(pos, cross_only, cx)
@@ -573,15 +579,15 @@ impl ChartPanel {
     }
 
     pub(super) fn try_start_order_drag(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
-        // Раздельные зоны: тянуть линию ордера можно только в зоне стакана.
+        // Separate-zone mode permits order-line dragging only inside the order book.
         if self.separate_zones(cx) && self.glass_pane_at(pos).is_none() {
             return false;
         }
         let Some(hit) = self.hit_order_line(pos, false, cx) else {
             return false;
         };
-        // Крест начала — цель клика-отмены (обрабатывается ДО drag в mouse_down_left);
-        // drag с него не начинаем, чтобы промах по времени клика не переставлял ордер.
+        // The start cross is handled as click-to-cancel before dragging in `mouse_down_left`. Never
+        // start a drag there, or a timing miss could move the order instead of cancelling it.
         if hit.on_start_cross {
             return false;
         }
@@ -646,19 +652,18 @@ impl ChartPanel {
         });
         self.apply_order_visual(cx);
         self.arm_order_drag_preview_timeout(cx);
-        // Семантика линий при перетаскивании (как в Moonbot):
-        // - Buy/Sell (вход/выход) → `move_order` = replace СВОЕЙ ноги ордера (ядро делает
-        //   cancel+new: для селла в стакане новый кросс-лимит исполняется маркетом). Так нет
-        //   орфана (отдельный DoSellOrder оставлял резерв-лимит висеть → опасно).
-        // - Stop/Trailing/TakeProfit → `update_stops` фиксированной ценой.
+        // Match Moonbot drag routing:
+        // - Buy/Sell replaces that order leg through `move_order`. The core performs cancel-and-new;
+        //   a new crossing Sell limit in the order book executes at market. This avoids leaving the
+        //   reserve-limit orphan that a separate `DoSellOrder` path would create.
+        // - Stop/Trailing/TakeProfit uses `move_order_stop_price` with an absolute price.
         let sent = self.backend.update(cx, |b, _| {
             let price = drag.current_price;
-            // Sell-линия ордера под паник-селлом: сначала снимаем panic-флаг ЭТОГО
-            // ордера, иначе паник-воркер ядра держит цену у пола AllowedDrop и
-            // перевыставит её обратно — перенос линии «не работает». Ровно то, что в
-            // MoonBot делается руками: «Stop Panic Sell» → кинуть линию. Команды идут
-            // одной очередью ядра — порядок гарантирован; соседние ордера рынка
-            // остаются в панике (флаг пер-ордерный).
+            // Before moving a Sell line under panic sell, clear the panic flag for this order.
+            // Otherwise the core's panic worker holds the price at the AllowedDrop floor and moves
+            // it back. This matches Moonbot's manual "Stop Panic Sell" then line-drag sequence. Both
+            // commands share the core queue, preserving order, while neighboring market orders stay
+            // in panic mode because the flag is per-order.
             if drag.kind == LineKind::Sell
                 && b.session
                     .store()
@@ -732,9 +737,10 @@ impl ChartPanel {
             .input
             .cursor
             .and_then(|(x, y)| self.input.hovered_pane.map(|pane| (pane, x, y)));
-        // Compare-режим (замок): транслируем ЦЕНУ под курсором соседям вкладки — каждый рисует
-        // призрачную горизонталь + свои объём/% собственным Y-маппингом. Мимо GPUI-notify:
-        // сосед сам взводит present по смене цены. Уход курсора (None) гасит призраки.
+        // In locked compare mode, publish the cursor price to peer charts in the tab. Each peer
+        // renders a ghost horizontal line and its own volume/percentage through its Y mapping. This
+        // bypasses GPUI notification because each peer schedules presentation when the price
+        // changes; `None` clears the ghosts when the cursor leaves.
         if !self.ghost_peers.is_empty() {
             let price = cursor.and_then(|(pane, _x, y)| self.price_at_pane_y(pane, y));
             for peer in &self.ghost_peers {

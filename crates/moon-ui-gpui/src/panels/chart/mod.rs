@@ -1,15 +1,17 @@
-//! Панель чарта (center DockArea): НАШ own-pass DX11 рендер (через generic-хук gpui) +
-//! ввод. Как Dock-панель — отцепляется в окно. Монета — из
-//! focus и `Backend.open_request`.
+//! Central `DockArea` chart panel with an own-pass GPU renderer and input handling. As a dock panel
+//! it can be detached into a window. Main markets come from focus or `Backend.open_request`,
+//! detection ingestion populates numbered AddToChart panels, and manual selection or restoration
+//! populates numbered Custom panels.
 //!
-//! Рендер: `ChartEngine.canvas()` отдаёт GPUI `gpu_canvas` ПОД сценой (рисует combo/слои в
-//! backbuffer GPUI без readback), `prepare` обновляет вид и заливает новые тики.
-//! Текст осей/readout — retained gpu_canvas text; линии перекрестия — native chartdx cursor layer.
+//! `ChartEngine.canvas()` supplies a GPUI `gpu_canvas` below the scene, rendering composed layers
+//! directly into GPUI's backbuffer without readback; prepare updates the view and uploads new ticks.
+//! Axis and readout text uses retained `gpu_canvas` text, while crosshair lines use the native
+//! chartdx cursor layer.
 //!
-//! По функционалу разнесено: состояние/жизненный цикл/конструкторы/трейты — здесь;
-//! геометрия и хит-тест — [`geom`]; рефкаунт рынков и таймеры TTL/auto-live — [`refs`];
-//! ручная торговля (ордера/drag) — [`trade`]; `impl Render` — [`render`]; обработчики
-//! ввода слота (колесо/мышь/ховер) — [`render_input`].
+//! Responsibilities are split between state, lifecycle, constructors, and traits here; geometry and
+//! hit-testing in [`geom`]; market refcounts and TTL/auto-live timers in [`refs`]; manual trading and
+//! order dragging in [`trade`]; rendering in [`render`]; and slot wheel, mouse, and hover handling in
+//! [`render_input`].
 
 mod figures;
 mod geom;
@@ -88,120 +90,123 @@ pub struct ChartPanel {
     chart: ChartEngine,
     input: input::ChartInput,
     market: Option<String>,
-    /// Масштаб цены ЭТОЙ вкладки (None = Авто). Теперь ПО-ВКЛАДОЧНЫЙ (не глобальный): правится
-    /// своим регулятором (тулбар активной вкладки / шапка выносного окна), применяется в render.
+    /// Price scale for this panel, where `None` means Auto. It is per tab rather than global, edited
+    /// by the active-tab toolbar or detached-window header and applied during rendering.
     scale: Option<f32>,
-    /// Показывать ли стакан на графиках этой панели (per-окно, из настроек вкладки). Применяется
-    /// в render (`set_orderbook_enabled` движка). Дефолт — вкл.
+    /// Whether this panel shows order books. This per-window/tab setting is applied through the
+    /// engine's `set_orderbook_enabled`; it defaults to enabled.
     orderbook_enabled: bool,
-    /// Рисовать ли трейды ликвидаций на графиках этой панели (per-окно/вкладка, попап ⚙).
-    /// Применяется в render (`set_liquidations_enabled` движка). Дефолт — вкл.
+    /// Whether this panel renders liquidation trades. This per-window/tab setting is applied through
+    /// the engine's `set_liquidations_enabled`; it defaults to enabled.
     liquidations_enabled: bool,
-    /// Настройки отображения свечей/трейдов ЭТОЙ панели (per-окно/вкладка, попап ❚).
-    /// None = следовать глобальному дефолту (`layout.candle_view`). Применяется в render.
+    /// Per-window/tab candle and trade display settings. `None` follows the global
+    /// `layout.candle_view` default; the effective value is applied during rendering.
     candle_view: Option<moon_core::market::CandleViewCfg>,
-    /// Показывать ли тусклую заливку зоны управления при раздельных зонах и СКРЫТОМ стакане
-    /// (per-окно/вкладка, из настроек попапа ⚙). Применяется в render. Дефолт — вкл.
+    /// Whether to dim-fill the reserved control zone when zones are separate and the order book is
+    /// hidden. This is per window/tab, applied during rendering, and enabled by default.
     show_zone: bool,
-    /// Авто-пин графика при выставлении ордера лонг/шорт (per-окно/вкладка). Дефолт — выкл.
+    /// Whether a successful long or short order automatically pins its chart. Per window/tab and
+    /// disabled by default.
     auto_pin: bool,
-    /// Позиции кнопок рыночных действий в зоне чарта (per-окно/вкладка, из попапа ⚙). Дефолт — Right.
+    /// Per-window/tab positions of the market-action buttons in the chart area; defaults to Right.
     cancel_buy_pos: crate::chart_persist::ChartBtnPos,
     panic_sell_pos: crate::chart_persist::ChartBtnPos,
-    /// Положение оси цен (Left/Right/Hide) этой панели (per-окно/вкладка, из попапа ⚙). Применяется
-    /// в render (`set_price_axis_pos` движка) и в раскладке/хит-тесте. Дефолт — Left.
+    /// Per-window/tab price-axis position. It is applied through the engine's
+    /// `set_price_axis_pos` and affects layout and hit-testing; defaults to Left.
     price_axis_pos: crate::chart_persist::PriceAxisPos,
-    /// Видна ли ось времени (per-окно/вкладка, из попапа ⚙). Применяется в render
-    /// (`set_time_axis_visible` движка) и в раскладке/хит-тесте (высота плота). Дефолт — вкл.
+    /// Per-window/tab time-axis visibility. It is applied through the engine's
+    /// `set_time_axis_visible` and affects plot height in layout and hit-testing; enabled by default.
     time_axis_visible: bool,
-    /// Показывать подписи у линий ордеров (per-окно/вкладка, попап ⚙). Дефолт — вкл.
+    /// Whether order-line labels are shown for this window/tab; enabled by default.
     line_labels: bool,
-    /// Показывать подписи у перекрестия (курсорный ридаут). Дефолт — вкл.
+    /// Whether crosshair cursor-readout labels are shown; enabled by default.
     cursor_labels: bool,
-    /// Номер AddToChart-вкладки (None = Main).
+    /// Number of the containing AddToChart or Custom panel, or `None` for Main.
     num: Option<u32>,
-    /// Рынки, владельцем которых является именно эта chart panel. Backend держит refcount
-    /// по всем панелям и строит `desired` из него.
+    /// Markets retained by this panel. Backend aggregates ownership counts across panels to derive
+    /// `desired`.
     registered_markets: HashSet<(CoreId, String)>,
-    /// Рынки, по которым эта панель держит orderbook-ref в backend (= registered_markets, когда
-    /// стакан включён; пусто, когда выключен). Backend по ним строит `desired_orderbook`.
+    /// Markets for which this panel retains an order-book reference: equal to `registered_markets`
+    /// while the book is enabled and empty otherwise. Backend derives `desired_orderbook` from them.
     registered_orderbook: HashSet<(CoreId, String)>,
-    /// Поколение backend registry, в котором были взяты `registered_markets`.
-    /// Structural rebuild сбрасывает registry целиком и bump-ит epoch; старые панели после
-    /// этого не должны release-ить refs свежих панелей.
+    /// Backend market-reference epoch captured when this panel was constructed. If it ever changes,
+    /// `sync_market_ref_epoch` clears this panel's local ownership sets. The current runtime
+    /// initializes the epoch once and neither advances it nor clears the registry after startup.
     market_ref_epoch: u64,
-    /// Сигнатура рыночных данных прошлого кадра — нотифаим только при реальном приходе данных.
+    /// Latest market-data signature copied during backend observation or explicit data sync.
+    /// Notification throttling uses `last_axis_notify_data_sig` instead.
     data_sig: u64,
-    /// UI-настройки, которые применяются в render. После включения cached dock-панелей
-    /// top-down Shell render больше не будит ChartPanel, поэтому изменения должны нотифаить
-    /// саму панель.
+    /// UI settings applied during rendering. Cached dock panels are no longer awakened by every
+    /// top-down Shell render, so a changed signature must notify this panel directly.
     settings_sig: ChartSettingsSig,
-    /// FastChart: true → плавный кадр по vsync (фокусный чарт); false → адаптивно
-    /// (по приходу данных через observe). Main=true, AddToChart=false.
+    /// Whether to present smoothly at vsync as a focused chart instead of adapting to observed data.
+    /// Main starts true; numbered AddToChart and Custom panels start false.
     fast: bool,
-    /// Панель реально присутствует в GPUI scene этого окна. Скрытые вкладки не должны гонять
-    /// CPU prepare по data observe: их `gpu_canvas` всё равно не будет опрошен/нарисован.
+    /// Whether the panel is present in this window's GPUI scene. Hidden tabs skip CPU data prepare
+    /// because their `gpu_canvas` will not be queried or drawn.
     scene_visible: bool,
-    /// Панель сейчас является плиткой Main stack. В этом режиме wheel принадлежит внешнему
-    /// ScrollBox-у; fullscreen и AddToChart сохраняют обычный chart zoom.
+    /// Whether the panel is a Main-stack tile. The outer ScrollBox owns wheel events in this mode;
+    /// fullscreen and numbered AddToChart or Custom panels retain normal chart zoom.
     main_stack_scroll: bool,
+    /// Last market-data signature that passed the throttled axis-overlay notification gate.
     last_axis_notify_data_sig: u64,
-    /// Режим сравнения доступен (вкладка горизонтальная) → показываем кнопку-замок.
+    /// Whether comparison is eligible because the tab is horizontal, enabling the lock button.
     compare_eligible: bool,
-    /// Этот чарт — якорь сравнения (замок горит, цена ведущая).
+    /// Whether this chart is the comparison anchor with the active lock and leading price scale.
     is_compare_anchor: bool,
-    /// Пользователь кликнул замок — стек заберёт запрос в своём observe (как пин, но наружу).
+    /// Pending lock-button request consumed by the stack's observer.
     compare_lock_pending: bool,
-    /// Навязанное Y-окно `(center, range)` от якоря (lock сравнения). None = свободный Y.
-    /// Применяется в render через `set_locked_y` движка.
+    /// Comparison anchor's imposed Y window as `(center, range)`, or `None` for an independent Y
+    /// range. Applied through the engine's `set_locked_y` during rendering.
     locked_y: Option<(f32, f32)>,
-    /// Режим «только стакан» (кнопка-метла у соседей якоря): чарт+ось цен скрыты, виден стакан.
+    /// Book-only mode for anchor peers: hide the plot and price axis while keeping the order book.
     orderbook_only: bool,
-    /// Кликнули метлу — стек заберёт запрос в observe (переключает режим для соседей).
+    /// Pending broom-button request consumed by the stack observer to toggle anchor peers.
     compare_broom_pending: bool,
-    /// Режим метлы включён на вкладке (для подсветки кнопки-метлы на якоре). Ставит стек.
+    /// Tab-level broom state supplied by the stack to highlight the anchor's broom button.
     compare_broom_on: bool,
-    /// Призрачные перекрестия СОСЕДЕЙ compare-вкладки: при активном замке стек раздаёт каждой
-    /// панели weak-хэндлы движков остальных; на mouse-move шлём им цену под курсором — мимо
-    /// GPUI-notify (сосед сам взводит present). Пусто = сравнение неактивно.
+    /// Ghost-cursor handles for comparison peers. With the lock active, the stack gives each panel
+    /// weak handles to the other engines; mouse movement sends them the cursor price without a GPUI
+    /// notification because each peer schedules its own present. Empty means comparison is inactive.
     ghost_peers: Vec<crate::chartdx::ChartGhostCursor>,
     view_dirty: bool,
     last_adaptive_notify_at: Option<Instant>,
-    /// Последний scale_factor окна (ставится в render). Нужен data prepare path, у которого
-    /// нет window — DPI меняется редко, между сменами берём запомненный.
+    /// Last window scale factor recorded during rendering. The data-prepare path has no `Window`, so
+    /// it reuses this value between infrequent DPI changes.
     last_ppp: f32,
-    /// One-shot timer до ближайшего истечения AddToChart TTL. Это time-based dirty,
-    /// поэтому он не должен зависеть от backend data observe.
+    /// Whether a one-shot timer is armed for the nearest unpinned pane TTL deadline in a numbered
+    /// AddToChart or Custom panel. Custom panes are normally pinned after population. Time-based
+    /// expiry must not depend on backend data observations.
     ttl_timer_armed: bool,
-    /// One-shot timer авто-возврата в live после пана (П.9). Тоже time-based: prepare в
-    /// покое не тикает (камеру двигает own-pass), поэтому возврат нужен по таймеру.
+    /// Whether the one-shot auto-live timer is armed after a pan. Prepare does not tick while idle,
+    /// so the own-pass camera must return to live on a wall-clock timer.
     auto_live_timer_armed: bool,
     order_drag: Option<OrderDrag>,
     pending_order_drag: Option<PendingOrderDrag>,
     order_hover: Option<OrderHoverKey>,
-    /// Точка последнего hit-test ховера линий. Порог движения (Delphi): сырые MouseMove
-    /// с суб-пиксельным сдвигом не запускают повторный перебор линий.
+    /// Point of the most recent order-line hover hit-test. The Delphi-style movement threshold keeps
+    /// subpixel raw mouse movement from scanning the lines again.
     order_hover_probe: Option<(f32, f32)>,
-    /// Слой рисования фигур: драфт (режим-карандаш), hover и драг фигуры этой панели.
+    /// Figure-drawing state for this panel: pencil draft, hover, and drag.
     fig_draft: Option<figures::FigDraft>,
-    /// Экранная точка последней постановки узла драфта — отличить клик от протяжки:
-    /// отпускание кнопки заметно дальше неё завершает фигуру (drag-release жест).
+    /// Screen point where the latest draft node was placed. Releasing sufficiently far away
+    /// distinguishes a drag-release gesture from a click and completes the figure.
     fig_draw_down: Option<(f32, f32)>,
     fig_hover: Option<u64>,
     fig_drag: Option<figures::FigDrag>,
-    /// ПКМ-down открыл контекстное меню ордера → следующий ПКМ-up НЕ должен сработать
-    /// (иначе родитель Main-стека воспримет его как «возврат из фулскрина» и т.п.).
+    /// Whether right-button down opened an order context menu, suppressing the matching button-up
+    /// so the Main-stack parent cannot interpret it as a fullscreen toggle.
     suppress_rmb_up: bool,
-    /// Время (unix ms) последнего закрытия пейна кнопкой «×». Анти-ордер дебаунс: при
-    /// закрытии фулскрин-графика на его место встаёт следующий, и второй быстрый клик по
-    /// «×» ОС засчитывает как даблклик уже по новому чарту → случайный ордер. Клики
-    /// постановки в течение `ORDER_SUPPRESS_MS` после закрытия игнорируем. 0 = давно.
+    /// Unix-millisecond time of the last pane close-button action. After a fullscreen chart closes,
+    /// another chart takes its place and the OS can deliver the second click of the double-click to
+    /// that new chart, accidentally placing an order. Placement clicks within `ORDER_SUPPRESS_MS`
+    /// are ignored; zero means no recent close.
     last_pane_close_ms: f64,
     focus: FocusHandle,
 }
 
-/// Окно подавления постановки ордера после закрытия пейна (мс). ≥ OS double-click time,
-/// чтобы поймать второй клик даблклика по «×», прилетевший уже на новый фулскрин-график.
+/// Milliseconds to suppress order placement after closing a pane, covering a likely second click on
+/// the replacement fullscreen chart.
 const ORDER_SUPPRESS_MS: f64 = 500.0;
 
 impl ChartPanel {
@@ -211,8 +216,8 @@ impl ChartPanel {
             let b = self.backend.read(cx);
             self.chart.sync_orders_if_visible(&b.session, false);
         }
-        // Режим карандаша/выделение меняются в шапке (strip)/хоткеями — их состояние
-        // приходит сюда только через observe бэкенда; прокидываем в движок фигур.
+        // Pencil and selection state changes in the tab strip or through hotkeys reach this panel
+        // through the backend observer; propagate them into the figure engine.
         self.sync_fig_visual(cx);
         self.clear_settled_order_drag_preview(cx) && self.apply_order_visual(cx)
     }
@@ -246,7 +251,7 @@ impl ChartPanel {
             chart.open(core, &m);
             market = Some(m.clone());
             registered_markets.insert((core, m.clone()));
-            // Стакан по умолчанию вкл → сразу держим и его ref (Stage 2 подписка).
+            // The order book starts enabled, so retain its demand reference immediately.
             registered_orderbook.insert((core, m.clone()));
             backend.update(cx, |b, _| {
                 b.retain_chart_market(core, &m);
@@ -257,9 +262,9 @@ impl ChartPanel {
             let b = backend.read(cx);
             chart_settings_sig(&b)
         };
-        // UI notify при изменении настроек/редкого текста осей. Частые рыночные данные не
-        // идут через notify: gpu_canvas.frame() подтягивает MarketDataSource напрямую.
-        // Time-based TTL панелей обслуживает локальный one-shot timer, не backend data observe.
+        // Notify for setting changes and infrequent axis text. Frequent market data bypasses GPUI
+        // notification because `gpu_canvas.frame()` reads MarketDataSource directly. A local
+        // one-shot timer handles time-based pane TTL independently of backend observations.
         cx.observe(&backend, |this, backend, cx| {
             crate::diag::bump(&crate::diag::CHART_OBS_FIRE);
             let now = Instant::now();
@@ -281,10 +286,11 @@ impl ChartPanel {
                 cx.notify();
             }
             this.data_sig = sig;
-            // Троттл notify. Данные gpu_canvas рисует сам по present (форк), notify нужен лишь
-            // для GPUI-оверлея осей, а он идёт top-down → дёргает Orders. Поэтому ≤4 Гц для
-            // fast (≥250мс) и ≤1 Гц для addto. Частые GPU data/state обновляет
-            // gpu_canvas.frame() без GPUI dirty; notify здесь только для редкого текста осей.
+            // Throttle notification because `gpu_canvas` presents data itself. GPUI notification is
+            // needed only for the top-down axis overlay and also wakes Orders, so cap it at 4 Hz for
+            // fast panels and 1 Hz for numbered AddToChart and Custom panels.
+            // `gpu_canvas.frame()` handles frequent GPU data and state updates without marking GPUI
+            // dirty.
             let floor = if this.fast {
                 Duration::from_millis(250)
             } else {
@@ -365,8 +371,9 @@ impl ChartPanel {
         self.chart.active_target()
     }
 
-    /// AddToChart-вкладка №`num` (наполняется детектами через add_coin). Без `window`: панель
-    /// строится из данных, окно ей не нужно (важно для отложенного восстановления откреп-окон).
+    /// Builds numbered AddToChart or Custom panel `num`. Detections populate AddToChart panels and
+    /// manual selection or restoration populates Custom panels through [`Self::add_coin`]. It needs
+    /// no `Window`, allowing deferred restoration of detached windows from data alone.
     pub fn new_addto(
         backend: Entity<Backend>,
         num: u32,
@@ -403,9 +410,10 @@ impl ChartPanel {
                 cx.notify();
             }
             this.data_sig = sig;
-            // AddToChart — фоновый график: notify (а с ним top-down перерисовка Orders)
-            // ≤1 Гц. Частые GPU data/state обновляет gpu_canvas.frame() без notify;
-            // time-based prune делает локальный TTL timer.
+            // Numbered AddToChart and Custom panels are background charts, so cap GPUI notification
+            // and their top-down Orders redraw at 1 Hz. `gpu_canvas.frame()` handles frequent GPU
+            // data and state without notification, while the local TTL timer performs time-based
+            // pruning of unpinned panes.
             let notify_due = this
                 .last_adaptive_notify_at
                 .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(1_000));
@@ -477,19 +485,19 @@ impl ChartPanel {
         }
     }
 
-    /// Число открытых панелей чарта (для бейджа-счётчика на вкладке).
+    /// Returns the number of open chart panes for the tab's count badge.
     pub fn pane_count(&self) -> usize {
         self.chart.pane_count()
     }
 
-    /// Закреплён ли хоть один график панели (●). Стек сортирует запиненные наверх; пин также
-    /// защищает график от TTL (`prune_ttl` пропускает pinned).
+    /// Returns whether any pane is pinned. The stack sorts pinned charts first, and
+    /// `prune_ttl` skips them.
     pub fn is_pinned(&self) -> bool {
         (0..self.chart.pane_count()).any(|i| self.chart.pane_pinned(i))
     }
 
-    /// Идемпотентно закрепить все панели чарта (кастомная вкладка: чарты сразу запинены).
-    /// Пин отменяет авто-закрытие по TTL → пере-арм таймера дедлайнов.
+    /// Idempotently pins every pane, as required for charts restored into a custom tab. Pinning
+    /// cancels TTL auto-close, so the deadline timer is re-armed for any remaining unpinned pane.
     pub fn ensure_pinned(&mut self, cx: &mut Context<Self>) {
         let mut changed = false;
         for i in 0..self.chart.pane_count() {
@@ -536,7 +544,8 @@ impl ChartPanel {
         }
     }
 
-    /// Поставить масштаб ЭТОЙ вкладки (None=Авто). Применяется в render через `set_scale` движка.
+    /// Sets this panel's price scale, where `None` means Auto. Rendering applies it through the
+    /// engine's `set_scale`.
     pub fn set_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {
         if self.scale != pct {
             self.scale = pct;
@@ -545,8 +554,8 @@ impl ChartPanel {
         }
     }
 
-    /// Вкл/выкл стакан (per-окно). Применяется в render через `set_orderbook_enabled` движка;
-    /// плюс синхронизирует orderbook-ref backend (Stage 2: подписка по спросу).
+    /// Enables or disables this window/tab's order book. Rendering applies the engine flag, and the
+    /// backend order-book reference is synchronized for demand-driven subscription.
     pub fn set_orderbook_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.orderbook_enabled != enabled {
             self.orderbook_enabled = enabled;
@@ -556,8 +565,8 @@ impl ChartPanel {
         }
     }
 
-    /// Вкл/выкл трейды ликвидаций (per-окно). Применяется в render через `set_liquidations_enabled`
-    /// движка (смена флага форсит combo reset — кресты ликвидаций добавляются/убираются).
+    /// Enables or disables liquidation trades for this window/tab. Rendering applies the engine
+    /// flag, whose change resets the composed layer to add or remove liquidation crosses.
     pub fn set_liquidations_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.liquidations_enabled != enabled {
             self.liquidations_enabled = enabled;
@@ -566,8 +575,8 @@ impl ChartPanel {
         }
     }
 
-    /// Настройки отображения свечей/трейдов этой панели (per-окно/вкладка, попап ❚).
-    /// None = глобальный дефолт. Применяется в render (`set_candle_view` движка).
+    /// Sets this window/tab's candle and trade display settings. `None` uses the global default;
+    /// rendering applies the effective value through the engine's `set_candle_view`.
     pub fn set_candle_view(
         &mut self,
         cfg: Option<moon_core::market::CandleViewCfg>,
@@ -580,10 +589,10 @@ impl ChartPanel {
         }
     }
 
-    /// [Shift+СКМ] на графике — синхронизация временного X-масштаба чартов СВОЕГО
-    /// ОС-окна (Moonbot): масштаб наведённой панели → запрос в Backend с хендлом окна;
-    /// хозяин окна (полоска вкладок / выносной хост) применит ко всем своим стекам и
-    /// сохранит (группа → layout, выносное окно → спек вкладки).
+    /// Handles Shift+middle-click by requesting Moonbot-style time-axis synchronization within this
+    /// OS window. Backend carries the hovered pane's scale with the window handle; the tab strip or
+    /// detached host applies it to that window's stacks and persists it in group layout or the
+    /// detached tab specification.
     pub(super) fn sync_x_scale_window(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         let Some(ppm) = self.chart.pane_x_ppm(self.input.hovered_pane) else {
             return false;
@@ -597,12 +606,13 @@ impl ChartPanel {
         true
     }
 
-    /// Дефолтный X-масштаб для НОВЫХ графиков панели (ставит стек-хозяин; None = 60с).
+    /// Sets the default time-axis scale for new panes, supplied by the owning stack. `None` selects
+    /// the 60-second default.
     pub fn set_default_x_ppm(&mut self, ppm: Option<f32>) {
         self.chart.set_default_x_ppm(ppm);
     }
 
-    /// Применить X-масштаб ко всем открытым графикам панели (sync окна).
+    /// Applies a synchronized time-axis scale to every open pane in this panel.
     pub fn apply_x_ppm(&mut self, ppm: f32, cx: &mut Context<Self>) {
         if self.chart.set_x_ppm_all(ppm, now_unix_ms()) {
             self.view_dirty = true;
@@ -610,8 +620,8 @@ impl ChartPanel {
         }
     }
 
-    /// Показывать ли заливку зоны управления при скрытом стакане (per-окно). Только UI-оверлей,
-    /// движок не трогаем.
+    /// Controls the per-window/tab fill over the reserved control zone when the book is hidden.
+    /// This affects only the UI overlay, not the engine.
     pub fn set_show_zone(&mut self, show: bool, cx: &mut Context<Self>) {
         if self.show_zone != show {
             self.show_zone = show;
@@ -619,13 +629,13 @@ impl ChartPanel {
         }
     }
 
-    /// Авто-пин графика при выставлении ордера (per-окно). Только флаг; пин делается в
-    /// `try_place_order_click` при успешном ордере.
+    /// Sets the per-window/tab auto-pin flag. [`Self::try_place_order_click`] performs the pin after
+    /// a successful order.
     pub fn set_auto_pin(&mut self, on: bool, _cx: &mut Context<Self>) {
         self.auto_pin = on;
     }
 
-    /// Позиции кнопок рыночных действий (Cancel Buy / Panic Sell) в зоне чарта (per-окно).
+    /// Sets the per-window/tab positions of Cancel Buy and Panic Sell in the chart area.
     pub fn set_action_btn_pos(
         &mut self,
         cancel_buy: crate::chart_persist::ChartBtnPos,
@@ -639,7 +649,7 @@ impl ChartPanel {
         }
     }
 
-    /// Доступность режима сравнения (вкладка горизонтальная) — показывать ли кнопку-замок.
+    /// Sets comparison eligibility for a horizontal tab, controlling lock-button visibility.
     pub fn set_compare_eligible(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.compare_eligible != on {
             self.compare_eligible = on;
@@ -647,7 +657,7 @@ impl ChartPanel {
         }
     }
 
-    /// Пометить этот чарт якорем сравнения (замок горит). Управляет стек.
+    /// Marks this chart as the stack-controlled comparison anchor and highlights its lock.
     pub fn set_compare_anchor(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.is_compare_anchor != on {
             self.is_compare_anchor = on;
@@ -655,29 +665,29 @@ impl ChartPanel {
         }
     }
 
-    /// Клик по замку → выставить запрос и уведомить (стек заберёт его в observe).
+    /// Records a lock-button request and notifies the stack observer that consumes it.
     fn request_compare_lock(&mut self, cx: &mut Context<Self>) {
         self.compare_lock_pending = true;
         cx.notify();
     }
 
-    /// Забрать флаг «кликнули замок» (стек дёргает в своём observe). Сбрасывает его.
+    /// Takes and clears the pending lock-button request for the stack observer.
     pub fn take_compare_lock_request(&mut self) -> bool {
         std::mem::take(&mut self.compare_lock_pending)
     }
 
-    /// Клик по метле → выставить запрос (стек заберёт в observe, переключит режим у соседей).
+    /// Records a broom-button request for the stack observer to apply to anchor peers.
     fn request_compare_broom(&mut self, cx: &mut Context<Self>) {
         self.compare_broom_pending = true;
         cx.notify();
     }
 
-    /// Забрать флаг «кликнули метлу». Сбрасывает его.
+    /// Takes and clears the pending broom-button request.
     pub fn take_compare_broom_request(&mut self) -> bool {
         std::mem::take(&mut self.compare_broom_pending)
     }
 
-    /// Режим «только стакан» (метла): чарт+ось цен скрыты, стакан на всю ширину. Применяется в render.
+    /// Enables book-only broom mode: rendering hides the plot and price axis and expands the book.
     pub fn set_orderbook_only(&mut self, only: bool, cx: &mut Context<Self>) {
         if self.orderbook_only != only {
             self.orderbook_only = only;
@@ -686,8 +696,8 @@ impl ChartPanel {
         }
     }
 
-    /// Положение оси цен (Left/Right/Hide) этой панели (per-окно/вкладка). Применяется в render
-    /// через `set_price_axis_pos` движка; влияет и на раскладку плот/стакан/жёлоб, и на хит-тест.
+    /// Sets this window/tab's price-axis position. Rendering applies the engine flag, which also
+    /// affects plot, order-book, and gutter layout and hit-testing.
     pub fn set_price_axis_pos(
         &mut self,
         pos: crate::chart_persist::PriceAxisPos,
@@ -700,8 +710,8 @@ impl ChartPanel {
         }
     }
 
-    /// Видимость оси времени этой панели (per-окно/вкладка). Применяется в render через
-    /// `set_time_axis_visible` движка; влияет и на высоту плота (раскладка/хит-тест).
+    /// Sets this window/tab's time-axis visibility. Rendering applies the engine flag, and layout
+    /// and hit-testing adjust the plot height.
     pub fn set_time_axis_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         if self.time_axis_visible != visible {
             self.time_axis_visible = visible;
@@ -710,8 +720,8 @@ impl ChartPanel {
         }
     }
 
-    /// Показывать подписи у линий ордеров (per-окно/вкладка). Применяется в render через
-    /// `set_line_labels` движка. На раскладку не влияет (только видимость текста).
+    /// Sets order-line label visibility for this window/tab. Rendering applies the engine flag;
+    /// only text visibility changes, not layout.
     pub fn set_line_labels(&mut self, show: bool, cx: &mut Context<Self>) {
         if self.line_labels != show {
             self.line_labels = show;
@@ -720,8 +730,7 @@ impl ChartPanel {
         }
     }
 
-    /// Показывать подписи у перекрестия (курсорный ридаут). Применяется в render через
-    /// `set_cursor_labels` движка.
+    /// Sets crosshair cursor-readout label visibility, applied through the engine during rendering.
     pub fn set_cursor_labels(&mut self, show: bool, cx: &mut Context<Self>) {
         if self.cursor_labels != show {
             self.cursor_labels = show;
@@ -730,7 +739,7 @@ impl ChartPanel {
         }
     }
 
-    /// Подсветка кнопки-метлы на якоре (режим метлы включён на вкладке). Ставит стек.
+    /// Sets the stack-owned tab broom state used to highlight the anchor's broom button.
     pub fn set_compare_broom_on(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.compare_broom_on != on {
             self.compare_broom_on = on;
@@ -738,14 +747,14 @@ impl ChartPanel {
         }
     }
 
-    /// Weak-хэндл призрачного перекрестия движка этой панели (для раздачи соседям стеком).
+    /// Returns this panel engine's weak ghost-cursor handle for distribution to stack peers.
     pub fn ghost_cursor_handle(&self) -> crate::chartdx::ChartGhostCursor {
         self.chart.ghost_cursor()
     }
 
-    /// Раздать/забрать список соседей compare-вкладки (ставит стек в `apply_compare`).
-    /// Пустой список = сравнение неактивно: гасим и свой призрак (мог остаться от соседа).
-    /// Без notify — это плумбинг мимо GPUI-дерева, как и сам курсор.
+    /// Replaces the comparison-peer list as directed by the stack's `apply_compare`. An empty list
+    /// means comparison is inactive and clears this panel's own possibly stale ghost cursor. This
+    /// plumbing bypasses the GPUI tree and needs no notification.
     pub fn set_ghost_peers(&mut self, peers: Vec<crate::chartdx::ChartGhostCursor>) {
         if peers.is_empty() && !self.ghost_peers.is_empty() {
             self.chart.clear_ghost_cursor();
@@ -753,24 +762,25 @@ impl ChartPanel {
         self.ghost_peers = peers;
     }
 
-    /// Last этой панели (якорь сравнения отдаёт его стеку для дельт соседей в метле).
+    /// Returns this panel's latest price, used by the comparison anchor to drive peer deltas.
     pub fn last_price(&self) -> Option<f64> {
         self.chart.last_price()
     }
 
-    /// Last якоря compare-вкладки → крупная дельта под угловой подписью в метле. Ставит стек;
-    /// без notify — движок сам взводит present по смене значения.
+    /// Supplies the comparison anchor's latest price for the large broom-mode delta below a peer's
+    /// corner caption. The engine schedules a present when the value changes, so no notify is needed.
     pub fn set_compare_ref_price(&mut self, price: Option<f64>) {
         self.chart.set_compare_ref_price(price);
     }
 
-    /// Текущее Y-окно `(center, range)` (для стека — окно якоря). None если нет панелей.
+    /// Returns the current Y window as `(center, range)`, used as the anchor window by the stack, or
+    /// `None` when no pane exists.
     pub fn y_window(&self) -> Option<(f32, f32)> {
         self.chart.y_window()
     }
 
-    /// Навязать/снять lock Y-окна от якоря сравнения. Установка применяется в render каждый кадр;
-    /// снятие (None) одноразово возвращает Y-режим вкладки (масштаб/авто).
+    /// Applies or clears the comparison anchor's locked Y window. Rendering reapplies a lock each
+    /// frame; clearing it once restores this panel's configured or automatic price scale.
     pub fn set_locked_y(&mut self, window: Option<(f32, f32)>, cx: &mut Context<Self>) {
         if self.locked_y == window {
             return;
@@ -778,35 +788,35 @@ impl ChartPanel {
         let exiting = window.is_none();
         self.locked_y = window;
         if exiting {
-            // Выходим из сравнения → вернуть масштаб вкладки (или авто), минуя кэш движка.
+            // Leaving comparison must restore this panel's configured or automatic scale immediately.
             self.chart.reapply_scale(self.scale);
         }
         self.view_dirty = true;
         cx.notify();
     }
 
-    /// AddToChart: открыть/продлить монету в этой панели с TTL.
+    /// Opens or refreshes a market in this numbered AddToChart or Custom panel with the supplied
+    /// TTL. Custom callers normally pin their panes after population to disable expiry.
     pub fn add_coin(&mut self, core: CoreId, market: &str, ttl_ms: f64, cx: &mut Context<Self>) {
         self.release_market_refs_except(Some((core, market)), cx);
         self.chart.push_auto(core, market, ttl_ms, now_unix_ms());
         self.retain_market_ref(core, market, cx);
         self.view_dirty = true;
         self.arm_ttl_timer(cx);
-        // ВАЖНО: notify самой панели. Для вкладки в стрипе её перерисовывает render ChartTabs,
-        // но ОТКРЕПЛЁННАЯ панель живёт в своём окне — без notify оно не перерисуется и новая
-        // монета не появится (баг «детект пришёл, а графика в откреп-окне нет»).
+        // Notify the panel itself. ChartTabs renders an attached strip tab, but a detached panel
+        // lives in another window and would not display the newly detected market without this.
         cx.notify();
     }
 
-    /// Закрыть панель-монету крестиком: убрать график + отписаться от стакана
-    /// (убрать (core, market) из `desired`, если ни одна оставшаяся панель этого чарта его не
-    /// держит — трейды биржи идут оптом, снимаем именно стакан через `set_open`-дифф).
+    /// Closes a pane through its close button. When no remaining pane uses its market, release this
+    /// panel's market ownership and order-book demand; backend refcounts decide whether the market
+    /// remains desired by another panel.
     fn remove_pane(&mut self, idx: usize, cx: &mut Context<Self>) {
         let Some((core, market)) = self.chart.remove_pane(idx) else {
             return;
         };
-        // Анти-ордер дебаунс: закрыли график → следующий встаёт фулскрином, второй клик
-        // даблклика по «×» не должен поставить ордер на него.
+        // The replacement chart becomes fullscreen; suppress the second close-button click so it
+        // cannot place an order on that chart.
         self.last_pane_close_ms = moon_chart::paint::now_unix_ms();
         self.view_dirty = true;
         if !self.chart.uses_market(core, &market) {
@@ -815,8 +825,8 @@ impl ChartPanel {
         cx.notify();
     }
 
-    /// П.2: приколоть/открепить панель idx. Пин отменяет авто-закрытие по TTL; открепление
-    /// возвращает TTL (панель закроется, если срок уже истёк) → пере-арм таймера дедлайнов.
+    /// Toggles a pane's pin. Pinning exempts it from TTL auto-close; unpinning restores its deadline,
+    /// which may already have elapsed, so the deadline timer is re-armed.
     fn toggle_pin(&mut self, idx: usize, cx: &mut Context<Self>) {
         if self.chart.toggle_pane_pin(idx) {
             self.view_dirty = true;
@@ -825,8 +835,7 @@ impl ChartPanel {
         }
     }
 
-    /// Закрыть ВСЕ монеты этого чарта (кнопка «закрыть все графики» в выносном окне) +
-    /// отписаться от их стаканов.
+    /// Closes every market in this panel and releases their market and order-book references.
     pub fn close_all_panes(&mut self, cx: &mut Context<Self>) {
         let removed = self.chart.clear_panes();
         if removed.is_empty() {
@@ -849,13 +858,13 @@ impl ChartPanel {
             }
         });
         self.view_dirty = true;
-        // Если пан перевёл панель в ручной режим — заводим таймер авто-возврата (П.9).
+        // If the input moved a pane into manual mode, arm its wall-clock return to live.
         self.arm_auto_live_timer(cx);
     }
 
-    /// Подпись вкладки: для AddToChart — «N · рынок» (П.4: вместо безликого «Чарт N»),
-    /// иначе рынок открытой монеты, затем «Main». Группа/ядро тут недоступны (их знают
-    /// ChartTabs/DetachedChartHost) — используем номер + активный рынок.
+    /// Returns the tab caption. Numbered AddToChart and Custom panels use `N · market`, falling back
+    /// to the localized numbered label; Main uses the active market and then `Main`. Group and core
+    /// belong to ChartTabs or DetachedChartHost and are not available here.
     pub fn title_text(&self) -> String {
         let market = self
             .chart
