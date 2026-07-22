@@ -1,8 +1,9 @@
-//! Ввод чарт-области в GPUI (порт 1:1 из удалённой egui-версии, winit-free):
-//! вместо winit-типов берёт plain `dy: f32` (колесо) и локальный [`Btn`]. Всё в
-//! ДЕВАЙС-пикселях (та же шкала, в которой рендерит чарт-движок и в которой живёт
-//! `ChartView`). Конвертацию из лог. px окна делает вызывающий (Shell):
-//! `(pos − slot_origin) × scale_factor`.
+//! GPUI chart-area input state, ported from the removed egui implementation without winit types.
+//! Wheel input uses a plain `dy: f32`, and mouse buttons use the local [`Btn`] enum. All stored
+//! coordinates are device pixels, matching the chart renderer and [`ChartView`]. The `ChartPanel`
+//! handlers obtain them through `ChartEngine::chart_local_from_window_pos`, which converts logical
+//! window coordinates as `(position - slot_origin) * scale_factor`. This layer mutates chart views
+//! immediately; callers own event propagation, GPUI notification, and pending Main-open handoff.
 
 use crate::chartdx::pane::Container;
 use moon_chart::paint::now_unix_ms;
@@ -10,7 +11,7 @@ use moon_chart::view::{ChartView, Rect};
 use moon_chart::{GLASS_ZONE_PX, PRICE_AXIS_W};
 use moon_core::session::CoreId;
 
-/// Кнопка мыши (вместо winit::MouseButton).
+/// Mouse button subset used by chart navigation instead of `winit::MouseButton`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Btn {
     Left,
@@ -18,27 +19,30 @@ pub enum Btn {
 }
 
 const WHEEL_THRESHOLD: f32 = 100.0;
-/// Точный ввод (тачпад macOS): плавный зум 2^(px/этой_величины). Удвоение/деление
-/// масштаба на ~300 px прокрутки. Заменяет дискретный порог, который на непрерывных
-/// пиксельных дельтах с инерцией давал взрывной зум и дрожание оси.
+/// Pixel distance that doubles or halves X scale for precise macOS trackpad input.
+///
+/// Precise zoom uses `2^(pixels / WHEEL_PX_PER_2X)` instead of the discrete wheel threshold, which
+/// caused inertial pixel deltas to trigger repeated jumps and axis jitter.
 const WHEEL_PX_PER_2X: f32 = 300.0;
 const ANCHOR_BREAK_PCT: f32 = 0.10;
 const RMB_ZOOM_START_PX: f32 = 4.0;
 
 #[derive(Default)]
 pub struct ChartInput {
-    /// Позиция перекрестия (девайс-px); None — вне зоны графика.
+    /// Crosshair position in device pixels, or `None` outside the chart zone.
     pub cursor: Option<(f32, f32)>,
-    /// Последняя позиция указателя (девайс-px).
+    /// Most recent pointer position in device pixels.
     pub last_ptr: (f32, f32),
-    /// Панель под курсором (индекс в контейнере).
+    /// Container index of the pane under the cursor.
     pub hovered_pane: Option<usize>,
-    /// Раскладка панелей (девайс-px) прошлого кадра — hit-тест ввода.
+    /// Pane layout from the previous render, in device pixels, used for input hit testing.
     pub pane_rects: Vec<(usize, Rect)>,
-    /// Положение оси цен (обновляется в render): влияет на левый отступ плота и его ширину при
-    /// расчёте `cursor_x`/`plot_w`. Дефолт — Left (как и у панели).
+    /// Price-axis position published during render.
+    ///
+    /// This controls plot width and the left offset used to calculate `cursor_x`; its default is
+    /// `Left`, matching the panel default.
     pub price_axis_pos: crate::chart_persist::PriceAxisPos,
-    /// Двойной клик по чарту → отправить монету на Main (владелец забирает).
+    /// Market queued by an eligible chart double-click for the caller to take and open on Main.
     pub pending_to_main: Option<(CoreId, String)>,
 
     lmb_down: bool,
@@ -48,12 +52,12 @@ pub struct ChartInput {
     wheel_accum: f32,
     wheel_pane: Option<usize>,
     rmb_down: bool,
-    /// ПКМ сдвинулся за порог → зум-перетаскивание цены.
+    /// Whether right-button movement crossed the price-zoom drag threshold.
     rmb_moved: bool,
     rmb_start_y: f32,
     rmb_start_range: f32,
     rmb_start_center: f32,
-    /// Время/позиция прошлого ЛКМ-нажатия — для детекта двойного клика.
+    /// Time and position of the previous left-button press for double-click detection.
     last_lmb_ms: f64,
     last_lmb_pos: (f32, f32),
 }
@@ -80,7 +84,7 @@ impl ChartInput {
         };
         let glass_w = GLASS_ZONE_PX.min(r.w * 0.5);
         let plot_w = (r.w - price_axis_w - glass_w).max(1.0);
-        // Левый отступ плота = ширина оси ТОЛЬКО когда ось слева; справа/скрыта → плот от края слота.
+        // Reserve a left offset only for a left-side axis; right-side or hidden axes start at the slot edge.
         let left_off = if matches!(self.price_axis_pos, PriceAxisPos::Left) {
             price_axis_w
         } else {
@@ -90,7 +94,9 @@ impl ChartInput {
         (plot_w, cursor_x)
     }
 
-    /// `view` панели под курсором (для пан/зум). None — курсор не над панелью.
+    /// Return the hovered pane's mutable view for pan or zoom operations.
+    ///
+    /// Returns `None` when no pane is hovered or the container has no matching view.
     pub fn hovered_view_mut<'c>(&self, container: &'c mut Container) -> Option<&'c mut ChartView> {
         self.view_mut(container, self.hovered_pane)
     }
@@ -104,13 +110,13 @@ impl ChartInput {
         container.view_mut(idx)
     }
 
-    /// Двойной ЛКМ по чарту (не стакану) панели под курсором → запомнить монету.
+    /// Queue the hovered pane's market after a chart-area double-click.
     fn try_dblclick_to_main(&mut self, container: &Container) {
         let Some(idx) = self.hovered_pane else { return };
         let Some((_, r)) = self.pane_rects.iter().find(|(i, _)| *i == idx) else {
             return;
         };
-        // В стакане (правая зона GLASS_ZONE_PX) дабл-клик игнорируем.
+        // Ignore double-clicks in the right-side order-book/glass zone.
         let glass_w = GLASS_ZONE_PX.min(r.w * 0.5);
         if self.last_ptr.0 >= r.x + r.w - glass_w {
             return;
@@ -118,10 +124,11 @@ impl ChartInput {
         self.pending_to_main = container.target(idx);
     }
 
-    /// Колесо: зум по X (или пан по X при Shift/Alt) — у панели под курсором.
-    /// `dy` — знак/величина прокрутки (lines), `gate_ok` — указатель в зоне графика.
-    /// `pan` — сдвиг графика влево/вправо вместо зума (встроенный хоткей Shift/Alt+колесо).
-    /// Возвращает «нужен кадр».
+    /// Apply wheel X zoom or X pan to the hovered pane.
+    ///
+    /// `dy` is a line delta for discrete input or a pixel delta when `precise` is true. `pan`
+    /// selects Shift/Alt wheel panning instead of zooming, and `gate_ok` requires the pointer to be
+    /// inside the chart zone. Returns whether a view changed and needs presentation.
     pub fn wheel(
         &mut self,
         dy: f32,
@@ -143,19 +150,18 @@ impl ChartInput {
         let now = now_unix_ms();
         if let Some(view) = self.hovered_view_mut(container) {
             if pan {
-                // Пан по X. Точный ввод (Pixels) — на реальные пиксели жеста; дискретное
-                // колесо (Lines) — фиксированный шаг 60 px за щелчок.
+                // Precise panning follows gesture pixels; a discrete line event uses a fixed
+                // 60-device-pixel step in its sign direction.
                 let dx = if precise { -dy } else { -dy.signum() * 60.0 };
                 view.pan_x_px(dx, now, plot_w);
             } else if precise {
-                // Точный ввод (тачпад macOS): плавный ПРОПОРЦИОНАЛЬНЫЙ зум по величине
-                // жеста, без порога-аккумулятора — иначе поток пиксельных дельт с инерцией
-                // пересекает порог много раз подряд и даёт взрывной зум/дрожание оси.
+                // Precise macOS trackpad input zooms proportionally to gesture magnitude without
+                // threshold accumulation, avoiding repeated jumps from inertial pixel deltas.
                 self.wheel_accum = 0.0;
                 let factor = 2f32.powf(dy / WHEEL_PX_PER_2X);
                 view.zoom_x_at(factor, plot_w, cursor_x, now);
             } else {
-                // Дискретное колесо мыши (Windows): накапливаем и шагаем 2×/0.5× по порогу.
+                // Accumulate discrete wheel lines and apply a 2x or 0.5x step at the threshold.
                 self.wheel_accum += dy * 40.0;
                 if self.wheel_accum.abs() < WHEEL_THRESHOLD {
                     return false;
@@ -170,10 +176,14 @@ impl ChartInput {
         false
     }
 
-    /// Нажатие/отпускание кнопки. `gate_ok` — указатель в зоне графика (гейтит
-    /// только нажатия). ПКМ-drag = зум цены; короткий ПКМ-клик ничего не переключает,
-    /// потому что один `ChartEngine` больше не имеет внутреннего tiled-режима.
-    /// `allow_dbl_to_main` — разрешён ли дабл-клик→Main. Возврат: «нужен кадр».
+    /// Update chart-navigation state for a left or right mouse-button transition.
+    ///
+    /// `gate_ok` restricts presses to the chart zone but does not block releases, allowing held
+    /// state to clear outside that zone. A right-button drag zooms price; a short right click does
+    /// not toggle anything in this layer because one `ChartEngine` no longer owns tiled mode. The
+    /// caller may still use [`rmb_moved`](Self::rmb_moved) to gate a parent stack toggle.
+    /// `allow_dbl_to_main` permits an eligible left double-click to fill `pending_to_main`.
+    /// The return value reports a view change; the caller handles the pending market separately.
     pub fn mouse_button(
         &mut self,
         button: Btn,
@@ -189,7 +199,7 @@ impl ChartInput {
             Btn::Left => {
                 if pressed {
                     if !gate_ok {
-                        return false; // клик по UI-панелям — не таскаем график
+                        return false; // Do not start chart dragging from surrounding UI controls.
                     }
                     let now = now_unix_ms();
                     let (px, py) = self.last_ptr;
@@ -248,8 +258,10 @@ impl ChartInput {
         changed
     }
 
-    /// Drag-часть движения: ЛКМ (пан X/Y) и ПКМ (вертикальный зум цены от снимка).
-    /// Сам обновляет `last_ptr`. Возвращает «нужен кадр» (идёт перетаскивание).
+    /// Apply the navigation portion of a pointer-drag event and update `last_ptr`.
+    ///
+    /// Left drag pans X/Y, while right drag vertically zooms price from the press-time range and
+    /// center snapshot. Returns whether the event actually changed a view and needs presentation.
     pub fn pointer_drag(
         &mut self,
         x: f32,
@@ -263,7 +275,7 @@ impl ChartInput {
         self.last_ptr = (x, y);
         let mut changed = false;
 
-        // ЛКМ: горизонталь → пан по времени, вертикаль → пан по цене.
+        // Left drag pans time horizontally and price vertically.
         if self.lmb_down {
             let target = self.drag_pane.or(self.hovered_pane);
             let (plot_w, _) = self.plot_metrics_for(target, fallback_w, ppp);
@@ -288,7 +300,7 @@ impl ChartInput {
             }
         }
 
-        // ПКМ: вертикальный зум по цене от снимка нажатия.
+        // Right drag zooms price vertically from the range and center captured on press.
         if self.rmb_down {
             let cum = y - self.rmb_start_y;
             if cum.abs() > RMB_ZOOM_START_PX {
@@ -307,9 +319,10 @@ impl ChartInput {
         changed
     }
 
-    /// Синхронизировать зажатость кнопок из факта move-события. GPUI шлёт mouse_up
-    /// только над элементом → отпускание вне слота теряется и drag «залипает».
-    /// Move сообщает реально зажатую кнопку — сбрасываем залипшее состояние.
+    /// Reconcile held-button state from a mouse-move event.
+    ///
+    /// GPUI delivers `mouse_up` only over the element, so a release outside the slot can leave drag
+    /// state stuck. The move event reports the currently pressed button and clears stale state here.
     pub fn sync_pressed(&mut self, left_held: bool, right_held: bool) {
         if !left_held {
             self.lmb_down = false;
@@ -323,14 +336,15 @@ impl ChartInput {
         }
     }
 
-    /// Сдвигался ли ПКМ за порог зум-перетаскивания цены с момента нажатия. true =
-    /// это был зум-drag, а не короткий клик (нужно, чтобы возврат из фулскрина по ПКМ
-    /// не срабатывал после зума цены).
+    /// Return whether right-button movement crossed the price-zoom threshold since its press.
+    ///
+    /// The parent Main stack uses this to distinguish a zoom drag from the short right click that
+    /// exits fullscreen.
     pub fn rmb_moved(&self) -> bool {
         self.rmb_moved
     }
 
-    /// Hit-тест панели под точкой по `pane_rects`.
+    /// Return the first pane whose cached rectangle contains the device-pixel point.
     pub fn pane_at(&self, x: f32, y: f32) -> Option<usize> {
         self.pane_rects
             .iter()
