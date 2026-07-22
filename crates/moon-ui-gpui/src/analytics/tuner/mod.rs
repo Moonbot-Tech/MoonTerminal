@@ -129,19 +129,12 @@ impl AnalyticsView {
         // The "By time" schedule grid is PER strategy: reset it so the previous strategy's
         // v1 does not leak onto the new one (otherwise Save would write foreign values).
         self.time_tuner.reset_grid();
-        self.time_dirty = true;
+        self.time_tuner.dirty = true;
         // The coin lists were edited against the PREVIOUS strategy; carried over they would
         // read as "this strategy's coins". `invalidate` retires them along with the numbers.
         self.coins.invalidate();
         self.coin_lists.invalidate();
-        match self.strat_mode {
-            StratMode::Filters => {
-                self.reload_tuner(cx);
-                self.reload_hist(cx);
-            }
-            StratMode::Time => self.reload_time(cx),
-            StratMode::Coins => self.reload_coins(cx),
-        }
+        self.reload_axis(self.strat_mode, cx);
         cx.notify();
     }
 
@@ -258,7 +251,10 @@ impl AnalyticsView {
     /// own coin detail does not change either.
     fn selection_scope_changed(&mut self, cx: &mut Context<Self>) {
         self.tuner.invalidate();
-        self.time_dirty = true;
+        // A bare `dirty` write, NOT `time_tuner.invalidate()`: this path has never retired
+        // an in-flight time suggestion (unlike the filter axis' `invalidate` above), and the
+        // refactor keeps that behavior rather than silently changing it.
+        self.time_tuner.dirty = true;
         // The coin table's numbers AND its lists are scoped to the whole selection, so
         // adding or removing a strategy retires both — including any unsaved tick, whose
         // baseline (the union of the selected strategies' saved lists) just changed.
@@ -268,14 +264,7 @@ impl AnalyticsView {
         // just thrown that edit away with the scope it belonged to, so the banner would go on
         // promising something recoverable that no longer exists.
         self.write_error = None;
-        match self.strat_mode {
-            StratMode::Filters => {
-                self.reload_tuner(cx);
-                self.reload_hist(cx);
-            }
-            StratMode::Time => self.reload_time(cx),
-            StratMode::Coins => self.reload_coins(cx),
-        }
+        self.reload_axis(self.strat_mode, cx);
         cx.notify();
     }
 
@@ -330,22 +319,13 @@ impl AnalyticsView {
         self.selection_scope_changed(cx);
     }
 
-    /// Change strategy mode and refresh dirty tuner data when entering Filters.
+    /// Change strategy mode and refresh the entered axis' data when it is stale.
     fn set_strat_mode(&mut self, mode: StratMode, cx: &mut Context<Self>) {
         if self.strat_mode == mode {
             return;
         }
         self.strat_mode = mode;
-        if mode == StratMode::Filters && self.tuner.needs_reload() {
-            self.reload_tuner(cx);
-            self.reload_hist(cx);
-        }
-        if mode == StratMode::Time && (self.time_profiles.is_none() || self.time_dirty) {
-            self.reload_time(cx);
-        }
-        if mode == StratMode::Coins && self.coins.needs_reload() {
-            self.reload_coins(cx);
-        }
+        self.reload_axis_if_stale(mode, cx);
         cx.notify();
     }
 
@@ -434,11 +414,39 @@ impl AnalyticsView {
 }
 
 impl AnalyticsView {
-    /// Reload the data of the ACTIVE tuning axis (after writing to a strategy — refresh
-    /// its chips/KPI: for "By time" — `reload_time`, otherwise — `reload_tuner`).
+    /// Fully reload one axis' data — the dispatch every scope change (selection, filters,
+    /// period) goes through, so the "which reloads belong to which axis" list exists once.
+    ///
+    /// Exhaustive on purpose — no wildcard. A fourth axis must fail to compile here
+    /// instead of silently reloading the filter tuner's data under its own name.
+    pub(super) fn reload_axis(&mut self, mode: StratMode, cx: &mut Context<Self>) {
+        match mode {
+            StratMode::Filters => {
+                self.reload_tuner(cx);
+                self.reload_hist(cx);
+            }
+            StratMode::Time => self.reload_time(cx),
+            StratMode::Coins => self.reload_coins(cx),
+        }
+    }
+
+    /// Reload an axis only when its data is stale — the dispatch for ENTERING an axis
+    /// (a mode button, a tab switch): fresh data stays, a stale axis recomputes.
+    pub(super) fn reload_axis_if_stale(&mut self, mode: StratMode, cx: &mut Context<Self>) {
+        let stale = match mode {
+            StratMode::Filters => self.tuner.needs_reload(),
+            StratMode::Time => self.time_tuner.needs_reload(),
+            StratMode::Coins => self.coins.needs_reload(),
+        };
+        if stale {
+            self.reload_axis(mode, cx);
+        }
+    }
+
+    /// Reload the data of the ACTIVE tuning axis after WRITING to a strategy — refresh
+    /// its chips/KPI. Deliberately NOT `reload_axis`: a write changes no past trades, so
+    /// the filter histogram (a distribution over them) is left alone.
     pub(super) fn reload_active_tuner(&mut self, cx: &mut Context<Self>) {
-        // Exhaustive on purpose — no wildcard. A fourth axis must fail to compile here
-        // instead of silently reloading the filter tuner's data under its own name.
         match self.strat_mode {
             StratMode::Filters => self.reload_tuner(cx),
             StratMode::Time => self.reload_time(cx),

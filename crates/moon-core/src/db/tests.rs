@@ -18,9 +18,7 @@ fn rep_indexes_created_for_preexisting_columns() {
          ALTER TABLE orders_rep ADD COLUMN buydate INTEGER;",
     )
     .unwrap();
-    let cursors = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let open_rows = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    rep::init(&conn, cursors, open_rows).unwrap();
+    test_support::rep_init(&conn);
     let n: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='index'
@@ -69,9 +67,7 @@ fn union_reader_and_legacy_drop() {
     )
     .unwrap();
 
-    let cursors = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let open_rows = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut st = rep::init(&conn, cursors, open_rows).unwrap();
+    let mut st = test_support::rep_init(&conn);
 
     // Replica row for core 2, with columns as the core schema would extend them.
     for ddl in [
@@ -215,6 +211,77 @@ fn corrupt_replica_fails_report_totals_instead_of_zeroing() {
 
     drop(conn);
     test_support::remove_db(&path);
+}
+
+/// Soft-deleted rows leave the table and the totals by default; the deleted-only
+/// mode inverts the selection to exactly those rows.
+///
+/// The legacy table has no `deleted` column: its rows pass unfiltered by default
+/// and contribute nothing in deleted-only mode. NULL counts as not deleted.
+#[test]
+fn deleted_filter_default_hides_and_only_mode_inverts() {
+    let conn = Connection::open_in_memory().unwrap();
+    init_db(&conn).unwrap();
+
+    // Legacy source without a `deleted` column, one row.
+    conn.execute_batch(
+        "CREATE TABLE closed_sell_reports (
+            core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, db_id INTEGER NOT NULL,
+            coin TEXT, profitbtc REAL, closedate INTEGER,
+            created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
+            PRIMARY KEY (core_uid, db_id));
+         INSERT INTO closed_sell_reports
+            (core_uid, core_name, db_id, coin, profitbtc, closedate, created_ms, updated_ms)
+         VALUES (1, 'Legacy', 1, 'LEGACY', 1.0, 1780000000, 0, 0);",
+    )
+    .unwrap();
+
+    test_support::rep_init(&conn);
+
+    // Replica rows: kept (0), soft-deleted (1), and NULL, which counts as kept.
+    conn.execute_batch(
+        "ALTER TABLE orders_rep ADD COLUMN coin TEXT;
+         ALTER TABLE orders_rep ADD COLUMN profitbtc REAL;
+         ALTER TABLE orders_rep ADD COLUMN closedate INTEGER;
+         ALTER TABLE orders_rep ADD COLUMN deleted INTEGER;
+         INSERT INTO orders_rep (core_uid, core_name, newrecid, coin, profitbtc, closedate, deleted)
+         VALUES (2, 'Rep', 1, 'KEPT',   10.0, 1780000100, 0),
+                (2, 'Rep', 2, 'GONE',  -50.0, 1780000200, 1),
+                (2, 'Rep', 3, 'NULLD',  2.0, 1780000300, NULL);",
+    )
+    .unwrap();
+
+    let coins = |f: &ReportFilter| -> Vec<String> {
+        let t = query_reports(&conn, f, "closedate", true, 10).expect("выборка читается");
+        let ix = t.cols.iter().position(|c| c == "coin").unwrap();
+        let mut out: Vec<String> = t
+            .rows
+            .iter()
+            .map(|r| match &r[ix] {
+                Value::Text(s) => s.clone(),
+                v => panic!("coin не текст: {v:?}"),
+            })
+            .collect();
+        out.sort();
+        out
+    };
+
+    // Default: the soft-deleted row is gone from rows and totals alike.
+    let visible = ReportFilter::default();
+    assert_eq!(coins(&visible), ["KEPT", "LEGACY", "NULLD"]);
+    let (profit, count) = query_totals(&conn, &visible).expect("итоги читаются");
+    assert_eq!(count, 3);
+    assert!((profit - 13.0).abs() < 1e-9, "profit={profit}");
+
+    // Deleted-only: exactly the soft-deleted row; the legacy source yields nothing.
+    let only = ReportFilter {
+        deleted_only: true,
+        ..Default::default()
+    };
+    assert_eq!(coins(&only), ["GONE"]);
+    let (profit, count) = query_totals(&conn, &only).expect("итоги читаются");
+    assert_eq!(count, 1);
+    assert!((profit + 50.0).abs() < 1e-9, "profit={profit}");
 }
 
 /// Protects `max_core_uid`: it must fold BOTH report schemas, and a source whose table does not

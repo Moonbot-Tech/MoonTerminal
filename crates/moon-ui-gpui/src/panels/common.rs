@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{DockArea, MoonButton, MoonButtonSize, MoonMenuItem, MoonPalette};
+use moon_ui::{
+    DockArea, MoonButton, MoonButtonSize, MoonCheckbox, MoonCheckboxSize, MoonMenuItem,
+    MoonPalette, MoonTooltipView,
+};
 
 use crate::Backend;
 use crate::design;
@@ -51,6 +54,26 @@ where
             item.on_click(move |_, _, app| on_select(app, value))
         })
         .collect()
+}
+
+/// Builds an unlabeled compact checkbox with a tooltip. A `div.id.tooltip` wrapper
+/// supplies the tooltip because an unlabeled `MoonCheckbox` has none.
+pub(crate) fn icon_checkbox(
+    id: &str,
+    tooltip: String,
+    checked: bool,
+    on_change: impl Fn(&bool, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    div()
+        .id(SharedString::from(format!("{id}-tip")))
+        .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tooltip.clone())).into())
+        .child(
+            MoonCheckbox::new(SharedString::from(id.to_string()))
+                .checked(checked)
+                .size(MoonCheckboxSize::Compact)
+                .on_change(on_change),
+        )
+        .into_any_element()
 }
 
 /// Hosts a caller-built data table in the shared table-body surface. The container fills available

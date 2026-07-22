@@ -302,34 +302,6 @@ impl AnalyticsView {
         self.open_change_dialog(targets, changes, None, Vec::new(), warns, false, cx);
     }
 
-    /// "To strategy" for the "By time" axis: writes v1 into the `WorkingWeekTime`
-    /// (day span) and `WorkingTime` (time window) fields of the selected strategy through
-    /// the SAME confirmation dialog (`open_change_dialog`) as the thresholds. Only
-    /// NON-EMPTY and changed fields are written (an empty field is left alone, the
-    /// schedule is never wiped). The MoonBot field formats are unconfirmed — the strings
-    /// are visible in the confirmation dialog.
-    pub(in crate::analytics::tuner) fn time_open_save_dialog(&mut self, cx: &mut Context<Self>) {
-        let targets = self.selected_targets();
-        if targets.is_empty() {
-            return;
-        }
-        // Single: same fields that light "Save" amber (`is_dirty`) so the button state and
-        // the write permission agree. Multi: the forced set pushes the schedule to every
-        // target regardless of the anchor's current values, and disables IgnoreTime/
-        // IgnoreFilters so it actually applies.
-        let bulk = targets.len() > 1;
-        let changes = if bulk {
-            self.time_tuner.changes_forced()
-        } else {
-            self.time_tuner.changes()
-        };
-        if changes.is_empty() {
-            log::info!("analytics: 'Save' (time) — nothing to write (fields empty or = current)");
-            return;
-        }
-        self.open_change_dialog(targets, changes, None, Vec::new(), Vec::new(), false, cx);
-    }
-
     /// "Make a copy": the same change set, but the target is a NEW strategy
     /// (a copy of the current one with the thresholds applied) on all of the original's
     /// cores. The name is auto-uniqued and editable in the confirmation dialog. An
@@ -346,24 +318,6 @@ impl AnalyticsView {
         let (mut changes, warns) = self.build_strategy_changes(false);
         changes.push(self.analyzer_comment());
         self.open_copy_with(target, changes, warns, window, cx);
-    }
-
-    /// "Make a copy" for the "By time" axis: the same changes as Save (schedule +
-    /// IgnoreTime/IgnoreFilters), but the target is a NEW strategy (a copy of the selected
-    /// one). Shares the filter path through `open_copy_with`; empty changes are fine (a
-    /// plain duplicate).
-    pub(in crate::analytics::tuner) fn time_open_copy_dialog(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Copy is single-target only (button hidden in multi-select) — take the anchor.
-        let Some(target) = self.selected_targets().into_iter().next() else {
-            return;
-        };
-        let mut changes = self.time_tuner.changes();
-        changes.push(self.analyzer_comment());
-        self.open_copy_with(target, changes, Vec::new(), window, cx);
     }
 
     /// The SHARED tail of "Make a copy" (all axes): an auto-uniqued name for the new
@@ -602,7 +556,10 @@ impl AnalyticsView {
     /// The analyzer stamp for Comment: "dd.mm.yyyy hh:mm:ss (Save from
     /// analyzer)" UTC. The user's own description is preserved — only the previous
     /// stamp is replaced (segments are separated by "; ").
-    fn analyzer_comment(&self) -> (String, String) {
+    ///
+    /// `tuner`-visible: the "By time" copy dialog (`time/save.rs`) stamps its copies
+    /// through the same helper.
+    pub(in crate::analytics::tuner) fn analyzer_comment(&self) -> (String, String) {
         const MARK: &str = "(Save from analyzer)";
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

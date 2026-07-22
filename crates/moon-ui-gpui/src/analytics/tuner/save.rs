@@ -63,40 +63,31 @@ impl AnalyticsView {
         // selection change during the read RESURRECTED the dialog afterwards, on targets the
         // panel had already discarded, and confirming wrote an edit that was no longer shown.
         let req = self.tuner.seq;
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let olds_map = executor
-                .spawn(
-                    async move { moon_core::db::tuner::strategy_current_values(sid, core, &keys) },
-                )
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    // Before the generation check: a retired request still owes its decrement.
-                    this.op_finished(cx);
-                    if this.tuner.seq != req {
-                        log::info!("analytics: the confirmation's scope changed, dialog dropped");
-                        return;
-                    }
-                    let olds = changes
-                        .iter()
-                        .map(|(k, _)| olds_map.get(k).cloned())
-                        .collect();
-                    this.tuner.save_dialog = Some(Arc::new(SaveDialog {
-                        targets,
-                        changes,
-                        per_target,
-                        olds,
-                        notes,
-                        warns,
-                        copy,
-                    }));
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
+        self.spawn_db(
+            true,
+            cx,
+            move || moon_core::db::tuner::strategy_current_values(sid, core, &keys),
+            move |this, olds_map, cx| {
+                if this.tuner.seq != req {
+                    log::info!("analytics: the confirmation's scope changed, dialog dropped");
+                    return;
+                }
+                let olds = changes
+                    .iter()
+                    .map(|(k, _)| olds_map.get(k).cloned())
+                    .collect();
+                this.tuner.save_dialog = Some(Arc::new(SaveDialog {
+                    targets,
+                    changes,
+                    per_target,
+                    olds,
+                    notes,
+                    warns,
+                    copy,
+                }));
+                cx.notify();
+            },
+        );
     }
 
     /// "Yes" in the confirmation dialog: write into the strategy or create a copy.

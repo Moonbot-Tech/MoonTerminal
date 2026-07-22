@@ -11,6 +11,8 @@
 //! to refresh manually. A tab switch reloads only when its data is stale, missing, or for a
 //! different period.
 
+/// The shared spawn+overlay envelope of every background DB read.
+mod bg;
 mod calendar;
 /// Period presets, window tabs and date helpers — the time axis shared by every page.
 mod period;
@@ -196,26 +198,9 @@ pub struct AnalyticsView {
     /// The coin picker's read: the selected strategies' blacklist, with the core each coin
     /// belongs to and when it was added.
     coin_lists: tuner::CoinListsState,
-    /// By time mode: the single hour-of-day profile for the selected Strategies period and
-    /// strategy-selection scope. `None` before the first computation or after a read error.
-    pub(super) time_profiles: Option<Arc<Vec<[moon_core::db::analytics::HourStat; 24]>>>,
-    /// Average-profit profiles used to color the By time sliders
-    /// (weekday by hour / hour of day / minute of hour). `None` before computation or on error.
-    pub(super) time_slider: Option<Arc<moon_core::db::tuner::SliderProfiles>>,
-    /// By time mode's Fact vs variants KPI: Fact / v1 / v2 columns for the weekly schedule
-    /// from the grid, rendered in the shared matrix at the right.
-    pub(super) time_stats: LoadState<Vec<moon_core::db::tuner::VarStats>>,
-    /// By time v1/v2 bounds for the weekly span, time of day, and minute of hour.
+    /// The By time mode: v1/v2 schedule bounds, the loaded profiles/KPI and their
+    /// staleness — the whole axis state lives in one struct, like `coins`.
     time_tuner: tuner::TimeTunerState,
-    time_seq: u64,
-    /// Whether By time data is stale for the current query and strategy-selection scope, including
-    /// the anchor and Ctrl-selected extras, and must be recomputed on entry.
-    time_dirty: bool,
-    /// Track bounds of the three By time sliders (week/day/hour), captured through `canvas`
-    /// to convert the mouse coordinate into a value while dragging.
-    slider_track: [Option<gpui::Bounds<gpui::Pixels>>; 3],
-    /// Active slider drag: `(field 0..2, whether the left "from" handle is being dragged)`.
-    slider_drag: Option<(usize, bool)>,
     /// Calendars for the custom from/to range (MoonUI `MoonCalendar` popups); selecting a date
     /// switches the period to `Period::Custom`.
     cal_from: Entity<MoonCalendarState>,
@@ -369,14 +354,7 @@ impl AnalyticsView {
             tuner: tuner::TunerState::load(saved_tuner_iters, saved_tuner_edges),
             coins: tuner::CoinsState::default(),
             coin_lists: tuner::CoinListsState::default(),
-            time_profiles: None,
-            time_slider: None,
-            time_stats: LoadState::default(),
             time_tuner: tuner::TimeTunerState::load(),
-            time_seq: 0,
-            time_dirty: true,
-            slider_track: Default::default(),
-            slider_drag: None,
             cal_from,
             cal_to,
             cal_from_open: false,
@@ -485,7 +463,6 @@ impl AnalyticsView {
         self.hover_daily_bucket = None;
         self.hover_cum_bucket = None;
         self.hover_kind = None;
-        self.op_started();
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
         // Record the ACTIVE tab's time window that `data` is being computed for.
@@ -496,17 +473,18 @@ impl AnalyticsView {
         // The By time axis uses the shared filters and `strat_period`. This common reload path
         // conservatively retires its in-flight auto-suggestion even on a Summary-only period
         // change; otherwise a stale result could be written into v1 and become saveable.
-        self.time_tuner.invalidate_suggest();
-        if self.tab == Tab::Strategies && self.strat_mode == tuner::StratMode::Filters {
-            self.reload_tuner(cx);
-            self.reload_hist(cx);
-        }
-        // The By time profile likewise uses the shared filters and `strat_period`. Mark it stale
-        // here (conservatively on Summary-only period changes), then recompute it immediately in
-        // the active mode or defer until entry.
-        self.time_dirty = true;
-        if self.tab == Tab::Strategies && self.strat_mode == tuner::StratMode::Time {
-            self.reload_time(cx);
+        // The profile is marked stale the same way, recomputed immediately below when the
+        // axis is the active one, or deferred until entry.
+        self.time_tuner.invalidate();
+        // The active Filters/Time axis recomputes now. "By coin" is the deliberate
+        // exception — see the `coins.invalidate()` comment below.
+        if self.tab == Tab::Strategies
+            && matches!(
+                self.strat_mode,
+                tuner::StratMode::Filters | tuner::StratMode::Time
+            )
+        {
+            self.reload_axis(self.strat_mode, cx);
         }
         // The "By coin" axis lives on the same scope (its "Fact vs v1" matrix included):
         // mark it stale. It is NOT started here, unlike the other axes: it expands its coin
@@ -525,52 +503,46 @@ impl AnalyticsView {
         }
         let q = self.query();
         let undated_q = q.clone();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let (data, undated) = executor
-                .spawn(async move {
-                    let d = moon_core::db::analytics::summary(&q);
-                    // Rides the same pass: it answers a question ABOUT this filter set, and
-                    // a second round trip would let the two disagree about which cores.
-                    let u = moon_core::db::analytics::undated_closes(&undated_q);
-                    (d, u)
-                })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    if this.seq != req {
-                        return; // The period or filters have already changed.
-                    }
-                    // Keep the last known core list when a read produces no
-                    // summary: an empty `cores` makes `cores_selected()` read as
-                    // "no filter", which renders as if every core were selected.
-                    if let Ok(d) = &data {
-                        this.cores = d.cores.clone();
-                    }
-                    this.data.apply(data);
-                    // A failed read leaves it unknown rather than "nothing missing": the
-                    // origin already logged why, and a silent zero here would be the very
-                    // thing this banner exists to stop.
-                    this.undated = undated.ok();
-                    // Observation channel only — see `probe_selects_strategy`. It adopts a
-                    // strategy, which starts the coin reload itself; the arm below is then
-                    // skipped so the two do not race two full passes over the same period.
-                    let probe_took_over = probe_selects_strategy() && this.probe_select_first(cx);
-                    // Now that the base coin set belongs to this scope, the coin axis can
-                    // plan against it.
-                    if !probe_took_over
-                        && this.tab == Tab::Strategies
-                        && this.strat_mode == tuner::StratMode::Coins
-                        && this.coins.needs_reload()
-                    {
-                        this.reload_coins(cx);
-                    }
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
+        self.spawn_db(
+            true,
+            cx,
+            move || {
+                let d = moon_core::db::analytics::summary(&q);
+                // Rides the same pass: it answers a question ABOUT this filter set, and
+                // a second round trip would let the two disagree about which cores.
+                let u = moon_core::db::analytics::undated_closes(&undated_q);
+                (d, u)
+            },
+            move |this, (data, undated), cx| {
+                if this.seq != req {
+                    return; // The period or filters have already changed.
+                }
+                // Keep the last known core list when a read produces no
+                // summary: an empty `cores` makes `cores_selected()` read as
+                // "no filter", which renders as if every core were selected.
+                if let Ok(d) = &data {
+                    this.cores = d.cores.clone();
+                }
+                this.data.apply(data);
+                // A failed read leaves it unknown rather than "nothing missing": the
+                // origin already logged why, and a silent zero here would be the very
+                // thing this banner exists to stop.
+                this.undated = undated.ok();
+                // Observation channel only — see `probe_selects_strategy`. It adopts a
+                // strategy, which starts the coin reload itself; the arm below is then
+                // skipped so the two do not race two full passes over the same period.
+                let probe_took_over = probe_selects_strategy() && this.probe_select_first(cx);
+                // Now that the base coin set belongs to this scope, the coin axis can
+                // plan against it.
+                if !probe_took_over
+                    && this.tab == Tab::Strategies
+                    && this.strat_mode == tuner::StratMode::Coins
+                {
+                    this.reload_axis_if_stale(tuner::StratMode::Coins, cx);
+                }
+                cx.notify();
+            },
+        );
     }
 
     // cal_query/cal_query_prev/reload_calendar live in calendar/mod.rs — a page's

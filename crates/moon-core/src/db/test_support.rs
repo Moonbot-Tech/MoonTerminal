@@ -27,6 +27,16 @@ pub(super) fn remove_db(path: &Path) {
     }
 }
 
+/// Run `rep::init` with throwaway cursor and open-row registries.
+///
+/// Tests that do not exercise catch-up bookkeeping share this one-liner; those
+/// that do feed the returned state to `rep::apply_*`.
+pub(super) fn rep_init(conn: &Connection) -> super::rep::RepState {
+    let cursors = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let open_rows = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    super::rep::init(conn, cursors, open_rows).unwrap()
+}
+
 /// Build a replica whose columns predate `rep::init`, allowing index creation
 /// to follow the same path as an upgraded database.
 ///
@@ -50,9 +60,7 @@ pub(super) fn build_replica(path: &Path, rows: &[(i64, f64, &str)]) -> Connectio
              ALTER TABLE orders_rep ADD COLUMN deleted INTEGER;",
     )
     .unwrap();
-    let cursors = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let open_rows = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    super::rep::init(&conn, cursors, open_rows).unwrap();
+    rep_init(&conn);
 
     let mut stmt = conn
         .prepare(

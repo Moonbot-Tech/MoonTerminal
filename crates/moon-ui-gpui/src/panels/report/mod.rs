@@ -1,7 +1,8 @@
 //! Report panel ported from egui's `src/dock/report_view.rs`.
 //!
-//! It displays closed trades from the local SQLite database, with core, coin, side, date, and
-//! order-kind filters plus column selection above the table and exact period totals below it. The
+//! It displays closed trades from the local SQLite database, with core, coin, side, date,
+//! order-kind, and deleted-trades filters plus column selection above the table and exact period
+//! totals below it. The
 //! generic table supports every displayable database column and header-click sorting. A writer
 //! generation counter in `Backend.reports` triggers throttled automatic refreshes.
 //!
@@ -12,6 +13,9 @@
 mod columns;
 mod controls;
 mod export;
+
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -167,6 +171,77 @@ fn complete_widths(widths: &mut std::collections::HashMap<String, f32>, cols: &[
     }
 }
 
+/// Minimum column width, mirroring the floor the fork enforces in
+/// `MoonDataTableState::set_column_width` (`data_table.rs`). The fork does not export it,
+/// so it is duplicated here; the clamp math must use the same floor, or its "does this
+/// layout fit" test would disagree with the widths the engine actually stores.
+const MIN_COL_W: f32 = 40.0;
+
+/// Pure width-budget policy, split out of [`ReportPanel::clamp_table_widths`] so its
+/// no-infinite-loop invariant can be unit-tested without a gpui `App`.
+///
+/// Returns the width map to write (and notify on), or `None` when nothing should change:
+/// the columns already fit, no fitting solution exists, or the computed widths do not
+/// actually move. The `None` on an infeasible layout is what stops the observe→notify
+/// loop: with a 40px floor per column (enforced here and by the fork's `set_column_width`),
+/// a viewport narrower than `40px × visible` can never be satisfied, so writing and
+/// notifying anyway would re-arm the observer on every pass — CPU pegged, window frozen.
+fn plan_clamp(
+    cur: &std::collections::HashMap<String, f32>,
+    visible: &[String],
+    prev: &std::collections::HashMap<String, f32>,
+    viewport: f32,
+) -> Option<std::collections::HashMap<String, f32>> {
+    if cur.is_empty() || viewport <= 80.0 {
+        return None;
+    }
+    let width_of = |c: &str| cur.get(c).copied().unwrap_or_else(|| columns::width_for(c));
+    let sum: f32 = visible.iter().map(|c| width_of(c)).sum();
+    if sum - viewport <= 0.5 {
+        return None; // already within budget
+    }
+    // No packing fits at the floor. Leave the stored widths intact and do NOT notify: the
+    // fork already fits the DISPLAY itself at render time — `downscale_columns_to_available`
+    // shrinks columns down to the floor, and its horizontal scrollbar owns whatever still
+    // overflows — all without touching `column_widths`. So there is nothing to store, and
+    // notifying on a pass that cannot reduce the overflow would spin observe→clamp→notify.
+    if visible.len() as f32 * MIN_COL_W > viewport {
+        return None;
+    }
+    let overflow = sum - viewport;
+    // One changed column at an unchanged key set = a live single-column drag.
+    let changed: Vec<&str> = cur
+        .iter()
+        .filter(|(k, v)| prev.get(*k).is_none_or(|p| (**v - p).abs() > 0.5))
+        .map(|(k, _)| k.as_str())
+        .collect();
+    let single_drag = changed.len() == 1 && prev.len() == cur.len();
+    let mut next = cur.clone();
+    let mut moved = false;
+    if single_drag {
+        if let Some(w) = next.get_mut(changed[0]) {
+            let nw = (*w - overflow).max(MIN_COL_W);
+            if (nw - *w).abs() > 0.5 {
+                *w = nw;
+                moved = true;
+            }
+        }
+    } else {
+        let scale = viewport / sum;
+        for col in visible {
+            if let Some(w) = next.get_mut(col) {
+                let nw = (*w * scale).max(MIN_COL_W);
+                if (nw - *w).abs() > 0.5 {
+                    *w = nw;
+                    moved = true;
+                }
+            }
+        }
+    }
+    // Notify only on real movement; a no-op pass must not re-arm the observer.
+    moved.then_some(next)
+}
+
 /// Rows and exact period totals from one completed report read.
 ///
 /// The schema is stored separately so a completed failed read cannot collapse
@@ -273,6 +348,8 @@ pub struct ReportPanel {
     pub(super) period: Period,
     /// All, real, or emulated order kind, defaulting to real as in Orders.
     pub(super) kind: ReportKind,
+    /// Show ONLY soft-deleted trades when set; hide them when clear (the default).
+    pub(super) deleted_only: bool,
     needs_query: bool,
     query_inflight: bool,
     query_seq: u64,
@@ -427,6 +504,7 @@ impl ReportPanel {
             side: SideFilter::All,
             period: Period::Today,
             kind: ReportKind::Real,
+            deleted_only: false,
             needs_query: true,
             query_inflight: false,
             query_seq: 0,
@@ -455,62 +533,33 @@ impl ReportPanel {
 
     /// Reduce visible column widths toward the table viewport budget.
     ///
-    /// The table engine otherwise proportionally shrinks every column during each render through
-    /// `downscale_columns_to_available`, making neighbors move when one column is dragged. Only when
-    /// exactly one width changed and map membership stayed constant is overflow removed from that
-    /// column; initialization, first-drag snapshots, and panel shrinkage use proportional reduction
-    /// across visible columns. The 40 px minimum can leave residual overflow, which
-    /// `MoonDataTable` handles with its horizontal-scroll and scrollbar fallback.
+    /// The fork rescales columns at render to fit the viewport — `auto_width_columns` upscales to
+    /// fill spare room, `downscale_columns_to_available` shrinks down to the floor — so neighbors
+    /// "float" when one column is dragged; keeping the stored sum within the viewport stops that
+    /// rescale from engaging. The decision is delegated to [`plan_clamp`], kept pure so
+    /// its termination invariant is unit-testable. `None` means no write and no notify: this runs
+    /// from an `observe` on the table state and its own `notify()` re-enters that observe, so a
+    /// notify on a pass that made no progress (an infeasible `40px × visible > viewport` layout —
+    /// e.g. every column shown in a narrow detached window) would spin `flush_effects` forever.
     fn clamp_table_widths(&mut self, state: &Entity<MoonDataTableState>, cx: &mut App) {
         let (cur, viewport) = {
             let s = state.read(cx);
             (s.column_widths.clone(), s.viewport_width())
         };
         let prev = std::mem::replace(&mut self.last_widths, cur.clone());
-        if cur.is_empty() || viewport <= 80.0 {
-            return;
-        }
-        // Match the engine's sum: each visible column uses its stored width or its column default.
-        let visible: Vec<&String> = self
+        let visible: Vec<String> = self
             .cols
             .iter()
             .filter(|c| self.visible.contains(c.as_str()))
+            .cloned()
             .collect();
-        let sum: f32 = visible
-            .iter()
-            .map(|c| {
-                cur.get(c.as_str())
-                    .copied()
-                    .unwrap_or_else(|| columns::width_for(c))
-            })
-            .sum();
-        let overflow = sum - viewport;
-        if overflow <= 0.5 {
-            return;
+        if let Some(next) = plan_clamp(&cur, &visible, &prev, viewport) {
+            state.update(cx, |s, c| {
+                s.column_widths = next;
+                c.notify();
+            });
+            self.last_widths = state.read(cx).column_widths.clone();
         }
-        // One changed entry with unchanged map membership indicates a live single-column drag.
-        let changed: Vec<String> = cur
-            .iter()
-            .filter(|(k, v)| prev.get(*k).is_none_or(|p| (**v - p).abs() > 0.5))
-            .map(|(k, _)| k.clone())
-            .collect();
-        let single_drag = changed.len() == 1 && prev.len() == cur.len();
-        state.update(cx, |s, c| {
-            if single_drag {
-                if let Some(w) = s.column_widths.get_mut(&changed[0]) {
-                    *w = (*w - overflow).max(40.0);
-                }
-            } else {
-                let scale = viewport / sum;
-                for col in &visible {
-                    if let Some(w) = s.column_widths.get_mut(col.as_str()) {
-                        *w = (*w * scale).max(40.0);
-                    }
-                }
-            }
-            c.notify();
-        });
-        self.last_widths = state.read(cx).column_widths.clone();
     }
 
     /// Switch a newly created detached panel to the `:win` column-storage context.
@@ -602,6 +651,7 @@ impl ReportPanel {
                 .into_owned(),
             side: self.side,
             emulator: self.kind.to_filter(),
+            deleted_only: self.deleted_only,
         }
     }
 
@@ -792,6 +842,13 @@ impl ReportPanel {
     pub(super) fn set_kind(&mut self, k: ReportKind, cx: &mut Context<Self>) {
         if self.kind != k {
             self.kind = k;
+            self.request_requery(cx);
+        }
+    }
+    /// Toggle the deleted-trades checkbox: off hides soft-deleted trades, on shows only them.
+    pub(super) fn set_deleted_only(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.deleted_only != on {
+            self.deleted_only = on;
             self.request_requery(cx);
         }
     }
@@ -1098,7 +1155,7 @@ impl Render for ReportPanel {
             .child(self.period_combo(cx))
             .child(self.kind_combo(cx))
             // Show manual From/To dates only in detached windows. Docked tabs rely on period presets
-            // to keep the core, coin, side, period, order-kind, and column controls compact.
+            // to keep the core, coin, side, period, order-kind, deleted, and column controls compact.
             .when(self.detached, |f| {
                 f.child(
                     div()
@@ -1123,6 +1180,7 @@ impl Render for ReportPanel {
                         .child(MoonInput::new("rep-to").state(&self.to).small()),
                 )
             })
+            .child(self.deleted_check(cx))
             .child(self.export_menu(cx))
             .child(self.columns_menu(cx));
 

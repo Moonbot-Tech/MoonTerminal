@@ -1,6 +1,7 @@
 //! Report file export as semicolon-delimited CSV with a UTF-8 BOM or as a real Excel workbook
 //! produced by `rust_xlsxwriter`. Export runs its own SQLite query using the panel's CURRENT filter
-//! (period preset or manual From/To dates, cores, coin, side, and emulator) and current sort. It does
+//! (period preset or manual From/To dates, cores, coin, side, emulator, and the deleted-trades
+//! checkbox) and current sort. It does
 //! not use the table's `MAX_REPORT_ROWS` cap: the panel shows the top 100 rows, while export writes
 //! every matching row up to [`EXPORT_MAX_ROWS`]. Cell values retain their RAW database
 //! representation (`isshort` and `emulator` remain 0/1, and numbers receive no presentation

@@ -170,7 +170,7 @@ impl AnalyticsView {
 
     /// Value in the slider's units from the mouse X (via the captured track bounds).
     fn slider_value_at(&self, field: usize, x: Pixels) -> u16 {
-        let Some(b) = self.slider_track[field] else {
+        let Some(b) = self.time_tuner.slider_track[field] else {
             return 0;
         };
         let w = f32::from(b.size.width);
@@ -213,7 +213,7 @@ impl AnalyticsView {
 
     /// Finish a slider drag: clear the flag and recompute the KPIs ONCE (on release).
     fn slider_release(&mut self, cx: &mut Context<Self>) {
-        if self.slider_drag.take().is_some() {
+        if self.time_tuner.slider_drag.take().is_some() {
             self.reload_time(cx);
             cx.notify();
         }
@@ -241,7 +241,7 @@ impl AnalyticsView {
         let value = self.slider_value_at(field, x);
         let (from, to) = self.slider_range(field);
         let is_from = (value as i32 - from as i32).abs() <= (value as i32 - to as i32).abs();
-        self.slider_drag = Some((field, is_from));
+        self.time_tuner.slider_drag = Some((field, is_from));
         self.slider_drag_to(field, is_from, value, cx);
     }
 
@@ -251,7 +251,7 @@ impl AnalyticsView {
         p: MoonPalette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let prof = self.time_slider.clone();
+        let prof = self.time_tuner.slider.clone();
         let mut col = v_flex()
             .w_full()
             .flex_none()
@@ -397,7 +397,9 @@ impl AnalyticsView {
             .child(
                 canvas(
                     move |bounds, _window, app| {
-                        view.update(app, |this, _| this.slider_track[field] = Some(bounds));
+                        view.update(app, |this, _| {
+                            this.time_tuner.slider_track[field] = Some(bounds)
+                        });
                     },
                     |_, _, _, _| {},
                 )
@@ -449,7 +451,7 @@ impl AnalyticsView {
         &self,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
-        self.slider_drag?;
+        self.time_tuner.slider_drag?;
         Some(
             div()
                 .absolute()
@@ -459,7 +461,7 @@ impl AnalyticsView {
                 .bottom_0()
                 .cursor(CursorStyle::ClosedHand)
                 .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _w, cx| {
-                    if let Some((field, is_from)) = this.slider_drag {
+                    if let Some((field, is_from)) = this.time_tuner.slider_drag {
                         let v = this.slider_value_at(field, e.position.x);
                         this.slider_drag_to(field, is_from, v, cx);
                     }

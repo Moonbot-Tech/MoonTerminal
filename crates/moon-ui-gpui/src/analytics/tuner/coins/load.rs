@@ -51,96 +51,87 @@ impl AnalyticsView {
         self.coin_lists.rows.begin();
         self.coins.stats.begin();
         self.coins.kpi.begin();
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let (stats, kpi, lists, bl_n, wl_n, entries) = executor
-                .spawn(async move {
-                    let entries = moon_core::db::coin_lists::coin_lists(&list_targets);
-                    let stats = moon_core::db::analytics::coin_groups(&q);
-                    // An absent strategy DB or a kind without the fields yields empty
-                    // lists, which read as "these strategies list no coins" — true.
-                    let mut lists = CoinLists::default();
-                    for (sid, core) in targets {
-                        let m = moon_core::db::tuner::strategy_current_values(
-                            sid,
-                            core,
-                            &["CoinsBlackList".to_string(), "CoinsWhiteList".to_string()],
-                        );
-                        let get = |k: &str| m.get(k).map(String::as_str).unwrap_or("");
-                        lists.merge(CoinLists::parse(
-                            get("CoinsBlackList"),
-                            get("CoinsWhiteList"),
-                        ));
-                    }
-                    // The plan is built HERE, from the lists this pass just read: building
-                    // it before the read scored the PREVIOUS lists, which after a scope
-                    // change are empty — that is why v1 never appeared until the user
-                    // clicked something.
-                    let plan = CoinPlan::build(&lists, &universe);
-                    let kpi = moon_core::db::tuner::variant_stats(&kpi_q, &plan.variants);
-                    (stats, kpi, lists, plan.bl, plan.wl, entries)
-                })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    // Guarded separately from the table below: the panels have their own
-                    // generation, so a scope change that retired only them still lands here
-                    // without publishing their stale answer.
-                    //
-                    // A FAILED list read has to leave the pass stale like any other, or
-                    // `needs_reload` never fires again and both panels sit on that error for
-                    // the rest of the session.
-                    //
-                    // `NotReady` is deliberately NOT a failure here: it means there is no
-                    // strategy database at all, which is a COMPLETED answer and one that will
-                    // not change by asking again. Counting it would pin `dirty` on forever and
-                    // make every entry into this mode re-run the full period scan behind the
-                    // busy overlay, for a question already answered.
-                    let lists_failed =
-                        matches!(entries, Err(moon_core::db::ReadFail::Failed { .. }));
-                    if this.coin_lists.seq == lists_req {
-                        this.coin_lists.rows.apply(entries);
-                    }
-                    if this.coins.seq != req {
-                        // The list read above may still have published under its own live
-                        // generation; without this the picker holds new data that nothing
-                        // asked to be drawn.
-                        cx.notify();
-                        return;
-                    }
-                    // An edit landing mid-flight bumps the KPI generation, and that is also
-                    // what says "the user has touched the working lists since this request
-                    // started" — so it must not be overwritten by a baseline read before it.
-                    let edited = this.coins.kpi_seq != kpi_req;
-                    // Clear "recompute me" only when everything this pass owed came back. The
-                    // KPI counts only when it is actually applied — a discarded request's
-                    // error says nothing about the table. An empty universe means the plan
-                    // could not be built at all, so that too has to stay stale.
-                    this.coins.dirty = stats.is_err()
-                        || lists_failed
-                        || universe_empty
-                        || (!edited && kpi.is_err());
-                    this.coins.stats.apply(stats);
-                    // The edit is replayed onto the new baseline rather than re-seeded from
-                    // it — see `adopt`. After a scope change `invalidate` has emptied both
-                    // sets, so there is no delta and the new lists are adopted whole; the
-                    // previous selection's picks cannot leak into this one.
-                    this.coins.adopt(lists);
-                    // A view filtered by a list that just came back empty has nothing
-                    // left to show; fall back before the table renders "no matches".
-                    this.coins.settle_filter();
-                    if !edited {
-                        this.coins.kpi.apply(kpi);
-                        this.coins.kpi_bl = bl_n;
-                        this.coins.kpi_wl = wl_n;
-                    }
+        self.spawn_db(
+            true,
+            cx,
+            move || {
+                let entries = moon_core::db::coin_lists::coin_lists(&list_targets);
+                let stats = moon_core::db::analytics::coin_groups(&q);
+                // An absent strategy DB or a kind without the fields yields empty
+                // lists, which read as "these strategies list no coins" — true.
+                let mut lists = CoinLists::default();
+                for (sid, core) in targets {
+                    let m = moon_core::db::tuner::strategy_current_values(
+                        sid,
+                        core,
+                        &["CoinsBlackList".to_string(), "CoinsWhiteList".to_string()],
+                    );
+                    let get = |k: &str| m.get(k).map(String::as_str).unwrap_or("");
+                    lists.merge(CoinLists::parse(
+                        get("CoinsBlackList"),
+                        get("CoinsWhiteList"),
+                    ));
+                }
+                // The plan is built HERE, from the lists this pass just read: building
+                // it before the read scored the PREVIOUS lists, which after a scope
+                // change are empty — that is why v1 never appeared until the user
+                // clicked something.
+                let plan = CoinPlan::build(&lists, &universe);
+                let kpi = moon_core::db::tuner::variant_stats(&kpi_q, &plan.variants);
+                (stats, kpi, lists, plan.bl, plan.wl, entries)
+            },
+            move |this, (stats, kpi, lists, bl_n, wl_n, entries), cx| {
+                // Guarded separately from the table below: the panels have their own
+                // generation, so a scope change that retired only them still lands here
+                // without publishing their stale answer.
+                //
+                // A FAILED list read has to leave the pass stale like any other, or
+                // `needs_reload` never fires again and both panels sit on that error for
+                // the rest of the session.
+                //
+                // `NotReady` is deliberately NOT a failure here: it means there is no
+                // strategy database at all, which is a COMPLETED answer and one that will
+                // not change by asking again. Counting it would pin `dirty` on forever and
+                // make every entry into this mode re-run the full period scan behind the
+                // busy overlay, for a question already answered.
+                let lists_failed = matches!(entries, Err(moon_core::db::ReadFail::Failed { .. }));
+                if this.coin_lists.seq == lists_req {
+                    this.coin_lists.rows.apply(entries);
+                }
+                if this.coins.seq != req {
+                    // The list read above may still have published under its own live
+                    // generation; without this the picker holds new data that nothing
+                    // asked to be drawn.
                     cx.notify();
-                });
-            });
-        })
-        .detach();
+                    return;
+                }
+                // An edit landing mid-flight bumps the KPI generation, and that is also
+                // what says "the user has touched the working lists since this request
+                // started" — so it must not be overwritten by a baseline read before it.
+                let edited = this.coins.kpi_seq != kpi_req;
+                // Clear "recompute me" only when everything this pass owed came back. The
+                // KPI counts only when it is actually applied — a discarded request's
+                // error says nothing about the table. An empty universe means the plan
+                // could not be built at all, so that too has to stay stale.
+                this.coins.dirty =
+                    stats.is_err() || lists_failed || universe_empty || (!edited && kpi.is_err());
+                this.coins.stats.apply(stats);
+                // The edit is replayed onto the new baseline rather than re-seeded from
+                // it — see `adopt`. After a scope change `invalidate` has emptied both
+                // sets, so there is no delta and the new lists are adopted whole; the
+                // previous selection's picks cannot leak into this one.
+                this.coins.adopt(lists);
+                // A view filtered by a list that just came back empty has nothing
+                // left to show; fall back before the table renders "no matches".
+                this.coins.settle_filter();
+                if !edited {
+                    this.coins.kpi.apply(kpi);
+                    this.coins.kpi_bl = bl_n;
+                    this.coins.kpi_wl = wl_n;
+                }
+                cx.notify();
+            },
+        );
     }
 
     /// The BASE coin set: every coin the selected cores traded in the period.
@@ -181,25 +172,21 @@ impl AnalyticsView {
         let q = self.tuner_query_all();
         let mut coins: Vec<String> = self.coins.picked.iter().cloned().collect();
         coins.sort();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let hit = executor
-                .spawn(async move { moon_core::db::analytics::strategies_for_coins(&q, &coins) })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    if this.coins.picked_seq != req {
-                        return;
-                    }
-                    // A failed read leaves nothing highlighted rather than a stale set: the
-                    // highlight is an assertion about these coins, and a wrong one is worse
-                    // than none.
-                    this.coins.picked_strats = hit.unwrap_or_default().into_iter().collect();
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
+        self.spawn_db(
+            false,
+            cx,
+            move || moon_core::db::analytics::strategies_for_coins(&q, &coins),
+            move |this, hit, cx| {
+                if this.coins.picked_seq != req {
+                    return;
+                }
+                // A failed read leaves nothing highlighted rather than a stale set: the
+                // highlight is an assertion about these coins, and a wrong one is worse
+                // than none.
+                this.coins.picked_strats = hit.unwrap_or_default().into_iter().collect();
+                cx.notify();
+            },
+        );
     }
 
     /// Tick / untick a coin on one list. The lists drive variant v1, so the matrix is
@@ -260,28 +247,24 @@ impl AnalyticsView {
         let plan = self.coins.plan(&universe);
         let (bl_n, wl_n) = (plan.bl, plan.wl);
         let variants = plan.variants;
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let kpi = executor
-                .spawn(async move { moon_core::db::tuner::variant_stats(&q, &variants) })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    if this.coins.kpi_seq != req {
-                        return;
-                    }
-                    // Same rule as the full reload: a failed read leaves the panel stale so
-                    // `needs_reload` re-arms it, instead of pinning the matrix to an error.
-                    if kpi.is_err() {
-                        this.coins.dirty = true;
-                    }
-                    this.coins.kpi.apply(kpi);
-                    this.coins.kpi_bl = bl_n;
-                    this.coins.kpi_wl = wl_n;
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
+        self.spawn_db(
+            false,
+            cx,
+            move || moon_core::db::tuner::variant_stats(&q, &variants),
+            move |this, kpi, cx| {
+                if this.coins.kpi_seq != req {
+                    return;
+                }
+                // Same rule as the full reload: a failed read leaves the panel stale so
+                // `needs_reload` re-arms it, instead of pinning the matrix to an error.
+                if kpi.is_err() {
+                    this.coins.dirty = true;
+                }
+                this.coins.kpi.apply(kpi);
+                this.coins.kpi_bl = bl_n;
+                this.coins.kpi_wl = wl_n;
+                cx.notify();
+            },
+        );
     }
 }

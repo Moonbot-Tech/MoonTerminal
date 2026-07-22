@@ -114,72 +114,63 @@ impl AnalyticsView {
         // Time: exact minutes. round_bound (3-significant-digit rounding) on minutes of the
         // day/week would cross day/hour boundaries (e.g. 23:59→24:00) — so we do NOT round.
         let round = false;
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let sugg =
-                executor
-                    .spawn(async move {
-                        moon_core::db::tuner::suggest_time(&q, min_n, edges, round, axes)
-                    })
-                    .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    if this.time_tuner.sugg_seq != req {
-                        return; // stale auto-suggestion (the strategy/scope changed)
-                    }
-                    this.time_tuner.sugg_busy = false;
-                    match sugg {
-                        Ok(s) => {
-                            // Write ONLY into the FIELDS that were searched. WorkingWeekTime
-                            // is its own field: unchecked → untouched, its value pinned the
-                            // sweep. WorkingTime is one field behind two rows, so if either
-                            // format was searched its answer replaces the pair.
-                            if axes.week {
-                                // Field 0: the week window as "day.hh:mm".
-                                let (w0, w1) = s
-                                    .week_span
-                                    .map(|(f, t)| (fmt_week_ep(f, false), fmt_week_ep(t, true)))
-                                    .unwrap_or_default();
-                                this.set_v1_cell(0, w0, w1);
-                            }
-                            // WorkingTime: the sweep picked the format among the ticked ones,
-                            // so its answer names the row — fill it and clear the other view
-                            // of the same field. Both unticked → the field is left alone.
-                            if axes.day || axes.hour {
-                                match s.tod {
-                                    Some(TimeWindow::Day(f, t)) => {
-                                        this.set_v1_cell(1, fmt_min(f), fmt_min(t));
-                                        this.clear_field(0, 2);
-                                    }
-                                    Some(TimeWindow::Hour(f, t)) => {
-                                        this.set_v1_cell(2, f.to_string(), t.to_string());
+        self.spawn_db(
+            true,
+            cx,
+            move || moon_core::db::tuner::suggest_time(&q, min_n, edges, round, axes),
+            move |this, sugg, cx| {
+                if this.time_tuner.sugg_seq != req {
+                    return; // stale auto-suggestion (the strategy/scope changed)
+                }
+                this.time_tuner.sugg_busy = false;
+                match sugg {
+                    Ok(s) => {
+                        // Write ONLY into the FIELDS that were searched. WorkingWeekTime
+                        // is its own field: unchecked → untouched, its value pinned the
+                        // sweep. WorkingTime is one field behind two rows, so if either
+                        // format was searched its answer replaces the pair.
+                        if axes.week {
+                            // Field 0: the week window as "day.hh:mm".
+                            let (w0, w1) = s
+                                .week_span
+                                .map(|(f, t)| (fmt_week_ep(f, false), fmt_week_ep(t, true)))
+                                .unwrap_or_default();
+                            this.set_v1_cell(0, w0, w1);
+                        }
+                        // WorkingTime: the sweep picked the format among the ticked ones,
+                        // so its answer names the row — fill it and clear the other view
+                        // of the same field. Both unticked → the field is left alone.
+                        if axes.day || axes.hour {
+                            match s.tod {
+                                Some(TimeWindow::Day(f, t)) => {
+                                    this.set_v1_cell(1, fmt_min(f), fmt_min(t));
+                                    this.clear_field(0, 2);
+                                }
+                                Some(TimeWindow::Hour(f, t)) => {
+                                    this.set_v1_cell(2, f.to_string(), t.to_string());
+                                    this.clear_field(0, 1);
+                                }
+                                // Nothing beat the baseline: clear only the formats the
+                                // sweep was allowed to search. An unchecked row keeps
+                                // the value the user put there — the sweep never judged
+                                // it, so it is not ours to delete.
+                                None => {
+                                    if axes.day {
                                         this.clear_field(0, 1);
                                     }
-                                    // Nothing beat the baseline: clear only the formats the
-                                    // sweep was allowed to search. An unchecked row keeps
-                                    // the value the user put there — the sweep never judged
-                                    // it, so it is not ours to delete.
-                                    None => {
-                                        if axes.day {
-                                            this.clear_field(0, 1);
-                                        }
-                                        if axes.hour {
-                                            this.clear_field(0, 2);
-                                        }
+                                    if axes.hour {
+                                        this.clear_field(0, 2);
                                     }
                                 }
                             }
-                            this.reload_time(cx);
                         }
-                        Err(e) => log::warn!("analytics: time auto-suggestion failed — {e}"),
+                        this.reload_time(cx);
                     }
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
+                    Err(e) => log::warn!("analytics: time auto-suggestion failed — {e}"),
+                }
+                cx.notify();
+            },
+        );
     }
 
     /// Write `(from, to)` into v1 of field `field` and drop its cached inputs.

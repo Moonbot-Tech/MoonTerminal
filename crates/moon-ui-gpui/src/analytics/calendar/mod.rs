@@ -395,40 +395,33 @@ impl AnalyticsView {
         let q_prev = self.cal_query_prev();
         // "Day" loads HOURLY cells (a 24×N grid); the other modes load daily.
         let hourly = self.cal_mode == CalMode::Day;
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let data = executor
-                .spawn(async move {
-                    let cur = if hourly {
-                        moon_core::db::analytics::calendar_hours(&q)
-                    } else {
-                        moon_core::db::analytics::calendar_cells(&q)
-                    };
-                    // Previous month's aggregate (profit, trades, wins) for the KPI deltas.
-                    let prev = q_prev
-                        .and_then(|qp| moon_core::db::analytics::calendar_cells(&qp))
-                        .map(|d| {
-                            d.iter().fold((0.0f64, 0i64, 0i64), |a, c| {
-                                (a.0 + c.profit, a.1 + c.trades, a.2 + c.wins)
-                            })
-                        });
-                    (cur, prev)
-                })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    if this.cal_seq != req {
-                        return; // mode/filters already changed
-                    }
-                    let (cur, prev) = data;
-                    this.cal_days = cur.map(Arc::new);
-                    this.cal_prev = prev;
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
+        self.spawn_db(
+            true,
+            cx,
+            move || {
+                let cur = if hourly {
+                    moon_core::db::analytics::calendar_hours(&q)
+                } else {
+                    moon_core::db::analytics::calendar_cells(&q)
+                };
+                // Previous month's aggregate (profit, trades, wins) for the KPI deltas.
+                let prev = q_prev
+                    .and_then(|qp| moon_core::db::analytics::calendar_cells(&qp))
+                    .map(|d| {
+                        d.iter().fold((0.0f64, 0i64, 0i64), |a, c| {
+                            (a.0 + c.profit, a.1 + c.trades, a.2 + c.wins)
+                        })
+                    });
+                (cur, prev)
+            },
+            move |this, (cur, prev), cx| {
+                if this.cal_seq != req {
+                    return; // mode/filters already changed
+                }
+                this.cal_days = cur.map(Arc::new);
+                this.cal_prev = prev;
+                cx.notify();
+            },
+        );
     }
 }

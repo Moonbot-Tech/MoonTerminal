@@ -103,34 +103,28 @@ impl AnalyticsView {
         // Carry current numbers as stale during recomputation; any completed
         // non-data result drops them.
         self.tuner.stats.begin();
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let (stats, strat) = executor
-                .spawn(async move {
-                    let stats = moon_core::db::tuner::variant_stats(&q, &variants);
-                    let sf = sid
-                        .map(|sid| moon_core::db::tuner::strategy_filters(sid, core, &defaults))
-                        .unwrap_or_default();
-                    (stats, sf)
-                })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    if this.tuner.seq != req {
-                        return;
-                    }
-                    // A completed non-data result clears stale numbers because
-                    // values under a changed period label must belong to it.
-                    this.tuner.stats.apply(stats);
-                    this.tuner.strat = Arc::new(strat);
-                    this.tuner.dirty = false;
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
+        self.spawn_db(
+            true,
+            cx,
+            move || {
+                let stats = moon_core::db::tuner::variant_stats(&q, &variants);
+                let sf = sid
+                    .map(|sid| moon_core::db::tuner::strategy_filters(sid, core, &defaults))
+                    .unwrap_or_default();
+                (stats, sf)
+            },
+            move |this, (stats, strat), cx| {
+                if this.tuner.seq != req {
+                    return;
+                }
+                // A completed non-data result clears stale numbers because
+                // values under a changed period label must belong to it.
+                this.tuner.stats.apply(stats);
+                this.tuner.strat = Arc::new(strat);
+                this.tuner.dirty = false;
+                cx.notify();
+            },
+        );
     }
 
     /// Background histogram of the selected field.
@@ -140,24 +134,18 @@ impl AnalyticsView {
         let q = self.tuner_query();
         let field = FIELDS[self.tuner.sel_field].col.to_string();
         self.tuner.hist.begin();
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let hist = executor
-                .spawn(async move { moon_core::db::tuner::histogram(&q, &field, HIST_BUCKETS) })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    if this.tuner.hist_seq != req {
-                        return;
-                    }
-                    this.tuner.hist.apply(hist);
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
+        self.spawn_db(
+            true,
+            cx,
+            move || moon_core::db::tuner::histogram(&q, &field, HIST_BUCKETS),
+            move |this, hist, cx| {
+                if this.tuner.hist_seq != req {
+                    return;
+                }
+                this.tuner.hist.apply(hist);
+                cx.notify();
+            },
+        );
     }
 
     /// Commit a bound (on input Blur/Enter): store it in the tuner state and recompute.

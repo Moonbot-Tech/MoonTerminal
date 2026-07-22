@@ -10,7 +10,6 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::tuner;
 use super::{AnalyticsView, Period, Tab};
 use crate::design;
 use crate::design::moon;
@@ -79,28 +78,13 @@ impl AnalyticsView {
                             if period_changed {
                                 this.reload(cx);
                             } else {
-                                if t == Tab::Strategies
-                                    && this.strat_mode == tuner::StratMode::Filters
-                                    && this.tuner.needs_reload()
-                                {
-                                    this.reload_tuner(cx);
-                                    this.reload_hist(cx);
-                                }
-                                if t == Tab::Strategies
-                                    && this.strat_mode == tuner::StratMode::Time
-                                    && (this.time_profiles.is_none() || this.time_dirty)
-                                {
-                                    this.reload_time(cx);
-                                }
-                                // Same arm for the coin axis. Without it a core/side/emulator
-                                // change made on another tab leaves the coin table showing the
-                                // PREVIOUS scope's numbers under the new scope's rows — the
-                                // period is unchanged, so nothing else ever recomputes it.
-                                if t == Tab::Strategies
-                                    && this.strat_mode == tuner::StratMode::Coins
-                                    && this.coins.needs_reload()
-                                {
-                                    this.reload_coins(cx);
+                                // Entering "Strategies" recomputes ONLY a stale axis. Without
+                                // it a core/side/emulator change made on another tab leaves
+                                // the axis showing the PREVIOUS scope's numbers under the new
+                                // scope's rows — the period is unchanged, so nothing else
+                                // ever recomputes it.
+                                if t == Tab::Strategies {
+                                    this.reload_axis_if_stale(this.strat_mode, cx);
                                 }
                                 if t == Tab::Calendar && (this.cal_days.is_none() || this.cal_dirty)
                                 {
