@@ -8,6 +8,8 @@
 // Files of this axis.
 /// Its weekly schedule grid.
 mod grid;
+/// Its Save / Make-a-copy actions (feeding the shared confirmation dialog).
+mod save;
 /// Its three colour-profiled range sliders.
 mod sliders;
 /// Its own state: the schedule values, their parsers and the suggestion settings.
@@ -33,10 +35,10 @@ impl AnalyticsView {
     /// (a single snapshot). The base is the "Tuning" filters + the scope of the
     /// selected strategy (`tuner_query`); columns: the tab's active period, 7d, 30d, 90d.
     pub(in crate::analytics) fn reload_time(&mut self, cx: &mut Context<Self>) {
-        self.time_dirty = false;
-        self.time_seq = self.time_seq.wrapping_add(1);
-        let req = self.time_seq;
-        self.time_stats.begin();
+        self.time_tuner.dirty = false;
+        self.time_tuner.seq = self.time_tuner.seq.wrapping_add(1);
+        let req = self.time_tuner.seq;
+        self.time_tuner.stats.begin();
         let base = self.tuner_query();
         // One "by hour" profile for the SELECTED period only (the bottom chart is a single
         // full-width chart now, not the old 7/30/90-day columns).
@@ -53,66 +55,60 @@ impl AnalyticsView {
             .and_then(|(k, _)| super::parse_strat_key(k));
         let sid = sid_core.map(|(s, _)| s);
         let core = sid_core.and_then(|(_, c)| c);
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let (profiles, stats, current, slider, ig_time, ig_filters) = executor
-                .spawn(async move {
-                    let profiles = hourly_profiles(&base, &ranges);
-                    let stats = variant_stats(&base, &variants);
-                    // Coloring profiles for the sliders (week×hour / hour / minute of hour).
-                    let slider = moon_core::db::tuner::slider_profiles(&base);
-                    // Raw field values + the ignore flags (for display and the Save logic).
-                    let (current, ig_time, ig_filters): ([String; 2], bool, bool) = sid
-                        .map(|sid| {
-                            let m = moon_core::db::tuner::strategy_current_values(
-                                sid,
-                                core,
-                                &[
-                                    "WorkingWeekTime".to_string(),
-                                    "WorkingTime".to_string(),
-                                    "IgnoreTime".to_string(),
-                                    "IgnoreFilters".to_string(),
-                                ],
-                            );
-                            let truthy = |k: &str| {
-                                matches!(
-                                    m.get(k).map(|s| s.trim().to_ascii_uppercase()).as_deref(),
-                                    Some("YES" | "TRUE" | "1")
-                                )
-                            };
-                            (
-                                [
-                                    m.get("WorkingWeekTime").cloned().unwrap_or_default(),
-                                    m.get("WorkingTime").cloned().unwrap_or_default(),
-                                ],
-                                truthy("IgnoreTime"),
-                                truthy("IgnoreFilters"),
+        self.spawn_db(
+            true,
+            cx,
+            move || {
+                let profiles = hourly_profiles(&base, &ranges);
+                let stats = variant_stats(&base, &variants);
+                // Coloring profiles for the sliders (week×hour / hour / minute of hour).
+                let slider = moon_core::db::tuner::slider_profiles(&base);
+                // Raw field values + the ignore flags (for display and the Save logic).
+                let (current, ig_time, ig_filters): ([String; 2], bool, bool) = sid
+                    .map(|sid| {
+                        let m = moon_core::db::tuner::strategy_current_values(
+                            sid,
+                            core,
+                            &[
+                                "WorkingWeekTime".to_string(),
+                                "WorkingTime".to_string(),
+                                "IgnoreTime".to_string(),
+                                "IgnoreFilters".to_string(),
+                            ],
+                        );
+                        let truthy = |k: &str| {
+                            matches!(
+                                m.get(k).map(|s| s.trim().to_ascii_uppercase()).as_deref(),
+                                Some("YES" | "TRUE" | "1")
                             )
-                        })
-                        .unwrap_or_default();
-                    (profiles, stats, current, slider, ig_time, ig_filters)
-                })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    if this.time_seq != req {
-                        return; // the period/filters/strategy/grid have already changed
-                    }
-                    // The profile (heatmap) and the KPI are independent: a profile error is
-                    // shown as "no data", a KPI error as Failed in the matrix.
-                    this.time_profiles = profiles.ok().map(Arc::new);
-                    this.time_slider = slider.ok().map(Arc::new);
-                    this.time_stats.apply(stats);
-                    this.time_tuner.current_raw = current;
-                    this.time_tuner.ignore_cur = ig_time;
-                    this.time_tuner.ign_filters_cur = ig_filters;
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
+                        };
+                        (
+                            [
+                                m.get("WorkingWeekTime").cloned().unwrap_or_default(),
+                                m.get("WorkingTime").cloned().unwrap_or_default(),
+                            ],
+                            truthy("IgnoreTime"),
+                            truthy("IgnoreFilters"),
+                        )
+                    })
+                    .unwrap_or_default();
+                (profiles, stats, current, slider, ig_time, ig_filters)
+            },
+            move |this, (profiles, stats, current, slider, ig_time, ig_filters), cx| {
+                if this.time_tuner.seq != req {
+                    return; // the period/filters/strategy/grid have already changed
+                }
+                // The profile (heatmap) and the KPI are independent: a profile error is
+                // shown as "no data", a KPI error as Failed in the matrix.
+                this.time_tuner.profiles = profiles.ok().map(Arc::new);
+                this.time_tuner.slider = slider.ok().map(Arc::new);
+                this.time_tuner.stats.apply(stats);
+                this.time_tuner.current_raw = current;
+                this.time_tuner.ignore_cur = ig_time;
+                this.time_tuner.ign_filters_cur = ig_filters;
+                cx.notify();
+            },
+        );
     }
 
     /// Body of the "By time" mode — the layout MIRRORS "By filter": on the left the
@@ -183,13 +179,18 @@ impl AnalyticsView {
     /// the scope of the selected strategy. The same widget as in "By filter".
     fn time_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         // An empty label list → "v1"/"v2" (as in "By filter").
-        kpi_matrix_card(&self.time_stats, self.scope_label(), &[], p, cx)
+        kpi_matrix_card(&self.time_tuner.stats, self.scope_label(), &[], p, cx)
     }
 
     /// The bottom "by hour" chart for the selected period: header + 24 hour columns at full width.
     fn time_heatmap(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         // The single profile = the selected period (see `reload_time`).
-        let prof = self.time_profiles.as_ref().and_then(|v| v.first()).copied();
+        let prof = self
+            .time_tuner
+            .profiles
+            .as_ref()
+            .and_then(|v| v.first())
+            .copied();
         // Scope: the selected strategy's name, their count, or "all strategies".
         let scope = self.scope_label();
         // Bar scale — max |PnL| across the 24 hours of the selected period.

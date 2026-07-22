@@ -1,13 +1,19 @@
 //! State of the "By time" tuner: the three field rows' values, what the sweep may
-//! search, and the parsers/formatters for the two schedule fields. Pure data — the grid
-//! that renders it lives in `grid`.
+//! search, the axis' background-load results (profiles / KPI / staleness), and the
+//! parsers/formatters for the two schedule fields. Pure data — the grid that renders
+//! it lives in `grid`, the recompute in `time/mod.rs`.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use gpui::Entity;
+use gpui::{Bounds, Entity, Pixels};
 use moon_ui::MoonInputState;
 
-use moon_core::db::tuner::{TimeAxes, TimeWindow, Variant, format_week_span, format_working_time};
+use crate::load_state::LoadState;
+use moon_core::db::analytics::HourStat;
+use moon_core::db::tuner::{
+    SliderProfiles, TimeAxes, TimeWindow, VarStats, Variant, format_week_span, format_working_time,
+};
 /// Variants besides the "Fact" one (v1, v2) — same as the filter tuner's N_VAR.
 pub(in crate::analytics::tuner) const TIME_N_VAR: usize = 2;
 /// Fields: 0 = Weekly (WorkingWeekTime), 1 = Day, 2 = In hour (both are WorkingTime).
@@ -45,6 +51,26 @@ pub(in crate::analytics) struct TimeTunerState {
     pub(in crate::analytics::tuner) sugg_busy: bool,
     /// Auto-suggestion generation — a stale result is discarded.
     pub(in crate::analytics::tuner) sugg_seq: u64,
+    // ── Background-load results and staleness of the axis (see `reload_time`) ──
+    /// The single hour-of-day profile for the selected Strategies period and
+    /// strategy-selection scope. `None` before the first computation or after a read error.
+    pub(in crate::analytics::tuner) profiles: Option<Arc<Vec<[HourStat; 24]>>>,
+    /// Average-profit profiles used to color the By time sliders
+    /// (weekday by hour / hour of day / minute of hour). `None` before computation or on error.
+    pub(in crate::analytics::tuner) slider: Option<Arc<SliderProfiles>>,
+    /// The Fact vs variants KPI: Fact / v1 / v2 columns for the weekly schedule
+    /// from the grid, rendered in the shared matrix at the right.
+    pub(in crate::analytics::tuner) stats: LoadState<Vec<VarStats>>,
+    /// Reload generation — a stale completion is discarded.
+    pub(in crate::analytics::tuner) seq: u64,
+    /// Whether By time data is stale for the current query and strategy-selection scope,
+    /// including the anchor and Ctrl-selected extras, and must be recomputed on entry.
+    pub(in crate::analytics::tuner) dirty: bool,
+    /// Track bounds of the three By time sliders (week/day/hour), captured through `canvas`
+    /// to convert the mouse coordinate into a value while dragging.
+    pub(in crate::analytics::tuner) slider_track: [Option<Bounds<Pixels>>; 3],
+    /// Active slider drag: `(field 0..2, whether the left "from" handle is being dragged)`.
+    pub(in crate::analytics::tuner) slider_drag: Option<(usize, bool)>,
 }
 
 impl TimeTunerState {
@@ -68,7 +94,29 @@ impl TimeTunerState {
             round_results: true,
             sugg_busy: false,
             sugg_seq: 0,
+            profiles: None,
+            slider: None,
+            stats: LoadState::default(),
+            seq: 0,
+            dirty: true,
+            slider_track: Default::default(),
+            slider_drag: None,
         }
+    }
+
+    /// Whether the axis must recompute on entry: nothing loaded yet, or the loaded
+    /// data is stale relative to the current query/selection scope.
+    pub(in crate::analytics) fn needs_reload(&self) -> bool {
+        self.profiles.is_none() || self.dirty
+    }
+
+    /// The query (period/filters) changed: the loaded data is stale AND an in-flight
+    /// auto-suggestion belongs to the old scope — retire both, as the sibling axes'
+    /// `invalidate` methods do. The grid values themselves are deliberately kept
+    /// (they are the user's edit, not derived data).
+    pub(in crate::analytics) fn invalidate(&mut self) {
+        self.invalidate_suggest();
+        self.dirty = true;
     }
 
     /// Span of variant `vi` over the minute of the week (field 0). Empty → None; a missing edge →
