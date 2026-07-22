@@ -106,10 +106,9 @@ struct Backend {
     /// сессии после сохранения настроек (`SettingsView::save` → рестарт). Порт
     /// egui `App.epoch_ms`.
     epoch: f64,
-    /// БД отчётов: канал записи (ядро шлёт close-report → writer пишет в SQLite) +
-    /// счётчик-генерация (окно «Отчёт» по нему перезапрашивает). None = БД недоступна.
-    /// Порт egui `App.reports`. Держим целиком: `tx` нужен сессии (start/reconnect),
-    /// `generation` — панели отчётов.
+    /// Report database handle for typed `Event::Report` replication into SQLite.
+    /// The session uses `tx` across starts and reconnects; the Report panel uses
+    /// `generation` to trigger reads. `None` means the database is unavailable.
     reports: Option<moon_core::db::ReportsHandle>,
     metrics: Metrics,
     snap: MetricsSnapshot,

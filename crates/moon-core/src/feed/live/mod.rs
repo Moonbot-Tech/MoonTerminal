@@ -22,7 +22,6 @@ use moonproto::{
 };
 
 use super::assets::{build_assets, build_transfer_assets};
-use super::report::{send_close_report, OrderIndex};
 use super::strategies::{
     alert_params, build_schema_model, fmt_field, schema_default_fields, strat_db_dump,
     strat_kind_name,
@@ -38,7 +37,7 @@ use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 use commands::{drain_commands, LocalStratEdits};
 use convert::{
     build_order_rows, client_settings_from_proto, lev_manage_from_proto, license_state_from_proto,
-    runtime_state_from_proto, settings_event_snapshot,
+    runtime_state_from_proto, settings_event_snapshot, sys_status_from_proto,
 };
 use dirty::market_dirty_from_events;
 
@@ -183,8 +182,6 @@ pub fn run(
     let mut strat_db_initial = true;
     // Монотонный per-core номер детекта — курсор ингеста в ленту детектов UI.
     let mut detect_seq: u64 = 0;
-    // Полные данные ордеров для close-report'ов (uid/db_id) — см. feed::report.
-    let mut orders_index = OrderIndex::default();
     // Файловый писатель серверного лога этого ядра (logs/<дата>_<ядро>.log) с дневной
     // ротацией. Пишем на ПОТОКЕ ФИДА (не на UI), т.к. лога много — UI не должен ждать
     // диск. В UI уходит лишь in-memory копия для живого просмотра/поиска.
@@ -216,13 +213,7 @@ pub fn run(
         // реагируют на клик мгновенно; эхо ядра придёт следом и подтвердит/поправит.
         if orders_mutated && server.feed.orders {
             if let Some(snap) = client.snapshot() {
-                let order_rows = build_order_rows(
-                    server.id,
-                    &snap,
-                    &[],
-                    server.feed.reports,
-                    &mut orders_index,
-                );
+                let order_rows = build_order_rows(server.id, &snap, &[]);
                 last_orders = Instant::now();
                 orders_table_pending = false;
                 if tx.send(FeedMsg::Orders(order_rows)).is_err() {
@@ -362,6 +353,9 @@ pub fn run(
         events.clear();
         event_queue.drain_events_into(&mut events);
         let had_domain_event = !events.is_empty();
+        // v4 delivers Stop/VStop changes as ordinary `OrderEvent::Updated` field
+        // mutations rather than dedicated events, so `Updated` (already matched
+        // below) covers them.
         let has_order_line_event = events.iter().any(|ev| {
             matches!(
                 ev,
@@ -371,8 +365,6 @@ pub fn run(
                         | OrderEvent::Removed(_)
                         | OrderEvent::TracePoint { .. }
                         | OrderEvent::CorridorChanged(_)
-                        | OrderEvent::VStopChanged(_)
-                        | OrderEvent::StopsChanged(_)
                         | OrderEvent::Snapshot
                 )
             )
@@ -386,8 +378,6 @@ pub fn run(
                         | OrderEvent::Removed(_)
                         | OrderEvent::Snapshot
                         | OrderEvent::CorridorChanged(_)
-                        | OrderEvent::VStopChanged(_)
-                        | OrderEvent::StopsChanged(_)
                 )
             )
         });
@@ -534,6 +524,11 @@ pub fn run(
                         log::info!("core {} balance event after refresh: {bev:?}", server.id);
                     }
                 }
+                // News/tags feed: deliberately not consumed yet (no UI surface). An
+                // explicit arm keeps this a documented decision, not a silent drop.
+                Event::News(_) => {}
+                // `Event::KernelHealth` is consumed below via `settings_event_snapshot`
+                // reading the retained `kernel_health()` snapshot, not here.
                 _ => {}
             }
         }
@@ -614,6 +609,22 @@ pub fn run(
         );
         if let Some(state) = runtime_state {
             if tx.send(FeedMsg::RuntimeState(state)).is_err() {
+                break;
+            }
+        }
+        // Core resource telemetry (protocol v4 `Event::KernelHealth`). Read from the
+        // RETAINED snapshot (`kernel_health()`), not the event payload, matching the
+        // license/settings idiom above: the retained value keeps the last memory sample
+        // between CPU-only Pings. The store bumps `sys_rev` only on a metric change, and
+        // repaints are capped by the 250ms backend throttle + the panel `RenderGate`.
+        let sys_status = settings_event_snapshot(
+            &events,
+            &client,
+            |ev| matches!(ev, &Event::KernelHealth(_)),
+            |state| Some(sys_status_from_proto(state.kernel_health(), now_ms_i64())),
+        );
+        if let Some(sys) = sys_status {
+            if tx.send(FeedMsg::SysStatus(sys)).is_err() {
                 break;
             }
         }
@@ -766,26 +777,6 @@ pub fn run(
                             }
                         }
                     }
-                    Event::ClosedSellOrderReport(r) if server.feed.reports => {
-                        if let Some(tx_db) = reports {
-                            // db_id → uid → полные данные (uid стабилен с открытия).
-                            // Если db_id ещё не успели замапить — сканируем ТЕКУЩИЙ
-                            // снапшот: ордер часто ещё в модели с присвоенным db_id,
-                            // а его полные данные уже есть в индексе по uid.
-                            let m = orders_index.by_dbid(r.db_id as i32).or_else(|| {
-                                client
-                                    .snapshot()
-                                    .and_then(|snap| {
-                                        snap.orders()
-                                            .iter()
-                                            .find(|o| o.db_id as i64 == r.db_id)
-                                            .map(|o| o.uid)
-                                    })
-                                    .and_then(|uid| orders_index.by_uid(uid))
-                            });
-                            send_close_report(tx_db, server, r.db_id, r.sql.clone(), m);
-                        }
-                    }
                     // Диагностика (фича moonproto-diagnostics, по умолчанию ВЫКЛ):
                     // пакеты, отвергнутые парсером/валидацией lib, в обычной сборке
                     // исчезают бесследно — так завис report-sync BB1 (страница
@@ -843,23 +834,15 @@ pub fn run(
         if server.feed.orders && has_orders_table_event && !orders_table_pending {
             orders_table_pending = true;
         }
-        if (had_domain_event && (server.feed.orders || server.feed.reports))
-            || (server.feed.orders && orders_table_pending)
-        {
+        if server.feed.orders && (had_domain_event || orders_table_pending) {
             let orders_due = last_orders.elapsed() >= Duration::from_millis(250);
-            let orders_table_due = server.feed.orders && orders_table_pending && orders_due;
-            let order_lines_due = server.feed.orders && has_order_line_event && !orders_table_due;
-            if orders_table_due || order_lines_due || server.feed.reports {
+            let orders_table_due = orders_table_pending && orders_due;
+            let order_lines_due = has_order_line_event && !orders_table_due;
+            if orders_table_due || order_lines_due {
                 let Some(snap) = client.snapshot() else {
                     continue;
                 };
-                let order_rows = build_order_rows(
-                    server.id,
-                    &snap,
-                    &events,
-                    server.feed.reports,
-                    &mut orders_index,
-                );
+                let order_rows = build_order_rows(server.id, &snap, &events);
                 if orders_table_due {
                     last_orders = Instant::now();
                     orders_table_pending = false;

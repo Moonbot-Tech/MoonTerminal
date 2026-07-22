@@ -1,15 +1,15 @@
-//! Typed-реплика БД отчёта Orders (moonproto `Event::Report`) — таблица `orders_rep`.
+//! Typed replica of the Orders report database (`moonproto::Event::Report`) in
+//! the `orders_rep` table.
 //!
-//! Схема приходит от ядра (`ReportEvent::Schema`, append-only), имена колонок храним
-//! lowercase — они совпадают с легаси-именами (панель «Отчёт» форматирует по ним), а
-//! SQLite к регистру безразличен. Ключ репликации — `(core_uid, newrecid)`;
-//! `newRecID` ≠ легаси `db_id`, поэтому typed-поток и легаси close-SQL пишут в РАЗНЫЕ
-//! таблицы (легаси вычищается по мере первых полных sync'ов и сносится целиком).
+//! The core supplies an append-only schema through `ReportEvent::Schema`.
+//! Column names are stored lowercase to match the legacy names consumed by the
+//! Report panel; SQLite itself is case-insensitive. The replication key is
+//! `(core_uid, newrecid)`. The legacy `closed_sell_reports` table uses a different
+//! `db_id`, is read-only, and is purged per core after the first complete typed sync.
 //!
-//! Курсор (правило репликации moonproto): min(newRecID открытых строк) ИЛИ committed_max+1,
-//! где committed_max — максимум из ПОДТВЕРЖДЁННЫХ `SyncComplete` (не max таблицы: батчи
-//! catch-up приходят вне порядка, и max прерванной догонки перепрыгнул бы дыры).
-//! 0 = fresh-sync со всей удержанной историей ядра.
+//! Under the protocol-v4 replication contract, a core resumes at the local
+//! `max(newRecID) + 1`; zero requests a fresh sync. Open rows below that cursor
+//! are reconciled separately through `check_open_rows`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::SyncSender;
@@ -25,9 +25,6 @@ pub(super) const TABLE: &str = "orders_rep";
 
 /// Сообщение SQLite-writer'у (единственному владельцу соединения на запись).
 pub enum DbMsg {
-    /// Легаси close-SQL поток (deprecated в moonproto). Живёт до сноса легаси-таблицы
-    /// и пишет ТОЛЬКО в неё — потоки в одну таблицу не смешиваются.
-    Legacy(super::ReportRow),
     /// Схема реплики ядра (append-only) — создать/дорастить колонки.
     Schema {
         core_uid: u64,
@@ -81,10 +78,6 @@ impl ReportSink {
         let _ = self.tx.send(msg);
     }
 
-    pub fn legacy(&self, row: super::ReportRow) {
-        let _ = self.tx.send(DbMsg::Legacy(row));
-    }
-
     /// Курсор следующего sync-запроса ядра: 0 → fresh, >0 → resume(from).
     /// По новому контракту reports.md курсор всегда `max(newRecID)+1` локальной реплики
     /// (страницы ack'аются последовательно — дыр в хвосте не бывает и после краша).
@@ -113,11 +106,12 @@ pub(super) struct RepState {
     /// Кэш lowercase-имён колонок таблицы (не дёргать PRAGMA на каждую строку).
     cols: HashSet<String>,
     cursors: Arc<Mutex<HashMap<u64, i64>>>,
-    /// Легаси-таблица ещё существует (пустеет по мере первых полных sync'ов ядер).
+    /// Whether the read-only legacy table still exists; completed typed syncs
+    /// progressively purge it by core.
     pub(super) legacy_exists: bool,
-    /// Ядра с завершённым sync (rep_synced_*=1): их легаси close-SQL ИГНОРИРУЕТСЯ —
-    /// данные идут typed-потоком, а легаси-вставка после вычистки давала ДУБЛИ строк
-    /// (реплика + свежая легаси-копия) в объединённом читателе.
+    /// Cores with a persisted completed-sync marker (`rep_synced_*=1`).
+    /// Initialization uses this set to purge legacy rows left by terminal versions
+    /// that still wrote close-SQL reports; protocol v4 has no such write path.
     pub(super) synced: HashSet<u64>,
     /// The legacy table was dropped, so the writer must VACUUM after committing
     /// the batch; VACUUM is forbidden inside the transaction, and without it the
@@ -226,8 +220,8 @@ pub(super) fn init(
         vacuum_pending: false,
         indexes_done,
     };
-    // Вычистка легаси-строк синхронизированных ядер, накопившихся ПОСЛЕ их SyncComplete
-    // (легаси-поток успевал дописывать до фикса скипа) — иначе дубли в читателе.
+    // Purge rows left after SyncComplete by older terminal versions that still
+    // consumed the legacy close-SQL stream; otherwise the merged reader sees duplicates.
     for uid in st.synced.clone() {
         purge_legacy(conn, &mut st, uid);
     }
@@ -257,6 +251,17 @@ fn purge_legacy(conn: &Connection, st: &mut RepState, core_uid: u64) {
     }
 }
 
+/// Whether a lowercase key is a safe SQLite identifier (guards against injection
+/// where the name is interpolated into `ALTER TABLE` without quoting):
+/// `[a-z_][a-z0-9_]*`.
+fn valid_ident(name: &str) -> bool {
+    let b = name.as_bytes();
+    !b.is_empty()
+        && (b[0] == b'_' || b[0].is_ascii_lowercase())
+        && b.iter()
+            .all(|&c| c == b'_' || c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
 /// Append-only схема ядра → доращиваем недостающие колонки. Имя lowercase; `sql_spec`
 /// приходит от аутентифицированного ядра (тот же trust, что `sqlite_add_column_sql`
 /// самого moonproto), имя дополнительно валидируем как идентификатор.
@@ -271,7 +276,7 @@ pub(super) fn apply_schema(
         if name == "newrecid" || st.cols.contains(&name) {
             continue;
         }
-        if !super::parse::valid_ident(&name) {
+        if !valid_ident(&name) {
             log::warn!(
                 "отчёты(rep): поле схемы «{}» — не идентификатор, пропущено",
                 f.name
@@ -409,7 +414,6 @@ pub(super) fn apply_sync_complete(
     done: &ReportSyncComplete,
 ) {
     meta_set_i64(conn, &format!("rep_synced_{core_uid}"), 1);
-    st.synced.insert(core_uid);
     if let Ok(mut m) = st.cursors.lock() {
         m.insert(core_uid, done.next_from_rec_id.max(1));
     }
@@ -421,8 +425,8 @@ pub(super) fn apply_sync_complete(
         done.next_from_rec_id,
     );
 
-    // Легаси: typed-реплика с полной историей заменяет строки этого ядра (дальнейший
-    // легаси-поток ядра игнорируется — см. `synced`).
+    // A complete typed replica supersedes this core's legacy rows. No legacy
+    // write path remains, so the read-only rows cannot reappear after this purge.
     purge_legacy(conn, st, core_uid);
 }
 

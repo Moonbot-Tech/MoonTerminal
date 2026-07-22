@@ -1,16 +1,18 @@
-//! Агрегаты для окна «Аналитика» поверх реплики отчётов (`orders_rep`).
+//! Aggregates for the Analytics window over the `orders_rep` report replica.
 //!
-//! Все функции ходят в SQLite и считают по полной выборке периода — вызывать
-//! ТОЛЬКО с background executor (UI-поток не должен ждать диск; см. грабли
-//! reports-WAL-фриза). Источник — ОБЪЕДИНЕНИЕ typed-реплики и (пока жива)
-//! легаси-таблицы `closed_sell_reports`, как в Отчёте: часть ядер ещё пишет
-//! легаси, и чтение одной реплики «не видело» их сделок. Читатель свой
-//! (`open_reader`), имена стратегий — через `ATTACH` strategies.sqlite (join
-//! `strategyid = strategies.strategy_id`, оба signed i64); без файла — id.
+//! Every function scans SQLite for the complete requested period and must run
+//! on a background executor so the UI thread never waits for disk. The source
+//! combines the typed replica with the legacy
+//! `closed_sell_reports` table while that read-only table still exists. Typed
+//! syncs progressively purge its per-core rows, matching the Report panel.
+//! Reads use a dedicated connection
+//! (`open_reader`). Strategy names come from an attached `strategies.sqlite`,
+//! joining the signed `strategyid` and `strategies.strategy_id`; without that
+//! database, results use the numeric id.
 //!
-//! Периоды — unix-СЕКУНДЫ UTC, `to` эксклюзивно. Учитываются только закрытые
-//! сделки (`closedate > 0`) без удалённых (`deleted=0`). Профит — `profitbtc`
-//! (котировка пары, у нас USDT).
+//! Period bounds are UTC Unix seconds with an exclusive `to`. Queries include
+//! only closed, non-deleted trades (`closedate > 0`, `deleted = 0`). Profit is
+//! `profitbtc`, denominated in the pair quote currency (USDT here).
 
 use rusqlite::Connection;
 

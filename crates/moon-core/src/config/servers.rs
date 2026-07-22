@@ -18,7 +18,7 @@ pub struct FeedFlags {
     /// Детекты / watcher-строки / chart-only / alert-fire (`DetectEvent`).
     #[serde(default = "default_true")]
     pub detects: bool,
-    /// Отчёты по закрытым sell-ордерам (`ClosedSellOrderReport`) → SQLite.
+    /// Typed core report replication (`Event::Report` → `orders_rep`) into SQLite.
     #[serde(default = "default_true")]
     pub reports: bool,
     /// Балансы и метаданные аккаунта.

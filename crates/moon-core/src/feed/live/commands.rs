@@ -500,8 +500,11 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::JoinSells { market, short }) => {
                 trade::join_sells(client, server.id, market, short);
             }
-            Ok(CoreCmd::SplitOrder { market, parts }) => {
-                trade::split_order(client, server.id, market, parts);
+            Ok(CoreCmd::SplitOrder { uid, parts }) => {
+                trade::split_order(client, server.id, uid, parts);
+            }
+            Ok(CoreCmd::SplitOrderForMarket { market, parts }) => {
+                trade::split_order_for_market(client, server.id, market, parts);
             }
             Ok(CoreCmd::EditClientSettings(edit)) => {
                 // Правим УДЕРЖАННЫЙ снимок (moonproto хранит последний в SettingsState),

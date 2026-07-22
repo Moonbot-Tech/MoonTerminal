@@ -1,4 +1,4 @@
-# Панель «Статус ядер»: системные метрики ядер (CPU/память из строк лога) + статус.
+# Панель «Статус ядер»: системные метрики ядер (CPU/память из Event::KernelHealth) + статус.
 # Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
 _version: 2
 
@@ -29,30 +29,26 @@ core_status.col.status:
   ru: "Статус"
   en: "Status"
   es: "Estado"
-core_status.col.cpu:
-  ru: "CPU"
-  en: "CPU"
-  es: "CPU"
-core_status.col.cpu_avg:
-  ru: "CPU сред."
-  en: "CPU avg"
-  es: "CPU prom."
-core_status.col.mem_app:
-  ru: "Память прил."
-  en: "Mem app"
-  es: "Mem app"
-core_status.col.mem_sys:
-  ru: "Память сис."
-  en: "Mem sys"
-  es: "Mem sist."
+core_status.col.cpu_proc:
+  ru: "CPU проц."
+  en: "CPU proc"
+  es: "CPU proc."
+core_status.col.cpu_sys:
+  ru: "CPU сис."
+  en: "CPU sys"
+  es: "CPU sist."
+core_status.col.mem_used:
+  ru: "Память"
+  en: "Mem used"
+  es: "Mem usada"
 core_status.col.free_phys:
   ru: "Своб. физ."
   en: "Free phys"
   es: "Libre fís."
-core_status.col.free_page:
-  ru: "Своб. подкач."
-  en: "Free page"
-  es: "Libre pág."
+core_status.col.cpus:
+  ru: "Логич. CPU"
+  en: "Logical CPUs"
+  es: "CPU lógicos"
 core_status.col.updated:
   ru: "Обновлено"
   en: "Updated"

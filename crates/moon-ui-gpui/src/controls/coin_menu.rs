@@ -246,7 +246,6 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
                     }),
                 );
                 let backend_sp = backend.clone();
-                let market_sp = ctx.market.clone();
                 items.push(
                     MoonMenuItem::with_key(
                         "coin-order-split",
@@ -255,7 +254,7 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
                     .on_click(move |_, window, app| {
                         window.close_context_menu(app);
                         backend_sp.update(app, |b, _| {
-                            let _ = b.session.split_order(core, market_sp.clone(), SPLIT_PARTS);
+                            let _ = b.session.split_order(core, uid, SPLIT_PARTS);
                         });
                     }),
                 );
