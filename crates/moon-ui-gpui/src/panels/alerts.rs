@@ -1,10 +1,12 @@
-//! Панель «Алерты» — откпрепляемая док-панель (как Ордера/Лог/Отчёт). Список всех
-//! chart-алертов (нарисованных фигур с галкой Alert — локальных и созданных в ядре)
-//! ядер ГРУППЫ: Ядро/Монета/Фигура/Цена/Время + удаление (Clear); клик по монете
-//! открывает её график. Внизу — настройки звука (длительность/повтор, UI).
+//! Detachable Alerts dock panel, alongside Orders, Log, and Report. It lists all alert-enabled
+//! chart figures for cores in the panel's group, merging persisted local figures with alerts
+//! created by a core or Moonbot. Rows are filtered by market and sorted newest first, with columns
+//! for core, market, figure, price, time, strategy, and removal. Clicking a market opens its chart
+//! on Main and activates the Main window. The bottom bar contains the default sound selector and
+//! UI-only duration and repeat controls.
 //!
-//! Звук алерта/детекта берётся из стратегии (см. `detect_sound`), поэтому «Выбор
-//! звука» здесь — глобальный дефолт для алертов БЕЗ стратегии (пока не задействован).
+//! Detect playback uses the strategy sound when present; `detect_sound` uses the selected default
+//! for an alert firing without a strategy sound. Selecting an entry also previews it immediately.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -24,11 +26,12 @@ use crate::design::moon;
 use crate::panels::{RadioMark, radio_items};
 use crate::{Backend, design};
 
-/// Ordinal вида стратегии «Alerts» (только их назначаем алертам). Из moonproto
-/// `StrategyKindId::ALERTS = 22`.
+/// MoonProto ordinal for the `Alerts` strategy kind, the only kind assignable here.
+///
+/// This corresponds to `StrategyKindId::ALERTS = 22`.
 const ALERTS_KIND: u8 = 22;
 
-/// Единая высота контролов нижней панели (px) — чтобы степперы/выпадашки/поле стояли ровно.
+/// Shared bottom-bar control height in pixels, keeping steppers, dropdowns, and input aligned.
 const CTRL_H: f32 = 26.0;
 
 #[derive(Clone)]
@@ -40,9 +43,9 @@ struct Row {
     price: f64,
     time_ms: i64,
     from_server: bool,
-    /// id алерта (для назначения стратегии/удаления).
+    /// Alert figure ID used for strategy assignment and removal.
     fig_id: u64,
-    /// Привязанная стратегия (0 = без).
+    /// Assigned strategy ID, or zero when none is assigned.
     strategy_id: u64,
 }
 
@@ -53,9 +56,9 @@ pub struct AlertsPanel {
     coin_input: Entity<MoonInputState>,
     duration_s: u32,
     repeat: u32,
-    /// Стратегии вида «Alerts» по ядру (id, имя) — для выпадашки назначения.
+    /// Available `Alerts` strategies by core as `(ID, name)` pairs for row dropdowns.
     alert_strategies: HashMap<CoreId, Vec<(u64, String)>>,
-    /// Док-область (для кнопки открепления в своё окно). Ставится в `on_added_to`.
+    /// Dock area used by the detach button, assigned in `on_added_to`.
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -101,7 +104,7 @@ impl AlertsPanel {
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         let filter = self.coin_input.read(cx).value().trim().to_uppercase();
         let b = self.backend.read(cx);
-        // Ядра ЭТОЙ группы (алерты панели — только своей группы).
+        // Limit the panel to cores in its own group.
         let names: HashMap<CoreId, String> = b
             .session
             .sessions()
@@ -109,7 +112,7 @@ impl AlertsPanel {
             .filter(|s| s.group == self.group)
             .map(|s| (s.id, s.name.clone()))
             .collect();
-        // Стратегии вида «Alerts» по каждому ядру группы — для выпадашки назначения.
+        // Collect each group core's `Alerts` strategies for the per-row assignment dropdown.
         let mut strategies: HashMap<CoreId, Vec<(u64, String)>> = HashMap::new();
         for id in names.keys() {
             if let Some(core) = b.session.store().core(*id) {
@@ -147,7 +150,7 @@ impl AlertsPanel {
         self.rows = rows;
     }
 
-    /// Имя стратегии по id для ядра (или «—»).
+    /// Return a core's strategy name by ID, or the em-dash placeholder when unavailable.
     fn strategy_name(&self, core: CoreId, strategy_id: u64) -> String {
         if strategy_id == 0 {
             return "—".to_string();
@@ -199,7 +202,8 @@ impl AlertsPanel {
                         bcx.notify();
                     });
                 });
-            // Выпадашка стратегии (виды «Alerts» этого ядра + «—»); назначение → blob @32.
+            // Offer this core's `Alerts` strategies plus the unassigned placeholder. Assignment
+            // re-upserts the alert blob with the strategy ID stored at offset 32.
             let mut options: Vec<(u64, SharedString, SharedString)> =
                 vec![(0u64, "strat-none".into(), "—".into())];
             if let Some(list) = self.alert_strategies.get(&core) {
@@ -276,9 +280,9 @@ impl AlertsPanel {
     }
 
     fn bottom_bar(&self, p: MoonPalette, cx: &mut Context<Self>) -> impl IntoElement {
-        // Единый блок «подпись сверху + контрол фикс.высоты снизу» — чтобы все контролы
-        // стояли на одной линии (по низу) и одинаковой высоты. `cap` посчитан заранее,
-        // чтобы замыкание не держало `cx` (иначе конфликт с cx.listener степпера).
+        // Place each caption above a fixed-height control so all controls share a bottom baseline.
+        // Compute `cap` before constructing the closure so it does not retain `cx` and conflict
+        // with the stepper's `cx.listener` calls.
         let cap = design::t_caption(cx);
         let field = move |title: String, control: AnyElement| {
             v_flex()
@@ -381,8 +385,9 @@ impl AlertsPanel {
             ))
     }
 
-    /// Выпадашка «Выбор звука» — дефолт для алертов без стратегии (Backend). Клик по
-    /// пункту сразу проигрывает звук для прослушивания.
+    /// Render the Backend default-sound dropdown for alerts without a strategy sound.
+    ///
+    /// Selecting an entry updates the in-memory default and plays it immediately as a preview.
     fn sound_dropdown(&self, cx: &Context<Self>) -> impl IntoElement {
         let cur = self.backend.read(cx).default_alert_sound.clone();
         let backend = self.backend.clone();
@@ -418,7 +423,7 @@ impl AlertsPanel {
     }
 }
 
-/// `&'static str` из набора звуков для сравнения с текущим (radio_items требует Copy).
+/// Return the static sound name matching `cur`, as required by `radio_items`' copied selection.
 fn leak_str(cur: &str) -> &'static str {
     crate::sound::names().find(|n| *n == cur).unwrap_or("ding1")
 }
