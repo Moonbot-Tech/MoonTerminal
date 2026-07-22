@@ -20,42 +20,41 @@ toml = "0.8"
 anyhow = "1"
 log = "0.4"
 
-# Логгер-обёртка TeeLogger (applog.rs) делегирует в env_logger; ставится в main.
+# The TeeLogger wrapper (applog.rs) delegates to env_logger and is installed in main.
 env_logger = "0.11"
 
-# Язык по системной локали (config/lang.rs::from_system).
+# Language based on the system locale (config/lang.rs::from_system).
 sys-locale = "0.3"
 
-# Пользовательская директория данных вне бандла (config/paths.rs): на macOS/Linux
-# данные лежат в ~/Library/Application Support|~/.config, не внутри .app (см. ТЗ
-# про безопасное обновление через DMG). На Windows сборка остаётся переносимой.
+# Resolves platform-specific data directories for config/paths.rs.
 dirs = "6"
 
-# Метрики CPU/RAM (metrics.rs).
+# CPU/RAM metrics (metrics.rs).
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 
-# Зашифрованный конфиг: AES-256-GCM, ключ в OS keyring (config/crypto.rs).
-# В keyring v3 нет default platform features: без явного Linux backend на Linux
-# включается mock-хранилище в памяти процесса, и servers.enc нельзя прочитать
-# даже следующим запуском приложения.
+# Encrypted configuration: AES-256-GCM, with the key in the OS keyring (config/crypto.rs).
+# keyring v3 has no default platform features: without an explicit Linux backend, Linux
+# uses mock storage in process memory, and servers.enc cannot be read even by the next
+# application run.
 aes-gcm = "0.10"
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
 getrandom = "0.2"
 base64 = "0.22"
 zeroize = "1"
 
-# SoA-инстансы тиков/стакана (data/, бывш. chart/data) — Pod-лейаут под GPU.
+# SoA tick/order-book instances (data/, formerly chart/data) with a Pod layout for the GPU.
 bytemuck = { version = "1", features = ["derive"] }
 
-# Локальная БД отчётов (db/).
+# Local reports database (db/).
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# Импорт настроек MoonBot из буфера MBSC7 (config/moonbot_import/): gzip-распаковка
-# payload и CRC32 сжатых байт. Оба уже в дереве зависимостей (транзитивно).
+# Importing MoonBot settings from the MBSC7 buffer (config/moonbot_import/): gzip
+# decompression of the payload and CRC32 of the compressed bytes. Both are already in the
+# dependency tree transitively.
 flate2 = "1"
 crc32fast = "1"
 
-# Связь с ядром Moonbot (feed/live.rs) — единственный, кто знает транспорт.
+# Connection to the Moonbot core (feed/live/mod.rs), the only module that knows the transport.
 moonproto = { git = "https://github.com/Moonbot-Tech/MoonProtoBeta" }
 
 [target.'cfg(windows)'.dependencies]

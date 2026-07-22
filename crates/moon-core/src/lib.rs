@@ -1,12 +1,13 @@
-//! MoonTerminal backend core — UI-агностичное ядро терминала.
+//! MoonTerminal backend core — the UI-agnostic core of the terminal.
 //!
-//! Здесь живёт всё, что не зависит от движка отображения (GPUI/DX11): поток данных
-//! от ядра Moonbot, мульти-ядра/дедуп маркет-данных, конфиг с секретами, локальная
-//! БД отчётов и доменные типы. Общение с UI — через `feed::FeedMsg` (ядро → UI) и
-//! `feed::CoreCmd` (UI → ядро); UI никогда не зовёт транспорт (moonproto) напрямую.
+//! Contains everything independent of the rendering engine (GPUI/DX11): the data stream
+//! from the Moonbot core, multiple-core support and market-data deduplication, configuration
+//! with secrets, the local reports database, and domain types. It communicates with the UI
+//! through `feed::FeedMsg` (core → UI) and `feed::CoreCmd` (UI → core); the UI never calls
+//! the transport (moonproto) directly.
 //!
-//! Используется GPUI-оболочкой `moonterminal` (зависит от core, не наоборот). Старая
-//! egui-оболочка `moon-terminal` удалена.
+//! Used by the `moonterminal` GPUI shell (which depends on the core, not vice versa). The old
+//! `moon-terminal` egui shell has been removed.
 
 pub mod alert_blob;
 pub mod applog;
