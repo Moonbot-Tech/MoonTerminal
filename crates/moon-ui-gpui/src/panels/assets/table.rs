@@ -3,15 +3,20 @@
 //!
 //! The footer carries both summaries the panel produces — the visible rows on the left, the
 //! scope's account equity on the right — with [`super::balances`] rendering the account side.
+//! `AssetsView` supplies table rows already sorted by descending raw USDT value. The table renders
+//! that order and uses caller-owned column-width state, restored and persisted separately for dock
+//! and window contexts by the panel owner.
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use moon_ui::{MoonButtonVariant, MoonNotification, MoonText, MoonWindowExt as _};
 use rust_i18n::t;
 
-/// Открыть единое контекстное меню монеты по строке Активов (ПКМ на тикере). Стратегии/ордера
-/// у балансов нет → меню = навигация + ЧС ядра/ядер. «Выбранные ядра» = ядра охвата панели
-/// (группа → ядра группы, глобальное окно → все ядра).
+/// Open the shared coin context menu from an Assets row's ticker right-click.
+///
+/// Balance rows carry no strategy or order data, so the menu contains navigation and core
+/// blacklist actions. Its selected-core set is the entire panel scope: the group's cores for a
+/// group panel, or every core for the global window.
 fn open_asset_coin_menu(
     core: CoreId,
     market: String,
@@ -73,13 +78,13 @@ impl AssetsView {
             .px_2()
             .py_1()
             .child(self.core_combo(cores, cx))
-            // Слайдер порога пыли + подпись `≥ N$` (0 = показать всё). Колесо мыши над ним
-            // меняет порог на ±1$ (тащить мышью по узкому слайдеру неудобно).
+            // Pair the dust-threshold slider with its `≥ N$` label; zero shows everything. The
+            // mouse wheel changes the threshold by $1 because dragging the narrow slider is hard.
             .child(
                 div()
                     .id("assets-min-value-wheel")
                     .w(px(120.0))
-                    // Подсказка: что делает слайдер (0 = показать всё, колесо мыши меняет).
+                    // Explain that zero shows everything and the mouse wheel adjusts the value.
                     .tooltip(|_window, cx| {
                         cx.new(|_| {
                             moon_ui::MoonTooltipView::new(t!("assets.min_value_hint").to_string())
@@ -146,7 +151,7 @@ impl AssetsView {
     ///
     /// The two share a line but are not the same quantity: a futures core with no open positions
     /// can have an empty table (Σ = 0) and a fully funded account. Three devices keep them apart:
-    /// the divider between the groups, different nouns ("Позиции" vs "Ядер"), and a tooltip on
+    /// the divider between the groups, different nouns ("positions" versus "cores"), and a tooltip on
     /// each group naming what it sums. It is also why Σ sits beside its own count rather than at
     /// the far right:
     /// tight inner gaps bind a value to its label, the wide outer gap and the spacer separate
@@ -240,13 +245,13 @@ impl AssetsView {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        // Эффективный выбор: сохранённый, если он есть в охвате, иначе первое ядро.
+        // Keep the selected core while it remains in scope; otherwise fall back to the first core.
         let selected = self
             .selected_core
             .filter(|c| aggs.iter().any(|a| a.id == *c))
             .or_else(|| aggs.first().map(|a| a.id));
 
-        // ── Шапка секции (в стиле шапок «Позиции»/«Ядра») ──
+        // Section header, styled like the Positions and Cores headers.
         let collapsed = self.wallets_collapsed;
         let arrow = if collapsed { "▸" } else { "▾" };
         let mut header = h_flex()
@@ -309,7 +314,7 @@ impl AssetsView {
             return v_flex().w_full().flex_none().child(header);
         }
 
-        // ── Левая колонка: список ядер (имя + свободно/итого USDT) ──
+        // Left column: core names with free and total USDT balances.
         let mut list = v_flex().w_full().gap_0();
         for agg in aggs {
             let cid = agg.id;
@@ -351,8 +356,8 @@ impl AssetsView {
             list = list.child(item);
         }
 
-        // Левый контейнер оформлен КАК колонки кошельков (та же плашка-заголовок shell_high)
-        // — «4 одинаковых вертикальных контейнера».
+        // Style the left container like the wallet columns, including the same `shell_high` header,
+        // so the expanded section reads as four matching vertical containers.
         let left = v_flex()
             .w(px(240.0))
             .h_full()
@@ -381,7 +386,7 @@ impl AssetsView {
                     .child(list),
             );
 
-        // ── Правая часть: 3 контейнера кошельков (Спот/Фьючерсы/Квартальные) ──
+        // Right side: Spot, Futures, and Quarterly wallet containers.
         let right = match selected {
             Some(core) => self.wallets_section(core, wallets, cx).into_any_element(),
             None => div()
@@ -391,7 +396,7 @@ impl AssetsView {
                 .into_any_element(),
         };
 
-        // Развёрнутая секция: flex-доля с минимумом видимости (заголовки колонок + пара строк).
+        // Let the expanded section share flexible height while keeping headers and a few rows visible.
         v_flex()
             .w_full()
             .flex_1()
@@ -410,8 +415,9 @@ impl AssetsView {
     }
 }
 
-/// Колонки — 1:1 с окном Assets Moonbot: монета, количество, сумма в $, две кнопки.
-/// Плюс «Ядро» слева: у Moonbot окно per-core, наше — общее на все ядра охвата.
+/// Define the Moonbot Assets columns for coin, quantity, USDT value, and two actions.
+///
+/// This shared multi-core panel adds a Core column on the left; Moonbot's window is per-core.
 fn assets_columns() -> Vec<MoonDataTableColumn> {
     let numeric =
         |key: &'static str, title: String, w: f32| MoonDataTableColumn::new(key, title, w).right();
@@ -420,7 +426,7 @@ fn assets_columns() -> Vec<MoonDataTableColumn> {
         MoonDataTableColumn::new("coin", t!("assets.col.coin").to_string(), 80.0),
         numeric("qty", t!("assets.col.qty").to_string(), 130.0),
         numeric("value", t!("assets.col.value").to_string(), 110.0),
-        // Кнопки Market sell / Order.
+        // Market Sell and Order buttons.
         // `no_grow` keeps the pair at its designed width: the column carries no title and no text,
         // so a share of a wide viewport buys it nothing and only pushes coin/qty/value apart.
         MoonDataTableColumn::new("actions", String::new(), 170.0).no_grow(),
@@ -450,8 +456,9 @@ pub(super) fn assets_table(
         cx,
         MoonDataTable::new(id, row_count, move |ix, _window, _app| {
             let e = &table_rows[ix];
-            // Матч «в продаже» — по МОНЕТЕ, не по имени рынка: у кошельковых строк
-            // HL-спота рынок не резолвится (индексные имена «@151»), а монета совпадает.
+            // Hyperliquid orders and catalog markets use indexed names such as `@151`, while
+            // transfer-wallet rows expose canonical token names. Coin matching bridges the two
+            // representations when marking a row as being sold.
             let on_sale = sell_marked.contains(&(e.core, e.row.coin.to_ascii_uppercase()));
             assets_row(e, &view, p, on_sale)
         })
@@ -471,11 +478,11 @@ fn assets_row(
 ) -> MoonDataRow {
     let r = &e.row;
     let is_position = r.pos_size != 0.0;
-    // Кол-во/Сумма: спот — ПОЛНЫЙ удерживаемый остаток (free + заблокированное в открытых
-    // sell-ордерах), как Moonbot — открытую позу с TP-ордерами показываем целиком, а не
-    // «свободно≈0»; фьюч-позиция — остаток позиции и её стоимость (размер × цена рынка;
-    // котируемая у фьючей — USD-стейбл). Кол-во — ограниченная точность по величине
-    // (`fmt::qty`: макс. тысячные, мин. десятые), не adaptive.
+    // For spot, show the full held balance: free plus the amount locked in open sell orders. Like
+    // Moonbot, this keeps a holding with TP orders visible instead of showing its near-zero free
+    // amount. For futures, show the remaining position and its notional at market price in the
+    // USD-stable quote currency. `fmt::qty` uses magnitude-bounded precision from tenths through
+    // thousandths rather than adaptive formatting.
     let qty = if is_position {
         moon_core::util::fmt::qty(r.pos_size)
     } else {
@@ -491,16 +498,16 @@ fn assets_row(
     // and the same non-finite check keeps that row out of Σ with the footer saying so.
     let sum = super::balances::money_or_dash(e.display_value);
     MoonDataRow::new([
-        // Ядро кликабельно → фильтр панели ровно на это ядро (повторный клик — сброс на «Все»).
+        // Clicking Core filters to exactly that core; clicking it again resets the filter to All.
         MoonDataCell::element(core_cell(e, view, p)),
-        // Тикер кликабелен → открыть чарт монеты на Main НА ЯДРЕ строки (как в Ордерах/Отчёте).
+        // Clicking the ticker opens its market on Main using the row's core, as in Orders and Report.
         MoonDataCell::element(coin_cell(e, view, p, on_sale)),
         MoonDataCell::text(qty),
         MoonDataCell::text(sum),
         actions_cell(e, view, p, is_position),
     ])
-    // Подсветка строки: монета/позиция сейчас СТОИТ НА ПРОДАЖУ (активный sell-ордер,
-    // фаза SellSet/SellAlmostDone на этом ядре). Плюс синяя метка «SELL» у тикера.
+    // Highlight a coin or position being sold by an active sell order or a SellSet/SellAlmostDone
+    // phase on this core; the ticker also receives a blue `SELL` badge.
     .selected(on_sale)
 }
 
@@ -525,7 +532,7 @@ fn core_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        // Кегль/шрифт наследуются от стиля ячейки (каскад moonui, фикс `9a33dbf`).
+        // Inherit font family and size from the MoonUI cell style fixed in `9a33dbf`.
         .text_color(rgb(MoonTone::Muted.color(p)))
         .child(e.core_name.clone())
         .on_click(move |_, _window, app| {
@@ -533,9 +540,10 @@ fn core_cell(
         })
 }
 
-/// Ячейка тикера (базовая монета): клик открывает чарт монеты на Main на ядре строки.
-/// Порт клика по тикеру из панели «Ордера». `on_sale` — рядом с тикером синяя метка
-/// «SELL» (у монеты сейчас активный sell-ордер, тон Info как в таблице «Ордера»).
+/// Render the base-coin ticker cell, opening its chart on Main with the row's core when clicked.
+///
+/// This follows the Orders ticker behavior. `on_sale` adds a blue Info-tone `SELL` badge when the
+/// coin has an active sell order.
 fn coin_cell(
     e: &AssetEntry,
     view: &Entity<AssetsView>,
@@ -549,8 +557,8 @@ fn coin_cell(
     let view_menu = view.clone();
     let coin_menu = coin.clone();
     let market_menu = market.clone();
-    // Значок монеты (assets/coins). Нет значка → тикер без иконки (без пустого места:
-    // тут колонка узкая, выравнивание держит сама таблица).
+    // Use an `assets/coins` icon when available; omit both icon and reserved space otherwise because
+    // the narrow ticker column relies on table alignment.
     let icon = crate::coin_icons::coin_icon(&coin);
     div()
         .id(SharedString::from(format!(
@@ -566,12 +574,12 @@ fn coin_cell(
         .when_some(icon, |el, tex| {
             el.child(img(tex).w(px(14.0)).h(px(14.0)).flex_none())
         })
-        // Кегль/шрифт тикера — от стиля ячейки (каскад moonui, фикс `9a33dbf`).
+        // Inherit ticker font family and size from the MoonUI cell style fixed in `9a33dbf`.
         .text_color(rgb(MoonTone::Accent.color(p)))
         .font_weight(FontWeight::MEDIUM)
         .child(coin)
         .when(on_sale, |el| {
-            // Метка «SELL» меньше тикера — дефолтный кегль MoonText (9).
+            // Keep the `SELL` badge smaller than the ticker with MoonText's default size of 9.
             el.child(
                 MoonText::new("SELL")
                     .color(MoonTone::Info.color(p))
@@ -584,19 +592,20 @@ fn coin_cell(
         })
         .on_click(move |_, _window, app| {
             if market.is_empty() {
-                return; // строка без рынка (чистый баланс) — открывать нечего
+                return; // A balance-only row has no market to open.
             }
             view.update(app, |this, cx| {
                 this.backend.update(cx, |b, bcx| {
                     b.open_request = Some((core, market.clone()));
                     b.open_request_rev = b.open_request_rev.wrapping_add(1);
-                    // Открыть монету на Main, но окно НЕ поднимать (как в Ордерах).
+                    // Open the market on Main without activating its window, matching Orders.
                     b.open_request_activate = false;
                     bcx.notify();
                 });
             });
         })
-        // ПКМ — единое контекстное меню монеты (ЧС ядра/ядер охвата; стратегии/ордера нет).
+        // Right-click opens the shared navigation and scoped-core blacklist menu; balance rows
+        // provide no strategy or order context.
         .on_mouse_down(
             MouseButton::Right,
             move |e: &MouseDownEvent, window, app| {
@@ -613,17 +622,18 @@ fn coin_cell(
         )
 }
 
-/// Ячейка действий позиции: «Market sell» (panic-sell по рынку) + «Order» (заглушка — окно
-/// настроек ордера будет позже). Показывается только у строк с открытой позицией.
+/// Render Market Sell and the placeholder Order action for a sellable asset row.
+///
+/// The cell is populated for an open position or positive spot balance only when its resolved
+/// market exists on the core. The Order button remains a stub for a future order-settings window.
 fn actions_cell(
     e: &AssetEntry,
     view: &Entity<AssetsView>,
     _p: MoonPalette,
     is_position: bool,
 ) -> MoonDataCell {
-    // Продаваемо: открытая позиция ЛИБО спот-баланс монеты (есть что продать по рынку).
-    // Кнопку показываем ТОЛЬКО если рынок `<coin><quote>` реально существует у ядра
-    // (иначе продавать негде — напр. USDT на USDC-аккаунте: рынка USDTUSDC нет).
+    // An open position or positive spot balance is sellable only when its `<coin><quote>` market
+    // actually exists on the core. For example, a USDC account may have no USDTUSDC market.
     let size = if e.row.qty.abs() > 0.0 {
         e.row.qty.abs()
     } else {
@@ -652,8 +662,8 @@ fn actions_cell(
                 .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Danger)
                 .on_click(move |_, window, app| {
-                    // Спрашиваем подтверждение (да/нет) ДО закрытия по маркету — необратимое
-                    // действие, легко нажать случайно. Сама продажа — в кнопке «Да» диалога.
+                    // Require confirmation before the irreversible market close; only the dialog's
+                    // Yes button submits the sale.
                     open_market_sell_confirm(
                         view_ms.clone(),
                         core,
@@ -673,7 +683,7 @@ fn actions_cell(
                 .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Soft)
                 .on_click(move |_, _w, _app| {
-                    // Заглушка: окно настроек ордера будет позже.
+                    // Placeholder for a future order-settings window.
                     log::info!("assets: order button (stub) core={core} market={market}");
                 })
                 .render(),
@@ -681,9 +691,10 @@ fn actions_cell(
     MoonDataCell::element(el)
 }
 
-/// Модалка подтверждения «Market sell» (да/нет). Само закрытие по маркету исполняется только
-/// по кнопке «Да» — позиция закрывается `market_sell_position`, спот-остаток `market_sell_token`.
-/// Открывается прямо из клика кнопки (у `MoonButton::on_click` под рукой `&mut App`).
+/// Open the Market Sell confirmation dialog directly from the button click's mutable app context.
+///
+/// Only the Yes button submits the irreversible action: `market_sell_position` closes a position,
+/// while `market_sell_token` sells a spot balance.
 #[allow(clippy::too_many_arguments)]
 fn open_market_sell_confirm(
     view: Entity<AssetsView>,
@@ -754,7 +765,7 @@ fn open_market_sell_confirm(
                                 .on_click(move |_, window, cx| {
                                     confirm_view.update(cx, |this, cx| {
                                         let b = this.backend.read(cx);
-                                        // Позиция → закрыть по маркету; спот-токен → продать остаток.
+                                        // Close a position at market, or sell the remaining spot token.
                                         let res = if is_position {
                                             b.session.market_sell_position(core, market_c.clone())
                                         } else {
