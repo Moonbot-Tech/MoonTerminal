@@ -1,6 +1,7 @@
-//! Методы `Backend` для слоя фигур/алертов: тоггл галки «Alert» у выделенной
-//! фигуры, удаление фигуры с разоружением серверного алерта, re-upsert после драга.
-//! Вынесено из `main.rs` (дочерний модуль видит приватные поля `Backend`).
+//! `Backend` methods for the figure and alert layer: toggling the selected figure's Alert flag,
+//! removing a figure while disarming its core alert, and re-upserting an alert after an edit.
+//! This child module keeps the implementation separate from `main.rs` while retaining access to
+//! `Backend`'s private fields.
 
 use std::collections::HashMap;
 
@@ -10,7 +11,7 @@ use moon_core::session::CoreId;
 
 use crate::Backend;
 
-/// Собрать blob для upsert из фигуры (obj_uid = id фигуры).
+/// Encodes a figure for a chart-alert upsert, using the figure ID as `obj_uid`.
 fn figure_blob(fig: &Figure) -> Vec<u8> {
     alert_blob::encode(
         &fig.kind,
@@ -24,7 +25,8 @@ fn figure_blob(fig: &Figure) -> Vec<u8> {
 }
 
 impl Backend {
-    /// Def Strategy ядра (Backend читает из ServerConfig — персистится в servers.enc).
+    /// Returns the core's default Alerts-strategy ID from `ServerConfig`, or zero when the core is
+    /// absent. The setting is persisted as per-server metadata in `cfg/settings.toml`.
     pub(crate) fn alert_def_strategy(&self, core: CoreId) -> u64 {
         self.config
             .servers
@@ -34,7 +36,8 @@ impl Backend {
             .unwrap_or(0)
     }
 
-    /// Задать Def Strategy ядра (пишет в конфиг + дебаунс-сейв).
+    /// Sets the core's default Alerts-strategy ID. A changed value marks the configuration for the
+    /// coordination loop's routine save; an unknown core or unchanged value is ignored.
     pub(crate) fn set_alert_def_strategy(&mut self, core: CoreId, strategy_id: u64) {
         if let Some(s) = self.config.servers.iter_mut().find(|s| s.id == core) {
             if s.default_alert_strategy != strategy_id {
@@ -44,8 +47,10 @@ impl Backend {
         }
     }
 
-    /// Тоггл галки «Alert» у выделенной фигуры: армит (upsert) или разоружает
-    /// (delete) chart-алерт на ядре. Возвращает `true`, если что-то изменилось.
+    /// Toggles the selected figure's Alert flag, upserting the chart alert when enabling it and
+    /// deleting the core alert when disabling it. A newly armed figure with no strategy inherits
+    /// the core's nonzero default strategy. Returns `false` if no selected figure exists in the
+    /// store; command-send errors do not roll back the local edit.
     pub(crate) fn toggle_selected_figure_alert(&mut self) -> bool {
         let Some((core, market, id)) = self.fig_selected.clone() else {
             return false;
@@ -56,7 +61,7 @@ impl Backend {
         let changed = self.figures.borrow_mut().edit(core, &market, id, |fig| {
             fig.alert = !fig.alert;
             if fig.alert {
-                // Новый алерт без стратегии → применяем «Def Strategy».
+                // Apply the core's default strategy when arming a figure that has none.
                 if fig.strategy_id == 0 && def_strategy != 0 {
                     fig.strategy_id = def_strategy;
                 }
@@ -77,7 +82,8 @@ impl Backend {
         true
     }
 
-    /// Удалить фигуру; если была заармлена — разоружить серверный алерт.
+    /// Removes a figure and deletes its core alert if it was armed. The matching global selection
+    /// is cleared even if the figure was already absent; command-send errors are ignored.
     pub(crate) fn remove_figure(&mut self, core: CoreId, market: &str, id: u64) {
         let removed = self.figures.borrow_mut().remove(core, market, id);
         if let Some(fig) = removed {
@@ -96,11 +102,11 @@ impl Backend {
         }
     }
 
-    /// Реконсиляция серверных (созданных в ЯДРЕ/Moonbot) chart-алертов в render-стор:
-    /// декодируем blob'ы всех ядер в фигуры и кладём в `remote`-набор FigureStore.
-    /// Дедуп: алерты, чей `obj_uid` == id НАШЕЙ локальной фигуры (мы их сами заармили),
-    /// пропускаем — они уже рисуются как локальные. Зовётся при изменении серверного
-    /// набора (`chart_alerts_activity`). Возвращает `activity` для гейта вызывающим.
+    /// Reconciles chart alerts created by a core or Moonbot into the render store. It decodes the
+    /// current blobs from every core into a fresh set of `from_server` figures, skipping unsupported
+    /// or malformed blobs. `FigureStore::set_server_figures` then preserves local figures and omits
+    /// a server duplicate whose `obj_uid` matches a local figure ID. The coordination loop calls this
+    /// only after `chart_alerts_activity` changes.
     pub(crate) fn sync_remote_alerts(&mut self) {
         let mut server: HashMap<FigureKey, Vec<Figure>> = HashMap::new();
         for (core, data) in self.session.store().cores() {
@@ -127,8 +133,9 @@ impl Backend {
         self.figures.borrow_mut().set_server_figures(server);
     }
 
-    /// Назначить фигуре-алерту стратегию (id вида «Alerts», 0 = без). Пишет в blob (@32)
-    /// и ре-апсертит, если алерт заармлен.
+    /// Sets a figure's Alerts-strategy ID, where zero means no strategy. A changed value marks the
+    /// figure store for persistence and, for an armed figure, re-upserts a blob carrying the ID at
+    /// offset 32. A missing figure or unchanged value is ignored.
     pub(crate) fn set_figure_strategy(
         &mut self,
         core: CoreId,
@@ -149,8 +156,9 @@ impl Backend {
         }
     }
 
-    /// Пере-заармить фигуру после правки (драг узла/тела): если алерт вкл — upsert со
-    /// свежими координатами. Зовётся на mouse-up драга, не на каждое движение.
+    /// Re-upserts an armed figure with its current data after an edit. Drag handling calls this on
+    /// mouse-up rather than on every movement, and strategy changes reuse the same path. Missing or
+    /// unarmed figures do nothing; command-send errors are ignored.
     pub(crate) fn reupsert_figure_alert(&mut self, core: CoreId, market: &str, id: u64) {
         let blob = {
             let store = self.figures.borrow();
