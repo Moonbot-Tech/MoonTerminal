@@ -1,14 +1,14 @@
-//! Утилиты для отображения символа рынка. Ядро подключается к одному quote
-//! (USDT/USDC/…), и в UI монету показываем БЕЗ этого суффикса: `ADAUSDT` → `ADA`.
+//! Market-symbol display utilities. A core connects using a single quote currency
+//! (USDT/USDC/…), and the UI displays the coin WITHOUT that suffix: `ADAUSDT` → `ADA`.
 
-/// Известные quote-валюты, по которым режем суффикс. Порядок — по длине (сначала
-/// длинные), чтобы `FDUSD`/`USDC` срабатывали раньше `USD`.
+/// Known quote currencies whose suffixes are stripped. Ordered by length (longest first),
+/// so `FDUSD`/`USDC` match before `USD`.
 const QUOTES: [&str; 9] = [
     "FDUSD", "TUSD", "USDC", "BUSD", "USDT", "USD", "BTC", "ETH", "BNB",
 ];
 
-/// Quote подключения ядра, выведенный из его рынка по умолчанию (`server.market`).
-/// `BTCUSDT` → `USDT`; если не распознан — пустая строка (тогда ничего не режем).
+/// Recognizes a known quote suffix in any market name, ASCII-case-insensitively.
+/// `BTCUSDT` → `USDT`; returns the canonical uppercase quote, or an empty string if unrecognized.
 pub fn resolve_quote(market: &str) -> String {
     let up = market.to_ascii_uppercase();
     QUOTES
@@ -18,7 +18,8 @@ pub fn resolve_quote(market: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Является ли валюта USD-стейблом (курс к USD ≈ 1). Список зеркалит `feed::assets`.
+/// Whether the currency is a USD stablecoin (its USD rate is approximately 1).
+/// This list mirrors `feed::assets`.
 pub fn is_usd_stable(currency: &str) -> bool {
     matches!(
         currency.to_ascii_uppercase().as_str(),
@@ -26,12 +27,12 @@ pub fn is_usd_stable(currency: &str) -> bool {
     )
 }
 
-/// Базовая монета: срезает `quote` с конца `sym` (если совпал). `quote` пуст или
-/// не подошёл → возвращаем символ как есть.
+/// Returns the base coin by stripping `quote` from the end of `sym` when it matches.
+/// If `quote` is empty or does not match, returns the symbol unchanged.
 ///
-/// Gate и подобные биржи разделяют символ подчёркиванием (`VANRY_USDT`, `1INCH_USDT`):
-/// после среза `USDT` остаётся хвостовой разделитель `VANRY_` — убираем его (`_`/`-`/`/`),
-/// иначе в таблицах токен показывается как «VANRY_».
+/// Gate and similar exchanges separate the symbol with an underscore (`VANRY_USDT`,
+/// `1INCH_USDT`). Stripping `USDT` leaves a trailing separator as in `VANRY_`, so also
+/// strip `_`, `-`, or `/`; otherwise tables would display the token as `VANRY_`.
 pub fn base_symbol<'a>(sym: &'a str, quote: &str) -> &'a str {
     if !quote.is_empty() && sym.len() > quote.len() && sym.to_ascii_uppercase().ends_with(quote) {
         let base = &sym[..sym.len() - quote.len()];
@@ -41,8 +42,9 @@ pub fn base_symbol<'a>(sym: &'a str, quote: &str) -> &'a str {
     }
 }
 
-/// Полный тикер для подписи на чарте: `BTCUSDT` → `BTC-USDT`. HIP-3 (`xyz:BIRD`) → `BIRD`
-/// (dex-префикс и неявный USDC не показываем). Если quote не распознан — монета без префикса.
+/// Full ticker for a chart label: `BTCUSDT` → `BTC-USDT`. HIP-3 (`xyz:BIRD`) → `BIRD`
+/// because the DEX prefix and implicit USDC quote are hidden. If the quote is unrecognized,
+/// displays the coin without its DEX prefix.
 pub fn display_pair(market: &str) -> String {
     let after_dex = strip_dex(market);
     let quote = resolve_quote(after_dex);
@@ -52,28 +54,32 @@ pub fn display_pair(market: &str) -> String {
     format!("{}-{}", base_symbol(after_dex, &quote), quote)
 }
 
-/// HIP-3-рынок Hyperliquid: имя несёт dex-префикс `dex_name:coin` (`xyz:BIRD`). Двоеточие в
-/// имени рынка бывает ТОЛЬКО у HIP-3 (обычные биржи шлют пустой `dex_name`, без `:`).
+/// A Hyperliquid HIP-3 market whose name carries a `dex_name:coin` DEX prefix (`xyz:BIRD`).
+/// A colon occurs in market names ONLY for HIP-3; regular exchanges send an empty `dex_name`
+/// without a colon.
 pub fn is_hip3(market: &str) -> bool {
     market.contains(':')
 }
 
-/// Имя dex у HIP-3-рынка (`xyz:BIRD` → `Some("xyz")`), иначе `None`.
+/// The DEX name of a HIP-3 market (`xyz:BIRD` → `Some("xyz")`), or `None` otherwise.
 pub fn dex_of_market(market: &str) -> Option<&str> {
     market.split_once(':').map(|(dex, _)| dex)
 }
 
-/// Часть имени рынка ПОСЛЕ dex-префикса: `xyz:BIRD` → `BIRD`, `ADAUSDT` → `ADAUSDT`.
+/// The part of the market name AFTER its DEX prefix: `xyz:BIRD` → `BIRD`,
+/// `ADAUSDT` → `ADAUSDT`.
 fn strip_dex(market: &str) -> &str {
     market.rsplit(':').next().unwrap_or(market)
 }
 
-/// КАНОНИЧЕСКАЯ монета рынка (для ЧС/матчинга/показа тикера): срезаем dex-префикс, затем
-/// quote-суффикс. `xyz:BIRD` → `BIRD`, `BIRDUSDC` → `BIRD`, `ADAUSDT` → `ADA`.
+/// The CANONICAL market coin for blacklists, matching, and ticker display: strips the DEX
+/// prefix, then the quote suffix. `xyz:BIRD` → `BIRD`, `BIRDUSDC` → `BIRD`,
+/// `ADAUSDT` → `ADA`.
 ///
-/// ВАЖНО: это НЕ ключ рынка. Для подписки/открытия/поиска всегда берём полное имя рынка
-/// (`xyz:BIRD`) — сервер резолвит по `market_name`. `coin_of_market` — только «как называется
-/// монета» (сервер сравнивает ЧС именно с этим `market_currency`, без префикса).
+/// IMPORTANT: this is NOT a market key. Subscribing, opening, and data lookup require the full
+/// market name (`xyz:BIRD`). Search may accept a base-coin query, but returns full market keys.
+/// `coin_of_market` only answers "what is this coin called?"; the server compares blacklists
+/// against this unprefixed `market_currency`.
 pub fn coin_of_market(market: &str) -> &str {
     let after_dex = strip_dex(market);
     base_symbol(after_dex, &resolve_quote(after_dex))
