@@ -1,4 +1,4 @@
-//! Данные графика (CPU-side semantic model).
+//! Chart data (CPU-side semantic model).
 
 pub mod orderbook;
 pub mod price_line;
