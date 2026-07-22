@@ -1,5 +1,5 @@
-# Вкладка «Общие» окна настроек.
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# General tab of the Settings window.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
 _version: 2
 
 general.language:

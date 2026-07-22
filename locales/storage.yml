@@ -1,5 +1,5 @@
-# Вкладка «Хранилище» окна настроек: локальные БД (отчёты/стратегии/кэш свечей).
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Storage tab of the Settings window: local databases for reports, strategies, and the kline cache.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
 _version: 2
 
 tab.storage:

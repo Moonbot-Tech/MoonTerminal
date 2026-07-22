@@ -1,6 +1,6 @@
-# Строки, общие для нескольких панелей: плейсхолдеры фоновой загрузки и ошибок
-# чтения БД отчётов (см. crates/moon-ui-gpui/src/load_state.rs).
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Strings shared by multiple panels: placeholders for background loading and report-database read
+# errors; see `crates/moon-ui-gpui/src/load_state.rs`.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
 _version: 2
 
 common.loading:

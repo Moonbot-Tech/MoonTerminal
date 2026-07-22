@@ -1,4 +1,4 @@
-# Импорт настроек из MoonBot (Настройки → Общие): кнопка, preview-диалог, статусы.
+# Importing settings from MoonBot (Settings → General): button, preview dialog, and statuses.
 _version: 2
 
 import.button:

@@ -1,8 +1,8 @@
-# Панель «Статус ядер»: системные метрики ядер (CPU/память из Event::KernelHealth) + статус.
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Core Status panel: core system metrics from `Event::KernelHealth`, including CPU and memory, plus status.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
 _version: 2
 
-# --- Верхняя полоса / футер ---
+# --- Top bar and footer ---
 core_status.all_cores:
   ru: "Все ядра"
   en: "All cores"
@@ -20,7 +20,7 @@ core_status.empty:
   en: "No core data"
   es: "Sin datos de núcleos"
 
-# --- Колонки таблицы ---
+# --- Table columns ---
 core_status.col.core:
   ru: "Ядро"
   en: "Core"
@@ -54,7 +54,7 @@ core_status.col.updated:
   en: "Updated"
   es: "Actualizado"
 
-# --- Единицы / относительное время ---
+# --- Units and relative time ---
 core_status.mb:
   ru: "МБ"
   en: "MB"

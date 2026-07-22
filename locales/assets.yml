@@ -1,5 +1,5 @@
-# Окно/панель «Активы»: панель управления, колонки таблицы, кошельки.
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Assets window/panel: controls, table columns, and wallets.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
 _version: 2
 
 assets.window_title:
@@ -10,7 +10,7 @@ assets.show_all:
   ru: "показать всё"
   en: "show all"
   es: "mostrar todo"
-# Подсказка слайдера порога пыли в верхней полосе (0 = показать всё).
+# Hint for the top-bar dust-threshold slider; 0 shows everything.
 assets.min_value_hint:
   ru: "Скрывать активы дешевле N $ (0 — показать всё; колесо мыши меняет)"
   en: "Hide assets worth less than N $ (0 — show all; mouse wheel changes)"
@@ -93,7 +93,7 @@ assets.section_positions:
   ru: "Позиции"
   en: "Positions"
   es: "Posiciones"
-# Поле-список выбора ядер (как orders.all_cores / orders.cores_n).
+# Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores:
   ru: "Все ядра"
   en: "All cores"
@@ -103,7 +103,7 @@ assets.cores_n:
   en: "Cores: %{n}"
   es: "Núcleos: %{n}"
 
-# --- Колонки таблицы активов ---
+# --- Asset table columns ---
 assets.col.core:
   ru: "Ядро"
   en: "Core"
@@ -141,7 +141,7 @@ assets.col.kind:
   en: "Market"
   es: "Mercado"
 
-# --- Кнопки действий у позиции ---
+# --- Position action buttons ---
 assets.open_global_hint:
   ru: "Открыть Активы отдельным окном (все ядра)"
   en: "Open Assets in a separate window (all cores)"
@@ -163,7 +163,7 @@ assets.order:
   en: "Order"
   es: "Orden"
 
-# --- Кошельки (перенос монет между контейнерами) ---
+# --- Wallets for transferring coins between containers ---
 assets.wallets_hint:
   ru: "Кошельки · перетащи монету между контейнерами"
   en: "Wallets · drag a coin between containers"

@@ -1,4 +1,4 @@
-# Общие подписи таблиц (MoonDataTable): сброс ширин колонок и т.п.
+# Shared MoonDataTable labels for resetting column widths and similar actions.
 _version: 2
 
 tables.reset_widths:
