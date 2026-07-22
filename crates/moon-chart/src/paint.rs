@@ -1,8 +1,8 @@
-//! Общие мелочи времени для UI-оболочки. wgpu-рендер панелей (`render_panes`) и
-//! сигнатура видимых панелей (`panes_visible_sig`) удалены вместе с egui-движком —
-//! own-pass (chartdx) имеет свой рендер и `data_signature`.
+//! Shared time utilities for the UI shell. The wgpu pane renderer (`render_panes`) and
+//! visible-pane signature (`panes_visible_sig`) were removed with the egui engine —
+//! the own-pass implementation (chartdx) has its own renderer and `data_signature`.
 
-/// Текущее unix-время в мс (та же шкала, что time_ms тиков). Реэкспорт единого
-/// источника из `moon_core::util` — исторически жил здесь, путь сохранён ради
-/// многочисленных `moon_chart::paint::now_unix_ms` в UI-оболочке.
+/// Current Unix time in milliseconds (the same scale as tick time_ms). Re-exports the canonical
+/// source from `moon_core::util`; it historically lived here, and the path is retained for the
+/// many `moon_chart::paint::now_unix_ms` references in the UI shell.
 pub use moon_core::util::now_unix_ms;
