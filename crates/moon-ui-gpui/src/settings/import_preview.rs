@@ -1,9 +1,9 @@
-//! Preview импорта настроек MoonBot (ТЗ docs-internal/MOONBOT_CONFIG_IMPORT.md §2):
-//! оверлей поверх окна настроек. Стадии: «Загрузка…» (парс+план на background
-//! executor — большой буфер НЕ вешает UI), «Ошибка» (текст + Закрыть) и «Готово» —
-//! четыре группы (Терминал / График и линии / Ядро / Не перенесено), чекбоксы на
-//! каждый пункт, колонки Светлая|Тёмная со свотчами цветов, выбор целевых ядер.
-//! «Применить» пишет выбранное в draft (`apply_local`) — на диск по «Сохранить».
+//! MoonBot settings import preview overlay.
+//! The overlay has Loading, Error, and Ready states. Parsing and planning run on the background
+//! executor so large clipboard buffers do not block the UI. Ready groups terminal, hotkey, chart,
+//! per-core, command, warning, and unsupported items; offers per-item selection, light/dark color
+//! swatches, and target-core selection; and applies selected local items to the draft through
+//! `apply_local`. Save later persists the draft to disk.
 
 use std::collections::HashSet;
 
@@ -20,23 +20,25 @@ use moon_core::config::moonbot_import::plan::SettingChange;
 use moon_core::config::moonbot_import::{self, MoonBotImportPlan, PlanContext};
 use moon_core::config::servers::default_order_sizes;
 
-/// Готовый план + выбор пользователя.
+/// Completed import plan and current user selection.
 pub(super) struct ImportReady {
     plan: MoonBotImportPlan,
-    /// Выбранные id пунктов (дефолт — все локальные группы).
+    /// Selected item IDs; initially all changed local items, excluding no-op matches.
     selected: HashSet<String>,
-    /// Целевые ядра per-core группы: (ServerConfig.id, имя, выбран). Дефолт —
-    /// только первое активное ядро (ТЗ §2: не применять молча ко всем).
+    /// Per-core targets as `(ServerConfig.id, name, selected)`.
+    ///
+    /// Initially selects only the first active core in canonical order, or the first core if none
+    /// is active, so per-core settings are not silently applied to every core.
     cores: Vec<(u64, String, bool)>,
 }
 
-/// Стадия открытого preview.
+/// State of an open import preview.
 pub(super) enum ImportState {
-    /// Буфер похож на настройки MoonBot — парсим/строим план в фоне.
+    /// The clipboard passed the MoonBot sniff and is being parsed and planned in the background.
     Loading,
-    /// Разбор не удался — текст ошибки в окне.
+    /// Parsing failed; the error string is displayed in the overlay.
     Error(String),
-    /// План готов — выбор и «Применить».
+    /// The plan is ready for selection and application.
     Ready(ImportReady),
 }
 
@@ -48,12 +50,14 @@ impl SettingsView {
         }
     }
 
-    /// Кнопка «Импорт из MoonBot»: буфер → быстрый sniff → окно «Загрузка…» →
-    /// парс и план на background executor → Ready/Error. Не-настройки в буфере —
-    /// ошибка в статус-строку БЕЗ окна (окно только когда «опознали, что это вставка»).
+    /// Start MoonBot import from clipboard text.
+    ///
+    /// A quick sniff rejects unrelated text into the status line without opening the overlay.
+    /// Recognized input enters Loading while parsing and planning run on the background executor,
+    /// then transitions to Ready or Error.
     pub(super) fn start_moonbot_import(&mut self, cx: &mut Context<Self>) {
         if matches!(self.import, Some(ImportState::Loading)) {
-            return; // уже в полёте
+            return; // An import is already in flight.
         }
         let Some(text) = cx
             .read_from_clipboard()
@@ -64,7 +68,7 @@ impl SettingsView {
             cx.notify();
             return;
         };
-        // Дешёвый sniff «это вообще MBSC?» — без декодирования. Не похоже → статус.
+        // Check for the MBSC marker without decoding; unrelated clipboard text only updates status.
         if !text.contains("MBSC") {
             self.status = Some((
                 super::StatusMsg::Text(moonbot_import::ImportError::NotFound.to_string()),
@@ -77,7 +81,7 @@ impl SettingsView {
         self.import = Some(ImportState::Loading);
         cx.notify();
 
-        // Срезы draft для плана — клонами в фоновую задачу (build_plan чистый).
+        // Clone the draft slices needed by the pure `build_plan` function into the background task.
         let (hotkeys, theme, orders, ui_light, order_sizes, order_size_sel, cores) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
@@ -130,14 +134,14 @@ impl SettingsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
-                    // Пользователь мог закрыть окно во время загрузки — не воскрешаем.
+                    // Do not resurrect the preview if the settings window closed during loading.
                     if !matches!(this.import, Some(ImportState::Loading)) {
                         return;
                     }
                     this.import = Some(match result {
                         Ok(plan) => {
-                            // Дефолт выбора — только реальные ИЗМЕНЕНИЯ; совпадающие
-                            // (same) видны, но не отмечены (их применение — no-op).
+                            // Initially select only real changes. Matching `same` items remain
+                            // visible but unchecked because applying them is a no-op.
                             let selected = plan
                                 .local_items()
                                 .filter(|c| !c.same)
@@ -158,8 +162,9 @@ impl SettingsView {
         .detach();
     }
 
-    /// «Применить»: выбранные пункты → draft (`apply_local`), пересборка editor-стейтов
-    /// затронутых вкладок, статус с числом пунктов. Диск — по «Сохранить».
+    /// Apply selected local items to the draft, rebuild dependent editor state, and report count.
+    ///
+    /// `apply_local` updates the draft; Save persists it to disk later.
     fn apply_moonbot_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ImportState::Ready(state)) = self.import.take() else {
             self.import = None;
@@ -180,9 +185,9 @@ impl SettingsView {
             for id in &out.unknown_ids {
                 log::warn!("moonbot import: неизвестный id пункта «{id}» — пропущен");
             }
-            // Смена темы UI применяется ЖИВЬЁМ (как тогл на «Общих») — иначе до
-            // «Сохранить» палитра не переключится и импорт выглядит несработавшим.
-            // Цвета чарта спец-вызова не требуют: окна читают draft каждый кадр.
+            // Install a selected UI-theme change immediately, matching the General toggle, so the
+            // palette changes before Save. Chart colors need no special call because windows read
+            // the draft every frame.
             if out.applied > 0 && theme_selected {
                 crate::install_moon_theme_for_config(p, bcx);
             }
@@ -191,8 +196,7 @@ impl SettingsView {
             }
             out.applied
         });
-        // Цвета/хоткеи живут в editor-стейтах, собранных при build — пересобрать
-        // под новые значения draft (паттерн paste_tab).
+        // Rebuild Interface and Lines editor state from the new draft values, matching `paste_tab`.
         if applied > 0 {
             self.iface = interface::build(&self.backend, window, cx);
             self.lines = lines::build(&self.backend, window, cx);
@@ -204,7 +208,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Оверлей preview (рендерится поверх тела настроек, когда `import` открыт).
+    /// Render the import preview over the settings body while `import` is open.
     pub(super) fn import_overlay(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let state = self.import.as_ref()?;
         let p = MoonPalette::active(cx);
@@ -219,7 +223,7 @@ impl SettingsView {
                 .occlude()
         };
 
-        // ── Стадии «Загрузка…» (плашка как в Аналитике) и «Ошибка» ──
+        // Render Loading as an Analytics-style status card and Error as a dismissible card.
         match state {
             ImportState::Loading => {
                 return Some(
@@ -276,16 +280,16 @@ impl SettingsView {
 
         let mut card = v_flex()
             .w(design::font_w_px(cx, 760.0))
-            // ФИКСИРОВАННАЯ высота 88% (не max_h!): flex_1-тело со скроллом требует
-            // детерминированной высоты родителя — при авто-высоте оно схлопывается в 0.
+            // Use a fixed 88% height rather than `max_h`: the scrollable flex body needs a
+            // deterministic parent height or it collapses to zero under automatic sizing.
             .h(relative(0.88))
             .gap(design::ui_px(cx, 8.0))
             .p(design::ui_px(cx, 14.0))
             .rounded(design::r_container(cx))
             .border_1()
             .border_color(rgba_from(p.border, 1.0))
-            // Плотный непрозрачный фон + occlude: вкладка под оверлеем не просвечивает
-            // и не ловит клики.
+            // Use an opaque background plus `occlude` so the tab beneath neither shows through nor
+            // receives clicks.
             .bg(rgba_from(p.shell, 1.0))
             .occlude()
             .child(
@@ -295,7 +299,7 @@ impl SettingsView {
                     .child(t!("import.title").to_string()),
             );
 
-        // ── Скроллируемое тело: группы пунктов ──
+        // Build the scrollable body from item groups.
         let mut body = v_flex().gap(design::ui_px(cx, 10.0)).w_full();
         if state.plan.is_empty() {
             body = body.child(
@@ -310,7 +314,7 @@ impl SettingsView {
             .children(self.chart_columns(cx, &state.plan.chart, p))
             .children(self.import_group(cx, "import.group.core", &state.plan.per_core, p));
 
-        // Выбор целевых ядер — только когда есть per-core пункты.
+        // Show target-core selection only when the plan contains per-core items.
         if !state.plan.per_core.is_empty() {
             let all_on = state.cores.iter().all(|(_, _, on)| *on);
             let mut row = h_flex()
@@ -321,7 +325,7 @@ impl SettingsView {
                         .text_color(rgba_from(p.text_soft, 1.0))
                         .child(t!("import.core_targets").to_string()),
                 )
-                // «Все» — тогл всего списка разом.
+                // The All checkbox toggles every target at once.
                 .child(
                     MoonCheckbox::new("imp-core-all")
                         .checked(all_on)
@@ -354,7 +358,7 @@ impl SettingsView {
             body = body.child(row);
         }
 
-        // Core-команды (fixed-sell): показать, что приедет ядрам, но пока не шлём.
+        // Show fixed-sell core commands for preview only; this local apply path does not send them.
         if !state.plan.core_commands.is_empty() {
             let mut group = v_flex()
                 .gap_1()
@@ -379,7 +383,7 @@ impl SettingsView {
             body = body.child(group);
         }
 
-        // Warnings + «Не перенесено» (с причинами).
+        // Show warnings and unsupported items with their reasons.
         for w in &state.plan.warnings {
             body = body.child(div().text_color(rgba_from(p.yellow, 1.0)).child(w.clone()));
         }
@@ -400,8 +404,8 @@ impl SettingsView {
             body = body.child(group);
         }
 
-        // Скролл-схема из фикса п.41: внешний flex_1+min_h(0) тянется в остаток карточки,
-        // внутренний size_full со scrollbar — иначе Scrollable разваливает высоту.
+        // The outer `flex_1 + min_h(0)` consumes the card's remaining height, while the inner
+        // `size_full` owns the scrollbar. Without both layers, Scrollable breaks height layout.
         card = card.child(
             div().flex_1().min_h(px(0.0)).w_full().child(
                 div()
@@ -412,7 +416,7 @@ impl SettingsView {
             ),
         );
 
-        // ── Футер карточки: Применить / Отмена (отбит линией от тела) ──
+        // Separate the Apply/Cancel footer from the body with a top border.
         card = card.child(
             h_flex()
                 .gap(design::ui_px(cx, 8.0))
@@ -445,7 +449,7 @@ impl SettingsView {
         Some(backdrop().child(card).into_any_element())
     }
 
-    /// Одна строка пункта: чекбокс + «было → станет» рядом (цвета — свотчами).
+    /// Render an item's checkbox beside its current-to-new value; colors use swatches.
     fn change_row(&self, cx: &Context<Self>, item: &SettingChange, p: MoonPalette) -> AnyElement {
         let state_checked = self
             .import_ready()
@@ -475,7 +479,7 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// Группа пунктов (Терминал/Ядро): заголовок + однострочные пункты.
+    /// Render a titled Terminal or Core group of single-line setting changes.
     fn import_group(
         &self,
         cx: &Context<Self>,
@@ -495,8 +499,8 @@ impl SettingsView {
         Some(group.into_any_element())
     }
 
-    /// Группа «Хоткеи»: все сопоставленные сочетания (включая совпадающие) + внутри
-    /// же — «не перенесено» с причинами и сводка по пустым слотам MoonBot.
+    /// Render mapped hotkeys, including unchanged matches, plus unsupported reasons and the
+    /// MoonBot empty-slot summary.
     fn hotkeys_group(
         &self,
         cx: &Context<Self>,
@@ -540,7 +544,7 @@ impl SettingsView {
         Some(group.into_any_element())
     }
 
-    /// «График и линии»: цвета двумя колонками — Светлая | Тёмная (side из id пункта).
+    /// Render Chart and Lines colors in Light and Dark columns selected by item ID suffix.
     fn chart_columns(
         &self,
         cx: &Context<Self>,
@@ -582,8 +586,9 @@ impl SettingsView {
     }
 }
 
-/// Визуал значения пункта: для цвета — свотчи «было → станет», иначе muted-текст.
-/// Совпадающий (`same`) — одно значение + пометка «совпадает» вместо стрелки.
+/// Render color values as current-to-new swatches and other values as muted text.
+///
+/// A matching `same` item shows one value with a match marker instead of an arrow.
 fn value_el(item: &SettingChange, p: MoonPalette, cx: &Context<SettingsView>) -> AnyElement {
     use moon_core::config::moonbot_import::plan::PlannedValue;
     let muted = |s: String| {
@@ -623,7 +628,7 @@ fn value_el(item: &SettingChange, p: MoonPalette, cx: &Context<SettingsView>) ->
     muted(format!("{} → {}", item.current, item.new)).into_any_element()
 }
 
-/// `#RRGGBB` (формат `plan::rgb_hex`) → RGB.
+/// Parse the `#RRGGBB` format produced by `plan::rgb_hex` into RGB bytes.
 fn hex_to_rgb(s: &str) -> Option<[u8; 3]> {
     let h = s.strip_prefix('#')?;
     if h.len() != 6 {

@@ -1,11 +1,10 @@
-//! Вкладка «Бейджи» — код+цвет бейджа по видам стратегий (типам детектов). Каждая
-//! строка: галка «активность» (рисовать ли бейдж), код (long; при галке «различать
-//! L/S» рядом появляется код short), цвет (раздельно под тему), и галка «обводка»
-//! пер-строка (при включении — цвета обводки long/short). Правки идут в draft (живое
-//! превью), «Сохранить» пишет переносимый `badges.json`.
+//! The Badges tab edits badge codes and colors by strategy kind (detection type). Each row
+//! controls whether the badge is drawn, its long code, an optional distinct short code,
+//! theme-specific colors, and a per-row outline with long/short colors. Edits update the draft
+//! for live preview; Save writes the portable `badges.json` file.
 //!
-//! Состояние редактора — [`BadgesEd`]; строки пересобираются при add/del (свежие
-//! индексы в подписках), как вкладка «Подключения».
+//! [`BadgesEd`] stores editor state. Rows are rebuilt after add/delete and after a successful
+//! badge-config paste so subscriptions capture current indices, matching the Connections tab.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -20,10 +19,13 @@ use super::{SettingsView, separator};
 use crate::{Backend, design};
 use moon_core::config::{BadgeEntry, UiThemeMode};
 
-/// Редактор одной строки бейджа: поля ввода + пикеры цвета активной темы.
+/// Editor state for one badge row: text inputs and color pickers for the saved theme mode selected
+/// when the state is built.
 pub(super) struct BadgeRowEd {
-    /// Индекс записи в `badges.entries` (draft). Может НЕ совпадать с позицией строки в
-    /// списке: служебный вид `Unknown` (ordinal 0) в редакторе скрыт, но остаётся в данных.
+    /// Index in the draft's `badges.entries`.
+    ///
+    /// This may differ from the row position because the editor hides the `Unknown` service
+    /// entry with ordinal 0 while retaining it in the data.
     idx: usize,
     ordinal: Entity<MoonInputState>,
     name: Entity<MoonInputState>,
@@ -34,14 +36,14 @@ pub(super) struct BadgeRowEd {
     outline_short: Entity<MoonColorPickerState>,
 }
 
-/// Состояние редактора вкладки «Бейджи».
+/// Editor state for the Badges tab.
 pub(super) struct BadgesEd {
-    /// Тема, набор цветов которой сейчас редактируется (по активной теме приложения).
+    /// Whether this editor state was built for the saved light UI mode.
     is_light: bool,
     rows: Vec<BadgeRowEd>,
 }
 
-/// TextInput, привязанный к полю записи `badges.entries[idx]` (пишет в draft).
+/// Build a text input bound to a field in draft `badges.entries[idx]`.
 fn badge_input(
     window: &mut Window,
     cx: &mut Context<SettingsView>,
@@ -67,7 +69,7 @@ fn badge_input(
     st
 }
 
-/// Color-picker поля записи `badges.entries[idx]` (get/set над `BadgeEntry`, пишет в draft).
+/// Build a color picker bound through `BadgeEntry` accessors to draft `badges.entries[idx]`.
 fn entry_color(
     backend: &Entity<Backend>,
     window: &mut Window,
@@ -98,13 +100,16 @@ fn entry_color(
     })
 }
 
-/// Собрать редактор бейджей из текущего draft (зовётся из `SettingsView::new` и после add/del).
+/// Build badge editor state from the current draft.
+///
+/// Called during settings creation, after add/delete, and after a successful Badges-tab paste.
 pub(super) fn build(
     backend: &Entity<Backend>,
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> BadgesEd {
-    // Редактируем набор цветов АКТИВНОЙ темы приложения (по `ui_theme_mode`), как «Линии».
+    // Select badge color fields from saved `backend.config.ui_theme_mode`, as in Lines. An
+    // unsaved General or import-preview mode change may therefore differ from this editor state.
     let is_light = backend.read(cx).config.ui_theme_mode == UiThemeMode::Light;
     let entries = {
         let b = backend.read(cx);
@@ -118,8 +123,8 @@ pub(super) fn build(
     let rows = entries
         .iter()
         .enumerate()
-        // Служебный `Unknown` (ordinal 0) — фолбэк-бакет для нераспознанного типа детекта;
-        // в редакторе не показываем (просьба пользователя), в данных/`badges.json` оставляем.
+        // `Unknown` (ordinal 0) is the fallback bucket for unrecognized detection types. Hide it
+        // from the editor while retaining it in the data and `badges.json`.
         .filter(|(_, e)| e.ordinal != 0)
         .map(|(idx, e)| BadgeRowEd {
             idx,
@@ -196,7 +201,7 @@ pub(super) fn build(
 }
 
 impl SettingsView {
-    /// Добавить новый вид в draft (ordinal = max+1) и пересобрать редактор.
+    /// Add a kind to the draft with `ordinal = max + 1`, then rebuild editor state.
     fn add_badge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let default_color = design::u32_to_rgb(MoonPalette::active(cx).accent);
         self.backend.update(cx, |b, bcx| {
@@ -224,7 +229,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Удалить вид `idx` из draft и пересобрать редактор.
+    /// Delete draft entry `idx`, then rebuild editor state.
     fn delete_badge(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.backend.update(cx, |b, bcx| {
             if let Some(p) = b.preview.as_mut() {
@@ -238,8 +243,10 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Строка редактора бейджа (карточка): line1 = ordinal·имя·актив·код(·L/S·код-short)·
-    /// цвет·превью·удалить; line2 = обводка (галка + цвета long/short при включении).
+    /// Render one badge editor card.
+    ///
+    /// The row contains ordinal, name, active state, code, optional short code, color, preview,
+    /// outline controls with optional long/short colors, and delete action.
     fn badge_row(&self, cx: &Context<Self>, idx: usize, row: &BadgeRowEd) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let is_light = self.badges.is_light;
@@ -315,16 +322,16 @@ impl SettingsView {
             .label(t!("badges.use_outline").to_string())
             .size(MoonCheckboxSize::Compact);
 
-        // Всё в ОДНУ строку. Пикеры цвета — `flex_none` в натуральную ширину (128px,
-        // фикс форка), поэтому больше не налезают на соседний бейдж. Цвета обводки
-        // (L=long, S=short) появляются справа при включённой галке «Обводка».
+        // Keep everything on one row. Color pickers use `flex_none` at their natural 128px width
+        // so they do not overlap the next badge. Outline colors appear to the right as L for long
+        // and S for short when the outline checkbox is enabled.
         let cap = |t: &str| {
             div()
                 .flex_none()
                 .text_color(rgba_from(p.text_soft, 1.0))
                 .child(t.to_string())
         };
-        // Тултип-подсказка для криптовых полей строки (у Бейджей нет шапки колонок) — п.29a UX.
+        // Explain cryptic row fields with tooltips because Badges has no column header.
         let tip = |id: &str, key: &'static str, el: gpui::Div| {
             el.id(SharedString::from(format!("{id}-{idx}")))
                 .tooltip(move |_w, cx| {
@@ -418,8 +425,8 @@ impl SettingsView {
                     .render(),
             );
 
-        // Без `w_full` — карточка обжимает содержимое (ширина рамки зависит от строки:
-        // с включённой обводкой строка шире). Список выше выравнивает по левому краю.
+        // Omitting `w_full` makes the card fit its contents, so enabling outline colors widens
+        // its border. The parent list keeps cards left-aligned.
         div()
             .px_1()
             .py_0p5()
@@ -429,7 +436,7 @@ impl SettingsView {
             .child(row_el)
     }
 
-    /// Вкладка «Бейджи»: список видов (карточка на вид) + кнопка «Добавить тип».
+    /// Render the Badges tab as one card per kind followed by the Add Type button.
     pub(super) fn badges_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let mut col = v_flex()
@@ -443,8 +450,8 @@ impl SettingsView {
                     .text_color(rgba_from(p.text_soft, 1.0))
                     .child(t!("badges.theme_hint").to_string()),
             );
-        // Индекс берём из строки (row.idx = позиция в `entries`), НЕ из enumerate: список
-        // строк может быть короче entries (скрыт служебный Unknown), иначе правки уехали бы.
+        // Use `row.idx`, the position in `entries`, rather than enumerating visible rows. The
+        // hidden `Unknown` entry can make the visible list shorter and would shift edits.
         for row in self.badges.rows.iter() {
             col = col.child(self.badge_row(cx, row.idx, row));
         }

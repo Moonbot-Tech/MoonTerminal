@@ -1,17 +1,15 @@
-//! Окно настроек (порт egui `src/settings/*` + `window/settings_window.rs`).
-//! Отдельное ОС-окно, редактирует ЖИВОЙ `Backend.config`: правки темы применяются
-//! к чарту сразу (группы-окна читают config каждый кадр и пере-рендерят offscreen),
+//! Settings window, ported from egui's `src/settings/*` and `window/settings_window.rs`.
+//! The separate OS window gives draft-backed tabs a live `Backend.preview`; closing the window
+//! discards unsaved changes, while the Storage tab applies its separately persisted settings
+//! immediately.
 //! Save writes to disk through `AppConfig::save_with_snapshot`, a deliberate save preceded by a
 //! config copy in `backups/`; ordinary `save` without a snapshot serves the routine `config_dirty`
 //! drain.
 //!
-//! Разбито по вкладкам (как egui-оригинал): [`interface`] (тема), [`general`] (общие),
-//! [`lines`] (стиль ордер-линий), [`connections`] (ядра/группы). Здесь — каркас:
-//! `SettingsView` (состояние + поля редакторов) и `open`. Сами вкладки и их состояние —
-//! в подмодулях (`impl SettingsView` расщеплён по файлам): рендер каркаса (таб-бар,
-//! футер «Сохранить», шапка) — в [`render`], сохранение/применение — в [`apply`],
-//! общие UI-хелперы (`slider_row`/`section`/`color_row`/`separator`/draft-байндеры) —
-//! в [`common`] (re-export ниже).
+//! The window is split into tabs like the egui original. This module owns the `SettingsView`
+//! state and `open`; tab state and `impl SettingsView` blocks live in submodules. [`render`] owns
+//! the tab bar, header, body, and Save footer, [`apply`] owns persistence and activation, and
+//! [`common`] provides the shared UI and draft-binding helpers re-exported below.
 
 mod apply;
 mod badges;
@@ -73,7 +71,7 @@ impl Tab {
         Tab::Badges,
         Tab::Storage,
     ];
-    /// Стабильный id вкладки (для `MoonButton::new`/ключей) — НЕ переводим.
+    /// Returns the stable, deliberately untranslated tab ID used by `MoonButton::new` and keys.
     fn id(self) -> &'static str {
         match self {
             Tab::Connections => "Подключения",
@@ -85,7 +83,7 @@ impl Tab {
             Tab::Storage => "Хранилище",
         }
     }
-    /// Локализованная подпись вкладки (порт `tab.*`).
+    /// Returns the localized tab label from the `tab.*` namespace.
     fn title(self) -> String {
         match self {
             Tab::Connections => t!("tab.connections"),
@@ -100,8 +98,8 @@ impl Tab {
     }
 }
 
-/// Режимы источника данных (вкладка «Подключения») — стабильный i18n-ключ + режим;
-/// подпись локализуется на use-сайте (`conn.market_dedup`/`conn.market_percore`).
+/// Data-source modes for the Connections tab, paired with stable i18n keys.
+/// Labels are localized at the call site through `conn.market_dedup` and `conn.market_percore`.
 const MODE_LABELS: [(&str, MarketDataMode); 2] = [
     ("conn.market_dedup", MarketDataMode::Dedup),
     ("conn.market_percore", MarketDataMode::PerCore),
@@ -114,9 +112,10 @@ const CORE_SORT_LABELS: [(&str, CoreSortMode); 3] = [
     ("conn.core_sort.added_newest", CoreSortMode::AddedNewest),
 ];
 
-/// Сообщение статуса подвала: ключ i18n (резолвится на РЕНДЕРЕ — не кэшируем
-/// готовую строку, иначе после смены языка «Сохранено» оставалось хвостом
-/// прошлой локали) либо готовый текст (ошибки I/O, не локализуются).
+/// Footer status represented by an i18n key or a ready-to-display message.
+///
+/// Keys are resolved during rendering so changing languages cannot leave a cached status in the
+/// previous locale. Ready-to-display messages are used for non-localized I/O errors.
 pub(crate) enum StatusMsg {
     Key(&'static str),
     Text(String),
@@ -125,51 +124,52 @@ pub(crate) enum StatusMsg {
 pub struct SettingsView {
     backend: Entity<Backend>,
     active: Tab,
-    /// Статус сохранения: (сообщение, ошибка?).
+    /// Save status as `(message, is_error)`.
     status: Option<(StatusMsg, bool)>,
     iface: Iface,
     lines: Lines,
-    /// Редактор бейджей типов детектов (вкладка «Бейджи»); пересоздаётся при add/del.
+    /// Detect-type badge editor for the Badges tab; rebuilt after additions and removals.
     badges: BadgesEd,
-    /// Per-server editor-стейты (вкладка «Подключения»); пересоздаётся при add/del.
+    /// Per-server editor states for the Connections tab; rebuilt after additions and removals.
     conn: Vec<ConnRow>,
-    /// Слайдер «Шрифт UI» (`ui_font_delta`, личное из settings.toml) — вкладка «Общие».
+    /// UI-font slider for the personal `ui_font_delta` setting in `settings.toml`.
     ui_font: Entity<MoonSliderState>,
-    /// Числовой ввод «Шрифт UI» — двусторонняя синхронизация со слайдером `ui_font`.
+    /// Numeric UI-font input synchronized bidirectionally with the `ui_font` slider.
     ui_font_input: Entity<MoonInputState>,
-    /// Выпадающий выбор языка (вкладка «Общие»).
+    /// Language selector for the General tab.
     lang: Entity<MoonSelectState<Language>>,
-    /// Выпадающий выбор источника данных (вкладка «Подключения»).
+    /// Data-source selector for the Connections tab.
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Order selector shared by every core list on the Connections tab.
     core_sort: Entity<MoonSelectState<CoreSortMode>>,
-    /// Какие блоки-линии раскрыты (вкладка «Линии», порт CollapsingHeader).
+    /// Expanded line-style sections on the Lines tab, ported from `CollapsingHeader`.
     open_lines: HashSet<&'static str>,
-    /// Активная группа вкладки «Хоткеи» (саб-вкладки, как страницы хоткеев Moonbot).
+    /// Active Hotkeys sub-tab, matching Moonbot's hotkey pages.
     hotkeys_group: hotkeys::HotkeyGroup,
-    /// Вкладка «Хранилище»: конфиг storage.toml + фоновый снимок размеров/счётчиков.
+    /// Storage-tab state: `storage.toml` configuration plus a background size/count snapshot.
     storage: storage::StorageEd,
-    /// Кэш иконок групп (вкладка «Подключения»).
+    /// Group-icon cache for the Connections tab.
     icons: IconSet,
-    /// Для какой группы открыт пикер иконок (None = закрыт). Порт egui `picking`.
+    /// Group whose icon picker is open, or `None` when closed; ported from egui's `picking`.
     picking: Option<String>,
-    /// Сигнатура данных, которые реально читают настройки: draft/config + статусы.
+    /// Signature of data consumed by Settings: draft/configuration fields plus session statuses.
     last_sig: u64,
-    /// Память последнего валидного значения «Автозакрытие Main, сек» (для восстановления при
-    /// повторном включении галки в этой сессии настроек: снятая галка пишет 0 в конфиг, а
-    /// при обратном включении берём отсюда, а не дефолт 120). Порт п.8 UX-фидбека. 0 = ещё не
-    /// запоминали (тогда фолбэк на `IDLE_DEFAULT_SECS`). `Cell` — `general_tab(&self)` пишет
-    /// сюда при рендере (внутренняя мутабельность, без смены сигнатуры).
+    /// Last valid Main auto-close timeout retained for this Settings session.
+    ///
+    /// Disabling the checkbox writes zero to the draft; re-enabling restores this value instead
+    /// of the 120-second default. Zero means no value has been retained, so `IDLE_DEFAULT_SECS` is
+    /// used. `Cell` lets `general_tab(&self)` update it while rendering.
     idle_last_secs: std::cell::Cell<u32>,
-    /// Открытый preview импорта настроек MoonBot (None = закрыт). См. [`import_preview`].
+    /// Open MoonBot settings import preview, or `None` when closed; see [`import_preview`].
     import: Option<import_preview::ImportState>,
 }
 
 impl SettingsView {
-    /// Общий чекбокс draft-настроек: init = переданное значение, на `Change` — пишет в живой
-    /// `Backend.preview` через `apply` (проверка изменения + сеттер) и нотифаит бэкенд+view, если
-    /// что-то поменялось. Возвращает базовый `MoonCheckbox` — вызывающий навешивает `.label()`/
-    /// `.size()`. Общий для вкладок Линии/Подключения/Общие.
+    /// Builds the shared draft-backed checkbox used by the Lines, Connections, and General tabs.
+    ///
+    /// The supplied value initializes the control. On change, `apply` updates `Backend.preview`;
+    /// the backend and view are notified only when the setter reports a change. The caller adds
+    /// the label and size to the returned base `MoonCheckbox`.
     pub(super) fn draft_checkbox(
         &self,
         cx: &Context<Self>,
@@ -204,13 +204,13 @@ impl SettingsView {
         let badges = badges::build(&backend, window, cx);
         let conn = connections::build_conn(&backend, window, cx);
 
-        // Контрол «Шрифт UI» — личная настройка (settings.toml), вкладка «Общие»: ползунок с
-        // метками + числовой ввод, двусторонне синхронные; правка переустанавливает MoonUI-тему
-        // живьём (масштаб шрифтов всего UI). Вся конструкция — в `general::build_font`.
+        // Build the General tab's personal `settings.toml` UI-font control: a labeled slider and
+        // bidirectionally synchronized numeric input. Edits reinstall the MoonUI theme live so
+        // the entire UI font scale updates. `general::build_font` owns the complete control.
         let (ui_font, ui_font_input) = general::build_font(&backend, window, cx);
 
-        // Сохранять положение/размер окна «Настройки» в layout — чтобы открывалось на прежнем
-        // месте. Дебаунс-сейв делает дренаж по `layout_dirty` (как у Стратегий/Активов).
+        // Persist the Settings window position and size in layout so it reopens in the same place.
+        // The debounced persistence loop drains `layout_dirty`, as it does for Strategies/Assets.
         cx.observe_window_bounds(window, |this, window, cx| {
             let Some((x, y, w, h)) = crate::windowing::window_geom(window) else {
                 return;
@@ -225,7 +225,7 @@ impl SettingsView {
         })
         .detach();
 
-        // Язык — выпадающий список (порт egui ComboBox). Init = текущий язык draft.
+        // Initialize the language dropdown, ported from egui's ComboBox, from the current draft.
         let (cur_lang, cur_mode, cur_core_sort) = {
             let b = backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
@@ -254,7 +254,7 @@ impl SettingsView {
         })
         .detach();
 
-        // Источник данных — выпадающий список (порт egui ComboBox).
+        // Build the data-source dropdown, ported from egui's ComboBox.
         let mode_items = MODE_LABELS
             .iter()
             .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
@@ -324,8 +324,8 @@ impl SettingsView {
         })
         .detach();
 
-        // Закрытие окна (drop view) → сбросить draft: чарт откатывается к config
-        // (отмена несохранённых правок) — как egui (draft discarded on close).
+        // Dropping the window view discards the draft and restores the saved theme, cancelling
+        // unsaved live-preview changes as in the egui implementation.
         cx.on_release(|this, app| {
             this.backend.update(app, |b, cx| {
                 crate::install_moon_theme_for_config(&b.config, cx);
@@ -423,9 +423,10 @@ fn settings_sig(b: &Backend) -> u64 {
     h.finish()
 }
 
-/// Открыть окно настроек (отдельное ОС-окно). Заводит draft = копия config (его
-/// правят вкладки, чарт показывает его живьём). Повторный клик при уже открытом
-/// окне игнорируем (draft уже есть) — иначе два окна делили бы один draft.
+/// Opens Settings in a separate OS window backed by a live-preview configuration draft.
+///
+/// Reuses and activates an existing Settings window. If a draft already exists without a usable
+/// window, opening is ignored so two windows cannot share one draft.
 pub fn open(
     backend: Entity<Backend>,
     owner: Option<AnyWindowHandle>,
@@ -448,7 +449,7 @@ pub fn open(
         connections::sync_groups_from_servers(&mut preview);
         b.preview = Some(preview);
     });
-    // Геометрию восстанавливаем из layout (её сохраняет SettingsView), как у Стратегий/Активов.
+    // Restore geometry saved by `SettingsView`, as the Strategies and Assets windows do.
     let saved = backend.read(cx).layout.settings_window;
     let bounds = saved.map_or(
         Bounds {
@@ -460,8 +461,8 @@ pub fn open(
             size: size(px(g.w as f32), px(g.h as f32)),
         },
     );
-    // Мультимонитор: без display_id окно создаётся на primary и при bounds вне него gpui
-    // откатывается на дефолт — монитор по сохранённой точке (не-мак) либо от владельца.
+    // Select a display from the saved position when supported, or from the owner. Without a
+    // display ID, GPUI creates the window on the primary display and may discard off-screen bounds.
     let display_id = crate::windowing::saved_or_owner_display_id(
         saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
         owner,

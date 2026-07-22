@@ -1,7 +1,7 @@
-//! Вкладка «Общие» — личные/машинные настройки (settings.toml): тёмная/светлая тема и
-//! шрифт UI, язык интерфейса (выпадающий список), отдельная чарт-вкладка на ядро, лог в
-//! файлы + срок хранения. Правки идут в draft; тема/шрифт применяются живьём, остальное —
-//! после «Сохранить» (язык/чарты — на перезапуске/пересборке окон).
+//! General-tab editor for personal and machine settings in `settings.toml`.
+//! Changes remain in `Backend.preview`. UI mode/font, separate control zones, and the Main-window
+//! idle timeout are consumed live from that draft and roll back when Settings closes unsaved;
+//! other settings take effect after saving and reconciling the relevant runtime state.
 
 use gpui::*;
 use moon_ui::{
@@ -16,7 +16,7 @@ use crate::{Backend, design};
 use moon_core::config::UiThemeMode;
 
 impl SettingsView {
-    /// Изменить срок хранения логов (клампим 0..=365), правит draft.
+    /// Adjust the draft log-retention period, clamped to `0..=365` days.
     fn adjust_ret(&mut self, delta: i32, cx: &mut Context<Self>) {
         let changed = self.backend.update(cx, |b, bcx| {
             let mut changed = false;
@@ -35,11 +35,12 @@ impl SettingsView {
         }
     }
 
-    /// Дефолт секунд при ВКЛючении авто-закрытия Main по неактивности (чекбокс 0↔дефолт).
+    /// Fallback used when idle closing is re-enabled without a valid `idle_last_secs` value.
+    /// A remembered valid timeout is restored before this 120-second default is considered.
     const IDLE_DEFAULT_SECS: u32 = 120;
 
-    /// Изменить таймаут авто-закрытия Main (клампим 5..=3600), правит draft. Активно только
-    /// когда фича включена (значение > 0).
+    /// Adjust the draft Main-window idle-close timeout, clamped to `5..=3600` seconds.
+    /// The adjustment is active only while idle closing is enabled (the value is nonzero).
     fn adjust_idle(&mut self, delta: i32, cx: &mut Context<Self>) {
         let changed = self.backend.update(cx, |b, bcx| {
             let mut changed = false;
@@ -60,10 +61,8 @@ impl SettingsView {
         }
     }
 
-    /// Ряд степпера «<<  <  значение  >  >>»: одинарные стрелки — малый шаг,
-    /// двойные — крупный (быстрый набор без «тыкать в плюсик до отсыхания»).
-    /// Общий для счётчиков секунд/дней (+ лимит версий «Хранилища»); клампы —
-    /// внутри `adjust`.
+    /// Build a `<<  <  value  >  >>` stepper row with small and large adjustments.
+    /// Shared by second/day counters and the Storage version limit; `adjust` owns clamping.
     pub(super) fn stepper_controls(
         &self,
         cx: &Context<Self>,
@@ -106,9 +105,9 @@ impl SettingsView {
             .child(btn("+large", ">>", large))
     }
 
-    /// Записать `ui_font_delta` в draft + переустановить MoonUI-тему живьём (масштаб шрифтов
-    /// всего UI). Возвращает, изменилось ли значение — по этому вызывающий решает, обновлять ли
-    /// парный контрол (слайдер ↔ поле), не порождая лишний notify/перерисовку на no-op.
+    /// Store `ui_font_delta` in the draft and reinstall the MoonUI theme for a live preview.
+    /// Returns whether the value changed so callers can synchronize the paired control without
+    /// emitting redundant notifications or redraws for a no-op.
     pub(super) fn set_ui_font_delta(&mut self, v: f32, cx: &mut Context<Self>) -> bool {
         let changed = self.backend.update(cx, |b, bcx| {
             let Some(p) = b.preview.as_mut() else {
@@ -128,11 +127,9 @@ impl SettingsView {
         changed
     }
 
-    /// Контрол размера шрифта UI (вкладка «Общие»): ряд «колонка ползунок+линейка целочисленных
-    /// меток» и числовое поле точного ввода, БЕЗ отдельной подписи — параметр описывает хинт
-    /// снизу (единообразно с остальными настройками: контрол, под ним пояснение; ползунок стоит у
-    /// левого края, как прочие контролы). Ползунок и метки живут в одной колонке ширины `track_w`,
-    /// поэтому засечки совпадают с центром бегунка.
+    /// Build the General-tab UI-font control: a slider with integer marks and an exact input.
+    /// The explanatory hint below replaces a separate label. The slider and marks share the
+    /// `track_w` column so each tick aligns with the slider thumb center.
     pub(super) fn font_delta_control(&self, cx: &Context<Self>) -> impl IntoElement {
         let track_w = design::ui_value(cx, 210.0);
         h_flex()
@@ -160,9 +157,8 @@ impl SettingsView {
             )
     }
 
-    /// Вкладка «Общие» — порт egui `settings/general.rs` точь-в-точь: язык (выпадающий
-    /// список) + хинт; разделитель; чекбокс «чарт-вкладка на ядро» + хинт; разделитель;
-    /// чекбокс «писать лог в файлы» + хинт; срок хранения (число) + хинт.
+    /// Build the General tab for UI mode/font, locale, chart grouping, control zones,
+    /// Main-window idle closing, and file-log retention settings.
     pub(super) fn general_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
@@ -180,9 +176,8 @@ impl SettingsView {
         };
         let hint = |s: &str| div().text_color(muted).child(s.to_string());
 
-        // Память последнего валидного значения автозакрытия (п.8 UX): пока фича включена
-        // (secs>0), запоминаем его; при повторном включении галки восстановим отсюда, а не
-        // дефолт 120. Ниже 5 быть не может (клампер), но на всякий — фолбэк на дефолт.
+        // Remember the last valid enabled timeout and restore it when the checkbox is re-enabled.
+        // The adjustment clamp keeps it at least 5; fall back to the default defensively.
         if idle_secs >= 5 {
             self.idle_last_secs.set(idle_secs);
         }
@@ -198,13 +193,12 @@ impl SettingsView {
         v_flex()
             .w_full()
             .gap_1()
-            // Тёмная/светлая тема UI + шрифт UI — личные настройки (settings.toml, не
-            // переносимая тема чарта — та на вкладке «Интерфейс» = theme.toml).
+            // UI mode and font are personal settings in settings.toml; the portable chart theme
+            // is edited on the Interface tab and stored in theme.toml.
             .child(
                 MoonToggle::new("ui-theme-mode")
                     .checked(ui_theme_mode == UiThemeMode::Light)
-                    // Подпись отражает активную тему (п.7 UX-фидбека): в тёмной — «Тёмная тема»,
-                    // в светлой — «Светлая тема», а не вечно «Светлая тема».
+                    // Label the currently active mode instead of always describing the light mode.
                     .label(
                         if ui_theme_mode == UiThemeMode::Light {
                             t!("iface.light_theme")
@@ -240,7 +234,7 @@ impl SettingsView {
             .child(self.font_delta_control(cx))
             .child(hint(&t!("iface.font_delta_hint")))
             .child(super::separator(p, cx))
-            // Язык интерфейса — выпадающий список.
+            // Interface locale selector.
             .child(
                 h_flex()
                     .gap(px(10.0))
@@ -257,7 +251,7 @@ impl SettingsView {
             )
             .child(hint(&t!("general.language_hint")))
             .child(super::separator(p, cx))
-            // Отдельная чарт-вкладка на каждое ядро.
+            // Place each core in a separate chart tab.
             .child(
                 self.draft_checkbox(cx, "split", split, |p, v| {
                     if p.charts_split_by_core != v {
@@ -272,7 +266,7 @@ impl SettingsView {
             )
             .child(hint(&t!("general.charts_split_by_core_hint")))
             .child(super::separator(p, cx))
-            // Раздельные зоны управления: ордера/линии только в зоне стакана.
+            // Restrict order and line controls to the order-book control zone.
             .child(
                 self.draft_checkbox(cx, "separate-zones", scz, |p, v| {
                     if p.separate_control_zones != v {
@@ -287,12 +281,12 @@ impl SettingsView {
             )
             .child(hint(&t!("general.separate_control_zones_hint")))
             .child(super::separator(p, cx))
-            // Авто-закрытие графиков Main при неактивности окна (чекбокс 0↔дефолт + счётчик сек).
+            // Close Main charts after window inactivity; zero disables the timeout.
             .child(
                 self.draft_checkbox(cx, "idle-close", idle_secs > 0, move |p, v| {
-                    // Вкл: восстанавливаем последнее запомненное значение (не дефолт 120); выкл = 0.
+                    // Enabling restores the last remembered value; disabling stores zero.
                     let want = if v { idle_restore } else { 0 };
-                    // Вкл при уже выставленном значении не сбрасываем; выкл = 0.
+                    // Preserve an already enabled timeout instead of resetting it.
                     let target = if v && p.main_idle_close_secs > 0 {
                         p.main_idle_close_secs
                     } else {
@@ -333,9 +327,8 @@ impl SettingsView {
             )
             .child(hint(&t!("general.main_idle_close_hint")))
             .child(super::separator(p, cx))
-            // Раскладка стека (FIT/SCROLL/COMPRESS + высота) теперь per-вкладка — кнопка ⚙
-            // в полоске вкладок / шапке выносного окна (см. chart_tabs::layout_popup).
-            // Логи в файлы + срок хранения.
+            // Stack layout is now configured per tab from the chart-tabs layout popup.
+            // File logging and retention period.
             .child(
                 self.draft_checkbox(cx, "logf", logf, |p, v| {
                     if p.log_to_file != v {
@@ -349,9 +342,8 @@ impl SettingsView {
                 .size(MoonCheckboxSize::Normal),
             )
             .child(hint(&t!("general.log_to_file_hint")))
-            // Срок хранения активен только при включённой записи лога (порт
-            // egui `add_enabled_ui(cfg.log_to_file, ...)`): кнопки −/+ задизейблены,
-            // значение/подписи тусклые, пока «Писать лог в файлы» выключено.
+            // Retention controls are enabled only while file logging is enabled; otherwise the
+            // buttons are disabled and the value and labels are muted.
             .child(
                 h_flex()
                     .gap(design::ui_px(cx, 8.0))
@@ -375,20 +367,18 @@ impl SettingsView {
     }
 }
 
-/// Диапазон прибавки к размеру шрифта UI (logical px, целый шаг 1.0). Единый источник и для
-/// слайдера, и для клампа ввода, и для меток линейки.
+/// UI-font delta range in logical pixels, shared by the slider, input clamp, and tick marks.
 const FONT_DELTA_MIN: i32 = -2;
 const FONT_DELTA_MAX: i32 = 6;
 
-/// Каноничный текст значения прибавки (целый шаг): "-2", "0", "3". `round` перед `as i32` —
-/// на случай накопленной погрешности f32; заодно даёт "0" вместо "-0".
+/// Format a font delta as its canonical integer-step text, normalizing negative zero.
 fn font_delta_text(v: f32) -> String {
     (v.round() as i32).to_string()
 }
 
-/// Разбор ввода поля: запятая как точка, пробелы обрезаем. `None` — для пустого/незавершённого
-/// ("", "-") или нечисла; NaN/Inf тоже отвергаем ДО округления (иначе пролезли бы в конфиг).
-/// Валидное округляем к шагу, клампим в [MIN, MAX] и нормализуем IEEE `-0.0` → `0.0`.
+/// Parse font-delta input after trimming whitespace and treating a comma as a decimal point.
+/// Rejects incomplete, nonnumeric, and non-finite values before rounding; valid values are
+/// rounded to the integer step, clamped to the supported range, and normalized from `-0.0`.
 fn parse_font_delta(s: &str) -> Option<f32> {
     let v: f32 = s.trim().replace(',', ".").parse().ok()?;
     if !v.is_finite() {
@@ -400,11 +390,9 @@ fn parse_font_delta(s: &str) -> Option<f32> {
     Some(if v == 0.0 { 0.0 } else { v })
 }
 
-/// Линейка меток под ползунком размера шрифта: тонкая засечка на каждом целом [MIN..MAX],
-/// числовая подпись на чётных. Позиция метки — доля `(m-MIN)/span` от `track_w`, чтобы совпадать
-/// с центром бегунка (бар слайдера — во всю ширину той же колонки). Крайние подписи (MIN и MAX)
-/// прижаты к краям трека, а не центрированы: иначе половина цифры вылезала бы за трек — левая
-/// обрезалась бы, правая налезала на поле ввода.
+/// Build slider marks at every integer in the font range and label the even values.
+/// Marks use `(m - MIN) / span` across `track_w` to align with the full-width slider. Edge
+/// labels are anchored to the track ends so they do not clip or overlap the input field.
 fn font_delta_marks(cx: &App, track_w: f32) -> impl IntoElement {
     let span = (FONT_DELTA_MAX - FONT_DELTA_MIN) as f32;
     let p = MoonPalette::active(cx);
@@ -451,11 +439,10 @@ fn font_delta_marks(cx: &App, track_w: f32) -> impl IntoElement {
     row
 }
 
-/// Собрать контрол размера шрифта UI: ползунок + числовое поле, двусторонне синхронные.
-/// Диапазон — от −2 до 6 logical px с целым шагом 1.0; дефолт настройки — +2.
-/// Зовётся из [`SettingsView::new`]. Обе подписки — через `subscribe_in` (нужен `&mut Window`
-/// для `set_value` парного контрола). Петли нет: `set_value` слайдера только нотифаит, у поля —
-/// c `emit_events = false`, так что ни один не порождает встречное событие.
+/// Build the bidirectionally synchronized UI-font slider and numeric input.
+/// The range is -2 through 6 logical pixels in integer steps. Both subscriptions use
+/// `subscribe_in` because updating the paired control requires `&mut Window`; field updates
+/// suppress emitted events so synchronization does not form a feedback loop.
 pub(super) fn build_font(
     backend: &Entity<Backend>,
     window: &mut Window,
@@ -474,9 +461,8 @@ pub(super) fn build_font(
     });
     let input = cx.new(|cx| MoonInputState::new(window, cx).default_value(font_delta_text(cur)));
 
-    // Ползунок → конфиг, зеркалим число в поле. Замыкание намеренно не захватывает ничего
-    // внешнего: парное поле берёт через `this.ui_font_input`. Детач-подписка удерживается своим
-    // эмиттером, поэтому сильный захват input из подписки slider создал бы взаимный цикл удержания.
+    // Slider changes update the draft and mirror the canonical value into the input. The closure
+    // deliberately obtains the paired input through `this` to avoid a strong-reference cycle.
     cx.subscribe_in(
         &slider,
         window,
@@ -484,7 +470,7 @@ pub(super) fn build_font(
             let MoonSliderEvent::Change(v) = ev else {
                 return;
             };
-            // Квантование на отрицательном поддиапазоне даёт IEEE -0.0 — нормализуем.
+            // Quantization in the negative subrange can produce IEEE -0.0; normalize it.
             let v = v.end();
             let v = if v == 0.0 { 0.0 } else { v };
             if this.set_ui_font_delta(v, cx) {
@@ -495,16 +481,15 @@ pub(super) fn build_font(
     )
     .detach();
 
-    // Поле → конфиг, двигаем бегунок. На `Change` текст НЕ переписываем (не мешаем набору);
-    // на `Blur`/`Enter` нормализуем текст к канону (или к текущему значению, если ввод — мусор).
-    // Это замыкание тоже не захватывает ничего внешнего: своё поле получает параметром-эмиттером
-    // `field`, а парный бегунок — через `this.ui_font`; сильный захват slider создал бы тот же цикл.
+    // Input changes update the draft and slider without rewriting text mid-entry. Blur or Enter
+    // canonicalizes the text, falling back to the current value for invalid input. The closure
+    // receives its emitter and obtains the slider through `this` to avoid a reference cycle.
     cx.subscribe_in(
         &input,
         window,
         move |this, field, ev: &MoonInputEvent, window, cx| match ev {
             MoonInputEvent::Change => {
-                // Отдельным `let` — чтобы immutable-borrow `cx` полем закрылся до `set_ui_font_delta`.
+                // End the field's immutable `cx` borrow before calling `set_ui_font_delta`.
                 let parsed = parse_font_delta(&field.read(cx).value());
                 if let Some(v) = parsed {
                     if this.set_ui_font_delta(v, cx) {

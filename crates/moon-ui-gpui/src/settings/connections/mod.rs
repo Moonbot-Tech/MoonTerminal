@@ -1,11 +1,12 @@
-//! Вкладка «Подключения» — порт egui `settings/connections.rs`: слева таблица ядер
-//! (Акт·Окно·Имя·Ключ·Группа·[Данные n/8]·Цвет·Удалить·↻реконнект·●статус), справа
-//! панель групп (галка·иконка·имя·👁показать·выбор иконки + пикер). Над ними — источник
-//! рыночных данных (выпадающий). Правки идут в draft; статус/реконнект — через `Backend`.
+//! Connections tab, ported from egui `settings/connections.rs`. It renders market-data and core
+//! order selectors above a group-to-core tree. Group branches provide activation, icon, window,
+//! picker, and add-core controls; core leaves provide editable connection fields, feed flags,
+//! color, delete, reconnect, and status controls. Edits update the draft, while live status and
+//! reconnect requests use [`Backend`].
 //!
-//! Разбито по файлам: здесь — editor-стейты строк (`ConnRow`/`build_conn`) и синхронизация
-//! групп из серверов; [`table`] — таблица ядер (строки/колонки/шапка/add/del);
-//! [`tab`] — панель групп, пикер иконок и сборка вкладки (`connections_tab`).
+//! This module owns per-row editor state through [`ConnRow`] and [`build_conn`], plus group
+//! synchronization from servers. [`table`] owns core rows, columns, headers, feed controls, and
+//! add/delete actions; [`tab`] owns group branches, icon picking, selectors, and tab assembly.
 
 mod tab;
 mod table;
@@ -17,12 +18,14 @@ use super::SettingsView;
 use crate::Backend;
 use moon_core::config::{AppConfig, GroupConfig, Secret, ServerConfig};
 
-/// Редактор одной строки сервера: текст-поля + цвет (entity-стейты компонентов).
+/// Component state for one server row's text fields and color picker.
 pub(super) struct ConnRow {
     name: Entity<MoonInputState>,
     key: Entity<MoonInputState>,
     group: Entity<MoonInputState>,
-    /// Имя чарт-связки AddToChart (пусто = по глоб. настройке). См. `ServerConfig::chart_bundle`.
+    /// AddToChart bundle name; empty delegates to the global setting.
+    ///
+    /// See `ServerConfig::chart_bundle`.
     bundle: Entity<MoonInputState>,
     color: Entity<MoonColorPickerState>,
 }
@@ -47,7 +50,7 @@ pub(super) fn sync_groups_from_servers(cfg: &mut AppConfig) -> bool {
     changed
 }
 
-/// TextInput, привязанный к полю сервера `servers[i]` (пишет в draft).
+/// Build a text input bound to a field of draft server `servers[i]`.
 fn conn_input(
     window: &mut Window,
     cx: &mut Context<SettingsView>,
@@ -80,7 +83,7 @@ fn conn_input(
     st
 }
 
-/// Color-picker, привязанный к `servers[i].color` (пишет в draft).
+/// Build a color picker bound to draft `servers[i].color`.
 fn conn_color(
     window: &mut Window,
     cx: &mut Context<SettingsView>,
@@ -98,8 +101,10 @@ fn conn_color(
     })
 }
 
-/// Построить per-server editor-стейты из draft-серверов. Зовётся в `SettingsView::new`
-/// и после add/remove сервера (индексы в подписках свежие).
+/// Build per-server editor state from draft servers.
+///
+/// Called from `SettingsView::new` and after adding or removing a server so subscriptions capture
+/// current indices.
 pub(super) fn build_conn(
     backend: &Entity<Backend>,
     window: &mut Window,
@@ -122,8 +127,8 @@ pub(super) fn build_conn(
                 |s, v| s.name = v,
                 false,
             ),
-            // Ключ — поле пароля (порт egui `.password(true)`): символы скрыты, рядом
-            // переключатель видимости (mask_toggle), чтобы при необходимости показать.
+            // Treat the key as a password field, matching egui's `.password(true)`: mask its
+            // characters and provide `mask_toggle` for optional visibility.
             key: {
                 let st = conn_input(
                     window,

@@ -1,8 +1,7 @@
-//! Вкладка «Линии» — стиль ордер-линий (порт egui `settings/lines.rs`): сворачиваемый
-//! блок на каждый вид линии (Buy/Sell/Stop/…) + Path + Global. НАЗВАНИЯ линий —
-//! трейдинг-термины, остаются англ. (как в оригинале); атрибуты/общие подписи локализованы
-//! (`locales/lines.yml`). Правки идут в draft (живое превью), «Сохранить» — orders.toml.
-//! Состояние редактора — [`Lines`]; раскрытость блоков живёт в `SettingsView.open_lines`.
+//! Order-line style editor: one collapsible section per line type, plus Path and Global.
+//! Trading line names remain English while attributes and shared labels are localized through
+//! `locales/lines.yml`. Changes update the live-preview draft and are saved to `orders.toml`.
+//! [`Lines`] stores editor controls; `SettingsView.open_lines` stores expansion state.
 
 use gpui::*;
 use moon_ui::{
@@ -15,7 +14,7 @@ use crate::Backend;
 use moon_core::config::{OrdersStyle, UiThemeMode};
 use rust_i18n::t;
 
-/// Чекбокс ордер-стиля: (id, локализованная подпись, геттер, сеттер) — для тела блока линии.
+/// Order-style checkbox descriptor: id, localized label, getter, and setter.
 type Check = (
     &'static str,
     String,
@@ -23,20 +22,20 @@ type Check = (
     fn(&mut OrdersStyle, bool),
 );
 
-/// Редактор одной ордер-линии: цвет + слайдеры (маркеры/прозрачность используются не всеми).
+/// Editor controls for one order line; marker and opacity controls are optional by line type.
 struct LineEd {
     color: Entity<MoonColorPickerState>,
     thickness: Entity<MoonSliderState>,
     marker_size: Entity<MoonSliderState>,
     marker_thickness: Entity<MoonSliderState>,
     knot_size: Entity<MoonSliderState>,
-    /// Прозрачность невыставленного (fill=0) — показывается только у `buy`/`buy_short`.
+    /// Opacity for unfilled orders (`fill == 0`), shown only for `buy` and `buy_short`.
     pending_alpha: Entity<MoonSliderState>,
-    /// Цвет невыставленного (fill=0) — показывается только у `buy`/`buy_short`.
+    /// Color for unfilled orders (`fill == 0`), shown only for `buy` and `buy_short`.
     pending_color: Entity<MoonColorPickerState>,
 }
 
-/// Color-picker поля OrdersStyle активной темы (`is_light`) — пишет в draft.orders[тема].
+/// Build a color picker for a field in the active theme's draft `OrdersStyle`.
 fn ord_color(
     backend: &Entity<Backend>,
     window: &mut Window,
@@ -59,7 +58,7 @@ fn ord_color(
     })
 }
 
-/// Слайдер f32 поля OrdersStyle активной темы (`is_light`) — пишет в draft.orders[тема].
+/// Build a slider for an `f32` field in the active theme's draft `OrdersStyle`.
 #[allow(clippy::too_many_arguments)]
 fn ord_slider(
     backend: &Entity<Backend>,
@@ -85,7 +84,7 @@ fn ord_slider(
     })
 }
 
-/// Строит [`LineEd`] для поля `$line` OrdersStyle (fn-ptr аксессоры).
+/// Build a [`LineEd`] for an `OrdersStyle` line field using function-pointer accessors.
 macro_rules! line_ed {
     ($b:expr, $w:expr, $cx:expr, $il:expr, $line:ident) => {
         LineEd {
@@ -159,10 +158,10 @@ macro_rules! line_ed {
     };
 }
 
-/// Состояние редактора ордер-линий.
+/// Order-line editor state.
 pub(super) struct Lines {
-    /// Тема, набор которой сейчас редактируется (по активной теме приложения при открытии
-    /// Настроек): true = светлая, false = тёмная. Нужна `ord_check` для записи в нужный набор.
+    /// Theme variant selected when Settings opened: `true` for light and `false` for dark.
+    /// `ord_check` uses it to update the matching draft order-style set.
     is_light: bool,
     buy: LineEd,
     buy_short: LineEd,
@@ -181,14 +180,14 @@ pub(super) struct Lines {
     max_closed: Entity<MoonSliderState>,
 }
 
-/// Собрать редактор ордер-линий из текущего draft (зовётся из `SettingsView::new`).
+/// Build the order-line editor from the current draft for `SettingsView::new`.
 pub(super) fn build(
     backend: &Entity<Backend>,
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> Lines {
-    // Редактируем набор линий АКТИВНОЙ темы приложения (по `ui_theme_mode`). Сменить тему
-    // (вкладка «Общие») + сохранить → откроется набор другой темы.
+    // Edit the line set for the application's saved UI mode when Settings opens. Saving a mode
+    // change from General makes the other theme's line set active the next time Settings opens.
     let is_light = backend.read(cx).config.ui_theme_mode == UiThemeMode::Light;
     Lines {
         is_light,
@@ -254,7 +253,7 @@ pub(super) fn build(
 }
 
 impl SettingsView {
-    /// Checkbox булева поля OrdersStyle (пишет в draft.orders, notify групп+view).
+    /// Build a checkbox for a boolean `OrdersStyle` field in the active draft theme.
     fn ord_check(
         &self,
         cx: &Context<Self>,
@@ -280,11 +279,10 @@ impl SettingsView {
         .size(MoonCheckboxSize::Compact)
     }
 
-    /// Сворачиваемый блок вкладки «Линии» — тонкая обёртка над общим
-    /// [`super::collapse_block`]; раскрытость хранится в `SettingsView.open_lines[key]`.
-    // `use<>`: возвращаемый элемент НЕ заимствует `title` (сразу копируем в owned SharedString).
-    // Без этого Rust 2024 синтаксически «захватывает» лайфтайм `&str` в `impl IntoElement`,
-    // и временный `&t!(..)` из вложенного блока (Path) ловит E0716.
+    /// Wrap [`super::collapse_block`] for the Lines tab, storing expansion by `key`.
+    // `use<>` states that the returned element does not borrow `title`, which is copied into an
+    // owned SharedString. Without it, Rust 2024 captures the `&str` lifetime in `impl IntoElement`
+    // and a temporary `&t!(..)` from the nested Path block triggers E0716.
     fn collapse_section(
         &self,
         cx: &Context<Self>,
@@ -303,9 +301,9 @@ impl SettingsView {
         )
     }
 
-    /// Тело блока ордер-линии (порт egui `line_block`): цвет+толщина в строке, `dashed`,
-    /// и при `markers` — маркеры начала/конца, размер/толщина креста, узлы, размер узла.
-    /// `checks` = `[dashed]` или `[dashed, start, end, knots]`.
+    /// Build an order-line section body with color, thickness, and dashed controls.
+    /// When `markers` is enabled, also adds endpoint markers, cross dimensions, and knot controls.
+    /// `checks` is either `[dashed]` or `[dashed, start, end, knots]`.
     fn line_body(
         &self,
         cx: &Context<Self>,
@@ -335,8 +333,8 @@ impl SettingsView {
                     .child(slider_row(&t!("lines.thickness"), &ed.thickness, cx)),
             )
             .child(chk(0));
-        // Состояние «выставлен, но не исполнен» (fill=0) — только у входных линий buy/buy_short:
-        // отдельный цвет + прозрачность. Цвет пустой = брать основной цвет линии.
+        // Only entry lines expose a separate color and opacity for unfilled orders (`fill == 0`).
+        // An absent pending color falls back to the line's primary color.
         if pending {
             col = col
                 .child(
@@ -374,7 +372,7 @@ impl SettingsView {
         col.into_any_element()
     }
 
-    /// Сворачиваемый блок линии: заголовок + тело (видно при раскрытии).
+    /// Build a collapsible line section whose body is visible while expanded.
     fn line_section(
         &self,
         cx: &Context<Self>,
@@ -389,8 +387,8 @@ impl SettingsView {
         self.collapse_section(cx, key, title, body)
     }
 
-    /// Вкладка «Линии»: «Order lines», по сворачиваемому блоку на вид линии (названия —
-    /// англ. трейдинг-термины), затем «Path» и «Global». Атрибуты — из `locales/lines.yml`.
+    /// Build the Lines tab with one section per English trading line name, then Path and Global.
+    /// Attribute labels come from `locales/lines.yml`.
     pub(super) fn lines_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let l = &self.lines;
         v_flex()
@@ -718,7 +716,7 @@ impl SettingsView {
                 )],
             ))
             .child(separator(MoonPalette::active(cx), cx))
-            // Path (trail / змейка) — свой сворачиваемый блок.
+            // Path (the trailing trace) has its own collapsible section.
             .child({
                 let body = v_flex()
                     .w_full()

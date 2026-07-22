@@ -1,6 +1,7 @@
-//! Общие UI-хелперы окна настроек (`slider_row`/`section`/`color_row`/`separator`)
-//! и draft-байндеры (`draft_color`/`draft_slider`) — общие для вкладок
-//! Интерфейс/Линии/Подключения (re-export в `settings/mod.rs`).
+//! Shared Settings-window UI helpers (`slider_row`, `section`, `color_row`, and `separator`) and
+//! draft binders (`draft_color` and `draft_slider`).
+//!
+//! Interface, Lines, and Connections reuse these helpers through re-exports in `settings/mod.rs`.
 
 use std::collections::HashSet;
 
@@ -14,9 +15,10 @@ use super::SettingsView;
 use crate::{Backend, design};
 use moon_core::config::AppConfig;
 
-/// Сворачиваемый блок на компоненте MoonUI `MoonAccordion` (один item на ключ): заголовок
-/// с шевроном + тело. Общий для вкладок Линии/Хоткеи: раскрытость живёт в per-вкладочном
-/// `HashSet` (`open` — текущее значение, `set` — доступ к набору для тоггла по клику).
+/// Build a one-item-per-key collapsible block with MoonUI's `MoonAccordion`.
+///
+/// Lines and Hotkeys share this header-plus-body helper. Each tab owns expansion in a `HashSet`:
+/// `open` is the current state and `set` accesses the collection updated after a toggle click.
 pub(super) fn collapse_block(
     cx: &Context<SettingsView>,
     id: SharedString,
@@ -45,7 +47,7 @@ pub(super) fn collapse_block(
         })
 }
 
-/// Hsla (из color-picker) → sRGB [u8;3] для ChartTheme/OrdersStyle.
+/// Convert color-picker `Hsla` to an sRGB `[u8; 3]` for `ChartTheme` or `OrdersStyle`.
 pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
     let c: Rgba = h.into();
     [
@@ -55,10 +57,10 @@ pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
     ]
 }
 
-/// Строка слайдера (порт egui `Slider::new(..).text(label)`): подпись СВЕРХУ
-/// (полная ширина, не обрезается при крупном кегле), под ней — слайдер и
-/// текущее значение. Значение нормализуем от IEEE `-0.0` (квантование слайдера
-/// на отрицательном поддиапазоне даёт минус-ноль → печаталось «-0.00»).
+/// Build an egui-style labeled slider row with the label above the slider and current value.
+///
+/// The full-width label avoids clipping at large font sizes. Normalize IEEE `-0.0`, which slider
+/// quantization over a negative subrange can otherwise display as `-0.00`.
 pub(super) fn slider_row(label: &str, st: &Entity<MoonSliderState>, cx: &App) -> impl IntoElement {
     let p = MoonPalette::active(cx);
     let val = st.read(cx).value().end();
@@ -90,7 +92,7 @@ pub(super) fn slider_row(label: &str, st: &Entity<MoonSliderState>, cx: &App) ->
         )
 }
 
-/// Разделитель секций (порт egui `ui.separator()`).
+/// Build a section separator ported from egui's `ui.separator()`.
 pub(super) fn separator(p: MoonPalette, cx: &App) -> impl IntoElement {
     div()
         .my(design::ui_px(cx, 8.0))
@@ -98,7 +100,7 @@ pub(super) fn separator(p: MoonPalette, cx: &App) -> impl IntoElement {
         .bg(rgba_from(p.border, 1.0))
 }
 
-/// Секционный заголовок (порт egui `section()`): жирная подпись с отступом сверху.
+/// Build an egui-style section heading with semibold text and top spacing.
 pub(super) fn section(title: &str, p: MoonPalette, cx: &App) -> impl IntoElement {
     div()
         .mt(design::ui_px(cx, 10.0))
@@ -108,7 +110,7 @@ pub(super) fn section(title: &str, p: MoonPalette, cx: &App) -> impl IntoElement
         .child(title.to_string())
 }
 
-/// Строка цвета (порт egui `color_row`): свотч-пикер, затем подпись справа.
+/// Build an egui-style color row with a swatch picker followed by its label.
 pub(super) fn color_row(
     label: &str,
     st: &Entity<MoonColorPickerState>,
@@ -127,10 +129,11 @@ pub(super) fn color_row(
         )
 }
 
-/// Общий color-picker draft-настроек: init = переданное значение, на `Change` — пишет в живой
-/// `Backend.preview` через `apply` (он же делает проверку «изменилось ли» и возвращает результат) и
-/// нотифаит бэкенд. `apply` — замыкание (может захватывать индекс сервера и т.п.). Общий для вкладок
-/// Интерфейс/Линии/Подключения (тонкие обёртки делегируют сюда).
+/// Bind a color picker to the live Settings draft.
+///
+/// Initialize it from `init`. On `Change`, call `apply` against `Backend.preview`; the closure both
+/// detects and performs a change and may capture context such as a server index. Notify the backend
+/// only when it returns true. Interface, Lines, and Connections delegate through thin wrappers.
 pub(super) fn draft_color(
     window: &mut Window,
     cx: &mut Context<SettingsView>,
@@ -155,9 +158,11 @@ pub(super) fn draft_color(
     st
 }
 
-/// Общий слайдер f32 draft-настроек: init = переданное значение, на `Change` — пишет в живой
-/// `Backend.preview` через `apply` (проверка изменения + сам сеттер; `&mut Context<Backend>` нужен
-/// тем полям, что переустанавливают тему). Нотифаит бэкенд, если `apply` вернул true.
+/// Bind an `f32` slider to the live Settings draft.
+///
+/// Initialize it from `init`. On `Change`, `apply` detects and performs a change in
+/// `Backend.preview`; its backend context supports fields that reinstall the theme. Notify only when
+/// the closure returns true.
 pub(super) fn draft_slider(
     cx: &mut Context<SettingsView>,
     min: f32,
@@ -177,8 +182,8 @@ pub(super) fn draft_slider(
         let MoonSliderEvent::Change(f) = ev else {
             return;
         };
-        // Квантование слайдера на отрицательном поддиапазоне даёт IEEE -0.0 —
-        // нормализуем, чтобы в конфиг/на диск не уезжал «минус-ноль».
+        // Slider quantization over a negative subrange can produce IEEE -0.0. Normalize it before it
+        // reaches the draft or disk.
         let f = f.end();
         let f = if f == 0.0 { 0.0 } else { f };
         this.backend.update(cx, |b, bcx| {
