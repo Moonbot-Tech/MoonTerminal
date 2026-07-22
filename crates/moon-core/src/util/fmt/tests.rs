@@ -1,8 +1,9 @@
 use super::*;
 
+/// Regression guard: in `fmt.rs:compact`, removing the `!s.contains('.')` early-return guard makes
+/// the 330 and 1000 assertions fail by truncating user-visible integers to "33" and "1".
 #[test]
 fn compact_keeps_integer_zeros() {
-    // Регрессия: слепой трим нулей калечил целые (330 → «33», 1000 → «1»).
     assert_eq!(compact(330.0, 0), "330");
     assert_eq!(compact(1000.0, 0), "1000");
     assert_eq!(compact(0.0, 0), "0");

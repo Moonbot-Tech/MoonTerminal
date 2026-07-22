@@ -1,8 +1,9 @@
-//! Форматирование чисел для UI/feed.
+//! Number formatting for the UI and feed.
 
-/// Компактное число: точность `decimals`, хвостовые нули и точка срезаются
-/// ("1.500000" → "1.5", "2.000000" → "2"). Нули режутся ТОЛЬКО в дробной
-/// части: при `decimals=0` строка без точки, и слепой трим калечил целые
+/// Format a compact number to `decimals` places, trimming trailing fractional zeros and the point
+/// ("1.500000" → "1.5", "2.000000" → "2"). Zeros are trimmed ONLY from the fractional
+/// part: with `decimals=0`, the string has no point, and blindly trimming zeros used to corrupt
+/// integers
 /// ("330" → "33", "1000" → "1").
 pub fn compact(v: f64, decimals: usize) -> String {
     let s = format!("{v:.decimals$}");
@@ -17,8 +18,10 @@ pub fn compact(v: f64, decimals: usize) -> String {
     }
 }
 
-/// Компактное число с SI-суффиксом (K/M/B/T): 1_500 → «1.5K», 2_300_000 → «2.3M».
-/// Значения меньше 1000 идут через [`adaptive`] (без суффикса). Хвостовые нули срезаются.
+/// Format a compact number with an SI suffix (K/M/B/T): 1_500 → "1.5K", 2_300_000 → "2.3M".
+/// Values below 1000 use [`adaptive`] without a suffix. Every trailing `0` character is stripped
+/// from the whole formatted mantissa, even when it has no decimal point; consequently, 100_000
+/// becomes "1K" rather than "100K" under the existing behavior.
 pub fn compact_si(v: f64) -> String {
     let a = v.abs();
     if a < 1000.0 {
@@ -42,12 +45,14 @@ pub fn compact_si(v: f64) -> String {
     adaptive(v)
 }
 
-/// Точность `decimals`, хвостовые нули срезаются, но МИНИМУМ один знак после точки
-/// остаётся ("45.20" → "45.2", "45.00" → "45.0", "10000.000" → "10000.0").
+/// Format to `decimals` places and trim trailing zeros. When formatting includes a decimal point
+/// (`decimals > 0` for the current finite callers, which pass 1–3), AT LEAST one fractional digit
+/// remains ("45.20" → "45.2", "45.00" → "45.0", "10000.000" → "10000.0"). With
+/// `decimals=0`, no decimal point or fractional digit is added.
 fn trim_keep_one(v: f64, decimals: usize) -> String {
     let mut s = format!("{v:.decimals$}");
     if let Some(dot) = s.find('.') {
-        let min_len = dot + 2; // точка + один знак
+        let min_len = dot + 2; // Decimal point plus one digit.
         while s.len() > min_len && s.ends_with('0') {
             s.pop();
         }
@@ -55,8 +60,9 @@ fn trim_keep_one(v: f64, decimals: usize) -> String {
     s
 }
 
-/// Количество для таблиц активов: знаков по величине (крупнее — меньше), максимум
-/// тысячные, минимум десятые. "0.16206"→"0.162", "7.7972"→"7.797", "35483"→"35483.0".
+/// Format a quantity for asset tables with magnitude-based precision (larger values use fewer
+/// places): at most thousandths and at least tenths. "0.16206"→"0.162", "7.7972"→"7.797",
+/// "35483"→"35483.0".
 pub fn qty(v: f64) -> String {
     let a = v.abs();
     let decimals = if a >= 100.0 {
@@ -69,30 +75,30 @@ pub fn qty(v: f64) -> String {
     trim_keep_one(v, decimals)
 }
 
-/// Долларовая сумма (без символа): максимум сотые, минимум десятые.
+/// Format a dollar amount without the symbol, using at most hundredths and at least tenths.
 /// "45.238"→"45.24", "45.2"→"45.2", "10176"→"10176.0".
 pub fn usd(v: f64) -> String {
     trim_keep_one(v, 2)
 }
 
-/// Адаптивное число под размер/цену: точность подбирается по величине, а не фиксирована.
-/// Крупные значения — без дробной части (5000000.0001 → "5000000", 5000 → "5000");
-/// мелкие — с достаточным числом знаков, чтобы значащие цифры были видны
-/// (0.0000001 → "0.0000001"). `sig` — желаемое число значащих цифр (для дробной части).
+/// Format a size or price with precision selected by magnitude rather than fixed precision.
+/// Large values have no fractional part (5000000.0001 → "5000000", 5000 → "5000"); small
+/// values retain enough places to show their significant digits (0.0000001 → "0.0000001").
+/// `SIG` is the desired number of significant digits.
 pub fn adaptive(v: f64) -> String {
     let a = v.abs();
     if a == 0.0 {
         return "0".to_string();
     }
-    // Тысячи и больше — без дробной части.
+    // Thousands and larger values have no fractional part.
     if a >= 1000.0 {
         return compact(v, 0);
     }
     const SIG: i32 = 5;
-    // Экспонента старшего разряда: для a<1 отрицательна (0.0001 → -4).
+    // Exponent of the most significant digit; negative for a<1 (0.0001 → -4).
     let exp = a.log10().floor() as i32;
-    // Знаков после запятой = столько, чтобы набрать SIG значащих цифр (с запасом
-    // на ведущие нули у мелких чисел). Ограничиваем сверху на разумный максимум.
+    // Use enough decimal places to reach SIG significant digits, including the leading zeros of
+    // small values. Cap the result at a reasonable maximum.
     let decimals = (SIG - 1 - exp).clamp(0, 18) as usize;
     compact(v, decimals)
 }
