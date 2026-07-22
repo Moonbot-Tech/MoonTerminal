@@ -1,9 +1,9 @@
-//! Иконки групп из `assets/icons/{id}.png` — порт egui `src/icons.rs` на gpui.
-//! Грузит PNG (image crate) в `RenderImage` (BGRA, как ждёт gpui от `img(..)`),
-//! кэширует по id. Набор ВШИТ в бинарь (`include_dir`) — едет со сборкой сам; файл на диске
-//! (рядом с cwd/exe) имеет приоритет, чтобы докидывать/подменять иконки без пересборки.
-//! (Как `coin_icons.rs`. До этого читали только с диска — у пользователей без папки
-//! `assets/icons` пикер был пустой; см. п.2 UX-фидбека.)
+//! GPUI port of the egui group-icon loader for `assets/icons/{id}.png`.
+//! PNGs are decoded with `image`, converted to the BGRA layout expected by GPUI's `img(..)`, and
+//! cached by ID. The base set is embedded in the binary with `include_dir`; a file in the selected
+//! on-disk directory under the current working directory or beside the executable takes priority,
+//! allowing icons to be added or replaced without rebuilding. Like `coin_icons.rs`, embedding keeps
+//! the picker populated when a deployed installation has no `assets/icons` directory.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,10 +13,11 @@ use gpui::RenderImage;
 use image::{Frame, ImageBuffer, Rgba};
 use include_dir::{Dir, include_dir};
 
-/// Вшитый набор иконок групп (весь `assets/icons`, ~64 КБ PNG).
+/// Embedded group-icon set containing all PNG files under `assets/icons`, approximately 64 KB.
 static EMBEDDED: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/icons");
 
-/// Каталог иконок: `assets/icons` рядом с cwd, иначе рядом с exe.
+/// Locates `assets/icons` under the current working directory, then beside the executable.
+/// Returns the relative path when neither directory exists.
 fn icons_dir() -> PathBuf {
     let rel = PathBuf::from("assets/icons");
     if rel.is_dir() {
@@ -33,13 +34,14 @@ fn icons_dir() -> PathBuf {
     rel
 }
 
-/// `{stem}.png` → id, если stem — число. Общий парсер для диска и вшитого набора.
+/// Parses the numeric stem of an exact lowercase `{id}.png` filename for either icon source.
 fn id_from_png_name(name: &str) -> Option<u32> {
     name.strip_suffix(".png")?.parse::<u32>().ok()
 }
 
-/// Загрузить `{id}.png` в `RenderImage` (BGRA — gpui свопает R/B, как и для чарта).
-/// Диск (приоритет — можно докидывать иконки) → вшитый набор.
+/// Loads `{id}.png` into a BGRA `RenderImage`, preferring the selected disk directory.
+/// A disk read failure falls back to the embedded file; a missing embedded file or decode failure
+/// returns `None`.
 fn load_render_image(id: u32) -> Option<Arc<RenderImage>> {
     let file = format!("{id}.png");
     let bytes: Vec<u8> = match std::fs::read(icons_dir().join(&file)) {
@@ -47,7 +49,7 @@ fn load_render_image(id: u32) -> Option<Arc<RenderImage>> {
         Err(_) => EMBEDDED.get_file(&file)?.contents().to_vec(),
     };
     let mut img = image::load_from_memory(&bytes).ok()?.to_rgba8();
-    // RGBA → BGRA: gpui RenderImage ждёт порядок BGRA (иначе R↔B свопаются).
+    // Convert RGBA to the BGRA channel order expected by GPUI's RenderImage.
     for px in img.pixels_mut() {
         px.0.swap(0, 2);
     }
@@ -56,17 +58,17 @@ fn load_render_image(id: u32) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new(vec![Frame::new(buf)])))
 }
 
-/// Кэш иконок (по `Arc<RenderImage>` на id). Один на окно настроек.
+/// Per-settings-window group-icon catalog and lazy cache keyed by numeric ID.
 pub struct IconSet {
-    /// Реальные id `{id}.png` из каталога, отсортированы. Id могут быть с дырками.
+    /// Sorted, deduplicated IDs discovered across the embedded and disk sets; gaps are allowed.
     pub ids: Vec<u32>,
     cache: HashMap<u32, Option<Arc<RenderImage>>>,
 }
 
 impl IconSet {
     pub fn discover() -> Self {
-        // Вшитый набор — базовый (всегда есть); диск — дополнение/подмена (можно докидывать
-        // свои иконки без пересборки). Объединяем id обоих источников.
+        // Use the embedded set as the baseline and union it with disk IDs so installations can add
+        // or override icons without rebuilding.
         let mut ids: Vec<u32> = EMBEDDED
             .files()
             .filter_map(|f| f.path().file_name()?.to_str().and_then(id_from_png_name))
@@ -86,7 +88,8 @@ impl IconSet {
         }
     }
 
-    /// Иконка по id (лениво грузит + кэширует). None — если файла нет/битый.
+    /// Returns an icon by ID, loading it lazily and caching both success and failure. `None` means
+    /// the file is absent or invalid.
     pub fn texture(&mut self, id: u32) -> Option<Arc<RenderImage>> {
         if let Some(c) = self.cache.get(&id) {
             return c.clone();
