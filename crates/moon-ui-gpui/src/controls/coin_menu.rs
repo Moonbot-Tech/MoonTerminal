@@ -1,12 +1,12 @@
-//! Единое контекстное меню монеты (ПКМ). Применяется в разных точках, где пользователь
-//! видит монету — линия ордера на чарте, ячейка токена/стратегии в таблице ордеров (и
-//! позже Активы/Отчёт). Меню САМО показывает нужные пункты по наличию контекста в
-//! [`CoinMenuCtx`]: стратегия (`strat_id`), ордер (`order_uid`/`side`), набор «выбранных
-//! ядер» из фильтра панели-источника.
+//! Shared right-click context menu for a market token. It is used wherever a token is shown,
+//! including chart order lines, token or strategy cells in Orders, and token cells in Assets and
+//! Report. The menu selects applicable entries from the context available in [`CoinMenuCtx`]: a
+//! strategy (`strat_id`), an order (`order_uid` and `side`), and the source panel filter's selected
+//! cores.
 //!
-//! Все действия — «прочитать текущий список → дописать монету (дедуп) → отправить целиком»:
-//! отдельной команды «добавить одну монету» в moonproto нет ни для глобального ЧС ядра
-//! (`set_blacklist`), ни для ЧС стратегии (поле `CoinsBlackList` через `edit_strategies`).
+//! Every blacklist action reads the current list, appends the token with deduplication, and sends
+//! the entire list. MoonProto has no add-one-token command for either the core-wide blacklist via
+//! `set_blacklist` or the strategy blacklist stored in `CoinsBlackList` via `edit_strategies`.
 
 use gpui::*;
 use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonTone, MoonWindowExt as _};
@@ -16,58 +16,56 @@ use moon_core::session::CoreId;
 
 use crate::Backend;
 
-/// Имя поля стратегии moonproto с чёрным списком монет (`FIELD_COINS_BLACK_LIST`). Строка,
-/// формат = список монет через запятую (как глобальный ЧС ядра).
+/// MoonProto strategy field containing the token blacklist. Its string value is a comma-separated
+/// token list, matching the core-wide blacklist format.
 const FIELD_COINS_BLACK_LIST: &str = "CoinsBlackList";
 
-/// Ширина всплывающего меню (px). Чуть шире ордерного (170) — влезают подписи «В глобальный
-/// ЧС ядра «…»».
+/// Popup menu width in pixels. It is wider than the 170-pixel order menu to accommodate core-wide
+/// blacklist labels containing a core name.
 const MENU_WIDTH: f32 = 220.0;
 
-/// Сторона ноги ордера в точке клика. На чарте различается по виду линии (Buy/Sell),
-/// определяет набор ордерных пунктов: Buy → «Отменить», Sell → «Join all sells» + «Split».
+/// Side of the order line at the clicked point. The chart distinguishes Buy from Sell by line type;
+/// Buy provides Cancel, while Sell provides Join All Sells and Split actions.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum OrderSide {
     Buy,
     Sell,
 }
 
-/// Откуда открыто меню. Влияет только на мелочи (навигацию «Открыть на графике» не
-/// показываем, если уже на чарте).
+/// Origin of the menu. It controls minor behavior such as omitting Open on Chart when already there.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CoinMenuOrigin {
     OrderTable,
     ChartLine,
 }
 
-/// Контекст точки клика по монете. Собирается вызывающим (у каждого места — свой набор
-/// доступных данных); меню решает по наличию полей, какие пункты показать.
+/// Context for the clicked token. Each caller supplies the data available at its location, and the
+/// menu uses field presence to determine which entries to show.
 pub struct CoinMenuCtx {
     pub core: CoreId,
-    /// Имя ядра-источника (для подписи и пункта «ЧС ядра «name»»).
+    /// Source core name used in labels and the core-blacklist entry.
     pub core_name: String,
-    /// Рынок ордера/монеты (`ADAUSDT`) — для навигации/join/split.
+    /// Order or token market, such as `ADAUSDT`, used for navigation, joining, and splitting.
     pub market: String,
-    /// Базовая монета (`ADA`) — именно она пишется в списки ЧС.
+    /// Base token, such as `ADA`, written to blacklist values.
     pub coin: String,
-    /// Набор ядер из фильтра панели-источника (для «ЧС выбранных ядер»). Пункт показывается
-    /// только если тут > 1 ядра. Для чарт-линии = `[core]` (пункт не появляется).
+    /// Cores selected by the source panel's filter for the selected-cores blacklist action. That
+    /// entry appears only for more than one core. Chart lines supply `[core]`, so it remains hidden.
     pub selected_cores: Vec<CoreId>,
-    /// Стратегия ордера (`strat_id != 0`) — включает секцию стратегии. `None` = ручной/join.
+    /// Order strategy when `strat_id != 0`, enabling the strategy section. None means manual or join.
     pub strat_id: Option<u64>,
-    /// Имя стратегии (для подписи пункта). `None` → id в подписи.
+    /// Strategy name used in the entry label. None falls back to the strategy ID.
     pub strat_name: Option<String>,
-    /// uid ордера — включает секцию ордера. `None` = точка без ордера (тикер монеты).
+    /// Order UID enabling the order section. None represents a token point without an order.
     pub order_uid: Option<u64>,
-    /// Сторона (для чарт-линии). `None` в таблице → секция ордера = «Редактировать» + «Отменить».
+    /// Side for chart lines. A table supplies None, producing Edit and Cancel order actions.
     pub side: Option<OrderSide>,
-    /// Направление позиции ордера (для `join_sells`).
+    /// Order position direction used by `join_sells`.
     pub short: bool,
     pub origin: CoinMenuOrigin,
 }
 
-/// Открыть единое контекстное меню монеты в позиции `pos` (координаты окна, обычно
-/// `event.position`).
+/// Opens the shared token context menu at window-coordinate `pos`, usually `event.position`.
 pub fn open_coin_menu(
     ctx: CoinMenuCtx,
     backend: Entity<Backend>,
@@ -79,16 +77,16 @@ pub fn open_coin_menu(
     window.open_moon_context_menu(cx, "coin-context-menu", pos, items, MENU_WIDTH);
 }
 
-/// Сборка пунктов по контексту. Читает состояние ядра (`cx`) для галок «уже в ЧС» и гейта
-/// пункта стратегии по схеме.
+/// Builds context-dependent entries. It reads core state through `cx` to mark existing blacklist
+/// membership and gates the strategy entry on its schema.
 fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
     let b = backend.read(cx);
     let core = ctx.core;
     let coin = ctx.coin.clone();
     let mut items: Vec<MoonMenuItem> = Vec::new();
 
-    // — Навигация ———————————————————————————————————————————————— (нужен рынок; на чарте
-    // монета уже открыта — «Открыть» не дублируем; балансовые строки без рынка — пропускаем)
+    // Navigation requires a market. Do not duplicate Open when already on the chart, and skip
+    // balance rows that have no market.
     let has_market = !ctx.market.is_empty();
     if has_market && ctx.origin != CoinMenuOrigin::ChartLine {
         let backend_open = backend.clone();
@@ -124,12 +122,12 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
         );
     }
 
-    // — Чёрный список ————————————————————————————————————————————
+    // Blacklist actions.
     if !items.is_empty() {
         items.push(MoonMenuItem::separator());
     }
 
-    // (1) Глобальный ЧС текущего ядра.
+    // Add to the current core's global blacklist.
     let (_, cur_text) = core_blacklist(b, core);
     let in_core = blacklist_contains(&cur_text, &coin);
     {
@@ -148,7 +146,7 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
         );
     }
 
-    // (2) Глобальный ЧС всех выбранных ядер (фильтр панели) — только если их > 1.
+    // Add to every core selected in the panel filter, but only when more than one is selected.
     if ctx.selected_cores.len() > 1 {
         let cores = ctx.selected_cores.clone();
         let all_in = cores
@@ -173,8 +171,8 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
         );
     }
 
-    // (3) ЧС стратегии ордера — только если стратегия известна И её схема содержит поле
-    // `CoinsBlackList` (иначе правка молча потерялась бы — поле не в редакторе вида).
+    // Add to the order strategy's blacklist only when the strategy is known and its schema contains
+    // `CoinsBlackList`; otherwise the view editor would silently discard the field edit.
     if let Some(sid) = ctx.strat_id {
         if strategy_has_blacklist_field(b, core, sid) {
             let in_strat = blacklist_contains(&strategy_blacklist(b, core, sid), &coin);
@@ -196,7 +194,7 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
         }
     }
 
-    // — Стратегия ————————————————————————————————————————————————
+    // Strategy actions.
     if let Some(sid) = ctx.strat_id {
         items.push(MoonMenuItem::separator());
         let backend_g = backend.clone();
@@ -217,7 +215,7 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
         );
     }
 
-    // — Ордер ————————————————————————————————————————————————————
+    // Order actions.
     if let Some(uid) = ctx.order_uid {
         items.push(MoonMenuItem::separator());
         let backend_e = backend.clone();
@@ -259,7 +257,7 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
                     }),
                 );
             }
-            // Buy-линия чарта ИЛИ таблица (side=None) → отмена ордера целиком по uid.
+            // A chart Buy line or a table row with side=None cancels the entire order by UID.
             Some(OrderSide::Buy) | None => {
                 let backend_c = backend.clone();
                 items.push(
@@ -282,12 +280,13 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
     items
 }
 
-/// На сколько частей делит «Split order» (как на чарт-линии, Moonbot по умолчанию — 2).
+/// Number of parts produced by Split Order, matching the chart-line action and Moonbot's default.
 const SPLIT_PARTS: i32 = 2;
 
-// ————————————————————— helpers: чтение/запись ЧС —————————————————————
+// Blacklist read and write helpers.
 
-/// Текущий глобальный ЧС ядра: `(включён, текст-список)`. Нет снимка настроек → `(false, "")`.
+/// Returns the current core-wide blacklist as `(enabled, list text)`. A missing settings snapshot
+/// yields `(false, "")`.
 fn core_blacklist(b: &Backend, core: CoreId) -> (bool, String) {
     b.session
         .store()
@@ -297,9 +296,9 @@ fn core_blacklist(b: &Backend, core: CoreId) -> (bool, String) {
         .unwrap_or((false, String::new()))
 }
 
-/// Дописать монету в глобальный ЧС ядра и ВКЛЮЧИТЬ список (иначе добавление не влияет на
-/// торговлю — команда шлёт флаг+текст целиком). Идемпотентно: если монета уже есть,
-/// шлём тот же текст, но всё равно включаем ЧС.
+/// Appends a token to the core-wide blacklist and enables it. Enabling is required for the addition
+/// to affect trading because the command sends the flag and text together. This is idempotent: an
+/// existing token keeps the same text, while the blacklist is still enabled.
 fn add_to_core_blacklist(b: &Backend, core: CoreId, coin: &str) {
     let (_, text) = core_blacklist(b, core);
     let new = blacklist_add(&text, coin);
@@ -308,8 +307,8 @@ fn add_to_core_blacklist(b: &Backend, core: CoreId, coin: &str) {
     }
 }
 
-/// Текущее значение поля `CoinsBlackList` стратегии (read-only снимок). Поля, равные
-/// дефолту схемы, сервер НЕ шлёт → тогда пусто (и мы просто создаём список из одной монеты).
+/// Returns the strategy's read-only `CoinsBlackList` snapshot. The server omits fields equal to the
+/// schema default, so a missing value is treated as empty and the first token starts a new list.
 fn strategy_blacklist(b: &Backend, core: CoreId, sid: u64) -> String {
     b.session
         .store()
@@ -324,8 +323,8 @@ fn strategy_blacklist(b: &Backend, core: CoreId, sid: u64) -> String {
         .unwrap_or_default()
 }
 
-/// Содержит ли схема вида стратегии (по её `kind_ordinal`) поле `CoinsBlackList`. Если нет —
-/// правка поля молча не применилась бы, поэтому пункт скрываем.
+/// Returns whether the strategy-kind schema identified by `kind_ordinal` contains
+/// `CoinsBlackList`. Without it, the field edit would be silently ignored, so the entry is hidden.
 fn strategy_has_blacklist_field(b: &Backend, core: CoreId, sid: u64) -> bool {
     let Some(cd) = b.session.store().core(core) else {
         return false;
@@ -347,7 +346,7 @@ fn strategy_has_blacklist_field(b: &Backend, core: CoreId, sid: u64) -> bool {
         })
 }
 
-/// Дописать монету в ЧС стратегии (поле `CoinsBlackList`) через общий редактор полей.
+/// Appends a token to the strategy's `CoinsBlackList` through the shared field editor.
 fn add_to_strategy_blacklist(b: &Backend, core: CoreId, sid: u64, coin: &str) {
     let cur = strategy_blacklist(b, core, sid);
     let new = blacklist_add(&cur, coin);
@@ -357,7 +356,7 @@ fn add_to_strategy_blacklist(b: &Backend, core: CoreId, sid: u64, coin: &str) {
     }
 }
 
-/// Есть ли монета в списке (запятая-разделённом, без учёта регистра/пробелов).
+/// Checks a comma-separated list for a token, ignoring ASCII case and surrounding whitespace.
 ///
 /// Deliberately a LITERAL comparison, not `symbol::coin_match_key`. The list is being
 /// WRITTEN for the core here, and how the core matches an entry against its own
@@ -374,8 +373,8 @@ fn blacklist_contains(text: &str, coin: &str) -> bool {
     text.split(',').any(|s| s.trim().eq_ignore_ascii_case(coin))
 }
 
-/// Дописать монету в запятая-разделённый список (дедуп без регистра). Уже есть → без
-/// изменений. Пустой список → одна монета.
+/// Appends a token to a comma-separated list with case-insensitive deduplication. An existing token
+/// leaves the list unchanged, while an empty list becomes the token alone.
 fn blacklist_add(text: &str, coin: &str) -> String {
     if blacklist_contains(text, coin) {
         return text.to_string();

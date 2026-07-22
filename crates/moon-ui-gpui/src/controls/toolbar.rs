@@ -273,24 +273,23 @@ pub fn toolbar(
         // `None` is not merely "render a dash": it also means the popup has nothing to seed
         // from, so the button must be drawn DISABLED rather than swallowing a click.
         let tp_value = cs.map(|s| format!("{}%", fmt_field2(s.take_profit_main_pct as f32)));
-        // TP «горит», когда fixed-sell выключен. Локальный optimistic-state перекрывает
-        // снимок ядра, чтобы клик по S/TP отображался сразу, а не после echo ClientSettings.
+        // TP is lit while fixed-sell is off. Local optimistic state overrides the core snapshot so
+        // an S/TP click appears immediately instead of waiting for the ClientSettings echo.
         let tp_engaged = match (focus_core, cs) {
             (Some(core), Some(s)) => !b.fixed_sell_mode_with(core, s.fixed_sell_mode),
             _ => true,
         };
-        // SL знаковый: «+1,00%» / «-20,00%» (а не «--» из ручного минуса перед отрицательным).
+        // SL is signed: `+1.00%` / `-20.00%`, avoiding `--` from manually prefixing a negative value.
         let sl_value = cs.map(|s| format!("{}%", fmt_field2_signed(s.stop_loss_pct)));
-        // Включён ли стоп-лосс (`panic_if_price_drop`) — управляется тоглом рядом с кнопкой SL;
-        // когда выкл, кнопка SL неактивна.
+        // The toggle beside SL controls `panic_if_price_drop`; while off, the SL button is disabled.
         let sl_on = cs.map(|s| s.panic_if_price_drop).unwrap_or(false);
-        // Накладываем оптимистичный локальный кэш поверх значений ядра (живой sell-дисплей).
+        // Overlay the optimistic local cache on core values for a live sell display.
         let sell_pcts = focus_core.zip(cs).map(|(core, s)| {
             let arr: [f64; 6] =
                 std::array::from_fn(|i| b.fixed_sell_pct_with(core, i, s.fixed_sell_pcts[i]));
             arr
         });
-        // S-слот подсвечен ТОЛЬКО когда fixed-sell включён (иначе по умолчанию все S погашены).
+        // Highlight an S slot ONLY while fixed-sell is enabled; otherwise every S slot is dim.
         let sell_slot = match (focus_core, cs) {
             (Some(core), Some(s)) => {
                 b.fixed_sell_slot_with(core, s.fixed_sell_mode.then_some(s.fixed_sell_slot))
@@ -303,8 +302,8 @@ pub fn toolbar(
         let lev_value = TradeMetric::Lev
             .seed_value(b, group)
             .map(|l| format!("×{}", l as i32));
-        // Ручная стратегия включена (тогл MS в шапке): sell/стопы новым ордерам ставит ядро
-        // из её полей → TP/S-слоты/SL тулбара гасим (значения не применяются).
+        // With the header's MS toggle on, the core sets sell/stop levels for new orders from the
+        // manual strategy's fields. Dim toolbar TP/S slots/SL because their values do not apply.
         let manual_on = focus_core
             .map(|c| b.manual_strat_state(c).0)
             .unwrap_or(false);
@@ -468,15 +467,15 @@ pub fn toolbar(
         .child({
             let strip = sell_strip(
                 &sell_cells,
-                // При ручной стратегии слоты не применяются — ничего не горит.
+                // Manual strategy mode does not apply these slots, so none is lit.
                 sell_slot.filter(|_| !manual_on),
-                // Редактируем S-инпутом только если запрос относится к ФОКУСНОМУ ядру тулбара.
+                // Show the S editor only when its request belongs to the toolbar's focused core.
                 sell_edit
                     .filter(|(c, _)| Some(*c) == focus_core && !manual_on)
                     .map(|(_, i)| i),
                 sell_input,
                 backend.clone(),
-                // Ручная стратегия: гасим взаимодействие (клик/колесо/дабл) целиком.
+                // Manual strategy mode disables all click, wheel, and double-click interaction.
                 focus_core.filter(|_| !manual_on),
             );
             // Dim ONLY the sell block: manual-strategy mode stops its slots from being applied,

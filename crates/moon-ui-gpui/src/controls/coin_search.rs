@@ -1,13 +1,13 @@
-//! Общий виджет поиска монеты: поиск по market-юниверсу ядер + выпадающий список
-//! «COIN - Server».
+//! Shared token-search widget that searches each core's market universe and displays a
+//! `COIN - Server` dropdown.
 //!
-//! Для каждого совпадения строка `«BTC - Bybit1»` (база монеты + имя сервера ядра).
-//! Виджет НЕ знает, что делать с выбором: действие задаёт хозяин через `on_pick`
-//! (чарт-вкладки открывают монету, шапка ставит тикер курса, «Отчёт» — текст фильтра).
+//! Each result is shown as a row such as `BTC - Bybit1`, combining the base token with the core's
+//! server name. The widget does not define selection behavior; its owner supplies `on_pick`. Chart
+//! tabs open a market, the header sets the rate ticker, and Report sets its token filter text.
 //!
-//! Потребители: полоска чарт-вкладок и выносные окна (через шим
-//! [`crate::chart_tabs::coin_search`]), тикер курса в шапке (`shell/ticker.rs`) и
-//! фильтр монеты панели «Отчёт» (`panels/report`).
+//! Consumers are the chart-tab strip and detached windows through the
+//! [`crate::chart_tabs::coin_search`] shim, the header rate ticker in `shell/ticker.rs`, and the
+//! Report token filter in `panels/report`.
 
 use std::collections::HashSet;
 
@@ -24,10 +24,11 @@ use crate::design;
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
-/// Сколько совпадений тянуть из MoonProto-поиска на одно ядро.
+/// Maximum number of MoonProto search results requested per core.
 pub(crate) const COIN_SEARCH_LIMIT: usize = 8;
 
-/// Ядра, чей market-юниверс питает поле монеты этой вкладки. `bucket = None` → Main.
+/// Returns the cores whose market universes feed this token field. None searches the full group,
+/// the same as a shared bucket.
 ///
 /// Returned in canonical order: the search popup groups its hits per core and renders them
 /// in the order given, so this order is what the user reads as `COIN — Server` rows.
@@ -66,10 +67,10 @@ fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<Core
     ids
 }
 
-/// Латинская буква на той же физической клавише QWERTY, что и кириллическая ЙЦУКЕН
-/// (`и`→`b`, `е`→`t`, `с`→`c`). Тикеры рынков латиница, поэтому кириллица в поиске —
-/// почти всегда забытая раскладка; конвертируем, чтобы «иес» находило `BTC`. Регистр
-/// сохраняем (заглавная кириллица → заглавная латиница). Неизвестный символ — как есть.
+/// Maps a Russian-layout character to the Latin character on the same physical QWERTY key. Market
+/// tickers use Latin characters, so Russian-layout input usually indicates an unchanged keyboard
+/// layout. Converting it lets a physically typed `BTC` query find `BTC`. Case is preserved, and an
+/// unknown character is returned unchanged.
 fn ru_key_to_en(ch: char) -> char {
     let lower = ch.to_lowercase().next().unwrap_or(ch);
     let mapped = match lower {
@@ -115,8 +116,8 @@ fn ru_key_to_en(ch: char) -> char {
     }
 }
 
-/// Если в строке есть кириллица — переклад раскладки RU→EN (см. [`ru_key_to_en`]);
-/// иначе строка без изменений (без лишних аллокаций для обычного латинского ввода).
+/// Converts Russian-layout input to the corresponding English QWERTY keys when the query contains
+/// Russian letters; otherwise borrows the original string to avoid allocating for Latin input.
 pub(crate) fn normalize_layout(query: &str) -> std::borrow::Cow<'_, str> {
     if query
         .chars()
@@ -128,7 +129,7 @@ pub(crate) fn normalize_layout(query: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// Результаты поиска монеты для вкладки: `(ядро, market, имя сервера)`.
+/// Returns token-search results as `(core, market, server name)` tuples.
 pub(crate) fn search(
     b: &Backend,
     group: &str,
@@ -158,11 +159,11 @@ pub(crate) fn search(
     out
 }
 
-/// Выпадающий список совпадений (или «нет совпадений») + чекбоксы мульти-выбора и кнопка
-/// «Открыть в новой вкладке». Клик по строке (вне чекбокса) = `on_pick` (что делать с монетой —
-/// решает хозяин); клик по чекбоксу = `on_toggle` (накопить выбор); кнопка снизу = `on_open_new`
-/// (создать вкладку из выбранных). `selected` — текущий набор отмеченных монет (для подсветки
-/// чекбоксов). В одиночном режиме (`multi_select = false`) `on_toggle`/`on_open_new` не зовутся.
+/// Renders a result dropdown or an empty-result message, with multi-selection checkboxes and an
+/// Open in New Tab button when enabled. Clicking outside a checkbox calls the owner-defined
+/// `on_pick`; a checkbox calls `on_toggle`; the footer button calls `on_open_new` for the accumulated
+/// selection. `selected` contains the currently checked markets. In single-selection mode,
+/// `on_toggle` and `on_open_new` are never called.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_popup<F, G, H>(
     id: &'static str,
@@ -182,8 +183,8 @@ where
 {
     let hover_bg = rgb(p.shell_high);
     let selected_count = selected.len();
-    // `.id(..)` делает контейнер stateful → доступен `overflow_y_scroll` (gpui сам трекает
-    // прокрутку колесом по этому id); иначе длинный список просто обрезался бы по `max_h`.
+    // `.id(..)` makes the container stateful so `overflow_y_scroll` can let GPUI track wheel
+    // scrolling by ID. Without it, max_h would simply clip a long list.
     let mut list = div()
         .id(SharedString::from(format!("{id}-list")))
         .flex()
@@ -225,8 +226,9 @@ where
                         .w_full()
                         .gap(design::ui_px(cx, 6.0))
                         .items_center()
-                        // Чекбокс мульти-выбора: клик НЕ открывает монету (stop_propagation в
-                        // обёртке ниже не нужен — MoonCheckbox сам не триггерит on_pick строки).
+                        // Clicking a multi-select checkbox does not open the market. The wrapper
+                        // below needs no stop_propagation because MoonCheckbox does not trigger the
+                        // row's on_pick handler.
                         .when(multi_select, |row| {
                             row.child(
                                 MoonCheckbox::new(SharedString::from(format!("{id}-cb-{i}")))
@@ -238,7 +240,7 @@ where
                                     }),
                             )
                         })
-                        // Текст строки = выбрать одну монету (on_pick).
+                        // Clicking the row text selects one market through on_pick.
                         .child(
                             h_flex()
                                 .flex_1()
@@ -274,8 +276,9 @@ where
         );
     }
 
-    // Футер с кнопкой «Открыть в новой вкладке» — только в мульти-режиме; активна при непустом
-    // выборе. Вне скролла, чтобы всегда была видна. Счётчик выбранных — в подписи.
+    // Show the Open in New Tab footer only in multi-select mode and enable it for a nonempty
+    // selection. Keep it outside the scroller so it remains visible, with the selected count in
+    // its label.
     let footer = multi_select.then(|| {
         let label = if selected_count > 0 {
             format!("{} ({selected_count})", t!("chart.coin.open_new_tab"))
@@ -315,9 +318,9 @@ where
         .border_1()
         .border_color(rgb(p.border))
         .rounded(design::r_button(cx))
-        // Перехват mouse_down на всём попапе: иначе клик по чекбоксу (он реагирует на on_change,
-        // а не на mouse_down) проваливается на слой-дисмиссер под попапом и закрывает список.
-        // У строки-пика свой on_mouse_down со stop_propagation — он отработает раньше этого.
+        // Intercept mouse_down across the popup. A checkbox reacts on_change rather than
+        // mouse_down, so the event would otherwise reach the dismiss layer underneath and close
+        // the list. A pick row has its own earlier mouse-down handler with stop_propagation.
         .on_mouse_down(MouseButton::Left, |_, _window, app| app.stop_propagation())
         .child(list)
         .children(footer)

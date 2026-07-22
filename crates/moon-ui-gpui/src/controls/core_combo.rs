@@ -1,13 +1,11 @@
-//! Общее поле-список выбора ядер (мультивыбор чекбоксами) — фильтр «Все ядра» панелей
-//! «Ордера», «Отчёт», «Активы» и окна «Аналитика».
+//! Shared checkbox-based core multi-selector used by the Orders, Report, Assets, Core Status, and
+//! Analytics views.
 //!
-//! Ширина больше НЕ фиксирована: и кнопка-триггер, и меню растут под контент
-//! (`design::dropdown_content_widths`) с нижней границей на прежнем фикс-виде: кнопка растёт до
-//! потолка и затем усекает имя с «…», меню растёт под самый длинный пункт до общего верхнего
-//! предела. Разница в типе ключа была мнимой: `CoreId = u64` (алиас, см.
-//! `moon_core::session::store`), поэтому builder работает с `u64` и подходит всем.
-//! Что делает тумблер и как зовутся подписи — решает вызывающий (у каждой панели свои
-//! locale-ключи и свой `toggle_core`).
+//! The trigger and menu are content-sized through `design::dropdown_content_widths`, with their old
+//! fixed widths retained as lower bounds. The trigger grows to its compact-toolbar cap and then
+//! ellipsizes the label; the menu grows for its longest item up to the shared upper bound. `CoreId`
+//! aliases `u64`, so the builder uses `u64` for every caller. Each caller supplies its localized
+//! labels and defines the behavior of its own `toggle_core` callback.
 
 use std::collections::HashSet;
 
@@ -17,16 +15,28 @@ use crate::core_order::OrderedCores;
 use crate::design;
 use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize};
 
-/// Поле-список ядер: МУЛЬТИВЫБОР (чекбоксы, меню НЕ закрывается на клик — можно отметить
-/// сразу несколько). Подпись триггера: `all_label` (пусто / выбраны все) / имя единственного
-/// выбранного / `cores_n(N)`; кнопка растёт под неё до внутреннего потолка (при переполнении
-/// имя усекается с «…»), меню — под самый длинный пункт до общего верхнего предела.
-/// `on_toggle(None, app)` — пункт «Все» (тумблер снять все / выбрать все),
-/// `on_toggle(Some(id), app)` — тогл одного ядра.
+/// Build a checkbox-based core multi-selector whose menu stays open across item clicks.
 ///
-/// `id` — id дропдауна; от него же образуются ключи пунктов (`{id}-all` / `{id}-{i}`),
-/// уникальные в пределах своего меню. `min_menu_w` — НИЖНЯЯ ГРАНИЦА ширины меню (прежний
-/// фикс-вид для коротких списков), а не жёсткая ширина.
+/// The trigger shows `all_label` for an empty selection or when the nonempty `cores` and `selected`
+/// collections have equal lengths. This all-selected check is cardinality-only and does not verify
+/// that selected ids belong to `cores`, so an equal-sized set containing unknown ids is also treated
+/// as full. Otherwise the trigger shows the sole selected core's name when present in `cores`, or
+/// `cores_n(N)`. It grows to the internal cap before its label is ellipsized; the menu grows for its
+/// longest item up to the shared cap. The All item calls `on_toggle(None, app)`, while a core item
+/// calls `on_toggle(Some(id), app)`.
+///
+/// Args:
+///     cx: Application context used for text and layout measurements.
+///     id: Dropdown id and prefix for the `{id}-all` and `{id}-{i}` item keys.
+///     cores: Ordered core ids and display names.
+///     selected: Currently selected core ids.
+///     all_label: Localized label for the empty or cardinality-matched selection and the All item.
+///     cores_n: Localized formatter for a selection count or an unresolved sole id.
+///     min_menu_w: Lower bound for menu width, not a fixed width.
+///     on_toggle: Callback receiving `None` for All or `Some(id)` for one core.
+///
+/// Returns:
+///     The configured multi-select dropdown.
 pub(crate) fn core_combo<F>(
     cx: &App,
     id: &'static str,
@@ -40,6 +50,8 @@ pub(crate) fn core_combo<F>(
 where
     F: Fn(Option<u64>, &mut App) + Clone + 'static,
 {
+    // The current all-selected state compares cardinality only; it does not validate membership of
+    // `selected` in `cores`.
     let all_selected = !cores.is_empty() && selected.len() == cores.len();
     let all_on = selected.is_empty() || all_selected;
     let cur = match selected.len() {
@@ -55,9 +67,9 @@ where
         }
         n => cores_n(n),
     };
-    // Ширина по контенту (единый расчёт с screener::source_combo): кнопка под текущий выбор
-    // (пол — общий `CORES_TRIGGER_MIN_W`, потолок в плотном тулбаре), меню под самый длинный
-    // пункт между полом `min_menu_w` и общим потолком.
+    // Share the content-width calculation with `screener::source_combo`: size the trigger for the
+    // current selection between `CORES_TRIGGER_MIN_W` and the compact-toolbar cap, and size the menu
+    // for its longest item between `min_menu_w` and the shared cap.
     let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
         cx,
         &cur,
@@ -76,7 +88,7 @@ where
         .menu_size(MoonMenuSize::Compact)
         .close_on_select(false)
         .item(
-            // «Все» — тумблер: снять все / выбрать все ядра.
+            // The All item delegates clearing or selecting every core to the caller.
             MoonMenuItem::with_key(format!("{id}-all"), all_label)
                 .checked(all_on)
                 .selected(all_on)

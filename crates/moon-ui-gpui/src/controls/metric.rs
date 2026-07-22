@@ -17,7 +17,7 @@ use super::TP_FINE_MAX;
 use crate::shell::Shell;
 use crate::{Backend, design};
 
-/// Торговая метрика тулбара с собственным попапом (слайдер + поле ввода).
+/// Toolbar trading metric with its own slider-and-input popup.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TradeMetric {
     Tp,
@@ -138,8 +138,17 @@ impl TradeMetric {
         }
     }
 
-    /// Текущее значение метрики активного ядра (для сидирования слайдера/инпута при открытии).
-    /// Lev зависит ОТ ЯДРА И ТЕКУЩЕЙ МОНЕТЫ: плечо рынка main-чарта из ассетов активного ядра.
+    /// Return the active core's current value for seeding this metric's slider and input.
+    ///
+    /// Leverage depends on both the core and the Main chart's current market and is read from the
+    /// active core's asset state.
+    ///
+    /// Args:
+    ///     b: Backend providing the active trading core and its state.
+    ///     group: Window group used to resolve the active core and Main chart market.
+    ///
+    /// Returns:
+    ///     The current metric value, or `None` when its core, settings, market, or leverage is absent.
     pub fn current(self, b: &Backend, group: &str) -> Option<f32> {
         let core = b.active_trade_core(group)?;
         let cd = b.session.store().core(core)?;
@@ -147,12 +156,14 @@ impl TradeMetric {
             TradeMetric::Tp => cd
                 .client_settings
                 .as_ref()
-                // «Свой» TP кнопки (не эффективный): выбор S-слота не должен подменять seed слайдера.
+                // Seed from the button's own TP, not the effective value; selecting an S slot must
+                // not replace the slider seed.
                 .map(|s| s.take_profit_main_pct as f32),
             TradeMetric::Sl => cd.client_settings.as_ref().map(|s| s.stop_loss_pct),
             TradeMetric::Lev => {
-                // Плечо монеты main-чарта из per-core карты (любой отслеживаемый рынок, не
-                // только с позицией). Нет в карте → плечо неизвестно (покажем «—»).
+                // Read the Main chart market's leverage from the per-core map, which includes every
+                // tracked market rather than only open positions. Absence means unknown leverage and
+                // renders as a dash.
                 let (_, market) = b.main_chart_target(group)?;
                 cd.assets.leverage.get(&market).map(|l| *l as f32)
             }
@@ -262,9 +273,19 @@ pub(super) fn metric_button(
         .content(popup.unwrap_or_else(|| div().into_any_element()))
 }
 
-/// Тогл включения стоп-лосса (`panic_if_price_drop`) слева от кнопки SL. Подпись «SL» вынесена
-/// сюда из кнопки; выкл → кнопка SL неактивна (значение/попап только при включённом тогле).
-/// `disabled` — режим ручной стратегии: SL тулбара к новым ордерам не применяется.
+/// Build the `panic_if_price_drop` toggle to the left of the SL button.
+///
+/// The toggle owns the `SL` label. When off, the adjacent value and popup button are disabled.
+/// `disabled` represents manual-strategy mode, in which toolbar SL does not apply to new orders.
+///
+/// Args:
+///     on: Current `panic_if_price_drop` value.
+///     disabled: Whether manual-strategy mode prevents editing toolbar SL.
+///     backend: Backend used to resolve the active core and send the settings edit.
+///     group: Window group whose active trading core receives the edit.
+///
+/// Returns:
+///     The configured SL toggle element.
 pub(super) fn sl_toggle(
     on: bool,
     disabled: bool,
@@ -375,8 +396,9 @@ pub fn metric_popup_content(
                     }
                 }),
         );
-        // Файн-слайдер: суб-процентный TP (0..2, шаг 0.01) через scalp. Активен ТОЛЬКО когда
-        // верхний TP на минимуме (=2, без галки ×10); поднял верхний выше 2 — нижний disabled.
+        // The fine slider controls scalp TP values from 0 to `TP_FINE_CAP` (1.99) in 0.01 steps.
+        // It is enabled only at the coarse slider's 2.0 boundary without the x10 option; 2.0 itself
+        // belongs to the coarse/main TP path, and raising the coarse value above it disables fine TP.
         let coarse_tp = slider.read(cx).value().end();
         let fine_enabled = !extended && coarse_tp <= TP_FINE_MAX + 0.001;
         content = content
@@ -396,8 +418,8 @@ pub fn metric_popup_content(
     }
 
     if matches!(metric, TradeMetric::Sl) {
-        // Стоп-маркет: при срабатывании стопа продавать РЫНОЧНЫМ ордером, а не стоп-лимитом
-        // (`use_stop_market`). Перенесён сюда из попапа настроек ядра.
+        // `use_stop_market` sells with a market order when the stop triggers instead of placing a
+        // stop-limit order. This control moved here from the core-settings popup.
         let stop_market_on = {
             let b = backend.read(cx);
             b.active_trade_core(group)
@@ -454,11 +476,11 @@ pub fn metric_popup_content(
                     }
                 }),
         );
-        // Плечо — биржевое действие: применяем ТОЛЬКО по этой кнопке (слайдер/поле лишь
-        // выбирают значение, на драг ничего не шлётся). Значение берём из поля (его живо
-        // обновляет драг слайдера, и в него можно ввести точное число). Шлём per-market
-        // Engine `set_leverage` для монеты main-чарта (той, чьё плечо и показываем) — НЕ
-        // глобальный LevManage-снапшот: его ядро не присылает, и правка молча терялась.
+        // Leverage is an exchange action and is applied only by this button; the slider and field
+        // merely choose a value and dragging sends nothing. Read the value from the field, which the
+        // slider updates live and which also accepts an exact number. Send per-market Engine
+        // `set_leverage` for the Main chart coin whose leverage is displayed, not the global
+        // LevManage snapshot that the core does not send and whose edit was silently lost.
         //
         // The market is taken from the SEEDED address, not resolved afresh: this is the one control
         // here whose address includes a coin, and the Main chart can move to another one while the
