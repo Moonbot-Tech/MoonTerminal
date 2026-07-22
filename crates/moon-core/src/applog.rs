@@ -1,11 +1,12 @@
-//! Лог приложения: (1) файловый лог сырых команд/отчётов ядра в `logs/commands.log`
-//! рядом с exe — для диагностики report-SQL (INSERT/UPDATE), которые шлёт ядро;
-//! (2) общий in-memory кольцевой буфер для вкладки «Лог» нижнего дока.
+//! Application log: (1) a file log of raw core commands/reports in `logs/commands.log`
+//! under the application data directory (beside the exe on Windows), used to diagnose
+//! report SQL (INSERT/UPDATE) sent by the core; (2) a shared in-memory ring buffer for
+//! the bottom dock's Log tab.
 //!
-//! Буфер наполняют два источника: [`command`] (сырые report-SQL ядра) и
-//! [`TeeLogger`] — обёртка над `env_logger`, дублирующая каждую напечатанную
-//! `log::`-запись в буфер (и дальше отдающая её env_logger'у в консоль/файл).
-//! Потокобезопасно (несколько feed-потоков + UI-поток читает снимок).
+//! Two sources populate the buffer: [`command`] (raw core report SQL) and [`TeeLogger`],
+//! an `env_logger` wrapper that duplicates each accepted `log::` entry into the buffer
+//! before passing it to env_logger for console/file output. Thread-safe for multiple feed
+//! threads while the UI thread reads a snapshot.
 
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
@@ -18,42 +19,41 @@ use crate::util::now_unix_ms_i64 as now_ms_i64;
 
 static LOG: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
 
-/// Максимум строк в кольцевом буфере (старые вытесняются).
+/// Maximum number of lines in the ring buffer; oldest lines are evicted.
 const RING_CAP: usize = 5000;
 
-/// Писать ли лог в файлы logs/<дата>_<источник>.log. Дефолт on, чтобы ранние
-/// записи (до загрузки конфига) не терялись; приложение уточняет из конфига.
+/// Whether to write logs to `logs/<date>_<source>.log`. Defaults to on so early entries
+/// are not lost before config loading; the application later applies the configured value.
 static FILE_LOG: AtomicBool = AtomicBool::new(true);
-/// Срок хранения файлов лога (дней). 0 = хранить всё. См. [`purge_old`].
+/// Log-file retention period in days. 0 keeps everything. See [`purge_old`].
 static RETENTION_DAYS: AtomicU32 = AtomicU32::new(14);
 
-/// Применить настройки файлового лога из конфига (вызывается из App после загрузки
-/// и после сохранения настроек).
+/// Applies file-logging settings from config, after loading and after saving settings.
 pub fn set_file_logging(enabled: bool, retention_days: u32) {
     FILE_LOG.store(enabled, Ordering::Relaxed);
     RETENTION_DAYS.store(retention_days, Ordering::Relaxed);
 }
 
-/// Пишем ли сейчас лог в файлы.
+/// Whether logs are currently written to files.
 pub fn file_logging_enabled() -> bool {
     FILE_LOG.load(Ordering::Relaxed)
 }
 
-/// Одна строка лога для вкладки «Лог».
+/// One log line for the Log tab.
 #[derive(Clone)]
 pub struct LogLine {
-    /// Время UTC, `YYYY-MM-DD HH:MM:SS.mmm`.
+    /// UTC time in `YYYY-MM-DD HH:MM:SS.mmm` format.
     pub ts: String,
     pub level: log::Level,
-    /// Источник: target лог-записи или `core.cmd` для сырых команд ядра.
-    /// Пустой для строк лога ядра (источник ясен из выбранного сервера).
+    /// Source: the log entry's target, or `core.cmd` for raw core commands.
+    /// Empty for core log lines because the selected server identifies the source.
     pub target: String,
     pub msg: String,
 }
 
 impl LogLine {
-    /// Строка лога ядра (по unix-времени из ServerLog). Уровня у ядра нет → Info,
-    /// target пустой (источник — выбранный сервер в селекторе).
+    /// Creates a core log line using unix time from ServerLog. The core has no level, so
+    /// it uses Info; target is empty because the selected server identifies the source.
     pub fn core(unix_ms: i64, msg: String) -> Self {
         Self {
             ts: ts_from_unix_ms(unix_ms),
@@ -63,9 +63,9 @@ impl LogLine {
         }
     }
 
-    /// Эвристика «строка про ошибку» — для быстрого фильтра «только ошибки».
-    /// Уровень Warn/Error ИЛИ текст содержит error-подобные слова (лог ядра без
-    /// уровней — фильтруем по содержимому).
+    /// Heuristically identifies an error line for the quick errors-only filter.
+    /// Matches Warn/Error levels OR error-like words in the text, since level-less core
+    /// logs must be filtered by content.
     pub fn is_errorish(&self) -> bool {
         if matches!(self.level, log::Level::Error | log::Level::Warn) {
             return true;
@@ -86,29 +86,29 @@ impl LogLine {
 }
 
 static RING: OnceLock<Mutex<VecDeque<LogLine>>> = OnceLock::new();
-/// Монотонный счётчик добавлений — дёшево ловит «появились новые строки» (host
-/// форсит кадр, когда активна вкладка «Лог»). См. [`revision`].
+/// Monotonic insertion counter for cheaply detecting new lines. The host forces a frame
+/// while the Log tab is active. See [`revision`].
 static REVISION: AtomicU64 = AtomicU64::new(0);
 
 fn ring() -> &'static Mutex<VecDeque<LogLine>> {
     RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(RING_CAP)))
 }
 
-/// Глобальный файловый писатель локального лога приложения (`logs/<дата>_app.log`).
+/// Global file writer for the local application log (`logs/<date>_app.log`).
 static APP_WRITER: OnceLock<Mutex<DatedWriter>> = OnceLock::new();
 fn app_writer() -> &'static Mutex<DatedWriter> {
     APP_WRITER.get_or_init(|| Mutex::new(DatedWriter::new("app")))
 }
 
-/// Добавить строку в кольцевой буфер (с вытеснением самой старой) и, если включён
-/// файловый лог, дописать её в `logs/<дата>_app.log`.
+/// Adds a line to the ring buffer, evicting the oldest, and appends it to
+/// `logs/<date>_app.log` when file logging is enabled.
 fn push(line: LogLine) {
     if file_logging_enabled() {
         if let Ok(mut w) = app_writer().lock() {
             let date = line.ts.get(0..10).unwrap_or("");
             let hms = line.ts.get(11..).unwrap_or(line.ts.as_str());
             w.write(date, hms, level_code(line.level), &line.target, &line.msg);
-            w.flush(); // лог приложения низкочастотный — флашим сразу (виден на диске)
+            w.flush(); // Application logs are low-frequency, so flush immediately for disk visibility.
         }
     }
     if let Ok(mut r) = ring().lock() {
@@ -120,12 +120,12 @@ fn push(line: LogLine) {
     REVISION.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Ревизия буфера (число добавлений). Сравнивай для детекта новых строк.
+/// Buffer revision (number of insertions), used to detect new lines.
 pub fn revision() -> u64 {
     REVISION.load(Ordering::Relaxed)
 }
 
-/// Снимок последних `max` строк (по порядку старые→новые) для вкладки «Лог».
+/// Snapshot of the latest `max` lines, ordered oldest→newest, for the Log tab.
 pub fn snapshot(max: usize) -> Vec<LogLine> {
     ring()
         .lock()
@@ -162,7 +162,7 @@ fn ts() -> String {
     ts_from_unix_ms(now_ms_i64())
 }
 
-/// unix-ms → ("YYYY-MM-DD", "HH:MM:SS.mmm") в UTC (дата для имени файла, время в строке).
+/// Converts unix ms to UTC `(YYYY-MM-DD, HH:MM:SS.mmm)` for the filename date and line time.
 pub fn split_unix_ms(ms: i64) -> (String, String) {
     let secs = ms.div_euclid(1000);
     let frac = ms.rem_euclid(1000);
@@ -172,13 +172,13 @@ pub fn split_unix_ms(ms: i64) -> (String, String) {
     (date, format!("{time}.{frac:03}"))
 }
 
-/// unix-ms → "YYYY-MM-DD HH:MM:SS.mmm" (UTC).
+/// Converts unix ms to `YYYY-MM-DD HH:MM:SS.mmm` in UTC.
 pub fn ts_from_unix_ms(ms: i64) -> String {
     let (d, t) = split_unix_ms(ms);
     format!("{d} {t}")
 }
 
-/// Код уровня для записи в файл (TSV).
+/// Level code used in TSV files.
 fn level_code(l: log::Level) -> &'static str {
     match l {
         log::Level::Error => "ERR",
@@ -199,7 +199,7 @@ fn level_from_code(s: &str) -> log::Level {
     }
 }
 
-/// Метку источника приводим к безопасному имени файла (буквы/цифры/-/_).
+/// Converts a source label to a safe filename using letters, digits, hyphens, and underscores.
 pub fn sanitize_label(name: &str) -> String {
     let s: String = name
         .chars()
@@ -218,10 +218,10 @@ pub fn sanitize_label(name: &str) -> String {
     }
 }
 
-/// Файловый писатель лога одного источника с дневной ротацией: пишет в
-/// `logs/<дата>_<label>.log`, при смене суток сам переоткрывает файл. Формат строки —
-/// TSV: `время \t уровень \t источник \t сообщение`. Используется и локальным логом
-/// приложения, и потоком каждого ядра (там — со своим экземпляром на поток).
+/// Daily-rotating file writer for one log source. Writes to `logs/<date>_<label>.log`
+/// and reopens the file when the date changes. Line format is TSV:
+/// `time \t level \t source \t message`. Used by both the local application log and
+/// each core thread, with a separate instance per thread.
 pub struct DatedWriter {
     label: String,
     date: String,
@@ -237,8 +237,8 @@ impl DatedWriter {
         }
     }
 
-    /// Дописать строку. Если файловый лог выключен — ничего не пишет (и закрывает
-    /// открытый файл). `date`=YYYY-MM-DD (имя файла), `hms`=HH:MM:SS.mmm (в строку).
+    /// Appends a line. If file logging is disabled, writes nothing and closes any open file.
+    /// `date`=YYYY-MM-DD for the filename; `hms`=HH:MM:SS.mmm for the line.
     pub fn write(&mut self, date: &str, hms: &str, level: &str, target: &str, msg: &str) {
         if !file_logging_enabled() {
             self.file = None;
@@ -248,7 +248,7 @@ impl DatedWriter {
             self.open(date);
         }
         if let Some(f) = self.file.as_mut() {
-            // msg без переводов строк — одна запись = одна строка файла.
+            // Remove line breaks from msg so one entry occupies one file line.
             let msg = msg.replace(['\n', '\r'], " ");
             let _ = writeln!(f, "{hms}\t{level}\t{target}\t{msg}");
         }
@@ -280,9 +280,9 @@ impl Drop for DatedWriter {
     }
 }
 
-/// Удалить файлы лога старше срока хранения. Имя `<YYYY-MM-DD>_<label>.log` — возраст
-/// берём из даты в имени (надёжнее mtime). 0 дней = не удалять. Файлы без даты в
-/// имени (например `commands.log`) не трогаем.
+/// Removes log files older than the retention period. For `<YYYY-MM-DD>_<label>.log`,
+/// age comes from the filename date, which is more reliable than mtime. 0 days removes
+/// nothing. Files without a leading date, such as `commands.log`, are left untouched.
 pub fn purge_old() {
     let days = RETENTION_DAYS.load(Ordering::Relaxed);
     if days == 0 {
@@ -303,7 +303,7 @@ pub fn purge_old() {
             continue;
         };
         let Some(file_secs) = crate::db::parse_ymd(date) else {
-            continue; // нет даты в начале имени → не наш ротируемый файл
+            continue; // No leading date means this is not one of our rotated files.
         };
         if file_secs < cutoff && std::fs::remove_file(entry.path()).is_ok() {
             removed += 1;
@@ -314,8 +314,8 @@ pub fn purge_old() {
     }
 }
 
-/// Список файлов лога для источника (по метке), новейшие сверху. Метка: "app" для
-/// локального лога, имя ядра — для лога ядра.
+/// Lists log files for a source label, newest first. The label is "app" for the local
+/// log and the core name for a core log.
 pub fn list_files(label: &str) -> Vec<String> {
     let suffix = format!("_{}.log", sanitize_label(label));
     let dir = paths::logs_dir();
@@ -329,13 +329,13 @@ pub fn list_files(label: &str) -> Vec<String> {
             n.ends_with(&suffix).then_some(n)
         })
         .collect();
-    v.sort(); // дата в начале имени → лексикографически = по возрастанию даты
-    v.reverse(); // новейшие сверху
+    v.sort(); // A leading date makes lexicographic order equivalent to ascending date order.
+    v.reverse(); // Newest first.
     v
 }
 
-/// Прочитать историю из файла лога (последние `max` строк). Парсит TSV-формат;
-/// чужие/битые строки кладём целиком в msg.
+/// Reads the latest `max` lines of history from a log file. Parses TSV; foreign or malformed
+/// lines are stored whole in msg.
 pub fn read_file(filename: &str, max: usize) -> Vec<LogLine> {
     let path = paths::logs_dir().join(filename);
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -368,8 +368,8 @@ fn parse_file_line(date: &str, l: &str) -> LogLine {
     }
 }
 
-/// Пишет строку команды в `logs/commands.log` (с UTC-временем) и в in-memory
-/// буфер вкладки «Лог».
+/// Writes a command line with UTC time to `logs/commands.log` and to the Log tab's
+/// in-memory buffer.
 pub fn command(line: &str) {
     let ts = ts();
     if file_logging_enabled() {
@@ -387,8 +387,8 @@ pub fn command(line: &str) {
     });
 }
 
-/// Логгер-обёртка: дублирует напечатанные записи в кольцевой буфер и делегирует
-/// форматирование/вывод внутреннему `env_logger`. Ставится глобально в `main`.
+/// Logger wrapper that duplicates emitted entries into the ring buffer and delegates
+/// formatting/output to the inner `env_logger`. Installed globally in `main`.
 pub struct TeeLogger {
     inner: env_logger::Logger,
 }
@@ -405,8 +405,8 @@ impl log::Log for TeeLogger {
     }
 
     fn log(&self, record: &log::Record) {
-        // В буфер кладём только то, что реально проходит фильтр env_logger (то же,
-        // что попадёт в консоль) — иначе буфер забьётся trace-шумом зависимостей.
+        // Buffer only entries that pass env_logger's filter, matching console output;
+        // otherwise dependency trace noise would fill the buffer.
         if self.inner.matches(record) {
             push(LogLine {
                 ts: ts(),
