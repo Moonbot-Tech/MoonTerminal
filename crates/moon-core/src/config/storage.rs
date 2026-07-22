@@ -1,22 +1,22 @@
-//! Настройки локального хранилища — `cfg/storage.toml`.
+//! Local storage settings in `cfg/storage.toml`.
 //!
-//! Один файл на все БД (`data/*.sqlite`): UI-часть (вкладка «Хранилище» Настроек)
-//! пишет свои ключи сюда же, системная часть (игнор-лист версий и пр.) правится
-//! только руками. Нет файла → при первом чтении записываем дефолты, чтобы
-//! системные ключи были видны и редактируемы без чтения исходников.
+//! One settings file covers all local SQLite databases. The Settings UI's Storage tab writes
+//! its keys here, while system settings such as the version ignore list are edited manually.
+//! If the file is absent, the first read writes defaults so system keys are visible and editable
+//! without consulting the source.
 
 use serde::{Deserialize, Serialize};
 
 use super::{paths, toml_io};
 
-/// Поля стратегии, изменение которых НЕ создаёт новую версию (косметика/статус/
-/// оформление). Перенесено из mb_ai (проверено там годом эксплуатации), плюс:
-/// - `PreventWorkingUntil`: sgStop/sgStart — состояние, не правка параметров
-///   (трекается в head.checked), иначе каждый стоп плодил бы версию;
-/// - `OrderSize`: размер ордера крутится рутинно (в т.ч. хоткеями), версия
-///   параметров от него не нужна (решение 2026-07-16);
-/// - `StrategyName`: переименование — не правка параметров; текущее имя живёт
-///   в head-строке (решение 2026-07-16).
+/// Strategy fields whose changes do NOT create a new version (cosmetics/status/presentation).
+/// Ported from mb_ai after a year of production use, plus:
+/// - `PreventWorkingUntil`: sgStop/sgStart is state, not a parameter edit (tracked in
+///   head.checked); otherwise every stop would create a version;
+/// - `OrderSize`: order size changes routinely, including through hotkeys, and does not need
+///   a parameter version (decision 2026-07-16);
+/// - `StrategyName`: renaming is not a parameter edit; the current name lives in the head row
+///   (decision 2026-07-16).
 pub const DEFAULT_IGNORE_FIELDS: &[&str] = &[
     "Active",
     "LastEditDate",
@@ -55,18 +55,17 @@ impl Default for StorageCfg {
     }
 }
 
-/// Секция `[strategies]` — локальная БД стратегий и версий.
+/// The `[strategies]` section for the local strategy and version database.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StrategiesStoreCfg {
-    /// Вести локальную БД стратегий (head + версии). Выключение останавливает
-    /// запись; уже накопленная история остаётся на диске.
+    /// Whether to maintain the local strategy database (head + versions). Disabling stops
+    /// writes while preserving existing history on disk.
     pub enabled: bool,
-    /// Максимум версий на стратегию (0 = без лимита). Старые обрезаются.
+    /// Maximum versions per strategy (0 = unlimited). Older versions are pruned.
     pub version_limit: u32,
-    /// Поля, изменение которых не создаёт версию. Системный ключ: в UI не
-    /// выносится, правится руками (случайно выкинутое поле = молча потерянная
-    /// история правок).
+    /// Fields whose changes do not create a version. This system setting is not exposed in
+    /// the UI and is edited manually; accidentally excluding a field silently loses edit history.
     pub ignore_fields: Vec<String>,
 }
 
@@ -83,8 +82,8 @@ impl Default for StrategiesStoreCfg {
     }
 }
 
-/// Прочитать `storage.toml`; при отсутствии файла — записать дефолты (чтобы
-/// системные ключи были на виду). Битый файл → лог + дефолт (не перетираем).
+/// Reads `storage.toml`; if absent, writes defaults so system keys are visible. A corrupt file
+/// is logged and defaults are used without overwriting it.
 pub fn load() -> StorageCfg {
     let path = paths::storage_path();
     if !path.exists() {
@@ -97,7 +96,7 @@ pub fn load() -> StorageCfg {
     toml_io::load_or_default(&path, "storage.toml", |_| {})
 }
 
-/// Сохранить настройки хранилища (вызывает вкладка «Хранилище»).
+/// Saves storage settings from the Storage tab.
 pub fn save(cfg: &StorageCfg) {
     if let Err(e) = toml_io::save(&paths::storage_path(), cfg, "storage.toml") {
         log::warn!("storage.toml: сохранение не удалось: {e:#}");

@@ -1,12 +1,12 @@
-//! Бейджи типов детектов — переносимый JSON-файл `badges.json` (по образцу
-//! `orders.toml`/`figures.json`). Для каждого вида стратегии (`StrategyKind`
-//! ordinal) задаём: рисовать ли бейдж (`active`), короткий код (≤3 символа, не
-//! обязательно буквы) РАЗДЕЛЬНО под long/short (если включено `distinguish_dir`) и
-//! цвет РАЗДЕЛЬНО под тёмную/светлую тему. Обводка — ПЕР-СТРОКА: галка `outline` +
-//! свои цвета long/short на тему.
+//! Detection-type badges — a portable `badges.json` file (modeled after
+//! `orders.toml`/`figures.json`). For each strategy kind (`StrategyKind`
+//! ordinal), it specifies whether to draw the badge (`active`), a short code (≤3 characters,
+//! not necessarily letters) SEPARATELY for long/short (when `distinguish_dir` is enabled), and
+//! a color SEPARATELY for the dark/light theme. The outline is PER ROW: an `outline` toggle plus
+//! theme-specific long/short colors.
 //!
-//! Список видов растёт со временем — новые добавляются в UI по ordinal-номеру;
-//! ненастроенные виды в рантайме падают на нейтральный код `UNK`.
+//! The list of kinds grows over time — new ones are added to the UI by ordinal;
+//! unconfigured kinds fall back to the neutral `UNK` code at runtime.
 
 use serde::{Deserialize, Serialize};
 
@@ -18,37 +18,37 @@ const fn c(hex: u32) -> [u8; 3] {
     [(hex >> 16) as u8, (hex >> 8) as u8, hex as u8]
 }
 
-/// Нейтральный (muted) цвет-фолбэк для ненастроенных видов.
+/// Neutral (muted) fallback color for unconfigured kinds.
 const MUTED_DARK: [u8; 3] = c(0x97928A);
 const MUTED_LIGHT: [u8; 3] = c(0x4F5B68);
 
-// Дефолтные цвета обводки направления (long = зелёный, short = красный) на тему.
+// Default direction-outline colors per theme (long = green, short = red).
 const OUT_LONG_DARK: [u8; 3] = c(0x2FA85C);
 const OUT_LONG_LIGHT: [u8; 3] = c(0x168A49);
 const OUT_SHORT_DARK: [u8; 3] = c(0xFF4A4A);
 const OUT_SHORT_LIGHT: [u8; 3] = c(0xD92D3A);
 
-/// Один бейдж типа детекта.
+/// One detection-type badge.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct BadgeEntry {
-    /// Ordinal вида стратегии (`StrategyKind`). Ключ соответствия детекту.
+    /// Strategy-kind ordinal (`StrategyKind`). Key that associates the badge with a detection.
     pub ordinal: u8,
-    /// Человекочитаемое имя вида (для UI-строки настроек).
+    /// Human-readable kind name (for the settings UI row).
     pub name: String,
-    /// Рисовать бейдж для этого типа детекта. Выкл = бейдж не показываем.
+    /// Whether to draw a badge for this detection type. False hides the badge.
     pub active: bool,
-    /// Код бейджа (для лонга и для обоих направлений, если `distinguish_dir=false`). ≤3.
+    /// Badge code (for long, and for both directions when `distinguish_dir=false`). ≤3.
     pub code: String,
-    /// Различать код по направлению: при true у шорта свой код `code_short`.
+    /// Whether to distinguish the code by direction: when true, short uses `code_short`.
     pub distinguish_dir: bool,
-    /// Код бейджа для ШОРТА (используется только при `distinguish_dir`). ≤3.
+    /// Badge code for SHORT (used only when `distinguish_dir` is enabled). ≤3.
     pub code_short: String,
-    /// Цвет бейджа в тёмной теме.
+    /// Badge color in the dark theme.
     pub color_dark: [u8; 3],
-    /// Цвет бейджа в светлой теме.
+    /// Badge color in the light theme.
     pub color_light: [u8; 3],
-    /// Рисовать обводку бейджа (пер-строка). При true — цвета обводки по направлению.
+    /// Whether to draw the badge outline (per row). When true, outline colors depend on direction.
     pub outline: bool,
     pub outline_long_dark: [u8; 3],
     pub outline_long_light: [u8; 3],
@@ -77,7 +77,7 @@ impl Default for BadgeEntry {
 }
 
 impl BadgeEntry {
-    /// Цвет бейджа под активную тему.
+    /// Badge color for the active theme.
     pub fn color(&self, is_light: bool) -> [u8; 3] {
         if is_light {
             self.color_light
@@ -86,8 +86,8 @@ impl BadgeEntry {
         }
     }
 
-    /// Код бейджа под направление: при `distinguish_dir` и шорте — `code_short`
-    /// (если он непустой), иначе основной `code`.
+    /// Badge code for a direction: use `code_short` for short when `distinguish_dir` is enabled
+    /// (if it is non-empty); otherwise use the primary `code`.
     pub fn code_for(&self, is_short: bool) -> &str {
         if self.distinguish_dir && is_short && !self.code_short.is_empty() {
             &self.code_short
@@ -96,7 +96,7 @@ impl BadgeEntry {
         }
     }
 
-    /// Цвет обводки под направление и тему (если обводка включена).
+    /// Outline color for the direction and theme (when the outline is enabled).
     pub fn outline_color(&self, is_short: bool, is_light: bool) -> Option<[u8; 3]> {
         if !self.outline {
             return None;
@@ -110,50 +110,50 @@ impl BadgeEntry {
     }
 }
 
-/// Конфиг бейджей детектов (переносимый `badges.json`).
+/// Detection-badge configuration (portable `badges.json`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct BadgesConfig {
-    /// Записи по видам стратегий (ordinal → код/цвета/обводка).
+    /// Entries by strategy kind (ordinal → code/colors/outline).
     pub entries: Vec<BadgeEntry>,
 }
 
-/// Дефолтные 24 вида: `(ordinal, имя, код, цвет_тёмн, цвет_светл)`. Цвета — из
-/// семейств `MoonTone` (см. свотч бейджей). Держим здесь как единый источник —
-/// на первом запуске пишется в `badges.json`, дальше редактируется в Настройках.
+/// Default 24 kinds: `(ordinal, name, code, dark_color, light_color)`. Colors come from
+/// the `MoonTone` families (see the badge swatch). Kept here as the single source of truth —
+/// written to `badges.json` on first launch and edited in Settings thereafter.
 #[rustfmt::skip]
 const DEFAULTS: &[(u8, &str, &str, u32, u32)] = &[
-    // Вход / «лунные» — Positive (green)
+    // Entry / "moon" signals — Positive (green)
     (2,  "Drops",         "DRP", 0x2FA85C, 0x168A49),
     (6,  "MoonShot",      "SHT", 0x2FA85C, 0x168A49),
     (13, "MoonStrike",    "STR", 0x2FA85C, 0x168A49),
     (20, "MoonHook",      "HOK", 0x2FA85C, 0x168A49),
     (14, "New Listing",   "NEW", 0x2FA85C, 0x168A49),
-    // Импульс / объём — Warning (amber)
+    // Momentum / volume — Warning (amber)
     (4,  "Volumes",       "VOL", 0xFFB347, 0xB97800),
     (5,  "PumpDetection", "PMP", 0xFFB347, 0xB97800),
     (8,  "Delta",         "DLT", 0xFFB347, 0xB97800),
     (9,  "Waves",         "WAV", 0xFFB347, 0xB97800),
     (21, "Activity",      "ACT", 0xFFB347, 0xB97800),
-    // Стакан / структура — Info (blue)
+    // Order book / structure — Info (blue)
     (3,  "Walls",         "WAL", 0x7FC9FF, 0x126CBF),
     (19, "Chart Wall",    "CHW", 0x7FC9FF, 0x126CBF),
     (18, "Spread",        "SPR", 0x7FC9FF, 0x126CBF),
-    // Риск — Danger (red)
+    // Risk — Danger (red)
     (15, "Liquidations",  "LIQ", 0xFF4A4A, 0xD92D3A),
-    // Индикатор / производные — Accent
+    // Indicator / derivatives — Accent
     (17, "EMA",           "EMA", 0xD2691E, 0xB95C18),
     (7,  "V Lite",        "VLT", 0xD2691E, 0xB95C18),
     (16, "TopMarket",     "TOP", 0xD2691E, 0xB95C18),
     (10, "Combo",         "CMB", 0xD2691E, 0xB95C18),
-    // Внешний сигнал — Notice (yellow)
+    // External signal — Notice (yellow)
     (1,  "Telegram",      "TLG", 0xFFD93D, 0xB48A00),
     (11, "UDP",           "UDP", 0xFFD93D, 0xB48A00),
-    // Мета / служебное — Muted
+    // Meta / utility — Muted
     (12, "Manual",        "MAN", 0x97928A, 0x4F5B68),
     (22, "Alerts",        "ALR", 0x97928A, 0x4F5B68),
     (23, "Watcher",       "WCH", 0x97928A, 0x4F5B68),
-    // Служебный
+    // Utility
     (0,  "Unknown",       "UNK", 0xE8E4DC, 0x18202A),
 ];
 
@@ -176,8 +176,8 @@ impl Default for BadgesConfig {
 }
 
 impl BadgesConfig {
-    /// Прочитать `badges.json`. Нет файла/битый → дефолт (и записать его на диск,
-    /// чтобы пользователю было что редактировать вручную) — как `OrdersStyleSet::load`.
+    /// Reads `badges.json`. A corrupt file yields the default; a missing file creates and saves
+    /// the default so the user has something to edit manually, as in `OrdersStyleSet::load`.
     pub fn load() -> Self {
         let path = paths::badges_path();
         match std::fs::read_to_string(&path) {
@@ -196,7 +196,7 @@ impl BadgesConfig {
         }
     }
 
-    /// Записать `badges.json` (атомарно). Не фатально — при ошибке логируем.
+    /// Writes `badges.json` atomically. Failures are non-fatal and are logged.
     pub fn save(&self) {
         match serde_json::to_string_pretty(self) {
             Ok(s) => {
@@ -210,45 +210,45 @@ impl BadgesConfig {
         }
     }
 
-    /// Текст в формате badges.json — для «Копировать» в Настройках (= содержимое файла).
+    /// Text in badges.json format for "Copy" in Settings (= file contents).
     pub fn to_share_string(&self) -> Option<String> {
         serde_json::to_string_pretty(self).ok()
     }
 
-    /// Разобрать текст badges.json (вставка из буфера / содержимое файла). Требуем
-    /// массив `entries` — иначе любой JSON молча дал бы дефолт (serde(default)).
-    /// `None` = это не бейджи.
+    /// Parses badges.json text (clipboard paste / file contents). Requires an `entries`
+    /// array; otherwise any JSON would silently produce the default (`serde(default)`).
+    /// `None` means the text is not a badge configuration.
     pub fn parse_share(text: &str) -> Option<Self> {
         let v: serde_json::Value = serde_json::from_str(text).ok()?;
         v.get("entries")?.as_array()?;
         serde_json::from_str(text).ok()
     }
 
-    /// Запись по ordinal (первое совпадение).
+    /// Entry by ordinal (first match).
     pub fn entry(&self, ordinal: u8) -> Option<&BadgeEntry> {
         self.entries.iter().find(|e| e.ordinal == ordinal)
     }
 
-    /// Рисовать ли бейдж для вида (ненастроенный вид → да, покажем UNK).
+    /// Whether to draw the badge for a kind (an unconfigured kind shows UNK).
     pub fn active(&self, ordinal: u8) -> bool {
         self.entry(ordinal).map(|e| e.active).unwrap_or(true)
     }
 
-    /// Код бейджа для вида под направление (фолбэк `UNK`).
+    /// Badge code for a kind and direction (fallback: `UNK`).
     pub fn code(&self, ordinal: u8, is_short: bool) -> &str {
         self.entry(ordinal)
             .map(|e| e.code_for(is_short))
             .unwrap_or("UNK")
     }
 
-    /// Цвет бейджа для вида под активную тему (фолбэк — нейтраль).
+    /// Badge color for a kind in the active theme (fallback: neutral).
     pub fn color(&self, ordinal: u8, is_light: bool) -> [u8; 3] {
         self.entry(ordinal)
             .map(|e| e.color(is_light))
             .unwrap_or(if is_light { MUTED_LIGHT } else { MUTED_DARK })
     }
 
-    /// Цвет обводки бейджа под направление/тему (None = обводки нет).
+    /// Badge outline color for a direction/theme (None = no outline).
     pub fn outline_color(&self, ordinal: u8, is_short: bool, is_light: bool) -> Option<[u8; 3]> {
         self.entry(ordinal)
             .and_then(|e| e.outline_color(is_short, is_light))

@@ -38,7 +38,7 @@ fn parses_full_payload() {
 
 #[test]
 fn ui_appended_tail_is_allowed() {
-    // Append-only расширение той же версии: лишние байты в хвосте UI-блока ок.
+    // Append-only extension of the same version: extra bytes in the UI-block tail are valid.
     let cfg = parse_payload(&full_payload(&[1, 2, 3, 4, 5])).unwrap();
     assert_eq!(cfg.ui.main_buttons_index, 4);
 }
@@ -46,7 +46,7 @@ fn ui_appended_tail_is_allowed() {
 #[test]
 fn unknown_block_is_skipped() {
     let mut p = full_payload(&[]);
-    block(&mut p, 42, &[0xCC; 10]); // неизвестный kind в конце
+    block(&mut p, 42, &[0xCC; 10]); // Unknown kind at the end.
     assert!(parse_payload(&p).is_ok());
 }
 
@@ -62,7 +62,7 @@ fn duplicate_known_block_rejected() {
 
 #[test]
 fn missing_block_rejected() {
-    // Собираем payload без блока 5 (Ini).
+    // Build a payload without block 5 (Ini).
     let mut p = Vec::new();
     p.extend_from_slice(b"MBSP");
     p.push(7u8);
@@ -80,13 +80,13 @@ fn missing_block_rejected() {
 
 #[test]
 fn block_overrun_rejected() {
-    // size блока больше остатка payload.
+    // The declared block size exceeds the remaining payload.
     let mut p = Vec::new();
     p.extend_from_slice(b"MBSP");
     p.push(7u8);
     p.extend_from_slice(&1u16.to_le_bytes());
     p.push(1u8);
-    p.extend_from_slice(&100u32.to_le_bytes()); // заявлено 100, есть 2
+    p.extend_from_slice(&100u32.to_le_bytes()); // Declares 100 bytes but contains 2.
     p.extend_from_slice(&[0, 0]);
     assert!(matches!(parse_payload(&p), Err(ImportError::Truncated(_))));
 }
@@ -99,7 +99,7 @@ fn bad_magic_and_newer_version() {
     ));
     let mut p = Vec::new();
     p.extend_from_slice(b"MBSP");
-    p.push(8u8); // контейнер новее
+    p.push(8u8); // Newer container version.
     p.extend_from_slice(&1u16.to_le_bytes());
     assert_eq!(
         parse_payload(&p),
@@ -119,7 +119,7 @@ fn ui_version_mismatch_rejected() {
     block(&mut p, 4, &theme_body());
     block(&mut p, 5, &ini_body());
     let mut ui = ui_body([0.0; 6], [0; 6], [0; 6], [0.0; 6]);
-    ui[0] = 4; // version 4 вместо 3
+    ui[0] = 4; // Version 4 instead of 3.
     block(&mut p, 6, &ui);
     assert!(matches!(
         parse_payload(&p),
@@ -149,7 +149,7 @@ fn nan_order_size_rejected() {
 
 #[test]
 fn full_clipboard_roundtrip_through_transport() {
-    // Интеграция транспорта и схемы: encode → parse_clipboard.
+    // Transport/schema integration: encode → parse_clipboard.
     let text = super::super::transport::encode_mbsc7(&full_payload(&[]));
     let cfg = super::super::parse_clipboard(&text).unwrap();
     assert_eq!(cfg.ui.hotkeys.order_sizes[5], 50000.0);

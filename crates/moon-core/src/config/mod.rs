@@ -63,8 +63,8 @@ use std::path::Path;
 
 use crate::market::MarketDataMode;
 
-/// Атомарная запись пользовательского файла конфигурации/раскладки: временный sibling + rename.
-/// Используется и для TOML, и для JSON-персиста UI.
+/// Atomically writes a user config/layout file through a temporary sibling plus rename.
+/// Used for both TOML and persisted UI JSON.
 pub fn write_file_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
     toml_io::write_atomic(path, bytes, label)
 }
@@ -103,35 +103,35 @@ enum SaveKind {
 pub struct AppConfig {
     pub servers: Vec<ServerConfig>,
     pub groups: Vec<GroupConfig>,
-    /// Язык интерфейса (settings.toml). Дефолт — системная локаль.
+    /// Interface language (settings.toml). Defaults to the system locale.
     pub language: Language,
-    /// Источник рыночных данных (settings.toml). Дефолт — Dedup (провайдер на биржу).
+    /// Market-data source (settings.toml). Defaults to Dedup, one provider per exchange.
     pub market_mode: MarketDataMode,
-    /// Отдельная чарт-вкладка на каждое ядро для AddToChart (settings.toml).
+    /// Separate AddToChart tab per core (settings.toml).
     pub charts_split_by_core: bool,
-    /// AddToChart-стек: вертикальный скролл (true) / делить высоту окна (false, как раньше).
+    /// AddToChart stack: vertical scrolling (true) or divided window height (false, as before).
     pub charts_stack_scroll: bool,
-    /// Скролл-стек: сжимать по заполнению (скролл не появляется). Дефолт false.
+    /// Compress the scroll stack as it fills so no scrollbar appears. Defaults to false.
     pub charts_stack_compress: bool,
-    /// Скролл-стек: высота одного графика (лог. px). Дефолт 360.
+    /// Height of one chart in the scroll stack, in logical pixels. Defaults to 360.
     pub chart_stack_height: u16,
-    /// Раздельные зоны управления: ордера/линии только в зоне стакана (settings.toml). Дефолт true.
+    /// Separate control zones: orders/lines only in the order-book area (settings.toml). Defaults to true.
     pub separate_control_zones: bool,
-    /// Авто-закрытие графиков Main при неактивности окна, сек (settings.toml). 0 = выключено.
-    /// Неактивность = окно не в фокусе ЛИБО в фокусе, но мышь не двигается. Каждый график
-    /// закрывается через N сек своей неактивности (новейший — последним), фулскрин тоже.
+    /// Main-chart auto-close delay for window inactivity, in seconds (settings.toml). 0 disables it.
+    /// Inactive means either unfocused or focused with no mouse movement. Each chart closes after
+    /// N seconds of its own inactivity, newest last; fullscreen charts are included.
     pub main_idle_close_secs: u32,
-    /// Писать лог (приложения и ядер) в файлы logs/ (settings.toml). Дефолт on.
+    /// Whether to write application/core logs to files under logs/ (settings.toml). Defaults to on.
     pub log_to_file: bool,
-    /// Срок хранения файлов лога, дней; 0 = хранить всё (settings.toml). Дефолт 14.
+    /// Log-file retention in days; 0 keeps everything (settings.toml). Defaults to 14.
     pub log_retention_days: u32,
-    /// Прибавка к базовым размерам UI-шрифтов в logical px. Дефолт +2.
+    /// Addition to base UI font sizes in logical pixels. Defaults to +2.
     pub ui_font_delta: f32,
-    /// Тёмная/светлая тема MoonUI (settings.toml, открытый формат).
+    /// Dark/light MoonUI theme (plaintext settings.toml).
     pub ui_theme_mode: UiThemeMode,
-    /// Общий масштаб геометрии UI. Дефолт 1.0.
+    /// Overall UI geometry scale. Defaults to 1.0.
     pub ui_scale: f32,
-    /// Множитель RAM-budget для retained market history. 100 = авто-база, 800 = 8x.
+    /// RAM-budget multiplier for retained market history. 100 = automatic baseline, 800 = 8x.
     pub chart_memory_percent: u16,
     /// Order of every core list in the application (`settings.toml`). Defaults to `Name`.
     pub core_sort: CoreSortMode,
@@ -140,13 +140,13 @@ pub struct AppConfig {
     /// Private to `config`: a `pub` field could be overwritten with a stale counter from
     /// outside, undoing the floor without ever calling a constructor.
     pub(in crate::config) next_uid: UidCounter,
-    /// Горячие клавиши терминала (settings.toml, открытый формат).
+    /// Terminal hotkeys (plaintext hotkeys.toml).
     pub hotkeys: HotkeysConfig,
-    /// Тема оформления чарта per-режим UI (тёмная/светлая) — отдельный переносимый theme.toml.
+    /// Chart theme per UI mode (dark/light) in separate portable theme.toml.
     pub theme: ChartThemeSet,
-    /// Стили линий ордеров per-theme (тёмная/светлая) — отдельный переносимый orders.toml.
+    /// Order-line styles per theme (dark/light) in separate portable orders.toml.
     pub orders: OrdersStyleSet,
-    /// Бейджи типов детектов (код+цвета по видам, на тему) — отдельный переносимый badges.json.
+    /// Detect-type badges (code + per-type colors, per theme) in separate portable badges.json.
     pub badges: BadgesConfig,
     /// Runtime flag (NOT serialized): `settings.toml` EXISTS but could not be read because of
     /// permissions, a share, or an unhydrated cloud placeholder, so memory holds DEFAULTS rather
@@ -158,9 +158,9 @@ pub struct AppConfig {
     /// which could turn a temporary read failure into irreversible replacement of the live config
     /// with defaults.
     pub settings_unreadable: bool,
-    /// Рантайм-флаг (НЕ сериализуется): конфиг загружен из версии < `COREID_UID_VERSION`,
-    /// где `charts.json` хранил позиционные CoreId. UI на старте один раз перепривяжет их
-    /// к стабильным uid (см. `chart_persist::remap_core_ids`). Дефолт false.
+    /// Runtime flag (NOT serialized): the config came from before `COREID_UID_VERSION`, when
+    /// `charts.json` stored positional CoreIds. At startup, the UI rebinds them once to stable
+    /// uids (see `chart_persist::remap_core_ids`). Defaults to false.
     pub chart_core_remap_needed: bool,
 }
 
@@ -218,19 +218,19 @@ impl AppConfig {
     /// exists to prevent. `None` means no durable store contributed a uid, whether because the
     /// stores were absent, empty, or unreadable.
     pub fn load(uid_floor: Option<u64>) -> anyhow::Result<Self> {
-        // macOS/Linux: при первом запуске после переезда хранилища перенести
-        // конфиги из бандла (рядом с exe) в пользовательскую директорию данных.
-        // На Windows это no-op (data_dir == exe_dir).
+        // On macOS/Linux, the first launch after the storage move migrates configs from the
+        // bundle beside the executable to the user-data directory. On Windows this is a no-op
+        // because data_dir == exe_dir.
         paths::migrate_bundle_data();
-        // Настройки/раскладка переехали из корня данных в подпапку `cfg/` — один раз
-        // переносим старые плоские файлы (на всех платформах, после bundle-миграции).
+        // Settings/layout moved from the data root to `cfg/`; move legacy flat files once on
+        // every platform after bundle migration.
         paths::migrate_flat_to_cfg();
-        // Тема и стиль линий ордеров — отдельные переносимые файлы, грузятся
-        // независимо от серверов/групп.
+        // Theme and order-line style are separate portable files loaded independently of
+        // servers/groups.
         let theme = ChartThemeSet::load();
         let orders = OrdersStyleSet::load();
         let badges = BadgesConfig::load();
-        // Хоткеи — отдельный переносимый файл (с v13); None = ещё не мигрировали.
+        // Hotkeys use a separate portable file since v13; None means not yet migrated.
         let hotkeys_file = HotkeysConfig::load();
         if let Some(cfg) =
             Self::load_plaintext_env(uid_floor, theme.clone(), orders.clone(), badges.clone())?
@@ -257,8 +257,8 @@ impl AppConfig {
                 backup::snapshot(backup::Trigger::SchemaMigration);
             }
             let merged = reconcile::merge(sf, meta, uid_floor);
-            // hotkeys.toml приоритетен; нет файла → одноразовая миграция legacy-секции
-            // из settings.toml (или дефолта) на диск в новый файл.
+            // hotkeys.toml takes precedence. If absent, migrate the legacy settings.toml
+            // section (or its default) once into the new file.
             let hotkeys = hotkeys_file.unwrap_or_else(|| {
                 let h = merged.hotkeys.clone();
                 if let Err(e) = h.save() {
@@ -297,8 +297,8 @@ impl AppConfig {
                 cfg.servers.len(),
                 cfg.groups.len()
             );
-            // Дослоить новые дефолты / зафиксировать свежие uid на диск.
-            // Не фатально: при ошибке продолжаем с тем, что уже в памяти.
+            // Write new defaults and freshly assigned uids back to disk. Failure is non-fatal;
+            // continue with the state already in memory.
             //
             // FAIL CLOSED: `save` itself rejects `settings_unreadable` (see `save_impl`). This
             // explicit log makes the reason visible instead of presenting a mysterious write
@@ -316,7 +316,7 @@ impl AppConfig {
             return Ok(cfg);
         }
 
-        // Миграции со старых форматов (один раз → save() пишет новые файлы).
+        // One-time migration from legacy formats; save() writes the new files.
         if paths::legacy_enc_path().exists() {
             let mut cfg = migrate::from_legacy_enc(uid_floor)?;
             cfg.theme = theme;
@@ -380,7 +380,7 @@ impl AppConfig {
             theme,
             orders,
             badges,
-            charts_split_by_core: true, // дефолт — отдельная вкладка на ядро
+            charts_split_by_core: true, // Default to a separate tab per core.
             chart_stack_height: schema::default_chart_stack_height(),
             log_to_file: true,
             log_retention_days: 14,
@@ -491,8 +491,9 @@ impl AppConfig {
         }))
     }
 
-    /// Сохраняет в два файла. Проставляет стабильные uid, валидирует уникальность
-    /// имени и host:port. `&mut self` — т.к. может присвоить uid новым ядрам.
+    /// Saves split server/settings configuration plus portable theme, orders, badges, and hotkeys
+    /// files. Assigns stable uids and validates unique names and API keys.
+    /// Takes `&mut self` because it may assign uids to new cores.
     ///
     /// WITHOUT a snapshot: this path serves the routine `config_dirty` drain (the 100-ms loop,
     /// application exit, and header edits), which fires for small changes and would evict useful
@@ -557,8 +558,8 @@ impl AppConfig {
         };
         store::write_servers(&sf)?;
         store::write_settings(&meta)?;
-        // Тема, стиль линий, бейджи детектов и хоткеи — в свои переносимые файлы,
-        // независимо от settings.toml.
+        // Theme, line styles, detect badges, and hotkeys each use their own portable file,
+        // independently of settings.toml.
         self.theme.save()?;
         self.orders.save()?;
         self.badges.save();
@@ -566,27 +567,27 @@ impl AppConfig {
         Ok(outcome)
     }
 
-    /// Тема чарта активного режима UI (тёмная/светлая — по `ui_theme_mode`).
+    /// Chart theme for the active UI mode (dark/light according to `ui_theme_mode`).
     pub fn chart_theme(&self) -> &ChartTheme {
         self.theme.get(self.ui_theme_mode == UiThemeMode::Light)
     }
 
-    /// Группа имеет смысл только пока на неё ссылается хоть одно ядро. Сироты
-    /// (например, от промежуточных значений при наборе имени) не сохраняем.
+    /// A group is meaningful only while at least one core references it. Do not save orphans,
+    /// such as intermediate values created while typing a name.
     fn prune_orphan_groups(&mut self) {
         let used: HashSet<&str> = self.servers.iter().map(|s| s.group.as_str()).collect();
         self.groups.retain(|g| used.contains(g.name.as_str()));
     }
 
-    /// Проверка уникальности имени сервера и ключа (endpoint теперь внутри ключа,
-    /// поэтому одинаковый ключ = одно и то же ядро дважды). Пустые ключи не сравниваем
-    /// — это недозаполненные строки в процессе редактирования.
+    /// Validates unique server names and keys. The endpoint is encoded in the key, so an
+    /// identical key means the same core was added twice. Empty keys are ignored because they
+    /// represent incomplete rows during editing.
     fn validate(&self) -> anyhow::Result<()> {
         let mut names = HashSet::new();
         let mut keys = HashSet::new();
         for s in &self.servers {
-            // core i18n-агностичен: сообщения валидации — простым текстом. Раньше
-            // было t!("err.dup_name"/"err.dup_key"); при желании UI перелокализует.
+            // The core is i18n-agnostic, so validation uses plain text. This previously called
+            // t!("err.dup_name"/"err.dup_key"); the UI may localize it if needed.
             if !names.insert(s.name.to_lowercase()) {
                 anyhow::bail!("duplicate server name: {}", s.name);
             }
@@ -597,14 +598,14 @@ impl AppConfig {
         Ok(())
     }
 
-    /// Сигнатура «структурной» части конфига: серверы + группы, БЕЗ темы/языка/режима
-    /// рынка/хоткеев. По ней App решает, нужен ли при сохранении настроек реконнект к ядрам и
-    /// пересоздание окон. Тема меняется живо, язык, режим рынка и хоткеи — без реконнекта,
-    /// поэтому их исключаем (нейтрализуем дефолтом).
+    /// Signature of the structural config: servers + groups, WITHOUT theme/language/market mode/
+    /// hotkeys. The application uses it to decide whether saving settings requires reconnecting
+    /// cores and recreating windows. Theme updates live, while language, market mode, and hotkeys
+    /// need no reconnect, so they are neutralized to defaults.
     pub fn structural_sig(&self) -> String {
-        // Связка чарт-вкладок (`chart_bundle`) и пресеты размера ордера (`order_sizes`) —
-        // чисто UI/локальные настройки: их смена НЕ требует реконнекта ядер/ребилда сессий
-        // (см. apply_settings). Нейтрализуем, чтобы не считать структурными.
+        // Chart-tab bundles (`chart_bundle`) and order-size presets (`order_sizes`) are purely
+        // UI/local settings. Changing them does NOT reconnect cores or rebuild sessions (see
+        // apply_settings), so neutralize them to keep them non-structural.
         let servers: Vec<ServerConfig> = self
             .servers
             .iter()
@@ -621,13 +622,13 @@ impl AppConfig {
             &self.groups,
             Language::default(),
             MarketDataMode::default(),
-            true,  // нейтрализуем: тумблер чартов не влияет на структуру (без ребилда)
-            false, // charts_stack_scroll — чисто визуальный, не структурный
-            false, // charts_stack_compress — чисто визуальный
-            schema::default_chart_stack_height(), // высота стека — не структурная
-            false, // separate_control_zones — поведенческий, не структурный
-            0,     // main_idle_close_secs — поведенческий, не структурный
-            true,  // лог-настройки тоже не структурные (без реконнекта/ребилда)
+            true,  // The chart toggle is non-structural; no rebuild.
+            false, // charts_stack_scroll is purely visual, not structural.
+            false, // charts_stack_compress is purely visual.
+            schema::default_chart_stack_height(), // Stack height is not structural.
+            false, // separate_control_zones is behavioral, not structural.
+            0,     // main_idle_close_secs is behavioral.
+            true,  // Log settings are non-structural.
             14,
             schema::default_ui_font_delta(),
             UiThemeMode::default(),
@@ -645,7 +646,7 @@ impl AppConfig {
         format!("{a}\n{b}")
     }
 
-    /// Свойства группы по имени (существующие или дефолт).
+    /// Group properties by name, returning existing values or defaults.
     pub fn group(&self, name: &str) -> GroupConfig {
         self.groups
             .iter()
@@ -654,8 +655,8 @@ impl AppConfig {
             .unwrap_or_else(|| GroupConfig::new(name))
     }
 
-    /// Настраивали ли уже конфиг: есть ли хоть один сервер с ключом. False = первый
-    /// запуск (ещё ничего не вводили) — показываем только окно Настроек.
+    /// Whether config has been set up, defined as at least one server with a key. False means
+    /// first launch with no input yet, when only the Settings window is shown.
     pub fn has_keyed_server(&self) -> bool {
         self.servers.iter().any(|s| !s.key.is_empty())
     }

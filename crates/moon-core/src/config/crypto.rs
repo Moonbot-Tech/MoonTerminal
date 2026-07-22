@@ -1,5 +1,5 @@
-//! Шифрование конфига: AES-256-GCM, ключ хранится в OS keyring.
-//! Формат файла: [nonce(12)] ++ [ciphertext+tag].
+//! Config encryption using AES-256-GCM, with the key stored in the OS keyring.
+//! File format: [nonce(12)] ++ [ciphertext+tag].
 
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
@@ -11,7 +11,7 @@ const KEYRING_SERVICE: &str = "moon-terminal";
 const KEYRING_USER: &str = "config-key-v1";
 const NONCE_LEN: usize = 12;
 
-/// Достаёт 32-байтовый ключ из OS keyring; при первом запуске генерирует и сохраняет.
+/// Retrieves the 32-byte key from the OS keyring, generating and storing it on first launch.
 fn data_key() -> anyhow::Result<[u8; 32]> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).context("keyring entry")?;
     match entry.get_password() {

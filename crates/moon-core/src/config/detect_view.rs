@@ -1,10 +1,9 @@
-//! Настройки отображения ленты детектов: у КАЖДОГО размера карточки (мини/средний/
-//! крупный) свои габариты, тип графика, цветная полоска сервера (rail) и СЛОТОВАЯ
-//! раскладка полей — в слот назначается поле + флаги «поверх графика»/«вправо»/«под
-//! графиком». Persist — ОТДЕЛЬНЫЙ переносимый `detects_view.toml` (per-group, ключ —
-//! имя группы; как theme.toml/badges.json можно копировать между пользователями).
-//! Старые записи `layout.toml::detect_view_by_group` (галочная схема) не мигрируются —
-//! отсутствие записи даёт дефолт по дизайн-макету.
+//! Detection-feed display settings: EACH card size (mini/medium/large) has its own dimensions,
+//! chart type, colored server rail, and SLOT-BASED field layout — each slot receives a field plus
+//! "over chart"/"right"/"below chart" flags. Persistence uses a SEPARATE portable
+//! `detects_view.toml` (per group, keyed by group name; like theme.toml/badges.json, it can be
+//! copied between users). Old `layout.toml::detect_view_by_group` entries (the checkbox-based
+//! scheme) are not migrated; a missing entry uses the design-spec default.
 
 use std::collections::HashMap;
 
@@ -12,16 +11,16 @@ use serde::{Deserialize, Serialize};
 
 use super::{paths, toml_io};
 
-/// Размер карточки детекта.
+/// Detection-card size.
 pub const DETECT_SIZE_MINI: u8 = 0;
 pub const DETECT_SIZE_MEDIUM: u8 = 1;
 pub const DETECT_SIZE_LARGE: u8 = 2;
 
-/// Максимум слотов (крупный). Мини/средний используют первые 4/6 слотов того же массива —
-/// один тип конфига на все размеры (и `Copy` без Vec).
+/// Maximum number of slots (large). Mini/medium use the first 4/6 slots of the same array —
+/// one configuration type for all sizes (and `Copy` without a Vec).
 pub const DETECT_MAX_SLOTS: usize = 9;
 
-/// Сколько слотов у размера: мини 4 (2 ряда × 2), средний 6 (2 ряда × 3), крупный 9.
+/// Number of slots by size: mini 4 (2 rows × 2), medium 6 (2 rows × 3), large 9.
 pub fn detect_slot_count(size: u8) -> usize {
     match size {
         DETECT_SIZE_MINI => 4,
@@ -30,49 +29,49 @@ pub fn detect_slot_count(size: u8) -> usize {
     }
 }
 
-/// Ограничение ширины цветной полоски сервера (rail), px.
+/// Maximum width of the colored server rail, in pixels.
 pub const DETECT_RAIL_MAX: u8 = 5;
 
-/// Тип мини-графика карточки.
+/// Card mini-chart type.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DetectChart {
-    /// Без графика.
+    /// No chart.
     None,
-    /// Замороженные 5м-свечи (~2ч).
+    /// Frozen 5-minute candles (~2 hours).
     #[default]
     Candles,
-    /// Линия цены 24ч.
+    /// 24-hour price line.
     Line,
 }
 
-/// Поле, назначаемое в слот карточки.
+/// Field assigned to a card slot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DetectField {
-    /// Слот пуст.
+    /// Empty slot.
     #[default]
     None,
-    /// Токен монеты (крупная моно-подпись).
+    /// Coin token (large monospace label).
     Coin,
-    /// Обратный отсчёт («Ns»).
+    /// Countdown ("Ns").
     Time,
-    /// Бейдж типа детекта.
+    /// Detection-type badge.
     Badge,
-    /// Бейдж имени ядра.
+    /// Core-name badge.
     Core,
-    /// Дельта 24ч, %.
+    /// 24-hour delta, %.
     Delta24h,
-    /// Дельта 1ч, %.
+    /// 1-hour delta, %.
     Delta1h,
-    /// Название биржи.
+    /// Exchange name.
     Exchange,
-    /// Тип биржи (спот/фьючи/…).
+    /// Exchange kind (spot/futures/…).
     ExchangeKind,
 }
 
 impl DetectField {
-    /// Все назначаемые поля (порядок выпадашки слота; `None` = «—»).
+    /// All assignable fields (slot-dropdown order; `None` = "—").
     pub const ALL: [DetectField; 9] = [
         DetectField::None,
         DetectField::Coin,
@@ -86,19 +85,19 @@ impl DetectField {
     ];
 }
 
-/// Один слот раскладки. Позиция ряда (верх/низ) у мини/среднего задана ИНДЕКСОМ слота
-/// (первая половина — верх, вторая — низ); у крупного ряд выбирается флагом `below`.
+/// One layout slot. For mini/medium, the row position (top/bottom) is set by the slot INDEX
+/// (first half = top, second half = bottom); for large, the `below` flag selects the row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DetectSlot {
-    /// Что показывать (None = слот пуст).
+    /// What to display (None = empty slot).
     pub field: DetectField,
-    /// Рисовать поверх графика (с подложкой), а не в текстовой зоне. Действует только
-    /// при включённом графике.
+    /// Whether to draw over the chart (with a backing) rather than in the text area. Applies only
+    /// when the chart is enabled.
     pub over: bool,
-    /// Прижать к правому краю своей зоны (иначе к левому).
+    /// Whether to align to the right edge of its area (otherwise left).
     pub right: bool,
-    /// Крупный размер: под графиком (иначе над). Мини/средний игнорируют.
+    /// Large size: below the chart (otherwise above). Ignored by mini/medium.
     pub below: bool,
 }
 
@@ -113,27 +112,27 @@ impl DetectSlot {
     }
 }
 
-/// Настройки ОДНОГО размера карточки.
+/// Settings for ONE card size.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DetectSizeCfg {
-    /// Габариты карточки, лог. px (до масштаба UI).
+    /// Card dimensions in logical pixels (before UI scaling).
     pub w: u16,
     pub h: u16,
-    /// Тип мини-графика (мини-размер график не рисует независимо от значения).
+    /// Mini-chart type (the mini size never draws a chart, regardless of this value).
     pub chart: DetectChart,
-    /// Ширина цветной полоски сервера слева, px (0 = выкл, макс 5).
+    /// Width of the colored server rail on the left, in pixels (0 = off, max 5).
     pub rail_w: u8,
-    /// Ширина градиента-фейда от полоски, px (0 = выкл, макс = ширина карточки).
+    /// Width of the gradient fade from the rail, in pixels (0 = off, max = card width).
     pub rail_grad: u16,
-    /// Слоты раскладки (используются первые [`detect_slot_count`] штук).
+    /// Layout slots (the first [`detect_slot_count`] entries are used).
     pub slots: [DetectSlot; DETECT_MAX_SLOTS],
 }
 
 impl Default for DetectSizeCfg {
     fn default() -> Self {
-        // Прямо не используется (у каждого размера свой дефолт в DetectViewCfg), но нужен
-        // для serde(default) при частично заполненных toml-записях.
+        // Not used directly (each size has its own default in DetectViewCfg), but required
+        // by serde(default) for partially populated TOML entries.
         Self {
             w: 184,
             h: 44,
@@ -146,12 +145,12 @@ impl Default for DetectSizeCfg {
 }
 
 impl DetectSizeCfg {
-    /// Ширина полоски с клампом 0..=5.
+    /// Rail width clamped to 0..=5.
     pub fn rail_w_clamped(&self) -> u8 {
         self.rail_w.min(DETECT_RAIL_MAX)
     }
 
-    /// Ширина градиента с клампом 0..=w.
+    /// Gradient width clamped to 0..=w.
     pub fn rail_grad_clamped(&self) -> u16 {
         self.rail_grad.min(self.w)
     }
@@ -160,7 +159,7 @@ impl DetectSizeCfg {
 const F: fn(DetectField, bool, bool, bool) -> DetectSlot = DetectSlot::new;
 const EMPTY: DetectSlot = DetectSlot::new(DetectField::None, false, false, false);
 
-// Дефолты = рабочий набор пользователя от 2026-07-15 (снят с его detects_view.toml).
+// Defaults = the user's working set from 2026-07-15 (captured from their detects_view.toml).
 
 fn default_mini() -> DetectSizeCfg {
     DetectSizeCfg {
@@ -169,7 +168,7 @@ fn default_mini() -> DetectSizeCfg {
         chart: DetectChart::None,
         rail_w: 3,
         rail_grad: 30,
-        // Верхний ряд: монета слева, время справа; нижний: бейдж слева, ядро справа.
+        // Top row: coin on the left, time on the right; bottom: badge on the left, core on the right.
         slots: [
             F(DetectField::Coin, false, false, false),
             F(DetectField::Time, false, true, false),
@@ -191,7 +190,7 @@ fn default_medium() -> DetectSizeCfg {
         chart: DetectChart::Line,
         rail_w: 3,
         rail_grad: 30,
-        // Верх: монета, время слева, Δ24 справа; низ: бейдж, ядро слева, Δ1 справа.
+        // Top: coin and time on the left, Δ24 on the right; bottom: badge and core on the left, Δ1 on the right.
         slots: [
             F(DetectField::Coin, false, false, false),
             F(DetectField::Time, false, false, false),
@@ -213,8 +212,8 @@ fn default_large() -> DetectSizeCfg {
         chart: DetectChart::Candles,
         rail_w: 3,
         rail_grad: 30,
-        // Над графиком: монета+бейдж слева, Δ24 справа, время поверх; под:
-        // ядро слева, Δ1 справа.
+        // Above the chart: coin+badge on the left, Δ24 on the right, time overlaid; below:
+        // core on the left, Δ1 on the right.
         slots: [
             F(DetectField::Coin, false, false, false),
             F(DetectField::Badge, false, false, false),
@@ -229,13 +228,13 @@ fn default_large() -> DetectSizeCfg {
     }
 }
 
-/// Отображение ленты детектов одной группы: активный размер + настройки всех трёх.
+/// Detection-feed display for one group: active size plus settings for all three sizes.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DetectViewCfg {
-    /// Активный размер карточки: 0=мини, 1=средний, 2=крупный.
+    /// Active card size: 0=mini, 1=medium, 2=large.
     pub size: u8,
-    /// Знаков после запятой у дельт (Δ24ч/Δ1ч), 0..=2 — ОДНА настройка на все размеры.
+    /// Decimal places for deltas (Δ24h/Δ1h), 0..=2 — ONE setting for all sizes.
     pub delta_decimals: u8,
     pub mini: DetectSizeCfg,
     pub medium: DetectSizeCfg,
@@ -255,17 +254,17 @@ impl Default for DetectViewCfg {
 }
 
 impl DetectViewCfg {
-    /// Нормализованный размер (клампится к валидному диапазону).
+    /// Normalized size (clamped to the valid range).
     pub fn size_clamped(&self) -> u8 {
         self.size.min(DETECT_SIZE_LARGE)
     }
 
-    /// Знаков после запятой у дельт с клампом 0..=2.
+    /// Number of delta decimal places, clamped to 0..=2.
     pub fn delta_decimals_clamped(&self) -> usize {
         self.delta_decimals.min(2) as usize
     }
 
-    /// Настройки конкретного размера.
+    /// Settings for a specific size.
     pub fn size_cfg(&self, size: u8) -> &DetectSizeCfg {
         match size {
             DETECT_SIZE_MINI => &self.mini,
@@ -282,23 +281,24 @@ impl DetectViewCfg {
         }
     }
 
-    /// Настройки активного размера.
+    /// Settings for the active size.
     pub fn active(&self) -> &DetectSizeCfg {
         self.size_cfg(self.size_clamped())
     }
 
-    /// Текст в формате detects_view.toml одной группы — для «Копировать» в попапе.
+    /// Single-group text in detects_view.toml format for "Copy" in the popup.
     pub fn to_share_string(&self) -> Option<String> {
         toml::to_string_pretty(self).ok()
     }
 
-    /// Разобрать текст «Вставить» (конфиг одной группы). Чужой/битый текст → None.
+    /// Parses "Paste" text (one group's configuration). Invalid TOML yields None; valid TOML
+    /// uses serde defaults for fields it does not contain.
     pub fn parse_share(text: &str) -> Option<Self> {
         toml::from_str::<Self>(text).ok()
     }
 }
 
-/// Файл `detects_view.toml`: настройки лент детектов по группам (ключ — имя группы).
+/// `detects_view.toml` file: detection-feed settings by group (keyed by group name).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DetectViewFile {
@@ -316,7 +316,7 @@ impl DetectViewFile {
         }
     }
 
-    /// Настройки группы (или дефолт по макету).
+    /// Group settings (or the design-spec default).
     pub fn group(&self, group: &str) -> DetectViewCfg {
         self.groups.get(group).copied().unwrap_or_default()
     }

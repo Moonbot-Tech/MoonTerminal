@@ -1,8 +1,7 @@
-//! Связка файловых форматов (`schema`) с рантайм-`AppConfig` в обе стороны.
+//! Bidirectional mapping between file formats (`schema`) and runtime `AppConfig`.
 //!
-//! Ключ привязки меты к серверу — стабильный `uid`. Для старых файлов без uid
-//! один раз привязываемся по `name` и тут же проставляем свежий uid: после этого
-//! переименование сервера больше НЕ теряет его галки (привязка идёт по uid).
+//! Metadata binds to a server through a stable `uid`. Older files without uids bind once by
+//! `name` and immediately receive a fresh uid; subsequent renames no longer lose their settings.
 
 use super::groups::GroupConfig;
 use super::hotkeys::HotkeysConfig;
@@ -17,52 +16,52 @@ use super::uid_counter::UidCounter;
 use super::ServerConfig;
 use crate::market::MarketDataMode;
 
-/// Результат слияния двух файлов в рантайм.
+/// Result of merging the two files into runtime state.
 pub struct Merged {
     pub servers: Vec<ServerConfig>,
     pub groups: Vec<GroupConfig>,
-    /// Язык интерфейса из settings.toml (или системный дефолт).
+    /// Interface language from settings.toml, or the system default.
     pub language: Language,
-    /// Источник рыночных данных из settings.toml (или дефолт Dedup).
+    /// Market-data source from settings.toml, or the Dedup default.
     pub market_mode: MarketDataMode,
-    /// Отдельная чарт-вкладка на ядро (AddToChart).
+    /// Separate chart tab per core (AddToChart).
     pub charts_split_by_core: bool,
-    /// AddToChart-стек: вертикальный скролл (true) / делить высоту окна (false).
+    /// AddToChart stack: vertical scrolling (true) or divided window height (false).
     pub charts_stack_scroll: bool,
-    /// Скролл-стек: сжимать по заполнению (без скролла).
+    /// Compress the scroll stack as it fills, without a scrollbar.
     pub charts_stack_compress: bool,
-    /// Скролл-стек: высота одного графика (лог. px).
+    /// Height of one chart in the scroll stack, in logical pixels.
     pub chart_stack_height: u16,
-    /// Раздельные зоны управления (ордера/линии только в зоне стакана).
+    /// Separate control zones, restricting orders/lines to the order-book area.
     pub separate_control_zones: bool,
-    /// Авто-закрытие графиков Main при неактивности окна, сек (0 = выключено).
+    /// Main-chart auto-close delay for window inactivity, in seconds (0 = disabled).
     pub main_idle_close_secs: u32,
-    /// Писать лог в файлы logs/.
+    /// Whether to write logs to files under logs/.
     pub log_to_file: bool,
-    /// Срок хранения файлов лога (дней; 0 = хранить всё).
+    /// Log-file retention period in days (0 = keep everything).
     pub log_retention_days: u32,
-    /// Прибавка к базовым размерам UI-шрифтов в logical px.
+    /// Addition to base UI font sizes in logical pixels.
     pub ui_font_delta: f32,
-    /// Тёмная/светлая тема MoonUI.
+    /// Dark/light MoonUI theme.
     pub ui_theme_mode: UiThemeMode,
-    /// Общий масштаб геометрии UI.
+    /// Overall UI geometry scale.
     pub ui_scale: f32,
-    /// Множитель бюджета retained chart history.
+    /// Retained chart-history budget multiplier.
     pub chart_memory_percent: u16,
     /// How core lists are ordered app-wide.
     pub core_sort: CoreSortMode,
     /// Durable uid counter, already advanced past any uid handed out during this merge.
     pub next_uid: UidCounter,
-    /// Legacy-хоткеи из settings.toml (schema < v13) — только для одноразовой
-    /// миграции в `hotkeys.toml`; при существующем hotkeys.toml игнорируются.
+    /// Legacy hotkeys from settings.toml (schema < v13), used only for one-time migration
+    /// to `hotkeys.toml`; ignored when hotkeys.toml already exists.
     pub hotkeys: HotkeysConfig,
     /// Whether the merged config must be persisted because the schema, assigned uids, or durable
     /// uid counter changed.
     pub dirty: bool,
-    /// Конфиг был версии < `COREID_UID_VERSION` → `charts.json` хранит ПОЗИЦИОННЫЕ
-    /// CoreId, их надо один раз перепривязать к стабильным uid (делает UI на старте,
-    /// т.к. формат `charts.json` живёт в UI-крейте). Одноразово: после досейва версия
-    /// поднимется и флаг больше не взведётся.
+    /// The config version was below `COREID_UID_VERSION`, so `charts.json` contains POSITIONAL
+    /// CoreIds that must be rebound once to stable uids. The UI does this at startup because the
+    /// `charts.json` format lives in the UI crate. After write-back raises the version, this flag
+    /// no longer activates.
     pub chart_core_remap_needed: bool,
 }
 
@@ -76,7 +75,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     // A counter that had to be raised is written back, so the repair survives a later boot on
     // which the stores cannot be read.
     let mut dirty = meta.version < SCHEMA_VERSION || next_uid.get() > meta.next_uid;
-    // До v11 рантайм-CoreId был позиционным → charts.json хранит позиционные id.
+    // Before v11, runtime CoreId was positional, so charts.json contains positional ids.
     let chart_core_remap_needed = meta.version < COREID_UID_VERSION;
     let language = meta.language;
     let market_mode = meta.market_mode;
@@ -99,13 +98,13 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
         .servers
         .into_iter()
         .map(|e| {
-            // Привязка меты: по uid, иначе (старый файл) по имени.
+            // Bind metadata by uid, or by name for an older file.
             let m = if e.uid != 0 {
                 meta.servers.iter().find(|m| m.uid == e.uid)
             } else {
                 meta.servers.iter().find(|m| m.name == e.name)
             };
-            // Стабильный uid: из файла либо свежий (тогда конфиг «грязный» → досейв).
+            // Use the stable uid from the file or issue a fresh one and mark the config dirty.
             let uid = if e.uid != 0 {
                 e.uid
             } else {
@@ -113,9 +112,8 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 next_uid.issue()
             };
             ServerConfig {
-                // Рантайм-CoreId = стабильный uid (НЕ позиция): переживает добавление/
-                // удаление/перепорядок серверов, поэтому окна/подписки/раскладку не
-                // приходится пересоздавать при изменении набора ядер.
+                // Runtime CoreId equals the stable uid, NOT a position, so it survives server
+                // additions/removals/reordering without recreating windows, subscriptions, or layout.
                 id: uid,
                 uid,
                 name: e.name,
@@ -164,7 +162,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     }
 }
 
-/// Рантайм-`AppConfig` → два файловых формата (для записи).
+/// Converts runtime `AppConfig` to the two file formats for writing.
 #[allow(clippy::too_many_arguments)]
 pub fn split(
     servers: &[ServerConfig],
@@ -212,7 +210,7 @@ pub fn split(
         ui_theme_mode,
         ui_scale,
         chart_memory_percent: clamp_chart_memory_percent(chart_memory_percent),
-        // Legacy-поле: с v13 живёт в hotkeys.toml, в settings.toml не сериализуется.
+        // Legacy field: since v13 it lives in hotkeys.toml and is not serialized in settings.toml.
         hotkeys: HotkeysConfig::default(),
         groups: groups.to_vec(),
         core_sort,

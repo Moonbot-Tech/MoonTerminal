@@ -1,13 +1,13 @@
-//! Схема распакованного контейнера `MBSP` v7: заголовок + блоки `(kind u8, size u32 LE)`.
-//! Читаем UI v3 (kind 6), Theme v1 (kind 4), Ini v1 (kind 5); Signals/Trading/Visual
-//! (kind 1/2/3) обязаны присутствовать, но их содержимое пропускается целиком (ТЗ §10).
-//! Непрочитанный хвост ИЗВЕСТНОГО блока разрешён (append-only той же версии);
-//! неизвестный kind пропускается по size; повтор известного блока — ошибка.
+//! Schema for a decompressed `MBSP` v7 container: header plus `(kind u8, size u32 LE)` blocks.
+//! Reads UI v3 (kind 6), Theme v1 (kind 4), and Ini v1 (kind 5). Signals/Trading/Visual
+//! (kinds 1/2/3) must be present, but their contents are skipped entirely (spec section 10).
+//! An unread tail in a KNOWN block is allowed as an append-only extension of the same version;
+//! an unknown kind is skipped by size, while a repeated known block is an error.
 
 use super::reader::{IniSection, Reader};
 use super::ImportError;
 
-/// Действия 27 позиционных shortcut-слотов UI-блока (порядок — строго как в ТЗ §6).
+/// Actions of the UI block's 27 positional shortcut slots, ordered exactly as in spec section 6.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShortcutAction {
     CancelBuy,
@@ -39,7 +39,7 @@ pub enum ShortcutAction {
     Broadcast,
 }
 
-/// Все 27 действий в wire-порядке.
+/// All 27 actions in wire order.
 pub const SHORTCUT_ACTIONS: [ShortcutAction; 27] = [
     ShortcutAction::CancelBuy,
     ShortcutAction::PanicSell,
@@ -70,7 +70,7 @@ pub const SHORTCUT_ACTIONS: [ShortcutAction; 27] = [
     ShortcutAction::Broadcast,
 ];
 
-/// Сырые `TShortCut`-значения 27 слотов (индекс = позиция в [`SHORTCUT_ACTIONS`]).
+/// Raw `TShortCut` values for 27 slots; each index matches its position in [`SHORTCUT_ACTIONS`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shortcuts(pub [u16; 27]);
 
@@ -84,28 +84,28 @@ impl Shortcuts {
     }
 }
 
-/// `HotkeysPublic` из UI-блока: пресеты размера ордера, fixed-sell и shortcut-слоты.
+/// `HotkeysPublic` from the UI block: order-size presets, fixed-sell, and shortcut slots.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HotkeysPublic {
     pub filled: bool,
     pub ver: u8,
-    /// Шесть размеров ручного ордера (`OSize`).
+    /// Six manual-order sizes (`OSize`).
     pub order_sizes: [f64; 6],
-    /// Выбранный слот размера (`bNum`); валидный диапазон 0..=5 проверяет план.
+    /// Selected size slot (`bNum`); the plan validates the 0..=5 range.
     pub order_size_sel: i32,
-    /// Хоткеи слотов размера (`OKeys`), сырые `TShortCut`.
+    /// Raw `TShortCut` hotkeys for size slots (`OKeys`).
     pub order_size_keys: [u16; 6],
     pub split_parts: u8,
-    /// Выбранный fixed-sell слот (`sbNum`); диапазон проверяет план.
+    /// Selected fixed-sell slot (`sbNum`); the plan validates its range.
     pub fixed_sell_sel: u8,
-    /// Хоткеи fixed-sell слотов (`SKeys`), сырые `TShortCut`.
+    /// Raw `TShortCut` hotkeys for fixed-sell slots (`SKeys`).
     pub fixed_sell_keys: [u16; 6],
-    /// Fixed-sell проценты (`SPrice`).
+    /// Fixed-sell percentages (`SPrice`).
     pub fixed_sell_prices: [f32; 6],
     pub shortcuts: Shortcuts,
 }
 
-/// `MarketsTablePublic`: сортировка и раскладка 41 колонки таблицы рынков.
+/// `MarketsTablePublic`: sorting and layout of the market table's 41 columns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketsTable {
     pub sort_col: i32,
@@ -113,7 +113,7 @@ pub struct MarketsTable {
     pub col_pos: [u8; 41],
 }
 
-/// Блок UI v3 (kind 6) — основной для первой версии импортера.
+/// UI v3 block (kind 6), the primary block for the importer's first version.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiBlock {
     pub hide_demo_button: bool,
@@ -127,7 +127,7 @@ pub struct UiBlock {
     pub strat_expanded: [bool; 11],
 }
 
-/// Блок Theme v1 (kind 4): текущий стиль + INI-секции цветов обеих тем.
+/// Theme v1 block (kind 4): current style plus INI color sections for both themes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeBlock {
     pub current_style: i32,
@@ -135,7 +135,7 @@ pub struct ThemeBlock {
 }
 
 impl ThemeBlock {
-    /// `CurrentStyle` 3 и 4 — тёмная тема, остальные известные — светлая (ТЗ §8).
+    /// `CurrentStyle` values 3 and 4 are dark; all other known values are light (spec section 8).
     pub fn is_dark(&self) -> bool {
         matches!(self.current_style, 3 | 4)
     }
@@ -153,7 +153,7 @@ impl ThemeBlock {
     }
 }
 
-/// Блок Ini v1 (kind 5): секции `Charts`, `ArbColors`.
+/// Ini v1 block (kind 5): `Charts` and `ArbColors` sections.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IniBlock {
     pub sections: Vec<IniSection>,
@@ -165,22 +165,22 @@ impl IniBlock {
     }
 }
 
-/// Прочитанная модель payload MoonBot (без интерпретации — её делает план).
+/// Parsed MoonBot payload model without interpretation, which is performed by the plan.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MoonBotConfig {
-    /// `ConfigVersion` MoonBot из заголовка — только диагностика, НЕ версия схемы Terminal.
+    /// MoonBot `ConfigVersion` from the header, used only for diagnostics and NOT as a Terminal schema version.
     pub config_version: u16,
     pub ui: UiBlock,
     pub theme: ThemeBlock,
     pub ini: IniBlock,
 }
 
-/// Версия контейнера, которую понимает этот reader.
+/// Container version understood by this reader.
 const SUPPORTED_CONTAINER: u8 = 7;
-/// Известные блоки: kind → обязан присутствовать ровно один раз.
+/// Known blocks: each kind must appear exactly once.
 const KNOWN_KINDS: [u8; 6] = [1, 2, 3, 4, 5, 6];
 
-/// Разбор распакованного payload: заголовок `MBSP` + все блоки.
+/// Parses a decompressed payload containing the `MBSP` header and all blocks.
 pub fn parse_payload(payload: &[u8]) -> Result<MoonBotConfig, ImportError> {
     let mut r = Reader::new(payload);
 
@@ -224,12 +224,12 @@ pub fn parse_payload(payload: &[u8]) -> Result<MoonBotConfig, ImportError> {
             seen[kind as usize] = true;
         }
         match kind {
-            // Signals/Trading/Visual: присутствие обязательно, содержимое пропускаем.
+            // Signals/Trading/Visual must be present, but their contents are skipped.
             1 | 2 | 3 => {}
             4 => theme = Some(parse_theme(sub)?),
             5 => ini = Some(parse_ini(sub)?),
             6 => ui = Some(parse_ui(sub)?),
-            // Неизвестный kind (например, будущий Interop до его поддержки) — пропуск.
+            // Skip an unknown kind, such as a future Interop block before support is added.
             _ => {}
         }
     }
@@ -241,7 +241,7 @@ pub fn parse_payload(payload: &[u8]) -> Result<MoonBotConfig, ImportError> {
             )));
         }
     }
-    // seen гарантирует, что 4/5/6 были ровно по разу — unwrap'ы безопасны, но без паники:
+    // seen guarantees that 4/5/6 appeared exactly once. Unwraps would be safe, but avoid panic.
     match (ui, theme, ini) {
         (Some(ui), Some(theme), Some(ini)) => Ok(MoonBotConfig {
             config_version,
@@ -255,7 +255,7 @@ pub fn parse_payload(payload: &[u8]) -> Result<MoonBotConfig, ImportError> {
     }
 }
 
-/// Блок UI v3 — строго позиционный (ТЗ §6). Хвост блока (append-only) не читаем.
+/// Parses the strictly positional UI v3 block (spec section 6), ignoring its append-only tail.
 fn parse_ui(mut r: Reader) -> Result<UiBlock, ImportError> {
     let ver = r.u8("UI.version")?;
     if ver != 3 {
@@ -375,8 +375,8 @@ fn parse_ini(mut r: Reader) -> Result<IniBlock, ImportError> {
 
 #[cfg(test)]
 pub(super) mod build {
-    //! Тест-билдер бинарного payload (двойник Delphi-writer'а). Используется юнитами
-    //! схемы и транспорта; позже — золотыми фикстурами.
+    //! Binary payload test builder that mirrors the Delphi writer. Used by schema and transport
+    //! unit tests, and later by golden fixtures.
 
     pub fn push_string(out: &mut Vec<u8>, s: &str) {
         let units: Vec<u16> = s.encode_utf16().collect();
@@ -392,7 +392,7 @@ pub(super) mod build {
         out.extend_from_slice(body);
     }
 
-    /// Тело UI v3 с заданными hotkeys-значениями (остальное — фиксированные значения).
+    /// Builds a UI v3 body with specified hotkey values and fixed values for everything else.
     pub fn ui_body(
         order_sizes: [f64; 6],
         order_size_keys: [u16; 6],
@@ -424,7 +424,7 @@ pub(super) mod build {
             b.extend_from_slice(&p.to_le_bytes());
         }
         for i in 0..27u16 {
-            // 27 shortcut-слотов: детерминированные значения (слот 0 пустой).
+            // 27 shortcut slots with deterministic values; slot 0 is empty.
             let v = if i == 0 {
                 0
             } else {
@@ -477,15 +477,15 @@ pub(super) mod build {
         b
     }
 
-    /// Полный корректный payload с шестью блоками (+опционально лишние байты в хвосте UI).
+    /// Builds a complete valid payload with six blocks and optional extra bytes in the UI tail.
     pub fn full_payload(ui_tail_extra: &[u8]) -> Vec<u8> {
         let mut p = Vec::new();
         p.extend_from_slice(b"MBSP");
         p.push(7u8);
         p.extend_from_slice(&1234u16.to_le_bytes()); // ConfigVersion
-        block(&mut p, 1, &[0xAA; 3]); // Signals — содержимое не читаем
-        block(&mut p, 2, &[0xBB; 5]); // Trading — пропуск
-        block(&mut p, 3, &[]); // Visual — пустой допустим (не читаем)
+        block(&mut p, 1, &[0xAA; 3]); // Signals contents are not read.
+        block(&mut p, 2, &[0xBB; 5]); // Trading contents are skipped.
+        block(&mut p, 3, &[]); // An empty Visual block is valid because its contents are not read.
         block(&mut p, 4, &theme_body());
         block(&mut p, 5, &ini_body());
         let mut ui = ui_body(

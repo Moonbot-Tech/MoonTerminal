@@ -1,14 +1,14 @@
-//! Декодер Delphi `TShortCut` (u16): старшие биты — модификаторы, младший байт —
-//! Windows virtual-key code. Только ЯВНЫЙ маппинг известных VK: неизвестный код —
-//! [`DecodedShortcut::Unsupported`], угадывать строку GPUI нельзя (ТЗ §6).
+//! Decoder for Delphi `TShortCut` (u16): high bits are modifiers and the low byte is a
+//! Windows virtual-key code. Only EXPLICITLY mapped known VK values are accepted; an unknown
+//! code becomes [`DecodedShortcut::Unsupported`] rather than a guessed GPUI string (spec section 6).
 
-/// Бит модификатора Command (macOS-легаси Delphi; в Windows-конфигах не встречается).
+/// Command modifier bit, a Delphi macOS legacy value not found in Windows configurations.
 pub const MOD_CMD: u16 = 0x1000;
 pub const MOD_SHIFT: u16 = 0x2000;
 pub const MOD_CTRL: u16 = 0x4000;
 pub const MOD_ALT: u16 = 0x8000;
 
-/// Модификаторы сочетания.
+/// Shortcut modifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ShortcutMods {
     pub ctrl: bool,
@@ -17,10 +17,10 @@ pub struct ShortcutMods {
     pub cmd: bool,
 }
 
-/// Явно поддержанная клавиша (US-раскладка для OEM-символов).
+/// Explicitly supported key, using the US layout for OEM symbols.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShortcutKey {
-    /// `A`–`Z` (заглавная) или `0`–`9` верхнего ряда.
+    /// Uppercase `A`–`Z` or top-row `0`–`9`.
     Char(char),
     /// F1–F24 (1..=24).
     F(u8),
@@ -39,30 +39,30 @@ pub enum ShortcutKey {
     Right,
     Up,
     Down,
-    /// OEM-клавиша по её символу US-раскладки: `;` `=` `,` `-` `.` `/` `` ` `` `[` `\` `]` `'`.
+    /// OEM key represented by its US-layout symbol: `;` `=` `,` `-` `.` `/` `` ` `` `[` `\` `]` `'`.
     Oem(char),
 }
 
-/// Результат декодирования.
+/// Decoding result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodedShortcut {
-    /// 0 — сочетание не назначено.
+    /// A zero value means no shortcut is assigned.
     Empty,
-    /// Известная клавиша + модификаторы.
+    /// Known key with modifiers.
     Key {
         mods: ShortcutMods,
         key: ShortcutKey,
     },
-    /// Неизвестный VK или неиспользуемые биты — переносить нельзя, показываем как есть.
+    /// Unknown VK or unused bits; cannot be imported and is displayed as-is.
     Unsupported { raw: u16 },
 }
 
-/// Разобрать сырое `TShortCut`-значение.
+/// Decodes a raw `TShortCut` value.
 pub fn decode(raw: u16) -> DecodedShortcut {
     if raw == 0 {
         return DecodedShortcut::Empty;
     }
-    // Биты 0x0F00 в младшей части TShortCut не используются: ненулевые — не наш формат.
+    // Bits 0x0F00 in the lower portion of TShortCut are unused; nonzero means another format.
     if raw & 0x0F00 != 0 {
         return DecodedShortcut::Unsupported { raw };
     }
@@ -78,7 +78,7 @@ pub fn decode(raw: u16) -> DecodedShortcut {
     }
 }
 
-/// Явная таблица Windows VK → клавиша. Всё, чего здесь нет, — неподдерживаемо.
+/// Explicit Windows VK → key table. Anything absent is unsupported.
 fn vk_to_key(vk: u8) -> Option<ShortcutKey> {
     use ShortcutKey::*;
     Some(match vk {
@@ -97,8 +97,8 @@ fn vk_to_key(vk: u8) -> Option<ShortcutKey> {
         0x28 => Down,
         0x2D => Insert,
         0x2E => Delete,
-        0x30..=0x39 => Char(vk as char), // '0'..'9' — VK совпадает с ASCII
-        0x41..=0x5A => Char(vk as char), // 'A'..'Z' — VK совпадает с ASCII
+        0x30..=0x39 => Char(vk as char), // For '0'..'9', VK matches ASCII.
+        0x41..=0x5A => Char(vk as char), // For 'A'..'Z', VK matches ASCII.
         0x70..=0x87 => F(vk - 0x70 + 1), // F1..F24
         0xBA => Oem(';'),                // VK_OEM_1
         0xBB => Oem('='),                // VK_OEM_PLUS
@@ -115,8 +115,8 @@ fn vk_to_key(vk: u8) -> Option<ShortcutKey> {
     })
 }
 
-/// Сочетание в формате `gpui::Keystroke::parse` (`ctrl-shift-f7`, `alt-d`) — формат
-/// хранения `HotkeysConfig`. `None` для пустого/неподдерживаемого (переносить нечего).
+/// Converts to the `gpui::Keystroke::parse` format (`ctrl-shift-f7`, `alt-d`) stored by
+/// `HotkeysConfig`. Returns `None` for empty/unsupported values because there is nothing to import.
 pub fn to_gpui_keystroke(short: DecodedShortcut) -> Option<String> {
     let DecodedShortcut::Key { mods, key } = short else {
         return None;
@@ -158,8 +158,8 @@ pub fn to_gpui_keystroke(short: DecodedShortcut) -> Option<String> {
     Some(s)
 }
 
-/// Человекочитаемая подпись для preview: `Ctrl+Shift+F7`, `Alt+D`, `—` для пустого,
-/// `VK 0xE5?` для неподдерживаемого.
+/// Returns a human-readable preview label: `Ctrl+Shift+F7`, `Alt+D`, `—` for empty, or
+/// `VK 0xE5?` for unsupported.
 pub fn display(short: DecodedShortcut) -> String {
     match short {
         DecodedShortcut::Empty => "—".to_string(),

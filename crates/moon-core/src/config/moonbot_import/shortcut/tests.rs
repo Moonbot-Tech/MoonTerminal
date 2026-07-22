@@ -7,7 +7,7 @@ fn empty_shortcut() {
 
 #[test]
 fn plain_f1() {
-    // VK_F1 = 0x70 без модификаторов.
+    // VK_F1 = 0x70 without modifiers.
     assert_eq!(
         decode(0x0070),
         DecodedShortcut::Key {
@@ -75,9 +75,9 @@ fn letters_digits_and_oem() {
 
 #[test]
 fn unknown_vk_is_unsupported_not_guessed() {
-    // 0xE5 (VK_PROCESSKEY) не в таблице — Unsupported, не угадываем.
+    // 0xE5 (VK_PROCESSKEY) is absent from the table, so it is Unsupported rather than guessed.
     assert_eq!(decode(0x00E5), DecodedShortcut::Unsupported { raw: 0x00E5 });
-    // Ненулевые неиспользуемые биты 0x0F00 — тоже Unsupported.
+    // Nonzero unused bits 0x0F00 are also Unsupported.
     assert_eq!(decode(0x0170), DecodedShortcut::Unsupported { raw: 0x0170 });
 }
 

@@ -1,7 +1,7 @@
-//! Раскладка окон — отдельный переносимый `layout.toml` рядом с exe (как
-//! `theme.toml`). Хранит позиции/размеры окон групп, свёрнут ли док и активную
-//! вкладку, а также список откреплённых окон (какая вкладка, из какой группы,
-//! геометрия). Общая на всех (один файл). Битый/отсутствующий файл → дефолт.
+//! Window layout in the portable `layout.toml` file in the config directory. Stores
+//! group-window geometry and shared window, chart, and table settings. Live dock and
+//! detached-window state lives in `docks.json` and `detached.json`; legacy compatibility
+//! fields remain readable. A corrupt or missing file yields the default.
 
 use std::collections::HashMap;
 
@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use super::paths;
 
-/// Панели окна «Стратегии»: ширины (дерево/версии/разделы) + свёрнутость версий.
-/// Клампы — на стороне окна при применении.
+/// "Strategies" window panels: widths (tree/versions/sections) + versions collapsed state.
+/// Values are clamped by the window when applied.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StrategiesPanels {
@@ -26,51 +26,52 @@ impl Default for StrategiesPanels {
             tree_w: 418.0,
             versions_w: 166.0,
             sections_w: 264.0,
-            // По умолчанию колонка версий свёрнута в полоску со счётчиком.
+            // By default, the versions column is collapsed into a strip with a counter.
             versions_collapsed: true,
         }
     }
 }
 
-/// Геометрия+состояние окна группы (ключ карты — имя группы).
+/// Group-window geometry plus legacy egui compatibility state (map key = group name).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GroupLayout {
-    /// Внешняя позиция окна (физ. пиксели десктопа).
+    /// Outer window position (physical desktop pixels).
     pub x: i32,
     pub y: i32,
-    /// Внутренний размер (физ. пиксели).
+    /// Inner size (physical pixels).
     pub w: u32,
     pub h: u32,
     #[serde(default)]
     pub maximized: bool,
-    /// macOS «на весь экран» (WindowBounds::Fullscreen). Отдельно от `maximized`:
-    /// зелёная кнопка на macOS даёт Fullscreen, а не Maximized, и его надо
-    /// восстанавливать своим вариантом, иначе окно откроется обычным.
+    /// macOS fullscreen state (WindowBounds::Fullscreen). Separate from `maximized`:
+    /// the green macOS button produces Fullscreen rather than Maximized, and it must be
+    /// restored using its own variant or the window will open normally.
     #[serde(default)]
     pub fullscreen: bool,
     #[serde(default)]
+    /// Legacy egui dock-collapsed state.
     pub collapsed: bool,
-    /// Индекс активной вкладки дока (см. `DockTab::idx`).
+    /// Legacy egui active dock-tab index.
     #[serde(default)]
     pub tab: u8,
-    /// Высота развёрнутого дока (точки egui). 0 = не задано → дефолт.
+    /// Legacy expanded-dock height (egui points). 0 = unspecified → default.
     #[serde(default)]
     pub dock_h: f32,
-    /// Сортировка ордеров: 0=по созданию, 1=Sell первые, 2=Buy первые.
+    /// Legacy egui order sorting: 0=by creation, 1=Sell first, 2=Buy first.
     #[serde(default)]
     pub orders_primary: u8,
-    /// Сортировка ордеров по времени: новые первыми.
+    /// Legacy egui time sorting for orders: newest first.
     #[serde(default = "def_true")]
     pub orders_newest_first: bool,
-    /// Фильтр ордеров «только текущий маркет».
+    /// Legacy egui "current market only" order filter.
     #[serde(default)]
     pub orders_only_current: bool,
-    /// Фильтр типа ордеров: 0=все, 1=реальные, 2=эмуляторные.
+    /// Legacy egui order-kind filter: 0=all, 1=real, 2=emulated.
     #[serde(default)]
     pub orders_kind: u8,
-    /// UUID монитора окна (`PlatformDisplay::uuid`), строкой. На macOS координаты окна
-    /// per-display-относительные — восстановить монитор по x/y нельзя, только по uuid;
-    /// contains-детект по точке остаётся фолбэком для старых layout без поля.
+    /// Window display UUID (`PlatformDisplay::uuid`) as a string. On macOS, window coordinates
+    /// are display-relative, so x/y cannot restore the display; only the UUID can.
+    /// Point-containment detection remains the fallback for old layouts without this field.
     #[serde(default)]
     pub display_uuid: Option<String>,
 }
@@ -105,7 +106,7 @@ impl Default for StratColsByMode {
     }
 }
 
-/// Прямоугольник окна (внешняя позиция + внутренний размер, физ. пиксели).
+/// Window rectangle (outer position + inner size, physical pixels).
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct GeomRect {
     pub x: i32,
@@ -114,12 +115,12 @@ pub struct GeomRect {
     pub h: u32,
 }
 
-/// Одно откреплённое окно вкладки.
+/// Legacy egui detached-tab compatibility record; live detached state uses `detached.json`.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DetachedLayout {
-    /// Индекс вкладки (см. `DockTab::idx`).
+    /// Legacy tab index.
     pub tab: u8,
-    /// Имя группы-владельца (для Orders — чьи ордера; для глобальных — откуда открыт).
+    /// Legacy owner group name.
     pub owner_group: String,
     pub x: i32,
     pub y: i32,
@@ -127,7 +128,7 @@ pub struct DetachedLayout {
     pub h: u32,
 }
 
-/// Полная раскладка окон.
+/// Complete window layout.
 ///
 /// Every field is `Option` or carries `#[serde(default)]` on purpose, and prefers a type wider
 /// than its values need. This struct is deserialized as a WHOLE, so a single value that does not
@@ -137,51 +138,50 @@ pub struct DetachedLayout {
 /// window slot in the file, permanently. Keep that in mind when adding a field.
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct WindowLayout {
-    /// Окна групп по имени группы.
+    /// Group windows by group name.
     #[serde(default)]
     pub groups: HashMap<String, GroupLayout>,
-    /// Открытые откреплённые окна вкладок.
+    /// Legacy egui detached-tab records; the live detached-window list uses `detached.json`.
     #[serde(default)]
     pub detached: Vec<DetachedLayout>,
-    /// Запомненная геометрия окон открепления по ключу (даже после закрытия) —
-    /// чтобы повторное открепление той же вкладки вставало на прежнее место.
-    /// Ключ: `g:<idx>` для глобальных, `o:<idx>:<группа>` для Orders (см. App).
+    /// Remembered panel-window geometry after closing, used when the panel is detached again.
+    /// Active keys use `panel:<group>/<panel>`; `g:<idx>` and `o:<idx>:<group>` are legacy forms.
     #[serde(default)]
     pub detached_geom: HashMap<String, GeomRect>,
-    /// Геометрия окна «Стратегии» (отдельное окно) — чтобы открывалось на прежнем месте.
+    /// "Strategies" window geometry (separate window), so it reopens in its previous position.
     #[serde(default)]
     pub strategies_window: Option<GeomRect>,
-    /// Панели окна «Стратегии»: ширины колонок (лог. px, тянутся сплиттерами)
-    /// и свёрнутость колонки «Версии» — как персист ширин колонок таблиц.
+    /// "Strategies" window panels: column widths (logical pixels, resized by splitters)
+    /// and "Versions" column collapsed state, persisted like table-column widths.
     #[serde(default)]
     pub strategies_panels: StrategiesPanels,
-    /// Геометрия глобального окна «Активы» (singleton) — чтобы открывалось на прежнем месте.
+    /// Global "Assets" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub assets_window: Option<GeomRect>,
-    /// Порог «скрывать активы дешевле N $» (слайдер верхней полосы «Активов»). Общий на все
-    /// окна/вкладки «Активов» (один на всех — не плодим ключи на охват). `0` = показать всё.
-    /// `None` (файл старой версии / поле не писалось) → дефолт 1$ на стороне панели.
+    /// "Hide assets worth less than N $" threshold (slider in the "Assets" top bar). Shared by all
+    /// "Assets" windows/tabs (one value for every scope, avoiding per-scope keys). `0` = show all.
+    /// `None` (old file / field was not written) → panel-side default of $1.
     #[serde(default)]
     pub assets_min_value: Option<f64>,
-    /// Геометрия окна «Настройки» (отдельное окно) — чтобы открывалось на прежнем месте.
+    /// "Settings" window geometry (separate window), so it reopens in its previous position.
     #[serde(default)]
     pub settings_window: Option<GeomRect>,
-    /// Геометрия окна «Скринер» (singleton) — чтобы открывалось на прежнем месте.
+    /// "Screener" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub screener_window: Option<GeomRect>,
-    /// Геометрия окна «Аналитика» (singleton) — чтобы открывалось на прежнем месте.
+    /// "Analytics" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub analytics_window: Option<GeomRect>,
-    /// Выбранный пресет периода «Аналитики» (id вида "p-cur-month") — окно
-    /// открывается с прошлым выбором. None = дефолт («Тек. месяц»).
+    /// Selected "Analytics" period preset (id such as "p-cur-month"), so the window
+    /// opens with the previous selection. None = default ("Current month").
     #[serde(default)]
     pub analytics_period: Option<String>,
-    /// Режим тепловой карты «Аналитики»: "year" (GitHub-обзор) / "month"
-    /// (крупные карточки-дни). None = дефолт («Месяц»).
+    /// "Analytics" heatmap mode: "year" (GitHub-style overview) / "month"
+    /// (large day cards). None = default ("Month").
     #[serde(default)]
     pub analytics_heat_mode: Option<String>,
-    /// Выбранный пресет периода вкладки «Тюнинг стратегий» — СВОЙ, независимый
-    /// от «Сводки» (у каждой вкладки своё окно времени). None = дефолт.
+    /// Selected period preset for the "Strategy Tuning" tab — its OWN value, independent
+    /// from "Summary" (each tab has its own time window). None = default.
     #[serde(default)]
     pub analytics_strat_period: Option<String>,
     /// Bitmask of the visible columns in the Tuning strategy list (the ▦ selector).
@@ -225,91 +225,90 @@ pub struct WindowLayout {
     /// read and put away.
     #[serde(default)]
     pub analytics_undated_hidden_n: Option<i64>,
-    /// Видимые колонки скринера (ключи в каноничном порядке). None = все.
+    /// Visible screener columns (keys in canonical order). None = all.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,
-    /// Тикер курса в шапке (слева после логотипа): выбранные ядро+рынок. `None` = дефолт
-    /// (первое подключённое ядро; BTCUSDT, на Hyperliquid-подобных — UBTCUSDC).
+    /// Price ticker in the header (left, after the logo): selected core+market. `None` = default
+    /// (first connected core; BTCUSDT, or UBTCUSDC on Hyperliquid-like exchanges).
     #[serde(default)]
     pub header_ticker: Option<HeaderTicker>,
-    /// Часы в правом углу шапки: смещение отображаемого времени от UTC в минутах.
-    /// 0 = UTC (дефолт → метка «(UTC)»). Если совпадает с системным поясом (отображаемое =
-    /// системному времени) — метку пояса скрываем. Общее на все окна.
+    /// Clock in the header's right corner: displayed-time offset from UTC in minutes.
+    /// 0 = UTC (default → "(UTC)" label). If it matches the system timezone (displayed time =
+    /// system time), the timezone label is hidden. Shared by all windows.
     #[serde(default)]
     pub header_clock_offset_min: i32,
-    /// Отображение свечей/трейдов на чартах (ТФ, режим, зона трейдов, контур…) —
-    /// ГЛОБАЛЬНЫЙ ДЕФОЛТ (вкладки могут переопределять в спеке charts.json).
+    /// Candle/trade display on charts (timeframe, mode, trade zone, outline, etc.) —
+    /// GLOBAL DEFAULT (tabs can override it in their charts.json specification).
     #[serde(default)]
     pub candle_view: crate::market::candles::CandleViewCfg,
-    // Бывший `detect_view_by_group` переехал в отдельный `detects_view.toml`
-    // (см. `detect_view::DetectViewFile`); старый ключ в layout.toml просто игнорируется.
-    /// Временной X-масштаб чартов (px на мс) ПО ОКНАМ ГРУПП: [Shift+СКМ] на графике
-    /// синхронизирует и сохраняет масштаб для чартов СВОЕГО окна; новые чарты окна
-    /// наследуют. Нет записи = 60-секундный дефолт. Выносные окна хранят свой в
-    /// спеке вкладки (charts.json).
+    // The former `detect_view_by_group` moved to a separate `detects_view.toml`
+    // (see `detect_view::DetectViewFile`); the old layout.toml key is simply ignored.
+    /// Chart X time scale (pixels per millisecond) BY GROUP WINDOW: [Shift+middle click] on a chart
+    /// synchronizes and saves the scale for charts in ITS OWN window; new charts in that window
+    /// inherit it. No entry = 60-second default. Detached windows store their own value in the
+    /// tab specification (charts.json).
     #[serde(default)]
     pub chart_x_ppm_by_group: HashMap<String, f32>,
-    /// Универсальное сохранение ширин колонок таблиц: `id таблицы → (ключ колонки → ширина px)`.
-    /// Любая `MoonDataTable` персистит сюда свои `column_widths` по стабильному id (`orders-table`
-    /// и т.п.); при открытии панели ширины засеиваются обратно. Пусто = дефолтные ширины.
+    /// Generic table-column width persistence: `table id → (column key → width in pixels)`.
+    /// Every `MoonDataTable` persists its `column_widths` here under a stable id (`orders-table`,
+    /// etc.); opening the panel seeds the widths back into it. Empty = default widths.
     #[serde(default)]
     pub table_column_widths: HashMap<String, HashMap<String, f32>>,
-    /// Универсальное сохранение НАБОРА видимых колонок таблиц: `id таблицы (с контекстом
-    /// `:dock`/`:win`) → список ключей видимых колонок в каноничном порядке`. Аналог
-    /// `table_column_widths`, но для видимости полей — у докнутой вкладки и откреплённого окна
-    /// свои наборы. Отсутствие записи = дефолт таблицы (обычно «все видимы»).
+    /// Generic persistence for the SET of visible table columns: table id (with `:dock`/`:win`
+    /// context) → list of visible-column keys in canonical order. Analogous to
+    /// `table_column_widths`, but for field visibility; docked tabs and detached windows have
+    /// separate sets. No entry = table default (usually "all visible").
     #[serde(default)]
     pub table_visible_columns: HashMap<String, Vec<String>>,
-    /// Индекс вкладки панели в её «домашней» tab-полосе на момент ОТКРЕПЛЕНИЯ — чтобы возврат в
-    /// док встал НА ТО ЖЕ место, а не на каноничную priority-позицию. Ключ `группа:панель`
-    /// (напр. `default:Orders`). Отсутствие → возврат по priority.
+    /// Panel-tab index in its "home" tab strip at DETACH time, so returning it to the dock restores
+    /// THE SAME position rather than the canonical priority position. Key: `group:panel`
+    /// (for example, `default:Orders`). No entry → return by priority.
     #[serde(default)]
     pub dock_tab_index: HashMap<String, usize>,
-    /// Имя ЛЕВОГО СОСЕДА панели во вкладочной полосе на момент ОТКРЕПЛЕНИЯ (пустая строка = панель
-    /// была крайней слева). Возврат вставляет панель СРАЗУ ПОСЛЕ этого соседа в ЖИВОЙ полосе — так
-    /// место не съезжает, даже если между откреплением и возвратом полоса менялась (сырой индекс
-    /// [`Self::dock_tab_index`] в таком случае протухает). Ключ `группа:панель`. Фолбэк — индекс.
+    /// Name of the panel's LEFT NEIGHBOR in the tab strip at DETACH time (empty string = the panel
+    /// was leftmost). Returning inserts the panel IMMEDIATELY AFTER that neighbor in the LIVE strip,
+    /// so its position remains stable even if the strip changed while it was detached (the raw
+    /// [`Self::dock_tab_index`] becomes stale in that case). Key: `group:panel`. Fallback: index.
     #[serde(default)]
     pub dock_tab_left: HashMap<String, String>,
-    /// Split-слот панели на момент ОТКРЕПЛЕНИЯ, если она стояла ОТДЕЛЬНЫМ листом в сплите (рядом
-    /// с соседом, а не в общей линии вкладок). Открепление такой панели схлопывает сплит, поэтому
-    /// возврат должен пере-создать сплит рядом с соседом. Ключ `группа:панель`. Взаимоисключающ с
-    /// [`Self::dock_tab_index`] (панель либо в сплите, либо во вкладках).
+    /// Panel split slot at DETACH time when it occupied a SEPARATE leaf in a split (beside a neighbor,
+    /// not in the shared tab row). Detaching such a panel collapses the split, so returning it must
+    /// recreate the split beside its neighbor. Key: `group:panel`. Mutually exclusive with
+    /// [`Self::dock_tab_index`] (the panel is either in a split or in the tab row).
     #[serde(default)]
     pub dock_split_slot: HashMap<String, DockSplitSlot>,
 }
 
-/// Запомненное split-размещение панели: в каком сплите (по соседям-якорям), на каком индексе, с
-/// какой стороны и с какими размерами слотов она стояла — чтобы вернуть на ТО ЖЕ место и в
-/// прежней пропорции (важно для сплитов из 3+ панелей).
+/// Remembered split placement for a panel: which split (by anchor neighbors), which index, which
+/// side, and which slot sizes it occupied, so it can return to THE SAME position and retain its
+/// previous proportions (important for splits with 3+ panels).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DockSplitSlot {
-    /// Все соседи по сплиту (кроме самой панели) — якоря для поиска нужного сплита при возврате;
-    /// любой присутствующий в доке годится. В каноничном порядке сплита.
+    /// All split neighbors (except the panel itself), used as anchors to find the correct split on
+    /// return; any one present in the dock is sufficient. Stored in canonical split order.
     #[serde(default)]
     pub siblings: Vec<String>,
-    /// Панели СОСЕДНЕГО слота (рядом с которым стояла панель) — этот слот мог быть вложенным
-    /// сплитом (столбцом), его оборачиваем целиком при пере-создании сплита. Пусто → как siblings.
+    /// Panels in the NEIGHBORING slot (beside which the panel stood). That slot may have been a nested
+    /// split (column), so it is wrapped as a whole when recreating the split. Empty → use siblings.
     #[serde(default)]
     pub slot_panels: Vec<String>,
-    /// Индекс панели в сплите на момент открепления — чтобы вставить обратно на то же место
-    /// (клампится к числу слотов). Важно для сплитов 3+.
+    /// Panel index in the split at detach time, used to insert it back in the same position
+    /// (clamped to the number of slots). Important for splits with 3+ panels.
     #[serde(default)]
     pub index: usize,
-    /// Сторона панели относительно соседа для СХЛОПНУТОГО сплита (2 панели): 0=Left, 1=Right,
-    /// 2=Top, 3=Bottom (совпадает с `moon_ui::DockSplitPlacement`).
+    /// Panel side relative to its neighbor in a COLLAPSED split (2 panels): 0=Left, 1=Right,
+    /// 2=Top, 3=Bottom (matches `moon_ui::DockSplitPlacement`).
     pub placement: u8,
-    /// Пиксельный размер слота ПАНЕЛИ вдоль оси сплита на момент открепления. 0.0 = flex (без
-    /// фиксированного размера).
+    /// Pixel size of the PANEL slot along the split axis at detach time. 0.0 = flex (no fixed size).
     #[serde(default)]
     pub size: f32,
-    /// Пиксельный размер слота СОСЕДА вдоль оси сплита (для схлопнутого сплита). 0.0 = flex.
+    /// Pixel size of the NEIGHBOR slot along the split axis (for a collapsed split). 0.0 = flex.
     #[serde(default)]
     pub sibling_size: f32,
 }
 
-/// Выбор источника тикера курса в шапке. Ядро храним по стабильному `uid` сервера
-/// (переживает переупорядочивание конфига), рынок — каноничным именем ядра.
+/// Header price-ticker source selection. The core is stored by stable server `uid`
+/// (survives configuration reordering), and the market by the core's canonical name.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeaderTicker {
     pub core_uid: u64,
@@ -317,7 +316,7 @@ pub struct HeaderTicker {
 }
 
 impl WindowLayout {
-    /// Загрузить layout.toml. Нет файла → дефолт; битый → лог + дефолт.
+    /// Loads layout.toml. A missing file yields the default; a corrupt file is logged and yields the default.
     pub fn load() -> Self {
         super::toml_io::load_or_default(&paths::layout_path(), "layout.toml", |_| {})
     }
@@ -330,7 +329,7 @@ impl WindowLayout {
         self.header_ticker.as_ref().map(|t| t.core_uid)
     }
 
-    /// Записать layout.toml (не фатально: при ошибке только лог).
+    /// Writes layout.toml (non-fatal: errors are only logged).
     pub fn save(&self) {
         if let Err(e) = super::toml_io::save(&paths::layout_path(), self, "layout.toml") {
             log::warn!("{e:#}");

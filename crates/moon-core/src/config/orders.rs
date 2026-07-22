@@ -1,45 +1,46 @@
-//! Стиль линий ордеров на чарте — ОТДЕЛЬНЫЙ переносимый файл `orders.toml` рядом с
-//! exe (как theme.toml). Для каждого вида линии (buy/sell/stop/trailing/tp/vstop/
-//! cond/liq) задаются цвет, толщина, маркеры начала/конца (крест 45°), узелки
-//! перестановок и их размеры. Глобально — прозрачность активных/закрытых линий и
-//! cap хранения закрытых ордеров. Цвета в sRGB (linear считают шейдеры).
+//! Chart order-line styles in a separate portable `orders.toml` file in the config
+//! directory (like `theme.toml`). Each line kind (buy/sell/stop/trailing/tp/vstop/
+//! cond/liq) specifies its color, thickness, start/end markers (45° cross), repricing
+//! knots, and their sizes. Global settings control active/closed line opacity and the
+//! number of newest closed orders drawn per market. Colors are in sRGB (shaders
+//! calculate linear values).
 
 use serde::{Deserialize, Serialize};
 
 use super::paths;
 use crate::palette;
 
-/// Стиль одного вида линии. `#[serde(default)]` — отсутствующие поля в présent
-/// таблице берут generic-дефолт (см. `Default`), цвет лучше задавать явно.
+/// Style for one line kind. With `#[serde(default)]`, fields missing from the current
+/// table use the generic default (see `Default`); colors are best specified explicitly.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct LineStyle {
-    /// Цвет линии и маркеров (sRGB).
+    /// Line and marker color (sRGB).
     pub color: [u8; 3],
-    /// Толщина линии, px.
+    /// Line thickness, in pixels.
     pub thickness: f32,
-    /// Рисовать крест в точке начала (выставления).
+    /// Whether to draw a cross at the start point (placement).
     pub start_marker: bool,
-    /// Рисовать крест в точке конца (закрытия/отмены).
+    /// Whether to draw a cross at the end point (close/cancel).
     pub end_marker: bool,
-    /// Полудлина «плеча» креста, px (тик ≈ 3.5 → ×3 ≈ 10).
+    /// Half-length of a cross arm, in pixels (tick ≈ 3.5 → ×3 ≈ 10).
     pub marker_size: f32,
-    /// Толщина линий креста, px.
+    /// Cross-line thickness, in pixels.
     pub marker_thickness: f32,
-    /// Рисовать узелок-точку на каждой перестановке цены.
+    /// Whether to draw a point knot at every price move.
     pub knots: bool,
-    /// Полуразмер узелка, px.
+    /// Knot half-size, in pixels.
     pub knot_size: f32,
-    /// Базовый пунктир линии (например, pending-условие).
+    /// Base dashed-line setting (for example, a pending condition).
     pub dashed: bool,
-    /// Прозрачность линий ВЫСТАВЛЕННОГО, но ещё не исполненного ордера (fill=0), 0..1.
-    /// Применяется на уровне ордера по его входной линии: `buy` (лонг) или `buy_short`
-    /// (шорт). После исполнения линии рисуются на `active_alpha`. Остальные линии поле
-    /// игнорируют (значимо только для `buy`/`buy_short`).
+    /// Opacity of lines for a PLACED but not yet filled order (fill=0), 0..1.
+    /// Applied at the order level through its entry line: `buy` (long) or `buy_short`
+    /// (short). After the fill, lines use `active_alpha`. Other lines ignore this field
+    /// (it is meaningful only for `buy`/`buy_short`).
     pub pending_alpha: f32,
-    /// Цвет входной линии ВЫСТАВЛЕННОГО, но ещё не исполненного ордера (fill=0).
-    /// `None` = брать основной `color` (т.е. выставленный = исполненный, только бледнее).
-    /// Значимо только для `buy`/`buy_short`; после фила берётся `color`.
+    /// Entry-line color for a PLACED but not yet filled order (fill=0).
+    /// `None` = use the primary `color` (that is, placed = filled, only dimmer).
+    /// Meaningful only for `buy`/`buy_short`; after the fill, `color` is used.
     #[serde(default)]
     pub pending_color: Option<[u8; 3]>,
 }
@@ -69,36 +70,36 @@ impl LineStyle {
             ..Self::default()
         }
     }
-    /// Тот же стиль, но без крестов начала/конца (для trailing/tp/vstop).
+    /// The same style without start/end crosses (for trailing/tp/vstop).
     fn no_markers(mut self) -> Self {
         self.start_marker = false;
         self.end_marker = false;
         self
     }
-    /// Толщина линии (билдер).
+    /// Line-thickness builder.
     fn t(mut self, thickness: f32) -> Self {
         self.thickness = thickness;
         self
     }
-    /// Цвет невыставленного (выставлен, не исполнен) — билдер.
+    /// Unfilled-order color (placed, not filled) builder.
     fn pending(mut self, color: [u8; 3]) -> Self {
         self.pending_color = Some(color);
         self
     }
 }
 
-/// Стиль «пути» (trail) — змейка реального движения линии по истории перестановок.
-/// Отдельно от основной (прямой) линии: своя галка показа, цвет, толщина, пунктир.
+/// Path (trail) style — the actual line movement through its repricing history.
+/// Separate from the primary (straight) line, with its own visibility toggle, color, thickness, and dash setting.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PathStyle {
-    /// Показывать путь (змейку исторических позиций).
+    /// Whether to show the path through historical positions.
     pub show: bool,
-    /// Цвет пути (sRGB).
+    /// Path color (sRGB).
     pub color: [u8; 3],
-    /// Толщина пути, px.
+    /// Path thickness, in pixels.
     pub thickness: f32,
-    /// Пунктир.
+    /// Whether the path is dashed.
     pub dashed: bool,
 }
 
@@ -113,49 +114,50 @@ impl Default for PathStyle {
     }
 }
 
-/// Полный стиль линий ордеров (orders.toml).
+/// Complete order-line style (orders.toml).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct OrdersStyle {
-    /// Линия входа ЛОНГ-ордера (buy_price). По умолчанию оранжевый.
+    /// LONG-order entry line (buy_price). Orange by default.
     pub buy: LineStyle,
-    /// Линия входа ШОРТ-ордера — отдельный цвет/стиль от лонга (как long/short в Moonbot).
-    /// Применяется к линии входа, кресту и подписи размера, когда ордер шорт.
+    /// SHORT-order entry line, with a separate color/style from long (as in Moonbot long/short).
+    /// Applied to the entry line, cross, and size label when the order is short.
     pub buy_short: LineStyle,
-    /// Линия цены продажи (sell_price) ЛОНГ-ордера. По умолчанию синий.
+    /// LONG-order sell-price line (sell_price). Blue by default.
     pub sell: LineStyle,
-    /// Линия цены продажи ШОРТ-ордера — отдельный цвет/стиль от лонга (как long/short в
-    /// Moonbot: BuyShort/SellShort). Применяется к sell-линии, когда ордер шорт.
+    /// SHORT-order sell-price line, with a separate color/style from long (as in Moonbot:
+    /// BuyShort/SellShort). Applied to the sell line when the order is short.
     pub sell_short: LineStyle,
-    /// Стоп-лосс. Красный.
+    /// Stop loss. Red.
     pub stop: LineStyle,
-    /// Трейлинг-стоп. Светло-синий.
+    /// Trailing stop. Light blue.
     pub trailing: LineStyle,
-    /// Тейк-профит. Зелёный.
+    /// Take profit. Green.
     pub take_profit: LineStyle,
-    /// VStop. Фиолетовый.
+    /// VStop. Purple.
     pub vstop: LineStyle,
-    /// Pending-условие (BuyCondPrice). Серый, пунктир.
+    /// Pending condition (BuyCondPrice). Gray, dashed.
     pub pending_cond: LineStyle,
-    /// Линия ликвидации. Красная, БЕЗ маркеров начала/конца (непрерывная).
+    /// Liquidation line. Red, WITHOUT start/end markers (continuous).
     pub liq: LineStyle,
-    /// Путь (trail) — змейка движения линий по истории перестановок (опц.).
+    /// Path (trail) — line movement through the repricing history (optional).
     pub path: PathStyle,
-    /// Прозрачность серверной трассы ордера (`CO_OrderLine.Thikness2` в Moonbot).
+    /// Opacity of the server-provided order trace (`CO_OrderLine.Thikness2` in Moonbot).
     pub trace_alpha: f32,
 
-    /// Прозрачность активных линий, 0..1.
+    /// Active-line opacity, 0..1.
     pub active_alpha: f32,
-    /// Прозрачность закрытых (отменённых/исполненных) линий, 0..1.
+    /// Closed-line (canceled/filled) opacity, 0..1.
     pub closed_alpha: f32,
-    /// Pending-ордер: линию входа рисовать пунктиром.
+    /// Whether to draw a pending order's entry line as dashed.
     pub pending_dashed: bool,
-    /// Cap хранения закрытых ордеров на (ядро,рынок) — ограничение памяти.
+    /// Number of newest closed orders selected for chart drawing per market.
+    /// Closed-order storage is independently capped at 5000 entries per core.
     pub max_closed_orders: u32,
 }
 
 impl Default for OrdersStyle {
-    /// Дефолт = тёмный набор Moonbot.
+    /// Default = Moonbot dark set.
     fn default() -> Self {
         let liq = LineStyle {
             start_marker: false,
@@ -198,7 +200,7 @@ impl Default for OrdersStyle {
 }
 
 impl OrdersStyle {
-    /// Дефолт светлого набора Moonbot.
+    /// Default Moonbot light set.
     fn default_light() -> Self {
         let liq = LineStyle {
             start_marker: false,
@@ -237,9 +239,9 @@ impl OrdersStyle {
 }
 
 impl OrdersStyle {
-    /// Прочитать orders.toml рядом с exe. Нет файла → дефолт + досейв (чтобы у
-    /// пользователя сразу был полный файл с правильными цветами для правки).
-    /// Битый → дефолт (не падаем).
+    /// Reads `orders.toml` from the config directory. A missing file yields the default and saves it
+    /// (so the user immediately has a complete file with the correct colors to edit).
+    /// A corrupt file yields the default without failing.
     pub fn load() -> Self {
         let path = paths::orders_path();
         if !path.exists() {
@@ -250,14 +252,14 @@ impl OrdersStyle {
         super::toml_io::load_or_default(&path, "orders.toml", |_| {})
     }
 
-    /// Записать orders.toml (открытый человекочитаемый TOML — можно делиться).
+    /// Writes orders.toml (open, human-readable TOML that can be shared).
     pub fn save(&self) -> anyhow::Result<()> {
         super::toml_io::save(&paths::orders_path(), self, "orders.toml")
     }
 }
 
-/// Стили линий ОТДЕЛЬНО для тёмной и светлой темы (per-theme). Хранится в одном `orders.toml`
-/// двумя таблицами `[dark]` / `[light]`. Активный набор выбирается по текущей теме приложения.
+/// Order-line styles SEPARATELY for dark and light themes (per theme). Stored in one `orders.toml`
+/// with two tables, `[dark]` / `[light]`. The current application theme selects the active set.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct OrdersStyleSet {
@@ -267,7 +269,7 @@ pub struct OrdersStyleSet {
 
 impl Default for OrdersStyleSet {
     fn default() -> Self {
-        // Дефолты = текущие наборы пользователя: тёмный и СВОЙ светлый (бейк из orders.toml).
+        // Defaults = the user's current sets: dark plus its OWN light set (baked from orders.toml).
         Self {
             dark: OrdersStyle::default(),
             light: OrdersStyle::default_light(),
@@ -276,7 +278,7 @@ impl Default for OrdersStyleSet {
 }
 
 impl OrdersStyleSet {
-    /// Набор для активной темы: `light=true` → светлый, иначе тёмный.
+    /// Set for the active theme: `light=true` → light, otherwise dark.
     pub fn get(&self, light: bool) -> &OrdersStyle {
         if light {
             &self.light
@@ -292,9 +294,10 @@ impl OrdersStyleSet {
         }
     }
 
-    /// Прочитать `orders.toml`. Новый формат — таблицы `[dark]`/`[light]`. СТАРЫЙ плоский
-    /// `OrdersStyle` (без них) мигрируем в ОБА набора и сразу пере-сохраняем. Нет файла → дефолт
-    /// + досейв; битый → дефолт (не падаем).
+    /// Reads `orders.toml`. The new format uses `[dark]`/`[light]` tables. An OLD flat
+    /// `OrdersStyle` (without them) becomes `dark`, while `light` uses its own default;
+    /// the result is immediately saved again.
+    /// A missing file yields and saves the default; a corrupt file yields the default without failing.
     pub fn load() -> Self {
         let path = paths::orders_path();
         let Ok(text) = std::fs::read_to_string(&path) else {
@@ -302,10 +305,10 @@ impl OrdersStyleSet {
             let _ = def.save();
             return def;
         };
-        // Новый формат: присутствует таблица темы. Ранние dev-сборки мигрировали старый плоский
-        // orders.toml в `[dark]` и `[light]` одинаково; на светлой теме это делало линии почти
-        // невидимыми. Если видим такой клон, оставляем dark как пользовательский набор, а light
-        // переводим на светлый дефолт.
+        // New format: a theme table is present. Early development builds migrated old flat
+        // orders.toml files identically into `[dark]` and `[light]`, making lines almost invisible
+        // in the light theme. When such a clone is found, keep dark as the user's set and reset
+        // light to the light default.
         if text.contains("[dark") || text.contains("[light") {
             let mut set: Self = toml::from_str(&text).unwrap_or_else(|e| {
                 log::warn!("orders.toml повреждён ({e}); беру дефолт");
@@ -317,7 +320,7 @@ impl OrdersStyleSet {
             }
             return set;
         }
-        // Старый плоский файл → тёмный набор берём из файла, светлый — из своего дефолта.
+        // Old flat file → take the dark set from the file and the light set from its own default.
         let flat: OrdersStyle = toml::from_str(&text).unwrap_or_default();
         let set = Self {
             light: OrdersStyle::default_light(),
@@ -331,15 +334,15 @@ impl OrdersStyleSet {
         super::toml_io::save(&paths::orders_path(), self, "orders.toml")
     }
 
-    /// Текст в формате orders.toml — для «Копировать» в Настройках (= содержимое файла).
+    /// Text in orders.toml format for "Copy" in Settings (= file contents).
     pub fn to_share_string(&self) -> Option<String> {
         toml::to_string_pretty(self).ok()
     }
 
-    /// Разобрать текст orders.toml (вставка из буфера / содержимое файла). Валидируем по
-    /// характерным линиям — serde игнорирует незнакомые поля и на чужом файле молча дал бы
-    /// дефолт. Старый плоский `OrdersStyle` → в `dark` поверх `current` (как миграция load).
-    /// `None` = это не стили ордер-линий.
+    /// Parses orders.toml text (clipboard paste / file contents). Validates using distinctive
+    /// lines; serde ignores unknown fields and would silently produce the default for a foreign file.
+    /// An old flat `OrdersStyle` replaces `dark` in `current` (as in the load migration).
+    /// `None` means the text is not an order-line style configuration.
     pub fn parse_share(text: &str, current: &Self) -> Option<Self> {
         const KEYS: [&str; 4] = ["buy", "sell", "stop", "take_profit"];
         let v: toml::Value = toml::from_str(text).ok()?;

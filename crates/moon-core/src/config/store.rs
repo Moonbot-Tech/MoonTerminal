@@ -1,8 +1,8 @@
-//! Низкоуровневое чтение/запись файлов конфига: шифрование servers.enc и
-//! открытый settings.toml. Тут НЕТ доменной логики (слияние/uid — в `reconcile`).
+//! Low-level config-file I/O: encrypted servers.enc and plaintext settings.toml.
+//! This module contains NO domain logic; merging and uids belong in `reconcile`.
 //!
-//! Важно: битый settings.toml не теряем молча — уводим в `.bak` и продолжаем с
-//! дефолта. Иначе одно неверное значение обнулило бы все группы и галки серверов.
+//! A corrupt settings.toml must not be lost silently: move it to `.bak` and continue with
+//! defaults. Otherwise one invalid value could erase all groups and server checkboxes.
 
 use std::path::Path;
 
@@ -13,8 +13,8 @@ use super::paths;
 use super::schema::{ServersFile, SettingsFile};
 use super::toml_io::ConfigLoad;
 
-/// Расшифровать и разобрать servers.enc. Ошибка чтения/дешифровки — фатальна
-/// (это секреты пользователя, молча терять нельзя).
+/// Decrypts and parses servers.enc. Read/decryption failures are fatal because these are
+/// user secrets and must not be discarded silently.
 pub fn read_servers() -> anyhow::Result<ServersFile> {
     let bytes = std::fs::read(paths::servers_path()).context("чтение servers.enc")?;
     let plain = crypto::decrypt(&bytes)?;
@@ -22,7 +22,7 @@ pub fn read_servers() -> anyhow::Result<ServersFile> {
     Ok(sf)
 }
 
-/// Зашифровать и записать servers.enc.
+/// Encrypts and writes servers.enc.
 pub fn write_servers(sf: &ServersFile) -> anyhow::Result<()> {
     let enc = crypto::encrypt(toml::to_string(sf)?.as_bytes())?;
     super::toml_io::write_atomic(&paths::servers_path(), &enc, "servers.enc")
@@ -43,7 +43,7 @@ pub fn read_settings() -> (SettingsFile, ConfigLoad) {
     super::toml_io::load_or_default_status(&paths::settings_path(), "settings.toml", backup_corrupt)
 }
 
-/// Записать settings.toml (открытый, человекочитаемый TOML, без секретов).
+/// Writes settings.toml as plaintext, human-readable TOML without secrets.
 pub fn write_settings(sf: &SettingsFile) -> anyhow::Result<()> {
     super::toml_io::save(&paths::settings_path(), sf, "settings.toml")
 }

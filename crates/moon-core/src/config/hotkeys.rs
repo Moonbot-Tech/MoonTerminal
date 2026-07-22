@@ -1,8 +1,8 @@
-//! Открытая конфигурация горячих клавиш и мышиных жестов.
+//! Public configuration for hotkeys and mouse gestures.
 //!
-//! Клавиатура хранится в формате `gpui::Keystroke::parse` (`ctrl-r`,
-//! `shift-f7`, `ctrl-delete`). Пустая строка = действие без хоткея.
-//! Мышиные жесты повторяют Delphi `TOrderReplaceClick`.
+//! Keyboard shortcuts are stored in `gpui::Keystroke::parse` format (`ctrl-r`,
+//! `shift-f7`, `ctrl-delete`). An empty string means the action has no hotkey.
+//! Mouse gestures mirror Delphi's `TOrderReplaceClick`.
 
 use serde::{Deserialize, Serialize};
 
@@ -142,13 +142,13 @@ impl MouseGestureBinding {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HotkeysConfig {
-    /// Размер ручного ордера F1-F6 (`HotkeysConfig.OKeys` в Moonbot).
+    /// Manual order size F1-F6 (`HotkeysConfig.OKeys` in Moonbot).
     #[serde(default = "default_order_size_keys")]
     pub order_size: [String; ORDER_SIZE_KEYS],
-    /// Fixed sell S1-S6 (`HotkeysConfig.SKeys` в Moonbot).
+    /// Fixed sell S1-S6 (`HotkeysConfig.SKeys` in Moonbot).
     #[serde(default = "default_sell_preset_keys")]
     pub sell_preset: [String; SELL_PRESET_KEYS],
-    /// Manual strategy buttons 1-10 (`ManualStratsConfig.hotKeys` в Moonbot).
+    /// Manual strategy buttons 1-10 (`ManualStratsConfig.hotKeys` in Moonbot).
     #[serde(default = "default_manual_strategy_keys")]
     pub manual_strategy: [String; MANUAL_STRATEGY_KEYS],
 
@@ -172,8 +172,8 @@ pub struct HotkeysConfig {
     pub split_order: String,
     #[serde(default)]
     pub split_order_x: String,
-    /// Сдвиг ордеров рынка активного чарта на шаг цены (`move_order`): вход (buy, пока не
-    /// залит) / выход (sell) вверх-вниз.
+    /// Shifts orders for the active chart's market by one price step (`move_order`): entry
+    /// (buy, while unfilled) / exit (sell) up or down.
     #[serde(default)]
     pub shift_buy_up: String,
     #[serde(default)]
@@ -183,10 +183,10 @@ pub struct HotkeysConfig {
     #[serde(default)]
     pub shift_sell_down: String,
 
-    // Moonbot-хоткеи, под которые в moonproto НЕТ send-команд (reload book/chart,
-    // make shot, spy, show charts, fit sells, broadcast, sell +/-), удалены целиком
-    // 2026-07-10 (конфиг+вкладка+диспетчер); serde молча игнорирует их ключи в старых
-    // hotkeys.toml. Появится команда — возвращать по git-истории.
+    // Moonbot hotkeys that have NO corresponding send commands in moonproto (reload book/chart,
+    // make shot, spy, show charts, fit sells, broadcast, sell +/-) were removed completely on
+    // 2026-07-10 (configuration + tab + dispatcher); serde silently ignores their keys in old
+    // hotkeys.toml files. Restore them from git history if a command becomes available.
     #[serde(default = "default_scale_plus")]
     pub scale_plus: String,
     #[serde(default = "default_scale_minus")]
@@ -194,8 +194,9 @@ pub struct HotkeysConfig {
     #[serde(default = "default_switch_figure")]
     pub switch_figure: String,
 
-    /// Слой рисования фигур (карандаш): тоггл инструментов. Повторное нажатие того же
-    /// хоткея (или Esc) выключает режим. Дефолты на Ctrl (Alt-сочетания Windows перехватывает под меню окна — до обработчика не доходят, только системный звук).
+    /// Figure drawing layer (pencil): toggles tools. Pressing the same hotkey again
+    /// (or Esc) exits the mode. Defaults use Ctrl (Windows intercepts Alt combinations for the
+    /// window menu, so they never reach the handler and produce only a system sound).
     #[serde(default = "default_draw_hline")]
     pub draw_hline: String,
     #[serde(default = "default_draw_segment")]
@@ -204,38 +205,38 @@ pub struct HotkeysConfig {
     pub draw_triangle: String,
     #[serde(default = "default_draw_channel")]
     pub draw_channel: String,
-    /// Удалить выделенную фигуру.
+    /// Deletes the selected figure.
     #[serde(default = "default_fig_delete")]
     pub fig_delete: String,
-    /// Тоггл галки «Alert» у выделенной фигуры (заармить/разоружить chart-алерт).
+    /// Toggles the "Alert" checkbox on the selected figure (arms/disarms the chart alert).
     #[serde(default = "default_fig_alert")]
     pub fig_alert: String,
 
-    /// Живой Moonbot-путь MultiOrders: поставить long по стакану.
+    /// Live Moonbot MultiOrders path: places a long from the order book.
     #[serde(default = "default_left_double")]
     pub buy_set_click: MouseGestureBinding,
-    /// Живой Moonbot-путь MultiOrders: поставить short по стакану.
+    /// Live Moonbot MultiOrders path: places a short from the order book.
     #[serde(default)]
     pub short_set_click: MouseGestureBinding,
-    /// Живой Moonbot-путь: поставить pending long.
+    /// Live Moonbot path: places a pending long.
     #[serde(default)]
     pub pending_long_click: MouseGestureBinding,
-    /// Живой Moonbot-путь MultiOrders: поставить pending short.
+    /// Live Moonbot MultiOrders path: places a pending short.
     #[serde(default)]
     pub pending_short_click: MouseGestureBinding,
-    /// Живой Moonbot-путь MultiOrders: двигать open/buy long.
+    /// Live Moonbot MultiOrders path: moves an open/buy long.
     #[serde(default = "default_left_shift")]
     pub buy_move_click: MouseGestureBinding,
-    /// Живой Moonbot-путь MultiOrders: двигать TP/sell long.
+    /// Live Moonbot MultiOrders path: moves a TP/sell long.
     #[serde(default = "default_left_ctrl")]
     pub sell_move_click: MouseGestureBinding,
-    /// Живой Moonbot-путь MultiOrders: второй жест движения open/buy long.
+    /// Live Moonbot MultiOrders path: secondary gesture for moving an open/buy long.
     #[serde(default)]
     pub buy_move_click2: MouseGestureBinding,
-    /// Живой Moonbot-путь MultiOrders: второй жест движения TP/sell long.
+    /// Live Moonbot MultiOrders path: secondary gesture for moving a TP/sell long.
     #[serde(default)]
     pub sell_move_click2: MouseGestureBinding,
-    /// Delphi `SameHotkeysForMove`: short move жесты повторяют long move.
+    /// Delphi `SameHotkeysForMove`: short-move gestures mirror long-move gestures.
     #[serde(default = "default_same_hotkeys_for_move")]
     pub same_hotkeys_for_move: bool,
     #[serde(default = "default_left_shift")]
@@ -295,10 +296,10 @@ impl Default for HotkeysConfig {
 }
 
 impl HotkeysConfig {
-    /// Прочитать `hotkeys.toml`. `None` = файла ещё нет (первый запуск после переезда
-    /// хоткеев из settings.toml — вызывающий мигрирует legacy-секцию и записывает файл).
-    /// Битый файл → дефолт (лог внутри), а НЕ `None` — иначе битый файл молча
-    /// перезаписался бы устаревшей legacy-копией из settings.toml.
+    /// Reads `hotkeys.toml`. `None` means the file does not exist yet (first launch after moving
+    /// hotkeys out of settings.toml; the caller migrates the legacy section and writes the file).
+    /// A corrupt file yields the default (and logs internally), NOT `None`; otherwise the corrupt
+    /// file would be silently overwritten by the stale legacy copy from settings.toml.
     pub fn load() -> Option<Self> {
         let path = paths::hotkeys_path();
         if !path.exists() {
@@ -311,19 +312,19 @@ impl HotkeysConfig {
         ))
     }
 
-    /// Записать `hotkeys.toml` (открытый человекочитаемый TOML — можно делиться).
+    /// Writes `hotkeys.toml` (open, human-readable TOML that can be shared).
     pub fn save(&self) -> anyhow::Result<()> {
         super::toml_io::save(&paths::hotkeys_path(), self, "hotkeys.toml")
     }
 
-    /// Текст в формате hotkeys.toml — для «Копировать» в Настройках (= содержимое файла).
+    /// Text in hotkeys.toml format for "Copy" in Settings (= file contents).
     pub fn to_share_string(&self) -> Option<String> {
         toml::to_string_pretty(self).ok()
     }
 
-    /// Разобрать текст hotkeys.toml (вставка из буфера / содержимое файла). Валидируем по
-    /// характерным ключам — serde игнорирует незнакомые поля и на чужом файле молча дал бы
-    /// дефолт. `None` = это не хоткеи.
+    /// Parses hotkeys.toml text (clipboard paste / file contents). Validates using distinctive
+    /// keys; serde ignores unknown fields and would silently produce the default for a foreign file.
+    /// `None` means the text is not a hotkey configuration.
     pub fn parse_share(text: &str) -> Option<Self> {
         const KEYS: [&str; 4] = ["order_size", "sell_preset", "buy_set_click", "draw_hline"];
         let v: toml::Value = toml::from_str(text).ok()?;
@@ -349,11 +350,11 @@ fn default_manual_strategy_keys() -> [String; MANUAL_STRATEGY_KEYS] {
     std::array::from_fn(|_| String::new())
 }
 
-// Клавиатурные дефолты — буквальный `ctrl-` на ОБЕИХ платформах (паритет с Moonbot: на маке
-// управление тоже через Ctrl). На маке физический Control для клавиатурных хоткеев доходит
-// нормально (в отличие от Ctrl+ЛКМ, который ОС превращает в правый клик — поэтому мышиный
-// жест РИСОВАНИЯ остаётся на `secondary()`/Cmd, это отдельный код, не дефолт хоткея).
-// Клавиши без модификатора (F-клавиши, delete) — как есть.
+// Keyboard defaults use the literal `ctrl-` on BOTH platforms (matching Moonbot: Mac controls
+// also use Ctrl). On Mac, the physical Control key reaches keyboard-hotkey handling normally
+// (unlike Ctrl+left click, which the OS turns into a right click; therefore the DRAWING mouse
+// gesture remains on `secondary()`/Cmd, which is separate code rather than a hotkey default).
+// Keys without a modifier (function keys, delete) remain as-is.
 fn default_draw_hline() -> String {
     "ctrl-h".into()
 }

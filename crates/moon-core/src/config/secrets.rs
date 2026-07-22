@@ -1,5 +1,5 @@
-//! Secret — строка-секрет (ключ ядра): маскируется в логах/UI, затирается в памяти.
-//! Сам файл конфига шифруется целиком (crypto.rs); маскирование — для экрана/логов.
+//! Secret string (core key): masked in logs/UI and zeroized in memory.
+//! The entire config file is encrypted (crypto.rs); masking protects screen and log output.
 
 use std::fmt;
 
@@ -15,7 +15,7 @@ impl Secret {
         Self(s.into())
     }
 
-    /// Доступ к открытому значению (только там, где реально нужно — например, connect).
+    /// Accesses the plaintext value only where it is genuinely needed, such as connection setup.
     pub fn expose(&self) -> &str {
         &self.0
     }
@@ -24,7 +24,7 @@ impl Secret {
         self.0.is_empty()
     }
 
-    /// Изменяемый буфер для поля ввода в UI (egui password TextEdit).
+    /// Mutable buffer for a password input field in the UI.
     pub fn buffer_mut(&mut self) -> &mut String {
         &mut self.0
     }
