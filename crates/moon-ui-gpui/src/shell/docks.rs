@@ -1,6 +1,7 @@
-//! Док-механика окна группы: отцепление панели в своё окно, возврат закрытой/откреплённой
-//! панели на «домашнюю» вкладку, репин по запросу и персист геометрии ОС-окна. Вынесено из
-//! `shell.rs`. Методы, дёргаемые из `mod.rs` (`new`), помечены `pub(super)`.
+//! Group-window dock mechanics: detach a panel into its own window; repin it by preferring
+//! remembered split placement, then remembered tab placement, with canonical home-strip fallback;
+//! reset a closed docked panel to its home tabs; and persist OS-window geometry. Factored out of
+//! `shell.rs`; methods called from sibling shell modules are exposed as `pub(super)`.
 
 use gpui::*;
 
@@ -13,9 +14,12 @@ use crate::{Backend, detached};
 
 use super::Shell;
 
-/// Имена dock-панелей нижней строки в порядке их «домашних» позиций. Возврат
-/// откреплённой/закрытой панели вставляет её в TabPanel на индекс, сохраняющий этот
-/// порядок (см. [`dock_home_priority`]).
+/// Canonical order of the default bottom-row home strip.
+///
+/// This list identifies the home strip and supplies the final fallback insertion priority.
+/// Restoration first prefers a remembered split slot when allowed, then persisted
+/// `dock_tab_left`/`dock_tab_index`; only after those fail does [`dock_home_priority`] use this
+/// canonical order.
 ///
 /// The array must list ALL bottom-row tabs (`shell/init.rs`), not only those whose order seems to
 /// matter: [`strip_names`] identifies the "home" strip by the presence of any name from here, so a
@@ -27,14 +31,16 @@ use super::Shell;
 /// strip holding any of these names, a user who has dragged one of them into a different strip that
 /// comes earlier in depth-first order makes that strip win. Restoring by a stable strip identity
 /// rather than by name would remove the ambiguity, but that is a MoonUI-side change.
-// «CoreStatus» временно убран из строки вкладок (панель отключена до появления метрик в
-// moonproto; см. shell/init.rs). Вернуть сюда при повторном включении.
+// `CoreStatus` remains outside the default bottom strip even though its panel now consumes typed
+// protocol-v4 `KernelHealth` state. Add it here if the default tab is re-enabled; the historical
+// log-parser limitation is no longer the reason for its omission.
 pub(super) const DOCK_TAB_ORDER: [&str; 5] = ["Orders", "Assets", "Report", "Alerts", "Log"];
 
-/// Home index of a bottom-row panel (`Orders < Assets < Report < Alerts < Log`).
+/// Return the final fallback home index for a bottom-row panel.
 ///
-/// The returning panel is inserted at this position, clamped to the current tab count, so a
-/// partially detached set still preserves the configured relative order.
+/// Remembered split placement and persisted left-neighbor/tab-index placement take priority. If
+/// those cannot place the panel, this index is clamped to the current tab count so a partially
+/// detached set still preserves `Orders < Assets < Report < Alerts < Log` relative order.
 ///
 /// The order must mirror the push order in `shell/init.rs`, which is what a FRESH layout renders.
 /// An existing user is unaffected either way: a saved layout whose `DOCK_VERSION` still matches is
@@ -71,7 +77,7 @@ impl Shell {
         cx.defer(move |app| {
             let _ = handle.update(app, move |_, window, app| {
                 for panel_name in repins {
-                    // Возврат из ОКНА — на запомненное место (в т.ч. в сплит).
+                    // Restore from a detached window to the remembered location, including splits.
                     restore_panel_to_home_tabs(
                         &dock,
                         &backend,
@@ -98,9 +104,9 @@ impl Shell {
         let handle = self.window_handle;
         cx.defer(move |app| {
             let _ = handle.update(app, move |_, window, app| {
-                // Assets отцепляется как обычная панель (per-group окно + удаление вкладки +
-                // репин при закрытии). Глобальное окно «все ядра» открывается отдельно —
-                // кнопкой «⧉» в тулбаре панели, не даблкликом.
+                // Assets detaches like any other panel: open a per-group window, remove its tab,
+                // and repin it when that window closes. Its separate all-cores window opens from
+                // the panel toolbar button rather than a double-click.
                 if !detached::supports_panel(&panel_name) {
                     return;
                 }
@@ -118,9 +124,9 @@ impl Shell {
                 {
                     return;
                 }
-                // Запоминаем размещение панели в доке ДО удаления — чтобы возврат встал на то же
-                // место. Split-лист (рядом с соседом) → сплит-слот; иначе вкладка → индекс. Хранилища
-                // взаимоисключающи (панель либо там, либо там) — второе чистим. None → не трогаем.
+                // Capture placement before removal so restoration can return to the same location.
+                // A split leaf records a split slot; a tab records its index. These stores are
+                // mutually exclusive, so recording one clears the other; `None` changes neither.
                 let key = format!("{group}:{panel_name}");
                 match captured_slot(&dock, &panel_name, app) {
                     Some(DockSlot::Split {
@@ -154,7 +160,7 @@ impl Shell {
                         );
                         backend.update(app, |b, _| {
                             b.layout.dock_tab_index.insert(key.clone(), ix);
-                            // Пустая строка = была крайней слева; иначе имя соседа.
+                            // An empty string means leftmost; otherwise store the left neighbor name.
                             b.layout
                                 .dock_tab_left
                                 .insert(key.clone(), left.unwrap_or_default());
@@ -198,8 +204,9 @@ impl Shell {
         let handle = self.window_handle;
         cx.defer(move |app| {
             let _ = handle.update(app, move |_, window, app| {
-                // × на ДОКНУТОЙ панели = сброс размещения: убрать из сплита и вернуть ПРОСТО
-                // вкладкой в линию (её место). Чистим split-слот, чтобы не восстановился сплитом.
+                // Closing a docked panel resets its placement: remove it from any split and restore
+                // it as a regular tab in the home strip. Clear the split slot to prevent a split
+                // restoration.
                 let key = format!("{group}:{panel_name}");
                 backend.update(app, |b, _| {
                     if b.layout.dock_split_slot.remove(&key).is_some() {
@@ -228,8 +235,8 @@ impl Shell {
         let Some(bounds) = bounds else {
             return;
         };
-        // Монитор окна — по стабильному uuid: на macOS x/y относительны своему экрану и
-        // восстановить дисплей по ним нельзя (см. GroupLayout::display_uuid).
+        // Identify the window's display by stable UUID. On macOS, x/y are relative to each screen
+        // and cannot identify the display during restoration; see `GroupLayout::display_uuid`.
         let display_uuid = window
             .display(cx)
             .and_then(|d| d.uuid().ok())
@@ -274,8 +281,9 @@ impl Shell {
     }
 }
 
-/// Имена панелей (слева-направо) ПЕРВОЙ tab-полосы, содержащей любую из [`DOCK_TAB_ORDER`] —
-/// «домашней» линии вкладок. Для устойчивого вычисления индекса возврата по левому соседу.
+/// Return left-to-right names from the first tab strip containing any [`DOCK_TAB_ORDER`] panel.
+///
+/// This identifies the home strip for stable restoration relative to the remembered left neighbor.
 fn strip_names(node: &PanelState) -> Option<Vec<String>> {
     if let PanelInfo::Tabs { .. } = &node.info {
         let names: Vec<String> = node.children.iter().map(|c| c.panel_name.clone()).collect();
@@ -302,23 +310,23 @@ fn restore_panel_to_home_tabs(
         return;
     };
     log::info!("[dock] restore {key}: panel built");
-    // Приоритет размещения при возврате:
-    //   1) split-слот — вернуть РЯДОМ с соседом сплитом (если сосед сейчас в доке) — ТОЛЬКО когда
-    //      `prefer_split` (возврат из окна); × на докнутой панели (prefer_split=false) сбрасывает
-    //      в линию вкладок;
-    //   2) запомненный индекс вкладки — в домашнюю tab-полосу на то же место;
-    //   3) каноничный priority.
-    // `insert_*` клампят индекс/находят соседа сами; при промахе (1) падаем в (2)/(3) тем же
-    // `panel` (в beside/into_home передаём clone, оригинал держим на фолбэк).
+    // Restoration priority:
+    //   1) for `prefer_split`, restore the split slot beside a surviving sibling;
+    //   2) restore into the home tab strip relative to the remembered left neighbor, falling back
+    //      to the saved tab index;
+    //   3) use canonical home priority.
+    // Closing a docked panel passes `prefer_split = false` and therefore resets it to the tab strip.
+    // Insert helpers clamp indices or locate siblings. A failed split insertion falls through with
+    // the same panel; cloned handles go into attempts while the original remains for fallback.
     let split = prefer_split
         .then(|| backend.read(app).layout.dock_split_slot.get(&key).cloned())
         .flatten();
     let tab_ix = backend.read(app).layout.dock_tab_index.get(&key).copied();
-    // Левый сосед на момент открепления (пустая строка = была крайней слева, None = не сохраняли).
+    // Left neighbor at detach time: empty means leftmost, while `None` means it was not recorded.
     let tab_left = backend.read(app).layout.dock_tab_left.get(&key).cloned();
-    // Живой порядок домашней tab-полосы — ОТДЕЛЬНЫМ dump-апдейтом (как `captured_slot`), НЕ внутри
-    // апдейта со вставкой: dump обходит и читает ВСЕ панели дока; делать это в том же апдейте, где
-    // мы мутируем дерево (remove/insert), — риск реентранси/дедлока. Отдельный апдейт безопасен.
+    // Dump the live home-strip order in a separate dock update, as `captured_slot` does. `dump`
+    // traverses and reads every dock panel; running it inside the insertion update that mutates the
+    // tree risks reentrancy or deadlock.
     let strip: Vec<String> = dock.update(app, |area, cx| {
         let state = area.dump(cx);
         strip_names(&state.center)
@@ -350,7 +358,7 @@ fn restore_panel_to_home_tabs(
                 3 => DockSplitPlacement::Bottom,
                 _ => DockSplitPlacement::Left,
             };
-            // 0.0 = flex → None (без фиксированного размера слота).
+            // A zero size means flex layout, represented by no fixed slot size.
             let panel_size = (slot.size > 0.0).then_some(slot.size);
             let sibling_size = (slot.sibling_size > 0.0).then_some(slot.sibling_size);
             let anchors: Vec<&str> = slot.siblings.iter().map(|s| s.as_str()).collect();
@@ -372,9 +380,9 @@ fn restore_panel_to_home_tabs(
                 return;
             }
         }
-        // Индекс возврата — по ЖИВОЙ полосе (`strip`, посчитана выше) относительно левого соседа:
-        // место не съезжает, даже если полоса менялась. Соседа нет → фолбэк на сырой `tab_ix` →
-        // каноничный priority. Пустой сосед = была крайней слева (ix=0).
+        // Compute the insertion index from the live strip and remembered left neighbor so changes
+        // to the strip do not shift the intended location. A missing neighbor falls back to the raw
+        // `tab_ix`, then canonical priority; an empty neighbor means index 0.
         let ix = match tab_left.as_deref() {
             Some("") => 0,
             Some(name) => strip
@@ -394,15 +402,18 @@ fn restore_panel_to_home_tabs(
     log::info!("[dock] restore {key}: done");
 }
 
-/// Запомненное размещение панели в доке (для восстановления при возврате).
+/// Remembered dock placement used when restoring a panel.
 enum DockSlot {
-    /// Панель была вкладкой в tab-полосе — на позиции `ix`, справа от соседа `left`
-    /// (`None` = крайняя слева). Возврат предпочитает соседа (устойчив к сдвигу полосы).
+    /// The panel was a tab at `ix`, to the right of `left`.
+    ///
+    /// Restoration prefers the neighbor so it remains stable when the strip shifts. `None` means
+    /// there was no named left neighbor.
     Tab { ix: usize, left: Option<String> },
-    /// Панель была ОТДЕЛЬНЫМ листом в сплите. `siblings` — соседи-якоря (для поиска сплита),
-    /// `slot_panels` — панели соседнего слота (обернуть целиком при схлопе), `index` — её позиция
-    /// в сплите, `placement` — сторона, `size`/`sibling_size` — пиксельные размеры слотов (0.0 =
-    /// flex) для восстановления пропорции.
+    /// The panel was a standalone leaf in a split.
+    ///
+    /// `siblings` are anchors for finding the split, `slot_panels` identifies the complete adjacent
+    /// slot to wrap after collapse, `index` is the original split position, `placement` is its side,
+    /// and `size`/`sibling_size` preserve pixel proportions; zero means flex sizing.
     Split {
         siblings: Vec<String>,
         slot_panels: Vec<String>,
@@ -413,18 +424,19 @@ enum DockSlot {
     },
 }
 
-/// Размещение панели `panel_name` в доке (обходя дамп). Split-лист (одиночная панель прямо в
-/// сплите) → [`DockSlot::Split`] с соседом и стороной; вкладка → [`DockSlot::Tab`] с индексом;
-/// `None`, если не нашли. Обход по всем зонам, первое совпадение.
+/// Find `panel_name` placement by traversing a dock dump.
+///
+/// A standalone leaf directly in a split becomes [`DockSlot::Split`]; a tab becomes
+/// [`DockSlot::Tab`]. All dock zones are searched in order and the first match wins.
 fn captured_slot(dock: &Entity<DockArea>, panel_name: &str, app: &mut App) -> Option<DockSlot> {
-    /// Первое имя панели-листа в поддереве (для якоря-соседа).
+    /// Return the first leaf-panel name in a subtree for use as a sibling anchor.
     fn first_panel_name(node: &PanelState) -> Option<String> {
         if matches!(node.info, PanelInfo::Panel(_)) && !node.panel_name.is_empty() {
             return Some(node.panel_name.clone());
         }
         node.children.iter().find_map(first_panel_name)
     }
-    /// Все имена панелей-листьев в поддереве (панели соседнего слота — обернуть целиком).
+    /// Collect every leaf-panel name in a subtree to identify the complete neighboring slot.
     fn collect_panel_names(node: &PanelState, out: &mut Vec<String>) {
         if matches!(node.info, PanelInfo::Panel(_)) && !node.panel_name.is_empty() {
             out.push(node.panel_name.clone());
@@ -437,7 +449,7 @@ fn captured_slot(dock: &Entity<DockArea>, panel_name: &str, app: &mut App) -> Op
         match &node.info {
             PanelInfo::Tabs { .. } => {
                 if let Some(ix) = node.children.iter().position(|c| c.panel_name == target) {
-                    // Левый сосед (для устойчивого возврата): панель на ix-1, пустое имя пропускаем.
+                    // Remember the named tab at ix - 1 for stable restoration, skipping empty names.
                     let left = ix.checked_sub(1).and_then(|j| {
                         node.children
                             .get(j)
@@ -448,22 +460,22 @@ fn captured_slot(dock: &Entity<DockArea>, panel_name: &str, app: &mut App) -> Op
                 }
             }
             PanelInfo::Stack { axis, sizes } => {
-                // Панель = отдельный лист прямо в сплите (не вложена в Tabs) → сплит-слот.
+                // A standalone leaf directly in the split, rather than inside Tabs, is a split slot.
                 for (i, child) in node.children.iter().enumerate() {
                     let is_leaf_target =
                         child.panel_name == target && matches!(child.info, PanelInfo::Panel(_));
                     if is_leaf_target {
                         let horizontal = *axis == 0;
-                        // Сосед — соседний слот; сторона панели относительно него (для схлопа 2→1).
+                        // Use the adjacent slot as sibling and record the panel's side relative to it.
                         let (sib_ix, target_after) =
                             if i > 0 { (i - 1, true) } else { (i + 1, false) };
                         let placement = match (horizontal, target_after) {
-                            (true, true) => 1,   // справа от соседа
-                            (true, false) => 0,  // слева
-                            (false, true) => 3,  // снизу
-                            (false, false) => 2, // сверху
+                            (true, true) => 1,   // Right of sibling.
+                            (true, false) => 0,  // Left of sibling.
+                            (false, true) => 3,  // Below sibling.
+                            (false, false) => 2, // Above sibling.
                         };
-                        // Все соседи по сплиту — якоря для поиска сплита при возврате.
+                        // Every other split child contributes an anchor for finding it on restore.
                         let siblings: Vec<String> = node
                             .children
                             .iter()
@@ -474,12 +486,12 @@ fn captured_slot(dock: &Entity<DockArea>, panel_name: &str, app: &mut App) -> Op
                         if siblings.is_empty() {
                             return None;
                         }
-                        // Панели СОСЕДНЕГО слота целиком (слот мог быть вложенным сплитом).
+                        // Capture the complete adjacent slot, which may itself be a nested split.
                         let mut slot_panels = Vec::new();
                         if let Some(sib) = node.children.get(sib_ix) {
                             collect_panel_names(sib, &mut slot_panels);
                         }
-                        // Пиксельные размеры слотов (0.0 = flex) — вернуть прежнюю пропорцию.
+                        // Preserve pixel slot sizes and use zero to represent flex sizing.
                         let size = sizes.get(i).copied().unwrap_or(0.0);
                         let sibling_size = sizes.get(sib_ix).copied().unwrap_or(0.0);
                         return Some(DockSlot::Split {

@@ -131,8 +131,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// Создать файн-слайдер TP (0..2, шаг 0.01) с подпиской: на изменение шлёт суб-процентный
-    /// TP через scalp и живо обновляет поле. Активность (disabled) — на стороне рендера попапа.
+    /// Build the fine TP slider over `0..=TP_FINE_CAP` in `0.01` steps.
+    /// Changes send the scalp TP edit and update the numeric field live; popup rendering controls
+    /// whether the slider is enabled.
     pub(super) fn make_tp_fine_slider(cx: &mut Context<Self>) -> Entity<MoonSliderState> {
         let s = cx.new(|_| {
             MoonSliderState::new()
@@ -156,8 +157,8 @@ impl Shell {
         s
     }
 
-    /// Засеять слайдер+поле попапа значением активного ядра. Для TP выбирает обычный/
-    /// расширенный слайдер по текущему `x_tmode`.
+    /// Seed a metric popup's slider and field from the active core and optional Main-chart market.
+    /// TP selects its normal or extended slider from the active core's current `x_tmode`.
     fn seed_metric_popup(
         &self,
         metric: controls::TradeMetric,
@@ -165,7 +166,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         use controls::TradeMetric;
-        // Значение тянем заранее (отдельный read), чтобы не держать заём backend при update сущностей.
+        // Read the value first so entity updates do not retain a backend borrow.
         let val = metric.current(self.backend.read(cx), &self.group);
         let Some(val) = val else { return };
         match metric {
@@ -180,7 +181,7 @@ impl Shell {
                 self.tp_input.update(cx, |st, c| {
                     st.set_value(controls::fmt_field2(val), window, c)
                 });
-                // Нижний (файн) слайдер 0..1.99: ставим на текущий TP в этом диапазоне.
+                // Clamp the current TP into the lower fine slider's `0..=TP_FINE_CAP` range.
                 let fine = val.clamp(0.0, controls::TP_FINE_CAP);
                 self.tp_fine_slider
                     .update(cx, |st, c| st.set_value(fine, window, c));
@@ -202,8 +203,8 @@ impl Shell {
         }
     }
 
-    /// Текущий режим расширенного диапазона TP (`x_tmode`) активного ядра — для отправки
-    /// правки TP из поля в нужный диапазон. Нет ядра/настроек → false (обычный 1..100%).
+    /// Return the active core's current extended-TP mode for edits entered in the TP field.
+    /// Missing core or client settings falls back to the normal 1..=100% range.
     pub(super) fn active_tp_extended(&self, cx: &App) -> bool {
         let b = self.backend.read(cx);
         b.active_trade_core(&self.group)
@@ -213,8 +214,8 @@ impl Shell {
             .unwrap_or(false)
     }
 
-    /// Живо обновить поле попапа значением слайдера (drag → numeric-фидбэк). Через
-    /// `defer` + window-handle, т.к. `MoonInputState::set_value` требует `&mut Window`.
+    /// Update a popup field from its slider to provide live numeric feedback while dragging.
+    /// Defers through the window handle because `MoonInputState::set_value` requires `&mut Window`.
     pub(super) fn live_set_field(
         &self,
         input: Entity<MoonInputState>,
@@ -229,7 +230,7 @@ impl Shell {
         });
     }
 
-    /// Программно выставить значение слайдера (нужен `&mut Window` → через defer+window-handle).
+    /// Set a slider programmatically through a deferred window-handle update.
     pub(super) fn defer_set_slider(
         &self,
         slider: Entity<MoonSliderState>,
@@ -244,8 +245,8 @@ impl Shell {
         });
     }
 
-    /// Отправить правку `ClientSettings` активному торговому ядру окна (из попапа тулбара).
-    /// Нет активного ядра — no-op.
+    /// Send a core-settings-popover edit to the window group's currently active trading core.
+    /// Does nothing when the group has no active core.
     pub(super) fn commit_client_edit(&self, edit: ClientSettingsEdit, cx: &mut Context<Self>) {
         let b = self.backend.read(cx);
         let Some(core) = b.active_trade_core(&self.group) else {

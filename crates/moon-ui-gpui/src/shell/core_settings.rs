@@ -1,6 +1,6 @@
-//! Хостинг попапа «настройки ядра» (кнопка ⚙ рядом с селектором ядра в шапке): открытие/
-//! закрытие, сид числовых полей значением активного ядра, overlay+dismiss-слои и стадия
-//! подтверждения «Отменить все ордера». Контент — `crate::core_settings_popup`.
+//! Hosts the core-settings popover opened by the gear button beside the header core selector.
+//! Owns open state, seeds persistent editors from the active core, synchronizes blacklist editors,
+//! and tracks Cancel All confirmation. `crate::core_settings_popup` renders the content.
 
 use gpui::*;
 
@@ -11,9 +11,9 @@ use crate::core_settings_popup;
 use super::Shell;
 
 impl Shell {
-    /// Смена открытости попапа настроек ядра (`MoonPopover.on_open_change` у кнопки ⚙).
-    /// При открытии сидирует числовые поля (глоб-TP / трейлинг) значением активного ядра
-    /// и сбрасывает стадию подтверждения.
+    /// Handle `MoonPopover::on_open_change` for the core-settings gear button.
+    /// Opening collapses the blacklist editor, seeds persistent fields from the active core, and
+    /// resets Cancel All confirmation; closing only resets confirmation and open state.
     pub(crate) fn set_core_settings_open(
         &mut self,
         open: bool,
@@ -32,8 +32,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// Засеять слайдеры+поля паники (price_drop_level) / глоб-TP / трейлинга значениями ядра.
-    /// Слайдеры клампим в их диапазоны (трейлинг 0 = выкл → клампится к минимуму магнитуды).
+    /// Seed Global TP, Trailing, V-Stop, and blacklist editors from the active core snapshot.
+    /// Slider values are clamped to their supported ranges; disabled zero-valued stops preserve
+    /// their last displayed numeric controls rather than being clamped to a nonzero minimum.
     fn seed_core_settings_popup(&self, window: &mut Window, cx: &mut Context<Self>) {
         let (gtp, trailing, vstop, bl_text) = {
             let b = self.backend.read(cx);
@@ -52,11 +53,11 @@ impl Shell {
             }
         };
         let clamp = |v: f32, (lo, hi, _): (f32, f32, f32)| v.clamp(lo, hi);
-        // ВАЖНО: трейлинг/V-Stop НЕ имеют отдельного флага вкл/выкл на проводе (выкл = значение 0,
-        // ядро «прежнее» число не хранит — как Delphi Moonbot, который помнит его только в СВОЁМ
-        // UI: `TrailingDropOld`). Если на ядре 0 (выключено) — НЕ перетираем слайдер/поле нулём,
-        // а оставляем последнее показанное значение. Пустое поле при выключенном стопе — честное
-        // состояние: на ядре значения нет (НЕ подставляем дефолт, чтобы не врать о состоянии ядра).
+        // Trailing and V-Stop have no separate on/off flag on the wire: zero means disabled, and the
+        // core does not retain the previous value. Delphi Moonbot remembers it only in its own UI as
+        // `TrailingDropOld`. Do not overwrite these controls when the snapshot contains zero; retain
+        // the last displayed value. An initially empty field truthfully represents the lack of a
+        // core value, so do not invent a default.
         self.gtp_slider.update(cx, |st, c| {
             st.set_value(clamp(gtp, core_settings_popup::CORE_GTP_BOUNDS), window, c)
         });
@@ -91,8 +92,8 @@ impl Shell {
             .update(cx, |st, c| st.set_value(bl_text, window, c));
     }
 
-    /// Закоммитить текст чёрного списка монет активному ядру (флаг вкл — текущий у ядра).
-    /// Общая точка для подписок Blur/Enter обоих полей (строка + textarea) и тогла «…».
+    /// Commit blacklist text to the currently active core while preserving its current enabled flag.
+    /// Shared by Blur/Enter subscriptions for both editors and by the expansion toggle.
     pub(super) fn commit_blacklist_text(&self, text: String, cx: &Context<Self>) {
         let b = self.backend.read(cx);
         let Some(core) = b.active_trade_core(&self.group) else {
@@ -110,7 +111,7 @@ impl Shell {
         }
     }
 
-    /// Клик по «Отменить все ордера»: первый клик — подтверждение, второй — реальная отмена.
+    /// Require one confirmation click before cancelling all orders for the active core.
     pub(super) fn core_settings_cancel_all_click(&mut self, cx: &mut Context<Self>) {
         if !self.core_settings_cancel_confirm {
             self.core_settings_cancel_confirm = true;
@@ -127,9 +128,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// Контент попапа настроек ядра для `MoonPopover` у кнопки ⚙ (позиционируется к кнопке
-    /// самим popover'ом — прежние захардкоженные координаты absolute-оверлея уехали, когда
-    /// в шапку добавился тикер). Строится только при открытом попапе.
+    /// Build content for the gear button's anchored `MoonPopover` while it is open.
+    /// The popover owns trigger-relative positioning, avoiding the stale absolute coordinates used
+    /// before the ticker was added to the header.
     pub(super) fn core_settings_popup_content(
         &self,
         p: MoonPalette,
@@ -158,8 +159,8 @@ impl Shell {
                 toggle_view.update(app, |this, cx| {
                     let expanding = !this.core_settings_bl_expanded;
                     this.core_settings_bl_expanded = expanding;
-                    // Текст синкается между однострочным полем и multi-line редактором:
-                    // стейты РАЗНЫЕ намеренно (textarea необратимо портит single-line стейт).
+                    // Synchronize text between distinct single-line and multiline states. Reusing
+                    // one state is intentionally avoided because textarea setup mutates it irreversibly.
                     if expanding {
                         let text = this.blacklist_input.read(cx).value().to_string();
                         this.blacklist_area
@@ -168,8 +169,8 @@ impl Shell {
                         let text = this.blacklist_area.read(cx).value().to_string();
                         this.blacklist_input
                             .update(cx, |st, c| st.set_value(text.clone(), window, c));
-                        // Сворачивание = завершение правки: коммитим (Blur textarea при
-                        // подмене элемента может не прийти).
+                        // Collapsing finishes the edit explicitly because replacing the textarea
+                        // element may prevent its Blur event from arriving.
                         this.commit_blacklist_text(text, cx);
                     }
                     cx.notify();

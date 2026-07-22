@@ -1,5 +1,5 @@
-//! Нижняя строка состояния окна группы (порт egui `shell::mod`): бейдж соединения,
-//! лицензия и диагностика book/fps/CPU/GPU/RAM. Вынесено из `shell.rs`.
+//! Group-window status bar, ported from egui's `shell::mod`: connection indicator, license, and
+//! book/FPS/CPU/GPU/RAM diagnostics. Extracted from `shell.rs`.
 
 use gpui::*;
 use rust_i18n::t;
@@ -15,9 +15,11 @@ use crate::design;
 use super::Shell;
 
 impl Shell {
-    /// Нижняя строка состояния (порт egui `shell::mod`): слева — бейдж соединения
-    /// «● N/M подключено» (зелёный=все на связи, красный=есть упавшие, иначе янтарный)
-    /// с тултипом по не-подключённым; затем диагностика book/fps/CPU/RAM.
+    /// Builds the lower status bar ported from egui's `shell::mod`.
+    ///
+    /// The left connection indicator is green when every core is ready, red when any core failed
+    /// or disconnected, and amber otherwise. Its tooltip lists non-ready cores, followed by
+    /// license and book/FPS/CPU/GPU/RAM diagnostics.
     pub(super) fn status_bar(
         &self,
         conn: ConnSummary,
@@ -40,7 +42,7 @@ impl Shell {
         } else {
             p.amber
         };
-        // Текст тултипа — только про НЕ подключённых (имя: причина).
+        // Include only non-ready cores in the tooltip, formatted as name and reason.
         let down_text: String = conn
             .down
             .iter()
@@ -150,9 +152,9 @@ impl Shell {
                     .right_item(MoonStatusItem::new("moonbot.pro").color(p.blue))
                     .render(),
             );
-        // Кликабельная зона поверх подписи «moonbot.pro» (MoonStatusItem не умеет on_click):
-        // открывает сайт в браузере, чтобы не набирать адрес руками. Ширина ≈ подписи, у
-        // правого края (right_item там же). Курсор-палец — намёк на ссылку.
+        // Overlay a clickable area on the right-aligned moonbot.pro label because `MoonStatusItem`
+        // has no click handler. Its 72-pixel width approximately matches the label, and the pointer
+        // cursor signals a link.
         host = host.child(
             div()
                 .id("moonbot-link")
@@ -175,7 +177,7 @@ impl Shell {
                 div()
                     .id("debug-status-open")
                     .absolute()
-                    // Левее ссылки moonbot.pro (правый угол ~6..78), чтобы debug-кнопка её не перекрывала.
+                    // Keep the debug button left of the moonbot.pro link so their hitboxes do not overlap.
                     .right(px(150.0))
                     .top(px(3.0))
                     .px(design::ui_px(cx, 6.0))

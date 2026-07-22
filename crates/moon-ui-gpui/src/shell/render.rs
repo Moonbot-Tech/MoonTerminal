@@ -61,8 +61,8 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::SHELL_RENDER);
 
-        // Header-данные (рынок/цена/conn). Чарт/ввод/оси — в ChartPanel.
-        // FPS рендера (сглаженный) — диагностика статус-бара (порт host.fps).
+        // Collect frame and status diagnostics here; chart data, input, and axes stay in ChartPanel.
+        // Smoothed render FPS is shown in the status bar, matching the egui host.
         let now_inst = Instant::now();
         if let Some(prev) = self.last_frame {
             let dt = now_inst.duration_since(prev).as_secs_f32().max(1e-4);
@@ -79,7 +79,7 @@ impl Render for Shell {
             crate::core_order::CoreOrder::new(&b.config).sort_by(&mut conn.down, |(id, _, _)| *id);
             let license = b.session.license_summary_group(&self.group);
             let snap = b.snap;
-            // Для статус-бара нужно лишь число уровней стакана текущего Main-чарта.
+            // The status bar needs only the order-book level count for the current Main chart.
             let book_levels = match b.main_chart_target(&self.group) {
                 Some((core, m)) => b.session.with_orderbook_view(core, &m, |data| {
                     data.map(|(book, _)| book.len()).unwrap_or(0)
@@ -101,27 +101,23 @@ impl Render for Shell {
             .map(|(metric, _)| *metric)
             .zip(self.open_metric_content(p, cx));
 
-        // Попап настроек ядра — MoonPopover у кнопки ⚙ (контролируемый open в Shell):
-        // контент строим только при открытом попапе, позиционирование к кнопке — от popover.
+        // Build core-settings content only while the Shell-controlled `MoonPopover` is open; the
+        // popover itself anchors the content to its button.
         let core_settings_content = self
             .core_settings_open
             .then(|| self.core_settings_popup_content(p, cx));
 
-        // Тикер курса в шапке: сохранённый выбор или read-only дефолт. Render не мутирует backend.
+        // Read the persisted header-ticker selection or its cached default without mutating Backend.
         let ticker_sel = self.backend.read(cx).header_ticker();
         let (ticker_overlay, ticker_dismiss) = self.ticker_popup_layers(chrome_width, p, cx);
 
-        // Активность Main для авто-закрытия по неактивности: ОКОННЫЙ слушатель ловит ВСЕ
-        // движения мыши, в т.ч. над виджетами/панелями/чартом, которые блокируют hitbox
-        // корня (там gated `.on_mouse_move` молчал — отсюда «график закрылся, хотя мышь
-        // двигалась в окне»). Только при активном окне; без notify — это лишь отметка
-        // времени (дёшево, хоть и часто).
+        // Track Main activity with a window-level listener so movement over widgets, panels, and
+        // the chart still counts even when they block the root hitbox. Record activity only for an
+        // active window. No notification is needed because this updates only a timestamp.
         //
-        // CAPTURE-фаза (а НЕ bubble): чарт-панель в своём элементном `.on_mouse_move` при
-        // наведении зовёт `cx.stop_propagation()` (render.rs) — в bubble это гасит корневой
-        // слушатель, и движение НАД ЧАРТОМ не считалось активностью → график закрывался, хотя
-        // мышь по нему водили. Capture проходит до bubble и не подвержен его stop_propagation
-        // (gpui window.rs: фазы идут capture→bubble на одном флаге `propagate_event`).
+        // Use the capture phase rather than bubble: the chart's element-level mouse-move handler
+        // calls `stop_propagation`, which would suppress a bubble listener. Capture runs first, so
+        // movement over the chart cannot be missed and accidentally trigger inactivity closure.
         {
             let backend = self.backend.clone();
             let group = self.group.clone();
@@ -134,14 +130,14 @@ impl Render for Shell {
 
         v_flex()
             .size_full()
-            .relative() // для absolute-позиционирования демо-попапа поверх дока
-            // Фокусируемый корень → хоткеи (`on_key_down`) ловятся даже при пустом Main.
+            .relative() // Anchor absolute popup layers over the dock.
+            // A focusable root receives `on_key_down` hotkeys even when Main is empty.
             .track_focus(&self.focus)
             // Main inactivity tracking uses the window-level `on_mouse_event::<MouseMoveEvent>`
             // above because a gated root `.on_mouse_move` cannot see movement over mouse-blocking
             // widgets.
-            // НЕТ корневого .bg(): чарт-регион (центр дока) держим прозрачным «окном» под
-            // own-pass (UnderScene). Хром (хедер/тулбар/панели/статус) красит свой фон сам.
+            // Do not set a root background: the central chart region remains transparent for its
+            // UnderScene own-pass, while header, toolbar, panels, and status paint their own chrome.
             .font_family(design::mono())
             .text_color(rgb(p.text))
             .text_size(design::t_body(cx))
@@ -172,7 +168,7 @@ impl Render for Shell {
                 chrome_width,
                 cx,
             ))
-            // ── Центр: единый DockArea (чарт=center, детекты+ордер=right, вкладки=bottom) ──
+            // ── One DockArea: ChartTabs=center-left, Detects=right, Orders/utilities=bottom ──
             .child(
                 div()
                     .relative()
@@ -190,7 +186,7 @@ impl Render for Shell {
                             .child(self.dock.clone()),
                     ),
             )
-            // ── Status bar (полный порт egui `shell::ui` нижней панели) ──
+            // ── Status bar, fully ported from egui's lower `shell::ui` panel ──
             .child(self.status_bar(conn, license, snap, book_levels, fps, cx))
             .child(
                 MoonWindowFrame::main("moon-main-window-frame", chrome_width)
@@ -199,7 +195,7 @@ impl Render for Shell {
                     .show_controls(design::show_custom_window_controls())
                     .hit_overlay(),
             )
-            // Попап выбора источника тикера курса (клик по «1 BTC = …» в шапке).
+            // Header price-ticker source picker and its dismiss layer.
             .children(ticker_dismiss)
             .children(ticker_overlay)
     }

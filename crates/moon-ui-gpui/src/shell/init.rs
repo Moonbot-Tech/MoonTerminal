@@ -1,6 +1,6 @@
-//! Конструктор [`Shell::new`]: сборка дока/панелей окна группы, observe/subscribe-плумбинг
-//! (инпуты, слайдеры, док-события, активация окна) + `wire_metric_subscriptions`.
-//! Вынесено из `shell/mod.rs` точь-в-точь.
+//! [`Shell::new`] construction: assemble a group window's dock and panels, wire observers and
+//! subscriptions for inputs, sliders, dock events, and window activation, and delegate metric
+//! wiring to `wire_metric_subscriptions`. Factored out of `shell/mod.rs`.
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -34,9 +34,9 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         let window_handle = window.window_handle();
-        // Единый DockArea на окно. Панели: чарт=center, детекты+ордер=right (split),
-        // нижние вкладки=bottom. Dock/TabPanel — MoonPalette, чтобы фоны управлялись
-        // MoonBackgroundPolicy и не перекрывали chart UnderScene.
+        // Use one DockArea per group window. Charts occupy center-left, Detects the right split,
+        // and Orders plus the other utility panels the bottom tabs. No-fill background policies
+        // let MoonPalette and the chart UnderScene control their own backgrounds.
         let dock = cx.new(|cx| {
             DockArea::new("group-dock", Some(DOCK_VERSION), window, cx)
                 .background_policy(MoonBackgroundPolicy::NoFill)
@@ -44,9 +44,9 @@ impl Shell {
         });
         let weak = dock.downgrade();
 
-        // Сохранённая раскладка этой группы (совместимой версии) → восстановить через
-        // DockArea::load (панели пересоздаёт PanelRegistry по panel_name+группе). Иначе
-        // строим дефолтную раскладку. Порт «сохранение всего» для доков.
+        // Restore a version-compatible saved layout through `DockArea::load`; PanelRegistry
+        // recreates panels from panel name and group. Build the default layout only when no
+        // compatible saved state exists. This ports full dock persistence.
         let saved = backend
             .read(cx)
             .dock_states
@@ -61,8 +61,8 @@ impl Shell {
                 }
             });
         } else {
-            // Чарт-вкладки (Main + AddToChart-N) — свой таб-стрип (chart_tabs.rs), полный
-            // контроль активной вкладки/детача. Детекты/ордер/нижние — gpui-Dock-панели.
+            // Chart tabs (Main and AddToChart-N) use their own strip in chart_tabs/strip.rs for explicit
+            // active-tab and detach control. Detects and bottom tabs are GPUI dock panels.
             let charts = cx.new(|cx| {
                 ChartTabs::new(
                     backend.clone(),
@@ -76,8 +76,8 @@ impl Shell {
             });
             let detects = cx.new(|cx| DetectsPanel::new(backend.clone(), group.clone(), cx));
 
-            // Нижние вкладки — собираем, ПРОПУСКАЯ откреплённые (их окна откроет старт):
-            // панель убрана из дока при откреплении, dock_persist хранит док без неё.
+            // Build bottom tabs while omitting detached panels, whose windows startup restores.
+            // Detaching removes the panel from the dock, so persisted dock state excludes it.
             let detached_set: std::collections::HashSet<String> = backend
                 .read(cx)
                 .detached
@@ -96,10 +96,10 @@ impl Shell {
                     AssetsView::restored_group(backend.clone(), group.clone(), window, cx)
                 })));
             }
-            // Вкладка «Статус ядер» временно ОТКЛЮЧЕНА: наполнять её из строк лога
-            // нецелесообразно (редко/фрагментарно). Код панели/парсер оставлены — вернём,
-            // когда moonproto начнёт слать системные метрики типизированно. Тогда достаточно
-            // раскомментировать этот блок и вернуть "CoreStatus" в DOCK_TAB_ORDER.
+            // CoreStatus remains omitted from the default bottom tabs, but its panel now consumes
+            // typed protocol-v4 `KernelHealth` state. The older log-parser limitation is historical,
+            // not a current data dependency. To enable the default tab, uncomment this block and
+            // restore `CoreStatus` in `DOCK_TAB_ORDER`.
             // if !detached_set.contains("CoreStatus") {
             //     bottom_tabs.push(Rc::new(cx.new(|cx| {
             //         crate::panels::CoreStatusView::restored_group(
@@ -130,10 +130,10 @@ impl Shell {
                 ));
             }
 
-            // ВСЁ — в center-сплите: размеры панелей меняются split-handle'ами,
-            // tab-docking/drag-to-edge — отдельный следующий слой док-механики.
-            // Чарт-вкладки слева, детекты справа (≈220px), нижние вкладки внизу.
-            // Тулбар (Размеры/Продажа/Масштаб) — отдельная фикс. полоса в Shell::render, не док.
+            // Place the entire default layout in the center split: charts on the left, Detects in
+            // a roughly 220px right slot, and utility tabs in a roughly 220px bottom slot. Split
+            // handles resize panels; tab docking and edge dragging are separate dock behavior.
+            // The size/sell/scale toolbar remains a fixed Shell::render row outside the dock.
             let chart_item = DockItem::tab(charts, &weak, window, cx);
             let right = DockItem::tab(detects, &weak, window, cx);
             let top = DockItem::split_with_sizes(
@@ -157,9 +157,9 @@ impl Shell {
             dock.update(cx, |area, cx| area.set_center(center, window, cx));
         }
 
-        // Header/статус-бар читают backend; но это GPUI-перерисовка top-down → тащит тяжёлый
-        // Orders. Данные статуса (book/cpu/fps) меняются ≤10 Гц, человеку хватает ≤4 Гц.
-        // Троттлим notify до ≥250мс (Пример 5: не будить всю сцену общим молотком на каждый тик).
+        // Header and status bar read Backend, but a top-down GPUI repaint also pulls in the heavy
+        // Orders view. Throttle ordinary notifications to at most 4 Hz; book/CPU/FPS updates need
+        // no faster visual cadence even if their source changes up to 10 Hz.
         cx.observe(&backend, |this, backend, cx| {
             crate::diag::bump(&crate::diag::SHELL_OBS_FIRE);
             this.drain_order_size_edit_request(cx);
@@ -167,9 +167,8 @@ impl Shell {
             this.drain_repin_requests(cx);
             this.drain_engine_action_toasts(cx);
             let now = Instant::now();
-            // Follow/Live и Scale меняются по КЛИКУ юзера — отражаем мгновенно,
-            // мимо 250мс-троттла.
-            // Прочее (book/cpu/fps) меняется само и человеку хватает ≤4 Гц → троттлим.
+            // User-triggered Follow/Live and scale changes, plus any order-size revision, bypass
+            // the 250ms throttle. Autonomous book/CPU/FPS updates remain throttled to 4 Hz.
             let (follow, price_scale, order_size_rev) = {
                 let b = backend.read(cx);
                 (b.follow, b.price_scale, b.order_size_rev)
@@ -195,10 +194,9 @@ impl Shell {
         })
         .detach();
 
-        // Тик часов шапки: раз в секунду будим Shell-рендер, чтобы «HH:MM:SS» шли даже в
-        // простое (backend-notify гейтится наличием данных → без этого часы бы замирали).
-        // Один таймер на окно; 1 Гц ≤ штатного троттла статус-бара (4 Гц) — дёшево. Останов —
-        // по смерти сущности (окно закрыто).
+        // Wake Shell once per second so the header clock advances while idle; backend notifications
+        // are data-gated and would otherwise leave it frozen. One 1 Hz timer per window is below
+        // the status bar's 4 Hz cadence and stops when the Shell entity is gone.
         cx.spawn(async move |this, cx| {
             loop {
                 let executor = cx.update(|cx| cx.background_executor().clone());
@@ -217,8 +215,8 @@ impl Shell {
         })
         .detach();
 
-        // Любое изменение раскладки доков (drag/split/resize/detach) → дамп в backend,
-        // сохранение дебаунсит дренаж-таймер (docks.json). Порт персиста раскладки.
+        // Dump every dock event, including drag, split, resize, detach, and close, into Backend.
+        // The drain timer debounces persistence to `docks.json`.
         cx.subscribe(&dock, |this, dock, event: &DockEvent, cx| {
             match event {
                 DockEvent::DetachRequested { panel_name } => {
@@ -243,9 +241,9 @@ impl Shell {
         })
         .detach();
 
-        // Активность окна для авто-закрытия Main по неактивности: пока окно НЕ в фокусе,
-        // движение мыши над ним не считается активностью (таймер неактивности тикает). При
-        // получении фокуса засчитываем активность, чтобы не закрыть графики сразу после возврата.
+        // Track window activation for Main's idle auto-close. Mouse movement over an unfocused
+        // window must not reset inactivity; gaining focus records activity so charts are not closed
+        // immediately after the user returns.
         cx.observe_window_activation(window, |this, window, cx| {
             this.window_active = window.is_window_active();
             if this.window_active {
@@ -255,11 +253,10 @@ impl Shell {
         })
         .detach();
 
-        // Инпут инлайн-редактирования размера ордера (дабл-клик по кнопке F1-F6). По Blur
-        // (клик вне) или Enter — пишем значение в `ServerConfig.order_sizes` фокусного ядра
-        // и сохраняем на диск (config.save). Пустой/нечисловой ввод — отмена без записи.
-        // Каждый ВАЛИДНЫЙ кейстрок коммитится сразу (дебаунс-сейв через config_dirty):
-        // покупка хоткеем/кликом до Enter должна брать УЖЕ набранное значение.
+        // Inline order-size editor opened by double-clicking an F1-F6 button. Every valid positive
+        // Change updates the focused core's `ServerConfig.order_sizes` immediately and schedules a
+        // debounced save, so a hotkey or click before Enter uses the text already typed. Blur or
+        // Enter performs a direct config save; empty, nonnumeric, or nonpositive input is ignored.
         let size_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(&size_input, |this, inp, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
@@ -310,8 +307,9 @@ impl Shell {
         })
         .detach();
 
-        // Инпут инлайн-редактирования процента fixed-sell пресета (дабл-клик по S-кнопке). По
-        // Blur/Enter шлём `SetFixedSellPct` активному ядру. Пустой/нечисловой ввод — отмена.
+        // Inline fixed-sell percentage editor opened by double-clicking an S button. Blur or Enter
+        // sends `SetFixedSellPct` to the captured core; empty, nonnumeric, or negative input is
+        // ignored.
         let sell_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(&sell_input, |this, inp, ev: &MoonInputEvent, cx| {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
@@ -323,7 +321,7 @@ impl Shell {
             if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
                 if v >= 0.0 && ix < 6 {
                     this.backend.update(cx, |b, bcx| {
-                        // Оптимистичный локальный кэш (живой дисплей) + отправка в ядро.
+                        // Update the optimistic display cache before sending the edit to the core.
                         b.set_fixed_sell_pct_local(core, ix, v);
                         b.order_size_rev = b.order_size_rev.wrapping_add(1);
                         bcx.notify();
@@ -343,9 +341,9 @@ impl Shell {
         })
         .detach();
 
-        // Попапы торговых метрик: слайдер (быстрый выбор) + поле (точный ввод). Границы — из
-        // `controls` (по смыслу ядра). TP — два слайдера (обычный/расширенный под `x_tmode`).
-        // Значение сидируется при открытии попапа (on_open_change), здесь — лишь дефолт.
+        // Trading-metric popups pair a slider for quick selection with an input for exact values.
+        // Bounds come from `controls`; TP has normal and extended sliders selected by `x_tmode`.
+        // Popup opening seeds the current value through `on_open_change`; constructors use defaults.
         let mk_slider = |cx: &mut Context<Self>, (min, max, step): (f32, f32, f32), def: f32| {
             cx.new(|_| {
                 MoonSliderState::new()
@@ -357,7 +355,7 @@ impl Shell {
         };
         let tp_slider_normal = mk_slider(cx, controls::TP_NORMAL, 1.0);
         let tp_slider_ext = mk_slider(cx, controls::TP_EXT, 100.0);
-        // Файн-слайдер TP: фиксированный 0..2 (активен только когда верхний TP = 2).
+        // The fixed 0..2 TP fine slider is enabled only when the upper normal TP slider reaches 2.
         let tp_fine_slider = Self::make_tp_fine_slider(cx);
         let sl_slider = mk_slider(cx, controls::SL_BOUNDS, 0.0);
         let lev_slider = mk_slider(cx, controls::LEV_BOUNDS, 1.0);
@@ -375,21 +373,21 @@ impl Shell {
             MoonInputState::new(window, cx)
                 .placeholder(t!("core_settings.def_strategy_search").to_string())
         });
-        // Ввод в поле поиска стратегии → перерисовать попап (пере-фильтровать список).
+        // Repaint on strategy-search input so the popup can refilter its list.
         cx.subscribe(&def_strategy_input, |_this, _, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
                 cx.notify();
             }
         })
         .detach();
-        // Multi-line от рождения; Enter коммитит (submit), а не вставляет перенос строки.
+        // Start in multiline mode, but make Enter submit rather than insert a newline.
         let blacklist_area = cx.new(|cx| {
             MoonInputState::new(window, cx)
                 .multi_line(true)
                 .submit_on_enter(true)
         });
         let ticker_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("BTC…"));
-        // Ввод в поиске тикера — только перерисовать попап (список считается в layers).
+        // Ticker-search changes only repaint; layer rendering computes the filtered list.
         cx.subscribe(&ticker_input, |_this, _inp, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
                 cx.notify();
@@ -397,9 +395,9 @@ impl Shell {
         })
         .detach();
 
-        // Слайдеры/поля метрик: на изменение шлём правку активному ядру и держим numeric-поле
-        // попапа в синхроне. Вынесено в `wire_metric_subscriptions` — в `new` это ~80 строк
-        // повторяющегося плумбинга подписок.
+        // Metric sliders and fields send guarded edits for the popup's core and keep numeric inputs
+        // synchronized. `wire_metric_subscriptions` keeps the repeated subscription plumbing out of
+        // this constructor.
         Self::wire_metric_subscriptions(
             cx,
             &tp_slider_normal,
@@ -411,9 +409,9 @@ impl Shell {
             &lev_input,
         );
 
-        // Поля попапа настроек ядра: коммит по Blur/Enter. Порог паники = `price_drop_level`
-        // Глобальный TP пишем как `GlobalTakeProfit { on: true, pct }` (поле подразумевает
-        // включённый глоб-TP); трейлинг — `TrailingDrop`. Пустой/нечисловой ввод — игнор.
+        // Core-settings popup fields commit on Blur or Enter. Global TP writes
+        // `GlobalTakeProfit { on: true, pct }`, because the field implies that it is enabled;
+        // trailing writes `TrailingDrop`. Empty or nonnumeric input is ignored.
         cx.subscribe(&gtp_input, |this, inp, ev: &MoonInputEvent, cx| {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
@@ -436,8 +434,8 @@ impl Shell {
         })
         .detach();
 
-        // Слайдеры попапа настроек ядра: на изменение шлём правку активному ядру и живо обновляем
-        // соответствующее поле (как у метрик-попапов тулбара).
+        // Core-settings sliders send edits to the active core and update their fields live, matching
+        // the toolbar metric popups.
         cx.subscribe(&gtp_slider, |this, _e, ev: &MoonSliderEvent, cx| {
             if let MoonSliderEvent::Change(v) = ev {
                 let v = v.end();
@@ -464,7 +462,8 @@ impl Shell {
             }
         })
         .detach();
-        // V-Stop (vol_drop_level, целое %): слайдер → правка + целочисленное поле.
+        // V-Stop maps integer-percent `vol_drop_level`: slider changes send an edit and update the
+        // integer field.
         cx.subscribe(&vstop_slider, |this, _e, ev: &MoonSliderEvent, cx| {
             if let MoonSliderEvent::Change(v) = ev {
                 let n = v.end().round() as i32;
@@ -482,8 +481,8 @@ impl Shell {
             }
         })
         .detach();
-        // Текст чёрного списка: коммит по Blur/Enter (одна логика для однострочного поля и
-        // развёрнутого multi-line редактора). Флаг вкл берём текущий у активного ядра.
+        // Commit blacklist text on Blur or Enter through one path shared by the single-line and
+        // expanded multiline editors. Preserve the active core's current enabled flag.
         let commit_bl = |this: &mut Self,
                          inp: Entity<MoonInputState>,
                          ev: &MoonInputEvent,
@@ -505,8 +504,8 @@ impl Shell {
         )
         .detach();
 
-        // Фокус корня окна для хоткеев (см. поле `focus`). Фокусируем сразу, чтобы F-клавиши
-        // работали даже при пустом Main (когда фокусировать в доке нечего).
+        // Focus the window root immediately so hotkeys, including F keys, work even when Main is
+        // empty and the dock has nothing else to focus; see the `focus` field.
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
@@ -581,7 +580,7 @@ impl Shell {
                     cx,
                 );
                 this.live_set_field(this.tp_input.clone(), controls::fmt_field2(v), cx);
-                // Верхний дошёл до минимума (2) → нижний (файн) становится активным и равным 2.
+                // Reaching the upper slider's minimum of 2 enables the fine slider and sets it to 2.
                 if v <= controls::TP_FINE_MAX {
                     this.defer_set_slider(this.tp_fine_slider.clone(), controls::TP_FINE_MAX, cx);
                 }
@@ -616,8 +615,8 @@ impl Shell {
         })
         .detach();
         cx.subscribe(lev_slider, |this, _e, ev: &MoonSliderEvent, cx| {
-            // Плечо НЕ применяем на драг (биржевое действие) — только живой фидбэк в поле.
-            // Коммит идёт по кнопке «Применить» в попапе (читает значение из поля).
+            // Do not apply leverage while dragging because it is an exchange action. Only mirror
+            // the value into the field; the popup's Apply button reads and commits it.
             if let MoonSliderEvent::Change(v) = ev {
                 let v = v.end();
                 this.live_set_field(this.lev_input.clone(), format!("{}", v as i32), cx);
@@ -625,8 +624,8 @@ impl Shell {
         })
         .detach();
 
-        // Поля ввода: коммит по Blur/Enter (точное значение). Пустой/нечисловой ввод — игнор.
-        // TP читает текущий режим x_tmode активного ядра, чтобы отправить правку в тот же диапазон.
+        // Inputs commit exact values on Blur or Enter and ignore empty or nonnumeric text. TP reads
+        // the active core's current `x_tmode` so the edit uses the same range.
         cx.subscribe(tp_input, |this, inp, ev: &MoonInputEvent, cx| {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
@@ -654,8 +653,8 @@ impl Shell {
             }
         })
         .detach();
-        // Поле плеча НЕ коммитит само (ни Blur, ни Enter): плечо — биржевое действие, его
-        // отправляет только кнопка «Применить» в попапе. Поле/слайдер — лишь выбор значения.
+        // The leverage field never commits on Blur or Enter. Leverage is an exchange action sent
+        // only by the popup's Apply button; the field and slider merely select its value.
         let _ = lev_input;
     }
 }
