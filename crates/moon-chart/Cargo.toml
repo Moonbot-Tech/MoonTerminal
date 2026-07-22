@@ -9,9 +9,9 @@ name = "moon_chart"
 path = "src/lib.rs"
 
 [dependencies]
-# Доменные данные/конфиг/сессии (UI-агностик).
+# Domain data, configuration, and sessions (UI-agnostic).
 moon-core = { path = "../moon-core" }
 
-# Только для #[derive(Pod/Zeroable)] на типах инстансов/ChartUniform. wgpu больше нет:
-# wgpu-движок чарта удалён вместе с egui-бинарём, рисует own-pass DX11 (chartdx).
+# Only for #[derive(Pod/Zeroable)] on instance types and ChartUniform. wgpu is no longer used:
+# the wgpu chart engine was removed with the egui binary; own-pass DX11 (chartdx) does the rendering.
 bytemuck = { version = "1", features = ["derive"] }
