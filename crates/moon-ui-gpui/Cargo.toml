@@ -19,15 +19,15 @@ ico = "0.3"
 winresource = "0.1"
 
 [dependencies]
-# Общий backend (config/session/market/metrics/...). UI-агностик.
+# Shared backend (config/session/market/metrics/...). UI-agnostic.
 moon-core = { path = "../moon-core" }
-# Чарт-математика/геометрия (view/axes/transform/build_order_geometry/инстанс-типы,
-# константы). wgpu-free: данные рисует НАШ own-pass DX11 (chartdx), не wgpu-движок.
+# Platform-neutral chart math/geometry (view/axes/transform/build_order_geometry/instance types,
+# constants). chartdx renders the data via DX11 on Windows, Metal on macOS, and wgpu on Linux.
 moon-chart = { path = "../moon-chart" }
 image = "0.25"
 bytemuck = { version = "1", features = ["derive"] }
-# Вшитый набор значков монет (assets/coins) — чтобы иконки ехали в сборку без
-# отдельной папки рядом с exe; диск остаётся приоритетом (докинуть без пересборки).
+# Embedded coin icon set (assets/coins), so icons ship in the build without a
+# separate folder beside the executable; disk files take priority for adding icons without rebuilding.
 include_dir = "0.7"
 
 # Canonical Moon UI source: standalone GPUI runtime + Moon components.
@@ -41,26 +41,25 @@ moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI",
 
 anyhow = "1"
 log = "0.4"
-# Конверсии NaiveDate ↔ unix для полей «с»/«по» (MoonCalendar в Аналитике);
-# версия как у moonui (0.4.38) — тип NaiveDate общий с MoonDate.
+# NaiveDate <-> Unix conversions for the "from"/"to" fields (MoonCalendar in Analytics);
+# compatible Cargo resolution with MoonUI shares the NaiveDate type used by MoonDate.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 env_logger = "0.11"
-# Локализация интерфейса: словари в корневом `locales/*.yml` (см. locales/README.md).
-# Версия = как в MoonUI (rust-i18n 4.1), чтобы глобальный backend локали был общий.
+# UI localization: dictionaries in the root `locales/*.yml` (see locales/README.md).
+# Compatible Cargo resolution with MoonUI shares the global locale backend.
 rust-i18n = "4.1"
-# Окно «Отчёт» читает локальную SQLite напрямую (как egui ReportView). Версия и
-# фича bundled унифицируются с moon-core — отдельной сборки SQLite не будет.
+# The Report panel queries the local SQLite database through moon-core. The version and
+# bundled feature are unified with moon-core, avoiding a separate SQLite build.
 rusqlite = "0.32"
-# Сериализация раскладки доков/откреплённых окон (→ docks.json / detached.json).
+# Serialization of dock and detached-window layouts (-> docks.json / detached.json).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Экспорт отчёта в Excel (.xlsx) — панель «Отчёт», меню сохранения (report/export.rs).
+# Excel (.xlsx) export from the Report panel's save menu (report/export.rs).
 rust_xlsxwriter = "0.96.0"
 
-# Локальное смещение времени (подписи часов) + НАШ DX11 own-pass рендер чарта (chartdx).
-# Только Windows; иначе UTC. moon-chart намеренно windows-free, поэтому tz/DX11 здесь.
-# Версия 0.61 = как стенд chart_bench (проверено с RawGpuAccess-кастом форка; COM ABI
-# стабилен между версиями windows-rs, поэтому несовпадение с версией форка безопасно).
+# Local time offset (hour labels) and our own-pass DX11 chart renderer (chartdx).
+# Windows only; other platforms use UTC. moon-chart is intentionally Windows-free, so tz/DX11 live here.
+# Version 0.61 aligns with MoonUI's windows dependency to share the same windows-rs types.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_System_SystemInformation",

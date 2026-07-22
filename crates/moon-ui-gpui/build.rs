@@ -7,8 +7,8 @@ fn main() {
         println!("cargo:rustc-cfg=moon_profile_debug");
     }
 
-    // Встраиваем ВСЕ значки групп (assets/icons/<id>.png) в exe → подставляются из exe,
-    // без путей на диск (работает в dev и в деплое). Кодоген: GROUP_ICONS[id] = Option<&[u8]>.
+    // Embed every numerically named group icon (assets/icons/<id>.png) in the executable,
+    // avoiding runtime disk paths in development and deployment. Codegen: GROUP_ICONS[id] = Option<&[u8]>.
     if let Err(err) = embed_group_icons() {
         println!("cargo:warning=failed to embed group icons: {err}");
     }
@@ -19,8 +19,9 @@ fn main() {
     }
 }
 
-/// Кодогенерит `GROUP_ICONS: &[Option<&[u8]>]` (индекс = id значка) из `assets/icons/<id>.png`
-/// через `include_bytes!` (абсолютные пути от `CARGO_MANIFEST_DIR`). Включается в windowing.rs.
+/// Generates `GROUP_ICONS: &[Option<&[u8]>]` (index = icon ID) from `assets/icons/<id>.png`
+/// via `include_bytes!` (absolute paths from `CARGO_MANIFEST_DIR`) for inclusion by windowing.rs.
+/// Returns an I/O error if the input directory cannot be read or the output cannot be created or written.
 fn embed_group_icons() -> std::io::Result<()> {
     use std::io::Write;
     let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
@@ -154,8 +155,8 @@ fn embed_exe_icon() -> std::io::Result<()> {
     dir.write(File::create(&out)?)?;
 
     let mut res = winresource::WindowsResource::new();
-    // ID ровно "1": движок MoonUI грузит значок окна как LoadImageW(module, MAKEINTRESOURCE(1)).
-    // Без явного id winresource называет ресурс иначе → значок окна/таскбара не находится.
+    // ID must be exactly "1": MoonUI loads the window icon as LoadImageW(module, MAKEINTRESOURCE(1)).
+    // winresource also defaults to ID 1; any different explicit ID would break the window/taskbar icon lookup.
     res.set_icon_with_id(out.to_str().expect("icon path must be valid UTF-8"), "1");
     res.compile()
 }
