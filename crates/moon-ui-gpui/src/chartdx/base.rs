@@ -86,9 +86,10 @@ impl BaseCache {
         Ok(tex.rtv.clone())
     }
 
-    /// `clip` (l,t,r,b в device-px backbuffer) — слот ЭТОГО чарта. Блитим строго в него:
-    /// при нескольких `gpu_canvas` в одном окне (стек выносного окна) полноэкранный блит
-    /// window_bg затирал бы соседние чарты. Текстура база — на весь экран, scissor вырезает слот.
+    /// `clip` is this chart's slot in device-pixel backbuffer coordinates `(l, t, r, b)`.
+    /// Blitting is restricted to it because a full-window `window_bg` blit would overwrite
+    /// adjacent charts when one window contains multiple `gpu_canvas` elements. The base texture
+    /// covers the full screen, while the scissor restricts writes to this slot.
     pub fn blit_to(
         &mut self,
         context: &ID3D11DeviceContext,
@@ -110,8 +111,8 @@ impl BaseCache {
         unsafe {
             context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
             context.RSSetViewports(Some(&[full_viewport(gpu)]));
-            // Scissor на слот этого чарта: текстура база полноэкранная, но писать в backbuffer
-            // можно только в свой слот, иначе затрём соседние gpu_canvas того же окна.
+            // Restrict writes to this chart's slot even though the base texture is full-screen;
+            // otherwise this pass would overwrite adjacent gpu_canvas elements in the same window.
             set_scissor_rect(context, clip[0], clip[1], clip[2], clip[3]);
             context.RSSetState(&tex.scissor_rs);
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -121,8 +122,8 @@ impl BaseCache {
             context.PSSetConstantBuffers(0, Some(&[Some(tex.blit_cb.clone())]));
             context.PSSetShaderResources(0, Some(&[Some(tex.srv.clone())]));
             context.PSSetSamplers(0, Some(&[Some(tex.sampler.clone())]));
-            // Blend OFF: непрозрачная замена. База перекрывает белый clear целиком —
-            // никакого подмешивания белого через alpha<1 (см. blit_opaque_fragment).
+            // Disable blending for an opaque replacement. The base completely covers the white
+            // clear without mixing it through alpha values below one; see `blit_opaque_fragment`.
             context.OMSetBlendState(None, None, 0xFFFFFFFF);
             context.Draw(6, 0);
         }

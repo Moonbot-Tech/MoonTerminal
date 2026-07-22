@@ -1,11 +1,13 @@
-//! Тогл и пикер «ручной стратегии» (Moonbot manual strategies) в шапке.
+//! Header toggle and picker for Moonbot manual strategies.
 //!
-//! Состояние живёт в ЯДРЕ (`ClientSettings.use_manual_strategy`/`manual_strategy_id`):
-//! тогл/выбор шлют `ClientSettingsEdit::ManualStrategy`, живой отклик — optimistic-кэш
-//! `Backend::manual_strat_state` до echo ClientSettings. При включённом режиме sell/стопы
-//! ручным ордерам ставит САМО ЯДРО из полей стратегии — TP/S-слоты/SL тулбара к новым
-//! ордерам не применяются (тулбар их гасит), а `effective_strat_id` в moon-core уже ведёт
-//! ручные ордера по выбранной стратегии.
+//! State lives in the core's `ClientSettings.use_manual_strategy` and `manual_strategy_id` fields.
+//! Toggle and picker changes send `ClientSettingsEdit::ManualStrategy`; the process-lifetime local
+//! override exposed by `Backend::manual_strat_state` provides immediate feedback and continues to
+//! take precedence over ClientSettings snapshots until replaced. Core echoes and command failures do
+//! not reconcile it. When enabled, the core derives sell and stop behavior for manual orders from
+//! the strategy fields, so the toolbar's TP, S slots, and SL do not apply to new orders and are
+//! disabled. `effective_strat_id` in moon-core already routes manual orders through the selected
+//! strategy.
 
 use gpui::*;
 use rust_i18n::t;
@@ -20,7 +22,7 @@ use moon_core::session::CoreId;
 
 use crate::{Backend, design};
 
-/// Ordinal вида Manual в схеме стратегий Moonbot (см. `strat_kind_name`).
+/// Ordinal of the Manual kind in the Moonbot strategy schema; see `strat_kind_name`.
 const MANUAL_KIND: u8 = 12;
 
 /// Pill height shared with the header's core selector; label width is capped separately.
@@ -42,7 +44,7 @@ pub fn manual_strategy_controls(
     let core = b.active_trade_core(group)?;
     let (on, id) = b.manual_strat_state(core);
     let core_data = b.session.store().core(core);
-    // Manual-стратегии активного ядра — список пикера.
+    // Populate the picker from the active core's manual strategies.
     let manuals: Vec<(u64, String)> = core_data
         .map(|cd| {
             cd.strategies
@@ -54,13 +56,13 @@ pub fn manual_strategy_controls(
         .unwrap_or_default();
     let sel_row = core_data.and_then(|cd| cd.strategies.iter().find(|s| s.id == id && id != 0));
     let schema = core_data.and_then(|cd| cd.schema.as_ref());
-    // Сводка ключевых параметров стратегии (как в MB: Buy/Sell/SL/TS) — только при вкл.
+    // Show the Moonbot-style Buy/Sell/SL/TS summary only while the mode is enabled.
     let summary = (on && sel_row.is_some())
         .then(|| sel_row.map(|r| strat_summary(r, schema)))
         .flatten();
 
-    // Имя в пилюле: выбранная стратегия / «—» (не выбрана) / «?» (id есть, стратегии нет —
-    // удалена или снимок ещё не пришёл).
+    // The pill shows the selected strategy, the localized none marker when no id is selected, or
+    // `?` when an id exists but the strategy was deleted or its snapshot has not arrived yet.
     // Capped like the core selector beside it: a strategy name is arbitrary user text and this
     // pill sizes to its content, so an uncapped one pushes the header's right cluster off-window.
     let display: String = match (sel_row, id) {
@@ -73,13 +75,13 @@ pub fn manual_strategy_controls(
     let dot_color = if on && sel_row.is_some() {
         design::positive_color(p)
     } else if on {
-        // Включено, но стратегия не разрезолвилась — сигналим красным.
+        // Signal an enabled strategy id that did not resolve by using the danger color.
         design::danger_color(p)
     } else {
         p.text_muted
     };
 
-    // Пункты меню пикера. Пустой список — некликабельная заглушка.
+    // Build picker items, using a non-clickable placeholder for an empty list.
     let empty_label = t!("header.ms_empty").to_string();
     let mut items = Vec::with_capacity(manuals.len().max(1));
     if manuals.is_empty() {
@@ -92,7 +94,7 @@ pub fn manual_strategy_controls(
             MoonMenuItem::with_key(format!("ms-{sid}"), name.clone())
                 .selected(id == sid)
                 .checked(id == sid)
-                // Выбор стратегии из списка сразу ВКЛЮЧАЕТ режим (как выбор в меню MB).
+                // Selecting a strategy also enables the mode, matching the Moonbot menu.
                 .on_click(move |_, _, cx| {
                     backend.update(cx, |b, bcx| {
                         send_manual(b, core, true, sid);
@@ -113,7 +115,7 @@ pub fn manual_strategy_controls(
                 .label_side(MoonToggleLabelSide::Left)
                 .checked(on)
                 .size(MoonToggleSize::Compact)
-                // Нечего включать, пока стратегия не выбрана пикером.
+                // The mode cannot be enabled until the picker selects a strategy.
                 .disabled(id == 0)
                 .on_change(move |ch: &bool, _w, app| {
                     let v = *ch;
@@ -122,14 +124,14 @@ pub fn manual_strategy_controls(
                         if cur_id == 0 {
                             return;
                         }
-                        // Выключение сохраняет ID — повторный тогл вернёт ту же стратегию.
+                        // Disabling preserves the id so the next toggle restores the same strategy.
                         send_manual(b, core, v, cur_id);
                         bcx.notify();
                     });
                 }),
         )
         .child({
-            // Ширина меню — по самому длинному имени стратегии (или заглушке «пусто»).
+            // Size the menu for the longest strategy name or the empty-list placeholder.
             let menu_w = design::menu_fit_width(
                 cx,
                 manuals
@@ -178,9 +180,17 @@ pub fn manual_strategy_controls(
     Some(row.into_any_element())
 }
 
-/// Хоткей «Ручная стратегия N»: выбрать `ix`-ю manual-стратегию ядра (тот же порядок,
-/// что в списке пикера MS) и включить режим — ровно то, что делает клик по пункту меню.
-/// `false` — у ядра нет manual-стратегии с таким номером (клавиша всплывает дальше).
+/// Select the zero-based `ix`th manual strategy in picker order and enable manual-strategy mode.
+///
+/// This performs the same update as clicking the corresponding picker item.
+///
+/// Args:
+///     b: Backend used to read strategies and send the settings edit.
+///     core: Core whose manual strategy should be selected.
+///     ix: Zero-based position among that core's Manual-kind strategies.
+///
+/// Returns:
+///     `true` when that position exists; `false` to let the hotkey propagate otherwise.
 pub(crate) fn select_manual_strategy(b: &mut Backend, core: CoreId, ix: usize) -> bool {
     let sid = b.session.store().core(core).and_then(|cd| {
         cd.strategies
@@ -198,7 +208,16 @@ pub(crate) fn select_manual_strategy(b: &mut Backend, core: CoreId, ix: usize) -
     }
 }
 
-/// Шлёт правку ручной стратегии в ядро + optimistic-кэш (живой отклик до echo).
+/// Store the process-lifetime local override and send a manual-strategy edit to the core.
+///
+/// The override remains authoritative until replaced or process exit; neither a core echo nor a
+/// command failure reconciles it. Send failures are logged.
+///
+/// Args:
+///     b: Backend whose local state and session are updated.
+///     core: Target core.
+///     on: Whether manual-strategy mode should be enabled.
+///     id: Selected strategy id, retained even when the mode is disabled.
 fn send_manual(b: &mut Backend, core: CoreId, on: bool, id: u64) {
     b.set_manual_strat_local(core, on, id);
     if let Err(e) = b
@@ -209,16 +228,23 @@ fn send_manual(b: &mut Backend, core: CoreId, on: bool, id: u64) {
     }
 }
 
-/// Сводка ключевых параметров стратегии (как строка MB «Buy: +0.00% Sell: +0.50% SL: ON
-/// TS: OFF»). Поле, равное дефолту схемы, сервер НЕ шлёт — читаем с фолбэком на дефолт
-/// схемы вида. Не разрезолвившиеся Buy/Sell пропускаем (имя поля может отличаться у
-/// сборки MB), SL/TS показываем всегда.
+/// Build a Moonbot-style `Buy +0.00% Sell +0.50% SL ON TS OFF` parameter summary.
+///
+/// Values absent from the strategy snapshot fall back to defaults from its schema kind. Missing
+/// Buy or Sell fields fall back to zero; SL and TS are always included.
+///
+/// Args:
+///     row: Selected strategy snapshot.
+///     schema: Optional schema providing defaults omitted from the snapshot.
+///
+/// Returns:
+///     The four-part Buy, Sell, SL, and TS summary.
 fn strat_summary(row: &StrategyRow, schema: Option<&StrategySchemaModel>) -> String {
     let field = |name: &str| strat_field(row, schema, name);
     let mut parts: Vec<String> = Vec::with_capacity(4);
-    // Buy/Sell показываем ВСЕГДА (как строка MB): поле, равное дефолту, не приходит ни в
-    // снимке, ни (бывает) в секциях схемы — тогда это 0 = «по текущей цене» (подтверждено
-    // логом ядра «signal price +0%»).
+    // Always show Buy and Sell, as Moonbot does. A default-valued field may be absent from both the
+    // snapshot and some schema sections; zero then means the current price, matching the core's
+    // `signal price +0%` diagnostic.
     let buy = field("BuyPrice").unwrap_or_else(|| "0".to_string());
     parts.push(format!("Buy {}", fmt_pct(&buy)));
     let sell = field("SellPrice").unwrap_or_else(|| "0".to_string());
@@ -228,7 +254,15 @@ fn strat_summary(row: &StrategyRow, schema: Option<&StrategySchemaModel>) -> Str
     parts.join(" · ")
 }
 
-/// Значение поля стратегии: снимок → дефолт схемы её вида → None.
+/// Resolve a strategy field from the snapshot, then its schema-kind default.
+///
+/// Args:
+///     row: Strategy snapshot whose explicit fields take priority.
+///     schema: Optional schema containing defaults by strategy kind.
+///     name: Exact field name to resolve.
+///
+/// Returns:
+///     The explicit or default value, or `None` when neither is available.
 fn strat_field(
     row: &StrategyRow,
     schema: Option<&StrategySchemaModel>,
@@ -262,7 +296,13 @@ fn fmt_pct(v: &str) -> String {
     }
 }
 
-/// Булево поле («Yes»/«No» из `fmt_field`) → «ON»/«OFF»; отсутствует → «OFF».
+/// Convert a `Yes` or `No` field to `ON` or `OFF`, treating missing or other values as `OFF`.
+///
+/// Args:
+///     v: Optional strategy field value.
+///
+/// Returns:
+///     `ON` only for case-insensitive `Yes`; otherwise `OFF`.
 fn on_off(v: Option<String>) -> &'static str {
     match v {
         Some(s) if s.trim().eq_ignore_ascii_case("yes") => "ON",

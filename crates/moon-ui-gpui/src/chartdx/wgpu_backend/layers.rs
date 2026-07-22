@@ -1,5 +1,4 @@
-//! Данные слоёв `WgpuLayers`: combo-кольцо, price lines, стакан, userdata, скейл объёма
-//! (вынос из wgpu_backend.rs, verbatim).
+//! `WgpuLayers` layer data: combo ring, price lines, order book, user data, and volume scale.
 
 use super::*;
 
@@ -56,15 +55,16 @@ impl WgpuLayers {
         }
     }
 
-    /// Полная замена набора свечей (по смене ревизии серии). Свечи лежат в base-кэше —
-    /// его надо перепечь.
+    /// Replaces the complete candle set when the series revision changes.
+    ///
+    /// Candles reside in the base cache, so this invalidates it for rebaking.
     pub fn set_candles(&mut self, data: Vec<CandleGpu>) {
         self.candles = data;
         self.candle_buffers_dirty = true;
         self.base_cache.valid = false;
     }
 
-    /// Стиль слоя свечей (режим/зона/цвета/контур). Идемпотентен.
+    /// Idempotently updates candle-layer mode, zone, colors, and outline style.
     pub fn set_candle_style(&mut self, style: CandleStyleGpu) {
         if self.candle_style != style {
             self.candle_style = style;

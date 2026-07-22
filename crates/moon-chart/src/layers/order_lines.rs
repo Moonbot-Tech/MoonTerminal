@@ -1,18 +1,19 @@
-//! Типы инстансов линий ордеров — ЛОГИЧЕСКИЕ координаты (time_rel/price); time→x,
-//! price→y делает шейдер own-pass (chartdx) по chart-uniform. Объём крошечный
-//! (десятки ордеров). Геометрию из ретейн-стора собирает `crate::build_order_geometry`.
+//! Instance types for order lines and figure geometry in LOGICAL coordinates (time_rel/price);
+//! chartdx own-pass shaders map time→x and price→y using chart uniforms. The retained-order
+//! workload is tiny (dozens of orders). `crate::build_order_geometry` builds retained-order geometry,
+//! while `crate::build_figure_geometry` builds user-defined figure geometry.
 
-/// Инстанс непрерывной горизонтали (ликвидация).
+/// Instance of a continuous horizontal line (liquidation or figure).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LineInstance {
     pub price: f32,
     pub color: [f32; 4],
-    pub style: f32, // 0 = сплошная, 1 = пунктир
+    pub style: f32, // 0 = solid, 1 = dashed
     pub thickness: f32,
 }
 
-/// Инстанс ценовой зоны ордера: filled band между двумя ценами до правого edge.
+/// Instance of an order price zone: a filled band between two prices extending to the right edge.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ZoneInstance {
@@ -21,7 +22,7 @@ pub struct ZoneInstance {
     pub color: [f32; 4],
 }
 
-/// Инстанс отрезка линии.
+/// Instance of a line segment.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SegInstance {
@@ -32,12 +33,12 @@ pub struct SegInstance {
     pub thickness: f32,
     /// 0 = solid, 1 = DashDotDot, 2 = Dot (Moonbot trace parity).
     pub pattern: f32,
-    /// 1 = t1 берётся из userdata uniform edge (`cv_pad`) в шейдере.
+    /// 1 = the shader takes t1 from the userdata uniform edge (`cv_pad`).
     pub extend: f32,
     pub color: [f32; 4],
 }
 
-/// Инстанс маркера (крест/узелок).
+/// Instance of a marker (cross/knot).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MarkerInstance {
@@ -45,6 +46,6 @@ pub struct MarkerInstance {
     pub price: f32,
     pub size: f32,
     pub thickness: f32,
-    pub shape: f32, // 0 = крест, 1 = узелок
+    pub shape: f32, // 0 = cross, 1 = knot
     pub color: [f32; 4],
 }

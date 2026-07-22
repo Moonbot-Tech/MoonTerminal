@@ -1,24 +1,25 @@
-//! Bounded little-endian reader для распакованного payload MoonBot: примитивы Delphi,
-//! строки `WriteStringX` (UTF-16LE с длиной), INI-списки и суб-ридеры блоков.
-//! Все длины проверяются ДО выделения памяти; выход за границу — [`ImportError::Truncated`].
+//! Bounded little-endian reader for a decompressed MoonBot payload: Delphi primitives,
+//! length-prefixed UTF-16LE `WriteStringX` strings, INI lists, and block sub-readers.
+//! All lengths are validated BEFORE allocation; an out-of-bounds read returns
+//! [`ImportError::Truncated`].
 
 use super::ImportError;
 
-/// Лимит одной строки `WriteStringX` — 2 097 152 UTF-16 code units по ТЗ.
+/// Maximum `WriteStringX` length: 2,097,152 UTF-16 code units per the specification.
 const MAX_STRING_UNITS: usize = 2 * 1024 * 1024;
-/// Лимит записей в одной INI-секции по ТЗ.
+/// Maximum entries in one INI section per the specification.
 const MAX_INI_ENTRIES: usize = 2048;
-/// Разумный общий лимит секций одного INI-списка (в реальных блоках их единицы).
+/// Reasonable total section limit for one INI list; real blocks contain only a few.
 const MAX_INI_SECTIONS: usize = 256;
 
-/// Секция INI-списка: имя + пары ключ/значение в исходном порядке.
+/// INI-list section containing a name and key/value pairs in source order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IniSection {
     pub name: String,
     pub entries: Vec<(String, String)>,
 }
 
-/// Позиционный reader над срезом payload. Никогда не читает за `buf.len()`.
+/// Positional reader over a payload slice that never reads beyond `buf.len()`.
 pub struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -37,7 +38,7 @@ impl<'a> Reader<'a> {
         self.remaining() == 0
     }
 
-    /// Срез следующих `n` байт (с продвижением) — или Truncated с контекстом.
+    /// Takes and advances past the next `n` bytes, or returns Truncated with context.
     fn take(&mut self, n: usize, what: &str) -> Result<&'a [u8], ImportError> {
         let end = self
             .pos
@@ -54,8 +55,10 @@ impl<'a> Reader<'a> {
         Ok(s)
     }
 
-    /// Суб-ридер ровно на `size` байт (тело блока): чтение внутри не выйдет за блок,
-    /// внешний ридер сразу перескакивает блок целиком.
+    /// Creates a sub-reader over exactly `size` bytes (a block body).
+    ///
+    /// Reads cannot escape the block, and the outer reader immediately advances past the
+    /// entire block.
     pub fn sub_reader(&mut self, size: usize, what: &str) -> Result<Reader<'a>, ImportError> {
         Ok(Reader::new(self.take(size, what)?))
     }
@@ -64,7 +67,7 @@ impl<'a> Reader<'a> {
         Ok(self.take(1, what)?[0])
     }
 
-    /// Delphi `Boolean`: строго 0 или 1, всё прочее — порча формата.
+    /// Reads a Delphi `Boolean`: strictly 0 or 1; any other value is format corruption.
     pub fn bool(&mut self, what: &str) -> Result<bool, ImportError> {
         match self.u8(what)? {
             0 => Ok(false),
@@ -102,7 +105,7 @@ impl<'a> Reader<'a> {
         ]))
     }
 
-    /// `f64`, обязанный быть конечным (размеры/проценты: NaN/Infinity — порча).
+    /// Reads an `f64` that must be finite; NaN/Infinity in sizes or percentages is corruption.
     pub fn f64_finite(&mut self, what: &str) -> Result<f64, ImportError> {
         let v = self.f64_le(what)?;
         if !v.is_finite() {
@@ -111,7 +114,7 @@ impl<'a> Reader<'a> {
         Ok(v)
     }
 
-    /// `f32`, обязанный быть конечным.
+    /// Reads an `f32` that must be finite.
     pub fn f32_finite(&mut self, what: &str) -> Result<f32, ImportError> {
         let v = self.f32_le(what)?;
         if !v.is_finite() {
@@ -120,9 +123,11 @@ impl<'a> Reader<'a> {
         Ok(v)
     }
 
-    /// Строка `WriteStringX`: `i32 LE` число UTF-16 code units + `len*2` байт UTF-16LE.
-    /// Отрицательная длина, превышение лимита, обрыв или невалидный UTF-16 — ошибка.
-    /// Длина сверяется с остатком буфера ДО выделения.
+    /// Reads a `WriteStringX` string: an `i32 LE` UTF-16 code-unit count followed by
+    /// `len*2` UTF-16LE bytes.
+    ///
+    /// A negative or excessive length, truncation, or invalid UTF-16 is an error. The length
+    /// is checked against the remaining buffer BEFORE allocation.
     pub fn string_x(&mut self, what: &str) -> Result<String, ImportError> {
         let len = self.i32_le(what)?;
         if len < 0 {
@@ -136,7 +141,7 @@ impl<'a> Reader<'a> {
                 "{what}: строка {units} UTF-16 units (лимит {MAX_STRING_UNITS})"
             )));
         }
-        let byte_len = units * 2; // units ≤ 2 MiB → умножение не переполнит usize
+        let byte_len = units * 2; // units ≤ 2 MiB, so multiplication cannot overflow usize.
         let bytes = self.take(byte_len, what)?;
         let mut buf: Vec<u16> = Vec::with_capacity(units);
         for ch in bytes.chunks_exact(2) {
@@ -146,9 +151,11 @@ impl<'a> Reader<'a> {
             .map_err(|_| ImportError::BadValue(format!("{what}: некорректный UTF-16")))
     }
 
-    /// INI-список: `i32 section_count`, затем на секцию `string name`, `i32 entry_count`
-    /// и `entry_count` пар `string key`/`string value`. Лимиты и sanity-проверка count
-    /// против остатка буфера (каждая entry занимает минимум 8 байт двух длин).
+    /// Reads an INI list: `i32 section_count`, then `string name`, `i32 entry_count`, and
+    /// `entry_count` pairs of `string key`/`string value` for each section.
+    ///
+    /// Enforces limits and sanity-checks the count against the remaining buffer; each entry
+    /// needs at least the two four-byte lengths.
     pub fn ini_list(&mut self, what: &str) -> Result<Vec<IniSection>, ImportError> {
         let section_count = self.i32_le(what)?;
         if section_count < 0 {
@@ -177,8 +184,8 @@ impl<'a> Reader<'a> {
                     "{what}: [{name}] {entry_count} записей (лимит {MAX_INI_ENTRIES})"
                 )));
             }
-            // Каждая entry — минимум две 4-байтовые длины: count не может превышать
-            // остаток/8. Отсекает выделение по фиктивному count на обрезанных данных.
+            // Every entry needs at least two four-byte lengths, so count cannot exceed
+            // remaining/8. This prevents allocation from a bogus count in truncated data.
             if entry_count > self.remaining() / 8 {
                 return Err(ImportError::Truncated(format!(
                     "{what}: [{name}] заявлено {entry_count} записей, данных не хватает"

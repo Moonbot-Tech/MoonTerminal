@@ -1,9 +1,10 @@
-//! In-scene попап настроек раскладки чарт-вкладки: режим (Fit/Scroll) + высота ТОЛЬКО
-//! активного режима. Per-tab. Рендер общий для полоски вкладок главного окна и шапки
-//! выносного окна; обработчики (применение к нужному стеку + persist) задаёт вызывающий.
+//! In-scene chart-tab layout popup with mode (Fit or Scroll) and a size field ONLY for the active
+//! mode. Settings are per-tab. Rendering is shared by the main-window tab strip and detached-window
+//! header; the caller provides handlers that apply to the correct stack and persist the result.
 //!
-//! Семантика: Fit=0 → растяжение (делят окно); Fit≥20 → COMPRESS (фикс. высота без скролла);
-//! Scroll → фикс. высота слота + скролл. Допустимый диапазон высоты — [MIN_H, MAX_H].
+//! Semantics: `Fit=0` stretches slots to share the window; `Fit>=20` selects COMPRESS with a fixed
+//! size and no scrolling; Scroll uses a fixed slot size with scrolling. Nonzero sizes are limited
+//! to `[MIN_H, MAX_H]`; zero remains valid only for Fit stretch.
 
 use gpui::*;
 use moon_ui::{
@@ -15,11 +16,11 @@ use rust_i18n::t;
 use crate::chart_persist::{ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation};
 use crate::design;
 
-/// Порядок режимов в сегмент-контроле попапа (два положения).
+/// Mode order in the popup's two-position segmented control.
 pub(super) const POPUP_MODES: [StackLayoutMode; 2] =
     [StackLayoutMode::Fit, StackLayoutMode::Scroll];
 
-/// Порядок позиций в селекторе кнопок действий: «—»=скрыть, L=слева, C=центр, R=справа.
+/// Action-button positions: dash hides, L is left, C is center, and R is right.
 const BTN_POSITIONS: [ChartBtnPos; 4] = [
     ChartBtnPos::Hide,
     ChartBtnPos::Left,
@@ -36,7 +37,7 @@ fn pos_label(p: ChartBtnPos) -> &'static str {
     }
 }
 
-/// Строка-селектор позиции кнопки действия: подпись слева + сегмент-контрол [— L C R].
+/// Build an action-button position row with a left caption and `[dash L C R]` segmented control.
 fn pos_selector_row(
     id: String,
     caption: &str,
@@ -83,7 +84,7 @@ fn pos_selector_row(
         .child(seg)
 }
 
-/// Порядок положений оси цен в селекторе: «—»=скрыть, L=слева, R=справа (за стаканом).
+/// Price-axis positions: dash hides, L is left, and R is right beyond the order book.
 const AXIS_POSITIONS: [PriceAxisPos; 3] =
     [PriceAxisPos::Hide, PriceAxisPos::Left, PriceAxisPos::Right];
 
@@ -95,7 +96,7 @@ fn axis_label(p: PriceAxisPos) -> &'static str {
     }
 }
 
-/// Строка-селектор положения оси цен: подпись слева + сегмент-контрол [— L R].
+/// Build a price-axis position row with a left caption and `[dash L R]` segmented control.
 fn axis_selector_row(
     id: String,
     caption: String,
@@ -142,18 +143,19 @@ fn axis_selector_row(
         .child(seg)
 }
 
-/// Границы высоты слота (px). Меньше MIN (кроме 0 у Fit = растяжение) и больше MAX вводить нельзя.
+/// Slot-size bounds in pixels; values below MIN or above MAX are invalid except Fit zero for stretch.
 pub(super) const MIN_H: u16 = 20;
 pub(super) const MAX_H: u16 = 4000;
 
-/// Ширина сценового попапа (логич. px). Высоту НЕ считаем: контейнер сжимается по контенту
-/// (см. `w_full` у корня + отсутствие `.h(...)` у сцены), поэтому пустого места снизу нет.
-/// Ширину держим фиксированной — её определяет сегмент-контрол FIT/SCROLL (2×110) + поля/рамка.
+/// Scene-popup width in logical pixels.
+///
+/// Height is content-sized because the root uses `w_full` and the scene has no `.h(...)`, avoiding
+/// empty space below. Width stays fixed around the two 110-pixel FIT/SCROLL segments plus framing.
 pub(super) fn content_width(cx: &App, _with_rename: bool) -> Pixels {
     let pad = f32::from(design::ui_px(cx, 8.0));
-    let fpx = f32::from(design::ui_px(cx, 6.0)); // гор. паддинг рамки (×2)
+    let fpx = f32::from(design::ui_px(cx, 6.0)); // horizontal frame padding (x2)
     let border = 2.0;
-    let fb = 2.0; // граница рамки
+    let fb = 2.0; // frame border
     px(2.0 * 110.0 + 20.0 + 2.0 * pad + border + 2.0 * fpx + fb)
 }
 
@@ -164,8 +166,7 @@ fn mode_label(m: StackLayoutMode) -> &'static str {
     }
 }
 
-/// Рамка-группа: тонкая граница + заголовок-капшен сверху, содержимое внутри. Метрики
-/// (паддинги/зазоры/граница) ДОЛЖНЫ совпадать с расчётом высоты в [`content_size`].
+/// Build a framed group with a thin border, top caption, and inner content.
 fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl IntoElement {
     v_flex()
         .w_full()
@@ -184,9 +185,10 @@ fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl Int
         .child(body)
 }
 
-/// Маленькое окошко настроек раскладки. Показывает поле высоты ТОЛЬКО для текущего режима.
-/// `height_fit_input`/`height_scroll_input` — раздельные поля (подписку на Blur/Enter держит
-/// вызывающий). `on_pick_mode` вызывается при выборе режима. Позиционируется вызывающим.
+/// Render the compact layout settings panel, showing a size field ONLY for the current mode.
+///
+/// `height_fit_input` and `height_scroll_input` are separate fields whose Blur/Enter subscription
+/// belongs to the caller. `on_pick_mode` runs on mode selection. The caller positions the panel.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2, R2>(
     id: &str,
@@ -260,8 +262,8 @@ where
         })
         .render();
 
-    // Поле + примечание — только для активного режима. При гориз. ориентации значение трактуется
-    // как ШИРИНА слота → подписи/хинты берём из *width* ключей (та же логика, диапазон 20..4000).
+    // Show the field and note only for the active mode. In horizontal orientation the value is the
+    // slot WIDTH, so labels and hints use the `*width*` keys with the same `20..4000` range.
     let (input, label, hint) = match (current, horizontal) {
         (StackLayoutMode::Fit, false) => (
             height_fit_input,
@@ -284,7 +286,7 @@ where
             t!("chart.layout.width_scroll_hint").to_string(),
         ),
     };
-    // "Высота X  [поле]  px"
+    // Orientation-dependent "Height X  [field]  px" or "Width X  [field]  px" row.
     let height_line = h_flex()
         .gap(design::ui_px(cx, 6.0))
         .items_center()
@@ -297,7 +299,7 @@ where
             ),
         )
         .child(div().text_color(rgb(p.text_muted)).child("px"));
-    // Примечание под полем (многострочное по '\n').
+    // Note below the field, split into multiple lines on `\n`.
     let hint_block = v_flex().children(hint.split('\n').map(|line| {
         div()
             .text_size(design::t_caption(cx))
@@ -305,57 +307,57 @@ where
             .child(line.to_string())
     }));
 
-    // Чекбокс «Стакан» — вкл/выкл orderbook на графиках вкладки.
+    // "Order book" toggles the order book on this tab's charts.
     let orderbook_cb = MoonCheckbox::new(SharedString::from(format!("{id}-orderbook")))
         .label(t!("chart.layout.orderbook").to_string())
         .checked(orderbook_enabled)
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_orderbook(*ch, app));
 
-    // Чекбокс «Ликвидации» — вкл/выкл кресты трейдов ликвидаций на графиках вкладки.
+    // "Liquidations" toggles liquidation-trade crosses on this tab's charts.
     let liquidations_cb = MoonCheckbox::new(SharedString::from(format!("{id}-liquidations")))
         .label(t!("chart.layout.liquidations").to_string())
         .checked(liquidations_enabled)
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_liquidations(*ch, app));
 
-    // Чекбокс «Отображать зону разделения» — тусклая заливка зоны ордеров при скрытом стакане.
+    // "Show control zone" toggles the dim order-zone fill while the order book is hidden.
     let show_zone_cb = MoonCheckbox::new(SharedString::from(format!("{id}-show-zone")))
         .label(t!("chart.layout.show_zone").to_string())
         .checked(show_zone)
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_show_zone(*ch, app));
 
-    // Чекбокс «Авто-пин при ордере» — закреплять график при выставлении ордера лонг/шорт.
+    // "Auto-pin on order" pins a chart when placing a long or short order.
     let auto_pin_cb = MoonCheckbox::new(SharedString::from(format!("{id}-auto-pin")))
         .label(t!("chart.layout.auto_pin").to_string())
         .checked(auto_pin)
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_auto_pin(*ch, app));
 
-    // Чекбокс «Ось времени» — вкл/выкл нижние подписи времени на графиках вкладки.
+    // "Time axis" toggles bottom time labels on this tab's charts.
     let time_axis_cb = MoonCheckbox::new(SharedString::from(format!("{id}-time-axis")))
         .label(t!("chart.layout.time_axis").to_string())
         .checked(time_axis_visible)
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_time_axis(*ch, app));
 
-    // Чекбокс «Подписи у линий» — вкл/выкл цифры у ордер-линий (размер/%/стоп).
+    // "Line labels" toggles values beside order lines, including size, percentage, and stop.
     let line_labels_cb = MoonCheckbox::new(SharedString::from(format!("{id}-line-labels")))
         .label(t!("chart.layout.line_labels").to_string())
         .checked(line_labels)
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_line_labels(*ch, app));
 
-    // Чекбокс «Подпись у перекрестия» — вкл/выкл курсорный ридаут (время/цена/%/объём/размер).
+    // "Crosshair label" toggles the cursor readout for time, price, percentage, volume, and size.
     let cursor_labels_cb = MoonCheckbox::new(SharedString::from(format!("{id}-cursor-labels")))
         .label(t!("chart.layout.cursor_labels").to_string())
         .checked(cursor_labels)
         .size(MoonCheckboxSize::Compact)
         .on_change(move |ch: &bool, _w, app| on_toggle_cursor_labels(*ch, app));
 
-    // Селекторы позиции кнопок Cancel Buy / Panic Sell в зоне чарта (— L C R). Названия кнопок —
-    // бренд-термины Moonbot, НЕ переводим.
+    // Position selectors for Cancel Buy and Panic Sell in the chart zone (dash, L, C, R). Their
+    // names are Moonbot brand terms and deliberately remain untranslated.
     let cancel_pos_row = pos_selector_row(
         format!("{id}-cancelbuy-pos"),
         "Cancel Buy",
@@ -372,7 +374,7 @@ where
         cx,
         on_pick_panic_pos,
     );
-    // Селектор положения оси цен (— L R): скрыть / слева / справа за стаканом.
+    // Price-axis selector (dash, L, R): hidden, left, or right beyond the order book.
     let price_axis_row = axis_selector_row(
         format!("{id}-price-axis-pos"),
         t!("chart.layout.price_axis").to_string(),
@@ -382,8 +384,8 @@ where
         on_pick_price_axis,
     );
 
-    // Тоггл ориентации стека — рядом с «применить ко всем». «↕» = вертикально (стопка),
-    // «↔» = горизонтально (колонки). Клик перестраивает текущее отображение активной вкладки.
+    // Stack-orientation toggle beside "apply to all": ↕ is a vertical stack and ↔ is horizontal
+    // columns. Clicking rebuilds the active tab's current presentation.
     let orientation_btn = MoonButton::new(SharedString::from(format!("{id}-orientation")))
         .label(if horizontal { "↔" } else { "↕" })
         .tooltip(t!("chart.layout.orientation_tip").to_string())
@@ -397,8 +399,8 @@ where
         .on_click(move |_, _w, app| on_toggle_orientation(app))
         .render();
 
-    // Иконка «применить ко всем» — справа в строке заголовка, только символ + всплывающая подсказка
-    // (текст области: ко всем окнам / только чартам).
+    // Symbol-only "apply to all" icon with tooltip at the right of the header row. The scope text
+    // distinguishes all windows from charts only.
     let apply_all_btn = MoonButton::new(SharedString::from(format!("{id}-apply-all")))
         .label("⧉")
         .tooltip(apply_all_label)
@@ -407,8 +409,8 @@ where
         .on_click(move |_, _w, app| on_apply_all(app))
         .render();
 
-    // Поле имени — только для кастомных вкладок (rename_input = Some). Коммит по Blur/Enter
-    // держит вызывающий (подписка на инпут).
+    // Name field only for custom tabs (`rename_input = Some`). The caller owns the input subscription
+    // that commits on Blur or Enter.
     let rename_row = rename_input.map(|input| {
         h_flex()
             .gap(design::ui_px(cx, 6.0))
@@ -427,9 +429,9 @@ where
             )
     });
 
-    // Контент задаёт ВЫСОТУ сценового контейнера сам (w_full по ширине от `content_size`,
-    // высота — по содержимому). Так нет ручного суммирования высоты и пустого места снизу.
-    // Фон непрозрачный: если поверх него виден chart text, это z-order баг, а не прозрачность.
+    // The caller sets scene width through `content_width`; this content drives height naturally.
+    // That avoids manual height sums and empty space below. The background is opaque, so visible
+    // chart text over it indicates a z-order bug rather than transparency.
     v_flex()
         .id(SharedString::from(format!("{id}-popup")))
         .w_full()
@@ -439,7 +441,7 @@ where
         .border_1()
         .border_color(rgb(p.border))
         .child(
-            // Заголовок слева + иконка «ко всем» прижата к правому краю окна.
+            // Left-aligned title with the "apply to all" icon pinned to the panel's right edge.
             h_flex()
                 .w_full()
                 .items_center()
@@ -454,7 +456,7 @@ where
                 .child(apply_all_btn),
         )
         .children(rename_row)
-        // Рамка «Вид»: режим FIT/SCROLL + поле высоты активного режима + описание под ним.
+        // "View" frame: FIT/SCROLL mode, active-mode size field, and its description.
         .child(framed(
             t!("chart.layout.frame_view").to_string(),
             p,
@@ -467,7 +469,8 @@ where
                 .child(hint_block)
                 .into_any_element(),
         ))
-        // Рамка «Отображать»: галки видимости (стакан / зона разделения / ось времени).
+        // "Display" frame: order book, liquidations, control zone, time axis, line labels, and
+        // crosshair labels.
         .child(framed(
             t!("chart.layout.frame_display").to_string(),
             p,
@@ -483,7 +486,7 @@ where
                 .child(cursor_labels_cb)
                 .into_any_element(),
         ))
-        // Остальное (как было): авто-пин + позиции кнопок + ось цен.
+        // Remaining controls: auto-pin, button positions, and price axis.
         .child(auto_pin_cb)
         .child(cancel_pos_row)
         .child(panic_pos_row)
@@ -491,8 +494,8 @@ where
         .into_any_element()
 }
 
-/// Клампинг введённой высоты: Fit допускает 0 (растяжение), иначе [MIN_H, MAX_H]; Scroll — всегда
-/// [MIN_H, MAX_H].
+/// Clamp an entered slot size: Fit permits zero for stretch, otherwise `[MIN_H, MAX_H]`; Scroll
+/// always uses `[MIN_H, MAX_H]`.
 pub(super) fn clamp_height(mode: StackLayoutMode, raw: u16) -> u16 {
     match mode {
         StackLayoutMode::Fit if raw == 0 => 0,

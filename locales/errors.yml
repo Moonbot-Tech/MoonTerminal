@@ -1,5 +1,5 @@
-# Сообщения об ошибках (валидация настроек, GPU).
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Error messages for settings validation and GPU failures.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
 _version: 2
 
 err.dup_name:

@@ -1,4 +1,4 @@
-//! Общие утилиты, не привязанные к конкретному модулю.
+//! General utilities not tied to a specific module.
 
 pub mod fmt;
 pub mod time;

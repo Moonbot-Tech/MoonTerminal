@@ -1,6 +1,7 @@
-//! Обработчики ввода слота чарта (колесо мыши / кнопки / движение / ховер): тела замыканий
-//! `cx.listener` из `render.rs`, вынесенные вербатим в свободные функции (та же сигнатура
-//! `(this, event, window, cx)`, подставляются в `cx.listener` по имени).
+//! Chart-slot input handlers for wheel, buttons, pointer motion, and hover.
+//!
+//! These free functions use the `(this, event, window, cx)` signature expected by the named
+//! `cx.listener` registrations in `render.rs`.
 
 use gpui::*;
 
@@ -9,7 +10,7 @@ use crate::input;
 use super::ChartPanel;
 use super::trade::TradeMouseButton;
 
-/// Колесо: зум/скролл чарта (тело `on_scroll_wheel`).
+/// Routes a wheel event to chart zoom/pan or the surrounding stack scroll.
 pub(super) fn scroll_wheel(
     this: &mut ChartPanel,
     e: &ScrollWheelEvent,
@@ -18,7 +19,7 @@ pub(super) fn scroll_wheel(
 ) {
     if cx.has_active_drag() {
         return;
-    } // идёт drag Dock-панели — не мешаем drop
+    } // Do not interfere with a dock-panel drag/drop operation.
     if this.main_stack_scroll && this.window_pos_in_glass_zone(e.position) {
         return;
     }
@@ -26,9 +27,9 @@ pub(super) fn scroll_wheel(
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
     };
-    // В AddToChart-стеке колесо НАД ЦЕНОВОЙ ОСЬЮ (левее графика) скроллит сам стек,
-    // а не зумит: не потребляем событие → оно всплывёт к MoonVirtualList. Над
-    // графиком+стаканом — зум (ниже) + stop_propagation, чтобы стек не скроллился.
+    // In an AddToChart stack, wheel input over the left price-axis strip scrolls the stack rather
+    // than zooming: leave the event unconsumed so it bubbles to MoonVirtualList. Over the graph or
+    // book, handle zoom below and stop propagation so the stack does not scroll too.
     if this.num.is_some() && within {
         if let Some(idx) = this.input.pane_at(pos.0, pos.1) {
             if let Some((_, rect)) = this.input.pane_rects.iter().find(|(i, _)| *i == idx) {
@@ -38,9 +39,9 @@ pub(super) fn scroll_wheel(
             }
         }
     }
-    // Lines — дискретное колесо мыши (Windows): ±1/±3 за щелчок. Pixels — точный ввод
-    // (тачпад/Magic Mouse на macOS): непрерывный поток с инерцией. Их нельзя мешать в
-    // одну величину — передаём `precise`, чтобы input.wheel зумил их по-разному.
+    // Lines represent discrete mouse-wheel clicks, commonly +/-1 or +/-3 on Windows. Pixels are
+    // precise trackpad/Magic Mouse input on macOS, delivered as a continuous inertial stream.
+    // Preserve the distinction through `precise` so input.wheel scales them differently.
     let (dy, precise) = match e.delta {
         ScrollDelta::Lines(p) => (p.y, false),
         ScrollDelta::Pixels(p) => (f32::from(p.y), true),
@@ -53,8 +54,7 @@ pub(super) fn scroll_wheel(
     let changed = {
         let input = &mut this.input;
         this.chart.with_container_mut(|container| {
-            // Встроенный хоткей: Shift ИЛИ Alt + колесо = пан по времени (влево/вправо),
-            // без модификаторов = зум по времени.
+            // Built-in gesture: Shift OR Alt + wheel pans time left/right; no modifier zooms time.
             let pan = e.modifiers.shift || e.modifiers.alt;
             input.wheel(dy, precise, pan, within, container, fb, sf)
         })
@@ -64,11 +64,11 @@ pub(super) fn scroll_wheel(
         crate::diag::bump(&crate::diag::CHART_INPUT_NOTIFY);
         cx.notify();
     }
-    // Зум-зона графика: гасим всплытие, иначе колесо ещё и проскроллит стек.
+    // Stop propagation in the chart zoom zone so the wheel does not also scroll the stack.
     cx.stop_propagation();
 }
 
-/// ЛКМ down: фигуры/торговля/drag ордера/навигация (тело `on_mouse_down(Left)`).
+/// Routes left-button down through figures, trading, order drag, and chart navigation.
 pub(super) fn mouse_down_left(
     this: &mut ChartPanel,
     e: &MouseDownEvent,
@@ -90,14 +90,13 @@ pub(super) fn mouse_down_left(
         None
     };
     this.sync_native_cursor();
-    // Слой рисования фигур (только в режиме карандаша): фигуры трогаются ТОЛЬКО по Ctrl
-    // (secondary) — рисование новой / захват существующей. Обычный ЛКМ без модификатора
-    // try_fig_click отдаёт false → клик идёт в торговлю/навигацию (паритет с Moonbot: карандаш
-    // включён, но обычный ЛКМ торгует). Вне режима карандаша try_fig_click тоже сразу false.
-    // secondary() = ⌘ на macOS, Ctrl на Windows/Linux. На macOS именно Ctrl нельзя:
-    // ОС превращает Ctrl+ЛКМ в правый клик, поэтому событие рисования не доходит.
-    // Активный драфт = продолжение рисования: следующие клики завершают фигуру и
-    // БЕЗ модификатора (держать ⌘/Ctrl нужно только на первом клике).
+    // The figure layer reacts only in pencil mode and only to the secondary modifier when starting
+    // or grabbing a figure. An ordinary unmodified left click makes try_fig_click return false and
+    // continues to trading/navigation, matching Moonbot even while the pencil is enabled. Outside
+    // pencil mode it also returns false immediately. secondary() is Command on macOS and Ctrl on
+    // Windows/Linux; macOS Ctrl cannot be used because the OS converts Ctrl+left-click to a right
+    // click before the drawing event arrives. An active draft continues without a modifier, so
+    // Command/Ctrl is required only on the first click.
     if within
         && e.click_count <= 1
         && this.try_fig_click(pos, e.modifiers.secondary() || this.fig_draft.is_some(), cx)
@@ -112,8 +111,8 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
-    // Клик по кресту начала невыполненного входа — отмена ордера (до drag: с креста
-    // перетаскивание не начинается).
+    // Clicking the start cross of an unfilled entry cancels it before drag handling, so dragging
+    // never starts from that cross.
     if within && e.click_count <= 1 && this.try_cancel_order_click(pos, cx) {
         cx.notify();
         cx.stop_propagation();
@@ -125,12 +124,12 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
-    // Раздельные зоны: в зоне управления (стакан/резерв-полоса) ЛКМ — только
-    // торговля; обычную навигацию чарта (пан, дабл-клик «на Main») здесь не пускаем.
+    // With separate zones, left clicks in the control area (book/reserved strip) are trading-only.
+    // Do not route normal chart pan or the "open on Main" double-click through this area.
     if this.window_pos_in_control_zone(e.position, cx) {
         return;
     }
-    // На AddToChart-вкладках дабл-клик по ЧАРТУ → открыть монету на Main (fullscreen).
+    // On AddToChart tabs, double-clicking the CHART opens its coin on fullscreen Main.
     let allow_to_main = this.num.is_some();
     let fb = this.chart.slot_dev_width();
     let input_changed = {
@@ -152,7 +151,7 @@ pub(super) fn mouse_down_left(
         this.backend.update(cx, |b, bcx| {
             b.open_request = Some((core, market));
             b.open_request_rev = b.open_request_rev.wrapping_add(1);
-            // Только этот путь (дабл-клик по чарту) поднимает окно Main (П.1).
+            // This chart-double-click path also activates and raises the Main window.
             b.open_request_activate = true;
             bcx.notify();
         });
@@ -164,15 +163,15 @@ pub(super) fn mouse_down_left(
     }
 }
 
-/// ЛКМ up: завершение drag фигуры/ордера/навигации (тело `on_mouse_up(Left)`).
+/// Routes left-button up to finish a figure/order drag or chart navigation.
 pub(super) fn mouse_up_left(
     this: &mut ChartPanel,
     e: &MouseUpEvent,
     window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
-    // Drag-release рисования: «⌘/Ctrl+нажал — потянул — отпустил» завершает фигуру
-    // (отрезок/канал) без второго клика; клик на месте — не жест, ждём второго клика.
+    // A draw-drag-release gesture (Command/Ctrl down, drag, release) completes a segment/channel
+    // without a second click. A stationary click is not a drag gesture and waits for click two.
     if let Some((pos, _)) = this.chart_local(e.position) {
         if this.try_fig_release(pos, cx) {
             cx.notify();
@@ -206,7 +205,7 @@ pub(super) fn mouse_up_left(
     }
 }
 
-/// ПКМ down: меню фигур/ордеров, торговля, пан/зум (тело `on_mouse_down(Right)`).
+/// Routes right-button down through figure/order menus, trading, and chart pan/zoom.
 pub(super) fn mouse_down_right(
     this: &mut ChartPanel,
     e: &MouseDownEvent,
@@ -225,16 +224,16 @@ pub(super) fn mouse_down_right(
         None
     };
     this.sync_native_cursor();
-    // ПКМ по нарисованной фигуре (в режиме карандаша) → меню Alert/Удалить.
-    // Приоритетнее всего; suppress_rmb_up гасит парный up → фулскрин НЕ рвётся.
+    // Right-clicking a drawn figure in pencil mode opens its Alert/Delete menu. This has highest
+    // priority; suppress_rmb_up consumes the paired release so fullscreen remains intact.
     if within && this.try_open_figure_menu(pos, e.position, window, cx) {
         this.suppress_rmb_up = true;
         cx.stop_propagation();
         return;
     }
-    // ПКМ по линии ордера → контекстное меню (Cancel / Join sells / Split).
-    // Приоритетнее постановки/зума: на линии всегда открываем меню. Гасим и
-    // последующий ПКМ-up (флаг), чтобы родитель не вышел из фулскрина и т.п.
+    // Right-clicking a Buy or Sell order line opens its side-specific menu before placement or
+    // zoom. Other line kinds fall through to normal right-button routing. Suppress the paired
+    // release when the menu opens so a parent does not exit fullscreen or perform another action.
     if within && this.try_open_order_menu(pos, e.position, window, cx) {
         this.suppress_rmb_up = true;
         cx.stop_propagation();
@@ -247,8 +246,8 @@ pub(super) fn mouse_down_right(
         cx.stop_propagation();
         return;
     }
-    // Раздельные зоны: в зоне управления ПКМ — только торговля/меню ордеров;
-    // обычный ПКМ-пан/зум чарта подавляем (а тоггл fullscreen — в main_stack.rs).
+    // With separate zones, right clicks in the control area are only for trading/order menus.
+    // Suppress normal chart right-button pan/zoom there; main_stack.rs owns fullscreen toggling.
     if this.window_pos_in_control_zone(e.position, cx) {
         return;
     }
@@ -265,15 +264,15 @@ pub(super) fn mouse_down_right(
     }
 }
 
-/// ПКМ up (тело `on_mouse_up(Right)`).
+/// Routes right-button up or consumes it after a context-menu action or handled trading gesture.
 pub(super) fn mouse_up_right(
     this: &mut ChartPanel,
     e: &MouseUpEvent,
     window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
-    // ПКМ-down открыл меню ордера → гасим парный up (и не пускаем его к родителю,
-    // который иначе вышел бы из фулскрина Main-стека).
+    // When right-button down opened a figure/order menu or handled a trading gesture, consume its
+    // paired release instead of letting a parent exit the Main stack's fullscreen mode.
     if this.suppress_rmb_up {
         this.suppress_rmb_up = false;
         cx.stop_propagation();
@@ -297,7 +296,7 @@ pub(super) fn mouse_up_right(
     }
 }
 
-/// СКМ down: постановка ордера средней кнопкой (тело `on_mouse_down(Middle)`).
+/// Routes middle-button down to trading or window-local X-scale synchronization.
 pub(super) fn mouse_down_middle(
     this: &mut ChartPanel,
     e: &MouseDownEvent,
@@ -327,14 +326,14 @@ pub(super) fn mouse_down_middle(
         cx.stop_propagation();
         return;
     }
-    // [Shift+СКМ] на графике — синхронизация временного X-масштаба чартов ЭТОГО окна
-    // (Moonbot). Торговый жест (если назначен на Shift+СКМ) имеет приоритет — выше.
+    // Shift+middle-click on the graph synchronizes the time X scale across charts in THIS window,
+    // matching Moonbot. A trading gesture bound to Shift+middle-click takes priority above.
     if within && e.modifiers.shift && this.sync_x_scale_window(_window, cx) {
         cx.stop_propagation();
     }
 }
 
-/// Движение мыши: курсор/ховер/drag (тело `on_mouse_move`).
+/// Routes pointer motion through retained cursor/hover updates and active drags.
 pub(super) fn mouse_move(
     this: &mut ChartPanel,
     e: &MouseMoveEvent,
@@ -343,7 +342,7 @@ pub(super) fn mouse_move(
 ) {
     if cx.has_active_drag() {
         return;
-    } // идёт drag Dock-панели — не перехватываем
+    } // Do not intercept pointer motion during a dock-panel drag.
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
     };
@@ -368,13 +367,13 @@ pub(super) fn mouse_move(
         if cursor_changed && this.sync_native_cursor() {
             crate::diag::bump(&crate::diag::CHART_CURSOR_UPDATE);
         }
-        // Фигуры: превью драфта за курсором + hover-подсветка.
+        // Update figure-draft preview under the cursor and figure hover highlighting.
         this.update_fig_pointer(pos, within, false, cx);
         let order_hover_changed = if within {
             this.sync_order_hover(pos, cx)
         } else {
-            // Курсор ушёл с чарта: сбросить точку порога, чтобы возврат в ту же
-            // окрестность (<1px) не «застрял» без пересчёта ховера.
+            // On leaving the chart, clear the threshold probe so returning within the same <1 px
+            // neighborhood still recomputes hover instead of getting stuck.
             this.order_hover_probe = None;
             this.set_order_interaction(None, cx)
         };
@@ -427,23 +426,23 @@ pub(super) fn mouse_move(
             crate::diag::bump(&crate::diag::CHART_CURSOR_UPDATE);
         }
     }
-    // Drag меняет камеры/оси и GPUI-side controls. Cursor-only move теперь
-    // остаётся в retained gpu_canvas: crosshair/readout present без cx.notify().
+    // Dragging changes cameras/axes and GPUI-side controls. Cursor-only motion remains in retained
+    // gpu_canvas, which presents the crosshair/readout without cx.notify().
     if dragging {
         crate::diag::bump(&crate::diag::CHART_INPUT_NOTIFY);
         cx.notify();
     }
 }
 
-/// Уход курсора со слота (тело `on_hover`).
+/// Tracks chart-slot enter/leave state and clears cursor/order interaction on leave.
 pub(super) fn hover(
     this: &mut ChartPanel,
     hovered: &bool,
     _window: &mut Window,
     _cx: &mut Context<ChartPanel>,
 ) {
-    // Отметить/снять «чарт под курсором» для курсор-зависимых хоткеев (new_long/new_short).
-    // Enter/leave — редкое событие (не на каждый пиксель), backend без notify → без рендера.
+    // Track the chart under the pointer for cursor-dependent new_long/new_short hotkeys. Enter/leave
+    // is infrequent rather than per-pixel, and the backend update omits notify to avoid rendering.
     let self_id = _cx.entity_id();
     let weak = _cx.entity().downgrade();
     let hov = *hovered;

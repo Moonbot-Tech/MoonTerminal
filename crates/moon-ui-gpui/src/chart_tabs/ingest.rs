@@ -1,5 +1,5 @@
-//! `ChartTabs`: ингест AddToChart-детектов (создание/наполнение вкладок ядра) и поиск
-//! активного стека по `(num, bucket)`. Вынесено из `mod.rs`.
+//! `ChartTabs` ingestion of AddToChart detects, including creating and populating core tabs, plus
+//! active-stack lookup by `(num, bucket)`. Extracted from `mod.rs`.
 
 use gpui::*;
 
@@ -8,10 +8,11 @@ use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
 impl ChartTabs {
-    /// Ингест AddToChart-детектов (add_to_chart>0) → создать/наполнить вкладку.
-    /// Ключ вкладки — `ChartBucket` ядра (своё ядро / общая / именованная связка),
-    /// резолвится из конфига ядра + глоб. `charts_split_by_core`.
-    /// БЕЗ авто-перехода: active не трогаем (порт «не уводить на чарт при детекте»).
+    /// Ingest AddToChart detects with `add_to_chart > 0` by creating or populating a tab.
+    ///
+    /// The tab key is the core's `ChartBucket` (per-core, shared, or named bundle), resolved from
+    /// core config and global `charts_split_by_core`. This does not switch `active`, preserving the
+    /// behavior that a detect must not pull the user to a chart.
     pub(super) fn ingest(&mut self, cx: &mut Context<Self>) {
         let (split, fresh, cursors): (
             bool,
@@ -32,7 +33,8 @@ impl ChartTabs {
                 let Some(d) = b.session.store().core(id) else {
                     continue;
                 };
-                // Bucket ядра — из его конфига (связка) + глоб. split. Нет конфига → своя вкладка.
+                // Resolve the core bucket from its configured bundle and global split setting.
+                // A core without config gets its own tab.
                 let bucket = b
                     .config
                     .servers
@@ -70,8 +72,9 @@ impl ChartTabs {
         if fresh.is_empty() {
             return;
         }
-        // detect-diag: AddToChart-детекты дошли до UI этой группы. fresh — сколько монет
-        // на добавление в этом проходе. (env MOON_DETECT_DIAG, off by default.)
+        // Detect diagnostics: AddToChart detects reached this group's UI. `fresh` is the number of
+        // new AddToChart events processed in this pass. `MOON_DETECT_DIAG` enables this and is off
+        // by default.
         moon_core::detect_diag::line(&format!(
             "[ingest] group={} split={split} fresh={} existing_tabs={}",
             self.group,
@@ -104,7 +107,7 @@ impl ChartTabs {
                 let panel = cx.new(|_| {
                     AddChartStack::new(backend.clone(), n, bucket.clone(), epoch, theme.clone())
                 });
-                // Восстановить сохранённый масштаб и раскладку этой вкладки (charts.json).
+                // Restore this tab's saved per-tab display and comparison settings from charts.json.
                 let (
                     saved_scale,
                     saved_layout,
@@ -197,13 +200,13 @@ impl ChartTabs {
                 }
                 panel.update(cx, |p, pcx| p.add_coin(core, &market, ttl, pcx));
                 self.add.push((n, bucket.clone(), panel));
-                // Порядок вкладок: по (номер, bucket) — как egui sort_by_key.
+                // Order tabs by `(number, bucket)`, matching egui's `sort_by_key` behavior.
                 self.add.sort_by_key(|(num, c, _)| (*num, c.clone()));
                 moon_core::detect_diag::line(&format!(
                     "[ingest] NEW tab n={n} bucket={bucket:?} (total_tabs={})",
                     self.add.len()
                 ));
-                // active НЕ меняем — не уводим пользователя на новую вкладку.
+                // Do not change `active`; a new tab must not pull the user away.
             }
         }
         self.sync_seen_for_active(cx);

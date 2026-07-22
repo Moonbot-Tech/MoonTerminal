@@ -1,6 +1,6 @@
-# Вкладка «Подключения» окна настроек (ядра, группы, статусы, колонки, тултипы).
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
-# Колонки таблиц — короткие ярлыки (Акт/Окн/Орд/…); переводы тоже короткие.
+# Connections tab in Settings: cores, groups, statuses, columns, and tooltips.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
+# Table columns use short labels; translations should remain short as well.
 _version: 2
 
 conn.servers_heading:
@@ -55,7 +55,7 @@ conn.show_group:
   ru: "Показать окно группы"
   en: "Show group window"
   es: "Mostrar ventana del grupo"
-# Глиф + — отдельным segment-ом в коде, в словаре только текст.
+# The + glyph is prepended in code; the locale entry contains only text.
 conn.add_core:
   ru: "Добавить ядро (в «default»)"
   en: "Add core (to “default”)"
@@ -101,7 +101,7 @@ conn.filter_note:
   en: "client-side filter"
   es: "filtro en el cliente"
 
-# Кружок статуса подключения в конце строки сервера
+# Connection-status dot at the end of a server row.
 conn.status.ready:
   ru: "Подключено"
   en: "Connected"
@@ -131,7 +131,7 @@ conn.status.none:
   en: "No data (save settings to connect)"
   es: "Sin datos (guarda los ajustes para conectar)"
 
-# Заголовки колонок таблицы серверов
+# Server-table column headings.
 conn.col.act:
   ru: "Акт"
   en: "Act"
@@ -197,13 +197,13 @@ conn.col.arb:
   en: "Arb"
   es: "Arb"
 
-# Заголовки колонок таблицы групп
+# Group-table column headings.
 conn.gcol.ico:
   ru: "Ico"
   en: "Ico"
   es: "Ico"
 
-# Подсказки (тултипы)
+# Tooltips.
 conn.tip.act:
   ru: "Подключаться к ядру"
   en: "Connect to the core"

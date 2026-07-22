@@ -1,15 +1,15 @@
-//! Обслуживание SQLite-файлов (вкладка «Хранилище»): сжатие и бэкап.
-//! Работает по ОТДЕЛЬНОМУ соединению (writer'ы живут своими): WAL это допускает,
-//! эксклюзив VACUUM берётся между батчами writer'а (busy_timeout ждёт).
+//! SQLite file maintenance for the Storage tab: compaction and backup.
+//! Uses a SEPARATE connection while writers keep their own connections: WAL permits
+//! this, and exclusive VACUUM access is acquired between writer batches (`busy_timeout` waits).
 
 use std::path::Path;
 use std::time::Duration;
 
 use rusqlite::Connection;
 
-/// Checkpoint WAL (TRUNCATE) + VACUUM: возвращает диску место удалённых строк и
-/// сбрасывает разросшийся -wal. Блокирует писателей на время VACUUM — операция
-/// по явному действию пользователя.
+/// Checkpoint WAL (TRUNCATE) and VACUUM to reclaim deleted-row space and
+/// truncate an oversized `-wal` file. Blocks writers during VACUUM and therefore
+/// runs only after an explicit user action.
 pub fn compact_db(path: &Path) -> anyhow::Result<()> {
     let conn = Connection::open(path)?;
     let _ = conn.busy_timeout(Duration::from_secs(30));
@@ -18,8 +18,8 @@ pub fn compact_db(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Консистентный бэкап одним файлом (`VACUUM INTO`): работает на живой БД, не
-/// останавливая writer. Целевой файл не должен существовать.
+/// Create a consistent single-file backup (`VACUUM INTO`) from a live database
+/// without stopping the writer. The destination file must not exist.
 pub fn backup_db(src: &Path, dst: &Path) -> anyhow::Result<()> {
     anyhow::ensure!(
         !dst.exists(),
@@ -33,7 +33,7 @@ pub fn backup_db(src: &Path, dst: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Размер файла БД и его -wal (байты); отсутствующие файлы = 0.
+/// Return the database and `-wal` file sizes in bytes; missing files count as zero.
 pub fn db_sizes(path: &Path) -> (u64, u64) {
     let main = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let mut wal = path.as_os_str().to_os_string();

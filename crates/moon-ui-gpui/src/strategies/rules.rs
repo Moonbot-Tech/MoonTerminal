@@ -1,26 +1,28 @@
-//! Правила зависимостей полей стратегий: какое поле редактируемо/раздел активен в
-//! зависимости от значений ДРУГИХ полей. Источник — `assets/param_deps.toml`
-//! (`"Поле" = "A=VAL;B<>VAL"`). На старте пробуем внешний файл из dev-пути, иначе
-//! берём вшитый фолбэк. Hot-reload внешнего файла включается только явным env
-//! `MOON_STRATEGY_RULES_HOT_RELOAD`; production не опрашивает filesystem каждую секунду.
-//! Парсим имя→условия один раз.
-//! Порт egui `src/strategies/rules.rs` (точь-в-точь).
+//! Strategy-field dependency rules that determine whether a field is editable or a section is
+//! active from the values of OTHER fields. Rules come from `assets/param_deps.toml`
+//! (`"Field" = "A=VAL;B<>VAL"`). Startup first tries the external development path, then uses the
+//! bundled fallback. External-file hot reload requires the explicit
+//! `MOON_STRATEGY_RULES_HOT_RELOAD` environment variable; production does not poll the filesystem
+//! every second. Field names and conditions are parsed on initial load and each external reload.
+//! This is a verbatim port of egui's `src/strategies/rules.rs`.
 //!
-//! Логика разделов выводится отсюда же + соглашение имён `Ignore*` (см. mod.rs):
-//! отдельного конфига разделов нет.
+//! Section activity has no separate configuration: `section_active` evaluates these dependencies
+//! and keeps a section active when more than one of its fields is dependency-active.
 
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-/// Внешний путь (относительно cwd) для hot-reload в dev (`cargo run` → корень воркспейса).
+/// External path relative to the cwd for development hot reload (`cargo run` uses the workspace root).
 const EXTERNAL: &str = "assets/param_deps.toml";
-/// Фолбэк, вшитый в бинарь (release-запуск без assets рядом).
+/// Fallback bundled into the binary for release runs without adjacent assets.
 const BUNDLED: &str = include_str!("../../../../assets/param_deps.toml");
 
-/// Значения полей выбранной стратегии: имя(lowercase) → значение(как есть).
+/// Effective dependency values keyed by lowercase field name.
+///
+/// Stored fields are overlaid with staged edits, while schema defaults fill omitted fields.
 pub type Values = HashMap<String, String>;
 
-/// Оператор условия.
+/// Dependency-condition operator.
 #[derive(Clone, Copy)]
 enum Op {
     Eq,
@@ -31,7 +33,7 @@ enum Op {
     Le,
 }
 
-/// Одно условие: `field` (op) `value`.
+/// One dependency condition: `field` (op) `value`.
 #[derive(Clone)]
 struct Cond {
     field: String,
@@ -40,14 +42,14 @@ struct Cond {
 }
 
 pub struct Rules {
-    /// Имя поля(lowercase) → список условий (через ; — И).
+    /// Lowercase field name mapped to conditions joined by `;` as logical AND.
     deps: HashMap<String, Vec<Cond>>,
-    /// mtime внешнего файла — для hot-reload.
+    /// Modification time of the external file, used for hot reload.
     mtime: Option<SystemTime>,
 }
 
 impl Rules {
-    /// Грузит правила: внешний файл, если есть, иначе вшитый фолбэк.
+    /// Load rules from the external file when present, otherwise from the bundled fallback.
     pub fn load() -> Self {
         let mut r = Rules {
             deps: HashMap::new(),
@@ -63,7 +65,7 @@ impl Rules {
         r
     }
 
-    /// Перечитывает внешний файл, если он изменился. true — перечитали (нужен кадр).
+    /// Reload the external file when it changes, returning true when a new frame is needed.
     pub fn reload_if_changed(&mut self) -> bool {
         let m = file_mtime();
         if m.is_some() && m != self.mtime {
@@ -77,16 +79,18 @@ impl Rules {
         false
     }
 
-    /// Построчный разбор (терпимый к ручной правке): `"Поле" = "условие"`. Терпит
-    /// дубликаты (побеждает последний), комментарии `#`, заголовок `[deps]`, кавычки.
-    /// Один битый ключ не валит весь файл (в отличие от строгого TOML).
+    /// Parse manually edited `"Field" = "condition"` entries line by line.
+    ///
+    /// This accepts duplicate keys (the last wins), full-line `#` comments, the `[deps]` header,
+    /// and quotes.
+    /// Unlike strict TOML, one malformed key does not invalidate the entire file.
     fn parse_into(&mut self, content: &str) {
         for line in content.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
                 continue;
             }
-            // Разделитель — ПЕРВЫЙ '=' (внутри значения '=' уже за кавычками).
+            // Split on the FIRST `=`; any `=` inside the value follows the closing key quote.
             let Some(eq) = line.find('=') else { continue };
             let key = line[..eq].trim().trim_matches('"').trim().to_lowercase();
             let expr = line[eq + 1..].trim().trim_matches('"').trim();
@@ -101,11 +105,13 @@ impl Rules {
         );
     }
 
-    /// Поле активно (редактируемо), если все его условия истинны на текущих
-    /// значениях. Нет правила — активно. Условие на поле, которого НЕТ в values
-    /// (т.е. нет у этого вида стратегии вовсе), неприменимо — не блокирует. Поля
-    /// схемы кладутся в values с дефолтом/пустым (см. `selected_values`), так что
-    /// «нет в values» = «нет у вида», а несохранённое поле сравнивается по дефолту.
+    /// Return whether a field is active and editable under the current values.
+    ///
+    /// Every condition must hold; a field without a rule is active. A condition referring to a
+    /// field absent from `values` is inapplicable because that field does not exist for this
+    /// strategy kind, so it does not block. `selected_values` inserts every schema field with its
+    /// default or an empty value, making absence mean "not part of this kind" while an unsaved
+    /// field is still compared using its default.
     pub fn field_active(&self, name: &str, values: &Values) -> bool {
         match self.deps.get(&name.to_lowercase()) {
             None => true,
@@ -117,8 +123,10 @@ impl Rules {
     }
 }
 
-/// Истинно ли условие `c` на значении `v`. `=`/`<>` — булево/строковое сравнение,
-/// `>`/`<`/`>=`/`<=` — числовое (нечисловое значение → условие НЕ выполнено).
+/// Evaluate condition `c` against value `v`.
+///
+/// `=` and `<>` compare booleans or strings; `>`, `<`, `>=`, and `<=` compare numbers. A
+/// nonnumeric operand makes a numeric condition false.
 fn cond_true(c: &Cond, v: &str) -> bool {
     match c.op {
         Op::Eq => value_eq(v, &c.value),
@@ -136,8 +144,9 @@ fn cond_true(c: &Cond, v: &str) -> bool {
     }
 }
 
-/// Булева трактовка значения: ядро отдаёт да/нет как `1/0`, `Yes/No`, `true/false`.
-/// None — не булево (число/строка).
+/// Interpret the core's boolean forms: `1/0`, `Yes/No`, and `true/false`.
+///
+/// None means the value is a number or string rather than a boolean.
 fn as_bool(s: &str) -> Option<bool> {
     match s.trim().to_ascii_lowercase().as_str() {
         "yes" | "true" | "1" | "on" => Some(true),
@@ -146,8 +155,9 @@ fn as_bool(s: &str) -> Option<bool> {
     }
 }
 
-/// Сравнение значения условия: если ОБЕ стороны булевы (включая `0/1`), сравниваем
-/// как булевы (чтобы `IgnoreVolume=NO` совпало с сырым `"0"`), иначе — как строки.
+/// Compare condition values as booleans when BOTH sides are boolean forms, including `0/1`.
+///
+/// This makes `IgnoreVolume=NO` match the raw value `"0"`; all other values compare as strings.
 fn value_eq(actual: &str, expected: &str) -> bool {
     match (as_bool(actual), as_bool(expected)) {
         (Some(a), Some(e)) => a == e,
@@ -155,15 +165,16 @@ fn value_eq(actual: &str, expected: &str) -> bool {
     }
 }
 
-/// mtime внешнего файла правил (None — файла нет).
+/// Return the external rules file's modification time, or None when the file is absent.
 fn file_mtime() -> Option<SystemTime> {
     std::fs::metadata(EXTERNAL)
         .ok()
         .and_then(|m| m.modified().ok())
 }
 
-/// Разбирает `A=VAL;B<>VAL;C>1` в условия. Операторы проверяем от длинных к
-/// коротким (`<>`,`>=`,`<=` раньше `>`,`<`,`=`). Поля/значения — в lowercase.
+/// Parse `A=VAL;B<>VAL;C>1` into lowercase field/value conditions.
+///
+/// Operators are checked longest first: `<>`, `>=`, and `<=` precede `>`, `<`, and `=`.
 fn parse_conds(expr: &str) -> Vec<Cond> {
     const OPS: [(&str, Op); 6] = [
         ("<>", Op::Ne),

@@ -27,7 +27,7 @@ use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
 use rust_i18n::t;
 
-/// Строка таблицы: ядро + его статус подключения + последний снимок системных метрик.
+/// Cached table row containing a core name, connection state, and latest system telemetry sample.
 #[derive(Clone)]
 pub(super) struct CoreStatusRow {
     pub(super) name: String,
@@ -35,19 +35,19 @@ pub(super) struct CoreStatusRow {
     pub(super) sys: CoreSysStatus,
 }
 
-/// Панель «Статус ядер» (dock-вкладка / откреп-окно; охват = ядра группы).
+/// Group-scoped Core Status panel for a dock tab or detached window.
 pub struct CoreStatusView {
     pub(super) backend: Entity<Backend>,
-    /// Группа окна: охват = ядра этой группы (как у «Активов» group-scope).
+    /// Window group whose cores define this panel's scope, matching the Assets panel.
     group: String,
-    /// Мультивыбор ядер фильтра (пусто = все ядра группы), как в «Ордерах»/«Активах».
+    /// Multi-select core filter; an empty set means every core in the group.
     pub(super) sel_cores: HashSet<CoreId>,
-    /// Гейт перерисовки: сигнатура sys_rev/статусов ИЛИ 1 Гц-тик (для «обновлено N с назад»).
+    /// Redraw gate driven by the system/status signature or a 1 Hz sample-age refresh.
     gate: RenderGate,
     cache_sig: Option<u64>,
     cached_rows: Rc<Vec<CoreStatusRow>>,
     table_state: Entity<MoonDataTableState>,
-    /// Id хранилища ширин с контекстом (`core-status-table:dock` / `:win`).
+    /// Context-qualified column-width persistence ID (`core-status-table:dock` or `:win`).
     widths_id: String,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
@@ -105,7 +105,7 @@ impl CoreStatusView {
         this
     }
 
-    /// Реконструкция dock-вкладки (из `docks.json`) — контекст ширин `:dock`.
+    /// Reconstruct a dock tab from `docks.json` using the `:dock` width context.
     pub fn restored_group(
         backend: Entity<Backend>,
         group: String,
@@ -115,7 +115,7 @@ impl CoreStatusView {
         Self::new(backend, group, false, window, cx)
     }
 
-    /// Контент откреплённого окна (рамку даёт `DetachedWindow`) — контекст ширин `:win`.
+    /// Build detached-window content, framed by `DetachedWindow`, using the `:win` width context.
     pub fn detached_group(
         backend: Entity<Backend>,
         group: String,
@@ -125,7 +125,7 @@ impl CoreStatusView {
         Self::new(backend, group, true, window, cx)
     }
 
-    /// Доступ к state таблицы для кнопки «⤢ авто» в заголовке откреп-окна.
+    /// Return the table state used by the detached window's auto-width reset button.
     pub fn table_state(&self) -> Entity<MoonDataTableState> {
         self.table_state.clone()
     }
@@ -175,7 +175,10 @@ impl CoreStatusView {
         self.cached_rows = Rc::new(self.collect(b));
     }
 
-    /// Тумблер выбранного ядра фильтра (мультивыбор, как в «Активах»).
+    /// Toggle one core in the multi-select filter, or toggle the All item.
+    ///
+    /// `Some(id)` toggles one core. `None` uses only cardinality: it clears a selection
+    /// whose size equals the non-empty scoped set, otherwise replacing it with that full set.
     pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
         let all: HashSet<CoreId> = self
             .scope_cores(self.backend.read(cx))
@@ -202,7 +205,10 @@ impl CoreStatusView {
     }
 }
 
-/// Дискриминант статуса для сигнатуры (Stage/Failed сравниваем и по тексту — грубо, длиной).
+/// Return a compact connection-status contribution to the cache signature.
+///
+/// `Stage` and `Failed` incorporate only their text length, so different messages
+/// of the same length deliberately share this coarse invalidation value.
 fn status_ord(s: &ConnStatus) -> u64 {
     match s {
         ConnStatus::Connecting => 1,
@@ -323,7 +329,7 @@ impl CoreStatusView {
             .child(combo)
     }
 
-    /// Нижний футер: счётчик ядер (единый визуальный образец футера, как в «Активах»/«Отчёте»).
+    /// Render the core-count footer with the same visual treatment as Assets and Report.
     fn footer(&self, count: usize, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         h_flex()

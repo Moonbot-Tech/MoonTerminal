@@ -1,5 +1,6 @@
-//! Дренаж запросов backend'а (инлайн-правки размеров/sell, тосты Engine-действий) и
-//! обработка хоткеев корня окна. Вынесено из `shell/mod.rs` точь-в-точь.
+//! Drains backend requests for inline order-size and fixed-sell editing, presents Engine-action
+//! results, and routes group-window root hotkeys. Extracted from `shell/mod.rs` without changing
+//! behavior.
 
 use gpui::*;
 
@@ -36,11 +37,11 @@ impl Shell {
         });
     }
 
-    /// Тосты результатов Engine-действий (плечо/hedge/cancel-all/перенос/…).
-    /// Очередь общая в CoreStore; забирает её только Shell АКТИВНОГО окна — иначе
-    /// тот же тост показали бы все окна-группы (наблюдают один Backend). Пока ни
-    /// одно окно не активно, результаты копятся в очереди (кап в CoreData) и
-    /// всплывут на ближайшем notify после активации.
+    /// Drain Engine-action results such as leverage, hedge, cancel-all, and transfers into toasts.
+    ///
+    /// The queue is shared in `CoreStore`, so only the active window's Shell drains it; otherwise
+    /// every group window observing the same Backend would show the same toast. While no window is
+    /// active, results accumulate up to the `CoreData` cap and appear after activation and notify.
     pub(super) fn drain_engine_action_toasts(&mut self, cx: &mut Context<Self>) {
         if !self.window_active {
             return;
@@ -77,8 +78,8 @@ impl Shell {
         });
     }
 
-    /// Дабл-клик по S-кнопке: открыть инпут поверх неё с текущим процентом пресета и
-    /// сфокусировать (аналог `drain_order_size_edit_request`, но значение — из ядра).
+    /// Open and focus the inline editor after a fixed-sell S button is double-clicked.
+    /// Seeds it with the selected core's current preset percentage, mirroring the order-size editor.
     pub(super) fn drain_sell_edit_request(&mut self, cx: &mut Context<Self>) {
         let edit_req = self.backend.update(cx, |b, _| b.sell_edit_req.take());
         let Some((core, ix)) = edit_req.filter(|(_, i)| *i < 6) else {
@@ -99,10 +100,12 @@ impl Shell {
         });
     }
 
-    /// Обработка хоткея корня окна группы через ЕДИНЫЙ распознаватель [`crate::hotkeys`].
-    /// Таргет торговых действий — рынок фуллскрин-чарта группы (`main_chart_target`),
-    /// активное ядро — `active_trade_core`. Масштаб идёт через rev-механизм группы (свой,
-    /// не через `apply`). Гасит событие, если хоткей совпал.
+    /// Route a group-window root hotkey through the shared [`crate::hotkeys`] resolver.
+    ///
+    /// Actions delegated to [`crate::hotkeys::apply`] target the group's fullscreen Main-chart
+    /// market and active trading core. NewLong and NewShort are exceptions routed through the
+    /// globally hovered chart. Scaling uses the group's revision mechanism rather than `apply`.
+    /// Stop propagation only when the resolved action reports that it was handled.
     pub(super) fn on_hotkey(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         use crate::hotkeys::HotkeyAction;
         let action = {
@@ -115,9 +118,8 @@ impl Shell {
         };
         let group = self.group.clone();
         let handled = match action {
-            // Масштаб Y активной вкладки группы: листаем ступень и командуем ИМЕННО этой
-            // группе (price_scale_group=group) — её ChartTabs применит к активной панели
-            // (sig.rs сворачивает rev только для своей группы).
+            // Step the active tab's Y scale and address the revision to this group. Its ChartTabs
+            // applies the change to the active panel and consumes only revisions for its group.
             HotkeyAction::ScalePlus | HotkeyAction::ScaleMinus => {
                 let zoom_in = matches!(action, HotkeyAction::ScalePlus);
                 self.backend.update(cx, |b, _| {
@@ -128,9 +130,9 @@ impl Shell {
                 });
                 true
             }
-            // Переключить активный (fullscreen) чарт Main-стека группы на следующий — через
-            // rev-механизм этой группы (её ChartTabs слушает backend и листает свой стек), как
-            // масштаб. Отдельный от scale rev, чтобы зум и переключение не мешали друг другу.
+            // Advance this group's active fullscreen Main chart through a dedicated group revision.
+            // Keeping it separate from the scale revision prevents switching and zooming from
+            // consuming each other's signals.
             HotkeyAction::SwitchCharts => {
                 self.backend.update(cx, |b, _| {
                     b.switch_charts_group = Some(group.clone());
@@ -138,8 +140,8 @@ impl Shell {
                 });
                 true
             }
-            // Ручной ордер по цене под курсором: ставит чарт под мышью (`hovered_chart`) —
-            // цену знает только он. Работает независимо от того, какое окно в фокусе.
+            // Place a manual order through the globally hovered chart, which alone can translate
+            // the cursor position into a price. This is independent of which window has focus.
             HotkeyAction::NewLong | HotkeyAction::NewShort => {
                 let short = matches!(action, HotkeyAction::NewShort);
                 let chart = self
@@ -153,34 +155,33 @@ impl Shell {
                     None => false,
                 }
             }
-            // Встроенный Ctrl+Shift+F10: сброс позиций всех окон (спасение уехавших).
+            // Built-in Ctrl+Shift+F10 restores all windows to on-screen positions.
             HotkeyAction::ResetWindows => {
                 crate::windowing::reset_all_windows_onscreen(cx);
                 true
             }
-            // Встроенный Tab/Del: отмена ордера под курсором (чарт под мышью знает наведённый).
+            // Built-in Tab/Delete cancels the order tracked by the hovered chart.
             HotkeyAction::CancelHoveredOrder => {
                 crate::hotkeys::cancel_hovered_order(&self.backend, cx)
             }
-            // Del: приоритет — удалить выделенную фигуру; выделения нет → фолбэк на встроенную
-            // отмену ордера под курсором (дефолтный fig_delete=Del резолвится раньше встроенной
-            // ветки Tab/Del и без фолбэка затенял бы её навсегда).
+            // Delete prioritizes the selected figure, then falls back to hovered-order cancellation.
+            // The default figure binding resolves before built-in Tab/Delete and would otherwise
+            // shadow order cancellation permanently.
             HotkeyAction::FigDelete => {
                 self.backend.update(cx, |b, bcx| {
-                    // Таргет/ядро FigDelete не использует.
+                    // Figure deletion does not use a chart target or active core.
                     crate::hotkeys::apply(action, b, bcx, None, None)
                 }) || crate::hotkeys::cancel_hovered_order(&self.backend, cx)
             }
-            // Встроенный Shift+Esc: закрыть все графики Main всех групп (глобальный бамп rev).
+            // Built-in Shift+Escape increments the global revision that closes every Main stack.
             HotkeyAction::CloseAllCharts => {
                 self.backend.update(cx, |b, _| {
                     b.close_all_charts_rev = b.close_all_charts_rev.wrapping_add(1);
                 });
                 true
             }
-            // Встроенный Esc: ВСЕГДА закрывает ЧАРТ в фулскрине Main ЭТОЙ группы (и только его),
-            // как в Moonbot — режим рисования при этом НЕ выключается (он тумблерится карандашом).
-            // Окно/откреп не трогаем.
+            // Built-in Escape closes only this group's fullscreen Main chart. As in Moonbot, it
+            // leaves drawing mode enabled and does not close the group or detached window.
             HotkeyAction::CloseActiveChart => {
                 self.backend.update(cx, |b, _| {
                     b.close_active_chart_group = Some(group.clone());
@@ -200,8 +201,8 @@ impl Shell {
     }
 }
 
-/// Человекочитаемая подпись Engine-действия для тоста (что именно подтвердило/
-/// отклонило ядро). Кошельки — через `WalletKind::label()`, как в дереве Активов.
+/// Build the human-readable Engine-action label for a result accepted or rejected by the core.
+/// Wallet names use `WalletKind::label()`, matching the Assets tree.
 fn engine_action_label(kind: &moon_core::feed::EngineActionKind) -> String {
     use moon_core::feed::EngineActionKind as K;
     use rust_i18n::t;

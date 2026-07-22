@@ -1,5 +1,4 @@
-//! Дропдауны масштаба цены (Y): для полоски чарт-вкладок и для AddToChart-stack.
-//! Вынесено из `controls.rs` точь-в-точь.
+//! Price-scale (Y) dropdowns for the chart-tab strip and AddToChart stacks.
 
 use gpui::*;
 use rust_i18n::t;
@@ -11,9 +10,10 @@ use moon_ui::{
     MoonPalette, MoonTooltipView,
 };
 
-/// Пресеты масштаба цены (Y) — 1:1 с egui `dock/controls.rs::SCALES`. `None` = «Авто».
-/// Первый элемент пары — СТАБИЛЬНЫЙ ключ пункта меню (не показывается): проценты
-/// интернациональны и идут в подпись как есть, «Авто» подставляется из локали.
+/// Price-scale (Y) presets matching egui `dock/controls.rs::SCALES` one-for-one.
+///
+/// `None` means Auto. The first tuple element is a STABLE, hidden menu-item key. Percentage
+/// labels are universal and displayed as written, while the Auto label comes from the locale.
 const SCALES: [(&str, Option<f32>); 6] = [
     ("auto", None),
     ("50%", Some(0.50)),
@@ -23,8 +23,10 @@ const SCALES: [(&str, Option<f32>); 6] = [
     ("2%", Some(0.02)),
 ];
 
-/// Подпись ступени. `None` (и кастомный масштаб после перетаскивания, который не
-/// совпал ни с одной ступенью) → «Авто» из локали; проценты — как в `SCALES`.
+/// Returns a preset label for a scale step.
+///
+/// `None`, or a custom dragged scale that does not exactly match a numeric step, returns the
+/// localized Auto label. Numeric presets use their percentage labels from `SCALES`.
 fn scale_label(scale: Option<f32>) -> String {
     SCALES
         .iter()
@@ -33,11 +35,12 @@ fn scale_label(scale: Option<f32>) -> String {
         .unwrap_or_else(|| t!("toolbar.scale_auto").to_string())
 }
 
-/// Следующая ступень масштаба для хоткеев Scale +/− (единый источник порядка — `SCALES`:
-/// Авто → 50% → 20% → 10% → 5% → 2%, индекс растёт = зум ВНУТРЬ). `zoom_in=true` (Scale +)
-/// идёт к меньшему проценту, `false` (Scale −) — наружу к «Авто». По краям клампится (без
-/// wrap). Текущее значение матчится точно; кастомное (после перетаскивания) сводится к
-/// ближайшей числовой ступени.
+/// Returns the next price-scale step for the Scale +/- shortcuts.
+///
+/// `SCALES` is the single ordering source: Auto → 50% → 20% → 10% → 5% → 2%, with increasing
+/// indices zooming IN. `zoom_in=true` (Scale +) moves toward a smaller percentage; `false`
+/// (Scale -) moves outward toward Auto. The ends clamp without wrapping. Exact preset values
+/// match directly; a custom dragged value starts from its nearest numeric step.
 pub(crate) fn step_scale(current: Option<f32>, zoom_in: bool) -> Option<f32> {
     let idx = SCALES
         .iter()
@@ -60,12 +63,11 @@ pub(crate) fn step_scale(current: Option<f32>, zoom_in: bool) -> Option<f32> {
     SCALES[next].1
 }
 
-/// Дропдаун масштаба для полоски чарт-вкладок главного окна: применяет масштаб ТОЛЬКО к
-/// АКТИВНОЙ вкладке (Main или конкретный AddToChart), не трогая другие вкладки/окна, и
-/// сохраняет (per-вкладочный масштаб). Стоит рядом с кнопкой ⚙ настроек раскладки.
-/// Общая сборка дропдауна масштаба: единственные отличия вкладок и AddToChart-stack —
-/// набор id, размер триггера (`Micro`/`ToolbarCompact`) и куда писать выбранный масштаб
-/// (`on_pick`). Визуал/тултип/лупа/«А» для Авто — общие.
+/// Builds the shared price-scale dropdown.
+///
+/// Tab and AddToChart-stack variants differ only in IDs, trigger size (`Micro` or
+/// `ToolbarCompact`), and the `on_pick` destination. Appearance, tooltip, magnifier, and the
+/// localized short Auto marker are shared.
 fn scale_dropdown(
     cx: &App,
     scale: Option<f32>,
@@ -88,7 +90,8 @@ fn scale_dropdown(
         );
     }
 
-    // Лупа вместо слова «МАСШТАБ» + «А» для Авто (компактнее); подсказка «Масштаб» — тултипом.
+    // Use a magnifier instead of the word "SCALE" and a localized short Auto marker for compactness;
+    // expose the full localized "Scale" label through the tooltip.
     let trigger_val = if scale.is_none() {
         t!("toolbar.scale_auto_short").to_string()
     } else {
@@ -121,6 +124,11 @@ fn scale_dropdown(
         )
 }
 
+/// Builds the main window's chart-tab-strip scale dropdown beside the layout-settings button.
+///
+/// Applies the selection ONLY to the active Main, AddToChart, or Custom tab without changing other
+/// tabs or windows. Persistence covers Main and AddToChart; the current `persist_scales` path omits
+/// Custom tabs.
 pub(crate) fn scale_dropdown_for_tabs(
     cx: &App,
     scale: Option<f32>,
@@ -142,9 +150,10 @@ pub(crate) fn scale_dropdown_for_tabs(
     .into_any_element()
 }
 
-/// Дропдаун масштаба для AddToChart-stack: пишет масштаб во все отдельные ChartPanel внутри
-/// stack-а. Это сохраняет Delphi-модель "один график = одна сущность", но управление масштабом
-/// остаётся единым для окна/вкладки.
+/// Builds an AddToChart-stack scale dropdown that updates every contained `ChartPanel`.
+///
+/// This preserves the Delphi model of one graph as one entity while keeping scale control unified
+/// for the window/tab.
 pub(crate) fn scale_dropdown_for_add_stack(
     cx: &App,
     scale: Option<f32>,

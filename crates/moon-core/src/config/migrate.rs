@@ -1,6 +1,6 @@
-//! Одноразовые миграции со старых форматов конфига в текущий рантайм.
-//! Возвращают `AppConfig`; вызывающий (`AppConfig::load`) сразу делает `save()`,
-//! который проставит стабильные uid и запишет новые servers.enc + settings.toml.
+//! One-time migrations from legacy config formats to the current runtime.
+//! They return `AppConfig`; the caller (`AppConfig::load`) immediately calls `save()`,
+//! which assigns stable uids and writes new servers.enc + settings.toml files.
 
 use serde::Deserialize;
 
@@ -15,7 +15,7 @@ use super::{AppConfig, GroupConfig, ServerConfig};
 /// The legacy format has no durable counter, so construction still names `uid_floor`; see
 /// [`super::uid_counter::UidCounter`] for the invariant and best-effort boundary.
 pub fn from_legacy_enc(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
-    // host/port из старого формата игнорируем — endpoint берётся из ключа.
+    // Ignore host/port from the legacy format because the endpoint comes from the key.
     #[derive(Deserialize, Default)]
     struct OldServer {
         #[serde(default)]
@@ -73,7 +73,7 @@ pub fn from_legacy_enc(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
 ///
 /// Construction names `uid_floor` for the same reason as [`from_legacy_enc`].
 pub fn from_legacy_toml(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
-    // host/port игнорируем — endpoint берётся из ключа.
+    // Ignore host/port because the endpoint comes from the key.
     #[derive(Deserialize)]
     struct Legacy {
         #[serde(default)]

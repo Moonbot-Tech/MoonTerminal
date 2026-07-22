@@ -1,12 +1,12 @@
-//! Проигрывание звуков алертов/детектов. Wav-файлы вшиты в бинарь (assets/sounds),
-//! воспроизведение на Windows через winmm `PlaySoundW` (SND_MEMORY|SND_ASYNC) —
-//! без внешних зависимостей и без блокировки UI-потока. На не-Windows — no-op.
+//! Alert and detection sound playback. WAV files from `assets/sounds` are embedded in the binary.
+//! Windows playback uses WinMM `PlaySoundW` with `SND_MEMORY | SND_ASYNC`, avoiding external
+//! dependencies and UI-thread blocking. Playback is a no-op on non-Windows platforms.
 //!
-//! Звук у детекта/алерта задаётся полем стратегии (см. `feed::strategies`): имя
-//! совпадает со стемом файла (BABYTOY, ding1, …), регистр не важен.
+//! A detection or alert strategy selects a sound by file stem; lookup trims whitespace and is
+//! ASCII case-insensitive, so names such as `BABYTOY` and `ding1` match their embedded files.
 
-/// Вшитые звуки: (стем в нижнем регистре, байты wav). `include_bytes!` — путь от
-/// этого файла: crates/moon-ui-gpui/src → ../../../assets/sounds.
+/// Embedded sounds as lowercase stems paired with WAV bytes.
+/// `include_bytes!` paths are relative to this file in `crates/moon-ui-gpui/src`.
 macro_rules! sounds {
     ($($stem:literal => $file:literal),* $(,)?) => {
         pub const SOUNDS: &[(&str, &[u8])] = &[
@@ -36,20 +36,20 @@ sounds! {
     "yes_mast" => "YES_MAST.wav",
 }
 
-/// Имена звуков (стемы) для выпадашки «Выбор звука».
-#[allow(dead_code)] // задействуется при добавлении выбора звука в окно «Алерты»
+/// Return sound stems for the sound-selection dropdown.
+#[allow(dead_code)] // Used by the Alerts window's sound selector.
 pub fn names() -> impl Iterator<Item = &'static str> {
     SOUNDS.iter().map(|(n, _)| *n)
 }
 
-/// Байты звука по имени (регистр не важен).
+/// Find embedded WAV bytes by a trimmed, ASCII case-insensitive stem.
 fn bytes_of(name: &str) -> Option<&'static [u8]> {
     let name = name.trim().to_ascii_lowercase();
     SOUNDS.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
 }
 
-/// Проиграть звук по имени (не блокирует; один звук за раз — новый прерывает
-/// предыдущий, как в Moonbot). Неизвестное имя → ничего.
+/// Play a named sound asynchronously, doing nothing when the stem is unknown.
+/// WinMM plays one sound at a time, so a new call interrupts the previous sound as in Moonbot.
 pub fn play(name: &str) {
     let Some(wav) = bytes_of(name) else {
         return;
@@ -61,8 +61,8 @@ pub fn play(name: &str) {
 fn play_bytes(wav: &'static [u8]) {
     use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
     use windows::core::PCWSTR;
-    // SND_MEMORY: pszSound — указатель на wav в памяти. Байты 'static, живут всю
-    // сессию, поэтому async-воспроизведение безопасно (буфер не освободится).
+    // With SND_MEMORY, `pszSound` points directly into the WAV bytes. The embedded buffer is
+    // `'static`, so it remains valid for the entire asynchronous playback operation.
     unsafe {
         let _ = PlaySoundW(
             PCWSTR(wav.as_ptr() as *const u16),

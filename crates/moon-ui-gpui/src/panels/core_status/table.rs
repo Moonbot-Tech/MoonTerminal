@@ -74,8 +74,10 @@ fn core_status_row(r: &CoreStatusRow, now_ms: i64, p: MoonPalette) -> MoonDataRo
     ])
 }
 
-/// Ячейка статуса: цветной кружок (зелёный=Ready, янтарь=подключение, красный=ошибка,
-/// серый=нет связи) + локализованная подпись. Порт `status_dot` из настроек подключений.
+/// Render a localized connection state as a colored dot and label.
+///
+/// Ready is green, Connecting and Stage are amber, Failed is red, and Disconnected
+/// is gray. This is the table-cell counterpart of connection settings' `status_dot`.
 fn status_cell(status: &ConnStatus, p: MoonPalette) -> impl IntoElement + 'static {
     let (color, label) = match status {
         ConnStatus::Ready => (p.green, t!("conn.status.ready").to_string()),
@@ -129,9 +131,9 @@ fn count(v: Option<u8>) -> String {
 
 /// Format the age of the latest telemetry sample for the narrow right column.
 /// Values under a minute use seconds, values under an hour use minutes, and
-/// older values use hours. A zero or future timestamp renders as a dash. Bind
-/// the number locally because rust-i18n path arguments handle identifiers more
-/// reliably than expressions.
+/// older values use hours. A non-positive timestamp renders as a dash; a future
+/// timestamp is clamped to zero seconds. Bind the number locally because
+/// rust-i18n path arguments handle identifiers more reliably than expressions.
 fn ago(last_ms: i64, now_ms: i64) -> String {
     if last_ms <= 0 {
         return "—".to_string();

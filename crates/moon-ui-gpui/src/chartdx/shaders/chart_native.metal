@@ -63,7 +63,7 @@ struct BookStyle {
     float4 level;
     float4 bg_ask;
     float4 bg_bid;
-    // x = цена лучшего ask, y = цена лучшего bid, z = есть книга (0/1).
+    // x = best ask price, y = best bid price, z = whether the book is populated (0/1).
     float4 edges;
 };
 
@@ -211,7 +211,7 @@ fragment float4 readout_rect_fragment(ReadoutRectOut in [[stage_in]]) {
     return edge <= in.border_width ? in.border : in.bg;
 }
 
-// ── Свечи (зеркало candles.hlsl): тело + верхний/нижний фитили, 18 вершин/инстанс ──
+// ── Candles (mirrors candles.hlsl): body + upper/lower wicks, 18 vertices per instance ──
 
 struct CandleStyle {
     float4 up;
@@ -224,7 +224,7 @@ struct CandleStyle {
     float wicks_in_zone;
     float neutral_in_zone;
     float fill_alpha;
-    float hide_start; // rel ms: свечи с t_open >= границы не рисуем (только трейды)
+    float hide_start; // rel ms: omit candles with t_open >= boundary (trades only)
 };
 
 struct Candle {
@@ -234,7 +234,7 @@ struct Candle {
     float l;
     float c;
     float vol;
-    // СВОЙ ТФ свечи (rel ms); 0 = ТФ серии. Хвост истории — старшие ТФ (шире, приглушены).
+    // Candle's OWN timeframe (rel ms); 0 = series timeframe. History tail uses wider, muted higher timeframes.
     float tf_rel;
 };
 
@@ -259,11 +259,11 @@ vertex CandleOut candles_vertex(uint vid [[vertex_id]], uint iid [[instance_id]]
                                 constant CandleStyle& cs [[buffer(1)]],
                                 const device Candle* candles [[buffer(2)]]) {
     Candle cd = candles[iid];
-    uint part = vid / 6u; // 0 тело, 1 верхний фитиль, 2 нижний фитиль
+    uint part = vid / 6u; // 0 body, 1 upper wick, 2 lower wick
     float2 corner = CORNERS_01[vid % 6u];
 
     if (cd.t_open >= cs.hide_start) {
-        return candle_cull_out(); // зона «только трейды» — свечу не рисуем
+        return candle_cull_out(); // Omit the candle in the "trades only" zone.
     }
     bool foreign_tf = cd.tf_rel > 0.0 && fabs(cd.tf_rel - cs.tf_rel) > 0.5;
     float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs.tf_rel;
@@ -325,7 +325,7 @@ vertex CandleOut candles_vertex(uint vid [[vertex_id]], uint iid [[instance_id]]
     }
     float alpha = (part == 0u && !outline) ? saturate(cs.fill_alpha) : 1.0;
     if (foreign_tf) {
-        alpha *= 0.55; // хвост чужого ТФ — полупрозрачный
+        alpha *= 0.55; // The tail from another timeframe is translucent.
     }
 
     CandleOut out;
@@ -345,7 +345,7 @@ fragment float4 candles_fragment(CandleOut in [[stage_in]],
         if (min(dx, dy) > max(cs.outline_px, 1.0)) {
             discard_fragment();
         }
-        // Альфа из VS: у контуров обычно 1.0, у хвоста чужого ТФ — приглушённая.
+        // Alpha comes from VS: normally 1.0 for outlines and muted for another timeframe's tail.
         return in.color;
     }
     return in.color;
@@ -468,7 +468,7 @@ vertex PriceOut book_bg_vertex(uint vid [[vertex_id]], constant ChartView& cv [[
 fragment float4 book_bg_fragment(PriceOut in [[stage_in]],
                                  constant ChartView& cv [[buffer(0)]],
                                  constant BookStyle& bs [[buffer(1)]]) {
-    // Трёхцветный фон: выше лучшего ask / щель спреда / ниже лучшего bid.
+    // Three-color background: above best ask / spread gap / below best bid.
     if (bs.edges.z > 0.5) {
         float base = cv.bounds.y + cv.bounds.w;
         float ask_y = base - (bs.edges.x - cv.view_price0) * cv.price_to_px;
@@ -523,8 +523,8 @@ vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     float2 a = data_to_px(cv, s.pts.x, s.pts.y);
     float t1 = s.m.z >= 0.5 ? cv.pad : s.pts.z;
     float2 b = data_to_px(cv, t1, s.pts.w);
-    // Снап Y концов к целому пикселю — иначе горизонтальная линия ордера мерцает
-    // толщиной/яркостью при суб-пиксельном дрейфе view_price0 (паритет с round() hline).
+    // Snap endpoint Y coordinates to whole pixels; otherwise a horizontal order line flickers
+    // in thickness/brightness as view_price0 drifts by subpixels (matching hline's round()).
     a.y = round(a.y);
     b.y = round(b.y);
     float2 dir = b - a;

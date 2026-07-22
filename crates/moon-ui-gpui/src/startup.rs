@@ -1,6 +1,6 @@
-//! Старт приложения: логгер + паник/SEH-хуки, загрузка конфига, запуск GPUI `App`,
-//! создание общего [`Backend`], фоновые циклы (feed-wake + координация) и окна групп.
-//! Вынесено из `main.rs` точь-в-точь (тело старого `main()` = [`run`]).
+//! Application startup: logger and panic/SEH hooks, config loading, GPUI `App` startup,
+//! shared [`Backend`] creation, background loops (feed wakes and coordination), and group windows.
+//! Extracted verbatim from `main.rs` (the former `main()` body is now [`run`]).
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -114,8 +114,8 @@ fn observed_uid_floor(
 /// Core-keyed durable state is loaded before configuration because config loading may assign and
 /// persist missing uids; observing the floor afterwards would be too late to prevent reuse.
 pub(crate) fn run() -> anyhow::Result<()> {
-    // Строим env_logger как Logger (не .init()) и оборачиваем в TeeLogger — он
-    // дублирует напечатанные записи в in-memory кольцо вкладки «Лог» (порт egui main).
+    // Build env_logger as a Logger (rather than calling .init()) and wrap it in TeeLogger, which
+    // duplicates emitted records into the in-memory ring shown by the Log tab (ported from egui main).
     let env = env_logger::Builder::from_env(
         env_logger::Env::default()
             .default_filter_or("warn,moon_ui_gpui=info,moon_gpui=info,moon_core=info"),
@@ -135,15 +135,16 @@ pub(crate) fn run() -> anyhow::Result<()> {
         diag::force_enable();
     }
 
-    // Нативные краши (access violation в DirectX/GPUI-форке, напр. present по протухшему
-    // дескриптору окна при реконнекте) идут МИМО Rust-паник-хука — процесс умирает молча,
-    // `panic.log` пуст. Ставим SEH-фильтр верхнего уровня, чтобы такой краш тоже попал в
-    // `panic.log` с кодом/адресом/бэктрейсом. Раньше всего — до создания окон.
+    // Native crashes (an access violation in DirectX/the GPUI fork, such as presenting through a
+    // stale window handle during reconnect) bypass Rust's panic hook: the process exits silently
+    // and leaves `panic.log` empty. Install a top-level SEH filter so these crashes also reach
+    // `panic.log` with their code, address, and backtrace. Do this first, before creating windows.
     crash::install_native_handler();
 
-    // Паник-хук: GUI-приложение без консоли → stderr с сообщением паники теряется (и при
-    // panic=abort это выглядит как нативный краш 0xc0000409 в ucrtbase). Пишем место+сообщение
-    // паники в `panic.log` (cwd) и в общий лог ДО аборта — чтобы видеть точный source-локейшн.
+    // Panic hook: a GUI application has no console, so panic messages written to stderr disappear
+    // (and with panic=abort this looks like native crash 0xc0000409 in ucrtbase). Write the panic
+    // location and message to `panic.log` (in the cwd) and the shared log BEFORE aborting so the
+    // exact source location remains visible.
     {
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
@@ -157,8 +158,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 .copied()
                 .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
                 .unwrap_or("<non-string>");
-            // Бэктрейс (force — без RUST_BACKTRACE): location у clamp-паник = внутренность core,
-            // а нам нужен ВЫЗЫВАЮЩИЙ кадр в нашем коде.
+            // Force a backtrace without RUST_BACKTRACE: clamp panics report a location inside core,
+            // while we need the CALLING frame in our code.
             let bt = std::backtrace::Backtrace::force_capture();
             let line = format!("PANIC at {loc}: {payload}\n--- backtrace ---\n{bt}\n--- end ---");
             log::error!("PANIC at {loc}: {payload}");
@@ -191,19 +192,19 @@ pub(crate) fn run() -> anyhow::Result<()> {
     let uid_floor = observed_uid_floor(&layout, &saved_chart_specs, &figures);
 
     let cfg = AppConfig::load(uid_floor)?;
-    // Язык интерфейса из конфига → глобальная локаль rust-i18n (для t! здесь и в MoonUI).
+    // Apply the configured UI language to the global rust-i18n locale used by t! here and in MoonUI.
     rust_i18n::set_locale(cfg.language.code());
-    // Файловый лог: режим из конфига + одноразовая чистка старых файлов при старте.
+    // Configure file logging from the config and purge old log files once at startup.
     moon_core::applog::set_file_logging(cfg.log_to_file, cfg.log_retention_days);
     moon_core::applog::purge_old();
     let group_list = crate::group_window::groups(&cfg);
     log::info!("groups: {group_list:?} (servers: {})", cfg.servers.len());
 
-    // Единая точка отсчёта времени для сессий и чарт-вью (как epoch_ms в egui).
+    // Use one time origin for sessions and chart views, equivalent to epoch_ms in egui.
     let epoch = moon_chart::paint::now_unix_ms();
 
-    // Регистрируем встроенные SVG-иконки MoonUI как AssetSource — без этого `IconName::*`
-    // (напр. крестик очистки `cleanable` = CircleX) не находят svg и рисуются пустыми.
+    // Register MoonUI's embedded SVG icons as the AssetSource; otherwise `IconName::*` values
+    // (such as the `cleanable` clear icon, CircleX) cannot find their SVGs and render empty.
     let app = gpui_platform::application().with_assets(moon_ui::MoonAssets);
     app.run(move |cx| {
         init_moon_ui(cx);
@@ -215,9 +216,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
         let dock_states = dock_persist::load_all();
         let detached = detached::load_all();
 
-        // Одноразовый ремап charts.json: до v11 схемы вкладки хранили ПОЗИЦИОННЫЕ CoreId,
-        // а теперь CoreId = стабильный uid. Перепривязываем, пока порядок серверов тот же,
-        // что был при записи файла (флаг взводится только при апгрейде со старой версии).
+        // One-time charts.json remap: before schema v11, tabs stored POSITIONAL CoreId values;
+        // CoreId is now a stable uid. Rebind while server order still matches the order recorded
+        // in the file (the flag is set only when upgrading from an older version).
         let chart_specs = {
             let mut specs = saved_chart_specs;
             if cfg.chart_core_remap_needed {
@@ -247,10 +248,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
             reports,
             metrics: Metrics::new(),
             snap: MetricsSnapshot::default(),
-            // open = рынки ОТКРЫТЫХ чарт-панелей (как App::about_to_wait в egui).
-            // Пусто на старте; наполнится при открытии монеты (порт чарт-панелей).
-            // set_open всё равно избирает провайдера/биржу на старте → subscribe_all_trades
-            // (ретейн всех трейдов биржи — как было; ради мгновенного открытия монеты).
+            // open = markets of OPEN chart panels, as in App::about_to_wait in egui.
+            // Empty at startup; opening a coin populates it (ported with the chart panels).
+            // set_open still elects a provider/exchange at startup, which calls
+            // subscribe_all_trades (retaining all exchange trades as before so coins open instantly).
             desired: Vec::new(),
             chart_market_refs: HashMap::new(),
             chart_market_refs_epoch: 0,
@@ -350,15 +351,15 @@ pub(crate) fn run() -> anyhow::Result<()> {
         });
         backend.update(cx, |b, _| b.refresh_header_ticker_default(true));
 
-        // Фабрики панелей для восстановления раскладки доков (PanelRegistry — глобален).
+        // Register panel factories used to restore dock layouts (PanelRegistry is global).
         dock_persist::register_panels(cx, backend.clone(), epoch);
 
-        // Tab над линией ордера = отмена ордера (паритет с Del). Клавишу «tab» MoonRoot
-        // биндит на ЭКШЕН root::Tab (focus_next), а gpui диспатчит экшены РАНЬШЕ
-        // on_key_down — до резолвера хоткеев (`hotkeys::resolve` → CancelHoveredOrder)
-        // Tab не доходил и просто гулял фокусом по контролам. Интерцептор срабатывает
-        // ДО экшенов: есть ордер под курсором → отменяем и гасим событие; нет —
-        // пропускаем, Tab остаётся навигацией фокуса.
+        // Tab over an order line cancels the order, matching Del. MoonRoot binds the "tab" key to
+        // the root::Tab action (focus_next), and GPUI dispatches actions BEFORE on_key_down, ahead
+        // of the hotkey resolver (`hotkeys::resolve` -> CancelHoveredOrder). Tab therefore never
+        // reached the resolver and merely moved focus across controls. This interceptor runs BEFORE
+        // actions: cancel the hovered order and stop the event when one exists; otherwise let it
+        // through so Tab remains focus navigation.
         let tab_backend = backend.clone();
         cx.intercept_keystrokes(move |ev, _window, cx| {
             if ev.keystroke.key == "tab"
@@ -370,14 +371,14 @@ pub(crate) fn run() -> anyhow::Result<()> {
         })
         .detach();
 
-        // Закрытие ГЛАВНОГО (группового) окна = полный выход: убираем закрытое окно из
-        // group_windows, и если групповых окон не осталось — quit (закроет и откреплённые
-        // чарт-окна). Детач-чарт окна сами quit не вызывают (их id нет в group_windows).
+        // Closing a MAIN (group) window triggers a full exit when it removes the last entry from
+        // group_windows; quit then closes detached chart windows too. Detached chart windows never
+        // request quit themselves because their ids are absent from group_windows.
         let quit_backend = backend.clone();
         cx.on_window_closed(move |app, closed_id| {
-            // Возвращаем (откреп-окна_на_закрытие, надо_ли_выйти).
+            // Return (detached windows to close, whether the app should quit).
             let (to_close, quit) = quit_backend.update(app, |b, _| {
-                // Это окно группы? (его group, если да)
+                // Determine whether this is a group window and, if so, which group owns it.
                 let group = b
                     .group_windows
                     .iter()
@@ -386,10 +387,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 if let Some(group) = group {
                     b.group_windows.remove(&group);
                     if b.group_windows.is_empty() {
-                        // Последнее окно группы → полный выход (quit закроет всё, вкл. откреп).
+                        // The last group window triggers a full exit; quit closes everything detached too.
                         return (Vec::new(), true);
                     }
-                    // Иначе закрыть откреп-чарты ИМЕННО этой группы.
+                    // Otherwise close detached charts belonging to this group only.
                     let close: Vec<WindowHandle<Root>> = b
                         .detached_chart_windows
                         .iter()
@@ -399,7 +400,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
                     b.detached_chart_windows.retain(|(g, _)| *g != group);
                     (close, false)
                 } else {
-                    // Закрыли откреп-чарт-окно (или иное) — вычистить из трекинга.
+                    // A detached chart window (or another window) closed; remove it from tracking.
                     b.detached_chart_windows
                         .retain(|(_, h)| h.window_id() != closed_id);
                     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
@@ -424,10 +425,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
         })
         .detach();
 
-        // На выходе из приложения: пометить quitting и СРАЗУ сохранить charts.json. На старте
-        // quit окна ещё не снесены → detached=Some; без этого закрытие откреп-окон при выходе
-        // репинит их (detached→None) и они не восстанавливаются. quitting также глушит дренаж
-        // репина (drain_chart_repin), чтобы он не сбросил detached.
+        // On application exit, set quitting and save charts.json IMMEDIATELY. When quit begins, the
+        // windows have not been removed yet, so detached=Some; otherwise closing detached windows
+        // during exit repins them (detached -> None) and they are not restored. quitting also
+        // suppresses repin draining (drain_chart_repin) so it cannot clear detached.
         let app_quit_backend = backend.clone();
         cx.on_app_quit(move |cx| {
             moon_core::detect_diag::line("[quit] on_app_quit → сохраняю charts.json");
@@ -441,9 +442,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
                     }
                 }
                 chart_persist::save_all(&b.chart_specs);
-                // Флаш дебаунс-персиста: 100мс-тик мог не успеть после последнего изменения.
-                // Особенно detached.json: «вернул панель в док → сразу закрыл» иначе оставляет
-                // протухшую запись, и панель на старте восстанавливалась отдельным окном.
+                // Flush debounced persistence because the 100 ms tick may not run after the final
+                // change. This matters especially for detached.json: otherwise "repin a panel,
+                // then close immediately" leaves a stale record that restores as a separate window.
                 if b.layout_dirty {
                     b.layout.save();
                     b.layout_dirty = false;
@@ -491,15 +492,15 @@ pub(crate) fn run() -> anyhow::Result<()> {
                         if !drain.any {
                             return;
                         }
-                        // Серверный набор chart-алертов изменился → пере-декодировать
-                        // remote-фигуры (алерты, созданные в ядре/Moonbot). Гейт по activity,
-                        // чтобы не декодить blob'ы на каждый ui_state-тик.
+                        // The server-side chart-alert set changed, so decode remote figures again
+                        // (alerts created in the core/Moonbot). Gate on activity to avoid decoding
+                        // blobs on every ui_state tick.
                         let alerts_activity = b.session.store().chart_alerts_activity();
                         if alerts_activity != b.last_chart_alerts_activity {
                             b.last_chart_alerts_activity = alerts_activity;
                             b.sync_remote_alerts();
                         }
-                        // Звук детектов/алертов ядер (по новым детектам со звуком).
+                        // Play core detect/alert sounds for new detects that specify a sound.
                         b.play_detect_sounds();
                         if drain.order_lines_data {
                             let chart_consumers = b.live_chart_consumers();
@@ -524,7 +525,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         cx.spawn(async move |cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let mut last_report = Instant::now();
-            // Сумма assets_rev по всем ядрам на прошлом сэмпле — для дельты assets_apply.
+            // Sum of assets_rev across all cores in the previous sample, used for assets_apply delta.
             let mut last_assets_rev_sum: u64 = 0;
             loop {
                 executor.timer(Duration::from_millis(100)).await;
@@ -561,8 +562,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
                             b.figures.borrow_mut().save();
                         }
                         if b.config_dirty {
-                            // Дебаунс-сейв конфига (правка размеров колесом мыши пишет в память
-                            // часто; на диск — раз за дренаж-тик, а не на каждый тик колеса).
+                            // Debounce config saves: mouse-wheel resizing updates memory frequently,
+                            // but writes to disk once per drain tick rather than on every wheel tick.
                             if let Err(e) = b.config.save() {
                                 log::warn!("config save (debounced) failed: {e}");
                             }
@@ -601,10 +602,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 if last_report.elapsed().as_millis() >= 1000 {
                     let ms = last_report.elapsed().as_secs_f64() * 1000.0;
                     last_report = Instant::now();
-                    // Контекст момента для строки диагностики: CPU процесса/системы, число
-                    // окон и открытых чарт-панелей + дельта assets_rev (снапшоты «Активов»,
-                    // собранные feed-потоками за интервал — работа идёт и без открытого окна).
-                    // Считаем ДО take_sample, чтобы assets_apply попал в этот же сэмпл.
+                    // Point-in-time context for the diagnostics line: process/system CPU, counts of
+                    // windows and open chart panels, plus the assets_rev delta (Assets snapshots
+                    // collected by feed threads during the interval, even with no window open).
+                    // Calculate it BEFORE take_sample so assets_apply lands in the same sample.
                     let ctx = if crate::diag::is_enabled() {
                         cx.update(|cx| {
                             let windows = cx.windows().len();
@@ -612,8 +613,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
                                 let charts = b.live_chart_consumers().len();
                                 let rev_sum: u64 =
                                     b.session.store().cores().map(|(_, d)| d.assets_rev).sum();
-                                // Ядро могло переподключиться (rev обнулился) — тогда дельта
-                                // не определена, берём сумму заново без бампа.
+                                // A core may have reconnected and reset its revision; in that case
+                                // the delta is undefined, so take the new sum without a bump.
                                 if rev_sum >= last_assets_rev_sum {
                                     crate::diag::bump_by(
                                         &crate::diag::ASSETS_APPLY,
@@ -642,7 +643,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             }
         })
         .detach();
-        // По окну на группу (тем же helper'ом, что и кнопка 👁 «показать группу»).
+        // Open one window per group through the same helper used by the "show group" eye button.
         for (i, group) in group_list.into_iter().enumerate() {
             crate::group_window::spawn_group_window(
                 cx,
@@ -655,14 +656,14 @@ pub(crate) fn run() -> anyhow::Result<()> {
             );
         }
 
-        // Восстановить окна откреплённых панелей (панель уже не в доке — она была убрана
-        // при откреплении, и dock_persist сохранил док без неё). Порт egui-восстановления
-        // detached на старте.
+        // Restore detached-panel windows. Each panel is already absent from its dock because
+        // detaching removed it and dock_persist saved the dock without it. This ports egui's
+        // detached-window restoration at startup.
         //
-        // ДЕДУП с доком: docks.json и detached.json пишутся независимо (дебаунс), и запись
-        // detached может протухнуть (репин панели в док + быстрый выход). Раньше такая
-        // панель восстанавливалась ДВАЖДЫ — вкладкой в доке И отдельным окном. Панель,
-        // уже присутствующую в восстановимом доке своей группы, не спавним и чистим спеку.
+        // DEDUPLICATE against docks: docks.json and detached.json are written independently with
+        // debouncing, so a detached record may become stale after repinning a panel followed by a
+        // quick exit. Such a panel used to be restored TWICE, both as a dock tab and as a separate
+        // window. Do not spawn a panel already present in its group's restorable dock; remove its spec.
         let (specs, docked) = {
             let b = backend.read(cx);
             let mut docked: std::collections::HashSet<(String, String)> =
@@ -677,8 +678,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 }
             }
             for (group, state) in &b.dock_states {
-                // Док с несовпадающей версией на старте игнорируется (shell/init.rs) →
-                // панели из него НЕ восстановятся, дедупить по нему нельзя.
+                // A dock with a mismatched version is ignored at startup (shell/init.rs), so its
+                // panels will NOT be restored and must not participate in deduplication.
                 if state.version != Some(dock_persist::DOCK_VERSION) {
                     continue;
                 }

@@ -1,16 +1,17 @@
-//! Построение [`MoonBotImportPlan`]: сопоставление прочитанного [`MoonBotConfig`] с
-//! текущими настройками Terminal. ЧИСТАЯ функция — ничего не пишет и не отправляет;
-//! применение выбранных пунктов делает отдельный код по стабильным `id` пунктов.
+//! Builds a [`MoonBotImportPlan`] by mapping a parsed [`MoonBotConfig`] to the current
+//! Terminal settings. This is a PURE function that writes and sends nothing; separate code
+//! applies selected items by their stable item `id` values.
 //!
-//! Правила (ТЗ §2/§8/§9):
-//! - переносим только ОДНОЗНАЧНО сопоставленные поля; для прочих — запись в
-//!   `unsupported` с причиной, молча не забываем;
-//! - пункт создаётся только если новое значение ОТЛИЧАЕТСЯ от текущего;
-//! - пустые сочетания MoonBot не переносим (перенос назначает, а не стирает);
-//! - `ColorsLight` → светлый набор, `ColorsDark` → тёмный, никогда крест-накрест;
-//! - секции `Charts`/`ArbColors` (Ini-блок) декодированы для preview, но НЕ применяются
-//!   до явной таблицы соответствия (ТЗ §9);
-//! - значимая alpha цвета не отбрасывается молча — пункт уходит в unsupported.
+//! Rules (spec sections 2/8/9):
+//! - import only UNAMBIGUOUSLY mapped fields; record every other field in `unsupported`
+//!   with a reason rather than silently dropping it;
+//! - create items for both changed and matching values, marking matches with `same` so the
+//!   preview shows the complete import picture;
+//! - do not import empty MoonBot shortcuts (import assigns rather than clears);
+//! - map `ColorsLight` to the light set and `ColorsDark` to the dark set, never across sets;
+//! - decode the `Charts`/`ArbColors` sections (Ini block) for preview, but do NOT apply them
+//!   until an explicit mapping table exists (spec section 9);
+//! - do not silently discard meaningful color alpha; send the item to `unsupported`.
 
 use super::schema_v7::{MoonBotConfig, ShortcutAction, SHORTCUT_ACTIONS};
 use super::shortcut::{self, DecodedShortcut};
@@ -18,74 +19,74 @@ use crate::config::hotkeys::HotkeysConfig;
 use crate::config::orders::OrdersStyleSet;
 use crate::config::theme::ChartThemeSet;
 
-/// Значение переносимого пункта — типизировано, чтобы применение не парсило строки.
+/// Typed value of an importable item, so application code does not parse strings.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlannedValue {
-    /// Хоткей в формате `gpui::Keystroke` (`ctrl-shift-f7`).
+    /// Hotkey in `gpui::Keystroke` format (`ctrl-shift-f7`).
     Keystroke(String),
-    /// Светлая тема UI вкл/выкл.
+    /// Whether the light UI theme is enabled.
     UiThemeLight(bool),
-    /// Цвет sRGB.
+    /// sRGB color.
     Rgb([u8; 3]),
-    /// Шесть размеров ручного ордера.
+    /// Six manual-order sizes.
     OrderSizes([f64; 6]),
-    /// Индекс выбранного пресета размера.
+    /// Selected size-preset index.
     OrderSizeSel(usize),
-    /// Шесть fixed-sell процентов (core-owned, применяется через ClientSettings).
+    /// Six fixed-sell percentages reserved for preview; no application path consumes them.
     FixedSellPrices([f32; 6]),
-    /// Выбранный fixed-sell слот (core-owned).
+    /// Selected fixed-sell slot (core-owned).
     FixedSellSel(u8),
 }
 
-/// Один сопоставленный пункт preview: стабильный `id` (по нему применение находит
-/// сеттер), подпись и «было → станет» для отображения. Показываются ВСЕ пункты,
-/// включая уже совпадающие (`same`) — пользователь видит полную картину переноса.
+/// One mapped preview item: a stable `id` used to locate its setter, a label, and
+/// "before → after" display values. ALL items are shown, including values that already match
+/// (`same`), so the user sees the complete import picture.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettingChange {
-    /// Стабильный идентификатор (`hotkey.cancel_buy`, `theme.dark.bg`,
-    /// `orders.light.buy.color`, `core.order_sizes`, …).
+    /// Stable identifier (`hotkey.cancel_buy`, `theme.bg.dark`,
+    /// `orders.buy.color.light`, `core.order_sizes`, …).
     pub id: String,
-    /// Человекочитаемая подпись пункта (термины Moonbot не переводим).
+    /// Human-readable item label (Moonbot terms remain untranslated).
     pub label: String,
-    /// Текущее значение Terminal (для preview).
+    /// Current Terminal value for preview.
     pub current: String,
-    /// Новое значение из MoonBot (для preview).
+    /// New value from MoonBot for preview.
     pub new: String,
-    /// Типизированное значение для применения.
+    /// Typed value used for application.
     pub value: PlannedValue,
-    /// Значение УЖЕ совпадает с MoonBot: показываем с пометкой, по умолчанию не
-    /// выбран (применение — no-op, но не запрещено).
+    /// Whether the value ALREADY matches MoonBot. It is shown with a marker and unselected
+    /// by default; applying it is a no-op but is not prohibited.
     pub same: bool,
 }
 
-/// Поле MoonBot, которое НЕ переносится — с причиной (ТЗ §2 группа 4).
+/// MoonBot field that is NOT imported, with a reason (spec section 2, group 4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unsupported {
     pub name: String,
     pub reason: String,
 }
 
-/// План импорта: группы preview + предупреждения.
+/// Import plan containing preview groups and warnings.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MoonBotImportPlan {
-    /// Группа «Терминал»: тема UI (и прочие не-хоткейные настройки).
+    /// "Terminal" group: UI theme and other non-hotkey settings.
     pub terminal: Vec<SettingChange>,
-    /// Группа «Хоткеи»: все сопоставленные сочетания (включая совпадающие).
+    /// "Hotkeys" group: all mapped shortcuts, including matches.
     pub hotkeys: Vec<SettingChange>,
-    /// Хоткеи MoonBot, которые НЕ переносятся (нет действия/неизвестный VK) — с
-    /// причинами; показываются внутри группы «Хоткеи».
+    /// MoonBot hotkeys that are NOT imported (missing action/unknown VK), with reasons.
+    /// These are displayed inside the "Hotkeys" group.
     pub unsupported_hotkeys: Vec<Unsupported>,
-    /// Группа «График и линии»: цвета обеих тем.
+    /// "Chart and lines" group: colors for both themes.
     pub chart: Vec<SettingChange>,
-    /// Группа «Ядро», локальный конфиг: пресеты размера ордера (per-core).
+    /// "Core" group, local config: per-core order-size presets.
     pub per_core: Vec<SettingChange>,
-    /// Группа «Ядро», команды: fixed-sell (ClientSettings, шлётся выбранным ядрам).
+    /// "Core" preview/reserved group: fixed-sell values are not applied or sent to cores.
     pub core_commands: Vec<SettingChange>,
-    /// Группа «Не перенесено» (без хоткеев — те в `unsupported_hotkeys`).
+    /// "Not imported" group, excluding hotkeys stored in `unsupported_hotkeys`.
     pub unsupported: Vec<Unsupported>,
-    /// Предупреждения (значения вне диапазона и т.п.).
+    /// Warnings such as out-of-range values.
     pub warnings: Vec<String>,
-    /// Хоткеи, НЕ назначенные в MoonBot (пустые не переносим — не стираем свои).
+    /// Hotkeys NOT assigned in MoonBot (empty slots are not imported, preserving local values).
     pub hotkeys_empty: usize,
 }
 
@@ -98,7 +99,7 @@ impl MoonBotImportPlan {
             && self.core_commands.is_empty()
     }
 
-    /// Все применимые локальные пункты (для сборки выбора/итерации применения).
+    /// Returns all applicable local items for selection construction and application iteration.
     pub fn local_items(&self) -> impl Iterator<Item = &SettingChange> {
         self.terminal
             .iter()
@@ -108,20 +109,21 @@ impl MoonBotImportPlan {
     }
 }
 
-/// Текущие настройки Terminal, против которых строится дифф. Узкий срез —
-/// не тащим весь `AppConfig` (тестируемость).
+/// Current Terminal settings against which the diff is built.
+///
+/// This narrow view avoids carrying the entire `AppConfig` and improves testability.
 pub struct PlanContext<'a> {
     pub hotkeys: &'a HotkeysConfig,
     pub theme: &'a ChartThemeSet,
     pub orders: &'a OrdersStyleSet,
-    /// Активная тема UI: true = светлая.
+    /// Active UI theme: true means light.
     pub ui_theme_light: bool,
-    /// Текущие пресеты размера активного ядра (для «было» в preview).
+    /// Current size presets of the active core, used as the preview's "before" values.
     pub order_sizes: [f64; 6],
     pub order_size_sel: Option<usize>,
 }
 
-/// Построить план. Ничего не мутирует.
+/// Builds the plan without mutating anything.
 pub fn build_plan(mb: &MoonBotConfig, cur: &PlanContext) -> MoonBotImportPlan {
     let mut plan = MoonBotImportPlan::default();
     map_ui_theme(mb, cur, &mut plan);
@@ -132,7 +134,7 @@ pub fn build_plan(mb: &MoonBotConfig, cur: &PlanContext) -> MoonBotImportPlan {
     plan
 }
 
-// ── Тема UI ──────────────────────────────────────────────────────────────────
+// ── UI theme ─────────────────────────────────────────────────────────────────
 
 fn map_ui_theme(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPlan) {
     let mb_light = !mb.theme.is_dark();
@@ -147,10 +149,12 @@ fn map_ui_theme(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportP
     });
 }
 
-// ── Хоткеи ───────────────────────────────────────────────────────────────────
+// ── Hotkeys ──────────────────────────────────────────────────────────────────
 
-/// Наше поле-приёмник для shortcut-слота MoonBot. `None` = в Terminal нет действия
-/// (перечень удалённых 2026-07-10 — под них нет send-команд в moonproto).
+/// Returns the local destination field for a MoonBot shortcut slot.
+///
+/// `None` means Terminal has no such action. These actions were removed on 2026-07-10 because
+/// moonproto provides no send commands for them.
 fn action_target(action: ShortcutAction) -> Option<&'static str> {
     use ShortcutAction::*;
     Some(match action {
@@ -176,7 +180,7 @@ fn action_target(action: ShortcutAction) -> Option<&'static str> {
     })
 }
 
-/// Имя слота для preview/unsupported — как в Moonbot.
+/// Returns the Moonbot slot name used in preview/unsupported lists.
 fn action_name(action: ShortcutAction) -> &'static str {
     use ShortcutAction::*;
     match action {
@@ -210,7 +214,7 @@ fn action_name(action: ShortcutAction) -> &'static str {
     }
 }
 
-/// Текущее значение нашего поля-приёмника по имени (для «было» в preview).
+/// Returns the current named destination-field value for the preview's "before" column.
 fn hotkey_field(cfg: &HotkeysConfig, field: &str) -> String {
     match field {
         "cancel_buy" => cfg.cancel_buy.clone(),
@@ -234,9 +238,11 @@ fn hotkey_field(cfg: &HotkeysConfig, field: &str) -> String {
     }
 }
 
-/// Один хоткей-пункт (группа «Хоткеи»): MoonBot `TShortCut` → gpui-строка; показываем
-/// ВСЕ, включая совпадающие (`same`). Empty пропускаем (перенос назначает, а не
-/// стирает; считаем в сводку), Unsupported — в `unsupported_hotkeys` с причиной.
+/// Adds one hotkey item to the "Hotkeys" group by converting MoonBot `TShortCut` to a GPUI string.
+///
+/// Shows ALL values, including matches (`same`). Empty values are skipped because import assigns
+/// rather than clears, but they are counted in the summary. Unsupported values go to
+/// `unsupported_hotkeys` with a reason.
 fn push_hotkey(plan: &mut MoonBotImportPlan, id: String, label: String, raw: u16, current: &str) {
     let decoded = shortcut::decode(raw);
     match shortcut::to_gpui_keystroke(decoded) {
@@ -262,7 +268,7 @@ fn push_hotkey(plan: &mut MoonBotImportPlan, id: String, label: String, raw: u16
                     reason: format!("неизвестная клавиша (VK 0x{:02X})", raw & 0xFF),
                 });
             }
-            // Empty — не переносим (и считаем для сводки).
+            // Empty values are not imported but are counted for the summary.
             _ => plan.hotkeys_empty += 1,
         },
     }
@@ -270,7 +276,7 @@ fn push_hotkey(plan: &mut MoonBotImportPlan, id: String, label: String, raw: u16
 
 fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPlan) {
     let h = &mb.ui.hotkeys;
-    // Слоты размера ордера (OKeys → order_size) и fixed-sell (SKeys → sell_preset).
+    // Order-size slots (OKeys → order_size) and fixed-sell slots (SKeys → sell_preset).
     for i in 0..6 {
         push_hotkey(
             plan,
@@ -287,7 +293,7 @@ fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPl
             &cur.hotkeys.sell_preset[i],
         );
     }
-    // 27 shortcut-слотов: 17 переносимых + 10 без команды в Terminal.
+    // 27 shortcut slots: 17 importable and 10 without a Terminal command.
     for action in SHORTCUT_ACTIONS {
         let raw = h.shortcuts.get(action);
         match action_target(action) {
@@ -299,8 +305,8 @@ fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPl
                 &hotkey_field(cur.hotkeys, field),
             ),
             None => {
-                // Действия в Terminal нет: мёртвый хоткей не создаём. Показываем
-                // только НАЗНАЧЕННЫЕ (пустой слот нечего переносить).
+                // Terminal has no such action, so do not create a dead hotkey. Show only
+                // ASSIGNED shortcuts because an empty slot has nothing to import.
                 if raw != 0 {
                     plan.unsupported_hotkeys.push(Unsupported {
                         name: action_name(action).to_string(),
@@ -312,13 +318,14 @@ fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPl
     }
 }
 
-// ── Цвета (Theme-блок: ColorsLight → light, ColorsDark → dark) ───────────────
+// ── Colors (Theme block: ColorsLight → light, ColorsDark → dark) ─────────────
 
-/// TColor из INI-строки: битовая раскладка `0xAARRGGBB` (ТЗ §8). Реальный экспорт
-/// MoonBot пишет hex-строку из 8 символов (`FF008000`, `FFFFFFFF` — проверено живым
-/// буфером); допускаем и десятичную запись. Неоднозначность «8 цифр без букв»
-/// решаем в пользу десятичной (десятичные не пишутся с ведущим нулём, hex из одних
-/// цифр начинался бы с '0' либо содержал букву). Возвращает RGB и alpha-байт.
+/// Parses a TColor from an INI string using the `0xAARRGGBB` bit layout (spec section 8).
+///
+/// Real MoonBot exports write an eight-character hex string (`FF008000`, `FFFFFFFF`, as verified
+/// with a live clipboard), while decimal notation is also accepted. An eight-character value is
+/// recognized as hexadecimal only when it contains an A-F digit (in either case) or starts with
+/// `0`; an ambiguous all-digit value is parsed as decimal. Returns RGB and the alpha byte.
 fn parse_tcolor(s: &str) -> Option<([u8; 3], u8)> {
     let s = s.trim();
     let hex8 = s.len() == 8
@@ -360,7 +367,7 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
                 });
                 continue;
             };
-            // Наши цветовые поля без alpha: значимую alpha не отбрасываем молча.
+            // Our color fields have no alpha; do not silently discard meaningful alpha.
             if alpha != 0 && alpha != 0xFF {
                 plan.unsupported.push(Unsupported {
                     name: format!("{key} ({theme_side})"),
@@ -368,8 +375,8 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
                 });
                 continue;
             }
-            // Явная таблица MoonBot key → поле Terminal (ТЗ §8). Ключи вне таблицы —
-            // в unsupported (декодированы, не применяются).
+            // Explicit MoonBot key → Terminal field mapping (spec section 8). Keys outside
+            // this table go to unsupported: they are decoded but not applied.
             let (target_id, label, current_rgb): (&str, &str, [u8; 3]) = match key.as_str() {
                 "graphBK" => ("theme.bg", "Фон графика", theme.bg),
                 "graphNet" => ("theme.grid", "Сетка", theme.grid),
@@ -440,9 +447,9 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
                     continue;
                 }
             };
-            // Сторона темы НЕ в label: preview группирует цвета колонками
-            // «Светлая»/«Тёмная» (side закодирован в id пункта). Совпавшие тоже
-            // показываем (same) — полная картина переноса.
+            // The theme side is NOT in the label: preview groups colors into "Light"/"Dark"
+            // columns, with the side encoded in the item id. Matching values are also shown
+            // (`same`) to provide the complete import picture.
             plan.chart.push(SettingChange {
                 id: format!("{target_id}.{theme_side}"),
                 label: label.to_string(),
@@ -453,9 +460,9 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
             });
         }
     }
-    // Секции Charts/ArbColors Ini-блока: без явной таблицы не применяем (ТЗ §9).
-    // Ключи разворачиваем ПОИМЁННО (со значением) — по этому списку решаем, какие
-    // маппинги/поля добавлять в Terminal следующим шагом.
+    // Do not apply Charts/ArbColors sections from the Ini block without an explicit mapping
+    // table (spec section 9). Expand keys BY NAME with their values; this list determines which
+    // mappings/fields should be added to Terminal next.
     for name in ["Charts", "ArbColors"] {
         if let Some(s) = mb.ini.section(name) {
             for (key, value) in &s.entries {
@@ -468,9 +475,9 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
     }
 }
 
-// ── Ядро ─────────────────────────────────────────────────────────────────────
+// ── Core ─────────────────────────────────────────────────────────────────────
 
-/// Компактный список чисел для preview: `70, 80, 300` вместо `[70.0, 80.0, 300.0]`.
+/// Formats a compact preview list such as `70, 80, 300` instead of `[70.0, 80.0, 300.0]`.
 fn fmt_nums<T: Into<f64> + Copy>(vals: &[T]) -> String {
     vals.iter()
         .map(|v| {
@@ -487,7 +494,7 @@ fn fmt_nums<T: Into<f64> + Copy>(vals: &[T]) -> String {
 
 fn map_core(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPlan) {
     let h = &mb.ui.hotkeys;
-    // Шесть размеров ручного ордера → ServerConfig.order_sizes выбранных ядер.
+    // Six manual-order sizes → ServerConfig.order_sizes for selected cores.
     plan.per_core.push(SettingChange {
         id: "core.order_sizes".into(),
         label: "Пресеты размера ордера (F1-F6)".into(),
@@ -496,7 +503,7 @@ fn map_core(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPlan)
         value: PlannedValue::OrderSizes(h.order_sizes),
         same: h.order_sizes == cur.order_sizes,
     });
-    // Выбранный пресет: bNum строго 0..=5, иначе warning и пропуск (ТЗ §9).
+    // Selected preset: bNum must be in 0..=5; otherwise warn and skip it (spec section 9).
     match usize::try_from(h.order_size_sel).ok().filter(|v| *v <= 5) {
         Some(sel) => {
             plan.per_core.push(SettingChange {
@@ -515,15 +522,15 @@ fn map_core(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPlan)
             h.order_size_sel
         )),
     }
-    // Fixed-sell: проценты и слот принадлежат ядру (ClientSettings) — отдельная
-    // группа, применяется отправкой выбранным ядрам (шаг применения, ТЗ §10).
+    // Keep fixed-sell percentages and the selected slot in a reserved preview group. Terminal
+    // does not currently apply these values or send them to cores.
     plan.core_commands.push(SettingChange {
         id: "core.fixed_sell_prices".into(),
         label: "Fixed sell проценты (S1-S6)".into(),
         current: "текущие значения ядра".into(),
         new: fmt_nums(&h.fixed_sell_prices),
         value: PlannedValue::FixedSellPrices(h.fixed_sell_prices),
-        same: false, // текущих значений ядра локально не знаем
+        same: false, // Current core values are not known locally.
     });
     if h.fixed_sell_sel <= 5 {
         plan.core_commands.push(SettingChange {
@@ -542,9 +549,9 @@ fn map_core(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPlan)
     }
 }
 
-// ── Статичные «не перенесено» ────────────────────────────────────────────────
+// ── Static "not imported" items ──────────────────────────────────────────────
 
-/// Поля UI-блока, для которых в Terminal нет работающего эквивалента (ТЗ §2 гр. 4).
+/// Adds UI-block fields without a working Terminal equivalent (spec section 2, group 4).
 fn collect_static_unsupported(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
     let none = "в Terminal нет эквивалентной настройки";
     for name in [
@@ -569,7 +576,7 @@ fn collect_static_unsupported(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) 
         name: "Мышиные жесты".into(),
         reason: "недоступны в этой версии экспорта (появятся с блоком Interop)".into(),
     });
-    // SplitParts из HotkeysPublic: у Split Order в Terminal нет настройки частей.
+    // SplitParts from HotkeysPublic: Terminal has no part-count setting for Split Order.
     if mb.ui.hotkeys.split_parts > 0 {
         plan.unsupported.push(Unsupported {
             name: "SplitParts".into(),

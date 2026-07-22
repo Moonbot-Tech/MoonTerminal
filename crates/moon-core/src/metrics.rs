@@ -1,31 +1,31 @@
-//! Диагностические метрики процесса и системы для статус-бара: CPU
-//! (процесс/система), RAM процесса и её рост за окно. На Windows дополнительно
-//! снимаем GPU Engine utilisation текущего процесса через PDH. sysinfo/PDH
-//! обновление дорогое, поэтому реально опрашиваем не чаще REFRESH_EVERY, между
-//! сэмплами отдаём кэш.
+//! Diagnostic process and system metrics for the status bar: process/system CPU,
+//! process RAM, and RAM growth over a time window. On Windows, this also samples
+//! GPU Engine utilization for the current process through PDH. Refreshing sysinfo
+//! and PDH is expensive, so the system is polled at most once per `REFRESH_EVERY`
+//! and the cached snapshot is returned between samples.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
-/// Как часто реально опрашиваем sysinfo.
+/// Minimum interval between sysinfo polls.
 const REFRESH_EVERY: Duration = Duration::from_millis(1000);
-/// Окно, на котором считаем прирост памяти (растёт/падает).
+/// Time window used to calculate memory growth or decline.
 const MEM_WINDOW: Duration = Duration::from_secs(5);
 
-/// Снимок метрик — Copy, дёшево прокидывается в каждый `WindowHost::render`.
+/// Copyable metrics snapshot passed cheaply to UI and diagnostic consumers.
 #[derive(Clone, Copy, Default)]
 pub struct MetricsSnapshot {
-    /// CPU процесса, % всей машины (как в Task Manager: 100% = все ядра заняты).
+    /// Process CPU as a percentage of total machine capacity, matching Task Manager.
     pub cpu_process: f32,
-    /// CPU всей системы, %.
+    /// Total system CPU usage as a percentage.
     pub cpu_system: f32,
-    /// RAM процесса (resident), МБ.
+    /// Resident process memory in MiB.
     pub mem_mb: f32,
-    /// Прирост RAM за MEM_WINDOW, МБ (>0 — растёт; стабильный плюс → утечка).
+    /// Process memory change over `MEM_WINDOW` in MiB; positive values indicate growth.
     pub mem_delta_mb: f32,
-    /// GPU текущего процесса, % по Windows GPU Engine counters. На не-Windows 0.
+    /// Current process GPU usage from Windows GPU Engine counters; zero elsewhere.
     pub gpu_process: f32,
 }
 
@@ -36,7 +36,7 @@ pub struct Metrics {
     last_refresh: Option<Instant>,
     snap: MetricsSnapshot,
     gpu: GpuProcessSampler,
-    /// (время, RAM МБ) для расчёта прироста за MEM_WINDOW.
+    /// Timestamped process memory samples used to calculate change over `MEM_WINDOW`.
     mem_hist: VecDeque<(Instant, f32)>,
 }
 
@@ -57,7 +57,7 @@ impl Metrics {
         }
     }
 
-    /// Актуальный снимок; реально опрашивает систему не чаще REFRESH_EVERY.
+    /// Returns the current snapshot, polling the system at most once per `REFRESH_EVERY`.
     pub fn sample(&mut self, now: Instant) -> MetricsSnapshot {
         let due = self
             .last_refresh
@@ -74,7 +74,7 @@ impl Metrics {
 
         let cpu_system = self.sys.global_cpu_usage();
         let (cpu_process, mem_mb) = match self.sys.process(self.pid) {
-            // cpu_usage(): 100% = одно ядро → делим на число ядер (как Task Manager).
+            // `cpu_usage()` uses 100% per core, so divide by the core count to match Task Manager.
             Some(p) => (
                 p.cpu_usage() / self.ncpu,
                 p.memory() as f32 / (1024.0 * 1024.0),

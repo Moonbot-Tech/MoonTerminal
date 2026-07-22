@@ -1,54 +1,54 @@
-//! Чистая логика операций над деревом стратегий (создать/переименовать/копировать/
-//! вставить/перенести/удалить). Без UI и без `cx` — только вычисления над `StrategyRow`
-//! и схемой вида (`SchemaKind`). Результат — намерения (`NewStrategy` / списки
-//! `(id, новый путь)`), которые слой диспетча превращает в команды `moon-core`.
+//! Pure strategy-tree operation logic for create, rename, copy, paste, move, and delete workflows.
+//! It has no UI or `cx`, only calculations over `StrategyRow` and kind schemas (`SchemaKind`).
+//! Results are intents (`NewStrategy` or `(id, new path)` lists) that the dispatch layer converts
+//! into `moon-core` commands.
 //!
-//! Папка существует только как ПРЕФИКС пути у стратегий (в данных пустой папки нет —
-//! см. STRATEGIES_TREE_OPS_PLAN.md): все операции — это правка `folder_path`/набора.
+//! A folder exists only as a prefix of strategy paths; the data model has no empty folders.
+//! Every operation therefore edits `folder_path` or a row set.
 
 use std::collections::HashSet;
 
 use moon_core::feed::{SchemaKind, StrategyRow};
 
-/// Имя поля, в котором moonproto хранит имя стратегии (`StrategySnapshot::strategy_name`).
+/// Field name through which moonproto stores `StrategySnapshot::strategy_name`.
 pub const STRATEGY_NAME_FIELD: &str = "StrategyName";
 
-/// Сегменты пути (`/` и `\` — разделители, пустые отброшены) — БЕЗ аллокаций. Единый
-/// источник правила разбиения пути для всего окна (дерево/счётчики/раскрытие/операции).
+/// Iterates nonempty path segments using `/` and `\` as separators without allocating.
+/// This is the window-wide source of path splitting for trees, counts, expansion, and operations.
 pub fn path_segments(path: &str) -> impl Iterator<Item = &str> {
     path.split(['/', '\\']).filter(|s| !s.is_empty())
 }
 
-/// Разбить путь папки на владеемые сегменты (поверх [`path_segments`]).
+/// Splits a folder path into owned segments through [`path_segments`].
 pub fn split_path(path: &str) -> Vec<String> {
     path_segments(path).map(str::to_string).collect()
 }
 
-/// Собрать путь из сегментов (канонично через `/`).
+/// Joins path segments using canonical `/` separators.
 pub fn join_path(parts: &[String]) -> String {
     parts.join("/")
 }
 
-/// `path` начинается с `prefix` (посегментно, регистр учитывается как в данных)?
+/// Returns whether `path` starts with `prefix` segment by segment, preserving data case.
 fn starts_with(path: &[String], prefix: &[String]) -> bool {
     path.len() >= prefix.len() && prefix.iter().zip(path).all(|(a, b)| a == b)
 }
 
-/// Все строки (включая вложенные) под префиксом пути.
+/// Returns every row at or below a path prefix.
 pub fn rows_under<'a>(rows: &'a [StrategyRow], prefix: &[String]) -> Vec<&'a StrategyRow> {
     rows.iter()
         .filter(|r| starts_with(&split_path(&r.folder_path), prefix))
         .collect()
 }
 
-/// Правило удаления: ВСЕ затронутые стратегии выключены (`!checked`).
+/// Returns whether every affected strategy is disabled (`!checked`), as deletion requires.
 pub fn all_off(rows: &[&StrategyRow]) -> bool {
     rows.iter().all(|r| !r.checked)
 }
 
-// --- Создание -------------------------------------------------------------
+// --- Creation -------------------------------------------------------------
 
-/// Новая стратегия: вид + папка + поля (имя кладётся в поле `StrategyName`).
+/// New strategy intent containing its kind, folder, and fields, with its name in `StrategyName`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewStrategy {
     pub kind_ordinal: u8,
@@ -56,7 +56,7 @@ pub struct NewStrategy {
     pub fields: Vec<(String, String)>,
 }
 
-/// Дефолтные значения всех полей вида (из схемы; поля без дефолта — пустая строка).
+/// Returns schema defaults for every field in a kind, using an empty string when absent.
 pub fn default_fields(kind: &SchemaKind) -> Vec<(String, String)> {
     kind.sections
         .iter()
@@ -65,7 +65,7 @@ pub fn default_fields(kind: &SchemaKind) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Заменить (или добавить) значение поля по имени.
+/// Replaces a named field value or appends it when absent.
 pub fn set_field(fields: &mut Vec<(String, String)>, name: &str, value: &str) {
     if let Some(slot) = fields.iter_mut().find(|(n, _)| n == name) {
         slot.1 = value.to_string();
@@ -74,14 +74,14 @@ pub fn set_field(fields: &mut Vec<(String, String)>, name: &str, value: &str) {
     }
 }
 
-/// Построить новую стратегию заданного вида с дефолтами схемы и именем.
+/// Builds a named strategy of the requested kind from its schema defaults.
 pub fn new_strategy(kind: &SchemaKind, name: &str, folder_path: &str) -> NewStrategy {
     let mut fields = default_fields(kind);
     set_field(&mut fields, STRATEGY_NAME_FIELD, name);
-    // Тип стратегии в Moonbot = поле `SignalType` (kind-байт снапшота сервер
-    // пересобирает из него при sync, см. feed/live/commands.rs). Без явной
-    // записи созданная «Volumes» возвращалась с дефолтным SignalType схемы
-    // (Drops) — выбранный в диалоге вид игнорировался.
+    // Moonbot represents the strategy kind in `SignalType`; during sync the server reconstructs
+    // the snapshot kind byte from it. See `feed/live/commands.rs`. Without this explicit value, a
+    // newly created Volumes strategy returned with the schema's default SignalType, Drops, ignoring
+    // the kind selected in the dialog.
     set_field(&mut fields, "SignalType", &kind.name);
     NewStrategy {
         kind_ordinal: kind.ordinal,
@@ -90,17 +90,17 @@ pub fn new_strategy(kind: &SchemaKind, name: &str, folder_path: &str) -> NewStra
     }
 }
 
-// --- Копирование / вставка ------------------------------------------------
+// --- Copy and paste -------------------------------------------------------
 
-/// Элемент буфера копирования: ИСХОДНЫЕ данные стратегии (не ссылка на ядро) +
-/// относительный путь от базы копирования — чтобы вставлять в любое ядро/папку.
+/// Clipboard item containing source strategy data rather than a core reference, plus a path
+/// relative to the copy base so it can be pasted into any core or folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipItem {
     pub kind_ordinal: u8,
-    /// Имя вида (для межъядерного предупреждения о несовместимости схем).
+    /// Kind name serialized as clipboard metadata for text round-tripping.
     pub kind: String,
     pub name: String,
-    /// Путь относительно базы копирования (сегменты ниже базы; пусто — корень буфера).
+    /// Path below the copy base; empty means the clipboard root.
     pub rel_path: Vec<String>,
     pub fields: Vec<(String, String)>,
 }
@@ -121,9 +121,10 @@ fn clip_with_base(rows: &[&StrategyRow], base: &[String]) -> Vec<ClipItem> {
         .collect()
 }
 
-/// Снять выбранные стратегии в буфер ПЛОСКО: `rel_path` пуст у всех → при вставке копии
-/// падают ПРЯМО в целевую папку (исходные пути не сохраняются — мультивыбор может быть из
-/// разных папок, и пользователь ждёт копии там, куда вставляет, а не по старым путям).
+/// Copies selected strategies flat, with an empty `rel_path` for every item.
+///
+/// Paste therefore places each copy directly in the target folder. Original paths are discarded
+/// because a multi-selection can span folders and users expect copies at the chosen destination.
 pub fn copy_rows(rows: &[&StrategyRow]) -> Vec<ClipItem> {
     rows.iter()
         .map(|r| ClipItem {
@@ -136,17 +137,17 @@ pub fn copy_rows(rows: &[&StrategyRow]) -> Vec<ClipItem> {
         .collect()
 }
 
-/// Снять ПАПКУ в буфер; относительный путь — от РОДИТЕЛЯ папки (имя папки сохраняется
-/// при вставке, как в проводнике).
+/// Copies a folder relative to its parent so paste preserves the folder name like a file manager.
 pub fn copy_folder(rows: &[StrategyRow], folder_prefix: &[String]) -> Vec<ClipItem> {
     let under = rows_under(rows, folder_prefix);
     let parent_len = folder_prefix.len().saturating_sub(1);
     clip_with_base(&under, &folder_prefix[..parent_len])
 }
 
-/// База имени без суффиксов копий: срезает ХВОСТОВЫЕ « (copy)» / « (N)», сколько бы
-/// их ни накопилось («S (copy) (copy)», «S (copy) (2)» → «S»). Имя целиком из
-/// суффиксов не трогаем.
+/// Returns a name without any trailing ` (copy)` or ` (N)` copy suffixes.
+///
+/// For example, both `S (copy) (copy)` and `S (copy) (2)` reduce to `S`. A name made entirely of
+/// suffixes is left unchanged.
 fn base_name(name: &str) -> &str {
     let mut s = name.trim_end();
     loop {
@@ -168,9 +169,9 @@ fn base_name(name: &str) -> &str {
     s
 }
 
-/// Уникальное имя в наборе занятых: единый формат «База (N)» с наименьшим свободным
-/// N от 2. Старые суффиксы срезаются (см. [`base_name`]) — копия копии больше не
-/// плодит «S (copy) (copy)», а разнобой «(copy)»/«(2)» сведён к одному виду.
+/// Returns `desired` unchanged when it is free.
+/// On collision, removes existing suffixes through [`base_name`] and returns `Base (N)` with the
+/// smallest free `N` starting at two, preventing nested copy suffixes.
 pub fn unique_name(taken: &HashSet<String>, desired: &str) -> String {
     if !taken.contains(desired) {
         return desired.to_string();
@@ -185,9 +186,10 @@ pub fn unique_name(taken: &HashSet<String>, desired: &str) -> String {
     unreachable!()
 }
 
-/// План вставки буфера в целевую папку: для каждого элемента — новая стратегия с
-/// уникальным именем (коллизии и внутри самой пачки). `taken_names` — имена, уже
-/// занятые в целевом наборе (любой папки целевого ядра — имена в Moonbot глобальны).
+/// Plans clipboard paste into a target folder, creating a uniquely named strategy per item.
+///
+/// Collisions within the batch are included. `taken_names` contains names already used anywhere
+/// in the target core because Moonbot strategy names are global across its folders.
 pub fn paste_plan(
     clip: &[ClipItem],
     target: &[String],
@@ -211,9 +213,9 @@ pub fn paste_plan(
     out
 }
 
-// --- Текстовый буфер (блокнот / обмен между пользователями) ----------------
+// --- Text clipboard for editors and user-to-user sharing ------------------
 
-/// Экранирование значения поля для строчного формата: `\` → `\\`, перевод строки → `\n`.
+/// Escapes a line-format field value by mapping `\` to `\\` and newlines to `\n`.
 fn escape_value(v: &str) -> String {
     let mut out = String::with_capacity(v.len());
     for ch in v.chars() {
@@ -248,10 +250,11 @@ fn unescape_value(v: &str) -> String {
     out
 }
 
-/// Сериализация буфера в ТЕКСТ (кладётся в системный буфер обмена вместе с внутренним):
-/// блок `[Strategy]` на стратегию, `Ключ=Значение` построчно. Самодостаточен для
-/// обратной вставки ([`clip_from_text`]) в любом ядре/экземпляре терминала — так папку
-/// со стратегиями можно выкинуть в блокнот и переслать целиком.
+/// Serializes the clipboard as text alongside the internal representation.
+///
+/// Each strategy becomes a `[Strategy]` block with one `Key=Value` per line. The format is
+/// self-contained for [`clip_from_text`] in any core or terminal instance, allowing an entire
+/// strategy folder to pass through a text editor or message.
 pub fn clip_to_text(clip: &[ClipItem]) -> String {
     let mut out = String::new();
     for item in clip {
@@ -273,7 +276,7 @@ pub fn clip_to_text(clip: &[ClipItem]) -> String {
     out
 }
 
-/// Разбор текста [`clip_to_text`]. Не наш формат / битые блоки → `None`.
+/// Parses [`clip_to_text`] output, returning `None` for another format or malformed blocks.
 pub fn clip_from_text(text: &str) -> Option<Vec<ClipItem>> {
     let mut out: Vec<ClipItem> = Vec::new();
     let mut cur: Option<ClipItem> = None;
@@ -295,7 +298,7 @@ pub fn clip_from_text(text: &str) -> Option<Vec<ClipItem>> {
         if line.trim().is_empty() {
             continue;
         }
-        let item = cur.as_mut()?; // содержимое до первого блока — не наш формат
+        let item = cur.as_mut()?; // Content before the first block is not our format.
         let (key, value) = line.split_once('=')?;
         let value = unescape_value(value);
         match key {
@@ -312,10 +315,10 @@ pub fn clip_from_text(text: &str) -> Option<Vec<ClipItem>> {
     (!out.is_empty() && out.iter().all(|i| !i.name.is_empty())).then_some(out)
 }
 
-// --- Переименование / перенос (правка folder_path существующих) -----------
+// --- Rename and move existing `folder_path` values ------------------------
 
-/// Переименование папки: для строк под `old_prefix` вернуть `(id, новый folder_path)`,
-/// заменив последний сегмент `old_prefix` на `new_name`. Прочие строки не трогаем.
+/// Plans a folder rename as `(id, new folder_path)` for rows under `old_prefix`.
+/// Replaces the last prefix segment with `new_name` and leaves other rows untouched.
 pub fn rename_folder(
     rows: &[StrategyRow],
     old_prefix: &[String],
@@ -338,9 +341,10 @@ pub fn rename_folder(
         .collect()
 }
 
-/// Перенос ПАПКИ под нового родителя (drag&drop): имя папки сохраняется, поддерево
-/// ребейзится в `target_parent + имя + хвост`. Возвращает `(id, новый folder_path)`.
-/// No-op, если цель — сама папка или её потомок (защита от зацикливания).
+/// Plans dragging a folder beneath a new parent as `(id, new folder_path)` entries.
+///
+/// Preserves the folder name and rebases its subtree under `target_parent + name + suffix`.
+/// Returns no edits when the target is the folder itself or its descendant, preventing cycles.
 pub fn move_folder(
     rows: &[StrategyRow],
     folder_path: &[String],
@@ -363,8 +367,8 @@ pub fn move_folder(
         .collect()
 }
 
-/// Перенос выбранных стратегий ПЛОСКО в целевую папку: каждая → прямо в `target`
-/// (исходные пути не сохраняются; мультивыбор может быть из разных папок).
+/// Plans a flat move of selected strategies directly into `target`, discarding their original
+/// paths because the multi-selection may span folders.
 pub fn move_to(rows: &[&StrategyRow], target: &[String]) -> Vec<(u64, String)> {
     let path = join_path(target);
     rows.iter().map(|r| (r.id, path.clone())).collect()

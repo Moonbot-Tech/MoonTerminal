@@ -1,6 +1,6 @@
-//! Таблица ядер вкладки «Подключения»: строки серверов (Акт·Окно·Имя·Ключ·Группа·
-//! [Данные n/8]·Цвет·Удалить·↻реконнект·●статус), колонки/шапка, поповер фид-флагов
-//! и add/delete сервера.
+//! Core table for the Connections tab: server rows with active/window toggles, name, key, group,
+//! chart bundle, feed count, color, delete, reconnect, and status controls; shared column layout
+//! and headers; feed-flag dropdown; and server add/delete actions.
 
 use gpui::*;
 use moon_ui::{
@@ -16,10 +16,10 @@ use moon_core::config::{FeedFlags, Secret, ServerConfig};
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
 
-/// 8 фид-флагов приёма данных ядра (i18n-ключ подписи, геттер, сеттер) — для
-/// поповера «Данные». Ключи `conn.tip.*` (подпись локализуется на use-сайте, см.
-/// `feed_popover`); к каждой в поповере добавляется суффикс «(фильтр на клиенте)»
-/// (`conn.filter_note`). Const хранит `&'static str` ключ, а не готовую строку.
+/// Eight flags controlling incoming core data, each with a label key, getter, and setter.
+///
+/// `feed_popover` localizes each `conn.tip.*` key and appends the localized client-side-filter
+/// note from `conn.filter_note`. The constant stores static keys rather than rendered labels.
 const FEED_FLAGS: [(&str, fn(&FeedFlags) -> bool, fn(&mut FeedFlags, bool)); 8] = [
     ("conn.tip.orders", |f| f.orders, |f, v| f.orders = v),
     ("conn.tip.detects", |f| f.detects, |f, v| f.detects = v),
@@ -61,7 +61,7 @@ fn status_dot(
 }
 
 impl SettingsView {
-    /// Checkbox булева поля сервера `servers[i]` (пишет в draft).
+    /// Build a checkbox bound to a boolean field of draft server `servers[i]`.
     fn srv_check(
         &self,
         cx: &Context<Self>,
@@ -98,9 +98,10 @@ impl SettingsView {
         checkbox
     }
 
-    /// Аффикс «Вставить» внутри поля ключа (стиль как встроенные глаз/×): глиф-кнопка,
-    /// по клику берёт ключ из буфера обмена и кладёт в `servers[i].key` (и в стейт инпута —
-    /// `set_value` не эмитит Change, поэтому пишем в draft напрямую).
+    /// Build a Paste glyph control beside the key field, styled like its built-in affixes.
+    ///
+    /// Clicking reads a nonempty key from the clipboard and updates both input state and
+    /// `servers[i].key`; `set_value` does not emit Change, so the draft is updated directly.
     fn paste_key_affix(
         &self,
         i: usize,
@@ -150,7 +151,7 @@ impl SettingsView {
             }))
     }
 
-    /// Добавить сервер в draft (id = max+1) в указанную группу и пересобрать editor-стейты.
+    /// Add a draft server with `id = max + 1` to the given group, then rebuild editor state.
     pub(super) fn add_server(
         &mut self,
         group: String,
@@ -187,7 +188,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Удалить сервер `i` из draft и пересобрать editor-стейты.
+    /// Delete draft server `i`, synchronize groups, then rebuild editor state.
     fn delete_server(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.backend.update(cx, |b, bcx| {
             if let Some(p) = b.preview.as_mut() {
@@ -203,8 +204,9 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Поповер «Данные n/8» (порт egui `feed_button`): кнопка с числом включённых
-    /// фид-флагов ядра; клик раскрывает 8 чекбоксов приёма данных (пишут в draft).
+    /// Build the `Data n/8` dropdown ported from egui's `feed_button`.
+    ///
+    /// The trigger reports enabled feed flags; its eight checkbox items update the draft.
     fn feed_popover(&self, cx: &Context<Self>, i: usize) -> impl IntoElement {
         let feed = {
             let b = self.backend.read(cx);
@@ -224,9 +226,9 @@ impl SettingsView {
                     format!("{} ({})", t!(key), t!("conn.filter_note")),
                 )
                 .checked(cur)
-                // Явное различие вкл/выкл: включённые — зелёные с галочкой, выключенные —
-                // приглушённые без галочки (чтобы сразу видеть, какой пункт отключён, а не
-                // угадывать по счётчику «7/8»).
+                // Make states explicit: enabled items are green and checked, while disabled
+                // items are muted and unchecked, so the user need not infer the missing flag from
+                // a count such as `7/8`.
                 .tone(if cur {
                     MoonTone::Positive
                 } else {
@@ -260,8 +262,10 @@ impl SettingsView {
             .items(items)
     }
 
-    /// Строка сервера в таблице (порт egui `servers_panel` row): Акт·Окно·Имя·Ключ·
-    /// Группа·[Данные]·Цвет·Удалить·↻реконнект·●статус.
+    /// Render a server row ported from egui's `servers_panel`.
+    ///
+    /// Columns contain active and window toggles, name, key, group, chart bundle, feed flags,
+    /// color, delete, reconnect, and status controls.
     pub(super) fn server_row(
         &self,
         cx: &Context<Self>,
@@ -271,7 +275,8 @@ impl SettingsView {
         active: bool,
         status: Option<ConnStatus>,
     ) -> impl IntoElement {
-        // Реконнект — только для активных ядер (у неактивных нет сессии).
+        // Show reconnect only when the draft server is active. Session status still comes from
+        // the live saved runtime and may not yet match unsaved draft activity.
         let recon: AnyElement = if active {
             div()
                 .id(SharedString::from(format!("rec-tip-{i}")))
@@ -327,9 +332,9 @@ impl SettingsView {
             )
             .child(
                 Self::cell(200.0, true).child(
-                    // Поле ключа + ⧉-кнопка «Вставить» РЯДОМ (не в компоненте — порядок встроенных
-                    // аффиксов задаёт форк, между глаз/× не встроить). set_value не эмитит Change →
-                    // affix пишет и в draft.
+                    // Place the key field and Paste glyph side by side. The fork fixes built-in
+                    // affix order, so the button cannot be inserted between visibility and clear.
+                    // `set_value` emits no Change event, so Paste also writes directly to draft.
                     h_flex()
                         .w_full()
                         .gap_1()
@@ -339,10 +344,10 @@ impl SettingsView {
                                 MoonInput::new(SharedString::from(format!("key-{i}")))
                                     .state(&row.key)
                                     .small()
-                                    // Placeholder намекает, что сюда ждём ключ ядра.
+                                    // Indicate that this field expects a core key.
                                     .placeholder(t!("conn.key_ph").to_string())
                                     .mask_toggle()
-                                    // Кнопка очистки (×) — быстро удалить/заменить ключ.
+                                    // Allow the key to be cleared quickly before replacement.
                                     .cleanable(true),
                             ),
                         )
@@ -385,10 +390,11 @@ impl SettingsView {
             )))
     }
 
-    /// Ячейка-колонка таблицы ядер: ОДИН flex-спек, общий для шапки и строк (ключ к тому,
-    /// чтобы колонки не съезжали — обе раскладки тянутся/жмутся одинаково). `grow=true` —
-    /// растягивается под ширину (flex-grow, shrink по умолчанию); `grow=false` — фикс. ширина
-    /// (`flex-grow:0`+`flex-shrink:0`). `basis` = базовая ширина колонки.
+    /// Build the shared column flex specification used by both the header and server rows.
+    ///
+    /// Sharing this layout keeps columns aligned as they grow or shrink. `basis` is the base
+    /// width; `grow = true` enables flex growth with default shrinking, while `false` disables
+    /// both growth and shrinking.
     fn cell(basis: f32, grow: bool) -> Div {
         let d = div().flex_basis(px(basis));
         if grow {
@@ -398,9 +404,10 @@ impl SettingsView {
         }
     }
 
-    /// Заголовок колонки с тултипом (порт egui `head_tip`). Подпись помечена подчёркиванием
-    /// + чуть ярче цветом — сигнал «наведи, есть подсказка». `pad`/`grow` — как в `col_head`.
-    /// Тултип — штатный `MoonTooltipView` движка; длинный текст переносится внутри max width.
+    /// Build a column header with a tooltip, ported from egui's `head_tip`.
+    ///
+    /// Underlining and brighter text signal hover help. `pad` and `grow` match the column layout;
+    /// `MoonTooltipView` wraps long text within its maximum width.
     fn col_head_tip(
         id: &'static str,
         label: &str,
@@ -428,8 +435,9 @@ impl SettingsView {
             })
     }
 
-    /// Подпись-«есть подсказка» произвольной ширины (не колонка): подчёркивание + переносящий
-    /// тултип. Для заголовков секций/групп, где надо пояснить смысл при наведении.
+    /// Build an arbitrary-width help label with underlining and a wrapping tooltip.
+    ///
+    /// Used for section or group headings that need an explanation on hover rather than a column.
     pub(super) fn hint_label(
         id: &'static str,
         label: impl Into<SharedString>,
@@ -449,9 +457,10 @@ impl SettingsView {
             })
     }
 
-    /// Шапка колонок таблицы ядер: тот же левый отступ (`pl 20`), что у заголовка группы,
-    /// чтобы колонки строк вставали ровно под подписями. Хвостовые плейсхолдеры
-    /// (цвет/удалить/реконнект/статус) ОБЯЗАТЕЛЬНЫ — иначе растяжимые колонки шапки съедут.
+    /// Render the core table header with the same 20px left inset as group branches.
+    ///
+    /// Trailing placeholders for color, delete, reconnect, and status are required to keep the
+    /// growable header columns aligned with server rows.
     pub(super) fn conn_col_head_row(p: MoonPalette, cx: &App) -> impl IntoElement {
         h_flex()
             .w_full()
@@ -528,7 +537,7 @@ impl SettingsView {
                 p,
                 cx,
             ))
-            // Хвостовые плейсхолдеры под колонки строки (цвет/удалить/реконнект/статус).
+            // Reserve the row's trailing color, delete, reconnect, and status columns.
             .child(Self::cell(110.0, false))
             .child(Self::cell(24.0, false))
             .child(Self::cell(24.0, false))

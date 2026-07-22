@@ -1,9 +1,10 @@
-# Панель «Отчёт» (сделки): фильтры, итоги, значения ячеек.
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
-# Заголовки колонок НЕ переводятся (имя колонки БД как есть) — см. columns::header_for.
+# Report panel (trades): filters, totals, and cell values.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
+# Column headers are not localized. `columns::header_for` uses raw DB names except for the legacy
+# `profitbtc`/`spentbtc`/`gainedbtc` names, which display as `profit`/`spent`/`gained`.
 _version: 2
 
-# --- Значения ячеек стороны/эмулятора ---
+# --- Side/emulator cell values ---
 report.side.short:
   ru: "Шорт"
   en: "Short"
@@ -17,7 +18,7 @@ report.cell.emu:
   en: "emu"
   es: "emu"
 
-# --- Фильтры и комбобоксы ---
+# --- Filters and combo boxes ---
 report.filter.all:
   ru: "Все"
   en: "All"
@@ -50,13 +51,13 @@ report.filter.date_ph:
   ru: "ГГГГ-ММ-ДД"
   en: "YYYY-MM-DD"
   es: "AAAA-MM-DD"
-# Глиф ▾ — отдельно в коде; в словаре только текст.
+# The ▦ glyph is added separately in code; the dictionary contains text only.
 report.columns_menu:
   ru: "Колонки"
   en: "Columns"
   es: "Columnas"
-# Меню сохранения отчёта в файл (кнопка ⇩ левее «Колонок»). Период выборки —
-# текущий фильтр панели (пресет/даты С:–По:). «CSV»/«Excel» не переводим.
+# Menu for saving the report to a file (the ⇩ button left of Columns). The query period comes from
+# the panel's current filter (preset or From/To dates). CSV and Excel remain untranslated.
 report.export_menu:
   ru: "Сохранить отчёт в файл (CSV / Excel)"
   en: "Save report to a file (CSV / Excel)"
@@ -86,7 +87,7 @@ report.export.xlsx_all:
   en: "Excel — all columns"
   es: "Excel — todas las columnas"
 
-# --- Пустые состояния и итоги ---
+# --- Empty states and totals ---
 report.all_cols_hidden:
   ru: "Все колонки скрыты — включите в «Колонки»."
   en: "All columns are hidden — enable some in “Columns”."
@@ -143,12 +144,12 @@ report.cores_n:
   ru: "Ядер: %{n}"
   en: "Cores: %{n}"
   es: "Núcleos: %{n}"
-# Подпись поля-списка ядер — одинаковая с «Ордерами» (orders.all_cores).
+# The core-list field label matches Orders (orders.all_cores).
 report.all_cores:
   ru: "Все ядра"
   en: "All cores"
   es: "Todos los núcleos"
-# Поле-список типа ордеров (как orders.kind.*).
+# Order-type list field, matching orders.kind.*.
 report.kind.all:
   ru: "Все"
   en: "All"

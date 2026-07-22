@@ -63,14 +63,14 @@ fn applies_theme_hotkeys_and_colors() {
     assert_eq!(cfg.hotkeys.cancel_buy, "alt-z");
     assert_eq!(cfg.hotkeys.order_size[2], "ctrl-3");
     assert_eq!(cfg.theme.get(false).candle_up, [0, 255, 0]);
-    // graphFont красит все четыре нейтральные подписи светлой темы.
+    // graphFont colors all four neutral labels in the light theme.
     let light = cfg.theme.get(true);
     assert_eq!(light.axis_label, [1, 2, 3]);
     assert_eq!(light.caption_label, [1, 2, 3]);
     assert_eq!(light.readout_label, [1, 2, 3]);
     assert_eq!(light.label_neutral, [1, 2, 3]);
     assert_eq!(cfg.orders.get(false).buy.color, [9, 8, 7]);
-    // Тёмная тема подписей НЕ тронута (light-пункт).
+    // The dark-theme labels remain UNCHANGED by the light item.
     assert_ne!(cfg.theme.get(false).axis_label, [1, 2, 3]);
 }
 
@@ -87,21 +87,21 @@ fn selection_filter_and_unknown_ids() {
         vec![],
         vec![],
     );
-    // Выбран только cancel_buy и bogus.
+    // Only cancel_buy and bogus are selected.
     let selected: HashSet<String> =
         ["hotkey.cancel_buy".to_string(), "bogus.id".to_string()].into();
     let out = apply_local(&mut cfg, &plan, &selected, &[]);
     assert_eq!(out.applied, 1);
     assert_eq!(out.unknown_ids, vec!["bogus.id".to_string()]);
     assert_eq!(cfg.hotkeys.cancel_buy, "alt-z");
-    assert!(cfg.hotkeys.panic_sell.is_empty()); // не выбран — не тронут
+    assert!(cfg.hotkeys.panic_sell.is_empty()); // Not selected, so it remains unchanged.
 }
 
 /// Protects per-core changes from modifying cores outside the selected uid set.
 #[test]
 fn per_core_targets_only_selected_cores() {
     let mut cfg = AppConfig::blank(None);
-    // Три ядра; целимся в id 1 и 3.
+    // Three cores, targeting ids 1 and 3.
     for id in 1..=3u64 {
         cfg.servers.push(crate::config::ServerConfig {
             id,
@@ -137,6 +137,6 @@ fn per_core_targets_only_selected_cores() {
     let sizes = Some([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     assert_eq!(cfg.servers[0].order_sizes, sizes);
     assert_eq!(cfg.servers[0].order_size_sel, Some(3));
-    assert_eq!(cfg.servers[1].order_sizes, None); // ядро 2 не выбрано
+    assert_eq!(cfg.servers[1].order_sizes, None); // Core 2 is not selected.
     assert_eq!(cfg.servers[2].order_sizes, sizes);
 }

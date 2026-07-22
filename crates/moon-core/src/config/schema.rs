@@ -1,9 +1,9 @@
-//! Форматы файлов конфига на диске (serde). Здесь — ТОЛЬКО структуры данных:
-//! без чтения/записи (см. `store`) и без слияния с рантаймом (см. `reconcile`).
+//! On-disk config formats (serde). This module contains ONLY data structures, with no
+//! reading/writing (see `store`) or runtime merging (see `reconcile`).
 //!
-//! Forward-compat: каждое новое поле помечаем `#[serde(default = …)]`, тогда старый
-//! файл без него читается без ошибки (поле получает дефолт), а `version` ниже
-//! позволяет один раз дослоить эти дефолты обратно на диск (см. `AppConfig::load`).
+//! Forward compatibility: mark every new field with `#[serde(default = …)]` so an older
+//! file without it remains readable and receives the default. The `version` below allows
+//! these defaults to be written back once (see `AppConfig::load`).
 
 use serde::{Deserialize, Serialize};
 
@@ -22,14 +22,14 @@ use crate::market::MarketDataMode;
 /// `config::backup` preserves the original order for rollback.
 pub const SCHEMA_VERSION: u32 = 15;
 
-/// Версия схемы, начиная с которой рантайм-`CoreId == uid` (стабильный). Конфиги
-/// старее неё хранили в `charts.json` ПОЗИЦИОННЫЕ CoreId — их надо один раз
-/// перепривязать к uid. Фиксированная (НЕ `SCHEMA_VERSION`), чтобы будущие bump'ы
-/// схемы не запускали ремап повторно. См. `reconcile::merge`, `chart_persist::remap_core_ids`.
+/// Schema version from which runtime `CoreId == uid` and is stable. Older configs stored
+/// POSITIONAL CoreIds in `charts.json`, which must be rebound to uids once. This is fixed,
+/// NOT `SCHEMA_VERSION`, so future schema bumps do not repeat the remap. See
+/// `reconcile::merge` and `chart_persist::remap_core_ids`.
 pub const COREID_UID_VERSION: u32 = 11;
 
-/// Старые файлы без поля `version` читаются как 0 → меньше SCHEMA_VERSION →
-/// триггерят досейв с дослоением новых дефолтов.
+/// Older files without `version` load as 0, below SCHEMA_VERSION, triggering a save
+/// that writes newly defaulted fields.
 pub fn default_version() -> u32 {
     0
 }
@@ -100,15 +100,15 @@ pub enum UiThemeMode {
     Dark,
 }
 
-/// Запись сервера в servers.enc (секрет + стабильный uid).
+/// Server entry in servers.enc (secret + stable uid).
 ///
-/// host/port НЕ храним: они зашиты в самом ключе Moonbot (см. `parse_key_info` в
-/// feed/live.rs). Старые servers.enc с полями host/port читаются без ошибки —
-/// неизвестные поля serde просто игнорирует, подключение пойдёт по ключу.
+/// host/port are NOT stored because they are encoded in the Moonbot key itself (see
+/// `parse_key_info` in feed/live/mod.rs). Older servers.enc files with host/port fields still
+/// load: serde ignores unknown fields and connection details come from the key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerEntry {
-    /// Стабильный идентификатор ядра (см. `ServerConfig::uid`). 0 в старых файлах →
-    /// присваивается при первой загрузке (см. `reconcile::merge`).
+    /// Stable core identifier (see `ServerConfig::uid`). A 0 in older files is assigned
+    /// on first load (see `reconcile::merge`).
     #[serde(default)]
     pub uid: u64,
     pub name: String,
@@ -122,14 +122,14 @@ pub struct ServersFile {
     pub servers: Vec<ServerEntry>,
 }
 
-/// По-серверная мета в settings.toml (открытая, без секретов).
-/// Привязка к серверу — по `uid` (стабильно); для старых файлов без uid
-/// один раз привязываемся по `name` (см. `reconcile::merge`).
+/// Per-server metadata in plaintext settings.toml, without secrets.
+/// Binds to a server by stable `uid`; older files without a uid bind once by `name`
+/// (see `reconcile::merge`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerMeta {
     #[serde(default)]
     pub uid: u64,
-    /// Дублируется из servers.enc — для читаемости открытого файла и legacy-привязки.
+    /// Duplicated from servers.enc for plaintext-file readability and legacy binding.
     pub name: String,
     #[serde(default = "servers::default_true")]
     pub active: bool,
@@ -143,18 +143,18 @@ pub struct ServerMeta {
     pub market: String,
     #[serde(default = "servers::default_color")]
     pub color: [u8; 3],
-    /// Имя чарт-связки AddToChart (см. `ServerConfig::chart_bundle`). Пусто = по
-    /// глобальной настройке. Старые файлы → пустая строка (дефолт).
+    /// AddToChart chart-bundle name (see `ServerConfig::chart_bundle`). Empty uses the
+    /// global setting. Older files default to an empty string.
     #[serde(default)]
     pub chart_bundle: String,
-    /// 6 пресетов размера ручного ордера (F1-F6) в базовой монете. `None`/старые файлы →
-    /// дефолт по базе ядра (см. `ServerConfig::order_sizes`).
+    /// Six manual-order size presets (F1-F6) in the base coin. `None`/older files use
+    /// defaults for the core's base (see `ServerConfig::order_sizes`).
     #[serde(default)]
     pub order_sizes: Option<[f64; 6]>,
-    /// Последний выбранный пресет размера (индекс 0..=5), см. `ServerConfig::order_size_sel`.
+    /// Last selected size preset (index 0..=5); see `ServerConfig::order_size_sel`.
     #[serde(default)]
     pub order_size_sel: Option<usize>,
-    /// Стратегия алертов по умолчанию (id вида «Alerts»), см. `ServerConfig::default_alert_strategy`.
+    /// Default alert strategy (id of type "Alerts"); see `ServerConfig::default_alert_strategy`.
     #[serde(default)]
     pub default_alert_strategy: u64,
 }
@@ -163,58 +163,57 @@ pub struct ServerMeta {
 pub struct SettingsFile {
     #[serde(default = "default_version")]
     pub version: u32,
-    /// Язык интерфейса. Отсутствует в старых файлах → serde-дефолт = системная локаль.
+    /// Interface language. Missing in older files means the serde default, the system locale.
     #[serde(default)]
     pub language: Language,
-    /// Источник рыночных данных (дедуп по провайдеру / по ядрам). Старые файлы → дефолт.
+    /// Market-data source (deduplicated by provider or per core). Older files use the default.
     #[serde(default)]
     pub market_mode: MarketDataMode,
-    /// Отдельная чарт-вкладка на каждое ядро (AddToChart): true = 1-HL-ядро,
-    /// false = все ядра в одной вкладке 1-HL. Старые файлы → дефолт true.
+    /// Separate chart tab per core (AddToChart): true = 1-HL-core, false = all cores in
+    /// one 1-HL tab. Older files default to true.
     #[serde(default = "servers::default_true")]
     pub charts_split_by_core: bool,
-    /// AddToChart-вкладка с несколькими графиками: true = вертикальный скролл (фикс. высота
-    /// каждого графика), false = делить высоту окна (как раньше — масштаб по вертикали).
-    /// Старые файлы → дефолт false.
+    /// An AddToChart tab with multiple charts: true enables vertical scrolling with fixed chart
+    /// heights; false divides the window height as before. Older files default to false.
     #[serde(default)]
     pub charts_stack_scroll: bool,
-    /// Скролл-режим: сжимать по заполнению — скролл не появляется, графики рисуются заданной
-    /// высоты, пока не упрутся в конец окна, затем сжимаются (как без скролла). Дефолт false.
+    /// Scroll mode compression: charts retain their configured height until they fill the window,
+    /// then shrink as in non-scroll mode instead of showing a scrollbar. Defaults to false.
     #[serde(default)]
     pub charts_stack_compress: bool,
-    /// Скролл-режим: высота одного графика в логических px. Дефолт 360.
+    /// Height of one chart in logical pixels in scroll mode. Defaults to 360.
     #[serde(default = "default_chart_stack_height")]
     pub chart_stack_height: u16,
-    /// Раздельные зоны управления: true = ставить ордера и двигать линии ТОЛЬКО в зоне стакана;
-    /// false = по всей области графика. Дефолт true.
+    /// Separate control zones: true allows placing orders and moving lines ONLY in the order-book
+    /// area; false allows it across the whole chart. Defaults to true.
     #[serde(default = "servers::default_true")]
     pub separate_control_zones: bool,
-    /// Авто-закрытие графиков Main при неактивности окна, сек. 0 = выключено. Дефолт 0.
+    /// Auto-close delay for Main charts when the window is inactive, in seconds. 0 disables it.
     #[serde(default)]
     pub main_idle_close_secs: u32,
-    /// Писать лог (приложения и ядер) в файлы logs/<дата>_<источник>.log. Дефолт on.
+    /// Whether to write application and core logs to `logs/<date>_<source>.log`. Defaults to on.
     #[serde(default = "servers::default_true")]
     pub log_to_file: bool,
-    /// Сколько дней хранить файлы лога; старее — удаляются. 0 = хранить всё. Дефолт 14.
+    /// Number of days to retain log files; older files are deleted. 0 keeps all. Defaults to 14.
     #[serde(default = "servers::default_log_retention_days")]
     pub log_retention_days: u32,
-    /// Прибавка к базовым размерам UI-шрифтов в logical px. Дефолт +2: на 1x
-    /// дизайнерский 10px текст становится 12px, без полного zoom интерфейса.
+    /// Addition to base UI font sizes in logical pixels. Default +2 turns designed 10 px text
+    /// into 12 px at 1x without zooming the whole interface.
     #[serde(default = "default_ui_font_delta")]
     pub ui_font_delta: f32,
-    /// Тёмная/светлая тема MoonUI. Открытая настройка: это не секрет и не chart theme.
+    /// Dark/light MoonUI theme. This plaintext setting is neither a secret nor the chart theme.
     #[serde(default)]
     pub ui_theme_mode: UiThemeMode,
-    /// Общий масштаб геометрии UI. Пока без публичной ручки, но хранится рядом с
-    /// font_delta, чтобы компонентная тема имела один источник правды.
+    /// Overall UI geometry scale. It currently has no public control but is stored beside
+    /// font_delta so the component theme has one source of truth.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
-    /// Множитель бюджета retained chart history относительно RAM-based базы.
-    /// 100 = авто-база, 800 = 8x, как Delphi UseMemForCharts.
+    /// Retained chart-history budget multiplier relative to the RAM-based baseline.
+    /// 100 = automatic baseline, 800 = 8x, as in Delphi UseMemForCharts.
     #[serde(default = "default_chart_memory_percent")]
     pub chart_memory_percent: u16,
-    /// Legacy (schema < v13): хоткеи жили секцией здесь, теперь — в отдельном
-    /// переносимом `hotkeys.toml`. Читаем для одноразовой миграции, не пишем.
+    /// Legacy (schema < v13): hotkeys lived in this section and now use a separate portable
+    /// `hotkeys.toml`. Read for one-time migration but never written.
     #[serde(default, skip_serializing)]
     pub hotkeys: HotkeysConfig,
     #[serde(default)]

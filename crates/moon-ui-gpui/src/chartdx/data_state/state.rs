@@ -1,4 +1,4 @@
-//! Жизненный цикл/сигнатуры/frame `ChartDataState` (вынос из data_state.rs, verbatim).
+//! `ChartDataState` lifecycle, signatures, and frame handling.
 
 use super::*;
 
@@ -134,8 +134,9 @@ impl ChartDataState {
         true
     }
 
-    /// Применить геометрию слота из bounds канваса (логич. px) к движку: размер/origin/pixel-scale.
-    /// Источник — `GpuFrameInfo` (форк), синхронно в `frame()` → own-pass всегда в актуальном слоте.
+    /// Applies slot geometry from logical-pixel canvas bounds to the engine's size, origin, and
+    /// pixel scale. `frame()` synchronously obtains it from the fork's `GpuFrameInfo`, keeping the
+    /// own pass in the current slot.
     fn apply_slot_geometry(&mut self, info: &GpuFrameInfo) {
         if info.bounds.is_empty() {
             return;
@@ -157,7 +158,7 @@ impl ChartDataState {
         self.last_ppp = sf;
         self.slot_bounds = Some(info.bounds);
         let mut st = self.render.borrow_mut();
-        st.set_slot_origin(ox, oy); // self-guard: dirty/present только при смене
+        st.set_slot_origin(ox, oy); // The setter dirties and presents only when the value changes.
         st.set_pixel_scale(sf);
     }
 
@@ -175,10 +176,10 @@ impl ChartDataState {
     }
 
     pub(crate) fn frame(&mut self, info: GpuFrameInfo) -> GpuFrameDecision {
-        // Геометрия слота — СИНХРОННО из info.bounds (форк отдаёт реальные bounds канваса этого
-        // кадра, ДО present). Применяем до pull/sync, чтобы own-pass рисовал в текущем слоте без
-        // лага probe→notify→render→present (1–2 кадра): иначе при рефлоу стека освободившийся/
-        // сдвинутый слот кадр-два мигал clear'ом окна.
+        // Apply slot geometry synchronously from info.bounds, which the fork provides for this
+        // frame before presentation. Doing this before pull/sync lets the own pass draw in the
+        // current slot without the one- or two-frame probe-to-notify-to-render-to-present delay;
+        // otherwise a vacated or shifted slot flashes the window clear during stack reflow.
         self.apply_slot_geometry(&info);
         if !info.presentable || info.bounds.is_empty() {
             return self.render.borrow_mut().frame(info);

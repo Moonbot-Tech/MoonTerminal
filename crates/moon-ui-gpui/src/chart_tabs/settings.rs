@@ -1,8 +1,8 @@
-//! `ChartTabs`: per-вкладочные настройки (контроллер). Геттеры текущих настроек активной
-//! вкладки (`active_*`: раскладка/ориентация/стакан/зона/авто-пин/масштаб), применение ко всем
-//! стекам/окнам группы (`apply_layout_to_all` + дренаж запросов выносных окон) и реализация
-//! [`LayoutPopupHost`] — общая логика попапа ⚙ и одиночных применений (`apply_tab_setting`)
-//! живёт в [`super::common`], отрисовка попапа — в [`super::layout_popup`].
+//! `ChartTabs` per-tab settings controller. It provides active-tab setting getters (`active_*` for
+//! layout, orientation, order book, zone, auto-pin, and scale), applies settings to every group
+//! stack and window through `apply_layout_to_all` plus detached-window request draining, and
+//! implements [`LayoutPopupHost`]. Shared ⚙ popup and single-setting application logic through
+//! `apply_tab_setting` lives in [`super::common`]; popup rendering lives in [`super::layout_popup`].
 
 use gpui::*;
 
@@ -14,8 +14,8 @@ use moon_core::config::ChartBucket;
 use moon_ui::MoonInputState;
 
 impl ChartTabs {
-    /// Ключ персиста активной вкладки: Main → (0, Shared); AddToChart/Custom → (num, bucket).
-    /// (Для Custom персист всё равно пропускается — см. `persist_active`.)
+    /// Return the active tab's persistence key: Main is `(0, Shared)`; AddToChart and Custom use
+    /// `(num, bucket)`. Persistence still skips Custom tabs; see `persist_active`.
     pub(super) fn active_stack_key(&self) -> (u32, ChartBucket) {
         match &self.active {
             Tab::Main => (0, ChartBucket::Shared),
@@ -23,13 +23,15 @@ impl ChartTabs {
         }
     }
 
-    /// Кастомная (мульти-монетная) вкладка активна? Влияет на юниверс поиска монеты (все ядра
-    /// группы) и на гейтинг подписок стаканов по фокусу.
+    /// Return whether a custom multi-market tab is active.
+    ///
+    /// This selects all group cores as the market-search universe and gates order-book subscriptions
+    /// by focus.
     pub(super) fn active_is_custom(&self) -> bool {
         matches!(self.active, Tab::Custom(..))
     }
 
-    /// Активный Add/Custom-стек (None для Main / если не найден).
+    /// Return the active Add or Custom stack, or `None` for Main or a missing stack.
     pub(super) fn active_stack(&self) -> Option<Entity<AddChartStack>> {
         match &self.active {
             Tab::Main => None,
@@ -37,7 +39,7 @@ impl ChartTabs {
         }
     }
 
-    /// Per-tab режим раскладки активной вкладки (None = дефолт Fit).
+    /// Return the active tab's per-tab layout mode, with `None` meaning the Fit default.
     pub(super) fn active_layout_mode(&self, cx: &App) -> Option<StackLayoutMode> {
         match &self.active {
             Tab::Main => self.main.read(cx).layout_mode(),
@@ -47,7 +49,7 @@ impl ChartTabs {
         }
     }
 
-    /// Per-tab высота Fit активной вкладки.
+    /// Return the active tab's per-tab Fit size.
     pub(super) fn active_layout_height_fit(&self, cx: &App) -> Option<u16> {
         match &self.active {
             Tab::Main => self.main.read(cx).layout_height_fit(),
@@ -57,7 +59,7 @@ impl ChartTabs {
         }
     }
 
-    /// Per-tab высота Scroll активной вкладки.
+    /// Return the active tab's per-tab Scroll size.
     pub(super) fn active_layout_height_scroll(&self, cx: &App) -> Option<u16> {
         match &self.active {
             Tab::Main => self.main.read(cx).layout_height_scroll(),
@@ -67,7 +69,7 @@ impl ChartTabs {
         }
     }
 
-    /// Стакан включён на активной вкладке (None → дефолт вкл).
+    /// Return whether the active tab enables the order book, defaulting to enabled for `None`.
     pub(super) fn active_orderbook_enabled(&self, cx: &App) -> bool {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).orderbook_enabled(),
@@ -78,7 +80,7 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
-    /// Трейды ликвидаций рисуются на активной вкладке (None → дефолт вкл).
+    /// Return whether the active tab draws liquidation trades, defaulting to enabled for `None`.
     pub(super) fn active_liquidations_enabled(&self, cx: &App) -> bool {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).liquidations_enabled(),
@@ -89,7 +91,7 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
-    /// Заливка зоны управления включена на активной вкладке (None → дефолт вкл).
+    /// Return whether the active tab fills the control zone, defaulting to enabled for `None`.
     pub(super) fn active_show_zone(&self, cx: &App) -> bool {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).show_zone(),
@@ -100,7 +102,7 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
-    /// Авто-пин при ордере включён на активной вкладке (None → дефолт выкл).
+    /// Return whether the active tab auto-pins on an order, defaulting to disabled for `None`.
     pub(super) fn active_auto_pin(&self, cx: &App) -> bool {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).auto_pin(),
@@ -111,7 +113,7 @@ impl ChartTabs {
         v.unwrap_or(false)
     }
 
-    /// Позиции кнопок Cancel Buy / Panic Sell активной вкладки (None → дефолт Right).
+    /// Return the active tab's Cancel Buy and Panic Sell button positions, defaulting to Right.
     pub(super) fn active_action_btn_pos(&self, cx: &App) -> (ChartBtnPos, ChartBtnPos) {
         let (c, pp) = self.active_action_btn_pos_opt(cx);
         (c.unwrap_or_default(), pp.unwrap_or_default())
@@ -127,7 +129,7 @@ impl ChartTabs {
         }
     }
 
-    /// Положение оси цен активной вкладки (None → дефолт Left).
+    /// Return the active tab's price-axis position, defaulting to Left for `None`.
     pub(super) fn active_price_axis_pos(&self, cx: &App) -> crate::chart_persist::PriceAxisPos {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).price_axis_pos(),
@@ -138,7 +140,7 @@ impl ChartTabs {
         v.unwrap_or_default()
     }
 
-    /// Видимость оси времени активной вкладки (None → дефолт вкл).
+    /// Return the active tab's time-axis visibility, defaulting to enabled for `None`.
     pub(super) fn active_time_axis_visible(&self, cx: &App) -> bool {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).time_axis_visible(),
@@ -149,7 +151,7 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
-    /// Видимость подписей у линий активной вкладки (None → дефолт вкл).
+    /// Return the active tab's line-label visibility, defaulting to enabled for `None`.
     pub(super) fn active_line_labels(&self, cx: &App) -> bool {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).line_labels(),
@@ -160,7 +162,7 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
-    /// Видимость подписей у перекрестия активной вкладки (None → дефолт вкл).
+    /// Return the active tab's crosshair-label visibility, defaulting to enabled for `None`.
     pub(super) fn active_cursor_labels(&self, cx: &App) -> bool {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).cursor_labels(),
@@ -171,7 +173,9 @@ impl ChartTabs {
         v.unwrap_or(true)
     }
 
-    /// Ориентация стека активной вкладки (None → дефолт Vertical).
+    /// Return the active tab's optional stack orientation unchanged.
+    ///
+    /// Popup and layout consumers resolve `None` to the Vertical default.
     pub(super) fn active_layout_orientation(&self, cx: &App) -> Option<StackOrientation> {
         match &self.active {
             Tab::Main => self.main.read(cx).layout_orientation(),
@@ -181,7 +185,7 @@ impl ChartTabs {
         }
     }
 
-    /// Масштаб цены активной вкладки (None = Авто).
+    /// Return the active tab's price scale, with `None` meaning Auto.
     pub(super) fn active_scale_value(&self, cx: &App) -> Option<f32> {
         match &self.active {
             Tab::Main => self.main.read(cx).scale(),
@@ -191,9 +195,11 @@ impl ChartTabs {
         }
     }
 
-    /// Применить ВСЕ настройки вкладки-источника ко ВСЕМ стекам группы: режим+высоты раскладки,
-    /// масштаб цены и галку стакана. `include_main`: трогать ли Main (true — из попапа Main → ко
-    /// всем окнам; false — из чартов → Main не трогаем). Персист каждой вкладки.
+    /// Apply all layout-popup settings plus price scale from a source tab to every group stack.
+    ///
+    /// This deliberately does not copy candle view or X scale. `include_main` controls Main: `true`
+    /// from Main's popup includes it, while `false` from charts leaves it unchanged. Each tab is
+    /// persisted.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_layout_to_all(
         &mut self,
@@ -256,7 +262,7 @@ impl ChartTabs {
                 s.cursor_labels = Some(curl);
             });
         }
-        // «Чарты» = add-вкладки в стрипе + кастомные + откреплённые в окна (стеки в self.detached).
+        // "Charts" includes Add tabs in the strip, Custom tabs, and window-detached stacks in `self.detached`.
         let targets: Vec<(u32, ChartBucket, Entity<AddChartStack>)> = self
             .add
             .iter()
@@ -301,11 +307,10 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// Применить настройки отображения свечей (и X-масштаб окна-источника, если задан)
-    /// ко ВСЕМ вкладкам/окнам группы (кнопка ⧉ попапа ❚) + обновить глобальные дефолты —
-    /// новые вкладки/окна наследуют. `include_main` — как у ⚙: Main трогаем ТОЛЬКО если
-    /// попап открыт на нём; иначе Main пришпиливается к своему текущему виду (глобальный
-    /// дефолт ниже меняется — без пришпиливания Main «поехал» бы через фолбэк).
+    /// Apply candle rendering settings, plus the source window's X scale when set, to ALL group
+    /// tabs and windows through the ❚ popup's ⧉ button, then update the defaults inherited by new
+    /// tabs and windows. As with ⚙, `include_main` changes Main ONLY when its own popup is open;
+    /// otherwise Main is pinned to its current view before the global fallback changes.
     pub(super) fn apply_candle_view_to_all(
         &mut self,
         cfg: moon_core::market::CandleViewCfg,
@@ -351,8 +356,8 @@ impl ChartTabs {
         self.backend.update(cx, |b, _| {
             b.layout.candle_view = cfg;
             if let Some(ppm) = x_ppm {
-                // Масштаб — в СВОЮ группу и во все известные группы-окна: их новые
-                // графики наследуют (живые окна других групп подхватят на своих чартах).
+                // Store scale for THIS group and every known group window so their new charts
+                // inherit it. Live windows from other groups update their own charts separately.
                 b.layout.chart_x_ppm_by_group.insert(group, ppm);
                 let groups: Vec<String> = b.layout.groups.keys().cloned().collect();
                 for g in groups {
@@ -364,9 +369,10 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// [Shift+СКМ] на графике НАШЕГО окна: применить X-масштаб ко всем стекам окна
-    /// (Main + вкладки; выносные окна группы — НЕ трогаем, у них свой скоуп) + persist
-    /// в `layout.chart_x_ppm_by_group` (новые графики окна наследуют).
+    /// Apply X scale from Shift+middle-click on OUR window's chart to every stack in that window.
+    ///
+    /// This covers Main and tabs but not the group's detached windows, which have their own scope,
+    /// and persists to `layout.chart_x_ppm_by_group` for new charts to inherit.
     pub(super) fn drain_x_sync(&mut self, cx: &mut Context<Self>) {
         let (rev, req) = {
             let b = self.backend.read(cx);
@@ -385,7 +391,7 @@ impl ChartTabs {
         self.apply_x_ppm_to_window(ppm, cx);
     }
 
-    /// Применить X-масштаб ко всем стекам ЭТОГО окна + persist per-группа.
+    /// Apply X scale to every stack in THIS window and persist it per group.
     pub(super) fn apply_x_ppm_to_window(&mut self, ppm: f32, cx: &mut Context<Self>) {
         self.main.update(cx, |s, c| s.set_x_ppm(Some(ppm), true, c));
         let stacks: Vec<Entity<AddChartStack>> = self
@@ -405,8 +411,9 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// Дренаж запросов «применить ко всем» из выносных окон чартов ЭТОЙ группы (у них нет доступа
-    /// к стекам группы, поэтому шлют через Backend).
+    /// Drain "apply to all" requests from detached chart windows in THIS group.
+    ///
+    /// They send requests through Backend because they cannot access the group's stacks directly.
     pub(super) fn drain_apply_all(&mut self, cx: &mut Context<Self>) {
         let group = self.group.clone();
         let candle_reqs: Vec<(moon_core::market::CandleViewCfg, Option<f32>)> =
@@ -419,7 +426,7 @@ impl ChartTabs {
                 mine.into_iter().map(|(_, c, x)| (c, x)).collect()
             });
         for (cfg, x_ppm) in candle_reqs {
-            // Запрос из выносного окна — Main не трогаем (как ⚙ с include_main=false).
+            // A detached-window request leaves Main unchanged, like ⚙ with `include_main=false`.
             self.apply_candle_view_to_all(cfg, x_ppm, false, cx);
         }
         let reqs: Vec<crate::ChartApplyAll> = self.backend.update(cx, |b, _| {
@@ -452,8 +459,9 @@ impl ChartTabs {
     }
 }
 
-/// Хозяин попапа «Свечи и трейды» (кнопка ❚): цель = АКТИВНАЯ вкладка (как у ⚙);
-/// применение/persist — через `apply_tab_setting(StackSetting::CandleView)`.
+/// Host for the "Candles and Trades" ❚ popup targeting the ACTIVE tab, like ⚙.
+///
+/// Application and persistence use `apply_tab_setting(StackSetting::CandleView)`.
 impl super::candle_popup::CandlePopupHost for ChartTabs {
     fn candle_popup_open(&self) -> bool {
         self.candle_popup_open
@@ -480,7 +488,7 @@ impl super::candle_popup::CandlePopupHost for ChartTabs {
         cfg: moon_core::market::CandleViewCfg,
         cx: &mut Context<Self>,
     ) {
-        // Вместе с набором свечей копируем и X-масштаб этого окна (если задан).
+        // Copy this window's X scale with the candle settings when one is set.
         let x_ppm = self
             .backend
             .read(cx)
@@ -488,14 +496,16 @@ impl super::candle_popup::CandlePopupHost for ChartTabs {
             .chart_x_ppm_by_group
             .get(&self.group)
             .copied();
-        // Main получает копию только когда попап открыт на нём (симметрия с ⚙).
+        // Main receives a copy only when its own popup is open, matching ⚙ behavior.
         let include_main = matches!(self.active, Tab::Main);
         self.apply_candle_view_to_all(cfg, x_ppm, include_main, cx);
     }
 }
 
-/// Хозяин попапа ⚙ со стороны полоски вкладок: цель = АКТИВНАЯ вкладка (Main или Add/Custom-стек),
-/// ключ персиста — `active_stack_key`. Общая логика попапа/применений — default-методы трейта.
+/// Tab-strip host for the ⚙ popup targeting the ACTIVE Main, Add, or Custom stack.
+///
+/// `active_stack_key` supplies the persistence key; trait default methods provide shared popup and
+/// application logic.
 impl LayoutPopupHost for ChartTabs {
     fn popup_open(&self) -> bool {
         self.layout_popup_open
@@ -562,7 +572,7 @@ impl LayoutPopupHost for ChartTabs {
     fn popup_is_custom(&self, _cx: &App) -> bool {
         self.active_is_custom()
     }
-    /// Имя кастомной вкладки — для поля переименования в попапе (только Custom).
+    /// Return the custom tab name for the popup's rename field, available only for Custom tabs.
     fn seed_rename_input(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Tab::Custom(n, _) = &self.active {
             let name = self.custom_label(*n);
@@ -580,8 +590,9 @@ impl LayoutPopupHost for ChartTabs {
             }
         }
     }
-    /// «Ко всем» из попапа полоски: копируем ВСЕ настройки активной вкладки (+масштаб+стакан+
-    /// ориентация) ко всем стекам группы напрямую. `include_main` — попап открыт на Main.
+    /// Apply all active-tab layout-popup settings plus price scale directly to every group stack.
+    ///
+    /// Candle view and X scale are not copied. `include_main` indicates that the popup is open on Main.
     fn apply_all_from_popup(&mut self, cx: &mut Context<Self>) {
         let include_main = matches!(self.active, Tab::Main);
         let hf = self.read_layout_height(StackLayoutMode::Fit, cx);

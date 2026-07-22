@@ -1,16 +1,17 @@
-//! Контейнер одной панели чарта — ЛОГИКА (open/auto/prune/layout), без GPU. Порт смыслов
-//! `moon_chart::container`, но панель хранит только `ChartView` (математика вида), а не
-//! wgpu-движок: рисуем своим own-pass (`super::combo`/…). GPU-состояние слоёв живёт отдельно
-//! в `RenderState` (см. `mod.rs`), синхронизируется с этими панелями по индексу.
+//! Logic-only container for one chart panel: open, auto, prune, and layout without GPU state. It
+//! ports the semantics of `moon_chart::container`, but the panel stores only `ChartView` view math,
+//! not a wgpu engine, because rendering uses the native own-pass layers such as `super::combo`.
+//! Layer GPU state lives separately in `RenderState` (see `mod.rs`) and synchronizes to these panels
+//! by index.
 
 use moon_chart::view::{ChartView, Rect};
 use moon_core::session::CoreId;
 
-// Виды/источник панели — переиспользуем общие типы, но НЕ режимы раскладки:
-// в терминале один `ChartEngine` владеет максимум одним рынком.
+// Reuse shared panel view and source types, but NOT layout modes: one terminal `ChartEngine` owns at
+// most one market.
 pub use moon_chart::container::{ContainerKind, PaneSource};
 
-/// Применить масштаб цены к виду: None = Авто, Some(доля) = процент от цены.
+/// Apply price scale to a view: `None` means Auto; `Some(fraction)` is a fraction of price.
 fn apply_scale(view: &mut ChartView, pct: Option<f32>) {
     match pct {
         None => view.set_auto(),
@@ -18,25 +19,27 @@ fn apply_scale(view: &mut ChartView, pct: Option<f32>) {
     }
 }
 
-/// Одна панель: ядро/рынок/источник + вид (координаты). GPU-слои — в `RenderState` по индексу.
+/// One panel containing core, market, source, and coordinate view; GPU layers live by index in `RenderState`.
 #[derive(Clone)]
 pub struct Pane {
     pub core: CoreId,
     pub market: String,
     pub source: PaneSource,
     pub view: ChartView,
-    /// П.2: пользователь «приколол» AddToChart-панель → TTL не закрывает её. На Manual-панели
-    /// не влияет (они и так живут вечно). Сессионный флаг (панели сами по себе не персистятся).
+    /// Requirement 2: a user-pinned AddToChart panel does not close on TTL.
+    ///
+    /// This does not affect Manual panels, which already live indefinitely. The flag is session-only
+    /// because panels themselves are not persisted.
     pub pinned: bool,
 }
 
 #[derive(Clone)]
 pub struct Container {
-    /// Идентичность вкладки (Main / Chart{num}); используется при persist раскладки (позже).
+    /// Tab identity (`Main` or `Chart{num}`), reserved for later layout persistence.
     #[allow(dead_code)]
     pub kind: ContainerKind,
     pane: Option<Pane>,
-    /// Текущий масштаб цены контейнера (None=Авто): новые панели создаются сразу с ним.
+    /// Current container price scale, with `None` for Auto; new panels start with this value.
     scale: Option<f32>,
 }
 
@@ -116,7 +119,7 @@ impl Container {
         self.pane.is_none()
     }
 
-    /// Задать масштаб цены контейнера: применить ко ВСЕМ панелям и запомнить для будущих.
+    /// Set container price scale, applying it to ALL panels and retaining it for future panels.
     pub fn set_scale(&mut self, pct: Option<f32>) {
         self.scale = pct;
         for p in self.panes_mut() {
@@ -124,8 +127,10 @@ impl Container {
         }
     }
 
-    /// Ручное открытие монеты. Инвариант терминала: один `ChartEngine` = один рынок.
-    /// Стек нескольких графиков живёт снаружи как список отдельных `ChartPanel`.
+    /// Open a market manually.
+    ///
+    /// The terminal invariant is one market per `ChartEngine`; a multi-chart stack lives outside as
+    /// a list of separate `ChartPanel` instances.
     pub fn open_manual(&mut self, core: CoreId, market: &str, epoch_ms: f64) {
         if self.find(core, market).is_some() {
             if let Some(p) = self.pane.as_mut() {
@@ -143,8 +148,9 @@ impl Container {
         });
     }
 
-    /// AddToChart-детект для одного графика: продлить TTL или заменить рынок в этом
-    /// `ChartPanel`. Несколько графиков держит внешний `AddChartStack`, не внутренний tiled canvas.
+    /// Apply an AddToChart detect to one chart by extending TTL or replacing this `ChartPanel` market.
+    ///
+    /// The external `AddChartStack`, not an internal tiled canvas, owns multiple charts.
     pub fn push_auto(
         &mut self,
         core: CoreId,
@@ -178,7 +184,7 @@ impl Container {
         }
     }
 
-    /// Удалить истёкшие AddToChart-панели. Возвращает удалённые рынки для owner/refcount.
+    /// Remove expired AddToChart panels and return their markets for owner refcount updates.
     pub fn prune_ttl(&mut self, now_ms: f64) -> Vec<(CoreId, String)> {
         let remove = self.pane.as_ref().is_some_and(|p| match p.source {
             PaneSource::AddToChart { born_ms, ttl_ms } => !p.pinned && now_ms - born_ms >= ttl_ms,
@@ -202,14 +208,14 @@ impl Container {
         self.panes()
             .iter()
             .filter_map(|p| match p.source {
-                // Приколотые панели дедлайна не имеют (П.2).
+                // Pinned panels have no deadline under requirement 2.
                 PaneSource::AddToChart { born_ms, ttl_ms } if !p.pinned => Some(born_ms + ttl_ms),
                 _ => None,
             })
             .min_by(|a, b| a.total_cmp(b))
     }
 
-    /// Можно ли приколоть панель idx (только AddToChart с TTL; Manual/Main — нет смысла). П.2
+    /// Return whether panel `idx` can be pinned: only AddToChart with TTL, not Manual or Main.
     pub fn is_pinnable(&self, idx: usize) -> bool {
         self.pane(idx)
             .is_some_and(|p| matches!(p.source, PaneSource::AddToChart { .. }))
@@ -219,15 +225,15 @@ impl Container {
         self.pane(idx).is_some_and(|p| p.pinned)
     }
 
-    /// Переключить пин панели idx. Возвращает новое состояние (или None — индекс вне диапазона).
+    /// Toggle pinning for panel `idx`, returning its new state or `None` for an invalid index.
     pub fn toggle_pin(&mut self, idx: usize) -> Option<bool> {
         let p = self.pane_mut(idx)?;
         p.pinned = !p.pinned;
         Some(p.pinned)
     }
 
-    /// Удалить панель (закрытие крестиком в UI). Возвращает её (core, market) — для решения
-    /// об отписке от стакана. None — индекс вне диапазона.
+    /// Remove a panel from the UI close button and return its `(core, market)` for deciding whether
+    /// to release the order-book subscription. Returns `None` for an invalid index.
     pub fn remove_pane(&mut self, idx: usize) -> Option<(CoreId, String)> {
         if idx != 0 {
             return None;
@@ -236,16 +242,15 @@ impl Container {
         Some((p.core, p.market))
     }
 
-    /// Использует ли ещё какая-то панель этот (core, market) — чтобы не отписаться от стакана,
-    /// который нужен другой панели этого же чарта.
+    /// Return whether another panel still uses `(core, market)` so its order book is not released.
     pub fn uses_market(&self, core: CoreId, market: &str) -> bool {
         self.panes()
             .iter()
             .any(|p| p.core == core && p.market == market)
     }
 
-    /// Закрыть ВСЕ панели (кнопка «закрыть все графики» в выносном окне). Возвращает их
-    /// (core, market) — для отписки от стаканов.
+    /// Close ALL panels from a detached window's "close all charts" button and return their
+    /// `(core, market)` pairs for releasing order-book subscriptions.
     pub fn clear_panes(&mut self) -> Vec<(CoreId, String)> {
         self.pane
             .take()
@@ -253,7 +258,7 @@ impl Container {
             .unwrap_or_default()
     }
 
-    /// Раскладка видимой панели: (индекс панели, прямоугольник) в координатах `content` (физ. px).
+    /// Return visible panel layout as `(panel index, rectangle)` in physical `content` pixels.
     pub fn layout(&self, content: Rect) -> Vec<(usize, Rect)> {
         if self.pane.is_none() {
             return Vec::new();

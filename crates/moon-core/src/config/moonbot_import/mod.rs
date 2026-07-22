@@ -1,15 +1,17 @@
-//! Импорт настроек MoonBot из буфера обмена (`MBSC7`) — чистый parser без GPUI и без
-//! побочных эффектов. ТЗ: `docs-internal/MOONBOT_CONFIG_IMPORT.md`.
+//! Imports MoonBot settings from the clipboard (`MBSC7`) using a pure parser without GPUI
+//! or side effects.
 //!
-//! Слои:
-//! - [`transport`] — поиск `MBSC7:` в тексте, hex-заголовок, Base16384, CRC32, gzip, лимиты;
-//! - [`reader`] — bounded little-endian reader (строки `WriteStringX`, INI-списки, границы);
-//! - [`schema_v7`] — модель распакованного payload `MBSP` v7 (блоки UI v3 / Theme v1 / Ini v1;
-//!   Signals/Trading/Visual присутствие проверяем, содержимое пропускаем);
-//! - [`shortcut`] — декодер Delphi `TShortCut` (модификаторы + Windows VK).
+//! Layers:
+//! - [`transport`] finds `MBSC7:` in text and handles the hex header, Base16384, CRC32, gzip,
+//!   and limits;
+//! - [`reader`] is a bounded little-endian reader (`WriteStringX` strings, INI lists, bounds);
+//! - [`schema_v7`] models the decompressed `MBSP` v7 payload (UI v3 / Theme v1 / Ini v1
+//!   blocks; Signals/Trading/Visual presence is validated while their contents are skipped);
+//! - [`shortcut`] decodes Delphi `TShortCut` values (modifiers + Windows VK).
 //!
-//! Всё чтение — по явным little-endian примитивам, checked math, без `unsafe`. Любая
-//! порча/усечение/слишком новый формат — ошибка целиком, частичный результат не отдаём.
+//! All reads use explicit little-endian primitives and checked arithmetic without `unsafe`.
+//! Any corruption, truncation, or newer format rejects the entire import; no partial result
+//! is returned.
 
 pub mod apply;
 pub mod plan;
@@ -22,27 +24,27 @@ pub use apply::apply_local;
 pub use plan::{MoonBotImportPlan, PlanContext};
 pub use schema_v7::MoonBotConfig;
 
-/// Ошибка импорта. Сообщения — простым русским текстом (core i18n-агностичен, UI
-/// показывает как есть); каждая описывает, ЧТО именно не так, без сырых дампов payload.
+/// Import error. Messages use plain Russian text because the core is i18n-agnostic and the UI
+/// displays them as-is. Each explains WHAT is wrong without raw payload dumps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImportError {
-    /// В тексте нет `MBSC7:` (и вообще заголовка MBSC).
+    /// No supported `MBSC7:` header was found; older headers such as `MBSC6:` count as not found.
     NotFound,
-    /// Формат новее поддерживаемого (`MBSC8+` или payload-версия выше 7).
+    /// The format is newer than supported (`MBSC8+` or a payload version above 7).
     NewerFormat { found: u32 },
-    /// Синтаксис заголовка/контейнера (hex, magic, версия блока и т.п.).
+    /// Malformed transport/container header or invalid container magic.
     BadHeader(String),
-    /// Base16384: символ вне диапазона, лишний/недостающий символ, ненулевой padding.
+    /// Base16384 error: out-of-range, extra, or missing character, or nonzero padding.
     BadBase16384(String),
-    /// CRC32 сжатых данных не совпал с заявленным.
+    /// The compressed data's CRC32 does not match the declared value.
     CrcMismatch { expected: u32, actual: u32 },
-    /// Превышен жёсткий лимит размера (сжатого/распакованного/строки/списка).
+    /// A hard size limit was exceeded (compressed/decompressed data, string, or list).
     TooLarge(String),
-    /// Ошибка gzip/zlib-распаковки.
+    /// gzip/zlib decompression error.
     Decompress(String),
-    /// Данные закончились раньше, чем ожидает формат (`what` — что читали).
+    /// Data ended before the format expected it (`what` identifies the read operation).
     Truncated(String),
-    /// Недопустимое значение поля (`what` — какое и почему).
+    /// Invalid payload field or block value, including an unsupported block version.
     BadValue(String),
 }
 
@@ -70,8 +72,8 @@ impl std::fmt::Display for ImportError {
 
 impl std::error::Error for ImportError {}
 
-/// Полный разбор текста из буфера обмена: транспорт (`MBSC7` → gzip-байты → payload)
-/// плюс схема (`MBSP` v7 → [`MoonBotConfig`]). Ничего не пишет и не отправляет.
+/// Fully parses clipboard text: transport (`MBSC7` → gzip bytes → payload) plus schema
+/// (`MBSP` v7 → [`MoonBotConfig`]). Does not write or send anything.
 pub fn parse_clipboard(text: &str) -> Result<MoonBotConfig, ImportError> {
     let payload = transport::decode_transport(text)?;
     schema_v7::parse_payload(&payload)

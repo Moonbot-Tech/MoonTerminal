@@ -1,10 +1,16 @@
-//! Контент попапа «настройки ядра» (кнопка ⚙ рядом с селектором ядра в шапке). Чистый рендер:
-//! чекбоксы/кнопки строят замыкания через `backend` сами (как `controls::metric_popup_content`),
-//! числовые поля (глобальный TP / трейлинг) — персистентные сущности Shell с коммитом по Blur/Enter.
-//! Хостинг (overlay+dismiss, позиция, сид полей, confirm cancel-all) — в `shell/core_settings.rs`.
+//! Content for the core-settings popover opened by the gear button beside the header core selector.
+//! This is a pure renderer: checkboxes and buttons build their own backend closures, like
+//! `controls::metric_popup_content`, while Shell owns persistent input entities for Global TP,
+//! Trailing, V-Stop, and the blacklist. On open, `shell/core_settings.rs` seeds them from the active
+//! core but preserves the last displayed Trailing and V-Stop values when the snapshot contains zero.
+//! Subscriptions in `shell/init.rs` commit inputs on blur or Enter, commit sliders on Change, and
+//! keep numeric inputs synchronized with sliders. `shell/core_settings.rs` owns popover state,
+//! synchronizes the two blacklist editors, commits when the expanded editor collapses, and handles
+//! Cancel All confirmation.
 //!
-//! Все правки идут на `active_trade_core(group)` — то же ядро, что селектор/тулбар. Нет ядра/
-//! снимка → прочерк-заглушка.
+//! Most edits resolve `active_trade_core(group)`, the same core used by the selector and toolbar.
+//! Default Alert Strategy instead captures the core rendered into its row. A missing core or
+//! settings snapshot produces the placeholder state.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -20,12 +26,12 @@ use moon_core::session::CoreId;
 
 use crate::{Backend, design};
 
-/// Ordinal вида стратегии «Alerts» (moonproto `StrategyKindId::ALERTS = 22`).
+/// Ordinal of the Alerts strategy kind, matching MoonProto `StrategyKindId::ALERTS = 22`.
 const ALERTS_KIND: u8 = 22;
 
-/// Ряд «Стратегия алертов по умолчанию» (Def Strategy) активного ядра: выпадашка
-/// стратегий вида «Alerts» ЭТОГО ядра. Выбор пишет `Backend::default_alert_strategy[core]`,
-/// который применяется к новому алерту при постановке галки Alert.
+/// Builds the rendered core's Default Alert Strategy row from that core's Alerts strategies. A
+/// selection updates `Backend::default_alert_strategy[core]`, which is persisted in server config.
+/// Enabling an alert applies this default only when the alert's existing `strategy_id` is zero.
 fn def_alert_strategy_row(
     core: Option<CoreId>,
     filter_input: &Entity<MoonInputState>,
@@ -37,8 +43,8 @@ fn def_alert_strategy_row(
     let b = backend.read(cx);
     let cur = b.alert_def_strategy(core);
     let filter = filter_input.read(cx).value().trim().to_lowercase();
-    // Стратегии вида «Alerts» этого ядра, отфильтрованные по поиску. «—» (без стратегии)
-    // всегда первым и не фильтруется.
+    // Filter this core's Alerts strategies by the query. The em dash meaning no strategy always
+    // remains first and is never filtered out.
     let mut options: Vec<(u64, String)> = vec![(0u64, "—".to_string())];
     options.extend(
         b.session
@@ -50,9 +56,10 @@ fn def_alert_strategy_row(
             .filter(|s| filter.is_empty() || s.name.to_lowercase().contains(&filter))
             .map(|s| (s.id, s.name.clone())),
     );
-    // Инлайн (не MoonDropdown): вложенное меню-оверлей внутри MoonPopover ловится попапом
-    // как «клик снаружи» и закрывает его до выбора. Поиск + скролл фикс. высоты держат
-    // список компактным даже при сотнях стратегий; клики — часть контента попапа.
+    // Render inline instead of using MoonDropdown because a nested menu overlay inside MoonPopover
+    // is treated as an outside click and closes the popover before selection. Search and a
+    // height-capped scroller keep hundreds of strategies compact, shrink for short lists, and keep
+    // clicks inside the content.
     let mut list = v_flex().w_full().gap(design::ui_px(cx, 2.0));
     for (id, name) in options {
         let selected = id == cur;
@@ -120,17 +127,19 @@ fn def_alert_strategy_row(
 ///
 /// [`core_settings_content`] applies the font scale to this value; the terminal chrome uses the
 /// same scaled width when sizing the surrounding `MoonPopover`.
-/// 268: вмещает шапку «заголовок + Запущен/Автодетект» в EN/RU без обрезания (ES режет truncate).
+/// A width of 268 fits the title plus Running and Auto Detect status in EN and RU without clipping;
+/// ES relies on truncation.
 pub const CONTENT_W: f32 = 268.0;
 
-/// Границы слайдеров параметров «галка + слайдер + поле» (min, max, шаг).
-/// ТП-глоб = g_take_profit (плюс), трейлинг = trailing_drop (минус). Стоп-лосс вынесен в тулбар.
+/// Bounds `(minimum, maximum, step)` for checkbox-slider-input parameters. Global TP maps to
+/// positive `g_take_profit`, while Trailing maps to negative `trailing_drop`. Stop Loss lives in
+/// the toolbar.
 pub const CORE_GTP_BOUNDS: (f32, f32, f32) = (0.5, 10.0, 0.1);
 pub const CORE_TRAILING_BOUNDS: (f32, f32, f32) = (-10.0, -0.1, 0.1);
-/// V-Stop (vol_drop_level, целое %): уровень падения объёма BID, отрицательный.
+/// V-Stop bounds for negative, whole-percentage BID volume-drop levels in `vol_drop_level`.
 pub const CORE_VSTOP_BOUNDS: (f32, f32, f32) = (-50.0, 0.0, 1.0);
 
-/// Чекбокс правки `ClientSettings` активного ядра. `edit` — конструктор варианта `Variant(bool)`.
+/// Builds an active-core `ClientSettings` checkbox. `edit` constructs its boolean enum variant.
 fn cs_checkbox(
     id: &str,
     label: String,
@@ -156,7 +165,7 @@ fn cs_checkbox(
         })
 }
 
-/// Чекбокс правки `LevManage` активного ядра. `edit` — конструктор варианта `Variant(bool)`.
+/// Builds an active-core `LevManage` checkbox. `edit` constructs its boolean enum variant.
 fn lev_checkbox(
     id: &str,
     label: String,
@@ -182,7 +191,7 @@ fn lev_checkbox(
         })
 }
 
-/// Рамка-группа: тонкая граница + капшен-заголовок сверху (как в `chart_tabs/layout_popup`).
+/// Frames a group with a thin border and caption above it, matching `chart_tabs/layout_popup`.
 fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl IntoElement {
     v_flex()
         .w_full()
@@ -201,8 +210,8 @@ fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl Int
         .child(body)
 }
 
-/// Галка-иконка (без подписи) с всплывающей подсказкой «вкл/выкл». Обёртка `div.id.tooltip`
-/// над `MoonCheckbox` без label (у самого чекбокса тултипа нет).
+/// Builds an unlabeled icon checkbox with an enable/disable tooltip. A `div.id.tooltip` wrapper
+/// supplies the tooltip because an unlabeled `MoonCheckbox` has none.
 fn icon_checkbox(
     id: &str,
     tooltip: String,
@@ -221,8 +230,8 @@ fn icon_checkbox(
         .into_any_element()
 }
 
-/// Параметр «галка + слайдер + поле»: заголовок сверху, ниже строка [галка-иконка][слайдер][поле].
-/// Коммит слайдера/поля держит Shell (подписки); галку (вкл/выкл) задаёт `checkbox`.
+/// Builds a checkbox-slider-input parameter with a title above the control row. Shell subscriptions
+/// commit slider and input changes, while `checkbox` controls enablement.
 #[allow(clippy::too_many_arguments)]
 fn param_row(
     title: String,
@@ -266,9 +275,14 @@ fn param_row(
         )
 }
 
-/// Контент попапа настроек ядра. `gtp_input`/`trailing_input` — Shell-сущности (коммит держит
-/// Shell). `cancel_confirm` — стадия подтверждения «Отменить все ордера». `on_cancel_all` —
-/// колбэк Shell: первый клик ставит confirm, второй (когда confirm=true) шлёт команду.
+/// Builds core-settings popover content. Shell owns the Global TP, Trailing, V-Stop, blacklist, and
+/// strategy-filter inputs. `shell/core_settings.rs` seeds them on open without overwriting retained
+/// Trailing or V-Stop values when the core reports zero, and synchronizes the two blacklist editors;
+/// collapsing the expanded editor commits its text. Subscriptions in `shell/init.rs` commit numeric
+/// and blacklist inputs on blur or Enter, commit sliders on Change, and synchronize slider values
+/// into numeric inputs. `cancel_confirm` is the Cancel All Orders confirmation stage. The
+/// Shell-provided `on_cancel_all` callback arms confirmation on the first click and sends the command
+/// on the confirmed second click.
 #[allow(clippy::too_many_arguments)]
 pub fn core_settings_content(
     gtp_slider: &Entity<MoonSliderState>,
@@ -294,12 +308,12 @@ pub fn core_settings_content(
     let cd = core.and_then(|c| b.session.store().core(c));
     let cs = cd.and_then(|d| d.client_settings.clone());
     let lm = cd.and_then(|d| d.lev_manage.clone());
-    // Состояние рантайма активного ядра — 2 точки (запущен / авто-детект), перенесены сюда из
-    // шапки (рядом с кнопкой ⚙ было тесно и без подписей). Здесь подписаны.
+    // Show labeled Running and Auto Detect dots for the active core. They moved from the header,
+    // where the unlabeled dots were cramped beside the gear button.
     let rt = cd.and_then(|d| d.runtime_state);
 
-    // Фон/рамку/внешний паддинг даёт MoonPopover (хостится у кнопки ⚙ в шапке) — здесь
-    // только контент фикс. ширины.
+    // MoonPopover, hosted by the header gear button, supplies the background, border, and outer
+    // padding. This renderer provides only fixed-width content.
     let root = v_flex()
         .id("core-settings-popup")
         .w(design::font_w_px(cx, CONTENT_W))
@@ -310,8 +324,8 @@ pub fn core_settings_content(
                 .items_center()
                 .gap(design::ui_px(cx, 8.0))
                 .child(
-                    // flex_1+min_w_0+truncate: заголовок ужимается, иначе строка шире CONTENT_W
-                    // и подписи статуса вылезают за правый край попапа.
+                    // flex_1, min_w_0, and truncate let the title shrink; otherwise the row exceeds
+                    // CONTENT_W and pushes status labels beyond the popover's right edge.
                     div()
                         .flex_1()
                         .min_w_0()
@@ -323,7 +337,7 @@ pub fn core_settings_content(
                 .child(runtime_status(rt, p, cx)),
         );
 
-    // Нет ядра/снимка настроек — заглушка.
+    // Show a placeholder when the core or its settings snapshot is unavailable.
     let Some(cs) = cs else {
         return root
             .child(
@@ -334,12 +348,13 @@ pub fn core_settings_content(
             .into_any_element();
     };
 
-    // ── Шапка: Старт/Рестарт + эмулятор ──────────────────────────────────
+    // Header: restart and emulator controls.
     let restart_btn = {
         let backend = backend.clone();
         let group = group.to_string();
-        // Action-кнопка (Size::Small) идёт с pad_x=0 — фон ровно по тексту. Пробелы в label —
-        // единственный способ дать паре пикселей полей без правки форка (у MoonButton нет pad_x).
+        // The Action button has zero horizontal padding, leaving its background flush with the text.
+        // Spaces in the label provide a few pixels of margin without modifying the fork, because
+        // MoonButton exposes no pad_x setting.
         MoonButton::new("core-restart")
             .label(format!(" {} ", t!("core_settings.restart")))
             .size(MoonButtonSize::Action)
@@ -374,7 +389,7 @@ pub fn core_settings_content(
                 .child(div().flex_1())
                 .child(emu_check),
         )
-        // Заметная плашка-предупреждение, когда включён режим эмулятора.
+        // Display a prominent warning banner while emulator mode is enabled.
         .when(cs.emu_mode, |this| {
             this.child(
                 div()
@@ -391,9 +406,8 @@ pub fn core_settings_content(
             )
         });
 
-    // ── Рамка «Дефолты поведения» ────────────────────────────────────────
-    // Стоп-лосс/паника вынесены в тулбар (тогл рядом с кнопкой SL) — здесь их нет.
-    // Глобальный TP: галка `use_g_take_profit` + значение `g_take_profit`.
+    // Behavior Defaults group. Stop Loss and Panic moved to the toolbar beside the SL button.
+    // Global TP combines the `use_g_take_profit` flag with the `g_take_profit` value.
     let gtp_cb = {
         let backend = backend.clone();
         let group = group.to_string();
@@ -416,8 +430,8 @@ pub fn core_settings_content(
             },
         )
     };
-    // Трейлинг: флага на проводе нет → галка = «значение ≠ 0». Снятие шлёт 0; включение берёт
-    // текущее значение слайдера (или дефолт −1.0). Само значение правит слайдер/поле.
+    // Trailing has no wire-level enable flag, so a nonzero value means enabled. Disabling sends zero;
+    // enabling uses the current slider value or -1.0 by default. The slider and input edit the value.
     let trailing_cb = {
         let backend = backend.clone();
         let group = group.to_string();
@@ -451,8 +465,8 @@ pub fn core_settings_content(
             },
         )
     };
-    // V-Stop: флага на проводе нет → галка = «значение ≠ 0». Значение правит слайдер/поле
-    // (целое %). Включение из 0 берёт значение слайдера или дефолт −2.
+    // V-Stop also has no wire-level enable flag, so a nonzero value means enabled. The slider and
+    // input edit a whole percentage; enabling from zero uses the slider value or -2 by default.
     let vstop_cb = {
         let backend = backend.clone();
         let group = group.to_string();
@@ -542,9 +556,9 @@ pub fn core_settings_content(
             .into_any_element(),
     );
 
-    // ── Рамка «Ограничение рисков»: чёрный список монет ───────────────────
-    // Галка `use_coins_black_list` + текст `coins_black_list_text` (общий CoreCmd::SetBlacklist) +
-    // локальная галка «исключить из дельт» (нет read-back от ядра → состояние в Backend).
+    // Risk Limits group: token blacklist. It combines the `use_coins_black_list` flag and
+    // `coins_black_list_text` through CoreCmd::SetBlacklist with a local Exclude from Deltas option.
+    // The latter has no core read-back, so Backend retains its state.
     let bl_check = {
         let backend = backend.clone();
         let group = group.to_string();
@@ -592,9 +606,8 @@ pub fn core_settings_content(
                 }
             })
     };
-    // Кнопка «…» — развернуть/свернуть поле списка монет. Свёрнуто поле в одну строку
-    // (длинный список прячется), развёрнуто — многострочный редактор фикс. высоты со
-    // скроллом (не растягивает попап).
+    // The ellipsis button expands or collapses the token-list field. Collapsed mode hides the long
+    // tail in one line; expanded mode uses a fixed-height scrolling editor without growing the popover.
     let bl_expand_btn = MoonButton::new("core-bl-expand")
         .label("…")
         .size(MoonButtonSize::Micro)
@@ -602,14 +615,14 @@ pub fn core_settings_content(
         .selected(blacklist_expanded)
         .on_click(move |_, w, app| on_toggle_blacklist(w, app))
         .render();
-    // Свёрнуто — однострочный MoonInput (длинный хвост списка скрыт, поле НЕ растягивается).
-    // Развёрнуто — MoonTextArea на ОТДЕЛЬНОМ multi-line стейте `blacklist_area` (общий стейт
-    // нельзя: textarea необратимо переводит его в multi-line, и однострочное поле после
-    // сворачивания рендерится узкой полоской). Текст между стейтами синкает Shell в тогле «…»;
-    // коммит Blur/Enter подписан на оба. `submit_on_enter` — Enter коммитит, а не вставляет
-    // перенос (список монет — одна строка).
-    // NB: высота textarea только дефолтная Normal (~3 строки со скроллом) —
-    // `MoonTextAreaSize::Custom` не реэкспортирован из moonui (см. FORK_BUGS).
+    // Collapsed mode uses a single-line MoonInput so the hidden tail cannot stretch the field.
+    // Expanded mode uses a separate multiline `blacklist_area` state. Sharing state is impossible:
+    // MoonTextArea permanently switches it to multiline, after which the collapsed input renders as
+    // a narrow strip. Shell synchronizes the two states when the ellipsis is toggled, and both have
+    // Blur/Enter commit subscriptions. `submit_on_enter` commits instead of inserting a newline
+    // because the token list is logically one line. The text area uses only the default Normal
+    // height, about three scrolling lines, because moonui does not re-export
+    // `MoonTextAreaSize::Custom`.
     let bl_field: AnyElement = if blacklist_expanded {
         MoonTextArea::new("core-bl-area")
             .state(blacklist_area)
@@ -643,7 +656,7 @@ pub fn core_settings_content(
             .into_any_element(),
     );
 
-    // ── Рамка «Плечо / маржа» (LevManage) ────────────────────────────────
+    // Leverage and Margin group backed by LevManage.
     let (lev_max, lev_up, lev_iso, lev_cross, lev_tlg) = lm
         .as_ref()
         .map(|l| {
@@ -706,11 +719,9 @@ pub fn core_settings_content(
             .into_any_element(),
     );
 
-    // ── Рамка «Действия» ─────────────────────────────────────────────────
-    // Кнопки «Сброс сессии»/«Сброс всего» убраны: TResetProfitCommand сбрасывает серверные
-    // счётчики RepForm, которые клиенту не транслируются — эффект в терминале не виден
-    // (трансляция счётчиков запрошена у авторов moonproto). Вернуть, когда протокол
-    // начнёт их отдавать.
+    // Actions group. Reset Session and Reset All are omitted because TResetProfitCommand resets
+    // server-side RepForm counters that are not transmitted to the client, making the result
+    // invisible in the terminal. Restore these actions when MoonProto exposes those counters.
     let cancel_all = MoonButton::new("core-cancel-all")
         .label(if cancel_confirm {
             t!("core_settings.cancel_all_confirm").to_string()
@@ -749,9 +760,9 @@ pub fn core_settings_content(
         .into_any_element()
 }
 
-/// Две подписанные точки состояния рантайма активного ядра: «Запущен» (`is_started`) и
-/// «Автодетект» (`auto_detect_active`). Зелёный = вкл; запущен-но-passive автодетект → янтарный;
-/// иначе серый. Перенесено из шапки (были без подписей рядом с ⚙).
+/// Builds labeled Running (`is_started`) and Auto Detect (`auto_detect_active`) status dots for the
+/// active core. Enabled states are green; inactive Auto Detect on a running core is amber; other
+/// inactive states are gray. These moved from unlabeled dots beside the header gear button.
 fn runtime_status(rt: Option<RuntimeState>, p: MoonPalette, cx: &App) -> impl IntoElement {
     let ok = if p.is_light() { p.green_text } else { p.green };
     let started = rt.map(|r| r.is_started).unwrap_or(false);

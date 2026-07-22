@@ -1,11 +1,11 @@
-//! Прототип варианта 1: рисуем тиковую линию + крестик НАТИВНЫМИ примитивами GPUI
-//! (PathBuilder::stroke → paint_path, quad-крестик), БЕЗ offscreen-wgpu и readback.
-//! Цель — замерить, держит ли GPUI 60fps на реальной плотности тиков.
+//! Prototype variant 1: draw trade markers and a crosshair with NATIVE GPUI primitives
+//! (`paint_quad` rectangles), WITHOUT offscreen wgpu or readback.
+//! The goal is to measure whether GPUI sustains 60 FPS at realistic trade density.
 //!
-//! Запуск: `cargo run -p moon-ui-gpui --example chart_proto --release`
-//! Плотность тиков: env `CHART_N` (дефолт 3000), число графиков: `CHART_PANES` (дефолт 1).
-//! FPS пишется в лог раз в секунду и рисуется в углу. Каждый кадр полилиния
-//! ПЕРЕСТРАИВАЕТСЯ заново (худший случай — живой скролл), курсор едет за мышью.
+//! Run: `cargo run -p moon-ui-gpui --example chart_proto --release`
+//! Trade density: `CHART_N` env var (default 3000); pane count: `CHART_PANES` (default 1).
+//! FPS is logged once per second and drawn in the corner. Every marker quad is rebuilt on
+//! EVERY frame, and the crosshair follows the pointer.
 
 use std::time::Instant;
 
@@ -16,7 +16,8 @@ use gpui::{
 };
 
 struct Proto {
-    /// Трейды: (цена 0..1, is_buy). Рисуем КРЕСТИКАМИ (как реальный тиковый график).
+    /// Trades: (normalized price in 0..1, is_buy). Drawn as crosses by default or as square
+    /// markers when `CHART_DOT` is set.
     trades: Vec<(f32, bool)>,
     panes: usize,
     cursor: Option<Point<Pixels>>,
@@ -36,7 +37,7 @@ impl Proto {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
-        // Детерминированный random-walk (LCG), чтобы не тянуть rand.
+        // Deterministic random walk (LCG) to avoid pulling in rand.
         let mut seed: u64 = 0x1234_5678_9abc_def0;
         let mut v = 0.5f32;
         let mut trades = Vec::with_capacity(n);
@@ -64,7 +65,7 @@ impl Proto {
 
 impl Render for Proto {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Гоним кадры на максимум (vsync) — меряем реальный потолок.
+        // Request frames continuously at the vsync rate to measure the practical ceiling.
         window.request_animation_frame();
 
         // FPS.
@@ -131,9 +132,9 @@ fn draw(
     let total_h = f32::from(bounds.size.height);
     let pane_h = total_h / panes as f32;
     let n = trades.len().max(2);
-    // Лёгкая анимация: всё «едет» по кадру (живой скролл) — quad'ы пересобираются каждый кадр.
+    // Apply a slight per-frame vertical wobble; draw rebuilds every marker quad on each paint.
     let phase = (frame as f32) * 0.01;
-    // Размер крестика (полудлина плеча, px) и толщина.
+    // Cross size (arm half-length in pixels) and thickness.
     const R: f32 = 3.0;
     const TH: f32 = 1.0;
     let green = rgb(0x2fa85c);
@@ -142,20 +143,20 @@ fn draw(
     for p in 0..panes {
         let p_top = top + p as f32 * pane_h;
         let plot_h = pane_h - 24.0;
-        // КАЖДЫЙ трейд — крестик «+»: горизонт. + вертик. quad. Цвет по стороне.
+        // Each trade is a "+" cross by default or a square marker when `CHART_DOT` is set.
         for (i, &(val, is_buy)) in trades.iter().enumerate() {
             let x = left + (i as f32 / (n - 1) as f32) * width;
             let wob = (i as f32 * 0.05 + phase + p as f32).sin() * 0.01;
             let y = p_top + (1.0 - (val + wob).clamp(0.0, 1.0)) * plot_h;
             let col = if is_buy { green } else { red };
             if std::env::var("CHART_DOT").is_ok() {
-                // 1 quad — маленький квадрат-маркер.
+                // One quad: a small square marker.
                 window.paint_quad(fill(
                     Bounds::new(point(px(x - R), px(y - R)), size(px(2.0 * R), px(2.0 * R))),
                     col,
                 ));
             } else {
-                // 2 quad'а — крестик «+».
+                // Two quads form a "+" cross.
                 window.paint_quad(fill(
                     Bounds::new(
                         point(px(x - R), px(y - TH * 0.5)),
@@ -172,7 +173,7 @@ fn draw(
                 ));
             }
         }
-        // Пара горизонтальных «ордер-линий» (quad'ы по 1px).
+        // Two horizontal order lines, each drawn as a one-pixel quad.
         for k in 1..=2 {
             let y = p_top + plot_h * (0.3 * k as f32);
             window.paint_quad(fill(
@@ -182,7 +183,7 @@ fn draw(
         }
     }
 
-    // Крестик — у курсора (2 quad'а на всю зону), как в тиковом графике.
+    // Crosshair at the pointer: two quads spanning the entire plot area, as in the tick chart.
     if let Some(c) = cursor {
         let cx_px = f32::from(c.x);
         let cy_px = f32::from(c.y);
@@ -196,7 +197,7 @@ fn draw(
         ));
     }
 
-    // FPS-плашка (текст).
+    // FPS overlay (text).
     let text = SharedString::from(format!("FPS {fps:.0}  N {n}  panes {panes}"));
     let font = window.text_style().font();
     let run = TextRun {

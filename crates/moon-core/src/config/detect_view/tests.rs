@@ -1,8 +1,8 @@
 use super::*;
 
-/// КАЖДОЕ поле конструктора переживает toml-roundtrip (то, чем пишется/читается
-/// detects_view.toml и Копировать/Вставить): активный размер, per-размер
-/// w/h/chart/rail и все флаги каждого слота.
+/// EVERY constructor field survives a TOML round trip (the path used to read/write
+/// detects_view.toml and for Copy/Paste): active size, per-size w/h/chart/rail,
+/// and every flag in every slot.
 #[test]
 fn detect_view_roundtrip_preserves_every_field() {
     let mut cfg = DetectViewCfg::default();
@@ -21,12 +21,12 @@ fn detect_view_roundtrip_preserves_every_field() {
         slot.below = i % 4 == 0;
     }
 
-    // Общий формат (Копировать/Вставить = одна группа).
+    // Shared format (Copy/Paste = one group).
     let text = cfg.to_share_string().expect("serialize");
     let back = DetectViewCfg::parse_share(&text).expect("parse");
     assert_eq!(cfg, back);
 
-    // Файл целиком (в т.ч. пустое имя группы — дефолтная группа окна).
+    // Entire file (including an empty group name, which is the window's default group).
     let mut file = DetectViewFile::default();
     file.set_group("", cfg);
     file.set_group("Группа 2", DetectViewCfg::default());
@@ -34,19 +34,18 @@ fn detect_view_roundtrip_preserves_every_field() {
     let back: DetectViewFile = toml::from_str(&text).expect("parse file");
     assert_eq!(back.group(""), cfg);
     assert_eq!(back.group("Группа 2"), DetectViewCfg::default());
-    // Незнакомая группа → дефолт.
+    // Unknown group → default.
     assert_eq!(back.group("нет такой"), DetectViewCfg::default());
 }
 
-/// Частичная запись (старый/чужой файл без новых полей) добивается дефолтами,
-/// а мусор не валит парс всего файла в load_or_default-цепочке.
+/// A partial entry (old/foreign file without new fields) is completed with defaults.
 #[test]
 fn detect_view_partial_toml_fills_defaults() {
     let cfg: DetectViewCfg =
         toml::from_str("size = 2\n[medium]\nw = 150\n").expect("partial parse");
     assert_eq!(cfg.size, DETECT_SIZE_LARGE);
     assert_eq!(cfg.medium.w, 150);
-    // Остальное — из дефолтов.
+    // Everything else comes from the defaults.
     assert_eq!(cfg.mini, DetectViewCfg::default().mini);
     assert_eq!(cfg.medium.h, DetectViewCfg::default().medium.h);
 }

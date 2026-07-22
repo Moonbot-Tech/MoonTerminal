@@ -1,18 +1,17 @@
-//! «Умный» автоподбор порогов тюнера: координатный спуск со СЛУЧАЙНЫМИ
-//! РЕСТАРТАМИ (random-restart hill climbing) по всем полям сразу.
+//! Smart automatic threshold tuning: coordinate descent with RANDOM RESTARTS
+//! (random-restart hill climbing) across all fields at once.
 //!
-//! Наивный подбор оптимизирует каждое поле независимо — комбинация не
-//! максимальна (поля взаимодействуют). Здесь состояние = диапазон (или «нет
-//! фильтра») на КАЖДОЕ поле; шаг — переоптимизация одного поля полным
-//! перебором пар КВАНТИЛЬНЫХ краёв (квантили = реальные значения данных;
-//! число краёв настраивается, деф. 64) при зафиксированных остальных;
-//! проходы до сходимости. Спуск
-//! жадный и застревает в локальных оптимумах — поэтому несколько РЕСТАРТОВ:
-//! первый с пустого состояния, остальные со случайной инициализации и
-//! перетасованным порядком полей; берётся лучший результат.
+//! A naive suggestion optimizes each field independently, so the combined result is not
+//! optimal because fields interact. Here, the state assigns every field a range or no filter;
+//! each step reoptimizes one field by exhaustively testing pairs of QUANTILE edges (quantiles
+//! are actual data values; the edge count is configurable and defaults to 64) while holding
+//! the others fixed. Passes continue until convergence or the 16-pass cap. The descent is
+//! greedy and can become trapped in local optima, so it uses multiple RESTARTS: the first starts
+//! empty, while the others use random initialization and shuffled field order; the best result
+//! wins.
 //!
-//! Семантика совпадает с вариантами тюнера: NULL поля = 0 (COALESCE), границы
-//! включительные. Один скан БД, дальше всё в памяти — вызывать ТОЛЬКО с
+//! Semantics match tuner variants: NULL fields equal 0 (COALESCE), and bounds are inclusive.
+//! The database is scanned once and all later work stays in memory, so call this ONLY from a
 //! background executor.
 
 use super::analytics::{unified_from, Query};
@@ -20,8 +19,9 @@ use super::read_fail::read_fail;
 use super::tuner::{FieldClass, FIELDS};
 use super::{ReadFail, ReadResult};
 
-/// Бин «ниже первого края» (значения COALESCE-0 при положительном минимуме).
-/// Число краёв ≤128 — индексы бинов не сталкиваются с сентинелом.
+/// Sentinel bin for a value below the first quantile edge. Quantile edges currently include
+/// the observed minimum, making this a defensive, unreachable case for derived bins. The edge
+/// count is at most 128, so bin indices cannot collide with the sentinel.
 const BELOW: u8 = u8::MAX;
 
 /// Minimum accepted restart count. Shared with the UI so displayed and executed counts agree.
@@ -43,7 +43,7 @@ pub const EDGES_MIN: usize = 4;
 /// Maximum quantile-edge count; keeps bin indices clear of the `BELOW` sentinel.
 pub const EDGES_MAX: usize = 128;
 
-/// Итоговый диапазон одного поля.
+/// Final range for one field.
 #[derive(Clone, Debug)]
 pub struct SmartField {
     pub field: &'static str,
@@ -51,20 +51,19 @@ pub struct SmartField {
     pub to: f64,
 }
 
-/// Результат умного подбора: диапазоны + ожидаемый профит/сделки комбинации.
+/// Smart-suggestion result: ranges plus the combination's expected profit and trade count.
 #[derive(Clone, Debug)]
 pub struct SmartResult {
     pub fields: Vec<SmartField>,
     pub profit: f64,
     pub n: i64,
-    /// Сколько рестартов сделано.
+    /// Number of completed restarts.
     pub rounds: usize,
 }
 
-/// Простой PRNG (xorshift64*) — rand-зависимость не нужна. Зерно берётся от
-/// времени запуска: каждый клик «Подобрать всё» пробует СВОИ случайные старты
-/// (намеренно, по просьбе пользователя — повторные переборы продолжают искать
-/// новые локальные оптимумы, а не повторяют одну последовательность).
+/// Simple PRNG (xorshift64*) that avoids a rand dependency. The seed comes from invocation time,
+/// so every "Suggest all" click tries its OWN random starts. This is intentional: repeated
+/// searches keep looking for new local optima instead of replaying one sequence.
 struct Rng(u64);
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -89,9 +88,8 @@ impl Rng {
 /// slot fields may carry ranges because the strategy format cannot store more.
 /// `locked[fi]` is `None` for a searched field, a fixed range for an active
 /// locked field, or `(None, None)` for an excluded field.
-/// `Ok(None)` means no candidate beats the baseline or the sample is too small;
-/// `NotReady` means the replica or required schema is absent, while `Failed`
-/// means opening or scanning the replica failed.
+/// `Ok(None)` means the sample is too small; `NotReady` means the replica or required schema is
+/// absent, while `Failed` means opening or scanning the replica failed.
 pub fn smart_suggest(
     q: &Query,
     restarts: usize,
@@ -118,7 +116,7 @@ pub fn smart_suggest(
         .join(", ");
     let sql = format!("SELECT {cols}, COALESCE(o.profitbtc,0) FROM {src}");
 
-    // Скан в память: профит + эффективные значения (COALESCE 0) колоночно.
+    // Scan profit and effective values (COALESCE 0) into column-oriented memory.
     let mut profits: Vec<f64> = Vec::new();
     let mut vals: Vec<Vec<f64>> = vec![Vec::new(); nf];
     {
@@ -143,7 +141,7 @@ pub fn smart_suggest(
         return Ok(None);
     }
 
-    // Квантильные края и бин каждой сделки по каждому полю.
+    // Quantile edges and each trade's bin for every field.
     let mut edges: Vec<Vec<f64>> = Vec::with_capacity(nf);
     let mut bins: Vec<Vec<u8>> = Vec::with_capacity(nf);
     for col in &vals {
@@ -156,7 +154,7 @@ pub fn smart_suggest(
                 if *v < e[0] {
                     BELOW
                 } else {
-                    // Последний край включительно — клампим в верхний бин.
+                    // The last edge is inclusive, so clamp it into the top bin.
                     let mut lo = 0usize;
                     let mut hi = ne;
                     while lo + 1 < hi {
@@ -175,14 +173,14 @@ pub fn smart_suggest(
         bins.push(b);
     }
 
-    // Мульти-старт: рестарт 0 — жадный с пустого состояния, дальше —
-    // случайная инициализация + перетасованный порядок полей.
+    // Multi-start: restart 0 is greedy from an empty state; subsequent restarts use random
+    // initialization and shuffled field order.
     let restarts = restarts.clamp(RESTARTS_MIN, RESTARTS_MAX);
     let is_slot: Vec<bool> = FIELDS
         .iter()
         .map(|s| s.class == FieldClass::DeltaSlot)
         .collect();
-    // Перебираемые поля; фиксированные маски залипают в fail-счётчиках базой.
+    // Searchable fields; fixed masks remain embedded in the baseline failure counts.
     let free: Vec<bool> = (0..nf)
         .map(|fi| locked.get(fi).is_none_or(|l| l.is_none()))
         .collect();
@@ -202,16 +200,16 @@ pub fn smart_suggest(
             }
         }
     }
-    // Занятые фикс-полями слоты уменьшают лимит пары Delta2/Delta3.
+    // Slots occupied by fixed fields reduce the available Delta2/Delta3 pair limit.
     let locked_slots: usize = (0..nf)
         .filter(|fi| {
             is_slot[*fi]
                 && matches!(locked.get(*fi), Some(Some((lo, hi))) if lo.is_some() || hi.is_some())
         })
         .count();
-    // Зерно от времени запуска: каждый перебор — свои случайные старты
-    // (рестарт 0 всё равно жадный с пустого, он стабилен). Нулевое зерно
-    // xorshift'у запрещено — подмешиваем константу.
+    // Seed from invocation time so each search gets its own random starts. Restart 0 remains
+    // deterministic because it is greedy from empty. Xorshift forbids a zero seed, so mix in
+    // a constant.
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -221,7 +219,7 @@ pub fn smart_suggest(
     for restart in 0..restarts {
         let mut sel: Vec<Option<(usize, usize)>> = vec![None; nf];
         if restart > 0 {
-            // ~30% полей стартуют со случайного диапазона (слотов — макс 2).
+            // About 30% of fields start with a random range, with at most two slots.
             let mut slots_used = 0usize;
             for (fi, s) in sel.iter_mut().enumerate() {
                 if !free[fi] {
@@ -240,7 +238,7 @@ pub fn smart_suggest(
                 }
             }
         }
-        // Маски из инициализации (поверх фиксированных фильтров).
+        // Masks from initialization, layered over fixed filters.
         let mut pass: Vec<Vec<bool>> = vec![vec![true; n]; nf];
         let mut fail: Vec<u16> = base_fail.clone();
         for fi in 0..nf {
@@ -267,7 +265,7 @@ pub fn smart_suggest(
             for &fi in &order {
                 // Sum bins among trades that pass every other field.
                 let selfpass = &pass[fi];
-                let mut bp = vec![0.0f64; ne + 1]; // бины + BELOW последним
+                let mut bp = vec![0.0f64; ne + 1]; // Bins followed by BELOW.
                 let mut bc = vec![0usize; ne + 1];
                 let (mut tot_p, mut tot_c) = (0.0f64, 0usize);
                 for t in 0..n {
@@ -353,11 +351,10 @@ pub fn smart_suggest(
                 break;
             }
         }
-        // Финальная зачистка совместно-избыточных диапазонов: спуск мог
-        // остановиться по лимиту проходов, не успев снять поле, все сделки
-        // которого уже режут ДРУГИЕ фильтры (уникально режет row t только
-        // поле с !pass && fail==1). Такой диапазон — пустышка: удаление не
-        // меняет ни профит, ни счёт. Чистим до стабильности.
+        // Final cleanup of jointly redundant ranges: descent may hit the pass limit before
+        // removing a field whose rejected trades are already rejected by OTHER filters.
+        // A field uniquely rejects row t only when !pass && fail==1. Such a range is a no-op:
+        // removing it changes neither profit nor count. Repeat until stable.
         loop {
             let mut removed = false;
             for fi in 0..nf {
@@ -380,7 +377,7 @@ pub fn smart_suggest(
                 break;
             }
         }
-        // Итог рестарта — против глобального лучшего.
+        // Compare this restart's result with the global best.
         let (mut profit, mut cnt) = (0.0f64, 0i64);
         for t in 0..n {
             if fail[t] == 0 {
@@ -393,7 +390,7 @@ pub fn smart_suggest(
         }
     }
 
-    // No variant beat the baseline — a legitimate "no suggestion".
+    // Defensive fallback when no restart completed; clamping normally makes this unreachable.
     let Some((profit, cnt, sel)) = best_global else {
         return Ok(None);
     };
@@ -401,7 +398,7 @@ pub fn smart_suggest(
         .iter()
         .enumerate()
         .filter_map(|(fi, s)| {
-            // Пара на обоих краях данных ничего не режет — не подставляем.
+            // A pair spanning both data edges filters nothing, so omit it.
             let (i, j) = (*s).filter(|(i, j)| !(*i == 0 && *j == ne))?;
             let (mut from, mut to) = (edges[fi][i], edges[fi][j]);
             if round {

@@ -130,9 +130,9 @@ impl Shell {
                 }
             }))
             .child(
-                // Ширина = список `render_popup` (фикс. 240) + свои паддинги (2×6, масштабируются
-                // слайдером шрифта) + рамка (2×1): иначе внутренняя рамка списка вылазит за
-                // границы попапа.
+                // `render_popup` font-scales its nominal 240-unit list width, while this outer box
+                // keeps a raw 240-pixel base and adds scaled horizontal padding plus two raw border
+                // pixels. The dimensions align at the default font scale but do not scale together.
                 v_flex()
                     .w(px(240.0 + 2.0 * f32::from(design::ui_px(cx, 6.0)) + 2.0))
                     .gap(design::ui_px(cx, 4.0))

@@ -1,54 +1,57 @@
-//! Свечи чарта: агрегация из трейдов, ресемпл серверной истории и слитная серия
-//! per-pane. Источники: CoinCard deep history (честные OHLC, по требованию) →
-//! retained `candles_5m` moonproto (авто-снимок с ядра; несёт только high/low) →
-//! трейд-ринг (живой край и суб-5м ТФ). Чистые функции + серия с ревизией: рендер
-//! перезаливает GPU-буфер только по смене ревизии.
+//! Chart candles: trade aggregation, base-history resampling, and a merged per-pane
+//! series. The production caller supplies a sorted base already merged and resampled to
+//! the target timeframe, while the trade ring supplies the local overlay and live edge.
+//! Pure functions plus a revisioned series let the renderer re-upload the GPU buffer only
+//! when the revision changes.
 //!
-//! Правило шва: серверные свечи авторитетны для «прошлого», локальные (из трейдов) —
-//! от первого ПОЛНОГО бакета, покрытого трейд-рингом (первый бакет ринга обычно
-//! частичный — его o/h/l врут, если есть серверная свеча этого бакета, берём её).
+//! Seam rule: when the base covers the first local bucket's timestamp, that base candle
+//! is retained and the local overlay begins at the next bucket. Otherwise the overlay
+//! begins at the first local bucket. This rule tests timestamp coverage without inferring
+//! how much of the bucket interval the local trades represent.
 
 use serde::{Deserialize, Serialize};
 
 use crate::feed::Tick;
 
-/// Допустимые таймфреймы свечей, минуты. 30с (код 0) УДАЛЁН из набора по просьбе
-/// пользователя (2026-07-12): суб-минутный ТФ жил только из трейдов, без deep-базы.
-/// База: CoinCard-история родного ТФ (1/5/30/60/240/1440), фолбэк — 5м-снимок ядра.
+/// Supported candle timeframes in minutes. The 30-second timeframe (code 0) was REMOVED
+/// from the set at the user's request (2026-07-12): it relied only on trades and had no
+/// deep-history base. A 5-minute snapshot can contribute only when the target timeframe
+/// is at least 5 minutes and divisible by 5; the 1-minute timeframe has no such fallback.
 pub const CANDLE_TF_CHOICES_MIN: [u32; 6] = [1, 5, 30, 60, 240, 1440];
 
-/// Режим отрисовки свечей (см. `CandleViewCfg::mode`).
+/// Candle rendering modes used by `CandleViewCfg::mode`.
 pub const CANDLE_MODE_FILLED: u8 = 0;
 pub const CANDLE_MODE_OUTLINE: u8 = 1;
 pub const CANDLE_MODE_OUTLINE_IN_ZONE: u8 = 2;
-/// Свечи выключены вовсе: чистый тик-чарт (трейды на всё окно, слой свечей пуст).
+/// Disables candles completely, leaving a pure tick chart across the full window.
 pub const CANDLE_MODE_OFF: u8 = 3;
 
-/// Глобальные настройки отображения свечей/трейдов на чарте (кнопка «свеча» в полоске
-/// вкладок). Persist — `layout.toml` (`WindowLayout::candle_view`), один набор на всё
-/// приложение.
+/// Candle/trade chart display settings controlled by the candle button in the tab strip.
+/// `layout.toml` stores the global default as `WindowLayout::candle_view`, while
+/// `charts.json` stores optional per-tab overrides.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CandleViewCfg {
-    /// Таймфрейм свечей, минуты (одно из [`CANDLE_TF_CHOICES_MIN`]).
+    /// Candle timeframe in minutes, selected from [`CANDLE_TF_CHOICES_MIN`].
     pub tf_min: u32,
-    /// Режим: 0 = заполненные, 1 = контуры, 2 = контуры в зоне трейдов.
+    /// Mode: 0 = filled, 1 = outlines, 2 = outlines in the trade zone, 3 = off.
     pub mode: u8,
-    /// Зона трейдов: сколько ПОСЛЕДНИХ свечей перерисовываем трейдами (кресты рисуются
-    /// только внутри этих бакетов). 0 = трейды не рисуем вовсе (только свечи).
+    /// Number of MOST RECENT candles redrawn with trades in the trade zone; crosses are
+    /// drawn only inside those buckets. A value of 0 disables trades entirely.
     pub trade_candles: u16,
-    /// Сколько ПОСЛЕДНИХ свечей НЕ рисовать вовсе (в этих бакетах остаются только
-    /// трейды). 0 = показываем все свечи. Обычно ≤ `trade_candles`.
+    /// Number of MOST RECENT candles not drawn at all, leaving only trades in those
+    /// buckets. A value of 0 shows every candle. Usually no greater than `trade_candles`.
     pub hide_candles: u16,
-    /// Жёсткий лимит числа отображаемых трейдов (страховка на всплеск).
+    /// Hard cap on displayed trades to protect against bursts.
     pub trades_limit: u32,
-    /// Толщина контура свечи, лог. px.
+    /// Candle outline width in logical pixels.
     pub outline_px: f32,
-    /// Рисовать тени (фитили) у свечей в зоне трейдов.
+    /// Whether to draw candle shadows (wicks) in the trade zone.
     pub wicks_in_zone: bool,
-    /// Красить свечи в зоне трейдов нейтральным цветом (не спорят с окраской крестов).
+    /// Whether to use a neutral candle color in the trade zone to avoid competing with
+    /// the cross colors.
     pub neutral_in_zone: bool,
-    /// Рисовать линии цены last/mark (оранжевая LastPrice + голубая MarkPrice).
+    /// Whether to draw last/mark price lines: orange LastPrice and blue MarkPrice.
     pub price_lines: bool,
 }
 
@@ -69,8 +72,9 @@ impl Default for CandleViewCfg {
 }
 
 impl CandleViewCfg {
-    /// Таймфрейм в миллисекундах (клампится к допустимому набору; легаси 30с (код 0)
-    /// сведён к 1м — суб-минутные удалены из настроек).
+    /// Returns the timeframe in milliseconds, clamped to the supported set.
+    ///
+    /// Legacy 30-second code 0 maps to 1 minute because sub-minute settings were removed.
     pub fn tf_ms(&self) -> i64 {
         let tf = if self.tf_min == 0 {
             1
@@ -83,7 +87,7 @@ impl CandleViewCfg {
     }
 }
 
-/// Одна свеча чарта (время — unix ms открытия бакета).
+/// One chart candle whose timestamp is the bucket's Unix opening time in milliseconds.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ChartCandle {
     pub t_open_ms: f64,
@@ -91,18 +95,20 @@ pub struct ChartCandle {
     pub high: f32,
     pub low: f32,
     pub close: f32,
-    /// Суммарный объём сделок бакета (базовая валюта).
+    /// Total trade volume in the bucket, denominated in the base currency.
     pub volume: f32,
 }
 
-/// Начало бакета ТФ для момента времени (floor по сетке от unix-эпохи).
+/// Returns the timeframe bucket start for a timestamp, floored on the Unix-epoch grid.
 pub fn bucket_open_ms(time_ms: f64, tf_ms: i64) -> f64 {
     let tf = tf_ms.max(1) as f64;
     (time_ms / tf).floor() * tf
 }
 
-/// Родной ТФ CoinCard-истории (мин) для ТФ серии: точный где есть (1/5/30/60/240/1440);
-/// суб-минутные ТФ базы не имеют (только трейды), остальное — ресемпл из 5м.
+/// Returns the native CoinCard-history timeframe in minutes for a series timeframe.
+///
+/// Exact history exists for 1/5/30/60/240/1440 minutes. Sub-minute timeframes have no
+/// base and use only trades; every other timeframe is resampled from 5-minute history.
 pub fn deep_kind_min_for_tf(tf_min: u32) -> u32 {
     match tf_min {
         1 => 1,
@@ -114,11 +120,14 @@ pub fn deep_kind_min_for_tf(tf_min: u32) -> u32 {
     }
 }
 
-/// Ориентация свечей «только диапазон». Замер показал: bulk-снимок 5м с ядра несёт
-/// ТОЛЬКО high/low (в полях open==high, close==low) — честных open/close там нет,
-/// тела рисовались всегда «падающими» и без теней. Пока не приехала CoinCard-история
-/// (настоящие OHLC), ориентируем такие строки по направлению против предыдущей:
-/// вверх → open=low/close=high, вниз — как пришла.
+/// Orients range-only candles whose real open and close values are unavailable.
+///
+/// Measurements show that the core's bulk 5-minute snapshot carries ONLY high/low,
+/// encoded as `open == high` and `close == low`. Without real open/close values, bodies
+/// would always appear bearish and wickless. Until CoinCard history with real OHLC
+/// arrives, orient these rows relative to the previous midpoint: rows whose midpoint is
+/// non-decreasing, including a tie, become `open = low, close = high`, while decreasing
+/// rows remain unchanged.
 pub fn orient_range_rows(rows: &mut [ChartCandle]) {
     let mut prev_mid: Option<f32> = None;
     for c in rows.iter_mut() {
@@ -135,28 +144,31 @@ pub fn orient_range_rows(rows: &mut [ChartCandle]) {
     }
 }
 
-/// Нормализация o/h/l/c серверной свечи: перепутанный wire-порядок (high,low,open,close)
-/// в полях (open,close,high,low) детектим по инварианту корректной свечи
-/// `h ≥ max(o,c) && l ≤ min(o,c)` и разворачиваем ТОЛЬКО нарушившие его строки —
-/// корректные ряды (CoinCard-история, live-запечатанные) проходят как есть.
+/// Normalizes server-candle OHLC values with a potentially swapped wire order.
+///
+/// Detects `(high, low, open, close)` stored in `(open, close, high, low)` fields by the
+/// valid-candle invariant `h ≥ max(o,c) && l ≤ min(o,c)`, and swaps ONLY rows that violate
+/// it. Correct CoinCard-history and sealed live rows pass through unchanged.
 pub fn normalize_ohlc(o: f32, h: f32, l: f32, c: f32) -> (f32, f32, f32, f32) {
     if h >= o.max(c) && l <= o.min(c) {
-        return (o, h, l, c); // корректная свеча
+        return (o, h, l, c); // The candle is already valid.
     }
     if o >= h.max(l) && c <= h.min(l) {
-        // (o,c,h,l)-поля содержат (high,low,open,close): real o=h, h=o, l=c, c=l.
+        // The (o,c,h,l) fields contain (high,low,open,close): real o=h, h=o, l=c, c=l.
         return (h, o, c, l);
     }
-    // Неопознанный мусор: диапазон растягиваем на все четыре, o/c оставляем.
+    // For unrecognized garbage, span the range across all four values and preserve o/c.
     let hi = o.max(c).max(h).max(l);
     let lo = o.min(c).min(h).min(l);
     (o, hi, lo, c)
 }
 
-/// Свечи из трейдов (любой ТФ). Трейды почти отсортированы по времени; поздние
-/// resend-строки (UDP) попадают в СТАРЫЙ бакет — обновляем его h/l/vol (o/c по времени
-/// не уточняем: для чарта это визуально неразличимо, а точный порядок ринг не хранит).
-/// Пустые бакеты (нет трейдов) не создаются — разрежённая серия, как сама лента.
+/// Aggregates trades into candles of any timeframe.
+///
+/// Trades are nearly time-sorted. Late UDP resend rows may enter an OLD bucket, whose
+/// high, low, and volume are updated without refining time-based open/close values: the
+/// difference is visually negligible and the ring does not preserve exact ordering.
+/// Empty buckets are omitted, producing a sparse series like the trade stream itself.
 pub fn aggregate_trades(trades: &[Tick], tf_ms: i64, out: &mut Vec<ChartCandle>) {
     out.clear();
     for t in trades {
@@ -176,13 +188,13 @@ pub fn aggregate_trades(trades: &[Tick], tf_ms: i64, out: &mut Vec<ChartCandle>)
             }
             None => out.push(candle_from_tick(open_ms, t)),
             _ => {
-                // Поздний resend в старый бакет: ищем его с хвоста (обычно рядом).
+                // Search backward for a late resend's old bucket, which is usually nearby.
                 if let Some(c) = out.iter_mut().rev().find(|c| c.t_open_ms == open_ms) {
                     c.high = c.high.max(t.price);
                     c.low = c.low.min(t.price);
                     c.volume += t.qty.max(0.0);
                 }
-                // Бакета нет (трейд старше всей серии) — игнорируем: окно уехало.
+                // Ignore a trade older than the entire series because its window has moved on.
             }
         }
     }
@@ -199,8 +211,9 @@ fn candle_from_tick(open_ms: f64, t: &Tick) -> ChartCandle {
     }
 }
 
-/// Ресемпл свечей в более крупный ТФ (5м → 15м и т.п.). Вход отсортирован
-/// по времени; кратность не проверяем жёстко — некратный ТФ просто даст сетку floor.
+/// Resamples time-sorted candles into a larger timeframe, such as 5 to 15 minutes.
+///
+/// Divisibility is not enforced; a non-multiple timeframe simply uses its floored grid.
 pub fn resample(rows: &[ChartCandle], tf_ms: i64, out: &mut Vec<ChartCandle>) {
     out.clear();
     for r in rows {
@@ -220,16 +233,17 @@ pub fn resample(rows: &[ChartCandle], tf_ms: i64, out: &mut Vec<ChartCandle>) {
     }
 }
 
-/// Слитная per-pane серия свечей: серверная база + локальный хвост из трейдов.
-/// Живёт в `ChartHistoryCursor`; перестраивается на combo-reset, живой край —
-/// `push_trades` из того же дренажа, что кормит кресты.
+/// Merged per-pane candle series combining base history with a local trade-derived tail.
+///
+/// It lives in `ChartHistoryCursor`, rebuilds on a combo reset, and updates its live edge
+/// through `push_trades` from the same drain that feeds the crosses.
 #[derive(Default)]
 pub struct CandleSeries {
     tf_ms: i64,
     candles: Vec<ChartCandle>,
     revision: u64,
     valid: bool,
-    /// Скретч ресемпла (переиспользуем аллокацию между rebuild).
+    /// Resampling scratch space whose allocation is reused between rebuilds.
     scratch: Vec<ChartCandle>,
 }
 
@@ -255,20 +269,23 @@ impl CandleSeries {
         self.candles.clear();
     }
 
-    /// Полная пересборка: `base` — серверные свечи родного ТФ `base_tf_ms`
-    /// (CoinCard-история либо 5м-снимок; отсортированы), `trades` — трейды видимого
-    /// окна (почти отсортированы). Серверные ряды берём для бакетов ДО первого
-    /// полного трейдового, локальные — дальше (включая живой).
+    /// Rebuilds the series from sorted base candles and nearly sorted trades.
+    ///
+    /// `base` contains candles sorted at `base_tf_ms`; the production caller currently
+    /// supplies a merged base already resampled to the target timeframe. `trades` contains
+    /// the visible window's trades. If the base covers the first local bucket's timestamp,
+    /// the local overlay begins at the next bucket; otherwise it begins at that first
+    /// local bucket.
     pub fn rebuild(&mut self, tf_ms: i64, base: &[ChartCandle], base_tf_ms: i64, trades: &[Tick]) {
         let tf_ms = tf_ms.max(1);
         self.tf_ms = tf_ms;
         self.candles.clear();
 
-        // Локальный хвост из трейдов — во временный буфер (scratch переживёт clear).
+        // Build the local trade tail in a temporary buffer so scratch survives clear.
         let mut local = std::mem::take(&mut self.scratch);
         aggregate_trades(trades, tf_ms, &mut local);
 
-        // Серверная база: родной ТФ должен делить ТФ серии (иначе ресемпл соврёт).
+        // The declared base timeframe must divide the series timeframe for valid resampling.
         if base_tf_ms > 0 && tf_ms >= base_tf_ms && tf_ms % base_tf_ms == 0 && !base.is_empty() {
             if tf_ms == base_tf_ms {
                 self.candles.extend_from_slice(base);
@@ -279,16 +296,15 @@ impl CandleSeries {
             }
         }
 
-        // Шов: первый ПОЛНЫЙ локальный бакет (первый — частичный, если трейд-ринг
-        // начинается посреди бакета; его серверная версия честнее). Если серверной базы
-        // нет вовсе — берём весь локальный ряд, включая частичный первый.
+        // Choose the seam by timestamp coverage. If the base contains the first local
+        // bucket, retain that base candle and begin the overlay at the next bucket.
+        // Without base coverage, retain the local series from its first bucket.
         let overlay_from = match local.first() {
             None => f64::INFINITY,
             Some(first) if self.candles.is_empty() => first.t_open_ms,
             Some(first) => {
-                // Частичность первого бакета определяем по покрытию: если серверная база
-                // содержит этот бакет — начинаем со следующего, иначе рискуем дырой и
-                // берём и частичный.
+                // Base coverage keeps the first local timestamp on the base side of the
+                // seam; without coverage, include that local bucket to avoid a gap.
                 let covered = self.candles.iter().any(|c| c.t_open_ms == first.t_open_ms);
                 if covered {
                     first.t_open_ms + tf_ms as f64
@@ -307,8 +323,10 @@ impl CandleSeries {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Живой край: подать новые трейды (тот же дренаж, что кормит кресты). Обновляет
-    /// последнюю свечу или открывает новую на кросс-бакете. `true` — серия изменилась.
+    /// Applies new trades from the same drain that feeds crosses to the live edge.
+    ///
+    /// Updates the last candle or opens a new one across a bucket boundary. Returns `true`
+    /// when the series changes.
     pub fn push_trades(&mut self, trades: &[Tick]) -> bool {
         if !self.valid || trades.is_empty() {
             return false;
@@ -337,7 +355,7 @@ impl CandleSeries {
                     changed = true;
                 }
                 _ => {
-                    // Поздний resend в недавний старый бакет (обновляем h/l/vol).
+                    // Update high, low, and volume for a late resend into a recent old bucket.
                     if let Some(c) = self
                         .candles
                         .iter_mut()
@@ -359,7 +377,7 @@ impl CandleSeries {
         changed
     }
 
-    /// Диапазон цен (low..high) свечей, пересекающих окно времени — для авто-Y чарта.
+    /// Returns the low-to-high range of candles intersecting a time window for chart auto-Y.
     pub fn price_range(&self, from_ms: f64, to_ms: f64) -> Option<(f32, f32)> {
         let tf = self.tf_ms.max(1) as f64;
         let mut lo = f32::MAX;

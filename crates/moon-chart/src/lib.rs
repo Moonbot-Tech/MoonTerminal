@@ -1,20 +1,20 @@
-//! Чарт-математика и геометрия, wgpu-free. Даёт общей UI-оболочке:
-//! layout-константы осей/стакана, тик-математику осей (`axes`), вид (`view::ChartView`
-//! — зум/пан/Y), типы инстансов линий ордеров (`layers`), и `build_order_geometry`
-//! (логические time_rel/price → примитивы).
+//! Chart math and geometry, wgpu-free. Provides the shared UI shell with:
+//! layout constants for the axes and order book, axis tick math (`axes`), the view (`view::ChartView`
+//! — zoom/pan/Y), order-line instance types (`layers`), and `build_order_geometry`
+//! (logical time_rel/price → primitives).
 //!
-//! Сами данные рисует НАШ own-pass DX11 (`chartdx` в moon-ui-gpui), а не wgpu-движок:
-//! старый wgpu-рендер (Chart/canvas/слои/style) удалён вместе с egui-бинарём.
+//! The data itself is rendered by our own-pass DX11 (`chartdx` in moon-ui-gpui), not by a wgpu engine:
+//! the old wgpu renderer (Chart/canvas/layers/style) was removed with the egui binary.
 
-// Подписи осей рисует UI-оболочка (GPUI-оверлей). Здесь — только layout-константы.
+// The UI shell draws the axis labels (as a GPUI overlay). Only layout constants live here.
 pub const PRICE_AXIS_W: f32 = 56.0;
 pub const TIME_AXIS_H: f32 = 16.0;
-/// Ширина зоны стакана справа (как BOOK_WIDTH_CSS стенда = 220), физ. пиксели.
+/// Width of the order book zone on the right (matching the reference's BOOK_WIDTH_CSS = 220), in physical pixels.
 pub const GLASS_ZONE_PX: f32 = 220.0;
 
 pub mod axes;
 pub mod container;
-// `data` / market-source models live in moon-core. Ре-экспорт под прежним путём.
+// `data` / market-source models live in moon-core. Re-export them under the previous path.
 pub use moon_core::data;
 pub mod figures;
 pub use figures::build_figure_geometry;

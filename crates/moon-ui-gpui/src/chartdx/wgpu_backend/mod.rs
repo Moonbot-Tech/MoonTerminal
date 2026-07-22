@@ -350,7 +350,7 @@ pub struct WgpuLayers {
     mark_line: Vec<PriceLinePoint>,
     combo_capacity: usize,
     price_line_capacity: usize,
-    /// Свечи (полный набор серии; замена целиком по смене ревизии) + стиль слоя.
+    /// Complete stored candle series, replaced as a unit when its revision changes.
     candles: Vec<CandleGpu>,
     candle_style: CandleStyleGpu,
     levels: Vec<LevelInstance>,
@@ -386,9 +386,9 @@ pub struct WgpuLayers {
     candle_buffers_dirty: bool,
 }
 
-// Разнос по смысловым блокам (verbatim-перенос): layers — данные/ёмкости/скейл объёма;
-// render — draw-методы и prepare-пасс; upload — юниформы и bind groups;
-// pipelines — создание пайплайнов/шейдеров/фоновой текстуры.
+// Split by responsibility: layers manages data, capacities, and volume scale; render handles
+// drawing and the prepare pass; upload manages uniforms and bind groups; pipelines creates
+// pipelines, shaders, and the background texture.
 mod layers;
 mod pipelines;
 mod render;

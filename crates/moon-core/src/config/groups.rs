@@ -1,4 +1,4 @@
-//! Свойства группы (= окна): иконка и активность. Привязаны к имени группы.
+//! Group (= window) properties: icon and active state. Associated by group name.
 
 use serde::{Deserialize, Serialize};
 
@@ -6,12 +6,12 @@ use super::servers::default_true;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GroupConfig {
-    /// Имя группы (ключ; совпадает с `ServerConfig.group`).
+    /// Group name (key; matches `ServerConfig.group`).
     pub name: String,
-    /// Активна ли группа. Неактивная — все её ядра не подключаются, окна нет.
+    /// Whether the group is active. An inactive group's cores do not connect, and it has no window.
     #[serde(default = "default_true")]
     pub active: bool,
-    /// Id иконки в assets/icons (taskbar + шапка окна группы).
+    /// Icon id in assets/icons (taskbar + group-window header).
     #[serde(default)]
     pub icon: u32,
 }

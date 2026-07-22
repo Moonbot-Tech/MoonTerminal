@@ -1,15 +1,14 @@
-//! Свой таб-стрип чартов (порт egui-полоски чарт-вкладок): Main + AddToChart-N.
-//! Полный контроль: активная вкладка, БЕЗ авто-
-//! перехода при детекте, дабл-клик по чарту→Main, отцепление вкладки в ОС-окно.
-//! Является Dock-панелью (center DockArea), внутри — своя полоска + активная
-//! `ChartPanel`. Детекты/ордер/нижние вкладки — отдельные MoonPalette Dock-панели.
+//! Custom chart tab strip ported from the egui chart tabs: Main plus AddToChart-N.
+//! It owns active-tab selection without automatically switching on a detect, chart double-click
+//! routing to Main, and detaching tabs into OS windows. The center `DockArea` panel contains this
+//! strip and the active `ChartPanel`; detects, orders, and lower tabs are separate dock panels.
 //!
-//! Подсистема выносных ОС-окон откреп-вкладок (detach/restore/repin/персист + хост
-//! `DetachedChartHost`) — в [`windows`].
+//! The detached-tab OS-window subsystem, including detach, restore, repin, persistence, and
+//! `DetachedChartHost`, lives in [`windows`].
 
 mod add_stack;
 mod candle_popup;
-// pub(crate): `search`/`render_popup` реюзает тикер курса в шапке (shell/ticker.rs).
+// `pub(crate)` because the header price ticker reuses `search` and `render_popup`.
 pub(crate) mod coin_search;
 mod common;
 mod custom;
@@ -45,31 +44,29 @@ use crate::chart_persist;
 use moon_core::config::{ChartBucket, ChartTheme};
 use moon_core::session::CoreId;
 
-/// Высота полоски чарт-вкладок (px). Должна РАВНЯТЬСЯ высоте таба `MoonTabStrip`
-/// (`tab.rs`: `fit_height(28, 13, 7.5)`), иначе при изменении масштаба интерфейса/шрифта
-/// (`scale.ui`/`font_delta`) полоса и линия под ней рассинхронятся с самими табами
-/// (таб масштабируется через `fit_height`, а не через чистый `ui()`). При дефолте
-/// (ui=1, font_delta=2) даёт 30 — прежнее значение константы.
+/// Return the chart-tab strip height in pixels.
+/// This must equal `MoonTabStrip`'s tab height (`fit_height(28, 13, 7.5)` in `tab.rs`) so UI and
+/// font scaling cannot desynchronize the strip and underline from the tabs. With the default
+/// `ui = 1` and `font_delta = 2`, it returns the former constant value of 30.
 pub(super) fn chart_tab_strip_h(cx: &App) -> f32 {
     crate::design::fit_h_value(cx, 28.0, 13.0, 7.5)
 }
 
-/// Идентичность вкладки чарта. Main — фуллскрин; Add(номер, bucket) — AddToChart-вкладка,
-/// где `bucket` — куда сведены графики ядра внутри группы (своё ядро / общая / именованная
-/// связка; см. `ChartBucket`). Порт egui `ContainerKind` (Main / Chart{num, bucket}).
+/// Identity of a chart tab, ported from egui's `ContainerKind`.
+/// `Main` owns the Main stack; `Add(number, bucket)` identifies an AddToChart tab whose bucket
+/// groups core charts as per-core, shared, or named-link collections.
 #[derive(Clone, PartialEq, Eq)]
 enum Tab {
     Main,
     Add(u32, ChartBucket),
-    /// Сессионная вкладка из мульти-выбора монет (кнопка «Открыть в новой вкладке»). Та же
-    /// форма, что `Add` (номер+bucket) → большинство веток сворачиваются `Add | Custom`. Номера
-    /// идут с `CUSTOM_NUM_BASE` (не пересекаются с детект-номерами Add); НЕ персистится и НЕ
-    /// наполняется ингестом (детекты в неё не текут — bucket синтетический `Shared`).
+    /// User-created tab built from multi-market selection by Open in New Tab.
+    /// It shares the `(number, bucket)` shape with `Add`, uses numbers starting at
+    /// `CUSTOM_NUM_BASE`, persists through `custom_coins` specs, and is not populated by detect ingest.
     Custom(u32, ChartBucket),
 }
 
-/// База номеров кастомных (session-only) вкладок — заведомо выше детект-номеров AddToChart,
-/// чтобы `(num, bucket)` кастома не совпал с обычной Add-вкладкой.
+/// Base number for custom tabs, kept above AddToChart detect numbers so their
+/// `(number, bucket)` identities cannot collide.
 const CUSTOM_NUM_BASE: u32 = 100_000;
 
 pub struct ChartTabs {
@@ -77,82 +74,81 @@ pub struct ChartTabs {
     group: String,
     epoch: f64,
     theme: ChartTheme,
-    /// Main-чарты: несколько рынков как stack отдельных `ChartPanel`, активный — fullscreen.
+    /// Main charts: multiple markets as separate `ChartPanel` entries with one active fullscreen.
     main: Entity<MainChartStack>,
-    /// AddToChart-вкладки (номер, bucket, стек графиков), отсортированы по (номер, bucket).
+    /// AddToChart tabs as `(number, bucket, chart stack)`, sorted by `(number, bucket)`.
     add: Vec<(u32, ChartBucket, Entity<AddChartStack>)>,
-    /// Сессионные кастомные вкладки из мульти-выбора монет (та же тройка). Не персистятся, не
-    /// наполняются ингестом. Лейблы — отдельно в `custom_labels`.
+    /// Custom tabs from multi-market selection, using the same tuple shape.
+    /// Specs persist them while detect ingest does not populate them; `custom_labels` stores labels.
     custom: Vec<(u32, ChartBucket, Entity<AddChartStack>)>,
-    /// Лейблы кастомных вкладок по номеру (показ в стрипе).
+    /// Custom-tab labels by tab number for display in the strip.
     custom_labels: HashMap<u32, String>,
-    /// Следующий номер кастомной вкладки.
+    /// Next custom-tab number.
     next_custom_num: u32,
-    /// Отмеченные чекбоксами монеты в выпадашке поиска (для «Открыть в новой вкладке»).
+    /// Markets checked in the search dropdown for Open in New Tab.
     coin_selected: std::collections::HashSet<(CoreId, String)>,
-    /// Поколение «гейта стаканов» по номеру кастомной вкладки — отменяет устаревшие 5с-таймеры
-    /// suspend (ушли→вернулись→снова ушли: считается только последний таймер).
+    /// Order-book gate generation by custom-tab number, invalidating stale five-second suspend
+    /// timers so only the latest leave/return/leave cycle applies.
     custom_gate_gen: HashMap<u32, u64>,
-    /// Откреплённые в своё ОС-окно вкладки — держим Entity, чтобы при закрытии окна
-    /// вернуть панель в стрип (repin) и чтобы новые детекты этого номера шли в неё.
+    /// Tabs detached into their own OS windows, retained so closing a window can repin its panel
+    /// and new detects for the same number continue reaching it.
     detached: Vec<(u32, ChartBucket, Entity<AddChartStack>)>,
-    /// Активная вкладка.
+    /// Active tab.
     active: Tab,
-    /// Сколько монет на вкладке (num, bucket) пользователь уже «видел» (был на ней активен).
-    /// Бейдж = pane_count - seen (новые с момента ухода). На активной вкладке seen догоняет
-    /// pane_count → бейджа нет. Уходишь → seen заморожен → новые детекты растят бейдж.
+    /// Number of markets already seen while each `(number, bucket)` tab was active.
+    /// The badge is `pane_count - seen`; active tabs catch up and hide it, while inactive tabs
+    /// retain their seen count so new detects increase the badge.
     seen: HashMap<(u32, ChartBucket), usize>,
-    /// Per-core курсор учтённых AddToChart-детектов.
+    /// Per-core cursor of processed AddToChart detects.
     add_seq: HashMap<CoreId, u64>,
-    /// Сигнатура входов, которые реально меняют tab-strip: AddToChart-детекты,
-    /// split-настройка и явный запрос открыть монету на Main.
+    /// Signature of inputs that change the tab strip: AddToChart detects, split configuration,
+    /// and explicit requests to open a market on Main.
     last_sig: u64,
-    /// Последняя виденная `price_scale_rev` тулбара — применяем масштаб к АКТИВНОЙ панели
-    /// только когда rev вырос (юзер выбрал), иначе синхроним показ масштаба активной вкладки.
+    /// Last observed toolbar `price_scale_rev`; a larger revision applies the selected scale only
+    /// to the active panel, while unchanged revisions mirror the active tab's displayed scale.
     last_scale_rev: u64,
-    /// Последняя виденная `switch_charts_rev` — листаем активный чарт Main-стека только на
-    /// РОСТ rev, адресованный нашей группе (хоткей `switch_charts`), одноразово.
+    /// Last observed `switch_charts_rev`; only a larger revision addressed to this group advances
+    /// the Main stack's active chart, exactly once.
     last_switch_charts_rev: u64,
-    /// Последняя виденная `close_all_charts_rev` — на её рост закрываем Main-стек (Shift+Esc).
+    /// Last observed `close_all_charts_rev`; a larger revision closes the Main stack.
     last_close_all_charts_rev: u64,
-    /// Последняя виденная `close_active_chart_rev` — на её рост закрываем фулскрин-чарт (Esc).
+    /// Last observed `close_active_chart_rev`; a larger revision closes the fullscreen chart.
     last_close_active_chart_rev: u64,
-    /// Последняя виденная `chart_x_sync_rev` — [Shift+СКМ] в НАШЕМ окне применяет масштаб
-    /// ко всем стекам окна + persist (`layout.chart_x_ppm_by_group`), одноразово.
+    /// Last observed `chart_x_sync_rev`; Shift+middle-click in this window applies the scale to all
+    /// its stacks and persists `layout.chart_x_ppm_by_group`, exactly once.
     last_x_sync_rev: u64,
-    /// Откреп-вкладки на восстановление при загрузке (из charts.json): создаём их пустыми и
-    /// открываем окна на ПЕРВОМ render (не в конструкторе окна группы — нельзя вложенно).
+    /// Detached tabs pending restoration from `charts.json`; regular Add tabs start empty for
+    /// ingest, while Custom tabs seed from their specs. The constructor begins restoration and
+    /// defers actual OS-window creation through `cx.defer`.
     restore_pending: Vec<(u32, ChartBucket, chart_persist::WinGeom, Option<f32>)>,
-    /// Handle окна группы. Backend-observe callbacks не получают `&mut Window`, но open/activate
-    /// и restore detached окон должны жить вне `render()`.
+    /// Group-window handle used by backend observers that lack `&mut Window`; opening, activating,
+    /// and restoring detached windows must happen outside `render()`.
     window_handle: AnyWindowHandle,
     focus: FocusHandle,
-    /// Открыт ли попап стиля карандаша (ПКМ по кнопке-карандашу): выбор инструмента,
-    /// цвета, толщины, непрозрачности, Solid/Dash. См. `fig_tools`.
+    /// Whether the pencil-style popup is open for tool, color, width, opacity, and line-style selection.
     fig_style_popup_open: bool,
-    /// In-scene попап настроек раскладки активной вкладки (кнопка ⚙). Popup должен жить
-    /// в обычной GPUI scene: chart text находится ниже scene, поэтому отдельное ОС-окно не нужно.
+    /// In-scene layout-settings popup for the active tab.
+    /// Chart text renders below the regular GPUI scene, so this popup needs no separate OS window.
     layout_popup_open: bool,
-    /// Был ли курсор внутри popup-а. Уход после первого входа закрывает popup и коммитит ввод.
+    /// Whether the cursor has entered the popup; leaving after first entry closes it and commits input.
     layout_popup_hovered: bool,
-    /// In-scene попап «Свечи и трейды» (кнопка ❚ рядом с ⚙) — ГЛОБАЛЬНЫЕ настройки
-    /// отображения свечей (см. [`candle_popup`]).
+    /// In-scene Candles and Trades popup for global candle-display settings.
     candle_popup_open: bool,
     candle_popup_hovered: bool,
-    /// Поле высоты режима Fit.
+    /// Fit-mode height field.
     layout_fit_input: Entity<MoonInputState>,
-    /// Поле высоты режима Scroll.
+    /// Scroll-mode height field.
     layout_scroll_input: Entity<MoonInputState>,
-    /// Поле имени кастомной вкладки (в попапе ⚙, только для Custom).
+    /// Custom-tab name field, shown only for `Custom` in the layout popup.
     custom_name_input: Entity<MoonInputState>,
-    /// Поле ввода монеты (поиск) полоски вкладок — своё на окно; набор монет зависит от ядер
-    /// АКТИВНОЙ вкладки (см. [`coin_search`]).
+    /// Per-window market-search input in the tab strip; available markets depend on the active
+    /// tab's cores.
     coin_input: Entity<MoonInputState>,
-    /// Текущий текст в поле монеты (зеркало `coin_input`, обновляется по `Change`).
+    /// Current market-input text mirrored from `coin_input` on `Change`.
     coin_query: String,
-    /// Открыт ли выпадающий список совпадений монеты.
+    /// Whether the market-match dropdown is open.
     coin_popup_open: bool,
-    /// Пикер произвольного цвета рисования (кнопка «Custom» в попапе стиля карандаша).
+    /// Arbitrary drawing-color picker opened from Custom in the pencil-style popup.
     fig_color_picker: Entity<MoonColorPickerState>,
 }
 
@@ -186,8 +182,8 @@ impl ChartTabs {
                 });
             }
         }
-        // Из charts.json: масштаб Main (num=0) и список откреп-вкладок этой группы на
-        // восстановление (создадим пустыми на первом render → ждут детект).
+        // Load Main scale (`number == 0`) and this group's detached tabs from `charts.json`.
+        // Constructor-deferred restoration leaves Add tabs empty for ingest and seeds Custom from specs.
         #[allow(clippy::type_complexity)]
         let (
             main_scale,
@@ -301,7 +297,7 @@ impl ChartTabs {
         if main_cursor_labels.is_some() {
             main.update(cx, |p, pcx| p.set_cursor_labels(main_cursor_labels, pcx));
         }
-        // Сохранённый X-масштаб окна группы ([Shift+СКМ] sync) — новые графики стартуют с него.
+        // Seed new charts with the group's persisted window X scale from Shift+middle-click sync.
         let group_x_ppm = backend
             .read(cx)
             .layout
@@ -312,9 +308,9 @@ impl ChartTabs {
             main.update(cx, |s, c| s.set_x_ppm(group_x_ppm, false, c));
         }
         cx.observe(&backend, |this, backend, cx| {
-            // Запросы «применить ко всем» из выносных окон — до early-return по sig (они sig не меняют).
+            // Drain apply-to-all requests from detached windows before the signature early return.
             this.drain_apply_all(cx);
-            // [Shift+СКМ] в НАШЕМ окне → применить масштаб ко всем стекам окна + persist.
+            // Shift+middle-click in this window applies its scale to every stack and persists it.
             this.drain_x_sync(cx);
             let sig = chart_tabs_sig(backend.read(cx), &this.group);
             if sig == this.last_sig {
@@ -343,10 +339,9 @@ impl ChartTabs {
             MoonInputState::new(window, cx)
                 .placeholder(rust_i18n::t!("chart.coin.search").to_string())
         });
-        // Печать в поле монеты → обновить запрос и (пере)открыть список совпадений. Render читает
-        // `coin_query`, а не сам инпут как источник событий (мирроринг StrategiesView).
-        // Кириллица = забытая RU-раскладка (тикеры всегда латиница) — конвертируем прямо
-        // в поле, как Moonbot; повторный Change принесёт уже латиницу.
+        // Mirror market-input changes into `coin_query` and reopen the match list. Cyrillic input
+        // indicates an accidentally active Russian keyboard layout because tickers are Latin-only;
+        // convert it in place, and the resulting change event will deliver the Latin text.
         cx.subscribe_in(
             &coin_input,
             window,
@@ -368,8 +363,8 @@ impl ChartTabs {
             },
         )
         .detach();
-        // Пикер произвольного цвета рисования: выбор пишет RGB в fig_style (альфа
-        // сохраняется — ей управляет степпер «Прозр.»).
+        // The custom drawing-color picker writes RGB into `fig_style` while preserving alpha,
+        // which is controlled by the opacity stepper.
         let fig_color_picker = {
             let init = backend.read(cx).fig_style.color;
             let hsla: Hsla =
@@ -413,7 +408,7 @@ impl ChartTabs {
             },
         )
         .detach();
-        // Поле имени кастомной вкладки в попапе ⚙: коммит по Blur/Enter.
+        // Commit the custom-tab name field from the layout popup on blur or Enter.
         let custom_name_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(
             &custom_name_input,
@@ -501,9 +496,8 @@ impl ChartTabs {
                 .update(cx, |p, pcx| p.open_or_focus(core, market, pcx));
             self.active = Tab::Main;
             self.last_sig = chart_tabs_sig(self.backend.read(cx), self.group.as_str());
-            // П.1: поднимаем/фокусируем окно Main ТОЛЬКО для дабл-клика по чарту
-            // (open_request_activate). Клики в Ордерах/Детектах открывают монету, но окно
-            // не активируют — иначе любой клик дёргал бы окно на передний план.
+            // Raise and focus Main when `open_request_activate` is set by a chart double-click or
+            // an Alerts coin click; Orders, Detects, and other sources open without stealing focus.
             if activate {
                 let handle = self.window_handle;
                 cx.defer(move |app| {
@@ -518,8 +512,8 @@ impl ChartTabs {
         }
     }
 
-    /// ПКМ по детекту: «открыть в новой кастомной вкладке в режиме сравнения». Дренаж
-    /// зеркалит `handle_open_request` (compare-and-take, чтобы чужая группа не съела запрос).
+    /// Drain a detect context-menu request to open a new custom tab in comparison mode.
+    /// Compare-and-take mirrors `handle_open_request` so another group cannot consume the request.
     fn handle_open_compare_request(&mut self, cx: &mut Context<Self>) {
         let pending = {
             let b = self.backend.read(cx);
@@ -581,7 +575,7 @@ impl ChartTabs {
         }
     }
 
-    /// Активная панель (Main или AddToChart/Custom stack) для показа.
+    /// Return the active panel to display: Main or an AddToChart/Custom stack.
     fn active_element(&self) -> AnyElement {
         match &self.active {
             Tab::Main => self.main.clone().into_any_element(),
@@ -603,8 +597,8 @@ impl ChartTabs {
     }
 
     fn main_chart_target(&self, cx: &App) -> Option<(CoreId, String)> {
-        // Залоченный якорь сравнения действует как Main-фулскрин для торговли: его (core, market)
-        // становится таргетом группы → хоткеи F1-F6/S1-S6 и cancel_buy идут на него.
+        // A locked comparison anchor acts like Main fullscreen for trading: its `(core, market)`
+        // becomes the group target for F1-F6, S1-S6, and cancel-buy hotkeys.
         if let Some(stack) = self.active_stack() {
             if let Some(anchor) = stack.read(cx).compare_anchor() {
                 return Some(anchor);
@@ -638,26 +632,25 @@ impl ChartTabs {
         }
     }
 
-    /// Выбор масштаба из дропдауна в полоске вкладок (рядом с ⚙): применяется ТОЛЬКО к
-    /// активной вкладке этого окна (Main — к Main) и сохраняется per-вкладочно. В отличие
-    /// от старого тулбар-дропдауна не трогает глобальный `price_scale_rev` → другие вкладки
-    /// и выносные окна не затрагиваются.
+    /// Apply a tab-strip scale-dropdown selection only to this window's active tab.
+    /// `persist_scales` saves Main, Add, and detached scales but currently omits Custom tabs in the
+    /// strip; unlike the former toolbar dropdown, this does not change global `price_scale_rev`.
     pub(crate) fn pick_active_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {
         self.set_active_scale(pct, cx);
         self.persist_scales(cx);
         cx.notify();
     }
 
-    /// Совпадения поля монеты для АКТИВНОЙ вкладки (Main/Custom → все ядра группы; Add → ядра
+    // Market-input matching lives in `custom.rs`; tab-label construction follows below.
 
-    /// Метка вкладки (П.4): «номер-группа», «номер-группа-ядро» (своё ядро) или
-    /// «номер-группа-связка» (именованная связка).
+    /// Return a tab label as number-group, number-group-core, or number-group-link.
     fn add_label(&self, n: u32, bucket: &ChartBucket, cx: &App) -> String {
         chart_pane_label(&self.backend, &self.group, n, bucket, cx)
     }
 
-    /// Неактивные вкладки отсутствуют в текущей GPUI scene, значит их chart data observe не должен
-    /// гонять CPU prepare. Активная/откреплённая панель сама выставит visible=true в своём render.
+    /// Mark inactive tabs invisible because they are absent from the current GPUI scene and must
+    /// not run CPU preparation from chart-data observation. Active or detached panels mark
+    /// themselves visible in their own render path.
     fn sync_inactive_chart_visibility(&self, cx: &mut Context<Self>) {
         let active = self.active.clone();
         if matches!(active, Tab::Main) {
@@ -697,10 +690,8 @@ impl ChartTabs {
                 b.price_scale_group.as_deref() == Some(&self.group),
             )
         };
-        // Команда «применить масштаб» (дропдаун-«ко всем» / хоткей Scale +/−) на РОСТ rev.
-        // Применяем ТОЛЬКО если бамп адресован нашей группе — иначе хоткей другой группы
-        // менял бы масштаб наших вкладок. Виденную rev продвигаем в любом случае, чтобы
-        // чужой бамп не «догнал» нас позже (last_scale_rev не залипает на старом).
+        // Apply a scale command only on a larger revision addressed to this group. Advance the
+        // observed revision even for another group's bump so it cannot catch up here later.
         if rev != self.last_scale_rev {
             self.last_scale_rev = rev;
             if ours {
@@ -708,7 +699,7 @@ impl ChartTabs {
                 return;
             }
         }
-        // Иначе синхроним ПОКАЗ масштаба активной вкладки обратно в backend (подпись тулбара).
+        // Otherwise mirror the active tab's scale into the backend for the toolbar label.
         let cur = self.active_scale(cx);
         self.backend.update(cx, |b, _| {
             if b.price_scale != cur {
@@ -717,10 +708,9 @@ impl ChartTabs {
         });
     }
 
-    /// Хоткей `switch_charts`: на РОСТ `switch_charts_rev`, адресованного нашей группе, листаем
-    /// активный чарт Main-стека на следующий. Виденную rev продвигаем всегда (чужой бамп не
-    /// должен «догнать» нас позже). Работает по Main-стеку (fullscreen активный чарт); кастомные
-    /// AddToChart-вкладки — тайловый список без единого активного, там переключать нечего.
+    /// Advance the Main stack's active chart for a larger `switch_charts_rev` addressed to this group.
+    /// Always advance the observed revision so another group's bump cannot apply later. AddToChart
+    /// and custom tiled lists have no single active chart and are unaffected.
     fn sync_switch_charts(&mut self, cx: &mut Context<Self>) {
         let (rev, ours) = {
             let b = self.backend.read(cx);
@@ -738,9 +728,9 @@ impl ChartTabs {
         }
     }
 
-    /// Хоткей `CloseAllCharts` (встроенный Shift+Esc): на РОСТ ГЛОБАЛЬНОЙ `close_all_charts_rev`
-    /// закрываем Main-стек ЭТОЙ группы. Rev общий (без адресации группе) → срабатывает у всех
-    /// ChartTabs всех окон одновременно. AddToChart/кастомные вкладки (именованные) не трогаем.
+    /// Close this group's Main stack on a larger global `close_all_charts_rev`.
+    /// The unaddressed revision reaches every `ChartTabs` simultaneously; AddToChart and named
+    /// custom tabs remain open.
     fn sync_close_all_charts(&mut self, cx: &mut Context<Self>) {
         let rev = self.backend.read(cx).close_all_charts_rev;
         if rev == self.last_close_all_charts_rev {
@@ -752,8 +742,8 @@ impl ChartTabs {
         });
     }
 
-    /// Встроенный Esc: на РОСТ `close_active_chart_rev`, адресованного нашей группе, закрываем
-    /// ЧАРТ в фулскрине Main (и только его). Не в фулскрине — no-op. Режим рисования не трогаем.
+    /// Close only Main's fullscreen chart on a larger `close_active_chart_rev` for this group.
+    /// This is a no-op outside fullscreen mode and does not alter drawing mode.
     fn sync_close_active_chart(&mut self, cx: &mut Context<Self>) {
         let (rev, ours) = {
             let b = self.backend.read(cx);
@@ -792,7 +782,7 @@ impl Panel for ChartTabs {
         crate::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
-        // AddToChart-вкладки не сохраняем: они пересоздаются из детектов при работе.
+        // Do not persist AddToChart tabs; runtime detects recreate them.
         crate::dock_persist::panel_state_with_group("ChartTabs", &self.group)
     }
     fn background_policy(&self, _cx: &App) -> MoonBackgroundPolicy {
@@ -800,10 +790,9 @@ impl Panel for ChartTabs {
     }
 }
 
-/// Осмысленная подпись AddToChart-графика (П.4 — порт egui): «номер-группа», а далее по
-/// `bucket`: своё ядро → «номер-группа-ядро», именованная связка → «номер-группа-связка»,
-/// общая → только «номер-группа». Пустая группа → только номер (старый фолбэк). Используется
-/// и в стрипе вкладок, и в заголовке/титуле выносного окна.
+/// Build an AddToChart label for both the tab strip and detached-window title.
+/// The base is number-group; per-core buckets append the core, named links append the link, and
+/// shared buckets append nothing. An empty group falls back to the number alone.
 fn chart_pane_label(
     backend: &Entity<Backend>,
     group: &str,
@@ -811,8 +800,8 @@ fn chart_pane_label(
     bucket: &ChartBucket,
     cx: &App,
 ) -> String {
-    // Кастомная (мульти-монетная) вкладка: метка = её имя (custom_label) или дефолт «Набор N»,
-    // а не сырой номер «100000-…». Узнаём по наличию custom_coins в спеке.
+    // A custom multi-market tab uses its `custom_label` or the localized default set label instead
+    // of the raw 100000-series number; `custom_coins` in the spec identifies it.
     {
         let specs = &backend.read(cx).chart_specs;
         if let Some(s) = specs.iter().find(|s| s.matches(group, n, bucket)) {

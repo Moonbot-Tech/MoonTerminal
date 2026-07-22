@@ -1,17 +1,18 @@
-//! Единый распознаватель+исполнитель хоткеев для ВСЕХ окон (главное окно группы,
-//! выносные окна чартов). Раньше матчинг клавиш жил россыпью `pressed()` только в
-//! `Shell::on_hotkey`, из-за чего половина настроенных хоткеев в рантайме не работала,
-//! а выносные окна не ловили ничего. Теперь одно место:
+//! Shared hotkey recognition and backend action execution for group windows and detached chart
+//! windows. Key matching previously lived in scattered `pressed()` checks under
+//! `Shell::on_hotkey`, leaving some configured bindings inactive and detached chart windows with
+//! no handling. The shared flow is now:
 //!
-//! - [`resolve`] превращает нажатие + конфиг в семантическое [`HotkeyAction`]
-//!   (сравнение `modifiers`+`key`, НЕ полный `==Keystroke` — см. [[keystroke-eq-pitfall]]);
-//! - [`apply`] исполняет действие относительно ПЕРЕДАННОГО таргета (активное ядро / рынок
-//!   активного чарта окна) — так каждое окно работает со своим контекстом. Масштаб (`Scale`)
-//!   `apply` не трогает: он свой у каждого окна (rev-механизм группы vs панель выносного окна),
-//!   поэтому вызывающий обрабатывает его сам.
+//! - [`resolve`] maps a key-down event plus configuration to a semantic [`HotkeyAction`], comparing
+//!   only `modifiers` and `key` rather than full `Keystroke` equality;
+//! - [`apply`] executes shared backend actions against the caller-supplied active core and chart
+//!   market. Actions requiring caller-level context return `false`: scale belongs to the calling
+//!   window; cursor placement and cancellation follow the globally tracked hovered chart;
+//!   switching and active-chart closing are group-local; reset and close-all are application-global.
 //!
-//! Кросс-платформенность: дефолты хранятся как `secondary-*` (gpui резолвит в Ctrl на
-//! Windows/Linux и Cmd на macOS), так что назначения из коробки работают на обеих ОС.
+//! Configured shortcuts use GPUI's `Keystroke::parse` syntax. Shipped keyboard defaults deliberately
+//! use literal `ctrl-` on both Windows and macOS to match Moonbot; bindings that need no modifier
+//! retain their bare function-key or Delete forms.
 
 use gpui::{App, Context, Entity, KeyDownEvent, Keystroke, Modifiers};
 use moon_core::config::HotkeysConfig;
@@ -22,75 +23,88 @@ use moon_core::session::order_lines::LineKind;
 
 use crate::Backend;
 
-/// Семантическое действие хоткея (независимо от конкретной клавиши в конфиге).
+/// Semantic hotkey action independent of its configured key binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyAction {
-    /// Выбрать пресет размера ордера F1-F6 активного ядра.
+    /// Select one of the active core's six order-size presets.
     OrderSize(usize),
-    /// Задействовать fixed-sell слот S1-S6 (гасит TP).
+    /// Select one of the active core's six fixed-sell slots, making that preset the effective take
+    /// profit instead of the main TP setting.
     SellPreset(usize),
-    /// Выбрать i-ю manual-стратегию активного ядра (порядок пикера MS шапки) и включить
-    /// режим ручной стратегии — то же, что клик по пункту пикера.
+    /// Select the indexed manual strategy in the active core's header picker and enable manual
+    /// strategy mode, matching a click on that picker item.
     ManualStrategy(usize),
-    /// Отменить ожидающие buy-ордера рынка активного чарта.
+    /// Cancel pending buy orders for the active chart's market.
     CancelBuy,
-    /// Отменить ВСЕ ожидающие buy-ордера активного ядра (по всем рынкам).
+    /// Cancel all pending buy orders for the active core across every market.
     CancelAllBuys,
-    /// Тоггл «паник-селл» по рынку активного чарта.
+    /// Toggle panic sell for the active chart's market.
     PanicSell,
-    /// Немедленно закрыть позицию рынка активного чарта по рынку (market sell).
+    /// Immediately close the active chart market's position with a market sell.
     PanicSellOne,
-    /// Объединить sell-ордера рынка активного чарта (по стороне позиции).
+    /// Join sell orders for the active chart's market using its current position side.
     JoinSells,
-    /// Сдвинуть ордера рынка активного чарта на один шаг цены (`chart_price_step`)
-    /// через `move_order`: `sell=false` — входные buy-линии (только незалитые, тот же
-    /// гард, что у перетаскивания), `sell=true` — выходные sell-линии.
+    /// Move active-chart orders by one market price step through `move_order`.
+    ///
+    /// `sell = false` selects unfilled entry buy lines, using the same guard as line dragging;
+    /// `sell = true` selects exit sell lines. `up` chooses the direction.
     ShiftOrder {
+        /// Select exit sell lines when true, or entry buy lines when false.
         sell: bool,
+        /// Add one price step when true, or subtract one when false.
         up: bool,
     },
-    /// Разбить sell-ордер рынка активного чарта на части.
+    /// Split a sell order for the active chart's market into parts.
     SplitOrder,
-    /// Поставить ручной ордер по цене ПОД КУРСОРОМ на чарте (long/short). Исполняет
-    /// вызывающее окно через чарт под курсором (`Backend::hovered_chart`) — цену знает
-    /// только сам чарт (пиксель Y → цена пейна).
+    /// Place a manual long order at the hovered chart price.
+    ///
+    /// The caller routes this through `Backend::hovered_chart`, because only the chart can map the
+    /// cursor's pane-relative Y coordinate to a price.
     NewLong,
+    /// Place a manual short order at the hovered chart price through the caller.
     NewShort,
-    /// Выбрать/тогать инструмент рисования (слой фигур — глобальное состояние).
+    /// Select or toggle a drawing tool in the global figure state.
     FigTool(FigureTool),
-    /// Переключить инструмент рисования на следующий по кругу (+вкл режим рисования).
+    /// Cycle to the next drawing tool and keep drawing mode enabled.
     SwitchFigure,
-    /// Переключить активный (fullscreen) чарт Main-стека окна на следующий. Исполняет
-    /// вызывающее окно (свой стек у каждого) — как масштаб.
+    /// Switch the group window's active fullscreen Main chart to the next chart.
+    ///
+    /// The group-window caller routes this through its revision mechanism; detached chart windows
+    /// do not handle it.
     SwitchCharts,
-    /// Удалить выделенную фигуру.
+    /// Delete the selected figure.
     FigDelete,
-    /// Тоггл chart-алерта выделенной фигуры.
+    /// Toggle the selected figure's chart alert.
     FigAlert,
-    /// Закрыть ЧАРТ в фулскрине Main (встроенный Esc). Как в Moonbot: Esc ВСЕГДА закрывает
-    /// график, режим рисования при этом НЕ выключается (он тумблерится карандашом). Исполняет
-    /// вызывающее окно (Main-группа), в откреп-окне — no-op.
+    /// Close the group window's fullscreen Main chart with the built-in plain Escape binding.
+    ///
+    /// Matching Moonbot, Escape closes the chart without disabling drawing mode. The group-window
+    /// caller executes this action; detached chart windows leave it unhandled.
     CloseActiveChart,
-    /// Сбросить позиции ВСЕХ окон на экран (встроенный Ctrl+Shift+F10). Исполняет
-    /// вызывающее окно (нужен доступ к списку окон приложения).
+    /// Reset every application window to an on-screen position with built-in Ctrl+Shift+F10.
+    ///
+    /// The caller executes this because it requires application-wide window access.
     ResetWindows,
-    /// Отменить ордер ПОД КУРСОРОМ (встроенный Tab/Del над линией ордера). Исполняет
-    /// вызывающее окно через чарт под мышью (`Backend::hovered_chart`) — наведённый ордер
-    /// знает только сам чарт (`order_hover`). Нет наведённого ордера → не обработано (клавиша
-    /// всплывает: Tab остаётся навигацией фокуса).
+    /// Cancel the order under the cursor for the built-in unmodified Tab/Delete binding.
+    ///
+    /// The caller routes this through `Backend::hovered_chart`, whose `order_hover` state identifies
+    /// the order. With no hovered order the action remains unhandled, allowing Tab focus navigation.
     CancelHoveredOrder,
-    /// Закрыть ВСЕ графики Main-стеков всех групп (встроенный Shift+Esc). Исполняет
-    /// вызывающее окно бампом глобальной ревизии — каждый ChartTabs закрывает свой Main.
+    /// Close every group's Main-stack charts with the built-in Shift+Escape binding.
+    ///
+    /// The caller increments a global revision observed by every `ChartTabs` instance.
     CloseAllCharts,
-    /// Масштаб Y — зум внутрь. Исполняет вызывающее окно (свой у каждого).
+    /// Zoom the active chart's Y scale inward through the calling window.
     ScalePlus,
-    /// Масштаб Y — зум наружу. Исполняет вызывающее окно.
+    /// Zoom the active chart's Y scale outward through the calling window.
     ScaleMinus,
 }
 
-/// Нажатая клавиша совпала с сочетанием `raw` из конфига. Сравниваем ТОЛЬКО
-/// `modifiers`+`key`: событие на Windows несёт ещё `key_char`, которого у распарсенного
-/// `Keystroke` нет → полный `==` для Ctrl+буква никогда не совпадал.
+/// Return whether an event matches a configured GPUI keystroke string.
+///
+/// Empty or invalid strings do not match. Comparison uses only `modifiers` and `key`: Windows
+/// events also carry `key_char`, while a parsed `Keystroke` does not, so full equality previously
+/// prevented Ctrl-plus-letter bindings from matching.
 fn pressed(raw: &str, ev: &KeyDownEvent) -> bool {
     let raw = raw.trim();
     !raw.is_empty()
@@ -100,13 +114,17 @@ fn pressed(raw: &str, ev: &KeyDownEvent) -> bool {
         )
 }
 
-/// Распознать нажатие как действие по конфигу хоткеев. `None` — не наш хоткей.
-/// Порядок веток = приоритет (фигуры/масштаб раньше торговых).
+/// Resolve a key-down event to the first matching configured or built-in action.
+///
+/// Branch order defines collision precedence: configured figure actions; built-in Shift+Escape,
+/// Escape, reset, and Tab/Delete; configured scale actions; order-size and fixed-sell presets;
+/// active-market and active-core trading actions; configured `switch_charts`; then manual
+/// strategies. Returns `None` when no binding matches.
 pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     use HotkeyAction as A;
     let p = |raw: &str| pressed(raw, ev);
 
-    // Слой рисования — до торговых веток.
+    // Drawing-layer bindings take precedence over built-ins and trading bindings.
     if p(&hk.draw_hline) {
         return Some(A::FigTool(FigureTool::HLine));
     }
@@ -128,7 +146,7 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     if p(&hk.fig_alert) {
         return Some(A::FigAlert);
     }
-    // Встроенный Shift+Esc — закрыть все графики (до плоского Esc, иначе перехватится им).
+    // Shift-only Escape closes all Main stacks; the next branch matches modifier-free Escape.
     if ev.keystroke.key == "escape"
         && ev.keystroke.modifiers.shift
         && !ev.keystroke.modifiers.control
@@ -140,7 +158,7 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     if ev.keystroke.key == "escape" && ev.keystroke.modifiers == Modifiers::default() {
         return Some(A::CloseActiveChart);
     }
-    // Встроенные (не конфигурируемые) клавиши.
+    // Remaining built-in, non-configurable bindings.
     if p("ctrl-shift-f10") {
         return Some(A::ResetWindows);
     }
@@ -150,7 +168,7 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
         return Some(A::CancelHoveredOrder);
     }
 
-    // Масштаб.
+    // Window-local Y-scale bindings.
     if p(&hk.scale_plus) {
         return Some(A::ScalePlus);
     }
@@ -158,7 +176,7 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
         return Some(A::ScaleMinus);
     }
 
-    // Размеры / sell-пресеты.
+    // Order-size and fixed-sell presets.
     if let Some(i) = hk.order_size.iter().position(|r| p(r)) {
         return Some(A::OrderSize(i));
     }
@@ -166,7 +184,7 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
         return Some(A::SellPreset(i));
     }
 
-    // Управление ордерами рынка активного чарта.
+    // Order actions for the active chart's market.
     if p(&hk.cancel_buy) {
         return Some(A::CancelBuy);
     }
@@ -225,10 +243,12 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     None
 }
 
-/// Отменить ордер ПОД КУРСОРОМ через чарт под мышью (`Backend::hovered_chart`) — общий
-/// путь встроенного Tab/Del и фолбэка `FigDelete` без выделенной фигуры (дефолтный
-/// `fig_delete`=Del резолвится раньше встроенной ветки и иначе затенял бы отмену навсегда).
-/// `false` — нет чарта под мышью или наведённого ордера (клавиша всплывает дальше).
+/// Cancel the order under the cursor through `Backend::hovered_chart`.
+///
+/// This is shared by the built-in Tab/Delete route and the caller's `FigDelete` fallback when no
+/// figure is selected. The default `fig_delete = Delete` resolves before the built-in branch and
+/// would otherwise shadow hovered-order cancellation. Returns `false` when no hovered chart or
+/// order exists, allowing the key event to continue propagating.
 pub fn cancel_hovered_order(backend: &Entity<Backend>, cx: &mut App) -> bool {
     let chart = backend
         .read(cx)
@@ -241,9 +261,13 @@ pub fn cancel_hovered_order(backend: &Entity<Backend>, cx: &mut App) -> bool {
     }
 }
 
-/// Исполнить действие (кроме масштаба — его окно делает само). `target` — рынок активного
-/// чарта окна (`(ядро, рынок)`); `active_core` — активное торговое ядро окна. Возвращает
-/// `true`, если действие обработано (клавишу надо погасить). `Scale*` возвращает `false`.
+/// Execute a shared backend action against the caller's trading context.
+///
+/// `target` is the calling window's active chart market as `(core, market)`, and `active_core` is
+/// its active trading core. `true` means the action was handled and the caller should stop key
+/// propagation; for command-sending actions it does not guarantee remote success. Actions that
+/// require caller-level window, hovered-chart, group-revision, or application context return
+/// `false` for caller routing.
 pub fn apply(
     action: HotkeyAction,
     b: &mut Backend,
@@ -254,7 +278,7 @@ pub fn apply(
     use HotkeyAction as A;
     match action {
         A::FigTool(tool) => {
-            // Повтор того же инструмента в активном режиме — выключает; иначе выбирает + вкл.
+            // Repeating the active tool disables drawing; another tool selects it and enables drawing.
             if b.fig_draw_mode && b.fig_tool == tool {
                 b.fig_draw_mode = false;
             } else {
@@ -265,8 +289,8 @@ pub fn apply(
             true
         }
         A::SwitchFigure => {
-            // Листаем инструмент по кругу и держим режим рисования включённым (как «смена
-            // фигуры» в Moonbot). Повтор хоткея → следующий инструмент; выход — Esc/повтор его же.
+            // Cycle through tools and keep drawing mode enabled, matching Moonbot's switch-figure
+            // action. This action never exits drawing mode; the pencil or active-tool toggle does.
             b.fig_tool = b.fig_tool.next();
             b.fig_draw_mode = true;
             bcx.notify();
@@ -291,7 +315,7 @@ pub fn apply(
         }
         A::OrderSize(i) => match active_core {
             Some(core) => {
-                // Выбор + персист в конфиг (восстановление после перезапуска).
+                // Select the preset and persist it in configuration for the next restart.
                 b.set_order_size_sel(core, i);
                 b.order_size_rev = b.order_size_rev.wrapping_add(1);
                 bcx.notify();
@@ -376,9 +400,9 @@ pub fn apply(
             Some((core, market)) => shift_orders(b, core, &market, sell, up),
             None => false,
         },
-        // Масштаб, постановка по курсору и переключение активного чарта — забота вызывающего
-        // окна: масштаб/активный чарт свои у каждого окна (rev-механизм группы), а цену ордера
-        // знает только чарт под курсором (`Backend::hovered_chart`).
+        // Caller-routed actions have mixed scope: scale is window-specific; cursor placement and
+        // cancellation use `Backend::hovered_chart`; switching and active-chart closing are
+        // group-local; reset and close-all are application-global.
         A::ScalePlus
         | A::ScaleMinus
         | A::NewLong
@@ -391,10 +415,12 @@ pub fn apply(
     }
 }
 
-/// Хоткеи shift_buy/sell_up/down: сдвинуть живые линии стороны `sell` рынка на один шаг
-/// цены (`chart_price_step` рынка) через `move_order` — та же команда и те же гарды, что
-/// у перетаскивания линии мышью (вход двигаем только пока не залит). Шаг рынка неизвестен
-/// или двигать нечего → `false` (не выдумываем шаг).
+/// Move eligible active-market order lines by one configured market price step.
+///
+/// The function uses `move_order`, matching line dragging. Buy entries are eligible only while
+/// unfilled; open sell exits remain eligible. It returns `false` when the price step is unavailable
+/// or no eligible line has a finite positive current price. Once at least one eligible line is
+/// found it returns `true`; non-positive destination prices are skipped and send errors are logged.
 fn shift_orders(b: &mut Backend, core: CoreId, market: &str, sell: bool, up: bool) -> bool {
     let Some(step) = b.session.market_source().price_step(core, market) else {
         return false;
@@ -407,7 +433,7 @@ fn shift_orders(b: &mut Backend, core: CoreId, market: &str, sell: bool, up: boo
             .iter_market(market)
             .filter(|order| order.closed_ms.is_none())
         {
-            // Залитый вход — историческая отметка, реплейсить нечего (см. drag в trade.rs).
+            // A filled entry is historical and cannot be replaced; this matches dragging in trade.rs.
             if !sell && order.fill_pct > 0.0 {
                 continue;
             }

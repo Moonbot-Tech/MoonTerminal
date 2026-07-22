@@ -35,7 +35,7 @@ fn merge_dedups_and_read_filters() {
     let _ = std::fs::remove_file(&path);
     let cache = KlineCache::open(path.clone()).expect("open cache");
     let day = (now_unix_ms() / DAY_MS) * DAY_MS;
-    // Две записи с перекрытием: вторая заливка обновляет свечу t=day.
+    // Two overlapping writes: the second one updates the candle at t=day.
     cache.merge(
         "7:0".into(),
         "BTCUSDT".into(),
@@ -48,11 +48,11 @@ fn merge_dedups_and_read_filters() {
         1,
         vec![candle(day as f64, 9.0)],
     );
-    // Дать потоку прожевать очередь: read идёт тем же каналом, порядок сохранён.
+    // Let the worker drain its queue; reads use the same channel, preserving order.
     let rows = cache.read_range("7:0", "BTCUSDT", 1, day, day + DAY_MS);
     assert_eq!(rows.len(), 2, "дедуп по t_open внутри дня");
     assert_eq!(rows[0].open, 9.0, "поздняя заливка авторитетнее");
-    // Чужой kind/рынок не видны.
+    // Rows from another kind or market are not visible.
     assert!(cache
         .read_range("7:0", "BTCUSDT", 5, day, day + DAY_MS)
         .is_empty());

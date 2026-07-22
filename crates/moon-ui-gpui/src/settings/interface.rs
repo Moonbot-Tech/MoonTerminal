@@ -1,6 +1,7 @@
-//! Вкладка «Интерфейс» — тема оформления (порт egui `settings/interface.rs`): цвета
-//! графика/перекрестия/стакана/панелей + слайдеры. Правки идут в draft (живое превью),
-//! «Сохранить» пишет theme.toml. Состояние редактора — [`Iface`].
+//! Interface tab for chart-theme editing, ported from egui's `settings/interface.rs`.
+//!
+//! It exposes chart, crosshair, order-book, panel, and candle colors plus numeric controls. Edits
+//! update the draft for live preview; Save writes `theme.toml`. [`Iface`] owns editor controls.
 
 use gpui::*;
 use moon_ui::{MoonColorPickerState, MoonPalette, MoonSliderState, v_flex};
@@ -10,7 +11,7 @@ use super::{SettingsView, color_row, section, separator, slider_row};
 use crate::Backend;
 use moon_core::config::{ChartTheme, UiThemeMode};
 
-/// Состояние редактора темы: по entity на каждое поле.
+/// Theme editor state with one retained control entity per field.
 pub(super) struct Iface {
     label_font_delta: Entity<MoonSliderState>,
     bg: Entity<MoonColorPickerState>,
@@ -32,9 +33,10 @@ pub(super) struct Iface {
     panel_bg: Entity<MoonColorPickerState>,
 }
 
-/// Color-picker, привязанный к полю темы АКТИВНОГО режима UI (`is_light`, как «Линии»):
-/// init из текущего config, на изменение — пишет в `Backend.preview.theme[режим]`
-/// (живое применение + notify групп-окон).
+/// Bind a color picker to one field of the UI mode selected when Settings opened.
+///
+/// Initialize from the current config or draft and write changes to the matching
+/// `Backend.preview.theme` variant for live application and backend notification, as in Lines.
 fn color_field(
     backend: &Entity<Backend>,
     window: &mut Window,
@@ -57,7 +59,7 @@ fn color_field(
     })
 }
 
-/// Слайдер f32, привязанный к полю темы активного режима UI (живое применение).
+/// Bind an `f32` slider to a field of the selected UI-mode theme for live preview.
 #[allow(clippy::too_many_arguments)]
 fn num_field(
     backend: &Entity<Backend>,
@@ -83,14 +85,14 @@ fn num_field(
     })
 }
 
-/// Собрать редактор темы из текущего draft (зовётся из `SettingsView::new`).
+/// Build the theme editor from the current draft, called by `SettingsView::new`.
 pub(super) fn build(
     backend: &Entity<Backend>,
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> Iface {
-    // Редактируем набор темы АКТИВНОГО режима UI (по `ui_theme_mode`), как «Линии»:
-    // сменить режим + сохранить → откроется набор другого режима.
+    // Bind controls to the saved UI mode that was active when Settings opened, as in Lines. Saving
+    // a mode change and reopening Settings builds controls for the other variant.
     let is_light = backend.read(cx).config.ui_theme_mode == UiThemeMode::Light;
     Iface {
         label_font_delta: num_field(
@@ -239,16 +241,17 @@ pub(super) fn build(
 }
 
 impl SettingsView {
-    /// Вкладка «Интерфейс» = ровно переносимый theme.toml (тема чарта активного режима):
-    /// секции Шрифт(подписей) · График(фон/сетка) · Перекрестие · Стакан · Панели.
-    /// Личные настройки (тёмная/светлая, шрифт UI) — на вкладке «Общие» (settings.toml).
+    /// Render the Interface tab for the portable `theme.toml` chart theme variant.
+    ///
+    /// Sections cover chart-label font, chart background/grid, crosshair, candles, order book, and
+    /// panels. Personal light/dark mode and UI font settings belong to General in `settings.toml`.
     pub(super) fn interface_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let i = &self.iface;
         let p = MoonPalette::active(cx);
         v_flex()
             .w_full()
             .gap_1()
-            // Шрифт подписей на чарте (поле темы).
+            // Chart-label font field from the portable theme.
             .child(section(&t!("iface.sec_font"), p, cx))
             .child(slider_row(
                 &t!("iface.label_font_delta"),
@@ -256,13 +259,13 @@ impl SettingsView {
                 cx,
             ))
             .child(separator(p, cx))
-            // График: фон и сетка
+            // Chart background and grid.
             .child(section(&t!("iface.sec_chart"), p, cx))
             .child(color_row(&t!("iface.bg"), &i.bg, p, cx))
             .child(color_row(&t!("iface.grid"), &i.grid, p, cx))
             .child(slider_row(&t!("iface.grid_alpha"), &i.grid_alpha, cx))
             .child(separator(p, cx))
-            // График: перекрестие
+            // Chart crosshair.
             .child(section(&t!("iface.sec_cross"), p, cx))
             .child(color_row(&t!("iface.cross"), &i.cross, p, cx))
             .child(slider_row(&t!("iface.cross_alpha"), &i.cross_alpha, cx))
@@ -272,7 +275,7 @@ impl SettingsView {
                 cx,
             ))
             .child(separator(p, cx))
-            // Свечи (единые цвета для всех окон, per-тема; включение/режим — в попапе ❚)
+            // Per-theme candle colors shared by all windows; visibility and mode live in the candle popup.
             .child(section(&t!("iface.sec_candles"), p, cx))
             .child(color_row(&t!("iface.candle_up"), &i.candle_up, p, cx))
             .child(color_row(&t!("iface.candle_down"), &i.candle_down, p, cx))
@@ -288,7 +291,7 @@ impl SettingsView {
                 cx,
             ))
             .child(separator(p, cx))
-            // Стакан
+            // Order book.
             .child(section(&t!("iface.sec_book"), p, cx))
             .child(color_row(&t!("iface.book_bg"), &i.book_bg, p, cx))
             .child(color_row(&t!("iface.book_bg_ask"), &i.book_bg_ask, p, cx))
@@ -301,7 +304,7 @@ impl SettingsView {
                 cx,
             ))
             .child(separator(p, cx))
-            // Панели
+            // Panels.
             .child(section(&t!("iface.sec_panels"), p, cx))
             .child(color_row(&t!("iface.panel_bg"), &i.panel_bg, p, cx))
             .child(

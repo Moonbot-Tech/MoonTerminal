@@ -1,17 +1,18 @@
-//! Персист чарт-вкладок (порт идеи `detached.rs`, но для чарт-вкладок — у них своя
-//! сериализация). Хранит ПО ВКЛАДКЕ (ключ = группа/номер/ядро): масштаб цены и, если вкладка
-//! откреплена в своё ОС-окно, геометрию этого окна. Файл `charts.json` рядом с exe.
+//! Chart-tab persistence, based on the idea in `detached.rs` but using a dedicated schema. Each tab
+//! is keyed by group, number, and [`ChartBucket`]. Its `charts.json` specification can store scale
+//! and layout settings, display overrides, custom-tab composition and comparison state, plus window
+//! geometry when detached. The file lives at `paths::charts_path()` under the configuration directory.
 //!
-//! На старте откреп-вкладки восстанавливаются ПУСТЫМИ (только брендовое лого) в том же месте и
-//! ждут детект — `ChartTabs::ingest` наполнит их по (номер, ядро), как обычные AddToChart.
-//! Положение/зум самого чарта НЕ персистим: при загрузке вкладка пуста (нечего восстанавливать),
-//! а появившиеся монеты идут в live-follow.
+//! At startup, ordinary detached AddToChart tabs reopen empty at their saved geometry and display
+//! only the branded logo until `ChartTabs::ingest` populates them by number and bucket. Custom tabs
+//! restore their explicit `custom_coins` immediately. Live camera position is not persisted; newly
+//! ingested markets begin in live-follow, while the schema restores only its explicit scale settings.
 
 use moon_core::config::{ChartBucket, ServerConfig, paths};
 use moon_core::session::CoreId;
 use serde::{Deserialize, Serialize};
 
-/// Геометрия окна откреплённой вкладки.
+/// Geometry of a detached chart-tab window.
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct WinGeom {
     pub x: i32,
@@ -20,20 +21,21 @@ pub struct WinGeom {
     pub h: u32,
 }
 
-/// Режим раскладки чарт-стека вкладки (per-tab). Два положения:
-/// - `Fit`: высота 0 → растяжение (графики делят окно); высота ≥20 → COMPRESS (фикс. высота,
-///   без скролла, сжатие при переполнении);
-/// - `Scroll`: фикс. высота слота + вертикальный скролл.
-/// Высоты у Fit и Scroll РАЗДЕЛЬНЫЕ (`layout_height_fit` / `layout_height_scroll`).
+/// Per-tab chart-stack layout mode:
+/// - `Fit`: slot extent zero stretches charts to share the window; an extent of at least 20 enables
+///   COMPRESS, using fixed slots without scrolling and shrinking on overflow.
+/// - `Scroll`: uses a fixed slot extent and scrolls along the stack orientation.
+///
+/// Fit and Scroll retain separate values in `layout_height_fit` and `layout_height_scroll`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum StackLayoutMode {
     Fit,
     Scroll,
 }
 
-/// Ориентация стека чартов (per-tab). `Vertical` — графики стопкой сверху-вниз (дефолт),
-/// `Horizontal` — колонками слева-направо. В горизонтальном режиме поле «высота слота» попапа
-/// раскладки трактуется как ШИРИНА слота (та же логика FIT/COMPRESS/SCROLL, просто мерим по X).
+/// Per-tab chart-stack orientation. `Vertical` stacks charts from top to bottom and is the default;
+/// `Horizontal` places them left to right. In horizontal mode, the layout popup's slot-height field
+/// represents slot width, applying the same FIT, COMPRESS, and SCROLL rules along the X axis.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum StackOrientation {
     Vertical,
@@ -41,14 +43,14 @@ pub enum StackOrientation {
 }
 
 impl StackOrientation {
-    /// Горизонтальная раскладка? (None в спеке = Vertical).
+    /// Returns whether the orientation is horizontal. A missing specification value means Vertical.
     pub fn is_horizontal(self) -> bool {
         matches!(self, StackOrientation::Horizontal)
     }
 }
 
-/// Позиция кнопки рыночного действия (Cancel Buy / Panic Sell) в ЗОНЕ ЧАРТА (не стакана).
-/// `Hide` — не показывать. Дефолт (None в спеке) — `Right`.
+/// Position of a market action button such as Cancel Buy or Panic Sell within the chart area, not
+/// the order-book area. `Hide` suppresses it; a missing specification value defaults to `Right`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum ChartBtnPos {
     Hide,
@@ -63,9 +65,10 @@ impl Default for ChartBtnPos {
     }
 }
 
-/// Положение оси цен относительно чарта/стакана (per-tab). `Left` — жёлоб слева от графика
-/// (исторический дефолт); `Right` — жёлоб справа, ЗА стаканом (чарт и стакан не разделяются
-/// осью); `Hide` — оси нет, её место отдаётся графику. None в спеке = `Left`.
+/// Per-tab price-axis position relative to the chart and order book. `Left` places the gutter left
+/// of the plot and is the historical default. `Right` places it to the right beyond the order book,
+/// so the axis does not separate the plot from the book. `Hide` removes the axis and returns its
+/// space to the plot. A missing specification value means `Left`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum PriceAxisPos {
     Hide,
@@ -79,99 +82,105 @@ impl Default for PriceAxisPos {
     }
 }
 
-/// Состояние одной чарт-вкладки. `num == 0` — Main; `num >= 1` — AddToChart-N.
+/// Persistent state for one chart tab. `num == 0` identifies Main; `num >= 1` identifies numbered
+/// AddToChart or custom tabs.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ChartTabSpec {
     pub group: String,
     pub num: u32,
-    /// LEGACY-ключ старых charts.json (до именованных связок): Some(ядро)=split, None=общая.
-    /// Читается для обратной совместимости; новые записи кладут `bucket`, а `core`=None.
+    /// Legacy key from `charts.json` before named bundles. Some(core) denotes a split core and None
+    /// a shared tab. It remains readable for compatibility; new records write `bucket` and leave
+    /// `core` as None.
     #[serde(default)]
     pub core: Option<CoreId>,
-    /// Канонический ключ вкладки (своё ядро / общая / именованная связка). Отсутствует в
-    /// старых файлах → выводим из `core` (см. `bucket()`).
+    /// Canonical tab key for a dedicated core, shared group, or named bundle. Older files omit it,
+    /// in which case [`ChartTabSpec::bucket`] derives it from `core`.
     #[serde(default)]
     pub bucket: Option<ChartBucket>,
     #[serde(default)]
     pub scale: Option<f32>,
-    /// Some → вкладка откреплена в своё окно с этой геометрией; None → во вкладочном стрипе.
+    /// Some means the tab is detached into a window with this geometry; None keeps it in the tab strip.
     #[serde(default)]
     pub detached: Option<WinGeom>,
-    /// Режим раскладки стека этой вкладки (Fit/Scroll). None → дефолт (Fit).
+    /// Stack layout mode for this tab. None defaults to Fit.
     #[serde(default)]
     pub layout_mode: Option<StackLayoutMode>,
-    /// Высота слота (px) для режима Fit: 0 = растяжение (обычный Fit), ≥20 = COMPRESS
-    /// (фикс. высота без скролла). None → дефолт (0).
+    /// Fit-mode slot extent in pixels: height for Vertical and width for Horizontal. Zero stretches
+    /// charts for normal Fit; at least 20 enables COMPRESS with fixed slots and no scrolling. None
+    /// defaults to zero.
     #[serde(default)]
     pub layout_height_fit: Option<u16>,
-    /// Высота слота (px) для режима Scroll. None → дефолт.
+    /// Scroll-mode slot extent in pixels: height for Vertical and width for Horizontal. None selects
+    /// the default.
     #[serde(default)]
     pub layout_height_scroll: Option<u16>,
-    /// Показывать ли стакан на графиках этой вкладки. None → дефолт (вкл). Выкл = стакан не
-    /// рисуется, подпись не выводится и (Stage 2) рынок не подписывается на стакан, если его не
-    /// хочет ни одно другое окно.
+    /// Whether this tab's charts show the order book. None defaults to enabled. When disabled, the
+    /// book and its label are not rendered; Stage 2 also avoids subscribing to book data unless
+    /// another window requests it.
     #[serde(default)]
     pub orderbook_enabled: Option<bool>,
-    /// Рисовать ли трейды ликвидаций на графиках этой вкладки. None → дефолт (вкл). Per-окно/вкладка.
+    /// Whether this tab's charts render liquidation trades. None defaults to enabled per window/tab.
     #[serde(default)]
     pub liquidations_enabled: Option<bool>,
-    /// Показывать ли заливку зоны управления при раздельных зонах и скрытом стакане. None →
-    /// дефолт (вкл). Per-окно/вкладка, как `orderbook_enabled`.
+    /// Whether to fill the management zone when zones are separate and the order book is hidden.
+    /// None defaults to enabled per window/tab, like `orderbook_enabled`.
     #[serde(default)]
     pub show_zone: Option<bool>,
-    /// Авто-пин графика при выставлении ордера. None → дефолт (выкл). Per-окно/вкладка.
+    /// Whether placing an order automatically pins its chart. None defaults to disabled per window/tab.
     #[serde(default)]
     pub auto_pin: Option<bool>,
-    /// Ориентация стека (Vertical/Horizontal). None → дефолт (Vertical). Per-окно/вкладка.
+    /// Per-window/tab stack orientation. None defaults to Vertical.
     #[serde(default)]
     pub layout_orientation: Option<StackOrientation>,
-    /// Позиция кнопки «Cancel Buy» в зоне чарта. None → дефолт (Right). Per-окно/вкладка.
+    /// Per-window/tab position of Cancel Buy in the chart area. None defaults to Right.
     #[serde(default)]
     pub cancel_buy_pos: Option<ChartBtnPos>,
-    /// Позиция кнопки «Panic Sell» в зоне чарта. None → дефолт (Right). Per-окно/вкладка.
+    /// Per-window/tab position of Panic Sell in the chart area. None defaults to Right.
     #[serde(default)]
     pub panic_sell_pos: Option<ChartBtnPos>,
-    /// Кастомная (мульти-монетная) вкладка из поиска: явный список тикеров `(core, market)`.
-    /// `Some` помечает спек как кастомный — на старте вкладка восстанавливается и заполняется
-    /// ИМЕННО этими чартами (а не ждёт детект, как обычные AddToChart). None → обычная вкладка.
+    /// Explicit `(core, market)` list for a custom multi-market tab created through search. Some
+    /// classifies the specification as custom, causing startup to restore exactly these charts
+    /// instead of waiting for detect ingest like an ordinary AddToChart tab. None is a regular tab.
     #[serde(default)]
     pub custom_coins: Option<Vec<(CoreId, String)>>,
-    /// Имя кастомной вкладки (редактируется в попапе ⚙). None → дефолтная метка «Набор N».
+    /// Editable custom-tab name from the settings popup. None uses the localized default Set N label.
     #[serde(default)]
     pub custom_label: Option<String>,
-    /// Якорь режима сравнения `(core, market)` — ведущий по цене чарт (горит замок, стоит слева).
-    /// None = сравнение выключено. Только для горизонтальных (обычно кастомных) вкладок.
+    /// Comparison-mode `(core, market)` anchor whose chart leads the price scale, shows the lock,
+    /// and sits on the left. None disables comparison. Used only by horizontal, usually custom, tabs.
     #[serde(default)]
     pub compare_anchor: Option<(CoreId, String)>,
-    /// Режим «только стакан» у соседей сравнения (кнопка-метла): чарт+ось цен скрыты, виден стакан.
+    /// Whether comparison peers use book-only broom mode, hiding the plot and price axis while
+    /// leaving the order book visible.
     #[serde(default)]
     pub compare_orderbook_only: bool,
-    /// Положение оси цен (Left/Right/Hide). None → дефолт (Left). Per-окно/вкладка.
+    /// Per-window/tab price-axis position. None defaults to Left.
     #[serde(default)]
     pub price_axis_pos: Option<PriceAxisPos>,
-    /// Показывать ли ось времени (нижние подписи + жёлоб под них). None → дефолт (вкл).
-    /// Per-окно/вкладка. Выкл = подписи времени не рисуются, плот занимает всю высоту.
+    /// Whether to show the time axis, including bottom labels and their gutter. None defaults to
+    /// enabled per window/tab. When disabled, labels are omitted and the plot uses the full height.
     #[serde(default)]
     pub time_axis_visible: Option<bool>,
-    /// Показывать подписи у линий ордеров. None → дефолт (вкл). Per-окно/вкладка.
+    /// Whether to show order-line labels. None defaults to enabled per window/tab.
     #[serde(default)]
     pub line_labels: Option<bool>,
-    /// Показывать подписи у перекрестия (курсорный ридаут). None → дефолт (вкл). Per-окно/вкладка.
+    /// Whether to show crosshair cursor-readout labels. None defaults to enabled per window/tab.
     #[serde(default)]
     pub cursor_labels: Option<bool>,
-    /// Настройки отображения свечей/трейдов (ТФ, режим, зона; попап ❚). None → глобальный
-    /// дефолт (`layout.candle_view`). Per-окно/вкладка.
+    /// Per-window/tab candle and trade display settings such as timeframe, mode, and zone from the
+    /// candle popup. None inherits the global `layout.candle_view` default.
     #[serde(default)]
     pub candle_view: Option<moon_core::market::CandleViewCfg>,
-    /// Временной X-масштаб (px на мс) выносного окна этой вкладки ([Shift+СКМ] в нём).
-    /// None → масштаб группы / 60-секундный дефолт.
+    /// Detached-window time-axis X scale in pixels per millisecond, synchronized there with
+    /// Shift+middle-click. None inherits the group scale or the 60-second default.
     #[serde(default)]
     pub x_ppm: Option<f32>,
 }
 
 impl ChartTabSpec {
-    /// Заготовка спеки вкладки (group/num/bucket) со всеми опциями в дефолте (None). База для
-    /// `upsert`, чтобы не дублировать длинный литерал со всеми полями в каждом пути персиста.
+    /// Creates a group/number/bucket specification with schema defaults: optional fields are None
+    /// and comparison book-only mode is false. [`upsert`] uses this to avoid duplicating the long
+    /// field literal across persistence paths.
     pub fn new(group: String, num: u32, bucket: ChartBucket) -> Self {
         Self {
             group,
@@ -203,8 +212,8 @@ impl ChartTabSpec {
         }
     }
 
-    /// Ключ вкладки: новый `bucket`, иначе выводим из legacy `core`
-    /// (Some(ядро)→Core, None→Shared).
+    /// Returns the canonical tab key from `bucket`, or derives it from legacy `core`: Some(core)
+    /// becomes Core and None becomes Shared.
     pub fn bucket(&self) -> ChartBucket {
         self.bucket.clone().unwrap_or_else(|| match self.core {
             Some(id) => ChartBucket::Core(id),
@@ -212,17 +221,16 @@ impl ChartTabSpec {
         })
     }
 
-    /// Совпадает ли спек с ключом вкладки (группа + номер + bucket). Один предикат на все
-    /// `chart_specs.iter().find(...)` по тройке ключа.
+    /// Returns whether this specification matches a group, number, and bucket key. This centralizes
+    /// the predicate used by `chart_specs.iter().find(...)` calls.
     pub fn matches(&self, group: &str, num: u32, bucket: &ChartBucket) -> bool {
         self.group == group && self.num == num && self.bucket() == *bucket
     }
 }
 
-/// Найти спеку (group/num/bucket) и применить `f`; если её ещё нет — создать заготовку
-/// (`ChartTabSpec::new`) и применить `f` к ней. Один общий upsert для всех путей персиста
-/// чарт-вкладок (`ChartTabs`/`DetachedChartHost`). Пометку `chart_specs_dirty` ставит
-/// вызывающий (флаг живёт на `Backend`).
+/// Finds a group/number/bucket specification and applies `f`, or creates one with
+/// [`ChartTabSpec::new`] before applying `f`. This is the shared upsert for `ChartTabs` and
+/// `DetachedChartHost` persistence paths. The caller sets Backend's `chart_specs_dirty` flag.
 pub fn upsert(
     specs: &mut Vec<ChartTabSpec>,
     group: &str,
@@ -239,18 +247,18 @@ pub fn upsert(
     }
 }
 
-/// Одноразовый ремап legacy ПОЗИЦИОННЫХ CoreId (`Core(n)` / `core = n`) в стабильные
-/// uid. Запускается ровно один раз при апгрейде конфига с версии < `COREID_UID_VERSION`
-/// (флаг `AppConfig::chart_core_remap_needed`), пока порядок серверов в `servers.enc` ещё
-/// тот же, что был при записи `charts.json`. До v11 `n` означало позицию (1-based) ядра в
-/// списке серверов → берём `servers[n-1].uid`. Вне диапазона (вкладка осиротевшего ядра)
-/// оставляем как есть — живого ядра с таким id всё равно нет, вкладка останется пустой.
+/// Remaps legacy positional CoreIds in `Core(n)` or `core = n` to stable UIDs. This runs exactly
+/// once while upgrading a configuration older than `COREID_UID_VERSION`, as indicated by
+/// `AppConfig::chart_core_remap_needed`, while server order in `servers.enc` still matches the order
+/// used to write `charts.json`. Before v11, `n` was a one-based position in the server list, so it
+/// maps to `servers[n - 1].uid`. Out-of-range IDs from orphaned tabs remain unchanged; no live core
+/// has that ID, so the tab remains empty.
 ///
-/// Идемпотентность держится снаружи (версия схемы): повторно НЕ вызывать на уже
-/// перемапленном файле, иначе uid воспримется как позиция и привязка поедет.
+/// Schema versioning provides one-shot safety. Do not call this again on an already remapped file,
+/// because a stable UID would be misinterpreted as a position and rebound incorrectly.
 pub fn remap_core_ids(specs: &mut [ChartTabSpec], servers: &[ServerConfig]) {
     let pos_to_uid = |n: CoreId| -> Option<CoreId> {
-        // n — старый позиционный id (1-based) → сервер на этой позиции.
+        // Map the old one-based positional ID to the server occupying that position.
         n.checked_sub(1)
             .and_then(|i| servers.get(i as usize))
             .map(|s| s.uid)
@@ -303,7 +311,7 @@ pub fn max_core_uid(specs: &[ChartTabSpec]) -> Option<u64> {
         .max()
 }
 
-/// Загрузить из `charts.json` (нет/битый → пусто).
+/// Loads `charts.json`, returning an empty list when the file is absent or invalid.
 pub fn load_all() -> Vec<ChartTabSpec> {
     match std::fs::read_to_string(paths::charts_path()) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
@@ -314,7 +322,7 @@ pub fn load_all() -> Vec<ChartTabSpec> {
     }
 }
 
-/// Записать в `charts.json` (не фатально).
+/// Saves specifications to `charts.json`; failures are logged but nonfatal.
 pub fn save_all(list: &[ChartTabSpec]) {
     moon_core::detect_diag::line(&format!(
         "[save] charts.json: {} спек, detached(окна)={}",

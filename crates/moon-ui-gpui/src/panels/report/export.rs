@@ -1,12 +1,13 @@
-//! Экспорт отчёта в файл: CSV (текст, `;`-разделитель, UTF-8 BOM — дружит с Excel)
-//! и Excel (.xlsx, настоящая книга через `rust_xlsxwriter`). Выборка — СВОЙ запрос к
-//! SQLite по ТЕКУЩЕМУ фильтру панели (период «Сегодня»/«С:–По:», ядра, монета,
-//! сторона, эмулятор) и текущей сортировке — без капа таблицы `MAX_REPORT_ROWS`
-//! (панель показывает топ-100, экспорт пишет всё до [`EXPORT_MAX_ROWS`]).
-//! Значения — СЫРЫЕ, как лежат в БД (isshort/emulator = 0/1, числа без
-//! знако-форматирования, без локализованных подписей): файл — машиночитаемая
-//! выгрузка, а не скриншот таблицы. Единственное исключение — колонки дат: unix-
-//! секунды в файле бесполезны, пишем "YYYY-MM-DD HH:MM" (UTC, как в таблице).
+//! Report file export as semicolon-delimited CSV with a UTF-8 BOM or as a real Excel workbook
+//! produced by `rust_xlsxwriter`. Export runs its own SQLite query using the panel's CURRENT filter
+//! (period preset or manual From/To dates, cores, coin, side, and emulator) and current sort. It does
+//! not use the table's `MAX_REPORT_ROWS` cap: the panel shows the top 100 rows, while export writes
+//! every matching row up to [`EXPORT_MAX_ROWS`]. Cell values retain their RAW database
+//! representation (`isshort` and `emulator` remain 0/1, and numbers receive no presentation
+//! formatting or localized value labels), making this a machine-readable extract rather than a
+//! snapshot of the table. Date columns are formatted as `YYYY-MM-DD HH:MM` UTC text, matching the
+//! table. In XLSX, large identifiers in `strategyid`, `exorderid`, `taskid`, and `newrecid` are also
+//! written as text so Excel preserves every digit.
 
 use std::path::{Path, PathBuf};
 
@@ -15,8 +16,8 @@ use rusqlite::types::Value;
 use super::columns;
 use moon_core::db::{self, ReportFilter};
 
-/// Предохранитель от гигантских выборок: экспорт читает всё по фильтру, но не больше
-/// этого количества строк (БД годами копит сотни тысяч записей; усечение — в лог).
+/// Caps an otherwise complete filtered export to protect against enormous result sets; reaching the
+/// cap is logged because the database may accumulate hundreds of thousands of rows over the years.
 const EXPORT_MAX_ROWS: usize = 200_000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -34,10 +35,11 @@ impl Format {
     }
 }
 
-/// Имя файла по умолчанию: период фильтра в имени (`report_2026-07-13.csv`,
-/// `report_2026-07-01_2026-07-10.xlsx`, без дат — `report_all.csv`). При выгрузке ПО
-/// ВСЕМ колонкам БД добавляем суффикс `-All` (`report_2026-07-13-All.csv`) — чтобы на
-/// диске сразу отличать полный отчёт от урезанного до видимых колонок.
+/// Builds the suggested filename from the filter period, such as `report_2026-07-13.csv` or
+/// `report_2026-07-01_2026-07-10.xlsx`; an undated export becomes `report_all.csv`.
+///
+/// Exporting the full runtime report schema adds the `-All` suffix, for example
+/// `report_2026-07-13-All.csv`, distinguishing it from a visible-column export on disk.
 pub(super) fn suggested_name(filter: &ReportFilter, fmt: Format, all_cols: bool) -> String {
     let day = |secs: i64| {
         let full = db::fmt_unix(secs);
@@ -53,7 +55,8 @@ pub(super) fn suggested_name(filter: &ReportFilter, fmt: Format, all_cols: bool)
     format!("report_{range}{all}.{}", fmt.ext())
 }
 
-/// Стартовая папка диалога сохранения: профиль пользователя, иначе текущая.
+/// Returns the user's profile or home directory for the save dialog, falling back to the current
+/// directory.
 pub(super) fn default_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -101,8 +104,10 @@ pub(super) fn run(
     Ok(table.rows.len())
 }
 
-/// CSV: `;`-разделитель (Excel в русской локали читает его без мастера импорта),
-/// UTF-8 BOM (кириллица в Excel), CRLF. Поля с `;`/кавычками/переносами — в кавычках.
+/// Writes semicolon-delimited CSV with a UTF-8 BOM and CRLF line endings for Excel compatibility.
+///
+/// A Russian-locale Excel installation accepts the delimiter without its import wizard, while the
+/// BOM preserves Cyrillic text. Fields containing semicolons, quotes, or line breaks are quoted.
 fn write_csv(path: &Path, idx: &[(usize, &str)], rows: &[Vec<Value>]) -> anyhow::Result<()> {
     let mut out = String::with_capacity(64 * (rows.len() + 1));
     out.push('\u{FEFF}');
@@ -128,7 +133,7 @@ fn write_csv(path: &Path, idx: &[(usize, &str)], rows: &[Vec<Value>]) -> anyhow:
     Ok(())
 }
 
-/// Колонки-даты: в БД unix-секунды, в файл — читаемый "YYYY-MM-DD HH:MM" (UTC).
+/// Returns whether a database column stores Unix seconds that export formats as UTC date text.
 fn date_col(col: &str) -> bool {
     matches!(
         col,
@@ -136,16 +141,18 @@ fn date_col(col: &str) -> bool {
     )
 }
 
-/// Колонки-идентификаторы: большие целые (i64), которые Excel при записи ЧИСЛОМ
-/// показывает экспонентой (`-3,06221E+18`) и теряет точность. Это ID, а не суммы —
-/// пишем ТЕКСТОМ, чтобы значение читалось полностью и не округлялось.
+/// Returns whether an identifier column must be written to XLSX as text.
+///
+/// Excel displays large `i64` numbers in scientific notation and loses precision. These values are
+/// identifiers rather than amounts, so text preserves every digit.
 fn id_text_col(col: &str) -> bool {
     matches!(col, "strategyid" | "exorderid" | "taskid" | "newrecid")
 }
 
-/// Текст поля для CSV: даты — форматированные, остальное — сырое значение БД
-/// (без локализации: isshort/emulator остаются 0/1, числа — `Display` как есть,
-/// NULL — пустое поле). Блобов в отчёте нет.
+/// Converts a database value to CSV text, formatting dates while leaving other values raw.
+///
+/// `isshort` and `emulator` remain 0/1, numbers use their `Display` form, and NULL becomes an empty
+/// field. Report queries do not contain blobs.
 fn field_text(col: &str, v: &Value) -> String {
     if date_col(col) {
         return match v {
@@ -171,8 +178,10 @@ fn csv_field(s: &str) -> String {
     }
 }
 
-/// XLSX: заголовок жирным, значения — сырые типы БД (Integer/Real → число, Text →
-/// строка, NULL — пустая ячейка); даты — форматированной строкой. Автоширина колонок.
+/// Writes XLSX with bold headers and automatically fitted columns.
+///
+/// Database Integer and Real values become numbers, Text remains text, and NULL leaves an empty
+/// cell. Dates become formatted strings, and large identifier columns remain text to preserve them.
 fn write_xlsx(path: &Path, idx: &[(usize, &str)], rows: &[Vec<Value>]) -> anyhow::Result<()> {
     use rust_xlsxwriter::{Format as XFormat, Workbook};
 
@@ -194,7 +203,8 @@ fn write_xlsx(path: &Path, idx: &[(usize, &str)], rows: &[Vec<Value>]) -> anyhow
                 }
                 continue;
             }
-            // ID-поля — текстом (иначе Excel рвёт большие i64 в экспоненту).
+            // Write identifier columns as text so Excel cannot convert large i64 values to imprecise
+            // scientific notation.
             if id_text_col(name) {
                 if let Value::Integer(n) = val {
                     ws.write_string(r, c, n.to_string())?;

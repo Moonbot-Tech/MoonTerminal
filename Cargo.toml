@@ -1,10 +1,10 @@
-# Virtual workspace. Единственный бинарь — GPUI-оболочка moon-ui-gpui (`moonterminal`)
-# поверх UI-агностичного ядра moon-core; общий чарт-крейт moon-chart даёт математику/
-# геометрию (view/axes/transform/build_order_geometry/инстанс-типы), wgpu-free.
+# Virtual workspace. The only binary is the moon-ui-gpui GPUI shell (`moonterminal`)
+# built on the UI-agnostic moon-core; the shared moon-chart crate provides the math/
+# geometry (view/axes/transform/build_order_geometry/instance types), wgpu-free.
 #
-# Старый egui-бинарь moon-terminal (корневой src/) удалён вместе с wgpu-движком и
-# offscreen→readback — рисование переведено на own-pass DX11 (chartdx). См.
-# docs/ARCHITECTURE.md (раздел «Рендер»).
+# The old moon-terminal egui binary (root src/) was removed along with the wgpu engine and
+# offscreen→readback; rendering now uses an own-pass DX11 implementation (chartdx). See
+# docs/ARCHITECTURE.md (the "Rendering" section).
 [workspace]
 members = ["crates/moon-core", "crates/moon-chart", "crates/moon-ui-gpui"]
 resolver = "2"
@@ -14,22 +14,22 @@ codegen-units = 1
 lto = true
 strip = true
 
-# Dev-сборка для GPUI-оболочки: главный источник рывков (вплоть до курсора) — DX12
-# debug/validation-слой, который GPUI и wgpu включают в debug по `cfg!(debug_assertions)`
-# (он же `HRESULT 0x887A002D` на старте без Graphics Tools). Отключаем его, не уходя в
-# release: debug_assertions=false снимает оба слоя; зависимости (gpui/skia) собираем
-# оптимизированно — рантайм близок к release, а инкрементальная сборка своего кода быстра.
+# Dev build for the GPUI shell: the main source of stuttering (even for the cursor) is the DX12
+# debug/validation layer enabled by GPUI and wgpu in debug via `cfg!(debug_assertions)`
+# (also responsible for `HRESULT 0x887A002D` at startup without Graphics Tools). Disable it without
+# switching to release: debug_assertions=false removes both layers; build dependencies (gpui/skia)
+# with optimizations so runtime performance is close to release while incremental builds of our code remain fast.
 [profile.dev]
 debug-assertions = false
 
 [profile.dev.package."*"]
 opt-level = 3
 
-# Moon UI: единая локальная/публичная база для GPUI runtime + компонентов.
+# Moon UI: a unified local/public base for the GPUI runtime and components.
 #
-# Канонический источник Moon-стека теперь Moonbot-Tech/MoonUI: standalone GPUI
-# (`moon-gpui`) + Moon components (`moon-ui`). Публичные зависимости идут через Git;
-# локальная разработка подменяет их на соседний checkout в untracked `.cargo/config.toml`.
+# Moonbot-Tech/MoonUI is now the canonical source for the Moon stack: standalone GPUI
+# (`moon-gpui`) plus Moon components (`moon-ui`). Public dependencies are fetched through Git;
+# local development overrides them with a sibling checkout in the untracked `.cargo/config.toml`.
 
 # Zed's crates.io patches are not inherited transitively when GPUI is consumed as a dependency.
 # Keep the GPUI process stack on the same patched crates the fork itself uses.

@@ -1,34 +1,34 @@
-//! Нижняя часть окна «Активы»: 3 контейнера кошельков (Спот/Фьючерсы/Квартальные) с
-//! монетами выбранного ядра, drag&drop переносом между ними и модальным диалогом
-//! количества (дефолт — всё свободное).
+//! Lower Assets-window section with Spot, Futures, and Quarterly wallet containers for the
+//! selected core, drag-and-drop transfers between them, and an amount dialog whose initial text
+//! adaptively formats the available quantity.
 
 use super::*;
 use anyhow::Result;
 use moon_ui::{MoonNotification, MoonWindowExt as _};
 use rust_i18n::t;
 
-/// Полезная нагрузка drag&drop переноса актива между кошельками.
+/// Drag-and-drop payload for moving an asset between wallets.
 #[derive(Clone)]
 pub(super) struct AssetDrag {
     pub(super) core: CoreId,
     pub(super) asset: String,
     pub(super) from: WalletKind,
-    /// Свободное количество монеты (дефолт для диалога — перенести всё).
+    /// Raw available quantity passed through `num` to seed the dialog input.
     pub(super) free: f64,
 }
 
-/// Ожидающий подтверждения перенос (открыт диалог количества).
+/// Transfer awaiting confirmation while its amount dialog is open.
 #[derive(Clone)]
 pub(super) struct PendingTransfer {
     core: CoreId,
     asset: String,
     from: WalletKind,
     to: WalletKind,
-    /// Свободное количество (максимум / дефолт).
+    /// Raw available quantity displayed through `num` and used to derive the input's initial text.
     free: f64,
 }
 
-/// Превью под курсором при перетаскивании монеты.
+/// Coin-transfer preview displayed under the drag cursor.
 struct AssetDragPreview {
     label: SharedString,
 }
@@ -51,8 +51,10 @@ impl Render for AssetDragPreview {
 }
 
 impl AssetsView {
-    /// 3 контейнера кошельков ядра в ряд. Шапка секции (подпись + ↻ refresh) живёт уровнем
-    /// выше — в `bottom()` (общий образец сворачиваемых секций окна).
+    /// Renders the selected core's three wallet containers in one row.
+    ///
+    /// The section header, label, and refresh button are owned by `bottom()`, following the
+    /// window's shared collapsible-section pattern.
     pub(super) fn wallets_section(
         &self,
         core: CoreId,
@@ -66,8 +68,10 @@ impl AssetsView {
         )
     }
 
-    /// Один контейнер кошелька (Спот/Фьючерсы/Квартальные): монеты (draggable) и
-    /// drop-таргет. Бросок монеты из другого кошелька открывает диалог количества.
+    /// Renders one Spot, Futures, or Quarterly wallet as draggable coin rows and a drop target.
+    ///
+    /// Dropping a coin from another wallet of the same core opens the transfer-amount dialog;
+    /// same-wallet and cross-core drops are ignored.
     fn wallet_column(
         &self,
         core: CoreId,
@@ -99,18 +103,19 @@ impl AssetsView {
             let fmt_qty = moon_core::util::fmt::qty;
             let preview_label: SharedString =
                 format!("{} {}", a.currency, fmt_qty(a.amount)).into();
-            // Формат строки — 1:1 с Moonbot Transfer: `МОНЕТА свободно / всего (стоимость$)`,
-            // всё слева в строку; стоимость считается по `total`, цена неизвестна → `(?$)`.
-            // Точность ограничена: кол-во — `fmt::qty` (макс. тысячные), доллары —
-            // `fmt::usd` (макс. сотые), не adaptive-простыни.
+            // Match the Moonbot Transfer row: `COIN available / total (value$)`, all left-aligned.
+            // Value is based on `total`; an unknown conversion rate displays `(?$)`. Keep output
+            // bounded: `fmt::qty` uses up to three decimal places and `fmt::usd` up to two,
+            // rather than emitting long adaptive decimals.
             let qty_txt = format!("{} / {}", fmt_qty(a.amount), fmt_qty(a.total));
             let value_txt = if a.value_usdt > 0.0 {
                 format!("({}$)", moon_core::util::fmt::usd(a.value_usdt))
             } else {
                 "(?$)".to_string()
             };
-            // Значок монеты (32×32 PNG из assets/coins) — как в Moonbot Transfer. Нет
-            // значка → пустая ячейка той же ширины, чтобы тикеры оставались выровнены.
+            // Load the coin image from assets/coins or its runtime override and render it at the
+            // theme-scaled icon size, without assuming source dimensions. A missing icon gets an
+            // equal-width empty cell to align tickers.
             let icon_side = design::ui_px(cx, 16.0);
             let icon: AnyElement = match crate::coin_icons::coin_icon(&a.currency) {
                 Some(tex) => img(tex)
@@ -140,7 +145,7 @@ impl AssetsView {
                     .gap_2()
                     .cursor_grab()
                     .text_color(rgb(p.text))
-                    // Заметная подсветка строки при наведении (видно, что потащишь).
+                    // Give draggable rows a conspicuous hover highlight.
                     .hover(|s| {
                         s.bg(design::moon_alpha(p.blue, 0.15))
                             .border_color(rgb(p.blue))
@@ -190,7 +195,7 @@ impl AssetsView {
                     .text_size(design::t_body(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(p.text_soft))
-                    // Заголовок по центру, как у групп Spot/Futures/Quarterly в Moonbot.
+                    // Center the heading like Moonbot's Spot/Futures/Quarterly groups.
                     .text_center()
                     .child(format!("{} ({})", kind.label(), snapshot.total_count)),
             )
@@ -214,7 +219,10 @@ impl AssetsView {
             )
     }
 
-    /// Открыть диалог количества для переноса монеты (дефолт — всё свободное).
+    /// Opens an amount dialog for a dropped coin.
+    ///
+    /// Seeds the input with `num(drag.free)`, an adaptive representation that may round and need
+    /// not equal the exact raw available quantity.
     fn open_transfer_dialog(
         &mut self,
         drag: &AssetDrag,
@@ -330,7 +338,11 @@ impl AssetsView {
         cx.notify();
     }
 
-    /// Подтвердить перенос: прочитать количество из поля, выполнить и закрыть диалог.
+    /// Parses and confirms the pending transfer amount.
+    ///
+    /// A positive amount sends the transfer command; invalid, zero, or negative input sends
+    /// nothing. Success clears dialog state, while a command error is returned so the caller can
+    /// keep the dialog open and show a notification.
     fn confirm_transfer(&mut self, cx: &mut Context<Self>) -> Result<()> {
         let Some(pt) = self.pending_transfer.clone() else {
             return Ok(());

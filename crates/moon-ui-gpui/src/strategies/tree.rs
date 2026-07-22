@@ -1,6 +1,6 @@
-//! Левая панель окна «Стратегии»: дерево ядро→папка→стратегия с поиском/фильтрами
-//! (вид/L/S), чекбоксами-стейджингом и кнопками старт/стоп («Применить»). Это методы
-//! `impl StrategiesView`; состояние и чистые помощники — в [`super`]/[`super::logic`].
+//! Left pane of the Strategies window: a core -> folder -> strategy tree with search/kind/direction
+//! filters, staged checkboxes, and start/stop (Apply) buttons. These methods extend
+//! `StrategiesView`; state and pure helpers live in [`super`] and [`super::logic`].
 
 use super::*;
 use rust_i18n::t;
@@ -16,11 +16,11 @@ impl StrategiesView {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
 
-        // Само дерево (MoonTree, headless) — флэттинг/виртуализация/DnD внутри компонента.
-        // Адаптер `CoreStore → MoonTreeItem` + строки/DnD/меню живут в [`super::tree_moon`].
+        // MoonTree itself is headless and owns flattening, virtualization, and drag-and-drop.
+        // The `CoreStore -> MoonTreeItem` adapter plus rows, DnD, and menus live in `super::tree_moon`.
         let tree_el = self.moon_tree_el(node_data, cx);
 
-        // Поиск + фильтр вида + фильтр направления.
+        // Search, strategy-kind filter, and direction filter.
         let kinds = kinds_present(cores, store);
         let kind_text = self
             .filter
@@ -38,7 +38,7 @@ impl StrategiesView {
         let cores_owned: Arc<Vec<(CoreId, String)>> = Arc::new(cores.to_vec());
 
         v_flex()
-            // Ширина тянется сплиттером (персист в layout.strategies_panels).
+            // The splitter resizes this width, persisted in layout.strategies_panels.
             .w(px(self.panels.tree_w))
             .flex_none()
             .h_full()
@@ -48,7 +48,7 @@ impl StrategiesView {
             .line_height(design::line_px(cx, 14.0))
             .border_r_1()
             .border_color(border)
-            // ── Фильтры сверху ──
+            // Top filters.
             .child(
                 v_flex()
                     .w_full()
@@ -114,7 +114,7 @@ impl StrategiesView {
                     ),
             )
             .child(div().w_full().h(px(1.0)).bg(border))
-            // ── Дерево (MoonTree сам виртуализирует/скроллит) ──
+            // Tree; MoonTree handles its own virtualization and scrolling.
             .child(
                 div()
                     .id("strat-tree-scroll")
@@ -124,13 +124,13 @@ impl StrategiesView {
                     .p(px(8.0))
                     .child(tree_el),
             )
-            // ── Нижняя панель действий ──
+            // Bottom action bar.
             .child(div().w_full().h(px(1.0)).bg(border))
             .child(self.action_bar(cores_owned, store, cx))
             .into_any_element()
     }
 
-    /// Комбобокс фильтра вида (попап-список: «все типы» + присутствующие виды).
+    /// Render the kind-filter combo box with "all kinds" and the kinds currently present.
     fn combo_kind(
         &self,
         current: String,
@@ -184,7 +184,7 @@ impl StrategiesView {
             .into_any_element()
     }
 
-    /// Комбобокс фильтра направления (все/LONG/SHORT).
+    /// Render the direction-filter combo box with all, LONG, and SHORT options.
     fn combo_dir(&self, current: String, cx: &Context<Self>) -> AnyElement {
         let view = cx.entity();
         let opts: [(&str, String, Option<bool>); 3] = [
@@ -219,8 +219,10 @@ impl StrategiesView {
             .into_any_element()
     }
 
-    /// Нижняя панель действий: СЛЕВА группа выделения (копировать/вставить, под ними —
-    /// удалить во всю ширину), СПРАВА старт/стоп отмеченных стопкой. Счётчик стейджинга — по центру.
+    /// Render the bottom action bar.
+    ///
+    /// The selection group is on the LEFT with copy/paste and a full-width delete button below;
+    /// stacked Start Checked/Stop Checked actions are on the RIGHT, with the staged count in the center.
     fn action_bar(
         &self,
         cores: Arc<Vec<(CoreId, String)>>,
@@ -228,7 +230,7 @@ impl StrategiesView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let cs = cores.clone();
-        // Правая группа: старт/стоп друг под другом, прижата вправо.
+        // Right-align the stacked Start Checked/Stop Checked action group.
         let right = v_flex()
             .gap_1()
             .items_end()
@@ -279,5 +281,5 @@ impl StrategiesView {
         bar.child(right).into_any_element()
     }
 
-    // ── Панель 2: разделы (секции) ────────────────────────────────────────────
+    // Section-pane rendering remains in the parent module.
 }

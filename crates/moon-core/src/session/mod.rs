@@ -1,13 +1,15 @@
-//! SessionManager: по одному backend-потоку (ядру) на каждый сервер из конфига.
+//! `SessionManager` runs one backend thread, or core, for each active configured server whose
+//! group is active.
 //!
-//! Данные ядер делятся на два плана:
-//! - АККАУНТНЫЙ (статус/ордера/детекты/стратегии) — свой у каждого ядра, лежит в
-//!   `CoreStore` по CoreId;
-//! - РЫНОЧНЫЙ (крестики/стакан) — общий для биржи, дедуплицируется по ядру-провайдеру
-//!   и лежит в `MarketStore` (см. `crate::market`).
+//! Core data is split across two planes:
+//! - the account plane (status, orders, detects, and strategies) is specific to each core and
+//!   stored in `CoreStore` by `CoreId`;
+//! - the market plane (price ticks and order books) is stored in `MarketStore` (see
+//!   `crate::market`). In `Dedup` mode, cores on one exchange share a provider core; in `PerCore`
+//!   mode, every core is its own provider.
 //!
-//! Координатор (см. `coordinator.rs`) узнаёт биржу каждого ядра из `Identity`,
-//! избирает провайдера на биржу и шлёт ядрам рыночную роль командой `SetMarket`.
+//! The coordinator (see `coordinator.rs`) learns each core's exchange from `Identity`, selects
+//! providers according to the active mode, and assigns market roles with the `SetMarket` command.
 
 pub mod coordinator;
 pub mod order_lines;
@@ -34,16 +36,17 @@ pub struct CoreSession {
     pub id: CoreId,
     pub name: String,
     pub group: String,
-    /// Сигнатура connection-relevant полей (key/feed/synthetic), с которыми поднят
-    /// feed-поток. `reconcile` пере-поднимает ядро только если она изменилась —
-    /// смена имени/группы/рынка/цвета такого не требует.
+    /// Signature of the connection-relevant key, feed, and synthetic fields used to start this
+    /// feed thread. `reconcile` restarts the core only when this changes; changes to its name,
+    /// group, market, or color do not require a restart.
     conn_sig: u64,
     handle: FeedHandle,
 }
 
-/// Стабильный (в пределах процесса) хэш connection-relevant полей сервера. Меняется —
-/// нужно пере-поднять feed-поток. Имя/группа/рынок/цвет/связка/размеры сюда НЕ входят:
-/// их смена обновляется на месте без реконнекта.
+/// Return a process-stable hash of the server fields that require a feed-thread restart.
+///
+/// The name, group, market, color, link, and size fields are excluded because they can be updated
+/// in place without reconnecting.
 fn conn_sig(server: &ServerConfig) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -64,8 +67,8 @@ fn conn_sig(server: &ServerConfig) -> u64 {
     h.finish()
 }
 
-/// Сводка подключений для статус-бара: сколько ядер готово из общего числа +
-/// список «лежащих» (имя, статус) для всплывающей подсказки.
+/// Connection summary for a status bar: ready and total counts plus non-ready core details for the
+/// tooltip.
 pub struct ConnSummary {
     pub ready: usize,
     pub total: usize,
@@ -73,7 +76,7 @@ pub struct ConnSummary {
     pub down: Vec<(CoreId, String, ConnStatus)>,
 }
 
-/// Сводка лицензий ядер одной группы для статус-бара окна.
+/// License summary for the cores in one window group.
 #[derive(Clone, Debug, Default)]
 pub struct LicenseSummary {
     pub total: usize,
@@ -91,31 +94,32 @@ pub struct SessionManager {
     /// Refreshed by every path that can insert a session.
     config_order: Vec<CoreId>,
     feed_wake: Option<FeedWakeTx>,
-    /// Аккаунтный план: статус/ордера/детекты/стратегии по ядру. Снаружи —
-    /// только чтение через [`SessionManager::store`]; мутирует лишь сам менеджер.
+    /// Account plane: per-core status, orders, detects, and strategies. External callers have
+    /// read-only access through [`SessionManager::store`]; only the manager mutates it.
     store: CoreStore,
-    /// Рыночный план: общий буфер вне GPUI entity. Live-feed только будит; данные
-    /// в буфер тянет `MarketDataSource` из MoonProto snapshots.
+    /// Market plane: a shared buffer outside the GPUI entity. The live feed only wakes consumers;
+    /// `MarketDataSource` pulls MoonProto snapshots into the buffer.
     market: SharedMarketStore,
     /// Pull/read-model bridge shared by UI listener and native chart frames.
     market_source: MarketDataSource,
-    /// Режим источника рыночных данных (рубильник; пока дефолт Dedup).
+    /// Market-data source mode; its current default is `Dedup`.
     mode: MarketDataMode,
-    /// Ядро → биржа (из `Identity`). Без идентичности провайдер не назначается.
+    /// Core-to-exchange mapping from `Identity`. A core cannot become a provider without it.
     core_key: HashMap<CoreId, ExchangeId>,
-    /// Ядро → базовая валюта аккаунта (из `CoreBase`): "USDT"/"BTC"/…. Нужна UI для
-    /// дефолтов размера ордера по базе (BTC vs USDT). Пусто, пока ядро не идентифицировано.
+    /// Core-to-account-base mapping from `CoreBase`, such as "USDT" or "BTC". The UI uses it for
+    /// base-currency order-size defaults. It remains empty until the core is identified.
     core_base: HashMap<CoreId, String>,
-    /// Ядро → ядро-провайдер его рыночных данных (dedup: один на биржу; per-core: сам).
+    /// Core-to-market-provider mapping: one provider per exchange in deduplicated mode, or the
+    /// core itself in per-core mode.
     core_provider: HashMap<CoreId, CoreId>,
-    /// Биржа → избранный провайдер (для удержания/failover в режиме Dedup).
+    /// Exchange-to-selected-provider mapping for retention and failover in deduplicated mode.
     providers: HashMap<ExchangeId, CoreId>,
-    /// Провайдер → обслуживаемые рынки (union открытых чартов + linger).
+    /// Provider-to-served-markets mapping: the union of open charts and lingering markets.
     wanted: HashMap<CoreId, HashSet<String>>,
-    /// (провайдер, рынок) → дедлайн снятия после закрытия последнего чарта (linger).
+    /// Deadline for releasing each `(provider, market)` after its last chart closes.
     pending_drop: HashMap<(CoreId, String), Instant>,
-    /// Последняя посланная ядру роль `(provider, markets, orderbook_markets)` — чтобы не слать
-    /// дубликаты команд. `orderbook_markets` — подмножество `markets`, которым нужен стакан.
+    /// Last `(provider, markets, orderbook_markets)` role sent to each core, used to suppress
+    /// duplicate commands. `orderbook_markets` is the subset of `markets` that needs an order book.
     last_cmd: HashMap<CoreId, (bool, Vec<String>, Vec<String>)>,
 }
 

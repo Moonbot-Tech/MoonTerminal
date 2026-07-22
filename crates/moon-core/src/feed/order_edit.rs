@@ -1,20 +1,20 @@
-//! Применение формы правок стопов из окна «Активный ордер» (диалог редактирования ордера).
-//! Родственно [`trade::set_order_stop`] (тогл одного стопа кликом в таблице), но применяет
-//! ЦЕЛЕВОЕ состояние сразу нескольких групп: SL/TS/TP собираются в ОДИН `update_stops`
-//! (нетронутые `None`-группы — из ЭФФЕКТИВНЫХ параметров, чтобы не затереть стратегийный
-//! стоп нулями), VStop — отдельным `update_vstop`. Иерархия истины уровня та же, что в
-//! `set_order_stop`: явная правка формы → провод → память выключения → стратегия → дефолт
-//! ClientSettings. Праймер первого OFF по дефолт-стопу — тоже как там (send-if-changed
-//! глушит «выключить» при пустом проводе, сначала материализуем эффективный стоп).
+//! Applies stop edits from the Active Order window's order-edit dialog.
+//! This resembles [`trade::set_order_stop`] (toggling one stop from the table), but applies the
+//! TARGET state of several groups at once: SL/TS/TP are assembled into ONE `update_stops`
+//! call (untouched `None` groups come from EFFECTIVE parameters so a strategy stop is not
+//! overwritten with zeroes), while VStop uses a separate `update_vstop`. Level resolution uses
+//! the same precedence as `set_order_stop`: explicit form edit → wire → disable memory → strategy
+//! → ClientSettings default. The first-OFF primer for a default stop is also the same: when the
+//! wire is empty, send-if-changed suppresses `disable`, so the effective stop is materialized first.
 
 use moonproto::{MoonClient, VStopParams};
 
 use super::trade;
 use super::{OrderStopKind, OrderStopsForm, StopGroupEdit};
 
-/// Целевые параметры stop-группы `(enabled, fixed, level, spread)` по правке формы.
-/// `edit=None` (группа не менялась) → эффективное сохранение (как соседняя группа в
-/// `set_order_stop`). `None`-результат = уровень не разрешился — группу на проводе не трогаем.
+/// Resolves target `(enabled, fixed, level, spread)` parameters for a stop-group form edit.
+/// `edit=None` (the group was unchanged) preserves its effective state, like the neighboring
+/// group in `set_order_stop`. A `None` result means no level was resolved, so the wire group stays.
 #[allow(clippy::too_many_arguments)]
 fn target_group(
     server_id: u64,
@@ -28,7 +28,7 @@ fn target_group(
     strat_on: bool,
     strat_level: Option<f64>,
     cs_default: f64,
-    // TS можно включать с level=0 (ядро дефолтит уровень само); SL — нельзя (отвергает).
+    // TS can be enabled with level=0 (the core supplies its own default); SL rejects level=0.
     allow_zero_level: bool,
 ) -> Option<(bool, bool, f64, f64)> {
     let resolve = |forced: Option<bool>| {
@@ -56,12 +56,14 @@ fn target_group(
         if edit.price > 0.0 && edit.price.is_finite() {
             return Some((true, true, edit.price, wire_spread));
         }
-        // Невалидная фиксированная цена — обычное включение (провод/память/стратегия).
+        // An invalid fixed price falls back to normal enable resolution
+        // (wire/memory/strategy/ClientSettings).
         return resolve(Some(true));
     }
-    // Глобальный (процентный) режим.
+    // Global (percentage) mode.
     if wire_fixed {
-        // Возврат fixed → глобальный: провод хранит ЦЕНУ, процент берём из стратегии/дефолта.
+        // Switching fixed → global: the wire stores a PRICE, so take the percentage from
+        // strategy/default.
         if let Some(level) = strat_level.filter(|l| *l != 0.0 && l.is_finite()) {
             return Some((true, false, level.abs(), 0.0));
         }
@@ -80,7 +82,7 @@ fn target_group(
     resolve(Some(true)).or_else(|| allow_zero_level.then_some((true, false, 0.0, 0.0)))
 }
 
-/// Применить форму правок стопов ордера `uid` (окно «Активный ордер»).
+/// Applies stop edits for order `uid` from the Active Order window.
 pub(super) fn update_order_stops_form(
     client: &MoonClient,
     server_id: u64,
@@ -102,7 +104,7 @@ pub(super) fn update_order_stops_form(
 
     if form.sl.is_some() || form.ts.is_some() || form.tp.is_some() {
         let stops = o.stops;
-        // Контекст стратегии/дефолтов — как в trade::set_order_stop.
+        // Strategy/default context matches trade::set_order_stop.
         let strat_id = super::strategies::effective_strat_id(&snap, o.strat_id);
         let has_strat = snap.strats().snapshot(strat_id).is_some();
         let (cs_sl, cs_ts) = snap
@@ -157,7 +159,7 @@ pub(super) fn update_order_stops_form(
             Some((true, true, level, spread)) => s.with_stop_loss_fixed(*level, *spread),
             Some((true, false, level, spread)) => s.with_stop_loss_percent(*level, *spread),
             Some((false, ..)) => s.without_stop_loss(),
-            None => s, // уровень не разрешился — провод как есть
+            None => s, // No level resolved: preserve the wire state.
         };
         let apply_ts = |s: moonproto::StopSettings, g: &Option<(bool, bool, f64, f64)>| match g {
             Some((true, true, level, spread)) => s.with_trailing_fixed(*level, *spread),
@@ -170,12 +172,12 @@ pub(super) fn update_order_stops_form(
                 s.with_take_profit_price(tp.price)
             }
             Some(tp) if !tp.on => s.without_take_profit(),
-            _ => s, // не менялся / on с невалидной ценой — провод как есть
+            _ => s, // Unchanged, or enabled with an invalid price: preserve the wire state.
         };
 
-        // ПРАЙМЕР первого OFF по дефолт-стопу (см. set_order_stop): per-order поля на
-        // проводе пустые и «выключить» совпадает с локальной моделью — send-if-changed
-        // глушит пакет. Материализуем эффективный стоп per-order, затем обычный OFF.
+        // First-OFF PRIMER for a default stop (see set_order_stop): per-order wire fields are
+        // empty, so `disable` matches the local model and send-if-changed suppresses the packet.
+        // Materialize the effective per-order stop first, then send the ordinary OFF.
         let primer_groups: [(OrderStopKind, Option<StopGroupEdit>, bool); 2] = [
             (OrderStopKind::StopLoss, form.sl, stops.stop_loss_enabled()),
             (OrderStopKind::Trailing, form.ts, stops.trailing_enabled()),
@@ -245,7 +247,8 @@ pub(super) fn update_order_stops_form(
             }
         }
 
-        // Память уровня перед выключением + явный override терминала для правленых групп.
+        // Remember the level before disabling and record explicit terminal overrides for
+        // edited groups.
         for (kind, edit) in [
             (OrderStopKind::StopLoss, form.sl),
             (OrderStopKind::Trailing, form.ts),
@@ -267,8 +270,8 @@ pub(super) fn update_order_stops_form(
     }
 
     if let Some(v) = form.vstop {
-        // Выключение и включение-без-уровня — через set_order_stop (праймер против
-        // send-if-changed + память уровня). Явный уровень формы — прямым update_vstop.
+        // Disable and enable-without-level go through set_order_stop (the send-if-changed primer
+        // plus level memory). An explicit form level goes directly through update_vstop.
         if !v.on {
             trade::set_order_stop(client, server_id, uid, OrderStopKind::VStop, false);
         } else if v.level > 0.0 && v.level.is_finite() {

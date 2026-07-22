@@ -1,10 +1,11 @@
-//! Окно «Стратегии» (порт egui `src/strategies/*` + `window/strategies_window.rs`).
-//! Отдельное ОС-окно, 4 панели (дерево → секции → параметры): дерево ядро→папка→
-//! стратегия с поиском/фильтрами/чекбоксами (стейджинг) и «Применить» (старт/стоп),
-//! секции схемы выбранной стратегии (затемнение неактивных), плашки параметров
-//! (read-only, YES/NO, «…» для длинных значений). Зависимости полей/разделов — из
-//! `assets/param_deps.toml` (hot-reload, [`rules`]). Читает живой `Backend` (store
-//! по ядрам), «Применить» шлёт `session.apply_strategies` (синхр. галок + старт/стоп).
+//! Strategies window, ported from egui's `src/strategies/*` and `window/strategies_window.rs`.
+//! The separate OS window contains tree, versions, schema-section, and parameter panels. Its
+//! core/folder/strategy tree supports search, filters, staged checkboxes, and start/stop Apply;
+//! schema sections dim inactive entries, while parameter rows support read-only, YES/NO, and long
+//! values. Field and section dependencies load from `assets/param_deps.toml` through [`rules`] and
+//! hot-reload only when `MOON_STRATEGY_RULES_HOT_RELOAD` is set.
+//! The view reads the live per-core Backend store, and Apply sends checkbox changes plus start/stop
+//! through `session.apply_strategies`.
 
 mod filter;
 mod logic;
@@ -15,8 +16,8 @@ mod tree_dialogs;
 mod tree_dnd;
 mod tree_menu;
 mod tree_moon;
-// pub(crate): unique_name/set_field/STRATEGY_NAME_FIELD переиспользует
-// «Сделать копию» тюнера Аналитики.
+// `pub(crate)` exposes `unique_name`, `set_field`, and `STRATEGY_NAME_FIELD` to the Analytics
+// tuner's Make Copy operation.
 pub(crate) mod tree_ops;
 mod tree_ui;
 mod versions;
@@ -50,84 +51,82 @@ type FieldEditKey = (CoreId, u64, String);
 
 const STRATEGIES_HEADER_H: f32 = 32.0;
 
-/// Состояние окна «Стратегии» (порт egui `StrategiesState` + рендер 4 панелей).
+/// Strategies-window state, porting egui's `StrategiesState` and four-panel renderer.
 pub struct StrategiesView {
     backend: Entity<Backend>,
-    /// Текстовое поле поиска — значение читаем в фильтр.
+    /// Search input whose value is synchronized into the filter.
     search: Entity<MoonInputState>,
-    /// Фильтры дерева (вид/направление/только активные); `search` синхр. из инпута.
+    /// Tree filters for kind, direction, active state, and search text synchronized from the input.
     filter: StrategyFilter,
-    /// Текущая (первичная) стратегия — источник схемы/секций (ядро, id).
+    /// Primary strategy key supplying the schema and sections.
     selected: Option<Key>,
-    /// Множественный выбор (ядро, id) — подсветка + объединённый показ параметров.
+    /// Multi-selection used for highlighting and merged parameter display.
     sel: HashSet<Key>,
-    /// Панель «Версии»: история версий выбранной стратегии + выбранная старая.
+    /// Versions-panel state for history and an optional persisted read-only snapshot selection.
+    /// No selected snapshot means the panels display the live strategy.
     versions: versions::VersionsState,
-    /// Удалённые на серверах стратегии (только в нашей БД): core → head-строки.
-    /// Папка «Удалённые» в дереве; путей ядра у них больше нет — лежат плоско.
+    /// Strategies deleted from cores but retained in the local database, keyed by core.
+    /// They appear flat in the tree's Deleted folder because their core paths no longer exist.
     deleted: HashMap<CoreId, Vec<moon_core::strat_db::stats::HeadRow>>,
     deleted_gen: u64,
     deleted_inflight: bool,
-    /// Раскрытые папки «Удалённые» по ядрам.
+    /// Cores whose Deleted folder is expanded.
     expanded_deleted: HashSet<CoreId>,
-    /// Ширины панелей (дерево/версии/разделы) — тянутся сплиттерами, персист
-    /// в layout.strategies_panels (как ширины колонок таблиц).
+    /// Resizable tree, versions, and sections widths persisted in `layout.strategies_panels`.
     panels: moon_core::config::layout::StrategiesPanels,
-    /// Якорь для range-выбора по Shift.
+    /// Anchor for Shift range selection.
     anchor: Option<Key>,
-    /// Плоский порядок видимых стратегий прошлого кадра — для Shift-диапазона.
+    /// Previous frame's flat visible-strategy order used for Shift ranges.
     flat_order: Vec<Key>,
-    /// Состояние дерева MoonTree (флэттинг/виртуализация/раскрытие/DnD-hitbox). Выбор/стейджинг
-    /// остаются в полях выше — `TreeState` лишь рендерит и отдаёт hitbox-и под декораторы.
+    /// MoonTree state for flattening, virtualization, expansion, and drag-and-drop hitboxes.
+    /// Selection and staging remain above; `TreeState` only renders and exposes decorator hitboxes.
     tree_state: Entity<MoonTreeState>,
-    /// Индекс выбранной секции в схеме её вида. НЕ сбрасывается при смене стратегии,
-    /// только клампится при выходе за диапазон.
+    /// Selected section index within the strategy kind's schema.
+    /// Preserved across strategy changes and reset only when it falls outside the new range.
     selected_section: usize,
-    /// Стейджинг чекбоксов: (ядро, id) → желаемый checked. Уходит на сервер по
-    /// старт/стоп отмеченных, затем очищается.
+    /// Staged checkbox values keyed by core and strategy id.
+    /// Sent with Start/Stop Checked and cleared after successful application.
     staged: HashMap<Key, bool>,
-    /// Draft редактирования полей: (ядро, id, field) → новая строка UI.
+    /// Draft field edits mapping core, strategy id, and field name to the new UI string.
     field_edits: HashMap<FieldEditKey, String>,
-    /// Живые состояния single-line редакторов видимых/посещённых полей.
+    /// Retained single-line editor states for visible or previously visited fields.
     field_inputs: HashMap<String, Entity<MoonInputState>>,
-    /// Живые состояния memo/formula редакторов видимых/посещённых полей.
+    /// Retained memo/formula editor states for visible or previously visited fields.
     field_memos: HashMap<String, Entity<MoonTextAreaState>>,
-    /// Пикеры Color-полей: row_id → (RGB на момент создания, state). При внешней
-    /// смене hex пересоздаются (у MoonColorPickerState нет тихого sync).
+    /// Color-field pickers keyed by row id, storing the RGB used to create each state.
+    /// External RGB changes recreate the state because it has no silent synchronization; changing
+    /// only the hexadecimal alpha prefix does not invalidate this RGB-based cache.
     field_colors: HashMap<String, ([u8; 3], Entity<MoonColorPickerState>)>,
-    /// Поле, для которого открыт контекстный helper/autocomplete.
+    /// Field whose contextual helper or autocomplete is open.
     focused_field: Option<String>,
-    /// Раскрытые ядра в дереве.
+    /// Expanded cores in the strategy tree.
     expanded_cores: HashSet<CoreId>,
-    /// Раскрытые папки в дереве: (ядро, путь).
+    /// Expanded tree folders keyed by core and path.
     expanded_folders: HashSet<(CoreId, String)>,
-    /// Правила зависимостей полей (param_deps.toml; hot-reload).
+    /// Field-dependency rules from `param_deps.toml`, hot-reloaded only with the opt-in environment flag.
     rules: Rules,
-    /// Буфер копирования стратегий/папок (исходные данные — для межъядерной вставки).
+    /// Copied strategy or folder source data, retained for cross-core pasting.
     clipboard: Option<Vec<tree_ops::ClipItem>>,
-    /// Имена, УЖЕ отправленные на создание, но ещё не пришедшие эхом от ядра:
-    /// (ядро, имя). Без резерва два быстрых Ctrl+V читали один и тот же снимок
-    /// store и генерировали одинаковые имена (четыре «S (7)»). Чистится при
-    /// появлении имени в store.
+    /// Names submitted for creation but not yet echoed by the core, keyed by core and name.
+    /// Reserving them prevents rapid pastes from reading one store snapshot and generating the same
+    /// name repeatedly. A reservation is cleared once the name appears in the store.
     pending_names: HashSet<(CoreId, String)>,
-    /// Выделенная кликом папка дерева: (ядро, путь) — подсветка + цель Ctrl+C
-    /// (копия папки целиком, как в Moonbot).
+    /// Click-selected folder used for highlighting and whole-folder Ctrl+C copying as in Moonbot.
     selected_folder: Option<(CoreId, String)>,
-    /// Пустые UI-папки (до наполнения первой стратегией): (ядро, путь через `/`).
+    /// Empty UI folders before their first strategy is added, keyed by core and slash-separated path.
     ui_folders: HashSet<(CoreId, String)>,
-    /// Активная модалка операции над деревом (создать/переименовать/подтвердить).
+    /// Active create, rename, or confirmation modal for a tree operation.
     op: Option<tree_ui::TreeOp>,
-    /// Ввод модалки создания/переименования — пересоздаётся на каждое открытие, чтобы
-    /// модалка всегда стартовала с актуальным начальным значением.
+    /// Create/rename modal input, recreated on each opening to use the current initial value.
     op_input: Option<Entity<MoonInputState>>,
-    /// Начальное значение для `op_input` при следующем создании (render строит инпут).
+    /// Initial value used when rendering the next `op_input` instance.
     op_input_init: String,
-    /// Ожидаем появления стратегии (эхо ядра после create/paste): (ядро, имя) — как
-    /// придёт, выбираем её в дереве. Очищается после выбора.
+    /// Strategy expected from a core echo after create/paste, keyed by core and name.
+    /// Selected in the tree when it arrives, then cleared.
     pending_select: Option<(CoreId, String)>,
-    /// Сигнатура данных стратегий/схем, которые реально меняют окно.
+    /// Signature of strategy and schema data that materially changes the window.
     last_sig: u64,
-    /// Показывать только активные параметры (галка над параметрами).
+    /// Whether the parameters panel hides dependency-inactive fields.
     only_active_params: bool,
     focus: FocusHandle,
 }
@@ -137,8 +136,8 @@ impl StrategiesView {
         let panels = backend.read(cx).layout.strategies_panels;
         let search = cx
             .new(|cx| MoonInputState::new(window, cx).placeholder(t!("strat.search").to_string()));
-        // Печать в поиске → обновить фильтр и перерисовать. Render не должен читать input
-        // как event source.
+        // Update the filter and redraw from search input events; render must not poll the input as
+        // an event source.
         cx.subscribe(&search, |this, input, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
                 let value = input.read(cx).value().to_string();
@@ -152,10 +151,10 @@ impl StrategiesView {
 
         let initial_sig = strategies_sig(backend.read(cx));
 
-        // Новые снимки стратегий/схемы → перерисовка. Hot-reload правил живёт на
-        // отдельном file-mtime таймере ниже: backend data observe не должен быть
-        // суррогатным polling loop для файловой системы. Запрос «показать стратегию»
-        // (`strategies_goto`) тоже будит render — дренаж живёт там (нужен `Window`).
+        // Redraw for new strategy or schema snapshots. When explicitly enabled by
+        // `MOON_STRATEGY_RULES_HOT_RELOAD`, rules reload on the file-mtime timer below; observing
+        // backend data must not become a surrogate filesystem polling loop. A `strategies_goto`
+        // request also wakes render, where it is drained with Window access.
         cx.observe(&backend, |this, backend, cx| {
             let b = backend.read(cx);
             let goto = b.strategies_goto.is_some();
@@ -169,8 +168,8 @@ impl StrategiesView {
         })
         .detach();
 
-        // Сохранять положение/размер окна «Стратегии» в layout — чтобы открывалось на прежнем
-        // месте. Дебаунс-сейв делает дренаж по `layout_dirty` (как у окон групп).
+        // Persist Strategies-window geometry in layout. The debounced save loop drains
+        // `layout_dirty`, matching group windows.
         cx.observe_window_bounds(window, |this, window, cx| {
             let Some((x, y, w, h)) = crate::windowing::window_geom(window) else {
                 return;
@@ -243,16 +242,17 @@ impl StrategiesView {
             op_input_init: String::new(),
             pending_select: None,
             last_sig: initial_sig,
-            // По умолчанию неактивные параметры скрыты (галка включена).
+            // Hide dependency-inactive parameters by default.
             only_active_params: true,
             focus: cx.focus_handle(),
         }
     }
 
-    // ── Выбор ───────────────────────────────────────────────────────────────
+    // ── Selection ───────────────────────────────────────────────────────────
 
-    /// Клик по стратегии с учётом модификаторов: Shift — диапазон от якоря (по
-    /// `order`), Ctrl/Cmd — добавить/убрать по одной, без модификатора — выбрать одну.
+    /// Apply a strategy click with selection modifiers.
+    /// Shift selects the `order` range from the anchor, Ctrl/Cmd toggles one key, and an
+    /// unmodified click replaces the selection.
     fn apply_click(&mut self, key: Key, order: &[Key], shift: bool, command: bool) -> bool {
         let before_selected = self.selected;
         let before_anchor = self.anchor;
@@ -281,9 +281,9 @@ impl StrategiesView {
             self.sel.insert(key);
             self.anchor = Some(key);
         }
-        // Первичная (источник схемы/секций) — всегда кликнутая. Раздел не сбрасываем.
+        // The clicked strategy always becomes the primary schema/section source; keep the section.
         self.selected = Some(key);
-        // Клик по стратегии снимает выделение папки (Ctrl+C снова копирует выбор).
+        // A strategy click clears folder selection so Ctrl+C copies the strategy selection again.
         self.selected_folder = None;
         before_selected != self.selected || before_anchor != self.anchor || before_sel != self.sel
     }
@@ -312,10 +312,10 @@ impl StrategiesView {
         true
     }
 
-    /// Дренаж запроса «показать стратегию» (`Backend::strategies_goto`): снять «только
-    /// активные», при необходимости сбросить прочие фильтры (иначе цель не видна),
-    /// раскрыть ядро/папки и выбрать стратегию. Возвращает ключ для скролла к строке
-    /// (render зовёт до построения дерева, скроллит после `set_items`).
+    /// Drain a `Backend::strategies_goto` request and reveal its strategy.
+    /// Disables the active-only filter, resets other filters when they still hide the target,
+    /// expands its core and folders, and selects it. Returns the key so render can scroll after
+    /// calling `set_items`.
     fn drain_goto(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Key> {
         let (core, strat_id) = self.backend.read(cx).strategies_goto?;
         self.backend.update(cx, |b, _| b.strategies_goto = None);
@@ -329,8 +329,8 @@ impl StrategiesView {
                 .cloned()?
         };
         self.filter.only_active = false;
-        // Фильтры вида/направления/поиска могут всё ещё прятать цель — сбрасываем их
-        // (и сам инпут поиска: `set_value` не эмитит Change, фильтр правим вручную).
+        // Reset kind, direction, and search only if they still hide the target. `set_value` does not
+        // emit Change, so update the filter explicitly alongside the search input.
         if !self.filter.matches(&row) {
             self.filter.kind = None;
             self.filter.dir = None;
@@ -363,18 +363,18 @@ impl StrategiesView {
         true
     }
 
-    // ── Действия (старт/стоп отмеченных) ─────────────────────────────────────
+    // ── Actions for starting or stopping checked strategies ─────────────────
 
-    /// «Старт/стоп отмеченных»: на ядро — изменённые галки (diff стейджинга против
-    /// серверного checked) + команда старт/стоп, если у ядра есть отмеченная стратегия
-    /// или есть правки галок. Шлёт через `session.apply_strategies`, чистит стейджинг.
+    /// Start or stop checked strategies on each core through `session.apply_strategies`.
+    /// Sends staged checkbox differences plus the start/stop command when the core has an
+    /// effectively checked strategy or any checkbox changes, then clears staging after success.
     fn apply_start_stop(
         &mut self,
         cores: &[(CoreId, String)],
         start: bool,
         cx: &mut Context<Self>,
     ) {
-        // Собрать действия (читаем store), затем применить (повторный borrow backend).
+        // Collect actions while reading the store, then reacquire the backend to apply them.
         let mut actions: Vec<(CoreId, Vec<(u64, bool)>, bool)> = Vec::new();
         {
             let b = self.backend.read(cx);
@@ -424,8 +424,9 @@ impl StrategiesView {
         value: String,
         cx: &mut Context<Self>,
     ) {
-        // Просмотр старой версии — только чтение (контролы задизейблены; сеттер
-        // гейтим страховкой от обходных путей вроде пикера цвета).
+        // Persisted snapshot views are read-only, including the snapshot labeled current. Live mode
+        // has no selected snapshot. Controls are disabled, and this setter guard blocks indirect
+        // paths such as the color picker as a backstop.
         if keys.is_empty() || self.viewing_version() {
             return;
         }
@@ -441,9 +442,9 @@ impl StrategiesView {
         if self.field_edits.is_empty() {
             return;
         }
-        // Группируем по ЯДРУ → внутри по стратегии. На ядро уходит ОДНА команда со всеми его
-        // правками: иначе при нескольких выбранных стратегиях одного ядра раздельные
-        // `sync_local_strategies` перетирали бы друг друга (применялось бы к одной).
+        // Group by core and then strategy, sending one command with all edits for each core.
+        // Separate commands for multiple selected strategies on one core would let successive
+        // `sync_local_strategies` calls overwrite each other and retain only one strategy's edits.
         let mut per_core: HashMap<CoreId, HashMap<u64, Vec<(String, String)>>> = HashMap::new();
         for ((core, id, field), value) in &self.field_edits {
             per_core
@@ -481,9 +482,8 @@ impl StrategiesView {
         self.focused_field = None;
     }
 
-    /// Поставить фильтр поиска по точному имени стратегии и сфокусировать поле — пункт
-    /// меню «Найти все с этим именем». Имя пишем и в фильтр, и в сам инпут (`set_value`
-    /// не эмитит Change, поэтому фильтр выставляем вручную).
+    /// Put a strategy's full name into the search filter and focus the input for Find All by Name.
+    /// Writes both the filter and input because `set_value` does not emit Change.
     pub(super) fn search_by_name(
         &mut self,
         name: String,
@@ -512,9 +512,9 @@ impl StrategiesView {
             if cur == value {
                 return state.clone();
             }
-            // Кэш мог устареть: значение в сторе изменилось (эхо сервера / правка в другом
-            // выборе), а `value` уже актуально (учитывает черновик). Синхронизируем тихо:
-            // `sync_value` не эмитит Change, поэтому не зацикливает staged edits.
+            // The cache may lag a server echo or an edit made through another selection while
+            // `value` already includes the current draft. Synchronize silently; `sync_value` does
+            // not emit Change and therefore cannot loop staged edits.
             let state = state.clone();
             state.update(cx, |s, cx| s.sync_value(value.clone(), cx));
             return state;
@@ -545,7 +545,7 @@ impl StrategiesView {
             if cur == value {
                 return state.clone();
             }
-            // См. field_input_state: тихо синхронизируем с актуальным значением.
+            // As in `field_input_state`, synchronize silently to the current value.
             let state = state.clone();
             state.update(cx, |s, cx| s.sync_value(value.clone(), cx));
             return state;
@@ -562,9 +562,9 @@ impl StrategiesView {
         state
     }
 
-    /// Пикер Color-поля (свотч + палитра moonui): выбор цвета стейджит новый hex,
-    /// сохраняя альфа-префикс текущего значения (формат Moonbot AARRGGBB). Кэш по
-    /// row_id; при внешней смене hex state пересоздаётся под новый цвет.
+    /// Build a MoonUI swatch/palette picker for a Color field.
+    /// A selection stages a new hexadecimal value while preserving its Moonbot `AARRGGBB` alpha
+    /// prefix. States are cached by row id and recreated when the external RGB value changes.
     fn field_color_state(
         &mut self,
         id: String,
@@ -610,9 +610,8 @@ impl StrategiesView {
         }
     }
 
-    /// Раскрыть каждый уровень пути (накопительные префиксы) в `expanded_folders`.
-    /// Единый помощник раскрытия цепочки папок (используется при «развернуть всё» и при
-    /// создании папки, чтобы новая была сразу видна).
+    /// Insert every cumulative path prefix into `expanded_folders`.
+    /// Shared by Expand All and folder creation so a newly created folder is immediately visible.
     pub(super) fn expand_path<'a>(
         &mut self,
         core: CoreId,
@@ -628,7 +627,7 @@ impl StrategiesView {
         }
     }
 
-    /// Развернуть все узлы (если `collapsed`) или свернуть все (иначе).
+    /// Expand every node when `collapsed` is true; otherwise collapse all nodes.
     fn expand_collapse_toggle(
         &mut self,
         cores: &[(CoreId, String)],
@@ -654,7 +653,7 @@ impl StrategiesView {
         }
     }
 
-    // ── Панель 1: дерево ──────────────────────────────────────────────────────
+    // ── Panel 1: strategy tree ───────────────────────────────────────────────
 
     fn sections_panel(&self, store: &CoreStore, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
@@ -699,8 +698,8 @@ impl StrategiesView {
                 )
                 .into_any_element();
         }
-        // Просмотр версии с диффом: сверху псевдораздел «Все» (по умолчанию),
-        // ниже — только разделы, где есть изменённые поля.
+        // A version diff starts with the default synthetic All section, followed only by schema
+        // sections containing changed fields.
         if let Some(ch) = self.version_changed_filter() {
             let ch: HashSet<String> = ch.keys().cloned().collect();
             let mut list = v_flex().w_full().gap_0();
@@ -777,7 +776,7 @@ impl StrategiesView {
 
         let values = selected_values(self, store);
 
-        // Порядок: сначала активные, потом неактивные; внутри групп — порядок схемы.
+        // Show active sections first and inactive sections second, preserving schema order within each.
         let mut order: Vec<(usize, bool)> = sections
             .iter()
             .enumerate()
@@ -829,10 +828,10 @@ impl StrategiesView {
         col.into_any_element()
     }
 
-    // ── Панель 3: параметры выбранной секции ────────────────────────────────
+    // ── Parameters for the selected section ─────────────────────────────────
 }
 
-/// Какой сплиттер панелей тянут.
+/// Panel boundary being dragged.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum PanelSplit {
     Tree,
@@ -840,13 +839,13 @@ enum PanelSplit {
     Sections,
 }
 
-/// Полезная нагрузка drag'а сплиттера.
+/// Splitter drag payload.
 #[derive(Clone)]
 struct PanelResizeDrag {
     which: PanelSplit,
 }
 
-/// Пустой «призрак» drag'а сплиттера — ничего не рисуем, панель следует за мышью.
+/// Empty splitter drag ghost; the panel itself follows the pointer.
 struct SplitGhost;
 impl Render for SplitGhost {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -854,14 +853,14 @@ impl Render for SplitGhost {
     }
 }
 
-/// Ширина сплиттера между панелями (лог. px).
+/// Width of a panel splitter in logical pixels.
 const PANEL_SPLIT_W: f32 = 5.0;
-/// Ширина свёрнутой полоски «Версии».
+/// Width of the collapsed Versions strip.
 const VERSIONS_COLLAPSED_W: f32 = 22.0;
 
 impl StrategiesView {
-    /// Персист ширин панелей + свёрнутости версий в layout (дебаунс-сейв по
-    /// `layout_dirty`, как геометрия окна).
+    /// Persist panel widths and Versions collapse state in layout.
+    /// The debounced save loop drains `layout_dirty`, as it does for window geometry.
     pub(super) fn save_panels(&mut self, cx: &mut Context<Self>) {
         let mut p = self.panels;
         p.versions_collapsed = self.versions.collapsed;
@@ -881,7 +880,7 @@ impl StrategiesView {
         });
     }
 
-    /// Вертикальный сплиттер между панелями (тянется мышью).
+    /// Build a draggable vertical splitter between panels.
     fn panel_splitter(&self, which: PanelSplit, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         div()
@@ -897,8 +896,8 @@ impl StrategiesView {
             .into_any_element()
     }
 
-    /// Обработка перетаскивания сплиттера: ширина панели = позиция мыши минус
-    /// левый край панели (абсолютно от окна — устойчиво к пропущенным событиям).
+    /// Resize a panel from the pointer's window-relative position minus the panel's left edge.
+    /// Absolute positioning remains stable when intermediate drag events are missed.
     fn on_panel_split_drag(&mut self, x: f32, which: PanelSplit, cx: &mut Context<Self>) {
         match which {
             PanelSplit::Tree => {
@@ -947,8 +946,8 @@ impl Focusable for StrategiesView {
 
 impl Render for StrategiesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Запрос «показать стратегию» (ПКМ по линии ордера / клик Strat в Ордерах) —
-        // дренаж ДО построения дерева, чтобы фильтры/раскрытие/выбор попали в этот кадр.
+        // Drain navigation from an order-line context menu or Orders Strat click before building
+        // the tree so filter, expansion, and selection changes appear in this frame.
         let goto = self.drain_goto(window, cx);
 
         // Root nodes are connected cores in canonical order.
@@ -958,7 +957,7 @@ impl Render for StrategiesView {
                 .from_sessions(b.session.sessions(), |_| true)
         };
 
-        // Адаптер MoonTree (owned, без заимствования стора наружу), затем синк состояния дерева.
+        // Build the owned MoonTree adapter without leaking a store borrow, then synchronize state.
         let build = {
             let store = self.backend.read(cx).session.store();
             tree_moon::build(self, store, &cores)
@@ -969,8 +968,8 @@ impl Render for StrategiesView {
             st.set_items(build.items, c);
             st.set_force_expanded(searching, c);
             st.set_expanded(build.expanded_ids, c);
-            // Переход к стратегии: прокрутить дерево к её строке. Индекс по id через
-            // выбор MoonTree (выбор тут же снимаем — подсветку рисует наш `sel`).
+            // Navigate by temporarily selecting the MoonTree item to obtain its index and scroll
+            // to it, then clear that selection because `sel` renders the highlight.
             if let Some((core, id)) = goto {
                 let item = MoonTreeItem::new(tree_moon::id_strat(core, id), "");
                 st.set_selected_item(Some(&item), c);
@@ -982,8 +981,8 @@ impl Render for StrategiesView {
         });
         let node_data = std::rc::Rc::new(build.node_data);
 
-        // Панель «Версии» + кэш удалённых — до блока с заимствованием store
-        // (спавнят фоновые загрузки).
+        // Prepare the Versions panel and deleted-strategy cache before borrowing the store because
+        // they can spawn background loads.
         self.ensure_deleted(cx);
         let versions = self.versions_panel(cx);
         let (tree, sections, params_model) = {
@@ -1018,7 +1017,7 @@ impl Render for StrategiesView {
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 this.handle_tree_key(ev, window, cx);
             }))
-            // Перетаскивание сплиттеров панелей (ширины персистятся в layout).
+            // Resize panel splitters; resulting widths are persisted in layout.
             .on_drag_move(
                 cx.listener(|this, e: &DragMoveEvent<PanelResizeDrag>, _window, cx| {
                     let which = e.drag(cx).which;
@@ -1081,10 +1080,10 @@ fn strategies_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         })
 }
 
-/// Открыть окно «Стратегии» и перейти к стратегии ядра `core` с id `strat_id`:
-/// окно открывается/фокусируется, «только активные» снимается, ядро и папки цели
-/// раскрываются, стратегия выбирается (дренаж запроса — в render `StrategiesView`).
-/// Точки входа: ПКМ по линии ордера на чарте, клик по колонке Strat в «Ордерах».
+/// Open or focus the Strategies window and navigate to `strat_id` on `core`.
+/// Render drains the request, disables the active-only filter, expands the target core and folders,
+/// and selects the strategy. Entry points include chart order-line context menus and the Orders
+/// table's Strat column.
 pub fn open_goto(
     backend: Entity<Backend>,
     core: CoreId,
@@ -1095,20 +1094,20 @@ pub fn open_goto(
 ) {
     backend.update(cx, |b, bcx| {
         b.strategies_goto = Some((core, strat_id));
-        // Будит observe уже открытого окна (дедуп в `open` только фокусирует его).
+        // Wake an existing window's observer because `open` only focuses a deduplicated window.
         bcx.notify();
     });
     open(backend, owner, owner_display, cx);
 }
 
-/// Открыть окно «Стратегии» (tool/secondary окно). Дедуп окон — в `Backend`.
+/// Open the Strategies tool window, deduplicated through `Backend`.
 pub fn open(
     backend: Entity<Backend>,
     owner: Option<AnyWindowHandle>,
     owner_display: Option<DisplayId>,
     cx: &mut App,
 ) {
-    // Уже открыто → сфокусировать.
+    // Focus an existing window.
     if let Some(handle) = backend.read(cx).strategies_window {
         if handle
             .update(cx, |_, window, _| window.activate_window())
@@ -1117,8 +1116,8 @@ pub fn open(
             return;
         }
     }
-    // Tool-окно: визуально и поведенчески это часть терминала, а не отдельное приложение
-    // в taskbar. Геометрию восстанавливаем из layout (её сохраняет StrategiesView).
+    // The tool window behaves as part of the terminal rather than a separate taskbar application.
+    // Restore geometry persisted by `StrategiesView`.
     let saved = backend.read(cx).layout.strategies_window;
     let bounds = saved.map_or(
         Bounds {
@@ -1130,8 +1129,8 @@ pub fn open(
             size: size(px(g.w as f32), px(g.h as f32)),
         },
     );
-    // Мультимонитор: без display_id окно создаётся на primary и при bounds вне него gpui
-    // откатывается на дефолт — монитор по сохранённой точке (не-мак) либо от владельца.
+    // Choose a display from the saved position where supported, otherwise from the owner. Without a
+    // display id, GPUI creates the window on the primary display and may discard off-screen bounds.
     let display_id = crate::windowing::saved_or_owner_display_id(
         saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
         owner,

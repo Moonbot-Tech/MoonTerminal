@@ -11,17 +11,18 @@ pub(super) const LINE_H: f32 = FONT_SIZE + 4.0;
 const READOUT_PAD_X: f32 = 5.0;
 const READOUT_PAD_Y: f32 = 2.5;
 const READOUT_INSET: f32 = 2.0;
-// Отступ подписи ордер-линии от самой линии (px). Достаточный, чтобы плашка (её низ/верх =
-// dy ± READOUT_PAD_Y) не накрывала линию: GAP > READOUT_PAD_Y.
+// Distance from an order-line label to the line itself (px). Large enough that the badge
+// (its bottom/top = dy ± READOUT_PAD_Y) does not cover the line: GAP > READOUT_PAD_Y.
 const LABEL_LINE_GAP: f32 = 4.0;
-// Угловая подпись (имя ядра + тикер). Якорь правым краем: есть стакан → у края панели (над
-// стаканом, слева от ✕ закрытия); нет стакана → у края плота (в области графика). Кнопка ✕
-// занимает крайние ~26px (bounds `right-26`, ширина 22), поэтому инсет 30px уводит правый край
-// подписи ЛЕВЕЕ кнопки (зазор ~4px), чтобы текст не прятался под ней. pub(super): render_state
-// строит по ним прозрачную плашку (тем же инсетом — едет вместе с текстом).
+// Corner caption (core name + ticker), anchored by its right edge. With an order book it sits
+// at the panel edge (above the book, left of the close button); without one it sits at the plot
+// edge. The close button occupies the outermost ~26 px (bounds `right-26`, width 22), so a 30 px
+// inset moves the caption's right edge LEFT of the button by ~4 px and keeps text from hiding
+// under it. These are pub(super) because render_state uses them to build a translucent badge
+// with the same inset, keeping it aligned with the text.
 pub(super) const CAPTION_PAD_X: f32 = 30.0;
 pub(super) const CAPTION_PAD_Y: f32 = 4.0;
-// Зазор между бейджем текущего Y-масштаба и блоком угловой подписи (бейдж — левее).
+// Gap between the current Y-scale badge and the corner-caption block (badge on the left).
 pub(super) const CAPTION_SCALE_GAP: f32 = 8.0;
 const FIRETEST_TEXT_FONT_SIZE: f32 = 9.0;
 const FIRETEST_TEXT_LINE_H: f32 = 11.0;
@@ -64,15 +65,18 @@ fn rect_y_range_log(dst: [f32; 4], scale: f32) -> (f32, f32) {
     (t, t + dst[3] / scale)
 }
 
-/// Отступ курсорных подписей (размер/объём/%) от горизонтали перекрестия: плашка подписи
-/// (текст ± `READOUT_PAD_Y`) не должна накрывать саму линию — иначе видимый «разрыв» курсора.
-/// Учитывает толщину креста (device px → лог.) с запасом 1px.
+/// Returns the gap between cursor labels (size/volume/%) and the crosshair's horizontal line.
+///
+/// The label badge (text ± `READOUT_PAD_Y`) must not cover the line, which would create a
+/// visible break in the cursor. Accounts for crosshair thickness (device px → logical px)
+/// with an additional 1 px margin.
 fn cursor_label_gap(cursor_thickness_dev: f32, sf: f32) -> f32 {
     LABEL_LINE_GAP.max(READOUT_PAD_Y + cursor_thickness_dev / sf.max(0.1) * 0.5 + 1.0)
 }
 
-/// «+1.25%» — знаковый процент для подписей курсора (отклонение от текущей цены).
-/// Общий и для подписей ордер-линий (`data_state::orders`).
+/// Formats a signed percentage such as `+1.25%` for cursor labels relative to current price.
+///
+/// Also used by order-line labels (`data_state::orders`).
 ///
 /// Deliberately NOT `moon_core::util::fmt::signed_pct`: this runs per label in the GPU frame
 /// path on `f32` cursor deltas, and a deviation that rounds to zero sits at the cursor's own
@@ -82,12 +86,12 @@ pub(in crate::chartdx) fn fmt_pct(v: f32) -> String {
     format!("{v:+.2}%")
 }
 
-/// Компактное накопленное количество стакана с SI-суффиксом K/M/B/T — для подписи курсора.
+/// Formats cumulative order-book notional compactly with a K/M/B/T SI suffix for cursor labels.
 fn fmt_amount(v: f32) -> String {
     moon_core::util::fmt::compact_si(v as f64)
 }
 
-/// Цвет знакового процента: плюс → positive, минус → negative из текущей chart theme.
+/// Returns the current chart theme's positive or negative color for a signed percentage.
 fn pct_hsla(v: f32, positive: u32, negative: u32) -> Hsla {
     color(if v >= 0.0 { positive } else { negative })
 }
@@ -137,8 +141,10 @@ fn draw_text_run(
     )
 }
 
-/// `draw_text_run` с произвольным кеглем (высота строки = кегль+4) — крупная дельта от якоря
-/// в метле. Кегль передаётся снаружи (масштабируется слайдером через `label_font_px`).
+/// Draws a `draw_text_run` with a custom font size and line height of `size + 4`.
+///
+/// Used for the large delta from the anchor in broom mode. The externally supplied size is
+/// scaled by the settings slider through `label_font_px`.
 #[allow(clippy::too_many_arguments)]
 fn draw_sized_text_run(
     runs: &mut Vec<GpuCanvasTextRun>,
@@ -283,7 +289,7 @@ fn nearest_orderbook_notional(
     best.map(|(_, q)| q)
 }
 
-// Разнос по смысловым блокам (verbatim-перенос): runs — draw/measure-обёртки RenderState,
-// firetest и призрак курсора; prepare — главный prepare_text.
+// Split by responsibility: runs contains RenderState draw/measure helpers, FireTest text, and
+// the ghost cursor; prepare contains the main prepare_text implementation.
 mod prepare;
 mod runs;

@@ -1,11 +1,14 @@
-//! Поля-списки (источник/тип) и меню сортировки/фильтра панели «Ордера».
+//! Source, order-kind, column, sorting, and filtering controls for the Orders panel.
 
 use super::*;
 use rust_i18n::t;
 
 impl OrdersPanel {
-    /// Поле-список ядер — МУЛЬТИВЫБОР (общий виджет [`crate::controls::core_combo`], как в
-    /// «Отчёте»/«Активах»). Подпись: «Все ядра» (пусто/все) / имя единственного / «Ядер: N».
+    /// Builds the multi-select core dropdown shared with the Report and Assets panels through
+    /// [`crate::controls::core_combo`].
+    ///
+    /// Its label shows All Cores for an empty or cardinality-matched selection, a resolved core name
+    /// for a sole selection, or the localized core count otherwise.
     pub(super) fn source_combo(
         &self,
         cores: &OrderedCores,
@@ -26,7 +29,7 @@ impl OrdersPanel {
         )
     }
 
-    /// Поле-список типа ордеров (Все / Реальные / Эмуляторные).
+    /// Builds the All, Real, and Emulated order-kind dropdown.
     pub(super) fn kind_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let cur = match self.view.kind {
             OrderKind::All => t!("orders.kind.all"),
@@ -66,15 +69,15 @@ impl OrdersPanel {
             .items(items)
     }
 
-    /// Поле-список выбора отображаемых колонок таблицы. Каждый пункт — чекбокс-тогл
-    /// видимости колонки; меню НЕ закрывается на клик (`close_on_select(false)`), чтобы
-    /// можно было отметить сразу несколько. Нельзя скрыть ВСЕ колонки — последняя
-    /// видимая колонка не тогается (иначе таблица станет пустой). Состояние персистится.
+    /// Builds the persisted table-column visibility menu.
+    ///
+    /// Each item toggles one column, and `close_on_select(false)` keeps the menu open for multiple
+    /// edits. The final visible column cannot be disabled, preventing an empty table.
     pub(super) fn columns_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let cur = self.view;
         let mut menu = MoonDropdown::new("orders-columns")
-            // Кнопка-глиф вместо поля со списком (общий вид селекторов колонок).
+            // Use a glyph button instead of a text field, matching the other column selectors.
             .segment(moon_ui::MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
@@ -82,7 +85,7 @@ impl OrdersPanel {
             .menu_width(design::font_w(cx, 170.0))
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
-        // «Все» — тумблер: включить все колонки / повторно — оставить одну первую.
+        // The All item enables every column; clicking it again leaves only the first canonical one.
         let full_mask = OrdCol::ALL.iter().fold(0u16, |m, c| m | c.bit());
         let all_on = cur.columns == full_mask;
         let all_view = view.clone();
@@ -102,7 +105,7 @@ impl OrdersPanel {
         );
         for col in OrdCol::ALL {
             let shown = cur.shows(col);
-            // Последняя оставшаяся видимая колонка заблокирована на выключение.
+            // Disable turning off the final visible column.
             let last_visible = shown && cur.columns == col.bit();
             let view = view.clone();
             menu = menu.item(
@@ -112,7 +115,7 @@ impl OrdersPanel {
                     .on_click(move |_, _, app| {
                         Self::mutate(&view, app, |v| {
                             let next = v.columns ^ col.bit();
-                            // Защита от пустой таблицы: не применяем, если погасли все колонки.
+                            // Reject an empty visibility mask as a final guard against a blank table.
                             if next != 0 {
                                 v.columns = next;
                             }
@@ -129,8 +132,9 @@ impl OrdersPanel {
             .child(menu)
     }
 
-    /// Меню сортировки/фильтра (порт ПКМ-меню egui): фильтр текущего маркета + две
-    /// тогл-группы сортировки. В GPUI — попап-кнопка (PopupMenu основан на Action).
+    /// Builds the gear-triggered dropdown for the current-market filter and ordering options.
+    ///
+    /// The menu combines a primary-sort radio group, newest/oldest ordering, and Main-on-top modes.
     pub(super) fn sort_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let cur = self.view;
@@ -201,8 +205,8 @@ impl OrdersPanel {
                 .checked(!cur.newest_first)
                 .on_click(move |_, _, app| Self::mutate(&v, app, |s| s.newest_first = false)),
         );
-        // «Main сверху» — две взаимоисключающие галки + возможность выключить (клик по уже
-        // активной снимает её → Off). Подсветка строк от этого не зависит.
+        // Main on top offers two mutually exclusive choices; clicking the active choice returns to
+        // Off. Row highlighting is independent of this ordering mode.
         let v = view.clone();
         menu = menu.item(MoonMenuItem::separator()).item(
             MoonMenuItem::with_key("m-main-all", t!("orders.sort.main_all").to_string())

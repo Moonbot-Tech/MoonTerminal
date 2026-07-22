@@ -1,10 +1,11 @@
-//! Ручная торговля ядра: постановка / переставление / отмена ордера.
-//! Транслирует доменные торговые `CoreCmd` в high-level хендлы moonproto
-//! (`client.trade()` / `client.orders()`). Рантайм moonproto сам применяет
-//! действие к локальной модели `Orders` ДО отправки пакета (Delphi-гейты:
-//! throttle replace, send-if-changed) — здесь мы только вызываем хендл.
+//! Core manual trading: placing, moving, and canceling orders.
+//! Translates domain trading `CoreCmd`s into high-level moonproto handles
+//! (`client.trade()` / `client.orders()`). Some `MoonOrders` mutations update the local
+//! `Orders` model before sending (including replace throttling and send-if-changed). New,
+//! join, split, close, and sell operations are queued or sent without inserting them into
+//! the local model; this layer only invokes the handle.
 //!
-//! Истина по API — moonproto: `MoonTrade::new_order` (TNewOrderCommand, CmdId=3),
+//! moonproto is the API source of truth: `MoonTrade::new_order` (TNewOrderCommand, CmdId=3),
 //! `MoonOrders::move_order` (TOrderReplaceCommand, CmdId=6),
 //! `MoonOrders::cancel` (TOrderCancelCommand, CmdId=10).
 
@@ -15,9 +16,9 @@ use moonproto::{
 
 use crate::feed::{OrderLinePriceKind, OrderStopKind};
 
-/// Единый лог исхода торгового вызова: `Ok` → `info` с контекстом `ctx`, `Err` → тот же
-/// контекст + `warn` с ошибкой. Контекст совпадает по тексту с прежними per-функция логами,
-/// чтобы грепы по логам не сломались.
+/// Logs a trading call outcome consistently: `Ok` → `info` with `ctx`; `Err` → the same
+/// context plus a `warn` with the error. Context text matches the former per-function logs
+/// so log searches remain compatible.
 pub(super) fn report<T, E: std::fmt::Display>(
     server_id: u64,
     ctx: impl std::fmt::Display,
@@ -29,9 +30,10 @@ pub(super) fn report<T, E: std::fmt::Display>(
     }
 }
 
-/// Поставить новый ордер (TNewOrderCommand). `short` — сторона ПОЗИЦИИ
-/// (Long/Short, зеркало `is_short`); `strategy_id=None` шлёт `StratID=0` —
-/// штатный ручной ордер без стратегии. `size` — размер в базовой монете.
+/// Places a new order (TNewOrderCommand). `short` is the POSITION side
+/// (Long/Short, mirroring `is_short`); `strategy_id=None` sends `StratID=0`, marking a manual
+/// order that may still be governed by the core's configured manual strategy. `size` is
+/// expressed in the base coin.
 pub(super) fn place_order(
     client: &MoonClient,
     server_id: u64,
@@ -60,9 +62,9 @@ pub(super) fn place_order(
     }
 }
 
-/// Переставить (move/replace) существующий ордер ядра по `uid` на новую цену —
-/// «потянуть за линию». Рантайм троттлит повторы (`replace_sent_time`) и сам
-/// выводит сторону/рынок из локального ордера.
+/// Moves/replaces an existing core order identified by `uid` to a new price, as when dragging
+/// its line. The runtime throttles repeats (`replace_sent_time`) and derives side/market from
+/// the local order.
 pub(super) fn move_order(client: &MoonClient, server_id: u64, uid: u64, new_price: f64) {
     report(
         server_id,
@@ -71,8 +73,8 @@ pub(super) fn move_order(client: &MoonClient, server_id: u64, uid: u64, new_pric
     );
 }
 
-/// Отменить ордер ядра по `uid` (TOrderCancelCommand). Рантайм выводит текущий
-/// статус из локального ордера; для pending (OS_None) повторяет replace-then-cancel.
+/// Cancels a core order by `uid` (TOrderCancelCommand). The runtime derives the current status
+/// from the local order; for pending (OS_None), it repeats replace-then-cancel.
 pub(super) fn cancel_order(client: &MoonClient, server_id: u64, uid: u64) {
     report(
         server_id,
@@ -81,9 +83,9 @@ pub(super) fn cancel_order(client: &MoonClient, server_id: u64, uid: u64) {
     );
 }
 
-/// «Паник-селл» по рынку (кнопка на чарте): market-level panic sell button semantics.
-/// Транслируется в `orders().switch_panic_sell_by_market`. Рантайм сам применяет тоггл
-/// к ордерам рынка и шлёт нужные пакеты.
+/// Toggles panic sell for a market, matching the chart button's market-level semantics.
+/// This maps to `orders().switch_panic_sell_by_market`; the runtime applies the toggle to
+/// the market's orders and sends the required packets.
 pub(super) fn panic_sell_market(client: &MoonClient, server_id: u64, market: String, on: bool) {
     report(
         server_id,
@@ -94,8 +96,8 @@ pub(super) fn panic_sell_market(client: &MoonClient, server_id: u64, market: Str
     );
 }
 
-/// Паник-селл КОНКРЕТНОГО ордера (`TTurnPanicSellCommand` по `uid`). Рантайм гейтит
-/// повтор (send-if-changed) против своей живой модели ордеров.
+/// Toggles panic sell for one SPECIFIC order (`TTurnPanicSellCommand` by `uid`). The runtime
+/// gates repeats through send-if-changed against its live order model.
 pub(super) fn turn_order_panic_sell(client: &MoonClient, server_id: u64, uid: u64, on: bool) {
     report(
         server_id,
@@ -104,23 +106,24 @@ pub(super) fn turn_order_panic_sell(client: &MoonClient, server_id: u64, uid: u6
     );
 }
 
-/// Закрыть ПОЗИЦИЮ рынка по маркету (`TDoClosePositionCommand`, market_sell=true) — кнопка
-/// «Market sell» в Активах у строки с открытой позицией. Рантайм сам определяет сторону.
+/// Closes a market POSITION (`TDoClosePositionCommand`, market_sell=true), as triggered by the
+/// Assets row's `Market sell` button for an open position. The runtime determines the side.
 pub(super) fn market_sell_position(client: &MoonClient, server_id: u64, market: String) {
     report(
         server_id,
         format!("market close position {market}"),
         client
             .trade()
-            // `::new()`/`limit_orders()` = ЛИМИТНОЕ закрытие (market_sell=false) — лимитка могла
-            // не исполниться, из-за чего «Market sell» не срабатывал. Кнопка обязана закрывать
-            // ПО МАРКЕТУ → `market_order()` (market_sell=true). Сторону рантайм определит сам.
+            // `::new()`/`limit_orders()` performs a LIMIT close (market_sell=false), which might
+            // remain unfilled and make `Market sell` appear ineffective. The button must close AT
+            // MARKET, so use `market_order()` (market_sell=true); the runtime determines the side.
             .close_position(ClosePositionParams::market_order(market)),
     );
 }
 
-/// Продать СПОТ-ТОКЕН рынка по маркету (`TDoSellOrderCommand`) — кнопка «Market sell» в
-/// Активах у строки-холдинга. `price=0` = рыночный ордер; `size` — количество в базовой монете.
+/// Sells a market's SPOT TOKEN at market (`TDoSellOrderCommand`), as triggered by the Assets
+/// holding row's `Market sell` button. `price=0` means a market order; `size` is the base-coin
+/// amount.
 pub(super) fn market_sell_token(client: &MoonClient, server_id: u64, market: String, size: f64) {
     report(
         server_id,
@@ -131,10 +134,10 @@ pub(super) fn market_sell_token(client: &MoonClient, server_id: u64, market: Str
     );
 }
 
-/// Отменить ожидающие buy-ордера рынка («Cancel Buy»). Берём УДЕРЖАННЫЙ снимок, отбираем
-/// ордера этого рынка в buy-фазе ДО исполнения (`OS_None` — ещё не на бирже, или `BuySet` —
-/// лимит-бай ждёт налива), не помеченные на отмену, и шлём по каждому `orders().cancel(uid)`.
-/// Исполненные позиции (`BuyDone`/sell-фазы) и терминальные ордера не трогаем.
+/// Cancels a market's pending buy orders (`Cancel Buy`). Takes an OWNED snapshot, selects
+/// uncanceled orders for this market in a pre-fill buy phase (`OS_None` means not yet on the
+/// exchange; `BuySet` means a limit buy awaits a fill), and calls `orders().cancel(uid)` for each.
+/// Filled positions (`BuyDone`/sell phases) and terminal orders remain untouched.
 pub(super) fn cancel_market_buys(client: &MoonClient, server_id: u64, market: &str) {
     let Some(snap) = client.snapshot() else {
         log::warn!("core {server_id} cancel market buys {market}: no snapshot yet");
@@ -161,8 +164,8 @@ pub(super) fn cancel_market_buys(client: &MoonClient, server_id: u64, market: &s
     }
 }
 
-/// «Join all sells» (ПКМ по линии sell): объединить sell-ордера рынка. `short` — сторона
-/// ПОЗИЦИИ (зеркало `is_short`), задаёт `OrderSide`. Транслируется в `trade().join_orders`.
+/// Joins all sell orders for a market (the sell-line context-menu action). `short` is the
+/// POSITION side (mirroring `is_short`) and determines `OrderSide`. Maps to `trade().join_orders`.
 pub(super) fn join_sells(client: &MoonClient, server_id: u64, market: String, short: bool) {
     let side = if short {
         OrderSide::Short
@@ -257,20 +260,23 @@ pub(super) fn split_order_for_market(
     }
 }
 
-/// Включить/выключить стоп (SL/TS/VStop) ордера по `uid`.
+/// Enables or disables an order's stop (SL/TS/VStop) by `uid`.
 ///
-/// МОДЕЛЬ Moonbot (подтверждена вживую 2026-07-08): у ордера может НЕ БЫТЬ «своего»
-/// per-order стопа — тогда стоп берётся ИЗ СТРАТЕГИИ и реально сработает, хотя на проводе
-/// per-order поля пустые (нули). Провод НЕ отличает «стоп явно выключен» от «не задан».
-/// Отсюда три правила:
-/// - эффективное состояние (для UI и для сборки пакета) = наш явный override (клики
-///   терминала, [`stop_override`]) → иначе `per-order флаг ИЛИ флаг стратегии`;
-/// - `update_stops` несёт ВЕСЬ StopSettings: соседняя группа (SL↔TS) собирается из
-///   ЭФФЕКТИВНЫХ параметров — иначе тогл SL затирал нулями стратегийный TS (и наоборот);
-/// - уровень включаемого стопа: провод (≠0) → память выключения → поле стратегии
-///   ("StopLoss"/"TrailingStop", в стратегии проценты отрицательные → abs) → дефолт
-///   ClientSettings (SL `price_drop_level` / TS `trailing_drop`). VStop — провод/память.
-/// Рантайм сам сравнивает с живой моделью (send-if-changed). SL/TS → `update_stops`,
+/// Moonbot MODEL (confirmed live on 2026-07-08): an order may have NO per-order stop of its
+/// own; the stop then comes from its effective strategy, or from ClientSettings for a manual
+/// order without a strategy, and will trigger even though per-order wire fields are empty
+/// (zeroes). The wire does NOT distinguish `explicitly disabled` from `not set`.
+/// This gives three rules:
+/// - effective state (for the UI and packet assembly) = our explicit override (terminal clicks,
+///   [`stop_override`]), otherwise the per-order flag, effective-strategy flag, or a nonzero
+///   ClientSettings default for a manual order without a strategy;
+/// - `update_stops` carries the ENTIRE StopSettings: the neighboring group (SL↔TS) is assembled
+///   from EFFECTIVE parameters, or toggling SL would overwrite strategy TS with zeroes and vice
+///   versa;
+/// - an enabled stop's level comes from wire (≠0) → disable memory → strategy field
+///   ("StopLoss"/"TrailingStop", whose strategy percentages are negative → abs) → ClientSettings
+///   default (SL `price_drop_level` / TS `trailing_drop`). VStop uses wire/memory only.
+/// The runtime compares against the live model through send-if-changed. SL/TS → `update_stops`,
 /// VStop → `update_vstop`.
 pub(super) fn set_order_stop(
     client: &MoonClient,
@@ -287,9 +293,9 @@ pub(super) fn set_order_stop(
         log::warn!("core {server_id} set order stop {uid} {kind:?}->{on}: order not tracked");
         return;
     };
-    // Эффективная стратегия ордера: своя ЛИБО «ручная стратегия» настроек ядра (ручные
-    // ордера strat_id=0 ведутся по ней); 0 = совсем без стратегии, стопы — из дефолтов
-    // ClientSettings. Держать синхронно с convert.rs (отображение).
+    // Effective order strategy: its own OR the core settings' `manual strategy`, which governs
+    // manual orders with strat_id=0. A 0 means no strategy at all, so stops use ClientSettings
+    // defaults. Keep this synchronized with feed/live/convert.rs (display).
     let strat_id = super::strategies::effective_strat_id(&snap, o.strat_id);
     let has_strat = snap.strats().snapshot(strat_id).is_some();
     let cs = snap.settings().client_settings.as_ref();
@@ -311,10 +317,10 @@ pub(super) fn set_order_stop(
     let result = match kind {
         OrderStopKind::StopLoss | OrderStopKind::Trailing => {
             let stops = o.stops;
-            // Флаг «включён по умолчанию»: поле стратегии, а без стратегии (ручной ордер)
-            // — ненулевой дефолт настроек ядра.
-            // Проценты «падения» в настройках ОТРИЦАТЕЛЬНЫЕ (price_drop_level=-1.1 →
-            // SL 1.1%): включён = ненулевое, уровень дальше берётся по модулю.
+            // The `enabled by default` flag comes from the strategy field, or, without a strategy
+            // (manual order), from a nonzero core-settings default. Settings `drop` percentages
+            // are NEGATIVE (price_drop_level=-1.1 → SL 1.1%): nonzero means enabled, and level
+            // resolution below takes the absolute value.
             let strat_sl_on = if has_strat {
                 super::strategies::strat_field_bool(&snap, strat_id, "UseStopLoss")
             } else {
@@ -361,19 +367,19 @@ pub(super) fn set_order_stop(
             };
             let sl = sl_resolve((kind == OrderStopKind::StopLoss).then_some(on));
             let mut ts = ts_resolve((kind == OrderStopKind::Trailing).then_some(on));
-            // TS: уровень не нашли (у ручных без manual-стратегии trailing_drop часто 0),
-            // но MB включает трейлинг и без настроенного уровня — ядро дефолтит его само.
-            // Шлём enable с level=0 (для SL так НЕЛЬЗЯ: ядро отвергает enable-с-нулём —
-            // проверено логом 14:05 TAG). Если ядро отвергнет и тут — увидим по логу
-            // (wire ts останется false).
+            // TS: no level was found (trailing_drop is often 0 for manual orders without a
+            // manual strategy), but MB enables trailing without a configured level and lets the
+            // core supply its own default. Send enable with level=0. SL CANNOT do this because the
+            // core rejects enable-with-zero, as confirmed by the 14:05 TAG log. If the core rejects
+            // TS too, the log will show it and wire ts will remain false.
             if kind == OrderStopKind::Trailing && on && ts.is_none() {
                 log::info!(
                     "core {server_id} set order stop {uid} Trailing->on: уровень не найден — пробуем enable с level=0 (дефолт ядра)"
                 );
                 ts = Some((true, false, 0.0, 0.0));
             }
-            // Тогаемая группа обязана разрешиться (иначе не шлём вовсе); соседняя без
-            // уровня — оставляем как на проводе (хуже не станет), но предупреждаем.
+            // The toggled group must resolve, or nothing is sent. If the neighboring group has no
+            // level, preserve its wire state (no worse than before) but emit a warning.
             let (target, other) = if kind == OrderStopKind::StopLoss {
                 (&sl, &ts)
             } else {
@@ -395,7 +401,7 @@ pub(super) fn set_order_stop(
                 Some((true, true, level, spread)) => s.with_stop_loss_fixed(*level, *spread),
                 Some((true, false, level, spread)) => s.with_stop_loss_percent(*level, *spread),
                 Some((false, ..)) => s.without_stop_loss(),
-                None => s, // уровень не найден — оставить провод как есть
+                None => s, // No level found: preserve the wire state.
             };
             let apply_ts = |s: moonproto::StopSettings, g: &Option<(bool, bool, f64, f64)>| match g
             {
@@ -405,12 +411,12 @@ pub(super) fn set_order_stop(
                 None => s,
             };
             let next = apply_ts(apply_sl(stops, &sl), &ts);
-            // ПРАЙМЕР первого OFF по дефолт-стопу: per-order поля на проводе пустые (нули),
-            // и «выключить» (without_*) бит-в-бит совпадает с локальной моделью — moonproto
-            // send_stops_if_changed глушит пакет, ядро НИЧЕГО не получает, стоп остаётся
-            // включённым по дефолту (стратегия/настройки). Сначала материализуем эффективный
-            // стоп per-order (enable с текущим уровнем — поведенчески no-op, стоп и так
-            // вооружён), затем обычный OFF: оба пакета отличаются от модели и доходят.
+            // First-OFF PRIMER for a default stop: per-order wire fields are empty (zeroes), and
+            // `disable` (without_*) is bit-for-bit identical to the local model. moonproto's
+            // send_stops_if_changed suppresses the packet, the core receives NOTHING, and the stop
+            // stays enabled by strategy/settings default. First materialize the effective per-order
+            // stop (enable at the current level is behaviorally a no-op because it is already armed),
+            // then send the ordinary OFF; both packets differ from the model and reach the core.
             let target_wire_on = if kind == OrderStopKind::StopLoss {
                 stops.stop_loss_enabled()
             } else {
@@ -420,7 +426,7 @@ pub(super) fn set_order_stop(
                 let enable = if kind == OrderStopKind::StopLoss {
                     sl_resolve(Some(true))
                 } else {
-                    // TS-праймер: без уровня — enable с level=0 (дефолт ядра, см. выше).
+                    // TS primer: without a level, enable at level=0 (the core default; see above).
                     ts_resolve(Some(true)).or(Some((true, false, 0.0, 0.0)))
                 };
                 if let Some((true, ..)) = enable {
@@ -448,7 +454,7 @@ pub(super) fn set_order_stop(
         }
         OrderStopKind::VStop => {
             let params = if on {
-                // Для VStop дефолта нет — только провод/память.
+                // VStop has no default; only wire state or memory can provide its parameters.
                 let Some((fixed, level, vol)) = restore_from_wire_or_memory(
                     server_id,
                     uid,
@@ -468,9 +474,9 @@ pub(super) fn set_order_stop(
                     VStopParams::percent(level, vol)
                 }
             } else {
-                // Праймер как у SL/TS: выключение при пустом проводе глушится
-                // send_vstop_if_changed (модель и так нулевая). Без уровня праймер
-                // невозможен — предупреждаем.
+                // Primer as for SL/TS: send_vstop_if_changed suppresses disable when the wire is
+                // empty (the model is already all zeroes). A primer is impossible without a level,
+                // so warn in that case.
                 if !o.vstop_on {
                     if let Some((fixed, level, vol)) = restore_from_wire_or_memory(
                         server_id,
@@ -517,10 +523,11 @@ pub(super) fn set_order_stop(
     );
 }
 
-/// Эффективные параметры одной stop-группы `(enabled, fixed, level, spread)` для сборки
-/// полного StopSettings. `forced=Some(x)` — тогаемая группа (целевое состояние клика);
-/// `None` — соседняя, сохраняем её ЭФФЕКТИВНОЕ состояние (override → провод|страта).
-/// Возврат `None` = группа должна быть включена, но уровень найти не удалось.
+/// Resolves one stop group's effective `(enabled, fixed, level, spread)` parameters for a complete
+/// StopSettings. `forced=Some(x)` identifies the toggled group and its click target; `None`
+/// identifies the neighboring group, whose EFFECTIVE state is preserved (override → wire,
+/// effective strategy, or the ClientSettings fallback supplied for a manual order).
+/// Returns `None` when the group should be enabled but no level can be found.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_stop_group(
     server_id: u64,
@@ -541,8 +548,8 @@ pub(super) fn resolve_stop_group(
     if !enabled {
         return Some((false, false, 0.0, 0.0));
     }
-    // Уровень: провод → память выключения → стратегия (проценты в стратегии
-    // отрицательные, «падение на N%» → abs) → дефолт ClientSettings.
+    // Level precedence: wire → disable memory → strategy (strategy percentages are negative,
+    // `drop by N%` → abs) → ClientSettings default.
     if wire_level != 0.0 && wire_level.is_finite() {
         return Some((true, wire_fixed, wire_level, wire_spread));
     }
@@ -552,12 +559,12 @@ pub(super) fn resolve_stop_group(
     if let Some(level) = strat_level.filter(|l| *l != 0.0 && l.is_finite()) {
         return Some((true, false, level.abs(), 0.0));
     }
-    // Дефолты настроек тоже отрицательные («падение на N%») → модуль.
+    // Settings defaults are also negative (`drop by N%`), so take the absolute value.
     let pct = default_pct.filter(|p| *p != 0.0 && p.is_finite())?;
     Some((true, false, pct.abs(), 0.0))
 }
 
-/// Провод → память: восстановление параметров без стратегии/дефолтов (VStop).
+/// Restores parameters from wire → memory without strategy/default fallbacks (VStop).
 fn restore_from_wire_or_memory(
     server_id: u64,
     uid: u64,
@@ -572,9 +579,10 @@ fn restore_from_wire_or_memory(
     stop_memory_get(server_id, uid, kind).map(|(f, l, s)| (f, l, s))
 }
 
-/// Явные per-order переопределения стопов, сделанные ИЗ ТЕРМИНАЛА (session-scoped).
-/// Провод не отличает «стоп явно выключен» от «не задан» (оба — нули), а флаг стратегии
-/// иначе маскировал бы наш OFF в таблице. Ключ (ядро, uid) → [Option<целевой_флаг>; 3].
+/// Explicit per-order stop overrides made FROM THE TERMINAL, scoped to the session.
+/// The wire does not distinguish `explicitly disabled` from `not set` (both are zeroes), so the
+/// strategy flag would otherwise mask our OFF in the table.
+/// Key: (core, uid) → [Option<target flag>; 3].
 fn stop_overrides_map(
 ) -> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64), [Option<bool>; 3]>> {
     static MEM: std::sync::OnceLock<
@@ -583,7 +591,7 @@ fn stop_overrides_map(
     MEM.get_or_init(Default::default)
 }
 
-/// Записать переопределение (вызывается при отправке тогла).
+/// Records an override when a table toggle or form edit is sent.
 pub(super) fn note_stop_override(server_id: u64, uid: u64, kind: OrderStopKind, on: bool) {
     stop_overrides_map()
         .lock()
@@ -592,12 +600,12 @@ pub(super) fn note_stop_override(server_id: u64, uid: u64, kind: OrderStopKind, 
         .or_default()[stop_kind_tag(kind) as usize] = Some(on);
 }
 
-/// Прочитать переопределение (UI и сборка пакетов: эффективный флаг SL/TS/Vstop).
-/// Инвариант протухания: override живёт, пока провод СОГЛАСЕН с его целью
-/// (`target == wire_now`; наши же отправки сразу приводят локальную модель к цели).
-/// Провод противоречит цели → значит per-order стоп изменили С ТОЙ СТОРОНЫ (ядро/MB)
-/// — override отбрасывается, действует провод/стратегия. Без этого серверный ON
-/// навсегда маскировался бы нашим старым OFF.
+/// Reads an override for the UI or packet assembly as the effective SL/TS/VStop flag.
+/// Expiration invariant: the override lives while the wire AGREES with its target
+/// (`target == wire_now`; our own sends immediately move the local model to the target).
+/// A conflicting wire value means the per-order stop changed ON THE OTHER SIDE (core/MB),
+/// so the override is discarded and wire/strategy takes effect. Without this, a server-side ON
+/// would be masked forever by our old OFF.
 pub(super) fn stop_override(
     server_id: u64,
     uid: u64,
@@ -612,9 +620,10 @@ pub(super) fn stop_override(
         .filter(|on| *on == wire_now)
 }
 
-/// Память параметров стопов, стираемых выключением: ключ (ядро, uid ордера, вид стопа) →
-/// (fixed, level, spread|vol). Живёт до конца процесса; объём — единицы записей на сессию
-/// (пишется только при ручном выключении стопа из таблицы ордеров).
+/// Remembers stop parameters erased by disabling. Key: (core, order uid, stop kind) →
+/// (fixed, level, spread|vol). It lives until process exit and holds only a handful of entries
+/// per session because writes occur only when a stop is manually disabled from the order table
+/// or the order-edit form.
 fn stop_memory(
 ) -> &'static std::sync::Mutex<std::collections::HashMap<(u64, u64, u8), (bool, f64, f64)>> {
     static MEM: std::sync::OnceLock<
@@ -639,7 +648,7 @@ fn stop_kind_tag(kind: OrderStopKind) -> u8 {
     }
 }
 
-/// Запомнить параметры стопа перед выключением (только осмысленный уровень).
+/// Remembers stop parameters before disabling when the level is meaningful.
 fn remember_stop_params(
     server_id: u64,
     uid: u64,
@@ -656,7 +665,7 @@ fn remember_stop_params(
     }
 }
 
-/// Запомнить SL/TS группу StopSettings перед выключением.
+/// Remembers an SL/TS group from StopSettings before disabling it.
 pub(super) fn remember_stop_group(
     server_id: u64,
     uid: u64,
@@ -684,11 +693,11 @@ pub(super) fn remember_stop_group(
     }
 }
 
-/// Передвинуть цену стоп/тейк-линии ордера (перетаскивание линии на чарте) на абсолютную
-/// `price`. SL/TS ставим ФИКСИРОВАННЫМ стопом по цене (`with_stop_loss_fixed`/
-/// `with_trailing_fixed`, сохраняя текущий spread), take-profit — `with_take_profit_price`.
-/// Остальные стопы ордера сохраняем (билдеры StopSettings трогают только свою группу полей).
-/// Рантайм сам гейтит отправку (send-if-changed) против живой модели.
+/// Moves an order's stop/take line (dragged on the chart) to absolute `price`. SL/TS become FIXED
+/// price stops through `with_stop_loss_fixed`/`with_trailing_fixed`, preserving the current spread;
+/// take-profit uses `with_take_profit_price`. Other order stops remain unchanged because each
+/// StopSettings builder touches only its own field group. The runtime gates the send through
+/// send-if-changed against the live model.
 pub(super) fn move_order_stop_price(
     client: &MoonClient,
     server_id: u64,

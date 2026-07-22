@@ -1,12 +1,12 @@
-//! Персист раскладки доков («сохранение всего», часть 2: сами доки, не только окна).
+//! Persistence for dock layouts, complementing the separate window-geometry persistence.
 //!
-//! MoonPalette сериализует `DockArea` в `DockAreaState` (serde) и восстанавливает
-//! его через `DockArea::load` + глобальный `PanelRegistry`: по `panel_name` из
-//! состояния фабрика заново строит панель. Реестр ОДИН на приложение, а группа —
-//! у каждого окна своя, поэтому группу (и прочие параметры реконструкции) каждая
-//! панель кладёт в свой `PanelInfo::Panel(json)` через `Panel::dump`, а фабрика
-//! читает её оттуда. Карта `группа → DockAreaState` пишется в `docks.json` рядом с
-//! exe (как layout.toml для геометрии окон).
+//! MoonUI serializes a `DockArea` into serde-backed `DockAreaState` through `DockArea::dump` and
+//! restores it through `DockArea::load` plus the application-wide `PanelRegistry`. A factory uses
+//! the saved `panel_name` to rebuild each panel. Because the registry is global while each window
+//! belongs to a different group, panels store their group and any other reconstruction parameters
+//! in `PanelInfo::Panel` JSON from `Panel::dump`, and their factories read those values back. The
+//! `group -> DockAreaState` map is stored at [`paths::docks_path`], currently `cfg/docks.json`
+//! under the platform data directory.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -23,20 +23,27 @@ use crate::panels::{
 };
 use moon_core::session::CoreId;
 
-/// Версия схемы раскладки доков. Поднимаем при несовместимом изменении структуры
-/// панелей → старый `docks.json` игнорируется (откат к дефолтной раскладке).
-/// v2: убрана панель «Order» (кнопки BUY/SELL справа от чарта) — старые раскладки
-/// с ней давали бы «missing panel»-заглушку, поэтому сбрасываем их к дефолту.
-/// v3: добавлена нижняя вкладка «Алерты» — сброс раскладки, чтобы она появилась.
-/// v4: добавлена нижняя вкладка «Статус ядер» — сброс раскладки, чтобы она появилась.
-/// v5: «Статус ядер» временно ОТКЛЮЧЕНА (данных из логов недостаточно; ждём поля в moonproto)
-///     — сброс раскладки, чтобы уже сохранённая вкладка исчезла из дока.
+/// Dock-layout schema version used to accept or reject saved layouts during restoration.
+///
+/// Increment this for incompatible panel-structure changes. A mismatched `docks.json` entry is
+/// ignored and the group receives the default layout.
+///
+/// - v2 removed the Order panel containing the chart-side BUY/SELL buttons; resetting avoided a
+///   missing-panel placeholder in layouts that still referenced it.
+/// - v3 added the Alerts bottom tab and reset layouts so the new tab appeared.
+/// - v4 added the Core Status bottom tab and reset layouts so the new tab appeared.
+/// - v5 temporarily disabled Core Status because, at that time, log-derived data was insufficient
+///   and typed moonproto fields were not yet available; resetting removed the previously saved tab.
 pub const DOCK_VERSION: usize = 5;
 
-/// Карта раскладок: группа → состояние её `DockArea`.
+/// Map each group name to its serialized `DockArea` state.
 pub type DockMap = HashMap<String, DockAreaState>;
 
-/// Загрузить карту раскладок из `docks.json` (нет файла/битый → пусто = дефолт).
+/// Load all dock layouts from `docks.json`.
+///
+/// A missing or unreadable file returns an empty map. A JSON deserialization failure emits a
+/// warning and also returns an empty map, causing each group to build its default layout. Version
+/// compatibility is checked later by the shell restoration path.
 pub fn load_all() -> DockMap {
     match std::fs::read_to_string(paths::docks_path()) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
@@ -47,7 +54,9 @@ pub fn load_all() -> DockMap {
     }
 }
 
-/// Записать карту раскладок в `docks.json` (не фатально: при ошибке только лог).
+/// Serialize all dock layouts as pretty JSON and atomically write `docks.json`.
+///
+/// Serialization and write failures are non-fatal and produce warnings only.
 pub fn save_all(map: &DockMap) {
     match serde_json::to_string_pretty(map) {
         Ok(s) => {
@@ -63,7 +72,9 @@ pub fn save_all(map: &DockMap) {
     }
 }
 
-/// Группа панели, зашитая в её `dump()` (см. [`panel_state_with_group`]).
+/// Read the panel group embedded by [`panel_state_with_group`].
+///
+/// Missing, non-panel, or non-string metadata falls back to the empty group name.
 fn group_of(info: &PanelInfo) -> String {
     if let PanelInfo::Panel(v) = info {
         if let Some(g) = v.get("group").and_then(|g| g.as_str()) {
@@ -73,8 +84,11 @@ fn group_of(info: &PanelInfo) -> String {
     String::new()
 }
 
-/// Хелпер для `Panel::dump` панелей, которым для реконструкции нужна группа:
-/// кладёт `{"group": ...}` в `PanelInfo::Panel`, сохраняя `panel_name`.
+/// Build the `PanelState` dumped by panels that require a group during reconstruction.
+///
+/// The state preserves `panel_name`, has no child panels, and stores `{"group": ...}` in
+/// `PanelInfo::Panel`. The field name is part of the persisted JSON contract consumed by
+/// [`group_of`].
 pub fn panel_state_with_group(panel_name: &str, group: &str) -> PanelState {
     PanelState {
         panel_name: panel_name.to_string(),
@@ -83,25 +97,25 @@ pub fn panel_state_with_group(panel_name: &str, group: &str) -> PanelState {
     }
 }
 
-/// Фокус-монета группы (первое активное ядро группы + его рынок) — та же логика,
-/// что в `main()` при первичном открытии окон; нужна Main-чарту при реконструкции.
-/// Зарегистрировать фабрики всех панелей-доков в глобальном `PanelRegistry`.
-/// Вызывается один раз на старте (после создания `backend`). `backend`/`epoch`
-/// захватываются в замыкания; группа и пр. читаются из `PanelState` при восстановлении.
+/// Register every dock-panel factory in the application-wide `PanelRegistry`.
+///
+/// Startup calls this once after creating the backend. Factories capture `backend` and `epoch`,
+/// then recover the group and panel-specific view state from persisted panel metadata. Restored
+/// ChartTabs intentionally start Main without opening a focus market automatically.
 pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
-    // Чарт-вкладки: группа из state, тема/фокус — из backend по группе.
+    // Chart tabs recover the group from state and obtain their theme from the backend.
     {
         let backend = backend.clone();
         register_panel(cx, "ChartTabs", move |_state, info, window, cx| {
             let group = group_of(info);
             let theme = backend.read(cx).config.chart_theme().clone();
             let backend = backend.clone();
-            // Main стартует пустым — монету не открываем автоматически (см. group_window).
+            // Main starts empty; unlike a fresh group window, restoration opens no market.
             let focus: Option<(CoreId, String)> = None;
             Rc::new(cx.new(|cx| ChartTabs::new(backend, group, focus, epoch, theme, window, cx)))
         });
     }
-    // Лента детектов: группа из state.
+    // The detect tape recovers its group from state.
     {
         let backend = backend.clone();
         register_panel(cx, "Detects", move |_state, info, _window, cx| {
@@ -110,17 +124,18 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
             Rc::new(cx.new(|cx| DetectsPanel::new(backend, group, cx)))
         });
     }
-    // Таблица ордеров: группа из state.
+    // The orders table recovers its group from state.
     {
         let backend = backend.clone();
         register_panel(cx, "Orders", move |_state, info, window, cx| {
             let group = group_of(info);
             let backend = backend.clone();
-            // `restored` применяет сохранённое состояние вида (сортировка/тип/фильтр).
+            // `restored` applies the saved sort, order type, and filter view state.
             Rc::new(cx.new(|cx| OrdersPanel::restored(backend, group, info, window, cx)))
         });
     }
-    // Активы: группа из state; реальные данные ядер группы (таблица + дерево переноса).
+    // Assets recovers its group from state and shows that group's live grouped table only;
+    // `restored_group` disables the wallet transfer tree.
     {
         let backend = backend.clone();
         register_panel(cx, "Assets", move |_s, info, window, cx| {
@@ -129,7 +144,7 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
             Rc::new(cx.new(|cx| AssetsView::restored_group(backend, group, window, cx)))
         });
     }
-    // Лог: группа из state; нужен `window` (поле поиска — InputState).
+    // Log recovers its group from state and needs `window` for its search `InputState`.
     {
         let backend = backend.clone();
         register_panel(cx, "Log", move |_s, info, window, cx| {
@@ -138,7 +153,7 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
             Rc::new(cx.new(|cx| LogPanel::new(backend, group, window, cx)))
         });
     }
-    // Отчёт: группа из state; нужен `window` (поля фильтров — InputState).
+    // Report recovers its group from state and needs `window` for filter `InputState` values.
     {
         let backend = backend.clone();
         register_panel(cx, "Report", move |_s, info, window, cx| {
@@ -147,7 +162,7 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
             Rc::new(cx.new(|cx| ReportPanel::new(backend, group, window, cx)))
         });
     }
-    // Алерты: группа из state; нужен `window` (поле фильтра — InputState).
+    // Alerts recovers its group from state and needs `window` for its filter `InputState`.
     {
         let backend = backend.clone();
         register_panel(cx, "Alerts", move |_s, info, window, cx| {
@@ -156,7 +171,8 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
             Rc::new(cx.new(|cx| AlertsPanel::new(backend, group, window, cx)))
         });
     }
-    // Статус ядер: группа из state; системные метрики ядер (CPU/память из строк лога).
+    // The retained Core Status factory recovers its group and reads typed protocol-v4
+    // `Event::KernelHealth` telemetry converted by `sys_status_from_proto` into the core store.
     {
         let backend = backend.clone();
         register_panel(cx, "CoreStatus", move |_s, info, window, cx| {

@@ -1,5 +1,5 @@
-# Окно «Аналитика»: вкладки, периоды, KPI сводки, топы, инсайты.
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Analytics window: tabs, periods, KPI summaries, rankings, and insights.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
 _version: 2
 
 analytics.window_title:
@@ -40,7 +40,7 @@ analytics.stub:
   en: "Tab under construction — next stage of the analytics plan."
   es: "Pestaña en desarrollo — siguiente etapa del plan."
 
-# Вкладка «Календарь»: тепловые карты PnL по дням.
+# Calendar tab: daily PnL heatmaps.
 analytics.heat.year:
   ru: "Год"
   en: "Year"
@@ -65,7 +65,7 @@ analytics.heat.trades_full:
   ru: "%{n} сделки"
   en: "%{n} trades"
   es: "%{n} operac."
-# Календарь прибыли: заголовок, навигация по месяцам, KPI, нижняя полоса.
+# Profit calendar: title, month navigation, KPIs, and bottom bar.
 analytics.cal.title:
   ru: "Календарь прибыли"
   en: "Profit calendar"
@@ -130,7 +130,7 @@ analytics.heat.profit:
   ru: "прибыль"
   en: "profit"
   es: "beneficio"
-# Короткие дни недели (Пн→Вс) и месяцы (Янв→Дек) — через запятую, по порядку.
+# Abbreviated weekdays (Monday through Sunday) and months (January through December), comma-separated in order.
 analytics.heat.weekdays:
   ru: "Пн,Вт,Ср,Чт,Пт,Сб,Вс"
   en: "Mon,Tue,Wed,Thu,Fri,Sat,Sun"
@@ -140,7 +140,7 @@ analytics.heat.months:
   en: "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec"
   es: "Ene,Feb,Mar,Abr,May,Jun,Jul,Ago,Sep,Oct,Nov,Dic"
 
-# Тюнер фильтров (вкладка «Фильтры»): что-если по порогам рыночных полей.
+# Filter tuner on the Filters tab: what-if analysis for market-field thresholds.
 analytics.tuner.kpi_title:
   ru: "Факт vs варианты"
   en: "Fact vs variants"
@@ -534,7 +534,7 @@ analytics.strat.title:
   ru: "Тюнинг"
   en: "Tuning"
   es: "Ajuste"
-# Режимы правой панели «Тюнинга»: по фильтру (пороги) / по монете / по времени.
+# Tuning right-pane modes: by filter thresholds, coin, or time.
 analytics.strat.mode_filter:
   ru: "По фильтру"
   en: "By filter"
@@ -547,13 +547,13 @@ analytics.strat.mode_time:
   ru: "По времени"
   en: "By time"
   es: "Por tiempo"
-# Нижняя тепловая карта «По времени»: колонки-периоды профиля «час дня».
+# Lower By Time heatmap: period columns for the hour-of-day profile.
 analytics.time.by_hour:
   ru: "По часам"
   en: "By hour"
   es: "Por hora"
-# Нижняя правая плашка «По времени»: два поля стратегии (WorkingWeekTime — спан
-# дней, WorkingTime — окно времени), каждое одно «от-до», И-комбинируются.
+# Lower-right By Time card: two strategy fields, WorkingWeekTime for the day span and WorkingTime
+# for the time window. Each defines one from-to range, and the two are combined with AND.
 analytics.time.autopick_title:
   ru: "Параметры"
   en: "Parameters"
@@ -562,12 +562,12 @@ analytics.time.col_day:
   ru: "День"
   en: "Day"
   es: "Día"
-# Заголовок столбца-имени поля тюнера «По времени».
+# Field-name column heading in the By Time tuner.
 analytics.time.col_field:
   ru: "Поле"
   en: "Field"
   es: "Campo"
-# Тюнер «По времени»: два поля стратегии (одно от-до каждое), И-комбинируются.
+# By Time tuner: two strategy fields with one from-to range each, combined with AND.
 analytics.time.field_week:
   ru: "WorkingWeekTime"
   en: "WorkingWeekTime"
@@ -580,7 +580,7 @@ analytics.time.field_hour:
   ru: "WorkingTime(h)"
   en: "WorkingTime(h)"
   es: "WorkingTime(h)"
-# Режим WorkingTime: окно времени суток («сутки») либо минуты в каждом часе («в часе»).
+# WorkingTime mode: a time-of-day window (day) or a minute range within every hour (in hour).
 analytics.time.mode_day:
   ru: "сутки"
   en: "day"
@@ -589,7 +589,7 @@ analytics.time.mode_hour:
   ru: "в часе"
   en: "in hour"
   es: "en hora"
-# Столбец «текущее значение поля стратегии» (сырая строка WorkingTime/WorkingWeekTime).
+# Current strategy-field value column containing the raw WorkingTime or WorkingWeekTime string.
 analytics.time.cur:
   ru: "в стратегии"
   en: "in strategy"
@@ -598,8 +598,8 @@ analytics.time.cur_varies:
   ru: "разное"
   en: "varies"
   es: "varía"
-# Столбец без данных: период ещё грузится ИЛИ чтение реплики не удалось (пустой
-# период даёт нули по 24 часам, а не эту подпись) — потому нейтрально «нет данных».
+# No-data column: the period is still loading OR the replica read failed. An empty period produces
+# zeroes for all 24 hours instead of this label, so the wording remains neutral.
 analytics.time.no_data:
   ru: "нет данных"
   en: "no data"
@@ -655,8 +655,8 @@ analytics.strat.scope_all:
   ru: "все стратегии"
   en: "all strategies"
   es: "todas las estrategias"
-# Мультивыбор: числа считаются по ВСЕМУ набору, поэтому в заголовке стоит их количество —
-# имя одной стратегии над суммой по N штукам было бы враньём.
+# Multi-selection aggregates numbers across the ENTIRE set, so the heading shows its count; naming
+# one strategy above a sum covering N strategies would be misleading.
 analytics.strat.scope_many:
   ru: "выбрано: %{n}"
   en: "%{n} selected"

@@ -1,6 +1,6 @@
-//! Общее для док-панелей: кнопка открепления (⧉), гейт перерисовки `RenderGate`
-//! (повторялся в Orders/Assets) и числовой форматтер `num`. Каждая панель живёт в
-//! своей папке (`orders/`, `assets/`, `report/`, `log/`); сюда вынесено лишь ОБЩЕЕ.
+//! Shared panel UI helpers: adaptive number formatting, mutually exclusive dropdown items, a data
+//! table host, repaint gating, and the detached-window toolbar action. Panel-specific behavior stays
+//! in its owning module.
 
 use std::time::{Duration, Instant};
 
@@ -12,24 +12,22 @@ use crate::Backend;
 use crate::design;
 use crate::detached::DetachedSpec;
 
-/// Адаптивный числовой формат (кол-во/цена) — общий для таблиц Orders/Assets.
+/// Formats a quantity or price with the shared adaptive number formatter.
 pub(crate) fn num(v: f64) -> String {
     moon_core::util::fmt::adaptive(v)
 }
 
-/// Маркер выбранного пункта radio-меню. Визуал moonui различается: `Check` — галочка справа,
-/// `Highlight` — синяя подсветка + bold, `Both` — и то и другое. Каждая панель сохраняет свой
-/// стиль (Orders — галочки, фильтры Report — подсветка), поэтому стиль передаётся явно.
+/// Selection decoration for a mutually exclusive menu item. `Check` applies the menu item's checked
+/// state, while `Highlight` applies its selected state; callers choose the style explicitly.
 #[derive(Clone, Copy)]
 pub(crate) enum RadioMark {
     Check,
     Highlight,
 }
 
-/// Построить взаимоисключающие пункты `MoonDropdown::items` из списка `(value, key, label)`:
-/// пункт помечается выбранным (`mark`) при `value == current`, по клику зовёт `on_select(app,
-/// value)`. Снимает копипасту циклов построения комбобоксов в Orders/Report (источник/тип/ядро/
-/// сторона/сортировка). `value` — Copy-перечисление или индекс.
+/// Builds mutually exclusive `MoonDropdown` items from `(value, key, label)` options. The item whose
+/// copied value equals `current` receives the requested selection mark, and clicking an item invokes
+/// `on_select(app, value)`. Returns the menu items in input order.
 pub(crate) fn radio_items<T, F>(
     options: impl IntoIterator<Item = (T, SharedString, SharedString)>,
     current: T,
@@ -55,10 +53,9 @@ where
         .collect()
 }
 
-/// Хост таблицы данных док-панели (общий для Orders/Assets): контейнер на всю высоту с фоном
-/// `table_body`, сама `MoonDataTable` (строит вызывающий — у каждой панели свои колонки/строки) и
-/// оверлей-заглушка «пусто» при `empty` (как egui-плейсхолдер, поверх шапки). `empty_msg` —
-/// готовая локализованная строка.
+/// Hosts a caller-built data table in the shared table-body surface. The container fills available
+/// flex space and clips overflow; when `empty` is true, it adds an absolute placeholder row below
+/// the table header. `empty_msg` must already be localized by the caller.
 pub(crate) fn data_table_host(
     host_id: impl Into<SharedString>,
     empty: bool,
@@ -93,9 +90,9 @@ pub(crate) fn data_table_host(
         })
 }
 
-/// Гейт перерисовки док-панели по сигнатуре данных. Повторялся в Orders/Assets:
-/// перерисовываем при смене сигнатуры данных ИЛИ раз в секунду (живые цены/P&L),
-/// но НЕ ЧАЩЕ 4 Гц (пол 250мс) — частые ивенты коалесцируются (глаз не различит).
+/// Coalesces panel repaint requests by data signature and wall-clock second. A signature change or a
+/// new second bucket makes a notification eligible, while a monotonic 250 ms floor limits accepted
+/// requests to at most 4 Hz.
 #[derive(Default)]
 pub(crate) struct RenderGate {
     last_sig: u64,
@@ -104,8 +101,9 @@ pub(crate) struct RenderGate {
 }
 
 impl RenderGate {
-    /// True, если пора перерисовать (сигнатура сменилась ИЛИ новое секундное ведро),
-    /// с полом 250мс. На true обновляет внутреннее состояние.
+    /// Returns whether `sig` changed or `now_ms` entered a new second bucket and the 250 ms floor has
+    /// elapsed. Updates the accepted signature, bucket, and monotonic timestamp only when returning
+    /// true.
     pub(crate) fn should_notify(&mut self, sig: u64, now_ms: f64) -> bool {
         let sec = (now_ms as u64) / 1000;
         let changed = sig != self.last_sig || sec != self.last_sec;
@@ -124,9 +122,10 @@ impl RenderGate {
     }
 }
 
-/// Кнопка тулбара «открепить в окно» (⧉): убирает панель из своего дока и открывает
-/// её отдельным окном, записывая спеку в `backend.detached`. `name` — стабильное имя
-/// панели (как у `panel_name`/`remove_panel_by_name`/`DetachedSpec`).
+/// Builds the toolbar action that opens a fresh detached window for a panel. After a successful
+/// spawn it removes the source panel when its dock handle is available and records a unique
+/// `DetachedSpec` in `backend.detached`. `name` must be the stable panel identifier shared by
+/// `panel_name`, `remove_panel_by_name`, and `DetachedSpec`.
 pub fn detach_button(
     name: &'static str,
     group: String,
@@ -147,13 +146,13 @@ pub fn detach_button(
                 log::warn!("detach panel failed group={} panel={name}: {err:#}", group);
                 return;
             }
-            // Убрать себя из дока только после успешного открытия окна.
+            // Remove the source panel only after the detached window opens successfully.
             if let Some(dock) = dock.as_ref().and_then(|d| d.upgrade()) {
                 dock.update(app, |area, cx| {
                     area.remove_panel_by_name(name, window, cx);
                 });
             }
-            // Записать спеку после успешного открытия + удаления из дока.
+            // Record the specification after the successful spawn and optional dock removal.
             backend.update(app, |b, _| {
                 if !b
                     .detached

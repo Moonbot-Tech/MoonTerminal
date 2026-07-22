@@ -1,8 +1,7 @@
-//! Применение ВЫБРАННЫХ пунктов [`MoonBotImportPlan`] к `AppConfig` (draft-копии).
-//! Только локальные настройки: терминал (тема UI, хоткеи), график/линии (цвета),
-//! per-core пресеты размера — для явно выбранных ядер. Группа `core_commands`
-//! (fixed-sell) сюда НЕ входит: она уходит ядрам отдельным шагом через
-//! существующий ClientSettings-путь (ТЗ §10/§12).
+//! Applies SELECTED [`MoonBotImportPlan`] items to an `AppConfig` draft copy.
+//! Local settings only: terminal (UI theme, hotkeys), chart/lines (colors), and per-core
+//! size presets for explicitly selected cores. The `core_commands` group (fixed-sell) is NOT
+//! included here: it is reserved for preview and is not currently sent to cores.
 //!
 //! The function mutates the supplied config IN MEMORY and writes nothing to disk. The Save button
 //! calls `AppConfig::save_with_snapshot()` (spec section 12). A snapshot is required because import
@@ -13,16 +12,19 @@ use std::collections::HashSet;
 use super::plan::{MoonBotImportPlan, PlannedValue, SettingChange};
 use crate::config::{AppConfig, UiThemeMode};
 
-/// Итог применения: сколько пунктов легло и какие id не распознаны (баг-гард —
-/// в норме пусто; не паникуем, чтобы не ронять применение из-за одного пункта).
+/// Application result: how many items were applied and which ids were unrecognized.
+///
+/// The unrecognized list is a bug guard and is normally empty. This does not panic, so one
+/// item cannot abort the entire application operation.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ApplyOutcome {
     pub applied: usize,
     pub unknown_ids: Vec<String>,
 }
 
-/// Применить выбранные (`selected` — id пунктов) локальные изменения плана к `cfg`.
-/// `target_core_ids` — ядра (ServerConfig.id) для per-core группы.
+/// Applies selected local plan changes to `cfg`, where `selected` contains item ids.
+///
+/// `target_core_ids` identifies the cores (`ServerConfig.id`) for the per-core group.
 pub fn apply_local(
     cfg: &mut AppConfig,
     plan: &MoonBotImportPlan,
@@ -53,7 +55,7 @@ pub fn apply_local(
     out
 }
 
-/// Терминальный/чартовый пункт по id. `false` = id не распознан.
+/// Applies a terminal/chart item by id. Returns `false` for an unrecognized id.
 fn apply_item(cfg: &mut AppConfig, item: &SettingChange) -> bool {
     match (&item.value, item.id.as_str()) {
         (PlannedValue::UiThemeLight(light), "ui.theme_mode") => {
@@ -72,7 +74,7 @@ fn apply_item(cfg: &mut AppConfig, item: &SettingChange) -> bool {
 
 fn apply_hotkey(cfg: &mut AppConfig, id: &str, ks: &str) -> bool {
     let h = &mut cfg.hotkeys;
-    // Слоты пресетов: hotkey.order_size.{i} / hotkey.sell_preset.{i}.
+    // Preset slots: hotkey.order_size.{i} / hotkey.sell_preset.{i}.
     if let Some(rest) = id.strip_prefix("hotkey.order_size.") {
         if let Some(slot) = parse_slot::<6>(rest) {
             h.order_size[slot] = ks.to_string();
@@ -90,7 +92,7 @@ fn apply_hotkey(cfg: &mut AppConfig, id: &str, ks: &str) -> bool {
     let Some(field) = id.strip_prefix("hotkey.") else {
         return false;
     };
-    // Зеркало plan::hotkey_field — те же 17 полей-приёмников.
+    // Mirrors plan::hotkey_field with the same 17 destination fields.
     let target = match field {
         "cancel_buy" => &mut h.cancel_buy,
         "panic_sell" => &mut h.panic_sell,
@@ -119,7 +121,7 @@ fn parse_slot<const N: usize>(s: &str) -> Option<usize> {
     s.parse::<usize>().ok().filter(|i| *i < N)
 }
 
-/// Цветовой пункт: `{target}.{side}`, side = light|dark.
+/// Applies a color item: `{target}.{side}`, where side = light|dark.
 fn apply_color(cfg: &mut AppConfig, id: &str, rgb: [u8; 3]) -> bool {
     let (target, side) = match id.rsplit_once('.') {
         Some(pair) => pair,
@@ -136,7 +138,7 @@ fn apply_color(cfg: &mut AppConfig, id: &str, rgb: [u8; 3]) -> bool {
         "theme.bg" => theme.bg = rgb,
         "theme.grid" => theme.grid = rgb,
         "theme.cross" => theme.cross = rgb,
-        // graphFont: один пункт красит все нейтральные подписи (ТЗ §8).
+        // graphFont: one item colors all neutral labels (spec section 8).
         "theme.labels" => {
             theme.axis_label = rgb;
             theme.caption_label = rgb;
@@ -160,8 +162,9 @@ fn apply_color(cfg: &mut AppConfig, id: &str, rgb: [u8; 3]) -> bool {
     true
 }
 
-/// Per-core пункт для выбранных ядер. `false` = id не распознан (пустой список
-/// ядер — не ошибка плана: пункт применён «в никуда» осознанным выбором).
+/// Applies a per-core item to selected cores. Returns `false` for an unrecognized id.
+///
+/// An empty core list is not a plan error: the item is deliberately applied to no targets.
 fn apply_per_core(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: &[u64]) -> bool {
     let apply_to_cores = |cfg: &mut AppConfig, f: &dyn Fn(&mut crate::config::ServerConfig)| {
         for s in cfg

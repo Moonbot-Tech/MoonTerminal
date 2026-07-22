@@ -1,6 +1,6 @@
-//! Слой сетки (хром данных): СТАТИЧНЫЕ вертикали (фикс. X-деления) + горизонтали по цене.
-//! Процедурный fullscreen-проход над chart_area (1 drawcall). Рисуется ПЕРВЫМ в нашем
-//! own-pass — под крестами/данными. Вертикали не «едут» (модель Moonbot).
+//! Data-chrome grid layer with static vertical lines at fixed X divisions and horizontal price
+//! lines. A procedural full-screen pass over `chart_area` uses one draw call and runs first in the
+//! own pass beneath crosses and other data. The vertical lines remain fixed, matching Moonbot.
 
 use gpui::RawGpuAccess;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -34,8 +34,8 @@ impl GridLayer {
         }
     }
 
-    /// Рисует сетку в backbuffer хука (под данными). `params.resolution` ставит вызывающий
-    /// (= размер backbuffer). bounds — chart_area в координатах окна.
+    /// Draws the grid beneath data into the hook's backbuffer. The caller sets
+    /// `params.resolution` to the backbuffer size; `bounds` is `chart_area` in window coordinates.
     pub fn render(
         &mut self,
         params: &GridParams,

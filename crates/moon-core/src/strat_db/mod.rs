@@ -1,24 +1,28 @@
-//! Локальная БД стратегий и их версий — `data/strategies.sqlite`.
+//! Local database of strategies and their versions: `data/strategies.sqlite`.
 //!
-//! НАРОЧНО отдельный файл от `reports.sqlite`: реплика отчётов — восстановимый
-//! кэш (сбрасывается `database_recreated`/пересинхроном), а история версий —
-//! единственный экземпляр и живёт вечно. Кросс-БД аналитика («сделки × параметры
-//! версии») — через `ATTACH` из читателя отчётов, скорость как в одной БД.
+//! Kept separate from `reports.sqlite` by design: the reports replica is a recoverable
+//! cache (reset by `database_recreated`/resynchronization), while version history is the
+//! authoritative copy. Its per-strategy retention is bounded by the configured `version_limit`
+//! when a new version is inserted; lowering the limit does not globally prune existing history,
+//! and each strategy is pruned only on its next version insertion. Cross-database analytics
+//! ("trades x version parameters") uses `ATTACH` from the reports reader, with single-database performance.
 //!
-//! Модель — порт mb_ai/moonbridge (`storage/strategies.rs` там):
-//! - head-таблица `strategies` — одна строка на стратегию, UPSERT на каждый
-//!   серверный снапшот (ключ `(core_uid, strategy_id)`, id — signed i64: ядро
-//!   пишет `strategyid` ордера как Delphi signed, иначе join ломается);
-//! - `strategy_versions` — append-only, НОВАЯ версия только если КОНТЕНТ
-//!   отличается от последней после выкидывания игнор-полей (косметика, список —
-//!   `config::storage`) и `__`-меты. Правка торговых полей → версия; тогл
-//!   галки/звука/цвета → только head. Эхо-снапшоты дедупятся даром.
+//! The model is ported from mb_ai/moonbridge (its `storage/strategies.rs`):
+//! - the `strategies` head table has one row per strategy; every server snapshot is evaluated,
+//!   and the row is upserted only when its head or content changes (keyed by
+//!   `(core_uid, strategy_id)`; the id is a signed i64 because
+//!   the core writes an order's `strategyid` using Delphi's signed representation, or the join fails);
+//! - `strategy_versions` inserts a new version only when non-ignored content differs from the
+//!   latest version after excluding configured `ignore_fields` and `__` metadata. The configured
+//!   fields include cosmetic, status, and presentation fields plus the `OrderSize` policy; their
+//!   changes update the head when represented there and otherwise create no version. Inserting a
+//!   revision closes the previous range by updating `valid_to`; restoring unchanged content can
+//!   instead reopen the latest range. Echoed snapshots deduplicate naturally.
 //!
-//! Запись — на ПРИЁМЕ серверного снапшота (feed-цикл, не локальный эдит):
-//! сервер — источник истины, так ловятся и правки чужих клиентов/MoonBot.exe.
-//! Дампы приходят НОРМАЛИЗОВАННЫМИ: сервер не шлёт поля со значением, равным
-//! дефолту схемы, поэтому feed материализует дефолты перед отправкой — иначе
-//! фантомные версии от «исчезнувших» полей.
+//! Writes happen when a server snapshot is received (in the feed loop, not on a local edit):
+//! the server is the source of truth, so this also captures edits from other clients/MoonBot.exe.
+//! Dumps arrive normalized: the server omits fields whose values equal schema defaults, so the
+//! feed materializes defaults before sending them, preventing phantom versions from "vanished" fields.
 
 pub mod stats;
 mod write;
@@ -31,9 +35,9 @@ use rusqlite::Connection;
 
 use crate::config::paths;
 
-/// Нормализованный дамп одной стратегии (снапшот сервера + дефолты схемы).
+/// Normalized dump of one strategy (server snapshot plus schema defaults).
 pub struct StratDump {
-    /// Signed-представление серверного u64 id (join к `orders_rep.strategyid`).
+    /// Signed representation of the server's u64 id (joined to `orders_rep.strategyid`).
     pub strategy_id: i64,
     pub name: String,
     pub kind: String,
@@ -41,22 +45,23 @@ pub struct StratDump {
     pub folder_path: String,
     pub is_short: bool,
     pub checked: bool,
-    /// Серверный счётчик правок из заголовка стратегии.
+    /// Server-side edit counter from the strategy header.
     pub server_ver: i32,
-    /// Серверное время последней правки (unix-ms из `last_date`).
+    /// Server time of the latest edit (Unix milliseconds from `last_date`).
     pub server_ms: i64,
-    /// Полный нормализованный дамп полей. `serde_json::Map` = BTreeMap →
-    /// ключи отсортированы, сериализация канонична (стабильный контент-хэш).
+    /// Complete normalized field dump. `serde_json::Map` is a BTreeMap, so keys are sorted
+    /// and serialization is canonical (yielding a stable content hash).
     pub fields: serde_json::Map<String, serde_json::Value>,
-    /// Правка пришла в ответ на НАШУ команду (кольцо недавних отправок feed'а).
+    /// Heuristic classification that the edit likely responds to our command, based on the feed's
+    /// recent-send ring.
     pub local_edit: bool,
 }
 
-/// Сообщение writer'у.
+/// Message sent to the writer.
 pub enum StratMsg {
-    /// ПОЛНЫЙ набор стратегий ядра (реестр moonproto целиком): позволяет
-    /// помечать пропавшие head-строки как удалённые. `initial` — первый набор
-    /// после (ре)коннекта: origin неизвестен (правки могли случиться оффлайн).
+    /// Complete set of strategies from the core (the entire moonproto registry), allowing
+    /// missing head rows to be marked as deleted. `initial` marks the first set after a
+    /// (re)connection, when the origin is unknown because edits may have happened offline.
     FullSet {
         core_uid: u64,
         core_name: String,
@@ -65,8 +70,8 @@ pub enum StratMsg {
     },
 }
 
-/// Ёмкость канала: наборы приходят ≤1Гц с ядра и весят немного; переполнение
-/// (writer занят) — дропаем набор, следующий снапшот всё догонит (дедуп).
+/// Channel capacity: sets arrive from the core at no more than 1 Hz and are small. If the
+/// writer is busy and the channel fills, the set is dropped; the next snapshot catches up via deduplication.
 const QUEUE_CAP: usize = 64;
 
 #[derive(Clone)]
@@ -88,22 +93,22 @@ impl StratSink {
         }
     }
 
-    /// Растёт после каждой записи — читатели (история версий) перезапрашивают
-    /// данные по смене поколения, без поллинга БД.
+    /// Increases after each write that changes rows, allowing version-history readers to
+    /// reload on generation changes without polling the database.
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Relaxed)
     }
 }
 
-/// Глобальный ленивый writer: первый снапшот стратегий поднимает поток.
-/// Глобал (а не проброс через SessionManager→lifecycle→feed) — writer живёт
-/// независимо от жизненного цикла сессий, как и сам файл БД.
+/// Global lazy writer: the first strategy snapshot starts the thread.
+/// It is global rather than passed through SessionManager -> lifecycle -> feed, so the writer,
+/// like the database file itself, lives independently of session lifecycles.
 static SINK: OnceLock<Option<StratSink>> = OnceLock::new();
-/// Живой тогл записи (вкладка «Хранилище»): выключен — sink() отдаёт None,
-/// writer простаивает. Инициализируется из `storage.toml` при первом обращении.
+/// Live write toggle (the Storage tab): when disabled, future `sink()` calls return `None`.
+/// Existing sink clones and queued messages are not revoked. Initialized from `storage.toml` on first access.
 static ENABLED: AtomicBool = AtomicBool::new(true);
-/// Живой лимит версий на стратегию (0 = без лимита) — writer читает на каждую
-/// запись, правка из вкладки «Хранилище» действует сразу.
+/// Live per-strategy version limit (0 means unlimited), consulted when a new version is inserted.
+/// Pruning then applies only to that strategy; lowering the limit does not prune existing history immediately.
 static VERSION_LIMIT: AtomicU32 = AtomicU32::new(0);
 static ENABLED_INIT: OnceLock<()> = OnceLock::new();
 
@@ -115,7 +120,7 @@ fn ensure_enabled_loaded() {
     });
 }
 
-/// Канал к writer'у; `None` — запись выключена в настройках или БД недоступна.
+/// Channel to the writer; `None` means writing is disabled in settings or the database is unavailable.
 pub fn sink() -> Option<StratSink> {
     ensure_enabled_loaded();
     if !ENABLED.load(Ordering::Relaxed) {
@@ -124,31 +129,32 @@ pub fn sink() -> Option<StratSink> {
     SINK.get_or_init(spawn_writer).clone()
 }
 
-/// Текущее состояние тогла записи (для вкладки «Хранилище»).
+/// Current state of the write toggle for the Storage tab.
 pub fn is_enabled() -> bool {
     ensure_enabled_loaded();
     ENABLED.load(Ordering::Relaxed)
 }
 
-/// Живой тогл записи (вкладка «Хранилище» пишет и сюда, и в storage.toml).
+/// Updates the live write toggle; the Storage tab writes both here and to `storage.toml`.
 pub fn set_enabled(on: bool) {
     ensure_enabled_loaded();
     ENABLED.store(on, Ordering::Relaxed);
 }
 
-/// Текущий лимит версий (0 = без лимита).
+/// Current version limit (0 means unlimited).
 pub fn version_limit() -> u32 {
     ensure_enabled_loaded();
     VERSION_LIMIT.load(Ordering::Relaxed)
 }
 
-/// Живой лимит версий (вкладка «Хранилище» пишет и сюда, и в storage.toml).
+/// Updates the live version limit; the Storage tab writes both here and to `storage.toml`.
+/// The new limit is applied to a strategy on its next version insertion.
 pub fn set_version_limit(v: u32) {
     ensure_enabled_loaded();
     VERSION_LIMIT.store(v, Ordering::Relaxed);
 }
 
-/// Поколение записей (0 — writer не поднимался).
+/// Write generation (0 until the writer records its first change).
 pub fn generation() -> u64 {
     SINK.get()
         .and_then(|s| s.as_ref())
@@ -259,8 +265,8 @@ fn open_ro(path: &std::path::Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-/// Read-only соединение (история версий, вкладка «Хранилище», аналитика).
-/// Для кросс-БД запросов к отчётам читатель отчётов делает ATTACH этого файла.
+/// Read-only connection for version history, the Storage tab, and analytics.
+/// For cross-database report queries, the reports reader attaches this file with `ATTACH`.
 pub fn open_reader() -> Option<Connection> {
     let path = paths::strategies_db_path();
     if !path.exists() {

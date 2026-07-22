@@ -1,10 +1,13 @@
-//! Панель «Отчёт» — порт egui `src/dock/report_view.rs`. Таблица закрытых сделок
-//! (ордеров) из локальной SQLite. Фильтры (ядро/монета/сторона/даты) + выбор колонок
-//! сверху, ИТОГО за период снизу, generic-таблица по всем колонкам БД с сортировкой
-//! по клику на заголовок. Автообновление по счётчику-генерации writer'а (Backend.reports).
+//! Report panel ported from egui's `src/dock/report_view.rs`.
 //!
-//! По функционалу разнесено: состояние/запросы/жизненный цикл — здесь, поля-списки и
-//! меню колонок — [`controls`], форматирование колонок/ячеек/заголовков — [`columns`].
+//! It displays closed trades from the local SQLite database, with core, coin, side, date, and
+//! order-kind filters plus column selection above the table and exact period totals below it. The
+//! generic table supports every displayable database column and header-click sorting. A writer
+//! generation counter in `Backend.reports` triggers throttled automatic refreshes.
+//!
+//! Responsibilities are split across this module for state, queries, and lifecycle; [`controls`]
+//! for selectors and the column menu; [`columns`] for column, cell, and header formatting; and
+//! [`export`] for file export.
 
 mod columns;
 mod controls;
@@ -32,15 +35,17 @@ use crate::load_state::{LoadState, Note, note_el};
 use crate::{Backend, design};
 use moon_core::db::{self, ReadResult, ReportFilter, SideFilter};
 
-/// Data cap для отчёта: в таблицу грузим только топ-N под текущий фильтр/сортировку,
-/// а «Итого за период» считается ОТДЕЛЬНЫМ SQL-агрегатом по ВСЕМУ фильтру
-/// (`query_totals`) — итоги точны при любом N. Каждая запись writer'а перечитывает
-/// выборку (generation), поэтому N маленький — иначе фоновые апдейты легаси-строк
-/// каждые ~30с гоняли бы стотысячные выборки (CPU впустую).
+/// Maximum number of report rows loaded for the current filter and sort order.
+///
+/// Period totals come from a separate [`db::query_totals`] aggregate over the complete filtered
+/// data set, so they remain exact regardless of this limit. Writer generations can request repeated
+/// background reads, coalesced by the panel's five-second throttle; keeping the row cap small avoids
+/// repeatedly materializing very large result sets.
 const MAX_REPORT_ROWS: usize = 100;
 
-/// Пресеты периода, как в отчёте Moonbot. Границы — сутки UTC (даты в БД и в
-/// таблице отображаются в UTC — фильтр согласован с тем, что видно в колонках).
+/// Moonbot-style report period presets with UTC-day boundaries.
+///
+/// Database and table dates are also displayed in UTC, keeping filters aligned with visible values.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Period {
     All,
@@ -78,7 +83,7 @@ impl Period {
         .to_string()
     }
 
-    /// (from, to) unix-секунды; None — граница не ограничена.
+    /// Return inclusive `(from, to)` Unix-second bounds; `None` leaves that edge unbounded.
     fn range(self) -> (Option<i64>, Option<i64>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -118,7 +123,7 @@ pub(super) enum ReportKind {
 }
 
 impl ReportKind {
-    /// В фильтр БД: `None` = все, `Some(false)` = реальные, `Some(true)` = эмуляторные.
+    /// Convert to the database filter: `None` selects all, `Some(false)` real, and `Some(true)` emulated.
     fn to_filter(self) -> Option<bool> {
         match self {
             ReportKind::All => None,
@@ -128,7 +133,7 @@ impl ReportKind {
     }
 }
 
-/// Колонки, видимые по умолчанию (имена = колонки БД).
+/// Database column names visible by default.
 const DEFAULT_VISIBLE: &[&str] = &[
     "buydate",
     "closedate",
@@ -144,12 +149,13 @@ const DEFAULT_VISIBLE: &[&str] = &[
     "comment",
 ];
 
-/// Достроить ЧАСТИЧНО сохранённую карту ширин до полной (все текущие колонки,
-/// недостающим — дефолт `width_for`). Частичная карта (старые сессии, переименованные
-/// при миграции колонки) заставляла движок пере-масштабировать нетронутые колонки при
-/// КАЖДОМ драге — соседи «плавали». Полная карта = драг двигает только свою колонку
-/// (как в Ордерах после первого ресайза). Пустую не трогаем: полный автофил, снапшот
-/// всех ширин движок сделает сам при первом драге.
+/// Complete a partially persisted width map with defaults for every current column.
+///
+/// Partial maps from older sessions or renamed columns caused the table engine to rescale untouched
+/// neighbors on every drag. Completing a non-empty map lets later observations recognize a
+/// single-column drag once the previous snapshot has the same membership. Leave an empty map
+/// untouched so automatic fill remains active; the first drag then snapshots all widths and may use
+/// the proportional overflow path.
 fn complete_widths(widths: &mut std::collections::HashMap<String, f32>, cols: &[String]) {
     if widths.is_empty() {
         return;
@@ -206,7 +212,7 @@ fn run_report_query(
     };
     let table = db::query_reports(&snap, &filter, &sort_key, sort_desc, MAX_REPORT_ROWS)?;
     let totals = db::query_totals(&snap, &filter)?;
-    // Замер вместо гаданий: медленный requery виден в логе (частоту задаёт троттл панели).
+    // Log measured query latency so slow refreshes are visible; the panel controls their frequency.
     let ms = started.elapsed().as_millis();
     if ms > 250 {
         log::warn!(
@@ -247,48 +253,53 @@ pub struct ReportPanel {
     sort_key: String,
     sort_desc: bool,
 
-    /// Выбранные ядра (мультивыбор по uid, как выбор колонок); пусто = все.
+    /// Multi-selected core UIDs; an empty set means all cores.
     pub(super) sel_cores: HashSet<u64>,
     coin: Entity<MoonInputState>,
-    /// Текст поля монеты (зеркало `coin`, обновляется по `Change`). Нужен, чтобы отличить
-    /// РУЧНОЙ ввод (открыть список совпадений) от программной подстановки в `on_pick`
-    /// (зеркало выставляется заранее → список не открывается заново).
+    /// Mirror of the coin input, updated on `Change`.
+    ///
+    /// This distinguishes manual edits, which open the match popup, from `on_pick` substitutions,
+    /// which update the mirror first so their change event does not reopen the popup.
     coin_query: String,
-    /// Открыт ли выпадающий список совпадений монеты (общий виджет `controls::coin_search`).
+    /// Whether the shared `controls::coin_search` match popup is open.
     coin_popup_open: bool,
     from: Entity<MoonInputState>,
     to: Entity<MoonInputState>,
     pub(super) side: SideFilter,
-    /// Пресет периода (дефолт «Сегодня», как MB). Ручные даты С:/По: действуют
-    /// только при пресете «Все»; правка дат сбрасывает пресет на «Все».
+    /// Period preset, defaulting to Today as in Moonbot.
+    ///
+    /// Editing a non-empty manual date switches to All. Under other presets, the preset lower bound
+    /// overrides From, while only Yesterday supplies an upper bound that overrides To.
     pub(super) period: Period,
-    /// Тип ордеров: Все / Реальные (дефолт) / Эмуляторные (поле-список, как в «Ордерах»).
+    /// All, real, or emulated order kind, defaulting to real as in Orders.
     pub(super) kind: ReportKind,
     needs_query: bool,
     query_inflight: bool,
     query_seq: u64,
-    /// Старт последнего запроса — троттл generation-requery (писатель бампает
-    /// generation на КАЖДУЮ запись, легаси-апдейты открытых позиций идут каждые
-    /// ~15с с ядра — без троттла БД в сотни МБ сканировалась бы с той же частотой).
+    /// Start time of the last query, used to throttle writer-generation refreshes.
+    ///
+    /// The writer advances its generation after writes; without coalescing, a large database could
+    /// be rescanned at the same high event frequency.
     last_query_start: Option<std::time::Instant>,
-    /// Отложенный generation-requery уже взведён (таймер досыпает остаток троттла).
+    /// Whether a trailing generation-refresh timer is already waiting out the throttle interval.
     throttle_armed: bool,
-    /// Когда последний раз тянули список ядер (дорогой GROUP BY — не чаще 1/мин).
+    /// Time when the last core-list query was launched; its full-database grouping is requested at
+    /// most once per minute.
     last_cores_at: Option<std::time::Instant>,
 
-    /// Видимые колонки — по ИМЕНАМ (а не индексам), чтобы авто-добавленные поля
-    /// ядра не сбивали соответствие. Новая колонка по умолчанию скрыта.
+    /// Visible columns by name rather than index, so runtime schema additions do not shift choices.
+    /// A newly discovered column is visible only if its name is already present in the resolved
+    /// default, `app_meta`, or per-context set.
     pub(super) visible: HashSet<String>,
     table_state: Entity<MoonDataTableState>,
-    /// Id хранилища ширин колонок с контекстом (`report-table:dock`/`:win`) — свои ширины на режим.
+    /// Context-qualified width-storage ID, `report-table:dock` or `report-table:win`.
     widths_id: String,
-    /// Панель открыта в откреплённом окне (`mark_table_detached`): в докнутой вкладке
-    /// показываем компактный набор фильтров (без ручных дат С:/По: — там есть пресеты).
+    /// Whether the panel is detached; docked tabs omit manual date fields for a compact filter row.
     detached: bool,
-    /// Снимок ширин с прошлого observe-тика — детект «какая колонка тянется» для
-    /// бюджет-клампа [`Self::clamp_table_widths`].
+    /// Width snapshot from the previous observation, used by [`Self::clamp_table_widths`] to detect
+    /// the column currently being dragged.
     last_widths: std::collections::HashMap<String, f32>,
-    // (table_state отдаётся наружу через `table_state()` — кнопка «⤢» откреп-окна.)
+    // `table_state()` exposes the retained state to the detached window's automatic-width button.
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -317,13 +328,13 @@ impl ReportPanel {
             .as_ref()
             .map(|g| g.load(Ordering::Relaxed))
             .unwrap_or(0);
-        // Видимость колонок: восстанавливаем сохранённый набор имён (app_meta), иначе дефолт.
+        // Restore visible column names from `app_meta`, or use the defaults when never saved.
         let visible: HashSet<String> = conn
             .as_ref()
             .and_then(db::load_visible)
             .map(|saved| saved.into_iter().collect())
             .unwrap_or_else(|| DEFAULT_VISIBLE.iter().map(|c| c.to_string()).collect());
-        // Стартовый список колонок — сразу из БД, чтобы первая отрисовка/меню были полными.
+        // Probe the initial database schema so the first render and column menu are complete.
         let init_cols = conn
             .as_ref()
             .and_then(|c| db::display_columns(c).ok())
@@ -340,8 +351,8 @@ impl ReportPanel {
             state.set_sort(sort_key.clone(), !sort_desc);
             state.column_widths = saved_widths;
         });
-        // Ресайз колонки мутирует state → бюджет-кламп (сумма ширин ≤ вьюпорт, см.
-        // clamp_table_widths) и сохранение ширин (универсальный сейвер).
+        // A column resize mutates table state; clamp visible widths to the viewport budget, then
+        // persist them through the shared storage.
         cx.observe(&table_state, |this, state, cx| {
             this.clamp_table_widths(&state, cx);
             crate::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
@@ -357,9 +368,9 @@ impl ReportPanel {
         let to = cx.new(|cx| {
             MoonInputState::new(window, cx).placeholder(t!("report.filter.date_ph").to_string())
         });
-        // Правка поля монеты → перезапрос + (при РУЧНОМ вводе) открыть список совпадений.
-        // Программная подстановка из `on_pick` заранее ставит `coin_query` → условие не
-        // срабатывает и список не открывается обратно (Change прилетает и синхронно, и отложенно).
+        // Any coin-field change requests a query. Manual input also opens the match popup. An
+        // `on_pick` substitution updates `coin_query` first, so either a synchronous or deferred
+        // Change event sees the mirror already matched and does not reopen the popup.
         cx.subscribe(&coin, |t, e, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
                 let value = e.read(cx).value().to_string();
@@ -371,7 +382,7 @@ impl ReportPanel {
             }
         })
         .detach();
-        // Ручной ввод дат переводит период на «Все» (иначе пресет молча перекрыл бы даты).
+        // A non-empty manual date switches to All so a preset cannot silently take precedence.
         for st in [&from, &to] {
             cx.subscribe(st, |t, e, ev: &MoonInputEvent, cx| {
                 if matches!(ev, MoonInputEvent::Change) {
@@ -383,9 +394,8 @@ impl ReportPanel {
             })
             .detach();
         }
-        // Перерисовка — ТОЛЬКО когда writer записал новый отчёт (сменился generation);
-        // иначе таблицу не перестраиваем каждые 100мс. Правки фильтров нотифаят сами
-        // (без троттла — реакция на клик мгновенная); generation — через троттл.
+        // Backend observation requests a refresh only when the report writer's generation changes.
+        // Filter edits notify and query immediately; generation-driven refreshes use the throttle.
         cx.observe(&backend, |this, _b, cx| {
             if let Some(g) = &this.generation {
                 let v = g.load(Ordering::Relaxed);
@@ -431,27 +441,26 @@ impl ReportPanel {
             dock: None,
             focus: cx.focus_handle(),
         };
-        // Per-контекст набор полей (единый дескриптор) перекрывает загруженный из app_meta набор,
-        // если сохранён для этого режима; иначе app_meta-набор остаётся как миграционный сид.
+        // A per-context shared-storage column set overrides the one loaded from `app_meta`. Without
+        // one for this mode, the `app_meta` set remains as a migration seed.
         this.apply_ctx_columns(cx);
         this.schedule_requery(cx);
         this
     }
 
-    /// Пометить панель как открытую в ОТКРЕПЛЁННОМ окне (из `detached::spawn`): контекст ширин
-    /// → `:win`, пере-засев из набора этого режима. Своя раскладка ширин у вкладки и у окна.
-    /// Стейт таблицы — для кнопки «⤢ авто» в заголовке откреп-окна (detached.rs).
+    /// Return retained table state for the detached window's automatic-width reset button.
     pub(crate) fn table_state(&self) -> Entity<MoonDataTableState> {
         self.table_state.clone()
     }
 
-    /// Бюджет-кламп ширин: сумма ширин ВИДИМЫХ колонок не должна превышать вьюпорт
-    /// таблицы. Пока превышает, движок пропорционально ужимает ВСЕ колонки на каждом
-    /// рендере (`downscale_columns_to_available` форка, без опт-аута) — драг одной
-    /// колонки менял масштаб всех, «соседи плыли». Держим стор в бюджете: перелив от
-    /// одиночного драга снимаем с тянутой колонки (она упирается в край), перелив
-    /// засева/сжатия панели — пропорционально со всех видимых. Ширины сверх вьюпорта
-    /// движок всё равно не отрисовал бы (нет h-скролла) — мы ничего не теряем.
+    /// Reduce visible column widths toward the table viewport budget.
+    ///
+    /// The table engine otherwise proportionally shrinks every column during each render through
+    /// `downscale_columns_to_available`, making neighbors move when one column is dragged. Only when
+    /// exactly one width changed and map membership stayed constant is overflow removed from that
+    /// column; initialization, first-drag snapshots, and panel shrinkage use proportional reduction
+    /// across visible columns. The 40 px minimum can leave residual overflow, which
+    /// `MoonDataTable` handles with its horizontal-scroll and scrollbar fallback.
     fn clamp_table_widths(&mut self, state: &Entity<MoonDataTableState>, cx: &mut App) {
         let (cur, viewport) = {
             let s = state.read(cx);
@@ -461,7 +470,7 @@ impl ReportPanel {
         if cur.is_empty() || viewport <= 80.0 {
             return;
         }
-        // Сумма как у движка: видимые колонки, сток из карты либо дефолт колонки.
+        // Match the engine's sum: each visible column uses its stored width or its column default.
         let visible: Vec<&String> = self
             .cols
             .iter()
@@ -479,7 +488,7 @@ impl ReportPanel {
         if overflow <= 0.5 {
             return;
         }
-        // Одна изменившаяся колонка при том же составе карты = живой драг.
+        // One changed entry with unchanged map membership indicates a live single-column drag.
         let changed: Vec<String> = cur
             .iter()
             .filter(|(k, v)| prev.get(*k).is_none_or(|p| (**v - p).abs() > 0.5))
@@ -504,6 +513,10 @@ impl ReportPanel {
         self.last_widths = state.read(cx).column_widths.clone();
     }
 
+    /// Switch a newly created detached panel to the `:win` column-storage context.
+    ///
+    /// Reload widths and visible columns for detached mode so docked tabs and windows keep separate
+    /// layouts, and enable the detached-only manual date controls.
     pub(crate) fn mark_table_detached(&mut self, cx: &mut Context<Self>) {
         self.detached = true;
         self.widths_id = crate::table_persist::ctx_id("report-table", true);
@@ -517,9 +530,10 @@ impl ReportPanel {
         cx.notify();
     }
 
-    /// Применить сохранённый per-контекст набор видимых колонок (`table_visible_columns` по
-    /// `widths_id`), если он есть. Единый дескриптор полей: набор различается на режим (`:dock`
-    /// vs `:win`). Пустой набор → оставляем текущий (иначе показали бы пустую таблицу).
+    /// Apply a saved per-context visible-column set for `widths_id`, when non-empty.
+    ///
+    /// Docked `:dock` and detached `:win` modes have distinct shared-storage entries. An empty set
+    /// leaves the current selection intact rather than producing an empty table.
     fn apply_ctx_columns(&mut self, cx: &App) {
         if let Some(keys) = crate::table_persist::visible(self.backend.read(cx), &self.widths_id) {
             let set: HashSet<String> = keys.into_iter().collect();
@@ -529,8 +543,11 @@ impl ReportPanel {
         }
     }
 
-    /// Сохранить текущий набор видимых колонок в per-контекст хранилище (`widths_id`) в порядке
-    /// колонок таблицы. Зовётся из [`Self::toggle_column`].
+    /// Save visible columns in runtime table order to per-context storage under `widths_id`.
+    ///
+    /// Called through [`Self::persist_visible`] after column-menu changes. An empty set is not
+    /// written, so an older non-empty per-context entry remains available and can override the empty
+    /// `app_meta` set when the panel is recreated.
     fn save_ctx_columns(&self, cx: &mut App) {
         let keys: Vec<String> = self
             .cols
@@ -557,7 +574,10 @@ impl ReportPanel {
         !self.cols.is_empty() && self.cols.iter().all(|c| self.visible.contains(c.as_str()))
     }
 
-    /// Persist visible columns to report metadata and the dock/window table descriptor.
+    /// Persist visible columns to `app_meta` and, when non-empty, the dock/window table descriptor.
+    ///
+    /// `app_meta` records an empty set, but [`Self::save_ctx_columns`] deliberately leaves any older
+    /// per-context descriptor unchanged in that case.
     fn persist_visible(&self, cx: &mut App) {
         if let Some(conn) = &self.conn {
             db::save_visible(conn, &self.visible_cols());
@@ -576,8 +596,8 @@ impl ReportPanel {
             core_uids: self.sel_cores.iter().copied().collect(),
             date_from,
             date_to,
-            // Раскладку переводим и для SQL-фильтра, а не только для попапа поиска: иначе
-            // набранное русскими («бтц») уходило в запрос как есть → `coin LIKE %бтц%` → пусто.
+            // Normalize Russian-layout keystrokes for the SQL filter as well as the search popup;
+            // otherwise Cyrillic input would reach `coin LIKE` unchanged and return no matches.
             coin: crate::controls::coin_search::normalize_layout(&self.coin.read(cx).value())
                 .into_owned(),
             side: self.side,
@@ -591,8 +611,10 @@ impl ReportPanel {
         cx.notify();
     }
 
-    /// Requery по записи writer'а: не чаще раза в 5с (трейлинг-таймер досыпает остаток —
-    /// последняя запись не теряется). Пользовательские правки фильтров идут мимо троттла.
+    /// Request a writer-generation refresh at most once every five seconds.
+    ///
+    /// A trailing timer waits out the remaining interval so the final generation change is not
+    /// lost. User filter edits bypass this throttle.
     fn requery_on_generation(&mut self, cx: &mut Context<Self>) {
         const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
         let since = self
@@ -632,7 +654,7 @@ impl ReportPanel {
         // Keep stale rows while a refresh is in flight to avoid flicker. A
         // completed `NotReady` or `Failed` result discards them through `LoadState`.
         self.data.begin();
-        // Список ядер — не чаще раза в минуту (дорогой GROUP BY по всей БД).
+        // Refresh the core list at most once per minute because it groups across the full database.
         let with_cores = self
             .last_cores_at
             .map(|t| t.elapsed() >= std::time::Duration::from_secs(60))
@@ -697,8 +719,11 @@ impl ReportPanel {
         .detach();
     }
 
-    /// Тогл ядра в мультивыборе; `None` — «Все»-тумблер: ставит галки на все ядра,
-    /// повторный клик по полному набору — снимает все (пусто = фильтра нет).
+    /// Toggle a core in the multi-selection.
+    ///
+    /// `None` is the All toggle: it builds the current core set, then clears the selection when that
+    /// set is non-empty and its cardinality matches the selection's cardinality. This check does not
+    /// compare membership. Otherwise it replaces the selection with the current core set.
     pub(super) fn toggle_core(&mut self, uid: Option<u64>, cx: &mut Context<Self>) {
         match uid {
             None => {
@@ -718,8 +743,9 @@ impl ReportPanel {
         self.request_requery(cx);
     }
 
-    /// Клик по ячейке «Ядро»: фильтр ТОЛЬКО на это ядро; повторный клик по нему же (когда оно
-    /// единственное выбранное) — сброс на «все». Как клик по ядру в «Ордерах»/«Активах».
+    /// Set the filter to only the clicked Core-cell UID, or clear it when already the sole selection.
+    ///
+    /// This matches Core-cell filtering in Orders and Assets.
     pub(super) fn filter_to_core(&mut self, uid: u64, cx: &mut Context<Self>) {
         if self.sel_cores.len() == 1 && self.sel_cores.contains(&uid) {
             self.sel_cores.clear();
@@ -729,8 +755,9 @@ impl ReportPanel {
         self.request_requery(cx);
     }
 
-    /// «Все»-тумблер колонок: включает все колонки; повторный клик по полному набору
-    /// оставляет только первую (все скрыть нельзя — таблица опустеет).
+    /// Toggle all runtime columns on, or retain only the first when all are already visible.
+    ///
+    /// Keeping one column prevents the table from becoming entirely empty.
     pub(super) fn toggle_all_columns(&mut self, cx: &mut Context<Self>) {
         if self.all_columns_on() {
             self.visible = self.cols.first().cloned().into_iter().collect();
@@ -752,8 +779,9 @@ impl ReportPanel {
             self.request_requery(cx);
         }
     }
-    /// Закрыть список совпадений монеты (клик вне списка). Текст фильтра НЕ трогаем —
-    /// он остаётся набранным (в отличие от чарт-вкладок, где выбор чистит поле).
+    /// Close the coin-match popup without changing the typed report filter.
+    ///
+    /// Unlike chart tabs, dismissing this popup leaves its text intact.
     pub(super) fn close_coin_popup(&mut self, cx: &mut Context<Self>) {
         if self.coin_popup_open {
             self.coin_popup_open = false;
@@ -767,7 +795,10 @@ impl ReportPanel {
             self.request_requery(cx);
         }
     }
-    /// Переключить видимость колонки по ИМЕНИ и СОХРАНИТЬ набор (app_meta) — переживает рестарт.
+    /// Toggle a column by name and persist it using [`Self::persist_visible`].
+    ///
+    /// Hiding the last column writes an empty `app_meta` set but does not erase a prior per-context
+    /// entry, which may restore that older non-empty set when the panel is recreated.
     pub(super) fn toggle_column(&mut self, name: String, cx: &mut Context<Self>) {
         if self.visible.contains(name.as_str()) {
             self.visible.remove(&name);
@@ -809,7 +840,7 @@ impl ReportPanel {
         let handle = window.window_handle();
         let rx = cx.prompt_for_new_path(&export::default_dir(), Some(&suggested));
         cx.spawn(async move |_this, cx| {
-            // Диалог отменён/закрыт — тихо выходим.
+            // A cancelled or closed destination dialog requires no notification.
             let Ok(Ok(Some(path))) = rx.await else {
                 return;
             };
@@ -976,10 +1007,10 @@ impl Render for ReportPanel {
         let p = MoonPalette::active(cx);
         let border = rgb(p.border);
 
-        // ── Поле монеты: общий виджет поиска (как на чартах, «BTC - Bybit1») ──
-        // Отличие от чартов: выбор НЕ открывает монету, а подставляет её базу в ТЕКСТОВЫЙ
-        // фильтр отчёта (SQL `coin LIKE %…%`) и перезапрашивает выборку. Ручной ввод
-        // частичного имени продолжает работать — список лишь подсказка сверху.
+        // Coin field using the shared chart-style search widget, such as `BTC - Bybit1`.
+        // Unlike chart search, selecting a result does not open that market. It inserts the base
+        // token into the textual report filter, backed by SQL `coin LIKE`, and requests a refresh.
+        // Partial manual input still works; the popup is only a suggestion layer.
         let coin_popup = self.coin_popup_open.then(|| {
             let results = {
                 let b = self.backend.read(cx);
@@ -1000,9 +1031,9 @@ impl Render for ReportPanel {
                 p,
                 cx,
                 move |_core, market, window, app| {
-                    // Фильтр текстовый → берём БАЗУ рынка («BTCUSDT» → «BTC»); ядро не важно
-                    // (для него есть свой селектор). Зеркало ставим ДО set_value, иначе
-                    // прилетевший Change снова откроет список.
+                    // The filter is textual, so use the market base, for example `BTCUSDT` to `BTC`.
+                    // Core is selected separately. Update the mirror before `set_value` so the
+                    // resulting Change event does not reopen the popup.
                     let base = moon_core::symbol::coin_of_market(&market).to_string();
                     view.update(app, |this, cx| {
                         this.coin_query = base.clone();
@@ -1020,8 +1051,8 @@ impl Render for ReportPanel {
             .left_0()
             .mt(px(2.0))
         });
-        // Слой-перехватчик клика вне списка (закрыть). Ниже фильтров в z-порядке — клик по
-        // строке списка ловит сама строка, клик мимо закрывает список.
+        // Catch clicks outside the popup to dismiss it. This layer sits below the filters in z-order,
+        // so result rows handle their own clicks while clicks elsewhere close the list.
         let coin_dismiss = self.coin_popup_open.then(|| {
             div()
                 .id("rep-coin-dismiss")
@@ -1047,7 +1078,7 @@ impl Render for ReportPanel {
             )
             .children(coin_popup);
 
-        // ── Фильтры ──
+        // Filters.
         let filters = h_flex()
             .w_full()
             .flex_wrap()
@@ -1066,9 +1097,8 @@ impl Render for ReportPanel {
             .child(self.side_combo(cx))
             .child(self.period_combo(cx))
             .child(self.kind_combo(cx))
-            // Ручные даты С:/По: — только в откреплённом окне; в докнутой вкладке
-            // хватает пресетов периода (компактная строка: ядро/монета/сторона/
-            // период/эмулятор/колонки).
+            // Show manual From/To dates only in detached windows. Docked tabs rely on period presets
+            // to keep the core, coin, side, period, order-kind, and column controls compact.
             .when(self.detached, |f| {
                 f.child(
                     div()
@@ -1096,7 +1126,7 @@ impl Render for ReportPanel {
             .child(self.export_menu(cx))
             .child(self.columns_menu(cx));
 
-        // ── Таблица ──
+        // Table.
         let vis: Vec<usize> = self
             .cols
             .iter()
@@ -1123,7 +1153,7 @@ impl Render for ReportPanel {
             Ok(data) => self.table_el(data.clone(), &vis, p, cx),
         };
 
-        // ── ИТОГО ──
+        // Exact totals over the full filtered period.
         // Without current data, never render +0.00 / 0 orders: those values are
         // indistinguishable from a genuinely empty period.
         let mut totals = h_flex()
@@ -1189,13 +1219,13 @@ impl Render for ReportPanel {
             .size_full()
             .relative()
             .track_focus(&self.focus)
-            // Моно-шрифт на СВОЁМ корне (как Orders/Assets/Analytics/Screener): в
-            // открепляемом окне панель не наследует моно от шапки — без этого «Отчёт» в
-            // detached-окне рисовался бы Inter'ом (рассинхрон с docked-видом и с измерением
-            // ширины селектора ядра, которое опирается на моно).
+            // Set monospace on the panel root, as in Orders, Assets, Analytics, and Screener.
+            // Detached panels do not inherit it from the shell header; without this, Report would
+            // render in Inter and diverge from the docked view and monospace-based core-selector
+            // width measurement.
             .font_family(design::mono())
             .bg(rgb(p.table_body))
-            // Дисмиссер ниже фильтров в z-порядке (см. `coin_dismiss`).
+            // Keep the popup dismiss layer below the filters in z-order; see `coin_dismiss`.
             .children(coin_dismiss)
             .child(filters)
             .child(div().w_full().h(px(1.0)).bg(border))

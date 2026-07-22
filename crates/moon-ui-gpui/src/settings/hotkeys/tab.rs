@@ -1,7 +1,7 @@
-//! Сборка вкладки «Хоткеи» — раскладка как в Moonbot: сверху всегда видимый блок
-//! встроенных (захардкоженных) хоткеев, под ним переключатель групп-саб-вкладок
-//! (`SettingsView.hotkeys_group`), ниже — строки активной группы. Однострочные
-//! редакторы (`hotkey_row`/`mouse_row`/`same_move_checkbox`) пишут в draft.
+//! Builds the Hotkeys tab in a Moonbot-style layout: an always-visible block of hard-coded
+//! built-in hotkeys, a group sub-tab switcher (`SettingsView.hotkeys_group`), and the active
+//! group's rows. Single-row editors (`hotkey_row`, `mouse_row`, and `same_move_checkbox`) update
+//! the draft.
 
 use gpui::*;
 use moon_core::config::{
@@ -29,8 +29,8 @@ impl SettingsView {
         };
         let p = MoonPalette::active(cx);
 
-        // Как в Moonbot: сверху — фиксированные встроенные хоткеи (всегда видны), под
-        // ними переключатель групп (саб-вкладки), ниже — строки только активной группы.
+        // Match Moonbot: fixed built-ins stay at the top, the group sub-tabs follow, and only the
+        // active group's rows appear below.
         let builtin = v_flex()
             .w_full()
             .gap(design::ui_px(cx, 3.0))
@@ -61,17 +61,17 @@ impl SettingsView {
                 self.builtin_row(t!("hotkeys.builtin.reset_windows").to_string(), cx),
             ]);
 
-        // Переключатель групп — тот же контрол, что полоска чарт-вкладок главного окна
-        // («Main»/Add: MoonTabStrip + MoonTabItem — обычный шрифт, без капса кнопок).
-        // Стрип рисует табы абсолютно и без явных bounds схлопывается в 0×0 (см.
-        // chart_tabs/strip.rs) — ширину даём с запасом, контейнер ниже режет по своей.
+        // Reuse the main window's chart-tab control (`MoonTabStrip` + `MoonTabItem`) for
+        // normal-case labels. Its tabs use absolute positioning and collapse to zero without
+        // explicit bounds; provide ample width and let the enclosing container clip it.
         let entity = cx.entity();
         let strip_h = design::fit_h_px(cx, 28.0, 13.0, 7.5);
         let items: Vec<MoonTabItem> = HotkeyGroup::ALL
             .iter()
             .map(|g| {
                 let label = g.title();
-                // Ширина по содержимому, как у чарт-вкладок (~7px/символ + паддинги).
+                // Size from label content like chart tabs, using roughly seven pixels per
+                // character plus padding.
                 let width = (label.chars().count() as f32 * 7.0 + 28.0).clamp(64.0, 168.0);
                 MoonTabItem::new(label)
                     .width(width)
@@ -124,8 +124,9 @@ impl SettingsView {
             .child(body)
     }
 
-    /// Строки активной группы (содержимое саб-вкладки). `hotkeys` клонируем локально —
-    /// строки-редакторы берут `&hotkeys` (перенесены из аккордеон-версии без правок).
+    /// Builds the active group's sub-tab rows.
+    ///
+    /// The supplied hotkey snapshot is cloned locally before its values are passed to row builders.
     fn group_rows(
         &self,
         group: HotkeyGroup,
@@ -428,8 +429,8 @@ impl SettingsView {
         }
     }
 
-    /// Строка-описание встроенного (не конфигурируемого) хоткея: только текст, без
-    /// редактора. Как справочная вкладка «Встроенные хоткеи» в Moonbot.
+    /// Builds a text-only row for a hard-coded, non-configurable hotkey, matching Moonbot's
+    /// built-in hotkey reference page.
     fn builtin_row(&self, line: impl Into<String>, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         h_flex()
@@ -478,7 +479,7 @@ impl SettingsView {
                     .render(),
             )
             .child(
-                // Описание — тем же размером, серым, с переносом (не уходит за окно).
+                // Match title sizing, use muted text, and wrap within the window.
                 div().flex_1().min_w_0().child(
                     MoonText::new(desc.into())
                         .uppercase(false)
@@ -556,7 +557,7 @@ impl SettingsView {
                     .render(),
             )
             .child(
-                // Описание — тем же размером, серым, с переносом (не уходит за окно).
+                // Match title sizing, use muted text, and wrap within the window.
                 div().flex_1().min_w_0().child(
                     MoonText::new(desc.into())
                         .uppercase(false)
@@ -622,8 +623,9 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// Янтарный бейдж «не подключено» для строк, чей рантайм-путь ещё не существует
-    /// ([`slot_wip`]/[`mouse_slot_wip`]): клавиша/жест сохраняются в конфиг, но действия нет.
+    /// Builds the amber "not connected" badge for mouse gestures without a runtime consumer.
+    ///
+    /// The selection is saved to configuration, but no action executes it yet.
     fn wip_tag(&self, p: &MoonPalette, _cx: &Context<Self>) -> AnyElement {
         MoonText::new(t!("hotkeys.todo").to_string())
             .uppercase(false)

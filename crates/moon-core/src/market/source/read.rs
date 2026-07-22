@@ -1,4 +1,4 @@
-//! Read-плоскость источника: ревизии/цены/тикер/поиск и дренаж истории чарта.
+//! Source read plane for revisions, prices, ticker data, search, and chart-history draining.
 
 use crate::data::OrderBookModel;
 use crate::feed::SharedMoonClient;
@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use moonproto::DeepHistoryKind;
 
-/// Retained-ряд CoinCard → свеча чарта (нормализация перепутанного wire-порядка полей).
+/// Convert a retained CoinCard row into a chart candle, normalizing shuffled wire fields.
 fn deep_row_candle(r: &moonproto::DeepPrice) -> crate::market::candles::ChartCandle {
     let (open, high, low, close) =
         crate::market::candles::normalize_ohlc(r.open(), r.high(), r.low(), r.close());
@@ -29,9 +29,11 @@ use super::{
 };
 use crate::market::candles::ChartCandle;
 
-/// Короткий тип биржи из `exchange_type_mask` server_info: «Спот»/«Фьючи»/«DEX»/…
-/// (core i18n-агностичен — строки простым текстом, UI при желании перелокализует). Маска —
-/// набор возможностей подключения; для одиночного коннекта обычно ровно один торговый бит.
+/// Return a short exchange-type label from `server_info.exchange_type_mask`.
+///
+/// The core is i18n-agnostic, so spot and futures labels are plain Russian strings that the UI may
+/// relocalize. The mask represents connection capabilities; a single connection usually sets one
+/// trading bit.
 fn exchange_kind_label(info: &moonproto::ServerInfo) -> String {
     use moonproto::ExchangeTypeMask as M;
     let spot = info.supports(M::SPOT);
@@ -46,7 +48,7 @@ fn exchange_kind_label(info: &moonproto::ServerInfo) -> String {
     }
 }
 
-/// ТФ CoinCard-истории (мин) → wire-kind moonproto.
+/// Map a CoinCard history timeframe in minutes to its MoonProto wire kind.
 fn deep_history_kind(tf_min: u32) -> DeepHistoryKind {
     match tf_min {
         1 => DeepHistoryKind::Min1,
@@ -152,9 +154,11 @@ impl MarketDataSource {
         Ok(price)
     }
 
-    /// Курс валюты `currency` в USD: USD-стейбл → 1; иначе `p_last` рынка `<currency>USDT`
-    /// (напр. BTC → BTCUSDT). `None` — курс неизвестен (нет провайдера/снимка/рынка).
-    /// Та же линейная модель, что у `feed::assets` (без контрактных множителей).
+    /// Return the USD rate for `currency`.
+    ///
+    /// A USD stablecoin maps to 1; otherwise this uses `p_last` for `<currency>USDT`, such as
+    /// `BTCUSDT` for BTC. `None` means the provider, snapshot, market, or rate is unavailable. This
+    /// uses the same linear model as `feed::assets`, without contract multipliers.
     pub fn currency_usd_rate(&self, core: CoreId, currency: &str) -> Option<f64> {
         if currency.is_empty() {
             return None;
@@ -176,25 +180,27 @@ impl MarketDataSource {
         (p.p_last.is_finite() && p.p_last > 0.0).then_some(p.p_last)
     }
 
-    /// Курс котировки рынка `market` в USD (для пересчёта ноционала qty·price в $).
-    /// USDT-котировка → 1; BTC-котировка → курс BTC/USDT. `None` — неизвестен.
+    /// Return the USD rate for the quote currency of `market`.
+    ///
+    /// This converts `quantity * price` notional into USD. A USDT quote maps to 1, while a BTC quote
+    /// uses the BTC/USDT rate. `None` means the rate is unknown.
     pub fn quote_usd_rate(&self, core: CoreId, market: &str) -> Option<f64> {
         let quote = crate::symbol::resolve_quote(market);
         if quote.is_empty() {
-            // HL/HIP-3 dex-перпы именуются как «xyz:BIRD» (dex-префикс + монета) — котировка
-            // (USDC) в имени НЕ присутствует, поэтому суффикс-парсер её не находит. Но эти рынки
-            // котируются в USDC (USD-стейбл, курс ≈1). Без этого `quote_usd` был None и подпись
-            // размера падала в количество монет (показывала qty «11.8» вместо $-номинала «$50»).
+            // HL/HIP-3 DEX perpetuals use names such as `xyz:BIRD`, consisting of a DEX prefix and
+            // coin. Their USDC quote is absent from the name, so the suffix parser cannot find it.
+            // These markets are nevertheless quoted in USDC, a USD stablecoin with a rate near 1.
+            // Without this fallback, `quote_usd` was None and the size label fell back from a USD
+            // notional such as `$50` to a coin quantity such as `11.8`.
             return Some(1.0);
         }
         self.currency_usd_rate(core, &quote)
     }
 
-    /// Последняя цена + знаковые дельты рынка за 1ч/24ч, % (moonproto `MarketDeltaState`:
-    /// `coin_1h_delta`/`coin_24h_delta` — отклонение цены от удержанного среднего, как
-    /// Ядро-провайдер рыночных данных consumer-ядра — дедуп-ключ биржи: у
-    /// ядер одной биржи провайдер общий. Скринер группирует ядра по нему,
-    /// чтобы монеты не дублировались.
+    /// Return the market-data provider core for a consumer core.
+    ///
+    /// This is the exchange deduplication key: cores on the same exchange share a provider. The
+    /// screener groups cores by this value to avoid duplicate coins.
     pub fn provider_of(&self, core: CoreId) -> Option<CoreId> {
         self.inner
             .read()
@@ -204,8 +210,9 @@ impl MarketDataSource {
             .copied()
     }
 
-    /// Живой MoonProto-клиент КОНКРЕТНОГО ядра (не его провайдера) — для
-    /// аккаунтных полей, которые персональны для ядра (скринер).
+    /// Return the live MoonProto client for the specific core, not its market-data provider.
+    ///
+    /// The screener uses this for account fields that belong to the individual core.
     pub(crate) fn core_client(
         &self,
         core: CoreId,
@@ -214,9 +221,11 @@ impl MarketDataSource {
         inner.clients.get(&core).and_then(SharedMoonClient::get)
     }
 
-    /// Шаг цены рынка (moonproto `chart_price_step`) — размер клавиатурного сдвига
-    /// ордеров (shift_buy/sell_up/down). `None` — нет провайдера/снимка/рынка или шаг
-    /// не задан (≤0): сдвиг тогда не делаем, чтобы не выдумывать шаг.
+    /// Return the market price step from MoonProto's `chart_price_step`.
+    ///
+    /// This is the keyboard increment for `shift_buy/sell_up/down`. `None` means the provider,
+    /// snapshot, or market is unavailable, or the step is non-positive. In that case orders are not
+    /// shifted because the terminal must not invent an increment.
     pub fn price_step(&self, core: CoreId, market: &str) -> Option<f64> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
@@ -231,8 +240,11 @@ impl MarketDataSource {
         (step.is_finite() && step > 0.0).then_some(step)
     }
 
-    /// Moonbot Coin1hDelta). Для тикера курса в шапке (и будущего скринера).
-    /// `None` — нет провайдера/снимка/рынка.
+    /// Return the last price and signed 1-hour and 24-hour percentage deltas for a market.
+    ///
+    /// MoonProto's `MarketDeltaState` defines `coin_1h_delta` and `coin_24h_delta` as deviations
+    /// from retained averages, matching MoonBot's Coin1hDelta semantics. This feeds the header
+    /// ticker and a future screener. `None` means the provider, snapshot, or market is unavailable.
     pub fn market_ticker(&self, core: CoreId, market: &str) -> Option<MarketTickerReadout> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
@@ -256,12 +268,16 @@ impl MarketDataSource {
         })
     }
 
-    /// Замороженный снимок для карточки детекта: последние `bars` 5м-свечей `(high, low)`
-    /// (старые→новые) + имя/тип биржи. История — из локального kline-кэша (фоновый регистратор
-    /// пишет 5м-бары по ВСЕМ рынкам, 90 дней), живой хвост — из трейд-ринга провайдера; оба
-    /// БЕСПЛАТНЫ (биржевой API НЕ трогаем). Данные — ДЕДУП-ПРОВАЙДЕРА биржи (общие для ядер той
-    /// же биржи/рынка). Собирать ОДИН раз в момент детекта, морозить в карточке. Пусто — нет
-    /// провайдера/клиента/снимка/истории.
+    /// Build a frozen snapshot for a detection card.
+    ///
+    /// The snapshot contains the latest `bars` 5-minute OHLC candles, ordered oldest to newest,
+    /// plus the exchange name and type. History combines the provider's retained 5-minute snapshot,
+    /// the local kline cache populated for every market by the background recorder, and the live
+    /// trade-ring tail. None of these sources calls the exchange API here. Data belongs to the
+    /// exchange's deduplicated provider and is shared by cores on the same exchange and market.
+    /// Build this once when the detection occurs and retain it in the card. Missing provider,
+    /// client, or snapshot yields the empty default. Missing history leaves `bars` and `line` empty
+    /// while exchange metadata can remain populated.
     pub fn detect_snapshot(&self, core: CoreId, market: &str, bars: usize) -> DetectSnapshot {
         let t0 = std::time::Instant::now();
         let (client, kline_cache, exchange_key) = {
@@ -272,7 +288,8 @@ impl MarketDataSource {
             let Some(client) = inner.clients.get(&provider).and_then(SharedMoonClient::get) else {
                 return DetectSnapshot::default();
             };
-            // Стабильный ключ биржи провайдера для kline-кэша (как в read_chart_history_into).
+            // Use the provider's stable exchange key for the kline cache, as in
+            // read_chart_history_into.
             let exchange_key = inner
                 .provider_exchange
                 .get(&provider)
@@ -283,28 +300,30 @@ impl MarketDataSource {
             return DetectSnapshot::default();
         };
         let mut out = DetectSnapshot::default();
-        // Имя/тип биржи — из идентити подключения (server_info из BaseCheck).
+        // Read the exchange name and type from the connection identity supplied by BaseCheck's
+        // server_info.
         let info = snapshot.server_info();
         if let Some(name) = &info.exchange_name {
             out.exchange_name = name.clone();
         }
         out.exchange_kind = exchange_kind_label(info);
 
-        let tf_ms: i64 = 300_000; // 5м
+        let tf_ms: i64 = 300_000; // 5 minutes
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
-        // Окно 24ч: свечной режим берёт из него последние `bars` бакетов (~2ч), линейный —
-        // все close-цены (до 24ч). `line_cap` = максимум 5м-бакетов в 24ч (288).
+        // Candle mode takes its latest `bars` buckets, roughly two hours, from a 24-hour window;
+        // line mode uses every close in that window. `line_cap` is the maximum number of 5-minute
+        // buckets in 24 hours: 288.
         let from_ms = now_ms - 24 * 3_600_000;
         let line_cap = (24 * 3_600_000 / tf_ms) as usize;
 
-        // Свечи по бакету 5м (ключ = t_open, ФЛОР к tf для сшивки разных источников):
-        //   база №1 = retained 5м-снимок ЯДРА (тянется при старте по скоупу → ГЛУБИНА истории);
-        //   база №2 = локальный kline-кэш (реальные OHLC, перекрывает снимок);
-        //   хвост   = трейд-ринг (живой край, перекрывает свежие бакеты).
-        // Приоритет свежести — порядок вставки (снимок < кэш < ринг). Раньше снимок был лишь
-        // фолбэком «если пусто» → ринг всегда давал пару бар → глубина снимка игнорировалась.
+        // Build 5-minute candle buckets keyed by `t_open`, floored to the timeframe so sources
+        // align. Base 1 is the core's retained 5-minute startup snapshot, which supplies depth;
+        // base 2 is the local kline cache with real OHLC and overrides the snapshot; the trade ring
+        // is the live tail and overrides recent buckets. Insertion order defines freshness priority:
+        // snapshot < cache < ring. The snapshot used to be only an empty-data fallback, so the ring
+        // always supplied a few bars and caused the snapshot's depth to be ignored.
         let mut buckets: std::collections::BTreeMap<i64, (f32, f32, f32, f32)> =
             std::collections::BTreeMap::new();
         let bucket_key = |t_ms: i64| (t_ms.max(0) / tf_ms) * tf_ms;
@@ -312,10 +331,12 @@ impl MarketDataSource {
         let mut cache_n = 0usize;
 
         if let Some(readers) = snapshot.market_history_readers(market) {
-            // База №1: 5м-снимок ядра. Несёт только high/low (open==high, close==low) → тело=
-            // диапазон; штампуется КОНЦОМ периода → сдвигаем на tf назад к open (совпасть с кэшем).
-            // normalize_ohlc + orient_range_rows (как чарт): ориентируем «диапазонные» свечи по
-            // тренду средней, иначе тела-only покрасили бы всю историю в один цвет (close<open).
+            // Base 1 is the core's 5-minute snapshot. It carries only high and low, represented as
+            // open == high and close == low, so the body spans the range. Rows are stamped at the
+            // end of the period; shift them back one timeframe to align their open with the cache.
+            // As in the chart, normalize_ohlc and orient_range_rows orient these range-only candles
+            // by the average-price trend. Otherwise body-only rendering would color the entire
+            // history in one direction because close < open.
             if let Some(candles) = readers.candles_5m {
                 let mut snap: Vec<ChartCandle> = Vec::new();
                 candles.with_last(line_cap, |view| {
@@ -347,7 +368,7 @@ impl MarketDataSource {
                 }
                 snap5_n = buckets.len();
             }
-            // База №2: kline-кэш (реальные OHLC прошлых минут/сессий, kind_min=5).
+            // Base 2 is the kline cache: real OHLC from prior minutes and sessions at kind_min 5.
             if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref()) {
                 for c in cache.read_range(ex, market, 5, from_ms, now_ms) {
                     if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
@@ -359,7 +380,8 @@ impl MarketDataSource {
                 }
             }
             cache_n = buckets.len();
-            // Хвост: трейд-ринг провайдера → 5м-свечи (перекрывает свежие бакеты).
+            // Aggregate the provider trade-ring tail into 5-minute candles that override recent
+            // buckets.
             if let Some(reader) = readers.futures_trades.or(readers.spot_trades) {
                 let from_t = moonproto::MoonTime::from_unix_millis(from_ms);
                 let to_t = moonproto::MoonTime::from_unix_millis(now_ms);
@@ -380,9 +402,9 @@ impl MarketDataSource {
             }
         }
 
-        // Диагностика (env MOON_DETECT_DIAG=1): реальная структура бакетов — сколько свечей,
-        // общий охват, МАКС дыра во времени (по-индексный рендер её скрывает, но она укажет на
-        // рваность данных) и ценовой диапазон (выброс = сплющивание). Не гадать про «разрывы».
+        // With MOON_DETECT_DIAG=1, report actual bucket structure: candle count, total span, maximum
+        // time gap, and price range. Index-based rendering hides time gaps, but they reveal sparse
+        // data; a price outlier explains flattening. This avoids guessing about discontinuities.
         if std::env::var_os("MOON_DETECT_DIAG").is_some() {
             let keys: Vec<i64> = buckets.keys().copied().collect();
             let max_gap = keys.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
@@ -408,14 +430,14 @@ impl MarketDataSource {
             );
         }
 
-        // Линия (режим «линия»): все close-цены 24ч-окна, старые→новые.
+        // Line mode uses every close in the 24-hour window, ordered oldest to newest.
         out.line = buckets.values().map(|&(_, _, _, c)| c).collect();
-        // Свечи (режим «свечи»): последние `bars` бакетов (~2ч), старые→новые.
+        // Candle mode uses the latest `bars` buckets, roughly two hours, oldest to newest.
         let start = buckets.len().saturating_sub(bars);
         out.bars = buckets.values().skip(start).copied().collect();
-        // Дельты 1ч/24ч = ФАКТИЧЕСКОЕ изменение цены за период (сейчас vs цена N назад) — из
-        // НАШИХ бакетов, чтобы совпадали со сдвигом линии. (moonproto coin_*_delta — это
-        // отклонение от СРЕДНЕЙ за период, другая метрика; она осталась тикеру шапки.)
+        // Derive actual 1-hour and 24-hour price changes from our buckets by comparing now with the
+        // earlier price, so the deltas match the line's movement. MoonProto's coin_*_delta measures
+        // deviation from the period average instead and remains the header ticker metric.
         if let Some((_, &(_, _, _, last))) = buckets.iter().next_back() {
             let close_at = |ago_ms: i64| -> Option<f32> {
                 let target = now_ms - ago_ms;
@@ -489,8 +511,8 @@ impl MarketDataSource {
         let readers = snapshot.market_history_readers(market)?;
         let from_time = moon_time_from_rel_ms(epoch_ms, from_rel_ms);
         let to_time = moon_time_from_rel_ms(epoch_ms, to_rel_ms.max(from_rel_ms + 1.0));
-        // Зона отображения трейдов (последние K свечей): кресты/сканы читаем только от неё.
-        // INFINITY = трейды не отображаем вовсе (K=0). Агрегацию свечей это НЕ ограничивает.
+        // Read trade crosses and scans only from the last-K-candles display zone. INFINITY hides
+        // trades entirely when K is zero; it does not constrain candle aggregation.
         let display_trades = candle_params.map_or(true, |cp| cp.trades_from_rel_ms.is_finite());
         let trades_from_rel = candle_params
             .map(|cp| cp.trades_from_rel_ms.max(from_rel_ms))
@@ -561,8 +583,8 @@ impl MarketDataSource {
         } else {
             cursor.trades = None;
             cursor.last_price = None;
-            // Трейды скрыты (K=0), но ринг есть: last_price — из последнего трейда, а на
-            // reset флагом combo_reset велим слою очистить кольцо крестов.
+            // Trades are hidden when K is zero, but the ring still supplies last_price. On reset,
+            // combo_reset instructs the layer to clear its cross ring.
             if let Some(reader) = trade_reader.as_ref() {
                 read.combo_capacity = reader.capacity();
                 if force_reset {
@@ -576,10 +598,10 @@ impl MarketDataSource {
             }
         }
 
-        // Трейды ликвидаций — отдельный ring того же типа. Синхронны с combo: на полном
-        // reset combo (или первом проходе) перечитываем весь видимый диапазон, иначе тянем
-        // только новый живой край. Рендер тегирует их единым цветом (side=2). Окно — как у
-        // обычных трейдов (зона последних K свечей).
+        // Liquidations use a separate ring of the same type and stay synchronized with combo. A
+        // full combo reset or first pass rereads the entire visible range; otherwise only the new
+        // live edge is drained. The renderer tags them with side=2 for one shared color. Their
+        // window matches normal trades: the last-K-candles zone.
         if let Some(reader) = readers.liquidations.as_ref().filter(|_| display_trades) {
             let reset = read.combo_reset || cursor.liquidations.is_none();
             if reset {
@@ -607,20 +629,22 @@ impl MarketDataSource {
             cursor.liquidations = None;
         }
 
-        // Серия свечей: серверный 5м-снимок (авто-снимок moonproto — история ДО подключения)
-        // + локальный хвост из трейдов. Свой курсор по трейд-рингу: агрегация не зависит от
-        // зоны отображения крестов. Полная пересборка — только на reset/смене ТФ; живой
-        // край — дешёвый drain новых строк.
+        // The candle series combines the server's automatic 5-minute MoonProto snapshot, which
+        // covers history before connection, with a local tail built from trades. Its own trade-ring
+        // cursor keeps aggregation independent of the cross display zone. Only reset or timeframe
+        // changes require a full rebuild; the live edge cheaply drains new rows.
         if let Some(cp) = candle_params {
-            // CoinCard deep history применима только к ТФ ≥ 1м (суб-минутные — из трейдов).
+            // CoinCard deep history applies only to timeframes of at least one minute. Sub-minute
+            // candles are built from trades.
             let use_deep = cp.tf_ms >= 60_000;
             let native_kind_min =
                 crate::market::candles::deep_kind_min_for_tf((cp.tf_ms / 60_000) as u32);
-            // ЯДРО ДЕРЖИТ ОДИН СВЕЧНОЙ ТФ НА ЯДРО (разраб МБ, 2026-07-12): kind-флипы между
-            // окнами с разными ТФ заставляли ядро перекачивать историю с биржи на каждый
-            // запрос/подписку → бан API. Эффективный kind провайдера = MIN живых желаний
-            // (kind'ы цепочкой делятся: 1|5|30|60|240|1440) — панели крупнее ресемплят из
-            // мелкой базы ценой глубины (ринг ядра ~10к строк базового ТФ).
+            // The core holds one candle timeframe per core, according to the MoonBot developer on
+            // 2026-07-12. Alternating kinds between windows with different timeframes made the core
+            // refetch exchange history for every request or subscription and could trigger API
+            // limits. The provider's effective kind is the minimum live request because the kinds
+            // divide into the chain 1|5|30|60|240|1440. Coarser panels resample the finer base at the
+            // cost of depth; the core ring holds about 10,000 rows of the base timeframe.
             let deep_kind_min = if use_deep {
                 let inner = self.inner.read().expect("market source poisoned");
                 let mut wants = inner
@@ -636,8 +660,9 @@ impl MarketDataSource {
                 native_kind_min
             };
             let deep_kind = deep_history_kind(deep_kind_min);
-            // Локальный kline-кэш: хэндл + стабильный ключ биржи провайдера (ядра одной
-            // биржи делят кэш; CoreId между сессиями нестабилен).
+            // Pair the local kline-cache handle with the exchange key so cores on one exchange share
+            // cached rows and provider election can change without changing the cache address.
+            // CoreId itself is a stable uid since schema v11, but it identifies one core.
             let (kline_cache, exchange_key) = {
                 let inner = self.inner.read().expect("market source poisoned");
                 (
@@ -648,11 +673,11 @@ impl MarketDataSource {
                         .map(|e| format!("{}:{:08x}", e.code, e.dex)),
                 )
             };
-            // Подписка на живые ТФ-бары ядра: Event::LiveCandle дошивает/заменяет последний
-            // ряд retained tf_candles — без неё deep-ряды заморожены с момента ответа и на
-            // больших ТФ серия отставала на часы. Подписка ГЛОБАЛЬНА на клиенте (последний
-            // kind выигрывает) → общий реестр per (провайдер, рынок): панели «трогают»
-            // запись, протухшие (>60с без спроса) отписываются попутно.
+            // Subscribe to the core's live timeframe bars. Event::LiveCandle appends or replaces
+            // the last retained tf_candles row. Without it, deep rows freeze at response time and
+            // coarse-timeframe series can lag by hours. The subscription is global to the client
+            // and the most recent kind wins, so a shared `(provider, market)` registry lets panels
+            // refresh demand while entries stale for more than 60 seconds are unsubscribed.
             {
                 let inner = self.inner.read().expect("market source poisoned");
                 let mut subs = inner.candle_subs.lock().expect("candle subs poisoned");
@@ -677,7 +702,7 @@ impl MarketDataSource {
                     }
                     entry.last_want = now_i;
                 }
-                // Попутная уборка протухших подписок ЭТОГО провайдера (его клиент под рукой).
+                // Remove stale subscriptions for this provider while its client is available.
                 let stale: Vec<String> = subs
                     .iter()
                     .filter(|((p, _), s)| {
@@ -692,9 +717,9 @@ impl MarketDataSource {
                     subs.remove(&(provider, m));
                 }
             }
-            // Префикс из локального kline-кэша: честные нативные klines прошлых сессий.
-            // Читается из sqlite ОДИН раз на (рынок, kind, левый край) — ресеты частые
-            // (пан/зум), в БД на каждый нельзя; расширение окна влево перечитывает.
+            // Load authoritative native klines from prior sessions as a local-cache prefix. Read
+            // SQLite once per `(market, kind, left edge)` because pan and zoom reset frequently;
+            // extending the window to the left triggers another read.
             if use_deep {
                 let need_from = (epoch_ms + (from_rel_ms - cp.tf_ms.max(0) as f32) as f64) as i64;
                 let cache_stale =
@@ -710,8 +735,9 @@ impl MarketDataSource {
                         cursor.cache_rows =
                             cache.read_range(ex, market, native_kind_min, need_from, i64::MAX);
                         cursor.cache_rows_kind = native_kind_min;
-                        // Нативного kind нет — каскадный фолбэк: 5м фонового регистратора,
-                        // затем 1м deep-записей (любой ТФ кратен обоим, ресемпл в merge).
+                        // If the native kind is absent, fall back first to the background recorder's
+                        // 5-minute rows and then to 1-minute deep-history rows. Every supported
+                        // timeframe is divisible by both, so the merge can resample them.
                         for fb in [5u32, 1] {
                             if !cursor.cache_rows.is_empty() || native_kind_min <= fb {
                                 break;
@@ -720,7 +746,9 @@ impl MarketDataSource {
                                 cache.read_range(ex, market, fb, need_from, i64::MAX);
                             cursor.cache_rows_kind = fb;
                         }
-                        // Крупные слои для дорисовки хвоста истории старшими ТФ.
+                        // Load cache-only coarser layers used to extend the historical prefix. Kind-5
+                        // rows come from the recorder and possible deep-history writeback; the
+                        // retained 5-minute snapshot is merged separately through `snap_part`.
                         if cp.tf_ms < 300_000 {
                             cursor.cache_rows_5m =
                                 cache.read_range(ex, market, 5, need_from, i64::MAX);
@@ -739,13 +767,13 @@ impl MarketDataSource {
                     }
                 }
             }
-            // Разовый нативный бэкфилл крупного ТФ: панель хочет kind крупнее эффективного
-            // («один ТФ на ядро» держит слот на мелком), а нативной глубины нет ни в
-            // retained, ни в кэше → ОДИН осознанный запрос native kind за сессию на
-            // (провайдер, рынок, kind). Слот ядра флипнется туда-обратно (страховка
-            // свежести вернёт эффективный kind с бэкоффом), ответ уляжется в кэш — дальше
-            // глубина живёт локально и флипов больше нет. Без кэша бэкфилл не делаем
-            // (плоды терялись бы каждый рестарт, а флипы оставались).
+            // Perform a one-time native backfill for a coarse timeframe when the panel requests a
+            // kind coarser than the effective one-core timeframe and neither retained state nor the
+            // cache has native depth. Send one deliberate native-kind request per session for each
+            // `(provider, market, kind)`. The core slot changes there and back as the freshness
+            // guard restores the effective kind with backoff, while the response settles into the
+            // cache and avoids future changes. Skip backfill without a cache because its result
+            // would be lost on every restart while the slot changes remained.
             if use_deep && native_kind_min > deep_kind_min && kline_cache.is_some() {
                 let native_kind = deep_history_kind(native_kind_min);
                 let have_native = snapshot
@@ -773,10 +801,10 @@ impl MarketDataSource {
                     }
                 }
             }
-            // Урожай нативного бэкфилла: ряды нативного kind панели (крупнее эффективного)
-            // приезжают МИМО deep-сигнатуры (та следит за эффективным kind) — пишем их в
-            // кэш по собственной сигнатуре и форсим перечитку префикса + пересборку серии,
-            // чтобы глубина появилась сразу, а не со следующей сессии.
+            // Native-backfill rows use the panel's native kind, which is coarser than the effective
+            // kind, so they bypass the deep signature that tracks only the effective kind. Cache
+            // them under a separate signature and force a prefix reread plus series rebuild so the
+            // added depth appears immediately instead of in the next session.
             if use_deep && native_kind_min > deep_kind_min {
                 if let (Some(cache), Some(ex)) = (kline_cache.as_ref(), exchange_key.as_ref()) {
                     let native_kind = deep_history_kind(native_kind_min);
@@ -792,8 +820,8 @@ impl MarketDataSource {
                                     native_kind_min,
                                     rows.iter().map(deep_row_candle).collect(),
                                 );
-                                // Merge уехал в очередь РАНЬШЕ будущего чтения (FIFO) —
-                                // перечитка префикса увидит свежие ряды.
+                                // The merge enters the FIFO queue before the future read, so the
+                                // prefix reread sees the new rows.
                                 cursor.cache_kind = None;
                                 cursor.candle_series.invalidate();
                             }
@@ -801,14 +829,14 @@ impl MarketDataSource {
                     }
                 }
             }
-            // Свежесть базы — КАЖДЫЙ проход, не только на reset: при K=0 (зона трейдов
-            // выключена) ресетов между сменами cfg нет вообще, и потерянный/просроченный
-            // ответ раньше замораживал серию навсегда. «Устарело» = нет ряда ТЕКУЩЕГО
-            // бакета (живая подписка обязана его держать; дыра = пропущенный ответ или
-            // разрыв). ВАЖНО: deep history ядро тянет с БИРЖЕВОГО API (весовые лимиты!),
-            // поэтому повтор без прогресса — с ЭКСПОНЕНЦИАЛЬНЫМ бэкоффом 30с→10мин
-            // (сброс по приходу новых рядов / смене kind). Ровный 30с-ретрай при молчащем
-            // ядре/бирже приводил к «автостоп по превышению лимитов API» ядра.
+            // Check base freshness on every pass, not only reset. When K is zero and the trade zone
+            // is disabled, no resets occur between configuration changes, so a lost or expired
+            // response used to freeze the series forever. Stale means the current bucket has no
+            // row; the live subscription must maintain it, and a gap means a missed response or
+            // disconnect. The core fetches deep history from the exchange API and consumes request
+            // weight, so retries without progress use exponential backoff from 30 seconds to 10
+            // minutes. New rows or a kind change reset the delay. A fixed 30-second retry against a
+            // silent core or exchange previously triggered the core's API-limit auto-stop.
             if use_deep {
                 let base_tf_native_ms = deep_kind_min as i64 * 60_000;
                 let rows = snapshot.tf_candles(market, deep_kind);
@@ -830,10 +858,10 @@ impl MarketDataSource {
                 {
                     cursor.last_deep_request = Some(Instant::now());
                     cursor.last_deep_kind = Some(deep_kind);
-                    // Глобальный дедуп поверх per-pane бэкоффа: N панелей одной монеты
-                    // делят retained-ответ — шлём один запрос (монета, kind) в 30с на всё
-                    // приложение. Заблокированная панель бэкофф НЕ раскручивает (запрос
-                    // ушёл от соседа) — её last_deep_request уже отодвинут выше.
+                    // Add global deduplication above per-panel backoff. N panels for one coin share
+                    // the retained response, so the application sends one `(coin, kind)` request
+                    // every 30 seconds. A gated panel does not increase its backoff when another
+                    // panel sent the request; its last_deep_request was already advanced above.
                     let gate_open = {
                         let inner = self.inner.read().expect("market source poisoned");
                         let mut gate = inner.deep_req_gate.lock().expect("deep req gate poisoned");
@@ -861,9 +889,11 @@ impl MarketDataSource {
                     }
                 }
             }
-            // Сигнатура загруженных deep-строк: их приход/обновление (событие CoinCardCandles
-            // будит чарт) обязан ПЕРЕСОБРАТЬ серию — иначе после смены ТФ история появлялась
-            // только после переоткрытия графика.
+            // Track a cheap deep-row fingerprint: row count plus the final timestamp. It detects a
+            // new or advanced bucket, but not an in-place OHLC replacement at the same timestamp.
+            // Such a replacement does not itself trigger rebuild or writeback; a trade-tail or
+            // explicit reset can rebuild independently, while writeback waits for a later fingerprint
+            // advance, normally a new bucket.
             let deep_rows_sig = if use_deep {
                 snapshot.tf_candles(market, deep_kind).map_or(0u64, |rows| {
                     let last_ms = rows.last().map_or(0, |r| r.unix_millis());
@@ -873,7 +903,7 @@ impl MarketDataSource {
                 0
             };
             if deep_rows_sig != cursor.last_deep_sig {
-                // Deep-ряды продвинулись (ответ/live-бар) — прогресс, бэкофф запросов заново.
+                // A response or live bar advanced the deep rows, so reset the request backoff.
                 cursor.deep_retry_delay_s = 30;
             }
             let series_reset = force_reset
@@ -888,20 +918,20 @@ impl MarketDataSource {
                 cursor.server_candles.clear();
                 let from_base_ms =
                     (epoch_ms + (from_rel_ms - cp.tf_ms.max(0) as f32) as f64) as i64;
-                // Правая граница базы — ВСЕГДА не раньше «сейчас», а не правый край окна:
-                // ресет во время прокрутки в прошлое обрезал базу краем ТОГО окна, возврат
-                // в live ресета не делает (только расширение влево) → дыра В СЕРЕДИНЕ ряда
-                // от места прокрутки до сегодняшнего live-бакета, лечившаяся любым паном.
+                // Keep the base's right edge at least at now rather than at the window's right edge.
+                // A reset while scrolling into the past used to truncate the base at that window.
+                // Returning live does not reset because it only extends left, leaving a gap in the
+                // middle from the historical position to today's live bucket until another pan.
                 let now_unix = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis() as i64);
                 let to_ms = ((epoch_ms + to_rel_ms as f64) as i64).max(now_unix);
-                // База №1: CoinCard deep history — честные OHLC эффективного kind («один ТФ
-                // на ядро»). База №2: бесплатный 5м-снимок (только high/low) — ПРЕФИКС
-                // старше deep-части (композит: старое — диапазоны без теней, свежее —
-                // честные свечи) либо вся база, пока deep не приехала. ТФ < 5м снимок
-                // не использует (вниз не ресемплится).
-                // База после единого merge всегда приведена к ТФ серии.
+                // Base 1 is CoinCard deep history with authoritative OHLC for the effective
+                // one-core timeframe. Base 2 is the free 5-minute range-only snapshot, used as a
+                // prefix older than the deep part or as the entire base until deep history arrives.
+                // The composite therefore has older range candles and newer authoritative candles.
+                // Timeframes below five minutes cannot downsample the snapshot and do not use it.
+                // One merge always converts the resulting base to the series timeframe.
                 let base_tf_ms = cp.tf_ms;
                 let mut deep_part: Vec<ChartCandle> = Vec::new();
                 if let Some(rows) = snapshot.tf_candles(market, deep_kind).filter(|_| use_deep) {
@@ -962,7 +992,7 @@ impl MarketDataSource {
                         crate::market::candles::orient_range_rows(&mut snap_part);
                     }
                 }
-                // Кэш-часть: нативные честные klines прошлых сессий (видимое окно).
+                // Use authoritative native klines from prior sessions as the visible cache portion.
                 let cache_part: Vec<ChartCandle> = cursor
                     .cache_rows
                     .iter()
@@ -972,9 +1002,11 @@ impl MarketDataSource {
                     })
                     .cloned()
                     .collect();
-                // Write-back свежих deep-рядов в кэш (по смене сигнатуры, неблокирующе).
-                // Пишем ПОЛНЫЙ retained-ряд, НЕ обрезанный видимым окном deep_part:
-                // узкое окно записывало 1 свечу из ответа — глубина терялась.
+                // Write deep rows back to the cache without blocking when the cheap fingerprint
+                // advances. Same-timestamp OHLC replacements do not advance it and remain unwritten
+                // until a later bucket does. Persist the complete retained sequence rather than
+                // `deep_part` clipped to the visible window; a narrow window used to save one
+                // response candle and lose the remaining depth.
                 if have_deep && deep_rows_sig != cursor.cache_written_sig {
                     match (kline_cache.as_ref(), exchange_key.as_ref()) {
                         (Some(cache), Some(ex)) => {
@@ -986,9 +1018,10 @@ impl MarketDataSource {
                             cache.merge(ex.clone(), market.to_string(), deep_kind_min, full);
                         }
                         (Some(_), None) => {
-                            // Идентичность биржи провайдера не доехала — кэш слепнет,
-                            // это надо ВИДЕТЬ в логе (разово на панель: sig не двигаем,
-                            // но лог глушим по первому разу).
+                            // The provider exchange identity is unavailable, so the cache cannot
+                            // address these rows. Make this visible in the log once per panel. Keep
+                            // the real signature unchanged, but use the initial marker to suppress
+                            // repeated logging.
                             if cursor.cache_written_sig == 0 {
                                 cursor.cache_written_sig = 1;
                                 log::warn!(
@@ -1000,9 +1033,10 @@ impl MarketDataSource {
                         _ => {}
                     }
                 }
-                // ЕДИНЫЙ merge базы к ТФ серии, приоритет по возрастанию:
-                // 5м-снимок (только HL) < кэш (честные klines) < deep (живой, свежайший).
-                // Неделимые/крупнее ТФ части пропускаются (снимок для 1м и т.п.).
+                // Merge every base source into the series timeframe in increasing priority:
+                // 5-minute range-only snapshot < authoritative cached klines < live, freshest deep
+                // history. Skip sources whose timeframe is coarser than or does not divide the
+                // target, such as a 5-minute snapshot for a 1-minute series.
                 {
                     let tf = cp.tf_ms;
                     let mut merged: std::collections::BTreeMap<i64, ChartCandle> =
@@ -1025,9 +1059,9 @@ impl MarketDataSource {
                 }
                 cursor.candle_trade_rows.clear();
                 if let Some(reader) = trade_reader.as_ref() {
-                    // Хвост серии — до «сейчас» (to_ms уже включает now): курсор дочитки
-                    // ставится «от сейчас», диапазон копии обязан дотягиваться туда же,
-                    // иначе между ними дыра навсегда.
+                    // Extend the series tail through now, which is already included in to_ms. The
+                    // follow-up cursor starts at now, so the copied range must reach the same point
+                    // or a permanent gap remains between them.
                     reader.copy_time_range(
                         from_time,
                         moonproto::MoonTime::from_unix_millis(to_ms),
@@ -1051,7 +1085,7 @@ impl MarketDataSource {
                 let meta =
                     reader.drain_new_bounded(cur, reader.capacity(), &mut cursor.candle_trade_rows);
                 if meta.clipped {
-                    // Отстали от ринга — на следующем проходе полная пересборка.
+                    // The cursor fell behind the ring; force a full rebuild on the next pass.
                     cursor.candle_series.invalidate();
                 } else if meta.copied > 0 {
                     rows_to_ticks(&cursor.candle_trade_rows, &mut cursor.candle_ticks);
@@ -1062,10 +1096,11 @@ impl MarketDataSource {
             read.candles_changed =
                 cursor.candle_series.is_valid() && read.candles_revision != cp.shipped_revision;
             if read.candles_changed {
-                // Хвост истории дорисовывается СТАРШИМИ ТФ «до упора»: старше начала
-                // серии — 5м-слой (снимок+регистратор), глубже него — дневные свечи
-                // (бэкфилл/кэш). У каждой свечи хвоста свой ТФ (ширина в шейдере) —
-                // рисуются приглушённо, чтобы отличались от выбранного ТФ.
+                // Extend history as far back as possible with cache-only coarser timeframes. The
+                // kind-5 prefix comes from the recorder and possible deep-history writeback; the
+                // retained `snap_part` already feeds the main series. Daily cache rows extend beyond
+                // the kind-5 prefix. Prefix candles carry their own timeframe for shader width and
+                // render muted to distinguish them from the selected timeframe.
                 let series_first = cursor
                     .candle_series
                     .candles()
@@ -1081,11 +1116,11 @@ impl MarketDataSource {
                     if (cp.tf_ms as f64) >= tf {
                         continue;
                     }
-                    // Берём ряды, НАЧИНАЮЩИЕСЯ до границы (граничная свеча может
-                    // перекрыть шов до целого ТФ): правило «только целиком старше»
-                    // оставляло карман гранулярности до tf_coarse (дневка кончается в
-                    // 00:00, серия начинается в 04:06 → дыра 4ч). Перекрытие невидимо —
-                    // хвост рисуется приглушённой подложкой ПОД мелкими свечами.
+                    // Take rows that start before the boundary, allowing the boundary candle to
+                    // overlap the seam by up to one full timeframe. Requiring rows to end entirely
+                    // before the boundary left a gap as wide as tf_coarse; for example, a daily
+                    // candle ending at 00:00 followed by a series starting at 04:06 left four hours.
+                    // The overlap is invisible because the muted prefix renders below finer candles.
                     let mut taken: Vec<(ChartCandle, f32)> = rows
                         .iter()
                         .filter(|c| c.t_open_ms < boundary)
@@ -1113,15 +1148,15 @@ impl MarketDataSource {
                         out.candle_tf_ms.push(cp.tf_ms as f32);
                     }
                 }
-                // Диагностика разрыва «свечи ↔ сейчас»: если последняя свеча старше 3 ТФ,
-                // раз в 30с печатаем покрытие всех слоёв — по логу видно, КАКОЙ слой
-                // кончился (серия/deep/кэш/5м/1д), вместо слепой чинки по скриншотам.
+                // Diagnose candle-to-now gaps. If the last candle is older than three timeframes,
+                // log layer coverage once every 30 seconds so the exhausted layer is identifiable
+                // as series, deep, cache, 5-minute, or 1-day instead of debugging screenshots.
                 let now_unix = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0.0, |d| d.as_millis() as f64);
                 let last_ms = out.candles.last().map(|c| c.t_open_ms).unwrap_or(0.0);
-                // Дыры и В СЕРЕДИНЕ ряда (следующая свеча позже конца предыдущей) — разрыв
-                // «прокрутка в прошлое → возврат в live» прятался именно там.
+                // Detect gaps inside the sequence where the next candle begins after the previous
+                // one ends. This is where the scroll-to-history then return-to-live gap was hidden.
                 let mut max_hole = 0.0f64;
                 let mut hole_at = 0.0f64;
                 for i in 1..out.candles.len() {
@@ -1175,8 +1210,9 @@ impl MarketDataSource {
                 }
             }
             if scan_price {
-                // Авто-Y учитывает high/low видимых свечей (кресты теперь только в зоне —
-                // без этого прошлое за зоной не влияло бы на масштаб).
+                // Include visible candle highs and lows in automatic Y scaling. Trade crosses now
+                // cover only their display zone, so older visible history would otherwise not affect
+                // the scale.
                 if let Some((lo, hi)) = cursor
                     .candle_series
                     .price_range(epoch_ms + from_rel_ms as f64, epoch_ms + to_rel_ms as f64)
@@ -1186,7 +1222,8 @@ impl MarketDataSource {
                         None => (lo, hi),
                     });
                 }
-                // Хвост старших ТФ тоже виден — его high/low входят в авто-масштаб.
+                // The coarser-timeframe prefix is visible too, so include its highs and lows in
+                // automatic scaling.
                 let from_abs = epoch_ms + from_rel_ms as f64;
                 let to_abs = epoch_ms + to_rel_ms as f64;
                 let series_first = cursor

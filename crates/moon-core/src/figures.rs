@@ -1,11 +1,12 @@
-//! Пользовательские фигуры чарта (слой рисования, как «карандаш» Moonbot):
-//! горизонталь, отрезок, параллельный канал. Фигуры ЛОКАЛЬНЫ (living в терминале,
-//! персист в `figures.json`); в ядро уезжают только фигуры с галкой «Alert»
-//! (этап 2-3 алертов, upsert blob `TChartObject`). Ключ набора — (CoreId, market):
-//! как в Moonbot, рисунок принадлежит чарту конкретного бота.
+//! User-defined chart figures (a drawing layer similar to Moonbot's pencil tool):
+//! horizontal lines, segments, triangles, and horizontal channels. Figures drawn in the
+//! terminal are local and persist in `figures.json`; only figures with the "Alert" checkbox
+//! enabled are sent to the core as upserted `TChartObject` blobs. Server-originated alert
+//! figures are merged into the same store but are not persisted locally. Each set is keyed by
+//! `(CoreId, market)`: as in Moonbot, a drawing belongs to a specific bot's chart.
 //!
-//! Модель здесь (moon-core), чтобы билдер геометрии в moon-chart и UI-слой видели
-//! одни типы, не завися друг от друга.
+//! The model lives here in `moon-core` so the geometry builder in `moon-chart` and the UI layer
+//! share the same types without depending on each other.
 
 use std::collections::HashMap;
 
@@ -14,30 +15,30 @@ use serde::{Deserialize, Serialize};
 use crate::config::{paths, write_file_atomic};
 use crate::session::CoreId;
 
-/// Узел фигуры: точка (время, цена). Время — unix ms.
+/// Figure node represented by a `(time, price)` point. Time is Unix milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FigNode {
     pub time_ms: f64,
     pub price: f64,
 }
 
-/// Вид фигуры. Соответствие типам blob `TChartObject` Moonbot: HLine=1, Segment=2,
-/// Triangle=4, Channel=5 (Fibo=3 пока не поддержан). Треугольник = 3 вершины;
-/// канал Moonbot = ДВЕ ГОРИЗОНТАЛЬНЫЕ цены (ценовой коридор), без времени.
+/// Figure type corresponding to Moonbot's `TChartObject` blob types: HLine=1, Segment=2,
+/// Triangle=4, Channel=5 (Fibo=3 is not yet supported). A triangle has three vertices;
+/// a Moonbot channel consists of TWO HORIZONTAL prices (a price corridor) without time values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FigureKind {
-    /// Горизонтальная линия на цене (бесконечная по времени).
+    /// Horizontal line at a price, extending indefinitely in time.
     HLine { price: f64 },
-    /// Отрезок между двумя узлами.
+    /// Segment between two nodes.
     Segment { a: FigNode, b: FigNode },
-    /// Треугольник по трём вершинам (как △ в Moonbot, тип 4).
+    /// Triangle defined by three vertices (like Moonbot's triangle, type 4).
     Triangle { a: FigNode, b: FigNode, c: FigNode },
-    /// Горизонтальный канал: две цены (как канал Moonbot, тип 5).
+    /// Horizontal channel defined by two prices (like Moonbot's channel, type 5).
     Channel { price1: f64, price2: f64 },
 }
 
 impl FigureKind {
-    /// Человекочитаемое имя вида (для списка алертов/тултипов).
+    /// Human-readable type name for alert lists and tooltips.
     pub fn label(&self) -> &'static str {
         match self {
             FigureKind::HLine { .. } => "Горизонталь",
@@ -47,7 +48,7 @@ impl FigureKind {
         }
     }
 
-    /// Опорная цена фигуры (для колонки Price списка алертов и сортировок).
+    /// Reference price used by the alert list's Price column and sorting.
     pub fn anchor_price(&self) -> f64 {
         match self {
             FigureKind::HLine { price } => *price,
@@ -57,37 +58,38 @@ impl FigureKind {
     }
 }
 
-/// Одна фигура чарта.
+/// A single chart figure.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Figure {
-    /// Локальный id (монотонный в пределах стора). Для алертов этот же id станет
-    /// `obj_uid` при upsert в ядро.
+    /// Local ID, monotonically increasing within the store. For alerts, the same ID becomes
+    /// `obj_uid` when upserted to the core.
     pub id: u64,
     pub kind: FigureKind,
-    /// RGBA-цвет линии.
+    /// Line color in RGBA format.
     pub color: [u8; 4],
-    /// Толщина, px (до масштабирования ppp).
+    /// Thickness in pixels before pixels-per-point scaling.
     pub thickness: f32,
-    /// Вид линии (Solid/Dash/Dot/DashDot/DashDotDot), в blob @13.
+    /// Line style (Solid/Dash/Dot/DashDot/DashDotDot), stored at blob offset 13.
     #[serde(default)]
     pub line_kind: LineKind,
-    /// Unix ms создания (колонка Time списка алертов).
+    /// Creation time in Unix milliseconds, shown in the alert list's Time column.
     pub created_ms: i64,
-    /// Галка «Alert»: фигура отправлена ядру как chart-алерт.
+    /// Whether the "Alert" checkbox is enabled and the figure is sent to the core as a chart alert.
     pub alert: bool,
-    /// Привязанная стратегия (id вида «Alerts»); 0 = без стратегии. Уходит в blob (@32).
+    /// Associated strategy ID of the "Alerts" type; 0 means no strategy. Stored at blob offset 32.
     #[serde(default)]
     pub strategy_id: u64,
-    /// Фигура ПРИШЛА ИЗ ЯДРА (алерт, нарисованный в Moonbot): декодирована из
-    /// серверного blob'а, а не нарисована у нас. Такие НЕ персистятся (управляет
-    /// сервер) и удаляются, когда сервер их снимает; но их можно выделять/двигать —
-    /// правка ре-апсертится в ядро. Не сериализуется (загруженные всегда локальные).
+    /// Whether the figure CAME FROM THE CORE (an alert drawn in Moonbot) and was decoded from
+    /// a server blob rather than drawn locally. Such figures are NOT persisted because the
+    /// server owns them, and they disappear when the server removes them. They can still be
+    /// selected and moved, with edits re-upserted to the core. This field is not serialized,
+    /// so figures loaded from disk are always local.
     #[serde(default, skip)]
     pub from_server: bool,
 }
 
-/// Инструмент режима рисования (какую фигуру ставит карандаш). Глобален для
-/// приложения (выбор в попапе карандаша), живёт в Backend UI.
+/// Drawing-mode tool that determines which figure the pencil creates. This application-wide
+/// selection is configured in the pencil popup and stored in the UI backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FigureTool {
     HLine,
@@ -97,7 +99,7 @@ pub enum FigureTool {
 }
 
 impl FigureTool {
-    /// Все инструменты по порядку (для циклического переключения хоткеем «смена фигуры»).
+    /// All tools in the order used by the figure-switching hotkey.
     pub const ALL: [FigureTool; 4] = [
         FigureTool::HLine,
         FigureTool::Segment,
@@ -105,14 +107,14 @@ impl FigureTool {
         FigureTool::Channel,
     ];
 
-    /// Следующий инструмент по кругу — хоткей `switch_figure` листает HLine→Segment→…→HLine.
+    /// Next tool in the cycle; the `switch_figure` hotkey advances HLine -> Segment -> ... -> HLine.
     pub fn next(self) -> FigureTool {
         let i = Self::ALL.iter().position(|&t| t == self).unwrap_or(0);
         Self::ALL[(i + 1) % Self::ALL.len()]
     }
 }
 
-/// Стиль линии (соответствует «Kind» Moonbot и Delphi `TPenStyle` в blob @13):
+/// Line style corresponding to Moonbot's "Kind" and Delphi's `TPenStyle` at blob offset 13:
 /// Solid=0, Dash=1, Dot=2, DashDot=3, DashDotDot=4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LineKind {
@@ -133,7 +135,7 @@ impl LineKind {
         LineKind::DashDotDot,
     ];
 
-    /// TPenStyle (значение @13 в blob).
+    /// `TPenStyle` value stored at blob offset 13.
     pub fn to_pen(self) -> u32 {
         match self {
             LineKind::Solid => 0,
@@ -164,17 +166,17 @@ impl LineKind {
         }
     }
 
-    /// Сплошная ли (для рендера горизонталей: LineInstance.style 0/1).
+    /// Whether the line is solid, used to map horizontal lines to `LineInstance.style` 0/1.
     pub fn is_solid(self) -> bool {
         self == LineKind::Solid
     }
 }
 
-/// Текущий стиль рисования (цвет/толщина/вид линии) — применяется к НОВЫМ фигурам,
-/// правится в попапе карандаша. Живёт в Backend UI.
+/// Current drawing style (color, thickness, and line style), applied to NEW figures and edited
+/// in the pencil popup. Stored in the UI backend.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DrawStyle {
-    /// RGBA; `a` — «Opacity» из попапа.
+    /// RGBA color; `a` is the "Opacity" value from the popup.
     pub color: [u8; 4],
     pub thickness: f32,
     pub kind: LineKind,
@@ -182,7 +184,7 @@ pub struct DrawStyle {
 
 impl Default for DrawStyle {
     fn default() -> Self {
-        // Голубой (отличать от ордер-линий), 1 px, пунктир (Dash).
+        // Light blue to distinguish figures from order lines, 1 px, dashed.
         Self {
             color: [64, 196, 255, 255],
             thickness: 1.0,
@@ -191,22 +193,21 @@ impl Default for DrawStyle {
     }
 }
 
-/// Ключ набора фигур: чарт конкретного ядра и монеты.
+/// Figure-set key identifying the chart for a specific core and market.
 pub type FigureKey = (CoreId, String);
 
-/// Стор фигур всех чартов + персист. Живёт в Backend UI; правки идут через
-/// методы стора, каждая бампает `rev` (гейт перерисовки) и ставит `dirty`
-/// (дебаунс-сейв коорд-тиком, как config/docks).
+/// Store for all chart figures and their persistence. It lives in the UI backend; interactive
+/// edits go through store methods that increment `rev` to gate redraws and set `dirty` for a
+/// debounced save by the coordination tick, like config and dock state.
 #[derive(Debug, Default)]
 pub struct FigureStore {
-    /// Все фигуры чартов: локальные (`from_server=false`, персистятся) + серверные
-    /// алерты из Moonbot (`from_server=true`, управляет сервер). И те, и другие
-    /// одинаково выделяются/двигаются/удаляются.
+    /// All chart figures: persisted local figures (`from_server=false`) and server-managed
+    /// Moonbot alerts (`from_server=true`). Both are selected, moved, and deleted identically.
     by_key: HashMap<FigureKey, Vec<Figure>>,
     next_id: u64,
-    /// Растёт при любой правке — data_state чарта перечитывает набор по ней.
+    /// Incremented on every change so the chart data state knows to reload the set.
     rev: u64,
-    /// Есть несохранённые правки (для дебаунс-сейва).
+    /// Whether edits are awaiting a debounced save.
     pub dirty: bool,
 }
 
@@ -222,11 +223,11 @@ impl FigureStore {
             .unwrap_or(&[])
     }
 
-    /// Реконсиляция серверных алерт-фигур (созданных в ядре/Moonbot) в общий набор.
-    /// `server` — свежий полный набор `from_server`-фигур из декодированных blob'ов.
-    /// Локальные (`from_server=false`) не трогаем; наши уже заармленные (id совпал с
-    /// локальным) — не дублируем. Зовётся только при изменении серверного набора
-    /// (гейт по activity), поэтому rev бампаем безусловно.
+    /// Reconciles server alert figures created in the core or Moonbot into the shared set.
+    /// `server` is a fresh complete set of `from_server` figures decoded from blobs. Local
+    /// figures (`from_server=false`) are preserved, and an armed local figure is not duplicated
+    /// when a server figure has the same ID. This is called only when the server set changes,
+    /// as gated by its activity counter, so `rev` is incremented unconditionally.
     pub fn set_server_figures(&mut self, server: HashMap<FigureKey, Vec<Figure>>) {
         for figs in self.by_key.values_mut() {
             figs.retain(|f| !f.from_server);
@@ -244,7 +245,7 @@ impl FigureStore {
         self.rev = self.rev.wrapping_add(1);
     }
 
-    /// Все фигуры-алерты для окна «Алерты»: `(core, market, &Figure)`.
+    /// All alert figures for the Alerts window as `(core, market, &Figure)` tuples.
     pub fn all_alerts(&self) -> impl Iterator<Item = (CoreId, &str, &Figure)> + '_ {
         self.by_key.iter().flat_map(|((c, m), v)| {
             v.iter()
@@ -257,7 +258,7 @@ impl FigureStore {
         self.figures(core, market).iter().find(|f| f.id == id)
     }
 
-    /// Добавляет ЛОКАЛЬНУЮ фигуру, возвращает её id.
+    /// Adds a LOCAL figure and returns its ID.
     pub fn add(&mut self, core: CoreId, market: &str, mut fig: Figure) -> u64 {
         self.next_id += 1;
         fig.id = self.next_id;
@@ -271,7 +272,7 @@ impl FigureStore {
         id
     }
 
-    /// Правка фигуры на месте (драг узла/тела). `edit` возвращает true, если что-то поменяла.
+    /// Edits a figure in place while dragging a node or body. `edit` returns true if it changed anything.
     pub fn edit(
         &mut self,
         core: CoreId,
@@ -305,7 +306,7 @@ impl FigureStore {
         Some(fig)
     }
 
-    /// Удалить все фигуры чарта (Clear All инструмента).
+    /// Removes all figures from a chart for the tool's Clear All action.
     pub fn clear(&mut self, core: CoreId, market: &str) -> usize {
         let n = self
             .by_key
@@ -323,7 +324,7 @@ impl FigureStore {
         self.dirty = true;
     }
 
-    // ── Персист ──────────────────────────────────────────────────────────────
+    // Persistence
 
     /// Highest core uid this store still holds figures for.
     ///
@@ -334,7 +335,7 @@ impl FigureStore {
         self.by_key.keys().map(|(core, _)| *core).max()
     }
 
-    /// Загрузка из `figures.json` (нет/битый → пусто).
+    /// Loads from `figures.json`; a missing or malformed file produces an empty store.
     pub fn load() -> Self {
         let path = paths::figures_path();
         let by_key: Vec<PersistEntry> = match std::fs::read_to_string(&path) {
@@ -353,8 +354,8 @@ impl FigureStore {
         store
     }
 
-    /// Сохранение в `figures.json` (не фатально). Сбрасывает `dirty`. Серверные
-    /// (`from_server`) алерты НЕ персистятся — ими управляет ядро.
+    /// Saves to `figures.json` non-fatally and clears `dirty`. Server alerts (`from_server`)
+    /// are NOT persisted because they are managed by the core.
     pub fn save(&mut self) {
         let list: Vec<PersistEntry> = self
             .by_key
@@ -383,7 +384,7 @@ impl FigureStore {
     }
 }
 
-/// Элемент сериализации: HashMap с tuple-ключом в JSON не живёт — плоский список.
+/// Flat serialization entry used because JSON cannot represent a `HashMap` with tuple keys.
 #[derive(Serialize, Deserialize)]
 struct PersistEntry {
     core: CoreId,

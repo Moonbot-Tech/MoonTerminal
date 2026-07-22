@@ -74,8 +74,8 @@ jobs:
   macos-probe:
     name: macOS probe (aarch64-darwin) — diagnostic
     runs-on: macos-14
-    # Зонд: ожидаем ошибки компиляции Metal-бэкенда. Не валим весь пайплайн —
-    # читаем лог job'а, чтобы получить конкретный список того, что надо чинить.
+    # Probe: Metal backend compilation errors are expected. Do not fail the entire pipeline —
+    # read the job log to get a concrete list of what needs fixing.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7

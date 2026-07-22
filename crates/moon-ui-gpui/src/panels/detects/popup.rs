@@ -1,11 +1,11 @@
-//! Попап-конструктор отображения ленты детектов: ⚙ в полоске панели — ТРИГГЕР
-//! [`MoonPopover`] (оверлей-слой moonui: не клипуется панелью, закрытие по клику-вне
-//! даром). Вкладка размера = АКТИВНЫЙ размер ленты (переключение сразу меняет ленту —
-//! она и есть живое превью). Слайдеры Ширина/Высота/Полоса/Градиент, тип графика и
-//! грид слотов, повторяющий ПОЗИЦИИ полей на кнопке (мини 2×2, средний 3×2, крупный
-//! 3×3) внутри рамки-«карточки» с rail. Элементы — в идиоме попапов настроек чарта
-//! (framed-группы, сегменты, stateless-контролы). Копировать/Вставить обмениваются
-//! конфигом группы текстом detects_view.toml (как вкладки Настроек).
+//! Detection-feed display configurator: the panel toolbar's ⚙ button triggers a [`MoonPopover`].
+//! Its moonui overlay layer is not clipped by the panel. Outside-click dismissal is disabled to
+//! protect nested dropdown overlays; the close button, Escape, or the gear dismisses it. The size
+//! tab selects the ACTIVE feed size, so switching tabs updates the feed immediately as a live
+//! preview. Width, height, rail, and gradient sliders, the chart type, and a slot grid mirror the
+//! field positions on each card (mini 2×2, medium 3×2, large 3×3) inside a rail-backed card frame.
+//! Controls follow the chart-settings popup idiom: framed groups, segments, and stateless controls.
+//! Copy and Paste exchange one group's configuration as detects_view.toml text, like Settings tabs.
 
 use gpui::*;
 use moon_ui::{
@@ -24,25 +24,25 @@ use super::{DetectsPanel, cards};
 use crate::design;
 use crate::panels::{RadioMark, radio_items};
 
-/// Ширина попапа (лог. px): 3 колонки слотов крупного (выпадашка 76 + 3 тогла по 20)
-/// + зазоры/рамки/паддинги с запасом.
+/// Popup width in logical pixels: three large-slot columns (76-pixel dropdown plus three 20-pixel
+/// toggles), with room for gaps, borders, and padding.
 const POPUP_W: f32 = 560.0;
 
-/// Вкладки размеров: (код, ключ локали).
+/// Size tabs as `(size code, localization key)` pairs.
 const TABS: [(u8, &str); 3] = [
     (DETECT_SIZE_MINI, "detects.view.size_mini"),
     (DETECT_SIZE_MEDIUM, "detects.view.size_medium"),
     (DETECT_SIZE_LARGE, "detects.view.size_large"),
 ];
 
-/// Типы графика: (значение, ключ локали).
+/// Chart types as `(value, localization key)` pairs.
 const CHARTS: [(DetectChart, &str); 3] = [
     (DetectChart::None, "detects.cfg.chart_none"),
     (DetectChart::Candles, "detects.cfg.chart_candles"),
     (DetectChart::Line, "detects.cfg.chart_line"),
 ];
 
-/// Ключ локали подписи поля слота.
+/// Returns the localization key for a slot-field label.
 fn field_key(f: DetectField) -> &'static str {
     match f {
         DetectField::None => "detects.field.none",
@@ -58,7 +58,8 @@ fn field_key(f: DetectField) -> &'static str {
 }
 
 impl DetectsPanel {
-    /// Засеять слайдеры значениями конфига редактируемой вкладки (эхо гасит write_view).
+    /// Seeds the sliders from the edited tab's configuration; `write_view` suppresses unchanged
+    /// echoes.
     fn seed_sliders(&self, window: &mut Window, cx: &mut Context<Self>) {
         let cfg = self.view_cfg(cx);
         let s = *cfg.size_cfg(self.popup_tab);
@@ -72,7 +73,7 @@ impl DetectsPanel {
         }
     }
 
-    /// «Копировать»: конфиг группы текстом detects_view.toml → буфер.
+    /// Copies the group's configuration to the clipboard as detects_view.toml text.
     fn copy_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(text) = self.view_cfg(cx).to_share_string() else {
             return;
@@ -84,7 +85,7 @@ impl DetectsPanel {
         );
     }
 
-    /// «Вставить»: разобрать буфер как конфиг группы, применить + persist + пересидировать.
+    /// Parses a group configuration from the clipboard, persists it, and reseeds the sliders.
     fn paste_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = cx
             .read_from_clipboard()
@@ -103,7 +104,7 @@ impl DetectsPanel {
     }
 }
 
-/// Полоска сверху панели: ⚙ = триггер попапа-конструктора (MoonPopover, поверх всего).
+/// Builds the panel toolbar whose ⚙ button triggers the configurator's overlay popover.
 pub(super) fn toolbar(
     this: &DetectsPanel,
     cfg: &DetectViewCfg,
@@ -121,8 +122,9 @@ pub(super) fn toolbar(
         .placement(MoonPopoverPlacement::BottomStart)
         .width(POPUP_W)
         .close_on_content_click(false)
-        // Меню дропдаунов — отдельные deferred-слои и вылезают за границы попапа: клик
-        // по ним ловился бы как «мимо» и закрывал попап. Закрытие — крестиком/ESC/⚙.
+        // Dropdown menus occupy separate deferred layers and may extend beyond the popover. Without
+        // this override, clicking those extensions counts as an outside click and closes the popover.
+        // The close button, Escape, and the gear remain the explicit dismissal paths.
         .overlay_closable(false)
         .open(this.popup_open)
         .on_open_change(move |open, window, app| {
@@ -147,7 +149,7 @@ pub(super) fn toolbar(
         .child(popover)
 }
 
-/// Рамка-группа: тонкая граница + заголовок-капшен (идиома candle_popup::framed).
+/// Wraps popup content in a thin bordered group with a caption, matching `candle_popup::framed`.
 fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl IntoElement {
     v_flex()
         .w_full()
@@ -166,7 +168,7 @@ fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl Int
         .child(body)
 }
 
-/// Ряд слайдера: подпись слева, слайдер, значение справа.
+/// Builds a slider row with a left caption and a right value label.
 fn slider_row(
     caption: String,
     slider: &Entity<moon_ui::MoonSliderState>,
@@ -197,7 +199,7 @@ fn slider_row(
         )
 }
 
-/// Микро-кнопка-тогл слота (глиф + тултип), в духе кнопок инструментов рисования.
+/// Builds a micro slot toggle with a glyph and tooltip, styled like the drawing-tool buttons.
 #[allow(clippy::too_many_arguments)]
 fn slot_toggle(
     id: SharedString,
@@ -231,8 +233,10 @@ fn slot_toggle(
         .render()
 }
 
-/// Ячейка слота: выпадашка поля + тоглы ВПЛОТНУЮ к ней. Вложенный MoonDropdown внутри
-/// MoonPopover безопасен с фикса форка `0f3ace9` (deferred-раунды на месте).
+/// Builds a slot cell with a field dropdown and tightly adjacent toggles.
+///
+/// A `MoonDropdown` nested in `MoonPopover` is safe since fork fix `0f3ace9`, which keeps deferred
+/// rounds in place.
 fn slot_cell(
     cfg: &DetectViewCfg,
     tab: u8,
@@ -271,7 +275,7 @@ fn slot_cell(
         .menu_size(MoonMenuSize::Compact)
         .items(items);
 
-    // Кнопки прижаты к полю (без распорок) — ячейка пакуется влево.
+    // Keep buttons adjacent to the field with no spacers, packing the cell to the left.
     let mut row = h_flex().items_center().gap(px(2.0)).child(dropdown);
     let chart_on = scfg.chart != DetectChart::None;
     if tab != DETECT_SIZE_MINI && chart_on {
@@ -323,7 +327,8 @@ fn slot_cell(
     row
 }
 
-/// Контент попапа. Значения читаются из конфига на каждый рендер (stateless, кроме слайдеров).
+/// Builds popup content from configuration values read on every render; slider entities are seeded
+/// separately when the popup or active size changes.
 fn content(
     this: &DetectsPanel,
     cfg: &DetectViewCfg,
@@ -334,7 +339,7 @@ fn content(
     let scfg = cfg.size_cfg(tab);
     let entity = cx.entity();
 
-    // --- Шапка: заголовок + Копировать/Вставить ---
+    // Header: title plus Copy and Paste actions.
     let head = h_flex()
         .w_full()
         .items_center()
@@ -373,7 +378,7 @@ fn content(
                 .render(),
         );
 
-    // --- Вкладки размеров: выбор = АКТИВНЫЙ размер ленты (лента = живое превью) ---
+    // Size tabs select the active feed size, making the feed itself the live preview.
     let entity_tab = entity.clone();
     let tabs = MoonSegmentedControl::new("det-view-tabs")
         .accent(MoonAccent::Blue)
@@ -396,7 +401,7 @@ fn content(
             }
         })
         .render();
-    // Точность дельт (0/1/2 знака) — ОДНА настройка на все размеры, справа от вкладок.
+    // Delta precision (zero, one, or two decimals) is one setting shared by every size.
     let entity_dec = entity.clone();
     let cur_dec = cfg.delta_decimals_clamped();
     let dec_seg = MoonSegmentedControl::new("det-view-decimals")
@@ -428,7 +433,7 @@ fn content(
         )
         .child(dec_seg);
 
-    // --- Размер и график ---
+    // Card dimensions and chart type.
     let w_row = slider_row(
         t!("detects.cfg.width").to_string(),
         &this.w_slider,
@@ -477,7 +482,7 @@ fn content(
         )
         .child(chart_seg);
 
-    // --- Полоса сервера: свотч-подпись + два слайдера ---
+    // Server rail: swatch caption plus width and gradient sliders.
     let rail_caption = h_flex()
         .items_center()
         .gap(design::ui_px(cx, 5.0))
@@ -509,8 +514,8 @@ fn content(
         cx,
     );
 
-    // --- Грид слотов: ПОЗИЦИИ как на кнопке (мини 2×2, средний 3×2, крупный 3×3),
-    // внутри рамки-«карточки» с rail — как будто настраиваешь сам детект. ---
+    // Slot grid mirrors card positions (mini 2×2, medium 3×2, large 3×3) inside a rail-backed
+    // card frame, making the controls resemble the detection card they configure.
     let cols = if tab == DETECT_SIZE_MINI { 2 } else { 3 };
     let n = detect_slot_count(tab);
     let mut grid = v_flex().w_full().gap(design::ui_px(cx, 8.0));

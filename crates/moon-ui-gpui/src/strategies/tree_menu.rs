@@ -1,5 +1,5 @@
-//! ПКМ-контекст-меню дерева стратегий: набор пунктов по цели (папка/стратегия) и открытие
-//! меню в MoonUI Root. Сами действия делегируются методам модалок/буфера.
+//! Right-click context menu for strategy-tree folders and strategies. MoonUI Root owns the open
+//! menu, while actions delegate to the modal and clipboard methods.
 
 use super::tree_ops;
 use super::tree_ui::{ContextMenu, MenuTarget};
@@ -140,7 +140,8 @@ impl StrategiesView {
                             }
                         }),
                 );
-                // Имя кликнутой стратегии → поиск по нему (показать все одноимённые).
+                // Prefill the case-insensitive substring search with the clicked strategy's full
+                // name; additional names containing it may also match.
                 let store = self.backend.read(cx).session.store();
                 if let Some(name) = row(store, core, *id).map(|r| r.name.clone()) {
                     items.push(
@@ -177,8 +178,8 @@ impl StrategiesView {
                 );
             }
             MenuTarget::DeletedStrategy(id) => {
-                // Восстановление под СТАРЫМ id: история версий и профит по
-                // ордерам продолжаются (join по strategyid не рвётся).
+                // Restore under the original ID so version history and order profit remain joined
+                // through `strategyid`.
                 let id = *id;
                 items.push(
                     MoonMenuItem::with_key(

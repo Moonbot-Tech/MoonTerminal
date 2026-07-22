@@ -1,5 +1,5 @@
-# Окно «Стратегии» (дерево, фильтр, параметры).
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Strategies window with the tree, filters, and parameters.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
 _version: 2
 
 strat.window_title:
@@ -42,7 +42,7 @@ strat.collapse_all:
   ru: "Свернуть всё"
   en: "Collapse all"
   es: "Contraer todo"
-# Глифы ▶ / ■ — отдельным segment-ом в коде, в словаре только текст.
+# The ▶ / ■ glyphs are separate code segments; the locale contains text only.
 strat.start_checked:
   ru: "отмеченных"
   en: "checked"
@@ -124,7 +124,7 @@ strat.folder_named:
   en: "folder “%{name}”"
   es: "carpeta «%{name}»"
 
-# --- Дерево стратегий: контекстное меню и тулбар ---
+# --- Strategy tree: context menu and toolbar ---
 strat.menu_create:
   ru: "Создать"
   en: "Create"
@@ -182,7 +182,7 @@ strat.action_delete:
   en: "delete"
   es: "eliminar"
 
-# --- Панель «Версии» (история версий стратегии + статистика) ---
+# --- Versions pane (strategy version history and statistics) ---
 strat.versions:
   ru: "Версии"
   en: "Versions"

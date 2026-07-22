@@ -1,9 +1,11 @@
-//! Карточки детекта по дизайн-макету:
-//! нейтральная кнопка (фон/рамка палитры, БЕЗ заливки цветом ядра) + слева цветная
-//! полоска сервера (rail) с градиент-фейдом; поля раскладываются ПО СЛОТАМ конфига
-//! ([`DetectSizeCfg::slots`]): мини 4 (2 ряда), средний 6 (колонки по бокам графика),
-//! крупный 9 (ряды над/под графиком + углы поверх). Габариты/график/rail — per-размер
-//! из `detects_view.toml`. Только визуал — интерактив (клик/ПКМ) вешает [`super`].
+//! Detection cards based on the design specification.
+//!
+//! Each card has a neutral palette background and border rather than a core-color fill, and can
+//! add a server-color rail and gradient fade on the left. Fields occupy configured
+//! [`DetectSizeCfg::slots`]: mini uses four slots in two rows, medium uses six across side columns
+//! or chart-overlay corners, and large uses nine in bands above and below the chart or overlays.
+//! `detects_view.toml` configures dimensions, chart type, and rail per size. This module builds
+//! visuals only; [`super`] owns card ordering and attaches left- and right-click actions.
 
 use gpui::*;
 use moon_ui::{
@@ -18,22 +20,23 @@ use moon_core::config::{
 use super::DetectItem;
 use crate::design;
 
-/// Доля ширины карточки среднего размера под зону графика (текстовые колонки по бокам).
+/// Fraction of a medium card's width allocated to the chart between the text columns.
 const MEDIUM_CHART_FRAC: f32 = 0.40;
-/// Высота ряда полей над/под графиком (крупный) и рядов мини, лог. px.
+/// Height reserved for each field band above and below a large card's chart, in logical pixels.
 const BAND_H: f32 = 16.0;
 
-/// Номинальный размер зоны графика (лог. px после масштаба, округлён): высота бокса
-/// показа фиксированная, ширина на дисплее тянется на всю зону (графики векторные).
+/// Return the rounded chart-zone dimensions in scaled logical pixels.
+///
+/// The rendered chart box keeps this height while its vector content stretches across the zone.
 fn zone_dims(size: u8, s: &DetectSizeCfg, cx: &App) -> (f32, f32) {
     let (w, h) = (f32::from(s.w), f32::from(s.h));
     match size {
-        // Крупный: зона на всю внутреннюю ширину, высота = карточка минус ряды/отступы.
+        // Large: use the full inner width and subtract field bands and padding from the height.
         DETECT_SIZE_LARGE => (
             design::ui_value(cx, w - 16.0).round(),
             design::ui_value(cx, (h - 12.0 - 2.0 * BAND_H - 6.0).max(12.0)).round(),
         ),
-        // Средний: фиксированная доля ширины, высота почти на всю карточку.
+        // Medium: use a fixed width fraction and nearly the full card height.
         _ => (
             medium_zone_w(s, cx),
             design::ui_value(cx, (h - 10.0).max(12.0)).round(),
@@ -41,7 +44,7 @@ fn zone_dims(size: u8, s: &DetectSizeCfg, cx: &App) -> (f32, f32) {
     }
 }
 
-/// Собрать карточку активного размера (без интерактива — его вешает вызывающий).
+/// Build a card at the configured active size without attaching click handlers.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn card(
     it: &DetectItem,
@@ -66,7 +69,7 @@ pub(super) fn card(
     )
 }
 
-/// Карточка КОНКРЕТНОГО размера — для ленты (активный) и превью попапа (размер вкладки).
+/// Build a card for an explicit size; [`card`] passes the clamped active configuration size.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn card_sized(
     it: &DetectItem,
@@ -90,7 +93,7 @@ pub(super) fn card_sized(
     base(scfg, color, p, cx).child(inner)
 }
 
-/// Нейтральная кнопка-подложка + rail (полоска цвета сервера и градиент-фейд от неё).
+/// Build the neutral card surface and its server-color rail with gradient fade.
 fn base(scfg: &DetectSizeCfg, color: u32, p: MoonPalette, cx: &App) -> Div {
     let w = design::ui_px(cx, f32::from(scfg.w));
     let h = design::ui_px(cx, f32::from(scfg.h));
@@ -101,7 +104,7 @@ fn base(scfg: &DetectSizeCfg, color: u32, p: MoonPalette, cx: &App) -> Div {
         .max_w(w)
         .h(h)
         .flex_none()
-        // Радиус 6 — по макету (между button 4 и container 8 moonui).
+        // The design's 6px radius sits between Moon UI's 4px button and 8px container radii.
         .rounded(design::ui_px(cx, 6.0))
         .border_1()
         .border_color(rgb(p.border))
@@ -120,11 +123,12 @@ fn base(scfg: &DetectSizeCfg, color: u32, p: MoonPalette, cx: &App) -> Div {
     card
 }
 
-/// Слои rail: полоска и градиент рисуются ФОНАМИ слоёв на всю карточку (жёсткий стоп
-/// градиента на ширине полоски) — фон gpui скругляется по радиусам div'а, поэтому
-/// полоска сама изгибается по углу карточки во всю высоту (отдельный брусок торчал бы
-/// углом: клип overflow_hidden прямоугольный, а радиус узкого div клампится к половине
-/// его ширины). Слои с inset 1px — под рамкой карточки.
+/// Build full-card background layers for the rail stripe and its gradient fade.
+///
+/// The fade has a hard stop at the stripe width. GPUI rounds each layer with its div, so the
+/// stripe follows the card corner for the full height. A separate narrow bar would protrude at
+/// the corner because `overflow_hidden` clips rectangularly and a narrow div's radius is clamped
+/// to half its width. The layers use a 1px inset to remain beneath the card border.
 pub(super) fn rail_layers(color: u32, rail_w: f32, grad_w: f32, card_w: f32, cx: &App) -> Vec<Div> {
     let mut out = Vec::new();
     let inner_w = (design::ui_value(cx, card_w) - 2.0).max(1.0);
@@ -148,7 +152,7 @@ pub(super) fn rail_layers(color: u32, rail_w: f32, grad_w: f32, card_w: f32, cx:
         )));
     }
     if rail_w > 0.0 {
-        // Жёсткий стоп (~полпикселя перехода = лёгкое сглаживание кромки).
+        // Use a hard stop with roughly half a pixel of transition for slight edge antialiasing.
         out.push(layer().bg(linear_gradient(
             90.0,
             linear_color_stop(rgba_from(color, 1.0), stripe.min(1.0)),
@@ -158,19 +162,21 @@ pub(super) fn rail_layers(color: u32, rail_w: f32, grad_w: f32, card_w: f32, cx:
     out
 }
 
-/// Номинальная ширина зоны графика среднего размера.
+/// Return the nominal width of a medium card's chart zone.
 fn medium_zone_w(scfg: &DetectSizeCfg, cx: &App) -> f32 {
     design::ui_value(cx, (f32::from(scfg.w) * MEDIUM_CHART_FRAC).max(30.0)).round()
 }
 
-/// Левый внутренний отступ контента: за полоску + небольшой зазор.
+/// Return the left content padding required to clear the rail plus a small gap.
 fn pad_l(scfg: &DetectSizeCfg, base: f32, cx: &App) -> Pixels {
     design::ui_px(cx, base + f32::from(scfg.rail_w_clamped()))
 }
 
 // --- Field chips use the shared MoonText, MoonBadge, and delta styles. ---
 
-/// Бейдж типа детекта (код long/short + цвет темы + опц. обводка). None — тип неактивен.
+/// Build the detection-type badge from its long/short code, theme color, and optional outline.
+///
+/// Return `None` when this detection type's badge is disabled.
 fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<MoonBadge> {
     badges.active(it.kind).then(|| {
         let code = badges.code(it.kind, it.is_short).to_string();
@@ -189,7 +195,7 @@ fn type_badge(it: &DetectItem, badges: &BadgesConfig, is_light: bool) -> Option<
     })
 }
 
-/// Бейдж имени ядра (цвет сервера). Кегль — как у бейджа типа (Tiny).
+/// Build a tiny core-name badge using the server color.
 fn core_badge(it: &DetectItem, color: u32) -> MoonBadge {
     MoonBadge::new(it.core_name.clone())
         .variant(MoonBadgeVariant::Soft)
@@ -201,7 +207,7 @@ fn core_badge(it: &DetectItem, color: u32) -> MoonBadge {
         .mono(true)
 }
 
-/// Токен монеты (крупная моно-подпись).
+/// Build the coin token as a prominent monospace label.
 fn coin_text(it: &DetectItem, p: MoonPalette, size: f32) -> MoonText {
     MoonText::new(it.base.clone())
         .color(p.text)
@@ -212,7 +218,7 @@ fn coin_text(it: &DetectItem, p: MoonPalette, size: f32) -> MoonText {
         .uppercase(false)
 }
 
-/// Мелкая приглушённая подпись (время). Кегль — дефолт MoonText (9).
+/// Build a small muted label, used for time, at MoonText's default 9px size.
 fn muted(text: String, p: MoonPalette) -> MoonText {
     MoonText::new(text)
         .color(p.text_muted)
@@ -220,7 +226,7 @@ fn muted(text: String, p: MoonPalette) -> MoonText {
         .uppercase(false)
 }
 
-/// Подпись биржи/типа биржи (soft-тон).
+/// Build an exchange or exchange-kind label in the soft text tone.
 fn soft(text: String, p: MoonPalette) -> MoonText {
     MoonText::new(text)
         .color(p.text_soft)
@@ -228,11 +234,13 @@ fn soft(text: String, p: MoonPalette) -> MoonText {
         .uppercase(false)
 }
 
-/// Цвета роста/падения (как дельты в шапке терминала).
+/// Reuse the terminal header's positive and negative delta colors.
 use design::{danger_color as neg_col, positive_color as pos_col};
 
-/// Дельта («+1.23%») жирным моно; `over` — с подложкой (читаемость поверх графика).
-/// `decimals` — знаков после запятой (настройка «Точность» попапа, одна на все размеры).
+/// Build a bold monospace percentage delta such as `+1.23%`.
+///
+/// `over` adds a backing for legibility over a chart. `decimals` is the popup's precision setting
+/// shared by all card sizes.
 fn delta_chip(val: f32, over: bool, decimals: usize, p: MoonPalette, cx: &App) -> Div {
     // Same percentage contract as the header deltas: classify by the ROUNDED value, so a small
     // negative cannot print a minus while being coloured positive.
@@ -255,7 +263,9 @@ fn delta_chip(val: f32, over: bool, decimals: usize, p: MoonPalette, cx: &App) -
     chip
 }
 
-/// Чип одного поля слота. None — поле пустое/неактивное (бейдж типа может быть выключен).
+/// Build one configured slot field.
+///
+/// Return `None` for an empty field, missing exchange text, or disabled detection-type badge.
 #[allow(clippy::too_many_arguments)]
 fn chip(
     field: DetectField,
@@ -298,7 +308,7 @@ fn chip(
                 .into_any_element()
         }
     };
-    // Не-дельтовые чипы поверх графика тоже получают подложку (как в макете).
+    // Give non-delta chart overlays the same design backing used for readable overlay chips.
     if over && !matches!(field, DetectField::Delta24h | DetectField::Delta1h) {
         return Some(
             div()
@@ -312,7 +322,9 @@ fn chip(
     Some(el)
 }
 
-/// Кластер чипов слотов, прошедших фильтр (порядок слотов сохраняется). None — пусто.
+/// Build a chip cluster from the surviving slots while preserving iterator order.
+///
+/// Return `None` when every slot is empty or filtered out.
 #[allow(clippy::too_many_arguments)]
 fn cluster<'a>(
     slots: impl Iterator<Item = &'a DetectSlot>,
@@ -345,9 +357,11 @@ fn cluster<'a>(
     )
 }
 
-/// Элемент графика по типу из конфига — ОБА векторные, рисуются по фактическим
-/// границам зоны в paint (битмап-тумбнейлы «плыли» от растяжения и требовали
-/// бейка/инвалидации). None — нет графика/данных.
+/// Build the configured chart element from either vector renderer.
+///
+/// Both renderers paint against the zone's actual bounds; bitmap thumbnails distorted when
+/// stretched and required baking and invalidation. Return `None` when the chart is disabled or
+/// its selected renderer has no data.
 fn chart_el(
     it: &DetectItem,
     scfg: &DetectSizeCfg,
@@ -432,7 +446,7 @@ fn candle_canvas(
                     if c < o {
                         quad(x0, x1, yt, yb, color);
                     } else {
-                        // Полое тело: контур 1px.
+                        // Draw a hollow body with a 1px outline.
                         quad(x0, x1, yt, yt + 1.0, color);
                         quad(x0, x1, yb - 1.0, yb, color);
                         quad(x0, x0 + 1.0, yt, yb, color);
@@ -514,12 +528,12 @@ fn line_canvas(line: &[f32], theme: &moon_core::config::ChartTheme) -> Option<An
     )
 }
 
-/// Эффективный «поверх графика»: только при включённом графике.
+/// Return whether a slot is effectively overlaid, which requires an enabled chart.
 fn eff_over(scfg: &DetectSizeCfg, slot: &DetectSlot) -> bool {
     scfg.chart != DetectChart::None && slot.over
 }
 
-// --- Мини: 2 ряда × лево/право, без графика ---
+// --- Mini: two rows split between left and right, without a chart. ---
 
 fn mini_layout(
     it: &DetectItem,
@@ -576,7 +590,7 @@ fn mini_layout(
         .child(row(2..4))
 }
 
-// --- Средний: текст-колонки по бокам, график в середине, over-чипы по краям графика ---
+// --- Medium: side text columns, a central chart, and overlay chips at chart edges. ---
 
 fn medium_layout(
     it: &DetectItem,
@@ -592,7 +606,7 @@ fn medium_layout(
     let n = detect_slot_count(DETECT_SIZE_MEDIUM);
     let slots = &scfg.slots[..n];
     let half = n / 2;
-    // Текстовая колонка сбоку: верхний ряд из первых 3 слотов, нижний — из вторых.
+    // Each side column takes its top row from the first three slots and bottom row from the rest.
     let column = |right: bool| -> Div {
         let top = cluster(
             slots[..half]
@@ -622,8 +636,8 @@ fn medium_layout(
             is_light,
             cx,
         );
-        // Колонка по КОНТЕНТУ (flex_none): остаток ширины забирает график (как в макете);
-        // пустая колонка не занимает место и не оставляет дыру сбоку.
+        // Size the column to its content so the chart takes the remaining width; an empty column
+        // occupies no space and leaves no gap along the side.
         let mut col = v_flex()
             .h_full()
             .flex_none()
@@ -636,8 +650,8 @@ fn medium_layout(
         }
         col.children(top).children(bot)
     };
-    // Чип(ы) поверх графика — по углам зоны (якорь одной стороной, без пар-инсетов:
-    // gpui не резолвит размер абсолюта из пары, контент уезжал за рамку).
+    // Place chart-overlay chips at zone corners with a single horizontal anchor. GPUI does not
+    // resolve an absolute element's size from paired insets, which pushed content past the frame.
     let corner = |top_row: bool, right: bool| -> Option<Div> {
         let range = if top_row { 0..half } else { half..n };
         let c = cluster(
@@ -670,9 +684,9 @@ fn medium_layout(
 
     let chart_on = scfg.chart != DetectChart::None;
     let mid = if chart_on {
-        // Зона забирает остаток между колонками. Ширина картинки тянется/сжимается
-        // на ВСЮ зону (w_full + Fill — иначе фикс-бокс прилипал к контенту слева и
-        // обгрызался справа), высота — ТОЧНО бейк (вертикальный стретч резал линию).
+        // The zone takes the space between columns. Stretch the vector across its full width;
+        // otherwise the fixed box hugs the left content and is clipped on the right. Keep the
+        // computed height exact because vertical stretching clipped the line.
         let (_zw, zh) = zone_dims(DETECT_SIZE_MEDIUM, scfg, cx);
         let mut zone = div()
             .relative()
@@ -706,7 +720,7 @@ fn medium_layout(
         .child(column(true))
 }
 
-// --- Крупный: ряды над/под графиком + углы поверх ---
+// --- Large: bands above and below the chart plus overlay corners. ---
 
 fn large_layout(
     it: &DetectItem,
@@ -721,7 +735,7 @@ fn large_layout(
 ) -> Div {
     let n = detect_slot_count(DETECT_SIZE_LARGE);
     let slots = &scfg.slots[..n];
-    // Ряд НЕ-поверх для своей стороны (над/под графиком): лево/право по краям.
+    // Build each non-overlay band above or below the chart with clusters at both edges.
     let band = |below: bool| -> Div {
         let l = cluster(
             slots
@@ -751,7 +765,7 @@ fn large_layout(
             is_light,
             cx,
         );
-        // Пустой ряд держит высоту — график не прыгает от настроек полей (как в макете).
+        // An empty band retains its height so field settings do not move the chart.
         h_flex()
             .w_full()
             .h(design::ui_px(cx, BAND_H))
@@ -761,7 +775,7 @@ fn large_layout(
             .children(l)
             .children(r)
     };
-    // Угол поверх графика (verh/niz × левый/правый).
+    // Build each chart-overlay corner from its above/below and left/right flags.
     let corner = |below: bool, right: bool| -> Option<Div> {
         let c = cluster(
             slots
@@ -793,9 +807,8 @@ fn large_layout(
 
     let chart_on = scfg.chart != DetectChart::None;
     let mid = if chart_on {
-        // Зона между рядами: ширина картинки — на всю зону (Fill по X), высота —
-        // ТОЧНО бейк (вертикальный стретч резал линию). Углы — абсолюты с якорем
-        // одной стороной.
+        // The zone sits between the bands. Fill its width and preserve the exact computed height
+        // because vertical stretching clipped the line. Overlay corners use one-sided anchors.
         let (_zw, zh) = zone_dims(DETECT_SIZE_LARGE, scfg, cx);
         let mut zone = div()
             .relative()

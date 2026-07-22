@@ -1,7 +1,8 @@
-// Слой ордеров (UserData) own-pass: горизонтали (вход/стоп/liq) + отрезки (лестница) +
-// маркеры (крест начала/конца, узелки). Координаты ЛОГИЧЕСКИЕ (time_rel/price), маппинг в
-// шейдере по cv_* (тот же трансформ, что кресты). Порт moon-chart order_lines/seg/marker.wgsl.
-// GPU-структы 16-байт-выровнены (float4-поля) — StructuredBuffer читает их корректно.
+// Order layer (UserData) own pass: horizontal lines (entry/stop/liq) + segments (ladder) +
+// markers (start/end crosses and nodes). Coordinates are LOGICAL (time_rel/price) and mapped
+// in the shader through cv_* using the same transform as crosses. Port of moon-chart
+// order_lines/seg/marker.wgsl. GPU structs are 16-byte aligned (float4 fields), allowing
+// StructuredBuffer to read them correctly.
 
 cbuffer ChartView : register(b0) {
     float4 cv_bounds;
@@ -22,15 +23,15 @@ float2 data_to_px(float t_rel, float price) {
     float y = cv_bounds.y + cv_bounds.w - (price - cv_view_price0) * cv_price_to_px;
     return float2(x, y);
 }
-// Таргет = B8G8R8A8_UNORM: пишем sRGB-цвет ордера НАПРЯМУЮ (как GPUI/кресты), без
-// конверсии в linear — иначе линии/маркеры темнее, чем заданный цвет (см. grid.hlsl).
+// Target = B8G8R8A8_UNORM: write the order's sRGB color DIRECTLY (as GPUI/crosses do), without
+// converting to linear; otherwise lines/markers are darker than the requested color (see grid.hlsl).
 
 static const float2 CORNERS[6] = {
     float2(-1, -1), float2(1, -1), float2(1, 1),
     float2(-1, -1), float2(1, 1), float2(-1, 1)
 };
 
-// ── Зона (ZoneInstance: color, m=(price0,price1,_,_)) ───────────────────────
+// ── Zone (ZoneInstance: color, m=(price0,price1,_,_)) ───────────────────────
 struct Zone { float4 color; float4 m; };
 StructuredBuffer<Zone> zones : register(t1);
 struct ZOut { float4 pos : SV_Position; float4 color : COLOR0; };
@@ -49,7 +50,7 @@ float4 zone_fragment(ZOut i) : SV_Target {
     return float4(i.color.rgb, i.color.a);
 }
 
-// ── Горизонталь (LineInstance: color, m=(price,style,thickness,_)) ───────────
+// ── Horizontal line (LineInstance: color, m=(price,style,thickness,_)) ───────
 struct HLine { float4 color; float4 m; };
 StructuredBuffer<HLine> hlines : register(t1);
 struct HOut { float4 pos : SV_Position; float4 color : COLOR0; nointerpolation float style : TEXCOORD0; float xpx : TEXCOORD1; };
@@ -70,7 +71,7 @@ float4 hline_fragment(HOut i) : SV_Target {
     return float4(i.color.rgb, i.color.a);
 }
 
-// ── Отрезок (SegInstance: pts=(t0,p0,t1,p1), color, m=(thickness,pattern,_,_)) ─
+// ── Segment (SegInstance: pts=(t0,p0,t1,p1), color, m=(thickness,pattern,_,_)) ─
 struct Seg { float4 pts; float4 color; float4 m; };
 StructuredBuffer<Seg> segs : register(t1);
 struct SOut { float4 pos : SV_Position; float4 color : COLOR0; nointerpolation float pattern : TEXCOORD0; float dist : TEXCOORD1; };
@@ -80,10 +81,10 @@ SOut seg_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float2 a = data_to_px(s.pts.x, s.pts.y);
     float t1 = s.m.z >= 0.5 ? cv_pad : s.pts.z;
     float2 b = data_to_px(t1, s.pts.w);
-    // Снап Y концов к целому пикселю. Линия ордера (вход/стоп/трейс) — это seg на
-    // постоянной цене; на дробном Y тонкая линия мерцает толщиной/яркостью при
-    // суб-пиксельном дрейфе view_price0 между ребейками базы и стоит не на той строке,
-    // что round() крестов/hline. X не трогаем (горизонтальная протяжённость гладкая).
+    // Snap endpoint Y coordinates to whole pixels. An order line (entry/stop/trailing) is a
+    // constant-price segment; at fractional Y, a thin line flickers in thickness/brightness as
+    // view_price0 drifts by subpixels between base rebakes and lands on a different row than
+    // rounded crosses/hlines. Preserve X so the horizontal extent remains smooth.
     a.y = round(a.y);
     b.y = round(b.y);
     float2 dir = b - a;
@@ -105,7 +106,7 @@ float4 seg_fragment(SOut i) : SV_Target {
     return float4(i.color.rgb, i.color.a);
 }
 
-// ── Маркер (MarkerInstance: color, pos=(t_rel,price,size,thickness), m=(shape,_,_,_)) ─
+// ── Marker (MarkerInstance: color, pos=(t_rel,price,size,thickness), m=(shape,_,_,_)) ─
 struct Marker { float4 color; float4 pos; float4 m; };
 StructuredBuffer<Marker> markers : register(t1);
 struct MOut { float4 pos : SV_Position; float4 color : COLOR0; float2 local : TEXCOORD0; nointerpolation float shape : TEXCOORD1; nointerpolation float thick : TEXCOORD2; nointerpolation float sz : TEXCOORD3; };

@@ -1,10 +1,10 @@
-# Вкладка «Линии» окна настроек (стиль ордер-линий, orders.toml).
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка.
+# Lines tab of the Settings window (order-line styling, orders.toml).
+# rust-i18n `_version: 2` format: key → locale-to-string map.
 _version: 2
 
-# Названия линий (Order lines, Buy/Sell/Stop/Trailing/Take Profit/VStop/Pending cond/
-# Liquidation) — трейдинг-термины, по договорённости НЕ переводим: в lines.rs они англ.
-# литералами. Здесь только атрибуты/общие подписи.
+# Line names (Order lines, Buy/Sell/Stop/Trailing/Take Profit/VStop/Pending cond/
+# Liquidation) are trading terms and intentionally remain untranslated: lines.rs keeps them as
+# English literals. This file contains only attributes and shared labels.
 lines.dashed:
   ru: "пунктир"
   en: "dashed"

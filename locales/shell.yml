@@ -1,10 +1,10 @@
-# Верхняя панель, статус-бар, тулбар, откреплённое чарт-окно.
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
-# Намеренно НЕ переводим: BUY · SELL · LONG · SHORT · ON · OFF · Live · строку метрик статус-бара.
+# Top bar, status bar, toolbar, and detached chart window.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
+# Intentionally untranslated: BUY · SELL · LONG · SHORT · ON · OFF · Live · the status-bar metrics line.
 _version: 2
 
-# --- Shell (верхняя панель / статус) ---
-# Глифы-иконки (⚙ ▶ ⏸ …) в словаре НЕ храним — они отдельным segment-ом в коде (см. README).
+# --- Shell (top bar / status) ---
+# Glyph icons (⚙ ▶ ⏸ …) are not stored in the locale; they are separate code segments (see README).
 shell.settings_btn:
   ru: "Настройки"
   en: "Settings"
@@ -25,8 +25,8 @@ status.connected_count:
   ru: "подключено"
   en: "connected"
   es: "conectado"
-# Подпись статус-бара переводится ЦЕЛИКОМ вместе с двоеточием: порядок слов и пунктуация —
-# забота переводчика, а не склейки в коде. %{value} — «OK» либо пара чисел «готово/всего».
+# Translate the entire status-bar label, including its colon; word order and punctuation belong to
+# the translation rather than code concatenation. %{value} is either "OK" or a "ready/total" pair.
 status.connection:
   ru: "Соединение: %{value}"
   en: "Connection: %{value}"
@@ -35,12 +35,12 @@ status.license:
   ru: "Лицензия: %{value}"
   en: "License: %{value}"
   es: "Licencia: %{value}"
-# Селектор активного торгового ядра в шапке: текст, когда в группе нет ядер.
+# Active trading-core selector in the header: text shown when the group has no cores.
 header.no_cores:
   ru: "нет ядер"
   en: "no cores"
   es: "sin núcleos"
-# Тикер курса в шапке (справа, рядом с часами).
+# Price ticker in the header, on the right beside the clock.
 header.ticker_tip:
   ru: "Курс и дельты за 1ч / 24ч. Клик — открыть график, двойной — выбрать монету и ядро"
   en: "Price and 1h / 24h deltas. Click opens the chart, double-click picks coin and core"
@@ -49,7 +49,7 @@ header.ticker_pick:
   ru: "Монета тикера (поиск по ядрам)"
   en: "Ticker coin (search across cores)"
   es: "Moneda del ticker (búsqueda por núcleos)"
-# Подписи окон дельт тикера: без них две процентовки стоят рядом без указания периода.
+# Ticker delta-window labels distinguish the periods of two adjacent percentages.
 header.delta_1h:
   ru: "1ч"
   en: "1h"
@@ -58,17 +58,17 @@ header.delta_24h:
   ru: "24ч"
   en: "24h"
   es: "24h"
-# Часы в правом углу шапки.
+# Clock in the header's right corner.
 header.clock_tip:
   ru: "Часы (UTC). Клик — выбрать пояс; совпал с системным — метка скрыта"
   en: "Clock (UTC). Click to pick a zone; matches system → label hidden"
   es: "Reloj (UTC). Clic para elegir zona; igual al sistema → etiqueta oculta"
 
-# --- Тулбар ---
-# Тултипы полос пресетов. Сама подпись группы — литерал (Size/Sell), как соседние
-# Lev/SL/TP; переводится подсказка, потому что это проза, а не тех-токен.
-# `unit` — базовая валюта счёта; несёт единицу измерения на узком окне, где подпись группы
-# «Size, USDT» схлопнулась. Нет активного ядра — валюта неизвестна, работает вариант _nounit.
+# --- Toolbar ---
+# Tooltips for preset strips. The group label itself is a literal (Size/Sell), like the adjacent
+# Lev/SL/TP labels; the prose tooltip is translated because it is not a technical token.
+# `unit` is the account's base currency and preserves the unit in narrow windows where the
+# "Size, USDT" group label has collapsed. With no active core, `_nounit` handles the unknown currency.
 toolbar.size_hint:
   ru: "Размер ордера F%{n} в %{unit} · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить"
   en: "Order size F%{n} in %{unit} · click to select · double-click to edit · Ctrl+wheel to change"
@@ -89,12 +89,12 @@ toolbar.scale_auto:
   ru: "Авто"
   en: "Auto"
   es: "Auto"
-# Одна буква на триггере дропдауна масштаба (место под ~1 символ) — первая буква «Авто».
+# The scale-dropdown trigger has room for about one character: the first letter of "Auto".
 toolbar.scale_auto_short:
   ru: "А"
   en: "A"
   es: "A"
-# «Live» — отраслевой термин, не переводим; глиф ▶ — отдельный segment.
+# `Live` is an untranslated domain term; code prepends the `●` status indicator and keeps label text in a neighboring segment.
 toolbar.live:
   ru: "Live"
   en: "Live"
@@ -115,7 +115,7 @@ toolbar.screener:
   ru: "Скринер"
   en: "Screener"
   es: "Screener"
-# Ручная стратегия (тогл MS + пикер в шапке): пилюля без выбора / пустой список Manual-стратегий.
+# Manual strategy (MS toggle and header picker): the unselected pill and empty Manual-strategy list.
 header.ms_none:
   ru: "— стратегия —"
   en: "— strategy —"
@@ -124,7 +124,7 @@ header.ms_empty:
   ru: "Нет ручных стратегий"
   en: "No manual strategies"
   es: "No hay estrategias manuales"
-# Заголовки попапов торговых метрик (слайдер + поле ввода).
+# Trading-metric popup titles for the slider and input field.
 toolbar.tp_title:
   ru: "Тейк-профит"
   en: "Take profit"
@@ -137,12 +137,12 @@ toolbar.lev_title:
   ru: "Плечо"
   en: "Leverage"
   es: "Apalancamiento"
-# Чекбокс расширенного диапазона TP (флаг x_tmode / «s9»): 100..900% вместо 0..100%.
+# Extended TP-range checkbox (`x_tmode` / "s9" flag): 100..900% instead of 0..100%.
 toolbar.tp_ext:
   ru: "×10 (100–900%)"
   en: "×10 (100–900%)"
   es: "×10 (100–900%)"
-# Файн-слайдер TP (суб-процент через scalp) и тоггл hedge-mode (dual-side позиции).
+# Fine TP slider: 0..=1.99% in 0.01% steps through scalp; the hedge-mode toggle controls dual-side positions.
 toolbar.tp_fine:
   ru: "Точно (0.01%)"
   en: "Fine (0.01%)"
@@ -151,18 +151,18 @@ toolbar.hedge:
   ru: "Hedge Mode"
   en: "Hedge Mode"
   es: "Hedge Mode"
-# Чекбокс «Стоп-маркет» в SL-попапе: продавать по стопу рыночным ордером, а не стоп-лимитом.
+# Stop-market checkbox in the SL popup: sell at the stop with a market order, not a stop-limit order.
 toolbar.stop_market:
   ru: "Стоп-маркет"
   en: "Stop market"
   es: "Stop market"
-# Кнопка применения плеча в попапе (плечо — биржевое действие, шлётся только по ней).
+# Leverage Apply button in the popup; leverage is an exchange action sent only through this button.
 toolbar.apply:
   ru: "Применить"
   en: "Apply"
   es: "Aplicar"
 
-# --- Попап настроек ядра (кнопка ⚙ рядом с селектором ядра) ---
+# --- Core-settings popup (⚙ button beside the core selector) ---
 core_settings.title:
   ru: "Настройки ядра"
   en: "Core settings"
@@ -203,7 +203,7 @@ core_settings.panic_drop:
   ru: "Паник селл при падении цены"
   en: "Panic sell on price drop"
   es: "Venta de pánico al caer el precio"
-# Тултип галок «вкл/выкл» у параметров «галка+слайдер+поле» (паника/глоб-TP/трейлинг).
+# Enable/disable checkbox tooltip for checkbox-plus-slider-plus-input parameters (global TP/trailing/V-Stop).
 core_settings.toggle_tip:
   ru: "Включить / выключить"
   en: "Enable / disable"
@@ -285,7 +285,7 @@ core_settings.cancel_all_confirm:
   en: "Sure? Cancel all"
   es: "¿Seguro? Cancelar todo"
 
-# --- Чарт-вкладка / откреплённое чарт-окно ---
+# --- Chart tab / detached chart window ---
 chartwin.tab_title:
   ru: "Чарт %{n}"
   en: "Chart %{n}"
@@ -295,7 +295,7 @@ chartwin.clear:
   en: "Close window (remove all charts)"
   es: "Cerrar ventana (quitar todos los gráficos)"
 
-# --- Попап настроек раскладки чарт-вкладки (Fit/Scroll + раздельные высоты) ---
+# --- Chart order and coin context menus ---
 chart.order_menu.edit:
   ru: "Ордер…"
   en: "Order…"
@@ -340,6 +340,7 @@ coin_menu.strategy_goto:
   ru: "Перейти к стратегии"
   en: "Go to strategy"
   es: "Ir a la estrategia"
+# --- Chart-tab layout popup (Fit/Scroll with separate heights) ---
 chart.layout.title:
   ru: "Раскладка вкладки"
   en: "Tab layout"
@@ -536,7 +537,7 @@ chart.coin.open_new_tab:
   ru: "Открыть в новой вкладке"
   en: "Open in new tab"
   es: "Abrir en pestaña nueva"
-# --- Ориентация стека (верт/гор) + подписи ширины при горизонтали ---
+# --- Stack orientation (vertical/horizontal) and width labels in horizontal mode ---
 chart.layout.orientation_tip:
   ru: "Ориентация: вертикально / горизонтально"
   en: "Orientation: vertical / horizontal"
@@ -566,7 +567,7 @@ chart.tab.rename:
   en: "Name"
   es: "Nombre"
 
-# --- Тосты результатов Engine-действий (плечо/hedge/cancel-all/перенос/…) ---
+# --- Result toasts for Engine actions (leverage/hedge/cancel-all/transfer/…) ---
 shell.engine_toast.ok:
   ru: "%{core}: выполнено"
   en: "%{core}: done"
@@ -620,7 +621,7 @@ shell.engine_action.reload_order_book:
   en: "Order book reload"
   es: "Recarga del libro de órdenes"
 
-# --- Контекст-меню нарисованной фигуры (ПКМ в режиме карандаша) ---
+# --- Drawn-figure context menu (right-click in pencil mode) ---
 chart.fig_menu.alert_on:
   ru: "Alert: включить"
   en: "Alert: on"
@@ -634,7 +635,7 @@ chart.fig_menu.delete:
   en: "Delete figure"
   es: "Eliminar figura"
 
-# --- Окно «Алерты» ---
+# --- Alerts window ---
 alerts.window_title:
   ru: "Алерты"
   en: "Alerts"

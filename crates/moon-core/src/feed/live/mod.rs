@@ -1,11 +1,10 @@
-//! Live-backend: подключение к ядру Moonbot через MoonProtoBeta.
-//! Единственный модуль, знающий про moonproto.
+//! Live backend that owns one Moonbot core connection and its MoonProtoBeta event loop.
 //!
-//! Поток: event-driven. `MoonEventSink` будит backend thread после реального события;
-//! market data остаётся в immutable read-model snapshot, сюда идёт только лёгкий сигнал.
+//! Flow: event-driven. `MoonEventSink` wakes the backend thread after an actual event; market data
+//! remains in an immutable read-model snapshot, and only a lightweight signal reaches this module.
 //!
-//! `run()` — главный event-цикл; команды роли вынесены в [`commands`], чистые конвертеры
-//! moonproto→терминал — в [`convert`], расчёт «грязных» рынков — в [`dirty`].
+//! `run()` is the main event loop; role commands live in [`commands`], pure moonproto-to-terminal
+//! converters in [`convert`], and dirty-market calculation in [`dirty`].
 
 mod commands;
 mod convert;
@@ -68,12 +67,12 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let _ = tx.send(FeedMsg::Status(ConnStatus::Connecting));
 
-    // 1. Ключ -> мастер/мак ключи + предложенная сеть.
+    // 1. Decode the key into master/MAC keys and its suggested network.
     let info = moonproto::parse_key_info(server.key.expose())
         .ok_or_else(|| anyhow::anyhow!("не удалось разобрать ключ Moonbot (server.key)"))?;
 
-    // 2. Endpoint берётся из ключа (host/port/transport зашиты в нём; отдельных
-    //    полей в конфиге больше нет).
+    // 2. Derive the endpoint from the key, which embeds host/port/transport; the config no longer
+    //    has separate fields for them.
     let net = info.network.as_ref();
     let host: String = net
         .and_then(|n| n.address)
@@ -89,18 +88,18 @@ pub fn run(
             chart_memory_percent,
         ));
 
-    // 3. Init БЕЗ рыночных подписок. Рыночную роль ядра задаёт координатор командой
-    //    SetMarket после того, как узнает биржу ядра (Identity) и изберёт провайдера:
-    //    только ОДНО ядро на биржу делает subscribe_all_trades, остальные шлют лишь
-    //    аккаунт. Так трейды биржи тянутся 1 раз, а не с каждого из 200 ядер.
-    //    initial_strategies ОБЯЗАТЕЛЬНО — иначе init зависает после Connected.
+    // 3. Initialize WITHOUT market subscriptions. The coordinator assigns the core's market role
+    //    via SetMarket after learning its exchange (Identity) and electing a provider. Only ONE
+    //    core per exchange calls subscribe_all_trades; the others publish account data only. This
+    //    fetches exchange trades once instead of once from each of up to 200 cores.
+    //    initial_strategies IS REQUIRED, or initialization hangs after Connected.
     let init = InitConfig {
         initial_strategies: Some(InitialStrategies::new(0, Vec::new())),
         ..Default::default()
     };
 
-    // connect (не blocking) + connect_timeout, чтобы зависший шаг init пришёл
-    // как ConnectFailed с причиной, а не молчал.
+    // `connect` is nonblocking; add connect_timeout so a stuck initialization step arrives as
+    // ConnectFailed with a reason instead of remaining silent.
     let event_wake_tx = wake_tx.clone();
     let (event_sink, event_queue) = MoonEventSink::queue_with_waker(move || {
         let _ = event_wake_tx.send(());
@@ -115,11 +114,11 @@ pub fn run(
         slot: client_slot.clone(),
     };
 
-    // Typed-реплика БД отчётов: заявляем catch-up сразу (лежит intent'ом — lib отправит
-    // после connect и САМА повторит после hard-reconnect). Курсор = max(newRecID)+1
-    // локальной реплики; 0 = реплика пуста → fresh со ВСЕЙ удержанной историей ядра
-    // (заменяет легаси-таблицу). Догонка идёт СТРАНИЦАМИ: следующая не запрашивается,
-    // пока writer не закоммитил и не ack'нул текущую (backpressure by design).
+    // Typed report-database replica: declare catch-up immediately. It remains an intent that the
+    // library sends after connection and repeats on its own after a hard reconnect. The cursor is
+    // max(newRecID)+1 in the local replica; 0 means the replica is empty, so start fresh with ALL
+    // retained core history, replacing the legacy table. Catch-up is PAGED: the next page is not
+    // requested until the writer commits and acknowledges the current one (backpressure by design).
     if server.feed.reports {
         if let Some(sink) = reports {
             let from = sink.next_cursor(server.uid);
@@ -135,9 +134,9 @@ pub fn run(
                 ),
                 Err(e) => log::warn!("отчёты: core={} sync не запустился: {e:?}", server.uid),
             }
-            // Открытые строки могли закрыться/удалиться в оффлайне НИЖЕ курсора —
-            // регистрируем их проверку (lib держит набор и повторяет на hard-reconnect;
-            // результаты придут обычными RowUpsert/RowDelete).
+            // Open rows may have closed or been deleted offline BELOW the cursor. Register them
+            // for checking; the library retains the set and repeats it on hard reconnect, and the
+            // results arrive as ordinary RowUpsert/RowDelete events.
             let open = sink.open_rows(server.uid);
             if !open.is_empty() {
                 if let Err(e) = client.reports().check_open_rows(&open) {
@@ -147,52 +146,54 @@ pub fn run(
         }
     }
 
-    // Рыночная роль ядра (задаётся координатором командой SetMarket).
-    // is_provider — ретейним ли ВСЕ трейды биржи (subscribe_all_trades).
-    // wanted — рынки, которые активно обслуживаем (подписки + snapshot source).
+    // The core's market role, assigned by the coordinator through SetMarket.
+    // is_provider controls whether ALL exchange trades are retained via subscribe_all_trades.
+    // wanted lists the markets actively served through subscriptions and the snapshot source.
     let mut is_provider = false;
     let mut wanted: Vec<String> = Vec::new();
-    // Рынки, на стакан которых подписаны (подмножество wanted; вкл стакан хотя бы в одном окне).
+    // Markets with order-book subscriptions: a subset of wanted, enabled in at least one window.
     let mut wanted_orderbook: Vec<String> = Vec::new();
     let mut identity_sent = false;
     let mut last_orders = Instant::now();
     let mut orders_table_pending = false;
     let mut last_strats = Instant::now();
-    // Активы (окно «Активы»): тот же ~1 Гц тик, что у ордеров/стратегий.
+    // Assets snapshot rate cap: minimum 1 s between publishes while the Assets view is active,
+    // otherwise 5 s. Publication still requires a domain event; this is not a periodic timer.
     let mut last_assets = Instant::now();
-    // Троттл активного запроса баланса у ЯДРА после филлов (см. блок в цикле).
+    // Throttle for proactive CORE balance requests after fills; see the block in the loop.
     let mut last_balance_refresh = Instant::now();
     let mut last_wallet_refresh = Instant::now();
-    // Окно логирования Balance-событий после нашего refresh (диагностика фантомов «Активов»).
+    // Window for logging Balance events after our refresh, used to diagnose phantom Assets entries.
     let mut balance_refresh_log_until: Option<Instant> = None;
-    // Курсор transfer-активов: шлём только при смене revision (request/response).
+    // Transfer-assets cursor: publish only when the revision changes (request/response).
     let mut last_transfer_rev: u64 = u64::MAX;
-    // Курсоры выгрузки стратегий: revision схемы и сигнатура состава/checked —
-    // шлём только при изменениях (поля стратегий тяжёлые, гонять каждую секунду незачем).
+    // Strategy-export cursors: schema revision plus the contents/checked signature. Publish only
+    // changes because strategy fields are expensive and need not be sent every second.
     let mut last_schema_rev: u64 = u64::MAX;
     let mut last_strat_sig: u64 = u64::MAX;
-    // strat_db: дефолты полей схемы по видам (нормализация дампов — сервер не шлёт
-    // поля, равные дефолту), кольцо наших правок (origin=local) и флаг первого
-    // набора после (ре)коннекта (origin неизвестен — правки могли пройти оффлайн).
+    // strat_db: per-kind defaults for dump normalization, a 30-second timestamp heuristic for
+    // `origin=local`, and the flag for the first set published by this run, whose origins can
+    // predate the run. Recent remote changes can look local, delayed local echoes can look remote,
+    // and an internal reconnect does not reset the first-set flag.
     let mut strat_schema_defaults: std::collections::HashMap<
         u8,
         Vec<(String, moonproto::FieldValue)>,
     > = std::collections::HashMap::new();
     let mut local_strat_edits = LocalStratEdits::new();
     let mut strat_db_initial = true;
-    // Монотонный per-core номер детекта — курсор ингеста в ленту детектов UI.
+    // Monotonic per-core detect number used as the ingestion cursor for the UI detect feed.
     let mut detect_seq: u64 = 0;
-    // Файловый писатель серверного лога этого ядра (logs/<дата>_<ядро>.log) с дневной
-    // ротацией. Пишем на ПОТОКЕ ФИДА (не на UI), т.к. лога много — UI не должен ждать
-    // диск. В UI уходит лишь in-memory копия для живого просмотра/поиска.
+    // File writer for this core's server log (logs/<date>_<core>.log), with daily rotation. Write
+    // on the FEED THREAD rather than the UI thread because log volume is high and the UI must not
+    // wait for disk. Only an in-memory copy reaches the UI for live viewing and search.
     let mut log_writer = crate::applog::DatedWriter::new(&server.name);
     let mut events = Vec::new();
     let mut lifecycle_events = Vec::new();
     let mut force_market_sample = false;
 
     loop {
-        // Команды роли от координатора (полное желаемое состояние, не дельта).
-        // Закрытие канала = координатор ушёл → отключаемся.
+        // `SetMarket` contains complete desired state; the other coordinator commands are deltas
+        // or actions. A closed channel means the coordinator has exited, so disconnect.
         let mut orders_mutated = false;
         if drain_commands(
             cmd_rx,
@@ -207,10 +208,10 @@ pub fn run(
         ) {
             return Ok(());
         }
-        // ОПТИМИСТИЧНАЯ отрисовка ордеров: команда (тогл стопа/drag/отмена/постановка) уже
-        // применена к ЛОКАЛЬНОЙ модели (рантайм применяет до отправки пакета) — отдаём
-        // строки НЕМЕДЛЕННО, мимо event-гейта и 250мс-троттла. Линии/подписи/таблица
-        // реагируют на клик мгновенно; эхо ядра придёт следом и подтвердит/поправит.
+        // Publish an immediate best-effort order snapshot after a flagged command, bypassing the
+        // event gate and 250 ms throttle. Some retained-order edits may already be visible locally,
+        // but queued work such as new-order creation may not be; this snapshot can precede the
+        // asynchronous mutation, and later order events reconcile the rows.
         if orders_mutated && server.feed.orders {
             if let Some(snap) = client.snapshot() {
                 let order_rows = build_order_rows(server.id, &snap, &[]);
@@ -222,14 +223,14 @@ pub fn run(
             }
         }
 
-        // Биржа ядра (из server_info после BaseCheck) — координатору для группировки
-        // и выбора провайдера. Шлём один раз, как только идентичность известна.
+        // Send the core's exchange from server_info after BaseCheck to the coordinator for grouping
+        // and provider election. Publish it once, as soon as the identity is known.
         if !identity_sent {
             if let Some(info) = client.server_info() {
                 if let Some(code) = info.exchange_code {
-                    // dex_name: непустое только для Hyperliquid HIP-3 фьючей. Входит в
-                    // идентичность, чтобы ядра разных dex НЕ дедуплились на одного
-                    // провайдера с неполным списком рынков (см. ExchangeId).
+                    // dex_name is nonempty only for Hyperliquid HIP-3 futures. Include it in the
+                    // identity so cores from different DEXes are NOT deduplicated onto one provider
+                    // with an incomplete market list; see ExchangeId.
                     let dex = info.dex_name.as_deref().unwrap_or("");
                     let id = ExchangeId::with_dex(code.stable_id(), dex);
                     log::info!(
@@ -240,7 +241,7 @@ pub fn run(
                         id
                     );
                     let _ = tx.send(FeedMsg::Identity(id));
-                    // Базовая валюта аккаунта — для дефолтов размера ордера в UI (BTC vs USDT).
+                    // The account base currency selects UI order-size defaults such as BTC vs USDT.
                     let base = info.base_currency_name.unwrap_or_default();
                     if !base.is_empty() {
                         let _ = tx.send(FeedMsg::CoreBase { base });
@@ -250,14 +251,14 @@ pub fn run(
             }
         }
 
-        // Lifecycle -> статус (стадии и ошибки видны прямо в бейдже).
-        // ConnectFailed — ТЕРМИНАЛЬНЫЙ отказ начального connect/init: фоновый рантайм
-        // moonproto при нём делает break и больше НЕ реконнектится (авто-реконнект у
-        // него только для потери линка ПОСЛЕ успешного коннекта). При этом сам
-        // MoonClient::connect неблокирующий и уже вернул Ok, так что без явного выхода
-        // мы бы крутились вечно со статусом Failed и app-level реконнект (feed/mod.rs)
-        // не запустился бы. Поэтому ловим ConnectFailed и возвращаем Err → внешний
-        // цикл пересоздаст клиент с backoff. (Ровно баг «5/7, авто-реконнекта нет».)
+        // Map lifecycle events to status so stages and errors appear directly in the badge.
+        // ConnectFailed is a TERMINAL failure of the initial connect/init. The moonproto background
+        // runtime breaks and does NOT reconnect; its auto-reconnect handles only link loss AFTER a
+        // successful connection. Meanwhile MoonClient::connect is nonblocking and has already
+        // returned Ok, so without an explicit exit this loop would run forever in Failed state and
+        // the app-level reconnect in feed/mod.rs would never start. Catch ConnectFailed and return
+        // Err so the outer loop recreates the client with backoff. This is the exact "5/7, no
+        // auto-reconnect" bug.
         let mut connect_failed: Option<String> = None;
         lifecycle_events.clear();
         event_queue.drain_lifecycle_events_into(&mut lifecycle_events);
@@ -271,11 +272,11 @@ pub fn run(
             let st = match ev {
                 LifecycleEvent::Connecting => ConnStatus::Stage("connecting…".into()),
                 LifecycleEvent::Connected { fresh } => {
-                    // fresh=true → дальше идёт одноразовый init, ждём Ready.
-                    // fresh=false → реконнект: moonproto НЕ повторяет init и НЕ шлёт
-                    // Ready снова, но подписки/индексы уже восстановлены и клиент
-                    // операционен — иначе статус навсегда застрял бы на «reconnected»
-                    // (0/N), хотя данные идут. Поэтому реконнект = сразу Ready.
+                    // fresh=true means one-time initialization follows, so wait for Ready.
+                    // fresh=false means a reconnect: moonproto does NOT repeat initialization or
+                    // emit Ready again, but subscriptions/indexes are restored and the client is
+                    // operational. Otherwise status would remain stuck at "reconnected" (0/N)
+                    // forever even while data flows. Therefore a reconnect is immediately Ready.
                     if fresh {
                         ConnStatus::Stage("connected, init…".into())
                     } else {
@@ -308,12 +309,12 @@ pub fn run(
                         server.id
                     );
                 }
-                // Полный снимок ClientSettings (TP/SL/sell/…). LevManage/RuntimeState ядро
-                // присылает само после connect; здесь дёргаем только settings-refresh.
+                // Request the complete ClientSettings snapshot (TP/SL/sell/...). The core sends
+                // LevManage/RuntimeState after connection itself, so only refresh settings here.
                 if let Err(error) = client.settings().refresh() {
                     log::warn!("core {} request client settings failed: {error}", server.id);
                 }
-                // Hedge-mode аккаунта (для тоггла в тулбаре).
+                // Account hedge mode for the toolbar toggle.
                 if let Err(error) = client.account().refresh_hedge_mode() {
                     log::warn!("core {} request hedge mode failed: {error}", server.id);
                 }
@@ -330,8 +331,8 @@ pub fn run(
                         server.id
                     );
                 }
-                // Chart-алерты авторитетны на ядре: после init/reconnect просим полный
-                // снапшот (без него локальный набор может отстать от сервера).
+                // Chart alerts are authoritative on the core. Request a full snapshot after
+                // initialization/reconnect so the local set cannot lag behind the server.
                 if server.feed.alerts {
                     if let Err(error) = client.chart_alerts().request_snapshot() {
                         log::warn!(
@@ -342,14 +343,14 @@ pub fn run(
                 }
             }
         }
-        // Терминальный отказ старта → наружу как Err: пусть app-level цикл пересоздаст
-        // клиент (moonproto сам этот рантайм уже не оживит).
+        // Propagate a terminal startup failure as Err so the app-level loop recreates the client;
+        // moonproto cannot revive this runtime itself.
         if let Some(e) = connect_failed {
             return Err(anyhow::anyhow!("{e}"));
         }
 
-        // Дренируем доменные события из MoonEventSink. Тики/стакан/ордера берём из
-        // snapshot только после реального события, а не постоянным 8мс polling.
+        // Drain domain events from MoonEventSink. Read ticks/order books/orders from the snapshot
+        // only after an actual event instead of polling continuously every 8 ms.
         events.clear();
         event_queue.drain_events_into(&mut events);
         let had_domain_event = !events.is_empty();
@@ -381,18 +382,19 @@ pub fn run(
                 )
             )
         });
-        // Филл/снятие ордера меняет позицию и баланс, но ядро НЕ всегда пушит свежий
-        // баланс (проданный токен зависает фантомом в «Активах» до реконнекта — снимок
-        // протухает). Активно просим у ЯДРА свежий снимок: `Command::Balance` идёт к ядру
-        // (Delphi `SendBalanceCmd`), НЕ на биржу — дёшево. Троттл 3с, чтобы серия филлов
-        // не спамила. Ответ придёт Balance-событием на следующей итерации и обновит снимок.
+        // Filling/cancelling an order changes position and balance, but the core does NOT always
+        // push a fresh balance. A sold token can remain as a phantom in Assets until reconnect
+        // because the snapshot goes stale. Proactively request a fresh snapshot FROM THE CORE:
+        // `Command::Balance` goes to the core (Delphi `SendBalanceCmd`), NOT the exchange, so it is
+        // cheap. Throttle to 3 s so a sequence of fills does not spam requests. The response arrives
+        // as a Balance event on the next iteration and updates the snapshot.
         if has_orders_table_event && last_balance_refresh.elapsed() >= Duration::from_secs(3) {
             last_balance_refresh = Instant::now();
             match client.balances().refresh() {
-                // Диагностика фантомов «Активов»: фиксируем сам факт запроса и (ниже, в цикле
-                // событий) ЧЕМ ядро ответило — полным снимком (SnapshotApplied: обнуляет
-                // пропавшие монеты) или инкрементом (IncrementalApplied: обнулённую монету
-                // НЕ сотрёт — дырка на стороне ядра).
+                // Diagnose phantom Assets entries by recording the request and, below in the event
+                // loop, WHAT the core returned: a full snapshot (SnapshotApplied, which clears
+                // missing coins) or an increment (IncrementalApplied, which does NOT clear a coin
+                // whose balance reached zero, exposing a core-side gap).
                 Ok(()) => {
                     balance_refresh_log_until = Some(Instant::now() + Duration::from_secs(5));
                     log::info!(
@@ -405,11 +407,11 @@ pub fn run(
                 }
             }
         }
-        // У кошельковых спот-бирж (Bitget, Hyperliquid-спот) купленные монеты живут ТОЛЬКО
-        // в transfer_assets — per-market балансов ядро не шлёт вовсе. Без переопроса
-        // свежекупленная монета не появится в «Активах» до ручного клика по ядру.
-        // Спрашиваем один Spot-кошелёк (не все три) и реже балансов: этот запрос ядро
-        // форвардит на биржу (CheckAssets в логе ядра бывает и в таймаут).
+        // On wallet-based spot exchanges such as Bitget and Hyperliquid spot, purchased coins exist
+        // ONLY in transfer_assets; the core sends no per-market balances. Without polling again, a
+        // newly purchased coin does not appear in Assets until the core is clicked manually. Query
+        // one Spot wallet rather than all three and do it less often than balance refreshes because
+        // the core forwards this request to the exchange (CheckAssets can time out in core logs).
         if has_orders_table_event && last_wallet_refresh.elapsed() >= Duration::from_secs(10) {
             last_wallet_refresh = Instant::now();
             if let Err(error) = client
@@ -422,21 +424,21 @@ pub fn run(
                 );
             }
         }
-        // Судьба bulk-снимка 5м-свечей (авто-запрос moonproto после subscribe_all_trades):
-        // от него живут свечные величины retained-истории (H.vol/72h скринера). Провал
-        // иначе полностью беззвучен (никто событие не слушал). Учти известный баг
-        // moonproto (зарепорчен авторам): снимок может молча выброситься уже ПОСЛЕ
-        // Ready из-за таймзоны сервера.
-        // Результаты Engine-действий (плечо/hedge/cancel-all/перенос/…) — в UI тостами.
-        // Приходят и при обрыве (`success=false`), так что «не дошло» тоже видно.
+        // Track the outcome of the bulk 5-minute candle snapshot that moonproto requests
+        // automatically after subscribe_all_trades. Retained-history candle metrics such as
+        // screener H.vol/72h depend on it, and failure would otherwise be completely silent because
+        // no one consumed the event. Account for a known moonproto bug reported upstream: the
+        // snapshot can be silently discarded even AFTER Ready because of the server timezone.
+        // Surface Engine action results (leverage/hedge/cancel-all/transfer/...) as UI toasts. They
+        // also arrive on disconnect with `success=false`, making "did not reach the server" visible.
         let mut engine_actions: Vec<crate::feed::EngineActionResult> = Vec::new();
-        // Chart-алерты (фигуры с галкой Alert): авторитетный набор ядра.
+        // Chart alerts (figures with Alert checked): the core is the authoritative source.
         let mut chart_alerts: Vec<crate::feed::ChartAlertUpdate> = Vec::new();
         for ev in &events {
             match ev {
                 Event::ChartAlert(ev) if server.feed.alerts => {
-                    // Этап реверса blob (TChartObject.Save): полный hex в лог — алерты
-                    // создаются руками и их единицы, объём лога не проблема.
+                    // During reverse engineering of the TChartObject.Save blob, log the full hex.
+                    // Alerts are created manually and are few, so log volume is not a concern.
                     match ev {
                         moonproto::ChartAlertEvent::Upserted(obj) => {
                             log::info!(
@@ -503,8 +505,8 @@ pub fn run(
                 }) => {
                     log::warn!("core {} candles snapshot failed: {error}", server.id);
                 }
-                // Отказ CoinCard-запроса (deep history чарта): раньше падал в `_ => {}`
-                // МОЛЧА — свечи «не приезжали» без единого следа в логе.
+                // A failed CoinCard request for deep chart history used to fall into `_ => {}`
+                // SILENTLY, so candles "did not arrive" without any trace in the log.
                 Event::CoinCardCandles(moonproto::state::CoinCardCandlesEvent::UpdateFailed {
                     market,
                     kind,
@@ -516,9 +518,10 @@ pub fn run(
                         server.id
                     );
                 }
-                // Окно диагностики после нашего balance-refresh (фантомы «Активов»): вид
-                // ответа решает судьбу зависшей монеты — Snapshot обнуляет пропавшие,
-                // Incremental нет. Вне окна не логируем (балансы пушатся постоянно).
+                // Diagnostic window after our balance refresh for phantom Assets entries. Response
+                // type determines the stuck coin's fate: Snapshot clears missing entries while
+                // Incremental does not. Do not log outside this window because balances are pushed
+                // continuously.
                 Event::Balance(bev) => {
                     if balance_refresh_log_until.is_some_and(|t| Instant::now() < t) {
                         log::info!("core {} balance event after refresh: {bev:?}", server.id);
@@ -559,8 +562,8 @@ pub fn run(
                 break;
             }
         }
-        // ClientSettings/LevManage/RuntimeState — снимки настроек ядра. Каждый тянем из
-        // snapshot ТОЛЬКО когда пришло его событие (а не каждый тик), как и license выше.
+        // ClientSettings/LevManage/RuntimeState are core settings snapshots. Read each from the
+        // snapshot ONLY when its event arrives rather than on every tick, as with license above.
         let client_settings = settings_event_snapshot(
             &events,
             &client,
@@ -628,7 +631,7 @@ pub fn run(
                 break;
             }
         }
-        // Hedge-mode: значение приходит прямо в событии (Engine API ответ).
+        // Hedge mode arrives directly in the Engine API response event.
         let hedge_mode = events.iter().find_map(|ev| match ev {
             Event::Account(AccountEvent::HedgeModeUpdated { hedge_mode, .. }) => Some(*hedge_mode),
             _ => None,
@@ -644,9 +647,9 @@ pub fn run(
             Vec::new()
         };
         let want_log = server.feed.log;
-        // detect-diag: один раз за процесс — состояние серверных флагов фида. Если
-        // `feed.detects=false`, ветка `Event::Detect` ниже вообще не работает → корень
-        // «нет детектов» виден сразу, без догадок. (env MOON_DETECT_DIAG, off by default.)
+        // detect-diag: report a subset of server feed flags once per process. The line includes
+        // detects/reports/log but not alerts; `Event::Detect` can still run with detects=false when
+        // alerts=true. Controlled by MOON_DETECT_DIAG, off by default.
         {
             use std::sync::OnceLock;
             static FLAGS_ONCE: OnceLock<()> = OnceLock::new();
@@ -657,16 +660,16 @@ pub fn run(
                 ));
             }
         }
-        // Алерт-фаеры (`DETECT_KIND_ALERT`) приходят Event::Detect: чтобы они работали
-        // при включённых АЛЕРТАХ даже без общего потока детектов — заходим и по feed.alerts.
+        // Alert fires (`DETECT_KIND_ALERT`) arrive as Event::Detect. Also enter this path when
+        // feed.alerts is enabled so alerts work without the general detect stream.
         let want_detects = server.feed.detects || server.feed.alerts;
         if want_detects || (server.feed.reports && reports.is_some()) || want_log {
             let mut detects: Vec<DetectRow> = Vec::new();
             let mut logs: Vec<CoreLogLine> = Vec::new();
-            // Снимок для полей стратегии-источника детекта (SoundAlert/KeepAlert/звук).
+            // Snapshot for fields of the strategy that produced the detect (SoundAlert/KeepAlert/sound).
             let detect_snap = want_detects.then(|| client.snapshot()).flatten();
-            // Схема стратегий — для фолбэка на default_value: поля, равные дефолту
-            // схемы, сервер не шлёт (в т.ч. звук/SoundAlert).
+            // Strategy schema for fallback to default_value: the server omits fields equal to the
+            // schema default, including sound/SoundAlert.
             let detect_schema = detect_snap
                 .as_ref()
                 .and_then(|s| s.strats().strategy_schema());
@@ -675,7 +678,7 @@ pub fn run(
                     Event::ServerLog(l) if want_log => {
                         let ms = l.unix_millis();
                         let recv_ms = now_ms_i64();
-                        // На диск — сразу (буферизованно); время бьём на дату+часы.
+                        // Write to disk immediately through the buffer; split time into date and clock.
                         let (date, hms) = crate::applog::split_unix_ms(ms);
                         log_writer.write(&date, &hms, "INFO", "", &l.msg);
                         logs.push(CoreLogLine {
@@ -713,16 +716,16 @@ pub fn run(
                             keep_in_chart_secs: params.keep_in_chart_secs,
                             sound_name: params.sound_name,
                             is_alert: d.is_alert_fire(),
-                            // Вид стратегии-источника для бейджа типа детекта; без снимка
-                            // стратегии срабатывание алерта помечаем видом Alerts (22).
+                            // Kind of the strategy that produced the detect, used for its type badge.
+                            // Without a strategy snapshot, mark an alert fire as Alerts kind (22).
                             kind: strat
                                 .map(|st| st.kind().ordinal())
                                 .unwrap_or(if d.is_alert_fire() { 22 } else { 0 }),
                             is_short: strat.map(|st| st.is_short()).unwrap_or(false),
                         });
                     }
-                    // Typed-реплика БД отчётов: схема/строки/завершение catch-up →
-                    // SQLite-writer'у (он один владеет соединением на запись).
+                    // Typed report-database replica: send schema/rows/catch-up completion to the
+                    // SQLite writer, the sole owner of the write connection.
                     Event::Report(rev) if server.feed.reports => {
                         if let Some(sink) = reports {
                             match rev {
@@ -744,10 +747,10 @@ pub fn run(
                                     server.uid,
                                     request.from_rec_id,
                                 ),
-                                // Страница catch-up: writer применит транзакцией и сам
-                                // ack'нет (`page_applied`) после коммита — до этого lib
-                                // следующую страницу не запросит. `database_recreated`
-                                // writer тоже обрабатывает (wipe), lib рестартует сама.
+                                // Catch-up page: the writer applies it in a transaction and
+                                // acknowledges it with `page_applied` after commit. Until then the
+                                // library does not request another page. The writer also handles
+                                // `database_recreated` by wiping data, and the library restarts itself.
                                 ReportEvent::SyncPage(page) => sink.send(DbMsg::Page {
                                     core_uid: server.uid,
                                     core_name: server.name.clone(),
@@ -777,12 +780,12 @@ pub fn run(
                             }
                         }
                     }
-                    // Диагностика (фича moonproto-diagnostics, по умолчанию ВЫКЛ):
-                    // пакеты, отвергнутые парсером/валидацией lib, в обычной сборке
-                    // исчезают бесследно — так завис report-sync BB1 (страница
-                    // отвергалась молча, курсор стоял сутками). Для страницы
-                    // catch-up (CmdId=39) декодируем заголовок: видно, ЧТО прислал
-                    // сервер (row_count/last/max_rec_id) и почему не прошло.
+                    // Diagnostics through the moonproto-diagnostics feature, OFF by default. In a
+                    // normal build, packets rejected by the library parser/validation disappear
+                    // without a trace. This is how BB1 report sync stalled: a page was rejected
+                    // silently and the cursor did not move for days. For a catch-up page (CmdId=39),
+                    // decode the header to show WHAT the server sent (row_count/last/max_rec_id)
+                    // and why validation failed.
                     #[cfg(feature = "moonproto-diagnostics")]
                     Event::ParseFailed { cmd, len, payload } => {
                         let mut extra = String::new();
@@ -807,14 +810,15 @@ pub fn run(
                 }
             }
             if !logs.is_empty() {
-                log_writer.flush(); // один флаш на пачку (не на строку) — диск не узкое место
+                log_writer.flush(); // One flush per batch, not per line, keeps disk from becoming a bottleneck.
                 if tx.send(FeedMsg::ServerLog(logs)).is_err() {
                     break;
                 }
             }
-            // detect-diag: сколько Event::Detect реально надренажено и сколько из них с
-            // AddToChart>0. raw>0 но with_chart=0 → стратегия без AddToChart (вкладки и не
-            // будет — это не баг чарта). raw=0 при flags.detects=true → сервер не шлёт детекты.
+            // detect-diag: count the Event::Detect items actually drained and those with
+            // AddToChart>0. raw>0 with with_chart=0 means the strategy lacks AddToChart, so no tab
+            // should appear and this is not a chart bug. This block runs only when `detects` is
+            // nonempty, so it never logs raw=0.
             if server.feed.detects && !detects.is_empty() {
                 let raw = detects.len();
                 let with_chart = detects.iter().filter(|d| d.add_to_chart > 0).count();
@@ -827,10 +831,10 @@ pub fn run(
             }
         }
 
-        // Снимок дёшев (Arc-clone), но читаем его по реальному domain event.
-        // Таблицу ордеров в UI троттлим до ~4 Гц, а chart/order-line store
-        // обновляем сразу на OrderEvent. Иначе короткий terminal status
-        // (Cancel/Fail с deferred-removal=0) можно проспать между двумя table ticks.
+        // A snapshot is cheap (an Arc clone), but read it only after an actual domain event. Throttle
+        // the UI order table to about 4 Hz while updating the chart/order-line store immediately on
+        // OrderEvent. Otherwise a short terminal status (Cancel/Fail with deferred-removal=0) can be
+        // missed between two table ticks.
         if server.feed.orders && has_orders_table_event && !orders_table_pending {
             orders_table_pending = true;
         }
@@ -855,8 +859,8 @@ pub fn run(
             }
         }
 
-        // Стратегии ядра (для окна стратегий): проверяем по domain event, не чаще
-        // ~1 Гц, и шлём только при изменениях.
+        // Core strategies for the Strategies window: check on domain events at no more than about
+        // 1 Hz and publish only changes.
         if had_domain_event
             && server.feed.strategies
             && last_strats.elapsed() >= Duration::from_secs(1)
@@ -865,12 +869,12 @@ pub fn run(
             if let Some(snap) = client.snapshot() {
                 let strats = snap.strats();
 
-                // Схема (секции/поля по видам) — при смене revision.
+                // Publish the schema (per-kind sections/fields) when its revision changes.
                 let sr = strats.strategy_schema_revision();
                 if sr != last_schema_rev {
                     last_schema_rev = sr;
                     if let Some(schema) = strats.strategy_schema() {
-                        // Дефолты полей для нормализации дампов strat_db (см. ниже).
+                        // Field defaults used to normalize strat_db dumps; see below.
                         strat_schema_defaults = schema_default_fields(schema);
                         if tx
                             .send(FeedMsg::StrategySchema(build_schema_model(schema)))
@@ -881,7 +885,7 @@ pub fn run(
                     }
                 }
 
-                // Состав/значения — при смене сигнатуры (id/ver/last_date/checked).
+                // Publish contents/values when the signature changes (id/ver/last_date/checked).
                 let mut sig = 0u64;
                 for s in strats.snapshots() {
                     sig = sig
@@ -893,12 +897,12 @@ pub fn run(
                 }
                 if sig != last_strat_sig {
                     last_strat_sig = sig;
-                    // Колонка Strat таблицы ордеров резолвит strat_id → тип через этот же
-                    // реестр (`build_order_row`). Реестр наполняется ПОЗЖЕ ордеров, а сама
-                    // таблица пересобирается только на order-событии → до него видны сырые
-                    // strat_id. Смена состава стратегий = повод пере-резолвить имена: взводим
-                    // orders_table_pending, чтобы таблица пересобралась в пределах ~250мс даже
-                    // без нового order-события (order_wait ниже разбудит цикл по таймеру).
+                    // The order table's Strat column resolves strat_id to kind through this same
+                    // registry in `build_order_row`. The registry is populated AFTER orders, while
+                    // the table normally rebuilds only on order events, so raw strat_id values are
+                    // visible until then. A strategy-set change must resolve the names again: set
+                    // orders_table_pending so the table rebuilds within about 250 ms even without a
+                    // new order event; order_wait below wakes the loop on its timer.
                     if server.feed.orders {
                         orders_table_pending = true;
                     }
@@ -931,10 +935,10 @@ pub fn run(
                         break;
                     }
 
-                    // strat_db: тот же снапшот — в локальную БД стратегий (head +
-                    // версии по контент-диффу; эхо/косметика дедупятся у writer'а).
-                    // Ждём схему: без материализации её дефолтов дампы неполны и
-                    // при её приходе появились бы фантомные версии.
+                    // Send the same snapshot to the local strat_db (head plus versions based on
+                    // content diffs; the writer deduplicates echoes and cosmetic changes). Wait for
+                    // the schema because dumps are incomplete until its defaults are materialized,
+                    // which would create phantom versions when the schema arrives.
                     if !strat_schema_defaults.is_empty() {
                         if let Some(sink) = crate::strat_db::sink() {
                             local_strat_edits.prune();
@@ -961,12 +965,13 @@ pub fn run(
             }
         }
 
-        // Активы ядра (окно «Активы»): по domain event, не чаще ~1 Гц при живом окне.
-        // Без окна снапшот всё равно нужен (баланс шапки, метрика плеча читают
-        // global/leverage), но полный ребилд по всем рынкам ×N ядер каждую секунду —
-        // лишний фон; сбавляем до 1 раза в 5 с. Цены живут от рынка, поэтому снимок
-        // шлём целиком (UI гейтит перерисовку секундным ведром по assets_rev).
-        // Transfer-активы — лишь при смене revision.
+        // Core assets for the Assets window: after a domain event, publish no more often than about
+        // 1 Hz while the window is active. Without the window, the 5-second value is a minimum
+        // interval, not a periodic publish; a quiet core emits nothing. The snapshot is still needed
+        // for header balance and leverage, but rebuilding every market for N cores on every event is
+        // needless work. Prices come from the market, so publish the full snapshot; the UI gates
+        // repainting by placing assets_rev into one-second buckets. Publish transfer assets only on
+        // revision changes.
         let assets_every = if crate::feed::assets_view_active() {
             Duration::from_secs(1)
         } else {
@@ -975,9 +980,10 @@ pub fn run(
         if had_domain_event && last_assets.elapsed() >= assets_every {
             last_assets = Instant::now();
             if let Some(snap) = client.snapshot() {
-                // Базовая валюта аккаунта (USDT/BTC/…) — нужна для корректного пересчёта
-                // `btc_balance_*` (исторически в базовой валюте) в USDT. Оттуда же —
-                // фьючность ядра (маска BaseCheck): фьюч-активы UI режет до позиций.
+                // The account base currency (USDT/BTC/...) is required to convert `btc_balance_*`,
+                // historically denominated in the base currency, into USDT. The same server info
+                // identifies a futures core through the BaseCheck mask; the UI restricts futures
+                // assets to positions.
                 let info = client.server_info();
                 let base = info
                     .as_ref()
@@ -993,9 +999,9 @@ pub fn run(
             }
         }
 
-        // Transfer-активы: проверяем КАЖДУЮ итерацию (а не в 1 Гц/domain-event блоке) — чтобы
-        // ответ на `refresh_transfer_assets` (клик по ядру в окне «Активы») доходил до UI
-        // сразу, даже если у ядра нет потока рыночных событий.
+        // Check transfer assets on EVERY iteration rather than in the 1 Hz/domain-event block so a
+        // `refresh_transfer_assets` response, requested by clicking the core in the Assets window,
+        // reaches the UI immediately even when the core has no stream of market events.
         if let Some(snap) = client.snapshot() {
             let tr = snap.transfer_assets();
             let rev = tr.revision();
@@ -1008,8 +1014,8 @@ pub fn run(
             }
         }
 
-        // Рыночные данные НЕ переливаем здесь. Feed только сигналит, что у provider
-        // появился свежий read-model snapshot; видимый chart сам подтянет нужные рынки.
+        // Do NOT copy market data here. The feed only signals that the provider has a fresh
+        // read-model snapshot; the visible chart pulls the markets it needs itself.
         if !dirty_markets.is_empty() {
             if tx.send(FeedMsg::MarketDataChanged(dirty_markets)).is_err() {
                 let _ = client.disconnect();
@@ -1045,8 +1051,8 @@ pub fn run(
     Ok(())
 }
 
-/// Hex-строка байт (без разделителей) — дамп blob chart-алертов для реверса
-/// формата `TChartObject.Save()` (см. docs-internal, этап 0 алертов).
+/// Returns bytes as a separator-free hex string for dumping chart-alert blobs while reverse
+/// engineering the `TChartObject.Save()` format; see alert stage 0 in the internal docs.
 fn hex_dump(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut s = String::with_capacity(bytes.len() * 2);

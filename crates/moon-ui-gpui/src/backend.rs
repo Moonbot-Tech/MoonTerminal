@@ -1,7 +1,6 @@
-//! Методы общего backend-состояния приложения ([`Backend`]). Сам struct объявлен в
-//! `main.rs` (крейт-рут), чтобы его приватные поля были видны всем модулям крейта
-//! (правило: потомок видит приватное предка). Вынесено из `main.rs` точь-в-точь;
-//! методы получили `pub(crate)` (в корне приватное = видно всему крейту, здесь — нет).
+//! Methods for the application's shared backend state ([`Backend`]). The struct is declared in
+//! `main.rs`, the crate root, so its private fields are visible to descendant modules. Methods in
+//! this sibling module use `pub(crate)` because private items here would not be crate-wide.
 
 use std::time::{Duration, Instant};
 
@@ -21,7 +20,7 @@ impl Backend {
         let sizes = server
             .map(|s| s.order_sizes_or_default(base))
             .unwrap_or_else(|| moon_core::config::servers::default_order_sizes(base));
-        // Выбор: рантайм-карта → персист конфига (последний выбор прошлого запуска) → F3.
+        // Selection precedence: runtime map -> persisted config from the previous run -> F3.
         let sel = self
             .order_size_sel
             .get(&core)
@@ -32,8 +31,8 @@ impl Backend {
         (sizes, sel)
     }
 
-    /// Выбрать пресет размера ордера (клик F1-F6 / хоткей): рантайм-карта + персист в
-    /// конфиг сервера (дебаунс-сейв дренажа через `config_dirty`, как значения пресетов).
+    /// Select an order-size preset by F1-F6 click or hotkey, update the runtime map, and persist it
+    /// in the server config through the same debounced `config_dirty` drain as the preset values.
     pub(crate) fn set_order_size_sel(&mut self, core: CoreId, ix: usize) {
         if ix >= 6 {
             return;
@@ -52,8 +51,9 @@ impl Backend {
         sizes[sel]
     }
 
-    /// Прогнозный размер ручного ордера (s1-s6 активного ядра) в USD: размер в базовой валюте
-    /// аккаунта × курс базы→USD. None — нет ядра/размера/курса. Для подписи на перекрестии чарта.
+    /// Return the selected F1-F6 manual order size in USD: the account-base amount multiplied by
+    /// the base-to-USD rate. Returns `None` when the size or rate is unavailable; used by the chart
+    /// crosshair label.
     pub(crate) fn prospective_order_usd(&self, core: CoreId) -> Option<f64> {
         let size = self.manual_order_size(core);
         if !(size > 0.0) {
@@ -64,14 +64,15 @@ impl Backend {
         (rate > 0.0).then_some(size * rate)
     }
 
-    /// Значение пресета размера `ix` (F1-F6) ядра — из конфига (или дефолт по базе).
+    /// Return core order-size preset `ix` (F1-F6) from config or the base-currency default.
     pub(crate) fn order_size_value(&self, core: CoreId, ix: usize) -> f64 {
         let (sizes, _) = self.manual_order_size_state(core);
         sizes[ix.min(sizes.len().saturating_sub(1))]
     }
 
-    /// Записать значение пресета размера `ix` ядра в конфиг (правка колесом/инпутом). На диск
-    /// НЕ сохраняем сразу — ставим `config_dirty`, дренаж сделает дебаунс-сейв.
+    /// Write core order-size preset `ix` to config after a wheel or input edit.
+    ///
+    /// This only sets `config_dirty`; the drain performs the debounced disk save.
     pub(crate) fn set_order_size_value(&mut self, core: CoreId, ix: usize, v: f64) {
         if ix >= 6 || !(v > 0.0) {
             return;
@@ -87,8 +88,10 @@ impl Backend {
         }
     }
 
-    /// Текущий видимый процент fixed-sell пресета `ix` (S1-S6) ядра: оптимистичный локальный
-    /// кэш, если есть (свежая правка колесом/инпутом), иначе значение из снимка ClientSettings.
+    /// Return the currently displayed fixed-sell percentage for core preset `ix` (S1-S6).
+    ///
+    /// A process-lifetime local cache entry always takes precedence over the `ClientSettings`
+    /// snapshot. Core echoes and command failures do not reconcile or clear this override.
     pub(crate) fn fixed_sell_pct(&self, core: CoreId, ix: usize) -> f64 {
         if let Some(v) = self.sell_pct_local.get(&(core, ix)) {
             return *v;
@@ -101,12 +104,16 @@ impl Backend {
             .unwrap_or(0.0)
     }
 
-    /// Записать оптимистичный локальный процент fixed-sell (живой дисплей до эха ядра).
+    /// Store a process-lifetime local fixed-sell override for immediate display.
+    ///
+    /// The override remains until replaced or the process exits; core echoes do not clear it.
     pub(crate) fn set_fixed_sell_pct_local(&mut self, core: CoreId, ix: usize, v: f64) {
         self.sell_pct_local.insert((core, ix), v);
     }
 
-    /// Локальный кэш `(core,ix)`, иначе `fallback` (значение ядра) — для дисплея sell-полосы.
+    /// Return the process-lifetime local `(core, ix)` override or the core-provided `fallback`.
+    ///
+    /// The local value continues to mask the fallback after core echoes or command failures.
     pub(crate) fn fixed_sell_pct_with(&self, core: CoreId, ix: usize, fallback: f64) -> f64 {
         self.sell_pct_local
             .get(&(core, ix))
@@ -133,13 +140,16 @@ impl Backend {
             .unwrap_or(fallback)
     }
 
-    /// Оптимистичный локальный выбор ручной стратегии (живой отклик до echo ядра).
+    /// Store a process-lifetime local manual-strategy override for immediate feedback.
     pub(crate) fn set_manual_strat_local(&mut self, core: CoreId, on: bool, id: u64) {
         self.manual_strat_local.insert(core, (on, id));
     }
 
-    /// Эффективное состояние ручной стратегии `(вкл, id)` ядра: локальный кэш поверх
-    /// снимка ClientSettings; ни того ни другого нет → (false, 0).
+    /// Return the core's effective manual-strategy state as `(enabled, id)`.
+    ///
+    /// A local override takes precedence over the `ClientSettings` snapshot and remains until
+    /// replaced or process exit; core echoes and command failures do not reconcile it. If neither
+    /// source exists, this returns `(false, 0)`.
     pub(crate) fn manual_strat_state(&self, core: CoreId) -> (bool, u64) {
         if let Some(v) = self.manual_strat_local.get(&core) {
             return *v;
@@ -152,7 +162,9 @@ impl Backend {
             .unwrap_or((false, 0))
     }
 
-    /// Взведён ли «паник-селл» по (ядро, рынок) — для подсветки кнопки Panic Sell.
+    /// Return whether panic sell is armed for `(core, market)` to highlight the Panic Sell button.
+    ///
+    /// The state is the union of the retained order-line snapshot and the process-local armed set.
     pub(crate) fn is_panic_armed(&self, core: CoreId, market: &str) -> bool {
         let snapshot_armed = self.session.store().core(core).is_some_and(|data| {
             data.order_lines
@@ -165,8 +177,9 @@ impl Backend {
         self.panic_armed.contains(&(core, market.to_string()))
     }
 
-    /// Тоггл «паник-селл» по рынку: текущее состояние берём из снапшота ордеров, локальный флаг —
-    /// только optimistic echo до прихода следующего апдейта ядра.
+    /// Toggle panic sell for a market using the union of the order-line snapshot and local armed set.
+    ///
+    /// A successfully enabled local entry survives core updates until a later toggle removes it.
     pub(crate) fn toggle_panic_sell(&mut self, core: CoreId, market: String) -> bool {
         let key = (core, market.clone());
         let on = !self.is_panic_armed(core, &market);
@@ -182,9 +195,11 @@ impl Backend {
         on
     }
 
-    /// Отменить ожидающие buy-ордера по ВСЕМ рынкам ядра (хоткей «cancel all buys»). Берём
-    /// удержанный снимок ордеров, отбираем рынки с pending buy (не шорт, не исполнен, не
-    /// закрыт) и шлём по каждому `cancel_market_buys`. Возвращает число задействованных рынков.
+    /// Cancel pending buy orders across all markets for a core for the "cancel all buys" hotkey.
+    ///
+    /// The retained order snapshot supplies unique markets with a pending, non-short order whose
+    /// job is not done. A `cancel_market_buys` request is sent for each market, and the return value
+    /// is the number of requests accepted.
     pub(crate) fn cancel_all_buys_for_core(&self, core: CoreId) -> usize {
         let markets: Vec<String> = self
             .session
@@ -207,8 +222,10 @@ impl Backend {
         n
     }
 
-    /// Сторона позиции рынка (для join_sells): true = short. Берём из удержанного снимка
-    /// ордеров рынка (первый ордер рынка), иначе — long по умолчанию.
+    /// Return the market position side for `join_sells`, where `true` means short.
+    ///
+    /// The first matching order in the retained snapshot determines the side; absent a match, the
+    /// position defaults to long.
     pub(crate) fn market_position_short(&self, core: CoreId, market: &str) -> bool {
         self.session
             .store()
@@ -265,9 +282,9 @@ impl Backend {
     }
 
     pub(crate) fn set_main_chart_target(&mut self, group: &str, target: Option<(CoreId, String)>) {
-        // Открытие фуллскрином чарта ДРУГОГО ядра = «явная смена» → сбрасываем sticky-override,
-        // чтобы шапка вернулась к авто-следованию за фуллскрином. Тот же core / снятие фуллскрина
-        // override не трогают.
+        // Clear the sticky override whenever the new fullscreen target differs from the previous
+        // target core, including when no previous target existed. Preserve it only for the same
+        // target core or when fullscreen is removed.
         if let Some((new_core, _)) = &target {
             let prev_core = self.main_chart_targets.get(group).map(|(c, _)| *c);
             if prev_core != Some(*new_core) {
@@ -288,7 +305,7 @@ impl Backend {
         self.main_chart_targets.get(group).cloned()
     }
 
-    /// Опубликовать монеты, открытые в стеке Main группы (из `MainChartStack`).
+    /// Publish the markets open in a group's Main stack from `MainChartStack`.
     pub(crate) fn set_main_open_markets(&mut self, group: &str, markets: Vec<(CoreId, String)>) {
         if markets.is_empty() {
             self.main_open_markets.remove(group);
@@ -297,7 +314,7 @@ impl Backend {
         }
     }
 
-    /// Монеты, открытые в стеке Main группы (для подсветки/сортировки в «Ордерах»).
+    /// Return the markets open in a group's Main stack for highlighting and sorting in Orders.
     pub(crate) fn main_open_markets(&self, group: &str) -> &[(CoreId, String)] {
         self.main_open_markets
             .get(group)
@@ -305,30 +322,31 @@ impl Backend {
             .unwrap_or(&[])
     }
 
-    /// Отметить «активный» ввод в главном окне группы (движение мыши при сфокусированном окне).
-    /// Сбрасывает таймер авто-закрытия Main по неактивности. Зовётся из Shell on_mouse_move
-    /// ТОЛЬКО когда окно активно.
+    /// Record group-wide activity and reset Main's inactivity-close timer.
+    ///
+    /// Any active group-owned window can refresh this timestamp, including the primary window,
+    /// detached chart windows, and detached panel windows.
     pub(crate) fn note_main_input(&mut self, group: &str) {
         self.last_main_input
             .insert(group.to_string(), std::time::Instant::now());
     }
 
-    /// Время последнего активного ввода в главном окне группы (для авто-закрытия по неактивности).
+    /// Return the last group-wide activity time used by Main's inactivity timeout.
     pub(crate) fn main_input_at(&self, group: &str) -> Option<std::time::Instant> {
         self.last_main_input.get(group).copied()
     }
 
-    /// Локальный тоггл «исключить ЧС из дельт» активного ядра (см. поле `exclude_bl_delta`).
+    /// Return the core-local toggle for excluding blacklisted markets from delta calculations.
     pub(crate) fn exclude_bl_delta(&self, core: CoreId) -> bool {
         self.exclude_bl_delta.get(&core).copied().unwrap_or(false)
     }
 
-    /// Запомнить выбор «исключить ЧС из дельт» для ядра (отправку команды делает вызывающий).
+    /// Remember whether a core excludes blacklisted markets from deltas; the caller sends the command.
     pub(crate) fn set_exclude_bl_delta(&mut self, core: CoreId, on: bool) {
         self.exclude_bl_delta.insert(core, on);
     }
 
-    /// Авто-закрытие Main по неактивности, сек (config; 0 = выключено).
+    /// Return Main's configured inactivity-close timeout in seconds, where zero disables it.
     pub(crate) fn main_idle_close_secs(&self) -> u32 {
         self.preview
             .as_ref()
@@ -336,9 +354,10 @@ impl Backend {
             .main_idle_close_secs
     }
 
-    /// Активное торговое ядро группы для шапки/тулбара: sticky-override (ручной выбор в
-    /// шапке), если он ещё валиден (ядро в группе), иначе ядро фуллскрин-чарта, иначе первое
-    /// ядро группы. Тулбар не должен превращаться в прочерки только потому, что чарт ещё не открыт.
+    /// Return the group's active trading core for the header and toolbar.
+    ///
+    /// A still-valid sticky header selection takes precedence, followed by the fullscreen chart's
+    /// core and then the group's first core. This keeps the toolbar populated before a chart opens.
     pub(crate) fn active_trade_core(&self, group: &str) -> Option<CoreId> {
         if let Some(&core) = self.trade_core_override.get(group) {
             let in_group = self
@@ -356,7 +375,7 @@ impl Backend {
             .or_else(|| self.group_cores(group).first().map(|(id, _)| *id))
     }
 
-    /// Записать ручной выбор активного торгового ядра (клик в селекторе шапки).
+    /// Store the active trading core selected manually in the header.
     pub(crate) fn set_trade_core_override(&mut self, group: &str, core: CoreId) {
         self.trade_core_override.insert(group.to_string(), core);
     }
@@ -396,9 +415,11 @@ impl Backend {
         self.header_ticker_default = market.map(|market| (core, market));
     }
 
-    /// Источник тикера курса в шапке: сохранённый выбор (layout, по стабильному uid ядра),
-    /// если ядро ещё подключено; иначе готовый дефолтный кэш. Render не ищет рынки и не
-    /// мутирует backend.
+    /// Return the header price ticker source.
+    ///
+    /// A layout selection keyed by stable core UID is used while a session for that core is present;
+    /// otherwise the precomputed default cache is returned. Rendering neither searches markets nor
+    /// mutates the backend.
     pub(crate) fn header_ticker(&self) -> Option<(CoreId, String)> {
         if let Some(sel) = &self.layout.header_ticker {
             let core = self
@@ -419,7 +440,7 @@ impl Backend {
             .cloned()
     }
 
-    /// Записать выбор тикера шапки (клик в попапе поиска) + персист в layout по uid ядра.
+    /// Store the header ticker selected in the search popup by core UID and mark layout persistence dirty.
     pub(crate) fn set_header_ticker(&mut self, core: CoreId, market: String) {
         let Some(uid) = self
             .config
@@ -440,12 +461,12 @@ impl Backend {
         }
     }
 
-    /// Смещение часов шапки (минуты от UTC). Дефолт 0 = UTC.
+    /// Return the header clock offset in minutes from UTC; the default zero means UTC.
     pub(crate) fn header_clock_offset_min(&self) -> i32 {
         self.layout.header_clock_offset_min
     }
 
-    /// Записать смещение часов шапки (клик в попапе выбора пояса) + персист в layout.
+    /// Store the header clock offset selected in the time-zone popup and mark layout persistence dirty.
     pub(crate) fn set_header_clock_offset_min(&mut self, off_min: i32) {
         if self.layout.header_clock_offset_min != off_min {
             self.layout.header_clock_offset_min = off_min;
@@ -499,7 +520,9 @@ impl Backend {
         self.rebuild_orderbook_wanted();
     }
 
-    /// Пересобрать `desired_orderbook` (рынки с ≥1 включённым стаканом). Меняется → dirty (re-send).
+    /// Rebuild `desired_orderbook` from markets with at least one enabled order-book consumer.
+    ///
+    /// A changed list marks the open-market request set dirty for resending.
     pub(crate) fn rebuild_orderbook_wanted(&mut self) {
         let mut want: Vec<(CoreId, String)> = self
             .chart_orderbook_refs

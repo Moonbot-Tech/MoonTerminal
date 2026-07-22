@@ -1,28 +1,28 @@
-//! Типы операций над деревом стратегий (модалки/меню/DnD-нагрузки) и общие утилиты
-//! выделения/UI-папок/тулбара. Модалки — в [`super::tree_dialogs`], буфер/DnD —
-//! в [`super::tree_dnd`], контекст-меню — в [`super::tree_menu`]. Чистая логика над
-//! путями/наборами — в [`super::tree_ops`].
+//! Strategy-tree operation types for modals, menus, and DnD payloads, plus shared selection,
+//! UI-folder, and toolbar helpers. Modals live in [`super::tree_dialogs`], clipboard and DnD in
+//! [`super::tree_dnd`], context menus in [`super::tree_menu`], and pure path and collection logic
+//! in [`super::tree_ops`].
 
 use super::tree_ops;
 use super::*;
 use rust_i18n::t;
 
-/// Активная модалка операции (взаимоисключающая; рисуется оверлеем поверх окна).
+/// Active mutually exclusive operation modal rendered over the window.
 #[derive(Clone)]
 pub(super) enum TreeOp {
-    /// Создать стратегию: целевая папка + выбранный вид (kind ordinal).
+    /// Create a strategy in a target folder using the selected kind ordinal.
     CreateStrategy {
         core: CoreId,
         target: String,
         kind: Option<u8>,
     },
-    /// Создать (UI-)папку: целевой родитель.
+    /// Create a UI-only folder under the target parent.
     CreateFolder { core: CoreId, target: String },
-    /// Переименовать папку: ядро + путь папки (сегменты).
+    /// Rename a folder identified by its core and path segments.
     RenameFolder { core: CoreId, old_path: Vec<String> },
-    /// Подтверждение удаления стратегий выделения (id переderives при подтверждении).
+    /// Confirm deletion of selected strategies; IDs are derived again on confirmation.
     ConfirmDeleteStrategies { label: String },
-    /// Подтверждение удаления папки: ядро + путь, подпись.
+    /// Confirm folder deletion using its core, path, and display label.
     ConfirmDeleteFolder {
         core: CoreId,
         path: Vec<String>,
@@ -30,7 +30,7 @@ pub(super) enum TreeOp {
     },
 }
 
-/// Запрос контекст-меню: цель + позиция курсора. Само открытое меню хранится в MoonUI Root.
+/// Context-menu request containing its target and cursor position; MoonUI Root owns the open menu.
 pub(super) struct ContextMenu {
     pub(super) core: CoreId,
     pub(super) target: MenuTarget,
@@ -40,25 +40,25 @@ pub(super) struct ContextMenu {
 pub(super) enum MenuTarget {
     Folder(Vec<String>),
     Strategy(u64),
-    /// Удалённая на сервере стратегия (папка «Удалённые»): только «Восстановить».
+    /// Server-deleted strategy from the Deleted folder, offering only Restore.
     DeletedStrategy(u64),
 }
 
-/// Полезная нагрузка drag&drop: перетаскиваемые стратегии (ядро-источник + id).
+/// Drag-and-drop payload for strategies, containing the source core and IDs.
 #[derive(Clone)]
 pub(super) struct StratDrag {
     pub(super) core: CoreId,
     pub(super) ids: Vec<u64>,
 }
 
-/// Полезная нагрузка drag&drop: перетаскиваемая папка (ядро-источник + путь).
+/// Drag-and-drop payload for a folder, containing its source core and path.
 #[derive(Clone)]
 pub(super) struct FolderDrag {
     pub(super) core: CoreId,
     pub(super) path: Vec<String>,
 }
 
-/// Превью под курсором при перетаскивании.
+/// Preview displayed beneath the cursor while dragging.
 pub(super) struct DragChip {
     pub(super) label: SharedString,
 }
@@ -81,9 +81,9 @@ impl Render for DragChip {
 }
 
 impl StrategiesView {
-    // ── Утилиты ───────────────────────────────────────────────────────────────
+    // ── Utilities ─────────────────────────────────────────────────────────────
 
-    /// Виды (ordinal, имя) из схемы ядра — для выбора при создании стратегии.
+    /// Returns `(ordinal, name)` kinds from the core schema for strategy creation.
     pub(super) fn kinds_of(&self, store: &CoreStore, core: CoreId) -> Vec<(u8, String)> {
         store
             .core(core)
@@ -97,7 +97,7 @@ impl StrategiesView {
             .unwrap_or_default()
     }
 
-    /// Выбранные строки (мультивыбор) с их ядром — owned-копии (для буфера/проверок).
+    /// Returns owned copies of selected rows with their cores for clipboard and validation use.
     pub(super) fn selection_rows(&self, store: &CoreStore) -> Vec<(CoreId, StrategyRow)> {
         selected_keys(self)
             .into_iter()
@@ -105,8 +105,8 @@ impl StrategiesView {
             .collect()
     }
 
-    /// Целевая папка по умолчанию (ядро, путь) — папка первичной стратегии или корень
-    /// первого ядра.
+    /// Returns the default `(core, path)` target: the primary strategy's folder or the first core's
+    /// root.
     pub(super) fn default_target(
         &self,
         store: &CoreStore,
@@ -120,14 +120,14 @@ impl StrategiesView {
         (cores.first().map(|(c, _)| *c).unwrap_or(0), String::new())
     }
 
-    // ── UI-папки (пустые, до наполнения) ──────────────────────────────────────
+    // ── UI-only folders, empty until populated ────────────────────────────────
 
     pub(super) fn add_ui_folder(&mut self, core: CoreId, parent: &str, name: &str) {
         let mut parts = tree_ops::split_path(parent);
         parts.push(name.to_string());
         self.ui_folders.insert((core, tree_ops::join_path(&parts)));
-        // Раскрыть ядро и родительскую цепочку (все сегменты, кроме новой папки), чтобы она
-        // была сразу видна.
+        // Expand the core and parent chain, excluding the new folder itself, so it is immediately
+        // visible.
         self.expanded_cores.insert(core);
         let ancestors = parts.len().saturating_sub(1);
         self.expand_path(core, parts.iter().take(ancestors).map(String::as_str));
@@ -160,7 +160,7 @@ impl StrategiesView {
         }
     }
 
-    /// Пустые UI-папки данного ядра (сегменты пути) — для подмешивания в дерево.
+    /// Returns empty UI-only folder paths for a core so they can be merged into the tree.
     pub(super) fn ui_folder_paths(&self, core: CoreId) -> Vec<Vec<String>> {
         self.ui_folders
             .iter()
@@ -169,7 +169,7 @@ impl StrategiesView {
             .collect()
     }
 
-    // ── Клавиатура (Ctrl+C / Ctrl+V / Delete) ────────────────────────────────
+    // ── Keyboard: Ctrl+C, Ctrl+V, and Delete ──────────────────────────────────
 
     pub(super) fn handle_tree_key(
         &mut self,
@@ -180,8 +180,8 @@ impl StrategiesView {
         let m = &ev.keystroke.modifiers;
         let key = ev.keystroke.key.as_str();
         if m.control && key == "c" {
-            // Нет выбора стратегий, но кликом выделена ПАПКА → копируем её целиком
-            // (со всем содержимым, как в Moonbot).
+            // When no strategies are selected but a folder was clicked, match Moonbot by copying
+            // the entire folder and its contents.
             let no_sel = {
                 let store = self.backend.read(cx).session.store();
                 self.selection_rows(store).is_empty()
@@ -209,16 +209,16 @@ impl StrategiesView {
         }
     }
 
-    // ── Рендер: тулбар выделения ──────────────────────────────────────────────
+    // ── Rendering: selection toolbar ──────────────────────────────────────────
 
-    /// Кнопки операций над выделением/буфером (в нижней панели действий).
+    /// Builds selection and clipboard action buttons for the lower action panel.
     pub(super) fn selection_toolbar(&self, store: &CoreStore, cx: &Context<Self>) -> AnyElement {
         let rows = self.selection_rows(store);
         let has_sel = !rows.is_empty();
         let all_off = rows.iter().all(|(_, r)| !r.checked);
         let can_paste = self.clipboard.is_some();
-        // Левая группа фикс. ширины: ряд [копировать][вставить] (каждая тянется на свою
-        // половину), под ними [удалить] во всю ширину — через `MoonButton::full_width()`.
+        // Use a fixed-width left group: Copy and Paste each fill half of the first row, while
+        // Delete spans the row below through `MoonButton::full_width()`.
         v_flex()
             .w(px(176.0))
             .gap_1()
@@ -247,7 +247,7 @@ impl StrategiesView {
                                 .label(t!("strat.action_paste").to_string())
                                 .disabled(!can_paste)
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    // вставка в папку первичной стратегии (или корень).
+                                    // Paste into the primary strategy's folder or the default root.
                                     let (core, target) = {
                                         let b = this.backend.read(cx);
                                         let cores = crate::core_order::CoreOrder::new(&b.config)
@@ -277,7 +277,7 @@ impl StrategiesView {
             .into_any_element()
     }
 
-    /// Кнопка «＋ Создать» (дропдаун: стратегия/папка) для шапки дерева.
+    /// Builds the Create dropdown for a strategy or folder in the tree header.
     pub(super) fn create_dropdown(
         &self,
         core: CoreId,

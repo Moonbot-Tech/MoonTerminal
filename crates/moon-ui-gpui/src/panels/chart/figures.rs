@@ -1,7 +1,8 @@
-//! Интеракция слоя рисования фигур на панели чарта: режим-карандаш (⌘/Ctrl+ЛКМ рисует),
-//! hover/выделение/драг узлов и тела, контекст-меню по ПКМ (Alert/Удалить). Инструмент
-//! (`Backend::fig_tool`), режим (`fig_draw_mode`) и выделение (`fig_selected`) глобальны.
-//! Всё работает ТОЛЬКО в области чарта (не в зоне стакана — там свои кнопки).
+//! Chart-panel figure-layer interaction: pencil mode, Command/Ctrl-left-click drawing, hover,
+//! selection, node/body dragging, and the right-click Alert/Delete menu. The selected tool
+//! (`Backend::fig_tool`), mode (`fig_draw_mode`), and selection (`fig_selected`) are global. New
+//! drawing, selection, and hit testing start only in the chart area; an active draft or drag may
+//! continue and finish over the order-book zone.
 
 use gpui::{Context, Pixels, Point, Window};
 use rust_i18n::t;
@@ -14,53 +15,53 @@ use moon_core::session::CoreId;
 use super::ChartPanel;
 use crate::chartdx::FigureVisual;
 
-/// Порог хит-теста линии, px (до умножения на ppp), как у ордер-линий.
+/// Figure-line hit-test threshold in pixels before scaling by pixels-per-point, matching order lines.
 const HIT_PX: f32 = 6.0;
 
-/// Фигура в процессе рисования на этой панели.
+/// Figure currently being drawn on this panel.
 pub(super) struct FigDraft {
     pub pane: usize,
     pub core: CoreId,
     pub market: String,
     pub tool: FigureTool,
-    /// Стиль (цвет/толщина/пунктир) — снимок `Backend::fig_style` на начало рисования.
+    /// Color, thickness, and line-kind snapshot captured from `Backend::fig_style` at draw start.
     pub color: [u8; 4],
     pub thickness: f32,
     pub kind: moon_core::figures::LineKind,
-    /// Первый узел (второй — курсор). Для канала после второго клика — Some(b) в `base_b`.
+    /// First node of a multi-point figure; `cursor` supplies the preview endpoint.
     pub first: Option<FigNode>,
-    /// Канал: зафиксированный базовый отрезок (стадия растяжки ширины).
+    /// Triangle's fixed second node while awaiting the third click.
     pub base_b: Option<FigNode>,
-    /// Текущая позиция курсора в координатах данных.
+    /// Current cursor position in data coordinates.
     pub cursor: FigNode,
 }
 
-/// Драг существующей фигуры.
+/// Drag state for an existing figure.
 pub(super) struct FigDrag {
     pub core: CoreId,
     pub market: String,
     pub id: u64,
     pub pane: usize,
     pub grab: FigGrab,
-    /// Смещение точки захвата от опорного узла (чтобы фигура не «прыгала» под курсор).
+    /// Grab-point offset from the anchor node, preventing the figure from jumping to the cursor.
     pub grab_off_price: f64,
     pub grab_off_time: f64,
 }
 
-/// Что именно тащим.
+/// Portion of a figure being dragged.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum FigGrab {
-    /// Первый узел (a) / первая цена канала.
+    /// First node (`a`) or first channel price.
     NodeA,
-    /// Второй узел (b) / вторая цена канала.
+    /// Second node (`b`) or second channel price.
     NodeB,
-    /// Третий узел (c) треугольника.
+    /// Triangle's third node (`c`).
     NodeC,
-    /// Всё тело (сдвиг по цене и времени).
+    /// Entire body, translated in price and time.
     Body,
 }
 
-/// Пиксельный маппинг плота панели: данные ↔ device px.
+/// Mapping between pane-plot data coordinates and device pixels.
 struct Map {
     plot: moon_chart::view::Rect,
     epoch_ms: f64,
@@ -95,7 +96,7 @@ impl Map {
     }
 }
 
-/// Расстояние от точки до отрезка (px).
+/// Return the pixel distance from a point to a line segment.
 fn seg_dist(px: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len2 = dx * dx + dy * dy;
@@ -109,7 +110,7 @@ fn seg_dist(px: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
 }
 
 impl ChartPanel {
-    /// Пиксельный маппинг плота панели (None — панель без вида).
+    /// Build a pane's plot mapping, or return `None` when the pane has no valid view.
     fn fig_map(&self, pane: usize) -> Option<Map> {
         let plot = self.local_plot_rect(pane)?;
         let (epoch_ms, left_rel, window_ms, center, range) =
@@ -138,16 +139,19 @@ impl ChartPanel {
         })
     }
 
-    /// Ключ чарта панели по индексу pane.
+    /// Return the `(core, market)` chart key for a pane index.
     fn fig_pane_key(&self, pane: usize) -> Option<(CoreId, String)> {
         self.chart
             .with_container(|c| c.pane(pane).map(|p| (p.core, p.market.clone())))
     }
 
-    /// ЛКМ-down. true = клик съеден слоем фигур. Работает ТОЛЬКО в режиме рисования
-    /// (карандаш нажат): `draw_mod` зажат → рисуем `fig_tool`; без него → выделяем/двигаем
-    /// существующую фигуру. Вне режима — фигуры не трогаем (клик идёт в торговлю/чарт).
-    /// `draw_mod` — вторичный модификатор (⌘ на macOS, Ctrl на Windows/Linux).
+    /// Handle a left-button press for the figure layer.
+    ///
+    /// Interaction requires pencil mode and a true `draw_mod` gate. The caller sets this gate when
+    /// the secondary modifier is held—Command on macOS or Ctrl on Windows/Linux—or when a draft is
+    /// already active, allowing later nodes without a held modifier. With no draft, an existing
+    /// figure is grabbed first; otherwise the click places the next node. Returns whether the
+    /// figure layer consumed it.
     pub(super) fn try_fig_click(
         &mut self,
         pos: (f32, f32),
@@ -157,37 +161,36 @@ impl ChartPanel {
         if !self.backend.read(cx).fig_draw_mode {
             return false;
         }
-        // Паритет с Moonbot: даже при ВКЛЮЧЁННОМ карандаше фигуры трогаем ТОЛЬКО по Ctrl
-        // (`draw_mod` = secondary/⌘ ИЛИ продолжение начатого драфта). Обычный ЛКМ без
-        // модификатора уходит дальше — в торговлю/навигацию, как будто карандаш выключен
-        // (в Moonbot тултип: «Hold CTRL to perform actual draw»).
+        // Match Moonbot: starting a draft or grabbing a figure requires the secondary modifier.
+        // The caller also keeps this gate true for an existing draft, so its later clicks continue
+        // without the modifier. An unmodified click with no draft continues to trading/navigation.
         if !draw_mod {
             return false;
         }
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return false;
         };
-        // В зоне управления (стакан/резерв) фигуры не рисуем и не хватаем — там торговля.
+        // Leave the order-book/reserved control zone to trading input.
         if self.glass_pane_at(pos).is_some() {
             return false;
         }
         let Some(map) = self.fig_map(pane) else {
             return false;
         };
-        // Ctrl+ЛКМ по СУЩЕСТВУЮЩЕЙ фигуре (вне активного драфта) — схватить узел/тело/выделить;
-        // по пустому месту (или продолжая начатый драфт) — ставим узел новой фигуры.
+        // With no active draft, modifier-click grabs/selects an existing node or body first. Empty
+        // space, or any click continuing a draft, places a node for the new figure.
         if self.fig_draft.is_none() && self.try_fig_grab(pane, pos, &map, cx) {
             return true;
         }
         let tool = self.backend.read(cx).fig_tool;
         let node = map.node_at(pos);
         self.fig_draw_click(pane, tool, node, cx);
-        // Точка постановки узла — для drag-release жеста (см. try_fig_release).
+        // Retain the placed-node position for the drag-release gesture in `try_fig_release`.
         self.fig_draw_down = self.fig_draft.is_some().then_some(pos);
         true
     }
 
-    /// Клик в режиме рисования: ставит узел/завершает фигуру.
+    /// Place a node in pencil mode, completing the figure when enough nodes exist.
     fn fig_draw_click(
         &mut self,
         pane: usize,
@@ -199,7 +202,7 @@ impl ChartPanel {
             return;
         };
         let style = self.backend.read(cx).fig_style;
-        // Начатый на другой панели драфт сбрасываем — рисуем там, где кликнули.
+        // Discard a draft started on another pane or target; drawing follows the current click.
         if self
             .fig_draft
             .as_ref()
@@ -208,9 +211,9 @@ impl ChartPanel {
             self.fig_draft = None;
         }
         let finished: Option<FigureKind> = match (&mut self.fig_draft, tool) {
-            // Один клик — сразу готово.
+            // A horizontal line completes on its first click.
             (_, FigureTool::HLine) => Some(FigureKind::HLine { price: node.price }),
-            // Первый клик любого многоточечного инструмента — заводим драфт.
+            // The first click of any multi-point tool starts a draft.
             (None, _) => {
                 self.fig_draft = Some(FigDraft {
                     pane,
@@ -226,12 +229,12 @@ impl ChartPanel {
                 });
                 None
             }
-            // Отрезок: второй клик завершает.
+            // A segment completes on the second click.
             (Some(d), FigureTool::Segment) => {
                 let a = d.first.take().unwrap_or(node);
                 Some(FigureKind::Segment { a, b: node })
             }
-            // Канал: 2 клика по ЦЕНАМ (время не важно) — горизонтальный коридор.
+            // A channel uses two price clicks; time is irrelevant to the horizontal band.
             (Some(d), FigureTool::Channel) => {
                 let a = d.first.take().unwrap_or(node);
                 Some(FigureKind::Channel {
@@ -239,10 +242,10 @@ impl ChartPanel {
                     price2: node.price,
                 })
             }
-            // Треугольник: 3 клика (a, b, c).
+            // A triangle uses three clicks: `a`, `b`, and `c`.
             (Some(d), FigureTool::Triangle) => {
                 if d.base_b.is_none() {
-                    // Второй клик — вторая вершина; ждём третью.
+                    // Retain the second vertex while awaiting the third.
                     d.base_b = Some(node);
                     d.cursor = node;
                     None
@@ -273,7 +276,7 @@ impl ChartPanel {
                 .figures
                 .borrow_mut()
                 .add(core, &market, fig);
-            // Новая фигура сразу выделена — видно узлы, можно удалить/подвинуть.
+            // Select a new figure immediately so its nodes appear and it can be moved or deleted.
             self.backend.update(cx, |b, bcx| {
                 b.fig_selected = Some((core, market.clone(), id));
                 bcx.notify();
@@ -282,10 +285,11 @@ impl ChartPanel {
         self.sync_fig_visual(cx);
     }
 
-    /// Завершение фигуры жестом «нажал-потянул-отпустил»: если драфт активен и кнопку
-    /// отпустили заметно дальше точки постановки узла — считаем отпускание вторым кликом
-    /// (для треугольника — очередным). Простое отпускание на месте клика — не жест:
-    /// ждём следующего клика (классический click-click тоже работает). true = съедено.
+    /// Advance a draft with a press-drag-release gesture.
+    ///
+    /// A release far enough from the placed node counts as the next click, including the next
+    /// triangle vertex. A release near the press is not a gesture, so the normal click-click flow
+    /// continues. Returns whether the release advanced the draft.
     pub(super) fn try_fig_release(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
         let Some(d) = self.fig_draft.as_ref() else {
             return false;
@@ -294,7 +298,7 @@ impl ChartPanel {
             return false;
         };
         let dist = ((pos.0 - down.0).powi(2) + (pos.1 - down.1).powi(2)).sqrt();
-        // Порог протяжки: больше hit-порога, чтобы дрожание клика не завершало фигуру.
+        // Require more than the hit threshold so click jitter cannot complete a figure.
         let threshold = 2.0 * HIT_PX * self.last_ppp.max(1.0);
         if dist < threshold {
             return false;
@@ -309,7 +313,7 @@ impl ChartPanel {
         true
     }
 
-    /// Захват фигуры (по Ctrl+ЛКМ в режиме карандаша): узлы (у выделенной), затем тело ближайшей.
+    /// Grab a figure on modifier-left-click, preferring selected nodes over the nearest body.
     fn try_fig_grab(
         &mut self,
         pane: usize,
@@ -332,7 +336,7 @@ impl ChartPanel {
             .as_ref()
             .filter(|(c, m, _)| *c == core && *m == market)
             .map(|(_, _, id)| *id);
-        // 1. Узлы выделенной фигуры (приоритет над телом).
+        // Give nodes of the selected figure priority over all bodies.
         if let Some(sel_id) = selected {
             if let Some(fig) = figures.iter().find(|f| f.id == sel_id) {
                 if let Some(grab) = hit_node(fig, pos, map, threshold) {
@@ -351,7 +355,7 @@ impl ChartPanel {
                 }
             }
         }
-        // 2. Тело ближайшей фигуры: выделение + драг тела.
+        // Otherwise select and drag the nearest figure body.
         let mut best: Option<(u64, f32)> = None;
         for fig in figures {
             let d = hit_body(fig, pos, map);
@@ -362,7 +366,7 @@ impl ChartPanel {
         let Some((id, _)) = best else {
             drop(store);
             let _ = b;
-            // Клик мимо фигур — снимаем выделение (не съедая клик: пан работает).
+            // Clear selection on a miss without consuming the click, allowing pane input to run.
             if self.backend.read(cx).fig_selected.is_some() {
                 self.backend.update(cx, |b, bcx| {
                     b.fig_selected = None;
@@ -393,7 +397,11 @@ impl ChartPanel {
         true
     }
 
-    /// Mouse-move: превью драфта, драг фигуры, hover. `pressed_left` — кнопка зажата.
+    /// Update draft preview, active dragging, and figure hover from a mouse-move event.
+    ///
+    /// `pressed_left` reports whether the left button remains held. The return value reports an
+    /// active drag or a later preview/hover change; cancelling a draft after pencil mode is disabled
+    /// synchronizes visuals but can still return `false`, especially when outside the chart.
     pub(super) fn update_fig_pointer(
         &mut self,
         pos: (f32, f32),
@@ -401,7 +409,7 @@ impl ChartPanel {
         pressed_left: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        // Режим рисования выключили (Esc/кнопка) — гасим драфт.
+        // Cancel the draft when Escape or the toolbar disables pencil mode.
         if !self.backend.read(cx).fig_draw_mode && self.fig_draft.is_some() {
             self.fig_draft = None;
             self.sync_fig_visual(cx);
@@ -409,8 +417,8 @@ impl ChartPanel {
         if !within {
             return false;
         }
-        // Активный драг фигуры: правим стор на месте + принудительная пересборка (как
-        // ордер-драг: force=true), иначе линия «догоняет» рывками только на тиках данных.
+        // Edit an actively dragged figure in place and force the same immediate rebuild as an
+        // order drag; otherwise the line would update only on data ticks and visibly lag.
         if pressed_left {
             if let Some(drag) = &self.fig_drag {
                 let pane = self.input.pane_at(pos.0, pos.1);
@@ -438,7 +446,7 @@ impl ChartPanel {
                     self.fig_resync(cx);
                     cx.notify();
                 }
-                // Курсор-перекрестие ведём за мышью, как при драге ордера.
+                // Keep the crosshair under the pointer, matching order-line dragging.
                 self.input.cursor = Some(pos);
                 self.input.hovered_pane = Some(dpane);
                 self.sync_native_cursor();
@@ -446,7 +454,7 @@ impl ChartPanel {
             }
             return false;
         }
-        // Драфт: вторая точка следует за курсором.
+        // Move the draft's preview endpoint with the cursor while it remains on the draft pane.
         let mut changed = false;
         let draft_pane = self.fig_draft.as_ref().map(|d| d.pane);
         if let Some(dp) = draft_pane {
@@ -462,7 +470,7 @@ impl ChartPanel {
                 }
             }
         }
-        // Hover фигуры (в режиме рисования — чтобы видеть, что выделишь/потянешь).
+        // Pencil-mode hover previews which figure a modifier-click would select or drag.
         let hover = if self.backend.read(cx).fig_draw_mode {
             self.fig_hit_at(pos, cx)
         } else {
@@ -478,7 +486,7 @@ impl ChartPanel {
         changed
     }
 
-    /// id фигуры под курсором (тело или узел выделенной).
+    /// Return the nearest figure-body ID under the cursor within the scaled hit threshold.
     fn fig_hit_at(&self, pos: (f32, f32), cx: &Context<Self>) -> Option<u64> {
         let pane = self.input.pane_at(pos.0, pos.1)?;
         if self.glass_pane_at(pos).is_some() {
@@ -499,9 +507,10 @@ impl ChartPanel {
         best.map(|(id, _)| id)
     }
 
-    /// ПКМ по фигуре (только в режиме рисования, только в области чарта) → контекст-меню
-    /// «Alert / Удалить». true = меню открыто (вызывающий гасит fullscreen-тоггл). В зоне
-    /// стакана и вне режима возвращает false → ПКМ работает как обычно.
+    /// Open the Alert/Delete context menu for a right-clicked figure in pencil mode.
+    ///
+    /// This is limited to the chart area. Returns `true` when the menu opened so the caller can
+    /// suppress its fullscreen toggle; returning `false` leaves normal right-click behavior active.
     pub(super) fn try_open_figure_menu(
         &mut self,
         local_pos: (f32, f32),
@@ -512,7 +521,7 @@ impl ChartPanel {
         if !self.backend.read(cx).fig_draw_mode {
             return false;
         }
-        // fig_hit_at сам исключает зону стакана (glass_pane_at).
+        // `fig_hit_at` excludes the order-book zone through `glass_pane_at`.
         let Some(id) = self.fig_hit_at(local_pos, cx) else {
             return false;
         };
@@ -530,7 +539,7 @@ impl ChartPanel {
             .get(core, &market, id)
             .map(|f| f.alert)
             .unwrap_or(false);
-        // ПКМ по фигуре её выделяет (и показывает узлы).
+        // Select the right-clicked figure so its nodes are visible.
         self.backend.update(cx, |b, bcx| {
             b.fig_selected = Some((core, market.clone(), id));
             bcx.notify();
@@ -566,8 +575,9 @@ impl ChartPanel {
         true
     }
 
-    /// Mouse-up: завершить драг фигуры. true = ап съеден. Если фигура заармлена —
-    /// шлём свежий blob в ядро (координаты изменились).
+    /// Finish a figure drag and re-upsert its changed coordinates when it is armed as an alert.
+    ///
+    /// Returns whether an active drag consumed the mouse-up event.
     pub(super) fn finish_fig_drag(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(drag) = self.fig_drag.take() else {
             return false;
@@ -579,8 +589,10 @@ impl ChartPanel {
         true
     }
 
-    /// Прокинуть интерактив фигур в движок (режим/превью/hover/выделение). Зовётся на
-    /// мышь-событиях И на observe бэкенда (тоггл карандаша сразу скрывает/показывает слой).
+    /// Publish pencil mode, draft preview, hover, and selection to the chart engine.
+    ///
+    /// Mouse events and the Backend observer both call this so toggling pencil mode immediately
+    /// hides or shows the interactive layer.
     pub(super) fn sync_fig_visual(&mut self, cx: &mut Context<Self>) {
         let b = self.backend.read(cx);
         let draw_mode = b.fig_draw_mode;
@@ -605,34 +617,35 @@ impl ChartPanel {
         };
         let _ = b;
         if self.chart.set_figure_visual(visual) {
-            // Userdata пересобирается только в sync_orders_*: дёргаем сразу, иначе
-            // превью/подсветка ждали бы следующего тика данных/notify бэкенда.
+            // Userdata rebuilds only through `sync_orders_*`; trigger it immediately so preview and
+            // highlighting do not wait for the next data tick or Backend notification.
             self.fig_resync(cx);
             cx.notify();
         }
     }
 
-    /// Немедленная пересборка userdata (фигуры едут вместе с ордерными слоями).
-    /// `force=true` как у ордер-драга — иначе гейт пропускает часть кадров и драг рвётся.
+    /// Immediately rebuild userdata, where figures travel with the order layers.
+    ///
+    /// Force the rebuild as for order dragging so the normal gate cannot skip drag frames.
     fn fig_resync(&mut self, cx: &Context<Self>) {
         let b = self.backend.read(cx);
         self.chart.sync_orders_if_visible(&b.session, true);
     }
 }
 
-/// Превью-фигура из драфта (то, что рисуем за курсором).
+/// Build the transient preview figure drawn under the cursor from a draft.
 fn draft_preview(d: &FigDraft) -> Option<Figure> {
     let kind = match (d.tool, d.first, d.base_b) {
         (FigureTool::HLine, ..) => FigureKind::HLine {
             price: d.cursor.price,
         },
         (FigureTool::Segment, Some(a), _) => FigureKind::Segment { a, b: d.cursor },
-        // Канал: превью = 2 горизонтали (первая цена + цена курсора).
+        // Preview a channel as horizontal lines at the first and cursor prices.
         (FigureTool::Channel, Some(a), _) => FigureKind::Channel {
             price1: a.price,
             price2: d.cursor.price,
         },
-        // Треугольник: после 1-го клика — ребро a→курсор; после 2-го — треугольник.
+        // After one click preview an `a`-to-cursor edge; after two, preview the full triangle.
         (FigureTool::Triangle, Some(a), None) => FigureKind::Segment { a, b: d.cursor },
         (FigureTool::Triangle, Some(a), Some(b)) => FigureKind::Triangle { a, b, c: d.cursor },
         _ => return None,
@@ -650,7 +663,7 @@ fn draft_preview(d: &FigDraft) -> Option<Figure> {
     })
 }
 
-/// Расстояние от точки до тела фигуры, px.
+/// Return the pixel distance from a point to the nearest part of a figure body.
 fn hit_body(fig: &Figure, pos: (f32, f32), map: &Map) -> f32 {
     match &fig.kind {
         FigureKind::HLine { price } => (pos.1 - map.y_of_price(*price)).abs(),
@@ -667,7 +680,7 @@ fn hit_body(fig: &Figure, pos: (f32, f32), map: &Map) -> f32 {
     }
 }
 
-/// Узел/линия фигуры под курсором (для драга у выделенной).
+/// Return the selected figure node or channel line under the cursor for dragging.
 fn hit_node(fig: &Figure, pos: (f32, f32), map: &Map, threshold: f32) -> Option<FigGrab> {
     let near = |n: &FigNode| {
         let p = node_px(n, map);
@@ -695,7 +708,7 @@ fn hit_node(fig: &Figure, pos: (f32, f32), map: &Map, threshold: f32) -> Option<
                 None
             }
         }
-        // Канал: цепляемся за БЛИЖАЙШУЮ горизонталь по Y (свой узел-маркер не рисуем).
+        // Grab the nearest channel line by Y distance because channels render no node marker.
         FigureKind::Channel { price1, price2 } => {
             let d1 = (pos.1 - map.y_of_price(*price1)).abs();
             let d2 = (pos.1 - map.y_of_price(*price2)).abs();
@@ -714,15 +727,17 @@ fn node_px(n: &FigNode, map: &Map) -> (f32, f32) {
     (map.x_of_time(n.time_ms), map.y_of_price(n.price))
 }
 
-/// Смещение точки захвата от опорного узла (grab-offset): драг не телепортирует фигуру.
-/// Возвращает `(price_off, time_off)`. У горизонтали/канала время не используется (0).
+/// Return the grab offset from a figure anchor as `(price_offset, time_offset)`.
+///
+/// Preserving this offset prevents a drag from snapping the figure to the cursor. Horizontal lines
+/// and channels do not use time, so their time offset is zero.
 fn grab_offset(fig: &Figure, grab: FigGrab, map: &Map, pos: (f32, f32)) -> (f64, f64) {
     let cur = FigNode {
         time_ms: map.time_at_x(pos.0),
         price: map.price_at_y(pos.1),
     };
-    // Опорная цена по типу+захвату; время опоры = время курсора (сдвиг времени 0),
-    // кроме узлов отрезка/треугольника, где нужна реальная точка.
+    // Choose price from the figure kind and grab target. Use cursor time for horizontal lines and
+    // channels, yielding zero time offset; segment and triangle nodes use their actual time.
     let anchor = match (&fig.kind, grab) {
         (FigureKind::HLine { price }, _) => (*price, cur.time_ms),
         (FigureKind::Channel { price1, .. }, FigGrab::NodeA)
@@ -736,13 +751,13 @@ fn grab_offset(fig: &Figure, grab: FigGrab, map: &Map, pos: (f32, f32)) -> (f64,
         (FigureKind::Segment { b, .. }, FigGrab::NodeB)
         | (FigureKind::Triangle { b, .. }, FigGrab::NodeB) => (b.price, b.time_ms),
         (FigureKind::Triangle { c, .. }, FigGrab::NodeC) => (c.price, c.time_ms),
-        // Недостижимые сочетания (NodeC у отрезка/канала-NodeC уже покрыт) — курсор.
+        // `NodeC` is unreachable for a segment; use the cursor as a harmless fallback.
         (FigureKind::Segment { .. }, FigGrab::NodeC) => (cur.price, cur.time_ms),
     };
     (cur.price - anchor.0, cur.time_ms - anchor.1)
 }
 
-/// Применить драг к фигуре. `target` — новая позиция опорного узла/цены.
+/// Apply a drag using `target` as the new anchor-node position or anchor price.
 fn apply_drag(fig: &mut Figure, grab: FigGrab, target: FigNode) -> bool {
     match (&mut fig.kind, grab) {
         (FigureKind::HLine { price }, _) => {
@@ -811,7 +826,7 @@ fn apply_drag(fig: &mut Figure, grab: FigGrab, target: FigNode) -> bool {
                 n.time_ms += dt;
             }
         }
-        // Недостижимо: NodeC у отрезка/канала.
+        // `NodeC` is unreachable for segments and channels.
         (FigureKind::Segment { .. }, FigGrab::NodeC)
         | (FigureKind::Channel { .. }, FigGrab::NodeC) => return false,
     }

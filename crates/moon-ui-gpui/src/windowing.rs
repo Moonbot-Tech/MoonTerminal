@@ -1,8 +1,8 @@
-//! Окна на уровне платформы: фабрики `WindowOptions` для всех типов окон терминала
-//! (торговое / tool / открепл. панель / открепл. чарт / debug), выбор дисплея
-//! (сохранённая геометрия или дисплей окна-владельца), clear-color под тему,
-//! DWM-тюнинг рамки на Windows и HWND/geometry-хелперы. Плюс AppUserModelID и
-//! вшитые в exe значки групп (`build.rs`, `embed_group_icons`) для таскбара.
+//! Platform-level window support: `WindowOptions` factories for every terminal window type
+//! (trading, tool, detached panel, detached chart, and debug), display selection from saved
+//! geometry or the owner window, theme-aware clear colors, Windows DWM frame configuration, and
+//! HWND/geometry helpers. It also provides Windows AppUserModelIDs and group icons embedded in
+//! the executable by `build.rs` through `embed_group_icons`.
 
 use std::sync::Arc;
 
@@ -12,26 +12,41 @@ use crate::design;
 
 pub(crate) const APP_ID: &str = "MoonTerminal";
 
-/// Значки групп (`assets/icons/<id>.png`), ВШИТЫЕ в exe build-скриптом (см. build.rs
-/// `embed_group_icons`). Индекс = id значка из `GroupConfig.icon`. Подставляются из exe,
-/// без путей на диск (работает в dev и в деплое).
+/// Group icons from `assets/icons/<id>.png`, embedded in the executable by the build script's
+/// `embed_group_icons` step. Each index is a `GroupConfig.icon` ID, so icons require no runtime
+/// filesystem path in either development or deployed builds.
 mod group_icons {
     include!(concat!(env!("OUT_DIR"), "/group_icons.rs"));
 }
 
-/// PNG-байты значка группы по id (из embed). `None` — нет такого id.
+/// Return the embedded PNG bytes for a group icon ID.
+///
+/// # Arguments
+///
+/// * `id` - `GroupConfig.icon` ID used as the embedded icon-table index.
+///
+/// # Returns
+///
+/// The static PNG bytes, or `None` when the ID is absent or has no embedded icon.
 pub(crate) fn group_icon_png(id: u32) -> Option<&'static [u8]> {
     group_icons::GROUP_ICONS.get(id as usize).copied().flatten()
 }
 
-/// AppUserModelID окна = ключ группировки в таскбаре Windows. Каждой ГРУППЕ — свой id
-/// (`MoonTerminal.<группа>`), чтобы окна групп не слипались в одну кнопку.
+/// Build the platform app ID for a group window.
 ///
-/// ТОЛЬКО Windows: там значок таскбар-кнопки задаётся отдельно (`RelaunchIconResource`),
-/// от app_id не зависит. На Linux/Wayland app_id — ключ сопоставления окна с `.desktop`
-/// для ЗНАЧКА; вариативный id ломает иконку, поэтому держим базовый `MoonTerminal`.
-/// На X11 значок идёт через `_NET_WM_ICON` (см. `app_icon`), не от app_id. macOS app_id
-/// не использует. Итог: вне Windows — всегда базовый id.
+/// On Windows the AppUserModelID is the taskbar grouping key, so each non-empty group receives
+/// `MoonTerminal.<group>` and separate groups do not collapse into one taskbar button. The live
+/// window icon is set separately with `WM_SETICON`. Outside Windows this always returns the base
+/// `MoonTerminal` ID: Wayland uses it to match the `.desktop` entry, X11 receives the icon through
+/// `_NET_WM_ICON`, and macOS does not use this app ID.
+///
+/// # Arguments
+///
+/// * `group` - Group name to append on Windows; an empty name keeps the base ID.
+///
+/// # Returns
+///
+/// The group-specific Windows AppUserModelID or the platform-neutral base ID.
 pub(crate) fn group_app_id(group: &str) -> String {
     if cfg!(target_os = "windows") && !group.is_empty() {
         format!("{APP_ID}.{group}")
@@ -40,10 +55,19 @@ pub(crate) fn group_app_id(group: &str) -> String {
     }
 }
 
-/// Значок группы (декодированный `assets/icons/<icon_id>.png` из embed) для
-/// `WindowOptions.icon`. Движок применяет его на **X11** через `_NET_WM_ICON`. На Windows
-/// значок таскбара ставится отдельно через `WM_SETICON` (см. main.rs `set_group_window_icon`),
-/// на macOS — из бандла `.app`/`.icns`, на Wayland — из `.desktop`; там поле игнорируется.
+/// Decode an embedded group icon for `WindowOptions.icon`.
+///
+/// GPUI applies this field on X11 through `_NET_WM_ICON`. Windows sets the live taskbar and
+/// Alt-Tab icon separately through [`set_group_window_icon`]; macOS uses the `.app` bundle icon,
+/// and Wayland resolves the `.desktop` icon instead.
+///
+/// # Arguments
+///
+/// * `icon_id` - Embedded group-icon ID to decode.
+///
+/// # Returns
+///
+/// The decoded RGBA image, or `None` when the ID is absent or decoding fails.
 pub(crate) fn app_icon(icon_id: u32) -> Option<Arc<image::RgbaImage>> {
     let png = group_icon_png(icon_id)?;
     image::load_from_memory(png)
@@ -133,11 +157,22 @@ pub(crate) fn tool_window_options(
     owned_window_options(title, window_bounds, None, min_size, owner, true)
 }
 
-/// Открепленная non-chart панель (`Orders`, `Assets`, `Log`, `Report`).
+/// Build options for a detached non-chart panel such as Orders, Assets, Log, or Report.
 ///
-/// Это owned/tool окно, когда есть владелец: оно не получает отдельную taskbar-кнопку и
-/// живёт вместе с окном группы. При restore owner может отсутствовать; тогда окно
-/// становится independent, что лучше, чем потерять восстановленную панель.
+/// When an owner is present, the panel is an owned floating window that follows the group window
+/// and has no separate taskbar entry. During restoration the owner may be unavailable; in that
+/// case the relationship falls back to independent so the restored panel is not lost.
+///
+/// # Arguments
+///
+/// * `title` - Window title.
+/// * `window_bounds` - Initial or restored window state and geometry.
+/// * `display_id` - Display selected for the window, if known.
+/// * `owner` - Optional group-window owner.
+///
+/// # Returns
+///
+/// Floating window options with an owner relationship when one is available.
 pub(crate) fn detached_panel_window_options(
     title: impl Into<SharedString>,
     window_bounds: WindowBounds,
@@ -147,14 +182,22 @@ pub(crate) fn detached_panel_window_options(
     owned_window_options(title, window_bounds, display_id, None, owner, true)
 }
 
-/// Открепленное chart-окно — **independent** (НЕ owned, НЕ tool-window).
+/// Build options for an independent detached chart window.
 ///
-/// Только обычное independent-окно видит PowerToys FancyZones и снапит по зонам: tool-окна
-/// (`WS_EX_TOOLWINDOW`) и owned-окна FancyZones игнорирует (нет присутствия в таскбаре).
-/// Поэтому кнопку из таскбара убираем НЕ стилем окна, а `ITaskbarList::DeleteTab` после показа
-/// (см. `hide_window_from_taskbar`) — стиль не меняется → FancyZones продолжает работать.
-/// `taskbar Hidden` → без `WS_EX_APPWINDOW`, чтобы DeleteTab держался (APPWINDOW делает кнопку
-/// «липкой»). Independent (в отличие от owned) не поднимает окно группы при клике — это плюс.
+/// The project keeps chart windows neither owned nor tool windows so PowerToys FancyZones can
+/// discover and snap them. `WindowTaskbarVisibility::Hidden` avoids an app-window taskbar style,
+/// while [`hide_window_from_taskbar`] removes the taskbar item after the native window appears.
+/// Keeping the window independent also avoids raising the group window when the chart is clicked.
+///
+/// # Arguments
+///
+/// * `title` - Window title.
+/// * `window_bounds` - Initial or restored window state and geometry.
+/// * `display_id` - Display selected for the window, if known.
+///
+/// # Returns
+///
+/// Independent chart-window options with hidden taskbar visibility.
 pub(crate) fn detached_chart_window_options(
     title: impl Into<SharedString>,
     window_bounds: WindowBounds,
@@ -198,7 +241,7 @@ fn owned_window_options(
     owner: Option<AnyWindowHandle>,
     transparent_titlebar: bool,
 ) -> WindowOptions {
-    // Owned-окна (tool/detached/debug) скрыты из таскбара → значок им не нужен (None).
+    // Owned tool, detached, and debug windows are absent from the taskbar, so they need no icon.
     let mut options = app_window_options(
         title,
         window_bounds,
@@ -213,8 +256,19 @@ fn owned_window_options(
     options
 }
 
-/// Монитор, на котором сейчас находится окно-владелец (`Window::display`). Для tool/detached
-/// окон: открываться на том же дисплее, что и окно группы, из которого их открыли.
+/// Resolve the display currently containing an owner window.
+///
+/// Tool and detached windows use this to open on the same display as the group window that
+/// launched them.
+///
+/// # Arguments
+///
+/// * `owner` - Optional owner-window handle.
+/// * `cx` - Application context used to update and inspect the owner window.
+///
+/// # Returns
+///
+/// The owner's current display ID, or `None` if the owner or display cannot be resolved.
 pub(crate) fn owner_display_id(owner: Option<AnyWindowHandle>, cx: &mut App) -> Option<DisplayId> {
     owner?
         .update(cx, |_, window, cx| window.display(cx).map(|d| d.id()))
@@ -222,15 +276,28 @@ pub(crate) fn owner_display_id(owner: Option<AnyWindowHandle>, cx: &mut App) -> 
         .flatten()
 }
 
-/// display_id для вторичного окна с сохранённой геометрией. На macOS координаты окна
-/// per-display-ОТНОСИТЕЛЬНЫЕ (`MacWindow::bounds` считает от своего экрана) — детект
-/// «какой монитор содержит точку» по ним бессмыслен и всегда попадает в primary, поэтому
-/// там берём монитор окна-владельца. На прочих ОС координаты глобальные: сначала детект
-/// по сохранённой точке, фолбэк — монитор владельца.
+/// Resolve the display for a secondary window with saved geometry.
 ///
-/// `owner_display` — дисплей владельца, снятый В ТОЧКЕ ВЫЗОВА (`window.display(cx)`).
-/// Обязателен, когда вызов идёт из обработчика события окна-владельца: его слот в
-/// `cx.windows` в этот момент взят, и `owner.update()` (фолбэк) вернёт Err.
+/// Display containment is reliable on backends with global window coordinates, such as Windows
+/// and X11. macOS reports display-relative coordinates, so this skips containment there and uses
+/// the owner display. Wayland placement is compositor-controlled and coordinates may be
+/// surface-local, so callers may need to rely on the owner-display fallback instead of a saved
+/// origin.
+///
+/// `owner_display` is a display ID captured at the call site with `window.display(cx)`. Pass it
+/// when this function runs inside an owner-window event handler, because that window's slot in
+/// `cx.windows` is already borrowed and the `owner.update()` fallback will fail.
+///
+/// # Arguments
+///
+/// * `saved_origin` - Saved window origin used for display containment outside macOS.
+/// * `owner` - Optional owner handle used as the final fallback.
+/// * `owner_display` - Owner display captured by the caller when direct owner access is unavailable.
+/// * `cx` - Application context used to enumerate displays and inspect the owner.
+///
+/// # Returns
+///
+/// The display selected from saved geometry or owner state, or `None` when neither resolves.
 pub(crate) fn saved_or_owner_display_id(
     saved_origin: Option<Point<Pixels>>,
     owner: Option<AnyWindowHandle>,
@@ -251,17 +318,32 @@ pub(crate) fn saved_or_owner_display_id(
     owner_display.or_else(|| owner_display_id(owner, cx))
 }
 
-/// Явно активировать СВЕЖЕСОЗДАННОЕ окно. На macOS owned (child) окно, созданное на другом
-/// дисплее, без явного activate всплывает только при следующей активации приложения —
-/// клик N+1 показывал окно клика N. Вызывать только для окон, открытых кликом пользователя
-/// (на bulk-restore при старте активация каждого окна крала бы фокус).
+/// Activate a newly created window in response to an explicit user action.
+///
+/// On macOS an owned window created on another display may otherwise remain hidden until the next
+/// application activation, making click N+1 reveal the window requested by click N. Do not call
+/// this during bulk startup restoration, where activating each window would steal focus.
+///
+/// # Arguments
+///
+/// * `handle` - Handle of the newly created window.
+/// * `cx` - Application context used to update and activate the window.
 pub(crate) fn activate_new_window(handle: AnyWindowHandle, cx: &mut App) {
     let _ = handle.update(cx, |_, window, _| window.activate_window());
 }
 
-/// Геометрия окна в логич. px `(x, y, w, h)` — `None`, если окно НЕ в обычном (Windowed)
-/// состоянии (свёрнуто/во весь экран). Единая точка приведения f32→i32/u32 для персиста
-/// откреп-окон: одинаковая выборка жила в `detached.rs` и `chart_tabs::windows`.
+/// Read windowed geometry as logical pixels `(x, y, width, height)`.
+///
+/// This centralizes the float-to-integer conversion used to persist detached panel and chart
+/// geometry.
+///
+/// # Arguments
+///
+/// * `window` - Window whose current bounds should be inspected.
+///
+/// # Returns
+///
+/// Integer geometry for a `Windowed` window, or `None` for fullscreen or maximized bounds.
 pub(crate) fn window_geom(window: &Window) -> Option<(i32, i32, u32, u32)> {
     let WindowBounds::Windowed(b) = window.window_bounds() else {
         return None;
@@ -274,7 +356,13 @@ pub(crate) fn window_geom(window: &Window) -> Option<(i32, i32, u32, u32)> {
     ))
 }
 
-/// DWM-стиль окна (Windows): без скругления углов, тёмная рамка/заголовок. На прочих ОС — no-op.
+/// Configure an opaque Windows DWM frame with square corners and fixed dark border/caption colors.
+///
+/// Each native call is best effort. Other platforms use a no-op counterpart.
+///
+/// # Arguments
+///
+/// * `window` - Window whose native DWM attributes should be configured.
 #[cfg(target_os = "windows")]
 pub(crate) fn configure_dwm_window(window: &Window) {
     use raw_window_handle::RawWindowHandle;
@@ -321,12 +409,23 @@ pub(crate) fn configure_dwm_window(window: &Window) {
 }
 
 #[cfg(not(target_os = "windows"))]
+/// Leave DWM-specific configuration unchanged on non-Windows platforms.
+///
+/// # Arguments
+///
+/// * `_` - Window accepted for API parity with the Windows implementation.
 pub(crate) fn configure_dwm_window(_: &Window) {}
 
-/// Поставить per-group значок окну группы (из embed `assets/icons/<icon_id>.png`, вшит в exe).
-/// ЖИВАЯ таскбар-кнопка/Alt-Tab берут иконку ОКНА → ставим `WM_SETICON` big+small, создавая
-/// HICON прямо из PNG-байтов через `CreateIconFromResourceEx` (PNG-иконки — Vista+, dwVer
-/// 0x00030000). На X11 значок уже идёт через `WindowOptions.icon` (`_NET_WM_ICON`) — это Windows.
+/// Set a Windows group window's large and small native icons from embedded icon bytes.
+///
+/// The function asks `CreateIconFromResourceEx` for 32-pixel and 16-pixel `HICON` handles using
+/// resource version `0x00030000`, then sends them with `WM_SETICON` for the live taskbar and
+/// Alt-Tab representations. X11 receives the same group image through `WindowOptions.icon` instead.
+///
+/// # Arguments
+///
+/// * `window` - Group window whose native icons should be replaced.
+/// * `icon_id` - Embedded group-icon ID.
 #[cfg(target_os = "windows")]
 pub(crate) fn set_group_window_icon(window: &Window, icon_id: u32) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -362,13 +461,23 @@ pub(crate) fn set_group_window_icon(window: &Window, icon_id: u32) {
 }
 
 #[cfg(not(target_os = "windows"))]
+/// Leave the native window icon unchanged outside Windows.
+///
+/// # Arguments
+///
+/// * `_` - Window accepted for API parity with the Windows implementation.
+/// * `_` - Embedded icon ID accepted for API parity.
 pub(crate) fn set_group_window_icon(_: &Window, _: u32) {}
 
-/// Убрать кнопку окна из таскбара через `ITaskbarList::DeleteTab` — БЕЗ смены стиля окна.
-/// Для откреп-чартов: они остаются обычными independent-окнами → PowerToys FancyZones их видит
-/// и снапит по зонам, но кнопки в таскбаре нет. (`WS_EX_TOOLWINDOW` дал бы «нет кнопки», но
-/// FancyZones игнорирует tool-окна; owned — тоже игнорирует. Поэтому именно DeleteTab.)
-/// Вызывать после показа окна (кнопка уже создана); идемпотентно.
+/// Remove a Windows taskbar item without changing the window's native style.
+///
+/// Detached charts stay independent windows so PowerToys FancyZones can discover them; this
+/// calls `ITaskbarList::DeleteTab` only after the native window has been shown and its taskbar item
+/// can exist. Handle lookup, COM creation, initialization, and deletion are all best effort.
+///
+/// # Arguments
+///
+/// * `window` - Displayed window whose taskbar item should be removed.
 #[cfg(target_os = "windows")]
 pub(crate) fn hide_window_from_taskbar(window: &Window) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -396,12 +505,23 @@ pub(crate) fn hide_window_from_taskbar(window: &Window) {
 }
 
 #[cfg(not(target_os = "windows"))]
+/// Leave taskbar state unchanged outside Windows.
+///
+/// # Arguments
+///
+/// * `_` - Window accepted for API parity with the Windows implementation.
 pub(crate) fn hide_window_from_taskbar(_: &Window) {}
 
-/// Восстановить окно и вернуть его на экран (Windows): разминимизировать (`SW_RESTORE`) и
-/// переставить каскадом на первичный монитор (левый-верх primary = (0,0) в координатах ОС) —
-/// спасение откреп-окон, уехавших за пределы экранов / на отключённый монитор / свёрнутых.
-/// Сеттера позиции окна у gpui-форка нет (есть только `resize`), поэтому двигаем через WinAPI.
+/// Restore a Windows window and move it into an on-screen cascade near the primary origin.
+///
+/// `SW_RESTORE` unmaximizes or restores the window, and `SetWindowPos` moves it without changing
+/// its size. This recovers detached windows left off-screen, on a disconnected display, or
+/// minimized. The GPUI fork has no position setter, so the move uses Win32 directly.
+///
+/// # Arguments
+///
+/// * `window` - Window to restore and reposition.
+/// * `index` - Cascade index used to offset this window from its peers.
 #[cfg(target_os = "windows")]
 pub(crate) fn reset_window_onscreen(window: &Window, index: usize) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -417,7 +537,7 @@ pub(crate) fn reset_window_onscreen(window: &Window, index: usize) {
         return;
     };
     let hwnd = HWND(h.hwnd.get() as *mut _);
-    // Каскад с шагом 40px (и переносом по модулю), чтобы окна не легли стопкой друг на друга.
+    // Offset by 40 pixels and wrap every eight windows so the first windows do not fully overlap.
     let off = 60 + (index as i32 % 8) * 40;
     unsafe {
         let _ = ShowWindow(hwnd, SW_RESTORE);
@@ -434,12 +554,23 @@ pub(crate) fn reset_window_onscreen(window: &Window, index: usize) {
 }
 
 #[cfg(not(target_os = "windows"))]
+/// Leave window geometry unchanged outside Windows.
+///
+/// # Arguments
+///
+/// * `_` - Window accepted for API parity with the Windows implementation.
+/// * `_` - Cascade index accepted for API parity.
 pub(crate) fn reset_window_onscreen(_: &Window, _: usize) {}
 
-/// Сбросить позиции ВСЕХ окон приложения на экран каскадом (встроенный хоткей
-/// Ctrl+Shift+F10): спасение любых уехавших за экран / свёрнутых окон, независимо от
-/// того, из какого окна нажали. Использует `App::windows()` — не завязано на реестр
-/// откреп-окон в backend, поэтому охватывает и группы, и панели-окна.
+/// Reset every application window into an on-screen cascade for the Ctrl+Shift+F10 recovery action.
+///
+/// Enumerating `App::windows()` avoids dependence on the backend's detached-window registry, so
+/// the action covers group windows and detached panel windows alike. The per-window operation is
+/// effective only on Windows.
+///
+/// # Arguments
+///
+/// * `cx` - Application context used to enumerate and update every window.
 pub(crate) fn reset_all_windows_onscreen(cx: &mut App) {
     for (i, handle) in cx.windows().into_iter().enumerate() {
         let _ = handle.update(cx, |_, window, _| reset_window_onscreen(window, i));

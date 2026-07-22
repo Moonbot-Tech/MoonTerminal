@@ -1,6 +1,7 @@
-//! Рендер-состояние чарта (`impl RenderState`): сведение per-pane GPU-состояния,
-//! тайминг present (пейсер ~60Гц), курсор/ридаут, отрисовка слоёв own-pass.
-//! Вынесено из `mod.rs`; структура `RenderState` объявлена там.
+//! Chart render state (`impl RenderState`): per-pane GPU-state composition, present pacing initialized
+//! at 60 Hz and then driven by detected monitor refresh clamped to 30-360 Hz, with the renderer target
+//! capped at 240 Hz, plus cursor, readout, and own-pass layer rendering. Extracted from `mod.rs`, where
+//! the `RenderState` structure remains declared.
 
 use super::*;
 
@@ -11,10 +12,10 @@ const READOUT_INSET: f32 = 2.0;
 
 #[cfg(windows)]
 fn bounds_clip(bounds: [f32; 4], res: [f32; 2]) -> [f32; 4] {
-    // ВАЖНО: clamp(min, max) паникует при min > max. При вырожденных границах панели
-    // (нулевая ширина / панель упёрта в правый/нижний край) `l` может равняться res,
-    // тогда `l + 1.0 > res` и clamp(min>max) убивал бы кадр (баг: f32 clamp min=1681
-    // max=1680 при ресайзе/реконнекте). Поэтому верхнюю границу берём как max(res, l+1).
+    // IMPORTANT: `clamp(min, max)` panics when min exceeds max. With degenerate panel bounds such as
+    // zero width or a panel touching the right or bottom edge, `l` can equal the resolution. Then
+    // `l + 1.0 > res` previously killed the frame with e.g. f32 clamp min=1681, max=1680 during
+    // resize or reconnect. Use `max(res, l+1)` as the upper bound.
     let l = bounds[0].floor().clamp(0.0, res[0].max(1.0));
     let t = bounds[1].floor().clamp(0.0, res[1].max(1.0));
     let r = (bounds[0] + bounds[2])
@@ -170,8 +171,9 @@ impl RenderState {
         true
     }
 
-    /// Цена призрачного перекрестия compare-режима (пишет наведённый сосед по вкладке).
-    /// Смена цены сама взводит present — continuous-present соседям не нужен.
+    /// Set the comparison-mode ghost crosshair price written by the hovered sibling tab.
+    ///
+    /// A price change requests present itself, so siblings do not need continuous presentation.
     pub(super) fn set_ghost_price(&mut self, price: Option<f32>) -> bool {
         if self.ghost_price.map(f32::to_bits) == price.map(f32::to_bits) {
             return false;
@@ -183,8 +185,9 @@ impl RenderState {
         true
     }
 
-    /// Last якоря compare-вкладки для крупной дельты под угловой подписью (метла). Смена
-    /// значения взводит present — дельта обновляется и когда тикает только якорь.
+    /// Set the comparison anchor's Last for the large delta under the broom-mode corner label.
+    ///
+    /// A changed value requests present, keeping the delta current even when only the anchor ticks.
     pub(super) fn set_compare_ref_price(&mut self, price: Option<f32>) -> bool {
         if self.compare_ref_price.map(f32::to_bits) == price.map(f32::to_bits) {
             return false;
@@ -230,10 +233,11 @@ impl RenderState {
                     ];
                     params.enabled = 1.0;
                 } else if let Some(price) = self.ghost_price {
-                    // Призрак compare-режима: горизонталь на цене соседа, СВОИМ Y-маппингом.
-                    // X за границами → cursor.hlsl сам гасит вертикаль (bounds-check), а
-                    // горизонталь живёт своей проверкой Y (цена ушла из окна → линии нет).
-                    // У схлопнутого чарта метлы валиден вид стакана (высота/окно те же).
+                    // Comparison ghost: draw a horizontal at the sibling price using THIS panel's Y
+                    // mapping. An out-of-bounds X makes cursor.hlsl suppress the vertical through its
+                    // bounds check, while the horizontal has its own Y check and vanishes when price
+                    // leaves the window. A broom-collapsed chart retains a valid order-book view with
+                    // the same height and window.
                     let v = if pr.view.price_to_px > 0.0 {
                         &pr.view
                     } else {
@@ -287,22 +291,24 @@ impl RenderState {
             let plot_w = pr.view.bounds[2] / sf;
             let plot_h = pr.view.bounds[3] / sf;
             let plot_right = plot_left + plot_w;
-            // Сторона оси цен: Hide → плашку курсора-цены не рисуем (нет оси/жёлоба); Right → у
-            // правого края панели (за стаканом). Держим синхронно с text.rs.
+            // Price-axis side: Hide omits the cursor-price plate because no axis or gutter exists;
+            // Right places it at the panel's right edge beyond the order book. Keep this synchronized
+            // with `text/prepare.rs::prepare_text`.
             use crate::chart_persist::PriceAxisPos;
             let axis_hidden = matches!(pr.price_axis_pos, PriceAxisPos::Hide);
             let axis_on_right = matches!(pr.price_axis_pos, PriceAxisPos::Right);
 
-            // Прозрачная плашка-подложка под угловую подпись (alpha 0.2 — 80% прозрачности).
-            // Якорь совпадает с текстом (text.rs): есть стакан → у края панели, нет → у края плота.
-            // Рисуем ДО гейта `plot_w<60` — иначе в режиме «только стакан» (чарт схлопнут) подложки
-            // под подписью не было (как сейчас у соседей с метлой).
+            // Translucent corner-label backing plate with alpha 0.2, or 80% transparency. Its anchor
+            // matches `text/prepare.rs::prepare_text`: at the panel edge with an order book,
+            // otherwise at the plot edge.
+            // Draw BEFORE the `plot_w<60` gate so order-book-only broom followers retain a plate
+            // under their label even while the chart is collapsed.
             if pr.caption_w > 0.0 || pr.caption_delta_w > 0.0 || pr.caption_scale_w > 0.0 {
                 let lines = (!pr.core_name.is_empty()) as u32 + (!pr.market.is_empty()) as u32;
-                // Строка дельты от якоря (метла) — под подписью, на той же плашке: ширина по
-                // максимуму строк, высота + её замеренная высота (см. prepare_text). Бейдж
-                // текущего Y-масштаба — левее блока: ширина (с зазором) добавляется слева,
-                // высота может превышать строки подписи (крупный кегль) — берём максимум.
+                // Broom anchor-delta row sits below the label on the same plate. Width uses the
+                // widest row, and height adds its measured height from `prepare_text`. The current
+                // Y-scale badge sits left of the block, adding its width and gap there; its large
+                // font may exceed label-row height, so use the maximum.
                 let cap_w = pr.caption_w.max(pr.caption_delta_w) + pr.caption_scale_w;
                 let cap_h = (lines as f32 * super::text::LINE_H + pr.caption_delta_h)
                     .max(pr.caption_scale_h);
@@ -330,16 +336,16 @@ impl RenderState {
                 }
             }
 
-            // Плашки-подложки под подписи ордеров/курсора (раскладку дал `prepare_text`). Лёгкая
-            // плашка (как угловая подпись монеты, alpha 0.2) для ордерных; плотная (alpha 0.96) для
-            // курсорных — они приоритетные, на переднем плане. Строим ДО гейта по курсору — ордерные
-            // подписи видны и без курсора. И ДО гейта «схлопнутого» чарта: у соседа в метле
-            // (только стакан) призрак compare-режима кладёт сюда объём/% — им нужна подложка.
+            // Backing plates for order and cursor labels laid out by `prepare_text`. Order labels use
+            // a light alpha-0.2 plate like the market corner label; priority foreground cursor labels
+            // use a dense alpha-0.96 plate. Build them BEFORE the cursor gate because order labels are
+            // visible without a cursor, and BEFORE the collapsed-chart gate because a broom follower's
+            // comparison ghost places volume and percentage here and needs a backing plate.
             let placed = std::mem::take(&mut pr.label_placed);
             for pl in &placed {
                 let dst = readout_rect_dst(pl.x, pl.y, pl.w, pl.h, pl.ax, pl.ay, sf);
-                // solid → плотная курсорная плашка; иначе → полу-плотная ордерная (просвечивает,
-                // младшая «заходит под» старшую при наложении).
+                // `solid` selects a dense cursor plate; otherwise use a semitransparent order plate
+                // that lets a lower-priority label slide beneath a higher one during overlap.
                 let pbg = if pl.solid { bg } else { self.readout_order_bg };
                 pr.readout_rects.push(ReadoutRect {
                     dst,
@@ -350,7 +356,7 @@ impl RenderState {
             }
             pr.label_placed = placed;
 
-            // Дальше — курсорные плашки/оси, только для нормального (не схлопнутого) чарта.
+            // Remaining cursor plates and axes apply only to a normal, non-collapsed chart.
             if plot_w < 60.0 || plot_h < 60.0 || pr.view.price_to_px <= 0.0 {
                 continue;
             }
@@ -370,7 +376,7 @@ impl RenderState {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0.0, |d| d.as_millis() as f64);
-                // Не сегодняшний день → «ДД.ММ ЧЧ:ММ:СС» (большие ТФ/окна).
+                // A date other than today uses day-month plus time for large time frames or windows.
                 let label = moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, true, now_ms);
                 let text_w = readout_text_width(&label, pr.readout_time_width);
                 let line_h = pr.readout_time_line_h.max(1.0);
@@ -678,10 +684,10 @@ impl RenderState {
                     self.render_chart_base_d3d(res, &device, &context, &base_rtv, gpu, &scissor_rs);
                     self.base_dirty = false;
                 }
-                // Клип блита = слот ЭТОГО чарта (объединение баундов его активных панелей),
-                // НЕ весь бэкбуфер: при нескольких gpu_canvas в одном окне (стек выносного
-                // окна) полноэкранный блит window_bg затирал бы соседние чарты. Нет активных
-                // панелей → не блитим (пусто = логотип GPUI поверх).
+                // Clip the blit to THIS chart's slot, the union of its active-panel bounds, rather
+                // than the full backbuffer. With multiple `gpu_canvas` elements in one detached
+                // window stack, a full-window `window_bg` blit would erase sibling charts. With no
+                // active panels, skip the blit so the empty state remains the GPUI logo overlay.
                 let mut blit_clip: Option<[f32; 4]> = None;
                 for pr in &self.panes {
                     if !pr.active {

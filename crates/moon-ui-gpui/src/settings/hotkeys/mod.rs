@@ -1,9 +1,8 @@
-//! Вкладка «Хоткеи»: Moonbot-compatible набор горячих клавиш, но с нормальной
-//! компоновкой по сценариям.
+//! Hotkeys tab: a Moonbot-compatible hotkey set organized by workflow.
 //!
-//! Разбито по файлам: здесь — енумы слотов (`HotkeySlot`/`MouseSlot`), маппинг
-//! «слот → поле `HotkeysConfig`» (геттеры/сеттеры/id) и `parse_hotkey`; [`tab`] —
-//! сам `impl SettingsView` (сборка вкладки и строки-редакторы).
+//! This module owns the slot enums (`HotkeySlot`/`MouseSlot`), the slot-to-`HotkeysConfig`
+//! field mapping (getters, setters, and IDs), and `parse_hotkey`; [`tab`] contains the
+//! `SettingsView` implementation that builds the tab and its editor rows.
 
 mod tab;
 
@@ -41,8 +40,8 @@ enum HotkeySlot {
     FigAlert,
 }
 
-/// Группы вкладки «Хоткеи» — саб-вкладки под блоком встроенных (раскладка как страницы
-/// хоткеев Moonbot). Встроенные — не группа: они всегда видны над переключателем.
+/// Hotkey groups shown as sub-tabs below the built-in block, matching Moonbot's hotkey pages.
+/// Built-ins are not a group and remain visible above the switcher.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::settings) enum HotkeyGroup {
     Presets,
@@ -78,7 +77,7 @@ impl HotkeyGroup {
         .to_string()
     }
 
-    /// Подсказка группы — первой строкой над строками активной саб-вкладки.
+    /// Returns the hint shown above the active sub-tab's rows.
     pub(in crate::settings) fn hint(self) -> String {
         match self {
             Self::Presets => t!("hotkeys.group.presets_hint"),
@@ -109,9 +108,10 @@ enum MouseSlot {
     ShortSellMove2,
 }
 
-/// Мышиный жест, который рантайм пока не читает: постановку ордера смотрит только
-/// BuySet/ShortSet (`ChartPanel::try_place_order_click`), а перенос линий — простое
-/// ЛКМ-перетаскивание за линию, Move-жесты не проверяются.
+/// Returns whether runtime does not yet consume this mouse gesture.
+///
+/// Order placement checks only BuySet/ShortSet in `ChartPanel::try_place_order_click`; line
+/// movement uses direct left-button dragging and does not inspect the Move gestures.
 fn mouse_slot_wip(slot: MouseSlot) -> bool {
     !matches!(slot, MouseSlot::BuySet | MouseSlot::ShortSet)
 }
@@ -125,9 +125,8 @@ fn parse_hotkey(raw: &str) -> Option<Keystroke> {
     }
 }
 
-/// Единый список «слот → поле `HotkeysConfig`»: геттер и сеттер раньше дублировали 30
-/// строк маппинга (одну под `&`, другую под `&mut`). Макрос держит список в одном месте;
-/// `$($brw)+` принимает `&` или `&mut`, исчерпывающий match по-прежнему проверяет компилятор.
+/// Centralizes the slot-to-`HotkeysConfig` field map formerly duplicated by the getter and setter.
+/// `$($brw)+` accepts `&` or `&mut`, while the compiler still checks the match exhaustively.
 macro_rules! hotkey_field {
     ($hotkeys:ident, $slot:expr, $($brw:tt)+) => {
         match $slot {

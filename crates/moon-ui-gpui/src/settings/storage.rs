@@ -1,10 +1,10 @@
-//! Вкладка «Хранилище» — локальные БД (`data/*.sqlite`): размеры (файл + WAL),
-//! счётчики строк, обслуживание (Сжать/Бэкап), настройки БД стратегий.
+//! Storage tab for local databases (`data/*.sqlite`): main/WAL sizes, row counts, maintenance
+//! actions (compact/backup), and strategy-database settings.
 //!
-//! Правки применяются СРАЗУ (пишутся в `cfg/storage.toml` и в живые атомики
-//! `strat_db`), в отличие от draft-вкладок: у хранилища свой файл, а тогл записи
-//! должен действовать без «Сохранить». Сборы статистики и VACUUM ходят в SQLite —
-//! только на background executor (COUNT по большой реплике фризил бы UI).
+//! Changes apply immediately to `cfg/storage.toml` and live `strat_db` atomics, unlike draft-backed
+//! tabs: Storage has its own file, and its recording toggle must take effect without Save. SQLite
+//! statistics and maintenance run only on the background executor because counting a large replica
+//! on the UI thread would freeze the interface.
 
 use gpui::*;
 use moon_ui::{MoonButton, MoonCheckboxSize, MoonPalette, StyledExt, h_flex, rgba_from, v_flex};
@@ -14,10 +14,10 @@ use super::{SettingsView, StatusMsg, section, separator};
 use crate::design;
 use moon_core::config::{paths, storage as storage_cfg};
 
-/// Снимок состояния хранилища (собирается фоном).
+/// Snapshot of storage state collected in the background.
 #[derive(Clone, Default)]
 pub(super) struct StorageInfo {
-    /// (размер файла, размер -wal) по БД; None = файла нет.
+    /// Main-file and WAL sizes per database, or `None` when the file does not exist.
     pub reports: Option<(u64, u64)>,
     pub strategies: Option<(u64, u64)>,
     pub klines: Option<(u64, u64)>,
@@ -33,12 +33,12 @@ pub(super) struct StorageInfo {
     pub strat_versions: i64,
 }
 
-/// Состояние вкладки: конфиг хранилища + фоновый снимок.
+/// Storage-tab state: its configuration and background snapshot.
 pub(super) struct StorageEd {
     pub cfg: storage_cfg::StorageCfg,
     pub info: Option<StorageInfo>,
     pub inflight: bool,
-    /// Идущая операция обслуживания (кнопки задизейблены).
+    /// Whether a maintenance operation is running and action buttons must be disabled.
     pub busy: bool,
 }
 
@@ -74,7 +74,7 @@ fn collect_info() -> StorageInfo {
     out
 }
 
-/// Человекочитаемый размер (КБ/МБ/ГБ).
+/// Formats a byte count for display in KB, MB, or GB.
 fn fmt_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     let b = bytes as f64;
@@ -87,7 +87,7 @@ fn fmt_size(bytes: u64) -> String {
     }
 }
 
-/// Открыть папку в системном файловом менеджере.
+/// Opens a folder in the platform file manager.
 fn open_folder(path: &std::path::Path) {
     #[cfg(windows)]
     let cmd = "explorer";
@@ -99,8 +99,9 @@ fn open_folder(path: &std::path::Path) {
 }
 
 impl SettingsView {
-    /// Фоновый сбор снимка хранилища (размеры + COUNT'ы). Дедуп: не чаще одного
-    /// в полёте; повторный вызов при inflight игнорируется.
+    /// Collects storage sizes and row counts in the background.
+    ///
+    /// Only one collection may run at a time; calls made while one is in flight are ignored.
     pub(super) fn storage_refresh(&mut self, cx: &mut Context<Self>) {
         if self.storage.inflight {
             return;
@@ -120,7 +121,7 @@ impl SettingsView {
         .detach();
     }
 
-    /// Операция обслуживания на background executor + рефреш и статус по концу.
+    /// Runs a maintenance operation on the background executor, then refreshes data and status.
     fn storage_op(
         &mut self,
         cx: &mut Context<Self>,
@@ -155,7 +156,7 @@ impl SettingsView {
                             true,
                         ),
                     });
-                    this.storage.info = None; // размеры изменились — пересобрать
+                    this.storage.info = None; // Invalidate the snapshot after every maintenance attempt.
                     this.storage_refresh(cx);
                     cx.notify();
                 });
@@ -164,7 +165,7 @@ impl SettingsView {
         .detach();
     }
 
-    /// Изменить лимит версий (клампим 0..=10000): живой атомик + storage.toml.
+    /// Adjusts the version limit, clamps it to `0..=10000`, and updates live state and storage.toml.
     fn adjust_version_limit(&mut self, delta: i32, cx: &mut Context<Self>) {
         let v = (self.storage.cfg.strategies.version_limit as i32 + delta).clamp(0, 10_000) as u32;
         if self.storage.cfg.strategies.version_limit != v {
@@ -176,7 +177,7 @@ impl SettingsView {
     }
 
     pub(super) fn storage_tab(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Первый показ вкладки — запускаем фоновый сбор снимка.
+        // Start background snapshot collection when the tab is first shown.
         if self.storage.info.is_none() && !self.storage.inflight {
             self.storage_refresh(cx);
         }
@@ -207,8 +208,8 @@ impl SettingsView {
             .sum();
 
         let tool_btn = |id: &'static str, label: String, disabled: bool| {
-            // Боковые пробелы в label — обход форк-бага `MoonButton` pad_x=0 (текст впритык к
-            // рамке .outline); см. FORK_BUGS.md. Даёт горизонтальные гапы у текста.
+            // Spaces around the label work around the fork's `MoonButton` `pad_x=0` bug, which
+            // otherwise places text against the outline.
             MoonButton::new(id)
                 .outline()
                 .small()
@@ -219,7 +220,7 @@ impl SettingsView {
         v_flex()
             .w_full()
             .gap_1()
-            // ── Общий блок: папка данных ────────────────────────────────────
+            // ── General: data directory ─────────────────────────────────────
             .child(
                 h_flex()
                     .gap(design::ui_px(cx, 10.0))
@@ -248,7 +249,7 @@ impl SettingsView {
                 t!("storage.total_size", size = fmt_size(total)).to_string(),
             ))
             .child(separator(p, cx))
-            // ── Отчёты ──────────────────────────────────────────────────────
+            // ── Reports ─────────────────────────────────────────────────────
             .child(section(&t!("storage.reports_title"), p, cx))
             .child(hint(format!(
                 "{} · {}",
@@ -274,7 +275,7 @@ impl SettingsView {
             )
             .child(hint(t!("storage.reports_hint").to_string()))
             .child(separator(p, cx))
-            // ── Стратегии ───────────────────────────────────────────────────
+            // ── Strategies ──────────────────────────────────────────────────
             .child(section(&t!("storage.strategies_title"), p, cx))
             .child(
                 moon_ui::MoonCheckbox::new("strat-db-enabled")
@@ -357,7 +358,7 @@ impl SettingsView {
             )
             .child(hint(t!("storage.strategies_hint").to_string()))
             .child(separator(p, cx))
-            // ── Кэш свечей ──────────────────────────────────────────────────
+            // ── Kline cache ─────────────────────────────────────────────────
             .child(section(&t!("storage.klines_title"), p, cx))
             .child(hint(size_line(info.klines)))
             .child(hint(t!("storage.klines_hint").to_string()))

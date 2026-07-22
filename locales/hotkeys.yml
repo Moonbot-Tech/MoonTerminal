@@ -1,4 +1,4 @@
-# Вкладка «Хоткеи» окна настроек.
+# Hotkeys tab of the Settings window.
 _version: 2
 
 hotkeys.unassigned:
@@ -353,7 +353,7 @@ hotkeys.manual_strategy_hint:
   en: "Select the %{n}th strategy of the MS list and enable the mode."
   es: "Selecciona la estrategia %{n} de la lista MS y activa el modo."
 
-# --- Слой рисования фигур (карандаш) ---
+# --- Figure drawing layer (pencil) ---
 hotkeys.group.draw:
   ru: "Рисование"
   en: "Drawing"

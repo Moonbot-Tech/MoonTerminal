@@ -1,5 +1,5 @@
-//! Колонки/ячейки/заголовки таблицы «Отчёт»: построение колонок, форматирование
-//! значений БД в текст+цвет, человекочитаемые заголовки и ширины.
+//! Report table columns, cells, and headers: column descriptors, DB-value display formatting,
+//! raw-schema titles, and base widths.
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
@@ -22,7 +22,7 @@ pub(super) fn report_columns(cols: &[String], vis: &[usize]) -> Vec<MoonDataTabl
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Build one report row; absent values render as NULL and coin/core cells keep their actions.
+/// Build one report row; missing values render as empty cells, while coin and core cells retain actions.
 pub(super) fn report_data_row(
     ri: usize,
     cols: &[String],
@@ -36,8 +36,8 @@ pub(super) fn report_data_row(
     let mut cells = Vec::with_capacity(vis.len());
     if let Some(r) = data.rows.get(ri) {
         let core_uid = data.core_uids.get(ri).copied().unwrap_or(0);
-        // Стратегия сделки — колонка `strategyid` (может быть невидима, читаем по имени из
-        // ВСЕХ колонок). 0/отсутствует = ручная/без стратегии → секция стратегии в меню скрыта.
+        // Read strategyid from all columns, even when hidden. Zero or missing means manual/no
+        // strategy and suppresses the strategy section of the context menu.
         let strat_id = cols
             .iter()
             .position(|c| c == "strategyid")
@@ -70,9 +70,10 @@ pub(super) fn report_data_row(
     MoonDataRow::new(cells)
 }
 
-/// Ячейка монеты в «Отчёте»: кликабельна целиком (акцентным цветом — намёк), клик
-/// открывает чарт монеты НА ЯДРЕ сделки (`core_uid`) — как клик по токену в «Ордерах».
-/// Окно Main НЕ поднимаем (`open_request_activate = false`), как в Ордерах/Детектах.
+/// Build a full-cell clickable coin cell.
+///
+/// Left-click opens the resolved market on the transaction's core in Main without activating
+/// Main; right-click opens the shared coin context menu.
 fn coin_cell(
     ri: usize,
     val: &Value,
@@ -93,17 +94,16 @@ fn coin_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        // Кегль/шрифт наследуются от стиля ячейки (каскад moonui, фикс `9a33dbf`).
+        // Inherit font styling from the cell's MoonUI cascade.
         .text_color(rgb(MoonTone::Accent.color(p)))
         .child(coin.clone())
         .on_click(move |_, _window, app| {
             if coin.is_empty() {
                 return;
             }
-            // В БД отчёта монета хранится по-разному: одни ядра пишут базу (`M`), другие —
-            // полный рынок (`VINEUSDT`). Чарту нужен ИМЕННО полный ключ рынка ядра, иначе
-            // подписка не находит рынок → пустой график. Восстанавливаем его по quote ядра
-            // и его market-юниверсу.
+            // The report DB may store `coin` as a base (`M`) or a full market (`VINEUSDT`).
+            // The chart expects an exact full key, so resolve it using the core quote and
+            // market universe.
             let market = backend.read(app);
             let market = resolve_market(market, core_uid, &coin);
             backend.update(app, |b, bcx| {
@@ -113,8 +113,8 @@ fn coin_cell(
                 bcx.notify();
             });
         })
-        // ПКМ — единое контекстное меню монеты. Стратегия сделки известна (`strategyid`) →
-        // доступна и «В ЧС стратегии». «Выбранные ядра» = фильтр ядер отчёта.
+        // Right-click opens the shared coin menu. A nonzero strategyid enables the strategy
+        // blacklist, while selected_cores reflects the report's core filter.
         .on_mouse_down(
             MouseButton::Right,
             move |e: &MouseDownEvent, window, app| {
@@ -164,9 +164,12 @@ fn coin_cell(
     MoonDataCell::element(el)
 }
 
-/// Полный ключ рынка ядра по сохранённой в отчёте монете. `coin` может быть базой
-/// (`M`) или уже полным рынком (`MUSDT`). Достраиваем quote ядра (как Ордера/Детекты)
-/// и, если доступен снимок, сверяемся с реальным market-юниверсом ядра.
+/// Build a market candidate for the core from the DB `coin` value.
+///
+/// Supports both historical formats: a base (`M`) and an already complete market (`MUSDT`).
+/// A base receives the core quote. When the market universe is nonempty, the candidate is
+/// validated and may be replaced by a market with the same base; an empty universe leaves the
+/// candidate unverified.
 fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
     let quote = b
         .config
@@ -176,8 +179,8 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
         .map(|s| moon_core::symbol::resolve_quote(&s.market))
         .unwrap_or_default();
     let upper = coin.to_ascii_uppercase();
-    // Уже полный рынок: кончается на quote ядра ИЛИ содержит dex-префикс HIP-3 (`xyz:BIRD`) →
-    // берём как есть (достраивать quote нельзя — HL/HIP-3 не несут суффикса в имени).
+    // Treat a value ending in the core quote or carrying a HIP-3 DEX prefix (`xyz:BIRD`) as a
+    // complete market. HL/HIP-3 names must not receive a quote suffix.
     let already_full = moon_core::symbol::is_hip3(coin)
         || (!quote.is_empty() && upper.len() > quote.len() && upper.ends_with(&quote));
     let candidate = if already_full || quote.is_empty() {
@@ -185,8 +188,9 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
     } else {
         format!("{coin}{quote}")
     };
-    // Если снимок ядра доступен — подтверждаем кандидата по юниверсу, иначе ищем рынок,
-    // чья база совпадает с монетой (префиксы вроде `1000PEPEUSDT` и dex-перпы `xyz:BIRD`).
+    // An empty universe returns the candidate without verification. Otherwise accept an exact
+    // candidate match or fall back to a market with the same base, including prefixed markets
+    // and DEX perpetuals.
     let universe = b.session.market_source().search_markets(core, coin, 32);
     if universe.is_empty() || universe.iter().any(|m| m == &candidate) {
         return candidate;
@@ -198,8 +202,10 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
         .unwrap_or(candidate)
 }
 
-/// Ячейка «Ядро» в «Отчёте»: цвет как в Ордерах/Активах (тон Muted), кликом ставит фильтр
-/// ТОЛЬКО на это ядро (повторный клик по нему же — сброс на «все»).
+/// Build a full-cell core cell with the shared muted tone.
+///
+/// Clicking filters by exactly this core; clicking the sole selected core again clears the
+/// filter and shows all cores.
 fn core_cell(
     ri: usize,
     val: &Value,
@@ -226,9 +232,9 @@ fn core_cell(
 
 fn report_data_cell(col: &str, val: &Value, p: MoonPalette) -> MoonDataCell {
     let (text, color) = cell(col, val, p);
-    // Клиппируем форматированный content по реальной ширине колонки. Выравнивание — как
-    // у колонки, а сам MoonDataTable дополнительно защищает границы ячейки на уровне
-    // контейнера. Кегль/шрифт — от стиля ячейки (каскад moonui, фикс `9a33dbf`).
+    // Clip formatted content to the column's actual width. Alignment matches the column, while
+    // MoonDataTable also protects cell boundaries at the container level. Font styling comes
+    // from the cell style through MoonUI cascading.
     let right = is_numeric_report_column(col);
     let color = color.unwrap_or_else(|| MoonTone::Default.color(p));
     let inner = div()
@@ -332,12 +338,12 @@ fn cell_display_text(v: &Value) -> String {
     }
 }
 
-/// Заголовок колонки = ИМЯ колонки БД как есть, БЕЗ i18n. Единообразно с
-/// авто-добавленными полями ядра (дельты/dmark/…), нейтрально к языку и сразу
-/// показывает, что реально приходит в отчёт. Исключение — легаси-поля Moonbot с
-/// хвостом «btc» (`profitbtc`/`spentbtc`/`gainedbtc`): суффикс исторический, суммы
-/// деноминированы в котировке пары (usdt/usdc/…), а не в BTC — на не-BTC паре «btc»
-/// путает. Показываем нейтральные `profit`/`spent`/`gained` (валюта зависит от строки).
+/// Return the raw DB column name as the table and export header, without i18n.
+///
+/// This makes dynamically added core fields available automatically. The legacy Moonbot
+/// `profitbtc`, `spentbtc`, and `gainedbtc` names are the exception: their `btc` suffix is
+/// historical, while values are denominated in each row's quote currency. Neutral `profit`,
+/// `spent`, and `gained` headers avoid implying BTC on non-BTC pairs.
 pub(super) fn header_for(col: &str) -> String {
     match col {
         "profitbtc" => "profit".to_string(),

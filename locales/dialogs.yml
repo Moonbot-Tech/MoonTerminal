@@ -1,8 +1,8 @@
-# Диалоги (создание/переименование/удаление) и общие кнопки.
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Create, rename, and delete dialogs plus shared buttons.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
 _version: 2
 
-# --- Общие кнопки ---
+# --- Shared buttons ---
 dialogs.cancel:
   ru: "Отмена"
   en: "Cancel"
@@ -24,7 +24,7 @@ dialogs.rename:
   en: "Rename"
   es: "Renombrar"
 
-# --- Заголовки диалогов (стратегии) ---
+# --- Strategy dialog titles ---
 dialogs.new_strategy:
   ru: "Новая стратегия"
   en: "New strategy"
@@ -46,7 +46,7 @@ dialogs.operation:
   en: "Operation"
   es: "Operación"
 
-# --- Поля и подсказки диалогов ---
+# --- Dialog fields and hints ---
 dialogs.name_ph:
   ru: "имя"
   en: "name"

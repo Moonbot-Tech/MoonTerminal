@@ -1,13 +1,23 @@
-//! Нативный обработчик крашей (Windows SEH). Дополняет Rust-паник-хук из `main`:
-//! паник-хук ловит ТОЛЬКО Rust-паники (unwind), а нативные access violation в
-//! DirectX/GPUI-форке (например, present по протухшему дескриптору окна при
-//! реконнект-шторме) идут мимо него — процесс просто умирает, лог обрывается, и
-//! `panic.log` пуст. Этот фильтр верхнего уровня перехватывает такие исключения,
-//! пишет код/адрес сбоя и бэктрейс ВЫЗЫВАЮЩЕГО (упавшего) потока в `panic.log` —
-//! ровно туда же, куда пишет паник-хук, — чтобы краш был виден в одном месте.
+//! Native crash logging for Windows Structured Exception Handling (SEH), complementing the Rust
+//! panic hook installed during startup. A panic hook handles Rust panics but not native faults such
+//! as access violations in DirectX or GPUI code. On Windows, this module installs a process-wide
+//! top-level exception filter. In a process without a debugger, the filter runs when an exception
+//! remains unhandled and reaches `UnhandledExceptionFilter`; it appends the exception code and
+//! address plus a handler-time backtrace to the same `panic.log` used by the panic hook.
+//!
+//! The backtrace is captured while the filter executes on the faulting thread. It is not rebuilt
+//! from the saved processor context in `EXCEPTION_POINTERS`, so the exception record is the precise
+//! source of the fault code and instruction address.
 
-/// Ставит top-level фильтр исключений процесса. Вызывать один раз на старте, как
-/// можно раньше (после установки cwd, до создания окон). На не-Windows — no-op.
+/// Install the process-wide top-level exception filter on Windows.
+///
+/// Call this once during startup after establishing the working directory and before creating
+/// windows. `SetUnhandledExceptionFilter` replaces the filter currently registered for all existing
+/// and future process threads; a later registration can replace this one. This is a no-op on other
+/// platforms.
+///
+/// Returns:
+///     Nothing.
 pub fn install_native_handler() {
     #[cfg(windows)]
     unsafe {
@@ -16,18 +26,32 @@ pub fn install_native_handler() {
     }
 }
 
+/// Log the first unhandled native exception observed by this filter and return control to normal
+/// Windows exception processing.
+///
+/// A permanent one-shot guard makes nested and later invocations return without logging.
+///
+/// Args:
+///     info: Exception record and saved processor context supplied as a non-null pointer by the
+///         Windows callback contract. The implementation accepts null defensively.
+///
+/// Returns:
+///     `EXCEPTION_CONTINUE_SEARCH`, allowing `UnhandledExceptionFilter` to continue its normal path.
+///
+/// Safety:
+///     Any non-null pointer must reference a valid `EXCEPTION_POINTERS` layout for this call.
 #[cfg(windows)]
 unsafe extern "system" fn native_exception_filter(
     info: *const windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
 ) -> i32 {
     use std::io::Write;
-    // EXCEPTION_CONTINUE_SEARCH=0: продолжаем штатную обработку (WER/abort) после лога,
-    // не подменяя поведение завершения процесса.
+    // `EXCEPTION_CONTINUE_SEARCH` resumes normal `UnhandledExceptionFilter` processing after the
+    // log instead of attempting to continue execution at the faulting instruction.
     const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
     const STATUS_ACCESS_VIOLATION: u32 = 0xC0000005;
 
-    // Реентрант-гард: если фильтр сам упадёт (или повторное исключение во время
-    // логирования), не зацикливаемся.
+    // This one-shot reentrancy guard remains set after the first entry. Nested or repeated filter
+    // invocations therefore skip logging instead of recursing if logging itself faults.
     static IN_HANDLER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if IN_HANDLER.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return EXCEPTION_CONTINUE_SEARCH;
@@ -39,8 +63,8 @@ unsafe extern "system" fn native_exception_filter(
             let code = rec.ExceptionCode.0 as u32;
             let addr = rec.ExceptionAddress as usize;
             body.push_str(&format!("code=0x{code:08X} at instruction 0x{addr:016X}"));
-            // Для access violation первые два параметра — тип (0=чтение,1=запись,8=DEP)
-            // и адрес недоступной памяти.
+            // For an access violation, the first two parameters are the operation kind (zero for
+            // read, one for write, or eight for DEP execution) and the inaccessible virtual address.
             if code == STATUS_ACCESS_VIOLATION && rec.NumberParameters >= 2 {
                 let kind = match rec.ExceptionInformation[0] {
                     0 => "read",
@@ -58,13 +82,14 @@ unsafe extern "system" fn native_exception_filter(
         body.push_str("<no exception pointers>");
     }
 
-    // Бэктрейс упавшего потока: фильтр исполняется НА том же потоке, поэтому
-    // force_capture даёт стек сбоя (символизуется по нашим PDB, как в паник-хуке).
+    // The filter runs on the thread that faulted, and `force_capture` walks its current stack while
+    // the handler is executing. It does not unwind from the saved `ContextRecord`; available PDBs
+    // symbolize the captured frames in the same way as the panic hook.
     let bt = std::backtrace::Backtrace::force_capture();
     let line = format!("NATIVE CRASH: {body}\n--- backtrace ---\n{bt}\n--- end ---");
 
-    // Только прямой файловый IO: глобальный логгер мог держать lock на упавшем потоке
-    // (риск дедлока). `panic.log` — тот же файл, что у Rust-паник-хука.
+    // Use direct file I/O because the faulting thread may already hold the global logger's lock.
+    // `panic.log` is the same working-directory-relative file used by the Rust panic hook.
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

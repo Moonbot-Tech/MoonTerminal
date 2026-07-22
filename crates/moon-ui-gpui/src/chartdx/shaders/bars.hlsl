@@ -1,12 +1,12 @@
-// Стакан (orderbook) own-pass: фон зоны + кумулятивные прямоугольники глубины
-// + отдельные линии уровней поверх fill.
-// Своя зона СПРАВА (НЕ временной ряд, без combo). Бары тянутся ВЛЕВО от правого края,
-// длина = len_norm·zone; нормировка/геометрия считаются на CPU (book.build_instances).
-// Порт moon-chart/shaders/glass.wgsl. cbuffer ChartView — тот же, что у крестов (b0),
-// но viewport = зона стакана.
+// Order-book own pass: zone background + cumulative depth rectangles
+// + separate level lines above the fill.
+// Uses its own zone on the RIGHT (NOT a time series, without combo). Bars extend LEFT from
+// the right edge; length = len_norm·zone. Normalization and geometry are computed on the CPU
+// (book.build_instances). Port of moon-chart/shaders/glass.wgsl. The ChartView cbuffer is the
+// same as for crosses (b0), but its viewport is the order-book zone.
 
 cbuffer ChartView : register(b0) {
-    float4 cv_bounds;     // ox, oy, w(=ширина зоны стакана), h (px окна)
+    float4 cv_bounds;     // ox, oy, w (= order-book zone width), h (window px)
     float2 cv_resolution; // backbuffer w, h
     float  cv_time_to_px;
     float  cv_view_time0;
@@ -16,21 +16,21 @@ cbuffer ChartView : register(b0) {
     float  cv_pad;
 };
 
-// Цвета стакана (sRGB rgb + pad). Темовые; сейчас близко к крестам (bid green/ask red).
+// Order-book colors (sRGB rgb + pad). Theme-aware; currently close to crosses (green bid/red ask).
 cbuffer BookStyle : register(b1) {
-    float4 bs_book_bg; // фон ЩЕЛИ СПРЕДА (между лучшими bid/ask); без книги — вся зона
+    float4 bs_book_bg; // SPREAD GAP background (between best bid/ask); whole zone when book is empty
     float4 bs_bid;     // bid rgb
     float4 bs_ask;     // ask rgb
-    float4 bs_level;   // x = level-line opacity, y = level-line height px
-    float4 bs_bg_ask;  // фон ask-половины (выше лучшего ask)
-    float4 bs_bg_bid;  // фон bid-половины (ниже лучшего bid)
-    float4 bs_edges;   // x = цена лучшего ask, y = цена лучшего bid, z = есть книга
+    float4 bs_level;   // x = level-line opacity, y = level-line height in px
+    float4 bs_bg_ask;  // ask-half background (above best ask)
+    float4 bs_bg_bid;  // bid-half background (below best bid)
+    float4 bs_edges;   // x = best ask price, y = best bid price, z = whether the book is populated
 };
 
 struct Level {
     float price;
-    float span;     // signed-delta цены до второго края fill-полосы
-    float len_norm; // 0..1 доля ширины зоны
+    float span;     // signed price delta to the other edge of the fill strip
+    float len_norm; // 0..1 fraction of the zone width
     float kind;     // 0 bid fill / 1 ask fill / 2 bid level / 3 ask level
 };
 StructuredBuffer<Level> levels : register(t1);
@@ -40,10 +40,10 @@ static const float2 CORNERS[6] = {
     float2(-1,  1), float2(1, -1), float2( 1, 1)
 };
 
-// Таргет = B8G8R8A8_UNORM (НЕ sRGB): пишем sRGB-значения НАПРЯМУЮ, как GPUI/кресты.
-// Конверсии в linear НЕТ — иначе цвета раздавливаются в тёмное (см. grid.hlsl).
+// Target = B8G8R8A8_UNORM (NOT sRGB): write sRGB values DIRECTLY, as GPUI/crosses do.
+// There is NO conversion to linear; otherwise the colors are crushed into darkness (see grid.hlsl).
 
-// ── Fill-прямоугольники и отдельные level-lines (instanced) ─────────────────
+// ── Fill rectangles and separate level lines (instanced) ────────────────────
 struct BarOut {
     float4 pos : SV_Position;
     nointerpolation float kind : TEXCOORD0;
@@ -58,12 +58,13 @@ BarOut bars_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
 
     float base = cv_bounds.y + cv_bounds.w;
     float y_price = base - (lv.price - cv_view_price0) * cv_price_to_px;
-    // fill: один край — собственная цена уровня, второй — цена соседа (price+span). У соседней
-    // полосы общий шов считается из ДРУГОГО f32-выражения (его price vs наш price+span); при
-    // больших ценах (микро-токены) + зуме round() этих чуть разных f32 даёт РАЗНЫЙ пиксель →
-    // 1px чёрная щель на шве. Поэтому расширяем каждую полосу до ЦЕЛЫХ пикселей (floor/ceil):
-    // соседние полосы тогда перекрываются на стыке, шов исчезает (заливка непрозрачна — overlap
-    // невиден). Порт moon-chart/shaders/glass.wgsl — там та же правка.
+    // Fill: one edge is the level's own price, the other is the neighbor's price (price+span).
+    // A neighboring strip computes the shared seam from a DIFFERENT f32 expression (its price
+    // versus our price+span). With large prices (micro-tokens) and zoom, round() can map these
+    // slightly different f32 values to DIFFERENT pixels, leaving a 1 px black seam. Expand each
+    // strip to WHOLE pixels (floor/ceil) so neighboring strips overlap at the join and eliminate
+    // the seam. The fill is opaque, so the overlap is invisible. Ported from the same fix in
+    // moon-chart/shaders/glass.wgsl.
     float inner = lv.price + lv.span;
     float y_inner = base - (inner - cv_view_price0) * cv_price_to_px;
     float top = floor(min(y_price, y_inner));
@@ -97,7 +98,7 @@ float4 bars_fragment(BarOut i) : SV_Target {
     return float4(min(bs_ask.rgb * 1.25, 1.0.xxx), bs_level.x);
 }
 
-// ── Фон зоны стакана (fullscreen quad над зоной) ────────────────────────────
+// ── Order-book zone background (fullscreen quad over the zone) ──────────────
 struct BgOut {
     float4 pos : SV_Position;
 };
@@ -111,8 +112,8 @@ BgOut bg_vertex(uint vid : SV_VertexID) {
 }
 
 float4 bg_fragment(BgOut i) : SV_Target {
-    // Трёхцветный фон: выше лучшего ask — bg_ask, ниже лучшего bid — bg_bid, между
-    // ними (щель спреда) — book_bg. Y считается тем же трансформом, что бары.
+    // Three-color background: bg_ask above the best ask, bg_bid below the best bid, and book_bg
+    // between them (the spread gap). Y uses the same transform as the bars.
     if (bs_edges.z > 0.5) {
         float base = cv_bounds.y + cv_bounds.w;
         float ask_y = base - (bs_edges.x - cv_view_price0) * cv_price_to_px;

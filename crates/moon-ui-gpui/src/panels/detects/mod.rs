@@ -1,12 +1,12 @@
-//! Лента детектов — откпрепляемая панель (порт egui `DetectRibbon`). Втягивает детекты
-//! ядер группы с `SoundAlert=Yes` и `AddToChart==0` (AddToChart-детекты — в чарт-вкладки),
-//! держит `KeepAlert` секунд, новые сверху. Клик → открыть монету на Main (через
-//! `Backend.open_request`, который читает Shell).
+//! Detachable detection-feed panel, ported from egui's `DetectRibbon`. It ingests group-core rows
+//! for which `sound_alert || is_alert` and `add_to_chart == 0`; AddToChart detections go to chart
+//! tabs instead. Each `(core, market)` card remains for `max(keep_alert_secs, 1)` seconds.
+//! Left-click requests the market on Main without raising its window, while right-click requests a
+//! custom comparison tab.
 //!
-//! Отображение настраивается попапом-конструктором ⚙ (габариты/график/rail/слоты по
-//! размерам) — per-group, persist в отдельном `detects_view.toml` (см. [`popup`]).
-//! Раскладка карточек и векторные мини-чарты (замороженный срез на момент детекта) —
-//! в [`cards`].
+//! The gear popup configures per-size dimensions, chart type, server rail, and field slots for each
+//! group and persists them in `detects_view.toml`; see [`popup`]. Card layout and vector mini-charts
+//! built from the snapshot captured at detection time live in [`cards`].
 
 mod cards;
 mod popup;
@@ -23,36 +23,36 @@ use moon_ui::{
     MoonPalette, MoonSliderEvent, MoonSliderState, Panel, PanelEvent, PanelState, h_flex, v_flex,
 };
 
-/// Сколько закрытых 5м-свечей морозим для мини-чарта карточки (≈2ч истории). Под ПОЛЫЕ свечи
-/// при типовой ширине зоны ~75-130px: ~24 свечи → 3-5px на свечу (тело 1px контур + просвет),
-/// иначе «полое» схлопывается в закрашенное. Меньше свечей = шире и читаемее.
+/// Number of latest five-minute OHLC buckets retained for a card's candle chart, approximately two
+/// hours. At a typical 75-130 px chart width, 24 buckets leave roughly 3-5 px per outlined candle;
+/// denser candles would visually collapse into solid bars.
 const DETECT_THUMB_BARS: usize = 24;
 
-/// Кнопка ленты детектов (порт `src/dock/detects.rs::RibbonItem`).
+/// Frozen state for one detection-feed card, ported from `src/dock/detects.rs::RibbonItem`.
 pub(crate) struct DetectItem {
     core: CoreId,
     core_name: String,
-    /// Полный символ рынка (для подписки при клике).
+    /// Full market key passed to Main or comparison-tab open requests.
     market: String,
-    /// Подпись кнопки — монета без quote подключения (`ADAUSDT` → `ADA`).
+    /// Coin label derived from the market without its quote suffix (`ADAUSDT` to `ADA`).
     base: String,
     color: [u8; 3],
-    /// Ordinal вида стратегии-источника (`DetectRow.kind`) — для бейджа типа детекта.
+    /// Source-strategy kind ordinal from `DetectRow.kind`, used for the detection-type badge.
     kind: u8,
-    /// Направление стратегии-источника (`DetectRow.is_short`) — для обводки бейджа.
+    /// Source-strategy direction from `DetectRow.is_short`, used for the badge outline.
     is_short: bool,
     born_ms: f64,
     ttl_ms: f64,
-    /// Замороженный на момент детекта срез 5м-свечей `(open, high, low, close)` для мини-чарта.
+    /// Five-minute `(open, high, low, close)` snapshot frozen when the detection is ingested.
     bars: Vec<(f32, f32, f32, f32)>,
-    /// Цены (close) 24ч для режима «линия» (старые→новые).
+    /// Close prices over the 24-hour snapshot window for line mode, oldest to newest.
     line: Vec<f32>,
-    /// Дельты цены 24ч/1ч, % (на момент детекта).
+    /// 24-hour and one-hour percentage price changes at detection time.
     delta_24h: f32,
     delta_1h: f32,
-    /// Имя биржи (Binance Futures/Bybit/…) на момент детекта.
+    /// Exchange name captured at detection time.
     exchange_name: String,
-    /// Тип биржи (Спот/Фьючи/DEX/…) на момент детекта.
+    /// Exchange kind, such as spot, futures, or DEX, captured at detection time.
     exchange_kind: String,
 }
 
@@ -64,12 +64,12 @@ pub struct DetectsPanel {
     last_sig: u64,
     prune_timer_armed: bool,
     focus: FocusHandle,
-    /// Попап-конструктор отображения (⚙): открыт ли и какой РАЗМЕР редактируется
-    /// (вкладка = активный размер ленты).
+    /// Whether the gear configuration popup is open and which card-size tab it edits. Opening the
+    /// popup selects the tab corresponding to the feed's active size.
     popup_open: bool,
     popup_tab: u8,
-    /// Слайдеры попапа (ширина/высота карточки, полоса сервера, градиент) — сидируются
-    /// из конфига вкладки при открытии/смене вкладки, Change пишет обратно в конфиг.
+    /// Popup sliders for card width, height, server rail, and gradient. Opening or switching a tab
+    /// seeds them from that size's configuration; `Change` events write back to the same size.
     w_slider: Entity<MoonSliderState>,
     h_slider: Entity<MoonSliderState>,
     rail_slider: Entity<MoonSliderState>,
@@ -104,10 +104,11 @@ impl DetectsPanel {
         let w_slider = mk_slider(cx, 20.0, 320.0, 2.0);
         let h_slider = mk_slider(cx, 20.0, 320.0, 2.0);
         let rail_slider = mk_slider(cx, 0.0, f32::from(DETECT_RAIL_MAX), 1.0);
-        // Градиент: шкала до максимума ширины; фактический потолок = ширина карточки
-        // (клампится в конфиге, подпись показывает уже клампнутое значение).
+        // The gradient slider spans the maximum card width. Configuration clamps its effective
+        // value to the selected card width, and the caption displays that clamped value.
         let grad_slider = mk_slider(cx, 0.0, 320.0, 2.0);
-        // Change слайдеров → записать в конфиг РЕДАКТИРУЕМОЙ вкладки (гард от эха сидинга).
+        // Write slider changes to the size tab currently being edited. `write_view` ignores the
+        // unchanged values emitted while sliders are seeded.
         for (sl, apply) in [
             (
                 &w_slider,
@@ -150,8 +151,9 @@ impl DetectsPanel {
         this
     }
 
-    /// Правка конфига отображения группы: текущее → мутатор → persist в detects_view.toml.
-    /// Ничего не пишет, если мутатор не изменил конфиг (эхо сидинга слайдеров).
+    /// Applies a mutation to this group's display configuration and persists a changed value to
+    /// `detects_view.toml`. An unchanged mutation performs no write or notification, suppressing
+    /// slider-seeding echoes.
     fn write_view(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut DetectViewCfg)) {
         let group = self.group.clone();
         let changed = self.backend.update(cx, |b, bcx| {
@@ -171,12 +173,14 @@ impl DetectsPanel {
         }
     }
 
-    /// Втянуть свежие детекты ядер группы (seq > курсора, sound_alert, не AddToChart).
+    /// Ingests group-core detections newer than each core's sequence cursor. Rows are eligible when
+    /// they request a sound or represent an alert firing and are not routed to AddToChart. Returns
+    /// whether the visible card collection or a retained card changed.
     fn ingest(&mut self, b: &Backend) -> bool {
         let mut changed = false;
-        // Цвет + quote ядра берём из его сервера в конфиге: quote выводим из рынка по
-        // умолчанию (`server.market`), чтобы резать суффикс монеты (`ADAUSDT` → `ADA`),
-        // как egui `CoreInfo.quote`.
+        // Read each core's server color and resolved default-market quote from configuration. The
+        // current card path uses the color; its coin label is derived independently by
+        // `coin_of_market`, so the collected quote remains unused.
         // Canonical order: fresh events are appended core by core and rendered back in
         // reverse insertion order, with no chronological re-sort anywhere — so this order is
         // what decides how detects of the same instant read on screen.
@@ -215,14 +219,15 @@ impl DetectsPanel {
             }
             self.last_seq.insert(id, fresh[0].seq);
             for det in fresh.iter().rev() {
-                // Показываем детекты со звук-алертом И срабатывания алертов (даже без
-                // стратегии); AddToChart-детекты уходят в чарт-вкладки, не сюда.
+                // Show sound-enabled detections and alert firings, including alerts without a
+                // strategy. AddToChart detections are consumed by chart tabs instead.
                 if (!det.sound_alert && !det.is_alert) || det.add_to_chart > 0 {
                     continue;
                 }
                 let ttl = (det.keep_alert_secs.max(1) as f64) * 1000.0;
-                // Замороженный снимок на момент детекта: мини-чарт (5м H/L) + имя/тип биржи.
-                // Данные бесплатны (собственная запись ядра, не биржевой API).
+                // Freeze five-minute chart history, 24-hour line data, deltas, and exchange
+                // metadata. The market source assembles retained snapshots, local cache, and trade
+                // ring data without making an exchange API request here.
                 let snap =
                     b.session
                         .market_source()
@@ -237,7 +242,7 @@ impl DetectsPanel {
                     it.color = color;
                     it.kind = det.kind;
                     it.is_short = det.is_short;
-                    // Пере-морозка на свежее срабатывание той же монеты.
+                    // Refresh the snapshot and TTL in place when the same core and market fire again.
                     it.bars = snap.bars;
                     it.line = snap.line;
                     it.delta_24h = snap.delta_24h;
@@ -280,11 +285,10 @@ impl DetectsPanel {
         self.items.len() != before
     }
 
-    /// 1-Гц тик ПОКА есть детекты: обновляет обратный отсчёт («Ns») по СВОИМ часам и
-    /// убирает истёкшие. Раньше отсчёт перерисовывался только по приходу данных (backend-
-    /// пульс) — это «время сцеплено с данными»: на тихой/отключённой группе цифры замирали,
-    /// а кнопка просто исчезала в конце. Время — по часам, не по приходу тиков. Тик сам
-    /// гаснет, когда детектов нет (не плодим таймер вхолостую — executor.timer недёшев).
+    /// Arms a one-second refresh timer while the queue is nonempty. On wake it clears the armed
+    /// flag, prunes expired cards against wall-clock time, notifies if cards remain so their
+    /// countdowns update, and rearms itself. If pruning empties the queue, the timer stops and this
+    /// callback does not issue a final notification.
     fn arm_prune_timer(&mut self, cx: &mut Context<Self>) {
         if self.prune_timer_armed || self.items.is_empty() {
             return;
@@ -297,7 +301,7 @@ impl DetectsPanel {
                 this.update(cx, |this, cx| {
                     this.prune_timer_armed = false;
                     this.prune(now_unix_ms());
-                    // Перерисовать отсчёт / отразить пропажу истёкших, пока есть что показывать.
+                    // Refresh countdowns and reflect removals while at least one card remains.
                     if !this.items.is_empty() {
                         cx.notify();
                     }
@@ -312,14 +316,14 @@ impl DetectsPanel {
         .detach();
     }
 
-    /// Открыть монету на Main: запрос в Backend (Shell откроет чарт) + убрать кнопку.
+    /// Removes this card and requests its market on the group's Main chart through `Backend`.
     fn open(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
         self.items
             .retain(|it| !(it.core == core && it.market == market));
         self.backend.update(cx, |b, bcx| {
             b.open_request = Some((core, market.clone()));
             b.open_request_rev = b.open_request_rev.wrapping_add(1);
-            // Клик по детекту открывает монету на Main, но окно НЕ поднимает.
+            // A detection click opens the market on Main without activating its window.
             b.open_request_activate = false;
             bcx.notify();
         });
@@ -327,9 +331,10 @@ impl DetectsPanel {
         cx.notify();
     }
 
-    /// ПКМ: открыть монету в НОВОЙ кастомной вкладке в режиме сравнения — якорь = монета
-    /// детекта + та же монета (точное имя) с других ядер группы без повторов по бирже,
-    /// замок+метла. Запрос в Backend, читает ChartTabs группы (`open_compare_tab`).
+    /// Removes this card and requests a custom comparison tab through `Backend`. The group's
+    /// `ChartTabs` handler focuses an existing tab with the same coin label or creates a horizontal
+    /// tab anchored on this market, adds its exact market from other group cores with at most one
+    /// core per market-data provider, pins every chart, and enables anchor lock and broom mode.
     fn open_compare(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
         self.items
             .retain(|it| !(it.core == core && it.market == market));
@@ -342,7 +347,7 @@ impl DetectsPanel {
         cx.notify();
     }
 
-    /// Текущая настройка отображения группы (или дефолт) — из detects_view.toml.
+    /// Returns this group's `detects_view.toml` display configuration or its default.
     fn view_cfg(&self, cx: &App) -> DetectViewCfg {
         self.backend.read(cx).detects_view.group(&self.group)
     }
@@ -385,18 +390,20 @@ impl Render for DetectsPanel {
         let p = MoonPalette::active(cx);
         let is_light = p.is_light();
         let cfg = self.view_cfg(cx);
-        // Настройки бейджей (код/цвет по видам + обводка направления) — из конфига,
-        // под активную тему. Клон дешёвый (≤пара десятков записей), лента редко рендерится.
+        // Badge codes and kind colors plus direction outlines come from the active configuration
+        // and theme. Cloning at most a few dozen entries is cheap for this infrequently rendered
+        // feed.
         let badges = self.backend.read(cx).config.badges.clone();
-        // Тема чарта — цвета векторных свечей/линии карточек.
+        // The chart theme supplies colors for card candle and line vectors.
         let theme = self.backend.read(cx).config.chart_theme().clone();
         let now = now_unix_ms();
 
-        // Полоска-настройки сверху (⚙ = триггер попапа-конструктора) + разделитель.
+        // Place the gear-triggered configuration toolbar and divider above the feed.
         let toolbar = popup::toolbar(self, &cfg, p, cx);
         let divider = div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border));
 
-        // Карточки: новые сверху, кнопки фикс-ширины из конфига — сетка с переносом.
+        // Render fixed-size cards in reverse insertion order in a wrapping grid. Newly inserted
+        // markets appear first; a repeated core-market detection refreshes its existing position.
         let mut container = h_flex().flex_wrap().gap_1p5().content_start();
         for (i, it) in self.items.iter().enumerate().rev() {
             let secs = ((it.ttl_ms - (now - it.born_ms)) / 1000.0).ceil().max(0.0) as u32;
@@ -408,7 +415,7 @@ impl Render for DetectsPanel {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.open(core, market.clone(), cx);
                 }))
-                // ПКМ — открыть в новой кастомной вкладке в режиме сравнения (замок+метла).
+                // Right-click requests the custom comparison-tab workflow with lock and broom mode.
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, _, _, cx| {

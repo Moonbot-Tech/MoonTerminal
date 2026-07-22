@@ -82,7 +82,7 @@ impl SessionManager {
         mgr
     }
 
-    /// Общий блок подъёма feed-потока ядра: `feed::spawn` + регистрация market-клиента.
+    /// Start a core feed thread with `feed::spawn` and register its market client.
     fn spawn_feed(&self, server: ServerConfig, mem: u16, reports: Option<&ReportTx>) -> FeedHandle {
         let id = server.id;
         let handle = feed::spawn(
@@ -96,8 +96,11 @@ impl SessionManager {
         handle
     }
 
-    /// Сброс рыночной координации ядра: ключ/база/роль провайдера и last_cmd —
-    /// пусть переизберутся заново (общее для respawn/reconnect/drop).
+    /// Clear a core's market coordination state.
+    ///
+    /// After a respawn or reconnect, later `Identity` and `CoreBase` events may repopulate the key
+    /// and base before coordination recomputes the provider role and last command. Removal leaves
+    /// this state absent.
     fn clear_core_coordination(&mut self, id: CoreId) {
         self.core_key.remove(&id);
         self.core_base.remove(&id);
@@ -220,10 +223,10 @@ impl SessionManager {
         log::info!("{why}: core={id}");
     }
 
-    /// Погасить ядро (сервер убран/деактивирован): дроп сессии завершает поток, чистим
-    /// аккаунтные данные, рыночного клиента и всю координацию.
+    /// Stop a removed or deactivated core and clear its account data, market client, and
+    /// coordination state. Dropping the session terminates its feed thread.
     fn drop_core(&mut self, id: CoreId) {
-        self.sessions.retain(|s| s.id != id); // дроп FeedHandle → поток завершится
+        self.sessions.retain(|s| s.id != id); // Dropping FeedHandle terminates the thread.
         self.store.remove(id);
         self.market_source.remove_client(id);
         self.clear_core_coordination(id);
@@ -232,11 +235,13 @@ impl SessionManager {
         log::info!("session down: core={id}");
     }
 
-    /// Дренирует все каналы ядер. Аккаунтные сообщения → CoreStore; market-data
-    /// payload-и сюда не едут: live/synth публикуют их в read-model/MarketStore и
-    /// шлют только лёгкий `MarketDataChanged` wake. Identity → core_key.
-    /// Зовётся частым data-drain тиком перед `set_open`. Возвращает, что именно
-    /// изменилось: общий UI-state и отдельно данные, которые могут менять GPU-пиксели чарта.
+    /// Drain every core channel into the session stores.
+    ///
+    /// Account messages go to `CoreStore`. Live and synthetic feeds publish market payloads to the
+    /// read model or `MarketStore` and send only a lightweight `MarketDataChanged` wake-up here.
+    /// Identity messages populate `core_key`. This event-driven drain is independent of the
+    /// coordination loop that calls `set_open`; the result separates general UI state from data
+    /// that can change chart pixels.
     pub fn drain(&mut self) -> DrainStats {
         let mut stats = DrainStats::default();
         for sess in &self.sessions {
@@ -350,11 +355,10 @@ impl SessionManager {
         false
     }
 
-    /// Снимок статусов подключения всех ядер (id → статус) — для бейджей в окне
-    /// Настроек. Владеющая копия, чтобы не держать заём на сессию.
-    /// Забирает накопленные результаты Engine-действий всех ядер: (имя ядра, результат).
-    /// Очереди дренируются — зовёт только Shell АКТИВНОГО окна, чтобы каждый тост
-    /// показался ровно один раз (активно максимум одно ОС-окно).
+    /// Drain queued Engine action results from every core as `(core name, result)` pairs.
+    ///
+    /// Only the active window's shell calls this method, so each toast appears exactly once; at
+    /// most one OS window is active at a time.
     pub fn take_engine_action_toasts(&mut self) -> Vec<(String, EngineActionResult)> {
         let mut out = Vec::new();
         for sess in &self.sessions {
@@ -367,14 +371,16 @@ impl SessionManager {
         out
     }
 
+    /// Return an owned snapshot of every core's connection status for Settings window badges.
     pub fn status_map(&self) -> HashMap<CoreId, ConnStatus> {
         self.store.statuses().collect()
     }
 
-    /// Сводка подключений ядер ОДНОЙ группы: ready/total + список не-Ready ядер
-    /// (имя, статус). Группа = ОС-окно, поэтому каждый статус-бар показывает свою
-    /// группу (3/3 + 7/7 при 10 ядрах в двух группах). Учитываются и headless-ядра
-    /// группы — у них тоже есть сессия (show_window влияет лишь на наличие окна).
+    /// Summarize connections in one group as ready/total counts and non-ready core details.
+    ///
+    /// A group corresponds to an OS window, so each status bar reports only its own group. The
+    /// summary includes headless cores because they still have sessions; `show_window` controls
+    /// only whether the window exists.
     pub fn conn_summary_group(&self, group: &str) -> ConnSummary {
         let mut total = 0;
         let mut ready = 0;
@@ -395,8 +401,10 @@ impl SessionManager {
         ConnSummary { ready, total, down }
     }
 
-    /// Сводка license state ядер ОДНОЙ группы. License приходит позже connect/init,
-    /// поэтому `known` может быть меньше `total`; UI обязан показывать это честно.
+    /// Summarize license state for the cores in one group.
+    ///
+    /// License data arrives after connection and initialization, so `known` may be less than
+    /// `total`; the UI must represent that distinction.
     pub fn license_summary_group(&self, group: &str) -> LicenseSummary {
         let mut out = LicenseSummary::default();
         for s in self.sessions.iter().filter(|s| s.group == group) {

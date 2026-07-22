@@ -1,8 +1,8 @@
-//! Язык интерфейса. Хранится в settings.toml как код ("ru"/"en"/"es");
-//! применяется через `rust_i18n::set_locale(lang.code())`.
+//! Interface language. Stored in settings.toml as a code ("ru"/"en"/"es");
+//! applied through `rust_i18n::set_locale(lang.code())`.
 //!
-//! Дефолт — системная локаль (sys-locale), с откатом на английский, если язык
-//! системы не входит в поддерживаемые.
+//! The default is the system locale (sys-locale), falling back to English when the
+//! system language is not supported.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -14,10 +14,10 @@ pub enum Language {
 }
 
 impl Language {
-    /// Все поддерживаемые языки (порядок = порядок в выпадающем списке настроек).
+    /// All supported languages (order = order in the settings dropdown).
     pub const ALL: [Language; 3] = [Language::Ru, Language::En, Language::Es];
 
-    /// Код локали для rust_i18n / settings.toml.
+    /// Locale code for rust_i18n / settings.toml.
     pub fn code(self) -> &'static str {
         match self {
             Language::Ru => "ru",
@@ -26,7 +26,7 @@ impl Language {
         }
     }
 
-    /// Самоназвание языка для выпадающего списка (на самом этом языке).
+    /// Language's native name for the dropdown (written in that language).
     pub fn label(self) -> &'static str {
         match self {
             Language::Ru => "Русский",
@@ -35,7 +35,7 @@ impl Language {
         }
     }
 
-    /// Разбор кода ("ru", "en-US", "es_ES", …) — смотрим только префикс языка.
+    /// Parses a code ("ru", "en-US", "es_ES", …), considering only the language prefix.
     pub fn from_code(s: &str) -> Option<Language> {
         let prefix: String = s
             .chars()
@@ -50,7 +50,7 @@ impl Language {
         }
     }
 
-    /// Язык по системной локали; неизвестный/отсутствующий → английский.
+    /// Language from the system locale; unknown/missing → English.
     pub fn from_system() -> Language {
         sys_locale::get_locale()
             .and_then(|l| Language::from_code(&l))
@@ -59,8 +59,8 @@ impl Language {
 }
 
 impl Default for Language {
-    /// Дефолт = язык системы (используется при первом запуске и для serde-дефолта
-    /// в старых settings.toml без поля `language`).
+    /// Default = system language (used on first launch and as the serde default
+    /// for old settings.toml files without a `language` field).
     fn default() -> Self {
         Language::from_system()
     }
@@ -74,7 +74,7 @@ impl Serialize for Language {
 
 impl<'de> Deserialize<'de> for Language {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        // Неизвестный код не роняем разбор файла — откатываемся на системный язык.
+        // An unknown code does not fail file parsing; fall back to the system language.
         let s = String::deserialize(d)?;
         Ok(Language::from_code(&s).unwrap_or_default())
     }

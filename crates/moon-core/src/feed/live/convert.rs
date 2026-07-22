@@ -1,5 +1,5 @@
-//! Чистые проекции moonproto → терминальные снимки (license/client-settings/lev/runtime),
-//! точечные правки удержанных снимков настроек и сборка строк ордеров (`OrderRow`).
+//! Pure moonproto-to-terminal snapshot projections (license/client-settings/lev/runtime),
+//! targeted edits to retained settings snapshots, and order-row (`OrderRow`) construction.
 
 use std::sync::Arc;
 
@@ -54,10 +54,11 @@ pub(super) fn license_state_from_proto(
     }
 }
 
-/// Плоская проекция moonproto `ClientSettings` → терминальный снимок. Raw-поля
-/// (`s_price`/`sb_num`/…) в проде `pub(crate)`, поэтому читаем ТОЛЬКО через хелперы.
-/// «Свой» TP кнопки (из `x_sell`/scalp), ИГНОРИРУЯ `fixed_sell_mode` — это ветка
-/// `effective_take_profit_percent` без fixed-sell, чтобы выбор S-слота не подменял отображаемый TP.
+/// Computes the toolbar's main TP from moonproto `ClientSettings`. Raw fields
+/// (`s_price`/`sb_num`/...) are `pub(crate)` in production, so read them ONLY through helpers.
+/// This is the button's own TP (from `x_sell`/scalp), IGNORING `fixed_sell_mode`: the non-fixed-sell
+/// branch of `effective_take_profit_percent`, ensuring an S-slot selection does not replace the
+/// displayed main TP.
 fn main_take_profit_percent(c: &moonproto::ClientSettingsCommand) -> f64 {
     if c.x_sell > 0 {
         let mut value = f64::from(c.x_sell);
@@ -118,9 +119,9 @@ pub(super) fn runtime_state_from_proto(s: &moonproto::RuntimeStateCommand) -> Ru
     }
 }
 
-/// Снимок настроек ядра по событию: тянем из snapshot ТОЛЬКО когда в пачке есть
-/// соответствующее `Settings`-событие (как license/client_settings/lev/runtime),
-/// иначе None — снимок дёшев, но дёргать его без события незачем.
+/// Reads a retained core snapshot only when the batch contains any event matched by the caller's
+/// predicate, including non-settings events such as `KernelHealth`; otherwise returns `None`.
+/// Snapshot access is cheap, but unnecessary without a matching event.
 pub(super) fn settings_event_snapshot<T>(
     events: &[Event],
     client: &MoonClient,
@@ -154,16 +155,17 @@ pub(super) fn sys_status_from_proto(
     }
 }
 
-/// Применяет точечную правку тулбара к удержанному снимку настроек ЧЕРЕЗ хелперы команды
-/// (raw-поля `s_price`/`sb_num` в проде `pub(crate)`; `price_drop_level` — pub).
+/// Applies a targeted toolbar edit to the retained settings snapshot THROUGH command helpers.
+/// Raw fields `s_price`/`sb_num` are `pub(crate)` in production; `price_drop_level` is public.
 pub(super) fn apply_client_settings_edit(
     s: &mut moonproto::ClientSettingsCommand,
     edit: ClientSettingsEdit,
 ) {
     match edit {
         ClientSettingsEdit::TakeProfit { pct, extended } => {
-            // x_tmode/«s9»: on → x_sell хранит pct/10 (видимые 100..900%); off → x_sell=pct
-            // напрямую (1..100%). Ядро без флага само режет TP до 100, поэтому пишем оба поля.
+            // x_tmode/"s9": on -> x_sell stores pct/10 (displayed as 100..900%); off -> x_sell
+            // stores pct directly (1..100%). The core clamps TP to 100 without this flag, so set
+            // both fields.
             s.fixed_sell_mode = false;
             if extended {
                 s.x_tmode = true;
@@ -176,18 +178,19 @@ pub(super) fn apply_client_settings_edit(
         ClientSettingsEdit::StopLossPct(pct) => s.price_drop_level = pct,
         ClientSettingsEdit::ScalpTakeProfit(pct) => s.set_scalp_take_profit_percent(pct),
         ClientSettingsEdit::SelectFixedSellSlot(slot) => {
-            // Включаем fixed-sell режим — иначе effective TP остаётся на x_sell и не меняется.
-            // С ним effective_take_profit_percent() = процент выбранного пресета → TP в тулбаре
-            // становится равным значению S-кнопки.
+            // Enable fixed-sell mode; otherwise the effective TP remains on x_sell and does not
+            // change. This makes effective_take_profit_percent() equal the selected preset, while
+            // the toolbar deliberately continues to show the main TP and the S-button shows the
+            // selected fixed-sell value.
             s.fixed_sell_mode = true;
             s.set_selected_fixed_sell_slot(slot);
         }
         ClientSettingsEdit::EngageMainTakeProfit => {
-            // Возврат к главному TP: гасим fixed-sell, значение TP (x_sell/scalp) не трогаем.
+            // Return to the main TP by disabling fixed-sell without changing the TP value (x_sell/scalp).
             s.fixed_sell_mode = false;
         }
         ClientSettingsEdit::SetFixedSellPct { slot, pct } => {
-            // Видимый процент = s_price · (x_tmode? 10 : 1); пишем s_price обратным пересчётом.
+            // Displayed percentage = s_price * (x_tmode ? 10 : 1); derive s_price inversely.
             let price = if s.x_tmode {
                 (pct / 10.0) as f32
             } else {
@@ -195,7 +198,7 @@ pub(super) fn apply_client_settings_edit(
             };
             s.set_fixed_sell_preset_price(slot, price);
         }
-        // Дефолты поведения ядра (попап настроек ядра): прямые pub-поля снимка.
+        // Core behavior defaults from the core-settings popup: direct public snapshot fields.
         ClientSettingsEdit::UseStopMarket(on) => s.use_stop_market = on,
         ClientSettingsEdit::PanicIfPriceDrop(on) => s.panic_if_price_drop = on,
         ClientSettingsEdit::GlobalTakeProfit { on, pct } => {
@@ -223,7 +226,7 @@ pub(super) fn apply_lev_manage_edit(l: &mut moonproto::LevManage, edit: LevManag
         }
         LevManageEdit::AutoMaxOrder(on) => l.auto_max_order = on,
         LevManageEdit::AutoLevUp(on) => l.auto_lev_up = on,
-        // Режим маржи — взаимоисключающие флаги: включение одного гасит другой.
+        // Margin modes are mutually exclusive flags: enabling one disables the other.
         LevManageEdit::AutoIsolated(on) => {
             l.auto_isolated = on;
             if on {
@@ -261,11 +264,12 @@ fn order_trace(line: &OrderTraceLine) -> Option<OrderTrace> {
 /// This conversion has no report-database side effects; protocol-v4 reports are
 /// replicated independently through `Event::Report`.
 fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Order) -> OrderRow {
-    // Отображаемое имя рынка. Hyperliquid спот именует пары ИНДЕКСОМ («@206»); человекочитаемое
-    // имя даёт moonproto в `market_name_mb_classic` («UENAUSDT»). Кладём в ордер/отчёт классик —
-    // тогда `coin_of_market` даёт «UENA», а не «@206». Гейт по префиксу «@» — обычные рынки
-    // (BTCUSDT) не трогаем. ВНУТРЕННИЕ catalog-лукапы ниже (цена/снимок/ликвидация) остаются на
-    // СЫРОМ `o.market_name` — ядро ключует по нему. mb_classic пустой/тоже «@» → фолбэк на сырое.
+    // Display name for the market. Hyperliquid spot names pairs by INDEX ("@206"); moonproto
+    // provides the human-readable name in `market_name_mb_classic` ("UENAUSDT"). Store the classic
+    // name in the order/report so `coin_of_market` yields "UENA", not "@206". Gate this on the
+    // "@" prefix so ordinary markets such as BTCUSDT remain unchanged. INTERNAL catalog lookups
+    // below (price/snapshot/liquidation) keep the RAW `o.market_name`, which the core uses as its
+    // key. Fall back to the raw name when mb_classic is empty or also starts with "@".
     let market_display = if o.market_name.starts_with('@') {
         snap.markets()
             .get(&o.market_name)
@@ -279,9 +283,9 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
         Some(s) => strat_kind_name(s.kind().ordinal()).to_string(),
         None => o.strat_id.to_string(),
     };
-    // Входная нога ВСЕГДА `buy_order` — и для лонга, и для шорта (статус-машина фазовая:
-    // вход = «Buy*», выход = «Sell*»; у шорта вход тоже лежит в buy_order/buy_price, а
-    // sell_order — пустая выходная нога). Раньше для шорта брали sell_order → fill_pct=0.
+    // The entry leg is ALWAYS `buy_order`, for both longs and shorts. The state machine is phased:
+    // entry is `Buy*`, exit is `Sell*`; a short's entry also lives in buy_order/buy_price, while
+    // sell_order is the empty exit leg. The old short path used sell_order and produced fill_pct=0.
     let leg = &o.buy_order;
     let fill_pct = if leg.quantity > 0.0 {
         ((leg.quantity - leg.quantity_remaining) / leg.quantity * 100.0) as f32
@@ -311,37 +315,38 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
 
     let mkt = snap.markets().price(&o.market_name);
     let last = mkt.as_ref().map(|p| p.p_last as f32).unwrap_or(0.0);
-    // Цена входа для линии входа и расчёта стоп/тейк-уровней.
-    // ВАЖНО (баг «линия выше реального бая»): ПОСЛЕ исполнения ядро кладёт в `buy_price` И в
-    // `buy_order.actual_price` цену БЕЗУБЫТКА (= реальный филл + комиссия круга ≈ +0.1%), а не
-    // сырой вход. Реальная цена входа исполненного ордера = средняя цена ПОЗИЦИИ (`pos_price`,
-    // с биржи, без надбавки). Пока ордер НЕ залит (fill=0) — позиции ещё нет, берём цену
-    // выставленного лимита (`buy_price`).
+    // Entry price for the entry line and stop/take-profit level calculations.
+    // IMPORTANT (the "line above the actual buy" bug): AFTER execution, the core stores the
+    // BREAK-EVEN price (actual fill plus round-trip commission, about +0.1%) in BOTH `buy_price`
+    // and `buy_order.actual_price`, not the raw entry. The actual entry price of a filled order is
+    // the average POSITION price (`pos_price`, from the exchange, without markup). While the order
+    // is UNFILLED (fill=0), there is no position yet, so use the placed limit price (`buy_price`).
     let mkt_snapshot = snap.markets().get(&o.market_name).map(|h| h.snapshot());
     let pos_price = mkt_snapshot.as_ref().map(|m| m.pos_price).unwrap_or(0.0);
     let contract_size = mkt_snapshot
         .as_ref()
         .map(|m| m.contract_size())
         .unwrap_or(1.0);
-    // «В позиции» = держим позицию, для которой считаем PnL и рисуем линии. Сигнал —
-    // авторитетная ФАЗА воркера (moonproto), а не подгляд в `sell_order.quantity`:
-    // - `fill_pct > 0` — есть хоть какой-то филл ВХОДНОЙ ноги (buy_order). Покрывает ВСЁ с
-    //   buy-ногой: частичный вход (BuySet, filling), BuyDone, и вход шорта (у шорта вход
-    //   тоже в buy_order). Частично исполненный вход — позиция уже частично держится, PnL
-    //   на этой части корректен (кол-во берём от остатка выходной ноги).
-    // - `status == SellSet` — выход/тейк ВЫСТАВЛЕН. Единственный случай, который упускает
-    //   fill_pct — продажа из уже удерживаемого спот-актива (listing-sell/MoonHook): buy-ноги
-    //   нет → fill_pct=0, но ордер именно в фазе Sell. НЕ триггерим на BuySet (вход ещё
-    //   ждёт, fill_pct=0 → позиции нет) — до первого филла PnL/линий нет, как и должно.
-    // Sell-линия дополнительно гейтится `sell_price > 0` ниже, так что «нарисовать sell рано»
-    // невозможно: пока ядро не выставило sell-цену, линии выхода нет даже при in_position.
+    // "In position" means holding a position for which PnL and lines are rendered. The signal is
+    // the authoritative moonproto worker PHASE, not an inference from `sell_order.quantity`:
+    // - `fill_pct > 0` means the ENTRY leg (`buy_order`) has at least some fill. This covers every
+    //   case with a buy leg: partial entry (BuySet while filling), BuyDone, and short entry (which
+    //   also uses buy_order). A partially filled entry already holds part of the position, and PnL
+    //   for that part is valid because quantity comes from the remaining exit leg.
+    // - `status == SellSet` means the exit/take-profit IS PLACED. The only case fill_pct misses is
+    //   selling an already-held spot asset (listing-sell/MoonHook): there is no buy leg, so
+    //   fill_pct=0, but the order is in the Sell phase. Do NOT trigger on BuySet: the entry is still
+    //   waiting and fill_pct=0 means there is no position, so PnL/lines correctly stay absent until
+    //   the first fill.
+    // The sell line is additionally gated by `sell_price > 0` below, so it cannot be drawn too
+    // early: until the core sets a sell price, there is no exit line even when `in_position`.
     let in_position = fill_pct > 0.0 || o.status == OrderWorkerStatus::SellSet;
-    // Верхнеуровневые `o.buy_price`/`o.sell_price` moonproto обновляет ТОЛЬКО на смене
-    // статуса воркера и при ЛОКАЛЬНОМ move_order; серверные cancel-replace (ядро само
-    // ведёт лимитку за ценой) двигают лишь `*_order.actual_price`. Поэтому для РАБОЧЕГО
-    // (незаполненного) ордера цена линии — `actual_price` ноги, иначе линия замерзает на
-    // цене выставления (репорт 2026-07-17: бай шорта стоял там, где стакан давно прошёл,
-    // и «чинился» только drag-ом — тот как раз локально переписывает buy_price).
+    // moonproto updates the top-level `o.buy_price`/`o.sell_price` ONLY when the worker status
+    // changes or on a LOCAL move_order. Server-side cancel-replace (the core follows the market
+    // with its limit order) changes only `*_order.actual_price`. Therefore, the line price for a
+    // WORKING (unfilled) order is the leg's `actual_price`; otherwise the line freezes at its
+    // placement price. In the 2026-07-17 report, a short buy stayed where the order book had long
+    // since moved and was "fixed" only by dragging it, which locally rewrites buy_price.
     let live = |p: f64| (p.is_finite() && p > 0.0).then_some(p);
     let entry = if fill_pct > 0.0 && pos_price > 0.0 {
         pos_price
@@ -350,26 +355,26 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     } else if o.buy_price.is_finite() && o.buy_price > 0.0 {
         o.buy_price
     } else if in_position && pos_price > 0.0 {
-        // Sell из удерживаемого актива (listing-sell/MoonHook): входа через бота не было →
-        // `buy_price=0`. Цена входа = средняя цена позиции (как показывает Moonbot «Buy»).
-        // Без этого линия входа (`g(true, buy_price)`) и PnL не рисовались.
+        // Sell from an already-held asset (listing-sell/MoonHook): there was no bot entry, so
+        // `buy_price=0`. Use the average position price as the entry price, matching Moonbot's
+        // "Buy" value. Without this, neither the entry line (`g(true, buy_price)`) nor PnL rendered.
         pos_price
     } else {
         o.buy_price
     };
     let valid_entry = entry.is_finite() && entry > 0.0;
 
-    // Coin-margined (inverse) фьючи отдают количество в КОНТРАКТАХ, а не в базовой монете
-    // (`contract_size != 1`; номинал контракта фиксирован в quote/USD — напр. BTCUSD = $100,
-    // прочие *USD = $10). Реальный размер в монете = контракты × contract_size / цена_входа.
-    // После этого и подпись размера (монеты), и её USD-нотионал (монеты × цена = контракты × cs)
-    // считаются верно по общей формуле. `contract_size == 1` → linear/спот, size уже в монете.
+    // Coin-margined (inverse) futures report quantity in CONTRACTS rather than the base coin
+    // (`contract_size != 1`; contract notional is fixed in quote/USD, e.g. BTCUSD = $100 and other
+    // *USD contracts = $10). Actual coin size = contracts * contract_size / entry_price. This lets
+    // both the size label (coins) and its USD notional (coins * price = contracts * cs) use the
+    // shared formula correctly. `contract_size == 1` means linear/spot and size is already in coins.
     //
-    // ВАЖНО: `contract_size != 1` сам по себе НЕ значит inverse. У ЛИНЕЙНЫХ quanto-фьючей
-    // Gate (ASTEROID_USDT: cs=10000 монет/контракт) ядро уже отдаёт ноги В МОНЕТАХ — деление
-    // на копеечную цену раздувало количество до 7e14 и PnL до −71 млн при честных −1$.
-    // Отличие настоящего coin-margined: КОТИРУЕМАЯ ВАЛЮТА ПУСТАЯ (контракт деноминирован в
-    // USD; так же его различает build_assets) — только тогда конвертируем.
+    // IMPORTANT: `contract_size != 1` alone does NOT mean inverse. For LINEAR quanto futures on
+    // Gate (ASTEROID_USDT: cs=10000 coins/contract), the core already reports legs IN COINS;
+    // dividing by the tiny price inflated quantity to 7e14 and PnL to -71 million for an actual
+    // -$1 result. A true coin-margined contract has an EMPTY QUOTE CURRENCY because the contract is
+    // denominated in USD; `build_assets` distinguishes it the same way. Convert only in that case.
     let quote_is_empty = mkt_snapshot
         .as_ref()
         .is_some_and(|m| m.base_currency.trim().is_empty());
@@ -415,8 +420,8 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             entry * (1.0 - level / 100.0)
         }
     };
-    // SL и trailing считаются одинаково: fixed → абсолютный уровень как есть; иначе
-    // (если вход валиден) уровень-процент от входа; выключен/нет входа → None.
+    // Trailing-stop calculation: a fixed value is an absolute level; otherwise, when entry is
+    // valid, derive a percentage level from entry. Disabled or missing-entry cases return `None`.
     let stop = |enabled: bool, fixed: bool, level: f64| {
         if !enabled {
             None
@@ -428,18 +433,19 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             None
         }
     };
-    // Стоп-лосс приходит из снапшота ЖИВОГО ордера как РАЗРЕШЁННАЯ цена срабатывания в `sl_level`
-    // (точно как `take_profit` — абсолютная цена), а НЕ как процент. Флаг `sl_fixed` в снимке
-    // живого ордера НЕ означает «уровень в процентах» (проверено по логам ядра: `sl_fixed=false`,
-    // а `sl_level` ≈ ent*(1−X%) — это цена). Поэтому рисуем линию прямо по цене, без перевода из
-    // процента. (Трейлинг — иначе: его `ts_level` это % дистанции, см. `stop()` ниже.)
+    // The LIVE order snapshot provides stop loss in `sl_level` as the RESOLVED trigger price, just
+    // like `take_profit` is an absolute price, NOT as a percentage. The `sl_fixed` flag in a live
+    // order snapshot does NOT mean "the level is a percentage". Core logs confirm that with
+    // `sl_fixed=false`, `sl_level` is approximately ent*(1-X%), which is a price. Draw the line
+    // directly at that price without percentage conversion. Trailing differs: its `ts_level` is a
+    // percentage distance; see `stop()` below.
     //
-    // НО: для ШОРТА с процентным SL (sl_fixed=false) ядро может отдать цену, посчитанную
-    // «лонговой» формулой ent*(1−X%) — НИЖЕ входа, на стороне профита (репорт 2026-07-17:
-    // рыночный шорт → стоп лёг на линию тейка; сам Moonbot тот же стоп рисует ВЫШЕ входа,
-    // и его лог «StopLoss applied» для шортов подтверждает срабатывание выше). Восстанавливаем
-    // сторону зеркалом относительно входа: ent*(1−p) → ent*(1+p). Fixed-стоп (перетащенный/
-    // абсолютный) не трогаем — у него сторона может быть любой (профит-лок).
+    // HOWEVER, for a SHORT with percentage SL (`sl_fixed=false`), the core can report a price
+    // calculated with the "long" formula ent*(1-X%): BELOW entry, on the profit side. In the
+    // 2026-07-17 report, a market short placed its stop on the take-profit line, while Moonbot drew
+    // the same stop ABOVE entry and its "StopLoss applied" log for shorts confirmed the higher
+    // trigger. Restore the side by mirroring around entry: ent*(1-p) -> ent*(1+p). Do not change a
+    // fixed (dragged/absolute) stop because it may intentionally be on either side as a profit lock.
     let stop_loss = o
         .stops
         .stop_loss_enabled()
@@ -474,22 +480,22 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
         fin(v).or_else(|| fin(bp.liq_price))
     });
     let pending = o.pending_buy_cond_price.is_some();
-    // `filled` (позиция держится, гейт sell-линии/стопов/TP/liq и PnL) = `in_position`
-    // (см. определение выше: fill_pct>0 либо фаза SellSet). Без этого продажа из удерживаемого
-    // актива (fill_pct=0) не показывала ни линий, ни PnL, хотя в Moonbot всё есть.
+    // `filled`, which means a position is held and gates the sell line, stops, TP, liquidation,
+    // and PnL, equals `in_position` (defined above as fill_pct>0 or the SellSet phase). Without
+    // this, a sale from an already-held asset (fill_pct=0) showed neither lines nor PnL even though
+    // Moonbot displayed both.
     let filled = in_position;
     let create_time_ms = moon_time_to_unix_millis_f64(o.buy_order.create_time());
-    // Фолбэк-индикатор: SL/TS/VStop включены в СТРАТЕГИИ ордера (по `strat_id`), если
-    // per-order флаг не выставлен. Имена полей — Delphi-имена Moonbot (подтверждены строками
+    // Fallback indicator: SL/TS/VStop are enabled in the order's STRATEGY (by `strat_id`) when the
+    // per-order flag is not set. Field names are Moonbot Delphi names confirmed by strings in
     // MoonBot.exe): `UseStopLoss`/`UseTrailing`/`UseBV_SV_Stop`.
-    // ВАЖНО: сериализатор стратегий (Delphi и moonproto зеркально) НЕ передаёт поля, значение
-    // которых равно ДЕФОЛТУ СХЕМЫ (writer skips schema defaults). Отсутствующее поле в снимке
-    // значит «= дефолт схемы», а НЕ «выключено» — поэтому читаем с фолбэком на
-    // `StrategySchema.field(name).default_value`. Нет снимка стратегии (strat_id=0 /
-    // не синкнута) → false.
-    // Эффективная стратегия: своя ЛИБО «ручная стратегия» настроек ядра (ручные ордера
-    // strat_id=0 ведутся по ней). Совсем без стратегии — дефолтные стопы ClientSettings
-    // (SL: price_drop_level, TS: trailing_drop, VStop: vol_drop_level; >0 = включён).
+    // IMPORTANT: the strategy serializer (mirrored in Delphi and moonproto) DOES NOT send fields
+    // whose value equals the SCHEMA DEFAULT because the writer skips schema defaults. A missing
+    // snapshot field means "equals the schema default", NOT "disabled", so fall back to
+    // `StrategySchema.field(name).default_value`. The effective strategy is the order's own
+    // strategy or the core settings' manual strategy, which governs manual orders with strat_id=0.
+    // If that manual order has no strategy snapshot, fall back to ClientSettings stop defaults
+    // (SL: price_drop_level, TS: trailing_drop, VStop: vol_drop_level); nonzero means enabled.
     let eff_strat_id = crate::feed::strategies::effective_strat_id(snap, o.strat_id);
     let strat_snapshot = snap.strats().snapshot(eff_strat_id);
     let strat_schema = snap.strats().strategy_schema();
@@ -512,8 +518,8 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             strat_flag("UseBV_SV_Stop"),
         )
     } else if o.strat_id == 0 {
-        // Проценты «падения» в настройках ядра ОТРИЦАТЕЛЬНЫЕ (напр. price_drop_level
-        // = -1.1 → SL 1.1%); включён = ненулевое значение, не «> 0».
+        // "Drop" percentages in core settings are NEGATIVE (for example, price_drop_level=-1.1
+        // means SL 1.1%); enabled means nonzero, not "> 0".
         snap.settings()
             .client_settings
             .as_ref()
@@ -528,15 +534,16 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     } else {
         (false, false, false)
     };
-    // ЭФФЕКТИВНЫЕ флаги стопов («сработает ли», модель Moonbot): per-order стопа у ордера
-    // может НЕ БЫТЬ — тогда действует стоп СТРАТЕГИИ (на проводе per-order поля пустые).
-    // Явный override терминала (клик в таблице) главнее обоих: провод не отличает
-    // «выключен» от «не задан», и без override флаг стратегии маскировал бы наш OFF.
+    // EFFECTIVE stop flags (whether they will trigger, following the Moonbot model): an order may
+    // have NO per-order stop, in which case the STRATEGY stop applies and per-order wire fields are
+    // empty. An explicit terminal override from a table click takes precedence over both. The wire
+    // format cannot distinguish "disabled" from "unspecified", so without the override a strategy
+    // flag would mask our OFF action.
     let stop_eff = |kind: crate::feed::OrderStopKind, wire: bool, strat: bool| -> bool {
         crate::feed::trade::stop_override(server_id, o.uid, kind, wire).unwrap_or(wire || strat)
     };
     OrderRow {
-        // КЛЮЧ данных — сырое имя (ядро ключует по нему); отображение — mb_classic-резолв.
+        // The data KEY is the raw name used by the core; display uses the resolved mb_classic name.
         market: o.market_name.clone(),
         market_display,
         is_short: o.is_short,
@@ -562,8 +569,8 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
         vstop_level: o.vstop_level,
         vstop_vol: o.vstop_vol,
         buy_price: entry,
-        // Как и вход: живая цена РАБОЧЕГО sell-ордера — `sell_order.actual_price`
-        // (серверные переносы тейка не обновляют `o.sell_price` до смены статуса).
+        // As with entry, the live price of a WORKING sell order is `sell_order.actual_price`;
+        // server-side take-profit moves do not update `o.sell_price` until status changes.
         sell_price: if o.sell_order.actual_price.is_finite() && o.sell_order.actual_price > 0.0 {
             o.sell_order.actual_price
         } else {
@@ -632,7 +639,7 @@ pub(super) fn build_order_rows(
     order_rows
 }
 
-/// moonproto `ExchangeKind` → кошелёк домена (обратно к `assets::to_exchange_kind`).
+/// Maps moonproto `ExchangeKind` to a domain wallet (the inverse of `assets::to_exchange_kind`).
 fn wallet_kind_from_proto(k: moonproto::state::ExchangeKind) -> WalletKind {
     match k {
         moonproto::state::ExchangeKind::Spot => WalletKind::Spot,
@@ -641,7 +648,7 @@ fn wallet_kind_from_proto(k: moonproto::state::ExchangeKind) -> WalletKind {
     }
 }
 
-/// Проекция `Event::EngineAction` → терминальный результат для тостов UI.
+/// Projects `Event::EngineAction` into a terminal result for UI toasts.
 pub(super) fn engine_action_result(e: &moonproto::EngineActionEvent) -> EngineActionResult {
     use moonproto::EngineActionKind as K;
     let kind = match &e.kind {

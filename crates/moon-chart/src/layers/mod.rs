@@ -1,6 +1,6 @@
-//! Типы инстансов геометрии линий ордеров (логические координаты time_rel/price).
-//! Рисует их НАШ own-pass DX11 (chartdx); wgpu-пайплайны слоёв удалены вместе с
-//! egui-движком.
+//! Instance types for line and marker geometry (logical time_rel/price coordinates).
+//! They are rendered by the chartdx own-pass backends; the old moon-chart wgpu layer
+//! pipelines were removed with the egui engine.
 
 pub mod order_lines;
 

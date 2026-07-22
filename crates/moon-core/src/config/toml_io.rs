@@ -1,5 +1,5 @@
-//! Общие load/save открытых TOML-файлов (settings/layout/theme): один паттерн
-//! «нет файла → дефолт; битый → лог + on_corrupt + дефолт» вместо трёх копий.
+//! Shared load/save logic for plaintext TOML config files: one pattern of
+//! "missing → defaults; corrupt → log + on_corrupt + defaults" instead of duplicates.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -124,14 +124,14 @@ fn defaults_for_absent_file<T: Default + DeserializeOwned>(label: &str) -> T {
     })
 }
 
-/// Записать значение как человекочитаемый TOML.
+/// Writes a value as human-readable TOML.
 pub fn save<T: Serialize>(path: &Path, value: &T, label: &str) -> anyhow::Result<()> {
     write_atomic(path, toml::to_string_pretty(value)?.as_bytes(), label)?;
     Ok(())
 }
 
-/// Записать файл через временный sibling + rename. Прямой `fs::write` может оставить
-/// обрубленный конфиг при падении процесса или питания ровно во время записи.
+/// Writes a file through a temporary sibling plus rename. A direct `fs::write` can leave a
+/// truncated config if the process or power fails during the write.
 pub(super) fn write_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).with_context(|| format!("создание папки для {label}"))?;

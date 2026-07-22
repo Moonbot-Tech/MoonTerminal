@@ -49,40 +49,40 @@ use balances::CoreAgg;
 use moon_core::session::BalanceState;
 use wallets::PendingTransfer;
 
-/// Высота титлбара окна «Активы» (как у окна «Стратегии»).
+/// Height of the Assets title bar, matching the Strategies tool window.
 const ASSETS_HEADER_H: f32 = 32.0;
 
-/// Область охвата панели «Активы».
+/// Core scope represented by an Assets view.
 #[derive(Clone, PartialEq, Eq)]
 enum AssetsScope {
-    /// Dock-панель окна группы — ядра этой группы.
+    /// Group-window dock panel containing that group's cores.
     Group(String),
-    /// Глобальное окно — все подключённые ядра.
+    /// Global window containing all connected cores.
     All,
 }
 
-/// Строка таблицы активов с привязкой к ядру + посчитанная USDT-стоимость.
+/// Asset-table row associated with its core and computed USDT values.
 #[derive(Clone)]
 pub(super) struct AssetEntry {
-    /// Ядро строки (для клика по тикеру → открыть чарт на Main и торговых кнопок).
+    /// Row owner used by ticker navigation to Main and by trading actions.
     pub(super) core: CoreId,
     pub(super) core_name: String,
     pub(super) row: AssetRow,
-    /// Текущая стоимость в USDT — от удерживаемого БАЛАНСА монеты. Драйвит фильтр пыли и
-    /// сортировку.
+    /// Raw `row.value_usdt`, used as the fixed [`sort_by_value`] key and for spot-row dust
+    /// filtering. Futures position classification instead uses notional against `min_lot_usd`.
     ///
     /// NOT what the row displays: a USDT-margined futures position holds no coin balance
     /// (`feed::assets` builds `value_usdt` from `asset_balance*`), so this is ~0 for it while the
     /// position is worth its notional. Use [`Self::display_value`] for anything the user reads.
     pub(super) value: f64,
-    /// The number the "Стоим.$" column actually shows: a position's notional
+    /// The number the Value column actually shows: a position's notional
     /// (`|pos_size| * price`), otherwise [`Self::value`].
     ///
     /// Computed once during collection so the value cell and the footer's Σ use the same number;
     /// summing [`Self::value`] would understate futures rows whose coin balance is near zero.
     pub(super) display_value: f64,
-    /// Рынок строки (`row.market`) реально существует у ядра — гейт кнопки «Market sell»
-    /// (у синтетических кошельковых строк рынка `<coin><quote>` может не быть, напр. USDTUSDC).
+    /// Whether `row.market` exists in the core's market catalog, gating the Market Sell button.
+    /// A synthetic wallet row's `<coin><quote>` fallback may not exist, for example `USDTUSDC`.
     pub(super) market_exists: bool,
 }
 
@@ -93,8 +93,9 @@ pub(super) struct WalletColumnSnapshot {
     pub(super) rows: Vec<TransferAssetRow>,
 }
 
-/// Денежный формат USDT: тысячи через пробел, дробная через `.`, знак `$` в конце.
-/// Точность — максимум сотые, минимум десятые (`fmt::usd`): `1 111.24$` / `1 111.0$`.
+/// Formats a USDT amount with spaces between thousands, `.` as the decimal mark, and a trailing
+/// `$`. [`fmt::usd_grouped`] retains at most two decimal places and at least one:
+/// `1 111.24$` or `1 111.0$`.
 ///
 /// The decimal mark matches the header balance and the ticker price: the same account figure is
 /// read across those surfaces, and one shared thousands separator with a differing decimal mark
@@ -105,41 +106,41 @@ pub(super) fn money(v: f64) -> String {
     s
 }
 
-/// Окно/панель «Активы».
+/// Assets dock panel or standalone window content.
 pub struct AssetsView {
     pub(super) backend: Entity<Backend>,
     scope: AssetsScope,
-    /// true = вид рисует СВОЮ рамку ОС-окна (титлбар + системные контролы) и персистит
-    /// свою геометрию. Глобальное окно = true; откреп-окно (рамку даёт `DetachedWindow`)
-    /// и dock-вкладка = false.
+    /// Whether this view draws its own OS-window frame and persists its geometry. This is true for
+    /// the global window; `DetachedWindow` frames detached views, and dock tabs need no frame.
     windowed: bool,
-    /// Показывать нижние контейнеры переноса (список ядер + Спот/Фьючи/Квартальные).
-    /// true в любом отдельном окне (глобальном/откреплённом), false во вкладке дока.
+    /// Whether to show the lower transfer area: the core list and Spot, Futures, and Quarterly
+    /// wallets. Every standalone window enables it; a dock tab does not.
     show_wallets: bool,
-    /// Выбранное ядро для нижних контейнеров кошельков.
+    /// Core selected for the lower wallet containers.
     pub(super) selected_core: Option<CoreId>,
-    /// Hide asset rows worth less than this USDT threshold while always retaining open positions.
-    /// A non-positive threshold shows every row.
+    /// Hide asset rows worth less than this USDT threshold while retaining open positions whose
+    /// notional reaches the market's minimum lot. A non-positive threshold shows every row.
     pub(super) min_value_usd: f64,
-    /// Состояние слайдера порога в верхней полосе (диапазон 0..=100 $, шаг 1, дефолт 1).
+    /// Top-bar threshold slider state, ranging from 0 through 100 USD in steps of 1, defaulting to 1.
     min_value_slider: Entity<MoonSliderState>,
-    /// Выбранные ядра фильтра (мультивыбор, как в «Ордерах»/«Отчёте»). Пусто = все ядра охвата.
+    /// Multi-selected core filter, like Orders and Report. Empty means every core in scope.
     pub(super) sel_cores: HashSet<CoreId>,
-    /// Свёрнута ли секция кошельков (список ядер + Спот/Фьючерсы/Квартальные).
+    /// Whether the core list and Spot, Futures, and Quarterly wallet section is collapsed.
     pub(super) wallets_collapsed: bool,
-    /// Открытый диалог переноса (количество) + поле ввода. Тип `PendingTransfer`
-    /// приватен для `wallets`, поэтому поле тоже приватное (доступно потомкам модуля).
+    /// Open transfer-quantity dialog and its input. `PendingTransfer` is private to `wallets`, so
+    /// this field remains private while child modules can access it.
     pending_transfer: Option<PendingTransfer>,
     transfer_input: Option<Entity<MoonInputState>>,
-    /// Гейт перерисовки (сигнатура assets_rev/transfer_rev ИЛИ 1 Гц-тик, пол 250мс).
+    /// Redraw gate driven by the asset-related signature or a new one-second bucket, with a 250 ms
+    /// minimum notification interval.
     gate: RenderGate,
     /// Inputs represented by the current caches: data revisions and the dust threshold.
     cache_sig: Option<(u64, u64)>,
     cached_cores: Vec<(CoreId, String)>,
     cached_entries: Rc<Vec<AssetEntry>>,
-    /// `(ядро, рынок)` с АКТИВНЫМ sell-ордером (фаза SellSet/SellAlmostDone) — эти
-    /// строки подсвечиваем: монета/позиция сейчас стоит на продажу. Обновляется в
-    /// `rebuild_cache` (сигнатура включает orders_table_rev ядер).
+    /// `(core, uppercase coin)` pairs with an active `SellSet` or `SellAlmostDone` order. Their rows
+    /// are marked as currently for sale. Rebuilt by `rebuild_cache`; the signature includes each
+    /// core's `orders_table_rev`.
     pub(super) sell_marked: Rc<std::collections::HashSet<(CoreId, String)>>,
     /// Per-core balance figures and their trust classifications for the current scope.
     cached_aggs: Rc<Vec<CoreAgg>>,
@@ -156,11 +157,11 @@ pub struct AssetsView {
     /// to cover rows it silently dropped — the same "partial sum shown as complete" the balance
     /// side of the footer is built to prevent.
     cached_value_excluded: usize,
-    /// Состояние таблицы позиций (ширины/сортировка колонок) — своё, чтобы ширины
-    /// персистились через [`crate::table_persist`].
+    /// Asset-table column widths and sorting state. Its widths persist through
+    /// [`crate::table_persist`].
     table_state: Entity<MoonDataTableState>,
-    /// Id хранилища ширин с контекстом: dock-вкладка = `assets-table:dock`, отдельное/откреп.
-    /// окно (`show_wallets`) = `:win`. Свои ширины на режим.
+    /// Contextual width-storage ID: `assets-table:dock` for a dock tab and `assets-table:win` for
+    /// standalone or detached views with wallets. Each mode retains independent widths.
     widths_id: String,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
@@ -176,7 +177,7 @@ impl AssetsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Перерисовка по дренажу backend — только при изменении активов (rev) или раз в сек.
+        // Rebuild after an asset-related signature change or the gate's once-per-second refresh.
         cx.observe(&backend, |this, backend, cx| {
             let now = moon_chart::paint::now_unix_ms();
             let b = backend.read(cx);
@@ -191,7 +192,7 @@ impl AssetsView {
         })
         .detach();
 
-        // Только отдельное окно сохраняет свою геометрию (dock-панель живёт в окне группы).
+        // Only the global standalone window owns persisted geometry; a dock panel uses its group window.
         if windowed {
             cx.observe_window_bounds(window, |this, window, cx| {
                 let Some((x, y, w, h)) = crate::windowing::window_geom(window) else {
@@ -208,8 +209,8 @@ impl AssetsView {
             .detach();
         }
 
-        // Контекст ширин: отдельное/откреплённое окно (есть контейнеры кошельков) = `:win`,
-        // dock-вкладка = `:dock`. Свои сохранённые ширины на каждый режим.
+        // Standalone and detached views with wallet containers use the `:win` width context; dock
+        // tabs use `:dock`, retaining separate widths for each mode.
         let widths_id = crate::table_persist::ctx_id("assets-table", show_wallets);
         let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
@@ -217,21 +218,20 @@ impl AssetsView {
             s.column_widths = saved_widths;
             s
         });
-        // Ресайз колонки мутирует state → сохраняем ширины (универсальный сейвер).
+        // Column resizing mutates the state; persist the resulting widths through the shared saver.
         cx.observe(&table_state, |this, state, cx| {
             crate::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
         })
         .detach();
 
-        // Порог «скрыть дешевле N $» — из сохранённой раскладки (`layout.toml`, общий на все
-        // окна/вкладки «Активов»); нет записи → дефолт 1$.
+        // Restore the shared "hide below N USD" threshold from `layout.toml`; default to 1 USD.
         let min_value_usd = backend
             .read(cx)
             .layout
             .assets_min_value
             .unwrap_or(1.0)
             .clamp(0.0, 100.0);
-        // Слайдер порога (верхняя полоса): 0..=100, шаг 1, стартовое значение — сохранённое.
+        // Top-bar threshold slider: 0 through 100, step 1, initialized from the persisted value.
         let min_value_slider = cx.new(|_| {
             MoonSliderState::new()
                 .min(0.0)
@@ -239,8 +239,8 @@ impl AssetsView {
                 .step(1.0)
                 .default_value(min_value_usd as f32)
         });
-        // На изменение слайдера — новый порог + пересборка строк (гейт-независимо, как реакция
-        // на клик; сама пересборка дешёвая — снапшот кэшируется) + персист в раскладку.
+        // A slider change immediately rebuilds the cached snapshot independently of the redraw
+        // gate, persists the threshold, and requests a repaint.
         cx.subscribe(&min_value_slider, |this, _e, ev: &MoonSliderEvent, cx| {
             if let MoonSliderEvent::Change(v) = ev {
                 let v = v.end() as f64;
@@ -283,9 +283,9 @@ impl AssetsView {
             dock: None,
             focus: cx.focus_handle(),
         };
-        // Запросить transfer-активы у ВСЕХ ядер охвата: спотовые кошельки нужны не только
-        // выбранному ядру (нижние контейнеры), но и таблице сверху — часть бирж (Bitget)
-        // отдаёт купленные монеты ТОЛЬКО через transfer_assets, не в per-market балансах.
+        // Request transfer assets from every scoped core. Spot wallets feed both the selected
+        // core's lower containers and the upper table because some exchanges, including Bitget,
+        // expose purchased coins only through `transfer_assets`, not per-market balances.
         let cores: Vec<CoreId> = this
             .scope_cores(this.backend.read(cx))
             .into_iter()
@@ -302,7 +302,7 @@ impl AssetsView {
         this
     }
 
-    /// Реконструкция dock-панели из `docks.json` (группа из state) — вкладка, без контейнеров.
+    /// Restores a group-scoped dock tab from `docks.json`, without wallet containers.
     pub fn restored_group(
         backend: Entity<Backend>,
         group: String,
@@ -312,8 +312,8 @@ impl AssetsView {
         Self::new(backend, AssetsScope::Group(group), false, false, window, cx)
     }
 
-    /// Контент откреплённого окна (`DetachedWindow` даёт рамку) — ядра группы + нижние
-    /// контейнеры переноса, но без собственной рамки/персиста геометрии.
+    /// Builds group-scoped detached-window content with lower transfer containers.
+    /// `DetachedWindow` supplies the frame and geometry persistence.
     pub fn detached_group(
         backend: Entity<Backend>,
         group: String,
@@ -357,11 +357,11 @@ impl AssetsView {
             })
     }
 
-    /// `(ядро, МОНЕТА-UPPER)` с активным sell-ордером охвата: вход исполнен, выход
-    /// ВЫСТАВЛЕН (фаза SellSet/SellAlmostDone, ордер не терминален). Эти монеты/позиции
-    /// в таблице подсвечиваются — «сейчас стоит на продажу». Матчим по монете, а не по
-    /// имени рынка: у кошельковых строк HL-спота рынок индексный («@151») и в строку
-    /// актива не резолвится — бейдж по рынку не загорался.
+    /// Collects `(core, uppercase coin)` pairs with a nonterminal `SellSet` or
+    /// `SellAlmostDone` order, marking the corresponding table rows as currently for sale.
+    /// Hyperliquid orders and catalog markets may use an indexed name such as `@151`, while transfer
+    /// wallet rows expose the canonical token name. Matching by the coin extracted from
+    /// `market_display` bridges those representations.
     fn collect_sell_marked(&self, b: &Backend) -> std::collections::HashSet<(CoreId, String)> {
         let store = b.session.store();
         let mut out = std::collections::HashSet::new();
@@ -369,8 +369,8 @@ impl AssetsView {
             let Some(cd) = store.core(*id) else { continue };
             for o in &cd.orders {
                 if !o.job_is_done && matches!(o.status.as_str(), "SellSet" | "SellAlmostDone") {
-                    // Отображаемое имя рынка (mb_classic) резолвит «@N» в «KHYPEUSDT» —
-                    // из него монета выводится как везде (`coin_of_market`).
+                    // `market_display` resolves an indexed market such as `@N` to a display name
+                    // such as `KHYPEUSDT`, from which `coin_of_market` extracts the coin normally.
                     let disp = if o.market_display.is_empty() {
                         &o.market
                     } else {
@@ -386,23 +386,22 @@ impl AssetsView {
         out
     }
 
-    /// Строки таблицы по всем ядрам охвата (с USDT-стоимостью), отсортированные по
-    /// убыванию стоимости. По умолчанию — только ≥ `min_value_usd` $ (или открытая позиция);
-    /// порог `<= 0.0` (слайдер в 0) снимает фильтр («показать всё»).
+    /// Collects asset rows from every filtered core and sorts them by descending held-balance USDT
+    /// value. A positive `min_value_usd` retains spot holdings at or above the threshold and open
+    /// positions at or above their minimum lot; a non-positive threshold disables filtering.
     fn collect(&self, b: &Backend) -> Vec<AssetEntry> {
         let store = b.session.store();
-        // Порог видимости пыли (слайдер верхней полосы). `<= 0.0` = показать всё.
+        // The top-bar dust threshold; a non-positive value shows every row.
         let thr = self.min_value_usd;
         let mut out = Vec::new();
         for (id, name) in self.scope_cores(b) {
-            // Мультивыбор ядер (как в «Ордерах»): пусто = все ядра охвата.
+            // An empty multi-core selection means every core in scope.
             if !balances::in_scope(&self.sel_cores, id) {
                 continue;
             }
             let Some(cd) = store.core(id) else { continue };
-            // ДИАГ (env MOON_ASSETS_DIAG): что реально пришло в balance_position ядра —
-            // есть ли строка для рынка позиции и её поля. Показывает, скрыта ли поза
-            // фильтром или её вообще нет в balance_position (тогда причина в источнике).
+            // `MOON_ASSETS_DIAG` logs the core's raw balance-position rows, distinguishing a row
+            // hidden by filtering from one absent at the source.
             if std::env::var_os("MOON_ASSETS_DIAG").is_some() {
                 log::error!(
                     "[assets_diag] core={name} futures_acc={} rows={}",
@@ -422,8 +421,9 @@ impl AssetsView {
                         r.price
                     );
                 }
-                // Кошельковый спот (Bitget/Hyperliquid и т.п.): value=0 у «@»-имён = баг цены
-                // (рынок «@699USDT» не существует) → монета уходит под фильтр пыли.
+                // Also expose spot-wallet pricing: a zero value for an indexed asset indicates that
+                // the exact-indexed and canonical-token pricing cascade both failed, causing dust
+                // filtering.
                 for w in &cd.transfer_assets.spot {
                     log::error!(
                         "[assets_diag]   wallet-spot currency={} total={} amount={} value={:.2}",
@@ -434,22 +434,20 @@ impl AssetsView {
                     );
                 }
             }
-            // Монеты, уже показанные из per-market строк — чтобы не задублировать их
-            // спотовым кошельком (`transfer_assets`) ниже.
+            // Track coins already emitted from per-market rows to avoid duplicating them from the
+            // spot transfer wallet below.
             let mut seen_coin: std::collections::HashSet<String> = std::collections::HashSet::new();
             for row in &cd.assets.rows {
                 let row = row.clone();
-                // Открытую позу показываем ЦЕЛИКОМ (как Moonbot): выставленное на закрытие
-                // (sell/TP-ордера) из размера НЕ вычитаем — иначе поза, весь размер которой
-                // висит в ордерах, обнуляется и пропадает из «Активов», хотя на чарте есть.
+                // Display the full open position, as Moonbot does. Do not subtract quantities in
+                // closing sell or take-profit orders, which would hide a fully listed position.
                 let value = row.value_usdt;
-                // Видимость (правила Moonbot): фьюч-ядра (вкл. CoinM) — ТОЛЬКО открытые
-                // позиции (балансы там котируемые, не купленные монеты); спот — все
-                // купленные монеты, КРОМЕ котируемой валюты аккаунта (USDT и т.п.) и
-                // остатков дешевле минимального лота рынка (непродаваемая пыль; лот
-                // неизвестен → старый порог 1$). «Показать всё» снимает фильтры.
-                // Позиция-пыль (хвост округления после вычета «в работе» / частичного
-                // закрытия, дешевле минимального лота — её не продать) — не позиция.
+                // Moonbot visibility rules: futures cores, including Coin-M, show only open
+                // positions whose notional reaches `min_lot_usd`, falling back to 1 USD when that
+                // minimum is unknown. Their balances are quote collateral rather than purchased
+                // coins. Spot cores instead show non-quote holdings whose raw value reaches the
+                // user-selected `thr`; the minimum-lot fallback does not filter spot rows. A
+                // non-positive threshold bypasses all filtering.
                 let min_lot = if row.min_lot_usd > 0.0 {
                     row.min_lot_usd
                 } else {
@@ -480,16 +478,16 @@ impl AssetsView {
                     display_value,
                 });
             }
-            // Спот-холдинги из КОШЕЛЬКА (`transfer_assets`). У части бирж (Bitget и др.)
-            // купленные монеты НЕ привязаны к per-market балансам (`assets.rows` пуст) —
-            // они приходят только сюда. Показываем их как продаваемые спот-строки (как в
-            // Moonbot: BGB/MAPO с кнопкой Market Sell). Только для СПОТ-аккаунтов, без
-            // котируемой валюты и пыли; дедуп против уже показанных монет.
+            // Some exchanges, including Bitget, expose purchased spot holdings only through
+            // `transfer_assets`, with no corresponding per-market row. For spot accounts, turn
+            // those holdings into display rows, excluding the quote asset, dust, and coins already
+            // emitted above. Trading actions are enabled only when `resolve_market` finds a real
+            // catalog market and sets `market_exists`.
             if !cd.assets.futures_account {
-                // Квота аккаунта = base_currency ядра (BaseCheck): у ядра, торгующего в
-                // BTCUSDC/ETHUSDC, это USDC. Её баланс в кошельке — кэш, не купленная монета,
-                // прячем (как делает ядро для per-market через is_quote_asset). Фолбэк на
-                // квоту из конфига, если base_currency пуст (старый сервер).
+                // `base_currency` from BaseCheck is the account quote, for example USDC for a core
+                // trading BTCUSDC. Its wallet balance is collateral, not a purchased coin, so hide
+                // it just as per-market rows use `is_quote_asset`. Older cores with an empty value
+                // fall back to the configured market's quote.
                 let quote = {
                     let base = cd.assets.base_currency.trim();
                     if base.is_empty() {
@@ -505,15 +503,14 @@ impl AssetsView {
                         continue;
                     }
                     let is_quote = coin_up == quote_up;
-                    // Реальное имя рынка из каталога ядра (форматы бирж разные) — нужно ДО
-                    // фильтра: по нему вычитаем «в работе». Нет рынка → фолбэк-конкатенация
-                    // для отображения, но market_exists=false (Sell скрыт).
+                    // Resolve the exchange-specific market name from the core catalog. If none
+                    // exists, retain a concatenated display fallback but set `market_exists=false`
+                    // so Market Sell remains hidden.
                     let resolved = resolve_market(&cd.assets.markets, &w.currency, &quote);
-                    // ПОЛНЫЙ удерживаемый остаток кошелька (как Moonbot): `total` = полный баланс
-                    // (free + заблокированное в ордерах), `amount` = свободное. Выставленное на
-                    // продажу НЕ вычитаем — открытую спот-позу, всё количество которой висит в
-                    // TP-ордерах, показываем целиком (иначе строка с ~0 уходит под фильтр пыли).
-                    // `value_usdt` кошелька уже посчитан от `total`.
+                    // Use the complete held wallet balance, as Moonbot does: `total` includes the
+                    // free amount and quantities locked in orders, while `amount` is only free.
+                    // Do not subtract listed sell quantities, or a fully listed spot holding would
+                    // disappear under the dust filter. Wallet `value_usdt` already uses `total`.
                     let held_qty = w.total;
                     let held_value = w.value_usdt;
                     let keep = thr <= 0.0 || (!is_quote && held_value >= thr);
@@ -540,8 +537,8 @@ impl AssetsView {
         out
     }
 
-    /// Котируемая валюта ядра (из его `market` в конфиге) — для сборки спотовых строк
-    /// кошелька: символ рынка `<coin><quote>` и определение «это сама квота».
+    /// Returns the quote currency resolved from the core's configured market, or `USDT` when the
+    /// core is absent. Wallet-row construction uses it for `<coin><quote>` and quote-asset checks.
     fn core_quote(&self, b: &Backend, core: CoreId) -> String {
         b.config
             .servers
@@ -581,9 +578,9 @@ impl AssetsView {
             .collect()
     }
 
-    /// Тумблер выбранного ядра фильтра (мультивыбор, как в «Ордерах»). `None` — пункт «Все»
-    /// (все выбраны → очистить в «пусто = все»; иначе выбрать все ядра охвата). `Some(id)` —
-    /// тогл одного ядра. Не персистится (сброс на «Все» при переоткрытии).
+    /// Toggles the multi-core filter. `None` represents All: an explicit full selection collapses
+    /// to the equivalent empty-means-all state; otherwise it selects every scoped core. `Some(id)`
+    /// toggles one core. The filter is not persisted and reopens as All.
     pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
         let all: HashSet<CoreId> = self
             .scope_cores(self.backend.read(cx))
@@ -609,8 +606,8 @@ impl AssetsView {
         cx.notify();
     }
 
-    /// Сохранить порог пыли в раскладку (`layout.toml`). Общий на все окна/вкладки «Активов»:
-    /// значение одно, поэтому пишем без ключа охвата. Зовётся из обработчиков слайдера и колеса.
+    /// Persists the dust threshold to `layout.toml`. One value is shared by every Assets tab and
+    /// window, so it has no scope key. Slider and wheel handlers call this method.
     pub(super) fn persist_min_value(&self, cx: &mut Context<Self>) {
         let v = self.min_value_usd;
         self.backend.update(cx, |b, _| {
@@ -628,8 +625,8 @@ impl AssetsView {
         (sig, self.min_value_usd.to_bits())
     }
 
-    /// Клик по ячейке «Ядро»: выставить фильтр РОВНО на это ядро; повторный клик по уже
-    /// единственному выбранному ядру — сброс на «Все». «set-to-single / clear», не мультитогл.
+    /// Handles a Core-cell click as set-to-single or clear rather than a multi-toggle. Clicking the
+    /// sole selected core again resets the filter to All.
     pub(super) fn filter_to_core(&mut self, id: CoreId, cx: &mut Context<Self>) {
         if self.sel_cores.len() == 1 && self.sel_cores.contains(&id) {
             self.sel_cores.clear();
@@ -710,11 +707,11 @@ impl AssetsView {
         seen
     }
 
-    /// Дозапрос transfer-активов для ядер охвата, которые ещё НЕ прислали ни одного снимка
-    /// (`transfer_rev == 0`). На старте ядра ещё не подключены и разовый запрос из `new()`
-    /// уходит впустую — здесь ретраим (гейт rebuild ~1 Гц), пока ядро не ответит; после
-    /// первого снимка (rev>0) запрос прекращается, даже если спот-кошелёк пуст. Нужно
-    /// таблице сверху: часть бирж (Bitget) отдаёт купленные монеты только через transfer.
+    /// Requests transfer assets again for scoped cores that have not delivered a snapshot
+    /// (`transfer_rev == 0`). The initial request in `new` may precede connection, so cache rebuilds
+    /// retry until the first response. A positive revision stops retries even for an empty wallet.
+    /// The upper table needs this because some exchanges expose purchased coins only via transfer
+    /// assets.
     fn request_missing_transfers(&self, b: &Backend) {
         let store = b.session.store();
         for (id, _) in &self.cached_cores {
@@ -777,20 +774,20 @@ impl AssetsView {
     }
 }
 
-/// Реальное имя рынка `<coin>/<quote>` из каталога ядра. Форматы бирж разные: Binance/Bitget
-/// — конкатенация (`BTCUSDC`), Gate — с подчёркиванием (`SOVRN_USDT`). Возвращаем найденное
-/// имя (для Market Sell / клика по тикеру) или `None`, если рынка нет.
+/// Resolves a real `<coin>/<quote>` market name from the core catalog. Exchange formats differ:
+/// Binance and Bitget concatenate (`BTCUSDC`), while Gate uses an underscore (`SOVRN_USDT`).
+/// Returns the catalog name used by Market Sell and ticker navigation, or `None` when absent.
 ///
-/// НАРОЧНО без фолбэка «каноничная монета → индексный рынок» (пробовали для HL-спота
-/// «KHYPE»→«@151»): Market sell кошельковых остатков через Moonbot там не работает, и
-/// правильное поведение — кнопку НЕ показывать. Бейдж «в продаже» от рынка не зависит
-/// (матчится по монете, см. `collect_sell_marked`).
+/// This deliberately does not map a canonical coin to an indexed Hyperliquid spot market such as
+/// `KHYPE` to `@151`: Moonbot cannot market-sell those wallet holdings, so hiding the button is
+/// correct. The for-sale badge is unaffected because [`AssetsView::collect_sell_marked`] matches
+/// by coin.
 fn resolve_market(
     markets: &std::collections::HashSet<String>,
     coin: &str,
     quote: &str,
 ) -> Option<String> {
-    // Рынок = САМО имя монеты (Hyperliquid спот-индексы «@699» зовутся так, а не «@699USDC»).
+    // Accept the coin itself as a market name; Hyperliquid spot indexes use `@699`, not `@699USDC`.
     if markets.contains(coin) {
         return Some(coin.to_string());
     }
@@ -805,10 +802,10 @@ fn resolve_market(
     None
 }
 
-/// Синтетическая `AssetRow` из спотового кошелька (`transfer_assets`) — для монет, которых
-/// нет в per-market балансах (Bitget и т.п.). `market` — реальное имя рынка из каталога
-/// (или фолбэк-конкатенация, если рынка нет — кнопка Sell всё равно скрыта). Цену выводим
-/// из стоимости. Позиции/PnL нет (чистый спот-баланс).
+/// Builds a synthetic `AssetRow` for a spot-wallet coin absent from per-market balances. `market`
+/// is either a catalog name or a concatenated display fallback; the caller separately hides Sell
+/// when the fallback is not real. Price is derived from the wallet's total value and quantity.
+/// The row is a pure spot balance with no position or PnL.
 fn wallet_asset_row(
     w: &TransferAssetRow,
     quote: &str,
@@ -826,13 +823,13 @@ fn wallet_asset_row(
         market,
         coin: w.currency.clone(),
         quote: quote.to_string(),
-        listed: 1, // spot
-        // Свободный остаток БЕЗ выставленного на продажу (остаток sell-ордеров вычтен
-        // вызывающим — transfer-снимок сам заморозку не видит).
+        listed: 1, // Spot.
+        // Display the quantity supplied by the collector, currently the complete held balance so
+        // quantities locked in sell orders remain visible.
         qty: qty_free,
         qty_full: w.total,
         price,
-        // Стоимость свободного остатка (без выставленного на продажу) — как в per-market.
+        // Use the corresponding collector-supplied value, currently the complete held value.
         value_usdt: free_value,
         min_lot_usd: 0.0,
         is_quote_asset: is_quote,
@@ -845,7 +842,7 @@ fn wallet_asset_row(
     }
 }
 
-/// Сортировка строк по убыванию USDT-стоимости (самые большие сверху).
+/// Sorts rows by descending [`AssetEntry::value`], placing the largest held balances first.
 pub(super) fn sort_by_value(out: &mut [AssetEntry]) {
     out.sort_by(|a, b| {
         b.value
@@ -893,8 +890,8 @@ impl Panel for AssetsView {
     ) {
         self.dock = Some(dock_area);
     }
-    /// Кнопка «⧉»: открыть ГЛОБАЛЬНОЕ окно «Активы» (все ядра, singleton) — в отличие
-    /// от Orders это не per-group detach, а отдельное окно (как «Стратегии»).
+    /// Builds the toolbar action that opens the singleton global Assets window for all cores. Unlike
+    /// Orders detachment, this is not scoped to the current group.
     fn toolbar_buttons(
         &mut self,
         _window: &mut Window,
@@ -927,8 +924,9 @@ impl Render for AssetsView {
     /// Render the always-present table and footer plus the optional window-only Wallets section.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::ASSETS_RENDER);
-        // Метка живости окна для feed-потоков: пока панель на экране (рендер ≥1 Гц от
-        // RenderGate), build_assets идёт 1 Гц; без рендеров метка стареет → 1 раз в 5 с.
+        // Keep the shared Assets-view activity marker fresh. While any view renders at least once
+        // per second through RenderGate, feed snapshots may publish after a one-second minimum;
+        // without a visible view, the minimum interval rises to five seconds after domain events.
         moon_core::feed::note_assets_view_render();
         let cores = self.scope_cores(self.backend.read(cx));
         let entries = self.cached_entries.clone();
@@ -936,8 +934,8 @@ impl Render for AssetsView {
         let windowed = self.windowed;
 
         let count = entries.len();
-        // Натуральная высота таблицы = шапка + строки (пусто → 0). Ограничивает max_h
-        // обёртки, чтобы таблица росла под контент, а не тянулась на всю панель.
+        // Natural table height is its header plus rows, or zero when empty. This lets the table grow
+        // with content instead of stretching across a standalone window above the wallet section.
         let table_natural_h = if count == 0 {
             0.0
         } else {
@@ -950,8 +948,8 @@ impl Render for AssetsView {
         // The top bar owns filtering; the footer owns every summary figure the panel produces.
         let core_bar = self.core_bar(&cores, cx);
         let footer = self.footer(cx);
-        // Контейнеры переноса (список ядер + кошельки) — в отдельном ОКНЕ (глобальном или
-        // откреплённом); во вкладке дока показываем только позиции/балансы (таблица шире).
+        // Standalone global and detached windows show the core list and transfer wallets. A dock tab
+        // leaves them out and gives the asset table the full area.
         let wallets = self.cached_wallets.clone();
         let tree_section = self
             .show_wallets
@@ -975,7 +973,7 @@ impl Render for AssetsView {
             empty_msg,
             cx,
         );
-        // Ширина окна для хит-оверлея титлбара (drag/resize/контролы) — как у «Стратегий».
+        // Supply the current width to the title-bar hit overlay for dragging, resizing, and controls.
         let chrome_width = match window.window_bounds() {
             WindowBounds::Windowed(bb)
             | WindowBounds::Maximized(bb)
@@ -995,9 +993,8 @@ impl Render for AssetsView {
             .when(windowed, |this| this.child(assets_header(p, cx)))
             .child(core_bar)
             .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
-        // Таблица позиций (всегда показана). В ОКНЕ с кошельками — высота под контент (кошельки
-        // ниже растягиваются); во вкладке дока (кошельков нет) — таблица занимает ВСЮ высоту до
-        // футера (flex_1), иначе снизу оставался пустой обрыв.
+        // The asset table is always present. With wallets it uses its natural content height so the
+        // lower section can expand; in a dock tab it fills the space above the footer.
         let table_wrap = v_flex()
             .w_full()
             .min_h(px(0.0))
@@ -1009,7 +1006,7 @@ impl Render for AssetsView {
             table_wrap.flex_1()
         });
         root = root.child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
-        // Кошельки (только в отдельном окне) занимают растяжку под таблицей.
+        // In standalone views, let the wallet section consume the flexible space below the table.
         if let Some(tree) = tree_section {
             root = root
                 .child(tree)
@@ -1030,7 +1027,7 @@ impl Render for AssetsView {
     }
 }
 
-/// Титлбар окна «Активы» (drag-кластер слева + системные контролы справа).
+/// Builds the Assets window title bar with its drag cluster and optional system controls.
 fn assets_header(p: MoonPalette, cx: &App) -> impl IntoElement {
     h_flex()
         .id("assets-window-header")
@@ -1061,15 +1058,15 @@ fn assets_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         })
 }
 
-/// Открыть глобальное окно «Активы» (tool/secondary singleton, все ядра).
-/// Дедуп — в `Backend.assets_window`.
+/// Opens the singleton secondary Assets tool window covering all cores. `Backend.assets_window`
+/// provides deduplication and focus of an existing window.
 pub fn open(
     backend: Entity<Backend>,
     owner: Option<AnyWindowHandle>,
     owner_display: Option<DisplayId>,
     cx: &mut App,
 ) {
-    // Уже открыто → сфокусировать.
+    // Focus the existing singleton instead of opening a duplicate.
     if let Some(handle) = backend.read(cx).assets_window {
         if handle
             .update(cx, |_, window, _| window.activate_window())
@@ -1089,7 +1086,7 @@ pub fn open(
             size: size(px(g.w as f32), px(g.h as f32)),
         },
     );
-    // Мультимонитор: монитор по сохранённой точке (не-мак) либо от владельца.
+    // Choose a display from the saved origin where supported, otherwise from the owner window.
     let display_id = crate::windowing::saved_or_owner_display_id(
         saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
         owner,

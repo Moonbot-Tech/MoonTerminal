@@ -1,5 +1,5 @@
-//! Рендер окна настроек: полоска вкладок, тело активной вкладки (скролл), футер
-//! «Сохранить» + статус и шапка окна (`settings_header`).
+//! Renders the Settings window: tab strip, scrollable active-tab body, Save/status footer, and
+//! window header (`settings_header`).
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -17,7 +17,7 @@ impl Render for SettingsView {
         let p = MoonPalette::active(cx);
         let chrome_width = f32::from(window.viewport_size().width);
 
-        // ── Полоска вкладок ─────────────────────────────────────────────────
+        // ── Tab strip ───────────────────────────────────────────────────────
         let mut tabs = h_flex()
             .w_full()
             .h(design::fit_h_px(cx, 34.0, 13.0, 10.5))
@@ -42,7 +42,7 @@ impl Render for SettingsView {
                         line_height: 13.0,
                         gap: 5.0,
                     })
-                    // 110: семь вкладок должны влезать в дефолтную ширину окна (860).
+                    // Keep all seven tabs within the default 860-pixel window width.
                     .width(110.0)
                     .selected(on)
                     .label(t.title())
@@ -54,7 +54,7 @@ impl Render for SettingsView {
             );
         }
 
-        // ── Тело активной вкладки ───────────────────────────────────────────
+        // ── Active tab body ─────────────────────────────────────────────────
         let content = match self.active {
             Tab::Interface => self.interface_tab(cx).into_any_element(),
             Tab::General => self.general_tab(cx).into_any_element(),
@@ -64,12 +64,11 @@ impl Render for SettingsView {
             Tab::Connections => self.connections_tab(cx).into_any_element(),
             Tab::Storage => self.storage_tab(cx).into_any_element(),
         };
-        // Тело прокручивается (вкладки выше высоты окна): stateful div + ВИДИМЫЙ вертикальный
-        // скроллбар (`overflow_y_scrollbar`, п.18 UX). ВАЖНО: `Scrollable` наследует от элемента
-        // только `size` (не `flex_1`) и рендерится `size_full` — сам по себе он занял бы 100%
-        // высоты колонки и вытолкнул футер (п.41 UX). Поэтому кладём его во внешний `flex_1 +
-        // min_h(0)` контейнер (тот тянется в остаток высоты и позволяет ужиматься), а сам
-        // скролл-div — `size_full` внутри него.
+        // Make tall tabs scroll through a stateful div with a visible vertical scrollbar.
+        // `Scrollable` inherits only `size`, not `flex_1`, and renders at `size_full`; on its own it
+        // would consume the full column height and push out the footer. The outer `flex_1 +
+        // min_h(0)` container takes the remaining height and permits shrinking, while the inner
+        // scroll div fills that container.
         let body = div().flex_1().min_h(px(0.0)).w_full().child(
             div()
                 .id("settings-body")
@@ -85,9 +84,9 @@ impl Render for SettingsView {
                 .overflow_y_scrollbar(),
         );
 
-        // ── Подвал: Сохранить + статус ──────────────────────────────────────
-        // Текст статуса резолвим здесь (ключ → текущая локаль), чтобы после
-        // смены языка не оставался «хвост» прошлой локали.
+        // ── Footer: Save and status ─────────────────────────────────────────
+        // Resolve status keys against the current locale here so a language change cannot leave
+        // text from the previous locale behind.
         let status_el = match &self.status {
             Some((msg, err)) => {
                 let text = match msg {
@@ -120,8 +119,8 @@ impl Render for SettingsView {
             )
             .child(status_el)
             .child(div().flex_1())
-            // «Импорт из MoonBot» — в правой зоне футера (где у переносимых вкладок
-            // «Копировать/Вставить»; на «Общих» она свободна). Подсказка — тултипом.
+            // Put MoonBot import in the footer's right-hand area, which the General tab does not
+            // use for Copy/Paste, and expose its explanation through a tooltip.
             .when(self.active == Tab::General, |f| {
                 f.child(
                     div()
@@ -145,11 +144,11 @@ impl Render for SettingsView {
                         ),
                 )
             })
-            // Копировать/Вставить настройки вкладки (только у вкладок со своим
-            // переносимым файлом: Интерфейс/Линии/Бейджи/Хоткеи) — см. share.rs.
+            // Offer Copy/Paste only on tabs with portable files: Interface, Lines, Badges, and
+            // Hotkeys. See `share.rs`.
             .when(self.shareable(), |f| {
-                // .outline() + пробелы в label: видимая рамка кнопки (были ghost —
-                // выглядели серым текстом); пробелы — обход pad_x=0 (FORK_BUGS.md).
+                // Use outlined buttons for a visible boundary. Label spaces work around the fork's
+                // `MoonButton` `pad_x=0` bug, which otherwise places text against the outline.
                 f.child(
                     MoonButton::new("share-copy")
                         .outline()
@@ -180,7 +179,7 @@ impl Render for SettingsView {
             .child(tabs)
             .child(body)
             .child(footer)
-            // Оверлей preview импорта MoonBot — поверх всего тела окна.
+            // Render the MoonBot import preview over the entire window body.
             .children(self.import_overlay(cx))
             .child(
                 MoonWindowFrame::tool("settings-window-frame-hit", chrome_width)

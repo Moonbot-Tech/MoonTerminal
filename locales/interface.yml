@@ -1,5 +1,5 @@
-# Вкладка «Интерфейс» окна настроек (тема оформления, theme.toml).
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Interface tab of the Settings window (visual theme, theme.toml).
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
 _version: 2
 
 iface.sec_theme:

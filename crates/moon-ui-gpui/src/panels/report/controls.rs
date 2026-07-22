@@ -1,12 +1,13 @@
-//! Поля-списки (ядро/сторона) и попап выбора видимых колонок панели «Отчёт».
+//! Report panel dropdown filters and the visible-column selection menu.
 
 use super::columns::header_for;
 use super::*;
 use rust_i18n::t;
 
 impl ReportPanel {
-    /// Комбобокс ядер — МУЛЬТИВЫБОР (общий виджет [`crate::controls::core_combo`], как в
-    /// «Ордерах»/«Активах»). Подпись: «Все ядра» (пусто/все) / имя единственного / «Ядер: N».
+    /// Render the shared multi-select core combo.
+    ///
+    /// An empty set means all cores; the label shows all, a sole name, or the selected count.
     pub(super) fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         // Rank the raw DB result at render time; the query has no config and may include
@@ -26,7 +27,7 @@ impl ReportPanel {
         )
     }
 
-    /// Комбобокс стороны (Все/Лонг/Шорт).
+    /// Render the direction filter: all, Long, or Short.
     pub(super) fn side_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let cur = match self.side {
             SideFilter::All => t!("report.filter.all").to_string(),
@@ -68,7 +69,7 @@ impl ReportPanel {
             .items(items)
     }
 
-    /// Поле-список типа ордеров (Все / Реальные / Эмуляторные) — как в «Ордерах».
+    /// Render the trade-kind filter: all, real, or emulated.
     pub(super) fn kind_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let cur = match self.kind {
             ReportKind::All => t!("report.kind.all"),
@@ -110,7 +111,7 @@ impl ReportPanel {
             .items(items)
     }
 
-    /// Комбобокс периода (пресеты «Сегодня/Вчера/…», как в отчёте Moonbot).
+    /// Render the report-period filter using Moonbot-compatible presets.
     pub(super) fn period_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let options: Vec<(Period, SharedString, SharedString)> = Period::ALL
@@ -136,9 +137,10 @@ impl ReportPanel {
             .items(items)
     }
 
-    /// Меню сохранения отчёта в файл: CSV / CSV со всеми колонками / Excel (XLSX) /
-    /// Excel со всеми колонками. Период выборки = текущий фильтр панели
-    /// (пресет «Сегодня» и т.п. или ручные даты С:/По:).
+    /// Build the CSV/XLSX export menu for the visible or full schema.
+    ///
+    /// Export uses the panel's current filter and sort order; the period may be a preset or
+    /// dates entered in the From/To MoonInput fields and parsed with `db::parse_ymd`.
     pub(super) fn export_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let item =
@@ -174,7 +176,7 @@ impl ReportPanel {
                 true,
             ),
         ];
-        // Кнопка-глиф в ряд с селектором колонок (общий вид, подсказка тултипом).
+        // Keep the glyph button alongside the column selector and explain it with a tooltip.
         div()
             .id("rep-export-tip")
             .tooltip(|_window, cx| {
@@ -193,17 +195,16 @@ impl ReportPanel {
             )
     }
 
-    /// Попап выбора видимых колонок (чекбоксы) — по рантайм-списку колонок БД,
-    /// поэтому авто-добавленные поля ядра сразу доступны к показу.
+    /// Build a checkbox menu from the runtime DB schema, including new dynamic core fields.
     pub(super) fn columns_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let all_on = self.all_columns_on();
         let all_view = view.clone();
         let mut items: Vec<MoonMenuItem> = vec![
-            // «Все» — тумблер: включить все колонки / повторно — оставить одну первую.
-            // Только `checked` (галочка-глиф слева) — БЕЗ `selected`: голубой фон
-            // `selected` на светлой теме делал выбранные строки нечитаемыми (см. правку
-            // «чекбоксы вместо подсветки»), а checked-глиф — явный индикатор выбора.
+            // "All" enables every column; when all are already enabled, this action keeps only
+            // the first so it never empties the table. Use `checked`, not `selected`: selected
+            // adds a light background that makes rows hard to read in the light theme, while
+            // the check glyph is an explicit selection indicator.
             MoonMenuItem::with_key("col-all", t!("report.filter.all").to_string())
                 .checked(all_on)
                 .on_click(move |_, _, app| {
@@ -221,8 +222,8 @@ impl ReportPanel {
                     view.update(app, |t, c| t.toggle_column(name, c));
                 })
         }));
-        // Кнопка-глиф вместо поля со списком (общий вид селекторов колонок);
-        // подсказка — тултипом (глифы в словарь не кладём, см. locales/README).
+        // Use a glyph button instead of a list field, matching other column selectors. The
+        // tooltip is localized; glyphs remain outside the locale dictionary per locales/README.
         div()
             .id("rep-cols-tip")
             .tooltip(|_window, cx| {

@@ -1,9 +1,10 @@
-//! Дерево стратегий на компоненте `MoonTree` (форк MoonUI, headless `Tree::custom`).
-//! Заменяет ручной флэттинг/виртуализацию/hitbox-DnD прежней `tree.rs`: MoonTree даёт
-//! уплощение по `expanded_ids`, виртуальный список, клавиатуру и row-hitbox под декораторы
-//! DnD. Выбор/стейджинг/раскрытие остаются в полях `StrategiesView` — здесь только адаптер
-//! `CoreStore → MoonTreeItem` + side-map `id → NodeData` (данные строки и drag-нагрузка) и
-//! рендер строк/декораторов. Мутации идут через `Entity::update` (callbacks вне `Context<Self>`).
+//! Strategy tree built on MoonUI's forked `MoonTree` and its headless `Tree::custom` mode.
+//! It replaces the former `tree.rs` manual flattening, virtualization, and hitbox-based DnD:
+//! MoonTree flattens `expanded_ids`, virtualizes rows, handles the keyboard, and supplies row
+//! hitboxes to DnD decorators. Selection, staging, and expansion remain in `StrategiesView`; this
+//! module only adapts `CoreStore` to `MoonTreeItem`, builds the `id -> NodeData` side map for row
+//! and drag data, and renders rows and decorators. Callbacks outside `Context<Self>` mutate through
+//! `Entity::update`.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -22,7 +23,7 @@ use crate::design;
 use moon_core::feed::StrategyRow;
 use moon_core::session::{CoreId, CoreStore};
 
-// ── id-кодировка узлов (стабильные строковые id для MoonTree) ────────────────
+// ── Node ID encoding: stable string IDs for MoonTree ─────────────────────────
 fn id_core(core: CoreId) -> SharedString {
     SharedString::from(format!("c:{core}"))
 }
@@ -39,7 +40,7 @@ fn id_del_strat(core: CoreId, id: u64) -> SharedString {
     SharedString::from(format!("ds:{core}:{id}"))
 }
 
-/// Данные одной строки дерева (берёт `render_row`/декораторы по id узла).
+/// Data for one tree row, looked up by node ID from `render_row` and decorators.
 pub(super) enum NodeData {
     Core {
         core: CoreId,
@@ -54,7 +55,7 @@ pub(super) enum NodeData {
         label: String,
         active: usize,
         total: usize,
-        /// Папка выделена кликом (подсветка + цель Ctrl+C «копировать папку»).
+        /// Whether a click selected the folder for highlighting and Ctrl+C folder copying.
         selected: bool,
     },
     Strategy {
@@ -69,8 +70,8 @@ pub(super) enum NodeData {
         is_short: bool,
         drag_ids: Vec<u64>,
     },
-    /// Папка «Удалённые» ядра: стратегии, которых на сервере уже нет (живут
-    /// только в нашей БД, путей ядра у них нет — лежат плоско).
+    /// Core's Deleted folder: strategies absent from the server and retained only in the local DB.
+    /// The DB retains their folder paths for restoration, while the UI lists them flat here.
     DeletedFolder { core: CoreId, count: usize },
     DeletedStrategy {
         core: CoreId,
@@ -82,7 +83,7 @@ pub(super) enum NodeData {
     },
 }
 
-/// Результат адаптера: элементы дерева + side-map + раскрытые id + видимый плоский порядок.
+/// Adapter result containing tree items, the side map, expanded IDs, and visible flat order.
 pub(super) struct MoonTreeBuild {
     pub(super) items: Vec<MoonTreeItem>,
     pub(super) node_data: HashMap<SharedString, NodeData>,
@@ -91,7 +92,7 @@ pub(super) struct MoonTreeBuild {
     pub(super) searching: bool,
 }
 
-/// Построить дерево MoonTree из стора (owned — без заимствований стора наружу).
+/// Builds an owned MoonTree representation from the store without exposing store borrows.
 pub(super) fn build(
     view: &StrategiesView,
     store: &CoreStore,
@@ -118,7 +119,7 @@ pub(super) fn build(
             .filter(|r| filter.counts(r) && r.checked)
             .count();
         let open_orders_total = cd.orders.iter().filter(|o| !o.job_is_done).count();
-        // открытые ордера по стратегиям ядра (strat_id → кол-во)
+        // Count the core's open orders by strategy ID.
         let order_counts: HashMap<u64, usize> = {
             let mut m = HashMap::new();
             for o in cd.orders.iter().filter(|o| !o.job_is_done) {
@@ -132,7 +133,7 @@ pub(super) fn build(
             expanded.push(cid.clone());
         }
 
-        // дерево папок из видимых стратегий + пустые UI-папки
+        // Build the folder tree from visible strategies plus empty UI-only folders.
         let mut root = build_node(cd.strategies.iter().filter(|r| filter.matches(r)));
         for parts in view.ui_folder_paths(core) {
             ensure_folder(&mut root, &parts);
@@ -155,7 +156,7 @@ pub(super) fn build(
             &mut expanded,
         );
 
-        // Папка «Удалённые» — в хвост ядра. При поиске фильтруем по имени.
+        // Append the Deleted folder after live strategies and filter its rows by name during search.
         let search_lc = filter.search.trim().to_lowercase();
         let del: Vec<&moon_core::strat_db::stats::HeadRow> = view
             .deleted
@@ -323,7 +324,7 @@ fn convert_node(
 }
 
 impl StrategiesView {
-    /// Элемент дерева стратегий на `MoonTree` (headless). `data` — side-map текущего кадра.
+    /// Builds the headless `MoonTree` element using the current frame's `data` side map.
     pub(super) fn moon_tree_el(
         &self,
         data: Rc<HashMap<SharedString, NodeData>>,
@@ -337,7 +338,7 @@ impl StrategiesView {
         // enough.
         let view = cx.entity().downgrade();
 
-        // ── рендер строки ──
+        // ── Row rendering ──
         let row_data = data.clone();
         let row_view = view.clone();
         let tree = MoonTree::custom(&self.tree_state, move |entry, meta, _window, app| {
@@ -347,7 +348,7 @@ impl StrategiesView {
             };
             render_row(&row_data, &row_view, entry, meta, app)
         })
-        // ── DnD: стратегии ──
+        // ── DnD: strategies ──
         .draggable::<StratDrag, DragChip, _, _>(
             {
                 let data = data.clone();
@@ -370,7 +371,7 @@ impl StrategiesView {
                 })
             },
         )
-        // ── DnD: папки ──
+        // ── DnD: folders ──
         .draggable::<FolderDrag, DragChip, _, _>(
             {
                 let data = data.clone();
@@ -393,9 +394,9 @@ impl StrategiesView {
                 })
             },
         )
-        // ── Цель сброса: ядро/папка. Единый can_drop на ОБА типа (gpui `can_drop` —
-        // один слот; два drop_target перетёрли бы друг друга → дроп не срабатывал), плюс
-        // drag_over-подсветка и on_drop по типу нагрузки. ──
+        // ── Drop target: core or folder. Use one `can_drop` for both payload types because GPUI
+        // stores only one slot; two drop targets would overwrite each other and disable dropping.
+        // The decorator also supplies drag-over highlighting and payload-specific `on_drop`. ──
         .row_decorator({
             let data = data.clone();
             let view = view.clone();
@@ -435,7 +436,7 @@ impl StrategiesView {
     }
 }
 
-/// Цель сброса = ядро (корень) или папка. Возвращает (целевое ядро, путь).
+/// Resolves a core-root or folder drop target as `(target core, path)`.
 fn drop_dest(
     data: &HashMap<SharedString, NodeData>,
     entry: &MoonTreeEntry,
@@ -449,7 +450,7 @@ fn drop_dest(
     }
 }
 
-/// Рендер одной строки по `NodeData`.
+/// Renders one row from `NodeData`.
 fn render_row(
     data: &HashMap<SharedString, NodeData>,
     view: &Entity<StrategiesView>,
@@ -577,7 +578,7 @@ fn render_row(
 enum ToggleTarget {
     Core(CoreId),
     Folder(CoreId, Vec<String>),
-    /// Папка «Удалённые» ядра.
+    /// The core's Deleted folder.
     Deleted(CoreId),
 }
 
@@ -595,7 +596,8 @@ fn core_folder_row(
 ) -> AnyElement {
     let p = MoonPalette::active(app);
     let marker = if expanded { "▼" } else { "▶" };
-    // ПКМ-меню — только у папок (как в egui): переименовать/копировать/вставить/новая/удалить.
+    // In this core/folder row type, only actual folders receive the egui-style context menu for
+    // rename, copy, paste, create, and delete; core and Deleted headings do not.
     let menu = match &target {
         ToggleTarget::Folder(c, path) => Some((*c, path.clone())),
         ToggleTarget::Core(_) | ToggleTarget::Deleted(_) => None,
@@ -638,7 +640,7 @@ fn core_folder_row(
                     }
                     ToggleTarget::Folder(c, path) => {
                         toggle(&mut this.expanded_folders, (*c, path.join("/")));
-                        // Клик и ВЫДЕЛЯЕТ папку (подсветка + цель Ctrl+C), как в Moonbot.
+                        // Match Moonbot by selecting the clicked folder for highlighting and Ctrl+C.
                         this.selected_folder = Some((*c, path.join("/")));
                     }
                     ToggleTarget::Deleted(c) => {
@@ -673,8 +675,8 @@ fn core_folder_row(
         .into_any_element()
 }
 
-/// Строка удалённой стратегии: без чекбокса/ПКМ/DnD, приглушённая; клик —
-/// выбор с автопереходом на последнюю версию (живых параметров нет).
+/// Renders a muted deleted-strategy row without a checkbox or DnD.
+/// Clicking selects it and jumps to its latest version; right-click opens its Restore context menu.
 #[allow(clippy::too_many_arguments)]
 fn deleted_strategy_row(
     view: &Entity<StrategiesView>,
@@ -803,7 +805,7 @@ fn strategy_row(
         kind.to_string()
     };
 
-    // имя + вид(N) — кликабельная зона выбора
+    // Make the name and kind/open-order count the clickable selection area.
     let view_click = view.clone();
     let view_menu = view.clone();
     let mut name_row = h_flex()
@@ -829,8 +831,8 @@ fn strategy_row(
             ),
         )
         .child(
-            // Вид-бейдж различает направление: SHORT — оранжевый (`Negative`),
-            // LONG — зеленоватый (`Positive`).
+            // Distinguish direction through the kind badge: SHORT is orange (`Negative`) and LONG
+            // is greenish (`Positive`).
             MoonBadge::new(kind_txt)
                 .tone(if is_short {
                     MoonTone::Negative
@@ -895,9 +897,9 @@ fn strategy_row(
         .pr(design::ui_px(app, 2.0))
         .py(design::ui_px(app, 1.0))
         .child(
-            // Зелёный тон = «включена/активна» (по умолчанию тон Info давал бледно-голубой
-            // квадрат, неотличимый от пустого на светлой теме — просьба пользователя сделать
-            // «зелёный = активный»). Галочка-глиф внутри тоже зелёная.
+            // Use a green tone for enabled/active. The default Info tone produced a pale blue box
+            // that was indistinguishable from empty on the light theme; Positive also makes the
+            // checkmark glyph green.
             MoonCheckbox::new(SharedString::from(format!("chk-{core}-{id}")))
                 .checked(val)
                 .tone(MoonTone::Positive)

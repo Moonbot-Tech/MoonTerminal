@@ -1,5 +1,5 @@
-//! Команды ядрам (стратегии/торговля/Engine-действия) через per-core канал `CoreCmd`
-//! + read-only аксессоры менеджера (store/sessions/market_source/…).
+//! Commands to cores (strategy, trading, and Engine actions) through the per-core `CoreCmd`
+//! channel, plus read-only manager accessors (`store`, `sessions`, `market_source`, etc.).
 
 use anyhow::{anyhow, Result};
 
@@ -23,9 +23,9 @@ impl SessionManager {
             .map_err(|_| anyhow!("канал команд ядра {core} закрыт: {action}"))
     }
 
-    /// Действие со стратегиями ядра (из окна стратегий): единый путь команд через
-    /// per-core канал. Сначала синхронизирует галки (`checks`), затем — старт/стоп
-    /// отмеченных (`start_stop`). Пустое действие — no-op.
+    /// Send a strategy action from the Strategies window through the per-core command channel.
+    /// This first synchronizes the changed checkboxes in `checks`, then starts or stops the
+    /// checked strategies according to `start_stop`. An empty action is a no-op.
     pub fn apply_strategies(
         &self,
         core: CoreId,
@@ -42,10 +42,9 @@ impl SessionManager {
         )
     }
 
-    /// Редактирование полей стратегий ядра: на каждую стратегию свой `(id, changes)`. ВСЕ
-    /// правки ядра уходят ОДНОЙ командой (полный снимок правится на стороне feed одним
-    /// `sync_local_strategies`) — иначе при нескольких выбранных стратегиях одного ядра
-    /// второй sync перетирал бы первый (применялось бы к одной).
+    /// Edit fields for strategies belonging to one core, with one `(id, changes)` entry per
+    /// strategy. All edits for the core travel in one command because the feed patches the full
+    /// snapshot and sends one `sync_local_strategies`; separate syncs would overwrite each other.
     pub fn edit_strategies(
         &self,
         core: CoreId,
@@ -61,14 +60,14 @@ impl SessionManager {
         )
     }
 
-    /// Удалить ОДНУ стратегию ядра по `id` (необратимо). Правило «только выключенные»
-    /// проверяется в UI до вызова.
+    /// Logically delete one core strategy by `id`. The UI enforces the "unchecked only" rule
+    /// before calling this method, and retained history allows a later restore under the same ID.
     pub fn delete_strategy(&self, core: CoreId, id: u64) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::DeleteStrategy { id }, "delete strategy")
     }
 
-    /// Удалить ПАПКУ ядра целиком по пути (необратимо). Стратегии под папкой должны быть
-    /// удалены/перенесены заранее (UI это гарантирует).
+    /// Delete an entire core folder by path. The UI guarantees that contained strategies are
+    /// moved or deleted first.
     pub fn delete_folder(&self, core: CoreId, path: String) -> Result<()> {
         if path.is_empty() {
             return Ok(());
@@ -76,8 +75,8 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::DeleteFolder { path }, "delete folder")
     }
 
-    /// Создать новые стратегии ядра (создание / вставка из буфера). feed добавит их к
-    /// полному набору с новыми id и одним sync. Один набор на ядро (вызывать по разу на ядро).
+    /// Create new core strategies directly or from the clipboard. The feed adds them to the full
+    /// set with new IDs and one sync. Send one batch per core.
     pub fn create_strategies(&self, core: CoreId, specs: Vec<NewStrategySpec>) -> Result<()> {
         if specs.is_empty() {
             return Ok(());
@@ -89,9 +88,9 @@ impl SessionManager {
         )
     }
 
-    /// Восстановить удалённую стратегию под её СТАРЫМ id: история версий и
-    /// профит по ордерам (join по strategyid) продолжаются. Поля — из последней
-    /// версии strat_db; восстановленная приходит выключенной.
+    /// Restore a deleted strategy under its previous ID so version history and order-profit joins
+    /// through `strategyid` continue. Fields come from the latest `strat_db` version, and the
+    /// restored strategy is unchecked.
     pub fn restore_strategy(
         &self,
         core: CoreId,
@@ -112,8 +111,8 @@ impl SessionManager {
         )
     }
 
-    /// Сменить папку существующих стратегий ядра (переименование папки / перенос).
-    /// `moves` — `(strategy_id, новый folder_path)`. Один набор на ядро.
+    /// Change the folder of existing core strategies to rename a folder or move strategies.
+    /// Each `moves` entry is `(strategy_id, new_folder_path)`. Send one batch per core.
     pub fn move_strategies(&self, core: CoreId, moves: Vec<(u64, String)>) -> Result<()> {
         if moves.is_empty() {
             return Ok(());
@@ -121,8 +120,8 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::MoveStrategies { moves }, "move strategies")
     }
 
-    /// Перенос актива между кошельками ОДНОГО ядра (drag&drop в окне «Активы»).
-    /// `qty` в базовой монете; `from`/`to` — кошельки (Spot/Futures/Quarterly).
+    /// Transfer an asset between wallets of one core through drag and drop in the Assets window.
+    /// `qty` is in the base coin; `from` and `to` are Spot, Futures, or Quarterly wallets.
     pub fn transfer_asset(
         &self,
         core: CoreId,
@@ -146,8 +145,8 @@ impl SessionManager {
         )
     }
 
-    /// Заармить/обновить chart-алерт (фигура с галкой «Alert») на рынке ядра.
-    /// `blob` — сериализованный `TChartObject`; `obj_uid` — стабильный id фигуры.
+    /// Arm or update a chart alert, represented by a drawn object with its Alert option enabled,
+    /// on a core market. `blob` is a serialized `TChartObject`; `obj_uid` is the stable object ID.
     pub fn chart_alert_upsert(
         &self,
         core: CoreId,
@@ -169,7 +168,7 @@ impl SessionManager {
         )
     }
 
-    /// Разоружить/удалить chart-алерт по `obj_uid`.
+    /// Disarm and delete a chart alert by `obj_uid`.
     pub fn chart_alert_delete(&self, core: CoreId, market: String, obj_uid: u64) -> Result<()> {
         if market.is_empty() || obj_uid == 0 {
             return Ok(());
@@ -181,7 +180,7 @@ impl SessionManager {
         )
     }
 
-    /// Запросить свежий список transfer-активов ядра (по всем кошелькам).
+    /// Request a fresh list of the core's transferable assets across all wallets.
     pub fn refresh_transfer_assets(&self, core: CoreId) -> Result<()> {
         self.send_core_cmd(
             core,
@@ -190,14 +189,14 @@ impl SessionManager {
         )
     }
 
-    /// Сконвертировать «пыль» ядра в BNB (необратимо). Per-core.
+    /// Permanently convert one core's small balances, or dust, to BNB.
     pub fn convert_dust(&self, core: CoreId) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::ConvertDust, "convert dust")
     }
 
-    /// Поставить ордер вручную на рынке `market` ядра (ручная торговля). `short` —
-    /// сторона позиции (Long/Short); `strategy_id=None` → `StratID=0` (ордер без
-    /// стратегии). `price`/`size` должны быть положительными, иначе no-op.
+    /// Place a manual order on the core's `market`. `short` selects the Long or Short position
+    /// side; `strategy_id=None` maps to `StratID=0` for an order without a strategy. Non-positive
+    /// `price` or `size` values are ignored.
     pub fn place_order(
         &self,
         core: CoreId,
@@ -223,8 +222,8 @@ impl SessionManager {
         )
     }
 
-    /// Переставить (move/replace) ордер ядра по `uid` на новую цену — «потянуть за
-    /// линию». `new_price` должен быть положительным, иначе no-op.
+    /// Move or replace a core order by `uid` at a new price, as when dragging its line.
+    /// A non-positive `new_price` is ignored.
     pub fn move_order(&self, core: CoreId, uid: u64, new_price: f64) -> Result<()> {
         if !(new_price > 0.0) {
             return Ok(());
@@ -232,12 +231,12 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::MoveOrder { uid, new_price }, "move order")
     }
 
-    /// Отменить ордер ядра по `uid`.
+    /// Cancel a core order by `uid`.
     pub fn cancel_order(&self, core: CoreId, uid: u64) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::CancelOrder { uid }, "cancel order")
     }
 
-    /// «Паник-селл» по рынку ядра (кнопка на чарте). `on` — вкл/выкл флаг.
+    /// Toggle market-level panic sell for a core from the chart button.
     pub fn panic_sell_market(&self, core: CoreId, market: String, on: bool) -> Result<()> {
         self.send_core_cmd(
             core,
@@ -246,8 +245,9 @@ impl SessionManager {
         )
     }
 
-    /// Паник-селл КОНКРЕТНОГО ордера по `uid` — drag sell-линии снимает флаг перед
-    /// move_order (иначе паник-воркер ядра вернёт цену; соседние ордера рынка не трогаем).
+    /// Toggle panic sell for one order by `uid`. Dragging a sell line clears this flag before
+    /// `move_order`; otherwise the core's panic worker would restore the previous price. Other
+    /// orders in the market remain unchanged.
     pub fn turn_order_panic_sell(&self, core: CoreId, uid: u64, on: bool) -> Result<()> {
         self.send_core_cmd(
             core,
@@ -256,7 +256,7 @@ impl SessionManager {
         )
     }
 
-    /// Закрыть позицию рынка ядра ПО МАРКЕТУ (кнопка «Market sell» у строки с позицией).
+    /// Close a core market position at market from the Market Sell button on a position row.
     pub fn market_sell_position(&self, core: CoreId, market: String) -> Result<()> {
         self.send_core_cmd(
             core,
@@ -265,8 +265,8 @@ impl SessionManager {
         )
     }
 
-    /// Продать спот-токен рынка ядра ПО МАРКЕТУ (кнопка «Market sell» у строки-холдинга).
-    /// `size` — количество в базовой монете (обычно полный остаток).
+    /// Sell a core market's spot token at market from the Market Sell button on a holding row.
+    /// `size` is the quantity in the base coin, usually the full balance.
     pub fn market_sell_token(&self, core: CoreId, market: String, size: f64) -> Result<()> {
         self.send_core_cmd(
             core,
@@ -275,7 +275,7 @@ impl SessionManager {
         )
     }
 
-    /// Отменить ожидающие buy-ордера рынка ядра (кнопка «Cancel Buy»).
+    /// Cancel pending buy orders for a core market from the Cancel Buy button.
     pub fn cancel_market_buys(&self, core: CoreId, market: String) -> Result<()> {
         self.send_core_cmd(
             core,
@@ -284,7 +284,7 @@ impl SessionManager {
         )
     }
 
-    /// «Join all sells» (ПКМ по линии sell): объединить sell-ордера рынка по стороне `short`.
+    /// Join all sell orders for a market and position side from a sell-line context menu.
     pub fn join_sells(&self, core: CoreId, market: String, short: bool) -> Result<()> {
         if market.is_empty() {
             return Ok(());
@@ -315,8 +315,8 @@ impl SessionManager {
         )
     }
 
-    /// Включить/выключить стоп-флаг (SL/TS/VStop) ордера ядра по `uid` — клик по ячейке в
-    /// таблице «Ордера». feed сохраняет настроенный уровень стопа при повторном включении.
+    /// Toggle the SL, TS, or VStop flag of one core order by `uid`, as triggered by a cell click in
+    /// the Orders table. The feed preserves the configured stop level when re-enabling it.
     pub fn set_order_stop(
         &self,
         core: CoreId,
@@ -331,9 +331,9 @@ impl SessionManager {
         )
     }
 
-    /// Передвинуть цену стоп/тейк-линии ордера ядра по `uid` (перетаскивание линии на чарте)
-    /// на абсолютную `price`. SL/TS ставятся ФИКСИРОВАННЫМ стопом по цене, take-profit —
-    /// абсолютной ценой; остальные стопы ордера сохраняются. `price` должен быть положительным.
+    /// Move an order's stop or take-profit line by dragging it on the chart. The absolute `price`
+    /// sets SL or TS to a fixed-price stop, or sets take profit to an absolute price; the other
+    /// stops are preserved. A non-positive `price` is ignored.
     pub fn move_order_stop_price(
         &self,
         core: CoreId,
@@ -351,9 +351,9 @@ impl SessionManager {
         )
     }
 
-    /// Применить форму правок стопов ордера ядра по `uid` из окна редактирования
-    /// («Активный ордер»): SL/TS/TP/VStop разом — вкл/выкл, фиксированная цена или возврат
-    /// к глобальному уровню. `None`-группы не меняются. Пустая форма — no-op.
+    /// Apply all SL, TS, TP, and VStop edits for an order by `uid` from the Active Order editor,
+    /// including enabling, disabling, using a fixed price, or returning to the global level.
+    /// Groups set to `None` remain unchanged; an empty form is a no-op.
     pub fn update_order_stops(&self, core: CoreId, uid: u64, form: OrderStopsForm) -> Result<()> {
         if form.is_empty() {
             return Ok(());
@@ -365,8 +365,8 @@ impl SessionManager {
         )
     }
 
-    /// Точечная правка `ClientSettings` ядра из тулбара (TP/SL/выбор sell-пресета). feed
-    /// патчит удержанный снимок и шлёт его целиком в ядро.
+    /// Apply a targeted `ClientSettings` edit from the toolbar, such as TP, SL, or sell-preset
+    /// selection. The feed patches the retained snapshot and sends it to the core in full.
     pub fn edit_client_settings(&self, core: CoreId, edit: ClientSettingsEdit) -> Result<()> {
         self.send_core_cmd(
             core,
@@ -375,17 +375,17 @@ impl SessionManager {
         )
     }
 
-    /// Точечная правка управления плечом ядра (фикс. плечо из тулбара).
+    /// Apply a targeted leverage-management edit, such as fixed leverage from the toolbar.
     pub fn edit_lev_manage(&self, core: CoreId, edit: LevManageEdit) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::EditLevManage(edit), "edit lev manage")
     }
 
-    /// Переключить hedge-mode аккаунта ядра (dual-side позиции). Реальное действие на бирже.
+    /// Toggle account hedge mode for dual-side positions. This performs a live exchange action.
     pub fn set_hedge_mode(&self, core: CoreId, on: bool) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::SetHedgeMode(on), "set hedge mode")
     }
 
-    /// Установить плечо рынка ядра (Engine API). Реальное действие на бирже.
+    /// Set leverage for one core market through the Engine API. This is a live exchange action.
     pub fn set_leverage(&self, core: CoreId, market: String, leverage: i32) -> Result<()> {
         self.send_core_cmd(
             core,
@@ -394,27 +394,27 @@ impl SessionManager {
         )
     }
 
-    /// Старт/рестарт рантайма ядра (попап настроек ядра).
+    /// Start or restart the core runtime from the core-settings popup.
     pub fn restart_now(&self, core: CoreId) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::RestartNow, "restart now")
     }
 
-    /// Сброс счётчика прибыли ядра (сессия / всё время).
+    /// Reset the core's session or all-time profit counter.
     pub fn reset_profit(&self, core: CoreId, kind: ResetProfitKind) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::ResetProfit(kind), "reset profit")
     }
 
-    /// Отменить все ордера ядра (реальное биржевое действие).
+    /// Cancel every order for the core. This is a live exchange action.
     pub fn cancel_all_orders(&self, core: CoreId) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::CancelAllOrders, "cancel all orders")
     }
 
-    /// Чёрный список монет ядра: вкл/выкл + текст списка.
+    /// Set the core's coin-blacklist state and text.
     pub fn set_blacklist(&self, core: CoreId, on: bool, text: String) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::SetBlacklist { on, text }, "set blacklist")
     }
 
-    /// Исключать монеты ЧС из рыночной дельты (локально в Active Lib ядра).
+    /// Locally exclude blacklisted coins from the core's Active Lib market-delta calculation.
     pub fn set_exclude_blacklisted_delta(&self, core: CoreId, on: bool) -> Result<()> {
         self.send_core_cmd(
             core,
@@ -423,8 +423,8 @@ impl SessionManager {
         )
     }
 
-    /// Read-only доступ к аккаунтному плану (статусы/ордера/детекты/стратегии).
-    /// Наружу отдаём только `&` — мутирует store исключительно сам менеджер.
+    /// Return read-only access to account-plane state such as statuses, orders, detects, and
+    /// strategies. Only the manager mutates the store.
     pub fn store(&self) -> &CoreStore {
         &self.store
     }
@@ -436,8 +436,8 @@ impl SessionManager {
         &self.sessions
     }
 
-    /// Базовая валюта аккаунта ядра ("USDT"/"BTC"/…), если ядро уже идентифицировано
-    /// (`CoreBase`). UI берёт её для дефолтов размера ордера по базе.
+    /// Return the core account's base currency, such as `USDT` or `BTC`, once `CoreBase` has
+    /// identified it. The UI uses this currency for base-denominated order-size defaults.
     pub fn core_base(&self, core: CoreId) -> Option<&str> {
         self.core_base.get(&core).map(String::as_str)
     }
@@ -446,8 +446,8 @@ impl SessionManager {
         self.feed_wake.clone()
     }
 
-    /// Стакан для ядра `core` на рынке `market`: резолвим провайдера ядра и читаем
-    /// только book-view. История/last-price идут через retained-history API, не отсюда.
+    /// Read the order-book view for `core` and `market` after resolving the core's provider.
+    /// History and last price use the retained-history API instead.
     pub fn with_orderbook_view<R>(
         &self,
         core: CoreId,
@@ -461,10 +461,9 @@ impl SessionManager {
         self.market_source.clone()
     }
 
-    /// Переключить режим источника рыночных данных (рубильник из Настроек). При
-    /// реальной смене сбрасывает рыночный план целиком — провайдеры, обслуживаемые
-    /// рынки и данные переизберутся/перельются с нуля на следующем `set_open`
-    /// (старые ядра получат свежие роли, т.к. `last_cmd` очищен).
+    /// Switch the market-data source mode from Settings. An actual change clears the entire market
+    /// plan so providers, served markets, and data are rebuilt from scratch by the next `set_open`.
+    /// Clearing `last_cmd` ensures that existing cores receive fresh roles.
     pub fn set_market_mode(&mut self, mode: MarketDataMode) {
         if self.mode == mode {
             return;

@@ -118,7 +118,7 @@ impl MarketRevisions {
     }
 }
 
-/// Снимок курса рынка для тикера шапки: последняя цена + знаковые дельты, %.
+/// Market price snapshot for the header ticker: last price and signed percentage deltas.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MarketTickerReadout {
     pub last: f64,
@@ -126,26 +126,35 @@ pub struct MarketTickerReadout {
     pub delta_24h_pct: f64,
 }
 
-/// Замороженный снимок для карточки детекта (собирается ОДИН раз в момент детекта):
-/// мини-чарт последних закрытых 5м-свечей + идентити биржи. Данные — ретейненный снимок
-/// провайдера: `candles_5m` = собственная запись ядра (биржевой API не трогаем),
-/// `server_info` = идентити подключения. Пустой — нет провайдера/снимка.
+/// Frozen snapshot for a detection card, built exactly once when the detection occurs.
+///
+/// The mini-chart combines recent 5-minute candles from the provider's retained
+/// `candles_5m`, the local kline cache, and the live trade-ring tail without calling the exchange
+/// API. `server_info` supplies the connection identity. Missing history leaves the chart data
+/// empty while exchange metadata may still be present; a missing provider, client, or client
+/// snapshot returns the fully empty default.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DetectSnapshot {
-    /// Последние 5м-свечи `(open, high, low, close)`, порядок старые→новые. Пусто — нет истории.
-    /// Полный OHLC → мини-чарт рисует тело+фитиль (фолбэк `candles_5m` несёт только high/low →
-    /// тело вырождено, но тень видна).
+    /// Recent 5-minute candles as `(open, high, low, close)`, ordered oldest to newest.
+    ///
+    /// Full OHLC lets the mini-chart draw bodies and wicks. The retained `candles_5m` fallback is
+    /// range-only, so its candle orientation is synthesized. Empty when no history is available.
     pub bars: Vec<(f32, f32, f32, f32)>,
-    /// Цены (close) для режима «линия» — порядок старые→новые, до ~24ч глубины. Пусто — нет.
+    /// Close prices for line mode, ordered oldest to newest, with up to about 24 hours of history.
     pub line: Vec<f32>,
-    /// ФАКТИЧЕСКОЕ изменение цены за 24ч, % (сейчас vs close ~24ч назад из наших бакетов —
-    /// совпадает со сдвигом линии; НЕ moonproto `coin_24h_delta`, то — отклонение от средней).
+    /// Actual 24-hour price change in percent, comparing now with a close from about 24 hours ago.
+    ///
+    /// This is derived from our buckets so it matches the line movement. It is not MoonProto's
+    /// `coin_24h_delta`, which measures deviation from a retained average.
     pub delta_24h: f32,
-    /// Фактическое изменение цены за 1ч, % (сейчас vs close ~1ч назад).
+    /// Actual 1-hour price change in percent, comparing now with a close from about one hour ago.
     pub delta_1h: f32,
-    /// Человекочитаемое имя биржи из server_info (напр. «Binance Futures», «Bybit»). Пусто — нет.
+    /// Human-readable exchange name from `server_info`, such as `Binance Futures` or `Bybit`.
     pub exchange_name: String,
-    /// Короткий тип биржи из `exchange_type_mask` («Спот»/«Фьючи»/«DEX»/…). Пусто — не сообщён.
+    /// Short Russian-language exchange type label derived from `exchange_type_mask`.
+    ///
+    /// The label distinguishes spot, futures, DEX, and combined connections. Empty when the type
+    /// was not reported.
     pub exchange_kind: String,
 }
 
@@ -182,46 +191,58 @@ pub struct ChartHistoryCursor {
     liq_rows: Vec<TradeHistoryRow>,
     last_price_rows: Vec<LastPricePoint>,
     mark_price_rows: Vec<MarkPricePoint>,
-    /// Слитная серия свечей (серверная база + локальный хвост из трейдов).
-    /// Свой курсор по трейд-рингу (агрегация независима от зоны отображения крестов).
+    /// Merged candle series consisting of the server base and a local tail built from trades.
+    /// Uses its own trade-ring cursor so aggregation is independent of the cross display range.
     candle_series: CandleSeries,
     candle_trades: Option<SeqRingCursor>,
     candle_trade_rows: Vec<TradeHistoryRow>,
     candle_ticks: Vec<Tick>,
     server_candle_rows: Vec<moonproto::state::Candle5mRow>,
     server_candles: Vec<ChartCandle>,
-    /// Троттл неблокирующего запроса CoinCard deep history (честные OHLC).
+    /// Throttle for non-blocking CoinCard deep-history requests that provide authoritative OHLC.
     last_deep_request: Option<Instant>,
-    /// Последний запрошенный kind — смена ТФ обходит троттл.
+    /// Most recently requested kind; a timeframe change bypasses the throttle.
     last_deep_kind: Option<moonproto::DeepHistoryKind>,
-    /// Бэкофф повторных coin-card запросов, СЕКУНДЫ (0 → стартовые 30). Deep history ядро
-    /// тянет с БИРЖЕВОГО API (веса!) — ретрай без прогресса удваивает паузу до 10 мин,
-    /// приход новых рядов сбрасывает. Иначе зависшее ядро/биржа = вечный 30с-шторм запросов
-    /// со всех открытых чартов → «автостоп по превышению лимитов API» ядра.
+    /// Coin-card retry backoff in seconds, where zero starts at 30 seconds.
+    ///
+    /// The core fetches deep history from the exchange API and consumes request weight. A retry
+    /// without progress doubles the delay up to 10 minutes, while new rows reset it. Without this
+    /// backoff, a stalled core or exchange would receive a request storm from every open chart and
+    /// trigger the core's API-limit auto-stop.
     deep_retry_delay_s: u32,
-    /// Префикс из локального kline-кэша (нативный kind панели): читается из sqlite один
-    /// раз на (рынок, kind, левый край) и переживает series_reset'ы (ресеты частые —
-    /// пан/зум, каждый раз ходить в БД нельзя).
+    /// Prefix loaded from the local kline cache using the panel's native kind.
+    ///
+    /// It is read from SQLite once per `(market, kind, left edge)` and survives series resets.
+    /// Resets are frequent during pan and zoom, so each reset must not query the database.
     cache_rows: Vec<ChartCandle>,
     cache_kind: Option<u32>,
-    /// ФАКТИЧЕСКИЙ kind прочитанных рядов: нативный kind панели либо фолбэк
-    /// (5м регистратора → 1м deep-записей).
+    /// Actual kind of the loaded rows: the panel's native kind or a fallback.
+    ///
+    /// Fallback order is the recorder's 5-minute rows followed by 1-minute deep-history rows.
     cache_rows_kind: u32,
     cache_from_ms: i64,
-    /// Крупные слои для дорисовки хвоста истории СТАРШИМИ ТФ («до упора»):
-    /// 5м (снимок+регистратор) и 1д (бэкфилл/кэш). Читаются вместе с cache_rows.
+    /// Cache-only coarser layers used to extend the historical prefix as far back as possible.
+    ///
+    /// The 5-minute layer contains kind-5 cache rows from the recorder and possible deep-history
+    /// writeback; the retained 5-minute snapshot separately feeds the main series through
+    /// `snap_part`. The 1-day layer comes from backfill and cache.
     cache_rows_5m: Vec<ChartCandle>,
     cache_rows_1d: Vec<ChartCandle>,
-    /// Сигнатура последних записанных в кэш deep-рядов — write-back только на изменение.
+    /// Signature of the last deep rows written to the cache; write back only after a change.
     cache_written_sig: u64,
-    /// Троттл диагностики «разрыв свечи↔сейчас» (WARN раз в 30с на панель).
+    /// Throttle for candle-to-now gap diagnostics: at most one warning per panel every 30 seconds.
     last_gap_diag: Option<Instant>,
-    /// То же для рядов НАТИВНОГО kind панели (урожай разового бэкфилла, когда
-    /// эффективный kind ядра мельче нативного).
+    /// Equivalent signature for rows of the panel's native kind.
+    ///
+    /// These rows are produced by a one-time backfill when the core's effective kind is finer than
+    /// the panel's native kind.
     cache_written_native_sig: u64,
-    /// Сигнатура загруженных deep-строк на момент последней пересборки серии: их
-    /// приход/обновление форсит rebuild (без этого история появлялась только после
-    /// переоткрытия графика).
+    /// Low-cost fingerprint of loaded deep rows at the last series rebuild.
+    ///
+    /// It hashes only the row count and final timestamp. An in-place OHLC update at the same final
+    /// timestamp therefore does not itself trigger a rebuild or cache writeback. A trade-tail or
+    /// explicit reset can independently rebuild the series; writeback waits for the fingerprint to
+    /// advance, normally when a new bucket arrives.
     last_deep_sig: u64,
 }
 
@@ -243,26 +264,31 @@ impl ChartHistoryCursor {
         self.candle_ticks.clear();
         self.server_candle_rows.clear();
         self.server_candles.clear();
-        // last_deep_request НЕ сбрасываем: троттл запросов переживает reset
-        // (смена рынка пересоздаёт PaneRender → курсор свежий).
+        // Preserve last_deep_request so request throttling survives a reset. Changing markets
+        // recreates PaneRender and therefore starts with a fresh cursor.
     }
 }
 
 #[derive(Default)]
 pub struct ChartHistoryBuffers {
     pub ticks: Vec<Tick>,
-    /// Трейды ликвидаций (отдельный ring `readers.liquidations`). На reset — полный видимый
-    /// диапазон; иначе — только новые строки (живой край), как `ticks`. Сторона есть (знак qty),
-    /// но рисуются единым цветом — рендер тегирует их `side=2`.
+    /// Liquidation trades from the separate `readers.liquidations` ring.
+    ///
+    /// A reset returns the full visible range; otherwise only new live-edge rows are returned, as
+    /// with `ticks`. The quantity sign carries the side, but the renderer assigns `side=2` and
+    /// draws all liquidations with one color.
     pub liquidations: Vec<Tick>,
     pub last_points: Vec<PricePoint>,
     pub mark_points: Vec<PricePoint>,
-    /// Свечи серии (полный видимый ряд). Наполняется ТОЛЬКО когда ревизия серии отличается
-    /// от `CandleReadParams::shipped_revision` (см. `ChartHistoryRead::candles_changed`).
+    /// Complete visible candle series.
+    ///
+    /// Populated only when the series revision differs from
+    /// `CandleReadParams::shipped_revision`; see `ChartHistoryRead::candles_changed`.
     pub candles: Vec<ChartCandle>,
-    /// ТФ каждой свечи `candles` (мс), параллельный массив: хвост истории дорисовывается
-    /// СТАРШИМИ ТФ (5м-слой, затем 1д «до упора»), у таких свечей своя ширина.
-    /// Пусто = все свечи ТФ серии.
+    /// Timeframe in milliseconds for each entry in `candles`, stored as a parallel array.
+    ///
+    /// The historical prefix is extended with coarser timeframes, first 5-minute and then 1-day,
+    /// whose candles require distinct widths. Empty means every candle uses the series timeframe.
     pub candle_tf_ms: Vec<f32>,
 }
 
@@ -277,18 +303,23 @@ impl ChartHistoryBuffers {
     }
 }
 
-/// Параметры чтения свечей/зоны трейдов для `read_chart_history_into`. `None` у вызова =
-/// легаси-поведение (только кресты, без свечей).
+/// Candle and trade-zone parameters for `read_chart_history_into`.
+///
+/// Passing `None` preserves legacy behavior: trade crosses only, without candles.
 #[derive(Debug, Clone, Copy)]
 pub struct CandleReadParams {
-    /// Таймфрейм серии, мс.
+    /// Series timeframe in milliseconds.
     pub tf_ms: i64,
-    /// Нижняя граница ОТОБРАЖАЕМЫХ трейдов (rel ms от epoch) — зона «последних K свечей».
-    /// `f32::INFINITY` = трейды не отображаем вовсе (K=0). На агрегацию свечей не влияет.
+    /// Lower bound for displayed trades in milliseconds relative to the epoch.
+    ///
+    /// This defines the last-K-candles display zone. `f32::INFINITY` hides trades entirely when
+    /// K is zero. It does not limit candle aggregation.
     pub trades_from_rel_ms: f32,
-    /// Жёсткий лимит числа отображаемых трейдов.
+    /// Hard limit on the number of displayed trades.
     pub trades_limit: usize,
-    /// Ревизия серии, уже доставленная рендеру: совпала — `out.candles` не наполняем.
+    /// Series revision already delivered to the renderer.
+    ///
+    /// When it matches the current revision, `out.candles` remains empty.
     pub shipped_revision: u64,
 }
 
@@ -305,13 +336,13 @@ pub struct ChartHistoryRead {
     pub caught_up: bool,
     pub tick_price_range: Option<(f32, f32)>,
     pub last_price: Option<f32>,
-    /// Серия свечей изменилась относительно `shipped_revision` — `out.candles` наполнен.
+    /// Whether the candle series changed from `shipped_revision`, populating `out.candles`.
     pub candles_changed: bool,
-    /// Текущая ревизия серии свечей (вернуть в следующий `CandleReadParams`).
+    /// Current candle-series revision to return in the next `CandleReadParams`.
     pub candles_revision: u64,
 }
 
-/// Состояние живой подписки ТФ-баров одного (провайдер, рынок) — см. `candle_subs`.
+/// Live timeframe-bar subscription state for one `(provider, market)`; see `candle_subs`.
 struct CandleSubState {
     kind_min: u32,
     last_want: Instant,
@@ -327,28 +358,39 @@ struct MarketDataSourceInner {
     market_revisions: HashMap<CoreId, HashMap<String, MarketRevisionCounters>>,
     provider_generations: HashMap<CoreId, u64>,
     started_at: Instant,
-    /// ГЛОБАЛЬНЫЙ дедуп coin-card запросов (provider, market, kind_min → момент отправки):
-    /// курсоры per-pane, и N окон одной монеты слали N одинаковых запросов; deep history
-    /// стоит биржевых весов на ядре, поэтому одна пара (монета, ТФ) — не чаще раза в 30с
-    /// на всё приложение (ответ ложится в общий retained-стейт, панели делят его).
+    /// Global deduplication gate for coin-card requests, mapping request keys to send times.
+    ///
+    /// Cursors are per panel, so N windows for one coin would otherwise send N identical requests.
+    /// Deep history consumes exchange request weight in the core, so the application sends at most
+    /// one request per `(provider, market, kind_min)` every 30 seconds. The response enters shared
+    /// retained state used by all panels.
     deep_req_gate: Mutex<HashMap<(CoreId, String, u32), Instant>>,
-    /// Желаемые deep-kind'ы живых свечных панелей per провайдер (kind_min → последний спрос).
-    /// ЯДРО ДЕРЖИТ ОДИН СВЕЧНОЙ ТФ НА ЯДРО (слова разработчика МБ 2026-07-12): каждый флип
-    /// kind = ядро перекачивает историю С БИРЖИ заново → бан API при окнах с разными ТФ.
-    /// Эффективный kind ядра = min живых желаний (kind'ы цепочкой делятся 1|5|30|60|240|1440),
-    /// панели крупнее ресемплят из мелкой базы (ценой глубины). Запись живёт 30с без спроса.
+    /// Requested deep kinds for live candle panels, grouped by provider.
+    ///
+    /// Each `kind_min` maps to its most recent demand. The core holds one candle timeframe per
+    /// core, according to the MoonBot developer on 2026-07-12, and each kind change refetches
+    /// history from the exchange. Alternating kinds across windows can therefore trigger API
+    /// limits. The effective core kind is the minimum live request because the supported kinds
+    /// divide into the chain `1|5|30|60|240|1440`; coarser panels resample the finer base at the
+    /// cost of depth. A demand entry remains live for 30 seconds.
     deep_kind_wants: Mutex<HashMap<CoreId, HashMap<u32, Instant>>>,
-    /// Живые подписки ТФ-баров per (провайдер, рынок). Подписка ГЛОБАЛЬНА на клиенте
-    /// (последний kind выигрывает) — per-pane управление дёргало ядро; здесь панели лишь
-    /// «трогают» запись, протухшие (>60с без спроса: панель закрыта/суб-минутный ТФ)
-    /// отписываются попутно при следующем свечном чтении этого провайдера.
+    /// Live timeframe-bar subscriptions keyed by `(provider, market)`.
+    ///
+    /// A subscription is global to the client and the most recent kind wins, so per-panel control
+    /// repeatedly disturbed the core. Panels now only refresh demand. Entries stale for more than
+    /// 60 seconds, such as closed panels or sub-minute timeframes, are unsubscribed during the next
+    /// candle read for that provider.
     candle_subs: Mutex<HashMap<(CoreId, String), CandleSubState>>,
-    /// Локальный kline-кэш (klines.sqlite) — None, пока терминал не задал путь.
+    /// Local kline cache in `klines.sqlite`; `None` until the terminal supplies its path.
     kline_cache: Option<crate::market::kline_cache::KlineCache>,
-    /// Стабильная идентичность биржи провайдера — ключ kline-кэша (НЕ CoreId).
+    /// Exchange identity used to share kline-cache rows across cores on the same exchange and to
+    /// survive selected-provider changes. `CoreId` itself is a stable uid since schema v11, but it
+    /// identifies one core rather than the exchange.
     provider_exchange: HashMap<CoreId, crate::feed::ExchangeId>,
-    /// Разовые нативные бэкфиллы крупных ТФ за сессию: (провайдер, рынок, kind_min).
-    /// Один осознанный флип ТФ-слота ядра на открытие крупного ТФ с пустым кэшем.
+    /// One-time native backfills for coarse timeframes during a session.
+    ///
+    /// Each `(provider, market, kind_min)` records one deliberate core timeframe-slot change when
+    /// opening a coarse timeframe with an empty cache.
     native_backfill_done: Mutex<HashSet<(CoreId, String, u32)>>,
 }
 
@@ -367,10 +409,12 @@ fn moon_time_from_rel_ms(epoch_ms: f64, rel_ms: f32) -> MoonTime {
     MoonTime::from_unix_millis((epoch_ms + rel_ms as f64).round() as i64)
 }
 
-/// Дренаж линии цены (last/mark) — обе ветви идентичны по структуре, отличаются лишь
-/// курсором/буфером/выходом/конвертером. reset|первый вызов → ставим курсор «от сейчас»;
-/// иначе тянем новое (clipped/caught_up копятся в `read`); при изменении — копируем видимый
-/// диапазон и конвертируем в точки. Вызывается только когда ридер существует.
+/// Drain a last-price or mark-price line through their shared control flow.
+///
+/// The branches differ only in cursor, buffer, output, and converter. A reset or first call places
+/// the cursor at now; subsequent calls drain new rows and accumulate `clipped` and `caught_up` in
+/// `read`. After a change, the visible range is copied and converted to points. Call only when the
+/// reader exists.
 #[allow(clippy::too_many_arguments)]
 fn drain_price_line<R: SeqRingTimedRow>(
     reader: &SeqRingReader<R>,
@@ -412,9 +456,10 @@ fn rows_to_ticks(rows: &[TradeHistoryRow], out: &mut Vec<Tick>) {
     }));
 }
 
-/// Общий конвертер строк last/mark price-line → точки чарта: тела были идентичны,
-/// оба типа отдают время через `SeqRingTimedRow`, цену — вырожденным диапазоном
-/// `SeqRingPriceRow` (`(p, p)`, `None` у этих строк не бывает).
+/// Convert last-price or mark-price line rows into chart points.
+///
+/// Both row types expose time through `SeqRingTimedRow` and price as the degenerate `(p, p)` range
+/// through `SeqRingPriceRow`; these rows never return `None`.
 fn price_rows_to_points<R: SeqRingTimedRow + SeqRingPriceRow>(
     rows: &[R],
     out: &mut Vec<PricePoint>,

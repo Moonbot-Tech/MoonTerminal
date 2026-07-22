@@ -1,8 +1,8 @@
-# Нижний док: вкладки, открепление, лог.
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Bottom dock: tabs, detaching, and log.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
 _version: 2
 
-# --- Нижний док: вкладки ---
+# --- Bottom-dock tabs ---
 dock.tab.charts:
   ru: "Чарты"
   en: "Charts"
@@ -35,7 +35,7 @@ dock.tab.core_status:
   ru: "Статус ядер"
   en: "Core status"
   es: "Estado de núcleos"
-# Попап-конструктор ⚙ ленты детектов (вкладки размеров, слайдеры, слоты, превью).
+# Gear popover for configuring the detection ribbon: size tabs, sliders, slots, and preview.
 detects.cfg.title:
   ru: "Вид детектов"
   en: "Detect view"
@@ -228,7 +228,6 @@ dock.tab.in_window:
   ru: "Открыто в отдельном окне"
   en: "Open in a separate window"
   es: "Abierto en una ventana aparte"
-# Глиф ↩ — отдельным segment-ом в коде, в словаре только текст.
 dock.tab.generic:
   ru: "Панель"
   en: "Panel"
@@ -242,7 +241,7 @@ dock.tab.repin:
   en: "Return to dock"
   es: "Volver al panel"
 
-# --- Лог ---
+# --- Log ---
 log.source.local:
   ru: "Локальный"
   en: "Local"

@@ -198,21 +198,21 @@ pub(super) fn size_strip(
             Some(u) => t!("toolbar.size_hint", n = i + 1, unit = u).to_string(),
             None => t!("toolbar.size_hint_nounit", n = i + 1).to_string(),
         },
-        // Одиночный клик = выбор пресета; дабл = инлайн-правка (`order_size_edit_req`).
+        // Single click selects a preset; double click requests inline editing through `order_size_edit_req`.
         move |i, dbl, cx| {
             let Some(core) = core else { return };
             backend_click.update(cx, |b, bcx| {
                 if dbl {
                     b.order_size_edit_req = Some((core, i));
                 } else {
-                    // Выбор + персист в конфиг (восстановление после перезапуска).
+                    // Select and persist in config so the choice survives a restart.
                     b.set_order_size_sel(core, i);
                 }
                 b.order_size_rev = b.order_size_rev.wrapping_add(1);
                 bcx.notify();
             });
         },
-        // Колесо = ±значение с шагом по порядку величины (frac 1.0).
+        // Ctrl+wheel adjusts the value with the full magnitude-based step (`frac = 1.0`).
         move |i, up, cx| {
             let Some(core) = core else { return };
             backend.update(cx, |b, bcx| {
@@ -228,10 +228,15 @@ pub(super) fn size_strip(
     )
 }
 
-/// Полоса fixed-sell пресетов (S1-S6) рядом с кнопкой TP (без подписи). Значения — из
-/// `ClientSettings` активного ядра (видимые проценты). Слот подсвечен ТОЛЬКО когда задействован
-/// (`sel_slot = Some` лишь при `fixed_sell_mode`); по умолчанию все S погашены, горит TP.
-/// Клик — задействовать слот (гасит TP); повторный клик по активному — вернуть TP. Нет ядра — прочерки.
+/// Builds fixed-sell preset cells beside the TP button without per-cell S1-S6 labels.
+///
+/// The toolbar may wrap the strip in a collapsible `Sell` group caption. Displayed percentages
+/// start from the active core's `ClientSettings` snapshot, with process-lifetime local overrides
+/// masking individual values. `sel_slot=Some` highlights that engaged slot; `None` leaves every S
+/// cell dim and may represent main TP, no core, or manual-strategy mode, so it does not by itself
+/// imply that TP is lit. When interaction is enabled, clicking engages a slot, while clicking the
+/// active slot again requests main TP. With no core, the toolbar supplies dash cells and disables
+/// interaction.
 pub(super) fn sell_strip(
     cells: &FittedCells,
     sel_slot: Option<usize>,
@@ -264,15 +269,15 @@ pub(super) fn sell_strip(
         input,
         core.is_some(),
         |i| t!("toolbar.sell_hint", n = i + 1).to_string(),
-        // Одиночный клик = задействовать слот (гасит TP); повторный клик по активному слоту
-        // = вернуть TP (гасит S, не трогая значение TP); дабл = инлайн-правка %.
+        // Single click engages a slot and dims TP. Clicking the active slot again restores TP,
+        // dimming S without changing TP's value. Double click edits the percentage inline.
         move |i, dbl, cx| {
             let Some(core) = core else { return };
             backend_click.update(cx, |b, bcx| {
                 if dbl {
                     b.sell_edit_req = Some((core, i));
                 } else {
-                    // Повторный клик по уже горящему слоту → возврат к главному TP.
+                    // A second click on the lit slot returns to the main TP.
                     let (edit, local_slot) = if sel_slot == Some(i + 1) {
                         (ClientSettingsEdit::EngageMainTakeProfit, None)
                     } else {
@@ -287,14 +292,15 @@ pub(super) fn sell_strip(
                 bcx.notify();
             });
         },
-        // Колесо = ±% полразрядом (frac 0.5). Значение % — на ядре, читаем из снимка ClientSettings.
+        // Ctrl+wheel adjusts the percentage with a half-size magnitude step (`frac = 0.5`). Read
+        // the current core-owned value from the ClientSettings snapshot.
         move |i, up, cx| {
             let Some(core) = core else { return };
             backend.update(cx, |b, bcx| {
                 let cur = b.fixed_sell_pct(core, i);
                 let next = wheel_step(cur, up, 0.5);
                 if next != cur {
-                    // Оптимистично: локальный кэш + перерисовка СРАЗУ; в ядро — тоже.
+                    // Optimistically update the local cache and redraw immediately, then notify the core too.
                     b.set_fixed_sell_pct_local(core, i, next);
                     b.order_size_rev = b.order_size_rev.wrapping_add(1);
                     bcx.notify();

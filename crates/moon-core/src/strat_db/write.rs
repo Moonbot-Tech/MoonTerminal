@@ -1,13 +1,17 @@
-//! Запись полного набора стратегий ядра: head-UPSERT + версии по контент-диффу.
+//! Writes a core's complete strategy set: head UPSERTs plus versions based on content diffs.
 //!
-//! Контент = дамп полей БЕЗ игнор-полей (косметика) и `__`-меты. Версия пишется
-//! только при смене контента; тогл галки/цвета/звука обновляет только head.
-//! Помимо old/new значений (`changed_json`) версия несёт мету: вид изменения,
-//! происхождение (наша правка/внешняя), пропуск серверных правок (`ver_gap`),
-//! состояние стратегии на момент (`checked_at`).
+//! Content is the field dump without configured `ignore_fields` or `__` metadata. A version is
+//! written only when that content changes. Changes to tracked head fields update only the head row;
+//! a change confined to an ignored field outside the head hash, such as `Comment`, produces no
+//! write. Version metadata includes the change kind; `changed_json` holds old/new values when a
+//! previous dump exists and may be absent on the first `created` version; `origin` is local,
+//! external, or NULL for an initial set; `ver_gap` marks a gap in observed server revisions; and
+//! `checked_at` stores the exact checked state.
 //!
-//! Темпоральность: `valid_from`/`valid_to` (unix-ms) — «сделка → её версия»
-//! решается range-join'ом по `buydate` (вход совершён под параметрами версии).
+//! Temporal validity uses `valid_from`/`valid_to` (Unix milliseconds): a range join on `buydate`
+//! attributes each trade to a locally observed snapshot-validity window. Because `valid_from` is
+//! the local observation time, this attribution does not prove which parameters were active when
+//! the position opened.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -19,8 +23,8 @@ use super::StratDump;
 use crate::config::storage::StrategiesStoreCfg;
 use crate::util::now_unix_ms_i64 as now_ms;
 
-/// Кэш head-строки: пропускать бездельные UPDATE'ы (полный набор приходит на
-/// каждый чих — тогл одной галки не должен трогать 500 строк).
+/// Cached head-row hashes used to skip no-op updates when each small change resends the full set.
+/// Toggling one checkbox must not update 500 rows.
 struct Head {
     content_hash: i64,
     head_hash: i64,
@@ -56,8 +60,8 @@ pub(super) fn init(conn: &Connection, cfg: &StrategiesStoreCfg) -> rusqlite::Res
             updated_ms   INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (core_uid, strategy_id));
         CREATE INDEX IF NOT EXISTS idx_strat_name ON strategies(core_uid, name);
-        -- Тюнер ищет стратегию по id БЕЗ core_uid (strategy_cores/strategy_filters):
-        -- префикс PK (core_uid, strategy_id) там не работает.
+        -- The tuner queries strategies by id without core_uid (strategy_cores/strategy_filters):
+        -- the (core_uid, strategy_id) primary-key prefix cannot serve those queries.
         CREATE INDEX IF NOT EXISTS idx_strat_sid ON strategies(strategy_id);
         CREATE TABLE IF NOT EXISTS strategy_versions (
             id           INTEGER PRIMARY KEY,
@@ -75,12 +79,12 @@ pub(super) fn init(conn: &Connection, cfg: &StrategiesStoreCfg) -> rusqlite::Res
             raw_json     TEXT NOT NULL,
             changed_json TEXT,
             UNIQUE (core_uid, strategy_id, valid_from));
-        -- idx_sv_lookup дублировал implicit-индекс UNIQUE-ключа (те же колонки,
-        -- DESC SQLite ходит и по нему) — лишняя цена каждой записи версии.
+        -- idx_sv_lookup duplicated the UNIQUE constraint's implicit index (the same columns;
+        -- SQLite can scan it in descending order), adding needless cost to every version insert.
         DROP INDEX IF EXISTS idx_sv_lookup;
         CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
-    // Кэш head-строк с диска — writer не делает SELECT на каждую стратегию.
+    // Load the head-row cache from disk so the writer does not query every strategy.
     let mut heads = HashMap::new();
     {
         let mut stmt = conn.prepare(
@@ -109,8 +113,8 @@ pub(super) fn init(conn: &Connection, cfg: &StrategiesStoreCfg) -> rusqlite::Res
     })
 }
 
-/// Применить полный набор стратегий ядра одной транзакцией.
-/// Возвращает число реальных изменений (версии + head-правки + удаления).
+/// Applies a core's complete strategy set in one transaction.
+/// Returns the number of strategies that were logically changed or deleted.
 pub(super) fn apply_full_set(
     conn: &Connection,
     st: &mut State,
@@ -132,16 +136,16 @@ pub(super) fn apply_full_set(
         let content_hash = hash_of(&stripped);
         let head_hash = head_hash_of(d);
         let origin: Option<&str> = if initial {
-            None // первый набор после (ре)коннекта: правка могла случиться оффлайн
+            None // First set after a (re)connect: the edit may have occurred while offline.
         } else if d.local_edit {
             Some("local")
         } else {
             Some("external")
         };
 
-        // Восстановление БЕЗ изменений контента (удалили → вернули как было) —
-        // не новая версия: переоткрываем последнюю (valid_to=NULL) и оживляем
-        // head. Промежуток удаления остаётся внутри её окна (сделок там нет).
+        // Restoring unchanged content (deleted, then restored as it was) does not create a new
+        // version. Reopen the latest version (`valid_to=NULL`) and revive the head row; by policy,
+        // the deletion interval is folded into the reopened version's validity window.
         if let Some(h) = st.heads.get(&key) {
             if h.deleted && h.content_hash == content_hash {
                 tx.execute(
@@ -179,13 +183,14 @@ pub(super) fn apply_full_set(
                 d.server_ver > h.server_ver.saturating_add(1),
             ),
             Some(h) if h.head_hash != head_hash => (false, "", false),
-            Some(_) => continue, // ничего не изменилось
+            Some(_) => continue, // Nothing changed.
         };
 
         if need_version {
             let raw_json = serde_json::to_string(&Value::Object(d.fields.clone()))?;
-            // Дифф со ПОСЛЕДНЕЙ версией (по контенту, без косметики) — created
-            // без прошлого дампа остаётся с NULL.
+            // Diff against the latest version's content, excluding all configured `ignore_fields`
+            // and `__` metadata. A `created` version without a previous dump keeps `changed_json`
+            // as NULL.
             let prev: Option<(i64, String)> = tx
                 .query_row(
                     "SELECT valid_from, raw_json FROM strategy_versions
@@ -201,7 +206,7 @@ pub(super) fn apply_full_set(
                     let diff = diff_maps(prev_raw, &stripped, &st.ignore);
                     let n = diff.len();
                     if n == 0 && change_kind == "params" {
-                        // Хэш дрогнул, а контент тот же (коллизия/порядок) — не версия.
+                        // A hash mismatch with an empty content diff is not a new version.
                         (None, 0)
                     } else {
                         (Some(serde_json::to_string(&Value::Object(diff))?), n)
@@ -209,7 +214,7 @@ pub(super) fn apply_full_set(
                 }
             };
             if change_kind == "params" && n_changed == 0 && prev.is_some() {
-                // Ложная тревога хэша: обновим кэш и head, версию не пишем.
+                // For a false-positive hash change, update the cache and head without a version.
                 upsert_head(&tx, uid, core_name, d, content_hash, head_hash, now)?;
                 st.heads.insert(
                     key,
@@ -224,7 +229,7 @@ pub(super) fn apply_full_set(
                 continue;
             }
             let kind = change_kind;
-            // valid_from строго возрастает в пределах стратегии (UNIQUE-ключ).
+            // `valid_from` must increase strictly per strategy to satisfy the unique key.
             let valid_from = prev.as_ref().map(|(f, _)| now.max(f + 1)).unwrap_or(now);
             tx.execute(
                 "UPDATE strategy_versions SET valid_to=?3
@@ -251,7 +256,8 @@ pub(super) fn apply_full_set(
                     changed_json,
                 ],
             )?;
-            // Лимит — живой атомик (правка из «Хранилища» действует сразу).
+            // The live atomic is consulted on version insertion, so a changed limit is applied to
+            // this strategy on its next version insertion.
             let limit = super::version_limit();
             if limit > 0 {
                 tx.execute(
@@ -282,9 +288,9 @@ pub(super) fn apply_full_set(
         writes += 1;
     }
 
-    // Пропавшие из ПОЛНОГО набора — удалены на сервере (soft-delete, история
-    // остаётся). Пустой набор не трогаем: это скорее недособранный стейт после
-    // коннекта, чем «удалили всё».
+    // Strategies absent from a complete set were deleted on the server; soft-delete them while
+    // retaining history. Ignore an empty set because it more likely represents incomplete state
+    // after connecting than an intentional deletion of every strategy.
     if !dumps.is_empty() {
         let gone: Vec<i64> = st
             .heads
@@ -357,7 +363,7 @@ fn upsert_head(
     Ok(())
 }
 
-/// Копия дампа без игнор-полей и `__`-меты — «контент» для сравнения версий.
+/// Copies a dump without ignored fields or `__` metadata for version-content comparisons.
 fn strip(m: &Map<String, Value>, ignore: &HashSet<String>) -> Map<String, Value> {
     m.iter()
         .filter(|(k, _)| !k.starts_with("__") && !ignore.contains(k.as_str()))
@@ -365,8 +371,8 @@ fn strip(m: &Map<String, Value>, ignore: &HashSet<String>) -> Map<String, Value>
         .collect()
 }
 
-/// Канонический хэш контента: `serde_json::Map` — BTreeMap, сериализация
-/// отсортирована по ключам и стабильна между запусками.
+/// Computes a canonical content hash. `serde_json::Map` uses a `BTreeMap`, so serialization is
+/// key-sorted and stable across runs.
 fn hash_of(stripped: &Map<String, Value>) -> i64 {
     let s = serde_json::to_string(&Value::Object(stripped.clone())).unwrap_or_default();
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -374,7 +380,7 @@ fn hash_of(stripped: &Map<String, Value>) -> i64 {
     h.finish() as i64
 }
 
-/// Хэш head-полей (имя/папка/галка/вид/…) — пропуск бездельных UPDATE'ов.
+/// Hashes head fields such as name, folder, checkbox state, and kind to skip no-op updates.
 fn head_hash_of(d: &StratDump) -> i64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     d.name.hash(&mut h);
@@ -387,8 +393,8 @@ fn head_hash_of(d: &StratDump) -> i64 {
     h.finish() as i64
 }
 
-/// Дифф контента: `{"Поле": {"old": …, "new": …}}` (добавленное — old=null,
-/// удалённое — new=null).
+/// Builds a content diff as `{"Field": {"old": ..., "new": ...}}`; added fields have
+/// `old=null`, and removed fields have `new=null`.
 fn diff_maps(
     prev_raw: &str,
     new_stripped: &Map<String, Value>,

@@ -1,33 +1,34 @@
-//! Ленивая статистика по версиям стратегии: профит/сделки за окно действия
-//! версии (`orders_rep` по `buydate`, атрибуция входа — параметры версии).
+//! Lazy per-strategy-version statistics: profit and trades during the version's effective
+//! window (`orders_rep` by `buydate`, with entries attributed to the version's parameters).
 //!
-//! Замороженный агрегат в момент закрытия версии НЕЛЬЗЯ (открытые сделки, лаг
-//! репликации, RowUpsert задним числом) — поэтому кэш `version_stats` в
-//! strategies.sqlite заполняется ЛЕНИВО при чтении и инвалидируется сторожком:
-//! `as_of` = MAX(last_update_at) строк стратегии в реплике на момент расчёта.
-//! Любая новая/правленая сделка стратегии двигает max → пересчёт только её
-//! версий; у затихшей стратегии кэш валиден вечно. Плюс open_left>0 (в окне
-//! остались открытые сделки) и открытая версия — всегда пересчёт.
+//! A frozen aggregate cannot be taken when a version closes because of open trades,
+//! replication lag, and backdated RowUpsert events. Therefore, the `version_stats` cache in
+//! strategies.sqlite is populated lazily on reads and invalidated by a freshness marker:
+//! `as_of` is the maximum `last_update_at` among the strategy's replica rows at calculation time.
+//! Only a newer `last_update_at` advances the marker; partial upserts and removals do not guarantee
+//! invalidation. A strategy with no further replica updates keeps the same marker. Versions with
+//! `open_left > 0` (open trades remain in the window) and the current version are recalculated on
+//! each read while the reports replica is attached; otherwise cached values or zeros are returned.
 //!
-//! Вызывать ТОЛЬКО с background executor: тут SQLite-запросы по реплике.
+//! Call only from a background executor because this module queries the SQLite replica.
 
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::config::paths;
 use crate::util::now_unix_ms_i64 as now_ms;
 
-/// Версия стратегии + её статистика для UI (список в окне «Стратегии»).
+/// Strategy version and its statistics for the version list in the Strategies window.
 #[derive(Clone, Debug)]
 pub struct VersionInfo {
-    /// unix-ms начала действия (ключ версии).
+    /// Start of the effective period in Unix milliseconds (the version key).
     pub valid_from: i64,
-    /// unix-ms конца действия; None = текущая.
+    /// End of the effective period in Unix milliseconds; `None` means the current version.
     pub valid_to: Option<i64>,
     pub change_kind: String,
     pub origin: Option<String>,
     pub n_changed: i64,
-    /// Сделки, вошедшие в окно версии (по buydate), и их суммарный профит
-    /// (котировка, из profitbtc). Открытые (без closedate) не в профите.
+    /// Trades entering the version window by `buydate` and their total profit in the quote
+    /// currency from `profitbtc`. Open trades without a `closedate` do not contribute to profit.
     pub trades: i64,
     pub profit: f64,
     pub open_left: i64,
@@ -43,8 +44,8 @@ fn open_rw() -> Option<Connection> {
     Some(conn)
 }
 
-/// ATTACH реплики отчётов (read-only не критичен: пишем только в version_stats
-/// основного файла). Реплики может не быть — статистика тогда нулевая.
+/// Attaches the reports replica. A read-only attachment is unnecessary because writes target only
+/// `version_stats` in the main file. Without the replica, uncached statistics remain zero and cached values are reused.
 fn attach_reports(conn: &Connection) -> bool {
     let rep = paths::reports_db_path();
     if !rep.exists() {
@@ -63,8 +64,9 @@ fn attach_reports(conn: &Connection) -> bool {
     }
 }
 
-/// Сторожок свежести: MAX(last_update_at) строк стратегии в реплике (0 — нет
-/// строк/колонки). Меняется от любого upsert'а сделки стратегии.
+/// Freshness marker: the maximum `last_update_at` among the strategy's replica rows, or 0 when
+/// rows or the column are unavailable. It changes only when that maximum advances; partial upserts
+/// and removals do not guarantee a change.
 fn max_last_update(conn: &Connection, core_uid: i64, sid: i64) -> i64 {
     conn.query_row(
         "SELECT COALESCE(MAX(last_update_at),0) FROM rep.orders_rep
@@ -75,8 +77,8 @@ fn max_last_update(conn: &Connection, core_uid: i64, sid: i64) -> i64 {
     .unwrap_or(0)
 }
 
-/// Версии стратегии (новые первыми) со статистикой; несвежий кэш пересчитывается
-/// и дозаполняется на месте. Пустой список — БД/стратегии нет.
+/// Returns strategy versions newest-first with statistics, recalculating and updating stale cache entries.
+/// An empty list means the database or strategy is unavailable.
 pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> {
     let Some(conn) = open_rw() else {
         return Vec::new();
@@ -123,7 +125,7 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
                     profit: r.get::<_, Option<f64>>(6)?.unwrap_or(0.0),
                     open_left: r.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 },
-                r.get::<_, Option<i64>>(8)?, // as_of кэша (None = кэша нет)
+                r.get::<_, Option<i64>>(8)?, // Cached as_of value (None means no cache entry).
             ))
         });
         let Ok(rows) = rows else { return Vec::new() };
@@ -137,7 +139,7 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
             let (mut info, as_of) = row;
             let stale = as_of != Some(max_lu) || info.open_left > 0 || info.valid_to.is_none();
             if stale && has_rep {
-                // buydate в реплике — unix-СЕКУНДЫ, границы версии — ms.
+                // Replica buydate values use Unix seconds, while version boundaries use milliseconds.
                 let from_s = info.valid_from / 1000;
                 let to_s = info.valid_to.map(|t| t / 1000);
                 let agg: Option<(i64, f64, i64)> = conn
@@ -185,18 +187,19 @@ pub fn versions_with_stats(core_uid: u64, strategy_id: i64) -> Vec<VersionInfo> 
     out
 }
 
-/// Содержимое версии для панелей окна «Стратегии»: полный дамп полей + дифф
-/// с предыдущей версией.
+/// Version contents for panels in the Strategies window: displayable fields and the diff from
+/// the previous version.
 pub struct VersionView {
-    /// Все поля версии (raw_json) в отображаемых строках — формат как у
-    /// `fmt_field` живых стратегий (Yes/No, compact-числа).
+    /// Fields from the version's `raw_json`, excluding `__` metadata, as display strings formatted
+    /// like live strategies' `fmt_field` values (Yes/No and compact numbers).
     pub fields: Vec<(String, String)>,
-    /// Изменённые в ЭТОЙ версии поля: имя → старое значение (display-строка;
-    /// пустая = поля раньше не было). Пусто у created/без диффа.
+    /// Fields changed in this version, mapping each name to its old display value. An empty value
+    /// can mean the old field was missing, null, or an empty string. Empty for creation events or
+    /// versions without a diff.
     pub changed: Vec<(String, String)>,
 }
 
-/// Поля и дифф версии. None — версии нет.
+/// Returns a version's fields and diff, or `None` if it is absent, unavailable, unreadable, or invalid.
 pub fn version_view(core_uid: u64, strategy_id: i64, valid_from: i64) -> Option<VersionView> {
     let conn = open_rw()?;
     let (raw, changed_raw): (String, Option<String>) = conn
@@ -214,7 +217,7 @@ pub fn version_view(core_uid: u64, strategy_id: i64, valid_from: i64) -> Option<
         .filter(|(k, _)| !k.starts_with("__"))
         .map(|(k, v)| (k, json_display(&v)))
         .collect();
-    // Дифф {"Поле":{"old":…,"new":…}} → (имя, старое значение display).
+    // Convert {"Field":{"old":…,"new":…}} diffs into (name, old display value) pairs.
     let mut changed = Vec::new();
     if let Some(cj) = changed_raw {
         if let Ok(serde_json::Value::Object(m)) = serde_json::from_str(&cj) {
@@ -231,7 +234,7 @@ pub fn version_view(core_uid: u64, strategy_id: i64, valid_from: i64) -> Option<
     Some(VersionView { fields, changed })
 }
 
-/// JSON-значение поля → строка показа (зеркало `feed::strategies::fmt_field`).
+/// Converts a field's JSON value to a display string, mirroring `feed::strategies::fmt_field`.
 fn json_display(v: &serde_json::Value) -> String {
     use serde_json::Value as J;
     match v {
@@ -250,8 +253,8 @@ fn json_display(v: &serde_json::Value) -> String {
     }
 }
 
-/// Head-строка стратегии из strategies.sqlite (для показа удалённых, которых
-/// уже нет в живом сторе ядра).
+/// Strategy head row from strategies.sqlite, used to display deleted strategies that are no
+/// longer present in the core's live store.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HeadRow {
     pub core_uid: u64,
@@ -277,8 +280,8 @@ fn head_from_row(r: &rusqlite::Row) -> rusqlite::Result<HeadRow> {
 
 const HEAD_COLS: &str = "core_uid, strategy_id, name, kind, kind_ordinal, folder_path, is_short";
 
-/// Все удалённые на серверах стратегии (head.deleted=1) — папка «Удалённые»
-/// в дереве окна Стратегий. История их версий остаётся доступной.
+/// Returns all strategies deleted on their servers (`head.deleted=1`) for the Deleted folder in
+/// the Strategies window tree. Their version history remains available.
 pub fn deleted_heads() -> Vec<HeadRow> {
     let Some(conn) = super::open_reader() else {
         return Vec::new();
@@ -293,8 +296,9 @@ pub fn deleted_heads() -> Vec<HeadRow> {
         .unwrap_or_default()
 }
 
-/// Поля ПОСЛЕДНЕЙ версии стратегии (display-строки) — материал восстановления
-/// удалённой (`RestoreStrategy`). None — версий нет.
+/// Returns display strings for the latest strategy version's fields, used to restore a deleted
+/// strategy with `RestoreStrategy`, or `None` if no version exists or its data is unavailable,
+/// unreadable, or invalid.
 pub fn latest_version_fields(core_uid: u64, strategy_id: i64) -> Option<Vec<(String, String)>> {
     let conn = open_rw()?;
     let vf: i64 = conn
@@ -309,8 +313,8 @@ pub fn latest_version_fields(core_uid: u64, strategy_id: i64) -> Option<Vec<(Str
     version_view(core_uid, strategy_id, vf).map(|v| v.fields)
 }
 
-/// Head одной стратегии (живой или удалённой) — база синтетической строки,
-/// когда стратегии нет в живом сторе.
+/// Returns the head of one live or deleted strategy as the basis for a synthetic row when the
+/// strategy is absent from the live store.
 pub fn head_row(core_uid: u64, strategy_id: i64) -> Option<HeadRow> {
     let conn = super::open_reader()?;
     conn.query_row(
@@ -323,7 +327,7 @@ pub fn head_row(core_uid: u64, strategy_id: i64) -> Option<HeadRow> {
     .flatten()
 }
 
-/// «дд.мм» из unix-ms (UTC) — краткая подпись версии в списке.
+/// Formats Unix milliseconds in UTC as `dd.mm` for a compact version label in lists.
 pub fn short_date(ms: i64) -> String {
     let days = (ms / 1000).div_euclid(86_400);
     let (_, mo, d) = crate::util::time::civil_from_days(days);

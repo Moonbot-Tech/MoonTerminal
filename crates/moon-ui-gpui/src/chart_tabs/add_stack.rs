@@ -1,6 +1,6 @@
-//! AddToChart-вкладка: визуально один список графиков, архитектурно — отдельный `ChartPanel`
-//! на каждый график. Вынесено из `chart_tabs` как самостоятельная вью-модель; общий рендер
-//! стека — в [`super::stack`]. Используется и полоской вкладок, и выносными окнами ([`super::windows`]).
+//! An AddToChart tab appears as one chart list but uses a separate `ChartPanel` for each chart.
+//! Extracted from `chart_tabs` as an independent view model; shared stack rendering lives in
+//! [`super::stack`]. Used by both the tab strip and detached windows ([`super::windows`]).
 
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -21,9 +21,9 @@ use crate::panels::ChartPanel;
 use moon_core::config::{ChartBucket, ChartTheme};
 use moon_core::session::CoreId;
 
-/// AddToChart-вкладка: визуально это один список графиков, но архитектурно каждый график —
-/// отдельный `ChartPanel`/`gpu_canvas`/dirty entity. Не возвращаемся к старой модели
-/// `ChartPanel -> Container.panes`, где mousemove одного графика перерисовывал overlay всех.
+/// AddToChart tab that appears as one chart list while each chart is architecturally a separate
+/// `ChartPanel`/`gpu_canvas`/dirty entity. This avoids the old `ChartPanel -> Container.panes`
+/// model, where moving the mouse over one chart repainted every overlay.
 pub(crate) struct AddChartStack {
     backend: Entity<Backend>,
     num: u32,
@@ -32,60 +32,63 @@ pub(crate) struct AddChartStack {
     theme: ChartTheme,
     charts: Vec<ChartStackEntry>,
     scale: Option<f32>,
-    /// Per-tab режим раскладки (Fit/Scroll; None = дефолт Fit).
+    /// Per-tab layout mode (Fit/Scroll; `None` = default Fit).
     layout_mode: Option<StackLayoutMode>,
-    /// Высота слота для Fit: 0 = растяжение, ≥20 = compress. None = дефолт.
+    /// Fit slot height: 0 = stretch, ≥20 = compress. `None` = default.
     layout_height_fit: Option<u16>,
-    /// Высота слота для Scroll. None = дефолт.
+    /// Scroll slot height. `None` = default.
     layout_height_scroll: Option<u16>,
-    /// Показывать ли стакан на графиках вкладки (per-окно). None = дефолт (вкл).
+    /// Whether to show order books on this tab's charts (per window). `None` = enabled by default.
     orderbook_enabled: Option<bool>,
-    /// Рисовать ли трейды ликвидаций (per-окно). None = дефолт (вкл).
+    /// Whether to draw liquidation trades (per window). `None` = enabled by default.
     liquidations_enabled: Option<bool>,
-    /// Настройки отображения свечей/трейдов вкладки (None = глобальный дефолт).
+    /// Tab candle/trade display settings (`None` = global default).
     candle_view: Option<moon_core::market::CandleViewCfg>,
-    /// X-масштаб окна (px/ms, [Shift+СКМ] sync; None = 60с дефолт): наследуют новые
-    /// графики, применяется ко всем при sync.
+    /// Window X scale (px/ms, synchronized with Shift+middle-click; `None` = 60-second default).
+    /// New charts inherit it, and synchronization applies it to all charts.
     x_ppm: Option<f32>,
-    /// Показывать ли заливку зоны управления (per-окно). None = дефолт (вкл).
+    /// Whether to show the management-zone fill (per window). `None` = enabled by default.
     show_zone: Option<bool>,
-    /// Авто-пин графика при выставлении ордера (per-окно). None = дефолт (выкл).
+    /// Whether to auto-pin a chart when placing an order (per window). `None` = disabled by default.
     auto_pin: Option<bool>,
-    /// Ориентация стека (per-окно). None = дефолт (Vertical).
+    /// Stack orientation (per window). `None` = default Vertical.
     layout_orientation: Option<StackOrientation>,
-    /// Позиции кнопок Cancel Buy / Panic Sell в зоне чарта (per-окно). None = дефолт (Right).
+    /// Positions of the Cancel Buy / Panic Sell buttons in the chart zone (per window).
+    /// `None` = default Right.
     cancel_buy_pos: Option<ChartBtnPos>,
     panic_sell_pos: Option<ChartBtnPos>,
-    /// Положение оси цен (Left/Right/Hide) для графиков стека (per-окно). None = дефолт (Left).
+    /// Price-axis position (Left/Right/Hide) for stack charts (per window). `None` = default Left.
     price_axis_pos: Option<PriceAxisPos>,
-    /// Видимость оси времени для графиков стека (per-окно). None = дефолт (вкл).
+    /// Time-axis visibility for stack charts (per window). `None` = enabled by default.
     time_axis_visible: Option<bool>,
-    /// Видимость подписей у линий для графиков стека (per-окно). None = дефолт (вкл).
+    /// Line-label visibility for stack charts (per window). `None` = enabled by default.
     line_labels: Option<bool>,
-    /// Видимость подписей у перекрестия для графиков стека (per-окно). None = дефолт (вкл).
+    /// Crosshair-label visibility for stack charts (per window). `None` = enabled by default.
     cursor_labels: Option<bool>,
-    /// Подписки на стаканы временно приостановлены (вкладка не в фокусе > 5с). Эффективный
-    /// стакан = `orderbook_enabled ∧ !suspended` — не затирает пользовательскую галку «Стакан».
-    /// Откреплённые в окно вкладки никогда не suspend (окно само держит спрос).
+    /// Whether order-book subscriptions are temporarily suspended after the tab remains unfocused
+    /// for over five seconds. Effective order book = `orderbook_enabled ∧ !suspended`, preserving
+    /// the user's Order book checkbox. Tabs detached into a window are never suspended because the
+    /// window maintains its own demand.
     orderbook_suspended: bool,
-    /// Якорь режима сравнения `(core, market)` — ведущий по цене чарт (замок горит, стоит слева).
-    /// None = сравнение выключено. Активно только в горизонтальной ориентации.
+    /// Comparison anchor `(core, market)`: the price-leading chart, locked and positioned left.
+    /// `None` disables comparison. Active only in horizontal orientation.
     compare_anchor: Option<(CoreId, String)>,
-    /// Общее Y-окно сравнения `(center, range)` — следует за последней изменённой панелью.
+    /// Shared comparison Y window `(center, range)`, tracking the comparison anchor's Y window.
     compare_y: Option<(f32, f32)>,
-    /// Режим метлы: соседи якоря показывают «только стакан» (чарт+ось цен скрыты).
+    /// Broom mode: anchor neighbors show only the order book, hiding chart and price axis.
     compare_orderbook_only: bool,
-    /// Держать ли пустой слот при выбытии графика (COMPRESS-реюз для авто-AddToChart: место
-    /// сохраняется под следующий детект). У КАСТОМНЫХ вкладок = false: закрыл график → слот
-    /// удаляется сразу, соседи перераспределяются по раскладке.
+    /// Whether to retain an empty slot after a chart leaves. Automatic AddToChart tabs reuse the
+    /// slot in COMPRESS mode for the next detection. CUSTOM tabs set this false: closing a chart
+    /// removes its slot immediately and redistributes neighboring charts according to the layout.
     hold_vacated: bool,
-    /// Момент последнего изменения числа открытых графиков (появился/исчез/реюз слота). Debounce
-    /// для COMPRESS-компакции: пустые `vacated`-слоты схлопываются, только когда с этого момента
-    /// прошло `COMPACT_STABLE` (число графиков стабильно). См. `compact_vacated_if_stable`.
+    /// Time of the last open-chart count change (arrival, departure, or slot reuse). This debounces
+    /// COMPRESS compaction: empty `vacated` slots collapse only after `COMPACT_STABLE` has elapsed
+    /// with a stable chart count. See `compact_vacated_if_stable`.
     last_count_change: Instant,
-    /// Армирован ли ~1Гц таймер debounce-компакции COMPRESS (self-rearming, как idle-таймер Main).
+    /// Whether the roughly 1 Hz COMPRESS-compaction debounce timer is armed. It rearms itself like
+    /// Main's idle timer.
     compact_timer_armed: bool,
-    /// Скролл-хэндл вертикального MoonVirtualList (scroll-режим стека).
+    /// Scroll handle for the vertical `MoonVirtualList` used by the stack's Scroll mode.
     scroll: MoonVirtualListScrollHandle,
 }
 
@@ -132,16 +135,16 @@ impl AddChartStack {
         }
     }
 
-    /// Отметить изменение числа открытых графиков (появился/исчез/реюз слота) → перезапустить
-    /// debounce-таймер COMPRESS-компакции (5с стабильности до схлопывания пустых слотов).
+    /// Record an open-chart count change (arrival, departure, or slot reuse), restarting the
+    /// COMPRESS-compaction debounce interval that requires five stable seconds before collapsing
+    /// empty slots.
     fn touch_count_change(&mut self) {
         self.last_count_change = Instant::now();
     }
 
-    /// Армировать (если ещё нет) ~1Гц таймер debounce-компакции COMPRESS. Тикает, пока есть
-    /// графики; сам пере-армится в колбэке. Запускается событиями изменения состава/режима,
-    /// не из render.
-    /// Образец — `MainChartStack::arm_idle_timer`.
+    /// Arm the roughly 1 Hz COMPRESS-compaction debounce timer if needed. It ticks while charts
+    /// exist and rearms itself in the callback. Composition/layout events start it, not render.
+    /// Patterned after `MainChartStack::arm_idle_timer`.
     fn arm_compact_timer(&mut self, cx: &mut Context<Self>) {
         if self.compact_timer_armed || self.charts.is_empty() {
             return;
@@ -163,9 +166,9 @@ impl AddChartStack {
         .detach();
     }
 
-    /// COMPRESS: если число открытых графиков стабильно `COMPACT_STABLE` (никто не появился и не
-    /// исчез) и есть придержанные пустые слоты — убрать их, чтобы оставшиеся графики растянулись
-    /// на освободившееся место. В других режимах / на кастомных вкладках — no-op.
+    /// In COMPRESS mode, remove retained empty slots after the open-chart count stays unchanged for
+    /// `COMPACT_STABLE`, allowing remaining charts to expand into the freed space. A no-op in other
+    /// modes and on custom tabs.
     fn compact_vacated_if_stable(&mut self, cx: &mut Context<Self>) {
         let (_, compress, _) = resolve_layout(
             self.layout_mode,
@@ -183,7 +186,8 @@ impl AddChartStack {
         }
     }
 
-    /// Кастомная вкладка: НЕ держать пустые слоты (закрыл график → перераспределить остальные).
+    /// Configure whether a custom tab retains empty slots; disabling retention redistributes the
+    /// remaining charts as soon as one closes.
     pub(crate) fn set_hold_vacated(&mut self, hold: bool) {
         self.hold_vacated = hold;
     }
@@ -196,7 +200,7 @@ impl AddChartStack {
         self.compare_orderbook_only
     }
 
-    /// Восстановить состояние сравнения из charts.json (якорь + режим метлы) и применить.
+    /// Restore comparison state from `charts.json` (anchor plus broom mode) and apply it.
     pub(crate) fn restore_compare(
         &mut self,
         anchor: Option<(CoreId, String)>,
@@ -208,9 +212,9 @@ impl AddChartStack {
         self.sync_compare(cx);
     }
 
-    /// Синхронизировать режим сравнения: забрать клики замка/метлы (сменить/снять якорь, переставить
-    /// влево; переключить «только стакан»), затем навязать общее Y-окно/флаги панелям. В вертикали
-    /// сравнение выключено.
+    /// Synchronize comparison mode: consume lock/broom clicks (change or remove the anchor, move it
+    /// left, or toggle order-book-only), then impose the shared Y window and flags on panels.
+    /// Comparison is disabled in vertical orientation.
     fn sync_compare(&mut self, cx: &mut Context<Self>) {
         sync_compare(
             &mut self.charts,
@@ -235,7 +239,7 @@ impl AddChartStack {
             self.layout_height_scroll,
         );
 
-        // Уже есть такой график → продлить TTL.
+        // Extend the TTL when this chart already exists.
         if let Some(i) = self
             .charts
             .iter()
@@ -244,7 +248,7 @@ impl AddChartStack {
             if self.charts[i].vacated {
                 self.charts[i].vacated = false;
                 self.charts[i].arrived_at = Instant::now();
-                self.touch_count_change(); // график снова открыт → сброс debounce
+                self.touch_count_change(); // The chart reopened, so reset the debounce interval.
             }
             let panel = self.charts[i].panel.clone();
             panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
@@ -252,15 +256,16 @@ impl AddChartStack {
             return;
         }
 
-        // COMPRESS (только авто-AddToChart): новый занимает ПЕРВЫЙ пустой держащийся слот (без
-        // сдвига/смены размера соседей). Кастомные держат hold_vacated=false → этот путь не нужен.
+        // In COMPRESS mode, automatic AddToChart tabs place a new chart in the FIRST retained empty
+        // slot without moving or resizing neighbors. Custom tabs set `hold_vacated = false` and do
+        // not use this path.
         if compress && self.hold_vacated {
             if let Some(i) = self.charts.iter().position(|e| e.vacated) {
                 self.charts[i].core = core;
                 self.charts[i].market = market.to_string();
                 self.charts[i].arrived_at = Instant::now();
                 self.charts[i].vacated = false;
-                self.touch_count_change(); // новый график занял пустой слот → сброс debounce
+                self.touch_count_change(); // A chart reused an empty slot; reset the debounce.
                 let panel = self.charts[i].panel.clone();
                 panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
                 cx.notify();
@@ -268,7 +273,7 @@ impl AddChartStack {
             }
         }
 
-        // Новый график — в конец (в FIT-stretch запиненные всплывут при сортировке в render).
+        // Append a new chart; render sorting raises pinned charts in FIT-stretch mode.
         let backend = self.backend.clone();
         let num = self.num;
         let bucket = self.bucket.clone();
@@ -276,8 +281,8 @@ impl AddChartStack {
         let theme = self.theme.clone();
         let scale = self.scale;
         let panel = cx.new(|cx| ChartPanel::new_addto(backend, num, bucket, epoch, theme, cx));
-        // Любое изменение панели (вкл. переключение пина ●/○) → перерисовать стек: prune пустых +
-        // пере-сортировка запиненных наверх происходит в render.
+        // Repaint the stack after any panel change, including a pin toggle: empty-panel pruning and
+        // sorting pinned charts to the top happen during render.
         cx.observe(&panel, |this, _, cx| {
             this.prune_or_hold(cx);
             this.sync_compare(cx);
@@ -287,8 +292,8 @@ impl AddChartStack {
         if scale.is_some() {
             panel.update(cx, |panel, pcx| panel.set_scale(scale, pcx));
         }
-        // Эффективный стакан (учитывая suspend-гейт): новый чарт не должен подписываться, если
-        // вкладка сейчас приостановлена (или галка «Стакан» снята).
+        // Honor the effective order-book state, including the suspension gate: a new chart must not
+        // subscribe while the tab is suspended or the Order book checkbox is cleared.
         panel.update(cx, |panel, pcx| {
             panel.set_orderbook_enabled(self.effective_orderbook(), pcx)
         });
@@ -331,25 +336,28 @@ impl AddChartStack {
         panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
         self.charts
             .push(ChartStackEntry::new(core, market.to_string(), panel));
-        self.touch_count_change(); // появился новый график → сброс debounce
-        self.arm_compact_timer(cx); // запустить таймер компакции (если ещё не армирован)
-        // Новый тикер: в режиме сравнения сразу получает eligible + общее Y-окно якоря.
+        self.touch_count_change(); // A new chart appeared; reset the debounce interval.
+        self.arm_compact_timer(cx); // Start the compaction timer if it is not already armed.
+        // In comparison mode, a new ticker immediately receives eligibility and the anchor's
+        // shared Y window.
         self.sync_compare(cx);
         cx.notify();
     }
 
-    /// Реакция на выбытие графиков (TTL истёк → пустая панель).
-    /// - **FIT-stretch / Scroll**: удаляем пустые сразу (стабильность даёт пин — сортировка в render).
-    /// - **COMPRESS (Fit+пиксели)**: слот НЕ удаляем — помечаем `vacated` (держит позицию и размер
-    ///   соседей). Сброс ВСЕХ слотов — только когда пустыми стали все (→ вернётся дефолтная высота).
+    /// Handle any empty chart panel, whether a chart was explicitly closed or its TTL expired.
+    /// - **FIT-stretch / Scroll**: remove empty panels immediately; pinning and render-time sorting
+    ///   provide stability.
+    /// - **COMPRESS (Fit + pixels)**: retain the slot as `vacated`, preserving neighbor positions
+    ///   and sizes. Clear ALL slots only when every slot is empty, restoring the default height.
     fn prune_or_hold(&mut self, cx: &App) -> bool {
         let (_, compress, _) = resolve_layout(
             self.layout_mode,
             self.layout_height_fit,
             self.layout_height_scroll,
         );
-        // FIT-stretch / Scroll, ИЛИ кастомная вкладка (hold_vacated=false): пустые удаляем сразу
-        // → соседи перераспределяются. Держим слот только в COMPRESS у авто-AddToChart.
+        // Remove empty panels immediately in FIT-stretch/Scroll or on a custom tab
+        // (`hold_vacated = false`), redistributing neighbors. Only automatic AddToChart tabs in
+        // COMPRESS mode retain a slot.
         if !compress || !self.hold_vacated {
             let before = self.charts.len();
             self.charts.retain(|e| e.panel.read(cx).pane_count() > 0);
@@ -368,8 +376,8 @@ impl AddChartStack {
             changed = true;
         }
         if changed {
-            // График исчез (слот стал пустым) — число открытых изменилось → сброс debounce:
-            // придержанные пустые слоты схлопнутся только после 5с стабильности.
+            // A chart disappeared and its slot became empty, changing the open count. Reset the
+            // debounce so retained empty slots collapse only after five stable seconds.
             self.touch_count_change();
         }
         changed
@@ -396,12 +404,13 @@ impl AddChartStack {
         self.orderbook_enabled
     }
 
-    /// Эффективный стакан = пользовательская галка (None→вкл) И не приостановлен по фокусу.
+    /// Effective order book = the user's checkbox (`None` → enabled) AND not focus-suspended.
     fn effective_orderbook(&self) -> bool {
         self.orderbook_enabled.unwrap_or(true) && !self.orderbook_suspended
     }
 
-    /// Вкл/выкл стакан для всех графиков стека (per-окно). Применяется с учётом suspend-гейта.
+    /// Enable or disable order books for every stack chart (per window), honoring the suspension
+    /// gate.
     pub(crate) fn set_orderbook_enabled(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
         if self.orderbook_enabled == enabled {
             return;
@@ -411,8 +420,9 @@ impl AddChartStack {
         cx.notify();
     }
 
-    /// Приостановить/возобновить подписки на стаканы по фокусу вкладки (гейтинг кастомных
-    /// вкладок: ушли > 5с → suspend=true → отписка; вернулись → resume). Не трогает галку «Стакан».
+    /// Suspend or resume order-book subscriptions according to tab focus. Custom tabs unsubscribe
+    /// after more than five seconds away and resume on return. This does not change the user's
+    /// Order book checkbox.
     pub(crate) fn set_orderbook_suspended(&mut self, suspended: bool, cx: &mut Context<Self>) {
         if self.orderbook_suspended == suspended {
             return;
@@ -427,7 +437,7 @@ impl AddChartStack {
         self.show_zone
     }
 
-    /// Вкл/выкл заливку зоны управления для всех графиков стека (per-окно).
+    /// Enable or disable the management-zone fill for every stack chart (per window).
     pub(crate) fn set_show_zone(&mut self, show: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.show_zone, show, &self.charts, cx, |c, cx| {
             set_panels_show_zone(c, show.unwrap_or(true), cx)
@@ -442,7 +452,7 @@ impl AddChartStack {
         (self.cancel_buy_pos, self.panic_sell_pos)
     }
 
-    /// Позиции кнопок Cancel Buy / Panic Sell для всех графиков стека (per-окно).
+    /// Set Cancel Buy / Panic Sell button positions for every stack chart (per window).
     pub(crate) fn set_action_btn_pos(
         &mut self,
         cancel: Option<ChartBtnPos>,
@@ -467,7 +477,7 @@ impl AddChartStack {
         self.price_axis_pos
     }
 
-    /// Положение оси цен (Left/Right/Hide) для всех графиков стека (per-окно).
+    /// Set the price-axis position (Left/Right/Hide) for every stack chart (per window).
     pub(crate) fn set_price_axis_pos(&mut self, pos: Option<PriceAxisPos>, cx: &mut Context<Self>) {
         apply_setting(&mut self.price_axis_pos, pos, &self.charts, cx, |c, cx| {
             set_panels_price_axis_pos(c, pos.unwrap_or_default(), cx)
@@ -478,7 +488,7 @@ impl AddChartStack {
         self.time_axis_visible
     }
 
-    /// Видимость оси времени для всех графиков стека (per-окно).
+    /// Set time-axis visibility for every stack chart (per window).
     pub(crate) fn set_time_axis_visible(&mut self, visible: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(
             &mut self.time_axis_visible,
@@ -493,7 +503,7 @@ impl AddChartStack {
         self.line_labels
     }
 
-    /// Видимость подписей у линий для всех графиков стека (per-окно).
+    /// Set line-label visibility for every stack chart (per window).
     pub(crate) fn set_line_labels(&mut self, show: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.line_labels, show, &self.charts, cx, |c, cx| {
             set_panels_line_labels(c, show.unwrap_or(true), cx)
@@ -504,7 +514,7 @@ impl AddChartStack {
         self.cursor_labels
     }
 
-    /// Видимость подписей у перекрестия для всех графиков стека (per-окно).
+    /// Set crosshair-label visibility for every stack chart (per window).
     pub(crate) fn set_cursor_labels(&mut self, show: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.cursor_labels, show, &self.charts, cx, |c, cx| {
             set_panels_cursor_labels(c, show.unwrap_or(true), cx)
@@ -515,7 +525,7 @@ impl AddChartStack {
         self.liquidations_enabled
     }
 
-    /// Вкл/выкл трейды ликвидаций для всех графиков стека (per-окно).
+    /// Enable or disable liquidation trades for every stack chart (per window).
     pub(crate) fn set_liquidations_enabled(
         &mut self,
         enabled: Option<bool>,
@@ -538,8 +548,8 @@ impl AddChartStack {
         self.x_ppm
     }
 
-    /// X-масштаб окна: запомнить для новых графиков; `apply` — применить ко всем открытым
-    /// ([Shift+СКМ] sync; при сидинге на старте открытых ещё нет).
+    /// Store the window X scale for new charts; when `apply` is true, apply it to all open charts
+    /// for Shift+middle-click synchronization. No charts exist yet during startup seeding.
     pub(crate) fn set_x_ppm(&mut self, ppm: Option<f32>, apply: bool, cx: &mut Context<Self>) {
         self.x_ppm = ppm;
         for e in &self.charts {
@@ -557,7 +567,7 @@ impl AddChartStack {
         }
     }
 
-    /// Настройки отображения свечей/трейдов для всех графиков стека (per-окно).
+    /// Set candle/trade display settings for every stack chart (per window).
     pub(crate) fn set_candle_view(
         &mut self,
         cfg: Option<moon_core::market::CandleViewCfg>,
@@ -568,7 +578,7 @@ impl AddChartStack {
         });
     }
 
-    /// Вкл/выкл авто-пин при ордере для всех графиков стека (per-окно).
+    /// Enable or disable automatic pinning on order for every stack chart (per window).
     pub(crate) fn set_auto_pin(&mut self, on: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.auto_pin, on, &self.charts, cx, |c, cx| {
             set_panels_auto_pin(c, on.unwrap_or(false), cx)
@@ -579,7 +589,7 @@ impl AddChartStack {
         self.layout_orientation
     }
 
-    /// Сменить ориентацию стека (per-окно). Перестраивает текущее отображение.
+    /// Change stack orientation (per window), rebuilding the current display.
     pub(crate) fn set_orientation(
         &mut self,
         orientation: Option<StackOrientation>,
@@ -589,7 +599,7 @@ impl AddChartStack {
             return;
         }
         self.layout_orientation = orientation;
-        // Ориентация влияет на доступность сравнения (вертикаль выключает lock).
+        // Orientation controls comparison availability; vertical mode disables the lock.
         self.sync_compare(cx);
         cx.notify();
     }
@@ -606,7 +616,7 @@ impl AddChartStack {
         self.layout_height_scroll
     }
 
-    /// Применить per-tab раскладку (режим + раздельные высоты Fit/Scroll) к этому стеку.
+    /// Apply the per-tab layout (mode plus separate Fit/Scroll heights) to this stack.
     pub(crate) fn set_layout(
         &mut self,
         mode: Option<StackLayoutMode>,
@@ -623,8 +633,8 @@ impl AddChartStack {
         self.layout_mode = mode;
         self.layout_height_fit = height_fit;
         self.layout_height_scroll = height_scroll;
-        // Слоты держатся только в COMPRESS. При переключении в другой режим пустые слоты убираем,
-        // чтобы FIT-stretch/Scroll не показывали пустые плашки.
+        // Slots are retained only in COMPRESS mode. Remove empty slots when switching modes so
+        // FIT-stretch and Scroll do not show empty tiles.
         let (_, compress, _) = resolve_layout(mode, height_fit, height_scroll);
         if !compress {
             self.charts.retain(|e| !e.vacated);
@@ -634,8 +644,8 @@ impl AddChartStack {
         cx.notify();
     }
 
-    /// Текущий список тикеров стека `(core, market)` — для персиста кастомной вкладки.
-    /// Пустые/освобождённые слоты пропускаем.
+    /// Current stack ticker list `(core, market)` for custom-tab persistence, excluding empty or
+    /// vacated slots.
     pub(crate) fn coins(&self, cx: &App) -> Vec<(CoreId, String)> {
         self.charts
             .iter()
@@ -644,7 +654,7 @@ impl AddChartStack {
             .collect()
     }
 
-    /// Закрепить (pin) все графики стека — для кастомной вкладки (чарты сразу запинены).
+    /// Pin every stack chart so charts on a custom tab start pinned.
     pub(crate) fn pin_all(&mut self, cx: &mut Context<Self>) {
         for e in &self.charts {
             e.panel.update(cx, |p, pcx| p.ensure_pinned(pcx));
@@ -692,8 +702,8 @@ impl Render for AddChartStack {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
-            // Непрозрачный фон: в выносном окне Root=NoFill и own-pass нет → без фона
-            // сквозь логотип просвечивает белая подложка окна.
+            // Use an opaque background: a detached window has `Root=NoFill` and no own pass, so
+            // without this background the white window backing would show through the logo.
             return div()
                 .size_full()
                 .bg(rgb(palette.chart_bg))
@@ -704,16 +714,17 @@ impl Render for AddChartStack {
                 .into_any_element();
         }
 
-        // Stack: per-tab раскладка (FIT/SCROLL/COMPRESS + высота), иначе глобальный дефолт.
-        // ВАЖНО: чарт-слоты ПРОЗРАЧНЫЕ. own-pass (combo/стакан) — слой GpuCanvasLayer::UnderScene
-        // (под сценой); любой непрозрачный `.bg()` над слотом его перекрывает. Разделитель — рамка.
+        // Stack layout comes from the tab (FIT/SCROLL/COMPRESS plus height), otherwise the global
+        // default. IMPORTANT: chart slots are TRANSPARENT. The own pass (combo/order book) is a
+        // `GpuCanvasLayer::UnderScene` layer beneath the scene; any opaque `.bg()` above the slot
+        // covers it. The border serves as the separator.
         let (scroll, compress, cfg_h) = resolve_layout(
             self.layout_mode,
             self.layout_height_fit,
             self.layout_height_scroll,
         );
-        // Запиненные наверх кластером — ТОЛЬКО НЕ в COMPRESS (там слоты позиционно стабильны).
-        // Это read-only render order: сам `self.charts` не мутируем из render.
+        // Cluster pinned charts at the top ONLY outside COMPRESS, where slots are positionally
+        // stable. This is a read-only render order; render does not mutate `self.charts`.
         let mut render_order: Vec<usize> = (0..self.charts.len()).collect();
         if !compress {
             render_order.sort_by_key(|&ix| !self.charts[ix].panel.read(cx).is_pinned());
@@ -748,7 +759,7 @@ impl Render for AddChartStack {
             cfg_h,
             &self.scroll,
             border,
-            // Пустой (держащийся) COMPRESS-слот → None: render покажет прозрачную плашку.
+            // An empty retained COMPRESS slot maps to `None`, so render shows a transparent tile.
             move |s, ix| {
                 let Some(&real_ix) = panel_order.get(ix) else {
                     return None;
@@ -780,8 +791,9 @@ impl Render for AddChartStack {
                     border,
                     title_size,
                 );
-                // Поперёк оси — на всю ширину/высоту; вдоль оси — flex+cap (COMPRESS до size, сжатие),
-                // фикс (size без flex) или растяжение (FIT). Гор: ось = X (ширина), верт: ось = Y.
+                // Fill width/height across the axis. Along the axis, use flex with a cap (COMPRESS
+                // down to size), fixed size without flex, or stretch (FIT). Horizontal uses the X
+                // axis (width); vertical uses the Y axis (height).
                 tile = if horizontal {
                     tile.h_full()
                 } else {
@@ -803,16 +815,17 @@ impl Render for AddChartStack {
                         };
                     }
                 } else if let Some(v) = size {
-                    // Фикс. БЕЗ сжатия (min=max=v): в SCROLL тайлы переполняют контейнер → скролл.
+                    // Fixed WITHOUT shrinking (`min = max = v`): in SCROLL, tiles overflow the
+                    // container and activate scrolling.
                     tile = if horizontal {
                         tile.w(px(v)).min_w(px(v))
                     } else {
                         tile.h(px(v)).min_h(px(v))
                     };
                 }
-                // Подсветка только что появившегося графика: яркая акцентная рамка поверх, пульс
-                // (3 мигания за HIGHLIGHT). Сдвинута внутрь на 1px, чтобы overflow_hidden её не
-                // срезал; opacity не падает в 0 на пике, чтобы было хорошо видно. gpui гонит кадры.
+                // Highlight a newly arrived chart with a bright accent border and three pulses
+                // during `HIGHLIGHT`. Inset it by 1 px so `overflow_hidden` does not clip it; the
+                // opacity stays visible at the peak while GPUI drives the frames.
                 let highlight = fresh.then(|| {
                     div()
                         .absolute()
@@ -827,7 +840,7 @@ impl Render for AddChartStack {
                             SharedString::from(format!("{id}-arrive")),
                             Animation::new(HIGHLIGHT),
                             |el, delta| {
-                                // 3 чётких мигания: 0 → 1 → 0, повторённые.
+                                // Three distinct repeated flashes: 0 → 1 → 0.
                                 let pulse = (delta * std::f32::consts::PI * 3.0).sin().abs();
                                 el.opacity(pulse)
                             },

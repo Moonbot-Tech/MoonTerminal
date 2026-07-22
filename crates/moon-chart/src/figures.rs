@@ -1,30 +1,30 @@
-//! Геометрия пользовательских фигур чарта (слой рисования): фигуры из
-//! `moon_core::figures` → инстансы линий own-pass. ДОБАВЛЯЕТ в буферы (не чистит):
-//! зовётся после `build_order_geometry`, фигуры едут теми же userdata-слоями.
+//! Geometry for user-defined chart figures (drawing layer): figures from
+//! `moon_core::figures` → own-pass line instances. APPENDS to the buffers (does not clear them):
+//! called after `build_order_geometry`, with figures using the same userdata layers.
 //!
-//! Визуальный язык (чтобы фигуры не путались с ордер-линиями и было видно состояние):
-//! - обычная фигура — ТОНКИЙ ПУНКТИР;
-//! - заармленная (alert) — ЖИРНЫЙ ПУНКТИР (видно, что «боевая»);
-//! - под курсором / выделенная — СПЛОШНАЯ ТОЛСТАЯ + яркая (резко «оживает»),
-//!   у выделенной ещё узелки-квадраты на точках, а у горизонтали — ручка-маркер.
+//! Visual language (to distinguish figures from order lines and make their state visible):
+//! - regular figure — THIN BASE-STYLE LINE;
+//! - armed (alert) figure — THICK BASE-STYLE LINE (clearly shows that it is armed);
+//! - hovered / selected figure — SOLID, THICK, and bright (it sharply "comes alive"),
+//!   with square knots at the editable points of selected segments and triangles.
 
 use moon_core::figures::{FigNode, Figure, FigureKind, LineKind};
 
 use crate::layers::{LineInstance, MarkerInstance, SegInstance};
 
-/// Полупрозрачность спокойной (не активной) фигуры.
+/// Opacity of an idle (inactive) figure.
 const FIG_IDLE_ALPHA: f32 = 0.85;
-/// Множитель толщины активной (hover/selected) фигуры и заармленной.
+/// Thickness multiplier for an active (hovered/selected) figure.
 const FIG_ACTIVE_THICKNESS: f32 = 1.9;
 const FIG_ARMED_THICKNESS: f32 = 2.2;
-/// Размер узелка/ручки выделенной фигуры, px.
+/// Size of a selected figure's knot/handle, in pixels.
 const FIG_KNOT_SIZE: f32 = 4.5;
 const SEG_PATTERN_SOLID: f32 = 0.0;
-const SEG_PATTERN_DASH: f32 = 1.0; // DashDotDot в шейдере — ближайший «штрих»
+const SEG_PATTERN_DASH: f32 = 1.0; // DashDotDot in the shader is the closest available dashed pattern.
 const SEG_PATTERN_DOT: f32 = 2.0;
 
-/// Паттерн отрезка (шейдер: 0 solid / 1 dashdotdot / 2 dot) по виду линии Moonbot.
-/// Штриховых вариантов в шейдере меньше пяти → Dash/DashDot/DashDotDot дают один штрих.
+/// Segment pattern (shader: 0 solid / 1 dashdotdot / 2 dot) based on the Moonbot line kind.
+/// The shader has fewer than five dashed variants → Dash/DashDot/DashDotDot share one pattern.
 fn seg_pattern(kind: LineKind) -> f32 {
     match kind {
         LineKind::Solid => SEG_PATTERN_SOLID,
@@ -33,13 +33,13 @@ fn seg_pattern(kind: LineKind) -> f32 {
     }
 }
 
-/// Как рисуется конкретная фигура в этом кадре.
+/// Describes how a specific figure is drawn in the current frame.
 struct FigStyle {
     color: [f32; 4],
     thickness: f32,
-    /// Вид линии (или Solid при hover/выделении).
+    /// Line kind (or Solid when hovered/selected).
     line_kind: LineKind,
-    /// Рисовать узелки/ручку (выделенная).
+    /// Whether to draw knots/handles for a selected figure.
     knots: bool,
 }
 
@@ -52,8 +52,8 @@ fn rgba(c: [u8; 4], alpha_mul: f32) -> [f32; 4] {
     ]
 }
 
-/// Собирает геометрию фигур чарта. `draft` — превью рисуемой фигуры; `hovered`/
-/// `selected` подсвечиваются (у выделенной отрезка/канала — узлы на концах для драга).
+/// Builds chart figure geometry. `draft` is a preview of the figure being drawn; `hovered`/
+/// `selected` figures are highlighted (selected segments/triangles have draggable endpoint knots).
 pub fn build_figure_geometry(
     figures: &[Figure],
     draft: Option<&Figure>,
@@ -74,7 +74,7 @@ pub fn build_figure_geometry(
         }
     }
     if let Some(d) = draft {
-        // Превью рисуемой фигуры: ярче и толще, базовый вид линии — из стиля.
+        // Preview of the figure being drawn: brighter and thicker, using the style's base line kind.
         let style = FigStyle {
             color: rgba(d.color, 1.0),
             thickness: d.thickness * FIG_ACTIVE_THICKNESS,
@@ -85,10 +85,10 @@ pub fn build_figure_geometry(
     }
 }
 
-/// Стиль фигуры по состоянию:
-/// - спокойная — тонкий базовый вид (Solid/Dash из `fig.dashed`);
-/// - под курсором/выделенная — толстая СПЛОШНАЯ (резко «оживает»), + узлы у выделенной;
-/// - заармленная (alert) — толстая, базовый вид (толщина = «боевой» индикатор).
+/// Figure style by state:
+/// - idle — thin base style from `fig.line_kind`;
+/// - hovered/selected — thick SOLID line (sharply "comes alive"), plus knots when selected;
+/// - armed (alert) — thick base style (thickness indicates that it is armed).
 fn fig_style(fig: &Figure, is_hot: bool, is_selected: bool) -> FigStyle {
     if is_hot {
         FigStyle {
@@ -147,7 +147,7 @@ fn push_figure(
         FigureKind::HLine { price } => push_hline(*price),
         FigureKind::Segment { a, b } => push_seg(a, b, 0.0),
         FigureKind::Triangle { a, b, c } => {
-            // Три ребра: a-b, b-c, c-a.
+            // Three edges: a-b, b-c, c-a.
             push_seg(a, b, 0.0);
             push_seg(b, c, 0.0);
             push_seg(c, a, 0.0);
@@ -159,8 +159,8 @@ fn push_figure(
     }
 }
 
-/// Узлы редактирования выделенной фигуры (концы отрезка/канала — за них тянут).
-/// У горизонтали узлов нет: её тянут за любое место (наведи → толстая → драг).
+/// Editing knots for a selected figure (segment/triangle endpoints act as drag handles).
+/// Horizontal lines and channels have no knots: drag them anywhere along the line (hover → thick → drag).
 fn push_knots(fig: &Figure, color: [f32; 4], epoch_ms: f64, markers: &mut Vec<MarkerInstance>) {
     let to_rel = |t_ms: f64| (t_ms - epoch_ms) as f32;
     let mut knot = |t_rel: f32, price: f64| {
@@ -174,7 +174,7 @@ fn push_knots(fig: &Figure, color: [f32; 4], epoch_ms: f64, markers: &mut Vec<Ma
         });
     };
     match &fig.kind {
-        // У горизонтали и канала узлов нет — их тянут за линию (наведи → толстая → драг).
+        // Horizontal lines and channels have no knots; drag the line itself (hover → thick → drag).
         FigureKind::HLine { .. } | FigureKind::Channel { .. } => {}
         FigureKind::Segment { a, b } => {
             knot(to_rel(a.time_ms), a.price);

@@ -7,7 +7,7 @@ fn roundtrip(payload: &[u8]) -> Vec<u8> {
 #[test]
 fn roundtrip_small_and_binary() {
     assert_eq!(roundtrip(b"hello"), b"hello");
-    // Все значения байтов + длины, не кратные 7/14-битной упаковке.
+    // All byte values plus lengths not divisible by the 7/14-bit packing boundaries.
     let all: Vec<u8> = (0u8..=255).cycle().take(1000).collect();
     assert_eq!(roundtrip(&all), all);
     for len in [1usize, 2, 3, 6, 7, 8, 13, 14, 15, 255] {
@@ -19,12 +19,12 @@ fn roundtrip_small_and_binary() {
 #[test]
 fn finds_header_inside_noise_and_whitespace() {
     let enc = encode_mbsc7(b"payload");
-    // Пробелы/переводы строк внутри payload и мусор вокруг.
+    // Spaces/newlines inside the payload and noise around it.
     let noisy = format!(
         "some text before\n{}\nafter",
         enc.replace(':', " : ").replace("MBSC7", "MBSC7\n")
     );
-    // Разрезание самого заголовка пробелами тоже переживаем (чистка ≤32).
+    // Splitting the header itself with whitespace also works because code points ≤32 are removed.
     assert_eq!(decode_transport(&noisy).unwrap(), b"payload");
 }
 
@@ -50,14 +50,14 @@ fn not_found_and_newer_format() {
 #[test]
 fn bad_hex_and_bad_crc() {
     let enc = encode_mbsc7(b"data");
-    // Портим hex размера.
+    // Corrupt the size hex field.
     let bad_hex = enc.replacen("MBSC7:", "MBSC7:ZZ", 1);
     assert!(matches!(
         decode_transport(&bad_hex),
         Err(ImportError::BadHeader(_))
     ));
-    // Портим CRC: меняем один hex-символ CRC-поля на другой.
-    let idx = enc.find("MBSC7:").unwrap() + 6 + 9; // первый символ CRC
+    // Corrupt the CRC by changing one hex character in its field.
+    let idx = enc.find("MBSC7:").unwrap() + 6 + 9; // First CRC character.
     let mut chars: Vec<char> = enc.chars().collect();
     chars[idx] = if chars[idx] == '0' { '1' } else { '0' };
     let bad_crc: String = chars.into_iter().collect();
@@ -72,7 +72,7 @@ fn bad_base16384_char_and_truncated() {
     let enc = encode_mbsc7(b"some payload data");
     let start = enc.find("MBSC7:").unwrap();
     let payload_at = start + 6 + 8 + 1 + 8 + 1;
-    // Символ вне диапазона внутри payload.
+    // Out-of-range character inside the payload.
     let mut chars: Vec<char> = enc.chars().collect();
     chars[payload_at] = 'X';
     let bad: String = chars.into_iter().collect();
@@ -80,7 +80,7 @@ fn bad_base16384_char_and_truncated() {
         decode_transport(&bad),
         Err(ImportError::BadBase16384(_))
     ));
-    // Усечённый payload.
+    // Truncated payload.
     let truncated: String = enc.chars().take(payload_at + 2).collect();
     assert!(matches!(
         decode_transport(&truncated),
@@ -90,12 +90,12 @@ fn bad_base16384_char_and_truncated() {
 
 #[test]
 fn nonzero_padding_rejected() {
-    // 1 байт → total_bits=8 → 1 символ, старшие 6 бит символа — padding.
-    // Значение с ненулевым padding: 0b01_0000_0001 → символ BASE + 257.
+    // 1 byte → total_bits=8 → 1 character, whose high 6 bits are padding.
+    // A value with nonzero padding: 0b01_0000_0001 → character BASE + 257.
     let ch = char::from_u32(B16384_BASE + 0x100).unwrap();
-    // CRC заведомо неверный не подходит — нужно, чтобы падало ИМЕННО на padding,
-    // поэтому CRC не проверить раньше Base16384 нельзя: порядок в decode_transport —
-    // сначала Base16384, потом CRC. Берём произвольный CRC.
+    // A deliberately invalid CRC is acceptable because this must fail SPECIFICALLY on padding.
+    // CRC cannot be checked before Base16384: decode_transport processes Base16384 first, then
+    // CRC. Use an arbitrary CRC.
     let text = format!("MBSC7:00000001:00000000:{ch}");
     assert!(matches!(
         decode_transport(&text),
@@ -106,7 +106,7 @@ fn nonzero_padding_rejected() {
 #[test]
 fn extra_symbol_after_payload_rejected() {
     let enc = encode_mbsc7(b"xy");
-    // Дописываем ещё один символ Base16384-диапазона сразу за payload (до fence).
+    // Append another in-range Base16384 character immediately after the payload, before the fence.
     let extra = char::from_u32(B16384_BASE).unwrap();
     let with_extra = enc.replace("\n```", &format!("{extra}\n```"));
     assert!(matches!(
@@ -117,7 +117,7 @@ fn extra_symbol_after_payload_rejected() {
 
 #[test]
 fn truncated_gzip_rejected() {
-    // Валидная оболочка (size/CRC пересчитаны) вокруг ОБРЕЗАННЫХ gzip-байт.
+    // Valid wrapper with recalculated size/CRC around TRUNCATED gzip bytes.
     use std::io::Write;
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     enc.write_all(b"payload payload payload").unwrap();
@@ -148,7 +148,7 @@ fn truncated_gzip_rejected() {
 
 #[test]
 fn compressed_size_limit_enforced() {
-    // Заголовок с размером больше лимита — ошибка ДО каких-либо выделений.
+    // A header size above the limit fails BEFORE any allocation.
     let text = format!("MBSC7:{:08X}:00000000:一", MAX_COMPRESSED + 1);
     assert!(matches!(
         decode_transport(&text),
@@ -167,7 +167,7 @@ fn zero_size_rejected() {
 
 #[test]
 fn decompression_bomb_rejected() {
-    // 80 MiB нулей жмутся в мелочь; распаковка должна упереться в лимит 64 MiB.
+    // 80 MiB of zeros compresses to very little; decompression must hit the 64 MiB limit.
     use std::io::Write;
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     let chunk = vec![0u8; 1024 * 1024];

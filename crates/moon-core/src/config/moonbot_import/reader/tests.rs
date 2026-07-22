@@ -1,6 +1,6 @@
 use super::*;
 
-/// Тест-хелперы сериализации (двойник Delphi-writer'а для юнитов).
+/// Serialization test helper that mirrors the Delphi writer for unit tests.
 pub(crate) fn push_string(out: &mut Vec<u8>, s: &str) {
     let units: Vec<u16> = s.encode_utf16().collect();
     out.extend_from_slice(&(units.len() as i32).to_le_bytes());
@@ -73,7 +73,7 @@ fn negative_and_oversized_string_len() {
         Reader::new(&buf).string_x("s"),
         Err(ImportError::TooLarge(_))
     ));
-    // Длина валидная, но данных нет — Truncated, БЕЗ выделения буфера под неё.
+    // The length is valid but data is absent: Truncated WITHOUT allocating its buffer.
     let mut buf = Vec::new();
     buf.extend_from_slice(&1000i32.to_le_bytes());
     assert!(matches!(
@@ -84,7 +84,7 @@ fn negative_and_oversized_string_len() {
 
 #[test]
 fn invalid_utf16_rejected() {
-    // Одинокий high surrogate 0xD800.
+    // Lone high surrogate 0xD800.
     let mut buf = Vec::new();
     buf.extend_from_slice(&1i32.to_le_bytes());
     buf.extend_from_slice(&0xD800u16.to_le_bytes());
@@ -121,7 +121,7 @@ fn ini_roundtrip() {
 
 #[test]
 fn ini_entry_count_vs_remaining() {
-    // Заявлено 1000 записей, но данных нет — Truncated по sanity-проверке count.
+    // Declares 1,000 entries with no data, so the count sanity check returns Truncated.
     let mut buf = Vec::new();
     buf.extend_from_slice(&1i32.to_le_bytes());
     push_string(&mut buf, "S");
@@ -154,11 +154,11 @@ fn sub_reader_bounds() {
     let mut r = Reader::new(&buf);
     let mut sub = r.sub_reader(3, "block").unwrap();
     assert_eq!(sub.u8("a").unwrap(), 1);
-    // Чтение через конец суб-блока — ошибка, даже если у родителя байты есть.
+    // Reading past the sub-block is an error even if the parent has more bytes.
     assert!(matches!(sub.i32_le("b"), Err(ImportError::Truncated(_))));
-    // Родитель уже за блоком.
+    // The parent has already advanced past the block.
     assert_eq!(r.u8("c").unwrap(), 4);
-    // Суб-блок больше остатка родителя.
+    // The sub-block is larger than the parent's remainder.
     assert!(matches!(
         r.sub_reader(10, "d"),
         Err(ImportError::Truncated(_))

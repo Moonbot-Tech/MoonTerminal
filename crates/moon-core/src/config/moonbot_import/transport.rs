@@ -1,27 +1,27 @@
-//! Транспортный слой `MBSC7`: `MBSC7:<8 hex size>:<8 hex CRC32>:<Base16384>` →
-//! распакованные payload-байты. Вход недоверенный: все длины через checked math,
-//! буферы выделяются только по проверенным размерам, жёсткие лимиты на всё.
+//! `MBSC7` transport layer: `MBSC7:<8 hex size>:<8 hex CRC32>:<Base16384>` →
+//! decompressed payload bytes. Input is untrusted: all lengths use checked arithmetic,
+//! buffers are allocated only for validated sizes, and hard limits apply throughout.
 
 use super::ImportError;
 
-/// Лимит СЖАТЫХ данных (из заголовка) — 16 MiB по ТЗ.
+/// COMPRESSED data limit from the header: 16 MiB per the specification.
 const MAX_COMPRESSED: usize = 16 * 1024 * 1024;
-/// Лимит РАСПАКОВАННОГО payload — 64 MiB по ТЗ (защита от decompression bomb).
+/// DECOMPRESSED payload limit: 64 MiB per the specification, protecting against decompression bombs.
 const MAX_DECOMPRESSED: u64 = 64 * 1024 * 1024;
-/// Первый кодовый пункт Base16384; каждый символ несёт 14 бит `codepoint - 0x4E00`.
+/// First Base16384 code point; each character carries 14 bits of `codepoint - 0x4E00`.
 const B16384_BASE: u32 = 0x4E00;
-/// Максимальное 14-битное значение символа Base16384.
+/// Maximum 14-bit Base16384 character value.
 const B16384_MAX: u32 = 0x3FFF;
 
-/// Найти `MBSC7:` в тексте (игнорируя все символы с кодом ≤ 32), проверить hex-заголовок,
-/// декодировать Base16384, сверить CRC32 сжатых байт и распаковать gzip/zlib.
+/// Finds `MBSC7:` in text while ignoring all characters with code points ≤ 32, validates the
+/// hex header, decodes Base16384, verifies the compressed bytes' CRC32, and decompresses gzip/zlib.
 pub fn decode_transport(text: &str) -> Result<Vec<u8>, ImportError> {
-    // Убираем ВСЕ символы с кодом <= 32 (переносы строк, пробелы, табы): MoonBot может
-    // переносить payload по строкам, а клипборд — добавлять свои переводы строк.
+    // Remove ALL characters with code points <= 32 (newlines, spaces, tabs): MoonBot may wrap
+    // the payload across lines, and the clipboard may add its own line breaks.
     let cleaned: Vec<char> = text.chars().filter(|c| (*c as u32) > 32).collect();
 
     let start = find_header(&cleaned)?;
-    // За `MBSC7:` идут ровно 8 hex размера, ':', 8 hex CRC32, ':'.
+    // `MBSC7:` is followed by exactly 8 size hex digits, ':', 8 CRC32 hex digits, ':'.
     let mut pos = start + 6;
     let size = read_hex8(&cleaned, pos)? as usize;
     pos += 8;
@@ -45,7 +45,7 @@ pub fn decode_transport(text: &str) -> Result<Vec<u8>, ImportError> {
 
     let compressed = base16384_decode(&cleaned[pos..], size)?;
 
-    // CRC — по СЖАТЫМ байтам, до распаковки (стандартный IEEE CRC32).
+    // CRC covers the COMPRESSED bytes before decompression (standard IEEE CRC32).
     let crc_actual = crc32fast::hash(&compressed);
     if crc_actual != crc_expected {
         return Err(ImportError::CrcMismatch {
@@ -57,15 +57,17 @@ pub fn decode_transport(text: &str) -> Result<Vec<u8>, ImportError> {
     decompress(&compressed)
 }
 
-/// Позиция начала `MBSC7:` в очищенном тексте. Если найден `MBSC<N>:` с N > 7 —
-/// понятная ошибка «формат новее» вместо «не найдено».
+/// Returns the start position of `MBSC7:` in cleaned text.
+///
+/// If `MBSC<N>:` with N > 7 is found, returns a clear "newer format" error instead of
+/// "not found".
 fn find_header(cleaned: &[char]) -> Result<usize, ImportError> {
     let needle = ['M', 'B', 'S', 'C'];
     let mut newer: Option<u32> = None;
     let mut i = 0usize;
     while i + 4 <= cleaned.len() {
         if cleaned[i..i + 4] == needle {
-            // Читаем номер версии (одна и более десятичных цифр) и ':'.
+            // Read the version number (one or more decimal digits) and ':'.
             let mut j = i + 4;
             let mut ver: u32 = 0;
             let mut digits = 0u32;
@@ -91,7 +93,7 @@ fn find_header(cleaned: &[char]) -> Result<usize, ImportError> {
     }
 }
 
-/// Ровно 8 hex-цифр (любой регистр) начиная с `pos`.
+/// Reads exactly 8 case-insensitive hex digits starting at `pos`.
 fn read_hex8(cleaned: &[char], pos: usize) -> Result<u32, ImportError> {
     let end = pos
         .checked_add(8)
@@ -114,9 +116,11 @@ fn expect_colon(cleaned: &[char], pos: usize) -> Result<(), ImportError> {
     Ok(())
 }
 
-/// Декодер Base16384: `expected = ceil(out_len*8/14)` символов диапазона
-/// `U+4E00..=U+8DFF`, биты LSB-first. Лишний символ диапазона после ожидаемых,
-/// нехватка символов или ненулевые padding-биты последнего — ошибка.
+/// Decodes Base16384: `expected = ceil(out_len*8/14)` characters in the
+/// `U+4E00..=U+8DFF` range, with bits stored LSB-first.
+///
+/// An extra in-range character after the expected data, missing characters, or nonzero
+/// padding bits in the last character is an error.
 fn base16384_decode(chars: &[char], out_len: usize) -> Result<Vec<u8>, ImportError> {
     let total_bits = out_len
         .checked_mul(8)
@@ -129,7 +133,7 @@ fn base16384_decode(chars: &[char], out_len: usize) -> Result<Vec<u8>, ImportErr
         )));
     }
 
-    // out_len уже проверен лимитом MAX_COMPRESSED — выделять безопасно.
+    // out_len has already passed the MAX_COMPRESSED limit check, so allocation is safe.
     let mut out = Vec::with_capacity(out_len);
     let mut acc: u32 = 0;
     let mut acc_bits: u32 = 0;
@@ -148,7 +152,7 @@ fn base16384_decode(chars: &[char], out_len: usize) -> Result<Vec<u8>, ImportErr
             acc_bits -= 8;
         }
     }
-    // Остаток аккумулятора — padding-биты последнего символа: обязаны быть нулём.
+    // The remaining accumulator contains the last character's padding bits, which must be zero.
     if acc != 0 {
         return Err(ImportError::BadBase16384(
             "ненулевые padding-биты последнего символа".into(),
@@ -160,7 +164,7 @@ fn base16384_decode(chars: &[char], out_len: usize) -> Result<Vec<u8>, ImportErr
             out.len()
         )));
     }
-    // Символ Base16384-диапазона сразу ЗА ожидаемыми — признак рассинхрона размера.
+    // An in-range Base16384 character immediately AFTER the expected data indicates a size mismatch.
     if let Some(&next) = chars.get(expected_chars) {
         let v = (next as u32).wrapping_sub(B16384_BASE);
         if v <= B16384_MAX {
@@ -172,8 +176,8 @@ fn base16384_decode(chars: &[char], out_len: usize) -> Result<Vec<u8>, ImportErr
     Ok(out)
 }
 
-/// gzip (producer пишет `window_bits = 31`) с fallback на zlib — эквивалент
-/// auto-detect 47. Распаковка ограничена `MAX_DECOMPRESSED`.
+/// Decompresses gzip (the producer writes `window_bits = 31`) with a zlib fallback, equivalent
+/// to auto-detect 47. Decompression is limited to `MAX_DECOMPRESSED`.
 fn decompress(compressed: &[u8]) -> Result<Vec<u8>, ImportError> {
     use std::io::Read;
     let mut out = Vec::new();
@@ -200,7 +204,7 @@ fn decompress(compressed: &[u8]) -> Result<Vec<u8>, ImportError> {
 
 #[cfg(test)]
 pub(super) fn encode_mbsc7(payload: &[u8]) -> String {
-    // Тестовый producer: gzip(payload) → CRC32 → Base16384 → текст в fence, как MoonBot.
+    // Test producer: gzip(payload) → CRC32 → Base16384 → fenced text, matching MoonBot.
     use std::io::Write;
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     enc.write_all(payload).unwrap();

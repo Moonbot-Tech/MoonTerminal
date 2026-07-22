@@ -1,45 +1,45 @@
-//! Описание одного ядра Moonbot (сервера) и группы.
+//! Description of a Moonbot core (server) and its grouping.
 
 use serde::{Deserialize, Serialize};
 
 use super::secrets::Secret;
 
-/// Флаги приёма данных от ядра — чисто клиентский фильтр.
+/// Core-data reception flags, implemented entirely as a client-side filter.
 ///
-/// ВАЖНО: ядро всё равно шлёт эти доменные события всегда. Сброшенный флаг
-/// означает «не читаем / не складываем / не рисуем» (экономим CPU, БД и окна),
-/// но НЕ экономит сетевой трафик — серверного opt-out у этих категорий нет.
-/// Стакан/лента сюда не входят: они chart-only и живут только при открытом окне.
+/// IMPORTANT: the core always sends these domain events. A cleared flag means do not read,
+/// store, or draw them, saving CPU, database work, and windows, but it does NOT save network
+/// traffic because these categories have no server-side opt-out. The order book and tape are
+/// not included: they are chart-only and exist only while a window is open.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct FeedFlags {
-    /// Открытые ордера ядра (нижний док).
+    /// Open core orders in the bottom dock.
     #[serde(default = "default_true")]
     pub orders: bool,
-    /// Детекты / watcher-строки / chart-only / alert-fire (`DetectEvent`).
+    /// Detects/watcher rows/chart-only/alert-fire (`DetectEvent`).
     #[serde(default = "default_true")]
     pub detects: bool,
     /// Typed core report replication (`Event::Report` → `orders_rep`) into SQLite.
     #[serde(default = "default_true")]
     pub reports: bool,
-    /// Балансы и метаданные аккаунта.
+    /// Balances and account metadata.
     #[serde(default = "default_true")]
     pub balance: bool,
-    /// Состояние стратегий (`Strat`).
+    /// Strategy state (`Strat`).
     #[serde(default = "default_true")]
     pub strategies: bool,
-    /// Серверный лог (`ServerLog`).
+    /// Server log (`ServerLog`).
     #[serde(default = "default_true")]
     pub log: bool,
-    /// Chart-алерты и chart-текст.
+    /// Chart alerts and chart text.
     #[serde(default = "default_true")]
     pub alerts: bool,
-    /// Арбитраж (`Arb`).
+    /// Arbitrage (`Arb`).
     #[serde(default = "default_true")]
     pub arb: bool,
 }
 
 impl Default for FeedFlags {
-    /// Дефолт = принимать всё (поведение как до введения флагов).
+    /// Defaults to receiving everything, matching behavior before these flags existed.
     fn default() -> Self {
         Self {
             orders: true,
@@ -56,62 +56,62 @@ impl Default for FeedFlags {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
-    /// Рантайм-id ядра (CoreId). С v11 схемы РАВЕН `uid` → стабилен между загрузками
-    /// и при добавлении/удалении/перепорядке серверов (раньше был позиционным). По нему
-    /// привязываются панели/данные/БД/подписки/раскладка в пределах сессии.
+    /// Runtime core id (CoreId). Since schema v11 it EQUALS `uid`, making it stable across
+    /// loads and server additions/removals/reordering; it was previously positional. Panels,
+    /// data, databases, subscriptions, and layout bind to it within a session.
     pub id: u64,
-    /// Стабильный идентификатор ядра. Переживает переименование и перепорядок —
-    /// по нему мета из settings.toml привязывается к серверу из servers.enc.
-    /// 0 = ещё не присвоен (старый файл / только что добавлен) → проставится при save.
+    /// Stable core identifier that survives renaming and reordering. Metadata from settings.toml
+    /// binds through it to a server in servers.enc. 0 means unassigned (older file/new entry)
+    /// and is assigned during save.
     #[serde(default)]
     pub uid: u64,
     #[serde(default)]
     pub name: String,
-    /// Активно ли ядро (галка в настройках). Неактивные не подключаются.
+    /// Whether the core is active (Settings checkbox). Inactive cores do not connect.
     #[serde(default = "default_true")]
     pub active: bool,
-    /// Рисовать ли окно/чарт ядра. Off + active = headless: тянем отчёты/детекты
-    /// в БД/store без окна. Окно показываем только при active && show_window.
+    /// Whether to draw the core window/chart. Off + active is headless: reports/detects flow
+    /// into the database/store without a window. A window appears only for active && show_window.
     #[serde(default = "default_true")]
     pub show_window: bool,
-    /// Что принимаем от ядра (клиентский фильтр).
+    /// What to accept from the core (client-side filter).
     #[serde(default)]
     pub feed: FeedFlags,
-    /// Base64-ключ Moonbot. Внутри зашиты host/port/transport — отдельных полей нет.
+    /// Base64 Moonbot key containing host/port/transport; there are no separate fields.
     #[serde(default)]
     pub key: Secret,
-    /// Группа = имя окна, куда попадает ядро. Цвет/иконка — на группе (GroupConfig).
+    /// Group is the name of the window containing the core. Color/icon belong to GroupConfig.
     #[serde(default = "default_group")]
     pub group: String,
-    /// Рынок по умолчанию (временно, до мульти-рынков на ядро).
+    /// Default market, temporarily used until multiple markets per core are supported.
     #[serde(default = "default_market")]
     pub market: String,
-    /// Цвет сервера (RGB) — цвет детекта (используется позже).
+    /// Server color (RGB), later used as the detect color.
     #[serde(default = "default_color")]
     pub color: [u8; 3],
-    /// Синтетическое ядро бенчмарка (MOON_SYNTH): фид гонит synth::run вместо live::run.
+    /// Synthetic benchmark core (MOON_SYNTH): the feed runs synth::run instead of live::run.
     #[serde(default)]
     pub synthetic: bool,
-    /// Имя чарт-связки для AddToChart. Пусто = по глобальной настройке
-    /// (`charts_split_by_core`: своя вкладка на ядро / все ядра в одной). Непусто =
-    /// ядра ОДНОЙ группы с этим же именем сводят свои AddToChart=N графики в ОДНУ
-    /// вкладку, а имя связки идёт в её заголовок. Имя локально для группы.
+    /// AddToChart chart-bundle name. Empty follows the global setting
+    /// (`charts_split_by_core`: one tab per core or all cores together). With a non-empty name,
+    /// cores in the SAME group and bundle combine their AddToChart=N charts into ONE tab whose
+    /// title uses the bundle name. Names are local to a group.
     #[serde(default)]
     pub chart_bundle: String,
-    /// 6 пресетов размера ручного ордера (кнопки F1-F6 тулбара), в БАЗОВОЙ монете ядра.
-    /// `None` = не настроено → берём дефолт по базе ядра (`default_order_sizes`), т.к.
-    /// для BTC-базы нужны ~0.01..0.5, а для USDT — крупные (~50..2500). В moonproto
-    /// значений buy-size НЕТ (только sell-пресеты ClientSettings) — это локальный конфиг.
+    /// Six manual-order size presets (toolbar F1-F6 buttons), in the core's BASE coin.
+    /// `None` means unconfigured and uses `default_order_sizes` for the core base: BTC needs
+    /// approximately 0.01..0.5 while USDT needs larger values around 50..2500. moonproto has
+    /// NO buy-size values, only ClientSettings sell presets, so this is local config.
     #[serde(default)]
     pub order_sizes: Option<[f64; 6]>,
-    /// Последний ВЫБРАННЫЙ пресет размера (индекс 0..=5 кнопки F1-F6) — восстановление
-    /// выбора после перезапуска. `None` = не выбирали (дефолт F3). Как и значения
-    /// пресетов — локальный конфиг (в moonproto выбора buy-size нет).
+    /// Last SELECTED size preset (index 0..=5 for F1-F6), restored after restart. `None` means
+    /// no selection and defaults to F3. Like the preset values, this is local config because
+    /// moonproto has no buy-size selection.
     #[serde(default)]
     pub order_size_sel: Option<usize>,
-    /// Стратегия алертов по умолчанию (Def Strategy): id стратегии вида «Alerts» этого
-    /// ядра, автоназначаемый новому алерту при постановке галки Alert. 0 = без.
-    /// Локальный конфиг терминала (протокол дефолт-стратегию ядра не отдаёт).
+    /// Default alert strategy (Def Strategy): id of this core's strategy of type "Alerts",
+    /// automatically assigned to a new alert when its Alert checkbox is enabled. 0 means none.
+    /// This is local terminal config because the protocol does not provide the core default.
     #[serde(default)]
     pub default_alert_strategy: u64,
 }
@@ -239,22 +239,22 @@ impl<'de> Deserialize<'de> for CoreSortMode {
     }
 }
 
-/// Ключ чарт-вкладки AddToChart внутри группы — куда сводить графики ядра.
-/// Резолвится из `ServerConfig::chart_bucket` (см.). Сериализуется в charts.json.
+/// AddToChart tab key within a group, selecting where to combine a core's charts.
+/// Resolved by `ServerConfig::chart_bucket` and serialized in charts.json.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ChartBucket {
-    /// Все ядра группы в одной вкладке `N-группа` (глоб. split=off, связка пуста).
+    /// All cores in the group share one `N-group` tab (global split=off, empty bundle).
     Shared,
-    /// Своя вкладка ядра `N-группа-ядро` (глоб. split=on, связка пуста).
+    /// Dedicated `N-group-core` tab (global split=on, empty bundle).
     Core(crate::session::CoreId),
-    /// Именованная связка `N-группа-имя` — подмножество ядер группы (переопределяет
-    /// глобальный флаг). Имя попадает в заголовок вкладки.
+    /// Named `N-group-name` bundle for a subset of group cores, overriding the global flag.
+    /// The bundle name appears in the tab title.
     Bundle(String),
 }
 
 impl ServerConfig {
-    /// Куда сводить AddToChart-графики этого ядра при текущем глобальном флаге
-    /// `charts_split_by_core` (split). Непустая связка переопределяет флаг.
+    /// Selects where to combine this core's AddToChart charts under the current global
+    /// `charts_split_by_core` flag. A non-empty bundle overrides the flag.
     pub fn chart_bucket(&self, split: bool) -> ChartBucket {
         if !self.chart_bundle.is_empty() {
             ChartBucket::Bundle(self.chart_bundle.clone())
@@ -265,8 +265,8 @@ impl ServerConfig {
         }
     }
 
-    /// 6 пресетов размера ручного ордера для тулбара: настроенные (`order_sizes`) или
-    /// дефолт по базовой монете ядра `base` ("BTC"/"USDT"/…). `base` UI берёт из
+    /// Six manual-order size presets for the toolbar: configured `order_sizes` or defaults for
+    /// the core's base coin (`base`, such as "BTC"/"USDT"/…). The UI gets `base` from
     /// `SessionManager::core_base`.
     pub fn order_sizes_or_default(&self, base: &str) -> [f64; 6] {
         self.order_sizes
@@ -286,9 +286,9 @@ pub fn default_market() -> String {
     "BTCUSDT".to_string()
 }
 
-/// Дефолтные пресеты размера ордера (F1-F6) по базовой монете ядра. BTC-база → мелкие
-/// (как было захардкожено в тулбаре); прочее (USDT/стейблы/альты) → крупные. Это лишь
-/// стартовые значения — пользователь правит их в Настройках ядра (`order_sizes`).
+/// Default order-size presets (F1-F6) by core base coin. BTC uses small values previously
+/// hard-coded in the toolbar; everything else (USDT/stables/alts) uses larger values. These are
+/// only initial values and users can edit them in core Settings (`order_sizes`).
 pub fn default_order_sizes(base: &str) -> [f64; 6] {
     if base.eq_ignore_ascii_case("BTC") {
         [0.01, 0.025, 0.05, 0.10, 0.25, 0.50]
@@ -301,7 +301,7 @@ pub fn default_true() -> bool {
     true
 }
 
-/// Дефолт срока хранения файлов лога (дней). См. SettingsFile::log_retention_days.
+/// Default log-file retention period in days. See SettingsFile::log_retention_days.
 pub fn default_log_retention_days() -> u32 {
     14
 }

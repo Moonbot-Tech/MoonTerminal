@@ -1,11 +1,11 @@
-//! Ретейн-стор линий ордеров для чарта (per-core). moonproto держит терминальные
-//! ордера лишь до deferred-cleanup, поэтому отменённые/исполненные мы храним САМИ —
-//! всю сессию (с safety-cap по памяти), рисуя их полупрозрачными.
+//! Per-core retained store of chart order lines. moonproto keeps terminal orders only until
+//! deferred cleanup, so we retain cancelled and filled orders ourselves for the session, up to
+//! a memory safety cap, and render them semi-transparently.
 //!
-//! Каждая линия — «лестница» ступеней `(t_ms, price)`: с момента `t_ms` цена держится
-//! `price` до следующей ступени. Перестановка цены добавляет ступень (узелок). Начало
-//! линии = время создания ордера, конец = время закрытия (или живой правый край).
-//! Это уникальный источник старта/узлов/конца для маркеров и отрезков (рисует чарт).
+//! Each line is a staircase of `(t_ms, price)` steps: from `t_ms`, the price remains at `price`
+//! until the next step. Repricing appends a step (knot). The line begins at order creation and
+//! ends when the order closes, or at the live right edge. The chart uses this as the canonical
+//! source of starts, knots, and ends for markers and segments.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -13,11 +13,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::feed::{OrderRow, OrderTrace};
 use crate::util::now_unix_ms;
 
-/// Виды трассируемых линий (у каждой свой старт/узлы/конец). Ликвидация — отдельно
-/// (непрерывная линия без маркеров), хранится как `RetainedOrder::liq`.
+/// Number of traced line kinds, each with its own start, knots, and end.
+///
+/// Liquidation is stored separately as `RetainedOrder::liq`, a continuous line without markers.
 pub const TRACED_KINDS: usize = 7;
 
-/// Индексы видов в `RetainedOrder::lines` (совпадают с порядком стилей).
+/// Line-kind indices in `RetainedOrder::lines`, matching the style order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LineKind {
     Buy = 0,
@@ -46,44 +47,49 @@ pub struct OrderLineState {
     pub active: bool,
 }
 
-/// Кап кольца ЗАКРЫТЫХ ордеров на ядро (= верх слайдера `max_closed_orders`): свежие
-/// толкаем в хвост, старейшие выпадают из головы сами — без сорта и прун-скана.
-/// Открытые НЕ капаются (живут пока активны). Единственный кап на закрытые.
+/// Per-core capacity of the closed-order ring, equal to the `max_closed_orders` slider maximum.
+///
+/// New entries are pushed to the back and the oldest fall from the front, without sorting or a
+/// pruning scan. Open orders are not capped and remain while active.
 const CLOSED_RING_CAP: usize = 5000;
 
-/// Грейс перед пометкой ордера закрытым после исчезновения из снимка, мс. Снимок
-/// ордеров может кратко прийти пустым/частичным (реконнект, churn подписки) — без
-/// грейса линии мигали бы active↔closed. Закрываем, только если ордер не виделся
-/// дольше этого срока.
+/// Grace period in milliseconds before an order missing from a snapshot is marked closed.
+///
+/// An order snapshot can briefly be empty or partial during reconnects or subscription churn.
+/// Without this grace period, lines would flicker between active and closed states. An order is
+/// closed only after it has remained unseen for longer than this interval.
 const CLOSE_GRACE_MS: f64 = 2500.0;
 
-/// Относительный порог «цена изменилась» (защита от float-дрожания → ложных узлов).
+/// Relative price-change threshold that prevents float jitter from creating false knots.
 fn price_eps(p: f32) -> f32 {
     p.abs() * 1e-5 + 1e-9
 }
 
-/// Одна линия ордера как лестница ступеней.
+/// One order line represented as a staircase of price steps.
 #[derive(Clone, Default)]
 pub struct LineTrace {
-    /// Ступени `(t_ms, price)`: с `t_ms` цена = `price` до следующей ступени.
+    /// Steps `(t_ms, price)`, where `price` applies from `t_ms` until the next step.
     pub steps: Vec<(f64, f32)>,
-    /// Точная серверная трасса для buy/sell. Это отдельная история движения
-    /// линии; основная рабочая линия ордера всё равно рисуется прямой по
-    /// текущей цене. `steps` остаётся fallback для старых/неполных снимков.
+    /// Exact server trace for a buy or sell line.
+    ///
+    /// This is a separate history of line movement; the primary working order line is still drawn
+    /// straight at its current price. `steps` remains the fallback for old or incomplete snapshots.
     pub server_points: Vec<(f64, f32)>,
-    /// Живая temp-точка серверной трассы: рисуется пунктиром от последней точки.
+    /// Live temporary server-trace point, drawn dotted from the last point.
     pub tmp_point: Option<(f64, f32)>,
-    /// Stop-line, пришедшая вместе с серверной трассой, как в Moonbot `SetStopPrice`.
+    /// Stop line delivered with the server trace, as in Moonbot `SetStopPrice`.
     pub server_stop_price: Option<f32>,
     pub server_stop_time_ms: Option<f64>,
-    /// Линия выключена (цена стала недоступна), но ордер ещё жив. Конец линии.
+    /// Time when the line was disabled because its price became unavailable while the order lived.
     pub off_ms: Option<f64>,
 }
 
 impl LineTrace {
-    /// Обновляет лестницу новым значением цены. `start_ms` — время первой ступени
-    /// (для линии входа = создание ордера; для стопов = момент фила). Возвращает
-    /// true при изменении (новая ступень / выключение) — для бампа ревизии стора.
+    /// Updates the staircase with a new price.
+    ///
+    /// `start_ms` is the first step time: order creation for the entry line and fill time for stop
+    /// lines. Returns `true` when a step is added, the line is disabled, or a disabled line is
+    /// re-enabled, including at the same price, so the store can bump its revision.
     fn update(&mut self, price: Option<f32>, start_ms: f64, now_ms: f64) -> bool {
         match price {
             Some(p) if p.is_finite() && p > 0.0 => {
@@ -146,10 +152,11 @@ impl LineTrace {
         changed
     }
 
-    /// Текущая цена линии; `None`, если линия ВЫКЛЮЧЕНА (`off_ms`): выключенный стоп не
-    /// должен ни подписываться, ни ловиться hit-test'ом — иначе подпись «-X% [N]» висела
-    /// артефактом у стакана до закрытия ордера (репорт мак-тестера 2026-07-09). История
-    /// ступеней остаётся в `steps` (для завершённых Buy/Sell её рисует чарт).
+    /// Returns the current line price, or `None` when the line is disabled via `off_ms`.
+    ///
+    /// A disabled stop must not receive a label or hit testing; otherwise its `-X% [N]` label
+    /// remains as an artifact beside the order book until the order closes. Step history remains in
+    /// `steps`, and the chart renders it for completed buy and sell lines.
     pub fn current_price(&self) -> Option<f32> {
         if self.off_ms.is_some() {
             return None;
@@ -158,49 +165,54 @@ impl LineTrace {
     }
 }
 
-/// Один удержанный ордер с трассами линий.
+/// One retained order with its line traces.
 pub struct RetainedOrder {
-    /// uid ордера — ключ стора; понадобится для hit-test/drag линий (этап 5).
+    /// Order UID used as the store key and for line hit testing and dragging.
     #[allow(dead_code)]
     pub uid: u64,
     pub market: String,
     pub is_short: bool,
-    /// Размер входной ноги ордера (в базовой валюте) — для подписи размера у buy-линии.
+    /// Entry-leg size in base currency, used by the buy-line size label.
     pub size: f32,
-    /// Остаток выходной ноги (в базовой валюте) — для подписи sell-линии.
+    /// Remaining exit-leg size in base currency, used by the sell-line label.
     pub remaining_size: f32,
-    /// Заполнение входной ноги, % (0..100) — для подписи «куплено» (qty = size·fill/100).
+    /// Entry-leg fill percentage in `0..=100`, used for the bought-quantity label.
     pub fill_pct: f32,
-    /// Порядковый номер ордера НА ЧАРТЕ (per-market): присваивается при создании, растёт пока на
-    /// рынке есть открытые ордера, сбрасывается на 1 когда рынок опустел. Sell/стопы наследуют его
-    /// (это тот же ордер). 0 = не присвоен. Связывает линии одного ордера в подписях `[N]`.
+    /// Smallest available positive per-market chart slot, assigned when the order first appears.
+    ///
+    /// Assignment precedes the closure pass, so a fresh terminal row can reserve a slot for its
+    /// first batch. The slot becomes reusable by later assignments after the order closes. Sell and
+    /// stop lines share the entry line's slot because they belong to the same order. Zero means
+    /// unassigned; labels use `[N]` to associate that order's lines.
     pub chart_num: u32,
     pub pending: bool,
     pub panic_sell: bool,
     pub is_moon_shot: bool,
     pub corridor_price_down: f32,
     pub corridor_price_up: f32,
-    /// Время создания (начало линий), unix мс.
+    /// Creation time and line start in Unix milliseconds.
     pub create_ms: f64,
-    /// Время закрытия (отмена/исполнение); None = ордер активен.
+    /// Logical line-end time; backstop closure uses the last-seen time rather than detection time.
+    /// `None` means the order is active.
     pub closed_ms: Option<f64>,
     pub closed_reason: Option<OrderCloseReason>,
+    /// Local time when the store recorded the closure, including after the backstop grace period.
     pub closed_store_ms: Option<f64>,
     pub closed_rev: Option<u64>,
-    /// Когда ордер в последний раз был в снимке (для грейса закрытия).
+    /// Last time the order appeared in a snapshot, used by the closure grace period.
     last_seen_ms: f64,
-    /// Порядок появления (для cap-обрезки старых закрытых).
+    /// Order appearance sequence.
     pub seq: u64,
-    /// Трассы по видам (индекс = LineKind as usize).
+    /// Traces by line kind, indexed by `LineKind as usize`.
     pub lines: [LineTrace; TRACED_KINDS],
-    /// Текущая цена ликвидации (непрерывная линия без маркеров).
+    /// Current liquidation price, rendered as a continuous line without markers.
     pub liq: Option<f32>,
 }
 
 impl RetainedOrder {
     fn new(r: &OrderRow, now_ms: f64, seq: u64) -> Self {
-        // Старт не может быть в будущем (часы ядра могут опережать локальные) —
-        // иначе сегмент линии вырождается/уходит за правый край.
+        // The start cannot be in the future because the core clock may lead the local clock;
+        // otherwise the line segment degenerates or moves beyond the right edge.
         let create_ms = if r.create_time_ms > 1.0 {
             r.create_time_ms.min(now_ms)
         } else {
@@ -232,37 +244,43 @@ impl RetainedOrder {
     }
 }
 
-/// Стор линий ордеров одного ядра (все рынки).
+/// Per-core order-line store covering all markets.
 #[derive(Default)]
 pub struct OrderLineStore {
     orders: HashMap<u64, RetainedOrder>,
-    /// Кольцо uid ЗАКРЫТЫХ в порядке закрытия — единственный кап на закрытые,
-    /// без сорта/прун-скана: пришёл новый закрытый → в хвост, переполнено → из головы.
+    /// Closed-order UIDs in closure order, providing the only cap on retained closed orders.
+    ///
+    /// A newly closed UID enters at the back and overflow leaves from the front, without sorting or
+    /// a pruning scan.
     closed_ring: VecDeque<u64>,
-    /// Кэш диапазона цен ордер-линий открытых ордеров по рынку (для авто-Y): buy/sell +
-    /// АКТИВНЫЕ стопы исполненных ордеров (Stop/Trailing/VStop — у них цена есть только после
-    /// фила). Пересобирается ТОЛЬКО при изменении ордеров (вместе с rev), а не каждый prepare.
+    /// Cached per-market price range for auto-Y over open-order buy/sell lines and active protective
+    /// stops of filled orders. Stop, trailing, and VStop prices exist only after fill. The cache is
+    /// rebuilt only when orders change, together with `rev`, rather than on every prepare pass.
     auto_fit_ranges: HashMap<String, (f32, f32)>,
-    /// Растёт при реальном изменении геометрии (новый ордер/узел/закрытие/liq).
+    /// Increments on any render-affecting change, including geometry, label inputs, and zones.
     pub rev: u64,
     seq_counter: u64,
 }
 
 impl OrderLineStore {
-    /// Применяет свежий снимок ордеров: обновляет активные, фиксирует узлы при
-    /// перестановках, помечает исчезнувшие закрытыми. Бампит rev при изменениях.
+    /// Applies a fresh order-row batch and returns whether retained render state changed.
+    ///
+    /// Active orders are updated, repricings record knots, explicit terminal rows close immediately,
+    /// and missing orders close after the grace period. Geometry, label, and zone changes increment
+    /// `rev`.
     pub fn update(&mut self, rows: &[OrderRow]) -> bool {
         let now_ms = now_unix_ms();
         let mut changed = false;
         let mut seen: HashSet<u64> = HashSet::with_capacity(rows.len());
-        // uid'ы, закрытые в этом апдейте по ЯВНОМУ флагу job_is_done — remember_closed
-        // после цикла (внутри цикла держим &mut-заём self.orders через entry).
+        // UIDs closed by an explicit `job_is_done` flag in this update are remembered after the
+        // loop because the loop holds a mutable borrow of `self.orders` through its entry.
         let mut close_now: Vec<u64> = Vec::new();
         let mut closed_this_update: Vec<u64> = Vec::new();
 
-        // Порядковые номера НОВЫХ ордеров (в порядке создания = по uid). Берём НАИМЕНЬШИЙ
-        // свободный номер среди ОТКРЫТЫХ ордеров рынка (как слоты): закрылся №1 — следующий снова
-        // займёт 1, а не плодим новые пока что-то стоит. На пустом рынке это естественно даёт 1.
+        // Assign fresh rows in UID order. Each receives the smallest number not held by a currently
+        // open retained order or an earlier fresh row in this batch. A fresh terminal row can reserve
+        // a slot here because closure is processed later; after it closes, a later batch can reuse
+        // the slot. An empty market therefore starts naturally at 1.
         let mut new_nums: HashMap<u64, u32> = HashMap::new();
         {
             let mut used: HashMap<String, HashSet<u32>> = HashMap::new();
@@ -303,9 +321,9 @@ impl OrderLineStore {
                 }
             };
             order.last_seen_ms = now_ms;
-            // Воскрешение: ранее закрытый uid снова АКТИВЕН (НЕ job_is_done) → опять живой.
-            // Терминальный (job_is_done) ордер может оставаться в снимке весь deferred-window
-            // ядра — его НЕ воскрешаем, иначе линия мигала бы closed→open каждый апдейт.
+            // Revive a previously closed UID only when it is active again, without `job_is_done`.
+            // A terminal order may remain in snapshots throughout the core's deferred-removal
+            // window; reviving it would make the line flicker from closed to open on every update.
             if order.closed_ms.is_some() && !r.job_is_done {
                 order.closed_ms = None;
                 order.closed_reason = None;
@@ -315,9 +333,9 @@ impl OrderLineStore {
             }
             order.is_short = r.is_short;
             order.pending = r.pending;
-            // Размер/заполнение — для подписей линий. Бампим rev при заметном изменении
-            // (fill ползёт по мере исполнения → подпись «куплено» должна обновляться),
-            // с порогом против float-дрожания.
+            // Size and fill drive line labels. Bump the revision on a meaningful change so the
+            // bought-quantity label follows progressive fills, using a threshold against float
+            // jitter.
             let new_size = r.size as f32;
             let new_remaining_size = r.remaining_size as f32;
             if (order.size - new_size).abs() > price_eps(new_size)
@@ -341,10 +359,10 @@ impl OrderLineStore {
                 changed = true;
             }
             let f = r.filled;
-            // Вход (для long и short) — всегда BUY pending-ордер: видна сразу, старт =
-            // создание. SELL (закрытие, в противоположную сторону) появляется только
-            // после исполнения входа, старт = момент фила. Стопы/TP/vstop/liq — тоже
-            // только после фила.
+            // The entry for both long and short orders is represented by the Buy line, visible from
+            // order creation. The opposite-side Sell exit appears only after the entry fills and
+            // starts at fill time. Stops, take profit, VStop, and liquidation also appear only after
+            // fill.
             let new_liq = if f { r.liq.map(|v| v as f32) } else { None };
             if order.liq != new_liq {
                 order.liq = new_liq;
@@ -352,7 +370,7 @@ impl OrderLineStore {
             }
             let g = |show: bool, v: f64| (show && v.is_finite() && v > 0.0).then_some(v as f32);
             let go = |show: bool, v: Option<f64>| if show { v.map(|x| x as f32) } else { None };
-            // (значение, время первой ступени) по видам.
+            // Value and first-step time by line kind.
             changed |= order.lines[LineKind::Buy as usize].update_server(r.buy_trace.as_ref());
             changed |= order.lines[LineKind::Buy as usize].update(
                 g(true, r.buy_price),
@@ -368,7 +386,7 @@ impl OrderLineStore {
                 (go(f, r.trailing), now_ms, LineKind::Trailing as usize),
                 (go(f, r.take_profit), now_ms, LineKind::TakeProfit as usize),
                 (go(f, r.vstop), now_ms, LineKind::VStop as usize),
-                // Pending-условие осмысленно только до фила (старт = создание).
+                // The pending condition applies only before fill and starts at order creation.
                 (
                     go(!f, r.pending_cond),
                     order.create_ms,
@@ -378,9 +396,9 @@ impl OrderLineStore {
             for (v, start_ms, i) in vals {
                 changed |= order.lines[i].update(v, start_ms, now_ms);
             }
-            // Закрытие по ЯВНОМУ флагу ядра: job_is_done = ордер терминальный (исполнен/
-            // отменён), ждёт deferred-removal. Помечаем закрытым СРАЗУ, пока он ещё в
-            // снимке — не дожидаясь исчезновения + грейса.
+            // The explicit core flag `job_is_done` means the order is terminal, either filled or
+            // cancelled, and awaits deferred removal. Mark it closed immediately while it remains
+            // in the snapshot instead of waiting for disappearance plus the grace period.
             if r.job_is_done && order.closed_ms.is_none() {
                 order.closed_ms = Some(now_ms);
                 order.closed_reason = Some(explicit_close_reason(r));
@@ -395,10 +413,11 @@ impl OrderLineStore {
             self.remember_closed(uid);
         }
 
-        // BACKSTOP: ордер ИСЧЕЗ из снимка дольше грейса → закрыт. Основной путь — job_is_done
-        // выше (закрывает, пока ордер ещё в снимке). Сюда падают лишь ордера, убранные ядром
-        // БЕЗ виденного нами job_is_done (пропущенный кадр/гэп); грейс гасит ложное мигание
-        // на кратком пустом/частичном снимке (реконнект/churn подписки).
+        // Backstop: close an order after it remains absent from snapshots beyond the grace period.
+        // The primary `job_is_done` path above closes while an order is still present. This path is
+        // only for orders removed by the core before we observe that flag, such as after a missed
+        // frame or gap; the grace period suppresses false closures on brief empty or partial
+        // snapshots during reconnects or subscription churn.
         let mut newly_closed = Vec::new();
         for (uid, ord) in self.orders.iter_mut() {
             if !seen.contains(uid)
@@ -430,19 +449,20 @@ impl OrderLineStore {
         changed
     }
 
-    /// Пересобирает кэш buy/sell-диапазонов по рынкам из текущих открытых ордеров.
-    /// Зовётся только при реальном изменении (`changed`) — цены линий мутируют лишь в
-    /// `update`, поэтому кэш всегда свежий, но скан O(ордера) идёт 4 Гц, не 60.
+    /// Rebuilds per-market auto-fit ranges from the current open orders.
+    ///
+    /// This runs only after a real change because line prices mutate only in `update`. The cache
+    /// therefore stays current without scanning all orders during every render preparation.
     fn rebuild_auto_fit_ranges(&mut self) {
         self.auto_fit_ranges.clear();
         for o in self.orders.values() {
             if o.closed_ms.is_some() {
                 continue;
             }
-            // Buy/Sell + активные защитные стопы. У Stop/Trailing/VStop `current_price()` есть
-            // только после фила (значение гейтится флагом `filled` в sync) — поэтому в диапазон
-            // попадают лишь РЕАЛЬНО стоящие стопы исполненных ордеров, как и просил юзер («как
-            // селл»). Pending-ордера без стопов диапазон не расширяют.
+            // Include Buy/Sell plus active protective stops. Stop, Trailing, and VStop have a
+            // current price only after fill because synchronization gates their values on `filled`,
+            // so only actual protective stops of filled orders enter the range. Unfilled orders
+            // still contribute their Buy line, but no protective stop lines.
             for idx in [
                 LineKind::Buy as usize,
                 LineKind::Sell as usize,
@@ -464,7 +484,7 @@ impl OrderLineStore {
         }
     }
 
-    /// Запоминает закрытый uid и срезает старейшие закрытые сверх safety-cap.
+    /// Records a closed UID and removes the oldest retained closed orders beyond the safety cap.
     fn remember_closed(&mut self, uid: u64) {
         self.closed_ring.push_back(uid);
         while self.closed_ring.len() > CLOSED_RING_CAP {
@@ -481,7 +501,7 @@ impl OrderLineStore {
         }
     }
 
-    /// Ордера данного рынка (для рендера линий конкретной панели).
+    /// Iterates orders for one market, as used to render a specific chart panel's lines.
     pub fn iter_market<'a>(
         &'a self,
         market: &'a str,
@@ -489,9 +509,10 @@ impl OrderLineStore {
         self.orders.values().filter(move |o| o.market == market)
     }
 
-    /// Ордера рынка ДЛЯ ОТРИСОВКИ: все открытые + новейшие `max_closed` закрытых, в
-    /// порядке кольца (новые-первые), БЕЗ сортировки. Кап на закрытые задаёт сам стор
-    /// кольцом — отдельного сорта/отбора в рендере больше нет.
+    /// Returns orders to draw for a market: all open orders followed by at most `max_closed` newest
+    /// closed orders in reverse ring order.
+    ///
+    /// The result is not sorted, and the store separately caps retained closed history via its ring.
     pub fn market_draw_orders(&self, market: &str, max_closed: usize) -> Vec<&RetainedOrder> {
         let mut out: Vec<&RetainedOrder> = self
             .orders
@@ -504,7 +525,7 @@ impl OrderLineStore {
             if taken >= max_closed {
                 break;
             }
-            // Воскресший→переоткрытый uid может лежать в кольце дважды — дедупим.
+            // A revived and reclosed UID may occur in the ring twice, so deduplicate it.
             if !seen.insert(*uid) {
                 continue;
             }
@@ -518,15 +539,17 @@ impl OrderLineStore {
         out
     }
 
-    /// Диапазон цен (min,max) ордер-линий открытых (не закрытых) ордеров рынка — для авто-Y:
-    /// BUY/SELL + активные стопы (Stop/Trailing/VStop) ИСПОЛНЕННЫХ ордеров (у них цена есть
-    /// только после фила). Pending-стопов/liq в диапазоне нет.
-    /// Готовый кэш (`rebuild_auto_fit_ranges` при изменении ордеров), не скан per-prepare.
+    /// Returns the cached auto-Y price range for a market's open-order lines.
+    ///
+    /// The range includes Buy/Sell and active Stop/Trailing/VStop lines, with protective stops
+    /// available only for filled orders. Pending conditions, take-profit lines, and liquidation are
+    /// excluded. `rebuild_auto_fit_ranges` refreshes the cache when orders change, avoiding a scan
+    /// during every prepare pass.
     pub fn auto_fit_range(&self, market: &str) -> Option<(f32, f32)> {
         self.auto_fit_ranges.get(market).copied()
     }
 
-    /// Взведён ли panic-sell у ОТКРЫТОГО ордера (для авто-снятия при drag sell-линии).
+    /// Returns whether an open order has panic sell enabled, for disabling it before a Sell drag.
     pub fn order_panic_sell(&self, uid: u64) -> bool {
         self.orders
             .get(&uid)
@@ -544,8 +567,9 @@ impl OrderLineStore {
         })
     }
 
-    /// Текущая цена конкретной линии ордера. Нужна UI только для сверки optimistic-preview:
-    /// после drag держим новую цену визуально, пока ядро не прислало echo той же цены.
+    /// Returns the current price of one order line for UI optimistic-preview reconciliation.
+    ///
+    /// After a drag, the UI keeps the new price visible until the core echoes the same price.
     pub fn current_line_price(&self, uid: u64, kind: LineKind) -> Option<f32> {
         let order = self.orders.get(&uid)?;
         order

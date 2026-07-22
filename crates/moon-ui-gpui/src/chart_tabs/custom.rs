@@ -1,6 +1,6 @@
-//! `ChartTabs`: поле поиска монеты + кастомные (мульти-монетные) вкладки — мульти-выбор,
-//! создание/переименование/персист/восстановление и гейтинг подписок на стаканы по фокусу.
-//! Вынесено из `mod.rs`.
+//! `ChartTabs` coin search and custom multi-coin tabs: multi-selection, creation, renaming,
+//! persistence, restoration, and focus-based gating of order-book subscriptions.
+//! Extracted from `mod.rs`.
 
 use std::time::Duration;
 
@@ -14,7 +14,8 @@ use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
 impl ChartTabs {
-    /// bucket-а). Кастомная вкладка собирает монеты с разных ядер → ищем по всей группе.
+    /// Search results for the current query. Add tabs search within their bucket; Main and custom
+    /// tabs search the whole group because a custom tab can collect coins from different cores.
     pub(super) fn coin_results(&self, cx: &App) -> Vec<(CoreId, String, String)> {
         let bucket = match &self.active {
             Tab::Main | Tab::Custom(..) => None,
@@ -28,7 +29,7 @@ impl ChartTabs {
         )
     }
 
-    /// Открыть выбранную монету на АКТИВНОЙ вкладке: Main → fullscreen-чарт; Add/Custom → её стек.
+    /// Open the selected coin on the ACTIVE tab: Main → fullscreen chart; Add/Custom → its stack.
     pub(super) fn open_coin_on_active(
         &mut self,
         core: CoreId,
@@ -47,7 +48,7 @@ impl ChartTabs {
                 }
             }
         }
-        // Кастомная вкладка изменила состав → пере-персист её тикеров.
+        // Re-persist tickers after changing a custom tab's composition.
         if self.active_is_custom() {
             self.persist_custom_active(cx);
         }
@@ -55,8 +56,8 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// Тоггл выбора монеты чекбоксом в выпадашке (накапливается для «Открыть в новой вкладке»).
-    /// Выбор переживает смену запроса (можно искать BTC → отметить, потом ETH → отметить).
+    /// Toggle a coin through its dropdown checkbox, accumulating a selection for Open in new tab.
+    /// Selection survives query changes, so BTC and ETH can be selected in separate searches.
     pub(super) fn toggle_coin_selected(
         &mut self,
         core: CoreId,
@@ -70,8 +71,8 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// Создать кастомную вкладку из отмеченных монет: чарты сразу запинены, горизонтальная
-    /// ориентация, фокус переходит на новую вкладку. Персистится (тикеры + имя + раскладка).
+    /// Create a custom tab from selected coins. Its charts start pinned in horizontal orientation,
+    /// focus moves to the new tab, and its tickers, name, and layout are persisted.
     pub(super) fn open_selected_in_new_tab(&mut self, cx: &mut Context<Self>) {
         if self.coin_selected.is_empty() {
             return;
@@ -90,7 +91,7 @@ impl ChartTabs {
                 self.theme.clone(),
             )
         });
-        // По умолчанию — горизонтальная ориентация. Кастомная вкладка не держит пустые слоты.
+        // Custom tabs default to horizontal orientation and do not retain empty slots.
         stack.update(cx, |s, c| {
             s.set_hold_vacated(false);
             s.set_orientation(Some(StackOrientation::Horizontal), c);
@@ -100,15 +101,15 @@ impl ChartTabs {
                 s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c)
             });
         }
-        // Чарты сразу запинены (защита от TTL-закрытия).
+        // Pin charts immediately to protect them from TTL closure.
         stack.update(cx, |s, c| s.pin_all(c));
         self.custom.push((num, bucket.clone(), stack.clone()));
         self.custom_labels.insert(num, label.clone());
         self.active = Tab::Custom(num, bucket.clone());
         self.persist_custom(cx, num, &bucket, &coins, &label);
-        // Следить за составом → пере-персист при закрытии/добавлении чарта.
+        // Watch composition and re-persist whenever a chart is closed or added.
         self.watch_custom_stack(num, &bucket, &stack, cx);
-        // Сброс выбора/поля/попапа.
+        // Clear the selection, field, and popup.
         self.coin_selected.clear();
         self.coin_query.clear();
         self.coin_popup_open = false;
@@ -119,13 +120,13 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// ПКМ по детекту: открыть монету в НОВОЙ кастомной вкладке в режиме сравнения.
-    /// Якорь = монета детекта; к ней добавляется ТА ЖЕ монета (точное имя рынка) с других
-    /// ядер группы БЕЗ повторов по бирже — дедуп по ядру-провайдеру рыночных данных (как в
-    /// скринере), берётся первое ядро по списку сессий. Вкладка получает имя монеты,
-    /// горизонтальную ориентацию (сравнение работает только в ней), замок на якоре и метлу
-    /// (соседи — «только стакан»). Повторный ПКМ по той же монете фокусирует уже созданную
-    /// вкладку (по имени), не плодя дубли.
+    /// Handle a detection right-click by opening the coin in a NEW custom comparison tab.
+    /// The detection coin is the anchor; the SAME coin (exact market name) is added from other
+    /// group cores without duplicate exchanges, deduplicating by the core's market-data provider
+    /// as the screener does and taking the first core in session order. The tab receives the coin
+    /// name, horizontal orientation (the only orientation supporting comparison), an anchor lock,
+    /// and broom mode, so neighbors show only their order books. Right-clicking the same coin again
+    /// focuses the existing tab by name instead of creating a duplicate.
     pub(super) fn open_compare_tab(
         &mut self,
         core: CoreId,
@@ -133,7 +134,7 @@ impl ChartTabs {
         cx: &mut Context<Self>,
     ) {
         let label = moon_core::symbol::coin_of_market(&market).to_string();
-        // Вкладка с именем этой монеты уже есть → просто перейти на неё.
+        // If a tab already has this coin's name, switch to it.
         if let Some((n, b)) = self
             .custom
             .iter()
@@ -148,9 +149,9 @@ impl ChartTabs {
             cx.notify();
             return;
         }
-        // Собрать ту же монету с других ядер группы: точное совпадение имени рынка, по
-        // одному ядру на биржу (провайдер якоря уже занят). Ядро без провайдера (нет
-        // снимка рынков) пропускаем — проверить наличие монеты всё равно нечем.
+        // Collect the same exact market from other group cores, at most one core per exchange; the
+        // anchor provider is already taken. Skip cores without a provider (no market snapshot),
+        // because their coin availability cannot be checked.
         let coins: Vec<(CoreId, String)> = {
             let b = self.backend.read(cx);
             let ms = b.session.market_source();
@@ -197,12 +198,12 @@ impl ChartTabs {
         stack.update(cx, |s, c| {
             s.set_hold_vacated(false);
             s.set_orientation(Some(StackOrientation::Horizontal), c);
-            // Якорь добавляется первым → он и так слева.
+            // The anchor is added first, so it is already on the left.
             for (core, market) in &coins {
                 s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);
             }
             s.pin_all(c);
-            // Замок на якоре + метла: соседи показывают только стакан.
+            // Lock the anchor and enable broom mode so neighbors show only their order books.
             s.restore_compare(Some(anchor.clone()), true, c);
         });
         self.custom.push((num, bucket.clone(), stack.clone()));
@@ -221,7 +222,7 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// Метка кастомной вкладки (имя пользователя или дефолт «Набор N»).
+    /// Custom-tab label: the user-supplied name or the localized default set label.
     pub(super) fn custom_label(&self, n: u32) -> String {
         self.custom_labels
             .get(&n)
@@ -229,7 +230,7 @@ impl ChartTabs {
             .unwrap_or_else(|| t!("chart.tab.custom", n = n - CUSTOM_NUM_BASE + 1).to_string())
     }
 
-    /// Переименовать активную кастомную вкладку (поле имени в попапе ⚙) + persist.
+    /// Rename the active custom tab from the ⚙ popup's name field and persist the change.
     pub(super) fn rename_active_custom(&mut self, name: String, cx: &mut Context<Self>) {
         let name = name.trim().to_string();
         if name.is_empty() {
@@ -242,7 +243,7 @@ impl ChartTabs {
         }
     }
 
-    /// Записать спек кастомной вкладки (тикеры + имя + гориз. ориентация) в charts.json.
+    /// Write a custom-tab spec (tickers, name, and horizontal orientation) to `charts.json`.
     pub(super) fn persist_custom(
         &self,
         cx: &mut Context<Self>,
@@ -262,7 +263,7 @@ impl ChartTabs {
         });
     }
 
-    /// Удалить спек кастомной вкладки из charts.json (закрытие вкладки = удаление сохранёнки).
+    /// Remove a custom-tab spec from `charts.json`; closing the tab deletes its saved state.
     pub(super) fn remove_custom_spec(&self, n: u32, cx: &mut Context<Self>) {
         let group = self.group.clone();
         self.backend.update(cx, |b, _| {
@@ -275,10 +276,10 @@ impl ChartTabs {
         });
     }
 
-    /// Подписаться на изменения кастомного стека → пере-персист тикеров при смене состава
-    /// (закрыли «×»/добавили чарт на сохранённой вкладке → обновляем `custom_coins`). Пока стек
-    /// откреплён (в `self.detached`), `sync_custom_coins` ничего не пишет (его держит окно-хост);
-    /// после репина в стрип эта подписка снова актуальна.
+    /// Observe custom-stack changes and re-persist tickers when its composition changes, updating
+    /// `custom_coins` after a chart is closed or added on a saved tab. While the stack is detached
+    /// into `self.detached`, `sync_custom_coins` writes nothing because the window host owns it;
+    /// after repinning into the strip, this subscription becomes relevant again.
     pub(super) fn watch_custom_stack(
         &self,
         num: u32,
@@ -289,16 +290,16 @@ impl ChartTabs {
         let bk = bucket.clone();
         cx.observe(stack, move |this, _stack, cx| {
             this.sync_custom_coins(num, &bk, cx);
-            // Якорь сравнения мог смениться (клик замка) → обновить торговый таргет группы
-            // (хоткеи/cancel_buy идут на залоченный якорь как на Main-фулскрин).
+            // A lock click may have changed the comparison anchor, so update the group's trading
+            // target. Hotkeys and `cancel_buy` address the locked anchor like fullscreen Main.
             this.sync_main_chart_target(cx);
         })
         .detach();
     }
 
-    /// Сверить текущий состав кастомной вкладки (тикеры + якорь сравнения + режим метлы) с
-    /// сохранённым; переписать спек ТОЛЬКО при изменении (иначе observe-колбэк на каждый тик
-    /// данных писал бы вхолостую).
+    /// Compare the custom tab's current composition (tickers, comparison anchor, and broom mode)
+    /// with saved state, rewriting the spec ONLY after a change. Otherwise the observer callback
+    /// would perform a redundant write on every data tick.
     fn sync_custom_coins(&mut self, num: u32, bucket: &ChartBucket, cx: &mut Context<Self>) {
         let Some(stack) = self.add_stack(num, bucket) else {
             return;
@@ -328,7 +329,7 @@ impl ChartTabs {
         }
     }
 
-    /// Пере-персист тикеров активной кастомной вкладки (после изменения состава).
+    /// Re-persist the active custom tab's tickers after its composition changes.
     pub(super) fn persist_custom_active(&mut self, cx: &mut Context<Self>) {
         if let Tab::Custom(n, b) = self.active.clone() {
             if let Some(stack) = self.add_stack(n, &b) {
@@ -339,8 +340,9 @@ impl ChartTabs {
         }
     }
 
-    /// Восстановить кастомные вкладки из charts.json (спеки с `custom_coins`): создать стек,
-    /// залить тикеры (пин), применить раскладку/ориентацию/масштаб, имя. В стрипе (не окном).
+    /// Restore custom tabs from `charts.json` specs containing `custom_coins`: create each stack,
+    /// load and pin its tickers, and apply its layout, orientation, scale, and name. Restore into
+    /// the strip rather than a window.
     pub(super) fn restore_custom_tabs(&mut self, cx: &mut Context<Self>) {
         #[allow(clippy::type_complexity)]
         let specs: Vec<(
@@ -461,7 +463,7 @@ impl ChartTabs {
                 }
                 s.pin_all(c);
             });
-            // Восстановить режим сравнения (якорь + метла) после заливки тикеров.
+            // Restore comparison mode (anchor plus broom) after loading the tickers.
             if anchor.is_some() || broom {
                 stack.update(cx, |s, c| s.restore_compare(anchor.clone(), broom, c));
             }
@@ -477,19 +479,21 @@ impl ChartTabs {
         }
     }
 
-    /// Обновить гейты стаканов кастомных вкладок по фокусу: активная → resume сразу; неактивные
-    /// в стрипе → через 5с suspend (отписка), если так и не вернулись. Откреплённых нет в
-    /// `self.custom` → они не suspend'ятся (окно само держит спрос).
+    /// Update custom-tab order-book gates from focus. Resume the active tab immediately; suspend
+    /// inactive tabs remaining in the strip after five seconds if focus does not return. Detached
+    /// tabs are absent from `self.custom`, so they are never suspended; their window maintains
+    /// demand.
     pub(super) fn refresh_orderbook_gates(&mut self, cx: &mut Context<Self>) {
         let active = self.active.clone();
         let customs: Vec<(u32, ChartBucket, Entity<AddChartStack>)> = self.custom.clone();
         for (n, b, stack) in customs {
             if Tab::Custom(n, b.clone()) == active {
-                // Вернулись на вкладку → отменяем pending-таймер и сразу переподписываемся.
+                // Returning to the tab cancels the pending timer and resubscribes immediately.
                 *self.custom_gate_gen.entry(n).or_insert(0) += 1;
                 stack.update(cx, |s, c| s.set_orderbook_suspended(false, c));
             } else {
-                // Ушли с вкладки → ставим 5с-таймер на отписку (последний побеждает по поколению).
+                // Leaving the tab starts a five-second unsubscribe timer; the latest generation
+                // wins.
                 let want_gen = {
                     let e = self.custom_gate_gen.entry(n).or_insert(0);
                     *e += 1;
@@ -501,7 +505,7 @@ impl ChartTabs {
                     executor.timer(Duration::from_secs(5)).await;
                     let _ = cx.update(|cx| {
                         this.update(cx, |this, cx| {
-                            // Таймер ещё актуален, вкладка всё ещё неактивна и в стрипе?
+                            // Is the timer still current, with the tab still inactive in the strip?
                             let still = this.custom_gate_gen.get(&n) == Some(&want_gen)
                                 && !matches!(&this.active, Tab::Custom(nn, _) if *nn == n)
                                 && this.custom.iter().any(|(num, _, _)| *num == n);
@@ -518,10 +522,10 @@ impl ChartTabs {
     }
 }
 
-/// Поиск монеты в полоске вкладок: выбранная монета открывается на АКТИВНОЙ вкладке
-/// (Main → fullscreen-чарт; Add/Custom → её стек). Обвязка попапа — [`super::common`].
+/// Coin search in the tab strip. The selected coin opens on the ACTIVE tab (Main → fullscreen
+/// chart; Add/Custom → its stack). Popup plumbing lives in [`super::common`].
 impl CoinPopupHost for ChartTabs {
-    /// Очистить поле монеты и закрыть список (после выбора / по клику вне).
+    /// Clear the coin field and close the list after selection or an outside click.
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();
         self.coin_popup_open = false;

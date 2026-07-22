@@ -79,7 +79,7 @@ impl SettingsView {
             cx.refresh_windows();
         }
 
-        // Файловый лог — применяем живо: включили запись или сократили срок → чистим.
+        // Apply file logging live; purge immediately after toggling it or changing retention.
         if before.log_to_file != after.log_to_file
             || before.log_retention_days != after.log_retention_days
         {
@@ -90,8 +90,8 @@ impl SettingsView {
         let struct_changed = before.structural_sig() != after.structural_sig();
         let mode_changed = before.market_mode != after.market_mode;
         let split_changed = before.charts_split_by_core != after.charts_split_by_core;
-        // Смена чарт-связки (`chart_bundle`) у ядра меняет состав чарт-вкладок, но НЕ требует
-        // реконнекта — как split, только пересобираем окна групп (без рестарта сессий).
+        // Changing a core's `chart_bundle` alters chart-tab composition without requiring a
+        // reconnect. Treat it like split mode and rebuild group windows without restarting sessions.
         let bundle_sig = |c: &AppConfig| {
             let mut v: Vec<(u64, String)> = c
                 .servers
@@ -111,11 +111,12 @@ impl SettingsView {
         }
 
         if struct_changed {
-            // Инкрементальный реконсайл сессий по новому конфигу (НЕ полный рестарт):
-            // добавляем новые ядра, гасим удалённые, переподнимаем только изменённые —
-            // неизменные ядра не дёргаем. epoch/market_mode сохраняем. chart_market_refs
-            // НЕ сбрасываем: пережившие окна сохраняют свои подписки, закрытые освободят их
-            // через on_release панелей, новые — зарегистрируют при открытии.
+            // Reconcile sessions incrementally: stop removed or disabled cores and cores in disabled
+            // groups, add newly active cores, restart only connections whose `conn_sig` changed,
+            // and update other metadata in place. Reconciliation preserves epoch and the existing
+            // market mode; the following setter is a no-op unless the saved mode changed, in which
+            // case it applies the new mode. Keep `chart_market_refs`: surviving windows retain their
+            // subscriptions, closed panels release theirs, and new panels register when opened.
             self.backend.update(cx, |b, _| {
                 let reports = b.reports.as_ref().map(|h| &h.tx);
                 b.session.reconcile(&b.config, reports);
@@ -123,35 +124,35 @@ impl SettingsView {
             });
             self.reconcile_group_windows(cx);
         } else if mode_changed {
-            // Режим рынка — живо: ядра остаются на связи, координатор пере-выберет
-            // провайдеров на следующем тике.
+            // Apply market mode live. Cores stay connected and the coordinator reselects providers
+            // on its next tick.
             self.backend
                 .update(cx, |b, _| b.session.set_market_mode(b.config.market_mode));
         }
 
-        // Сменили «отдельная чарт-вкладка на ядро» (без структурного ребилда, который и
-        // так всё пересоздаёт) → пересобираем окна, чтобы чарт-вкладки собрались в новом
-        // режиме (egui чистил chart-tabs; в GPUI вкладки живут в окне — пересоздаём окно).
+        // When split-by-core or chart bundles change without a structural reconciliation, rebuild
+        // group windows so their chart tabs use the new topology. Egui cleared chart tabs directly;
+        // in GPUI tabs belong to their window, so the window is recreated.
         if !struct_changed && (split_changed || bundle_changed) {
             self.rebuild_group_windows(cx);
         }
     }
 
-    /// Закрыть все окна групп и открыть заново по актуальному конфигу (порт egui
-    /// `needs_rebuild`). Геометрия восстановится из сохранённой раскладки.
+    /// Close every group window and reopen it from the current config, porting egui's
+    /// `needs_rebuild` path. Saved layout restores window geometry.
     ///
-    /// Также закрываем ВСЕ откреп-окна чарт-вкладок и снимаем у спек `detached`: при
-    /// смене групп их состав/ключи (bucket) меняются — старые окна иначе зависают дублями
-    /// и сыплют «window not found» по протухшим хэндлам. Вкладки вернутся в стрип нового
-    /// окна группы по детектам (а не повторно откроются off-screen окнами).
+    /// Also close every detached chart-tab window and clear each spec's `detached` marker. Group
+    /// topology can change bucket keys; retaining old windows would leave duplicates and stale
+    /// handles. The specs then return to the new group window's tab strip instead of reopening as
+    /// detached off-screen windows.
     fn rebuild_group_windows(&mut self, cx: &mut Context<Self>) {
         let (handles, chart_handles, cfg, epoch, layout) = self.backend.update(cx, |b, _| {
             let handles: Vec<WindowHandle<Root>> = b.group_windows.values().copied().collect();
             b.group_windows.clear();
             let chart_handles: Vec<WindowHandle<Root>> =
                 b.detached_chart_windows.drain(..).map(|(_, h)| h).collect();
-            // Вернуть откреп-вкладки в стрип: снять detached у всех спек, чтобы свежие
-            // окна групп не открыли их повторно (иначе дубли).
+            // Return detached tabs to the strip by clearing every spec marker, preventing fresh
+            // group windows from reopening duplicate detached copies.
             for s in b.chart_specs.iter_mut() {
                 s.detached = None;
             }
@@ -183,17 +184,17 @@ impl SettingsView {
         }
     }
 
-    /// Инкрементальный реконсайл окон групп (вместо разрушительного `rebuild_group_windows`):
-    /// закрывает окна ТОЛЬКО исчезнувших групп (и их откреп-чарты), открывает окна ТОЛЬКО
-    /// новых групп, а окна сохранившихся групп НЕ трогает — их `ChartTabs` сами подхватят
-    /// добавленные/убранные ядра через сигнатуру. Так открытые вкладки и раскладка переживают
-    /// добавление/удаление серверов (фикс: раньше любое изменение состава сносило все окна).
+    /// Reconcile group windows incrementally instead of calling [`Self::rebuild_group_windows`].
+    ///
+    /// Close only removed groups and their detached charts, open only new groups, and leave retained
+    /// group windows intact. Their `ChartTabs` signatures pick up added or removed cores, preserving
+    /// open tabs and layout across server membership changes.
     fn reconcile_group_windows(&mut self, cx: &mut Context<Self>) {
         let (close_group, close_detached, spawn_groups, cfg, epoch, layout) =
             self.backend.update(cx, |b, _| {
                 let want = crate::group_window::groups(&b.config);
                 let want_set: HashSet<&str> = want.iter().map(String::as_str).collect();
-                // Окна исчезнувших групп → закрыть.
+                // Collect windows belonging to groups that no longer exist.
                 let close_group: Vec<WindowHandle<Root>> = b
                     .group_windows
                     .iter()
@@ -207,7 +208,7 @@ impl SettingsView {
                     .cloned()
                     .collect();
                 b.group_windows.retain(|g, _| want_set.contains(g.as_str()));
-                // Откреп-чарты исчезнувших групп → закрыть (их группы больше нет).
+                // Collect detached charts whose groups no longer exist.
                 let close_detached: Vec<WindowHandle<Root>> = b
                     .detached_chart_windows
                     .iter()
@@ -215,7 +216,7 @@ impl SettingsView {
                     .map(|(_, h)| *h)
                     .collect();
                 b.detached_chart_windows.retain(|(g, _)| !gone.contains(g));
-                // Новые группы (в want, окна ещё нет) → открыть. Сохранившиеся пропускаем.
+                // Spawn groups requested by the config that do not already have a window.
                 let spawn_groups: Vec<String> = want
                     .iter()
                     .filter(|g| !b.group_windows.contains_key(g.as_str()))

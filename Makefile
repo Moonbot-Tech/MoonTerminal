@@ -1,22 +1,22 @@
-# MoonTerminal — сборка единственного бинаря `moonterminal` (crates/moon-ui-gpui).
+# MoonTerminal — build the sole `moonterminal` binary (crates/moon-ui-gpui).
 #
-#   make run            собрать и запустить (debug)
-#   make build          собрать (debug)
-#   make release        собрать (release)
-#   make check          быстрая проверка типов
+#   make run            build and run (debug)
+#   make build          build (debug)
+#   make release        build (release)
+#   make check          quick type check
 #   make fmt            cargo fmt
-#   make clean          очистить target
-#   make update-moon-ui обновить локальный Cargo.lock до HEAD зависимостей
+#   make clean          clean target
+#   make update-moon-ui update the local Cargo.lock to the dependency HEAD revisions
 #
-# Windows: таргет ВСЕГДА MSVC (x86_64-pc-windows-msvc), не GNU — его ожидают GPUI/DirectX/
-# chartdx. Запускать `make` из «x64 Native Tools Command Prompt for VS 2022» (там настроен
-# vcvars), иначе линковка C-зависимостей не найдёт link.exe.
-# macOS (Metal) / Linux: нативный таргет, отдельная настройка не нужна.
+# Windows: the target is ALWAYS MSVC (x86_64-pc-windows-msvc), not GNU, as required by GPUI/DirectX/
+# chartdx. Run `make` from the "x64 Native Tools Command Prompt for VS 2022" (where vcvars is
+# configured); otherwise, the C dependency linker will not find link.exe.
+# macOS (Metal) / Linux: use the native target; no separate configuration is required.
 
 PKG := -p moon-ui-gpui --bin moonterminal
 
-# cargo может быть не в PATH (частый случай на macOS: он в ~/.cargo/bin, но Terminal
-# не подхватывает ~/.cargo/env). Ищем в PATH, иначе берём дефолтный путь rustup.
+# cargo may not be in PATH (common on macOS: it is in ~/.cargo/bin, but Terminal does not
+# load ~/.cargo/env). Search PATH first, then fall back to rustup's default path.
 CARGO := $(shell command -v cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
 
 ifeq ($(OS),Windows_NT)
@@ -29,10 +29,10 @@ else
   RELEASE_BIN := target/release/moonterminal
 endif
 
-# macOS: после сборки подписываем бинарь СТАБИЛЬНОЙ самоподписанной подписью. Иначе
-# ad-hoc подпись меняется каждую сборку, и macOS Keychain (в нём лежит ключ шифрования
-# конфига, крейт keyring/apple-native) при каждом запуске заново требует пароль.
-# См. scripts/macos-sign.sh. На Windows/Linux — no-op (этой проблемы там нет).
+# macOS: after building, sign the binary with a STABLE self-signed identity. Otherwise,
+# the ad-hoc signature changes with every build, and macOS Keychain (which stores the configuration
+# encryption key through the keyring/apple-native crate) asks for the password again on every launch.
+# See scripts/macos-sign.sh. This is a no-op on Windows/Linux (which do not have this issue).
 ifeq ($(OS),Windows_NT)
   SIGN = @echo ">> codesign: пропуск (Windows)"
 else ifeq ($(shell uname -s),Darwin)
@@ -47,13 +47,13 @@ help:
 	@echo "make run | build | release | check | fmt | clean | codesign-setup | update-moon-ui"
 	@echo "bin: $(BIN)"
 
-# macOS: один раз создать самоподписанный code-signing сертификат (иначе он создастся
-# автоматически при первой сборке). На других ОС скрипт сам делает no-op.
+# macOS: create the self-signed code-signing certificate once (otherwise it will be created
+# automatically during the first build). On other operating systems, the script is a no-op.
 codesign-setup:
 	./scripts/macos-codesign-setup.sh
 
-# run зависит от build → запускается уже ПОДПИСАННЫЙ бинарь (не свежий unsigned из
-# `cargo run`), поэтому Keychain не спрашивает пароль повторно.
+# run depends on build → it launches the already SIGNED binary (not the freshly built unsigned one from
+# `cargo run`), so Keychain does not ask for the password again.
 run: build
 	$(BIN)
 
@@ -74,8 +74,8 @@ fmt:
 clean:
 	$(CARGO) clean
 
-# Cargo.lock локальный и не коммитится. Fresh checkout резолвит текущий MoonUI master.
-# В уже собранной рабочей копии этот target обновляет локальный lock до HEAD зависимостей.
+# Cargo.lock is local and is not committed. A fresh checkout resolves the current MoonUI master.
+# In an existing working copy, this target updates the local lockfile to the dependency HEAD revisions.
 update-moon-ui:
 	$(CARGO) update
 	@echo ">> Локальный Cargo.lock обновлён. Теперь: make build"

@@ -1,6 +1,5 @@
-//! Сборка вкладки «Подключения»: заголовки-ветки групп (галка·иконка·имя·👁·пикер·+ядро),
-//! пикер иконок, селектор источника рыночных данных и `connections_tab` (дерево
-//! «группа → ядра» + глобальная кнопка добавления).
+//! Connections tab assembly: group branch headers, icon picker, market-data and core-order
+//! selectors, and the group-to-core tree with its global add button.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,8 +15,10 @@ use super::SettingsView;
 use crate::design;
 
 impl SettingsView {
-    /// Заголовок-ветка группы: галка active · иконка · имя · кол-во · win · Иконка · +ядро.
-    /// `ico_el` готовится снаружи (берёт `&mut self.icons` для текстуры).
+    /// Render a group branch header with active state, icon, name, member count, window action,
+    /// icon-picker action, and add-core action.
+    ///
+    /// `ico_el` is prepared by the caller because texture loading needs `&mut self.icons`.
     fn group_header_row(
         &mut self,
         name: &str,
@@ -120,9 +121,10 @@ impl SettingsView {
             )
     }
 
-    /// Пикер иконок под выбранной группой: строка-заголовок с «×» + скроллируемая сетка
-    /// иконок (клик = назначить иконку группе и закрыть). Возвращает обе строки списком,
-    /// чтобы вставить их в дерево без обёртки-контейнера.
+    /// Build the selected group's icon-picker header and scrollable icon grid.
+    ///
+    /// Clicking an icon assigns it and closes the picker. The two rows are returned separately so
+    /// they can be inserted into the tree without a wrapper container.
     fn icon_picker_rows(
         &mut self,
         name: &str,
@@ -200,7 +202,7 @@ impl SettingsView {
         ]
     }
 
-    /// Источник рыночных данных — выпадающий список (порт egui ComboBox).
+    /// Render the market-data source dropdown ported from the egui ComboBox.
     fn market_src_selector(&self, cx: &App) -> impl IntoElement {
         h_flex()
             .gap_2()
@@ -256,16 +258,15 @@ impl SettingsView {
             )
     }
 
-    /// Вкладка «Подключения» — порт egui `settings/connections.rs`: источник данных
-    /// (выпадающий), таблица ядер слева, панель групп (с иконками/👁/пикером) справа.
+    /// Render the Connections tab with source and ordering selectors plus the group-to-core tree.
     pub(in crate::settings) fn connections_tab(
         &mut self,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        // Живой статус ядер для точек.
+        // Snapshot live core status for the status dots.
         let status = self.backend.read(cx).session.status_map();
-        // Снимки серверов (id, active, группа) и групп (name, active, icon).
+        // Snapshot servers as (id, active, group) and groups as (name, active, icon).
         // Rank from the draft so a pending sort-mode change is visible before it is applied.
         let (order, servers, mut groups) = {
             let b = self.backend.read(cx);
@@ -282,10 +283,10 @@ impl SettingsView {
                     .collect::<Vec<_>>(),
             )
         };
-        // Стабильный порядок групп — по имени (заголовки-ветки в списке ядер).
+        // Keep group branches in stable name order.
         groups.sort_by(|a, b| a.0.cmp(&b.0));
-        // Предзагрузить иконки (групп + весь набор, если открыт пикер) — texture() берёт
-        // &mut self.icons, поэтому грузим ДО построения UI, потом читаем из карты.
+        // Preload group icons and, while the picker is open, every picker icon. `texture()` needs
+        // `&mut self.icons`, so load before building UI and then read from the map.
         let picking = self.picking.clone();
         let mut icon_tex: HashMap<u32, Option<Arc<RenderImage>>> = HashMap::new();
         for (_, _, icon) in &groups {
@@ -304,9 +305,9 @@ impl SettingsView {
                 .or_insert_with(|| self.icons.texture(*id));
         }
 
-        // ── Единый список-«дерево»: заголовок-ветка группы + ядра-листья под ней ──
-        // (Не настоящий tree: ветки/листья задаём отступом, без раскрытия.) Колонки
-        // ядер выровнены под заголовком группы: шапка колонок с тем же левым отступом.
+        // Build one tree-like list: each group branch header is followed by its core leaves. It is
+        // not an expandable tree; indentation expresses the hierarchy. The column header uses the
+        // same left inset as leaves so core columns stay aligned.
         let mut list_col = v_flex()
             .w_full()
             .min_w_0()
@@ -319,7 +320,7 @@ impl SettingsView {
             ))
             .child(Self::conn_col_head_row(p, cx));
 
-        // Нет групп (ни у одного ядра не задана) → поясняющий хинт.
+        // Explain the empty state when no server contributes a group.
         if groups.is_empty() {
             list_col = list_col.child(
                 div()
@@ -342,9 +343,10 @@ impl SettingsView {
             };
             list_col =
                 list_col.child(self.group_header_row(name, *active, ico_el, member_count, p, cx));
-            // ── Ядра-листья этой группы (с отступом + вертикальная линия ветки) ──
+            // Render this group's core leaves with indentation and a vertical branch line.
             // Keep inactive cores at their canonical position; the status dot shows state.
-            // `i` — исходный индекс в config.servers (нужен для мутаций draft), его сохраняем.
+            // Preserve `i`, the original index in this draft-derived `servers` snapshot. It is the
+            // corresponding index in `preview.servers` used by row mutations.
             let mut members: Vec<(usize, &(u64, bool, String))> = servers
                 .iter()
                 .enumerate()
@@ -364,14 +366,14 @@ impl SettingsView {
                     );
                 }
             }
-            // ── Пикер иконок под выбранной группой ──
+            // Insert the icon picker directly below its selected group.
             if picking.as_deref() == Some(name.as_str()) {
                 list_col =
                     list_col.children(self.icon_picker_rows(name, &pick_ids, &icon_tex, p, cx));
             }
         }
 
-        // Глобальная кнопка: новое ядро в группу «default» (дальше можно переписать «Группу»).
+        // The global button adds a core to `default`; the Group field can be edited afterward.
         list_col = list_col.child(
             MoonButton::new("add-srv")
                 .outline()
@@ -385,7 +387,7 @@ impl SettingsView {
         v_flex()
             .w_full()
             .gap_2()
-            // Источник рыночных данных — выпадающий список (порт egui ComboBox).
+            // Market-data source dropdown ported from the egui ComboBox.
             .child(self.market_src_selector(cx))
             // The selected order applies to every core list.
             .child(self.core_sort_selector(cx))

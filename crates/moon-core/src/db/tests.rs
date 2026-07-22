@@ -1,13 +1,14 @@
 use super::*;
 
-/// Индексы реплики создаются и для БД, где колонки появились ДО кода
-/// индексов: создание только в ветке успешного ALTER теряло индекс
-/// навсегда (колонка уже есть → цикл схемы её скипает).
+/// Replica indexes are also created for databases whose columns predate the index code.
+///
+/// Creating them only after a successful ALTER lost the index permanently because
+/// the schema loop skips columns that already exist.
 #[test]
 fn rep_indexes_created_for_preexisting_columns() {
     let conn = Connection::open_in_memory().unwrap();
     init_db(&conn).unwrap();
-    // Скелет реплики с колонками, но БЕЗ индексов — как БД старой версии.
+    // Replica skeleton with columns but NO indexes, matching an older database.
     conn.execute_batch(
         "CREATE TABLE orders_rep (core_uid INTEGER NOT NULL,
             core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
@@ -29,7 +30,7 @@ fn rep_indexes_created_for_preexisting_columns() {
         )
         .unwrap();
     assert_eq!(n, 2, "оба индекса должны существовать после init");
-    // Планировщик реально ходит по индексу для дефолтного фильтра периода.
+    // The planner actually uses the index for the default period filter.
     let plan: String = conn
         .query_row(
             "EXPLAIN QUERY PLAN SELECT * FROM orders_rep
@@ -44,17 +45,18 @@ fn rep_indexes_created_for_preexisting_columns() {
     );
 }
 
-/// Переходный читатель: строки из ЛЕГАСИ-таблицы и typed-реплики видны вместе
-/// (UNION ALL), db_id легаси отдаётся как `id`; после SyncComplete последнего
-/// легаси-ядра таблица сносится и читатель живёт на одной реплике.
+/// The transitional reader exposes rows from the LEGACY table and typed replica together.
+///
+/// Legacy `db_id` appears as `id`. After `SyncComplete` for the final legacy core,
+/// the table is dropped and the reader uses only the replica.
 #[test]
 fn union_reader_and_legacy_drop() {
     let conn = Connection::open_in_memory().unwrap();
     init_db(&conn).unwrap();
 
-    // Легаси-таблица + строка ядра 1. `init_db` её больше НЕ создаёт (на переходном
-    // периоде она уже есть у пользователя); воссоздаём минимальную схему ДО `rep::init`,
-    // чтобы он увидел `legacy_exists=true` и умел её снести на SyncComplete.
+    // Legacy table plus one row for core 1. `init_db` NO LONGER creates this table;
+    // users already have it during migration. Recreate the minimal schema BEFORE
+    // `rep::init` so it sees `legacy_exists=true` and can drop it on SyncComplete.
     conn.execute_batch(
         "CREATE TABLE closed_sell_reports (
             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, db_id INTEGER NOT NULL,
@@ -71,7 +73,7 @@ fn union_reader_and_legacy_drop() {
     let open_rows = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let mut st = rep::init(&conn, cursors, open_rows).unwrap();
 
-    // Строка реплики ядра 2 (колонки — как их дорастила бы схема ядра).
+    // Replica row for core 2, with columns as the core schema would extend them.
     for ddl in [
         "ALTER TABLE orders_rep ADD COLUMN coin TEXT",
         "ALTER TABLE orders_rep ADD COLUMN profitbtc REAL",
@@ -95,7 +97,7 @@ fn union_reader_and_legacy_drop() {
         .expect("выборка читается");
     assert_eq!(t.rows.len(), 2);
     assert!(t.core_uids.contains(&1) && t.core_uids.contains(&2));
-    // Легаси db_id виден в колонке id.
+    // Legacy `db_id` is exposed in the `id` column.
     let id_ix = t.cols.iter().position(|c| c == "id").unwrap();
     let legacy_row = t.core_uids.iter().position(|u| *u == 1).unwrap();
     assert_eq!(t.rows[legacy_row][id_ix], Value::Integer(42));
@@ -104,7 +106,7 @@ fn union_reader_and_legacy_drop() {
     assert_eq!(count, 2);
     assert!((profit - 2.0).abs() < 1e-9);
 
-    // SyncComplete ядра 1 → его легаси-строки вычищены; таблица опустела → DROP.
+    // SyncComplete for core 1 purges its legacy rows; the empty table is then dropped.
     let done = moonproto::ReportSyncComplete {
         ticket: moonproto::ReportSyncTicket { sync_id: 1 },
         page_count: 0,
@@ -119,7 +121,7 @@ fn union_reader_and_legacy_drop() {
         .expect("выборка читается после сноса легаси");
     assert_eq!(t.rows.len(), 1);
     assert_eq!(t.core_uids, vec![2]);
-    // init_db больше не воскрешает легаси (маркер legacy_dropped).
+    // The `legacy_dropped` marker prevents `init_db` from resurrecting the legacy table.
     init_db(&conn).unwrap();
     assert!(table_columns_res(&conn).expect("схема читается").is_empty());
 }

@@ -1,68 +1,74 @@
-//! Лог: сигнатура (гейт пересборки), агрегат живых логов ядер, классификация и
-//! рендер одной строки (цвет по тяжести, подсветка монеты и совпадений поиска).
+//! Log rebuild signature, aggregation of live core logs, line classification, and rendering of
+//! one row with severity colors plus coin and search-match highlighting.
 //!
-//! Классификация (`classify`) и детект монеты (`find_coin`) считаются ОДИН раз при
-//! сборке видимого списка (`apply_filter` → [`LineView`]), не на каждом кадре: парсинг
-//! текста дорог, а рендер строки вызывается для каждой видимой строки каждый кадр.
+//! [`super::LogPanel`] owns filtering, the virtual list, and follow-tail scrolling. Classification
+//! ([`classify`]) and coin detection ([`find_coin`]) run once while `apply_filter` builds
+//! [`LineView`] values instead of every frame: parsing is expensive, while the virtual list calls
+//! the row renderer for every visible line on each frame.
 
 use super::*;
 use std::collections::HashSet;
 use std::ops::Range;
 
-/// «Тяжесть» строки — определяет цвет всей строки. У лога ядра уровня нет
-/// (`LogLine::core` → Info), поэтому Error/Warn для него выводим из текста.
+/// Line severity, which determines the row's base text color.
+///
+/// Core logs have no source level and [`LogLine::core`] assigns `Info`, so their `Error` and
+/// `Warn` severities are inferred from message text.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Sev {
     Error,
     Warn,
     Info,
-    /// Debug/Trace — приглушаем.
+    /// Muted `Debug` and `Trace` output.
     Dim,
-    /// Шум форка GPUI (известный баг: `window not found` пачками на уровне ERR при
-    /// закрытии окон) — не настоящая ошибка, гасим, чтобы не тонули
-    /// реальные ошибки. В фильтр «только ошибки» НЕ попадает.
+    /// Noise from the GPUI fork, including bursts of `window not found` errors while windows close.
+    ///
+    /// These are muted so they do not obscure real errors and are excluded from errors-only mode.
     Noise,
 }
 
-/// Семантическая категория строки (независимо от тяжести) — для короткого бейджа.
+/// Semantic line category, independent of severity, used for the compact category badge.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Cat {
     None,
-    /// Отказ/отклонение ордера, недостаточно средств и т.п.
+    /// Order failure or rejection, insufficient funds, and similar messages.
     Reject,
-    /// Проблема связи: разрыв/переподключение/таймаут.
+    /// Connection loss, reconnection, or timeout.
     Conn,
 }
 
-/// Результат классификации строки: тяжесть + категория (считаются за один проход,
-/// один `to_lowercase`).
+/// Severity and category produced together from a single lowercase conversion.
 #[derive(Clone, Copy)]
 pub(super) struct Class {
     pub(super) sev: Sev,
     pub(super) cat: Cat,
 }
 
-/// Строка, подготовленная к отрисовке: время/источник/тяжесть/категория/плоский текст
-/// и диапазон тикера монеты (байтовый, по `flat`). Всё посчитано заранее.
+/// Precomputed render-ready line containing time, source, classification, flattened text, and an
+/// optional coin-token byte range into `flat`.
 #[derive(Clone)]
 pub(super) struct LineView {
-    /// Время (HH:MM:SS.mmm) — хвост `ts`.
+    /// `HH:MM:SS.mmm` suffix of `ts`.
     pub(super) time: String,
     pub(super) target: String,
     pub(super) sev: Sev,
     pub(super) cat: Cat,
-    /// Сообщение без переводов строк (для однострочного рендера).
+    /// Message with line breaks flattened for single-line rendering.
     pub(super) flat: String,
-    /// Монета строки: диапазон токена в `flat` (подсветка) + база для клик-фильтра
-    /// (напр. токен `USDT-SPK` → база `SPK`), если найдена.
+    /// Detected coin token: its byte range in `flat` for highlighting and its base for
+    /// click-filtering.
+    ///
+    /// For example, token `USDT-SPK` yields base `SPK`.
     pub(super) coin: Option<(Range<usize>, String)>,
 }
 
 impl LineView {
-    /// Собрать вид строки из уже посчитанной классификации (детект монеты — здесь, чтобы
-    /// не сканировать строки, которые отсеет фильтр «только ошибки»). `cl` берём из
-    /// [`classify`], вызванного до фильтра, чтобы не классифицировать дважды. `known` —
-    /// базы монет, собранные из всего буфера (для подсветки голых тикеров вроде `SPK`).
+    /// Build a render-ready line from an existing classification.
+    ///
+    /// Coin detection happens here so errors-only filtering can reject a line before scanning it.
+    /// `cl` comes from [`classify`], which the caller runs before that filter to avoid classifying
+    /// twice. `known` contains coin bases collected from the full buffer, allowing bare tickers
+    /// such as `SPK` to be highlighted.
     pub(super) fn from_parts(line: &LogLine, cl: Class, known: &HashSet<String>) -> Self {
         let time = line
             .ts
@@ -84,7 +90,7 @@ impl LineView {
     }
 }
 
-/// Тяжесть считается ошибкой для фильтра «только ошибки». Шум форка исключён намеренно.
+/// Return whether a severity passes errors-only mode; GPUI noise is deliberately excluded.
 pub(super) fn is_error(sev: Sev) -> bool {
     matches!(sev, Sev::Error | Sev::Warn)
 }
@@ -119,9 +125,12 @@ const CONN_KW: [&str; 8] = [
     "подключ",
 ];
 
-/// Классификация: тяжесть + категория за один `to_lowercase`. Явный уровень (лог
-/// приложения) приоритетнее текста; шум форка — поверх всего (он приходит уровнем ERR).
-/// Лог ядра идёт уровнем Info → тяжесть смотрим по тексту.
+/// Classify severity and category using one lowercase conversion.
+///
+/// Explicit non-`Info` levels (`Error`, `Warn`, `Debug`, and `Trace`) take precedence over message
+/// text, while recognized GPUI noise overrides everything. Every `Info` line is inferred from text;
+/// this includes application/local entries and core lines, which use `Info` as a placeholder
+/// because their source has no level.
 pub(super) fn classify(line: &LogLine) -> Class {
     let lower = line.msg.to_lowercase();
     if lower.contains("window not found") || lower.contains("недопустимый дескриптор окна")
@@ -149,8 +158,7 @@ pub(super) fn classify(line: &LogLine) -> Class {
     Class { sev, cat }
 }
 
-/// Категория по тексту (уже в нижнем регистре). Reject важнее Conn (таймаут при отказе —
-/// это отказ).
+/// Categorize already-lowercased text, preferring `Reject` over `Conn` for rejection timeouts.
 fn categorize(lower: &str) -> Cat {
     if REJECT_KW.iter().any(|k| lower.contains(k)) {
         Cat::Reject
@@ -167,24 +175,27 @@ fn is_tick(b: u8) -> bool {
     b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-' || b == b'_'
 }
 
-/// Базовая монета рыночного токена — если токен «рыночной формы»:
-/// - спот/перп с котируемой валютой: `SPKUSDT`/`SPK-USDT`/`SPK_USDT` → `SPK`;
-/// - котировка впереди: `USDT-SPK`/`USDT_SPK` → `SPK`;
-/// - поставочный контракт «база+дата»: `BTC_0626`/`ETH-240628` → `BTC`.
-/// Иначе `None`. Нужна заглавная буква (чтобы дата `2026-06-30` не считалась тикером).
+/// Extract the base coin from a market-shaped token:
+///
+/// - spot or perpetual with a quote suffix: `SPKUSDT`, `SPK-USDT`, or `SPK_USDT` becomes `SPK`;
+/// - quote prefix: `USDT-SPK` or `USDT_SPK` becomes `SPK`;
+/// - dated delivery contract: `BTC_0626` or `ETH-240628` becomes `BTC` or `ETH`.
+///
+/// Return `None` for other shapes. At least one uppercase letter is required so a date such as
+/// `2026-06-30` is not mistaken for a ticker.
 fn market_base(w: &str) -> Option<String> {
     if w.len() < 4 || !w.bytes().any(|b| b.is_ascii_uppercase()) {
         return None;
     }
     for q in QUOTES {
-        // Котировка суффиксом: <BASE><QUOTE>, <BASE>-<QUOTE>, <BASE>_<QUOTE>.
+        // Quote suffix: <BASE><QUOTE>, <BASE>-<QUOTE>, or <BASE>_<QUOTE>.
         if w.len() > q.len() && w.ends_with(q) {
             let base = w[..w.len() - q.len()].trim_end_matches(['-', '_']);
             if base.len() >= 3 && base.bytes().any(|b| b.is_ascii_uppercase()) {
                 return Some(base.to_string());
             }
         }
-        // Котировка префиксом: <QUOTE>-<BASE>, <QUOTE>_<BASE>.
+        // Quote prefix: <QUOTE>-<BASE> or <QUOTE>_<BASE>.
         if w.len() > q.len() + 1 && w.starts_with(q) {
             let after = &w[q.len()..];
             if let Some(base) = after.strip_prefix('-').or_else(|| after.strip_prefix('_')) {
@@ -194,7 +205,7 @@ fn market_base(w: &str) -> Option<String> {
             }
         }
     }
-    // Поставочный/квартальный контракт: база из букв + разделитель + хвост из цифр.
+    // Delivery or quarterly contract: base prefix, separator, then a numeric suffix.
     if let Some(pos) = w.rfind(['_', '-']) {
         let (base, tail) = (&w[..pos], &w[pos + 1..]);
         let base_ok = base.len() >= 3 && base.bytes().any(|b| b.is_ascii_uppercase());
@@ -206,8 +217,10 @@ fn market_base(w: &str) -> Option<String> {
     None
 }
 
-/// Набор базовых монет, встреченных в буфере в рыночной форме — чтобы затем подсветить
-/// их голые упоминания (`SPK` сам по себе неотличим от `BUY`/`API` по форме).
+/// Collect coin bases that appear in market-shaped tokens anywhere in the buffer.
+///
+/// This allows later bare mentions to be highlighted because `SPK` alone is structurally
+/// indistinguishable from words such as `BUY` or `API`.
 pub(super) fn collect_coin_bases(lines: &[LogLine]) -> HashSet<String> {
     let mut set = HashSet::new();
     for l in lines {
@@ -230,9 +243,11 @@ pub(super) fn collect_coin_bases(lines: &[LogLine]) -> HashSet<String> {
     set
 }
 
-/// Первая монета в сообщении: токен рыночной формы (подсветим весь токен, база — для
-/// клик-фильтра) ИЛИ голый тикер, известный по буферу (`known`). Возвращает (диапазон,
-/// база). Свой сканер, без regex.
+/// Find the first coin in a message with a purpose-built scanner rather than a regex.
+///
+/// A market-shaped token takes its full byte range for highlighting and yields a base for the
+/// click filter. A bare ticker is accepted only when present in `known`. Return the byte range and
+/// base, or `None` when no coin is found.
 pub(super) fn find_coin(msg: &str, known: &HashSet<String>) -> Option<(Range<usize>, String)> {
     let bytes = msg.as_bytes();
     let mut i = 0;
@@ -256,8 +271,10 @@ pub(super) fn find_coin(msg: &str, known: &HashSet<String>) -> Option<(Range<usi
     None
 }
 
-/// Сигнатура лога: ревизия кольца applog + сумма log_rev ядер группы. Растёт при
-/// любой новой строке (локальной или ядра). Не сменилась → пересобирать не нужно.
+/// Build the log-rebuild signature from the application ring revision and an ordered fold of
+/// `log_rev` for cores in scope.
+///
+/// A new local or scoped-core line changes the signature; an unchanged signature needs no rebuild.
 pub(super) fn log_sig(b: &Backend, group: &str) -> u64 {
     let store = b.session.store();
     let scoped = !group.is_empty();
@@ -271,7 +288,10 @@ pub(super) fn log_sig(b: &Backend, group: &str) -> u64 {
     applog::revision().wrapping_add(cores)
 }
 
-/// Слияние живых логов всех ядер области по времени (ts лексикографичен = хронологичен).
+/// Merge live logs from all scoped core sources in chronological order.
+///
+/// The fixed timestamp format makes lexicographic `ts` order chronological. Retain only the newest
+/// [`VIEW_LIMIT`] merged lines.
 pub(super) fn aggregate(store: &CoreStore, sources: &[LogSourceItem]) -> Vec<LogLine> {
     let mut merged: Vec<LogLine> = Vec::new();
     for item in sources {
@@ -292,7 +312,7 @@ pub(super) fn aggregate(store: &CoreStore, sources: &[LogSourceItem]) -> Vec<Log
     merged
 }
 
-/// Базовый цвет текста строки по тяжести.
+/// Return the row's base text color for its severity.
 fn sev_color(sev: Sev, p: MoonPalette) -> u32 {
     match sev {
         Sev::Error => p.red,
@@ -302,7 +322,7 @@ fn sev_color(sev: Sev, p: MoonPalette) -> u32 {
     }
 }
 
-/// Бейдж уровня (только для Error/Warn).
+/// Return the severity badge for `Error` or `Warn`.
 fn badge(sev: Sev, p: MoonPalette) -> Option<(&'static str, u32)> {
     match sev {
         Sev::Error => Some(("ERR", p.red)),
@@ -311,7 +331,7 @@ fn badge(sev: Sev, p: MoonPalette) -> Option<(&'static str, u32)> {
     }
 }
 
-/// Бейдж категории (отказ / связь).
+/// Return the rejection or connection category badge.
 fn cat_badge(cat: Cat, p: MoonPalette) -> Option<(&'static str, u32)> {
     match cat {
         Cat::Reject => Some(("REJ", p.orange)),
@@ -320,7 +340,7 @@ fn cat_badge(cat: Cat, p: MoonPalette) -> Option<(&'static str, u32)> {
     }
 }
 
-/// Вид сегмента сообщения — определяет стиль. Совпадение поиска важнее монеты.
+/// Message segment kind used for styling; a search match takes precedence over a coin.
 #[derive(Clone, Copy, PartialEq)]
 enum Seg {
     Plain,
@@ -338,15 +358,16 @@ fn seg_at(idx: usize, coin: &Option<Range<usize>>, matches: &[Range<usize>]) -> 
     }
 }
 
-/// Разбить сообщение на цветные спаны: база по тяжести, тикер монеты — синим (кликабелен →
-/// фильтр по монете), совпадения поиска — акцентом (жирным). Пустой запрос без монеты →
-/// один спан (быстрый путь).
+/// Split a message into styled spans.
+///
+/// Plain text uses the severity color, a clickable coin is blue, and search matches use bold
+/// accent text. An empty query with no coin takes the single-span fast path.
 fn message_spans(
     flat: &str,
     base: u32,
     coin: &Option<Range<usize>>,
     query: &str,
-    // (панель, база монеты, источник строки) — для ЛКМ-фильтра и ПКМ-«открыть график».
+    // Panel, coin base, and row source used by left-click filtering and right-click chart opening.
     coin_click: Option<(WeakEntity<LogPanel>, SharedString, SharedString)>,
     p: MoonPalette,
 ) -> Vec<AnyElement> {
@@ -389,7 +410,7 @@ fn message_spans(
                     .text_color(rgb(p.blue))
                     .child(text.to_string());
                 if let Some((weak, ticker, target)) = coin_click.clone() {
-                    // ЛКМ — фильтр по этой монете.
+                    // Left-click filters the panel to this coin base.
                     d = d.cursor_pointer().on_mouse_down(MouseButton::Left, {
                         let weak = weak.clone();
                         let ticker = ticker.clone();
@@ -400,8 +421,8 @@ fn message_spans(
                             }
                         }
                     });
-                    // ПКМ — открыть график монета+ядро на Main (stop_propagation, чтобы не
-                    // сработало копирование строки, висящее на всей строке).
+                    // Right-click resolves the coin against the row source and opens it on Main.
+                    // Stop propagation so the row-level clipboard handler does not also run.
                     d = d.on_mouse_down(MouseButton::Right, move |_ev, _w, app| {
                         if let Some(e) = weak.upgrade() {
                             let (base, target) = (ticker.to_string(), target.to_string());
@@ -436,9 +457,11 @@ fn message_spans(
     out
 }
 
-/// Рендер одной строки лога (время · [уровень] · [категория] · источник · сообщение).
-/// `query` — уже trim+lowercase запрос поиска (подсветка совпадений). ПКМ по строке
-/// копирует её в буфер обмена; клик по тикеру монеты фильтрует по этой монете.
+/// Render one log row as time, optional severity and category badges, source, and message.
+///
+/// `query` is already trimmed and lowercased for match highlighting. Right-clicking the row outside
+/// a coin copies it to the clipboard; clicking a coin filters to its base, while right-clicking it
+/// opens the resolved market on Main.
 pub(super) fn log_row(
     v: &LineView,
     query: &str,
@@ -485,8 +508,8 @@ pub(super) fn log_row(
                 .child(v.target.clone()),
         );
     }
-    // Клик по монете фильтрует по её базе (напр. токен `USDT-SPK` → фильтр `SPK`);
-    // ПКМ открывает график этой монеты на ядре строки (`target`).
+    // Left-click filters by the coin base (`USDT-SPK` becomes `SPK`); right-click resolves the
+    // market from the panel source and row target before opening its chart.
     let coin_range = v.coin.as_ref().map(|(r, _)| r.clone());
     let coin_click = v.coin.as_ref().map(|(_, base)| {
         (
@@ -495,7 +518,7 @@ pub(super) fn log_row(
             SharedString::from(v.target.clone()),
         )
     });
-    // Копия строки по правому клику (TSV-подобно: время · источник · текст).
+    // Build the space-separated time, optional source, and text copied on row right-click.
     let copy = if v.target.is_empty() {
         format!("{} {}", v.time, v.flat)
     } else {

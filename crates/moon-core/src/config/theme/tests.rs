@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::{HotkeysConfig, OrdersStyleSet};
 
-/// Round-trip: скопированный текст вкладки вставляется обратно 1:1.
+/// Round trip: copied tab text pastes back exactly.
 #[test]
 fn share_roundtrip() {
     let mut set = ChartThemeSet::default();
@@ -12,7 +12,7 @@ fn share_roundtrip() {
     assert_eq!(parsed, set);
 }
 
-/// Старый плоский theme.toml → dark (light остаётся текущим).
+/// Old flat theme.toml → dark (light remains current).
 #[test]
 fn share_flat_legacy_goes_dark() {
     let mut flat = ChartTheme::default();
@@ -25,7 +25,7 @@ fn share_flat_legacy_goes_dark() {
     assert_eq!(parsed.light, current.light);
 }
 
-/// Чужие файлы (orders.toml/hotkeys.toml/мусор) НЕ проходят как тема — и наоборот.
+/// Foreign files (orders.toml/hotkeys.toml/garbage) do NOT parse as a theme, and vice versa.
 #[test]
 fn share_rejects_foreign_files() {
     let orders = OrdersStyleSet::default().to_share_string().unwrap();
@@ -42,7 +42,7 @@ fn share_rejects_foreign_files() {
     assert!(HotkeysConfig::parse_share(&orders).is_none());
     assert!(ChartThemeSet::parse_share("не toml вовсе {", &cur_t).is_none());
 
-    // Свои файлы — проходят.
+    // Each parser accepts its own file.
     assert!(OrdersStyleSet::parse_share(&orders, &cur_o).is_some());
     assert!(HotkeysConfig::parse_share(&hotkeys).is_some());
 }

@@ -1,32 +1,32 @@
-//! Пути конфигов и пользовательских данных.
+//! Config and user-data paths.
 //!
 //! - **Windows**: files live beside the executable for a portable installation.
-//! - **macOS / Linux**: файлы лежат в пользовательской writable-директории *вне*
-//!   бандла приложения, чтобы обновление (замена `.app` через DMG / пакета) не
-//!   удаляло ядра и настройки:
+//! - **macOS / Linux**: files live in a user-writable directory *outside* the application
+//!   bundle so an update (replacing the `.app` through a DMG/package) does not delete cores
+//!   and settings:
 //!     - macOS: `~/Library/Application Support/com.moonbot.moonterminal/`
 //!     - Linux: `~/.config/com.moonbot.moonterminal/`
-//!   Ключ шифрования `servers.enc` хранится в OS keyring (см. `crypto.rs`).
+//!   The `servers.enc` encryption key is stored in the OS keyring (see `crypto.rs`).
 //!
-//! Все пути считаются от `data_dir()`; на Windows `data_dir() == exe_dir()`.
+//! All paths are based on `data_dir()`; on Windows, `data_dir() == exe_dir()`.
 //!
-//! Настройки и раскладка UI (открытые `settings.toml`/`theme.toml`/`orders.toml`/
-//! `layout.toml`/`docks.json`/`detached.json`/`charts.json`) лежат в подпапке
-//! `cfg/` внутри `data_dir`. В корне остаются только секрет `servers.enc`, БД
-//! report database `reports.sqlite`, logs in `logs/`, and config snapshots in `backups/`; see
-//! `config::backup`. Flat files in the root are moved to `cfg/` once at startup; see
-//! `migrate_flat_to_cfg`.
+//! UI settings and layout (plaintext `settings.toml`/`theme.toml`/`orders.toml`/
+//! `layout.toml`/`docks.json`/`detached.json`/`charts.json`) live in `cfg/` under
+//! `data_dir`. The data root retains the `servers.enc` secret, logs in `logs/`, and config
+//! snapshots in `backups/`; databases use `db_dir()` (`data/` on Windows, the data root
+//! elsewhere). See `config::backup`. Flat config files are moved to `cfg/` once at startup;
+//! see `migrate_flat_to_cfg`.
 
 use std::path::PathBuf;
 
-/// Идентификатор приложения для пользовательских директорий вне бандла
-/// (совпадает с `CFBundleIdentifier` в `.github/scripts/make-dmg.sh`).
-/// На Windows не используется — там данные лежат рядом с exe.
+/// Application identifier for user directories outside the bundle. Matches
+/// `CFBundleIdentifier` in `.github/scripts/make-dmg.sh`. Unused on Windows, where data
+/// lives beside the executable.
 #[cfg_attr(windows, allow(dead_code))]
 const APP_ID: &str = "com.moonbot.moonterminal";
 
-/// Папка рядом с исполняемым файлом. На Windows это и есть директория данных;
-/// на macOS/Linux — лишь источник одноразовой миграции (внутри бандла).
+/// Directory beside the executable. This is the data directory on Windows; on macOS/Linux,
+/// it is only the source of a one-time migration from inside the bundle.
 fn exe_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -34,8 +34,8 @@ fn exe_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Директория пользовательских данных без побочного создания (для сравнения путей
-/// в миграции). Логику расположения держим тут, в одном месте.
+/// User-data directory without creating it as a side effect, used for migration path comparison.
+/// Location logic is centralized here.
 fn data_dir_raw() -> PathBuf {
     #[cfg(windows)]
     {
@@ -50,15 +50,15 @@ fn data_dir_raw() -> PathBuf {
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        // Linux и прочие unix: ~/.config
+        // Linux and other Unix systems: ~/.config
         dirs::config_dir()
             .map(|d| d.join(APP_ID))
             .unwrap_or_else(exe_dir)
     }
 }
 
-/// Директория пользовательских данных/конфигов. Создаётся при первом обращении
-/// (на Windows это exe_dir и уже существует — `create_dir_all` no-op).
+/// User data/config directory. Created on first access; on Windows this is exe_dir and already
+/// exists, so `create_dir_all` is a no-op.
 pub fn data_dir() -> PathBuf {
     let dir = data_dir_raw();
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -70,9 +70,9 @@ pub fn data_dir() -> PathBuf {
     dir
 }
 
-/// Подпапка `cfg/` внутри данных — настройки и раскладка UI (открытые TOML/JSON).
-/// Everything moves here EXCEPT the `servers.enc` secret, `reports.sqlite` report database,
-/// `logs/`, and `backups/`, which remain in the `data_dir` root.
+/// The `cfg/` data subdirectory contains UI settings and layout as plaintext TOML/JSON.
+/// Flat configuration files move here; `servers.enc`, databases under `db_dir()`, `logs/`, and
+/// `backups/` remain outside. `db_dir()` is `data/` on Windows and the `data_dir` root elsewhere.
 /// Created on first access.
 pub fn cfg_dir() -> PathBuf {
     let dir = data_dir().join("cfg");
@@ -82,78 +82,78 @@ pub fn cfg_dir() -> PathBuf {
     dir
 }
 
-/// Зашифрованный файл серверов: только name/ip/port/key (переносимый секрет).
-/// Остаётся в корне `data_dir` (рядом с exe на Windows) — отдельно от настроек.
+/// Encrypted server file containing only uid/name/key as portable secrets.
+/// Remains in the `data_dir` root (beside the exe on Windows), separate from settings.
 pub fn servers_path() -> PathBuf {
     data_dir().join("servers.enc")
 }
 
-/// Остальная конфигурация (группы и пр.) — открытый toml, без секретов.
+/// Remaining config (groups, etc.) as plaintext TOML without secrets.
 pub fn settings_path() -> PathBuf {
     cfg_dir().join("settings.toml")
 }
 
-/// Тема оформления чарта — отдельный переносимый файл (можно делиться).
+/// Chart theme in a separate portable file that can be shared.
 pub fn theme_path() -> PathBuf {
     cfg_dir().join("theme.toml")
 }
 
-/// Стиль линий ордеров — отдельный переносимый файл.
+/// Order-line style in a separate portable file.
 pub fn orders_path() -> PathBuf {
     cfg_dir().join("orders.toml")
 }
 
-/// Раскладка окон (позиции/размеры/свёрнутость/активная вкладка + откреплённые
-/// окна) — отдельный переносимый файл.
+/// Window layout (positions/sizes/minimized state/active tab + detached windows) in a
+/// separate portable file.
 pub fn layout_path() -> PathBuf {
     cfg_dir().join("layout.toml")
 }
 
-/// Раскладка доков GPUI-оболочки (DockAreaState по группам) — отдельный JSON
-/// (структура задаётся gpui-component, потому не toml; см. moon-ui-gpui).
+/// GPUI shell dock layout (DockAreaState per group) as separate JSON. gpui-component defines
+/// the structure, so it is not TOML; see moon-ui-gpui.
 pub fn docks_path() -> PathBuf {
     cfg_dir().join("docks.json")
 }
 
-/// Откреплённые dock-панели GPUI-оболочки (какая панель, из какой группы, геометрия
-/// окна) — отдельный JSON. На старте окна открепления восстанавливаются.
+/// Detached GPUI shell dock panels (panel, source group, and window geometry) as separate JSON.
+/// Detached windows are restored at startup.
 pub fn detached_path() -> PathBuf {
     cfg_dir().join("detached.json")
 }
 
-/// Состояние чарт-вкладок (масштаб по вкладке + геометрия откреп-окон вкладок) — JSON.
-/// На старте откреп-вкладки восстанавливаются пустыми (только лого), ждут детект.
+/// Chart-tab state (per-tab scale + detached-tab window geometry) as JSON. Detached tabs are
+/// restored empty at startup, showing only the logo until a detect arrives.
 pub fn charts_path() -> PathBuf {
     cfg_dir().join("charts.json")
 }
 
-/// Пользовательские фигуры чарта (слой рисования; ключ = ядро+монета) — JSON.
+/// User-defined chart figures (drawing layer; key = core+coin) as JSON.
 pub fn figures_path() -> PathBuf {
     cfg_dir().join("figures.json")
 }
 
-/// Бейджи типов детектов (код+цвета по видам стратегий, на тему) — переносимый JSON.
+/// Detect-type badges (code + per-strategy-type colors, per theme) as portable JSON.
 pub fn badges_path() -> PathBuf {
     cfg_dir().join("badges.json")
 }
 
-/// Отображение лент детектов (габариты/график/rail/слоты по размерам, per-group) —
-/// отдельный переносимый файл (можно делиться, Копировать/Вставить в попапе ⚙).
+/// Detect-tape presentation (dimensions/chart/rail/size slots, per group) in a separate
+/// portable file that can be shared through Copy/Paste in the ⚙ popup.
 pub fn detects_view_path() -> PathBuf {
     cfg_dir().join("detects_view.toml")
 }
 
-/// Горячие клавиши и мышиные жесты — отдельный переносимый файл (можно делиться).
-/// До schema v13 жили секцией внутри settings.toml (одноразовая миграция в load).
+/// Hotkeys and mouse gestures in a separate portable file that can be shared. Before schema v13,
+/// they lived in a settings.toml section and are migrated once during load.
 pub fn hotkeys_path() -> PathBuf {
     cfg_dir().join("hotkeys.toml")
 }
 
-/// Подпапка баз данных (reports/klines). На Windows — `data/` рядом с exe, чтобы не
-/// захламлять портативный корень крупными файлами; на macOS/Linux `data_dir` и так
-/// выделенная папка приложения (Application Support/.config) — кладём прямо в неё.
-/// Разовая миграция: старый `reports.sqlite` (+ -wal/-shm) из корня переносится
-/// rename-ом (мгновенно на одном томе; wal/shm едут вместе — консистентность БД).
+/// Database directory (reports/klines). On Windows, use `data/` beside the exe to avoid
+/// cluttering the portable root with large files. On macOS/Linux, `data_dir` is already a
+/// dedicated application directory (Application Support/.config), so databases live there.
+/// One-time migration renames the old root `reports.sqlite` plus -wal/-shm; rename is instant
+/// on one volume and moving wal/shm together preserves database consistency.
 pub fn db_dir() -> PathBuf {
     #[cfg(windows)]
     let dir = data_dir().join("data");
@@ -187,26 +187,25 @@ pub fn reports_db_path() -> PathBuf {
     db_dir().join("reports.sqlite")
 }
 
-/// SQLite-БД локального kline-кэша (см. `market::kline_cache`) — отдельная от отчётов.
+/// SQLite database for the local kline cache (see `market::kline_cache`), separate from reports.
 pub fn klines_db_path() -> PathBuf {
     db_dir().join("klines.sqlite")
 }
 
-/// SQLite-БД стратегий и их версий (`strat_db`). НАРОЧНО отдельный файл от
-/// `reports.sqlite`: реплика отчётов — восстановимый кэш (пересинхронизируется
-/// с ядра), а история версий стратегий — единственный экземпляр и должна
-/// переживать любые сбросы/пересинхроны реплики.
+/// SQLite database for strategies and their versions (`strat_db`). DELIBERATELY separate from
+/// `reports.sqlite`: the report replica is a recoverable cache resynchronized from the core,
+/// while strategy version history is the only copy and must survive replica resets/resyncs.
 pub fn strategies_db_path() -> PathBuf {
     db_dir().join("strategies.sqlite")
 }
 
-/// Настройки локального хранилища (БД отчётов/стратегий): UI-часть пишется из
-/// вкладки Настроек, системная (игнор-лист версий и пр.) правится руками.
+/// Local storage settings for report/strategy databases. The Settings tab writes UI-managed
+/// values, while system values such as the version ignore list are edited manually.
 pub fn storage_path() -> PathBuf {
     cfg_dir().join("storage.toml")
 }
 
-/// Папка логов (команды/отчёты ядра для диагностики).
+/// Log directory for diagnostic core commands/reports.
 pub fn logs_dir() -> PathBuf {
     data_dir().join("logs")
 }
@@ -227,35 +226,34 @@ pub fn backups_dir() -> PathBuf {
 /// See `the_migration_lists_never_carry_the_backup_directory`.
 const BACKUPS_DIR_NAME: &str = "backups";
 
-/// Старый объединённый зашифрованный конфиг (для одноразовой миграции). Читаем из
-/// каталога рядом с exe — там его оставляли прежние сборки.
+/// Legacy combined encrypted config for one-time migration. Read from beside the executable,
+/// where older builds left it.
 pub fn legacy_enc_path() -> PathBuf {
     exe_dir().join("config.enc")
 }
 
-/// Совсем старый открытый конфиг (для одноразовой миграции).
+/// Oldest plaintext config used for one-time migration.
 pub fn legacy_toml_path() -> PathBuf {
     PathBuf::from("config.toml")
 }
 
-/// Одноразовая миграция пользовательских файлов из бандла (рядом с exe) в
-/// пользовательскую директорию данных. На Windows `data_dir() == exe_dir()` —
-/// no-op. Копируем файл только если в data_dir его ещё нет, а рядом с exe есть.
+/// One-time migration of user files from the bundle (beside the executable) to the user-data
+/// directory. On Windows, `data_dir() == exe_dir()`, so this is a no-op. A file is copied only
+/// when it exists beside the executable and is absent from its destination.
 ///
-/// Ключ шифрования лежит в OS keyring, поэтому после копирования `servers.enc`
-/// читается/расшифровывается без дополнительных действий.
+/// The encryption key lives in the OS keyring, so copied `servers.enc` remains readable and
+/// decryptable without additional steps.
 pub fn migrate_bundle_data() {
     let src_dir = exe_dir();
     let dst_dir = data_dir();
     if src_dir == dst_dir {
-        return; // Windows / запуск из той же папки — мигрировать нечего.
+        return; // Windows or launch from the same directory: nothing to migrate.
     }
-    // Прежние сборки писали все файлы плоско рядом с exe (внутри бандла). Кладём их
-    // сразу в актуальное расположение: секрет/БД — в корень data_dir, настройки и
-    // раскладку — в `cfg/`. Так не появляется осиротевших дублей в корне (иначе
-    // `dst.exists()` по корню «не видел» бы уже переехавший в `cfg/` файл и копировал
-    // бы заново на каждом старте). legacy config.enc/config.toml мигрируются отдельно
-    // в AppConfig::load — они читаются из exe_dir напрямую.
+    // Older builds wrote all files flat beside the executable inside the bundle. Put each file
+    // directly in its current location: secrets/databases in the data_dir root, settings/layout
+    // in `cfg/`. This avoids orphaned root duplicates; otherwise a root `dst.exists()` would not
+    // see a file already moved to `cfg/` and would copy it again on every launch. Legacy
+    // config.enc/config.toml files migrate separately in AppConfig::load, which reads exe_dir directly.
     let cfg_root = cfg_dir();
     let targets = ROOT_FILES
         .iter()
@@ -288,9 +286,8 @@ pub fn migrate_bundle_data() {
 /// directory name here would not be a no-op: the directory and all its contents would move silently.
 const ROOT_FILES: &[&str] = &["servers.enc", "reports.sqlite"];
 
-/// Файлы настроек/раскладки, переехавшие из корня `data_dir` в подпапку `cfg/`.
-/// `.bak` тоже переносим, чтобы аварийная копия битого settings.toml не осталась
-/// сиротой в корне.
+/// Settings/layout files moved from the `data_dir` root to the `cfg/` subdirectory.
+/// Move `.bak` too so the recovery copy of a corrupt settings.toml is not orphaned in the root.
 const CFG_FILES: &[&str] = &[
     "settings.toml",
     "settings.toml.bak",
@@ -304,13 +301,13 @@ const CFG_FILES: &[&str] = &[
     "hotkeys.toml",
 ];
 
-/// Одноразовый перенос плоских файлов настроек/раскладки из корня `data_dir` в
-/// подпапку `cfg/` (новое расположение). Идемпотентно: переносим файл, только если
-/// он есть в корне и ещё НЕ появился в `cfg/`. Не фатально — при ошибке оставляем
-/// файл на месте и логируем (на следующем старте попробуем снова).
+/// One-time move of flat settings/layout files from the `data_dir` root to their new `cfg/`
+/// location. Idempotent: move a file only when it exists in the root and is NOT already in
+/// `cfg/`. Failures are non-fatal; the file remains in place, the error is logged, and the next
+/// launch retries.
 ///
-/// Вызывать ПОСЛЕ `migrate_bundle_data` (та кладёт файлы из бандла в корень, отсюда
-/// они доезжают в `cfg/`) и ДО первого чтения настроек.
+/// Call AFTER `migrate_bundle_data`, which places bundle files directly in their current
+/// destinations, and BEFORE the first settings read.
 pub fn migrate_flat_to_cfg() {
     let root = data_dir();
     let cfg = cfg_dir();

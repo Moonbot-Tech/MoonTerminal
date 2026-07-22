@@ -1,14 +1,13 @@
-//! Панель «Лог» — порт egui `src/dock/log_panel.rs`. Просмотр лога с выбором
-//! источника, файла, поиском и фильтром «только ошибки».
+//! Log panel ported from egui's `src/dock/log_panel.rs`, with source and file selection, text and
+//! coin filters, and an errors-only mode.
 //!
-//! Источники: «Лог группы» (агрегат живых логов ядер группы), «Локальный» (лог
-//! приложения, `applog`-кольцо) и каждое ядро (его серверный лог, кольцо в `CoreData.log`).
-//! Для одного ядра/локального можно смотреть Live (текущий) ИЛИ файл с диска
-//! (`logs/<дата>_<источник>.log`); агрегат — только Live. Список виртуализирован
-//! через `MoonVirtualList`; при появлении новых строк прокрутка держится у хвоста.
+//! Sources are the live aggregate of in-scope core logs, the local application's `applog` ring, and
+//! each configured core's `CoreData.log` ring. Local and single-core sources can show either Live or
+//! a rotated `logs/<date>_<source>.log` file; Aggregate is Live-only. `MoonVirtualList` virtualizes
+//! rows, and effective follow mode keeps filtered output at the tail.
 //!
-//! По функционалу разнесено: состояние/сбор строк/жизненный цикл — здесь, поля-списки
-//! источника/файла — [`controls`], сигнатура/агрегат/рендер строки — [`render`].
+//! State, row collection, filtering, and lifecycle live here; source and file selectors are in
+//! [`controls`]; signatures, aggregation, classification, and row rendering are in [`render`].
 
 mod controls;
 mod render;
@@ -28,16 +27,16 @@ use crate::core_order::CoreOrder;
 use moon_core::applog::{self, LogLine};
 use moon_core::session::{CoreId, CoreStore};
 
-/// Сколько последних строк держим в поле зрения.
+/// Maximum number of recent rows retained in a normal live or file snapshot.
 const VIEW_LIMIT: usize = 5000;
-/// Сколько строк берём с каждого ядра при сборке агрегата.
+/// Maximum number of rows taken from each core before building the aggregate.
 const AGG_PER_CORE: usize = 2000;
-/// Потолок буфера в режиме паузы (листаем): пока не в Live, старые строки не удаляем, а
-/// дописываем новые сверх VIEW_LIMIT — чтобы позиция скролла не «съезжала». До этого
-/// потолка. При возврате в Live обрезаем обратно к VIEW_LIMIT.
+/// Buffer cap while tail following is paused. Fresh rows are appended beyond `VIEW_LIMIT` without
+/// replacing the existing prefix so the scroll position does not shift; returning to effective
+/// follow mode replaces it with a normal bounded snapshot.
 const PAUSED_CAP: usize = 20_000;
 
-/// Источник лога.
+/// Selected source of log rows.
 #[derive(Clone, PartialEq)]
 pub(super) enum LogSource {
     Aggregate,
@@ -45,14 +44,14 @@ pub(super) enum LogSource {
     Core(CoreId),
 }
 
-/// Что показываем: живой лог из памяти или файл с диска.
+/// Whether to show live in-memory rows or a named rotated file from disk.
 #[derive(Clone, PartialEq)]
 pub(super) enum LogFile {
     Live,
     Named(String),
 }
 
-/// Один пункт селектора источника.
+/// One source-selector entry with its UI label and sanitized log-file label.
 pub(super) struct LogSourceItem {
     pub(super) source: LogSource,
     pub(super) display: String,
@@ -65,33 +64,34 @@ pub struct LogPanel {
     pub(super) source: LogSource,
     pub(super) file: LogFile,
     errors_only: bool,
-    /// Фильтр по монете (клик по тикеру в строке). None — без фильтра.
+    /// Coin substring filter set by clicking a detected ticker; `None` disables it.
     coin_filter: Option<String>,
     query: Entity<MoonInputState>,
-    /// Кэш загруженного файла — чтобы не читать диск каждый кадр.
+    /// Named-file cache, avoiding disk reads during rendering and repeated backend observations.
     loaded_name: Option<String>,
     loaded_lines: Vec<LogLine>,
-    /// Кэш списка файлов выбранного источника. `render` не должен ходить в FS ради dropdown.
+    /// Cached file list for the selected source; rendering never scans the filesystem for the menu.
     available_files_label: Option<String>,
     available_files: Vec<String>,
-    /// Нефильтрованные строки текущего источника/file. Обновляются вне render.
+    /// Unfiltered rows for the current source and file, updated outside `render`.
     raw_lines: Vec<LogLine>,
-    /// Отфильтрованные строки текущего кадра (читает рендер списка по индексу).
-    /// Классификация/монета посчитаны заранее в `apply_filter`, не на кадре.
+    /// Filtered render rows indexed by the virtual list. Classification and coin detection are
+    /// precomputed in `apply_filter` rather than repeated for each rendered frame.
     lines: Vec<render::LineView>,
     total: usize,
-    /// «Live»: намерение пользователя держаться у хвоста. Ручной выключатель —
-    /// отжатая вручную кнопка не вернётся к Live сама (только ручным нажатием).
+    /// User intent to follow the tail. Turning Live off manually prevents automatic resumption until
+    /// the user enables it again.
     live: bool,
-    /// Авто-пауза Live: пользователь скроллит. Ставится по колесу, снимается таймером
-    /// через 5 c после последнего скролла. Пока true — к низу не прыгаем.
+    /// Temporary follow pause set by wheel scrolling and cleared five seconds after the latest
+    /// scroll. While true, filtering does not jump to the tail.
     scroll_pause: bool,
-    /// Поколение скролла — гейт для отложенного авто-возврата (новый скролл отменяет
-    /// прошлый таймер: 5 c считаются от ПОСЛЕДНЕГО скролла).
+    /// Generation guarding delayed follow resumption. A new scroll or manual Live toggle invalidates
+    /// earlier timers, so the five-second delay starts at the latest scroll.
     scroll_gen: u64,
     scroll: MoonVirtualListScrollHandle,
-    /// Сигнатура лога прошлого кадра — чтобы НЕ пересобирать лог каждые 100мс
-    /// (gather клонирует до 5000 строк; на холостом ходу это лишняя нагрузка).
+    /// Last observed combined log signature. Rebuilding only on a revision change avoids repeatedly
+    /// cloning bounded source snapshots while scoped logs are idle. Aggregate may clone up to
+    /// `AGG_PER_CORE` rows from every scoped core before its final `VIEW_LIMIT` truncation.
     last_sig: u64,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
@@ -113,7 +113,8 @@ impl LogPanel {
             }
         })
         .detach();
-        // Перерисовка — ТОЛЬКО когда реально появились новые строки лога.
+        // Reload only when the combined local and in-scope core log revision changes. This may wake
+        // a selected source even when the new row belongs to another source in the same scope.
         cx.observe(&backend, |this, backend, cx| {
             let sig = render::log_sig(backend.read(cx), &this.group);
             if sig != this.last_sig {
@@ -151,8 +152,9 @@ impl LogPanel {
         this
     }
 
-    /// Список источников в области видимости (порт `App::build_log_sources`).
-    /// Группа непуста → только её ядра (агрегат = «Лог группы»); пусто → все (детач).
+    /// Builds source-selector entries, ported from `App::build_log_sources`. A nonempty group limits
+    /// configured cores and the aggregate to that group; an empty group includes every configured
+    /// core. Aggregate and Local remain the first two entries, followed by canonically ordered cores.
     fn sources(&self, b: &Backend) -> Vec<LogSourceItem> {
         let scoped = !self.group.is_empty();
         let mut v = vec![
@@ -206,7 +208,8 @@ impl LogPanel {
         self.available_files_label = Some(label.to_string());
     }
 
-    /// Строки для текущего выбора (Live — из памяти/агрегат слиянием; Named — из файла).
+    /// Collects rows for the current selection. Live reads the local ring, one core ring, or the
+    /// merged core aggregate; Named reads and then caches at most `VIEW_LIMIT` rows from disk.
     fn gather(&mut self, store: &CoreStore, sources: &[LogSourceItem]) -> Vec<LogLine> {
         match &self.file {
             LogFile::Live => {
@@ -235,11 +238,11 @@ impl LogPanel {
         let errors_only = self.errors_only;
         let coin = self.coin_filter.as_deref().map(str::to_lowercase);
         self.total = self.raw_lines.len();
-        // Базы монет со всего буфера — чтобы подсветить голые тикеры (`SPK`), встреченные
-        // где-то в рыночной форме (`USDT-SPK`). Один проход до сборки строк.
+        // Collect coin bases across the whole raw buffer so bare tickers such as `SPK` can be
+        // recognized after appearing elsewhere in a market form such as `USDT-SPK`.
         let known = render::collect_coin_bases(&self.raw_lines);
-        // Классификацию/монету считаем ОДИН раз здесь (не на кадре): парсинг текста
-        // дорог, а рендер строки вызывается каждый кадр для каждой видимой строки.
+        // Classify severity and detect the coin once here. Text parsing is expensive, while visible
+        // row rendering runs every frame.
         self.lines = self
             .raw_lines
             .iter()
@@ -266,13 +269,13 @@ impl LogPanel {
         }
     }
 
-    /// Тейлим ли сейчас (эффективный Live): включён и не на скролл-паузе.
+    /// Returns effective tail-following state: Live intent enabled and no temporary scroll pause.
     fn following(&self) -> bool {
         self.live && !self.scroll_pause
     }
 
-    /// Вернуться в Live: снять паузу, включить, перечитать свежий хвост из кольца и
-    /// прыгнуть вниз (reload_rows → apply_filter сам прыгает, т.к. following() снова true).
+    /// Resumes Live intent, clears the scroll pause, reloads the current selection, and scrolls to
+    /// the filtered tail through `reload_rows` and `apply_filter`.
     fn resume_live(&mut self, cx: &mut Context<Self>) {
         self.scroll_pause = false;
         self.live = true;
@@ -281,9 +284,9 @@ impl LogPanel {
         self.reload_rows(backend.read(cx), cx);
     }
 
-    /// Пользователь крутанул колесо над списком. В режиме Live это отжимает кнопку
-    /// (пауза тейлинга) и заводит таймер авто-возврата на 5 c после ПОСЛЕДНЕГО скролла.
-    /// Если Live отжат вручную — скролл ничего не меняет.
+    /// Handles a wheel event over the list. With Live intent enabled it temporarily unchecks
+    /// effective follow and schedules resumption five seconds after the latest scroll. A manually
+    /// disabled Live setting ignores scrolling.
     fn on_user_scroll(&mut self, cx: &mut Context<Self>) {
         if !self.live {
             return;
@@ -292,14 +295,14 @@ impl LogPanel {
         let want_gen = self.scroll_gen;
         if !self.scroll_pause {
             self.scroll_pause = true;
-            cx.notify(); // кнопка визуально отжимается
+            cx.notify(); // Reflect the temporarily unchecked follow control.
         }
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
             executor.timer(std::time::Duration::from_secs(5)).await;
             let _ = cx.update(|cx| {
                 this.update(cx, |t, cx| {
-                    // Таймер ещё актуален (не было нового скролла) и Live не отжали вручную.
+                    // Resume only if no newer scroll or manual Live toggle invalidated this timer.
                     if t.scroll_gen == want_gen && t.live && t.scroll_pause {
                         t.resume_live(cx);
                         cx.notify();
@@ -311,7 +314,7 @@ impl LogPanel {
         .detach();
     }
 
-    /// Установить/снять фильтр по монете (клик по тикеру в строке).
+    /// Sets or clears the coin substring filter selected from a ticker in a row.
     pub(super) fn set_coin_filter(&mut self, coin: Option<String>, cx: &mut Context<Self>) {
         if self.coin_filter != coin {
             self.coin_filter = coin;
@@ -320,10 +323,10 @@ impl LogPanel {
         }
     }
 
-    /// ПКМ по монете: открыть её график на Main (через `Backend.open_request`, как Ордера/
-    /// Детекты). Ядро строки: источник `Core` → это ядро; `Aggregate` → сервер из `target`;
-    /// `Local` → первое ядро группы, где такая монета есть. Базу (`SPK`) резолвим в рыночное
-    /// имя через market-поиск ядра (истина), не угадываем суффикс.
+    /// Handles a ticker right-click by requesting its chart on Main. A Core source searches only
+    /// that core; Aggregate first resolves the row's `target` to a configured core; unresolved
+    /// Aggregate and Local rows scan configured cores in scope. Each candidate uses market search
+    /// for `base` and the first result rather than guessing a quote suffix. Main is not activated.
     pub(super) fn open_coin_chart(&mut self, base: String, target: String, cx: &mut Context<Self>) {
         let resolved = {
             let b = self.backend.read(cx);
@@ -357,12 +360,12 @@ impl LogPanel {
             })
         };
         let Some((core, market)) = resolved else {
-            return; // рынок для монеты не нашёлся на ядре — молча ничего не делаем
+            return; // No candidate core resolved the coin to a market; leave the UI unchanged.
         };
         self.backend.update(cx, |b, bcx| {
             b.open_request = Some((core, market));
             b.open_request_rev = b.open_request_rev.wrapping_add(1);
-            // Открыть монету, но окно Main не поднимать (как в Ордерах/Детектах).
+            // Open the market on Main without raising its window, as Orders and Detects do.
             b.open_request_activate = false;
             bcx.notify();
         });
@@ -377,20 +380,20 @@ impl LogPanel {
         }
         let fresh = self.gather(b.session.store(), &sources);
         if self.following() {
-            // Live: свежий хвост (кольцо уже обрезано до VIEW_LIMIT).
+            // Effective follow replaces the buffer with the current bounded snapshot.
             self.raw_lines = fresh;
         } else {
-            // Пауза (листаем): дописываем только новые строки в конец, старые не трогаем —
-            // позиция скролла не сдвигается. Лимит VIEW_LIMIT снят до PAUSED_CAP.
+            // While following is paused, append only unseen suffix rows and retain the existing
+            // prefix so the scroll position stays stable, up to `PAUSED_CAP`.
             self.merge_paused(fresh);
         }
         self.apply_filter(cx);
     }
 
-    /// Слить свежий снимок в `raw_lines` в режиме паузы: найти в свежем нашу последнюю
-    /// строку (по времени+тексту+источнику) и дописать всё, что после неё. Нет совпадения
-    /// (паузу держали дольше, чем кольцо, > VIEW_LIMIT новых) → дописываем весь снимок
-    /// (возможен разрыв — редкий край). Сверху обрезаем до PAUSED_CAP.
+    /// Merges a fresh snapshot into the paused buffer by finding its last retained row using
+    /// timestamp, message, and target, then appending the fresh suffix. If the boundary has fallen
+    /// out of the bounded snapshot, the whole snapshot is appended and a history gap can remain.
+    /// Drops the oldest prefix above `PAUSED_CAP`.
     fn merge_paused(&mut self, fresh: Vec<LogLine>) {
         match self.raw_lines.last() {
             None => self.raw_lines = fresh,
@@ -410,7 +413,8 @@ impl LogPanel {
         }
     }
 
-    /// Явный выбор источника/файла → всегда к Live (иначе merge_paused слил бы чужой лог).
+    /// Resets effective following after an explicit source or file change and invalidates pending
+    /// scroll-resume timers so `merge_paused` cannot combine rows from different selections.
     fn reset_to_live(&mut self) {
         self.live = true;
         self.scroll_pause = false;
@@ -420,7 +424,7 @@ impl LogPanel {
     pub(super) fn set_source(&mut self, s: LogSource, cx: &mut Context<Self>) {
         if self.source != s {
             self.source = s;
-            // Смена источника → к Live, сброс кэша файла.
+            // A source change returns to Live and invalidates both named-file caches.
             self.file = LogFile::Live;
             self.loaded_name = None;
             self.available_files_label = None;
@@ -498,7 +502,7 @@ impl Render for LogPanel {
         let is_agg = matches!(self.source, LogSource::Aggregate);
         let total = self.total;
 
-        // ── Панель управления ──
+        // Build the wrapping filter and follow controls.
         let mut controls = h_flex()
             .w_full()
             .flex_wrap()
@@ -545,12 +549,12 @@ impl Render for LogPanel {
                     .checked(self.following())
                     .size(MoonCheckboxSize::Compact)
                     .on_change(cx.listener(|t, ch: &bool, _, cx| {
-                        // Ручное нажатие отменяет отложенный авто-возврат.
+                        // A manual toggle invalidates any delayed automatic resumption.
                         t.scroll_gen = t.scroll_gen.wrapping_add(1);
                         if *ch {
-                            t.resume_live(cx); // вернуться к живому хвосту
+                            t.resume_live(cx); // Reload and return to the current selection's tail.
                         } else {
-                            // Отжали вручную — заморозить, сама к Live не вернётся.
+                            // Manual disable freezes following until the user enables it again.
                             t.live = false;
                             t.scroll_pause = false;
                         }
@@ -563,7 +567,7 @@ impl Render for LogPanel {
                     .text_color(rgb(p.text_muted))
                     .child(t!("log.count", shown = self.lines.len(), total = total).to_string()),
             );
-        // Чип активного фильтра монеты (клик снимает).
+        // Show a removable chip for the active coin filter.
         if let Some(coin) = self.coin_filter.clone() {
             controls = controls.child(
                 div()
@@ -581,7 +585,7 @@ impl Render for LogPanel {
             );
         }
 
-        // ── Список (виртуализирован, к низу) ──
+        // Build the tail-oriented virtualized list or its empty-state message.
         let weak = cx.entity().downgrade();
         let body: AnyElement = if self.lines.is_empty() {
             let msg = if total == 0 {
@@ -604,8 +608,8 @@ impl Render for LogPanel {
             let list_el = MoonVirtualList::new(
                 "log-virtual-rows",
                 self.lines.len(),
-                // Высота строки растёт с кеглем (MoonVirtualList берёт сырые px):
-                // фикс 18 при +6 обрезал текст по вертикали.
+                // Scale row height with the font because MoonVirtualList accepts raw pixels; a
+                // fixed 18 px row clipped text at the +6 font setting.
                 crate::design::fit_h_value(cx, 18.0, 14.0, 2.0),
                 move |ix, _w, app| {
                     weak.upgrade()
@@ -628,7 +632,7 @@ impl Render for LogPanel {
                 .w_full()
                 .min_h_0()
                 .child(list_el)
-                // Скролл колесом над списком → пауза Live + таймер авто-возврата.
+                // Any wheel event over the list pauses effective following and starts its timer.
                 .on_scroll_wheel(cx.listener(|t, _e: &ScrollWheelEvent, _w, cx| {
                     t.on_user_scroll(cx);
                 }))
@@ -639,10 +643,9 @@ impl Render for LogPanel {
             .id("log-panel")
             .size_full()
             .track_focus(&self.focus)
-            // Моно-шрифт на СВОЁМ корне (как Orders/Assets/Report): в открепляемом окне панель
-            // не наследует моно от шапки — без этого detached-«Лог» рисовался бы Inter'ом
-            // (рассинхрон с docked-видом и с измерением ширины селекторов в controls.rs,
-            // которое опирается на моно).
+            // Set the monospace font on this root, as Orders, Assets, and Report do. A detached
+            // panel does not inherit it from the dock header; without this, it would render in Inter
+            // and disagree with both the docked view and selector-width measurements in controls.rs.
             .font_family(crate::design::mono())
             .child(controls)
             .child(div().w_full().h(px(1.0)).bg(rgb(p.border)))

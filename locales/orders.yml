@@ -1,9 +1,9 @@
-# Правая панель ордера + нижний док: таблица ордеров.
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
-# Намеренно НЕ переводим: Buy · Sell.
+# Right order pane and the Orders table in the bottom dock.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
+# Intentionally untranslated: Buy · Sell.
 _version: 2
 
-# --- Правая панель ордера ---
+# --- Right order pane ---
 order.title:
   ru: "Ордер"
   en: "Order"
@@ -17,7 +17,7 @@ order.settings:
   en: "Order settings…"
   es: "Ajustes de orden…"
 
-# --- Нижний док: таблица ордеров ---
+# --- Bottom dock: Orders table ---
 orders.title:
   ru: "Открытые ордера группы (%{count})"
   en: "Open group orders (%{count})"
@@ -82,7 +82,7 @@ orders.only_current:
   ru: "Только ордера текущего маркета"
   en: "Only current market orders"
   es: "Solo órdenes del mercado actual"
-# Нижний футер: всего открытых ордеров (реальных/эму).
+# Bottom footer: total open orders, split into real and emulated.
 orders.footer_total:
   ru: "Всего %{total} (%{real}/%{emu})"
   en: "Total %{total} (%{real}/%{emu})"
@@ -115,7 +115,7 @@ orders.sort.old:
   ru: "Старые первые"
   en: "Oldest first"
   es: "Más antiguos primero"
-# --- Окно редактирования активного ордера (клик по BUY/SELL, ПКМ по линии) ---
+# --- Active-order editor (click BUY/SELL or right-click an order line) ---
 orders.edit.title:
   ru: "Активный ордер"
   en: "Active Order"
@@ -173,7 +173,7 @@ orders.edit.vol_lt:
   en: "Vol <"
   es: "Vol <"
 
-# Подъём строк, открытых на Main, наверх (две взаимоисключающие галки + выкл).
+# Move rows opened on Main to the top (two mutually exclusive checkboxes plus off).
 orders.sort.main_all:
   ru: "Main сверху: весь тикер"
   en: "Main on top: whole ticker"

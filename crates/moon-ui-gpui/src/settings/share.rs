@@ -1,16 +1,15 @@
-//! Копировать/Вставить настройки вкладки (обмен между пользователями): текст = РОВНО
-//! содержимое переносимого файла вкладки (Интерфейс = theme.toml, Линии = orders.toml,
-//! Бейджи = badges.json, Хоткеи = hotkeys.toml). Скопированное можно сохранить файлом,
-//! и наоборот — вставить содержимое файла, присланного другим пользователем.
-//! Вставка пишет в draft (живое превью); на диск попадает по «Сохранить».
-//! Формат/валидация — в moon-core (`to_share_string`/`parse_share` у структур файлов).
+//! Copies and pastes portable per-tab settings between users. The text uses the corresponding
+//! file format: Interface = `theme.toml`, Lines = `orders.toml`, Badges = `badges.json`, and
+//! Hotkeys = `hotkeys.toml`. Copied text can be saved as a file, and received file contents can be
+//! pasted back. Paste updates the live-preview draft; Save persists it. `moon-core` owns format
+//! serialization and validation through each file structure's `to_share_string`/`parse_share`.
 
 use super::{SettingsView, Tab, badges, interface, lines};
 use gpui::*;
 use moon_core::config::{AppConfig, BadgesConfig, ChartThemeSet, HotkeysConfig, OrdersStyleSet};
 
 impl SettingsView {
-    /// У вкладки есть свой переносимый файл → показываем Копировать/Вставить.
+    /// Returns whether the active tab has a portable file and should show Copy/Paste actions.
     pub(super) fn shareable(&self) -> bool {
         matches!(
             self.active,
@@ -18,7 +17,7 @@ impl SettingsView {
         )
     }
 
-    /// «Копировать»: сериализовать draft-срез активной вкладки в формате её файла → буфер.
+    /// Serializes the active tab's draft slice in its file format and copies it to the clipboard.
     pub(super) fn copy_tab(&mut self, cx: &mut Context<Self>) {
         let text = {
             let b = self.backend.read(cx);
@@ -39,9 +38,10 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// «Вставить»: разобрать буфер как файл активной вкладки, применить к draft (живое
-    /// превью) и пересобрать editor-стейты вкладки (пикеры/слайдеры держат значения с
-    /// build). Чужой/битый текст — ошибка в статус, draft не трогаем.
+    /// Parses clipboard text as the active tab's file and applies it to the live-preview draft.
+    ///
+    /// Editors that cache draft values during `build` are rebuilt after a successful paste.
+    /// Empty, foreign, or malformed text sets an error status without changing the draft.
     pub(super) fn paste_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(text) = cx
             .read_from_clipboard()
@@ -76,8 +76,8 @@ impl SettingsView {
         };
 
         if applied {
-            // Editor-стейты инициализируются из draft при build — пересобрать под
-            // вставленные значения (паттерн add/del бейджей/серверов).
+            // Rebuild editor states initialized from the draft during `build`, matching the
+            // add/remove pattern used by badge and server editors.
             match self.active {
                 Tab::Interface => self.iface = interface::build(&self.backend, window, cx),
                 Tab::Lines => self.lines = lines::build(&self.backend, window, cx),
@@ -91,13 +91,13 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Снимок среза draft (для parse_share, которому нужен текущий набор).
+    /// Returns a snapshot of the selected draft slice for parsers that need the current set.
     fn draft_snapshot<T>(&self, cx: &Context<Self>, get: impl Fn(&AppConfig) -> T) -> T {
         let b = self.backend.read(cx);
         get(b.preview.as_ref().unwrap_or(&b.config))
     }
 
-    /// Записать в draft + notify бэкенда (живое превью, как обычные правки вкладок).
+    /// Updates the draft and notifies the backend for the same live preview as ordinary tab edits.
     fn apply_draft(&self, cx: &mut Context<Self>, apply: impl FnOnce(&mut AppConfig)) {
         self.backend.update(cx, |b, bcx| {
             if let Some(p) = b.preview.as_mut() {

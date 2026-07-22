@@ -1,8 +1,8 @@
-# Окно настроек: общее + ярлыки вкладок.
-# Формат rust-i18n `_version: 2`: ключ → карта локаль→строка. Интерполяция: %{var}.
+# Settings window: general content and tab labels.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
 _version: 2
 
-# --- Окно настроек: общее ---
+# --- General settings-window content ---
 settings.save:
   ru: "Сохранить"
   en: "Save"
@@ -23,7 +23,7 @@ settings.title:
   ru: "Настройки"
   en: "Settings"
   es: "Ajustes"
-# --- Копировать/Вставить настройки вкладки (текст = содержимое переносимого файла) ---
+# --- Copy/Paste tab settings (the text is the portable file's contents) ---
 settings.copy:
   ru: "Копировать"
   en: "Copy"
@@ -49,7 +49,7 @@ settings.paste_empty:
   en: "Clipboard is empty"
   es: "Portapapeles vacío"
 
-# --- Ярлыки вкладок настроек ---
+# --- Settings tab labels ---
 tab.connections:
   ru: "Подключения"
   en: "Connections"
@@ -66,8 +66,8 @@ tab.interface:
   ru: "Интерфейс"
   en: "Interface"
   es: "Interfaz"
-# Содержимое вкладки «Линии» — трейдинг-термины (Buy/Sell/Stop/dashed/…), НЕ переводим;
-# переводим только ярлык вкладки.
+# Line-type names such as Buy/Sell/Stop remain English. This file localizes only the tab label;
+# attribute labels are localized in locales/lines.yml.
 tab.lines:
   ru: "Линии"
   en: "Lines"
@@ -77,7 +77,7 @@ tab.badges:
   en: "Badges"
   es: "Insignias"
 
-# --- Вкладка «Бейджи» (типы детектов) ---
+# --- Badges tab (detect types) ---
 badges.title:
   ru: "Бейджи типов детектов"
   en: "Detect type badges"

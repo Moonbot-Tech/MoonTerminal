@@ -2,36 +2,36 @@
 /tmp/
 /.cargo/
 /Cargo.lock
-# Локальные конфиги с ключами — НИКОГДА не коммитим.
-# Правила привязаны к корню (ведущий "/"), поэтому КАЖДОЕ расположение нужно перечислять
-# отдельно: на Windows папка данных — это папка рядом с exe, и запуск сборки из корня
-# репозитория создаёт эти файлы здесь же.
+# Local configs containing keys — NEVER commit them.
+# Rules are anchored to the root (leading "/"), so EACH location must be listed
+# separately: on Windows, the data directory is next to the exe, while running the build from the
+# repository root creates these files here as well.
 /config.toml
 /config.enc
 /servers.enc
 /settings.toml
-# Рабочие папки терминала: настройки (`cfg/`), базы (`data/`) и снимки конфига
-# (`backups/`, см. config::backup — до 30 копий servers.enc с ключами API).
+# Terminal working directories: settings (`cfg/`), databases (`data/`), and config snapshots
+# (`backups/`; may contain API keys; retention is defined by `config::backup`).
 /cfg/
 /data/
 /backups/
-# Cargo.lock локальный и ignored: терминал берёт текущие Git-зависимости
-# из публичных Cargo.toml, а локальная разработка может подменять MoonUI через .cargo/config.toml.
+# Cargo.lock is local and ignored: the terminal uses the current Git dependencies
+# from the public Cargo.toml, while local development can override MoonUI via .cargo/config.toml.
 /legasy
 *.log
 /docAi
-# Выходы бенчмарка (CSV семплов/сводок) — локальные, не коммитим.
+# Benchmark outputs (sample/summary CSV files) are local; do not commit them.
 /tools/bench-out/
-# Лабы миграции на GPUI: клон gpui-component для гейтов (Gate 0/Лаба 1/2/3).
-# Локальный, тяжёлый, не коммитим — это испытательный стенд, не часть продукта.
+# GPUI migration labs: a gpui-component clone for the gates (Gate 0/Lab 1/2/3).
+# This large local testbed is not part of the product; do not commit it.
 /vendor/
 render_diag.log
-# Приватные рабочие доки (хендоффы, sin-лог, дизайн, baseline-скрины, OLD-архивы) —
-# только на этом компе, в публичный репо НЕ уходят. Публичными остаются только
-# чисто архитектурные docs/ (RENDER_INVALIDATION, REFACTOR_RENDER, ARCHITECTURE_MULTICORE).
+# Private working docs (handoffs, sin log, design, baseline screenshots, OLD archives) —
+# only on this machine and NEVER included in the public repo. Only purely architectural
+# docs/ remain public (RENDER_INVALIDATION, REFACTOR_RENDER, ARCHITECTURE_MULTICORE).
 /docs-internal/
-# Внутренние агент-инструкции и рабочие заметки — на диске остаются (агент их читает
-# локально), но в публичный репо НЕ коммитятся. Удалены из истории (filter-repo).
+# Internal agent instructions and working notes remain on disk (the agent reads them
+# locally) but are NEVER committed to the public repo. Removed from history (filter-repo).
 /CLAUDE.md
 /AGENTS.md
 /DisQuestions

@@ -131,7 +131,7 @@ impl PlatformLayers {
         }
     }
 
-    /// Полная замена набора свечей слоя (по смене ревизии серии).
+    /// Fully replaces the layer's candle set when the series revision changes.
     pub fn set_candles(&mut self, data: Vec<CandleGpu>) {
         #[cfg(windows)]
         self.candles.set(data);
@@ -145,7 +145,7 @@ impl PlatformLayers {
         }
     }
 
-    /// Стиль слоя свечей (режим/зона/цвета/контур). Идемпотентен.
+    /// Idempotently sets the candle layer's mode, zone, colors, and outline style.
     pub fn set_candle_style(&mut self, style: CandleStyleGpu) {
         #[cfg(windows)]
         self.candles.set_style(style);
@@ -293,14 +293,14 @@ impl PlatformLayers {
         gpu: &gpui::RawGpuAccess,
         panel_clip: [f32; 4],
     ) {
-        // Послойные DRAW-счётчики (чокпоинт, мандат AGENTS.md): раз на present на каждый слой.
+        // Per-layer draw counters: bump each layer once per presentation.
         crate::diag::bump(&crate::diag::CHART_BG_DRAW);
         self.background
             .render(background_params, device, context, rtv, gpu);
         self.userdata.render_zones(view, context, rtv, gpu);
         crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
         self.grid.render(grid_params, device, context, rtv, gpu);
-        // Свечи — под крестами трейдов (combo блитится поверх).
+        // Draw candles below trade crosses; the combo layer is blitted on top.
         crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
         self.candles.render(view, context, rtv, gpu, panel_clip);
         crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);

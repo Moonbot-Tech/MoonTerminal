@@ -5,16 +5,18 @@
 //! Edits go where they belong: order sizes into the core's config, TP/SL/sell into the core via
 //! `ClientSettingsEdit`, leverage to the exchange, `follow` into `Backend`.
 //!
-//! Разнесено по подмодулям (mod.rs = границы слайдеров + re-export'ы):
-//! - [`coin_search`] — поиск монеты + выпадающий список «COIN - Server» (общий: чарт-вкладки,
-//!   тикер шапки, фильтр монеты «Отчёта»);
-//! - [`core_combo`] — поле-список выбора ядер, мультивыбор (общий: Ордера/Отчёт/Активы);
-//! - [`fmt`] — форматирование значений (size/sell/поля) и шаги колеса мыши;
-//! - [`manual_strat`] — тогл+пикер «ручной стратегии» (шапка);
-//! - [`metric`] — торговые метрики TP/SL/Lev: кнопки-триггеры и контент попапов;
-//! - [`strips`] — полосы пресетов размера/продажи с overlay-взаимодействием;
-//! - [`scale`] — дропдауны масштаба цены (вкладки/AddToChart-stack);
-//! - [`toolbar`] — сборка полосы тулбара.
+//! Organized into submodules, while this module owns slider bounds and re-exports:
+//! - [`coin_menu`] provides the shared coin context menu;
+//! - [`coin_search`] provides coin search and the shared `COIN - Server` dropdown for chart tabs,
+//!   the header ticker, and the Report coin filter;
+//! - [`core_combo`] provides the shared multi-select core picker for Orders, Report, Assets,
+//!   Analytics, and Core Status;
+//! - [`fmt`] formats size, sell, and field values and computes mouse-wheel steps;
+//! - [`manual_strat`] provides the header's manual-strategy toggle and picker;
+//! - [`metric`] provides TP/SL/leverage trigger buttons and popup content;
+//! - [`strips`] provides size and sell preset strips with overlay interaction;
+//! - [`scale`] provides price-scale dropdowns for tabs and AddToChart stacks;
+//! - [`toolbar`] composes the toolbar row.
 
 mod coin_menu;
 pub(crate) mod coin_search;
@@ -35,17 +37,22 @@ pub use metric::{MetricTarget, TradeMetric, metric_popup_content};
 pub(crate) use scale::{scale_dropdown_for_add_stack, scale_dropdown_for_tabs, step_scale};
 pub use toolbar::toolbar;
 
-/// Границы слайдеров торговых метрик `(min, max, step)` (по смыслу ядра). Использует и
-/// `Shell` при создании состояний слайдеров.
-pub const TP_NORMAL: (f32, f32, f32) = (2.0, 100.0, 1.0); // x_tmode off: 2..100% (мин = 2)
-/// Граница, ниже которой работает файн-слайдер (суб-процент через scalp). Верхний TP на 2
-/// = на минимуме → нижний слайдер активен (0..2). Выше — нижний disabled. Используется для
-/// надписи/стыка («2%»).
+/// Trading-metric slider bounds `(min, max, step)` matching core semantics.
+///
+/// `Shell` also uses these bounds when it creates slider state.
+pub const TP_NORMAL: (f32, f32, f32) = (2.0, 100.0, 1.0); // x_tmode off: 2..100% (minimum = 2)
+/// Boundary at or below which the fine slider controls sub-percent TP through scalp.
+///
+/// A coarse TP of 2 is its minimum, so the lower 0..2 slider remains enabled. Raising coarse TP
+/// above 2 disables the lower slider. This boundary also corresponds to the shared `2%`
+/// label/junction.
 pub const TP_FINE_MAX: f32 = 2.0;
-/// Кап ЗНАЧЕНИЯ файн-слайдера (scalp): ровно 2% должно уходить в ОСНОВНОЙ TP (верхний слайдер,
-/// `x_sell`), иначе бот уходит в «scalping mode» и продаёт по минимуму (~0.4%). Поэтому скальп
-/// ограничиваем 1.99%; шкала/надпись остаются «2%».
+/// Caps the fine-slider (scalp) VALUE below the main TP boundary.
+///
+/// Exactly 2% must go through the main TP (`x_sell`) on the upper slider; sending it through scalp
+/// instead puts the bot into scalping mode and sells near its minimum (~0.4%). Therefore the scalp
+/// value stops at 1.99%, while the scale and label still end at `2%`.
 pub const TP_FINE_CAP: f32 = 1.99;
-pub const TP_EXT: (f32, f32, f32) = (100.0, 900.0, 10.0); // x_tmode on («s9»): 100..900%
-pub const SL_BOUNDS: (f32, f32, f32) = (-20.0, 1.0, 0.01); // знаковый: -20..+1%
+pub const TP_EXT: (f32, f32, f32) = (100.0, 900.0, 10.0); // x_tmode on ("s9"): 100..900%
+pub const SL_BOUNDS: (f32, f32, f32) = (-20.0, 1.0, 0.01); // signed: -20..+1%
 pub const LEV_BOUNDS: (f32, f32, f32) = (1.0, 125.0, 1.0);

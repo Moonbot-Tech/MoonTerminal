@@ -1,6 +1,6 @@
-//! Правая панель окна «Стратегии»: модель панели параметров и её рендер — плашки/
-//! редакторы значений выбранной стратегии (read-only YES/NO, инпут/мемо, помощник
-//! формул) + попап полного значения. Методы — `impl StrategiesView` (в [`super`]).
+//! Right pane of the Strategies window: the parameter-pane model and renderer, including
+//! selected-strategy badges/value editors (read-only YES/NO, input/memo, formula helper) and the
+//! full-value popover. The methods extend `StrategiesView` from [`super`].
 
 use super::*;
 use rust_i18n::t;
@@ -26,8 +26,8 @@ impl StrategiesView {
         let Some(sections) = selected_sections(self, store) else {
             return ParamsPanelModel::NoSchema;
         };
-        // Просмотр версии с диффом: показываем ТОЛЬКО изменённые поля — либо по
-        // всем разделам («Все», по умолчанию), либо внутри выбранного раздела.
+        // When viewing a persisted snapshot with a diff, show ONLY changed fields, either across
+        // all sections (the default "All" view) or within the selected section.
         let section = if let Some(ch) = self.version_changed_filter() {
             match self.versions.section {
                 None => {
@@ -39,9 +39,9 @@ impl StrategiesView {
                         .filter(|f| seen.insert(f.name.to_lowercase()))
                         .cloned()
                         .collect();
-                    // Изменённые поля, которых НЕТ в схеме текущего вида
-                    // (ядро удалило поле апдейтом / поле другого вида) —
-                    // синтетические строки, иначе «(2)» в списке, а полей 0.
+                    // Add synthetic rows for changed fields absent from the current kind's schema
+                    // (the core removed the field in an update, or it belongs to another kind).
+                    // Otherwise the list could report "(2)" changes while displaying zero fields.
                     let mut extra: Vec<&String> = ch
                         .iter()
                         .filter(|(lc, _)| !seen.contains(lc.as_str()))
@@ -137,7 +137,7 @@ impl StrategiesView {
         };
         let keys: Vec<Key> = row_pairs.iter().map(|(key, _)| *key).collect();
 
-        // Заголовок раздела + счётчик (полей / выбрано) справа.
+        // Section title with the field/selection count on the right.
         let count = if multi {
             t!("strat.selected_count", n = row_pairs.len()).to_string()
         } else {
@@ -192,8 +192,8 @@ impl StrategiesView {
                 .border_color(moon_alpha(p.amber, 0.72))
                 .pl_2();
         }
-        // Баннер просмотра исторической версии — параметры только для чтения.
-        // Без диффа (created/точка отсчёта) поясняем, почему показаны все поля.
+        // The persisted-snapshot banner marks parameters as read-only. When there is no diff
+        // (for example, a created/baseline snapshot), explain why all fields are displayed.
         if let Some(vf) = self.versions.sel {
             let date = moon_core::strat_db::stats::short_date(vf);
             let text = if self.version_changed_filter().is_some() {
@@ -230,7 +230,7 @@ impl StrategiesView {
             )
             .child(div().w_full().h(px(1.0)).bg(moon(p.border)));
 
-        // Порядок полей — как в схеме. Значения берём из снимка по имени.
+        // Preserve schema field order and look up snapshot values by name.
         let mut list = v_flex().w_full().gap(design::ui_px(cx, 2.0));
         for f in &section.fields {
             let lname = f.name.to_lowercase();
@@ -246,8 +246,8 @@ impl StrategiesView {
                 continue;
             }
             let active = self.rules.field_active(&f.name, &values);
-            // В режиме «только изменения» ничего не прячем: список и так узкий,
-            // а изменённое-но-неактивное поле — всё равно изменение.
+            // Do not hide anything in changed-only mode: the list is already narrow, and a changed
+            // but inactive field is still a change.
             if self.only_active_params && !active && self.version_changed_filter().is_none() {
                 continue;
             }
@@ -275,8 +275,10 @@ impl StrategiesView {
         col.into_any_element()
     }
 
-    /// Строка поля: имя слева, значение справа. `active=false` — приглушаем тёмным.
-    /// `merged=None` — значения у выбранных различаются (помечаем «≠», без значения).
+    /// Render a field row with the name on the left and value on the right.
+    ///
+    /// `active=false` dims and disables the row. `merged=None` means the selected values differ,
+    /// so the row displays `≠` without a value and remains editable only when active.
     fn field_row(
         &mut self,
         f: &SchemaField,
@@ -286,9 +288,9 @@ impl StrategiesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // Просмотр старой версии: все контролы задизейблены (истинный гейт —
-        // в stage_field_value), значения остаются читаемыми; у изменённых полей
-        // под значением показываем старое («было: …»).
+        // Disable every control when viewing a persisted DB snapshot (stage_field_value is the
+        // authoritative gate) while keeping values readable. Changed fields show the prior value
+        // below as "was: ...".
         let frozen = self.viewing_version();
         let active = active && !frozen;
         let old_note = if frozen {
@@ -310,13 +312,13 @@ impl StrategiesView {
         let row_id = editor_state_id(keys, &field_name);
         let view = cx.entity();
 
-        // `merged == None` → у выбранных стратегий значение РАЗНОЕ. Раньше показывали лишь «≠»
-        // без правки. Теперь поле всё равно редактируемое: значок «≠» + подсветка, а ввод любого
-        // значения через `stage_field_value` ложится сразу во ВСЕ выбранные ключи (унифицирует).
+        // `merged == None` means the selected strategies have DIFFERENT values. Previously the row
+        // only displayed `≠` and could not be edited. It now remains editable with a `≠` marker and
+        // highlight; stage_field_value applies any entered value to ALL selected keys, unifying them.
         let differ = merged.is_none();
         let value = merged.unwrap_or_default();
-        // Значение версии (до move в контролы) — для сравнения с текущим и
-        // кнопки «копировать в текущую».
+        // Preserve the version value before moving it into a control so it can be compared with the
+        // current value and used by the "copy to current" button.
         let version_val = value.clone();
         let control: AnyElement = match f.ui {
             SchemaFieldUi::Checkbox => {
@@ -338,8 +340,8 @@ impl StrategiesView {
                     }))
                     .into_any_element()
             }
-            // Color-поле: hex-инпут + кликабельный свотч с палитрой (не только «индекс
-            // цвета», но и сам цвет + выбор из палитры).
+            // A color field combines a hex input with a clickable palette swatch, exposing the
+            // actual color and palette selection rather than only a color index.
             SchemaFieldUi::Color => {
                 let keys_arc = Arc::new(keys.to_vec());
                 let state = self.field_input_state(
@@ -431,8 +433,8 @@ impl StrategiesView {
             }
             _ => {
                 let keys_arc = Arc::new(keys.to_vec());
-                // Разные значения рисуем как ПУСТОЙ инпут с плейсхолдером (не memo): набранное
-                // применится ко всем выбранным сразу.
+                // Render differing values as an EMPTY input with a placeholder, never as a memo;
+                // entered text applies to all selected strategies at once.
                 if !differ && is_memo_field(f, &value) {
                     let state = self.field_memo_state(
                         row_id.clone(),
@@ -476,13 +478,12 @@ impl StrategiesView {
                 }
             }
         };
-        // Просмотр версии: под контролом — «было: X» (значение до этой версии)
-        // и «тек.: Y» (живое значение сейчас, если отличается) с кнопкой
-        // «→ в тек.»: значение версии стейджится в ЖИВУЮ стратегию (жёлтый
-        // dirty-маркер), реально применяется кнопкой «Применить N» — тогда
-        // ядро получит правку и появится новая версия.
-        // «тек.» показываем ВСЕГДА (пока стратегия жива); кнопку копирования —
-        // только когда текущее значение отличается от значения версии.
+        // In persisted-snapshot view, show "was: X" (the value before this snapshot) and
+        // "current: Y" (the live value now, when available) below the control. The "copy to current"
+        // button stages the snapshot value in the LIVE strategy with a yellow dirty marker;
+        // "Apply N" sends the actual change to the core and creates a new version. Always show
+        // "current" while the strategy is live, but show the copy button only when the live value
+        // differs from the snapshot value.
         let cur_note: Option<String> = if frozen {
             let b = self.backend.read(cx);
             let store = b.session.store();
@@ -508,7 +509,7 @@ impl StrategiesView {
                 );
             }
             if let Some(cur) = cur_note {
-                // Семантическое сравнение: «YES» (импортная эра) == «Yes», «1» == «1.0».
+                // Compare semantically: `YES` from the import era equals `Yes`, and `1` equals `1.0`.
                 let differs = !values_equal(&cur, &version_val);
                 let fname = field_name.clone();
                 let vval = version_val.clone();
@@ -517,8 +518,7 @@ impl StrategiesView {
                         .min_w_0()
                         .truncate()
                         .text_size(design::t_caption(cx))
-                        // Отличие от версии — синим (есть что копировать),
-                        // совпадение — тускло.
+                        // Use blue when the live value differs and can be copied; dim matching values.
                         .text_color(moon(if differs { p.blue } else { p.text_soft }))
                         .child(t!("strat.version_cur", v = cur).to_string()),
                 );
@@ -529,8 +529,8 @@ impl StrategiesView {
                             .size(MoonButtonSize::Micro)
                             .label(t!("strat.copy_to_current").to_string())
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                // Мимо гейта viewing_version НАРОЧНО: копирование
-                                // из версии — единственная легальная правка здесь.
+                                // Intentionally bypass the viewing_version gate: copying from a
+                                // version is the only permitted edit in this view.
                                 if let Some((core, id)) = this.selected {
                                     this.field_edits
                                         .insert((core, id, fname.clone()), vval.clone());
@@ -547,7 +547,7 @@ impl StrategiesView {
         } else {
             control
         };
-        // Значок «≠» перед редактируемым контролом, когда значения различаются.
+        // Prefix an editable control with `≠` when the selected values differ.
         let value_el: AnyElement = if differ {
             h_flex()
                 .items_center()
@@ -595,8 +595,8 @@ impl StrategiesView {
                             .text_color(moon(name_col))
                             .child(f.name.clone()),
                     )
-                    // Маркер «изменено, но не применено»: видно, какие поля из
-                    // простыни правились до нажатия «применить».
+                    // Mark edits that have not been applied so changed fields remain visible in a
+                    // long parameter list before the user presses "apply".
                     .when(dirty, |row| {
                         row.child(
                             div()
@@ -611,8 +611,8 @@ impl StrategiesView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    // Клип: значение НЕ должно вылезать за свою ячейку и просвечивать на
-                    // соседние поля (memo с длинным текстом раньше перекрывал строки ниже).
+                    // Clip values to their cells so they cannot bleed into adjacent fields; long
+                    // memo text previously overlapped the rows below.
                     .overflow_hidden()
                     .text_color(moon(val_col))
                     .child(value_el),
@@ -629,9 +629,9 @@ impl StrategiesView {
         if !is_formula_field(&field) {
             return None;
         }
-        // Хелпер формул — только для СТРОКОВЫХ редактируемых полей. Матч по имени
-        // ловил и чекбоксы («IgnoreFilters» содержит «filter») — клик по галке
-        // открывал подсказки EMA. Смотрим тип/контрол поля в схеме.
+        // Offer the formula helper only for editable STRING fields. Name matching also caught
+        // checkboxes (`IgnoreFilters` contains `filter`), so clicking one opened EMA suggestions;
+        // inspect the schema field type and control instead.
         {
             let b = self.backend.read(cx);
             let store = b.session.store();

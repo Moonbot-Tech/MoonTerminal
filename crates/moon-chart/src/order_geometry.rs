@@ -4,7 +4,7 @@
 const SEG_PATTERN_SOLID: f32 = 0.0;
 const SEG_PATTERN_DASH_DOT_DOT: f32 = 1.0;
 const SEG_PATTERN_DOT: f32 = 2.0;
-/// Moonbot: `ShowLightLines := T.RangeT > 0.02`, где RangeT — Delphi days.
+/// Moonbot: `ShowLightLines := T.RangeT > 0.02`, where RangeT is measured in Delphi days.
 const MB_TRACE_LIGHT_RANGE_MS: f32 = 0.02 * 86_400_000.0;
 /// Moonbot draws MoonShot area with fixed 0.15 opacity, independent from order line alpha.
 const MB_MOONSHOT_ZONE_ALPHA: f32 = 0.15;
@@ -14,7 +14,7 @@ use crate::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
 use moon_core::config::{LineStyle, OrdersStyle};
 use moon_core::session::order_lines::{LineKind, OrderLineStore, RetainedOrder};
 
-/// sRGB-цвет [u8;3] + alpha → [f32;4] (шейдер переводит rgb в linear).
+/// sRGB color [u8;3] + alpha → [f32;4] (the shader converts RGB to linear).
 fn rgba(c: [u8; 3], alpha: f32) -> [f32; 4] {
     [
         c[0] as f32 / 255.0,
@@ -24,7 +24,7 @@ fn rgba(c: [u8; 3], alpha: f32) -> [f32; 4] {
     ]
 }
 
-/// Виды трассируемых линий: (стиль, индекс в RetainedOrder::lines).
+/// Traced line kinds: (style, index into RetainedOrder::lines).
 fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, usize); 7] {
     [
         (&s.buy, LineKind::Buy as usize),
@@ -37,10 +37,9 @@ fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, usize); 7] {
     ]
 }
 
-/// Собирает геометрию линий ордеров рынка `market`: рабочие линии ордеров,
-/// отдельную trace-историю их движения, кресты начала/конца, узелки fallback-
-/// ступеней и непрерывную линию ликвидации. Куллит ордера вне видимого окна по
-/// времени.
+/// Builds order-line geometry for `market`: primary order lines, a separate trace history
+/// of their movement, start/end crosses, fallback-step knots, and a continuous liquidation
+/// line. Culls orders outside the visible time window.
 #[allow(clippy::too_many_arguments)]
 pub fn build_order_geometry(
     store: &OrderLineStore,
@@ -65,8 +64,8 @@ pub fn build_order_geometry(
     let to_rel = |t_ms: f64| (t_ms - epoch_ms) as f32;
     let kinds = traced_kinds(style);
 
-    // Видимые: открытые + новейшие max_closed_orders закрытых, в порядке кольца стора
-    // (без сорта — кап на закрытые делает сам стор). Дальше культим по окну времени.
+    // Visible set: open orders plus the newest max_closed_orders closed orders, in store-ring
+    // order (without sorting; the store itself caps closed orders). Then cull by time window.
     let visible: Vec<&RetainedOrder> =
         store.market_draw_orders(market, style.max_closed_orders as usize);
     for ord in visible {
@@ -79,19 +78,19 @@ pub fn build_order_geometry(
         let highlight_thickness_mul = if highlighted { 1.7 } else { 1.0 };
         let highlight_marker_mul = if highlighted { 1.25 } else { 1.0 };
         let order_end = ord.closed_ms.unwrap_or(now_ms);
-        // Куллинг по окну времени (rel ms).
+        // Cull by the time window (relative milliseconds).
         let start_rel = to_rel(ord.create_ms);
         let end_rel = to_rel(order_end);
         if end_rel < left_rel || start_rel > right_rel {
             continue;
         }
-        // Выставленный, но ещё НЕ исполненный (вход не залит, fill=0) → тусклее: после исполнения
-        // линия становится ярче (как в Moonbot). Закрытый — отдельный, самый тусклый уровень.
+        // A placed but NOT yet filled order (entry unfilled, fill=0) is dimmer; after filling,
+        // the line becomes brighter (as in Moonbot). Closed orders use a separate, dimmest level.
         let alpha = if closed {
             style.closed_alpha
         } else if ord.fill_pct <= 0.0 {
-            // Выставлен, но не залит → прозрачность настраивается на входной линии ордера
-            // по его стороне: `buy` (лонг) либо `buy_short` (шорт). После исполнения — ярче
+            // Placed but unfilled: opacity comes from the order's entry-line style according
+            // to its side: `buy` (long) or `buy_short` (short). After filling, it is brighter
             // (`active_alpha`).
             if ord.is_short {
                 style.buy_short.pending_alpha
@@ -129,10 +128,10 @@ pub fn build_order_geometry(
             }
         }
 
-        // Ликвидация — непрерывная горизонталь без маркеров. Рисуем ТОЛЬКО у активного
-        // (не закрытого) ордера: закрыли позицию → ордер закрыт → ликвидации больше нет.
-        // Иначе линия «висела» бы после закрытия (closed-ордер держит последний `liq` и
-        // ещё какое-то время остаётся в наборе отрисовки на closed_alpha).
+        // Liquidation is a continuous horizontal line without markers. Draw it ONLY for an active
+        // (not closed) order: once the position is closed, the order closes and liquidation no
+        // longer applies. Otherwise the line would linger after closure (a closed order retains
+        // its last `liq` and remains in the draw set at closed_alpha for some time).
         if !closed {
             if let Some(p) = ord.liq {
                 let s = &style.liq;
@@ -154,13 +153,13 @@ pub fn build_order_geometry(
         };
 
         for (st, idx) in kinds {
-            // После закрытия ордера (исполнен/отменён) на графике остаются ТОЛЬКО вход/выход
-            // (Buy/Sell) полупрозрачными (`closed_alpha`). Стоп/трейлинг/встоп/ТП/pending-линии
-            // и их серверные трассы у закрытого ордера убираем.
+            // After an order closes (filled/cancelled), ONLY its entry/exit (Buy/Sell) remain
+            // on the chart, translucent (`closed_alpha`). Remove stop/trailing/vstop/take-profit/
+            // pending lines and their server traces for a closed order.
             if closed && idx != LineKind::Buy as usize && idx != LineKind::Sell as usize {
                 continue;
             }
-            // Шорт-ордер красим вход/выход отдельными стилями (как long/short в Moonbot:
+            // Color a short order's entry/exit with separate styles (like long/short in Moonbot:
             // BuyShort/SellShort): Buy → `buy_short`, Sell → `sell_short`.
             let st = if ord.is_short && idx == LineKind::Buy as usize {
                 &style.buy_short
@@ -170,10 +169,10 @@ pub fn build_order_geometry(
                 st
             };
             let line = &ord.lines[idx];
-            // ВЫКЛЮЧЕННАЯ линия живого ордера (off_ms: стоп/TP/vstop сняли) не рисуется
-            // ВООБЩЕ — «история до момента снятия» выглядела огрызком-артефактом у правого
-            // края/в стакане (репорт мак-тестера 2026-07-09). История жизни ордера нужна
-            // только входу/выходу (Buy/Sell), они off не бывают.
+            // A DISABLED line of a live order (off_ms: stop/TP/vstop removed) is not drawn
+            // AT ALL: its "history until removal" looked like a fragment artifact at the right
+            // edge/in the order book (Mac tester report, 2026-07-09). Order lifetime history is
+            // needed only for entry/exit (Buy/Sell), which are never disabled.
             if line.off_ms.is_some()
                 && idx != LineKind::Buy as usize
                 && idx != LineKind::Sell as usize
@@ -183,8 +182,8 @@ pub fn build_order_geometry(
             let ended = line.off_ms.is_some() || closed;
             let dashed =
                 st.dashed || (idx == LineKind::Buy as usize && ord.pending && style.pending_dashed);
-            // Входная линия ВЫСТАВЛЕННОГО (ещё не залит) ордера может иметь свой цвет
-            // (`pending_color`); после фила — основной `color`. Только Buy-линия (вход).
+            // The entry line of a PLACED (not yet filled) order may have its own color
+            // (`pending_color`); after filling, it uses the primary `color`. Buy line only (entry).
             let line_color = if idx == LineKind::Buy as usize && ord.fill_pct <= 0.0 {
                 st.pending_color.unwrap_or(st.color)
             } else {
@@ -204,11 +203,11 @@ pub fn build_order_geometry(
             let trace_points = &line.server_points;
             let has_server_trace = !trace_points.is_empty();
             if has_server_trace {
-                // MoonProtoBeta уже хранит points в том же формате, что Delphi
-                // TOrderLine.SetPointTrade: anchor + группы по 3 точки. Рисуем
-                // именно как TOrderLine.DrawInternal, а не как обычную polyline.
-                // ВАЖНО: это отдельная серверная трасса. Она не подменяет live-цену
-                // рабочей линии ордера ниже.
+                // MoonProtoBeta already stores points in the same format as Delphi's
+                // TOrderLine.SetPointTrade: an anchor plus groups of three points. Draw them
+                // exactly like TOrderLine.DrawInternal, not as an ordinary polyline.
+                // IMPORTANT: this is a separate server trace. It does not replace the live price
+                // of the primary order line below.
                 let show_light_lines = (right_rel - left_rel) > MB_TRACE_LIGHT_RANGE_MS;
                 let base_trace_alpha = if highlighted {
                     style.trace_alpha.max(0.7)
@@ -359,18 +358,18 @@ pub fn build_order_geometry(
                 }
                 continue;
             }
-            // Линия завершена, если выключена сама или закрыт ордер. У активной
-            // (незавершённой) линии КОНЦА НЕТ — она тянется до правого края plot
-            // (через стакан), без креста конца. У завершённой конец = off/close время.
+            // A line is finished if it is disabled or the order is closed. An active (unfinished)
+            // line has NO END: it extends to the plot's right edge (through the order book),
+            // without an end cross. A finished line ends at its disable/close time.
             let line_end = line.off_ms.unwrap_or(order_end);
 
             let start_t = points[0].0;
-            // Текущая цена — последняя live-ступень. Основная линия ПРЯМАЯ на текущей цене
-            // от начала до конца (вся переезжает при перестановке).
+            // The current price is the last live step. The main line is STRAIGHT at the current
+            // price from start to end (the entire line moves when the order is repriced).
             let cur_p = preview_price.unwrap_or(points[n - 1].1);
             let t0_rel = to_rel(start_t);
-            // Активная линия — до правого края (edge_rel, через стакан); завершённая —
-            // до своего времени конца.
+            // An active line extends to the right edge (edge_rel, through the order book); a
+            // finished line extends to its own end time.
             let t1_rel = if ended { to_rel(line_end) } else { edge_rel };
 
             if !has_server_trace && path.show && n > 1 {
@@ -405,7 +404,7 @@ pub fn build_order_geometry(
                 }
             }
 
-            // Основная прямая линия на текущей цене.
+            // Main straight line at the current price.
             segs.push(SegInstance {
                 t0_rel,
                 p0: cur_p,
@@ -417,8 +416,8 @@ pub fn build_order_geometry(
                 color: col,
             });
 
-            // Узелки — точки fallback-steps на прямой линии. Для серверной трассы
-            // не дублируем узлы на рабочей линии: сама трасса уже отдельный объект.
+            // Knots are fallback-step points on the straight line. For a server trace, do not
+            // duplicate knots on the primary line because the trace is already a separate object.
             if st.knots && !has_server_trace {
                 for i in 1..n {
                     markers.push(MarkerInstance {
@@ -432,7 +431,7 @@ pub fn build_order_geometry(
                 }
             }
 
-            // Крест начала и конца — на концах прямой линии (на текущей цене).
+            // Start and end crosses sit at the ends of the straight line (at the current price).
             if st.start_marker {
                 markers.push(MarkerInstance {
                     t_rel: t0_rel,

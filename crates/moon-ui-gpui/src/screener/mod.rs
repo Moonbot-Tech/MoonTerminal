@@ -1,15 +1,16 @@
-//! Окно «Скринер» — таблица монет как в Moonbot («Таблица монет»).
+//! Screener window: a Moonbot-style coin table.
 //!
-//! Отдельное singleton ОС-окно (паттерн окна «Стратегии»): MoonDataTable по
-//! ВСЕМ рынкам подключённых бирж с сортировкой по клику на заголовок и
-//! фильтрами Coin/DVol внизу (как в Moonbot). Многоядерность через дедуп:
-//! ядра группируются по ядру-провайдеру рыночных данных (одна биржа = один
-//! провайдер, см. `MarketDataSource::provider_of`), рыночные колонки читаются
-//! один раз с провайдера, аккаунтные (Orders/Session/Pos) суммируются по всем
-//! ядрам группы. Данные — `MarketDataSource::screener_rows` (moon-core).
+//! A separate singleton OS window, following the Strategies-window pattern, hosts a `MoonDataTable`
+//! for every market on connected exchanges. Headers control sorting, while Coin and DVol filters
+//! sit in the footer. Multi-core data is grouped by the market-data provider returned by
+//! `MarketDataSource::provider_of`: cores on one exchange share a provider in deduplicated mode,
+//! while per-core mode keeps separate providers. Market columns are read once per provider group;
+//! Orders, Session, and Pos aggregate the group's member cores. Leverage is hybrid: the provider
+//! supplies `max_leverage`, while member accounts supply the maximum active `leverage_x` and its
+//! associated `isolated` state. Rows come from moon-core's `MarketDataSource::screener_rows`.
 //!
-//! Разнесено по подмодулям: состояние/окно/`open()` — [`view`]; схема колонок,
-//! форматирование и рендер строк — [`table`].
+//! [`view`] owns state, window rendering, and [`open`]; [`table`] owns the column schema, formatting,
+//! sorting, and row rendering.
 
 mod table;
 mod view;

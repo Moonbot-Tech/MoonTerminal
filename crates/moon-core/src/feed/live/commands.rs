@@ -1,5 +1,5 @@
-//! Дренаж команд роли от координатора (полное желаемое состояние, не дельта): рыночная роль,
-//! стратегии (sync/checked/start-stop), ручная торговля, активы и правки настроек.
+//! Drains coordinator commands: `CoreCmd::SetMarket` carries the complete desired market role,
+//! while strategy, trading, asset, and settings commands are deltas or actions.
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -14,11 +14,12 @@ use crate::feed::strategies::{fv_from_str, strat_kind_name};
 use crate::feed::{order_edit, trade, CoreCmd};
 use crate::util::now_unix_ms as now_ms;
 
-/// Значение поля `SignalType` → ordinal вида стратегии (`StrategyKind`). В Moonbot тип
-/// (вид) стратегии И ЕСТЬ её SignalType, но snapshot хранит вид отдельным байтом `kind`
-/// (не полем), поэтому правка поля сама по себе вид не меняет — мапим строку в ordinal,
-/// чтобы синхронно пересобрать снапшот. Сначала по именам видов из схемы ядра (авторитет),
-/// затем фолбэк на наш хардкод имён. Нет совпадения → None (вид не трогаем).
+/// Maps a `SignalType` field value to a strategy-kind (`StrategyKind`) ordinal. In Moonbot, a
+/// strategy's type (kind) is its SignalType, but the snapshot stores the kind in a separate `kind`
+/// byte rather than a field. Editing the field alone therefore does not change the kind, so map
+/// the string to an ordinal and rebuild the snapshot consistently. First match the authoritative
+/// kind names from the core schema, then fall back to our hard-coded names. No match means `None`
+/// (leave the kind unchanged).
 fn signaltype_to_kind_ordinal(schema: Option<&StrategySchema>, value: &str) -> Option<u8> {
     let v = value.trim();
     if v.is_empty() {
@@ -32,10 +33,10 @@ fn signaltype_to_kind_ordinal(schema: Option<&StrategySchema>, value: &str) -> O
     (0u8..=23).find(|o| strat_kind_name(*o).eq_ignore_ascii_case(v))
 }
 
-/// Кольцо недавних ЛОКАЛЬНЫХ правок стратегий — для пометки `origin=local` у
-/// версий strat_db (эхо сервера придёт снапшотом через feed-цикл). `wildcard` —
-/// команды без известного id (создание: id назначается внутри rebuild_sync).
-/// TTL короткий: эхо приходит за секунды, протухшее — чужая правка.
+/// Tracks local strategy-command timestamps in a `HashMap` plus a wildcard so strat_db can
+/// heuristically mark snapshot versions `origin=local`. The wildcard covers commands without a
+/// known id (creation assigns the id inside `rebuild_sync`). The 30-second TTL can misclassify a
+/// recent remote change as local or a delayed local echo as remote.
 pub(super) struct LocalStratEdits {
     ids: std::collections::HashMap<u64, std::time::Instant>,
     wildcard: Option<std::time::Instant>,
@@ -59,7 +60,7 @@ impl LocalStratEdits {
         self.wildcard = Some(std::time::Instant::now());
     }
 
-    /// Правка этого id (или любая) отправлена нами недавно?
+    /// Returns the 30-second local-origin heuristic for this id or the wildcard.
     pub(super) fn is_local(&self, id: u64) -> bool {
         let fresh = |t: &std::time::Instant| t.elapsed() < LOCAL_EDIT_TTL;
         self.ids.get(&id).map(fresh).unwrap_or(false)
@@ -78,10 +79,10 @@ impl LocalStratEdits {
     }
 }
 
-/// Общий путь синка стратегий: берём ПОЛНЫЙ текущий набор, даём его `build` на правку
-/// (патч полей / смена пути / добавление новых), и если что-то изменилось — шлём ОДИН
-/// `sync_local_strategies` + лог. `build` возвращает число затронутых. Бамп `last_date`
-/// (rollback-guard Delphi) делает сам `build` у изменённых снапшотов.
+/// Shared strategy-sync path: load the COMPLETE current set, let `build` edit it (patch fields,
+/// change paths, or add entries), and send ONE `sync_local_strategies` plus a log entry if
+/// anything changed. `build` returns the number of affected entries and increments `last_date`
+/// (the Delphi rollback guard) on changed snapshots itself.
 fn rebuild_sync(
     client: &MoonClient,
     server_id: u64,
@@ -101,10 +102,10 @@ fn rebuild_sync(
     }
 }
 
-/// Дренаж команд роли от координатора (полное желаемое состояние, не дельта).
-/// Мутирует рыночную роль ядра (`is_provider`/`wanted`/`wanted_orderbook`) и
-/// взводит `force_market_sample`. Возвращает `true`, если канал команд закрыт
-/// (координатор ушёл) → ядро должно отключиться и выйти из `run`.
+/// Drains coordinator commands; only `CoreCmd::SetMarket` is complete desired state, while the
+/// remaining variants are deltas or actions. `SetMarket` mutates the core's market role
+/// (`is_provider`/`wanted`/`wanted_orderbook`) and sets `force_market_sample`. Returns `true` when
+/// the command channel is closed, which means the coordinator exited and the core must disconnect.
 pub(super) fn drain_commands(
     cmd_rx: &Receiver<CoreCmd>,
     client: &MoonClient,
@@ -123,8 +124,8 @@ pub(super) fn drain_commands(
                 markets,
                 orderbook_markets,
             }) => {
-                // Переход провайдерства: вкл → ретейним все трейды биржи; выкл →
-                // снимаем подписку. Курсоры чтения market history живут у потребителя.
+                // Provider transition: on -> retain all exchange trades; off -> unsubscribe.
+                // Market-history read cursors belong to the consumer.
                 if provider != *is_provider {
                     if provider {
                         let _ = client
@@ -137,10 +138,11 @@ pub(super) fn drain_commands(
                     }
                     *is_provider = provider;
                 }
-                // Не провайдер не обслуживает рынки (стакан/чтение) вообще.
+                // A non-provider does not serve markets at all (order-book or reads).
                 let markets = if provider { markets } else { Vec::new() };
-                // Стакан подписываем ТОЛЬКО для рынков, которым он нужен (orderbook_markets ⊆
-                // markets). Рынок без стакана читается (трейды/история), но стакан не качаем.
+                // Subscribe to order books ONLY for markets that need them (orderbook_markets is
+                // a subset of markets). A market without an order book is still read for trades
+                // and history, but its order book is not streamed.
                 let orderbook_markets = if provider {
                     orderbook_markets
                 } else {
@@ -150,7 +152,7 @@ pub(super) fn drain_commands(
                     std::env::var_os("MOON_MARKET_DIAG").is_some()
                         || std::env::var_os("MOON_RENDER_DIAG").is_some()
                 };
-                // Диф подписки стакана: новым из orderbook_markets — subscribe, ушедшим — unsubscribe.
+                // Diff order-book subscriptions: subscribe new entries and unsubscribe removed ones.
                 for m in &orderbook_markets {
                     if !wanted_orderbook.iter().any(|w| w == m) {
                         match client.streams().subscribe_orderbook(m.clone()) {
@@ -192,8 +194,8 @@ pub(super) fn drain_commands(
                 *force_market_sample = true;
             }
             Ok(CoreCmd::StrategiesAction { checks, start_stop }) => {
-                // 1. Синхронизация галок: правим локальный checked у изменённых и
-                //    шлём серверу дельту (CheckedSync).
+                // 1. Synchronize checkboxes: update local `checked` on changed entries and send
+                //    the delta (CheckedSync) to the server.
                 for (id, checked) in &checks {
                     if let Err(error) = client.strategies().set_checked(*id, *checked) {
                         log::warn!(
@@ -207,7 +209,7 @@ pub(super) fn drain_commands(
                         log::warn!("core {} send checked delta failed: {error}", server.id);
                     }
                 }
-                // 2. Старт/стоп отмеченных (отдельная команда движка).
+                // 2. Start or stop checked strategies (a separate engine command).
                 match start_stop {
                     Some(true) => {
                         if let Err(error) = client.strategies().start() {
@@ -232,9 +234,10 @@ pub(super) fn drain_commands(
                 for (id, _) in &edits {
                     local_strat_edits.mark(*id);
                 }
-                // `sync_local_strategies` СИНХРОНИТ ВЕСЬ локальный набор (moonproto делает
-                // replace_with_snapshots). Патчим ВСЕ указанные в `edits` за один проход → один
-                // sync (раздельные команды на стратегии одного ядра перетёрли бы друг друга).
+                // `sync_local_strategies` SYNCHRONIZES THE ENTIRE local set (moonproto calls
+                // replace_with_snapshots). Patch EVERY entry listed in `edits` in one pass and
+                // issue one sync; separate commands for one core's strategies would overwrite
+                // each other.
                 rebuild_sync(client, server.id, "edit", |full, schema, now| {
                     let mut edited = 0usize;
                     for sc in full.iter_mut() {
@@ -248,9 +251,9 @@ pub(super) fn drain_commands(
                             sc.fields
                                 .insert(name.as_str(), fv_from_str(existing.as_ref(), stype, val));
                         }
-                        // Смена SignalType = смена вида стратегии: snapshot держит вид
-                        // отдельным (pub(crate)) байтом, а не полем, поэтому пересобираем
-                        // снапшот с новым `kind` (иначе бейдж вида в дереве остаётся старым).
+                        // Changing SignalType changes the strategy kind. The snapshot stores the
+                        // kind in a separate `pub(crate)` byte rather than a field, so rebuild it
+                        // with the new `kind`; otherwise the tree's kind badge stays stale.
                         if let Some((_, sig)) = changes
                             .iter()
                             .find(|(n, _)| n.eq_ignore_ascii_case("SignalType"))
@@ -276,26 +279,26 @@ pub(super) fn drain_commands(
                 });
             }
             Ok(CoreCmd::DeleteStrategy { id }) => {
-                // `TStratDelete(strategy_id=id, folder_path="")` — удалить одну стратегию.
-                // Правило «только выключенные» проверено в UI до отправки.
+                // `TStratDelete(strategy_id=id, folder_path="")` deletes one strategy.
+                // The UI enforces the "unchecked only" rule before sending the command.
                 if let Err(error) = client.strategies().delete(id, "") {
                     log::warn!("core {} delete strategy {id} failed: {error}", server.id);
                 }
                 log::info!("core {} delete strategy {id}", server.id);
             }
             Ok(CoreCmd::DeleteFolder { path }) => {
-                // `TStratDelete(strategy_id=0, folder_path=path)` — удалить папку целиком.
+                // `TStratDelete(strategy_id=0, folder_path=path)` deletes an entire folder.
                 if let Err(error) = client.strategies().delete(0, path.as_str()) {
                     log::warn!("core {} delete folder {path} failed: {error}", server.id);
                 }
                 log::info!("core {} delete folder {path}", server.id);
             }
             Ok(CoreCmd::CreateStrategies { specs }) => {
-                // id новых назначаются внутри rebuild_sync (max+1) — метим «любую» правку.
+                // New ids are assigned inside `rebuild_sync` (max + 1), so mark an edit to any id.
                 local_strat_edits.mark_all();
-                // К полному набору добавляем новые снапшоты. id = max+1 ЦЕЛЕВОГО ядра
-                // (безопасно для межъядерной вставки). Поля — из строк по типу схемы
-                // (как fv_from_str при правках), existing=None.
+                // Add new snapshots to the complete set. The id is max + 1 for the TARGET core,
+                // which is safe for cross-core paste. Parse fields from strings according to the
+                // schema type, as `fv_from_str` does for edits, with `existing=None`.
                 rebuild_sync(client, server.id, "create", |full, schema, now| {
                     let mut next_id = full.iter().map(|s| s.strategy_id).max().unwrap_or(0) + 1;
                     for spec in &specs {
@@ -327,7 +330,7 @@ pub(super) fn drain_commands(
             }) => {
                 local_strat_edits.mark(id);
                 rebuild_sync(client, server.id, "restore", |full, schema, now| {
-                    // Уже живая (двойной клик по меню/эхо) — не дублируем.
+                    // It is already live (double-click in the menu or an echo), so do not duplicate it.
                     if full.iter().any(|s| s.strategy_id == id) {
                         return 0;
                     }
@@ -340,7 +343,7 @@ pub(super) fn drain_commands(
                         id,
                         0,
                         now,
-                        false, // восстановленная всегда ВЫКЛЮЧЕНА — включать осознанно
+                        false, // A restored strategy is always UNCHECKED and must be enabled deliberately.
                         StrategyKind::from_ordinal(kind_ordinal),
                         folder_path.clone(),
                         f,
@@ -349,7 +352,7 @@ pub(super) fn drain_commands(
                 });
             }
             Ok(CoreCmd::MoveStrategies { moves }) => {
-                // Смена `path` у указанных стратегий + bump last_date → один sync.
+                // Change `path` and increment `last_date` for the selected strategies in one sync.
                 rebuild_sync(client, server.id, "move", |full, _schema, now| {
                     let mut changed = 0usize;
                     for sc in full.iter_mut() {
@@ -370,7 +373,7 @@ pub(super) fn drain_commands(
                 from,
                 to,
             }) => {
-                // Перенос строго в пределах ЭТОГО ядра (клиент конкретного ядра).
+                // Transfer strictly within THIS core because the client belongs to one core.
                 if let Err(error) = client.balances().transfer_asset(
                     &asset,
                     qty,
@@ -382,7 +385,7 @@ pub(super) fn drain_commands(
                         server.id
                     );
                 }
-                // После переноса просим свежий список — UI увидит новые остатки.
+                // Request a fresh list after the transfer so the UI sees the new balances.
                 if let Err(error) = client.balances().refresh_transfer_assets() {
                     log::warn!("core {} refresh transfer assets failed: {error}", server.id);
                 }
@@ -392,9 +395,10 @@ pub(super) fn drain_commands(
                 if let Err(error) = client.balances().refresh_transfer_assets() {
                     log::warn!("core {} refresh transfer assets failed: {error}", server.id);
                 }
-                // Заодно свежий баланс-снимок: ручной «пинок» против фантомов «Активов»
-                // (зависшая проданная монета) — клик по ядру в окне и есть просьба
-                // пользователя перечитать остатки. Дёшево (запрос к ядру, не к бирже).
+                // Also request a fresh balance snapshot as a manual nudge against phantom Assets
+                // entries (a sold coin that remains stuck). Clicking the core in the window is the
+                // user's request to reread balances. This is cheap: it queries the core, not the
+                // exchange.
                 if let Err(error) = client.balances().refresh() {
                     log::warn!("core {} balance refresh request failed: {error}", server.id);
                 } else {
@@ -405,7 +409,7 @@ pub(super) fn drain_commands(
                 }
             }
             Ok(CoreCmd::ConvertDust) => {
-                // Конверсия мелких остатков в BNB (Engine API), необратимо.
+                // Convert small balances to BNB through the Engine API; this is irreversible.
                 if let Err(error) = client.balances().convert_dust_bnb() {
                     log::warn!("core {} convert dust failed: {error}", server.id);
                 }
@@ -444,10 +448,11 @@ pub(super) fn drain_commands(
                     );
                 }
             }
-            // Ордер-мутирующие команды: рантайм moonproto применяет их к ЛОКАЛЬНОЙ модели
-            // ордеров сразу (до отправки пакета) → помечаем `orders_mutated`, чтобы цикл
-            // фида НЕМЕДЛЕННО отдал свежие строки (оптимистичная отрисовка линий/таблицы),
-            // не дожидаясь эха ядра и 250мс-троттла.
+            // Order commands have different local visibility. Some edits of retained orders update
+            // the local model synchronously, while new/join/split/close/sell commands are enqueued
+            // without inserting their result locally. For flagged commands, `orders_mutated` asks
+            // the feed loop for an immediate best-effort snapshot publish; that snapshot may still
+            // precede an asynchronous mutation or omit a newly created row.
             Ok(CoreCmd::PlaceOrder {
                 market,
                 short,
@@ -455,8 +460,8 @@ pub(super) fn drain_commands(
                 size,
                 strategy_id,
             }) => {
-                // Селл/стоп новому ордеру ставит САМО ЯДРО из ClientSettings (ROE). Терминал не
-                // переставляет — показываем то, что прислало ядро.
+                // THE CORE sets the sell/stop for a new order from ClientSettings (ROE). The
+                // terminal does not reposition it and displays exactly what the core sent.
                 trade::place_order(client, server.id, market, short, price, size, strategy_id);
                 *orders_mutated = true;
             }
@@ -507,8 +512,9 @@ pub(super) fn drain_commands(
                 trade::split_order_for_market(client, server.id, market, parts);
             }
             Ok(CoreCmd::EditClientSettings(edit)) => {
-                // Правим УДЕРЖАННЫЙ снимок (moonproto хранит последний в SettingsState),
-                // сохраняя tail/blob'ы, и шлём его целиком. Нет снимка → нечего слать.
+                // Edit the RETAINED snapshot (moonproto keeps the latest one in SettingsState),
+                // preserving tails/blobs, and send it in full. Without a snapshot there is
+                // nothing to send.
                 match client
                     .snapshot()
                     .and_then(|s| s.settings().client_settings.clone())
@@ -547,8 +553,8 @@ pub(super) fn drain_commands(
                 }
             }
             Ok(CoreCmd::SetHedgeMode(on)) => {
-                // РЕАЛЬНОЕ действие на бирже (Engine API). Тикет игнорируем — итог придёт
-                // событием HedgeModeUpdated, которое обновит стор.
+                // This performs a REAL exchange action through the Engine API. Ignore the ticket;
+                // the result arrives in a HedgeModeUpdated event that updates the store.
                 match client.account().set_hedge_mode(on) {
                     Ok(_ticket) => log::info!("core {} set hedge mode -> {on}", server.id),
                     Err(error) => {
@@ -557,8 +563,9 @@ pub(super) fn drain_commands(
                 }
             }
             Ok(CoreCmd::SetLeverage { market, leverage }) => {
-                // РЕАЛЬНОЕ действие на бирже (Engine API). Тикет игнорируем — новое плечо
-                // придёт balance-пушем рынка (leverage_x) и обновит карту плеч в ассетах.
+                // This performs a REAL exchange action through the Engine API. Ignore the ticket;
+                // the new leverage arrives in a market balance push (`leverage_x`) and updates
+                // the leverage map in Assets.
                 match client.account().set_leverage(&market, leverage) {
                     Ok(_ticket) => {
                         log::info!("core {} set leverage {market} -> {leverage}x", server.id)
@@ -570,7 +577,7 @@ pub(super) fn drain_commands(
                 }
             }
             Ok(CoreCmd::RestartNow) => {
-                // Старт/рестарт рантайма; итог придёт событием RuntimeStateUpdated → стор.
+                // Start or restart the runtime; the result reaches the store via RuntimeStateUpdated.
                 if let Err(error) = client.settings().restart_now() {
                     log::warn!("core {} restart_now failed: {error}", server.id);
                 } else {
@@ -591,7 +598,8 @@ pub(super) fn drain_commands(
                 }
             }
             Ok(CoreCmd::CancelAllOrders) => {
-                // РЕАЛЬНОЕ действие на бирже. Тикет игнорируем — итог придёт снимком ордеров.
+                // This performs a REAL exchange action. Ignore the ticket; the result arrives in
+                // an order snapshot.
                 match client.account().cancel_all_orders() {
                     Ok(_ticket) => log::info!("core {} cancel_all_orders sent", server.id),
                     Err(error) => {
@@ -600,7 +608,7 @@ pub(super) fn drain_commands(
                 }
             }
             Ok(CoreCmd::SetBlacklist { on, text }) => {
-                // Патчим удержанный снимок настроек (флаг + текст ЧС) и шлём целиком.
+                // Patch the retained settings snapshot (flag plus blacklist text) and send it in full.
                 match client
                     .snapshot()
                     .and_then(|s| s.settings().client_settings.clone())

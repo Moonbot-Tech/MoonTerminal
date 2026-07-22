@@ -13,11 +13,10 @@ use super::view::ScreenerView;
 
 pub(super) use crate::design::{moon, moon_alpha};
 
-/// Схема колонки: (ключ, заголовок, ширина, числовая/вправо).
+/// Column definition: key, title, width, and whether the contents are right-aligned.
 pub(super) type ColDef = (&'static str, &'static str, f32, bool);
 
-/// Колонки таблицы. Заголовки — отраслевые токены Moonbot (не переводятся,
-/// как колонки Orders/Report).
+/// Table columns using untranslated Moonbot field labels, consistent with Orders and Report.
 pub(super) const COLS: &[ColDef] = &[
     ("market", "Market", 92.0, false),
     ("core", "Core", 76.0, false),
@@ -44,15 +43,17 @@ pub(super) const COLS: &[ColDef] = &[
     ("pos", "Pos", 66.0, true),
 ];
 
-/// Строка таблицы: данные moon-core + имя ядра для колонки Core и ядро,
-/// с которым открывать чарт (при фильтре по ядру — оно, иначе провайдер).
+/// Screener row data plus the displayed core name and the core used to open the chart.
+///
+/// The chart core is the selected core when filtering by one, or the market-data provider when
+/// showing all cores.
 pub(super) struct Entry {
     pub(super) row: ScreenerRow,
     pub(super) core_name: SharedString,
     pub(super) open_core: CoreId,
 }
 
-/// Мин. объём из строки фильтра DVol: «500» → 500, «500k» → 500 000, «2m» → 2 000 000.
+/// Parse the minimum volume from the DVol filter, such as `500`, `500k`, or `2m`.
 pub(super) fn parse_vol(s: &str) -> f64 {
     if s.is_empty() {
         return 0.0;
@@ -73,7 +74,7 @@ pub(super) fn parse_vol(s: &str) -> f64 {
         * mult
 }
 
-/// Короткий объёмный формат Moonbot: 1 712 345 → «1.7m», 320 100 → «320k».
+/// Format volume in Moonbot's compact form, such as `1.7m` or `320k`.
 fn vol_fmt(v: f64) -> String {
     let a = v.abs();
     if a >= 1e9 {
@@ -90,7 +91,8 @@ fn vol_fmt(v: f64) -> String {
 }
 
 pub(super) fn sort_entries(entries: &mut [Entry], key: &str, desc: bool) {
-    // Строковые колонки сортируем по имени, числовые — по значению; NaN вниз.
+    // Compare string columns by name, leverage by its dedicated key, and remaining numeric
+    // columns using total floating-point ordering.
     let cmp_str = |a: &Entry, b: &Entry, f: fn(&Entry) -> &str| f(a).cmp(f(b));
     entries.sort_by(|a, b| {
         let ord = match key {
@@ -159,7 +161,7 @@ fn pct_cell(formatted: Option<(String, DeltaSign)>) -> MoonDataCell {
     }
 }
 
-/// Тон знаковой величины: плюс — зелёный, минус — красный, ноль — приглушённый.
+/// Map a signed value to positive, danger, or muted tone for positive, negative, or zero.
 fn signed_tone(v: f64) -> MoonTone {
     if v > 0.0 {
         MoonTone::Positive
@@ -246,7 +248,8 @@ pub(super) fn screener_row(
                 })
             }
             "step" => {
-                // «0.01% / 0.001» — шаг цены в % от ask и абсолютом (как Moonbot).
+                // Show the price step as a percentage of ask and as an absolute value, matching
+                // Moonbot's `0.01% / 0.001` format.
                 if r.price_step > 0.0 && r.ask > 0.0 {
                     MoonDataCell::text(format!(
                         "{:.2}% / {}",
@@ -286,7 +289,10 @@ pub(super) fn screener_row(
     MoonDataRow::new(cells)
 }
 
-/// Ячейка монеты: кликабельна целиком, клик открывает чарт на Main активной вкладки.
+/// Build a full-cell clickable market cell.
+///
+/// Clicking asks the ChartTabs group owning `open_core` to open or focus the market in Main and
+/// select `Tab::Main`, without raising or focusing that group's OS window.
 fn market_cell(
     e: &Entry,
     view: &Entity<ScreenerView>,
@@ -302,7 +308,8 @@ fn market_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        // Кегль/шрифт наследуются от стиля ячейки (каскад moonui, фикс `9a33dbf`).
+        // Inherit font family and size from the cell's MoonUI cascade; override the text color
+        // with Accent and the font weight with Medium.
         .text_color(rgb(MoonTone::Accent.color(p)))
         .font_weight(FontWeight::MEDIUM)
         .child(e.row.coin.clone())

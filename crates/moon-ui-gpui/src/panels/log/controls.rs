@@ -1,4 +1,4 @@
-//! Поля-списки источника и файла панели «Лог».
+//! Source and file selector controls for the Log panel.
 
 use super::*;
 use rust_i18n::t;
@@ -6,7 +6,7 @@ use rust_i18n::t;
 use crate::design;
 
 impl LogPanel {
-    /// Комбобокс источника.
+    /// Builds the log-source dropdown.
     pub(super) fn source_combo(
         &self,
         sources: &[LogSourceItem],
@@ -22,8 +22,9 @@ impl LogPanel {
             .iter()
             .map(|s| (s.source.clone(), s.display.clone()))
             .collect();
-        // Ширина по контенту: пункты содержат имена ядер (`LogSource::Core`), которые фикс-меню
-        // резало. Меню под самый длинный пункт (пол 180), кнопка под текущий выбор (пол 150).
+        // Derive widths from content because `LogSource::Core` items include variable-length core
+        // names. The trigger and menu use separate 150- and 180-pixel floors; the shared helper
+        // applies scaled ceilings and ellipsizes the trigger label when it reaches its cap.
         let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
             cx,
             &cur,
@@ -50,7 +51,7 @@ impl LogPanel {
             }))
     }
 
-    /// Комбобокс файла (Live + прошлые файлы) — только для одиночного источника.
+    /// Builds the Live-and-history file dropdown used for non-aggregate sources.
     pub(super) fn file_combo(&self, files: &[String], cx: &Context<Self>) -> impl IntoElement {
         let live = t!("log.live").to_string();
         let cur = match &self.file {
@@ -81,8 +82,9 @@ impl LogPanel {
                     }),
             );
         }
-        // Ширина по контенту: имена лог-файлов бывают длинными. Меню под самый длинный пункт
-        // (пол 220), кнопка под текущий выбор (пол 180).
+        // Derive widths from potentially long log-file names. The trigger and menu use separate
+        // 180- and 220-pixel floors; the shared helper applies scaled ceilings and ellipsizes the
+        // trigger label when it reaches its cap.
         let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
             cx,
             &cur,

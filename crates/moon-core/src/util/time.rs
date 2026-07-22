@@ -1,7 +1,7 @@
-//! Единый источник unix-времени. До рефактора каждый модуль (feed/live, feed/synth,
-//! session/order_lines, applog, db) держал свою копию `now_ms` — одна и та же формула
-//! `SystemTime::now() - UNIX_EPOCH` в пяти местах. Свели сюда: f64-мс для шкалы тиков
-//! чарта, i64-мс для логов/БД.
+//! Shared Unix-time helpers for feed/live, feed/synth, session/order_lines, applog, and db
+//! consumers. Before the refactor, those areas kept five copies of `now_ms` using the same
+//! `SystemTime::now() - UNIX_EPOCH` formula. Their common helpers were consolidated here: `f64`
+//! milliseconds for the chart tick timeline and `i64` milliseconds for logs and the database.
 //!
 //! This module also owns the crate's single Gregorian calendar implementation
 //! (`civil_from_days`), consumed by `db` for report timestamps, `strat_db` for compact version
@@ -9,7 +9,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Текущее unix-время в мс (f64). Та же шкала, что `time_ms` тиков рынка.
+/// Current Unix time in milliseconds (`f64`), on the same scale as market tick `time_ms` values.
+/// Returns `0.0` if `duration_since(UNIX_EPOCH)` fails because the system time precedes the epoch.
 pub fn now_unix_ms() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -17,7 +18,8 @@ pub fn now_unix_ms() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Текущее unix-время в целых мс (i64) — для меток логов и записей БД.
+/// Current Unix time in whole milliseconds (`i64`) for log timestamps and database records.
+/// Returns `0` if `duration_since(UNIX_EPOCH)` fails because the system time precedes the epoch.
 pub fn now_unix_ms_i64() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

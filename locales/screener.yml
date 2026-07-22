@@ -1,5 +1,5 @@
-# Окно «Скринер» (таблица монет как в Moonbot).
-# Заголовки колонок (Vol./ASK/Funding/…) — отраслевые токены Moonbot, НЕ переводим (в коде).
+# Screener window with a Moonbot-style coin table.
+# Column headers (Vol./ASK/Funding/…) are Moonbot domain tokens and remain untranslated in code.
 _version: 2
 
 screener.window_title:

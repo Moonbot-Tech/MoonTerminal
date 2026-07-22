@@ -7,12 +7,12 @@ use crate::config::hotkeys::HotkeysConfig;
 use crate::config::orders::OrdersStyleSet;
 use crate::config::theme::ChartThemeSet;
 
-/// MoonBotConfig с осмысленными значениями для плана.
+/// Builds a MoonBotConfig with meaningful values for plan tests.
 fn mb_config() -> MoonBotConfig {
     let mut shortcuts = [0u16; 27];
     shortcuts[0] = 0x8000 | 0x5A; // CancelBuy = Alt+Z
-    shortcuts[4] = 0x0075; // ReloadBook = F6 (нет действия в Terminal)
-    shortcuts[25] = 0x4000 | 0x2E; // CancelAllBuys = Ctrl+Delete (совпадает с дефолтом)
+    shortcuts[4] = 0x0075; // ReloadBook = F6 (no corresponding Terminal action)
+    shortcuts[25] = 0x4000 | 0x2E; // CancelAllBuys = Ctrl+Delete (matches the default)
     MoonBotConfig {
         config_version: 1,
         ui: UiBlock {
@@ -28,7 +28,7 @@ fn mb_config() -> MoonBotConfig {
                 order_size_keys: [0x70, 0x71, 0x72, 0x73, 0x74, 0x75], // F1..F6
                 split_parts: 2,
                 fixed_sell_sel: 1,
-                fixed_sell_keys: [0, 0, 0, 0, 0, 0], // пустые — не переносим
+                fixed_sell_keys: [0, 0, 0, 0, 0, 0], // Empty shortcuts are not imported.
                 fixed_sell_prices: [1.0, 5.0, 10.0, 25.0, 50.0, 100.0],
                 shortcuts: Shortcuts(shortcuts),
             },
@@ -42,23 +42,23 @@ fn mb_config() -> MoonBotConfig {
             strat_expanded: [false; 11],
         },
         theme: ThemeBlock {
-            current_style: 3, // тёмная
+            current_style: 3, // Dark theme.
             sections: vec![
                 IniSection {
                     name: "ColorsDark".into(),
                     entries: vec![
-                        // 0xFF00FF00 → зелёный, alpha FF (непрозрачный) — ок.
+                        // 0xFF00FF00 → green, alpha FF (opaque), which is valid.
                         ("CandleGreen".into(), format!("{}", 0xFF00_FF00u32 as i64)),
-                        // Alpha 0x80 — значимая, должна уйти в unsupported.
+                        // Alpha 0x80 is meaningful and must go to unsupported.
                         ("CandleRed".into(), format!("{}", 0x80FF_0000u32 as i64)),
                         ("graphBK".into(), "1973790".into()), // 0x001E1E1E
                         ("Unknown".into(), "123".into()),
-                        ("BuyOrder".into(), "junk".into()), // не число
+                        ("BuyOrder".into(), "junk".into()), // Not a number.
                     ],
                 },
                 IniSection {
                     name: "ColorsLight".into(),
-                    entries: vec![("graphBK".into(), "16777215".into())], // белый
+                    entries: vec![("graphBK".into(), "16777215".into())], // White.
                 },
             ],
         },
@@ -80,7 +80,7 @@ fn ctx<'a>(
         hotkeys,
         theme,
         orders,
-        ui_theme_light: true, // MoonBot тёмная → будет пункт смены темы
+        ui_theme_light: true, // MoonBot is dark, so the plan will contain a theme change.
         order_sizes: [50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0],
         order_size_sel: None,
     }
@@ -99,27 +99,27 @@ fn theme_mode_and_hotkeys_mapped() {
     );
     let plan = build_plan(&mb_config(), &ctx(&h, &t, &o));
 
-    // Тема: у нас светлая, MoonBot тёмная → пункт-изменение.
+    // The local theme is light and MoonBot is dark, producing a change item.
     let theme = find(&plan.terminal, "ui.theme_mode").unwrap();
     assert_eq!(theme.value, PlannedValue::UiThemeLight(false));
     assert!(!theme.same);
 
-    // Cancel Buy = Alt+Z → keystroke alt-z; текущее пусто. Группа «Хоткеи».
+    // Cancel Buy = Alt+Z → keystroke alt-z; the current value is empty. "Hotkeys" group.
     let cb = find(&plan.hotkeys, "hotkey.cancel_buy").unwrap();
     assert_eq!(cb.value, PlannedValue::Keystroke("alt-z".into()));
     assert_eq!(cb.current, "—");
     assert!(!cb.same);
 
-    // CancelAllBuys Ctrl+Delete совпадает с нашим дефолтом → пункт ЕСТЬ, same.
+    // CancelAllBuys Ctrl+Delete matches the local default, so the item EXISTS with same set.
     assert!(find(&plan.hotkeys, "hotkey.cancel_all_buys").unwrap().same);
 
-    // OKeys F1..F6 совпадают с дефолтами order_size → пункты ЕСТЬ, same.
+    // OKeys F1..F6 match the order_size defaults, so the items EXIST with same set.
     assert!(find(&plan.hotkeys, "hotkey.order_size.0").unwrap().same);
 
-    // Пустые SKeys не переносятся (наши дефолты shift-f7.. НЕ стираются) —
-    // пункта нет, но пустые посчитаны. Ожидание ВЫЧИСЛЯЕМ из фикстуры и
-    // продовой классификации (action_target), а не магическим числом: пустые
-    // OKeys/SKeys + переносимые shortcut-слоты с raw == 0.
+    // Empty SKeys are not imported, so the local shift-f7.. defaults are NOT cleared. No item
+    // is created, but empty values are counted. COMPUTE the expectation from the fixture and
+    // production classification (action_target), not a magic number: empty OKeys/SKeys plus
+    // importable shortcut slots with raw == 0.
     assert!(find(&plan.hotkeys, "hotkey.sell_preset.0").is_none());
     let mb = mb_config();
     let h = &mb.ui.hotkeys;
@@ -132,7 +132,7 @@ fn theme_mode_and_hotkeys_mapped() {
     assert_eq!(plan.hotkeys_empty, expected_empty);
     assert!(expected_empty > 0, "фикстура должна содержать пустые слоты");
 
-    // ReloadBook назначен, но действия нет → unsupported_hotkeys с причиной.
+    // ReloadBook is assigned but has no action, so it enters unsupported_hotkeys with a reason.
     assert!(plan
         .unsupported_hotkeys
         .iter()
@@ -148,32 +148,32 @@ fn colors_mapped_per_theme_side() {
     );
     let plan = build_plan(&mb_config(), &ctx(&h, &t, &o));
 
-    // CandleGreen (dark) 0x00FF00 отличается от дефолта → пункт-изменение.
+    // CandleGreen (dark) 0x00FF00 differs from the default, producing a change item.
     let cg = find(&plan.chart, "theme.candle_up.dark").unwrap();
     assert_eq!(cg.value, PlannedValue::Rgb([0, 255, 0]));
     assert!(!cg.same);
 
-    // graphBK dark = 0x1E1E1E — РАВЕН дефолту темы → пункт ЕСТЬ с same.
+    // graphBK dark = 0x1E1E1E MATCHES the theme default, so the item EXISTS with same set.
     assert!(find(&plan.chart, "theme.bg.dark").unwrap().same);
-    // graphBK light = белый — равен светлому дефолту → same.
+    // graphBK light = white, matching the light-theme default, so same is set.
     assert!(find(&plan.chart, "theme.bg.light").unwrap().same);
 
-    // CandleRed c alpha 0x80 → unsupported, не молча.
+    // CandleRed with alpha 0x80 goes to unsupported rather than being silently discarded.
     assert!(plan
         .unsupported
         .iter()
         .any(|u| u.name.starts_with("CandleRed") && u.reason.contains("alpha")));
-    // Unknown-ключ → unsupported.
+    // An unknown key goes to unsupported.
     assert!(plan
         .unsupported
         .iter()
         .any(|u| u.name.starts_with("Unknown")));
-    // Мусорное значение цвета → unsupported.
+    // An invalid color value goes to unsupported.
     assert!(plan
         .unsupported
         .iter()
         .any(|u| u.name.starts_with("BuyOrder") && u.reason.contains("не разобрано")));
-    // Секция Charts без таблицы — целиком в unsupported.
+    // The Charts section has no mapping table and goes entirely to unsupported.
     assert!(plan.unsupported.iter().any(|u| u.name.contains("Charts")));
 }
 
@@ -197,7 +197,7 @@ fn core_items_and_range_checks() {
     assert_eq!(sel.new, "F4");
     assert!(!sel.same);
 
-    // Fixed-sell — в core_commands (ClientSettings), не в per_core.
+    // Fixed-sell belongs in core_commands (ClientSettings), not per_core.
     assert!(find(&plan.core_commands, "core.fixed_sell_prices").is_some());
     assert_eq!(
         find(&plan.core_commands, "core.fixed_sell_sel")
@@ -206,7 +206,7 @@ fn core_items_and_range_checks() {
         "S2"
     );
 
-    // bNum вне диапазона → warning, пункта нет.
+    // An out-of-range bNum produces a warning and no item.
     let mut mb = mb_config();
     mb.ui.hotkeys.order_size_sel = 9;
     let plan = build_plan(&mb, &ctx(&h, &t, &o));
@@ -216,17 +216,17 @@ fn core_items_and_range_checks() {
 
 #[test]
 fn tcolor_hex_and_decimal() {
-    // Живой экспорт MoonBot: hex-строки 8 символов AARRGGBB.
+    // Live MoonBot export: eight-character AARRGGBB hex strings.
     assert_eq!(super::parse_tcolor("FF008000"), Some(([0, 128, 0], 0xFF)));
     assert_eq!(
         super::parse_tcolor("FFFFFFFF"),
         Some(([255, 255, 255], 0xFF))
     );
     assert_eq!(super::parse_tcolor("00FF00FF"), Some(([255, 0, 255], 0)));
-    // Десятичная запись тоже принимается (ведущих нулей у десятичных нет).
+    // Decimal notation is also accepted (decimal values have no leading zeros).
     assert_eq!(super::parse_tcolor("16777215"), Some(([255, 255, 255], 0)));
     assert_eq!(super::parse_tcolor("1973790"), Some(([30, 30, 30], 0)));
-    // Мусор — None.
+    // Invalid input returns None.
     assert_eq!(super::parse_tcolor("junk"), None);
     assert_eq!(super::parse_tcolor(""), None);
 }
@@ -239,14 +239,14 @@ fn fmt_nums_compact() {
 
 #[test]
 fn identical_values_marked_same_and_visible() {
-    // MoonBot-значения = текущим → пункты ЕСТЬ (полная картина), но с same=true.
+    // MoonBot values match current values, so items EXIST for completeness with same=true.
     let (h, t, o) = (
         HotkeysConfig::default(),
         ChartThemeSet::default(),
         OrdersStyleSet::default(),
     );
     let mut mb = mb_config();
-    mb.theme.current_style = 0; // светлая, как в ctx
+    mb.theme.current_style = 0; // Light, matching ctx.
     mb.ui.hotkeys.order_sizes = [50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0];
     let plan = build_plan(&mb, &ctx(&h, &t, &o));
     assert!(find(&plan.terminal, "ui.theme_mode").unwrap().same);

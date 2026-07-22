@@ -1,21 +1,23 @@
-//! Локальный кэш klines (свечей) — отдельная БД `klines.sqlite` РЯДОМ с остальными
-//! данными (НЕ reports.sqlite). Решает две проблемы протокола moonproto:
-//! ядро держит ОДИН свечной ТФ на ядро, а `GetCoinCardCandles` не умеет частичную
-//! догрузку (параметры = монета+kind, ответ всегда полный ринг). Поэтому один раз
-//! полученную историю храним локально: глубина крупных ТФ переживает рестарты и
-//! периоды, когда слот ядра занят мелким ТФ, а повторные полные перекачки с биржи
-//! (весовые лимиты!) не нужны.
+//! Local kline (candle) cache stored in a separate `klines.sqlite` database BESIDE the
+//! other data, NOT in `reports.sqlite`. It addresses two moonproto limitations: each core
+//! holds ONE candle timeframe, and `GetCoinCardCandles` cannot load incrementally because
+//! its coin+kind request always returns the full ring. Persisting fetched history locally
+//! preserves the depth of larger timeframes across restarts and while the core's slot is
+//! occupied by a smaller timeframe, without repeated full exchange downloads that consume
+//! rate-limit weight.
 //!
-//! Схема: одна таблица `chunks` — упакованный блоб суточных рядов на ключ
-//! (биржа, рынок, kind, сутки). Биржа = стабильный `ExchangeId` (код+dex-хеш), НЕ
-//! CoreId: ядра одной биржи делят кэш. Дедуп бесплатный — PRIMARY KEY + merge по
-//! t_open внутри чанка (входящие ряды авторитетнее лежащих). Ряд = 24 байта
-//! (u32 offset_ms + 5×f32) → сутки 1м ≈ 34КБ на монету. Ретеншн по kind при
-//! старте: см. `retention_days` (1м — 30 суток, 5м — 15, крупнее — 10 лет).
+//! Schema: one `chunks` table stores a packed blob of daily rows keyed by exchange,
+//! market, kind, and day. The exchange key is a stable `ExchangeId` (code + DEX hash),
+//! NOT a CoreId, so cores on the same exchange share the cache. Deduplication follows
+//! naturally from the PRIMARY KEY plus a merge by `t_open` within each chunk, where
+//! incoming rows override stored ones. Each row uses 24 bytes (`u32 offset_ms + 5×f32`),
+//! so one day of 1-minute data is about 34 KB per coin. Startup retention varies by kind;
+//! see `retention_days` (30 days for 1 minute, 15 for 5 minutes, 10 years for larger kinds).
 //!
-//! Все операции — на выделенном потоке (Connection не Sync); запись неблокирующая
-//! (очередь), чтение — с ответным каналом и таймаутом (пустой результат хуже, чем
-//! подвешенный prepare).
+//! Database open, schema creation, and startup retention run synchronously. After that
+//! setup, queued reads and writes run on a dedicated worker because `Connection` is not
+//! `Sync`. Writes are nonblocking; reads use a reply channel with a timeout because an
+//! empty result is preferable to a stalled prepare.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -26,13 +28,17 @@ use super::candles::ChartCandle;
 
 const DAY_MS: i64 = 86_400_000;
 const ROW_BYTES: usize = 24;
-/// Таймаут ответа на чтение: кэш-поток занят/умер → рисуем без префикса, не виснем.
+/// Read-response timeout that avoids hanging when the cache thread is busy or dead.
 const READ_TIMEOUT: Duration = Duration::from_millis(250);
 
-/// Ретеншн по kind (суток): мелкие ТФ тяжёлые, крупные — копейки. 5м пишется фоновым
-/// регистратором ПО ВСЕМ рынкам (~15 МБ/сутки на ~5.5к рынков) — 15 суток, чтобы полка
-/// базы была ~250 МБ, а не гигабайты (замер 2026-07-15; дальняя история мелких ТФ не
-/// нужна — хвост дорисовывают старшие слои). 1м — deep-ответы открытых чартов, 30 суток.
+/// Returns retention in days for a candle kind.
+///
+/// Small timeframes are expensive while larger ones are cheap. The background recorder
+/// writes 5-minute data for ALL markets, about 15 MB/day for roughly 5,500 markets, so it
+/// retains 15 days to keep the database near 250 MB instead of multiple gigabytes
+/// (measured 2026-07-15). Distant small-timeframe history is unnecessary because larger
+/// layers fill the tail. One-minute data comes from deep-history replies for open charts
+/// and is retained for 30 days.
 fn retention_days(kind_min: u32) -> i64 {
     match kind_min {
         0..=1 => 30,
@@ -41,10 +47,12 @@ fn retention_days(kind_min: u32) -> i64 {
     }
 }
 
-/// Элемент батч-записи: ряды одного (биржа, рынок, kind). Публичный — регистратор
-/// копит вектор таких и шлёт одним `merge_batch`: весь цикл (~тысячи рынков) уезжает
-/// ОДНОЙ транзакцией вместо тысячи мелких, так соседние чанки на общей странице
-/// пишутся в WAL один раз, а не по разу на коммит.
+/// Batch-write item containing rows for one exchange, market, and kind.
+///
+/// The recorder accumulates these public items and sends them through one `merge_batch`,
+/// so an entire cycle spanning thousands of markets uses ONE transaction rather than
+/// thousands of small ones. Adjacent chunks on a shared page are consequently written to
+/// the WAL once instead of once per commit.
 pub struct MergeItem {
     pub exchange: String,
     pub market: String,
@@ -72,15 +80,17 @@ enum Op {
     },
 }
 
-/// Хэндл кэша: дешёвый Clone, все операции уезжают на поток БД.
+/// Cheaply cloneable cache handle that sends queued reads and writes to the database worker.
 #[derive(Clone)]
 pub struct KlineCache {
     tx: mpsc::Sender<Op>,
 }
 
 impl KlineCache {
-    /// Открыть/создать БД и поднять поток. Ошибка открытия — None (кэш опционален,
-    /// чарты живут без него).
+    /// Opens the database and initializes its schema synchronously, then starts its worker.
+    ///
+    /// Returns `None` when opening or initialization fails because charts can operate
+    /// without this optional cache.
     pub fn open(path: PathBuf) -> Option<Self> {
         let conn = match rusqlite::Connection::open(&path) {
             Ok(c) => c,
@@ -102,8 +112,11 @@ impl KlineCache {
         Some(Self { tx })
     }
 
-    /// Дописать/обновить ряды (неблокирующе). Входящие авторитетнее лежащих
-    /// (серверные OHLC поверх прежних), пустые/мусорные строки отбрасываются.
+    /// Enqueues a nonblocking row merge.
+    ///
+    /// Incoming rows override stored rows so newer server OHLC wins. Empty input is not
+    /// queued; the worker skips rows with a non-finite or non-positive timestamp, or a
+    /// `high` value that is not positive.
     pub fn merge(&self, exchange: String, market: String, kind_min: u32, rows: Vec<ChartCandle>) {
         if rows.is_empty() {
             return;
@@ -116,8 +129,11 @@ impl KlineCache {
         });
     }
 
-    /// Дописать/обновить ряды МНОГИХ (биржа, рынок, kind) одной транзакцией. Пустые
-    /// элементы поток отсеет сам. Неблокирующе, как `merge`.
+    /// Enqueues rows for MANY exchange/market/kind groups in one transaction.
+    ///
+    /// Empty batches are not queued. For each queued item, the worker writes only rows that
+    /// pass the same timestamp and `high` validation as `merge`; no database write occurs
+    /// when none remain. This call is nonblocking.
     pub fn merge_batch(&self, items: Vec<MergeItem>) {
         if items.is_empty() {
             return;
@@ -125,8 +141,9 @@ impl KlineCache {
         let _ = self.tx.send(Op::MergeBatch { items });
     }
 
-    /// Прочитать ряды диапазона [from_ms, to_ms] (по t_open). Блокирует не дольше
-    /// `READ_TIMEOUT`; на таймауте/ошибке — пусто.
+    /// Reads rows whose `t_open` lies in the inclusive `[from_ms, to_ms]` range.
+    ///
+    /// Blocks for at most `READ_TIMEOUT` and returns an empty vector on timeout or error.
     pub fn read_range(
         &self,
         exchange: &str,
@@ -168,7 +185,7 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             PRIMARY KEY(exchange, market, kind, day)
         );",
     )?;
-    // Ретеншн при старте: суточные чанки старше лимита своего kind — под нож.
+    // At startup, delete daily chunks older than the retention limit for their kind.
     let today = now_unix_ms() / DAY_MS;
     let mut del = conn.prepare("DELETE FROM chunks WHERE kind = ?1 AND day < ?2")?;
     for kind in [0u32, 1, 5, 30, 60, 240, 1440] {
@@ -178,7 +195,7 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 }
 
 fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
-    // Первый merge по ключу логируем INFO (разово): видно в обычном логе, что кэш живёт.
+    // Log the first merge for each key at INFO so normal logs show that the cache is active.
     let mut seen: std::collections::HashSet<(String, String, u32)> =
         std::collections::HashSet::new();
     while let Ok(op) = rx.recv() {
@@ -212,8 +229,8 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
                         continue;
                     }
                 };
-                // Ошибка одного элемента не роняет транзакцию SQLite — логируем и пишем
-                // остальные, затем один commit на весь цикл.
+                // An item failure does not abort the SQLite transaction. Log it, write the
+                // remaining items, then commit the entire cycle once.
                 for it in &items {
                     match upsert_one(&tx, &it.exchange, &it.market, it.kind_min, &it.rows, now) {
                         Ok(()) => {
@@ -261,9 +278,11 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
     }
 }
 
-/// Записать ряды одного (биржа, рынок, kind) на УЖЕ ОТКРЫТОЙ транзакции `conn`
-/// (обычная `Connection` или `Transaction` через Deref). Транзакцией/коммитом
-/// управляет вызывающий — так один merge и батч из тысяч делят общий коммит.
+/// Writes rows for one exchange, market, and kind through an ALREADY OPEN transaction.
+///
+/// `conn` may be a regular `Connection` or a dereferenced `Transaction`. The caller owns
+/// transaction and commit management, allowing both a single merge and a batch of
+/// thousands to use the caller's chosen commit granularity.
 fn upsert_one(
     conn: &rusqlite::Connection,
     exchange: &str,
@@ -272,7 +291,7 @@ fn upsert_one(
     rows: &[ChartCandle],
     now: i64,
 ) -> rusqlite::Result<()> {
-    // Группируем по суткам; внутри дня merge по t_open (BTreeMap держит сортировку).
+    // Group by day and merge by t_open within each day; BTreeMap preserves ordering.
     let mut by_day: BTreeMap<i64, Vec<&ChartCandle>> = BTreeMap::new();
     for r in rows {
         if !(r.t_open_ms.is_finite() && r.t_open_ms > 0.0) || !(r.high > 0.0) {

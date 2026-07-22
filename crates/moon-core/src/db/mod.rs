@@ -1,9 +1,10 @@
-//! Локальная SQLite-БД отчётов Orders.
+//! Local SQLite database for Orders reports.
 //!
-//! ОСНОВНОЙ путь — typed-реплика серверной БД (moonproto `Event::Report`, таблица
-//! `orders_rep`, см. [`rep`]): схема от ядра, upsert/delete по `newRecID`, догонка
-//! оффлайна с курсора, reconcile на `SyncComplete`. Аналитические поля (дельты/
-//! pump/signaltype…) приходят настоящими значениями.
+//! The PRIMARY path is a typed replica of the server database (moonproto
+//! `Event::Report`, the `orders_rep` table; see [`rep`]): the core supplies the
+//! schema, rows are upserted or deleted by `newRecID`, offline changes catch up
+//! from a cursor, and `SyncComplete` reconciles the replica. Analytical fields
+//! (deltas, pump, signaltype, and others) arrive with their real values.
 //!
 //! LEGACY table `closed_sell_reports` (PK `(core_uid, db_id)`) is READ-ONLY: the
 //! terminal no longer consumes `Event::ClosedSellOrderReport`, so no new legacy
@@ -11,7 +12,8 @@
 //! core lingers on it, and [`rep`]'s per-core purge drops the table once every
 //! core is on typed replication (marker `legacy_dropped`).
 //!
-//! Пишет ОДИН поток-writer; читает окно «Отчёты» отдельным соединением (WAL).
+//! ONE writer thread performs writes; the Reports window reads through a separate
+//! connection (WAL).
 
 pub mod analytics;
 pub mod coin_lists;
@@ -42,16 +44,18 @@ use crate::config::paths;
 /// Feed-to-writer sink for typed replication messages plus per-core start cursors.
 pub type ReportTx = ReportSink;
 
-/// Хэндл БД: канал записи + счётчик-генерация (растёт после записи —
-/// окно «Отчёты» по нему перезапрашивает данные без поллинга).
+/// Database handle containing the write channel and a generation counter.
+///
+/// The counter advances after writes so the Reports window can refresh without polling.
 pub struct ReportsHandle {
     pub tx: ReportTx,
     pub generation: Arc<AtomicU64>,
 }
 
-/// Колонки и порядок для отображения в окне «Отчёты» (плюс заголовок/ширина —
-/// в самом окне). core_uid/newrecid скрыты (служебные); `id` — серверный row id
-/// (бывший легаси db_id).
+/// Columns and ordering displayed in the Reports window; the window owns titles and widths.
+///
+/// `core_uid` and `newrecid` are hidden service columns. `id` is the server row id
+/// formerly represented by the legacy `db_id`.
 pub const DISPLAY_COLUMNS: &[&str] = &[
     "buydate",
     "closedate",
@@ -119,8 +123,8 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         [],
     )?;
 
-    // Легаси-таблица уже снесена после полного переезда на typed-реплику —
-    // не пересоздаём (CREATE IF NOT EXISTS вернул бы её из мёртвых).
+    // The legacy table was already dropped after the full typed-replica migration.
+    // Do not recreate it: CREATE IF NOT EXISTS would bring the dead table back.
     let legacy_dropped: bool = conn
         .query_row(
             "SELECT value FROM app_meta WHERE key='legacy_dropped'",
@@ -206,8 +210,10 @@ pub fn report_row_count() -> ReadResult<i64> {
     .map_err(|e| read_fail(CTX, e))
 }
 
-/// Ёмкость канала к writer'у: backpressure вместо OOM. ~16k сообщений ≈ десятки МБ
-/// пика; при полном канале feed-поток ядра ждёт writer (естественный дроссель догонки).
+/// Writer-channel capacity: backpressure instead of OOM.
+///
+/// About 16k messages consume tens of MB at peak. When the channel is full, the
+/// core feed thread waits for the writer, naturally throttling catch-up.
 const REPORT_QUEUE_CAP: usize = 16_384;
 
 pub fn spawn_writer() -> Option<ReportsHandle> {
@@ -240,18 +246,18 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
         .name("reports-db".into())
         .spawn(move || {
             log::info!("отчёты: writer запущен ({})", path.display());
-            // Путь к WAL-файлу — для ленивого чекпоинта по РЕАЛЬНОМУ размеру (см. ниже).
+            // WAL path used by the lazy checkpoint based on the ACTUAL file size below.
             let wal_path = {
                 let mut s = path.clone().into_os_string();
                 s.push("-wal");
                 std::path::PathBuf::from(s)
             };
-            // Батчим пачку сообщений в одну транзакцию: catch-up льёт тысячи строк,
-            // и autocommit на каждую (fsync) растянул бы догонку на минуты.
+            // Batch messages into one transaction: catch-up emits thousands of rows,
+            // and per-row autocommit (fsync) would stretch catch-up into minutes.
             let mut thr_count: u64 = 0;
             let mut thr_started = std::time::Instant::now();
-            // Старое значение → первый чекпоинт срабатывает на первом же батче, усекая уже
-            // накопленный (возможно сотни МБ) WAL сразу после запуска, а не через 30с.
+            // Backdate the value by 30 seconds so the first WAL size check becomes eligible
+            // roughly 30 seconds after startup, on the next completed batch, rather than 60.
             let mut last_ckpt = std::time::Instant::now()
                 .checked_sub(Duration::from_secs(30))
                 .unwrap_or_else(std::time::Instant::now);
@@ -275,8 +281,8 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                         continue;
                     }
                 };
-                // ack страниц (`page_applied`) — ПОСЛЕ коммита (контракт flow-control:
-                // lib не запросит следующую страницу, пока эта не легла на диск).
+                // Acknowledge pages (`page_applied`) AFTER commit. Under the flow-control
+                // contract, the library requests no next page until this one reaches disk.
                 let mut acks = Vec::new();
                 for msg in batch {
                     apply_msg(&txn, &mut rep_state, msg, &mut acks);
@@ -291,8 +297,8 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                     }
                     Err(e) => log::error!("отчёты: commit батча упал: {e}"),
                 }
-                // Легаси снесена этим батчем → одноразовый VACUUM (вне транзакции):
-                // возвращает диску сотни МБ старой таблицы. Блокирует только writer.
+                // If this batch dropped the legacy table, run a one-off VACUUM outside the
+                // transaction to reclaim its hundreds of MB. Only the writer is blocked.
                 if rep_state.vacuum_pending {
                     rep_state.vacuum_pending = false;
                     let t = std::time::Instant::now();
@@ -305,12 +311,13 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                     }
                 }
                 gen_writer.fetch_add(1, Ordering::Relaxed);
-                // ЛЕНИВЫЙ чекпоинт WAL. Авто-чекпоинт SQLite (PASSIVE) обычно держит -wal мелким
-                // сам; форсировать TRUNCATE каждый раз — лишний CPU-всплеск (копирование WAL→main
-                // на writer-потоке). Поэтому TRUNCATE зовём ТОЛЬКО когда файл -wal реально разросся
-                // (авто-сброс не поспевает — напр. reader «Отчётов» мешает reset'у), иначе просто
-                // пропускаем. Так в норме всплесков нет, а раздувание диска в сотни МБ не случится.
-                // Проверяем размер раз в 60с (stat дёшев).
+                // LAZY WAL checkpoint. SQLite's PASSIVE auto-checkpoint normally keeps `-wal`
+                // small on its own; forcing TRUNCATE every time would cause an unnecessary CPU
+                // spike while the writer thread copies WAL into the main file. Call TRUNCATE
+                // ONLY when `-wal` has actually grown because auto-checkpointing cannot keep up,
+                // for example when a Reports reader prevents reset. This avoids normal-case
+                // spikes without allowing disk usage to grow by hundreds of MB. Check the size
+                // every 60 seconds; stat is cheap.
                 if last_ckpt.elapsed() >= Duration::from_secs(60) {
                     last_ckpt = std::time::Instant::now();
                     let wal_big = std::fs::metadata(&wal_path)
@@ -324,8 +331,8 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                         }
                     }
                 }
-                // Диагностика пропускной способности при плотном потоке (догонка):
-                // видно, успевает ли writer за входом (канал ограничен — не OOM).
+                // Throughput diagnostics for a dense catch-up stream show whether the writer
+                // keeps pace with input. The bounded channel prevents OOM either way.
                 let el = thr_started.elapsed();
                 if el >= Duration::from_secs(10) {
                     if thr_count > 2_000 {
@@ -405,18 +412,21 @@ fn apply_msg(
 }
 
 // ============================================================================
-//  Чтение для окна «Отчёты»
+//  Reads for the Reports window
 // ============================================================================
 
-/// Результат выборки: имена колонок + строки значений (generic, под все колонки).
-/// `cols` — РАНТАЙМ-список (из `PRAGMA table_info`), поэтому авто-добавленные поля
-/// ядра показываются без правок: известные колонки в каноничном порядке, новые — в хвост.
+/// Query result containing column names and generic value rows for every column.
+///
+/// `cols` is a RUNTIME list from `PRAGMA table_info`, so core-added fields appear
+/// without code changes: known columns keep canonical order and new ones follow.
 pub struct ReportTable {
     pub cols: Vec<String>,
     pub rows: Vec<Vec<Value>>,
-    /// `core_uid` каждой строки (параллельно `rows`). Служебная колонка не входит в
-    /// `cols`/DISPLAY_COLUMNS, но нужна, чтобы клик по монете в отчёте открыл чарт НА
-    /// ТОМ ЯДРЕ, где была сделка (`core_uid` == рантайм-`CoreId`).
+    /// `core_uid` for each row, parallel to `rows`.
+    ///
+    /// This service column is absent from `cols` and `DISPLAY_COLUMNS`, but lets a
+    /// report coin click open the chart ON THE CORE that made the trade
+    /// (`core_uid` equals the runtime `CoreId`).
     pub core_uids: Vec<u64>,
 }
 
@@ -430,14 +440,14 @@ pub enum SideFilter {
 
 #[derive(Debug, Clone, Default)]
 pub struct ReportFilter {
-    /// Выбранные ядра (мультивыбор); пусто = все.
+    /// Selected cores for the multi-select filter; empty means all cores.
     pub core_uids: Vec<u64>,
     pub date_from: Option<i64>,
     pub date_to: Option<i64>,
     pub coin: String,
     pub side: SideFilter,
-    /// Эмуляторные ордера: `None` — все, `Some(false)` — только реальные, `Some(true)` —
-    /// только эмуляторные (поле-список типа в отчёте). NULL в колонке считается «реальный».
+    /// Emulator orders: `None` selects all, `Some(false)` only real orders, and
+    /// `Some(true)` only emulator orders. A NULL column value counts as real.
     pub emulator: Option<bool>,
 }
 
@@ -513,7 +523,7 @@ pub fn save_sort(conn: &Connection, key: &str, desc: bool) {
     );
 }
 
-/// Сохранённый набор видимых колонок отчёта (имена через запятую). None — не сохраняли.
+/// Load the saved comma-separated set of visible report columns, or `None` if never saved.
 pub fn load_visible(conn: &Connection) -> Option<Vec<String>> {
     let csv: String = conn
         .query_row(
@@ -530,7 +540,7 @@ pub fn load_visible(conn: &Connection) -> Option<Vec<String>> {
     )
 }
 
-/// Сохранить набор видимых колонок отчёта (имена через запятую).
+/// Save the visible report-column names as a comma-separated set.
 pub fn save_visible(conn: &Connection, cols: &[&str]) {
     let csv = cols.join(",");
     let _ = conn.execute(
@@ -576,14 +586,16 @@ pub fn display_columns(conn: &Connection) -> ReadResult<Vec<String>> {
     Ok(out)
 }
 
-/// Источник чтения отчётов: таблица + её колонки + легаси-флаг. Читаем typed-реплику и
-/// (пока не снесена) легаси-таблицу РАЗДЕЛЬНЫМИ запросами — каждый со своим WHERE/
-/// ORDER/LIMIT, работают индексы — и сливаем в Rust. UNION ALL-подзапрос с NULL-
-/// проекцией SQLite не флаттенит: фильтр не проталкивался в ветки → полный скан
-/// легаси-БД в сотни МБ на каждый requery (замерено: ~400мс при «Сегодня»).
-/// Duplicate rows cannot arise during the merge: a core's rows live in exactly
-/// one table. Typed sync purges that core's legacy rows, and no legacy write path
-/// remains.
+/// Report read source: a table, its columns, and a legacy flag.
+///
+/// Query the typed replica and the legacy table, while it exists, SEPARATELY so
+/// each gets its own WHERE, ORDER, and LIMIT clauses and can use its indexes, then
+/// merge in Rust. SQLite does not flatten a UNION ALL subquery with NULL projection,
+/// so its filter was not pushed into the branches and every refresh fully scanned
+/// the hundreds-of-MB legacy database (measured at about 400 ms for "Today").
+/// During typed catch-up, a core can temporarily have rows in both tables until
+/// `SyncComplete` purges its legacy rows. Readers merge both sources as-is, so any
+/// overlap can temporarily contribute both copies to results.
 struct ReadSource {
     table: &'static str,
     cols: std::collections::HashSet<String>,
@@ -613,8 +625,8 @@ fn read_sources_res(conn: &Connection) -> ReadResult<Vec<ReadSource>> {
     Ok(out)
 }
 
-/// SELECT-проекция источника на общий набор `cols`: своя колонка как есть, легаси
-/// `db_id` → `id`, отсутствующая → NULL.
+/// Project a source onto the shared `cols`: preserve its own columns, map legacy
+/// `db_id` to `id`, and emit NULL for absent columns.
 fn source_select(src: &ReadSource, cols: &[String]) -> String {
     cols.iter()
         .map(|c| {
@@ -630,8 +642,8 @@ fn source_select(src: &ReadSource, cols: &[String]) -> String {
         .join(", ")
 }
 
-/// Сравнение значений при слиянии сортированных источников (числа как f64, текст
-/// лексикографически; NULL обрабатывает вызывающий — всегда в хвост).
+/// Compare values while merging sorted sources: numbers as `f64`, text
+/// lexicographically. The caller handles NULL and always places it last.
 fn cmp_values(a: &Value, b: &Value) -> std::cmp::Ordering {
     fn num(v: &Value) -> Option<f64> {
         match v {
@@ -649,8 +661,10 @@ fn cmp_values(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
 }
 
-/// Валидируем ключ сортировки против рантайм-колонок (без инъекций). Фолбэк —
-/// closedate, а до прихода схемы ядра (нет такой колонки) — newrecid (есть всегда).
+/// Validate the sort key against runtime columns to prevent injection.
+///
+/// Fall back to `closedate`, or to the always-present `newrecid` before the core
+/// schema supplies `closedate`.
 fn sort_column(cols: &[String], key: &str) -> String {
     if let Some(c) = cols.iter().find(|c| c.as_str() == key) {
         return c.clone();
@@ -662,9 +676,11 @@ fn sort_column(cols: &[String], key: &str) -> String {
     }
 }
 
-/// Условия по колонкам ставим только на СУЩЕСТВУЮЩИЕ в источнике: пока схема ядра не
-/// пришла, у реплики может не быть closedate/coin/isshort/emulator — фильтр по
-/// отсутствующей колонке валил бы весь SELECT (нет колонки = нет и данных для условия).
+/// Apply column predicates only to columns that EXIST in the source.
+///
+/// Before the core schema arrives, the replica may lack `closedate`, `coin`,
+/// `isshort`, or `emulator`; filtering on an absent column would fail the entire
+/// SELECT, while an absent column also means there is no data for that condition.
 fn build_where(
     f: &ReportFilter,
     cols: &std::collections::HashSet<String>,
@@ -673,7 +689,7 @@ fn build_where(
     let mut sql = String::from(" WHERE 1=1");
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     if !f.core_uids.is_empty() {
-        // Числа инлайним (инъекции нет), IN — под мультивыбор ядер.
+        // Inline numeric values safely; IN supports the multi-core selector.
         let ids = f
             .core_uids
             .iter()
@@ -760,13 +776,13 @@ pub fn query_reports(
     let sort_ix = cols.iter().position(|c| *c == col);
     let dir = if desc { "DESC" } else { "ASC" };
 
-    // Топ-N с КАЖДОГО источника своим запросом (индексы работают), слияние ниже.
+    // Query the top N from EACH source separately so indexes work, then merge below.
     let mut merged: Vec<(u64, Vec<Value>)> = Vec::new();
     for src in read_sources_res(conn)? {
         let (where_sql, mut params) = build_where(f, &src.cols);
         let select = source_select(&src, &cols);
-        // Сортируем на стороне SQL только если колонка есть у источника (alias `id`
-        // у легаси виден в ORDER BY); иначе порядок неважен — доупорядочит слияние.
+        // Sort in SQL only if the source has the column. The legacy `id` alias is
+        // visible to ORDER BY; otherwise source order is irrelevant because the merge reorders it.
         let sortable = src.cols.contains(&col) || (src.legacy && col == "id");
         let order = if sortable {
             format!("\"{col}\" IS NULL, \"{col}\" {dir}")
@@ -798,7 +814,7 @@ pub fn query_reports(
         }
     }
 
-    // Слияние: NULL всегда в хвост (как «{col} IS NULL» в SQL), затем направление.
+    // Merge with NULL always last, like `{col} IS NULL` in SQL, then apply direction.
     merged.sort_by(|a, b| {
         let va = sort_ix.and_then(|i| a.1.get(i)).unwrap_or(&Value::Null);
         let vb = sort_ix.and_then(|i| b.1.get(i)).unwrap_or(&Value::Null);
@@ -945,10 +961,10 @@ pub fn distinct_cores(conn: &Connection) -> ReadResult<Vec<(u64, String)>> {
 }
 
 // ============================================================================
-//  Дата/время без внешних крейтов (кроссплатформенно)
+//  Date and time without external crates (cross-platform)
 // ============================================================================
 
-/// unix-секунды → "YYYY-MM-DD HH:MM" в UTC. Пусто для <=0.
+/// Convert Unix seconds to `YYYY-MM-DD HH:MM` in UTC; return empty for values <= 0.
 pub fn fmt_unix(secs: i64) -> String {
     if secs <= 0 {
         return String::new();
@@ -973,7 +989,7 @@ pub fn fmt_unix_date(secs: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// unix-секунды → "YYYY-MM-DD HH:MM:SS" в UTC (для лога команд).
+/// Convert Unix seconds to `YYYY-MM-DD HH:MM:SS` in UTC for the command log.
 pub fn fmt_unix_secs(secs: i64) -> String {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
@@ -982,7 +998,7 @@ pub fn fmt_unix_secs(secs: i64) -> String {
     format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}")
 }
 
-/// "YYYY-MM-DD" → unix-секунды (UTC, начало суток).
+/// Convert `YYYY-MM-DD` to Unix seconds at the start of that UTC day.
 pub fn parse_ymd(s: &str) -> Option<i64> {
     let s = s.trim();
     if s.is_empty() {

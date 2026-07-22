@@ -1,7 +1,7 @@
-//! Фигуры чарта (слой рисования) в own-pass: доступ `ChartDataState` к общему
-//! стору фигур Backend'а + интерактив панели (превью рисования/hover/выделение).
-//! Геометрия добавляется в userdata-слои после `build_order_geometry`
-//! (см. `data_state::sync_orders_from_session`).
+//! Chart figures in the own-pass drawing layer. `ChartDataState` accesses the backend's shared
+//! figure store and panel interactions such as drawing previews, hover, and selection. Geometry is
+//! appended to userdata layers after `build_order_geometry`; see
+//! `data_state::sync_orders_from_session`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,33 +11,32 @@ use moon_core::session::CoreId;
 
 use super::ChartDataState;
 
-/// Интерактивное состояние фигур одной панели чарта. Данные фигур живут в общем
-/// сторе; здесь — только то, что видит конкретная панель (превью рисуемой фигуры,
-/// hover, выделение). Любая смена бампает `rev` → пересборка userdata.
+/// Interactive figure state for one chart panel. Figure data lives in the shared store; this value
+/// contains only panel-specific presentation state such as the draft preview, hover, and selection.
+/// Any change increments `rev` and triggers a userdata rebuild.
 #[derive(Default, Clone, PartialEq)]
 pub(crate) struct FigureVisual {
-    /// Режим рисования (карандаш). Фигуры видны/интерактивны ТОЛЬКО когда он включён.
+    /// Drawing mode. Figures are visible and interactive only while the pencil is enabled.
     pub draw_mode: bool,
-    /// Чарт (ядро+монета), к которому относится интерактив. Панель-движок может
-    /// держать СТЕК панелей разных монет — превью/подсветка применяются только
-    /// к панели с этим ключом.
+    /// Core and market identifying the chart whose interactions are represented. A `ChartEngine`
+    /// represents one current core and market, and this key restricts previews and highlights to it.
     pub key: Option<(CoreId, String)>,
-    /// Фигура в процессе рисования (превью за курсором, пунктиром).
+    /// Figure currently being drawn, previewed as a dashed shape following the cursor.
     pub draft: Option<Figure>,
-    /// Наведённая фигура (подсветка).
+    /// Hovered figure to highlight.
     pub hovered: Option<u64>,
-    /// Выделенная фигура (подсветка + узелки).
+    /// Selected figure to highlight and display control nodes for.
     pub selected: Option<u64>,
 }
 
 impl ChartDataState {
-    /// Подключить общий стор фигур (один Rc на Backend; зовётся при создании панели).
+    /// Attaches the backend's shared figure store when the panel is created.
     pub(super) fn set_figures_store(&mut self, store: Rc<RefCell<FigureStore>>) {
         self.figures = Some(store);
         self.figure_visual_rev = self.figure_visual_rev.wrapping_add(1);
     }
 
-    /// Интерактив фигур (превью/hover/выделение). Смена инвалидирует userdata панелей.
+    /// Sets figure preview, hover, and selection state, invalidating panel userdata on change.
     pub(super) fn set_figure_visual(&mut self, visual: FigureVisual) -> bool {
         if self.figure_visual == visual {
             return false;
@@ -53,8 +52,8 @@ impl ChartDataState {
         true
     }
 
-    /// Сигнатура фигур для гейта пересборки userdata: rev стора + rev интерактива.
-    /// u64::MAX не возвращаем (это «принудительно грязно» у панели).
+    /// Combines store and interaction revisions to gate userdata rebuilds. Never returns
+    /// `u64::MAX`, which panels reserve as the forced-dirty sentinel.
     pub(super) fn figures_sig(&self) -> u64 {
         let store_rev = self.figures.as_ref().map(|f| f.borrow().rev()).unwrap_or(0);
         let sig = store_rev
@@ -63,8 +62,8 @@ impl ChartDataState {
         if sig == u64::MAX { 0 } else { sig }
     }
 
-    /// Добавить геометрию фигур панели (ядро+монета) в userdata-буферы. Фигуры видны
-    /// ТОЛЬКО в режиме рисования (карандаш) — иначе слой не строим вовсе.
+    /// Appends figure geometry for a core and market to userdata buffers. Figures are visible only
+    /// in pencil drawing mode; otherwise this layer is not built.
     pub(super) fn append_figure_geometry(
         &self,
         core: CoreId,
@@ -81,10 +80,10 @@ impl ChartDataState {
             return;
         };
         let store = store.borrow();
-        // Локальные + серверные (from_server) — единый набор, все интерактивны.
+        // Treat local and server-provided figures as one fully interactive set.
         let figures = store.figures(core, market);
-        // Интерактив (превью/hover/выделение) — только для панели своего ключа:
-        // в стеке панелей разных монет draft рисуется лишь там, где курсор.
+        // Apply preview, hover, and selection only to the matching panel key. In a stack of
+        // different markets, the draft appears only in the panel containing the cursor.
         let v = &self.figure_visual;
         let mine = v
             .key

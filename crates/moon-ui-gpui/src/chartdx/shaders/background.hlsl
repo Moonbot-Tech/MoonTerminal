@@ -1,5 +1,5 @@
-// Статичная фото-подложка chart_area. Шейдер сам смешивает картинку с темовым bg,
-// поэтому слой остаётся непрозрачной базой, а grid выше рисует только линии.
+// Static photo backdrop for chart_area. The shader blends the image with the theme background,
+// so the layer remains an opaque base while the grid above draws only its lines.
 
 cbuffer BackgroundParams : register(b0) {
     float4 bp_dst;

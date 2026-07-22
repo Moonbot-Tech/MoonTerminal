@@ -1,6 +1,9 @@
-//! Заглушка-панель (Активы/Лог/Отчёт) до подключения данных. Имя = panel_name (для
-//! персиста раскладки фабрика восстанавливает по нему, заголовок известен по имени).
-//! Кнопка «⧉» откпрепляет панель в отдельное окно (убирает из дока + окно открепления).
+//! Generic fallback panel for an unavailable panel implementation.
+//!
+//! The detached-window factory currently constructs it for unrecognized persisted panel types.
+//! `name` supplies the [`Panel::panel_name`] and layout persistence key, while `title` supplies the
+//! visible heading. The detach toolbar action can open another detached window and, when a dock
+//! owner exists, removes the source only after that window opens successfully.
 
 use gpui::*;
 use moon_ui::{DockArea, MoonPalette, Panel, PanelEvent, PanelState};
@@ -8,15 +11,15 @@ use rust_i18n::t;
 
 use crate::Backend;
 
-/// Заглушка-панель (Активы/Лог/Отчёт) до подключения данных.
+/// Generic placeholder implementing the panel lifecycle for unavailable content.
 pub struct StubPanel {
     name: &'static str,
     title: SharedString,
-    /// Группа окна-владельца — для персиста раскладки и открепления (спека).
+    /// Owning window group used by layout persistence and detached-window specifications.
     group: String,
-    /// Общий backend — для записи спеки открепления / репина.
+    /// Shared backend used by the detach action to persist its detached-window specification.
     backend: Entity<Backend>,
-    /// DockArea-владелец — нужен для самоудаления при откреплении.
+    /// Owning dock area, when present, used to remove the source after successful detachment.
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -62,7 +65,7 @@ impl Panel for StubPanel {
     fn dump(&self, _cx: &App) -> PanelState {
         crate::dock_persist::panel_state_with_group(self.name, &self.group)
     }
-    /// Запоминаем dock-владельца — нужен, чтобы убрать себя из дока при откреплении.
+    /// Retain the owning dock so the detach action can remove this source panel after spawning.
     fn on_added_to(
         &mut self,
         dock_area: WeakEntity<DockArea>,
@@ -71,8 +74,10 @@ impl Panel for StubPanel {
     ) {
         self.dock = Some(dock_area);
     }
-    /// Кнопка «⧉»: убрать панель из дока + открыть в отдельном окне + записать спеку
-    /// (персист → на старте восстановится отцепленной). Порт egui `open_detached`.
+    /// Return the shared detach toolbar action.
+    ///
+    /// It opens a detached window, removes the source from its dock only after a successful spawn,
+    /// and records a `DetachedSpec` for startup restoration. This ports egui's `open_detached` flow.
     fn toolbar_buttons(
         &mut self,
         _window: &mut Window,
