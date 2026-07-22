@@ -1,5 +1,4 @@
-//! Draw/measure-обёртки `RenderState`, firetest-текст и призрак перекрестия
-//! (вынос из text.rs, verbatim).
+//! `RenderState` draw/measure helpers, FireTest text, and ghost-crosshair labels.
 
 use gpui::{GpuCanvasTextMetrics, Hsla, point, px};
 
@@ -56,7 +55,7 @@ impl RenderState {
         measure_text_run(&mut self.text_runs, self.text_run_cursor, ctx, text)
     }
 
-    /// `draw_text` с произвольным кеглем — крупная дельта от якоря в метле.
+    /// Draws text with a custom font size for the large anchor delta in broom mode.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_sized_text(
         &mut self,
@@ -83,13 +82,14 @@ impl RenderState {
         )
     }
 
-    /// Кегль подписей ордер-линий и курсора = база `FONT_SIZE` + поправка из темы (слайдер
-    /// Настроек). Зажат в разумные границы, чтобы не сломать раскладку.
+    /// Returns the order-line and cursor label size: `FONT_SIZE` plus the theme setting.
+    ///
+    /// Clamps the settings-slider adjustment to safe bounds so it cannot break layout.
     pub(super) fn label_font_px(&self) -> f32 {
         label_font_px(self.label_font_delta)
     }
 
-    /// `draw_text`, но кеглем подписей ордер-линий (`label_font_px`). Высота строки = кегль+4.
+    /// Draws text with the order-line label size from `label_font_px` and a `size + 4` line height.
     pub(super) fn draw_label_text(
         &mut self,
         ctx: &mut GpuCanvasTextContext<'_>,
@@ -114,7 +114,7 @@ impl RenderState {
         )
     }
 
-    /// `measure_text`, но кеглем подписей ордер-линий (`label_font_px`).
+    /// Measures text with the order-line label size from `label_font_px`.
     pub(super) fn measure_label_text(
         &mut self,
         ctx: &GpuCanvasTextContext<'_>,
@@ -201,12 +201,13 @@ impl RenderState {
         Ok(())
     }
 
-    /// Призрак перекрестия compare-режима: у панели БЕЗ реального курсора рисуем на цене
-    /// `ghost_price` ТОЛЬКО объём стакана на уровне (над линией) и % от текущей цены (под
-    /// линией) — время/цену-на-оси/размер ордера не дублируем (решение пользователя).
-    /// Работает и на схлопнутом чарте метлы: маппинг цена→Y берём из вида стакана, когда
-    /// чарт-вид схлопнут (высота и ценовое окно у них совпадают). Сама линия — cursor.hlsl
-    /// (см. `sync_cursor_params`, призрак с X за границами).
+    /// Draws compare-mode ghost-crosshair labels for a pane without a real cursor.
+    ///
+    /// At `ghost_price`, draws only order-book volume at the level (above the line) and the
+    /// percentage from current price (below it), without duplicating time, axis price, or order
+    /// size. Also works in a collapsed broom chart by mapping price to Y through the order-book
+    /// view, whose height and price window match the collapsed chart. The backend cursor layer
+    /// draws the line; see `sync_cursor_params`, which places the ghost's X outside the bounds.
     pub(super) fn draw_ghost_cursor_labels(
         &mut self,
         ctx: &mut GpuCanvasTextContext<'_>,
@@ -230,7 +231,7 @@ impl RenderState {
                 pr.cached_last_price,
             )
         };
-        // Тот же порог «нормального» чарта, что и у основного курсорного блока (plot_w>=60).
+        // Use the same "normal" chart threshold as the main cursor block (plot_w >= 60).
         let v = if view.price_to_px > 0.0 && view.bounds[2] / sf >= 60.0 {
             view
         } else {
@@ -246,8 +247,9 @@ impl RenderState {
         if !(cy >= top && cy <= bottom) {
             return Ok(());
         }
-        // Якорь X — как у реального курсора: правее разделителя (левый край стакана; в метле
-        // стакан на всю ширину → левый край панели). Без стакана — левый край зоны управления.
+        // Anchor X like the real cursor: to the right of the separator (the order book's left
+        // edge; in broom mode the full-width book starts at the panel's left edge). Without an
+        // order book, use the control zone's left edge.
         let pane_left = pane_bounds[0] / sf;
         let pane_right = (pane_bounds[0] + pane_bounds[2]) / sf;
         let zone_left = if orderbook_enabled {
@@ -257,13 +259,13 @@ impl RenderState {
             pane_right - zone_w
         };
         let right_x = zone_left + READOUT_PAD_X;
-        // Зазор от линии: плашка подписи не должна резать горизонталь (см. cursor_label_gap).
+        // Keep the label badge from cutting through the horizontal line; see cursor_label_gap.
         let gap = cursor_label_gap(self.cursor_thickness, sf);
         let cur_col = cached_last_price
             .filter(|l| *l > 0.0)
             .map(|last| pct_hsla(last - price, self.label_positive, self.label_negative))
             .unwrap_or(color(self.readout_label));
-        // Объём стакана на уровне призрака — над линией.
+        // Draw order-book volume at the ghost level above the line.
         if orderbook_enabled && !self.panes[idx].orderbook_levels.is_empty() {
             let tol = 6.0 / price_to_px.max(1e-6);
             if let Some(q) =
@@ -289,7 +291,7 @@ impl RenderState {
                 });
             }
         }
-        // % отклонения призрака от ТЕКУЩЕЙ цены этого чарта — под линией.
+        // Draw the ghost's percentage deviation from this chart's CURRENT price below the line.
         if let Some(last) = cached_last_price {
             if last > 0.0 {
                 let pct = (price - last) / last * 100.0;

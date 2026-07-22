@@ -1,12 +1,13 @@
-//! Подготовка данных чарта per pane (`impl ChartDataState`): главный `prepare`
-//! (БЕЗ рисования) — чтение истории/стакана/ордеров, заливка GPU-буферов, авто-Y,
-//! сигнатуры изменений. Вынесено из `mod.rs`; структура `ChartDataState` объявлена там.
+//! Per-pane chart data preparation in `ChartDataState`: the main non-drawing preparation reads
+//! history, order books, and orders; uploads GPU buffers; applies automatic Y scaling; and tracks
+//! change signatures. The implementation was extracted from `mod.rs`, where `ChartDataState`
+//! remains declared.
 
 use super::*;
 
-// Разнос по смысловым блокам (verbatim-перенос, логика не менялась):
-// state — жизненный цикл/сигнатуры/frame; orders — синк ордеров и подписи линий;
-// market — синк рыночных данных (история/стакан/авто-Y).
+// Responsibilities are split without logic changes: state handles lifecycle, signatures, and
+// frames; orders synchronizes orders and line labels; market synchronizes history, order books,
+// and automatic Y scaling.
 mod market;
 pub(crate) mod orders;
 mod state;

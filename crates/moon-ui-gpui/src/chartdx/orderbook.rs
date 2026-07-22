@@ -1,9 +1,9 @@
-//! Слой стакана (OrderBook): СВОЯ зона справа (не временной ряд, без combo). Фон зоны +
-//! кумулятивные fill-прямоугольники глубины и отдельные level-lines запекаются в
-//! офскрин-текстуру `BookTex` (наш
-//! аналог Moonbot `bmGlass`) и блитятся каждый present. Перепечатка текстуры — ТОЛЬКО при
-//! смене уровней/Y-трансформа, НЕ каждый кадр: на статике и mouse-move стакан = дешёвый
-//! блит готовой текстуры, а не повторная отрисовка сотен баров инстансами 240 раз/с.
+//! Order-book layer with its OWN right-side zone, independent of the time series and combo layer.
+//! The zone background, cumulative depth-fill rectangles, and individual level lines bake into an
+//! offscreen `BookTex`, analogous to Moonbot's `bmGlass`. During an outer `BaseCache` rebuild,
+//! `BookTex` is composited into that cache; `BaseCache`, not `BookTex`, blits on each present. The
+//! texture rebakes for level data, Y transform, non-edge style, size, or device-generation changes
+//! as applicable, while live edge movement uses the throttled dirty path.
 
 use std::time::{Duration, Instant};
 
@@ -36,11 +36,12 @@ struct BookPipe {
     style_cb: ID3D11Buffer,
 }
 
-/// Офскрин-битмап стакана (наш `bmGlass`): запечённые фон+бары + признак валидности и Y-входы,
-/// при которых текстура валидна. Размер = зона стакана (glass_area). Стакан не скроллит по X
-/// (зона фиксирована), поэтому блит 1:1, без UV-пана — проще combo.
+/// Offscreen order-book bitmap analogous to `bmGlass`, containing baked background and bars plus
+/// validity state and the Y inputs for which the texture remains valid. Its size equals the
+/// `glass_area`. The fixed order-book zone does not scroll on X, so it uses a one-to-one blit without
+/// UV panning and is simpler than combo.
 struct BookTex {
-    _tex: ID3D11Texture2D, // RAII: держит текстуру (rtv/srv ссылаются)
+    _tex: ID3D11Texture2D, // RAII keeps the texture referenced by RTV and SRV alive
     rtv: ID3D11RenderTargetView,
     srv: ID3D11ShaderResourceView,
     tex_w: u32,
@@ -52,11 +53,11 @@ struct BookTex {
     last_price_to_px: f32,
     last_view_price0: f32,
     last_style: BookStyle,
-    /// Текстура хоть раз отрисована (первый bake обязателен — иначе чёрный стакан).
+    /// Whether the texture has ever rendered; the first bake is required to avoid a black order book.
     baked: bool,
-    /// Входы сменились с прошлого bake → нужен ре-bake (троттлится 200мс).
+    /// Whether inputs changed since the previous bake, requiring a rebake throttled to 200 ms.
     dirty: bool,
-    /// Время прошлого bake — троттл re-bake до ~5 Гц (Moonbot bmGlass: 200мс).
+    /// Time of the previous bake, throttling rebakes to about 5 Hz like Moonbot `bmGlass` at 200 ms.
     last_bake_at: Option<Instant>,
 }
 
@@ -79,7 +80,7 @@ impl OrderBookLayer {
         }
     }
 
-    /// Залить уровни стакана (целиком). Зовётся при изменении книги/окна → инвалидирует кэш.
+    /// Upload all order-book levels after a book or window change, invalidating the cache.
     pub fn set(&mut self, levels: Vec<LevelInstance>) {
         self.pending = Some(levels);
     }
@@ -99,7 +100,9 @@ impl OrderBookLayer {
         if bw <= 0.0 || bh <= 0.0 {
             return;
         }
-        // device-lost: пересоздать pipe и текстуру; count=0 (prepare зальёт уровни заново).
+        // Device loss drops the pipeline and texture and resets the level count. This layer keeps no
+        // CPU copy and cannot reupload by itself, so it remains empty until a later `set()` queues
+        // fresh levels.
         if device_changed(&mut self.device_generation, gpu) {
             self.pipe = None;
             self.tex = None;
@@ -108,7 +111,7 @@ impl OrderBookLayer {
         if self.pipe.is_none() {
             self.pipe = Some(Self::create_pipe(device, INITIAL_LEVEL_BUFFER_CAPACITY));
         }
-        // Применить новые уровни (если пришли) → инвалидировать кэш текстуры.
+        // Apply incoming levels and invalidate the texture cache.
         let mut levels_changed = false;
         if let Some(levels) = self.pending.take() {
             let need_cap = next_buffer_cap(levels.len(), INITIAL_LEVEL_BUFFER_CAPACITY);
@@ -136,8 +139,9 @@ impl OrderBookLayer {
         let pipe = self.pipe.as_ref().unwrap();
         let count = self.count;
         let tex = self.tex.as_mut().unwrap();
-        // Стакан позиционируется по ЦЕНЕ → смена Y-трансформа (price_to_px/view_price0) делает
-        // картинку другой. Плюс смена уровней. Только это инвалидирует кэш.
+        // Level data and the Y transform (`price_to_px` or `view_price0`) invalidate the baked
+        // image here. Texture recreation handles size and device changes; the style checks below
+        // distinguish immediate non-edge changes from throttled live-edge movement.
         if levels_changed
             || tex.last_price_to_px != view.price_to_px
             || tex.last_view_price0 != view.view_price0
@@ -145,12 +149,12 @@ impl OrderBookLayer {
         {
             tex.dirty = true;
         }
-        // Живые границы bid/ask (edges) двигаются каждым тиком книги — они инвалидируют
-        // бейк только через throttled-dirty выше; НЕМЕДЛЕННУЮ перепечку требуют лишь
-        // цвета/толщины (eq_ignore_edges) и Y-трансформ.
+        // Live bid and ask edges move on every book tick and invalidate the bake only through the
+        // throttled dirty path above. Any non-edge `BookStyle` field (`eq_ignore_edges`) and the Y
+        // transform require an IMMEDIATE rebake.
         let style_hard_changed = !style.eq_ignore_edges(&tex.last_style);
 
-        // BAKE: фон+бары в текстуру (texture-local view). Book data may be throttled, but
+        // BAKE the background and bars into the texture using a texture-local view. Book data may be throttled, but
         // camera/price-transform changes from user pan/zoom must bake immediately; otherwise
         // the chart moves while the glass layer visibly lags behind.
         let now = Instant::now();
@@ -163,7 +167,7 @@ impl OrderBookLayer {
                 .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(200));
         if !tex.baked || transform_changed || book_data_due {
             crate::diag::bump(&crate::diag::CHART_BOOK_BAKE);
-            // bake-view: зона = весь битмап [0,0,tex_w,tex_h], Y-трансформ тот же.
+            // Bake view spans the full `[0, 0, tex_w, tex_h]` bitmap with the same Y transform.
             let bake_view = ChartViewGpu {
                 bounds: [0.0, 0.0, tex_w as f32, tex_h as f32],
                 resolution: [tex_w as f32, tex_h as f32],
@@ -196,15 +200,15 @@ impl OrderBookLayer {
                 context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 context.VSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
                 context.VSSetConstantBuffers(1, Some(&[Some(pipe.style_cb.clone())]));
-                // PS фона считает границы зон ask/bid из цен (edges) через Y-трансформ view.
+                // The background pixel shader maps price edges through the view's Y transform to ask/bid zones.
                 context.PSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
                 context.PSSetConstantBuffers(1, Some(&[Some(pipe.style_cb.clone())]));
                 context.OMSetBlendState(None, None, 0xFFFFFFFF);
-                // Фон зоны (всегда, даже при пустой книге) — opaque book_bg.
+                // Always draw the zone background as opaque `book_bg`, even for an empty book.
                 context.VSSetShader(&pipe.bg_vs, None);
                 context.PSSetShader(&pipe.bg_ps, None);
                 context.Draw(6, 0);
-                // Fill-прямоугольники и отдельные level-lines.
+                // Draw fill rectangles and individual level lines.
                 if count > 0 {
                     context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
                     context.VSSetShaderResources(1, Some(&[Some(pipe.srv.clone())]));
@@ -222,8 +226,10 @@ impl OrderBookLayer {
         }
     }
 
-    /// Блитит закэшированный стакан в зону `view.bounds`. `panel_clip` — scissor панели:
-    /// восстанавливаем его для слоёв ПОСЛЕ нас.
+    /// Composite the cached order book into `view.bounds` of the caller-provided render target
+    /// during an outer `BaseCache` rebuild.
+    ///
+    /// `panel_clip` is the panel scissor restored for layers that render afterward.
     pub fn render(
         &mut self,
         view: &ChartViewGpu,
@@ -238,8 +244,8 @@ impl OrderBookLayer {
         if !tex.baked || view.bounds[2] <= 0.0 || view.bounds[3] <= 0.0 {
             return;
         }
-        // BLIT: готовая текстура → зона стакана backbuffer (1:1, full UV). Scissor = panel_clip
-        // (восстанавливаем после bake-scissor — иначе userdata-слой после нас обрежется к зоне).
+        // BLIT the ready texture one-to-one with full UV into the backbuffer order-book zone. Restore
+        // `panel_clip` after the bake scissor or the following userdata layer would clip to this zone.
         let bp = BlitParams {
             dst: view.bounds,
             resolution: view.resolution,

@@ -1,13 +1,13 @@
-// Свечи own-pass: инстансный слой под крестами трейдов (base-проход, до combo-блита).
-// Один инстанс = одна свеча: тело (quad) + верхний/нижний фитили (тонкие quad'ы), 18
-// вершин. Режимы (заполненные / контуры / контуры в зоне трейдов), зона, тени и
-// нейтральный цвет — константами CandleStyle: смена вида не трогает вершинный буфер.
-// Контур — PS-дискард внутренности по попиксельной дистанции до края (размер quad'а
-// приходит из VS). Цвета sRGB напрямую (таргет UNORM, как grid.hlsl).
+// Candle own pass: instanced layer beneath trade crosses (base pass, before the combo blit).
+// One instance is one candle: body (quad) + upper/lower wicks (thin quads), 18 vertices.
+// Modes (filled / outlined / outlined in the trade zone), zone, wicks, and neutral color are
+// CandleStyle constants, so changing the appearance does not touch the vertex buffer.
+// The outline uses PS to discard the interior by per-pixel distance from the edge (the quad
+// size comes from VS). Write sRGB colors directly (UNORM target, as in grid.hlsl).
 
 cbuffer ChartView : register(b0) {
-    float4 cv_bounds;     // ox, oy, w, h (px) — область чарта
-    float2 cv_resolution; // w, h бэкбуфера (px)
+    float4 cv_bounds;     // ox, oy, w, h (px) — chart area
+    float2 cv_resolution; // backbuffer w, h (px)
     float  cv_time_to_px;
     float  cv_view_time0;
     float  cv_price_to_px;
@@ -21,36 +21,36 @@ cbuffer ChartView : register(b0) {
 };
 
 cbuffer CandleStyle : register(b1) {
-    float4 cs_up;      // цвет растущей свечи
-    float4 cs_down;    // цвет падающей
-    float4 cs_neutral; // нейтральный цвет зоны трейдов
-    float  cs_tf_rel;          // ширина бакета (rel ms)
-    float  cs_zone_start;      // rel ms начала зоны трейдов (f32::MAX = зоны нет)
-    float  cs_mode;            // 0 заполненные / 1 контуры / 2 контуры в зоне
-    float  cs_outline_px;      // толщина контура, физ. px
-    float  cs_wicks_in_zone;   // 0/1 — рисовать фитили в зоне
-    float  cs_neutral_in_zone; // 0/1 — нейтральный цвет в зоне
-    float  cs_fill_alpha;      // непрозрачность заливки тела
-    float  cs_hide_start;      // rel ms: свечи с t_open ≥ границы не рисуем (только трейды)
+    float4 cs_up;      // rising-candle color
+    float4 cs_down;    // falling-candle color
+    float4 cs_neutral; // neutral trade-zone color
+    float  cs_tf_rel;          // bucket width (rel ms)
+    float  cs_zone_start;      // trade-zone start in rel ms (f32::MAX = no zone)
+    float  cs_mode;            // 0 filled / 1 outlined / 2 outlined in the zone
+    float  cs_outline_px;      // outline width in physical px
+    float  cs_wicks_in_zone;   // 0/1 — draw wicks in the zone
+    float  cs_neutral_in_zone; // 0/1 — use the neutral color in the zone
+    float  cs_fill_alpha;      // body fill opacity
+    float  cs_hide_start;      // rel ms: omit candles with t_open ≥ boundary (trades only)
 };
 
 struct Candle {
-    float t_open; // rel ms открытия бакета
+    float t_open; // bucket opening time in rel ms
     float o;
     float h;
     float l;
     float c;
     float vol;
-    float tf_rel; // СВОЙ ТФ свечи (rel ms); 0 = ТФ серии. Хвост истории — старшие ТФ.
+    float tf_rel; // Candle's OWN timeframe (rel ms); 0 = series timeframe. History tail uses higher timeframes.
 };
 
 StructuredBuffer<Candle> candles : register(t3);
 
 struct CandleOut {
     float4 pos : SV_Position;
-    float2 uv  : TEXCOORD0; // 0..1 внутри quad'а
-    nointerpolation float2 size_px : TEXCOORD1; // размер quad'а, px (для контура)
-    nointerpolation float  outline : TEXCOORD2; // 1 = рисуем контуром (только тело)
+    float2 uv  : TEXCOORD0; // 0..1 inside the quad
+    nointerpolation float2 size_px : TEXCOORD1; // quad size in px (for the outline)
+    nointerpolation float  outline : TEXCOORD2; // 1 = draw as an outline (body only)
     nointerpolation float4 color   : TEXCOORD3;
 };
 
@@ -75,14 +75,14 @@ CandleOut cull_out() {
 
 CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     Candle cd = candles[iid];
-    uint part = vid / 6u;          // 0 тело, 1 верхний фитиль, 2 нижний фитиль
+    uint part = vid / 6u;          // 0 body, 1 upper wick, 2 lower wick
     float2 corner = CORNERS[vid % 6u];
 
     if (cd.t_open >= cs_hide_start) {
-        return cull_out(); // зона «только трейды» — свечу не рисуем
+        return cull_out(); // Omit the candle in the "trades only" zone.
     }
-    // Хвост истории дорисован старшими ТФ: у таких свечей свой tf_rel (ширина) и
-    // приглушённые цвета — визуально отличаются от выбранного ТФ.
+    // The history tail is completed with higher timeframes: those candles carry their own
+    // tf_rel (width) and muted colors to distinguish them from the selected timeframe.
     bool foreign_tf = cd.tf_rel > 0.0 && abs(cd.tf_rel - cs_tf_rel) > 0.5;
     float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs_tf_rel;
     float x0 = cv_bounds.x + (cd.t_open - cv_view_time0) * cv_time_to_px;
@@ -104,8 +104,8 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     y_top_body = round(y_top_body);
     y_bot_body = max(round(y_bot_body), y_top_body + 1.0);
 
-    // Тело с зазором между свечами (10% ширины, максимум 4px); вырожденное узкое —
-    // колонка минимум 1px по центру бакета.
+    // Leave a gap between candle bodies (10% of the width, at most 4 px). A degenerate narrow
+    // body becomes a column at least 1 px wide at the bucket center.
     float gap = clamp((x1 - x0) * 0.10, 0.0, 4.0);
     float bx0 = x0 + gap;
     float bx1 = x1 - gap;
@@ -115,7 +115,7 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
         bx1 = cx + 1.0;
     }
 
-    float2 p0; // левый-верхний угол quad'а
+    float2 p0; // top-left corner of the quad
     float2 sz;
     if (part == 0u) {
         p0 = float2(bx0, y_top_body);
@@ -133,7 +133,7 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
             y1 = round(price_y(cd.l));
         }
         if (y1 - y0 < 0.5) {
-            return cull_out(); // фитиля нет (high/low внутри тела)
+            return cull_out(); // No wick when high/low lies inside the body.
         }
         p0 = float2(wx, y0);
         sz = float2(wick_w, y1 - y0);
@@ -149,10 +149,10 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     }
     float alpha = 1.0;
     if (part == 0u && !outline) {
-        alpha = saturate(cs_fill_alpha); // заливка тела полупрозрачна (сетка чуть видна)
+        alpha = saturate(cs_fill_alpha); // The body fill is translucent, leaving the grid faintly visible.
     }
     if (foreign_tf) {
-        alpha *= 0.55; // хвост чужого ТФ — полупрозрачный
+        alpha *= 0.55; // The tail from another timeframe is translucent.
     }
 
     CandleOut o;
@@ -171,7 +171,7 @@ float4 candles_fragment(CandleOut i) : SV_Target {
         if (min(dx, dy) > max(cs_outline_px, 1.0)) {
             discard;
         }
-        // Альфа из VS: у контуров обычно 1.0, у хвоста чужого ТФ — приглушённая.
+        // Alpha comes from VS: normally 1.0 for outlines and muted for another timeframe's tail.
         return i.color;
     }
     return i.color;

@@ -1,8 +1,9 @@
-//! Слой свечей own-pass (D3D11): инстансный дроу в base-проход МЕЖДУ grid и combo —
-//! свечи лежат под крестами трейдов. Base перерисовывается только на data-change /
-//! сдвиге камеры (existing cadence), т.е. слой не добавляет работы в present-путь.
-//! Буфер (сотни свечей) перезаливается целиком по смене ревизии серии (дёшево);
-//! вид (режим/зона/контур/цвета) — константами CandleStyle, без пересборки вершин.
+//! D3D11 own-pass candle layer, drawn with instancing in the base pass between the grid and
+//! combo layers so candles remain below trade crosses. The base is redrawn only on data changes
+//! or camera movement at the existing cadence, so this layer adds no work to the presentation
+//! path. The buffer, containing hundreds of candles, is cheaply reuploaded in full whenever the
+//! series revision changes. `CandleStyle` constants control the mode, zone, outline, and colors
+//! without rebuilding vertices.
 
 use gpui::RawGpuAccess;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -14,8 +15,9 @@ use super::gpu::{
 };
 use super::types::{CandleGpu, CandleStyleGpu, ChartViewGpu};
 
-/// Ёмкость GPU-буфера свечей (инстансов). Видимое окно + префетч — сотни; 4096 с запасом
-/// (4096 × 24 B = 96 KB VRAM). Переполнение — оставляем последний хвост.
+/// Candle instance capacity of the GPU buffer. The visible window plus prefetch uses hundreds;
+/// 4096 leaves ample headroom while consuming 96 KB of VRAM at 24 bytes per instance. On
+/// overflow, only the most recent tail is retained.
 const CANDLE_CAPACITY: u32 = 4096;
 const CANDLES_HLSL: &str = include_str!("shaders/candles.hlsl");
 
@@ -50,12 +52,12 @@ impl CandleLayer {
         }
     }
 
-    /// Полная замена набора свечей (ревизия серии изменилась).
+    /// Fully replaces the candle set after a series revision change.
     pub fn set(&mut self, data: Vec<CandleGpu>) {
         self.pending = Some(data);
     }
 
-    /// Стиль слоя (режим/зона/цвета/контур). Идемпотентен.
+    /// Idempotently sets the layer's mode, zone, colors, and outline style.
     pub fn set_style(&mut self, style: CandleStyleGpu) {
         if self.style != style {
             self.style = style;
@@ -63,7 +65,7 @@ impl CandleLayer {
         }
     }
 
-    /// Prepare phase: заливка pending-буфера и констант стиля. Из `prepare_gpu`.
+    /// Uploads the pending buffer and style constants during `prepare_gpu`.
     pub fn prepare(
         &mut self,
         device: &ID3D11Device,
@@ -71,8 +73,8 @@ impl CandleLayer {
         gpu: &RawGpuAccess,
     ) {
         if device_changed(&mut self.device_generation_seen, gpu) {
-            // device-lost: ресурсы невалидны. Данные держит оркестратор (data_state) —
-            // он же перезальёт по ревизии; здесь достаточно пересоздать pipe и обнулиться.
+            // A lost device invalidates these resources. The data-state orchestrator retains the
+            // data and reuploads it by revision, so recreating the pipeline and resetting is enough.
             self.pipe = None;
             self.count = 0;
             self.style_dirty = true;
@@ -99,7 +101,7 @@ impl CandleLayer {
         }
     }
 
-    /// Рисует свечи в base-проход (между grid и combo). `prepare()` уже залил данные.
+    /// Draws candles in the base pass between grid and combo after `prepare()` uploads the data.
     pub fn render(
         &mut self,
         view: &ChartViewGpu,
@@ -139,7 +141,7 @@ impl CandleLayer {
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
             context.VSSetShader(&pipe.vs, None);
             context.PSSetShader(&pipe.ps, None);
-            // 18 вершин на свечу: тело + верхний/нижний фитили (3 quad'а).
+            // Use 18 vertices per candle: the body and upper/lower wicks form three quads.
             context.DrawInstanced(18, self.count, 0, 0);
         }
     }

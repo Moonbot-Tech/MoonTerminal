@@ -1,5 +1,6 @@
-//! Маппинг `moon_chart::view::ChartView` (математика вида, общая с эталоном) → наш cbuffer
-//! `ChartViewGpu`. Никакого рисования — только подготовка uniform для own-pass слоёв.
+//! Maps `moon_chart::view::ChartView`, whose view math is shared with the reference renderer, to
+//! the `ChartViewGpu` constant buffer. This module only prepares uniforms for own-pass layers and
+//! performs no drawing.
 
 use moon_chart::view::{ChartView, Rect};
 
@@ -16,8 +17,9 @@ pub fn cross_cull_margin_physical_px(view: &ChartView, marker_scale: f32) -> f32
 #[cfg(test)]
 mod tests;
 
-/// Собирает GPU-юнформ для текущего вида и чарт-области (физ. px). Поля заполняются ПО ИМЕНАМ
-/// (порядок в `ChartViewGpu` отличается от `moon_chart` ChartUniform — нельзя memcpy).
+/// Builds the GPU uniform for the current view and chart area in physical pixels. Fields are
+/// assigned by name because `ChartViewGpu` uses a different order from `moon_chart::ChartUniform`,
+/// so the structure cannot be copied with `memcpy`.
 pub fn view_gpu(
     view: &ChartView,
     area: Rect,

@@ -1,10 +1,11 @@
-//! Combo-слой: вся неизменная рыночная история (Trades; PriceLines/Volume — добавятся
-//! сюда же). Кресты лежат в резидентном кольце VRAM; «фон-битмап» combo шире экрана на
-//! +20% запекается крестовым шейдером и блитится с UV-паном. Прошлое неизменно → двигаем
-//! готовый битмап (scroll) + дорисовываем (append) живой край, НЕ перерисовывая историю.
+//! Combo layer for all immutable market history. It currently contains trades, with price lines
+//! and volume sharing the layer. Crosses reside in a VRAM ring; a combo backing bitmap 20% wider
+//! than the screen is baked by the cross shader and blitted with UV panning. Because historical
+//! data is immutable, scrolling moves the baked bitmap and appending draws only the live edge
+//! without redrawing history.
 //!
-//! Защита от device-lost (P0-4): при смене поколения device хука (GPUI пересоздал
-//! устройство) сбрасываем ВСЕ ресурсы — иначе рисовали бы stale-буферами на новом контексте.
+//! Device-loss handling resets every resource when the hook's device generation changes after
+//! GPUI recreates the device. Otherwise the new context would draw from stale buffers.
 
 use bytemuck::Zeroable;
 use gpui::RawGpuAccess;
@@ -34,7 +35,7 @@ fn texel_aligned_time0(time0: f32, time_to_px: f32) -> f32 {
     (time0 * time_to_px).floor() / time_to_px
 }
 
-/// Pipeline крестов + резидентное кольцо тиков в VRAM.
+/// Cross-rendering pipeline and resident VRAM tick ring.
 struct CrossPipe {
     cross_vs: ID3D11VertexShader,
     cross_ps: ID3D11PixelShader,
@@ -54,9 +55,9 @@ struct CrossPipe {
     view_cb: ID3D11Buffer,
 }
 
-/// Фон-битмап combo (W*1.2 × H): запечённая история + точка привязки UV-скролла.
+/// Combo backing bitmap `(W * 1.2) x H`, containing baked history and a UV-scroll anchor.
 struct ComboTex {
-    _tex: ID3D11Texture2D, // RAII: держит текстуру (rtv/srv ссылаются)
+    _tex: ID3D11Texture2D, // Retain the texture through RAII while its RTV and SRV reference it.
     rtv: ID3D11RenderTargetView,
     srv: ID3D11ShaderResourceView,
     tex_w: u32,
@@ -97,10 +98,10 @@ pub struct ComboLayer {
     mark_line_count: u32,
     cross_capacity: u32,
     price_line_capacity: u32,
-    /// Поколение RawGpuAccess device, на котором созданы ресурсы. Сменилось → device-lost.
+    /// `RawGpuAccess` device generation on which the resources were created; a change means loss.
     device_generation_seen: u64,
-    /// Поколение device: ++ при пересоздании (device-lost). Оркестратор сравнивает со своим
-    /// last → перезаливает ВСЮ историю (кольцо новое и пустое, append живого края не хватит).
+    /// Device generation incremented after each recreation. The orchestrator compares it with its
+    /// last value and reuploads all history because appending the live edge cannot refill a new ring.
     device_gen: u64,
     volume_buy_max: f32,
     volume_sell_max: f32,
@@ -136,8 +137,8 @@ impl ComboLayer {
         }
     }
 
-    /// Поколение device combo (++ на каждый device-lost). Оркестратор сравнивает со своим
-    /// last_device_gen: сменилось → кольцо пустое, нужна полная перезаливка истории.
+    /// Combo device generation incremented on every device loss. The orchestrator compares it with
+    /// `last_device_gen`; a change means the ring is empty and requires a full history reupload.
     pub fn device_gen(&self) -> u64 {
         self.device_gen
     }
@@ -169,13 +170,13 @@ impl ComboLayer {
         self.volume_window_cache = None;
     }
 
-    /// Полная перезаливка набора тиков (reload истории монеты). Сбрасывает append.
+    /// Reuploads the complete tick set after reloading market history and discards pending appends.
     pub fn reset(&mut self, data: Vec<ChartCross>) {
         self.pending_reset = Some(data);
         self.pending_append.clear();
     }
 
-    /// Дополнить кольцо новыми тиками (живой край) — каждый приход данных.
+    /// Appends newly arrived ticks to the ring's live edge.
     pub fn append(&mut self, data: &[ChartCross]) {
         if !data.is_empty() {
             self.pending_append.extend_from_slice(data);
@@ -195,9 +196,9 @@ impl ComboLayer {
         context: &ID3D11DeviceContext,
         gpu: &RawGpuAccess,
     ) {
-        // device-lost guard (P0-4): новый device → старые буферы/шейдеры/кольцо невалидны.
-        // Сбрасываем ресурсы И счётчики кольца: пересозданный буфер пуст, а stale count заставил
-        // бы DrawInstanced читать мусор. device_gen++ → prepare перезальёт всю историю (collect_all).
+        // A new device invalidates the old buffers, shaders, and ring. Reset both resources and ring
+        // counters because the recreated buffer is empty and a stale count would make DrawInstanced
+        // read garbage. Incrementing device_gen makes prepare reupload all history via collect_all.
         if device_changed(&mut self.device_generation_seen, gpu) {
             self.pipe = None;
             self.tex = None;
@@ -228,7 +229,7 @@ impl ComboLayer {
         self.prepare_combo(view, device, context);
     }
 
-    /// Рисует Combo в backbuffer хука (фаза UnderScene). `prepare()` уже сделал upload/bake.
+    /// Draws combo into the hook backbuffer during `UnderScene` after `prepare()` uploads and bakes.
     pub fn render(
         &mut self,
         view: &ChartViewGpu,
@@ -246,8 +247,8 @@ impl ComboLayer {
         self.draw_price_lines_to_backbuffer(view, context, rtv, gpu, panel_clip);
     }
 
-    /// Combo: инкрементальный bake новых тиков в текстуру.
-    /// Полный re-bake при исчерпании 20%-запаса или невалидном битмапе (зум/resize/первый кадр).
+    /// Incrementally bakes new combo ticks into the texture. Performs a full rebake when the 20%
+    /// margin is exhausted or the bitmap is invalid due to zoom, resize, or the first frame.
     fn prepare_combo(
         &mut self,
         view: &ChartViewGpu,
@@ -295,10 +296,10 @@ impl ComboLayer {
             tex.valid = false;
             need_full = true;
         }
-        // bake-юнформ: левый край времени = bake_t0 (фикс), viewport = весь битмап.
-        // При full re-bake держим bake_t0 на глобальной texel-фазе. Иначе формула
-        // "старый bake + rounded UV scroll" и формула "новый сырой view_time0" расходятся
-        // на ±1 px, и исторические крестики визуально подпрыгивают при исчерпании margin.
+        // The bake uniform fixes the left time edge at bake_t0 and covers the full bitmap viewport.
+        // During a full rebake, keep bake_t0 on the global texel phase. Otherwise the old bake plus
+        // rounded UV scroll can differ from the new raw view_time0 by one pixel, making historical
+        // crosses visibly jump when the margin is exhausted.
         let bake_view = ChartViewGpu {
             bounds: [0.0, 0.0, tex_w as f32, tex_h as f32],
             resolution: [tex_w as f32, tex_h as f32],
@@ -334,8 +335,8 @@ impl ComboLayer {
             if need_full {
                 crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);
                 tex.bake_t0 = bake_t0;
-                // ПРОЗРАЧНЫЙ фон битмапа: только кресты непрозрачны → при блите (alpha) сетка/фон
-                // нижнего слоя (grid) просвечивают между крестами. Фон #131416 красит grid-слой.
+                // Keep the bitmap background transparent so only crosses are opaque. Alpha blitting
+                // then reveals the lower grid/background layer between crosses; grid applies #131416.
                 context.ClearRenderTargetView(&tex.rtv, &[0.0, 0.0, 0.0, 0.0]);
                 context.VSSetShaderResources(1, Some(&[Some(pipe.srv.clone())]));
                 context.VSSetShader(&pipe.volume_vs, None);
@@ -351,7 +352,7 @@ impl ComboLayer {
                 tex.last_marker_half = view.marker_half;
                 tex.valid = true;
             } else if self.head != tex.last_baked_head {
-                // инкрементально: только новые тики кольца [last_head, head) (с заворотом)
+                // Incrementally draw only new ring ticks in [last_head, head), including wraparound.
                 let cap = self.cross_capacity;
                 let delta = (self.head + cap - tex.last_baked_head) % cap;
                 let runs: [(u32, u32); 2] = if tex.last_baked_head + delta <= cap {
@@ -401,9 +402,9 @@ impl ComboLayer {
         if !tex.valid || bw <= 0.0 {
             return;
         }
-        // Композит: блит видимого окна битмапа → чарт-область backbuffer (point-семпл).
-        // UV-сдвиг держим в целых texel'ах: дробный сдвиг под point sampler даёт
-        // полупиксельный flicker на live-scroll.
+        // Composite the visible bitmap window into the backbuffer chart area with point sampling.
+        // Keep the UV offset in whole texels because a fractional point-sampled offset causes
+        // half-pixel flicker during live scrolling.
         let u_left_px = (view.view_time0 - tex.bake_t0) * view.time_to_px;
         let tex_w = tex.tex_w;
         let u_left_px = u_left_px.round().clamp(0.0, (tex_w as f32 - bw).max(0.0));
@@ -490,7 +491,7 @@ impl ComboLayer {
                 upload_points(context, &mark_line_buf, &mark, self.price_line_capacity);
         }
         if let Some(data) = self.pending_reset.take() {
-            // при переполнении оставляем последний хвост ёмкости
+            // On overflow, retain only the most recent capacity-sized tail.
             let cap = self.cross_capacity;
             let data: &[ChartCross] = if data.len() as u32 > cap {
                 &data[data.len() - cap as usize..]
@@ -624,7 +625,7 @@ impl ComboLayer {
             match c.side {
                 0 => buy = buy.max(c.qty),
                 1 => sell = sell.max(c.qty),
-                _ => {} // side>=2 (ликвидации) без volume-баров → вне масштаба
+                _ => {} // Sides >= 2 are liquidations without volume bars, so exclude them from scale.
             }
         }
         let out = (buy, sell);

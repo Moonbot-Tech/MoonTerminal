@@ -1,16 +1,16 @@
-// Тиковые кресты own-pass: резидентный instanced-слой в проходе GPUI.
-// Кресты лежат в GPU StructuredBuffer как семантика (time_rel, price, side);
-// пан/зум — смена cbuffer ChartView (юнформ), CPU массив не трогает.
-// Форма 7×7 «Normal Trade X» через ROW_MASK + discard. Off-screen → вне NDC (hw clip).
+// Tick crosses own pass: resident instanced layer in the GPUI pass.
+// Crosses reside in a GPU StructuredBuffer as semantic data (time_rel, price, side).
+// Pan/zoom updates the ChartView cbuffer (uniform) without touching the CPU array.
+// The 7×7 "Normal Trade X" shape uses ROW_MASK + discard. Off-screen → outside NDC (hardware clip).
 
 cbuffer ChartView : register(b0) {
-    float4 cv_bounds;     // ox, oy, w, h (px) — область чарта (привязка)
-    float2 cv_resolution; // w, h бэкбуфера (px)
+    float4 cv_bounds;     // ox, oy, w, h (px) — chart area (anchor)
+    float2 cv_resolution; // backbuffer w, h (px)
     float  cv_time_to_px;
     float  cv_view_time0;
     float  cv_price_to_px;
     float  cv_view_price0;
-    float  cv_marker_half; // 3.5 для 7×7
+    float  cv_marker_half; // 3.5 for 7×7
     float  cv_instance_offset; // combo bake: first item in resident ring buffer
     float  cv_volume_buy_inv;
     float  cv_volume_sell_inv;
@@ -46,13 +46,13 @@ CrossOut crosses_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     Cross c = combo_cross(iid);
     CrossOut o;
 
-    // семантика → экранные пиксели (привязка к левому/нижнему краю области чарта)
+    // Semantic data → screen pixels (anchored to the chart area's left/bottom edges).
     float sx = cv_bounds.x + (c.time_rel - cv_view_time0) * cv_time_to_px;
     float sy = cv_bounds.y + cv_bounds.w - (c.price - cv_view_price0) * cv_price_to_px;
     sx = round(sx);
     sy = round(sy);
 
-    // off-screen по X/Y → выкинуть из NDC, растеризатор отсечёт бесплатно
+    // Move off-screen X/Y outside NDC so the rasterizer clips it for free.
     float cull_margin = max(8.0, cv_marker_half + 1.0);
     if (sx < cv_bounds.x - cull_margin || sx > cv_bounds.x + cv_bounds.z + cull_margin ||
         sy < cv_bounds.y - cull_margin || sy > cv_bounds.y + cv_bounds.w + cull_margin) {
@@ -73,7 +73,7 @@ CrossOut crosses_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
 }
 
 float4 crosses_fragment(CrossOut i) : SV_Target {
-    // uv в [-1,1] → ячейка 0..6 матрицы 7×7
+    // Map UV in [-1,1] to cell 0..6 of the 7×7 matrix.
     int col = clamp((int)floor((i.uv.x * 0.5 + 0.5) * 7.0), 0, 6);
     int row = clamp((int)floor((i.uv.y * 0.5 + 0.5) * 7.0), 0, 6);
     // r0/r6 = c!=3 (0x77), r1/r5 = all (0x7F), r2..4 = c1..5 (0x3E)
@@ -88,11 +88,11 @@ float4 crosses_fragment(CrossOut i) : SV_Target {
     if (((mask >> (uint)col) & 1u) == 0u) {
         discard;
     }
-    // Канон-палитра приложения: --long (GREEN) / --short (ORANGE) — те же, что bid/ask стакана,
-    // чтобы buy-трейд и bid-книга были одного зелёного. sRGB напрямую (таргет UNORM, см. grid.hlsl).
+    // Canonical application palette: --long (GREEN) / --short (ORANGE), matching order-book
+    // bid/ask so buy trades and book bids use the same green. Direct sRGB (UNORM target; see grid.hlsl).
     float3 buy  = float3(0.18431, 0.65882, 0.36078); // #2FA85C palette GREEN
     float3 sell = float3(1.0,     0.55686, 0.35294); // #FF8E5A palette ORANGE
-    float3 liq  = float3(1.0,     1.0,     0.0);     // #FFFF00 liquidation (ярко-жёлтый)
+    float3 liq  = float3(1.0,     1.0,     0.0);     // #FFFF00 liquidation (bright yellow)
     float3 rgb = (i.side == 0u) ? buy : ((i.side == 1u) ? sell : liq);
     return float4(rgb, 1.0);
 }
@@ -107,7 +107,7 @@ VolumeOut volume_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     VolumeOut o;
 
     float sx = cv_bounds.x + (c.time_rel - cv_view_time0) * cv_time_to_px;
-    // side>=2 (ликвидации) не рисуют volume-бар — отсекаем из этого прохода.
+    // side>=2 (liquidations) do not draw a volume bar, so cull them from this pass.
     if (sx < cv_bounds.x - 2.0 || sx > cv_bounds.x + cv_bounds.z + 2.0 || c.qty <= 0.0 || c.side >= 2u) {
         o.pos = float4(2.0, 2.0, 0.0, 1.0);
         o.side = 0u;

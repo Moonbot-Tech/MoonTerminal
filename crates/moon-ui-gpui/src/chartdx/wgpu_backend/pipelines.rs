@@ -1,5 +1,4 @@
-//! Создание пайплайнов/шейдеров/сэмплеров и фоновой текстуры
-//! (вынос из wgpu_backend.rs, verbatim).
+//! Pipeline, shader, sampler, and background-texture creation for `WgpuLayers`.
 
 use super::*;
 

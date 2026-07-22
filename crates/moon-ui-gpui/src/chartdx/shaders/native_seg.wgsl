@@ -50,8 +50,8 @@ fn seg_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32
     let a_raw = data_to_px(cv, s.pts.x, s.pts.y);
     let t1 = select(s.pts.z, cv.pad, s.m.z >= 0.5);
     let b_raw = data_to_px(cv, t1, s.pts.w);
-    // Снап Y концов к целому пикселю — иначе горизонтальная линия ордера мерцает
-    // толщиной/яркостью при суб-пиксельном дрейфе view_price0 (паритет с round() hline).
+    // Snap endpoint Y coordinates to whole pixels; otherwise a horizontal order line flickers
+    // in thickness/brightness as view_price0 drifts by subpixels (matching hline's round()).
     let a = vec2<f32>(a_raw.x, round(a_raw.y));
     let b = vec2<f32>(b_raw.x, round(b_raw.y));
     var dir = b - a;

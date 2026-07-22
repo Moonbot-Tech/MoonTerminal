@@ -1,4 +1,4 @@
-//! Синк ордеров из сессии + подписи ордер-линий (вынос из data_state.rs, verbatim).
+//! Synchronizes session orders and order-line labels.
 
 use super::*;
 
@@ -34,9 +34,9 @@ impl ChartDataState {
         let mut container = self.container.borrow_mut();
         let mut pixels_changed = false;
         let mut base_changed = false;
-        // Смена числа панелей (в т.ч. удаление последней монеты → пусто) обязана пометить
-        // base_dirty: иначе base-кэш продолжит блитить СТАРЫЙ чарт сквозь пустой слот (логотип
-        // прозрачный). Зеркалит проверку в sync_from_market_source.
+        // A pane-count change, including removal of the last market, must dirty the base. Otherwise
+        // the base cache keeps blitting the old chart through the empty slot because the logo is
+        // transparent. This mirrors the check in sync_from_market_source.
         if st.panes.len() != container.pane_count() {
             pixels_changed = true;
             base_changed = true;
@@ -56,8 +56,8 @@ impl ChartDataState {
                 pixels_changed = true;
                 base_changed = true;
             }
-            // Имя ядра для угловой подписи: резолвим тут — только здесь под рукой `session`.
-            // Меняется редко (смена ядра панели), поэтому флагаем present лишь при изменении.
+            // Resolve the core name for the corner label here, where the session is available. It
+            // changes only when the pane switches cores, so request presentation only on a change.
             let core_name = session
                 .sessions()
                 .iter()
@@ -124,8 +124,8 @@ impl ChartDataState {
                         &mut segs,
                         &mut markers,
                     );
-                    // Пользовательские фигуры (слой рисования) — теми же userdata-слоями,
-                    // ПОСЛЕ ордеров (рисуются поверх их зон, под маркерами курсора).
+                    // Add user figures through the same userdata layers after orders, placing them
+                    // above order zones but below cursor markers.
                     self.append_figure_geometry(
                         pane.core,
                         &pane.market,
@@ -197,10 +197,10 @@ impl ChartDataState {
     }
 }
 
-/// Подписи ордерных линий рынка для слоя текста: размер у buy-линии, % от входа +
-/// количество купленного у sell-линии, % стопа у stop-линии. Сторона размещения
-/// (над/под линией) зависит от long/short — как в эталоне Moonbot (категория E).
-/// Только открытые ордера (закрытые/исполненные не подписываем).
+/// Builds market order-line labels for the text layer: size at the buy line, percentage from entry
+/// plus sell quantity at the sell line, and stop percentage at the stop line. Long versus short
+/// determines whether labels appear above or below the line, matching Moonbot category E. Only
+/// open orders receive labels; closed or completed orders do not.
 fn build_order_labels(
     out: &mut Vec<OrderLabel>,
     book_out: &mut Vec<OrderBookLabel>,
@@ -245,8 +245,8 @@ fn build_order_labels(
         let sell = line_price(LineKind::Sell);
         let stop = line_price(LineKind::Stop);
         let short = o.is_short;
-        // Порядковый номер ордера на чарте — на основной подписи каждой линии (buy/sell/stop),
-        // чтобы связать линии одного ордера: «$X [10]», «-5% [10]», стоп «-3% [10]».
+        // Put the chart order number on each line's primary label to associate an order's buy,
+        // sell, and stop lines, for example "$X [10]", "-5% [10]", and stop "-3% [10]".
         let tag = if o.chart_num > 0 {
             format!("[{}]", o.chart_num)
         } else {
@@ -259,9 +259,9 @@ fn build_order_labels(
                 format!("{text} {tag}")
             }
         };
-        // BUY (линия входа): ожидающий ордер (fill=0) → «размер [N]» ОДНОЙ строкой, чтобы номер
-        // и размер не наложились друг на друга на одной стороне линии; исполненный → только [N].
-        // Размер входа — ВСЕГДА белый (не цвет линии, не по стороне).
+        // For an unfilled buy entry, place "size [N]" on one line so the number and size do not
+        // overlap on the same side. For a filled entry, show only [N]. Entry size is always white,
+        // independent of line color and order side.
         if let Some(bp) = buy {
             let forced = line_forced(LineKind::Buy);
             let text = if o.fill_pct <= 0.0 && o.size > 0.0 {
@@ -275,9 +275,9 @@ fn build_order_labels(
             };
             push(bp, text, !short, ORDER_LABEL_NEUTRAL, PRIO_BUY, forced);
         }
-        // SELL: профит-% от цены входа (знаковый цвет) + РАЗМЕР на продажу в $-ноционале
-        // (remaining·цена_продажи·курс) на противоположной стороне линии — как в Moonbot:
-        // процент primary рисуется всегда, остаток caption проходит через YTextFill.
+        // For a sell line, show profit percentage from entry using a sign-dependent color and the
+        // dollar-notional sell size (remaining * sell price * rate) on the opposite side, matching
+        // Moonbot. The primary percentage is always drawn; the remaining caption uses YTextFill.
         if let Some(sp) = sell {
             let forced = line_forced(LineKind::Sell);
             if sp.is_finite() && sp > 0.0 {
@@ -320,8 +320,8 @@ fn build_order_labels(
                 );
             }
         }
-        // STOP: % стопа от цены покупки. Шорт → сверху, лонг → снизу. Primary без YTextFill,
-        // как Delphi-блок stop-loss label.
+        // Show stop percentage from the buy price above the line for shorts and below for longs.
+        // The primary label bypasses YTextFill, matching the Delphi stop-loss label block.
         if let (Some(stp), Some(bp)) = (stop, buy) {
             if bp > 0.0 {
                 let forced = line_forced(LineKind::Stop);
@@ -343,15 +343,15 @@ fn rgb_u32(c: [u8; 3]) -> u32 {
     ((c[0] as u32) << 16) | ((c[1] as u32) << 8) | c[2] as u32
 }
 
-/// Знаковый процент уровня от цены входа С УЧЁТОМ СТОРОНЫ: лонг — как есть; шорт —
-/// инвертирован (выше входа = минус). Так профит у обеих сторон зелёный, лосс красный (как MB):
-/// для шорта sell ниже входа → «+», стоп выше входа → «−».
+/// Returns a level's signed percentage from entry with order side applied. Long values retain their
+/// sign, while short values are inverted so a level above entry is negative. This keeps profit green
+/// and loss red for either side: a short sell below entry is positive and a stop above it is negative.
 fn signed_pct(level: f32, entry: f32, short: bool) -> f32 {
     let raw = (level - entry) / entry * 100.0;
     if short { -raw } else { raw }
 }
 
-/// Цвет подписи размера по стороне ордера: лонг → positive, шорт → negative.
+/// Selects the positive size-label color for longs and the negative color for shorts.
 fn side_color(theme: &ChartTheme, short: bool) -> u32 {
     if short {
         rgb_u32(theme.label_negative)
@@ -360,7 +360,7 @@ fn side_color(theme: &ChartTheme, short: bool) -> u32 {
     }
 }
 
-/// Цвет знакового процента: плюс → positive, минус → negative.
+/// Selects the positive color for nonnegative percentages and the negative color otherwise.
 fn pct_color(theme: &ChartTheme, v: f32) -> u32 {
     if v >= 0.0 {
         rgb_u32(theme.label_positive)
@@ -369,10 +369,10 @@ fn pct_color(theme: &ChartTheme, v: f32) -> u32 {
     }
 }
 
-/// Компактное число (база/штуки) с SI-суффиксом K/M/B/T.
-/// Размер ордера: SI-суффикс (K/M/B/T) + ДО 2 знаков дробной части (сотые, если есть),
-/// без хвостовых нулей. Не использует общий `compact_si` (тот для десятков даёт до 3 знаков
-/// — «49.744»). 50 → «50»; 49.744 → «49.74»; 1234 → «1.23K»; 49744 → «49.74K».
+/// Formats a compact base-unit count with a K/M/B/T SI suffix and at most two fractional digits,
+/// trimming trailing zeros. This intentionally does not use shared `compact_si`, which can emit
+/// three fractional digits for tens. Examples: 50 becomes "50", 49.744 becomes "49.74", 1234
+/// becomes "1.23K", and 49744 becomes "49.74K".
 fn fmt_size_2dp(v: f64) -> String {
     let a = v.abs();
     let (n, suffix) = if a >= 1e12 {
@@ -428,7 +428,7 @@ pub(super) fn refresh_orderbook_label_notionals(
     }
 }
 
-/// $-сумма с SI-суффиксом: 1234 → «$1.23K».
+/// Formats a dollar amount with an SI suffix, for example 1234 as "$1.23K".
 fn fmt_usd(v: f64) -> String {
     format!("${}", fmt_size_2dp(v))
 }

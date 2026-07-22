@@ -1,9 +1,9 @@
-//! DX11-фундамент own-pass рендера чарта: общие GPU-типы (layout совпадает с HLSL) и
-//! helper'ы создания/заливки ресурсов. Всё рисование слоёв (`combo`/`orderbook`/…) идёт
-//! через эти примитивы.
+//! DX11 foundation for chart own-pass rendering: shared GPU types whose layout matches HLSL plus
+//! helpers for creating and uploading resources. Every layer (`combo`, `orderbook`, and others)
+//! renders through these primitives.
 //!
-//! Шейдеры компилируются из ВКОМПИЛЕННОЙ строки (`include_str!` → `D3DCompile`), а не из
-//! файла на диске — бинарь самодостаточен при деплое (нет внешних .hlsl рядом с exe).
+//! Shaders compile from an embedded string (`include_str!` to `D3DCompile`), not a disk file, so the
+//! deployed binary is self-contained and needs no external .hlsl beside the executable.
 
 use std::{
     ffi::{CString, c_void},
@@ -25,12 +25,14 @@ static DEBUG_FRAME_DUMP_DONE: AtomicBool = AtomicBool::new(false);
 static DEBUG_FRAME_DUMP_SEEN: AtomicU64 = AtomicU64::new(0);
 static DEBUG_COMBO_DUMP_DONE: AtomicBool = AtomicBool::new(false);
 
-// ───────────────────────── GPU-типы (layout = HLSL) ─────────────────────────
+// ───────────────────────── GPU types (layout = HLSL) ─────────────────────────
 
-// ───────────────────────── Компиляция шейдеров ─────────────────────────
+// ───────────────────────── Shader compilation ─────────────────────────
 
-/// Компилирует HLSL из строки (вкомпиленной `include_str!`) в байткод. Паникует с
-/// сообщением компилятора при ошибке — шейдеры наши, ошибка = баг сборки, не рантайма.
+/// Compile HLSL from an `include_str!`-embedded string into bytecode.
+///
+/// Panics with the compiler message on failure because these bundled shaders make compilation
+/// errors build defects rather than recoverable runtime input.
 pub fn compile_shader(src: &str, entry: &str, target: &str) -> ID3DBlob {
     let entry_c = CString::new(entry).unwrap();
     let target_c = CString::new(target).unwrap();
@@ -93,9 +95,9 @@ pub fn make_ps(device: &ID3D11Device, src: &str, entry: &str) -> ID3D11PixelShad
     }
 }
 
-// ───────────────────────── Буферы / ресурсы ─────────────────────────
+// ───────────────────────── Buffers and resources ─────────────────────────
 
-/// StructuredBuffer (DYNAMIC, CPU write) на `count` элементов по `elem_size` байт.
+/// Create a DYNAMIC CPU-writable StructuredBuffer for `count` elements of `elem_size` bytes.
 pub fn create_structured(device: &ID3D11Device, elem_size: u32, count: u32) -> ID3D11Buffer {
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: elem_size * count,
@@ -137,7 +139,7 @@ pub fn create_dynamic_cb(device: &ID3D11Device, size: u32) -> ID3D11Buffer {
     }
 }
 
-/// Стандартный alpha-blend (src.a, 1-src.a) — общий для крестов/линий/баров.
+/// Create the standard `(src.a, 1-src.a)` alpha blend shared by crosses, lines, and bars.
 pub fn create_alpha_blend(device: &ID3D11Device) -> ID3D11BlendState {
     let mut desc = D3D11_BLEND_DESC::default();
     desc.RenderTarget[0].BlendEnable = true.into();
@@ -155,12 +157,11 @@ pub fn create_alpha_blend(device: &ID3D11Device) -> ID3D11BlendState {
     }
 }
 
-/// Blend для текстуры, где RGB уже premultiplied через предыдущий alpha-pass.
+/// Create the blend for a texture whose RGB was premultiplied by an earlier alpha pass.
 ///
-/// Combo bake рисует полупрозрачные объёмы/линии в прозрачную texture обычным
-/// alpha blend, поэтому RGB внутри texture уже содержит `src.rgb * src.a`.
-/// Финальный перенос такой texture в backbuffer должен использовать `(1, 1-src.a)`,
-/// иначе alpha применяется второй раз и volume почти исчезает.
+/// Combo baking draws translucent volumes and lines into a transparent texture with ordinary alpha
+/// blending, so texture RGB already contains `src.rgb * src.a`. Compositing that texture into the
+/// backbuffer must use `(1, 1-src.a)`; applying alpha twice would make volume nearly disappear.
 pub fn create_premultiplied_alpha_blend(device: &ID3D11Device) -> ID3D11BlendState {
     let mut desc = D3D11_BLEND_DESC::default();
     desc.RenderTarget[0].BlendEnable = true.into();
@@ -178,9 +179,13 @@ pub fn create_premultiplied_alpha_blend(device: &ID3D11Device) -> ID3D11BlendSta
     }
 }
 
-/// Offscreen-кэш слоя (combo/orderbook): BGRA8 texture (RT+SRV) + её RTV и SRV. Слой держит
-/// `tex` живым (его ресурс адресуют RTV/SRV) и блитит SRV каждый кадр, перерисовывая в RTV
-/// только на изменение данных. Дублировался в `combo`/`orderbook` — теперь один источник.
+/// Create an offscreen BGRA8 RT+SRV texture for the combo or order-book layer.
+///
+/// These layers rebake for changes in data, Y transform, style, size, or device generation as
+/// applicable. During an outer `BaseCache` rebuild their SRVs are composited into that cache;
+/// `BaseCache` is what blits to the backbuffer on each present. The returned texture must remain
+/// alive because its RTV and SRV reference it. This helper centralizes code formerly duplicated by
+/// combo and order book.
 pub fn create_cache_texture(
     device: &ID3D11Device,
     tex_w: u32,
@@ -227,7 +232,7 @@ pub fn create_cache_texture(
     (tex, rtv, srv)
 }
 
-/// Point-семпл clamp-сэмплер (combo-блит 1:1).
+/// Create a point-sampled clamp sampler for one-to-one combo blits.
 pub fn create_point_sampler(device: &ID3D11Device) -> ID3D11SamplerState {
     let d = D3D11_SAMPLER_DESC {
         Filter: D3D11_FILTER_MIN_MAG_MIP_POINT,
@@ -245,9 +250,9 @@ pub fn create_point_sampler(device: &ID3D11Device) -> ID3D11SamplerState {
     }
 }
 
-// ───────────────────────── Заливка ─────────────────────────
+// ───────────────────────── Uploads ─────────────────────────
 
-/// MAP_WRITE_DISCARD: переписать буфер целиком из [0..data.len()).
+/// Rewrite the full `[0..data.len())` buffer range with `MAP_WRITE_DISCARD`.
 pub fn update_dynamic<T: Copy>(context: &ID3D11DeviceContext, buffer: &ID3D11Buffer, data: &[T]) {
     unsafe {
         let mut m = D3D11_MAPPED_SUBRESOURCE::default();
@@ -261,7 +266,7 @@ pub fn update_dynamic<T: Copy>(context: &ID3D11DeviceContext, buffer: &ID3D11Buf
     }
 }
 
-/// MAP_WRITE_NO_OVERWRITE по кольцу с заворотом (живой край, дешёвый append без сброса GPU).
+/// Append through a wrapping ring with `MAP_WRITE_NO_OVERWRITE` without resetting GPU work.
 pub fn ring_write_no_overwrite<T: Copy>(
     context: &ID3D11DeviceContext,
     buffer: &ID3D11Buffer,
@@ -290,12 +295,11 @@ pub fn ring_write_no_overwrite<T: Copy>(
     }
 }
 
-// ───────────────────────── Мелочи ─────────────────────────
+// ───────────────────────── Utilities ─────────────────────────
 
-/// Полный backbuffer-viewport (px из хука). Слои ставят его перед draw в backbuffer.
-/// device-lost guard, общий для всех own-pass слоёв: вернуть true и обновить `seen`, если GPU-устройство
-/// сменилось (generation вырос). Слой-вызыватель сам сбрасывает свои ресурсы/счётчики внутри `if` —
-/// набор сбрасываемого у слоёв разный (combo ещё бампает `device_gen`), поэтому общая только эта проверка.
+/// Device-loss guard shared by all own-pass layers: return `true` and update `seen`
+/// when the GPU device generation changes. Each calling layer resets its own resources and counters
+/// because reset sets differ; combo also increments `device_gen`, so only this check is shared.
 pub fn device_changed(seen: &mut u64, gpu: &RawGpuAccess) -> bool {
     let generation = gpu.device_generation();
     if *seen != generation {
@@ -306,6 +310,7 @@ pub fn device_changed(seen: &mut u64, gpu: &RawGpuAccess) -> bool {
     }
 }
 
+/// Return the full backbuffer viewport using hook pixels; layers set it before backbuffer draws.
 pub fn full_viewport(gpu: &RawGpuAccess) -> D3D11_VIEWPORT {
     D3D11_VIEWPORT {
         TopLeftX: 0.0,
@@ -317,9 +322,10 @@ pub fn full_viewport(gpu: &RawGpuAccess) -> D3D11_VIEWPORT {
     }
 }
 
-/// borrowed-каст raw-указателей хука (`RawGpuAccess`) в наши windows-rs COM-типы.
-/// Без AddRef — валидны только на время колбэка. Возвращает None, если хук пуст
-/// (не-D3D11 backend / device-lost кадр).
+/// Wrap `RawGpuAccess` hook pointers as borrowed COM interfaces, then clone them into owned
+/// windows-rs handles. Each clone performs `AddRef` and releases its reference on drop; the raw hook
+/// pointers themselves are valid only for the callback duration. Returns `None` when the hook is
+/// empty, such as on a non-D3D11 backend or device-loss frame.
 pub fn borrow_d3d(
     gpu: &RawGpuAccess,
 ) -> Option<(ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView)> {
@@ -486,12 +492,13 @@ fn debug_dump_texture_png(
     result
 }
 
-// ───────────────────────── Scissor (обрезка слоёв к зоне) ─────────────────────────
+// ───────────────────────── Scissor clipping ─────────────────────────
 
-/// Растеризатор с включённым scissor (копия дефолта GPUI + ScissorEnable). GPUI рисует
-/// сцену с ScissorEnable=false → own-pass обязан поставить свой стейт, чтобы бары стакана/
-/// линии ордеров (позиционируются по ЦЕНЕ, могут попасть за пределы плота) не лезли на
-/// тулбар/шкалы. После прохода вернуть стейт GPUI (см. `mod.rs` callback).
+/// Create a scissor-enabled rasterizer by copying GPUI's default and enabling `ScissorEnable`.
+///
+/// GPUI renders with scissoring disabled, so own-pass must set its state to keep price-positioned
+/// order-book bars and order lines from spilling outside the plot onto toolbars or scales. Restore
+/// GPUI state after the pass; see the callback in `mod.rs`.
 pub fn create_scissor_rasterizer(device: &ID3D11Device) -> ID3D11RasterizerState {
     let desc = D3D11_RASTERIZER_DESC {
         FillMode: D3D11_FILL_SOLID,
@@ -512,8 +519,10 @@ pub fn create_scissor_rasterizer(device: &ID3D11Device) -> ID3D11RasterizerState
     }
 }
 
-/// Поставить scissor-прямоугольник (px окна) + scissor-растеризатор. Прямоугольник =
-/// зона рисования слоя (плот+стакан панели); всё вне него растеризатор отбросит.
+/// Set a window-pixel scissor rectangle and the scissor rasterizer.
+///
+/// The rectangle is the layer drawing area, including the panel plot and order book; rasterization
+/// discards everything outside it.
 pub fn set_scissor(
     context: &ID3D11DeviceContext,
     rs: &ID3D11RasterizerState,
@@ -528,7 +537,7 @@ pub fn set_scissor(
     set_scissor_rect(context, l, t, r, b);
 }
 
-/// Обновить только прямоугольник scissor, не трогая rasterizer state.
+/// Update only the scissor rectangle without changing rasterizer state.
 pub fn set_scissor_rect(context: &ID3D11DeviceContext, l: f32, t: f32, r: f32, b: f32) {
     let rect = RECT {
         left: l.floor() as i32,

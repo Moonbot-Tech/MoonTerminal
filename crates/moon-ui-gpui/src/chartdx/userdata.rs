@@ -1,9 +1,10 @@
-//! Слой UserData (ордера юзера): МУТИРУЕТ задним числом (юзер двигает ордер → линия едет),
-//! поэтому НЕ в combo — отдельный слой, перерисовка по событию. Три геометрии (порт
-//! moon-chart order_lines): горизонтали (вход/стоп/liq), отрезки (лестница), маркеры
-//! (крест начала/конца, узелки). Геометрию строит `moon_chart::build_order_geometry`
-//! (логические time_rel/price), мы конвертим в 16-байт-выровненные GPU-структы и рисуем
-//! own-pass тем же chart-трансформом (view = chart_area, линии тянутся в зону стакана).
+//! UserData layer for user orders. It mutates retroactively when a user moves an order and its line
+//! moves, so it is a separate event-redrawn layer rather than part of combo. It has three geometry
+//! types ported from moon-chart order lines: horizontals for entry, stop, and liquidation; segments
+//! for ladders; and markers for start/end crosses and nodes. `moon_chart::build_order_geometry`
+//! builds logical `time_rel` and price geometry, which this layer converts to 16-byte-aligned GPU
+//! structs and draws in an own-pass with the same chart transform. The view is `chart_area`, and
+//! lines extend into the order-book zone.
 
 use gpui::RawGpuAccess;
 use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
@@ -78,7 +79,7 @@ impl UserDataLayer {
         }
     }
 
-    /// Залить геометрию ордеров (целиком). Зовётся по изменению ордеров/вида (мутация).
+    /// Upload all order geometry after an order or view mutation.
     pub fn set(
         &mut self,
         zones: &[ZoneInstance],
@@ -101,8 +102,9 @@ impl UserDataLayer {
         context: &ID3D11DeviceContext,
         gpu: &RawGpuAccess,
     ) {
-        // device-lost: пересоздать pipe; счётчики 0 — буферы пересоздаются пустыми (prepare зальёт
-        // ордера заново этим же кадром через set()/pending, инвариант: новый device = 0 валидных).
+        // Device loss recreates empty buffers and resets their counters. It does not queue pending
+        // geometry; data returns only after a later order sync or generation change calls `set()`.
+        // Until then the layer remains empty.
         if device_changed(&mut self.device_generation, gpu) {
             self.pipe = None;
             self.zone_count = 0;
@@ -141,7 +143,7 @@ impl UserDataLayer {
         }
     }
 
-    /// Рисует зоны ордеров: это фоновые диапазоны, поэтому их надо класть под сетку.
+    /// Draw order zones below the grid because they are background ranges.
     pub fn render_zones(
         &mut self,
         view: &ChartViewGpu,
@@ -170,8 +172,10 @@ impl UserDataLayer {
         }
     }
 
-    /// Рисует ордерные линии/трассы/маркеры поверх сетки. `view` — тот же chart_area-трансформ,
-    /// что у combo (линии тянутся в зону стакана; scissor ставит вызывающий).
+    /// Draw order lines, traces, and markers above the grid.
+    ///
+    /// `view` uses the same `chart_area` transform as combo. Lines extend into the order-book zone,
+    /// and the caller sets the scissor.
     pub fn render_lines(
         &mut self,
         view: &ChartViewGpu,

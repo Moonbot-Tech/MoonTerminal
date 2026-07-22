@@ -1,10 +1,11 @@
-//! Синк рыночных данных: история/стакан/авто-Y (вынос из data_state.rs, verbatim).
+//! Synchronizes market history, the order book, and automatic Y scaling.
 
 use super::orders::refresh_orderbook_label_notionals;
 use super::*;
 
-/// Аварийный рубильник свечей (`MOON_CANDLES_OFF=1`): чарт возвращается к чистому
-/// тик-режиму (кресты на всё окно, слой свечей пуст). Для A/B-замеров GPU/CPU.
+/// Emergency candle kill switch. The presence of `MOON_CANDLES_OFF`, regardless of its value,
+/// restores pure tick mode with crosses across the full window and an empty candle layer. Intended
+/// for GPU/CPU A/B measurements.
 fn candles_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| std::env::var_os("MOON_CANDLES_OFF").is_some())
@@ -78,8 +79,8 @@ impl ChartDataState {
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }
-            // Позиция оси цен (per-окно). Режим «только стакан» (метла) принудительно прячет ось,
-            // перебивая per-tab настройку. Hide → жёлоба нет (место отдаётся графику).
+            // Price-axis position is per window. Order-book-only mode forcibly hides the axis,
+            // overriding the per-tab setting. Hide removes the gutter and returns its space to the plot.
             let axis_pos = if self.orderbook_only {
                 crate::chart_persist::PriceAxisPos::Hide
             } else {
@@ -90,21 +91,21 @@ impl ChartDataState {
             } else {
                 moon_chart::PRICE_AXIS_W * self.last_ppp
             };
-            // Ось времени скрыта → жёлоб под подписи не резервируем, плот занимает всю высоту.
+            // A hidden time axis reserves no label gutter, allowing the plot to use the full height.
             let time_axis_h = if self.time_axis_visible {
                 moon_chart::TIME_AXIS_H * self.last_ppp
             } else {
                 0.0
             };
             let plot_h = (rect.h - time_axis_h).max(1.0);
-            // П.3: при узком графике стакан не должен съедать половину. База — GLASS_ZONE_PX
-            // (ограничена половиной слота). Если ширина графика при базовом стакане < 2× самого
-            // стакана (узко), сжимаем стакан до 0.8× зоны, отдавая место графику. В обычном
-            // (широком) режиме ширина стакана не меняется.
+            // On a narrow plot, the order book must not consume half the width. Start from
+            // GLASS_ZONE_PX, capped at half the slot. If the remaining plot would be narrower than
+            // twice the base order-book width, shrink the book to 80% of the zone and return space
+            // to the plot. Wide layouts keep the normal order-book width.
             let glass_cap = rect.w * 0.5;
             let glass_base = moon_chart::GLASS_ZONE_PX.min(glass_cap);
             let chart_w_base = rect.w - price_axis_w - glass_base;
-            // only → стакан на всю ширину; выкл → 0; иначе адаптивная зона.
+            // Book-only mode uses the full width, disabled mode uses zero, otherwise adapt the zone.
             let glass_w = if self.orderbook_only {
                 (rect.w - price_axis_w).max(1.0)
             } else if !self.orderbook_enabled {
@@ -114,9 +115,10 @@ impl ChartDataState {
             } else {
                 glass_base
             };
-            // Left → жёлоб оси слева (чарт сдвинут вправо), стакан у правого края.
-            // Right → чарт от левого края, стакан сразу за ним, ось — жёлоб справа ЗА стаканом.
-            // Hide → оси нет, чарт от левого края, стакан у правого края.
+            // Left places the axis gutter on the left, shifts the plot right, and keeps the book at
+            // the right edge. Right starts the plot at the left edge, then places the book and the
+            // axis gutter to its right. Hide removes the axis, starts the plot at the left edge,
+            // and keeps the book at the right edge.
             let axis_on_left = matches!(axis_pos, crate::chart_persist::PriceAxisPos::Left);
             let chart_x = if axis_on_left {
                 rect.x + price_axis_w
@@ -165,18 +167,19 @@ impl ChartDataState {
                 history_source_sig = mix_sig(history_source_sig, revs.meta);
             }
             let history_source_changed = history_source_sig != pr.source_history_sig;
-            // Смена галки «Ликвидации» → перезалить combo (добавить/убрать кресты ликвидаций).
+            // Changing the Liquidations toggle reuploads combo to add or remove liquidation crosses.
             let liq_toggle_changed = pr.liquidations_enabled != self.liquidations_enabled;
             pr.liquidations_enabled = self.liquidations_enabled;
-            // Свечи/зона трейдов: смена cfg (ТФ/K/лимит) или сдвиг бакета «сейчас» (зона
-            // последних K свечей уехала на новый бакет — старые кресты пора убрать) форсят
-            // history reset. Бакет двигается раз в ТФ (минуты) — reset редкий.
+            // Candle/trade-zone configuration changes, including timeframe, K, or limit, require a
+            // history reset. Moving the current bucket does too because the last-K-candle zone has
+            // advanced and old crosses must be removed. The bucket advances only once per timeframe,
+            // measured in minutes, so resets are infrequent.
             let candle_cfg = self.candle_view;
             let candle_tf_ms = candle_cfg.tf_ms();
             let candle_cfg_changed = pr.applied_candle_cfg != candle_cfg;
             pr.applied_candle_cfg = candle_cfg;
-            // Режим «Нет» = чистый тик-чарт: свечи не строим/не рисуем, зона трейдов не
-            // ограничивает кресты (params=None ниже → трейды на всё окно, как раньше).
+            // Mode None is a pure tick chart: do not build or draw candles, and do not restrict
+            // crosses to a trade zone. Passing params=None below keeps trades across the full window.
             let candles_off = candles_disabled()
                 || candle_cfg.mode == moon_core::market::candles::CANDLE_MODE_OFF;
             let now_zone_bucket = (now / candle_tf_ms as f64).floor() as i64;
@@ -185,7 +188,7 @@ impl ChartDataState {
                 && pr.last_zone_bucket != now_zone_bucket;
             pr.last_zone_bucket = now_zone_bucket;
             if device_lost {
-                // Новый device: слой свечей пуст, доставленная ревизия невалидна.
+                // A new device has an empty candle layer, invalidating the delivered revision.
                 pr.last_candle_rev = u64::MAX;
             }
             let force_history_reset = device_lost
@@ -196,8 +199,8 @@ impl ChartDataState {
                 || pr.resident_left_rel.is_nan()
                 || history_from < pr.resident_left_rel
                 || (!pane.view.follow && scan_price);
-            // Нижняя граница отображаемых трейдов (rel ms): открытие бакета N-K+1.
-            // K=0 → INFINITY (кресты не рисуем вовсе, только свечи).
+            // The lower displayed-trade boundary in relative milliseconds is the opening of bucket
+            // N-K+1. K=0 yields infinity, suppressing all crosses and leaving only candles.
             let trades_zone_rel = if candle_cfg.trade_candles == 0 {
                 f32::INFINITY
             } else {
@@ -205,9 +208,9 @@ impl ChartDataState {
                     - (candle_cfg.trade_candles as f64 - 1.0) * candle_tf_ms as f64;
                 (zone_open - pane.view.epoch_ms) as f32
             };
-            // Зона «скрыть свечи» (последние N бакетов — только трейды): граница для
-            // шейдера, данные не трогает. Двигается раз в бакет — стиль ниже сам
-            // подхватит смену на ближайшем синке.
+            // The hide-candles zone makes the last N buckets trade-only. This shader boundary does
+            // not alter data and moves once per bucket; the style update below picks it up on the
+            // next synchronization.
             let hide_start_rel = if candle_cfg.hide_candles == 0 {
                 f32::MAX
             } else {
@@ -215,9 +218,9 @@ impl ChartDataState {
                     - (candle_cfg.hide_candles as f64 - 1.0) * candle_tf_ms as f64;
                 (hide_open - pane.view.epoch_ms) as f32
             };
-            // Диаг X-геометрии (жалоба «зум-аут → разрыв между чартом и стаканом»): раз в
-            // секунду per-панель пишем окно/якорь/последние данные — по логу видно, кто врёт:
-            // камера (right уехал от now) или данные (тики/свечи легально кончились раньше).
+            // Diagnose X geometry for gaps between the plot and order book after zooming out. Once
+            // per second per panel, log the window, anchor, and latest data to distinguish a camera
+            // whose right edge drifted from now from data whose ticks or candles legitimately end earlier.
             if chart_market_diag_enabled()
                 && chart_market_diag_due(format!("xgeom:{}:{}:{}", pane.core, pane.market, idx))
             {
@@ -259,8 +262,8 @@ impl ChartDataState {
             let candle_params = moon_core::market::CandleReadParams {
                 tf_ms: candle_tf_ms,
                 trades_from_rel_ms: trades_zone_rel,
-                // Жёсткий лимит трейдов убран по просьбе пользователя (реальный предел —
-                // ёмкость ринга); поле осталось в протоколе чтения на будущее.
+                // The hard trade limit was removed at the user's request; ring capacity is the actual bound.
+                // Keep the field in the read protocol for future use.
                 trades_limit: usize::MAX,
                 shipped_revision: pr.last_candle_rev,
             };
@@ -374,10 +377,11 @@ impl ChartDataState {
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
-                // Кресты ТРЕЙДОВ ЛИКВИДАЦИЙ (side=2) — в то же combo-кольцо, отдельным append
-                // (порядок в кольце не влияет на позицию: шейдер ставит по time_rel). На combo_reset
-                // источник отдал полный видимый диапазон, иначе — только новый живой край. Гейт
-                // per-панель: выкл → не добавляем (а смена флага форсит reset выше, убирая старые).
+                // Append liquidation-trade crosses with side=2 to the same combo ring. Ring order
+                // does not affect placement because the shader uses time_rel. On combo_reset the
+                // source supplies the full visible range; otherwise it supplies only the new live
+                // edge. The per-panel toggle suppresses appends, and changing it forces the reset
+                // above to remove existing liquidation crosses.
                 if pr.liquidations_enabled && !pr.history_buffers.liquidations.is_empty() {
                     fill_liq_upload(
                         &pr.history_buffers.liquidations,
@@ -388,8 +392,8 @@ impl ChartDataState {
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
-                // Свечи: серия изменилась (rebuild или живой батч трейдов) → полная
-                // перезаливка инстанс-буфера слоя (сотни строк, дёшево).
+                // A candle-series change from a rebuild or live trade batch fully reuploads the
+                // layer's instance buffer. It contains only hundreds of rows, so this is inexpensive.
                 if history.candles_changed {
                     fill_candle_upload(
                         &pr.history_buffers.candles,
@@ -407,8 +411,8 @@ impl ChartDataState {
                     pixels_changed = true;
                 }
                 if history.price_lines_changed || history.combo_reset {
-                    // Галка «Линии цены»: выкл → last/mark линии не рисуем (смена галки
-                    // форсит history reset через candle_cfg_changed → попадаем сюда).
+                    // When Price Lines is disabled, omit last and mark lines. Changing the toggle
+                    // forces a history reset through candle_cfg_changed and reaches this branch.
                     if candle_cfg.price_lines {
                         fill_price_upload(
                             &pr.history_buffers.last_points,
@@ -485,17 +489,17 @@ impl ChartDataState {
                 pr.cached_last_price
             };
             let tick_price = pr.cached_tick_price;
-            // Якорь авто-фокуса по стакану: лучшие bid/ask. O(1) чтение под коротким
-            // read-lock; полную книгу строим ниже уже по выставленному окну.
+            // Use best bid and ask as the order-book autofocus anchor. This is an O(1) read under a
+            // short lock; build the full book below after the visible window is established.
             let book_top = source.with_orderbook_view(pane.core, &pane.market, |data| {
                 data.and_then(|(book, _)| book.best_bid_ask())
             });
             let book_mid = book_top.map(|(bid, ask)| (bid + ask) * 0.5);
-            // Если трейдов нет — центрируемся по стакану: середину книги даём как якорь
-            // центра (fallback для last_price), а видимую полосу строим так, чтобы она
-            // ГАРАНТИРОВАННО включала лучшие bid/ask (широкий спред HIP-3), но была не уже
-            // ±BOOK_FOCUS_HALF (иначе на узком спреде — абсурдный зум-ин). Когда трейды
-            // есть (tick_price.is_some()) — полосу НЕ добавляем: диапазон ведут реальные тики.
+            // With no trades, center on the order book: use its midpoint as the center anchor and
+            // last-price fallback, and construct a visible band guaranteed to include best bid and
+            // ask for wide HIP-3 spreads. Keep it at least +/-BOOK_FOCUS_HALF to prevent excessive
+            // zoom on narrow spreads. When tick_price is present, omit this band and let real ticks
+            // determine the range.
             let book_focus =
                 tick_price
                     .is_none()
@@ -507,8 +511,8 @@ impl ChartDataState {
                         (bid.min(mid - min_half), ask.max(mid + min_half))
                     });
             let last_price = last_price.or(book_mid);
-            // Цена-ориентир для подписи курсора (% выше/ниже): трейды, иначе мид стакана. Без
-            // этого на HIP-рынках без трейдов (но со стаканом) подпись % у курсора пропадала.
+            // Use trades, or otherwise the order-book midpoint, as the cursor label's percentage
+            // reference. Without this fallback, HIP markets with a book but no trades lost the label.
             pr.cached_last_price = last_price;
             let visible_price = union_range(
                 union_range(
@@ -518,8 +522,9 @@ impl ChartDataState {
                 book_focus,
             );
             pane.view.update_y(now, plot_h, visible_price, last_price);
-            // Бейдж текущего Y-масштаба у угловой подписи: Авто — всегда, ручной
-            // drag/RMB-zoom/lock сравнения — если целый % разошёлся с выбранной ступенью.
+            // Show the current Y-scale badge beside the corner label always in Auto mode. For manual
+            // drag, right-button zoom, or comparison lock, show it when the whole percentage differs
+            // from the selected step.
             let next_badge = scale_badge_pct(&pane.view);
             if pr.scale_badge != next_badge {
                 pr.scale_badge = next_badge;
@@ -590,8 +595,9 @@ impl ChartDataState {
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }
-            // Стиль слоя свечей: цвета из темы, режим/зона/контур из cfg. Зона (rel ms)
-            // меняется раз в бакет ТФ (см. zone_bucket_changed выше) — стиль обновится там же.
+            // Candle-layer colors come from the theme; mode, zone, and outline come from the config.
+            // The relative-millisecond zone changes once per timeframe bucket, as tracked by
+            // zone_bucket_changed above, and the style updates at the same time.
             let next_candle_style = CandleStyleGpu {
                 up: rgb4(self.theme.candle_up),
                 down: rgb4(self.theme.candle_down),
@@ -615,16 +621,17 @@ impl ChartDataState {
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }
-            // Флаг стакана в pane (для гейта угловой подписи в render_state/text). В режиме
-            // «только стакан» стакан принудительно включён (даже если галка «Стакан» снята).
+            // Store the pane's order-book-only flag for gating the corner label in render_state/text.
+            // Order-book-only mode forces the book on even when the Order Book toggle is cleared.
             pr.orderbook_only = self.orderbook_only;
-            // Эффективная позиция оси (с учётом форс-Hide в режиме метлы) — для рендера подписей.
+            // Store the effective axis position, including forced hiding in book-only mode, for labels.
             pr.price_axis_pos = axis_pos;
             pr.time_axis_visible = self.time_axis_visible;
             pr.prospective_usd = self.prospective_usd;
             let orderbook_on = self.orderbook_enabled || self.orderbook_only;
             pr.orderbook_enabled = orderbook_on;
-            // Стакан выключен (per-окно) → уровни не строим и не грузим (а если были — чистим).
+            // When the order book is disabled for this window, neither build nor upload levels and
+            // clear any that already exist.
             if !orderbook_on {
                 if pr.last_book_rev != u64::MAX {
                     pr.layers.set_orderbook(Vec::new());
@@ -638,7 +645,7 @@ impl ChartDataState {
             } else {
                 source.with_orderbook_view(pane.core, &pane.market, |data| {
                     if let Some((book, book_rev)) = data {
-                        // Живые границы книги — для трёхцветного фона зоны (ask/спред/bid).
+                        // Retain live book boundaries for the zone's ask/spread/bid three-color background.
                         pr.book_best = book.best_bid_ask();
                         let half = pane.view.render_range.max(1e-9) * 0.5;
                         let (lo, hi) = (
@@ -654,8 +661,8 @@ impl ChartDataState {
                             book.build_instances(lo, hi, &mut levels);
                             diag_levels_len = Some(levels.len());
                             pr.layers.set_orderbook(levels);
-                            // CPU-копия видимой книги — для подписей объёма в стакане:
-                            // cursor volume и Moonbot-style sell-line depth label.
+                            // Keep a CPU copy of the visible book for cursor-volume labels and the
+                            // Moonbot-style sell-line depth label.
                             book.collect_visible_depth(lo, hi, &mut pr.orderbook_levels);
                             refresh_orderbook_label_notionals(
                                 &mut pr.orderbook_labels,
@@ -701,8 +708,8 @@ impl ChartDataState {
                     }
                 });
             }
-            // Стиль стакана — ПОСЛЕ чтения книги: несёт живые границы bid/ask для
-            // трёхцветного фона (выше ask / щель спреда / ниже bid).
+            // Build the order-book style after reading the book so it carries live bid/ask boundaries
+            // for the three-color background above ask, inside the spread, and below bid.
             let book_edges = pr.book_best.filter(|_| orderbook_on);
             let next_book_style = BookStyle {
                 book_bg: rgb4(self.theme.book_bg),

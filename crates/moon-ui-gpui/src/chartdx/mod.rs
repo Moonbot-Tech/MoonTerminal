@@ -1,11 +1,12 @@
-//! Native `gpu_canvas` рендер чарта (замена wgpu-offscreen+readback). Слои по природе данных
-//! chartdx own-pass renderer: Combo (рыночная история) / OrderBook (срез) /
-//! UserData (мутирующее юзерское) + хром (Grid/Background) + native cursor/readout;
-//! статичный текст осей — в GPUI.
+//! Native `gpu_canvas` chart renderer replacing wgpu offscreen rendering and readback. Own-pass
+//! layers follow data semantics: Combo for market history, OrderBook for a snapshot, UserData for
+//! mutable user state, chrome for Grid and Background, plus native cursor and readout. GPUI renders
+//! static axis text.
 //!
-//! Доменная специфика чарта живёт ЗДЕСЬ (в терминале); форк gpui отдаёт только generic-хук
-//! `RawGpuAccess`. Файл на слой; здесь — оркестратор `ChartEngine`: prepare данных per pane
-//! (БЕЗ рисования) + `gpu_canvas` element, который и рисует в кадре GPUI.
+//! Chart domain behavior lives HERE in the terminal; the GPUI fork exposes only the generic
+//! `RawGpuAccess` hook. Each layer has its own file. This module contains the `ChartEngine`
+//! orchestrator: per-pane data preparation WITHOUT rendering plus the `gpu_canvas` element that
+//! draws inside the GPUI frame.
 
 mod backend;
 #[cfg(windows)]
@@ -14,8 +15,8 @@ pub mod background;
 mod base;
 #[cfg(windows)]
 pub mod candles;
-// Оркестратор движка, вынесенный из этого файла (impl-блоки; структуры объявлены ниже).
-// Дочерние модули видят приватные поля структур-предка — логика не менялась, только переезд.
+// Engine orchestration extracted from this file into impl blocks; structures remain declared below.
+// Child modules can access ancestor-private fields, so only code location changed, not behavior.
 #[cfg(windows)]
 pub mod combo;
 #[cfg(windows)]
@@ -79,10 +80,10 @@ use types::{
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
 
-/// Минимальная полу-ширина видимой полосы авто-фокуса вокруг середины стакана, когда
-/// трейдов нет (доля от цены). Полоса всегда включает лучшие bid/ask, но не уже ±0.5%
-/// → на узком спреде не зумит абсурдно в спред, на широком (HIP-3) показывает обе
-/// стороны. Как только пойдут трейды — диапазон ведут тики.
+/// Minimum half-width of the visible auto-focus band around the order-book midpoint when there are
+/// no trades, expressed as a price fraction. The band always includes best bid and ask but is never
+/// narrower than +/-0.5%, preventing absurd zoom into a tight spread while showing both sides of a
+/// wide HIP-3 spread. Once trades arrive, ticks drive the range.
 const BOOK_FOCUS_HALF_FRAC: f32 = 0.005;
 
 fn union_range(a: Option<(f32, f32)>, b: Option<(f32, f32)>) -> Option<(f32, f32)> {
@@ -93,10 +94,12 @@ fn union_range(a: Option<(f32, f32)>, b: Option<(f32, f32)>) -> Option<(f32, f32
     }
 }
 
-/// Целый % текущего видимого Y-диапазона от цены — бейдж масштаба у угловой подписи.
-/// None = не показывать. Правила: Авто — показываем всегда; ручной Y (drag/RMB-zoom/lock
-/// сравнения) — только когда целый % разошёлся с выбранной ступенью; фикс-процент без
-/// ручного вмешательства совпадает с выбранным по построению — не пишем.
+/// Return the whole-number percentage of the current visible Y range relative to price for the
+/// scale badge beside the corner label, or `None` to hide it.
+///
+/// Auto always shows the badge. Manual Y from drag, right-click zoom, or comparison lock shows it
+/// only when the whole percentage differs from the selected step. An untouched fixed percentage
+/// matches the selected step by construction and stays hidden.
 fn scale_badge_pct(view: &moon_chart::view::ChartView) -> Option<i32> {
     let center = view.render_center.abs();
     if !(center > 1e-9) || !(view.render_range > 0.0) {
@@ -163,12 +166,9 @@ struct CursorState {
     local: [f32; 2],
 }
 
-/// Готовая подпись у ордерной линии (категория E референса): текст + цена линии (Y) +
-/// сторона размещения (над/под линией) + цвет линии. Собирается при синке ордеров
-/// (`sync_orders_from_session`, там под рукой `session`), рисуется в `prepare_text`.
-/// Размещённая (после анти-наложения) подпись: лог. позиция/выравнивание/ширина — чтобы
-/// `sync_readout_params` построил под неё прозрачную плашку-подложку. `solid` — плотная плашка
-/// (курсорные цифры, передний план) против лёгкой (как у угловой подписи монеты).
+/// A placed label after overlap avoidance stores logical position, alignment, and width so
+/// `sync_readout_params` can build a translucent backing plate. `solid` selects a dense foreground
+/// plate for cursor numbers instead of the light plate used by the market corner label.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct PlacedLabel {
     pub x: f32,
@@ -182,31 +182,34 @@ pub(super) struct PlacedLabel {
 
 pub(super) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;
 
-// Плотность СТАТИЧНОЙ сетки: фикс. деления ширины/высоты (модель Moonbot — сетка стоит, едут
-// только подписи). И вертикали (время), и горизонтали (цена) на фикс. экранных долях.
+// STATIC grid density uses fixed width and height divisions. Like Moonbot, the grid stays still and
+// only labels move; both time verticals and price horizontals use fixed screen fractions.
 pub(super) const GRID_N_VERT: f32 = 60.0;
 pub(super) const GRID_N_HORIZ: f32 = 6.0;
 
-// Приоритеты подписей ордерных линий при наложении (выше = размещается раньше, перекрывает).
-// SELL/STOP (актуальное для позиции: PnL%/стоп-%) перекрывают BUY (вход/размер).
+// Order-line label overlap priorities: higher values place first and win overlaps. SELL and STOP,
+// which show current position PnL or stop percentages, take precedence over BUY entry and size.
 pub(super) const PRIO_BUY: u8 = 10;
 pub(super) const PRIO_SELL_SIZE: u8 = 20;
 pub(super) const PRIO_SELL_PCT: u8 = 30;
 pub(super) const PRIO_STOP_PCT: u8 = 40;
 
+/// Prepared order-line label (reference category E): text, line price on Y, placement above or below
+/// the line, and line color. It is built while orders synchronize in `sync_orders_from_session`,
+/// where `session` is available, and drawn by `prepare_text`.
 #[derive(Clone)]
 pub(super) struct OrderLabel {
-    /// Цена линии — превращается в Y по `view` каждый кадр.
+    /// Line price converted to Y through `view` each frame.
     pub price: f32,
     pub text: String,
-    /// true → подпись над линией, false → под линией.
+    /// `true` places the label above the line; `false` places it below.
     pub above: bool,
-    /// Цвет линии (0xRRGGBB) — подпись красится в него же.
+    /// Line color as `0xRRGGBB`, also used for the label.
     pub color: u32,
-    /// Приоритет draw-order-а при пересечении: младшие рисуются раньше, старшие поверх.
-    /// Настоящий Moonbot-style Y-bucket для secondary captions пока должен жить отдельным pass-ом.
+    /// Draw-order priority at intersections: lower values draw first and higher values on top.
+    /// A true Moonbot-style Y bucket for secondary captions still requires a separate pass.
     pub priority: u8,
-    /// Drag/hover label надо рисовать поверх и не давить overlap-ом.
+    /// Whether a drag or hover label must render on top without overlap suppression.
     pub force: bool,
 }
 
@@ -220,28 +223,28 @@ pub(super) struct OrderBookLabel {
     pub notional: f32,
 }
 
-/// GPU-состояние одной панели для `gpu_canvas` callbacks — отделено от логики `Container`,
-/// синхронизируется по индексу + идентичности (core, market) в `prepare`.
+/// GPU state for one panel's `gpu_canvas` callbacks, separate from `Container` logic and
+/// synchronized in `prepare` by index plus `(core, market)` identity.
 struct PaneRender {
     core: Option<CoreId>,
     market: String,
-    /// Имя ядра для угловой подписи чарта (резолв из `SessionManager` при синке ордеров).
-    /// Тикер подписи выводим из `market` на лету (`symbol::display_pair`), его не храним.
+    /// Core name for the chart corner label, resolved from `SessionManager` during order sync.
+    /// The ticker is derived on demand from `market` through `symbol::display_pair` and is not stored.
     core_name: String,
-    /// Изменённая ширина (лог. px) самой широкой строки угловой подписи — `prepare_text` её
-    /// замеряет, `sync_readout_params` строит по ней прозрачную плашку-подложку. 0 = подписи нет.
+    /// Measured logical-pixel width of the widest corner-label row. `prepare_text` measures it and
+    /// `sync_readout_params` builds the translucent backing plate. Zero means no label.
     caption_w: f32,
-    /// Размеры (лог. px) строки дельты от якоря compare-вкладки под угловой подписью (метла):
-    /// крупный «+0.12%» отличия last этой биржи от якоря. 0 = строки нет. Замеряет
-    /// `prepare_text`, плашку расширяет `sync_readout_params`.
+    /// Logical-pixel size of the comparison-anchor delta row below the corner label in broom mode:
+    /// a large "+0.12%" difference between this exchange's Last and the anchor. Zero means no row.
+    /// `prepare_text` measures it and `sync_readout_params` expands the plate.
     caption_delta_w: f32,
     caption_delta_h: f32,
-    /// Бейдж текущего Y-масштаба (целый % видимого диапазона от цены) слева от угловой
-    /// подписи. None = не показывать (фикс-процент совпадает с выбранной ступенью).
-    /// Считается в `sync_from_market_source` по логическому `ChartView` панели.
+    /// Current Y-scale badge to the left of the corner label, as a whole percentage of visible range
+    /// relative to price. `None` hides it when fixed percentage matches the selected step. Computed
+    /// by `sync_from_market_source` from the panel's logical `ChartView`.
     scale_badge: Option<i32>,
-    /// Замеренные размеры (лог. px) текста бейджа масштаба (ширина ВКЛЮЧАЕТ зазор до
-    /// подписи) — `prepare_text` замеряет, `sync_readout_params` расширяет плашку.
+    /// Measured logical-pixel scale-badge text size. Width INCLUDES the gap before the label.
+    /// `prepare_text` measures it and `sync_readout_params` expands the plate.
     caption_scale_w: f32,
     caption_scale_h: f32,
     view: ChartViewGpu,
@@ -261,19 +264,22 @@ struct PaneRender {
     /// Last provider generation seen by this pane. Changed generation means source replacement.
     source_generation: u64,
     cross_upload: Vec<ChartCross>,
-    /// Буфер крестов ТРЕЙДОВ ЛИКВИДАЦИЙ (side=2) для аплоада в то же combo-кольцо.
+    /// LIQUIDATION trade-cross upload buffer using `side=2` in the same combo ring.
     liq_upload: Vec<ChartCross>,
     last_line_upload: Vec<PriceLinePoint>,
     mark_line_upload: Vec<PriceLinePoint>,
-    /// Аплоад-буфер слоя свечей (переиспользуемая аллокация).
+    /// Reusable candle-layer upload buffer.
     candle_upload: Vec<CandleGpu>,
-    /// Последняя доставленная в GPU ревизия серии свечей (u64::MAX = не доставлялась).
+    /// Last candle-series revision delivered to the GPU; `u64::MAX` means never delivered.
     last_candle_rev: u64,
-    /// Применённый cfg отображения свечей — смена форсит history reset (ТФ/зона).
+    /// Applied candle-view config. Any effective change resets history, including the time frame,
+    /// mode, trade or hidden-candle boundary, trade limit, outline, wick or neutral-zone behavior,
+    /// and price-line visibility. The separately cached GPU style also carries theme colors and fill
+    /// alpha.
     applied_candle_cfg: moon_core::market::CandleViewCfg,
-    /// Бакет ТФ «сейчас» на прошлом синке: сдвинулся → зона трейдов уехала → reset.
+    /// Current-time time-frame bucket at the previous sync; movement shifts the trade zone and resets.
     last_zone_bucket: i64,
-    /// Последний отданный слою стиль свечей (сравнение перед set_candle_style).
+    /// Last candle style sent to the layer, compared before `set_candle_style`.
     candle_style: CandleStyleGpu,
     combo_cross_capacity: usize,
     combo_price_line_capacity: usize,
@@ -281,84 +287,84 @@ struct PaneRender {
     pane_bounds: [f32; 4],
     book_style: BookStyle,
     resident_left_rel: f32,
-    /// Последнее виденное поколение device combo: сменилось (device-lost) → перезалить историю.
+    /// Last observed combo device generation; device loss requires history reupload.
     last_device_gen: u64,
-    /// Последняя сборка стакана: ревизия данных + видимое ценовое окно.
+    /// Last order-book build: data revision plus visible price window.
     last_book_rev: u64,
     last_book_lo: f32,
     last_book_hi: f32,
-    /// Последняя ревизия ордеров, по которой залит userdata-буфер.
+    /// Last order revision uploaded into the userdata buffer.
     last_order_lines_rev: u64,
-    /// Последняя сигнатура order zones. Зоны входят в base-cache под сетку; линии и трассы
-    /// рисуются overlay. Поэтому смена zones должна инвалидировать base, а hover/drag линий - нет.
+    /// Last order-zone signature. Zones live in the base cache below the grid, while lines and traces
+    /// render as an overlay. Zone changes must invalidate base; line hover and drag must not.
     last_order_zone_sig: u64,
-    /// Локальное время, когда userdata-буфер был пересобран из `order_lines_rev`.
+    /// Local time when the userdata buffer was rebuilt from `order_lines_rev`.
     last_order_lines_sync_ms: f64,
-    /// Ревизия order userdata, которая ждёт ближайшего GPU prepare.
+    /// Order-userdata revision waiting for the next GPU prepare.
     pending_order_gpu_rev: Option<u64>,
-    /// Последняя order revision, дошедшая до GPU prepare.
+    /// Last order revision that reached GPU prepare.
     last_order_gpu_rev: u64,
-    /// Локальное время ближайшего GPU prepare для `last_order_gpu_rev`.
+    /// Local time of the GPU prepare associated with `last_order_gpu_rev`.
     last_order_gpu_ms: f64,
-    /// Последняя order revision, реально попавшая в own-pass draw.
+    /// Last order revision actually rendered by the own-pass draw.
     last_order_present_rev: u64,
-    /// Локальное время первого draw для `last_order_present_rev`.
+    /// Local time of the first draw for `last_order_present_rev`.
     last_order_present_ms: f64,
-    /// Последний uid ордера, который был подсвечен при сборке userdata.
+    /// Last order UID highlighted while building userdata.
     last_order_highlight_uid: Option<u64>,
-    /// Последний preview drag, который был зашит в userdata.
+    /// Last drag preview encoded into userdata.
     last_order_drag_preview: Option<(u64, LineKind, u32)>,
-    /// Сигнатура фигур (стор+интерактив), зашитая в userdata. u64::MAX = грязно.
+    /// Figure signature from store and interaction encoded into userdata; `u64::MAX` means dirty.
     last_figures_sig: u64,
-    /// Готовые подписи ордерных линий (size/%/qty), пересобираются при изменении ордеров.
-    /// Рисуются в `prepare_text`, привязка к Y — по `view` каждый кадр.
+    /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
+    /// `prepare_text` draws them and maps Y through `view` each frame.
     order_labels: Vec<OrderLabel>,
     /// Stable priority order for `order_labels`, rebuilt together with order labels.
     /// Cursor-only text frames must not allocate/sort it again.
     order_label_order: Vec<usize>,
-    /// Подписи объёма стакана у sell-линий (Moonbot `LastSellOrderPriceVol`): цель берём из
-    /// ордера, фактический объём считаем из текущей CPU-копии стакана.
+    /// Order-book volume labels on sell lines, matching Moonbot `LastSellOrderPriceVol`: the order
+    /// provides the target and the current CPU order-book copy provides actual volume.
     orderbook_labels: Vec<OrderBookLabel>,
-    /// Прогнозный размер ордера (s1-s6) в USD — рисуется на перекрестии курсора. None = нет
-    /// активного размера/курса. Считается в `ChartPanel::render` (есть `Backend`), копируется сюда.
+    /// Prospective selected F1-F6 order size in USD rendered at the cursor crosshair. `None` means no
+    /// active size or rate. `ChartPanel::render`, which has Backend access, computes and copies it here.
     prospective_usd: Option<f64>,
-    /// Размещённые подписи (ордерные + курсорные) этого кадра — `prepare_text` их раскладывает
-    /// (анти-наложение), `sync_readout_params` строит под них плашки-подложки.
+    /// Placed order and cursor labels for this frame. `prepare_text` lays them out with overlap
+    /// avoidance, and `sync_readout_params` builds their backing plates.
     label_placed: Vec<PlacedLabel>,
-    /// Видимые уровни стакана — CPU-копия для подписи количества под курсором и у sell-линий.
-    /// Наполняется при заливке стакана (`prepare`), пусто если стакан выключен.
+    /// CPU copy of visible order-book levels for quantity labels under the cursor and on sell lines.
+    /// Filled during order-book upload in `prepare`; empty while the order book is disabled.
     orderbook_levels: Vec<moon_core::data::BookDepthPoint>,
-    /// Живые лучшие (bid, ask) книги — границы трёхцветного фона зоны стакана.
+    /// Live best `(bid, ask)` book prices defining the three-color order-book zone background.
     book_best: Option<(f32, f32)>,
-    /// Камера X для own-pass: эпоха времени, поле справа (доля «будущего»), флаг follow и
-    /// последняя КВАНТОВАННАЯ пиксель-позиция правого края. Callback двигает камеру по этим
-    /// полям на каждый present (vblank, целопиксельно) — живой скролл без отдельного таймера.
+    /// Own-pass X camera: time epoch, right-side future fraction, follow flag, and last QUANTIZED
+    /// right-edge pixel position. The callback advances the camera from these fields on every
+    /// whole-pixel vblank present, providing live scrolling without a separate timer.
     epoch_ms: f64,
     right_margin_frac: f32,
     follow: bool,
     last_edge_px: i64,
-    /// Кэш дорогого авто-Y скана (min/max видимых тиков) + пиксель-позиция камеры, при которой
-    /// он валиден. Пересканируем лишь на пиксель-кроссе (рубильник, см. prepare).
+    /// Cache of the expensive auto-Y scan over visible tick minima and maxima plus the camera pixel
+    /// position for which it is valid. Rescan only on pixel crossings; see the prepare switch.
     scan_cam_px: i64,
     cached_tick_price: Option<(f32, f32)>,
     cached_last_price: Option<f32>,
-    /// Последний диапазон live-ордеров для auto-Y. Обновляется полным session-sync;
-    /// market-only frame-sync использует этот кэш, не трогая CoreStore из frame().
+    /// Last live-order range for auto-Y. Full session sync updates it; market-only frame sync reads
+    /// this cache without touching CoreStore from `frame()`.
     cached_order_price: Option<(f32, f32)>,
-    /// Видима в этом кадре (рисуем) — ставится в `prepare`.
+    /// Whether this pane is visible and rendered this frame, set by `prepare`.
     active: bool,
-    /// Стакан включён на этой панели (per-окно). Выкл → не рисуем стекло и угловую подпись.
+    /// Whether this panel enables its per-window order book; disabled hides the book and corner label.
     orderbook_enabled: bool,
-    /// Трейды ликвидаций рисуются на этой панели (per-окно). Выкл → кресты ликвидаций не
-    /// добавляются в combo. Смена флага форсит combo reset (перезалив без/с ликвидациями).
+    /// Whether this panel draws per-window liquidation trades. Disabled omits liquidation crosses
+    /// from combo. Changing the flag resets combo for reupload with or without liquidations.
     liquidations_enabled: bool,
-    /// Режим «только стакан» этой панели (чарт+ось цен скрыты, стакан на всю ширину).
+    /// This panel's order-book-only mode, hiding chart and price axis and using the full width.
     orderbook_only: bool,
-    /// Положение оси цен (Left/Right/Hide) — определяет, с какой стороны рисуются подписи оси
-    /// и где резервируется жёлоб под неё. Применяется ко всем панелям движка.
+    /// Price-axis position (`Left`, `Right`, or `Hide`), controlling label side and reserved gutter.
+    /// Applied to every engine panel.
     price_axis_pos: crate::chart_persist::PriceAxisPos,
-    /// Видна ли ось времени (нижние подписи + жёлоб под них). Выкл → подписи времени не
-    /// рисуются, плот занимает всю высоту слота. Применяется ко всем панелям движка.
+    /// Whether the time axis and its bottom-label gutter are visible. Disabled lets the plot fill
+    /// slot height. Applied to every engine panel.
     time_axis_visible: bool,
     /// CPU/base inputs changed and D3D prepare must upload/bake resident resources before draw.
     /// Cursor-only presents leave this false.
@@ -460,18 +466,18 @@ impl PaneRender {
         }
     }
 
-    /// Пиксельный рубильник камеры (follow по X). Двигаем правый край по `now_ms` ТОЛЬКО
-    /// когда «сейчас» уехало на ≥1 ЦЕЛЫЙ пиксель (Moonbot `round(Now/FdtScale)`): между
-    /// пикселями кадр попиксельно идентичен → present переказывает его без работы. Целый
-    /// шаг убирает субпиксельное дрожание; вызов на каждый present даёт гладкость на vblank.
-    /// True — камера реально сдвинулась (для счётчика «рабочих» кадров).
+    /// Advance the X-follow camera only when `now_ms` moves by at least one WHOLE pixel, matching
+    /// Moonbot `round(Now/FdtScale)`. Between pixel crossings the frame is pixel-identical, so present
+    /// can reuse it without work. Whole-pixel steps remove subpixel jitter, while calling on every
+    /// present keeps vblank motion smooth. Returns `true` when the camera actually moved for the
+    /// productive-frame counter.
     fn advance_camera(&mut self, now_ms: f64) -> bool {
         if !self.follow || !(self.view.time_to_px > 0.0) {
             return false;
         }
-        // ЕДИНЫЙ гард ppm для прямого И обратного преобразования: раньше target_px считался
-        // сырым ppm, а inv_ppm — по флору 1e-6; на глубоком зум-ауте (ppm < 1e-6 при окне
-        // 365 сут) right_rel схлопывался к ~0 и чарт уезжал влево от стакана.
+        // Use ONE ppm guard for forward and inverse conversion. Previously `target_px` used raw ppm
+        // while `inv_ppm` used a 1e-6 floor; at deep zoom-out below 1e-6 for a 365-day window,
+        // `right_rel` collapsed near zero and shifted the chart left of the order book.
         let ppm = self.view.time_to_px.max(moon_chart::view::MIN_PX_PER_MS);
         let target_px = ((now_ms - self.epoch_ms) * ppm as f64).round() as i64;
         if target_px == self.last_edge_px {
@@ -490,12 +496,13 @@ impl PaneRender {
     }
 }
 
-/// Состояние рендера всех панелей — шарится с `gpu_canvas` callbacks (`Rc<RefCell>`,
-/// единственный поток UI: `prepare` и callbacks кадра не пересекаются по времени).
+/// Render state for all panels shared with `gpu_canvas` callbacks through `Rc<RefCell>`.
+///
+/// The UI is single-threaded, and `prepare` never overlaps frame callbacks in time.
 struct RenderState {
     panes: Vec<PaneRender>,
-    /// CPU-side dirty flag для `GpuCanvasDriver::frame`: `prepare()` обновил resident state,
-    /// значит следующий platform tick должен презентить кадр даже без GPUI dirty.
+    /// CPU-side dirty flag for `GpuCanvasDriver::frame`: `prepare()` updated resident state, so the
+    /// next platform tick must present even without GPUI dirtiness.
     needs_present: bool,
     /// Scene pixels changed since the optional DX11 cursor-restore cache was built.
     /// Live-scroll draws directly and invalidates that cache; cursor-only frames may rebuild it once.
@@ -514,18 +521,19 @@ struct RenderState {
     firetest_text_revision: u64,
     firetest_force_present: bool,
     ui_palette: moon_ui::MoonPalette,
-    /// Левый верхний угол chart slot в backbuffer. Cursor приходит из UI в локальных
-    /// device-px слота, а own-pass рисует в координатах окна.
+    /// Top-left chart-slot origin in the backbuffer. UI cursor coordinates are local slot device
+    /// pixels, while own-pass renders in window coordinates.
     slot_origin: [f32; 2],
     cursor: Option<CursorState>,
-    /// Цена «призрачного» перекрестия compare-режима: панель БЕЗ реального курсора рисует
-    /// горизонталь на этой цене (свой Y-маппинг) + объём стакана/% в `text.rs`. Пишется
-    /// наведённым соседом по вкладке через `ChartGhostCursor` — мимо GPUI-notify, как и
-    /// реальный курсор.
+    /// Ghost crosshair price in comparison mode. A panel WITHOUT a real cursor draws a horizontal
+    /// line at this price using its own Y mapping, plus order-book volume and percentage through
+    /// `text/runs.rs::draw_ghost_cursor_labels`.
+    /// The hovered sibling writes it through `ChartGhostCursor`, bypassing GPUI notification like
+    /// the real cursor.
     ghost_price: Option<f32>,
-    /// Last-цена ЯКОРЯ compare-вкладки (замочек) — опора крупной дельты «+0.12%» под угловой
-    /// подписью в метле. Приносит стек (`apply_compare`) на каждом observe; None = не в
-    /// сравнении / этот чарт сам якорь.
+    /// Anchor Last price for the large "+0.12%" delta below the corner label in broom mode. The stack
+    /// supplies it through `apply_compare` on each observation. `None` means no comparison or this
+    /// chart is the anchor.
     compare_ref_price: Option<f32>,
     cursor_color: [f32; 4],
     cursor_thickness: f32,
@@ -540,28 +548,31 @@ struct RenderState {
     axis_label: u32,
     caption_label: u32,
     readout_label: u32,
-    /// Поправка кегля подписей ордер-линий и курсора (px) — из `ChartTheme.label_font_delta`.
-    /// Применяется к столбцу подписей линий и к курсорному ридауту в `text.rs`.
+    /// Order-line and cursor label font-size adjustment in pixels from `ChartTheme.label_font_delta`.
+    /// `text/runs.rs` applies it through label draw/measure helpers used by the line-label column and
+    /// cursor readout in `text/prepare.rs`.
     label_font_delta: f32,
-    /// Показывать подписи у линий ордеров (per-вкладка, из попапа ⚙). Выкл → столбец подписей
-    /// линий не рисуется. См. `text.rs`.
+    /// Whether to show per-tab order-line labels from the ⚙ popup. Disabled hides the line-label
+    /// column built by `text/prepare.rs::prepare_text`.
     line_labels: bool,
-    /// Показывать подписи у перекрестия (курсорный ридаут: время/цена/%/объём/размер).
-    /// Выкл → курсорные цифры не рисуются. См. `text.rs`.
+    /// Whether to show crosshair readout labels for time, price, percentage, volume, and size.
+    /// Disabled hides cursor values prepared by `text/prepare.rs::prepare_text` and ghost labels
+    /// drawn by `text/runs.rs::draw_ghost_cursor_labels`.
     cursor_labels: bool,
     pixel_scale: f32,
-    /// Scissor-растеризатор own-pass (lazy, пересоздаётся на смене device): клипует слои к
-    /// зоне панели, чтобы стакан/ордера (позиционируются по ЦЕНЕ) не лезли за плот на тулбар/шкалы.
+    /// Lazily created own-pass scissor rasterizer, recreated on device changes. It clips layers to
+    /// the panel so price-positioned order books and orders cannot spill beyond the plot onto
+    /// toolbars or scales.
     #[cfg(windows)]
     scissor_rs: Option<ID3D11RasterizerState>,
     #[cfg(windows)]
     scissor_generation: u64,
-    /// Полно-оконная тёмная база: рисуется ПЕРВЫМ слоем own-pass на ВЕСЬ backbuffer
-    /// (без scissor), чтобы закрыть белый незакрашенный фон GPUI/SwapChain на первом кадре.
-    /// Брендовый empty-state логотип рисуется SVG-слоем GPUI, не растровым native splash.
+    /// Full-window dark base drawn as the FIRST own-pass layer across the ENTIRE backbuffer without
+    /// scissoring, covering GPUI or SwapChain's unpainted white background on the first frame. The
+    /// branded empty-state logo is a GPUI SVG layer, not a native raster splash.
     #[cfg(windows)]
     window_bg: background::BackgroundLayer,
-    /// Цвет тёмной базы (= `rgb4(theme.bg)`), обновляется в `prepare`. Заливает ВСЁ окно.
+    /// Dark-base color equal to `rgb4(theme.bg)`, updated in `prepare` and filling the ENTIRE window.
     #[cfg(windows)]
     window_bg_color: [f32; 4],
     #[cfg(windows)]
@@ -659,38 +670,38 @@ struct ChartDataState {
     h: u32,
     origin: (f32, f32),
     scene_visible: bool,
-    /// Показывать ли стакан (per-окно/панель). Выкл → glass_w=0, уровни не строятся, подпись не
-    /// рисуется. Применяется ко всем панелям этого движка.
+    /// Whether to show the per-window or panel order book. Disabled sets `glass_w=0`, skips level
+    /// construction, and hides the label. Applied to every panel in this engine.
     orderbook_enabled: bool,
-    /// Рисовать ли трейды ликвидаций (per-окно/панель). Выкл → кресты ликвидаций не добавляются
-    /// в combo. Применяется ко всем панелям этого движка.
+    /// Whether to draw per-window or panel liquidation trades. Disabled omits liquidation crosses
+    /// from combo. Applied to every panel in this engine.
     liquidations_enabled: bool,
-    /// Режим «только стакан» (кнопка-метла в сравнении): чарт и ось цен скрыты, стакан на всю
-    /// ширину. Применяется ко всем панелям этого движка (у соседей якоря).
+    /// Order-book-only mode from the comparison broom button: hide chart and price axis and use the
+    /// full width for the order book. Applied to every panel in follower engines.
     orderbook_only: bool,
-    /// Положение оси цен (Left/Right/Hide), per-окно. Управляет раскладкой жёлоба оси и стороной
-    /// рендера подписей. Дефолт — Left (жёлоб слева, исторический вид).
+    /// Per-window price-axis position (`Left`, `Right`, or `Hide`) controlling gutter layout and
+    /// label side. Defaults to Left, the historical left gutter.
     price_axis_pos: crate::chart_persist::PriceAxisPos,
-    /// Видна ли ось времени (нижние подписи + жёлоб под них), per-окно. Выкл → подписи времени
-    /// не рисуются, плот занимает всю высоту. Дефолт — вкл.
+    /// Whether the per-window time axis, bottom labels, and gutter are visible. Disabled lets the
+    /// plot fill the full height. Enabled by default.
     time_axis_visible: bool,
-    /// Глобальные настройки отображения свечей/трейдов (ТФ, режим, зона) — из
-    /// `layout.candle_view`, применяются ко всем панелям движка.
+    /// Effective candle and trade rendering settings for time frame, mode, and zone, applied to all
+    /// engine panels. They may be a per-tab override or the `layout.candle_view` fallback.
     candle_view: moon_core::market::CandleViewCfg,
-    /// Сохранённый X-масштаб (px/ms, [Shift+СКМ] sync): НОВЫЕ панели стартуют с него
-    /// вместо 60-секундного дефолта. None = дефолт.
+    /// Saved X scale in pixels per millisecond from Shift+middle-click sync. NEW panels start with it
+    /// instead of the 60-second default; `None` uses that default.
     default_x_ppm: Option<f32>,
-    /// Прогнозный размер ручного ордера (s1-s6) в USD — для подписи на перекрестии курсора.
-    /// Ставится из `ChartPanel::render` (у него есть `Backend`). None = нет размера/курса.
+    /// Prospective selected F1-F6 manual order size in USD for the cursor crosshair label.
+    /// `ChartPanel::render`, which has Backend access, sets it. `None` means no size or rate.
     prospective_usd: Option<f64>,
-    /// Интерактивная подсветка линии ордера (hover/drag). Это не меняет рыночные данные:
-    /// только заставляет редкую пересборку userdata при смене uid.
+    /// Interactive order-line hover or drag highlight. It does not change market data and only
+    /// triggers an infrequent userdata rebuild when the UID changes.
     order_highlight: Option<(CoreId, u64)>,
-    /// Локальная preview-цена линии при drag. Ядру команда уходит только на mouse-up.
+    /// Local line-price preview during drag; the command reaches the core only on mouse-up.
     order_drag_preview: Option<(CoreId, u64, LineKind, f32)>,
-    /// Общий стор пользовательских фигур (Rc Backend'а; см. `figures_sync`).
+    /// Shared user-figure store from Backend `Rc`; see `figures_sync`.
     figures: Option<std::rc::Rc<std::cell::RefCell<moon_core::figures::FigureStore>>>,
-    /// Интерактив фигур этой панели (превью рисования/hover/выделение) + его rev.
+    /// This panel's figure interaction state for drawing preview, hover, and selection plus its revision.
     figure_visual: figures_sync::FigureVisual,
     figure_visual_rev: u64,
     market_source: Option<MarketDataSource>,

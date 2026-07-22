@@ -1,12 +1,13 @@
-//! Публичный хэндл движка чарта `ChartEngine`: open/scale/follow/prune/pin/layout,
-//! управление present и синхронизация с панелями. Вынесено из `mod.rs` (impl-блок);
-//! сама структура `ChartEngine` объявлена в `mod.rs` (дочерний модуль видит её поля).
+//! Public `ChartEngine` handle for opening, scaling, following, pruning, pinning, layout,
+//! presentation control, and panel synchronization. This implementation block was extracted from
+//! `mod.rs`, where the `ChartEngine` structure remains declared and visible to this child module.
 
 use super::*;
 
-/// Weak-хэндл «призрачного» перекрестия чужого движка (compare-режим). Наведённая панель
-/// держит по хэндлу на каждого соседа вкладки и на mouse-move пишет им цену под курсором —
-/// сосед рисует горизонталь + объём/% своими данными. Мимо GPUI-notify (как реальный курсор).
+/// Weak handle for another engine's ghost crosshair in comparison mode. A hovered panel holds one
+/// handle per peer chart in the same tab stack and writes the cursor price to each on mouse movement.
+/// Each peer draws a horizontal line plus volume and percentage from its own data. Like the real
+/// cursor, this bypasses GPUI notification.
 #[derive(Clone)]
 pub struct ChartGhostCursor {
     state: std::rc::Weak<RefCell<RenderState>>,
@@ -16,12 +17,12 @@ impl ChartGhostCursor {
     pub fn set_price(&self, price: Option<f64>) {
         if let Some(state) = self.state.upgrade() {
             let mut state = state.borrow_mut();
-            // Цена пришла → мышь сейчас над ДРУГИМ чартом вкладки, у этого не может быть
-            // реального курсора. Если он остался («зависшее» перекрестие: hover-out панели
-            // съеден stop_propagation соседа в fast-path mouse move), гасим — иначе призрак
-            // не включится (реальный курсор приоритетнее в sync_cursor_params/text.rs).
-            // Идемпотентно (у чистых панелей курсор и так None). При price=None НЕ трогаем:
-            // мышь могла только что прийти СЮДА, и реальный курсор здесь легитимен.
+            // Receiving a price means the mouse is over another chart in the tab, so this chart
+            // cannot have a real cursor. Clear a stale crosshair left when a neighbor's fast-path
+            // mouse-move stop_propagation consumed panel hover-out; otherwise the ghost cannot appear
+            // because the real cursor takes precedence in `render_state.rs::sync_cursor_params`. This is
+            // idempotent for panels whose cursor is already None. Do not clear on price=None because
+            // the mouse may have just entered this chart, where its real cursor is valid.
             if price.is_some() {
                 state.set_cursor(None);
             }
@@ -189,9 +190,9 @@ impl ChartEngine {
         self.data.borrow_mut().set_market_source(source)
     }
 
-    /// Обычный GPUI element, который владеет bounds/clip/lifetime через дерево.
-    /// В отличие от старого window-global pass, он сам исчезает при скрытии вкладки
-    /// и переезжает при detach вместе с `ChartPanel`.
+    /// Returns a normal GPUI element whose bounds, clip, and lifetime are owned by the tree. Unlike
+    /// the former window-global pass, it disappears with a hidden tab and moves with `ChartPanel`
+    /// when detached.
     pub fn canvas(&self) -> gpui::GpuCanvas {
         gpui::gpu_canvas(self.canvas.clone())
     }
@@ -263,29 +264,30 @@ impl ChartEngine {
             }))
     }
 
-    /// Weak-хэндл призрачного перекрестия compare-режима: сосед по вкладке пишет сюда цену
-    /// под своим курсором (мимо GPUI-notify), движок сам взводит present. Weak — чтобы список
-    /// соседей у панелей не продлевал жизнь закрытым чартам.
+    /// Returns a weak comparison-mode ghost-crosshair handle. A sibling chart in the same tab stack
+    /// writes its cursor price through this handle without GPUI notification, and the engine requests
+    /// presentation. The handle is weak so peer lists do not extend the lifetime of closed charts.
     pub fn ghost_cursor(&self) -> ChartGhostCursor {
         ChartGhostCursor {
             state: Rc::downgrade(&self.state),
         }
     }
 
-    /// Убрать призрачное перекрестие своего движка (выход из compare-режима).
+    /// Clears this engine's ghost crosshair when leaving comparison mode.
     pub fn clear_ghost_cursor(&mut self) {
         self.state.borrow_mut().set_ghost_price(None);
     }
 
-    /// Last-цена якоря compare-вкладки — опора крупной дельты под угловой подписью в метле.
-    /// None = не в сравнении / сам якорь. Приносит стек на каждом observe.
+    /// Sets the comparison tab anchor's last price, used for the large delta beneath the corner
+    /// label in book-only mode. None means not comparing or that this engine is the anchor. The
+    /// stack supplies the value on every observation.
     pub fn set_compare_ref_price(&mut self, price: Option<f64>) -> bool {
         self.state
             .borrow_mut()
             .set_compare_ref_price(price.map(|p| p as f32))
     }
 
-    /// Last-цена первой активной панели движка (якорь отдаёт её стеку для дельт соседей).
+    /// Returns the first active pane's last price, which the anchor supplies for neighbor deltas.
     pub fn last_price(&self) -> Option<f64> {
         self.state
             .borrow()
@@ -319,7 +321,7 @@ impl ChartEngine {
         self.state.borrow_mut().set_pixel_scale(ppp);
     }
 
-    // ── Настройки (порт из старого chart.rs::ChartGpu) ───────────────────────────
+    // ── Settings ported from the former chart.rs::ChartGpu ───────────────────────
 
     pub fn set_theme(&mut self, theme: ChartTheme) -> bool {
         if self.theme != theme {
@@ -379,7 +381,7 @@ impl ChartEngine {
             .set_order_visual(highlight, drag_preview)
     }
 
-    /// Подключить общий стор пользовательских фигур (Rc Backend'а; при создании панели).
+    /// Attaches the backend's shared user-figure store when the panel is created.
     pub fn set_figures_store(
         &mut self,
         store: std::rc::Rc<RefCell<moon_core::figures::FigureStore>>,
@@ -387,12 +389,12 @@ impl ChartEngine {
         self.data.borrow_mut().set_figures_store(store);
     }
 
-    /// Интерактив фигур (превью рисования/hover/выделение) этой панели.
+    /// Sets this panel's figure preview, hover, and selection state.
     pub(crate) fn set_figure_visual(&mut self, visual: super::figures_sync::FigureVisual) -> bool {
         self.data.borrow_mut().set_figure_visual(visual)
     }
 
-    /// Масштаб цены (Y) ко ВСЕМ панелям. None=Авто. Запоминается в контейнере.
+    /// Applies a price-axis scale to every pane and stores it in the container. None selects Auto.
     pub fn set_scale(&mut self, pct: Option<f32>) -> bool {
         if self.scale == pct {
             return false;
@@ -403,7 +405,7 @@ impl ChartEngine {
         true
     }
 
-    /// Текущее Y-окно `(center, range)` первой панели — источник для режима сравнения (якорь).
+    /// Returns the first pane's current Y window `(center, range)` as the comparison-mode anchor.
     pub fn y_window(&self) -> Option<(f32, f32)> {
         self.container
             .borrow()
@@ -412,7 +414,7 @@ impl ChartEngine {
             .map(|p| p.view.y_window())
     }
 
-    /// Навязать Y-окно всем панелям движка (lock сравнения по якорю). `true` при изменении.
+    /// Forces the anchor-locked comparison Y window onto every engine pane. Returns true on change.
     pub fn set_locked_y(&mut self, center: f32, range: f32) -> bool {
         let mut changed = false;
         for p in self.container.borrow_mut().panes_mut() {
@@ -424,15 +426,15 @@ impl ChartEngine {
         changed
     }
 
-    /// Принудительно пере-применить масштаб вкладки (после выхода из lock сравнения), минуя кэш
-    /// `self.scale` (он не изменился, обычный `set_scale` был бы no-op). None = Авто.
+    /// Reapplies the tab scale after leaving comparison lock, bypassing the unchanged `self.scale`
+    /// cache that would make a normal `set_scale` call a no-op. None selects Auto.
     pub fn reapply_scale(&mut self, pct: Option<f32>) {
         self.scale = pct;
         self.container.borrow_mut().set_scale(pct);
         self.data.borrow_mut().mark_view_dirty();
     }
 
-    /// Вкл/выкл стакан для всех панелей этого движка (per-окно). Возвращает `true` при изменении.
+    /// Enables or disables the per-window order book for every engine pane. Returns true on change.
     pub fn set_orderbook_enabled(&mut self, enabled: bool) -> bool {
         let mut data = self.data.borrow_mut();
         if data.orderbook_enabled == enabled {
@@ -443,12 +445,12 @@ impl ChartEngine {
         true
     }
 
-    /// Сохранённый X-масштаб для НОВЫХ панелей (px/ms; None = 60-секундный дефолт).
+    /// Stores the X scale for new panes in pixels per millisecond. None uses the 60-second default.
     pub fn set_default_x_ppm(&mut self, ppm: Option<f32>) {
         self.data.borrow_mut().default_x_ppm = ppm;
     }
 
-    /// X-масштаб (px/ms) панели `idx` (наведённой), иначе первой — источник sync.
+    /// Returns the X scale in pixels per millisecond for pane `idx`, or the first pane as fallback.
     pub fn pane_x_ppm(&self, idx: Option<usize>) -> Option<f32> {
         let container = self.container.borrow();
         let panes = container.panes();
@@ -456,7 +458,8 @@ impl ChartEngine {
         Some(pane.view.px_per_ms)
     }
 
-    /// Навязать X-масштаб всем панелям движка ([Shift+СКМ] sync). `true` при изменении.
+    /// Forces the X scale onto every engine pane for Shift+middle-click synchronization. Returns
+    /// true on change.
     pub fn set_x_ppm_all(&mut self, ppm: f32, now_ms: f64) -> bool {
         let mut changed = false;
         for p in self.container.borrow_mut().panes_mut() {
@@ -468,8 +471,8 @@ impl ChartEngine {
         changed
     }
 
-    /// Глобальные настройки отображения свечей/трейдов (ТФ/режим/зона/контур) для всех
-    /// панелей движка. `true` при изменении (форсит пересинк истории).
+    /// Applies global candle and trade display settings, including timeframe, mode, zone, and
+    /// outline, to every engine pane. Returns true on change and forces history resynchronization.
     pub fn set_candle_view(&mut self, cfg: moon_core::market::CandleViewCfg) -> bool {
         let mut data = self.data.borrow_mut();
         if data.candle_view == cfg {
@@ -480,7 +483,7 @@ impl ChartEngine {
         true
     }
 
-    /// Вкл/выкл трейды ликвидаций для всех панелей движка (per-окно). `true` при изменении.
+    /// Enables or disables liquidation trades for every pane in this window. Returns true on change.
     pub fn set_liquidations_enabled(&mut self, enabled: bool) -> bool {
         let mut data = self.data.borrow_mut();
         if data.liquidations_enabled == enabled {
@@ -491,8 +494,8 @@ impl ChartEngine {
         true
     }
 
-    /// Режим «только стакан» (метла в сравнении): чарт+ось цен скрыты, стакан на всю ширину.
-    /// Возвращает `true` при изменении.
+    /// Sets comparison book-only mode, hiding the plot and price axis while expanding the order book
+    /// to the full width. Returns true on change.
     pub fn set_orderbook_only(&mut self, only: bool) -> bool {
         let mut data = self.data.borrow_mut();
         if data.orderbook_only == only {
@@ -503,7 +506,7 @@ impl ChartEngine {
         true
     }
 
-    /// Положение оси цен (Left/Right/Hide) для всех панелей движка (per-окно). `true` при изменении.
+    /// Sets the per-window price-axis position for every engine pane. Returns true on change.
     pub fn set_price_axis_pos(&mut self, pos: crate::chart_persist::PriceAxisPos) -> bool {
         let mut data = self.data.borrow_mut();
         if data.price_axis_pos == pos {
@@ -514,7 +517,7 @@ impl ChartEngine {
         true
     }
 
-    /// Видимость оси времени для всех панелей движка (per-окно). `true` при изменении.
+    /// Sets per-window time-axis visibility for every engine pane. Returns true on change.
     pub fn set_time_axis_visible(&mut self, visible: bool) -> bool {
         let mut data = self.data.borrow_mut();
         if data.time_axis_visible == visible {
@@ -525,7 +528,7 @@ impl ChartEngine {
         true
     }
 
-    /// Показывать подписи у линий ордеров (per-вкладка). `true` при изменении.
+    /// Toggles per-tab order-line labels. Returns true on change.
     pub fn set_line_labels(&mut self, show: bool) -> bool {
         let mut st = self.state.borrow_mut();
         if st.line_labels == show {
@@ -536,7 +539,7 @@ impl ChartEngine {
         true
     }
 
-    /// Показывать подписи у перекрестия (курсорный ридаут). `true` при изменении.
+    /// Toggles crosshair cursor readout labels. Returns true on change.
     pub fn set_cursor_labels(&mut self, show: bool) -> bool {
         let mut st = self.state.borrow_mut();
         if st.cursor_labels == show {
@@ -547,8 +550,8 @@ impl ChartEngine {
         true
     }
 
-    /// Прогнозный размер ручного ордера (s1-s6) в USD — для подписи на перекрестии курсора.
-    /// `true` при изменении (порог против дрожания курса). None = нет размера/курса.
+    /// Sets the projected manual-order size from s1-s6 in USD for the cursor crosshair label.
+    /// Returns true when the change exceeds the anti-jitter threshold. None means no size or rate.
     pub fn set_prospective_usd(&mut self, usd: Option<f64>) -> bool {
         let mut data = self.data.borrow_mut();
         let changed = match (data.prospective_usd, usd) {
@@ -563,10 +566,9 @@ impl ChartEngine {
         changed
     }
 
-    /// Глобальный live-follow из тулбара (Live/Пауза) для единственной панели этого
-    /// `ChartEngine`. Реагирует только на смену самого глобального флага (явный клик).
-    /// Пан/rejoin отдельной панели живут в её `view.follow`; сюда уже сведённое значение
-    /// прилетает через `sync_follow_from_views`.
+    /// Applies the toolbar's global Live/Pause follow state to this `ChartEngine`'s single pane.
+    /// Only an explicit change to the global flag has an effect. Per-pane pan and rejoin state lives
+    /// in `view.follow`; `sync_follow_from_views` supplies the already consolidated value here.
     pub fn set_follow(&mut self, follow: bool, now_ms: f64) -> bool {
         if self.follow == follow {
             return false;
@@ -575,14 +577,14 @@ impl ChartEngine {
         self.data.borrow_mut().follow = follow;
         for p in self.container.borrow_mut().panes_mut() {
             if follow {
-                // Возобновляем live только у панелей, которые НЕ следовали (явный Live из
-                // тулбара): уже живые панели не трогаем — их окно/зум не сбрасываем.
+                // Explicit toolbar Live resumes only panes that were not following. Leave already
+                // live panes untouched so their window and zoom are not reset.
                 if !p.view.follow {
                     p.view.resume_live(now_ms);
                     p.view.reset_default_window_on_next_prepare();
                 }
             } else {
-                // Явное выключение live (кнопка) — без авто-возврата по таймеру (П.9).
+                // An explicit Live-button disable does not automatically rejoin on a timer.
                 p.view.set_manual_persistent();
             }
         }
@@ -594,7 +596,7 @@ impl ChartEngine {
         self.follow
     }
 
-    /// Ближайший дедлайн авто-возврата в live среди панелей (для арминга таймера, П.9).
+    /// Returns the nearest pane deadline for automatically rejoining live, used to arm the timer.
     pub fn next_auto_live_deadline_ms(&self) -> Option<f64> {
         self.container
             .borrow()
@@ -604,8 +606,8 @@ impl ChartEngine {
             .reduce(f64::min)
     }
 
-    /// Тик авто-возврата в live: панели, у которых истёк ручной hold, снова якорятся к
-    /// «сейчас». Возвращает true, если хоть одна возобновила live (нужен кадр/нотифай).
+    /// Processes automatic live rejoin by anchoring panes whose manual hold expired to now. Returns
+    /// true if any pane resumed live and therefore requires a frame and notification.
     pub fn tick_auto_live(&mut self, now_ms: f64) -> bool {
         let mut resumed = false;
         for p in self.container.borrow_mut().panes_mut() {
@@ -635,7 +637,7 @@ impl ChartEngine {
         }
     }
 
-    /// Открыть монету (фулскрин-панель).
+    /// Opens a market in the full-screen pane.
     pub fn open(&mut self, core: CoreId, market: &str) {
         self.container
             .borrow_mut()
@@ -643,7 +645,7 @@ impl ChartEngine {
         self.data.borrow_mut().mark_view_dirty();
     }
 
-    /// AddToChart: открыть/продлить монету в этой панели с TTL.
+    /// Opens or extends an AddToChart market in this pane with a TTL.
     pub fn push_auto(&mut self, core: CoreId, market: &str, ttl_ms: f64, now_ms: f64) {
         self.container
             .borrow_mut()
@@ -651,7 +653,7 @@ impl ChartEngine {
         self.data.borrow_mut().mark_view_dirty();
     }
 
-    /// Убрать истёкшие AddToChart-панели. Возвращает удалённые рынки.
+    /// Removes expired AddToChart panes and returns their markets.
     pub fn prune_ttl(&mut self, now_ms: f64) -> Vec<(CoreId, String)> {
         let removed = self.container.borrow_mut().prune_ttl(now_ms);
         if !removed.is_empty() {
@@ -691,7 +693,7 @@ impl ChartEngine {
         self.container.borrow().uses_market(core, market)
     }
 
-    /// П.2: можно ли приколоть панель idx (только AddToChart с TTL).
+    /// Returns whether pane `idx` can be pinned; only AddToChart panes with a TTL qualify.
     pub fn pane_is_pinnable(&self, idx: usize) -> bool {
         self.container.borrow().is_pinnable(idx)
     }
@@ -700,7 +702,7 @@ impl ChartEngine {
         self.container.borrow().is_pinned(idx)
     }
 
-    /// Переключить пин панели idx (отмена/возврат авто-закрытия по TTL). True — если изменили.
+    /// Toggles pinning for pane `idx`, disabling or restoring TTL auto-close. Returns true on change.
     pub fn toggle_pane_pin(&mut self, idx: usize) -> bool {
         let changed = self.container.borrow_mut().toggle_pin(idx).is_some();
         if changed {
@@ -717,14 +719,14 @@ impl ChartEngine {
         removed
     }
 
-    /// Core/market активной (фулскрин/первой) панели.
+    /// Returns the active full-screen or first pane's core and market.
     pub fn active_target(&self) -> Option<(CoreId, String)> {
         let container = self.container.borrow();
         container.pane(0).map(|p| (p.core, p.market.clone()))
     }
 
-    /// Core/market панели по индексу — для оверлей-кнопок чарта (Panic Sell / Cancel Buy),
-    /// привязанных к конкретному слоту.
+    /// Returns a pane's core and market by index for chart overlay actions such as Panic Sell and
+    /// Cancel Buy that are bound to a specific slot.
     pub fn pane_target(&self, idx: usize) -> Option<(CoreId, String)> {
         self.container
             .borrow()
@@ -732,7 +734,7 @@ impl ChartEngine {
             .map(|p| (p.core, p.market.clone()))
     }
 
-    /// Рынок активной (фулскрин/первой) панели — для подписи вкладки.
+    /// Returns the active full-screen or first pane's market for the tab label.
     pub fn active_market(&self) -> Option<String> {
         self.active_target().map(|(_, market)| market)
     }
@@ -758,7 +760,8 @@ impl ChartEngine {
         self.container.borrow().pane_count()
     }
 
-    /// Снимки осей ПО ВИДИМЫМ ПАНЕЛЯМ: (индекс, прямоугольник девайс-px, снимок). Звать ПОСЛЕ prepare.
+    /// Returns axis snapshots for visible panes as `(index, device-pixel rectangle, snapshot)`.
+    /// Call this after preparation.
     pub fn axis_panes(&self, tz_offset_sec: i64) -> Vec<(usize, Rect, AxisSnapshot)> {
         let container = self.container.borrow();
         container

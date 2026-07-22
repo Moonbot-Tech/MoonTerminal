@@ -1,5 +1,4 @@
-//! Главный `prepare_text`: оси, подписи ордер-линий и курсорный ридаут
-//! (вынос из text.rs, verbatim).
+//! Main `prepare_text` implementation for axes, order-line labels, and cursor readouts.
 
 use moon_chart::axes::price_decimals;
 
@@ -15,7 +14,7 @@ impl RenderState {
         let ink = color(self.axis_label);
         let readout = color(self.readout_label);
         let label_neutral = color(self.label_neutral);
-        // Угловая подпись — отдельный цвет chart theme, без подложки.
+        // The corner caption uses a dedicated chart-theme color without a backdrop.
         let caption_fg = color(self.caption_label);
         let tz_offset_sec = local_offset_sec();
         let mut firetest_text_drawn = false;
@@ -51,8 +50,8 @@ impl RenderState {
             }
             let cached_last_price = self.panes[idx].cached_last_price;
             let prospective_usd = self.panes[idx].prospective_usd;
-            // Раскладка подписей этого кадра (для плашек в sync_readout_params). Старую держим для
-            // сравнения: при зуме меняется Y, и подложки должны переехать вместе с текстом.
+            // Label layout for this frame, used by badges in sync_readout_params. Retain the old
+            // layout for comparison: zoom changes Y, so backdrops must move with their text.
             let previous_placed = std::mem::take(&mut self.panes[idx].label_placed);
             let mut placed: Vec<PlacedLabel> = Vec::new();
             let pane_left = pane_bounds[0] / sf;
@@ -64,8 +63,9 @@ impl RenderState {
             let plot_h = view.bounds[3] / sf;
             let plot_bottom = plot_top + plot_h;
             let plot_right = plot_left + plot_w;
-            // Сторона оси цен: Left → подписи в жёлобе слева от плота; Right → справа у края панели
-            // (жёлоб за стаканом); Hide → ось не рисуем вовсе. Правый якорь текста (align 1.0) общий.
+            // Price-axis side: Left places labels in the gutter left of the plot; Right places
+            // them at the panel's right edge (the gutter beyond the order book); Hide omits the
+            // axis. All variants anchor text by its right edge (alignment 1.0).
             use crate::chart_persist::PriceAxisPos;
             let axis_hidden = matches!(price_axis_pos, PriceAxisPos::Hide);
             let axis_on_right = matches!(price_axis_pos, PriceAxisPos::Right);
@@ -75,11 +75,11 @@ impl RenderState {
                 plot_left - 4.0
             };
 
-            // Угловая подпись: имя ядра + тикер, светлый текст на прозрачной плашке (её строит
-            // render_state по `caption_w`). Якорь правым краем: есть стакан → у края панели (над
-            // стаканом), нет стакана → у края плота (в области графика). Тот же выбор повторён в
-            // render_state для плашки — держать синхронно. Рисуем ДО гейта по `plot_w`, чтобы в
-            // режиме «только стакан» (чарт схлопнут) подпись осталась над стаканом.
+            // Corner caption: core name + ticker as light text on a translucent badge built by
+            // render_state from `caption_w`. Anchor its right edge at the panel edge when the
+            // order book is present (above the book), otherwise at the plot edge. render_state
+            // repeats this choice for the badge and must stay synchronized. Draw before the
+            // `plot_w` gate so the caption remains above the book in collapsed book-only mode.
             {
                 let right_edge = if orderbook_enabled {
                     pane_right
@@ -105,9 +105,11 @@ impl RenderState {
                     self.panes[idx].caption_w = cap_w;
                     readout_metrics_changed = true;
                 }
-                // Метла: отличие last ЭТОЙ биржи от якоря (замочек) — крупно, под подписью,
-                // знак и цвет ±. Данные обеих сторон живые: свой last — из пейна, last якоря
-                // приносит стек (`set_compare_ref_price` в apply_compare) на каждом observe.
+                // Broom mode: show this exchange's last-price difference from the locked anchor
+                // prominently below the caption, with sign and positive/negative color. Both
+                // sides are live: this pane provides its last price, while the stack supplies
+                // the anchor's last price through `set_compare_ref_price` in apply_compare on
+                // every observation.
                 let (delta_w, delta_h) = {
                     let (ob_only, own_last) = {
                         let pr = &self.panes[idx];
@@ -145,17 +147,18 @@ impl RenderState {
                     self.panes[idx].caption_delta_h = delta_h;
                     readout_metrics_changed = true;
                 }
-                // Бейдж текущего Y-масштаба — ЛЕВЕЕ блока подписи, тем же крупным кеглем,
-                // что и дельта метлы, цветом подписи (без ±). Целый процент («14%»).
-                // Показ решает sync_from_market_source (Авто всегда / ручной при расхождении).
+                // Place the current Y-scale badge LEFT of the caption block, using the caption
+                // color and a size 2 px smaller than the broom delta, without a sign. Display an
+                // integer percentage such as "14%". sync_from_market_source controls visibility:
+                // always in Auto mode, or manually when scales differ.
                 let (scale_w, scale_h) = if let Some(pct) = self.panes[idx].scale_badge {
-                    // Диапазон уже целого 1% (авто на спокойном рынке) → «<1%», не голый ноль.
+                    // A range below a whole 1% in a quiet Auto market is shown as "<1%", not zero.
                     let text = if pct == 0 {
                         "<1%".to_string()
                     } else {
                         format!("{pct}%")
                     };
-                    // Чуть мельче дельты метлы (−2px), чтобы бейдж не спорил с ней за внимание.
+                    // Make the badge 2 px smaller than the broom delta to keep the delta prominent.
                     let size = self.label_font_px() * 1.7 - 2.0;
                     let block_w = cap_w.max(delta_w);
                     let gap = if block_w > 0.0 {
@@ -186,10 +189,11 @@ impl RenderState {
                 }
             }
 
-            // Дальше — оси/курсор/сетка, только для нормального (не схлопнутого) чарта.
+            // Axes, cursor, and grid below apply only to a normal, non-collapsed chart.
             if plot_w < 60.0 || plot_h < 60.0 || view.price_to_px <= 0.0 {
-                // Призрак compare-режима живёт и на схлопнутом чарте метлы (только стакан):
-                // объём/% рисуем по виду стакана, линию даёт cursor.hlsl.
+                // The compare-mode ghost remains visible on a collapsed book-only broom chart:
+                // derive volume/percentage from the book view, while the backend cursor layer
+                // draws the line.
                 self.draw_ghost_cursor_labels(ctx, idx, sf, &mut placed)?;
                 if previous_placed != placed {
                     self.panes[idx].label_placed = placed;
@@ -214,9 +218,10 @@ impl RenderState {
             let window_ms = plot_w as f64 / time_to_px as f64;
             let left_unix = epoch_ms + view.view_time0 as f64;
 
-            // Левый край стакана / раздельной зоны (справа) — к нему прижаты (правым краем)
-            // подписи ордерных линий и курсора. Стакан вкл → плот кончается у стакана →
-            // его правый край = левый край стакана. Стакан выкл → левый край зоны управления.
+            // Order-line and cursor labels align their right edges to the order book's left edge,
+            // or to the separate zone on the right. With the book enabled, the plot ends at the
+            // book, so its right edge equals the book's left edge. Without the book, use the
+            // control zone's left edge.
             let zone_left = if orderbook_enabled {
                 plot_right
             } else {
@@ -225,15 +230,15 @@ impl RenderState {
             };
             let label_x = zone_left - READOUT_PAD_X;
 
-            // Подписи ордерных линий — отдельный столбик слева от разделителя, правым краем к нему.
-            // Рисуем ВСЕ подписи (не прячем при наложении): порядок = приоритет ПО ВОЗРАСТАНИЮ,
-            // поэтому старшая (SELL/STOP > BUY) рисуется ПОСЛЕДНЕЙ — её текст и полу-плотная плашка
-            // ложатся ПОВЕРХ младшей, а младшая просвечивает сквозь плашку (~15%) → «заходит под»,
-            // не исчезает. Подпись отстоит от линии на LABEL_LINE_GAP, чтобы плашка не накрыла саму
-            // линию ордера. `force` (drag/hover) рисуем в самом конце — поверх всего.
-            // Per-вкладка галка «подписи у линий» (попап ⚙). Выкл → столбец не строим.
+            // Order-line labels form a separate column left of the separator and align their
+            // right edge to it. Draw ALL labels even when they overlap, in ascending priority,
+            // so the higher-priority one (SELL/STOP > BUY) is drawn LAST. Its text and semi-opaque
+            // badge cover the lower-priority label, which remains ~15% visible underneath rather
+            // than disappearing. Offset labels by LABEL_LINE_GAP so badges do not cover the order
+            // line. Draw `force` labels (drag/hover) last, above everything. A per-tab "line labels"
+            // checkbox in the settings popup disables the entire column.
             if self.line_labels {
-                // Высота строки подписей зависит от их кегля (настраивается слайдером темы).
+                // Label row height follows the font size configured by the theme slider.
                 let label_line_h = self.label_font_px() + 4.0;
                 let mut force_items: Vec<(f32, f32, &OrderLabel)> = Vec::new();
                 for &li in &self.panes[idx].order_label_order {
@@ -312,10 +317,10 @@ impl RenderState {
                 }
             }
 
-            // Moonbot `LastSellOrderPriceVol`: отдельная подпись глубины стакана у sell-линии.
-            // Это НЕ текст ордера, а сумма book notional до цены закрытия:
-            // long → ask ниже sell, short → bid выше sell. Рисуем в зоне стакана; курсорный
-            // readout ниже идёт поверх неё, если пользователь навёлся в ту же точку.
+            // Moonbot `LastSellOrderPriceVol`: a separate order-book depth label at the sell line.
+            // This is NOT order text, but cumulative book notional up to the close price: asks
+            // below sell for a long, bids above sell for a short. Draw it in the order-book zone;
+            // the cursor readout below covers it when the user points at the same location.
             if orderbook_enabled && self.line_labels && !self.panes[idx].orderbook_levels.is_empty()
             {
                 let right_x = zone_left + READOUT_PAD_X;
@@ -357,7 +362,7 @@ impl RenderState {
                 }
             }
 
-            // Per-вкладка галка «подпись у перекрестия» (попап ⚙). Выкл → курсорный ридаут не рисуем.
+            // A per-tab "crosshair label" checkbox in the settings popup disables cursor readout.
             let cursor = self
                 .cursor
                 .filter(|cursor| cursor.pane == idx)
@@ -374,7 +379,7 @@ impl RenderState {
                     let now_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map_or(0.0, |d| d.as_millis() as f64);
-                    // Не сегодняшний день → «ДД.ММ ЧЧ:ММ:СС» (большие ТФ/окна).
+                    // For a day other than today, show "DD.MM HH:MM:SS" for large timeframes/windows.
                     let label =
                         moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, true, now_ms);
                     let metrics = self.measure_label_text(ctx, &label);
@@ -412,7 +417,7 @@ impl RenderState {
                         self.panes[idx].readout_price_line_h = line_h;
                         readout_metrics_changed = true;
                     }
-                    // Right → плашка у правого края панели (за стаканом); Left → у левого жёлоба.
+                    // Right places the badge at the panel's right edge beyond the book; Left uses the left gutter.
                     let x = if axis_on_right {
                         pane_right - 3.0
                     } else {
@@ -424,16 +429,17 @@ impl RenderState {
                     skip_price_label_y = Some(rect_y_range_log(dst, sf));
                 }
 
-                // Подписи у крестовины. Размер ордера ($) — СЛЕВА от разделителя (сторона графика),
-                // прижат правым краем к разделителю, на линии курсора. Объём стакана и % — СПРАВА от
-                // разделителя (в зоне стакана): объём НАД линией, % ПОД линией. Цвет всех трёх единый:
-                // курсор ниже текущей цены → зелёный, выше → красный.
+                // Crosshair labels: order size ($) sits LEFT of the separator on the chart side,
+                // right-aligned to the separator at the cursor line. Order-book volume and percent
+                // sit RIGHT of the separator in the book zone: volume ABOVE the line and percent
+                // BELOW it. All three share a color: green below current price, red above it.
                 if cy_log >= plot_top && cy_log <= plot_bottom {
                     let cursor_price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
-                    // Опора % и цвета курсора — БЛИЖНЯЯ сторона стакана, НЕ last (как в Moonbot):
-                    // курсор ниже цены → лучший бид, выше → лучший аск. Расстояние считается от
-                    // цены исполнения на своей стороне книги — поэтому для лонга/шорта опора разная
-                    // (спред сдвигает %). Нет стакана/цены → фолбэк на last (прежнее поведение).
+                    // Percent and cursor color use the NEAREST side of the book, not last price, as
+                    // in Moonbot: best bid when the cursor is below price, best ask when above it.
+                    // Distance is measured from the execution price on the matching side, so long
+                    // and short references differ because the spread shifts the percentage. Fall
+                    // back to last price when the book or its price is unavailable.
                     let cursor_ref = cached_last_price.filter(|l| *l > 0.0).map(|last| {
                         let levels = &self.panes[idx].orderbook_levels;
                         let best_bid = levels
@@ -460,12 +466,12 @@ impl RenderState {
                         })
                         .unwrap_or(readout);
                     let right_x = zone_left + READOUT_PAD_X;
-                    // Зазор от линии: плашка подписи не должна резать горизонталь перекрестия.
+                    // Leave a gap so the label badge does not cut through the crosshair line.
                     let gap = cursor_label_gap(self.cursor_thickness, sf);
-                    // Курсорные цифры — приоритетные, на переднем плане, в столбики НЕ входят
-                    // (рисуются на своём фикс. месте у крестовины), но получают плотную подложку.
-                    // Размер ордера — НАД линией курсора, слева от разделителя, правым краем.
-                    // Без $/K-M, всегда 2 знака после запятой («100.00»).
+                    // Cursor values are foreground priority elements outside the label columns:
+                    // they occupy fixed positions at the crosshair and receive an opaque backdrop.
+                    // Place order size ABOVE the cursor line, left of and right-aligned to the
+                    // separator. Omit $/K-M suffixes and always show two decimals, such as "100.00".
                     if let Some(usd) = prospective_usd {
                         let text = format!("{usd:.2}");
                         let m = self.draw_label_text(
@@ -487,7 +493,7 @@ impl RenderState {
                             solid: true,
                         });
                     }
-                    // Объём стакана на уровне курсора — правее разделителя, над линией.
+                    // Draw order-book volume at the cursor level right of the separator, above the line.
                     if orderbook_enabled && !self.panes[idx].orderbook_levels.is_empty() {
                         let tol = 6.0 / price_to_px.max(1e-6);
                         if let Some(q) = nearest_orderbook_notional(
@@ -515,8 +521,8 @@ impl RenderState {
                             });
                         }
                     }
-                    // % отклонения курсора от опоры (ближняя сторона стакана) — правее
-                    // разделителя, под линией.
+                    // Draw the cursor's percentage deviation from the nearest book side right of
+                    // the separator, below the line.
                     if let Some(r) = cursor_ref {
                         if r > 0.0 {
                             let pct = (cursor_price - r) / r * 100.0;
@@ -542,14 +548,14 @@ impl RenderState {
                     }
                 }
             } else {
-                // Нет реального курсора на панели → призрак compare-режима (объём/% на цене
-                // соседа). При реальном курсоре призрак не рисуем — хелпер сам проверяет.
+                // With no real cursor on the pane, draw the compare-mode ghost (volume/percentage
+                // at the neighboring price). The helper suppresses it when a real cursor exists.
                 self.draw_ghost_cursor_labels(ctx, idx, sf, &mut placed)?;
             }
 
-            // Готовая раскладка подписей кадра → плашки-подложки строит sync_readout_params.
-            // При зуме Y меняется даже если текст/ширина прежние, поэтому сравниваем раскладку:
-            // иначе подложки остаются на старой цене и визуально «висят в воздухе».
+            // sync_readout_params builds backdrop badges from the frame's completed label layout.
+            // Compare layouts because zoom changes Y even when text and width stay unchanged;
+            // otherwise backdrops remain at the old price and appear to float away from labels.
             if previous_placed != placed {
                 self.panes[idx].label_placed = placed;
                 readout_metrics_changed = true;
@@ -557,11 +563,12 @@ impl RenderState {
                 self.panes[idx].label_placed = previous_placed;
             }
 
-            // Подписи цены: на фикс. долях высоты — совпадают со СТАТИЧНЫМИ горизонталями сетки
-            // (модель Moonbot: сетка стоит, едут только подписи). Цена НЕкруглая — показываем ту,
-            // что попала на линию (как ось времени показывает некруглые метки на фикс. вертикалях).
-            // Рисуем внутренние линии (края у рамки плота не подписываем). Пропуск подписи, если
-            // она перекрыта курсорным ридаутом.
+            // Price labels use fixed height fractions matching the STATIC horizontal grid lines
+            // (Moonbot model: the grid stays fixed while labels move). Display the exact non-round
+            // price at each line. Time labels follow a different model: round local-time boundaries
+            // positioned from time coordinates, independently of the fixed vertical grid lines.
+            // Label internal horizontal lines only, omitting plot-frame edges and any label
+            // overlapped by the cursor readout.
             let min_v_gap = LINE_H;
             let mut last_y = f32::INFINITY;
             let n_horiz = GRID_N_HORIZ as i32;
@@ -585,9 +592,9 @@ impl RenderState {
                 }
             }
 
-            // Метки времени — на КРУГЛЫХ границах локального времени (nice_time_step:
-            // 1с..6ч под ~6 подписей). Раньше метки стояли на фикс. долях ширины окна →
-            // некруглые времена с плавающим шагом (19:46, 19:56, 20:05 — то +9, то +10).
+            // Place time labels at ROUND local-time boundaries (`nice_time_step`, from 1 s to 6 h
+            // for roughly six labels). Fixed window fractions previously produced non-round times
+            // with uneven steps, such as 19:46, 19:56, 20:05 (+10, then +9).
             let step_ms =
                 (moon_chart::axes::nice_time_step(window_ms / 1000.0, 6.0) * 1000.0).max(1000.0);
             let with_sec = step_ms < 60_000.0;
@@ -596,24 +603,23 @@ impl RenderState {
                 .map_or(0.0, |d| d.as_millis() as f64);
             let tz_ms = tz_offset_sec as f64 * 1000.0;
             let right_unix = left_unix + window_ms;
-            // Первая круглая граница в окне (выравнивание по ЛОКАЛЬНОМУ времени).
+            // Find the first round boundary in the window, aligned to LOCAL time.
             let mut tick_unix = ((left_unix + tz_ms) / step_ms).ceil() * step_ms - tz_ms;
-            // Прореживание по горизонтали: при узком окне подписи налезают друг на друга —
-            // рисуем подпись, только если её левый край отстоит от ПРАВОГО края предыдущей
-            // нарисованной (иначе пропуск → «через одну»).
+            // Thin labels horizontally in narrow windows: draw only when a label's left edge is
+            // separated from the RIGHT edge of the previously drawn label; otherwise skip it.
             let min_h_gap = 6.0;
             let mut last_right = f32::NEG_INFINITY;
             while time_axis_visible && tick_unix <= right_unix + 0.5 {
                 let unix = tick_unix;
                 tick_unix += step_ms;
-                // Правые ~10% окна — «будущее» за живым краем: время, которого ещё нет,
-                // не подписываем (сбивало с толку у границы стакана).
+                // The rightmost ~10% is future space beyond the live edge; do not label times that
+                // have not occurred, which would be confusing near the order-book boundary.
                 if now_ms > 0.0 && unix > now_ms {
                     break;
                 }
                 let x = plot_left + ((unix - left_unix) / window_ms) as f32 * plot_w;
-                // Подписи оси на не-сегодняшних сутках получают дату «ДД.ММ» — без неё
-                // на широких окнах метки читались как идущие «назад» (шаг > суток).
+                // Include a "DD.MM" date on axis labels outside the current day; without it,
+                // labels in wide windows with steps over one day appeared to run backward.
                 let label =
                     moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, with_sec, now_ms);
                 let metrics = self.measure_text(ctx, &label);

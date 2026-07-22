@@ -291,7 +291,7 @@ pub struct MetalLayers {
     mark_line: Vec<PriceLinePoint>,
     combo_capacity: usize,
     price_line_capacity: usize,
-    /// Свечи (полный набор серии; замена целиком по смене ревизии) + стиль слоя.
+    /// Candles as a complete series replaced on revision changes, plus layer style.
     candles: Vec<CandleGpu>,
     candle_style: CandleStyleGpu,
     levels: Vec<LevelInstance>,
@@ -376,15 +376,18 @@ impl MetalLayers {
         }
     }
 
-    /// Полная замена набора свечей (по смене ревизии серии). Свечи лежат в base-кэше —
-    /// его надо перепечь.
+    /// Replace the complete candle set when the series revision changes.
+    ///
+    /// Candles live in the base cache, which must be rebaked.
     pub fn set_candles(&mut self, data: Vec<CandleGpu>) {
         self.candles = data;
         self.candle_buffers_dirty = true;
         self.base_cache.valid = false;
     }
 
-    /// Стиль слоя свечей (режим/зона/цвета/контур). Идемпотентен.
+    /// Idempotently set the complete candle-layer style: time-frame width, mode, trade and hidden-
+    /// candle boundaries, up/down/neutral colors and fill alpha, outline thickness, wick visibility,
+    /// and neutral-zone behavior.
     pub fn set_candle_style(&mut self, style: CandleStyleGpu) {
         if self.candle_style != style {
             self.candle_style = style;
@@ -481,13 +484,12 @@ impl MetalLayers {
             self.update_volume_scale(data);
         }
         self.combo_buffers_dirty = true;
-        // Всегда FULL-bake combo-текстуры при изменении крестиков. Инкрементальный
-        // partial-bake (combo_dirty_ranges) на Metal хрупкий: комбо печётся при фикс.
-        // `bake_t0`, а композитится со смещением (view_time0 − bake_t0). На кадрах
-        // перерисовки (движение мыши) это давало временный горизонтальный сдвиг ВСЕГО
-        // слоя крестиков «на пару секунд назад», пока следующий full-bake не выровняет
-        // bake_t0. Full-bake перепекает буфер линейно [0..count] и заново берёт bake_t0
-        // от текущего вида — корректно и дёшево (cross_count мал).
+        // Always FULL-bake the combo texture when crosses change. Incremental partial baking through
+        // `combo_dirty_ranges` is fragile on Metal: combo bakes at fixed `bake_t0` but composites with
+        // the `(view_time0 - bake_t0)` offset. During redraw frames such as mouse movement, this
+        // temporarily shifted the ENTIRE cross layer a few seconds backward until the next full bake
+        // realigned `bake_t0`. A full bake linearly rebuilds `[0..count]` and samples `bake_t0` again
+        // from the current view, which is correct and cheap because `cross_count` is small.
         if let Some(tex) = self.combo_texture.as_mut() {
             tex.valid = false;
         }
@@ -619,7 +621,7 @@ impl MetalLayers {
         set_uniform(encoder, 0, self.grid_uniform.buffer());
         draw(encoder, &pipelines.grid, 6, 1);
 
-        // Свечи — под крестами трейдов (combo блитится поверх base-кэша).
+        // Candles render beneath trade crosses because combo blits over the base cache.
         if !self.candles.is_empty() {
             crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
             set_uniform(encoder, 0, self.view_uniform.buffer());
@@ -1205,8 +1207,8 @@ unsafe fn borrow_metal_prepare<'a>(
     if gpu.render_target_format == 0 {
         return None;
     }
-    // device — NonNull<c_void> (по контракту не null): берём сырой указатель и кастуем
-    // к *mut MTLDevice, как dx11-путь делает через `.as_ptr()`.
+    // `device` is contractually non-null `NonNull<c_void>`; take its raw pointer and cast to
+    // `*mut MTLDevice`, matching the DX11 path's `.as_ptr()` approach.
     Some((
         unsafe { DeviceRef::from_ptr(gpu.device.as_ptr().cast()) },
         unsafe { CommandBufferRef::from_ptr(gpu.command_buffer.as_ptr().cast()) },
@@ -1224,7 +1226,7 @@ unsafe fn borrow_metal_draw<'a>(
     let RawGpuAccess::Metal(gpu) = gpu else {
         return None;
     };
-    // command_encoder — Option<NonNull<c_void>>: None во время prepare (энкодера ещё нет).
+    // `command_encoder` is `Option<NonNull<c_void>>` and is `None` during prepare before creation.
     let encoder = gpu.command_encoder?;
     Some((
         unsafe { DeviceRef::from_ptr(gpu.device.as_ptr().cast()) },

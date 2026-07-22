@@ -1,5 +1,5 @@
-// Слой свечей (wgpu): зеркало candles.hlsl. Один инстанс = тело + верхний/нижний
-// фитили (18 вершин); режимы/зона/контур — константами CandleStyle.
+// Candle layer (wgpu): mirrors candles.hlsl. One instance = body + upper/lower wicks
+// (18 vertices); modes, zone, and outline are CandleStyle constants.
 
 struct ChartView {
     bounds: vec4<f32>,
@@ -27,7 +27,7 @@ struct CandleStyle {
     wicks_in_zone: f32,
     neutral_in_zone: f32,
     fill_alpha: f32,
-    // rel ms: свечи с t_open >= границы не рисуем (только трейды).
+    // rel ms: omit candles with t_open >= boundary (trades only).
     hide_start: f32,
 };
 
@@ -38,7 +38,7 @@ struct Candle {
     l: f32,
     c: f32,
     vol: f32,
-    // СВОЙ ТФ свечи (rel ms); 0 = ТФ серии. Хвост истории — старшие ТФ (шире, приглушены).
+    // Candle's OWN timeframe (rel ms); 0 = series timeframe. History tail uses wider, muted higher timeframes.
     tf_rel: f32,
 };
 
@@ -76,11 +76,11 @@ fn cull_out() -> CandleOut {
 @vertex
 fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> CandleOut {
     let cd = candles[iid];
-    let part = vid / 6u; // 0 тело, 1 верхний фитиль, 2 нижний фитиль
+    let part = vid / 6u; // 0 body, 1 upper wick, 2 lower wick
     let corner = CORNERS_01[vid % 6u];
 
     if cd.t_open >= cs.hide_start {
-        return cull_out(); // зона «только трейды» — свечу не рисуем
+        return cull_out(); // Omit the candle in the "trades only" zone.
     }
     let foreign_tf = cd.tf_rel > 0.0 && abs(cd.tf_rel - cs.tf_rel) > 0.5;
     var tf_rel = cs.tf_rel;
@@ -155,7 +155,7 @@ fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
         alpha = saturate(cs.fill_alpha);
     }
     if foreign_tf {
-        alpha *= 0.55; // хвост чужого ТФ — полупрозрачный
+        alpha *= 0.55; // The tail from another timeframe is translucent.
     }
 
     var o: CandleOut;
@@ -179,7 +179,7 @@ fn candles_fragment(in: CandleOut) -> @location(0) vec4<f32> {
         if min(dx, dy) > max(cs.outline_px, 1.0) {
             discard;
         }
-        // Альфа из VS: у контуров обычно 1.0, у хвоста чужого ТФ — приглушённая.
+        // Alpha comes from VS: normally 1.0 for outlines and muted for another timeframe's tail.
         return in.color;
     }
     return in.color;

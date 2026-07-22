@@ -1,5 +1,4 @@
-//! Заливка юниформ/сторадж-буферов и bind groups `WgpuLayers`
-//! (вынос из wgpu_backend.rs, verbatim).
+//! Uniform/storage-buffer uploads and bind-group preparation for `WgpuLayers`.
 
 use super::*;
 

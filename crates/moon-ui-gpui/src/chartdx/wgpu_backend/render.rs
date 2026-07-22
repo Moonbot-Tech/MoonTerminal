@@ -1,5 +1,4 @@
-//! Draw-методы и prepare-пасс `WgpuLayers`: base/combo кэши, курсор, user-слои
-//! (вынос из wgpu_backend.rs, verbatim).
+//! `WgpuLayers` draw methods and prepare pass for base/combo caches, cursor, and user layers.
 
 use super::pipelines::{create_background_texture, create_pipelines};
 use super::*;
@@ -65,7 +64,7 @@ impl WgpuLayers {
         }
         crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
         draw_pipeline(pass, &pipelines.grid, &binds.grid, 6, 1);
-        // Свечи — под крестами трейдов (combo блитится поверх base-кэша).
+        // Candles render beneath trade crosses; combo is blitted over the base cache.
         if !self.candles.is_empty() {
             crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
             draw_pipeline(
@@ -534,7 +533,7 @@ unsafe fn borrow_wgpu_prepare<'a>(
     let RawGpuAccess::Wgpu(gpu) = gpu else {
         return None;
     };
-    // Все поля — NonNull<c_void> (по контракту не null): берём сырой указатель `.as_ptr()`.
+    // All fields are contractually non-null NonNull<c_void>; obtain each raw pointer with `.as_ptr()`.
     Some((
         unsafe { &*(gpu.device.as_ptr() as *const wgpu::Device) },
         unsafe { &*(gpu.queue.as_ptr() as *const wgpu::Queue) },
@@ -553,7 +552,7 @@ unsafe fn borrow_wgpu_draw<'a>(
     let RawGpuAccess::Wgpu(gpu) = gpu else {
         return None;
     };
-    // render_pass — Option<NonNull<c_void>>: None во время prepare (пасса ещё нет).
+    // render_pass is Option<NonNull<c_void>> and remains None during prepare before a pass exists.
     let render_pass = gpu.render_pass?;
     Some((
         unsafe { &*(gpu.device.as_ptr() as *const wgpu::Device) },

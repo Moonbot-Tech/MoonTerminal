@@ -1,15 +1,15 @@
 //! Backend-neutral GPU structs shared by DX11, Metal, and wgpu chart passes.
-//! Плюс мелкие билдеры/хелперы, превращающие данные фида в эти GPU-инстансы.
+//! Also includes small builders and helpers that convert feed data into these GPU instances.
 
 use bytemuck::Zeroable;
 use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
 use moon_core::data::PriceLinePoint;
 use moon_core::feed::{PricePoint, Side, Tick};
 
-/// Единая дефолтная прозрачность volume для всех native backend-ов.
+/// Shared default volume opacity for all native backends.
 pub const DEFAULT_VOLUME_ALPHA: f32 = 0.34;
 
-/// sRGB [u8;3] → [f32;4] (alpha 1) для cbuffer-цветов (шейдер переводит в linear).
+/// Convert sRGB `[u8; 3]` to `[f32; 4]` with alpha one for cbuffer colors converted to linear by shaders.
 pub fn rgb4(c: [u8; 3]) -> [f32; 4] {
     [
         c[0] as f32 / 255.0,
@@ -19,7 +19,7 @@ pub fn rgb4(c: [u8; 3]) -> [f32; 4] {
     ]
 }
 
-/// Заполнить буфер GPU-крестов трейдов из тиков (время → относительное от epoch).
+/// Fill the GPU trade-cross buffer from ticks, converting time relative to the epoch.
 pub fn fill_cross_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross>) {
     out.clear();
     out.reserve(ticks.len());
@@ -34,9 +34,11 @@ pub fn fill_cross_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross
     }));
 }
 
-/// Заполнить буфер GPU-крестов ТРЕЙДОВ ЛИКВИДАЦИЙ из тиков. Сторона есть (знак qty), но все
-/// рисуются единым цветом → тегируем `side = 2` (шейдер выбирает liq-цвет, volume-проход их
-/// пропускает). Геометрия креста та же, что у обычных трейдов.
+/// Fill the GPU LIQUIDATION trade-cross buffer from ticks.
+///
+/// Tick quantity is an absolute magnitude and side is stored separately. Every liquidation is
+/// deliberately uploaded with `side = 2`, so the shader selects the liquidation color and the
+/// volume pass skips it. Cross geometry matches ordinary trades.
 pub fn fill_liq_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross>) {
     out.clear();
     out.reserve(ticks.len());
@@ -48,7 +50,8 @@ pub fn fill_liq_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross>)
     }));
 }
 
-/// Заполнить буфер точек ценовой линии (last/mark) из `PricePoint`, отбрасывая неконечные.
+/// Fill a last or mark price-line point buffer from `PricePoint`, discarding non-finite and
+/// non-positive prices.
 pub fn fill_price_upload(points: &[PricePoint], epoch_ms: f64, out: &mut Vec<PriceLinePoint>) {
     out.clear();
     out.reserve(points.len());
@@ -70,7 +73,7 @@ pub struct ChartCross {
     pub qty: f32,
 }
 
-/// Одна свеча в GPU-буфере слоя свечей. Layout = `Candle` в candles.hlsl.
+/// One candle in the candle-layer GPU buffer, matching `Candle` in candles.hlsl.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CandleGpu {
@@ -80,37 +83,40 @@ pub struct CandleGpu {
     pub low: f32,
     pub close: f32,
     pub volume: f32,
-    /// СВОЙ ТФ свечи (rel ms); 0 = ТФ серии (style.tf_rel_ms). Хвост истории
-    /// дорисовывается старшими ТФ — такие свечи шире и рисуются приглушённо.
+    /// Candle-specific time frame in relative milliseconds; zero uses series `style.tf_rel_ms`.
+    ///
+    /// Higher time frames fill the history tail with wider, muted candles.
     pub tf_rel: f32,
 }
 
-/// Константы стиля слоя свечей. Layout = cbuffer `CandleStyle` (b1) в candles.hlsl.
+/// Candle-layer style constants matching cbuffer `CandleStyle` at b1 in candles.hlsl.
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CandleStyleGpu {
     pub up: [f32; 4],
     pub down: [f32; 4],
     pub neutral: [f32; 4],
-    /// Ширина бакета (rel ms).
+    /// Bucket width in relative milliseconds.
     pub tf_rel_ms: f32,
-    /// Начало зоны трейдов (rel ms); `f32::MAX` = зоны нет.
+    /// Trade-zone start in relative milliseconds; `f32::MAX` means no zone.
     pub zone_start_rel: f32,
-    /// 0 заполненные / 1 контуры / 2 контуры в зоне.
+    /// Mode: zero is filled, one is outline, and two is outline in the zone.
     pub mode: f32,
-    /// Толщина контура, физ. px.
+    /// Outline thickness in physical pixels.
     pub outline_px: f32,
     pub wicks_in_zone: f32,
     pub neutral_in_zone: f32,
     pub fill_alpha: f32,
-    /// Начало зоны «скрыть свечи» (rel ms); `f32::MAX` = не скрываем. Свечи с
-    /// t_open ≥ этой границы не рисуются вовсе — остаются только трейды.
+    /// Hidden-candle zone start in relative milliseconds; `f32::MAX` disables hiding.
+    ///
+    /// Candles with `t_open` at or beyond this boundary do not render, leaving only trades.
     pub hide_start_rel: f32,
 }
 
-/// Заполнить GPU-буфер свечей из серии (время → относительное от epoch).
-/// `tf_ms` — параллельный массив ТФ каждой свечи (пусто = все свечи ТФ серии):
-/// хвост истории дорисовывается старшими ТФ со своей шириной.
+/// Fill the candle GPU buffer from a series, converting time relative to the epoch.
+///
+/// `tf_ms` is the parallel per-candle time-frame array; an empty array uses the series time frame for
+/// every candle. Higher time frames fill the history tail at their own widths.
 pub fn fill_candle_upload(
     candles: &[moon_core::market::ChartCandle],
     tf_ms: &[f32],
@@ -130,11 +136,10 @@ pub fn fill_candle_upload(
     }));
 }
 
-// ── Кольцо GPU-крестов: общие хелперы бэкендов ───────────────────────────────
-// Функции ниже используются DX11-combo, Metal- и wgpu-бэкендами; какие именно —
-// зависит от платформы (чужие бэкенды не компилируются), поэтому на каждой ОС
-// часть функций формально «не используется» — отсюда точечные #[allow(dead_code)].
-// Это НЕ мёртвый код, удалять нельзя: сломается сборка других платформ.
+// ── GPU cross ring: shared backend helpers ───────────────────────────────────
+// The functions below serve DX11 combo, Metal, and wgpu backends. The compiled subset depends on the
+// platform because other backends are excluded, so some functions appear unused on each OS and need
+// targeted `#[allow(dead_code)]`. This is NOT dead code; removal would break other platforms.
 #[allow(dead_code)]
 pub fn cross_append_ranges(start: usize, len: usize, capacity: usize) -> [(usize, usize); 2] {
     if len == 0 || capacity == 0 {
@@ -177,7 +182,7 @@ pub fn cross_volume_max<'a>(crosses: impl IntoIterator<Item = &'a ChartCross>) -
         match c.side {
             0 => buy = buy.max(c.qty),
             1 => sell = sell.max(c.qty),
-            _ => {} // side>=2 (ликвидации) не имеют volume-баров → не влияют на масштаб
+            _ => {} // side >= 2 liquidations have no volume bars and do not affect scale
         }
     }
     (buy, sell)
@@ -190,7 +195,7 @@ pub fn update_cross_volume_max(max: &mut (f32, f32), data: &[ChartCross]) -> boo
         match c.side {
             0 => max.0 = max.0.max(c.qty),
             1 => max.1 = max.1.max(c.qty),
-            _ => {} // side>=2 (ликвидации) не учитываются в volume-масштабе
+            _ => {} // side >= 2 liquidations are excluded from volume scale
         }
     }
     before != *max
@@ -350,12 +355,13 @@ impl Default for BackgroundParams {
 pub struct GridParams {
     pub bounds: [f32; 4],
     pub resolution: [f32; 2],
-    /// Число вертикальных делений ширины (статичны, НЕ зависят от времени).
+    /// Number of static vertical width divisions, independent of time.
     pub n_vert: f32,
-    /// Число горизонтальных делений высоты (статичны, НЕ зависят от цены).
+    /// Number of static horizontal height divisions, independent of price.
     pub n_horiz: f32,
-    /// Зарезервировано (было price_to_px/view_price0). Держим 0, чтобы статичная сетка не
-    /// инвалидировалась на каждом сдвиге цены.
+    /// Reserved, formerly `price_to_px` or `view_price0`.
+    ///
+    /// Keep it zero so price movement does not invalidate the static grid.
     pub _pad0: f32,
     pub _pad1: f32,
     pub grid_alpha: f32,
@@ -392,17 +398,17 @@ pub struct ReadoutRect {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BookStyle {
-    /// Фон щели спреда (между лучшими bid/ask); при отсутствии книги — вся зона.
+    /// Spread-gap background between best bid and ask, or the entire zone without a book.
     pub book_bg: [f32; 4],
     pub bid: [f32; 4],
     pub ask: [f32; 4],
     /// x = level-line opacity, y = level-line height in physical px.
     pub level: [f32; 4],
-    /// Фон ask-половины зоны (выше лучшего ask).
+    /// Ask-half background above the best ask.
     pub bg_ask: [f32; 4],
-    /// Фон bid-половины зоны (ниже лучшего bid).
+    /// Bid-half background below the best bid.
     pub bg_bid: [f32; 4],
-    /// x = цена лучшего ask, y = цена лучшего bid, z = есть книга (0/1).
+    /// `x` is best ask price, `y` is best bid price, and `z` indicates book presence as zero or one.
     pub edges: [f32; 4],
 }
 
@@ -421,8 +427,11 @@ impl Default for BookStyle {
 }
 
 impl BookStyle {
-    /// Равенство БЕЗ живых границ bid/ask: смена цветов/толщин требует немедленной
-    /// перепечки стакана, а движение границ (каждый тик книги) — только throttled-бейк.
+    /// Compare without live bid and ask edges.
+    ///
+    /// Every non-edge style field is compared: the book or spread background, bid and ask fill RGBA
+    /// including opacity, level opacity and thickness, and ask and bid region backgrounds. A change
+    /// to any of them requires an immediate rebake, while live edge movement uses the throttled bake.
     pub fn eq_ignore_edges(&self, other: &Self) -> bool {
         self.book_bg == other.book_bg
             && self.bid == other.bid
@@ -474,8 +483,8 @@ pub struct MarkerGpu {
     pub m: [f32; 4],
 }
 
-// Конвертеры инстансов order-lines (`moon_chart::layers`) в 16-байт-выровненные GPU-структы.
-// Общие для DX11 (userdata)/Metal/wgpu бэкендов — раньше дублировались в каждом.
+// Convert order-line instances from `moon_chart::layers` into 16-byte-aligned GPU structs. Shared by
+// DX11 userdata, Metal, and wgpu backends after removing their former duplication.
 pub fn hl_of(h: &LineInstance) -> HLineGpu {
     HLineGpu {
         color: h.color,
