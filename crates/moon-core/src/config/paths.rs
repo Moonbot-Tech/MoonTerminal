@@ -182,7 +182,7 @@ pub fn db_dir() -> PathBuf {
     dir
 }
 
-/// SQLite-БД с отчётами по закрытым ордерам (`ClosedSellOrderReport`).
+/// SQLite report DB (typed `orders_rep` replica; legacy `closed_sell_reports` read-only).
 pub fn reports_db_path() -> PathBuf {
     db_dir().join("reports.sqlite")
 }

@@ -6,11 +6,11 @@ use std::sync::Arc;
 use moonproto::state::{Order, OrderTraceChartPoint, OrderTraceLine};
 use moonproto::{Event, MoonClient, OrderWorkerStatus};
 
-use crate::feed::report::{OrderIndex, OrderMeta};
 use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
-    ClientSettings, ClientSettingsEdit, EngineActionKind, EngineActionResult, LevManageEdit,
-    LevManageState, LicenseState, OrderRow, OrderTrace, OrderTracePoint, RuntimeState, WalletKind,
+    ClientSettings, ClientSettingsEdit, CoreSysStatus, EngineActionKind, EngineActionResult,
+    LevManageEdit, LevManageState, LicenseState, OrderRow, OrderTrace, OrderTracePoint,
+    RuntimeState, WalletKind,
 };
 
 fn trace_point(p: OrderTraceChartPoint) -> OrderTracePoint {
@@ -30,11 +30,6 @@ fn valid_trace_tmp_point(p: OrderTraceChartPoint) -> Option<OrderTracePoint> {
         time_ms,
         price: p.price,
     })
-}
-
-fn moon_time_to_unix_seconds(time: moonproto::MoonTime) -> Option<i64> {
-    let millis = time.unix_millis();
-    (millis > 0).then_some(millis.div_euclid(1000))
 }
 
 fn moon_time_to_unix_millis_f64(time: moonproto::MoonTime) -> f64 {
@@ -140,6 +135,25 @@ pub(super) fn settings_event_snapshot<T>(
         .and_then(extract)
 }
 
+/// Convert protocol-v4 `KernelHealth` into terminal telemetry and stamp its
+/// receipt time. The caller reads `KernelHealth` from `snapshot().kernel_health()`
+/// (its retained value keeps the last memory sample between CPU-only Pings), not
+/// from the raw event. Process vs system CPU is a SCOPE distinction — each keeps
+/// its own field so machine-wide CPU never renders as a process average.
+pub(super) fn sys_status_from_proto(
+    h: moonproto::state::KernelHealth,
+    updated_ms: i64,
+) -> CoreSysStatus {
+    CoreSysStatus {
+        process_cpu_percent: Some(h.process_cpu_percent),
+        system_cpu_percent: Some(h.system_cpu_percent),
+        used_memory_mb: h.used_memory_mb,
+        free_physical_memory_mb: h.free_physical_memory_mb,
+        logical_cpu_count: h.logical_cpu_count,
+        updated_ms,
+    }
+}
+
 /// Применяет точечную правку тулбара к удержанному снимку настроек ЧЕРЕЗ хелперы команды
 /// (raw-поля `s_price`/`sb_num` в проде `pub(crate)`; `price_drop_level` — pub).
 pub(super) fn apply_client_settings_edit(
@@ -242,13 +256,11 @@ fn order_trace(line: &OrderTraceLine) -> Option<OrderTrace> {
     })
 }
 
-fn build_order_row(
-    server_id: u64,
-    snap: &moonproto::MoonStateSnapshot,
-    o: &Order,
-    remember_reports: bool,
-    orders_index: &mut OrderIndex,
-) -> OrderRow {
+/// Project one retained MoonProto order into a UI row.
+///
+/// This conversion has no report-database side effects; protocol-v4 reports are
+/// replicated independently through `Event::Report`.
+fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Order) -> OrderRow {
     // Отображаемое имя рынка. Hyperliquid спот именует пары ИНДЕКСОМ («@206»); человекочитаемое
     // имя даёт moonproto в `market_name_mb_classic` («UENAUSDT»). Кладём в ордер/отчёт классик —
     // тогда `coin_of_market` даёт «UENA», а не «@206». Гейт по префиксу «@» — обычные рынки
@@ -263,35 +275,6 @@ fn build_order_row(
     } else {
         o.market_name.clone()
     };
-    // Полные данные ордера по uid (есть с открытия); db_id→uid —
-    // когда db_id появился (перед закрытием). close-SQL этих полей
-    // не несёт.
-    if remember_reports {
-        orders_index.remember(
-            o.uid,
-            OrderMeta {
-                coin: market_display.clone(),
-                isshort: o.is_short,
-                buyprice: o.buy_price,
-                sellprice: o.sell_price,
-                quantity: o.buy_order.quantity,
-                spentbtc: o.buy_order.spent_btc,
-                gainedbtc: o.sell_order.total_btc,
-                lev: o.buy_order.leverage as i64,
-                strategyid: o.strat_id as i64,
-                taskid: o.uid as i64,
-                exorderid: (o.buy_order.int_id != 0).then(|| o.buy_order.int_id.to_string()),
-                emulator: o.emulator_mode,
-                buydate: moon_time_to_unix_seconds(o.buy_order.open_time()),
-                sellsetdate: moon_time_to_unix_seconds(o.sell_order.create_time()),
-                closedate: moon_time_to_unix_seconds(o.sell_order.close_time()),
-            },
-        );
-        if o.db_id != 0 {
-            orders_index.map_dbid(o.db_id, o.uid);
-        }
-    }
-
     let strat = match snap.strats().snapshot(o.strat_id) {
         Some(s) => strat_kind_name(s.kind().ordinal()).to_string(),
         None => o.strat_id.to_string(),
@@ -612,22 +595,18 @@ fn build_order_row(
     }
 }
 
+/// Build the current order rows and overlay captured order events from this drain.
+///
+/// Event rows preserve terminal states that may disappear from the retained
+/// snapshot before the application processes the event queue.
 pub(super) fn build_order_rows(
     server_id: u64,
     snap: &moonproto::MoonStateSnapshot,
     events: &[Event],
-    remember_reports: bool,
-    orders_index: &mut OrderIndex,
 ) -> Vec<OrderRow> {
     let mut order_rows = Vec::new();
     for o in snap.orders().iter() {
-        order_rows.push(build_order_row(
-            server_id,
-            snap,
-            o,
-            remember_reports,
-            orders_index,
-        ));
+        order_rows.push(build_order_row(server_id, snap, o));
     }
 
     // Snapshot is the live view. Terminal statuses can be removed from that view
@@ -642,7 +621,7 @@ pub(super) fn build_order_rows(
         let Some(order) = order_event.order() else {
             continue;
         };
-        let row = build_order_row(server_id, snap, order, remember_reports, orders_index);
+        let row = build_order_row(server_id, snap, order);
         if let Some(existing) = order_rows.iter_mut().find(|r| r.uid == row.uid) {
             *existing = row;
         } else {
@@ -703,3 +682,6 @@ pub(super) fn engine_action_result(e: &moonproto::EngineActionEvent) -> EngineAc
         error_msg: e.error_msg.clone(),
     }
 }
+
+#[cfg(test)]
+mod tests;

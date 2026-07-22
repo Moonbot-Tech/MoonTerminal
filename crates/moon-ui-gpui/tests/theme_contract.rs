@@ -528,3 +528,41 @@ fn moon_tree_closures_hold_weak_view_handles() {
          in MoonTreeState, which this view owns, so the view can never drop"
     );
 }
+
+/// The Core-status panel renders protocol v4 `Event::KernelHealth` telemetry.
+/// Process vs system CPU is a SCOPE distinction, not a time average: a future
+/// edit that re-adds a machine-wide-CPU column under an "average" label, or
+/// resurrects the memory columns v4 has no source for, reddens here.
+#[test]
+fn core_status_table_binds_scoped_telemetry_columns() {
+    let table = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("panels")
+        .join("core_status")
+        .join("table.rs");
+    let text = fs::read_to_string(&table)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", table.display()));
+
+    for key in [
+        "core_status.col.cpu_proc",
+        "core_status.col.cpu_sys",
+        "core_status.col.cpus",
+    ] {
+        assert!(
+            text.contains(key),
+            "core_status/table.rs must bind the scoped telemetry column `{key}`"
+        );
+    }
+    for banned in [
+        "core_status.col.cpu_avg",
+        "core_status.col.mem_app",
+        "core_status.col.mem_sys",
+        "core_status.col.free_page",
+    ] {
+        assert!(
+            !text.contains(banned),
+            "core_status/table.rs must not resurrect the removed column `{banned}` (v4 \
+             KernelHealth has no source for it; `cpu_avg` mislabels machine CPU as an average)"
+        );
+    }
+}

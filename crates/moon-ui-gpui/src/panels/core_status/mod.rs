@@ -1,10 +1,13 @@
-//! Панель «Статус ядер»: таблица системных метрик по ядрам охвата (CPU/память + статус
-//! подключения). Данные вытащены из строк серверного лога (`CoreData::sys`, парсер
-//! `moon_core::session::sys_status`) — moonproto типизированных полей не шлёт.
+//! Core Status panel: connection state and typed protocol-v4 resource telemetry
+//! (`Event::KernelHealth`) for every core in scope.
 //!
-//! Устройство 1:1 с «Активами» (группа-scope): dock-вкладка окна группы, откреп в своё
-//! окно (общий механизм `detached.rs`), персист ширин колонок через [`crate::table_persist`]
-//! с контекстом `:dock`/`:win`. Данные/жизненный цикл — здесь, таблица — в [`table`].
+//! `CoreData::sys` holds the latest sample, while `sys_rev` invalidates the table
+//! only when metric values change.
+//!
+//! Like the Assets panel, it is scoped to a window group and can live in a dock
+//! tab or a detached window. [`crate::table_persist`] stores separate column
+//! widths for `:dock` and `:win`. This module owns data and lifecycle; [`table`]
+//! owns table rendering.
 
 mod table;
 
@@ -58,8 +61,8 @@ impl CoreStatusView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Перерисовка по дренажу backend — при изменении метрик/статусов или раз в секунду
-        // (чтобы «обновлено N с назад» шло вперёд даже без новых строк лога).
+        // Backend drains repaint on metric/status changes or once per second so
+        // the sample-age column advances even when no new telemetry arrives.
         cx.observe(&backend, |this, backend, cx| {
             let now = moon_chart::paint::now_unix_ms();
             let b = backend.read(cx);
@@ -160,7 +163,7 @@ impl CoreStatusView {
             }
             let (status, sys) = store
                 .core(id)
-                .map(|c| (c.status.clone(), c.sys.clone()))
+                .map(|c| (c.status.clone(), c.sys))
                 .unwrap_or((ConnStatus::Disconnected, CoreSysStatus::default()));
             out.push(CoreStatusRow { name, status, sys });
         }

@@ -12,13 +12,14 @@
 pub mod coordinator;
 pub mod order_lines;
 pub mod store;
-pub mod sys_status;
 
 mod commands;
 mod lifecycle;
 
+/// Re-exported from `feed` (its producer): `CoreData::sys` is this type, so the
+/// session facade keeps `session::CoreSysStatus` valid for the "Core status" panel.
+pub use crate::feed::CoreSysStatus;
 pub use store::{BalanceState, CoreId, CoreStore};
-pub use sys_status::CoreSysStatus;
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;

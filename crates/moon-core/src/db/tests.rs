@@ -51,21 +51,25 @@ fn rep_indexes_created_for_preexisting_columns() {
 fn union_reader_and_legacy_drop() {
     let conn = Connection::open_in_memory().unwrap();
     init_db(&conn).unwrap();
+
+    // Легаси-таблица + строка ядра 1. `init_db` её больше НЕ создаёт (на переходном
+    // периоде она уже есть у пользователя); воссоздаём минимальную схему ДО `rep::init`,
+    // чтобы он увидел `legacy_exists=true` и умел её снести на SyncComplete.
+    conn.execute_batch(
+        "CREATE TABLE closed_sell_reports (
+            core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, db_id INTEGER NOT NULL,
+            coin TEXT, profitbtc REAL, closedate INTEGER,
+            created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
+            PRIMARY KEY (core_uid, db_id));
+         INSERT INTO closed_sell_reports
+            (core_uid, core_name, db_id, coin, profitbtc, closedate, created_ms, updated_ms)
+         VALUES (1, 'BB1', 42, 'BTCUSDT', 0.5, 1780000000, 0, 0);",
+    )
+    .unwrap();
+
     let cursors = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let open_rows = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let mut st = rep::init(&conn, cursors, open_rows).unwrap();
-
-    // Легаси-строка ядра 1.
-    let row = ReportRow {
-        core_uid: 1,
-        core_name: "BB1".into(),
-        db_id: 42,
-        coin: Some("BTCUSDT".into()),
-        profitbtc: Some(0.5),
-        closedate: Some(1_780_000_000),
-        ..Default::default()
-    };
-    insert(&conn, &row).unwrap();
 
     // Строка реплики ядра 2 (колонки — как их дорастила бы схема ядра).
     for ddl in [
@@ -227,16 +231,22 @@ fn max_core_uid_folds_both_report_schemas() {
     let conn = Connection::open_in_memory().unwrap();
     init_db(&conn).unwrap();
 
-    // `init_db` creates the legacy table but not `orders_rep`; an empty store is not a failure.
+    // Neither the legacy table (init_db no longer creates it) nor `orders_rep` exists yet;
+    // an empty store is not a failure.
     assert!(
         matches!(max_core_uid(&conn), Ok(None)),
         "an empty replica must read as no rows, never as a read failure"
     );
 
-    conn.execute(
-        "INSERT INTO closed_sell_reports (core_uid, core_name, db_id, created_ms, updated_ms)
-         VALUES (12, 'legacy', 1, 0, 0)",
-        [],
+    // Legacy rows still exist on the transition period; seed the table here (init_db no
+    // longer creates it) to exercise the cross-schema uid fold.
+    conn.execute_batch(
+        "CREATE TABLE closed_sell_reports (
+            core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, db_id INTEGER NOT NULL,
+            created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
+            PRIMARY KEY (core_uid, db_id));
+         INSERT INTO closed_sell_reports (core_uid, core_name, db_id, created_ms, updated_ms)
+         VALUES (12, 'legacy', 1, 0, 0);",
     )
     .unwrap();
     assert!(

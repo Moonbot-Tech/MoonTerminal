@@ -365,7 +365,7 @@ pub fn apply(
         },
         A::SplitOrder => match target {
             Some((core, market)) => {
-                if let Err(error) = b.session.split_order(core, market, 2) {
+                if let Err(error) = b.session.split_order_for_market(core, market, 2) {
                     log::warn!("hotkey split order failed: {error}");
                 }
                 true

@@ -176,16 +176,85 @@ pub(super) fn join_sells(client: &MoonClient, server_id: u64, market: String, sh
     );
 }
 
-/// «Split order» (ПКМ по линии sell): разбить выбранный sell-ордер рынка на `parts` частей.
-/// Транслируется в `trade().split_order(SplitOrderParams::new(market, parts))`.
-pub(super) fn split_order(client: &MoonClient, server_id: u64, market: String, parts: i32) {
+/// Which order a market-level split (hotkey) should target.
+#[derive(Debug, PartialEq, Eq)]
+enum SplitTarget {
+    /// Exactly one order on the market has a live sell leg.
+    One(u64),
+    /// Zero or several candidates — never guess, so send nothing.
+    Ambiguous,
+}
+
+/// Resolve the sole active sell order on `market`.
+///
+/// A market-level split hotkey carries no specific order, but protocol v4
+/// addresses a split by server order uid, so the terminal must choose one.
+/// Policy: target the order on `market` in the `SellSet` phase only when
+/// EXACTLY ONE exists; zero or several yields `Ambiguous`, so an ambiguous
+/// split is never sent to the wrong order. `candidates` are
+/// `(market_name, uid, has_live_sell_leg)`.
+fn resolve_market_split_target<'a>(
+    candidates: impl Iterator<Item = (&'a str, u64, bool)>,
+    market: &str,
+) -> SplitTarget {
+    let mut found: Option<u64> = None;
+    for (name, uid, has_live_sell_leg) in candidates {
+        if name == market && has_live_sell_leg {
+            if found.is_some() {
+                return SplitTarget::Ambiguous;
+            }
+            found = Some(uid);
+        }
+    }
+    found.map_or(SplitTarget::Ambiguous, SplitTarget::One)
+}
+
+/// Split a specific sell order selected from a line or row into `parts`.
+/// Protocol v4 addresses the order by its server `uid`.
+pub(super) fn split_order(client: &MoonClient, server_id: u64, uid: u64, parts: i32) {
     report(
         server_id,
-        format!("split order {market} parts={parts}"),
+        format!("split order uid={uid} parts={parts}"),
         client
             .trade()
-            .split_order(SplitOrderParams::new(market, parts)),
+            .split_order(SplitOrderParams::new(uid, parts)),
     );
+}
+
+/// Split the sole active sell order for a market-level hotkey.
+///
+/// [`resolve_market_split_target`] selects the order because no row or line is
+/// targeted. Zero or multiple candidates send nothing rather than guessing.
+pub(super) fn split_order_for_market(
+    client: &MoonClient,
+    server_id: u64,
+    market: String,
+    parts: i32,
+) {
+    let Some(snap) = client.snapshot() else {
+        log::warn!("core {server_id} split order {market}: no snapshot yet");
+        return;
+    };
+    let target = resolve_market_split_target(
+        snap.orders().iter().map(|o| {
+            (
+                o.market_name.as_str(),
+                o.uid,
+                o.status == OrderWorkerStatus::SellSet,
+            )
+        }),
+        &market,
+    );
+    match target {
+        SplitTarget::One(uid) => report(
+            server_id,
+            format!("split order {market} uid={uid} parts={parts}"),
+            client.trade().split_order(SplitOrderParams::new(uid, parts)),
+        ),
+        SplitTarget::Ambiguous => log::warn!(
+            "core {server_id} split order {market}: not exactly one active sell order — sending nothing"
+        ),
+    }
 }
 
 /// Включить/выключить стоп (SL/TS/VStop) ордера по `uid`.
@@ -650,3 +719,6 @@ pub(super) fn move_order_stop_price(
         client.orders().update_stops(uid, next),
     );
 }
+
+#[cfg(test)]
+mod tests;

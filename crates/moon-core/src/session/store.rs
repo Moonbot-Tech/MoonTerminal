@@ -131,9 +131,9 @@ pub struct CoreData {
     /// Сырые строки серверного лога с временем приёма терминалом. Нужны diagnostic/FireTest
     /// замерам; UI продолжает читать форматированный `log`.
     pub server_log_raw: VecDeque<crate::feed::CoreLogLine>,
-    /// Последний снимок системных метрик ядра (CPU/память), вытащенный из строк лога
-    /// (`sys_status`). moonproto их типизированно не шлёт — только текстом в `ServerLog`.
-    pub sys: crate::session::sys_status::CoreSysStatus,
+    /// Latest typed core resource telemetry from protocol-v4 `Event::KernelHealth`.
+    /// The Core Status table observes it through `sys_rev`.
+    pub sys: crate::feed::CoreSysStatus,
     /// Растёт при каждом новом снимке открытых ордеров; этим гейтится таблица Orders.
     pub orders_table_rev: u64,
     /// Растёт только при изменении геометрии/состояния ордерных линий на графике.
@@ -152,7 +152,8 @@ pub struct CoreData {
     pub hedge_mode_rev: u64,
     pub log_rev: u64,
     pub chart_alerts_rev: u64,
-    /// Растёт при обновлении системных метрик (`sys`) из строк лога — гейт таблицы «Ядра».
+    /// Advances only when typed `KernelHealth` metric values change, gating the
+    /// Core Status table without repainting for receipt-time-only updates.
     pub sys_rev: u64,
 }
 
@@ -177,7 +178,7 @@ impl CoreData {
             chart_alerts: HashMap::new(),
             log: VecDeque::new(),
             server_log_raw: VecDeque::new(),
-            sys: crate::session::sys_status::CoreSysStatus::default(),
+            sys: crate::feed::CoreSysStatus::default(),
             orders_table_rev: 0,
             order_lines_rev: 0,
             order_lines_rev_ms: 0,
@@ -310,6 +311,18 @@ impl CoreData {
                     self.runtime_state_rev = self.runtime_state_rev.wrapping_add(1);
                 }
             }
+            FeedMsg::SysStatus(sys) => {
+                // Telemetry arrives every Ping with a fresh `updated_ms`, so store it every
+                // time to keep the panel's "Updated" column live — but bump `sys_rev` (the
+                // repaint signature) ONLY when the metrics changed, else a steady core would
+                // churn it every Ping. Repaints are also capped by the 250ms backend throttle
+                // and the panel RenderGate.
+                let metrics_changed = !self.sys.metrics_eq(&sys);
+                self.sys = sys;
+                if metrics_changed {
+                    self.sys_rev = self.sys_rev.wrapping_add(1);
+                }
+            }
             FeedMsg::HedgeMode(on) => {
                 if self.hedge_mode != Some(on) {
                     self.hedge_mode = Some(on);
@@ -339,12 +352,6 @@ impl CoreData {
             FeedMsg::ServerLog(lines) => {
                 if !lines.is_empty() {
                     for l in lines {
-                        // Парсинг системных метрик (CoreSysStatus::parse_line) ВРЕМЕННО ОТКЛЮЧЁН:
-                        // наполнять панель «Статус ядер» из строк лога нецелесообразно
-                        // (редко/фрагментарно). Поле `sys`/`sys_rev` и модуль `sys_status`
-                        // оставлены — вернём разбор, когда moonproto начнёт слать метрики
-                        // типизированно. Тогда достаточно вернуть строку ниже:
-                        //   if self.sys.parse_line(&l.msg, l.time_ms) { sys_changed = true; }
                         self.server_log_raw.push_back(l.clone());
                         self.log.push_back(LogLine::core(l.time_ms, l.msg));
                     }

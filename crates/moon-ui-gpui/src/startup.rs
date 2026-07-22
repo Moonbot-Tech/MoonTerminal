@@ -227,9 +227,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
             specs
         };
 
-        // БД отчётов: поднимаем writer (как egui App). Его `tx` отдаём сессии (ядро
-        // шлёт close-report → запись в SQLite), `generation` живёт в Backend для окна
-        // «Отчёт». None = БД недоступна (окно отчётов покажет пусто).
+        // Start the report writer. The session receives its `tx` for typed
+        // `Event::Report` replication, while Backend retains `generation` for
+        // Report-panel refreshes. `None` means the database is unavailable.
         let reports = moon_core::db::spawn_writer();
         // Check the complete replica once because individual reads only detect
         // damage on pages reached by their query.

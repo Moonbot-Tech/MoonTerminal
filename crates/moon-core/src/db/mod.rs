@@ -5,10 +5,11 @@
 //! оффлайна с курсора, reconcile на `SyncComplete`. Аналитические поля (дельты/
 //! pump/signaltype…) приходят настоящими значениями.
 //!
-//! ЛЕГАСИ путь (deprecated в moonproto) — close-SQL `Event::ClosedSellOrderReport` →
-//! таблица `closed_sell_reports` (PK `(core_uid, db_id)`): жив только на переходный
-//! период; после первого полного sync ядра его легаси-строки вычищаются, опустевшая
-//! таблица сносится (маркер `legacy_dropped`), и поток игнорируется.
+//! LEGACY table `closed_sell_reports` (PK `(core_uid, db_id)`) is READ-ONLY: the
+//! terminal no longer consumes `Event::ClosedSellOrderReport`, so no new legacy
+//! rows are written. The report window still UNION-s its existing rows while any
+//! core lingers on it, and [`rep`]'s per-core purge drops the table once every
+//! core is on typed replication (marker `legacy_dropped`).
 //!
 //! Пишет ОДИН поток-writer; читает окно «Отчёты» отдельным соединением (WAL).
 
@@ -16,7 +17,6 @@ pub mod analytics;
 pub mod coin_lists;
 pub mod integrity;
 pub mod maint;
-mod parse;
 pub(crate) mod read_fail;
 mod rep;
 #[cfg(test)]
@@ -24,7 +24,6 @@ mod test_support;
 pub mod tuner;
 pub mod tuner_smart;
 
-pub use parse::parse_report_sql;
 pub use read_fail::{FailKind, ReadFail, ReadResult};
 pub use rep::{DbMsg, ReportSink};
 
@@ -40,39 +39,7 @@ use rusqlite::Connection;
 
 use crate::config::paths;
 
-/// Один отчёт для записи (заполнены поля, доступные терминалу).
-#[derive(Debug, Clone, Default)]
-pub struct ReportRow {
-    pub core_uid: u64,
-    pub core_name: String,
-    pub db_id: i64,
-    pub taskid: Option<i64>,
-    pub exorderid: Option<String>,
-    pub coin: Option<String>,
-    pub isshort: Option<bool>,
-    pub buydate: Option<i64>,
-    pub sellsetdate: Option<i64>,
-    pub closedate: Option<i64>,
-    pub quantity: Option<f64>,
-    pub buyprice: Option<f64>,
-    pub sellprice: Option<f64>,
-    pub spentbtc: Option<f64>,
-    pub gainedbtc: Option<f64>,
-    pub profitbtc: Option<f64>,
-    pub lev: Option<i64>,
-    pub strategyid: Option<i64>,
-    pub emulator: Option<bool>,
-    pub status: Option<i64>,
-    pub sellreason: Option<String>,
-    pub comment: Option<String>,
-    /// Универсальный passthrough: ВСЕ пары из close-SQL (lowercase-имя →
-    /// значение). Writer сам заводит недостающие колонки и пишет их — новые поля
-    /// ядра (дельты/MarkPriceDelta/…) попадают в отчёт без правок кода.
-    pub extras: Vec<(String, Value)>,
-    pub sql: String,
-}
-
-/// Feed-to-writer sink for typed and legacy messages plus per-core start cursors.
+/// Feed-to-writer sink for typed replication messages plus per-core start cursors.
 pub type ReportTx = ReportSink;
 
 /// Хэндл БД: канал записи + счётчик-генерация (растёт после записи —
@@ -81,63 +48,6 @@ pub struct ReportsHandle {
     pub tx: ReportTx,
     pub generation: Arc<AtomicU64>,
 }
-
-use crate::util::now_unix_ms_i64 as now_ms;
-
-/// Полный набор колонок (сверх core_uid/core_name/db_id/sql/created_ms/updated_ms),
-/// зеркалящий Postgres `orders`. Используется и для CREATE, и для ALTER-апгрейда.
-const ALL_DB_COLUMNS: &[(&str, &str)] = &[
-    ("taskid", "INTEGER"),
-    ("exorderid", "TEXT"),
-    ("coin", "TEXT"),
-    ("isshort", "INTEGER"),
-    ("buydate", "INTEGER"),
-    ("sellsetdate", "INTEGER"),
-    ("closedate", "INTEGER"),
-    ("quantity", "REAL"),
-    ("boughtq", "REAL"),
-    ("buyprice", "REAL"),
-    ("sellprice", "REAL"),
-    ("spentbtc", "REAL"),
-    ("gainedbtc", "REAL"),
-    ("profitbtc", "REAL"),
-    ("lev", "INTEGER"),
-    ("strategyid", "INTEGER"),
-    ("source", "INTEGER"),
-    ("channel", "INTEGER"),
-    ("channelname", "TEXT"),
-    ("signaltype", "TEXT"),
-    ("fname", "TEXT"),
-    ("basecurrency", "INTEGER"),
-    ("emulator", "INTEGER"),
-    ("status", "INTEGER"),
-    ("sellreason", "TEXT"),
-    ("comment", "TEXT"),
-    ("deleted", "INTEGER"),
-    ("imp", "INTEGER"),
-    ("btc1hdelta", "REAL"),
-    ("exchange1hdelta", "REAL"),
-    ("btc24hdelta", "REAL"),
-    ("exchange24hdelta", "REAL"),
-    ("btc5mdelta", "REAL"),
-    ("bvsvratio", "REAL"),
-    ("pump1h", "REAL"),
-    ("dump1h", "REAL"),
-    ("d24h", "REAL"),
-    ("d3h", "REAL"),
-    ("d1h", "REAL"),
-    ("d15m", "REAL"),
-    ("d5m", "REAL"),
-    ("d1m", "REAL"),
-    ("dbtc1m", "REAL"),
-    ("vd1m", "REAL"),
-    ("pricebug", "REAL"),
-    ("hvol", "REAL"),
-    ("hvolf", "REAL"),
-    ("dvol", "REAL"),
-    ("takeprofitlag", "REAL"),
-    ("last_update_at", "INTEGER"),
-];
 
 /// Колонки и порядок для отображения в окне «Отчёты» (плюс заголовок/ширина —
 /// в самом окне). core_uid/newrecid скрыты (служебные); `id` — серверный row id
@@ -195,6 +105,11 @@ pub const DISPLAY_COLUMNS: &[&str] = &[
     "last_update_at",
 ];
 
+/// Initialize shared report metadata and any still-present read-only legacy table.
+///
+/// A fresh database creates no `closed_sell_reports` table. Existing compatible
+/// tables receive only the indexes needed by report reads; the obsolete
+/// `server_id` schema is dropped because no protocol-v4 writer can repopulate it.
 fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     let _ = conn.busy_timeout(Duration::from_secs(3));
@@ -218,7 +133,10 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         return Ok(());
     }
 
-    // Очень старая схема по рантайм-`server_id` — пересоздаём под core_uid.
+    // Very old runtime-`server_id` schema is incompatible with the reader (which
+    // selects `core_uid`), so drop it — same as before. We no longer RECREATE the
+    // table: legacy rows are not written any more, and the reader gates its query
+    // on the table's existence.
     let has_old: bool = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('closed_sell_reports') WHERE name='server_id'",
@@ -229,209 +147,34 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         .unwrap_or(false);
     if has_old {
         conn.execute("DROP TABLE IF EXISTS closed_sell_reports", [])?;
-        log::warn!("отчёты: старая схема (server_id) — таблица пересоздана");
+        log::warn!("отчёты: старая схема (server_id) — таблица снесена");
     }
 
-    // CREATE с полным набором колонок.
-    let mut cols =
-        String::from("core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, db_id INTEGER NOT NULL");
-    for (n, d) in ALL_DB_COLUMNS {
-        cols.push_str(&format!(", {n} {d}"));
+    // Report-window indexes on the legacy table — only when it still exists (cores
+    // on the transition period). A fresh install has no legacy table, so there is
+    // nothing to index; `CREATE INDEX` on a missing table would error.
+    let legacy_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('closed_sell_reports')",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    if legacy_exists {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_csr_closedate ON closed_sell_reports(closedate)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_csr_core ON closed_sell_reports(core_uid)",
+            [],
+        )?;
     }
-    cols.push_str(", sql TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, PRIMARY KEY (core_uid, db_id)");
-    conn.execute(
-        &format!("CREATE TABLE IF NOT EXISTS closed_sell_reports ({cols})"),
-        [],
-    )?;
-
-    // ALTER-апгрейд: дописываем недостающие колонки в более старую таблицу.
-    let mut existing = std::collections::HashSet::new();
-    {
-        let mut stmt = conn.prepare("PRAGMA table_info(closed_sell_reports)")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
-        for name in rows {
-            existing.insert(name?);
-        }
-    }
-    for (name, decl) in ALL_DB_COLUMNS {
-        if !existing.contains(*name) {
-            conn.execute(
-                &format!("ALTER TABLE closed_sell_reports ADD COLUMN {name} {decl}"),
-                [],
-            )?;
-        }
-    }
-    // Индексы под горячие запросы окна «Отчёт»: дефолтный фильтр периода (closedate) и
-    // per-core вычистка/выборки. Легаси-БД бывает сотни МБ — без индекса каждый requery
-    // (а их триггерит КАЖДАЯ запись writer'а) сканировал таблицу целиком (CPU-спайки).
-    // Первое создание на большой базе занимает секунды — одноразово.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_csr_closedate ON closed_sell_reports(closedate)",
-        [],
-    )?;
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_csr_core ON closed_sell_reports(core_uid)",
-        [],
-    )?;
     Ok(())
 }
 
-fn insert(conn: &Connection, row: &ReportRow) -> rusqlite::Result<()> {
-    let ts = now_ms();
-    let isshort = row.isshort.map(|b| b as i64);
-    let emulator = row.emulator.map(|b| b as i64);
-    // COALESCE: новое значение если есть, иначе НЕ затираем старое (важно, чтобы
-    // повторный close-report не обнулял поля, взятые из модели ранее).
-    // prepare_cached: writer может вставлять тысячи строк — компиляция SQL на каждую
-    // строку была узким местом (очередь копилась).
-    let mut stmt = conn.prepare_cached(
-        "INSERT INTO closed_sell_reports
-            (core_uid, core_name, db_id, taskid, exorderid, coin, isshort, buydate,
-             sellsetdate, closedate, quantity, buyprice, sellprice, spentbtc, gainedbtc,
-             profitbtc, lev, strategyid, emulator, status, sellreason, comment, sql,
-             created_ms, updated_ms)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?24)
-         ON CONFLICT(core_uid, db_id) DO UPDATE SET
-            core_name=excluded.core_name, taskid=COALESCE(excluded.taskid,taskid),
-            exorderid=COALESCE(excluded.exorderid,exorderid),
-            coin=COALESCE(excluded.coin,coin), isshort=COALESCE(excluded.isshort,isshort),
-            buydate=COALESCE(excluded.buydate,buydate),
-            sellsetdate=COALESCE(excluded.sellsetdate,sellsetdate),
-            closedate=COALESCE(excluded.closedate,closedate),
-            quantity=COALESCE(excluded.quantity,quantity),
-            buyprice=COALESCE(excluded.buyprice,buyprice),
-            sellprice=COALESCE(excluded.sellprice,sellprice),
-            spentbtc=COALESCE(excluded.spentbtc,spentbtc),
-            gainedbtc=COALESCE(excluded.gainedbtc,gainedbtc),
-            profitbtc=COALESCE(excluded.profitbtc,profitbtc),
-            lev=COALESCE(excluded.lev,lev), strategyid=COALESCE(excluded.strategyid,strategyid),
-            emulator=COALESCE(excluded.emulator,emulator),
-            status=COALESCE(excluded.status,status),
-            sellreason=COALESCE(excluded.sellreason,sellreason),
-            comment=COALESCE(excluded.comment,comment),
-            sql=excluded.sql, updated_ms=excluded.updated_ms",
-    )?;
-    stmt.execute(rusqlite::params![
-        row.core_uid as i64,
-        row.core_name,
-        row.db_id,
-        row.taskid,
-        row.exorderid,
-        row.coin,
-        isshort,
-        row.buydate,
-        row.sellsetdate,
-        row.closedate,
-        row.quantity,
-        row.buyprice,
-        row.sellprice,
-        row.spentbtc,
-        row.gainedbtc,
-        row.profitbtc,
-        row.lev,
-        row.strategyid,
-        emulator,
-        row.status,
-        row.sellreason,
-        row.comment,
-        row.sql,
-        ts,
-    ])?;
-    Ok(())
-}
-
-/// Колонки, которыми занимается типизированный `insert` (или служебные PK/мета).
-/// Всё ОСТАЛЬНОЕ из close-SQL идёт через универсальный passthrough `apply_extras`.
-/// `server_id` обязателен в списке: авто-создание такой колонки заставило бы
-/// `init_db` принять таблицу за древнюю схему и УДАЛИТЬ её.
-fn is_passthrough(name: &str) -> bool {
-    const SKIP: &[&str] = &[
-        "core_uid",
-        "core_name",
-        "db_id",
-        "sql",
-        "created_ms",
-        "updated_ms",
-        "id",
-        "server_id",
-        "taskid",
-        "exorderid",
-        "coin",
-        "isshort",
-        "buydate",
-        "sellsetdate",
-        "closedate",
-        "quantity",
-        "buyprice",
-        "sellprice",
-        "spentbtc",
-        "gainedbtc",
-        "profitbtc",
-        "lev",
-        "strategyid",
-        "emulator",
-        "status",
-        "sellreason",
-        "comment",
-    ];
-    !SKIP.contains(&name)
-}
-
-/// Универсальный passthrough: для всех непокрытых типизированным insert полей из
-/// SQL заводит недостающие колонки (`ALTER TABLE … ADD COLUMN`, тип по значению) и
-/// пишет их в уже существующую (после `insert`) строку. `known` — кэш имён колонок
-/// в памяти writer'а, чтобы не дёргать PRAGMA на каждую запись.
-fn apply_extras(
-    conn: &Connection,
-    known: &mut std::collections::HashSet<String>,
-    row: &ReportRow,
-) -> rusqlite::Result<()> {
-    let cols: Vec<&(String, Value)> = row
-        .extras
-        .iter()
-        .filter(|(n, _)| is_passthrough(n))
-        .collect();
-    if cols.is_empty() {
-        return Ok(());
-    }
-    for (name, val) in &cols {
-        if !known.contains(name.as_str()) {
-            let decl = match val {
-                Value::Text(_) => "TEXT",
-                Value::Integer(_) => "INTEGER",
-                _ => "REAL",
-            };
-            // Имя провалидировано как [a-z0-9_] в parse::valid_ident — инъекции нет.
-            conn.execute(
-                &format!("ALTER TABLE closed_sell_reports ADD COLUMN {name} {decl}"),
-                [],
-            )?;
-            known.insert((*name).clone());
-            log::info!("отчёты: авто-колонка «{name}» {decl} (новое поле ядра)");
-        }
-    }
-    let set = cols
-        .iter()
-        .map(|(n, _)| format!("{n}=?"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql =
-        format!("UPDATE closed_sell_reports SET {set}, updated_ms=? WHERE core_uid=? AND db_id=?");
-    let ts = now_ms();
-    let uid = row.core_uid as i64;
-    let mut params: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(cols.len() + 3);
-    for (_, val) in &cols {
-        params.push(val);
-    }
-    params.push(&ts);
-    params.push(&uid);
-    params.push(&row.db_id);
-    let mut stmt = conn.prepare_cached(&sql)?;
-    stmt.execute(params.as_slice())?;
-    Ok(())
-}
-
-/// Probe legacy-table columns for the writer's close-SQL column cache.
+/// Probe legacy-table columns (the reader maps legacy rows onto display columns).
 ///
 /// Opening a database does not validate its schema b-tree. An absent table
 /// therefore yields `Ok(empty)`, while any SQLite error remains `Err`.
@@ -503,13 +246,6 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                 s.push("-wal");
                 std::path::PathBuf::from(s)
             };
-            // Кэш известных ЛЕГАСИ-колонок (авто-добавление новых полей close-SQL).
-            // Lossy HERE and fatal in `rep::init` on purpose, and the asymmetry
-            // is the point: this is a SEED for the legacy auto-column path, and
-            // `apply_extras` reports its own failure per row. `rep::init`'s cache
-            // instead GATES which fields a page may write while still ACKing it,
-            // so a swallowed probe there destroys data silently.
-            let mut known = table_columns_res(&conn).unwrap_or_default();
             // Батчим пачку сообщений в одну транзакцию: catch-up льёт тысячи строк,
             // и autocommit на каждую (fsync) растянул бы догонку на минуты.
             let mut thr_count: u64 = 0;
@@ -543,7 +279,7 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                 // lib не запросит следующую страницу, пока эта не легла на диск).
                 let mut acks = Vec::new();
                 for msg in batch {
-                    apply_msg(&txn, &mut rep_state, &mut known, msg, &mut acks);
+                    apply_msg(&txn, &mut rep_state, msg, &mut acks);
                 }
                 match txn.commit() {
                     Ok(()) => {
@@ -620,12 +356,13 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
     })
 }
 
-/// Одно сообщение writer'а: typed-реплика или легаси close-SQL (в СВОЮ таблицу).
-/// Страницы кладут ack в `acks` — вызывающий шлёт `page_applied` после коммита.
+/// Apply one typed-replica writer message.
+///
+/// Successful pages append their acknowledgements to `acks`; the caller sends
+/// `page_applied` only after the surrounding transaction commits.
 fn apply_msg(
     conn: &Connection,
     rep_state: &mut rep::RepState,
-    known: &mut std::collections::HashSet<String>,
     msg: DbMsg,
     acks: &mut Vec<(
         moonproto::MoonReports,
@@ -633,28 +370,6 @@ fn apply_msg(
     )>,
 ) {
     match msg {
-        DbMsg::Legacy(row) => {
-            // Легаси-поток игнорируем после сноса таблицы И для ядер с завершённым
-            // sync: их данные уже идут typed-потоком, легаси-вставка после вычистки
-            // давала дубль строки в читателе (реплика + легаси-копия).
-            if !rep_state.legacy_exists || rep_state.synced.contains(&row.core_uid) {
-                return;
-            }
-            match insert(conn, &row).and_then(|()| apply_extras(conn, known, &row)) {
-                Ok(()) => log::info!(
-                    "отчёт(легаси): {} ({}) db_id={} {} buy@{:?} {}",
-                    row.core_uid,
-                    row.core_name,
-                    row.db_id,
-                    row.coin.as_deref().unwrap_or("?"),
-                    row.buydate,
-                    row.profitbtc
-                        .map(|p| format!("{p:+.4}BTC"))
-                        .unwrap_or_default(),
-                ),
-                Err(e) => log::error!("отчёты: запись db_id={} упала: {e}", row.db_id),
-            }
-        }
         DbMsg::Schema { core_uid, schema } => rep::apply_schema(conn, rep_state, core_uid, schema),
         DbMsg::Upsert {
             core_uid,
@@ -866,8 +581,9 @@ pub fn display_columns(conn: &Connection) -> ReadResult<Vec<String>> {
 /// ORDER/LIMIT, работают индексы — и сливаем в Rust. UNION ALL-подзапрос с NULL-
 /// проекцией SQLite не флаттенит: фильтр не проталкивался в ветки → полный скан
 /// легаси-БД в сотни МБ на каждый requery (замерено: ~400мс при «Сегодня»).
-/// Дубли при слиянии невозможны: строки ядра живут ровно в одной таблице (легаси
-/// синхронизированных ядер вычищен и их поток игнорируется).
+/// Duplicate rows cannot arise during the merge: a core's rows live in exactly
+/// one table. Typed sync purges that core's legacy rows, and no legacy write path
+/// remains.
 struct ReadSource {
     table: &'static str,
     cols: std::collections::HashSet<String>,
@@ -885,6 +601,8 @@ fn read_sources_res(conn: &Connection) -> ReadResult<Vec<ReadSource>> {
         legacy: false,
     }];
     let legacy_cols = table_columns_res(conn)?;
+    // An empty probe means the legacy table is absent. Omitting that source keeps
+    // `query_reports` from generating a SELECT against a missing table.
     if !legacy_cols.is_empty() {
         out.push(ReadSource {
             table: "closed_sell_reports",

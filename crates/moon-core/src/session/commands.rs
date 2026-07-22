@@ -292,12 +292,27 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::JoinSells { market, short }, "join sells")
     }
 
-    /// «Split order» (ПКМ по линии sell): разбить выбранный sell-ордер рынка на `parts` частей.
-    pub fn split_order(&self, core: CoreId, market: String, parts: i32) -> Result<()> {
+    /// Split the specific sell order selected from a line or row into `parts`.
+    /// Values below two are ignored before the command reaches the feed.
+    pub fn split_order(&self, core: CoreId, uid: u64, parts: i32) -> Result<()> {
+        if parts < 2 {
+            return Ok(());
+        }
+        self.send_core_cmd(core, CoreCmd::SplitOrder { uid, parts }, "split order")
+    }
+
+    /// Request a market-level split for a hotkey with no selected order.
+    /// The feed sends it only when exactly one active sell order exists; an empty
+    /// market or fewer than two parts is ignored here.
+    pub fn split_order_for_market(&self, core: CoreId, market: String, parts: i32) -> Result<()> {
         if market.is_empty() || parts < 2 {
             return Ok(());
         }
-        self.send_core_cmd(core, CoreCmd::SplitOrder { market, parts }, "split order")
+        self.send_core_cmd(
+            core,
+            CoreCmd::SplitOrderForMarket { market, parts },
+            "split order",
+        )
     }
 
     /// Включить/выключить стоп-флаг (SL/TS/VStop) ордера ядра по `uid` — клик по ячейке в

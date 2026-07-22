@@ -1,31 +1,32 @@
-//! Таблица «Статус ядер»: колонки и ячейки. Числовые метрики — прочерк, если строки
-//! соответствующего вида лога ещё не было (старый core их не печатает).
+//! Core Status table columns and cells.
+//!
+//! A numeric metric renders as a dash until its `Event::KernelHealth` field has
+//! arrived at least once.
 
 use super::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 
-/// Колонки: ядро, статус, CPU (тек./сред.), память (прил./сис.), свободно (физ./подкачка),
-/// «обновлено N назад».
+/// Build columns for core name, connection state, process and system CPU,
+/// process memory, free physical memory, logical CPU count, and sample age.
 fn columns() -> Vec<MoonDataTableColumn> {
     let numeric =
         |key: &'static str, title: String, w: f32| MoonDataTableColumn::new(key, title, w).right();
     vec![
         MoonDataTableColumn::new("core", t!("core_status.col.core").to_string(), 130.0),
         MoonDataTableColumn::new("status", t!("core_status.col.status").to_string(), 120.0),
-        numeric("cpu", t!("core_status.col.cpu").to_string(), 90.0),
-        numeric("cpu_avg", t!("core_status.col.cpu_avg").to_string(), 90.0),
-        numeric("mem_app", t!("core_status.col.mem_app").to_string(), 100.0),
-        numeric("mem_sys", t!("core_status.col.mem_sys").to_string(), 100.0),
+        numeric("cpu_proc", t!("core_status.col.cpu_proc").to_string(), 90.0),
+        numeric("cpu_sys", t!("core_status.col.cpu_sys").to_string(), 90.0),
+        numeric(
+            "mem_used",
+            t!("core_status.col.mem_used").to_string(),
+            100.0,
+        ),
         numeric(
             "free_phys",
             t!("core_status.col.free_phys").to_string(),
             110.0,
         ),
-        numeric(
-            "free_page",
-            t!("core_status.col.free_page").to_string(),
-            110.0,
-        ),
+        numeric("cpus", t!("core_status.col.cpus").to_string(), 90.0),
         numeric("updated", t!("core_status.col.updated").to_string(), 100.0),
     ]
 }
@@ -58,20 +59,18 @@ pub(super) fn core_status_table(
     )
 }
 
+/// Render one core and its latest telemetry sample in the table's column order.
 fn core_status_row(r: &CoreStatusRow, now_ms: i64, p: MoonPalette) -> MoonDataRow {
     let sys = &r.sys;
-    // Самая свежая из двух строк (CPU/память) — для «обновлено».
-    let last_ms = sys.cpu_ms.max(sys.mem_ms);
     MoonDataRow::new([
         MoonDataCell::text(r.name.clone()),
         MoonDataCell::element(status_cell(&r.status, p)),
-        MoonDataCell::text(pct(sys.cpu_moment)),
-        MoonDataCell::text(pct(sys.cpu_avg)),
-        MoonDataCell::text(mb(sys.mem_app_mb)),
-        MoonDataCell::text(mb(sys.mem_sys_mb)),
-        MoonDataCell::text(mb(sys.free_phys_mb)),
-        MoonDataCell::text(mb(sys.free_page_mb)),
-        MoonDataCell::text(ago(last_ms, now_ms)),
+        MoonDataCell::text(pct(sys.process_cpu_percent)),
+        MoonDataCell::text(pct(sys.system_cpu_percent)),
+        MoonDataCell::text(mb(sys.used_memory_mb)),
+        MoonDataCell::text(mb(sys.free_physical_memory_mb)),
+        MoonDataCell::text(count(sys.logical_cpu_count)),
+        MoonDataCell::text(ago(sys.updated_ms, now_ms)),
     ])
 }
 
@@ -111,21 +110,28 @@ fn status_cell(status: &ConnStatus, p: MoonPalette) -> impl IntoElement + 'stati
         )
 }
 
-/// Проценты CPU: `97.8%` (одна десятая). `None` → прочерк.
-fn pct(v: Option<f32>) -> String {
-    v.map(|v| format!("{v:.1}%"))
+/// Format an integer `KernelHealth` CPU percentage, or a dash when unavailable.
+fn pct(v: Option<u8>) -> String {
+    v.map(|v| format!("{v}%"))
         .unwrap_or_else(|| "—".to_string())
 }
 
-/// Мегабайты: целое + « МБ». `None` → прочерк.
-fn mb(v: Option<u32>) -> String {
+/// Format an integer megabyte value with its localized unit, or a dash.
+fn mb(v: Option<u16>) -> String {
     v.map(|v| format!("{v} {}", t!("core_status.mb")))
         .unwrap_or_else(|| "—".to_string())
 }
 
-/// «Обновлено» — сколько назад пришла последняя строка (компактно, чтобы не обрезалось в узкой
-/// правой колонке): `< 60 с → «Nс»`, `< 60 мин → «Nм»`, иначе `«Nч»`. `0`/будущее → прочерк.
-/// Число биндим в локальную переменную (path-аргумент rust-i18n рендерится надёжнее выражения).
+/// Format a logical CPU count without a unit, or a dash when unavailable.
+fn count(v: Option<u8>) -> String {
+    v.map(|v| v.to_string()).unwrap_or_else(|| "—".to_string())
+}
+
+/// Format the age of the latest telemetry sample for the narrow right column.
+/// Values under a minute use seconds, values under an hour use minutes, and
+/// older values use hours. A zero or future timestamp renders as a dash. Bind
+/// the number locally because rust-i18n path arguments handle identifiers more
+/// reliably than expressions.
 fn ago(last_ms: i64, now_ms: i64) -> String {
     if last_ms <= 0 {
         return "—".to_string();

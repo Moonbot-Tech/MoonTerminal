@@ -830,4 +830,47 @@ pub enum FeedMsg {
     EngineActions(Vec<EngineActionResult>),
     /// Пачка изменений chart-алертов ядра за тик дренажа (гейт `feed.alerts`).
     ChartAlerts(Vec<ChartAlertUpdate>),
+    /// Core resource telemetry from protocol-v4 `Event::KernelHealth`.
+    /// Emitted for every health event; the store gates the Core Status table with
+    /// `sys_rev` only when metric values change.
+    SysStatus(CoreSysStatus),
+}
+
+/// Latest resource telemetry for one core, from protocol v4 `Event::KernelHealth`.
+///
+/// Every `Option` is `None` until that field first arrives. CPU refreshes on
+/// every Ping; memory and the logical-CPU count are a lower-rate tail (`None`
+/// until the first memory-bearing Ping, then the retained snapshot keeps the last
+/// value). Fields carry a SCOPE distinction (process vs whole machine), NOT a time
+/// one: `system_cpu_percent` is machine-wide CPU, never an average of the process
+/// CPU. Moonproto-free — the `KernelHealth` projection lives in `feed::live::convert`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CoreSysStatus {
+    /// MoonBot process CPU, % of the whole machine.
+    pub process_cpu_percent: Option<u8>,
+    /// Whole-machine CPU, %. The process-vs-machine SCOPE counterpart of
+    /// `process_cpu_percent`, not a time average.
+    pub system_cpu_percent: Option<u8>,
+    /// MoonBot process memory, MB (decimal).
+    pub used_memory_mb: Option<u16>,
+    /// Free physical memory on the machine, MB (decimal).
+    pub free_physical_memory_mb: Option<u16>,
+    /// Logical CPU count of the machine.
+    pub logical_cpu_count: Option<u8>,
+    /// Receipt time of the last `KernelHealth`, unix ms (`0` — none yet).
+    pub updated_ms: i64,
+}
+
+impl CoreSysStatus {
+    /// Whether the telemetry metrics are equal, ignoring the `updated_ms` receipt stamp.
+    /// The store bumps `sys_rev` only on a metric change; `updated_ms` advancing on
+    /// every Ping must not churn the panel's repaint signature (the panel keeps
+    /// "Updated" live via its own 1 Hz tick).
+    pub fn metrics_eq(&self, other: &Self) -> bool {
+        self.process_cpu_percent == other.process_cpu_percent
+            && self.system_cpu_percent == other.system_cpu_percent
+            && self.used_memory_mb == other.used_memory_mb
+            && self.free_physical_memory_mb == other.free_physical_memory_mb
+            && self.logical_cpu_count == other.logical_cpu_count
+    }
 }

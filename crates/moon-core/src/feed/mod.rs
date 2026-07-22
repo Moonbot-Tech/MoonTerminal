@@ -4,7 +4,6 @@
 mod assets;
 pub mod live;
 mod order_edit;
-mod report;
 mod strategies;
 pub mod synth;
 mod trade;
@@ -315,9 +314,13 @@ pub enum CoreCmd {
     /// «Join all sells» (ПКМ по линии sell): объединить sell-ордера рынка по стороне позиции.
     /// Транслируется в moonproto `trade().join_orders(market, side)`. РЕАЛЬНОЕ действие.
     JoinSells { market: String, short: bool },
-    /// «Split order» (ПКМ по линии sell): разбить выбранный sell-ордер рынка на `parts` частей.
-    /// Транслируется в moonproto `trade().split_order(SplitOrderParams::new(market, parts))`.
-    SplitOrder { market: String, parts: i32 },
+    /// Split the specific sell order selected from a line or row into `parts`.
+    /// Protocol v4 addresses this live trading action by the server order `uid`.
+    SplitOrder { uid: u64, parts: i32 },
+    /// Split by market for a hotkey with no selected order.
+    /// The feed sends this live trading action only when exactly one active sell
+    /// order can be resolved; zero or multiple candidates are a no-op.
+    SplitOrderForMarket { market: String, parts: i32 },
     /// Старт/рестарт рантайма ядра (попап настроек ядра). moonproto `settings().restart_now()`:
     /// старт рынка-рантайма + выход из passive + старт отмеченных стратегий. Стопа в протоколе нет.
     RestartNow,
