@@ -1,45 +1,45 @@
-//! Кодек blob'а chart-объекта Moonbot (`TChartObject.Save()`) — им chart-алерты
-//! ездят в ядро (`upsert`). Формат восстановлен реверсом 6 живых сэмплов
-//! (см. заметку chart-alerts-research). Всё little-endian.
+//! Codec for the Moonbot chart-object blob (`TChartObject.Save()`) used to send chart alerts
+//! to the core (`upsert`). The little-endian format was reverse-engineered from six live
+//! samples.
 //!
-//! Раскладка (заголовок 48 байт + payload по типу):
+//! Layout (48-byte header + type-specific payload):
 //! ```text
-//! @0   u8   тип фигуры (1=горизонталь, 2=отрезок, 3=fibo, 4=параллельные)
-//! @1   u32  kind = 13 (объект-алерт)
-//! @5   [u8;4] цвет
-//! @9   f32  толщина линии
-//! @13  u32  вид линии (TPenStyle): 0=Solid,1=Dash,2=Dot,3=DashDot,4=DashDotDot
+//! @0   u8   figure type (1=horizontal line, 2=segment, 3=fibo, 4=triangle, 5=channel)
+//! @1   u32  kind = 13 (alert object)
+//! @5   [u8;4] color
+//! @9   f32  line thickness
+//! @13  u32  line kind (TPenStyle): 0=Solid,1=Dash,2=Dot,3=DashDot,4=DashDotDot
 //! @17  u8   = 1
 //! @18  u32  = 0
-//! @22  f64  TDateTime создания (дни Delphi)
+//! @22  f64  creation TDateTime (Delphi days)
 //! @30  u16  = 0
-//! @32  u64  strategy_id (0 = без стратегии; для алертов — id стратегии вида «Alerts»)
+//! @32  u64  strategy_id (0 = no strategy; alerts use the id of the "Alerts" strategy)
 //! @40  u64  obj_uid
-//! @48  payload по типу:
-//!        hline(1)    = цена f64 + u16 0
-//!        segment(2)  = 2×(t,цена)
-//!        triangle(4) = 3×(t,цена)  — три вершины
-//!        channel(5)  = 2×цена f64 + u16 0  — две горизонтальные цены (без времени)
+//! @48  type-specific payload:
+//!        hline(1)    = price f64 + u16 0
+//!        segment(2)  = 2×(t,price)
+//!        triangle(4) = 3×(t,price)  — three vertices
+//!        channel(5)  = 2×price f64 + u16 0  — two horizontal prices (without time)
 //! ```
-//! Узел = `(TDateTime f64, цена f64)`. Fibo (тип 3) в нашей модели фигур пока нет —
-//! `decode` его пропускает, `encode` для него не вызывается.
+//! Node = `(TDateTime f64, price f64)`. Fibo (type 3) is not yet part of our figure model —
+//! `decode` skips it, and `encode` is never called for it.
 
 use crate::figures::{FigNode, FigureKind, LineKind};
 
-/// Тип фигуры в blob'е.
+/// Figure type in the blob.
 const T_HLINE: u8 = 1;
 const T_SEGMENT: u8 = 2;
 const T_FIBO: u8 = 3;
 const T_TRIANGLE: u8 = 4;
 const T_CHANNEL: u8 = 5;
 
-/// `kind` объекта-алерта (во всех сэмплах = 13).
+/// Alert-object `kind` (= 13 in every sample).
 const KIND_ALERT: u32 = 13;
 
-/// Начало payload'а (после 40-байтного заголовка + 8-байтного uid).
+/// Start of the payload (after the 40-byte header + 8-byte uid).
 const PAYLOAD_OFF: usize = 48;
 
-/// Delphi TDateTime: дни с 1899-12-30. Unix-эпоха = 25569-й день.
+/// Delphi TDateTime: days since 1899-12-30. The Unix epoch is day 25569.
 const DELPHI_UNIX_DAYS: f64 = 25569.0;
 const MS_PER_DAY: f64 = 86_400_000.0;
 
@@ -51,23 +51,23 @@ fn tdatetime_to_unix_ms(dt: f64) -> f64 {
     (dt - DELPHI_UNIX_DAYS) * MS_PER_DAY
 }
 
-/// Раскодированный chart-объект (для отображения серверных алертов / round-trip).
+/// Decoded chart object (for displaying server alerts / round trips).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecodedAlert {
     pub kind: FigureKind,
     pub color: [u8; 4],
     pub thickness: f32,
-    /// Вид линии (@13 TPenStyle).
+    /// Line kind (@13 TPenStyle).
     pub line_kind: LineKind,
     pub created_ms: f64,
-    /// Привязанная стратегия (id; 0 = без стратегии).
+    /// Associated strategy (id; 0 = no strategy).
     pub strategy_id: u64,
     pub uid: u64,
 }
 
-/// Собрать blob фигуры-алерта для `upsert`. `created_ms` — unix-время создания,
-/// `line_kind` — вид линии (@13), `strategy_id` — привязанная стратегия (0 = без),
-/// `uid` — тот же obj_uid.
+/// Builds an alert-figure blob for `upsert`. `created_ms` is the Unix creation time,
+/// `line_kind` is the line kind (@13), `strategy_id` is the associated strategy (0 = none),
+/// and `uid` is the same obj_uid.
 #[allow(clippy::too_many_arguments)]
 pub fn encode(
     kind: &FigureKind,
@@ -104,7 +104,7 @@ pub fn encode(
     match kind {
         FigureKind::HLine { price } => {
             out.extend_from_slice(&price.to_le_bytes());
-            out.extend_from_slice(&0u16.to_le_bytes()); // хвост (во всех hline-сэмплах = 0)
+            out.extend_from_slice(&0u16.to_le_bytes()); // Tail (= 0 in every hline sample).
         }
         FigureKind::Segment { a, b } => {
             node(a, &mut out);
@@ -124,8 +124,8 @@ pub fn encode(
     out
 }
 
-/// Разобрать blob chart-объекта. `None` — слишком короткий или тип, которого нет в
-/// нашей модели фигур (fibo).
+/// Decodes a chart-object blob. Returns `None` if it is too short or has a type absent from
+/// our figure model (fibo).
 pub fn decode(blob: &[u8]) -> Option<DecodedAlert> {
     if blob.len() < PAYLOAD_OFF + 8 {
         return None;
