@@ -1,6 +1,6 @@
-//! Модалки операций над деревом стратегий: создать стратегию/папку, переименовать,
-//! подтвердить удаление. Само открытое окно живёт в MoonUI Root; здесь — сборка тела/
-//! футера диалога и подтверждённый диспетч в `moon-core`.
+//! Modal operations for the strategy tree: create a strategy or folder, rename, and confirm
+//! deletion. MoonUI Root owns the open dialog; this module builds its body and footer and
+//! dispatches confirmed operations to `moon-core`.
 
 use super::tree_ops;
 use super::tree_ui::TreeOp;
@@ -70,8 +70,8 @@ fn op_dialog_body(
                         .collect()
                 })
                 .unwrap_or_default();
-            // MoonShot — наверх списка (самый используемый вид), остальные в
-            // порядке схемы: меньше беготни по длинному меню.
+            // Put MoonShot first because it is the most commonly used kind; retain schema order
+            // for the rest to reduce navigation through a long menu.
             if let Some(pos) = kinds
                 .iter()
                 .position(|(_, n)| n.eq_ignore_ascii_case("MoonShot"))
@@ -199,8 +199,8 @@ fn op_dialog_footer(
                 .on_click(move |_, window, cx| {
                     match ok_view.update(cx, |this, cx| this.confirm_op_dialog(cx)) {
                         Ok(true) => window.close_dialog(cx),
-                        // Валидация не прошла (пустое имя стратегии) — диалог оставляем
-                        // открытым и явно говорим почему (раньше была «тишина»).
+                        // Keep the dialog open when validation rejects an empty strategy name and
+                        // explain the reason instead of failing silently.
                         Ok(false) => {
                             window.push_notification(
                                 MoonNotification::warning(t!("dialogs.name_required").to_string()),
@@ -221,7 +221,7 @@ fn op_dialog_footer(
 }
 
 impl StrategiesView {
-    // ── Открытие модалок ──────────────────────────────────────────────────────
+    // ── Opening modals ────────────────────────────────────────────────────────
 
     pub(super) fn open_create_strategy(
         &mut self,
@@ -231,8 +231,8 @@ impl StrategiesView {
         cx: &mut Context<Self>,
     ) {
         let store = self.backend.read(cx).session.store();
-        // Дефолт вида — MoonShot (статистически самый используемый), а не первый
-        // по схеме (Telegram); нет MoonShot в схеме → первый.
+        // Default to MoonShot, the most commonly used kind, rather than the schema's first kind
+        // (Telegram). Fall back to the first kind when MoonShot is absent.
         let kinds = self.kinds_of(store, core);
         let kind = kinds
             .iter()
@@ -240,7 +240,7 @@ impl StrategiesView {
             .or_else(|| kinds.first())
             .map(|(o, _)| *o);
         self.op_input_init = String::new();
-        self.op_input = None; // каждое открытие получает свежий input entity/layout
+        self.op_input = None; // Give every opening a fresh input entity and layout.
         self.op = Some(TreeOp::CreateStrategy { core, target, kind });
         self.open_op_dialog(window, cx);
         cx.notify();
@@ -410,19 +410,19 @@ impl StrategiesView {
         );
     }
 
-    /// Запросить удаление стратегий выделения (с проверкой правила «все выключены»).
+    /// Requests deletion of the selected strategies after checking that all are disabled.
     pub(super) fn request_delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let store = self.backend.read(cx).session.store();
         let rows = self.selection_rows(store);
         if rows.is_empty() {
             return;
         }
-        // Правило: удалять можно, только если ВСЕ выбранные выключены.
+        // Deletion is allowed only when every selected strategy is disabled.
         if rows.iter().any(|(_, r)| r.checked) {
             return;
         }
-        // Выделение может охватывать разные ядра — подтверждение одно, диспетч группирует
-        // по ядрам (см. delete_selection, переderives выделение).
+        // A selection may span cores. Use one confirmation; `delete_selection` derives the
+        // selection again and dispatches each strategy to its core.
         self.op = Some(TreeOp::ConfirmDeleteStrategies {
             label: t!("strat.count_strategies", n = rows.len()).to_string(),
         });
@@ -430,7 +430,7 @@ impl StrategiesView {
         cx.notify();
     }
 
-    /// Запросить удаление папки (правило: все стратегии под ней выключены).
+    /// Requests folder deletion when every strategy beneath it is disabled.
     pub(super) fn request_delete_folder(
         &mut self,
         core: CoreId,
@@ -442,7 +442,7 @@ impl StrategiesView {
         let Some(cd) = store.core(core) else { return };
         let under = tree_ops::rows_under(&cd.strategies, &path);
         if !tree_ops::all_off(&under) {
-            return; // есть запущенные — нельзя
+            return; // Running strategies prevent deletion.
         }
         let label = t!(
             "strat.folder_named",
@@ -454,7 +454,7 @@ impl StrategiesView {
         cx.notify();
     }
 
-    // ── Подтверждённый диспетч ────────────────────────────────────────────────
+    // ── Confirmed dispatch ────────────────────────────────────────────────────
 
     fn confirm_create_strategy(
         &mut self,
@@ -484,10 +484,10 @@ impl StrategiesView {
             .read(cx)
             .session
             .create_strategies(core, vec![spec])?;
-        // Новая стратегия выключена — снимаем «только активные» и раскрываем ядро, чтобы её видеть.
+        // A new strategy is disabled, so clear the active-only filter and expand its core to show it.
         self.filter.only_active = false;
         self.expanded_cores.insert(core);
-        // Выберем её, как только ядро пришлёт эхо.
+        // Select it after the core echoes it back.
         self.pending_select = Some((core, name));
         Ok(())
     }
@@ -507,12 +507,12 @@ impl StrategiesView {
             tree_ops::rename_folder(&cd.strategies, old_path, new_name)
         };
         self.backend.read(cx).session.move_strategies(core, moves)?;
-        // UI-папка (пустая) — переименовать локально только после успешной отправки команды.
+        // Rename an empty UI-only folder locally only after the move command succeeds.
         self.rename_ui_folder(core, old_path, new_name);
         Ok(())
     }
 
-    /// Удалить выделение (группировка по ядрам; правило уже проверено в request_).
+    /// Deletes the selection; the request path already checked the disabled-only rule.
     fn delete_selection(&mut self, cx: &mut Context<Self>) -> Result<()> {
         let rows = {
             let store = self.backend.read(cx).session.store();

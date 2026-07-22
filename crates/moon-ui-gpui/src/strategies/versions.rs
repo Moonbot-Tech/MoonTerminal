@@ -1,8 +1,8 @@
-//! Панель «Версии» окна «Стратегии» (между деревом и разделами): история версий
-//! выбранной стратегии из strategies.sqlite со статистикой «дд.мм (изменено)(профит$)».
-//! Профит — ленивый кэш version_stats (`strat_db::stats`), считается с background
-//! executor. Верхняя строка — текущая версия (живые параметры); клик по старой
-//! подставляет её поля в панели разделов/параметров (только чтение).
+//! Versions pane of the Strategies window, between the tree and sections: history for the selected
+//! strategy from strategies.sqlite with `dd.mm (changed)(profit$)` statistics. Profit comes from
+//! the lazy version_stats cache (`strat_db::stats`) computed on the background executor. The top
+//! Current row represents live editable mode; selecting any persisted snapshot row, including the
+//! current-version snapshot, supplies its fields to the read-only sections and parameters panes.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -17,46 +17,48 @@ use crate::design::{moon, moon_alpha};
 use moon_core::feed::{SchemaFieldUi, StrategyRow};
 use moon_core::strat_db::stats::{VersionInfo, short_date};
 
-/// Состояние панели версий.
+/// State of the versions pane.
 #[derive(Default)]
 pub(super) struct VersionsState {
     pub list: Vec<VersionInfo>,
-    /// Для какой стратегии загружен `list`.
+    /// Strategy for which `list` was loaded.
     pub key: Option<Key>,
-    /// Поколение strat_db на момент загрузки — новая запись = перезагрузка.
+    /// strat_db generation at load time; a new record triggers a reload.
     pub db_gen: u64,
     pub inflight: bool,
-    /// valid_from выбранной СТАРОЙ версии; None = текущая (живые параметры).
+    /// `valid_from` of the selected persisted snapshot; None selects live editable mode.
     pub sel: Option<i64>,
-    /// Синтетическая строка старой версии (поля из raw_json) для панелей справа.
+    /// Synthetic persisted-snapshot row whose fields come from raw_json for the panes on the right.
     pub row: Option<(Key, i64, StrategyRow)>,
-    /// Изменённые в выбранной версии поля: имя(lowercase) → (имя как в дампе,
-    /// старое значение display; пустое = поля не было). Пусто — диффа нет.
+    /// Fields changed in the selected version, mapped from lowercase name to the name as dumped and
+    /// the previous display value; an empty value means the field did not exist. Empty means no diff.
     pub changed: std::collections::HashMap<String, (String, String)>,
-    /// Раздел в режиме просмотра версии: None = псевдораздел «Все» (только
-    /// изменённые поля всех разделов), Some(i) = раздел схемы (тоже фильтр).
+    /// Section in snapshot view: with a nonempty diff, None selects the synthetic "All" section of
+    /// changed fields across every section, while Some(i) filters one schema section.
     pub section: Option<usize>,
-    /// Выбрать ПОСЛЕДНЮЮ версию, как только список догрузится (клик по
-    /// удалённой стратегии: живого режима нет — сразу её финальные параметры).
+    /// Select the LATEST version once the list finishes loading.
+    ///
+    /// This follows a click on a deleted strategy, which has no live mode and opens directly on its
+    /// final parameters.
     pub pending_latest: bool,
-    /// Панель свёрнута влево в узкую полоску (виден только счётчик версий).
+    /// Whether the pane is collapsed left into a narrow strip showing only the version count.
     pub collapsed: bool,
 }
 
 impl StrategiesView {
-    /// Смотрим старую версию? (панели параметров — только чтение).
+    /// Return whether a persisted snapshot is being viewed, making the parameter panes read-only.
     pub(super) fn viewing_version(&self) -> bool {
         self.versions.sel.is_some()
     }
 
-    /// Синтетическая строка выбранной версии, если она про текущий выбор.
+    /// Return the selected version's synthetic row when it belongs to the current selection.
     pub(super) fn version_override(&self) -> Option<(Key, &StrategyRow)> {
         let vf = self.versions.sel?;
         let (key, row_vf, row) = self.versions.row.as_ref()?;
         (Some(*key) == self.selected && *row_vf == vf).then_some((*key, row))
     }
 
-    /// Фильтр «только изменённые поля» активен? (просмотр версии с непустым диффом).
+    /// Return the changed-fields-only filter when viewing a persisted snapshot with a nonempty diff.
     pub(super) fn version_changed_filter(
         &self,
     ) -> Option<&std::collections::HashMap<String, (String, String)>> {
@@ -67,7 +69,7 @@ impl StrategiesView {
         }
     }
 
-    /// Перезагрузка списка версий при смене выбора/поколения БД (fire-and-forget).
+    /// Fire-and-forget reload of the version list after the selection or DB generation changes.
     fn ensure_versions(&mut self, cx: &mut Context<Self>) {
         let key = self.selected;
         let db_gen = moon_core::strat_db::generation();
@@ -75,7 +77,7 @@ impl StrategiesView {
             return;
         }
         if self.versions.key != key {
-            // Другая стратегия — сброс выбора версии и списка.
+            // A different strategy invalidates the selected version and cached list.
             self.versions.list.clear();
             self.versions.sel = None;
             self.versions.row = None;
@@ -98,8 +100,7 @@ impl StrategiesView {
                     this.versions.inflight = false;
                     if this.versions.key == Some((core, id)) {
                         this.versions.list = list;
-                        // Удалённая стратегия: живого режима нет — сразу
-                        // открываем последнюю известную версию.
+                        // A deleted strategy has no live mode, so open its latest known version immediately.
                         if this.versions.pending_latest {
                             this.versions.pending_latest = false;
                             if let Some(vf) = this.versions.list.first().map(|v| v.valid_from) {
@@ -114,8 +115,8 @@ impl StrategiesView {
         .detach();
     }
 
-    /// Фоновая загрузка удалённых стратегий (папка «Удалённые» дерева): по
-    /// смене поколения strat_db (soft-delete пишется на FullSet-снапшоте).
+    /// Load deleted strategies for the tree's Deleted folder in the background when the strat_db
+    /// generation changes; soft deletion is recorded on a FullSet snapshot.
     pub(super) fn ensure_deleted(&mut self, cx: &mut Context<Self>) {
         let db_gen = moon_core::strat_db::generation();
         if self.deleted_gen == db_gen || self.deleted_inflight {
@@ -148,11 +149,12 @@ impl StrategiesView {
         .detach();
     }
 
-    /// ПКМ на версии → «Восстановить в текущую»: стейджит ПОЛНУЮ версию в живую
-    /// стратегию — каждое поле схемы получает значение версии (отсутствовало в
-    /// версии → дефолт схемы, т.е. добавленные позже поля сбрасываются), но
-    /// только там, где текущее значение реально отличается. Косметика из
-    /// игнор-листа не трогается. Применение — кнопкой «Применить» (новая версия).
+    /// Stage a FULL persisted snapshot into the live strategy through "Restore to current".
+    ///
+    /// Every schema field receives its version value; fields absent from that version fall back to
+    /// the schema default, resetting fields added later. Only values that genuinely differ from the
+    /// current strategy are staged, and cosmetic fields on the ignore list remain untouched. The
+    /// Apply button submits the changes and creates a new version.
     pub(super) fn stage_version_into_current(&mut self, vf: i64, cx: &mut Context<Self>) {
         let Some((core, id)) = self.selected else {
             return;
@@ -181,7 +183,7 @@ impl StrategiesView {
                     }
                     let vmap: std::collections::HashMap<String, String> =
                         fields.into_iter().collect();
-                    // Диф против живых значений по ВСЕЙ схеме вида.
+                    // Diff against live values across the kind's ENTIRE schema.
                     let edits: Vec<(String, String)> = {
                         let b = this.backend.read(cx);
                         let store = b.session.store();
@@ -209,7 +211,7 @@ impl StrategiesView {
                                     .cloned()
                                     .or_else(|| f.default.clone())
                                     .unwrap_or_default();
-                                // Как field_value: пустое числовое = «0».
+                                // Match field_value semantics: an empty numeric field is `0`.
                                 if target.is_empty()
                                     && f.type_name != "String"
                                     && matches!(f.ui, SchemaFieldUi::Edit)
@@ -232,7 +234,7 @@ impl StrategiesView {
                         this.field_edits.insert((core, id, name), v);
                     }
                     log::info!("версия {vf} → в текущую: {n} полей застейджено");
-                    // К живому виду: жёлтые dirty-маркеры + кнопка «Применить».
+                    // Return to live view with yellow dirty markers and the Apply button.
                     this.select_version(None, cx);
                     cx.notify();
                 });
@@ -241,9 +243,12 @@ impl StrategiesView {
         .detach();
     }
 
-    /// Восстановить удалённую стратегию под её СТАРЫМ id (ПКМ → «Восстановить»):
-    /// head + поля последней версии грузятся фоном, затем `RestoreStrategy` в
-    /// ядро. Эхо-снапшот оживит head (restored-версия), профит склеится по id.
+    /// Restore a deleted strategy under its OLD id through the context-menu Restore action.
+    ///
+    /// The head and latest-version fields load in the background before `RestoreStrategy` is sent
+    /// to the core. The echoed snapshot revives the head: unchanged content reopens the latest
+    /// version, while changed restored content may create a new version. Profit history rejoins
+    /// through the unchanged id.
     pub(super) fn restore_deleted_strategy(
         &mut self,
         core: moon_core::session::CoreId,
@@ -280,8 +285,8 @@ impl StrategiesView {
         .detach();
     }
 
-    /// Выбор УДАЛЁННОЙ стратегии из дерева (папка «Удалённые»): обычный выбор +
-    /// автопереход на последнюю версию (живых параметров у неё нет).
+    /// Select a DELETED strategy from the tree's Deleted folder and automatically open its latest
+    /// version because it has no live parameters.
     pub(super) fn select_deleted_strategy(&mut self, key: Key, cx: &mut Context<Self>) {
         self.sel.clear();
         self.sel.insert(key);
@@ -298,7 +303,7 @@ impl StrategiesView {
         cx.notify();
     }
 
-    /// Выбор версии: None = текущая (живая), Some = старая (грузим её поля фоном).
+    /// Select None for live editable mode or Some for a persisted snapshot loaded in the background.
     fn select_version(&mut self, vf: Option<i64>, cx: &mut Context<Self>) {
         if self.versions.sel == vf {
             return;
@@ -306,7 +311,7 @@ impl StrategiesView {
         self.versions.sel = vf;
         self.versions.row = None;
         self.versions.changed.clear();
-        self.versions.section = None; // по умолчанию — «Все» (только изменения)
+        self.versions.section = None; // A loaded nonempty diff interprets None as "All".
         cx.notify();
         let (Some((core, id)), Some(vf)) = (self.selected, vf) else {
             return;
@@ -325,11 +330,11 @@ impl StrategiesView {
                 let _ = this.update(cx, |this, cx| {
                     let Some(view) = view else { return };
                     if this.versions.sel != Some(vf) || this.selected != Some((core, id)) {
-                        return; // выбор уже ушёл
+                        return; // The selection has already moved elsewhere.
                     }
-                    // Синтетическая строка: живой снапшот (вид/папка/галка) +
-                    // поля версии; имя — из версии (могло быть переименование).
-                    // Удалённой стратегии в сторе нет — база из head-строки БД.
+                    // Build a synthetic row from the live snapshot's kind/folder/check state plus
+                    // the version fields. Take the name from the version because it may have been
+                    // renamed. Deleted strategies are absent from the store, so use the DB head row.
                     let live = {
                         let b = this.backend.read(cx);
                         let store = b.session.store();
@@ -369,15 +374,16 @@ impl StrategiesView {
         .detach();
     }
 
-    /// Панель «Версии» (колонка между деревом и разделами). Сворачивается влево
-    /// в узкую полоску: стрелка + счётчик версий выбранной стратегии.
+    /// Render the Versions pane between the tree and sections.
+    ///
+    /// It collapses left into a narrow strip showing an arrow and the selected strategy's version count.
     pub(super) fn versions_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
         let single = self.selected.is_some() && self.sel.len() <= 1;
         if self.versions.collapsed {
             if single {
-                self.ensure_versions(cx); // счётчик на полоске должен быть свежим
+                self.ensure_versions(cx); // Keep the count on the collapsed strip current.
             }
             let count = single.then(|| self.versions.list.len()).filter(|n| *n > 0);
             return v_flex()
@@ -430,7 +436,7 @@ impl StrategiesView {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(t!("strat.versions").to_string()),
                     )
-                    // Свернуть панель влево (останется полоска со счётчиком).
+                    // Collapse the pane left, leaving a narrow strip with the count.
                     .child(
                         div()
                             .id("versions-collapse")
@@ -455,7 +461,7 @@ impl StrategiesView {
                 .child(hint(t!("strat.no_selection").to_string()))
                 .into_any_element();
         }
-        // Мультивыбор: версии недоступны (панели показывают объединение живых).
+        // Versions are unavailable for multi-selection because the panes show merged live values.
         if self.sel.len() > 1 {
             self.versions.sel = None;
             self.versions.row = None;
@@ -473,8 +479,8 @@ impl StrategiesView {
             return col.child(hint(text)).into_any_element();
         }
 
-        // Удалённая стратегия (есть в БД, нет в живом сторе): живого режима нет —
-        // строка «Текущая» не показывается, список только исторический.
+        // A deleted strategy exists in the DB but not the live store, so it has no live mode: omit
+        // the Current row and show only its history.
         let live_exists = self
             .selected
             .map(|(c, id)| {
@@ -483,9 +489,8 @@ impl StrategiesView {
             })
             .unwrap_or(false);
         let mut list = v_flex().w_full().gap_0();
-        // «Текущая» — живой режим (все поля, редактирование), выбор по умолчанию.
-        // Ниже отдельной строкой идёт та же текущая версия («тек.»), но кликом
-        // открывается её ДИФФ+профит, как у исторических.
+        // Current is the default live mode with every field editable. A separate row below represents
+        // the persisted current-version snapshot and opens its DIFF and profit like other snapshot rows.
         if live_exists {
             let live_on = self.versions.sel.is_none();
             let mut live_row = h_flex()
@@ -506,7 +511,7 @@ impl StrategiesView {
                         .text_color(moon(p.text))
                         .child(t!("strat.versions_live").to_string()),
                 )
-                // Дата последней версии (той, что сейчас в ядре) — справа, тускло.
+                // Show the latest version's date, currently in the core, dimmed on the right.
                 .child(
                     div().flex_none().text_color(moon(p.text_muted)).child(
                         self.versions
@@ -583,7 +588,7 @@ impl StrategiesView {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.select_version(Some(vf), cx);
                 }))
-                // ПКМ: восстановить ПОЛНУЮ версию на место текущей (стейджинг).
+                // Right-click to stage the FULL version in place of the current one.
                 .when(live_exists, |r| {
                     r.on_mouse_down(
                         MouseButton::Right,

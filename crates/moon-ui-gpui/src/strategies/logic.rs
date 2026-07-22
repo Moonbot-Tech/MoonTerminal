@@ -1,7 +1,7 @@
-//! Чистые помощники окна «Стратегии» (порт `strategies/mod.rs`): выбор/мультивыбор,
-//! пересечение схем, значения полей и их правки, признаки полей (memo/формула) и
-//! построение дерева папок. Без UI и без `cx` — только вычисления над `StrategiesView`
-//! и `CoreStore`; рендер-методы живут в [`super`].
+//! Pure helpers for the Strategies window, ported from `strategies/mod.rs`: selection and
+//! multi-selection, schema intersections, field values and edits, memo/formula classification,
+//! and folder-tree construction. These functions perform UI-independent calculations over
+//! `StrategiesView` and `CoreStore`; rendering methods live in [`super`].
 
 use std::collections::HashSet;
 
@@ -13,14 +13,14 @@ use super::rules::{Rules, Values};
 use super::tree_ops::path_segments;
 use super::{Key, StrategiesView};
 
-/// Поиск строки стратегии в store.
+/// Find a strategy row in the core store.
 pub(super) fn row(store: &CoreStore, core: CoreId, id: u64) -> Option<&StrategyRow> {
     store.core(core)?.strategies.iter().find(|s| s.id == id)
 }
 
-/// Выбранная строка стратегии (по `selected`). Если в панели «Версии» выбрана
-/// старая версия — подставляется её синтетическая строка (поля из raw_json):
-/// панели разделов/параметров показывают исторические значения.
+/// Return the primary selected strategy row.
+/// When the Versions panel selects a persisted read-only snapshot, returns its synthetic row built
+/// from `raw_json` so the sections and parameters panels display that snapshot instead of live mode.
 pub(super) fn selected_row<'a>(
     st: &'a StrategiesView,
     store: &'a CoreStore,
@@ -32,7 +32,7 @@ pub(super) fn selected_row<'a>(
     row(store, core, id)
 }
 
-/// Ключи выбранных стратегий (мультивыбор) или первичная, если выбор пуст.
+/// Return multi-selected keys, or the primary selection when the set is empty.
 pub(super) fn selected_keys(st: &StrategiesView) -> Vec<Key> {
     if st.sel.is_empty() {
         st.selected.into_iter().collect()
@@ -45,7 +45,7 @@ pub(super) fn multi_row_pairs<'a>(
     st: &'a StrategiesView,
     store: &'a CoreStore,
 ) -> Vec<(Key, &'a StrategyRow)> {
-    // Просмотр старой версии (только одиночный выбор) — единственная «строка».
+    // A persisted snapshot view is read-only, supports one selection, and supplies the sole row.
     if let Some((key, r)) = st.version_override() {
         return vec![(key, r)];
     }
@@ -55,7 +55,7 @@ pub(super) fn multi_row_pairs<'a>(
         .collect()
 }
 
-/// У выбранных РАЗНЫЕ виды стратегий? (тогда SignalType менять нельзя — скрываем).
+/// Return whether selected strategies have different kinds, which hides the SignalType editor.
 pub(super) fn kinds_differ(st: &StrategiesView, store: &CoreStore) -> bool {
     let mut kind: Option<u8> = None;
     for (c, id) in selected_keys(st) {
@@ -70,7 +70,7 @@ pub(super) fn kinds_differ(st: &StrategiesView, store: &CoreStore) -> bool {
     false
 }
 
-/// Имена полей (lowercase) в схеме ядра `core` для вида `ord`.
+/// Return lowercase field names from core `core`'s schema for kind ordinal `ord`.
 pub(super) fn kind_field_set(store: &CoreStore, core: CoreId, ord: u8) -> HashSet<String> {
     store
         .core(core)
@@ -86,8 +86,8 @@ pub(super) fn kind_field_set(store: &CoreStore, core: CoreId, ord: u8) -> HashSe
         .unwrap_or_default()
 }
 
-/// Поля (lowercase), которые есть у ВСЕХ выбранных стратегий (пересечение схем их
-/// видов). None — выбрана одна (ограничения нет, показываем всё).
+/// Return lowercase fields present in every selected strategy kind's schema.
+/// Returns `None` for a single selection, meaning no intersection restriction applies.
 pub(super) fn common_fields(st: &StrategiesView, store: &CoreStore) -> Option<HashSet<String>> {
     let keys = selected_keys(st);
     if keys.len() <= 1 {
@@ -105,8 +105,8 @@ pub(super) fn common_fields(st: &StrategiesView, store: &CoreStore) -> Option<Ha
     acc
 }
 
-/// Значения полей выбранной стратегии: имя(lowercase) → значение(как есть) — для
-/// вычисления зависимостей (depends_on). Несохранённые ядром поля добираем дефолтами.
+/// Build dependency strings for the selected strategy, keyed by lowercase field name.
+/// Values come from stored fields, pending edits, or schema defaults without display normalization.
 pub(super) fn selected_values(st: &StrategiesView, store: &CoreStore) -> Values {
     let mut v = Values::new();
     if let Some(row) = selected_row(st, store) {
@@ -132,7 +132,7 @@ pub(super) fn selected_values(st: &StrategiesView, store: &CoreStore) -> Values 
     v
 }
 
-/// Раздел АКТИВЕН (не затемнён), если в нём осталось БОЛЬШЕ ОДНОГО активного поля.
+/// Return whether a section has more than one dependency-active field and should remain undimmed.
 pub(super) fn section_active(rules: &Rules, values: &Values, sec: &SchemaSection) -> bool {
     sec.fields
         .iter()
@@ -141,9 +141,9 @@ pub(super) fn section_active(rules: &Rules, values: &Values, sec: &SchemaSection
         > 1
 }
 
-/// Секции схемы для выбранной стратегии (по её виду). None — нет выбора/схемы.
-/// Вид берём через `selected_row` (живой ИЛИ синтетический из версии) — так
-/// схема резолвится и для удалённых стратегий, которых в сторе уже нет.
+/// Return schema sections for the selected strategy kind, or `None` without a selection or schema.
+/// Resolving the kind through [`selected_row`] supports both live rows and synthetic version rows,
+/// including deleted strategies that no longer exist in the store.
 pub(super) fn selected_sections<'a>(
     st: &'a StrategiesView,
     store: &'a CoreStore,
@@ -187,9 +187,9 @@ pub(super) fn edited_field_value(
         .unwrap_or_else(|| field_value(row, f))
 }
 
-/// Значение поля стратегии (по имени) или дефолт схемы. Числовое поле без
-/// значения и без дефолта показываем как «0» (формат Moonbot: сервер не шлёт
-/// поля, равные дефолту, а пустой инпут путал — «что тут должно быть?»).
+/// Return a named strategy field value or its schema default.
+/// A numeric edit field with neither value nor default displays `0`; Moonbot cores omit fields equal
+/// to their defaults, and an empty numeric input would otherwise be ambiguous.
 pub(super) fn field_value(row: &StrategyRow, f: &SchemaField) -> String {
     let v = row
         .fields
@@ -204,8 +204,9 @@ pub(super) fn field_value(row: &StrategyRow, f: &SchemaField) -> String {
     v
 }
 
-/// Последние 6 hex-цифр значения Color-поля → RGB (формат Moonbot `AARRGGBB`
-/// или голый `RRGGBB`). Мусор/короткое значение → серый.
+/// Discard non-hexadecimal characters and parse the final six remaining digits as RGB.
+/// Moonbot `AARRGGBB` and plain `RRGGBB` are accepted; fewer than six remaining digits, or a parse
+/// failure, produces gray.
 pub(super) fn parse_hex_rgb(v: &str) -> [u8; 3] {
     let hex: String = v.trim().chars().filter(|c| c.is_ascii_hexdigit()).collect();
     if hex.len() < 6 {
@@ -216,8 +217,8 @@ pub(super) fn parse_hex_rgb(v: &str) -> [u8; 3] {
     crate::design::u32_to_rgb(n)
 }
 
-/// Префикс значения ДО последних 6 hex-цифр (обычно альфа «FF») — сохраняется
-/// при выборе цвета пикером.
+/// Return the hexadecimal prefix before the final RGB digits, usually the `FF` alpha component.
+/// The color picker preserves this prefix when replacing the color.
 pub(super) fn hex_alpha_prefix(v: &str) -> String {
     let hex: String = v.trim().chars().filter(|c| c.is_ascii_hexdigit()).collect();
     if hex.len() > 6 {
@@ -227,8 +228,8 @@ pub(super) fn hex_alpha_prefix(v: &str) -> String {
     }
 }
 
-/// Семантическое равенство display-значений полей: регистр («YES» из импортной
-/// эры == «Yes» живое), числа («1» == «1.0», «-4» == «-4.00»), булевы формы.
+/// Compare displayed field values semantically across case, numeric formatting, and boolean forms.
+/// This treats legacy imported `YES` like live `Yes`, and values such as `1` and `1.0` as equal.
 pub(super) fn values_equal(a: &str, b: &str) -> bool {
     let (a, b) = (a.trim(), b.trim());
     if a.eq_ignore_ascii_case(b) {
@@ -250,9 +251,9 @@ pub(super) fn is_on(v: &str) -> bool {
 }
 
 pub(super) fn is_memo_field(f: &SchemaField, value: &str) -> bool {
-    // Memo (многострочный редактор формул) — ТОЛЬКО для строковых полей. Числовые
-    // (Int/Double/Single/…) всегда однострочный инпут, даже если в имени есть «ema»
-    // (напр. trailingEma) — иначе числовое поле растягивается как формула и текст течёт.
+    // Memo and multiline formula editors apply only to string fields. Numeric fields such as Int,
+    // Double, and Single always use a single-line input even when their name contains `ema` (for
+    // example, `trailingEma`); otherwise an ordinary numeric field expands like a formula editor.
     if f.type_name != "String" {
         return false;
     }
@@ -321,14 +322,14 @@ pub(super) fn append_snippet(current: &str, snippet: &str) -> String {
     }
 }
 
-/// Переключает наличие ключа в множестве (раскрыт/свёрнут).
+/// Toggle a key's membership in a set, such as an expanded/collapsed state set.
 pub(super) fn toggle<T: std::cmp::Eq + std::hash::Hash>(set: &mut HashSet<T>, key: T) {
     if !set.remove(&key) {
         set.insert(key);
     }
 }
 
-/// Виды стратегий, присутствующие в дереве: (ordinal, имя), отсортировано по имени.
+/// Return strategy kinds present in the tree as ordinal/name pairs sorted by name.
 pub(super) fn kinds_present(cores: &[(CoreId, String)], store: &CoreStore) -> Vec<(u8, String)> {
     let mut map: std::collections::BTreeMap<u8, String> = std::collections::BTreeMap::new();
     for (c, _) in cores {
@@ -343,14 +344,14 @@ pub(super) fn kinds_present(cores: &[(CoreId, String)], store: &CoreStore) -> Ve
     v
 }
 
-/// Узел дерева папок: подпапки (по имени) + стратегии прямо в этой папке.
+/// Folder-tree node containing named child folders and strategies directly in this folder.
 #[derive(Default)]
 pub(super) struct FolderNode<'a> {
     pub(super) children: std::collections::BTreeMap<String, FolderNode<'a>>,
     pub(super) strategies: Vec<&'a StrategyRow>,
 }
 
-/// Строит вложенное дерево из путей стратегий (`/` и `\` — разделители).
+/// Build a nested tree from strategy paths, treating both `/` and `\` as separators.
 pub(super) fn build_node<'a>(it: impl Iterator<Item = &'a StrategyRow>) -> FolderNode<'a> {
     let mut root = FolderNode::default();
     for r in it {
@@ -363,7 +364,7 @@ pub(super) fn build_node<'a>(it: impl Iterator<Item = &'a StrategyRow>) -> Folde
     root
 }
 
-/// Гарантирует существование узла по пути (для пустых UI-папок без стратегий).
+/// Ensure that a path exists for empty UI folders that contain no strategies yet.
 pub(super) fn ensure_folder(root: &mut FolderNode, parts: &[String]) {
     let mut node = root;
     for part in parts {
@@ -371,7 +372,7 @@ pub(super) fn ensure_folder(root: &mut FolderNode, parts: &[String]) {
     }
 }
 
-/// Активных/всего (по фильтру типа/L/S) во всех стратегиях под путём `prefix`.
+/// Count active and total strategies below `prefix` after applying kind and direction filters.
 pub(super) fn folder_counts(
     strategies: &[StrategyRow],
     filter: &StrategyFilter,

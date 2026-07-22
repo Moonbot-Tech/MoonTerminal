@@ -1,16 +1,17 @@
-# Зависимости полей стратегий. Список — ВСЕ параметры схемы.
-# Пустое "" — условий нет (заполняй по мере надобности).
-# Формат: "Поле" = "A=YES;B<>0;C>1" (через ; — И). Сравнение без регистра,
-# булевы 0/1 = no/yes. Парсер терпит дубликаты (последний/слитый) и # коммент.
+# Strategy field dependencies. The list contains ALL schema parameters.
+# An empty "" means no conditions; add them as needed.
+# Format: "Field" = "A=YES;B<>0;C>1" (semicolon means AND). Comparisons are case-insensitive,
+# and Boolean 0/1 means no/yes. The parser accepts duplicates (the last occurrence wins) and only
+# full-line `#` comments.
 
 [deps]
 
-# === (без раздела) ===
+# === (no section) ===
 "FIntID" = ""
 "FVersion" = ""
 "NewsStrength" = ""
 
-# === (нет в CSV) ===
+# === (not in CSV) ===
 "UsePostOnly" = "AutoBuy=YES"
 
 # === Buy conditions ===

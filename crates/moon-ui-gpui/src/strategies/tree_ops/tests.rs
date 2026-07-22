@@ -76,13 +76,13 @@ fn new_strategy_uses_defaults_and_name() {
     let ns = new_strategy(&kind(), "My Strat", "folder/x");
     assert_eq!(ns.kind_ordinal, 1);
     assert_eq!(ns.folder_path, "folder/x");
-    // имя — в поле StrategyName
+    // The name is stored in the StrategyName field.
     let name = ns.fields.iter().find(|(n, _)| n == STRATEGY_NAME_FIELD);
     assert_eq!(
         name,
         Some(&(STRATEGY_NAME_FIELD.to_string(), "My Strat".to_string()))
     );
-    // дефолты схемы
+    // Schema defaults are preserved.
     let amount = ns.fields.iter().find(|(n, _)| n == "Amount");
     assert_eq!(amount.map(|(_, v)| v.as_str()), Some("100"));
     let spread = ns.fields.iter().find(|(n, _)| n == "Spread");
@@ -97,15 +97,15 @@ fn unique_name_suffixing() {
     assert_eq!(unique_name(&taken, "S"), "S (2)");
     taken.insert("S (2)".to_string());
     assert_eq!(unique_name(&taken, "S"), "S (3)");
-    // Копия копии: старые суффиксы срезаются до базы, «(copy) (copy)» не плодится.
+    // Copying a copy strips old suffixes to the base instead of producing `(copy) (copy)`.
     taken.insert("S (copy)".to_string());
     assert_eq!(unique_name(&taken, "S (copy)"), "S (3)");
     taken.insert("S (3)".to_string());
     assert_eq!(unique_name(&taken, "S (3)"), "S (4)");
-    // Занятое «(copy) (copy)» уникализируется от БАЗЫ, а не наращивает хвост.
+    // An occupied `(copy) (copy)` name is uniquified from its base instead of extending the suffix.
     taken.insert("S (copy) (copy)".to_string());
     assert_eq!(unique_name(&taken, "S (copy) (copy)"), "S (4)");
-    // Скобки не-копийного вида — часть имени, не срезаются.
+    // Parentheses unrelated to copying remain part of the name.
     taken.insert("Grid (v2 beta)".to_string());
     assert_eq!(unique_name(&taken, "Grid (v2 beta)"), "Grid (v2 beta) (2)");
 }
@@ -129,7 +129,7 @@ fn clip_text_roundtrip() {
 
 #[test]
 fn copy_rows_flattens_to_target() {
-    // Мультивыбор из РАЗНЫХ папок: rel_path пуст у всех → вставка кладёт всех в цель.
+    // A multi-selection from different folders has empty relative paths, so paste puts all in target.
     let rows = vec![
         row(1, "a", "grpA/p1", false),
         row(2, "b", "grpB/sub/p2", false),
@@ -137,7 +137,7 @@ fn copy_rows_flattens_to_target() {
     let refs: Vec<&StrategyRow> = rows.iter().collect();
     let clip = copy_rows(&refs);
     assert!(clip.iter().all(|c| c.rel_path.is_empty()));
-    // и paste_plan кладёт обе ПРЯМО в целевую папку
+    // `paste_plan` therefore places both directly in the target folder.
     let plan = paste_plan(&clip, &split_path("dest"), &HashSet::new());
     assert!(plan.iter().all(|n| n.folder_path == "dest"));
 }
@@ -150,7 +150,7 @@ fn copy_folder_keeps_folder_name() {
         row(3, "c", "other", false),
     ];
     let clip = copy_folder(&rows, &split_path("parent/fld"));
-    // относительно родителя parent → сохраняется сегмент fld
+    // Relative to parent, the `fld` segment is preserved.
     let rels: Vec<Vec<String>> = clip.iter().map(|c| c.rel_path.clone()).collect();
     assert!(rels.contains(&split_path("fld")));
     assert!(rels.contains(&split_path("fld/sub")));
@@ -180,7 +180,7 @@ fn paste_plan_rebases_and_dedups() {
     let plan = paste_plan(&clip, &split_path("dest"), &taken);
     assert_eq!(plan[0].folder_path, "dest");
     assert_eq!(plan[1].folder_path, "dest/sub");
-    // оба имени уникализированы, не пересекаются между собой
+    // Both names are unique and do not collide with each other.
     let n0 = plan[0]
         .fields
         .iter()
@@ -224,7 +224,7 @@ fn move_folder_keeps_name_and_guards_self() {
     assert!(edits.contains(&(1, "dest/fld".to_string())));
     assert!(edits.contains(&(2, "dest/fld/sub".to_string())));
     assert_eq!(edits.len(), 2);
-    // в самого себя/потомка — no-op
+    // Moving into itself or a descendant is a no-op.
     assert!(tree_ops_move_folder(&rows, "src/fld", "src/fld/sub").is_empty());
 }
 
@@ -234,7 +234,7 @@ fn tree_ops_move_folder(rows: &[StrategyRow], folder: &str, target: &str) -> Vec
 
 #[test]
 fn move_to_flattens_to_target() {
-    // Перенос мультивыбора из разных папок → каждая прямо в целевую папку.
+    // Moving a multi-selection from different folders puts every row directly in the target.
     let rows = vec![
         row(1, "a", "src/p1", false),
         row(2, "b", "other/grp/p2", false),

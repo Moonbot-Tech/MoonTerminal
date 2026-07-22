@@ -1,17 +1,17 @@
-//! Фильтры дерева стратегий. Все условия действуют одновременно (И).
-//! Отделены от остального состояния окна: чистые предикаты без UI.
-//! Порт egui `src/strategies/filter.rs` (точь-в-точь).
+//! Strategy-tree filters. Every condition is combined with logical AND.
+//! Kept separate from the remaining window state as pure, UI-independent predicates.
+//! Ported directly from egui's `src/strategies/filter.rs`.
 
 use moon_core::feed::StrategyRow;
 
 pub struct StrategyFilter {
-    /// По названию стратегии (подстрока, без регистра).
+    /// Case-insensitive substring filter over the strategy name.
     pub search: String,
-    /// По виду стратегии (ordinal). None — все виды.
+    /// Strategy-kind ordinal, or `None` for every kind.
     pub kind: Option<u8>,
-    /// По направлению: None — все, Some(true) — SHORT, Some(false) — LONG.
+    /// Direction filter: `None` for both, `Some(true)` for short, and `Some(false)` for long.
     pub dir: Option<bool>,
-    /// Показывать только активные (запущенные). По умолчанию вкл.
+    /// Show only rows whose `checked` checkbox state is true; enabled by default.
     pub only_active: bool,
 }
 
@@ -27,19 +27,19 @@ impl Default for StrategyFilter {
 }
 
 impl StrategyFilter {
-    /// Поиск активен → дерево временно раскрываем целиком.
+    /// Return whether search is active, which temporarily expands the entire tree.
     pub fn searching(&self) -> bool {
         !self.search.trim().is_empty()
     }
 
-    /// Условие для СЧЁТЧИКОВ активных/всего: вид И направление (без имени и без
-    /// «только активные»), чтобы цифры на ядрах/папках отражали выбранный тип и L/S.
+    /// Apply the kind and direction filters used by active/total counters.
+    /// Search text and `only_active` are excluded so core and folder counts reflect kind and side.
     pub fn counts(&self, row: &StrategyRow) -> bool {
         self.kind.is_none_or(|k| row.kind_ordinal == k)
             && self.dir.is_none_or(|s| row.is_short == s)
     }
 
-    /// Видимость строки в дереве: имя И вид И направление И («только активные» → checked).
+    /// Return row visibility after applying name, kind, direction, and checked-state filters.
     pub fn matches(&self, row: &StrategyRow) -> bool {
         let q = self.search.trim().to_lowercase();
         let by_name = q.is_empty() || row.name.to_lowercase().contains(&q);

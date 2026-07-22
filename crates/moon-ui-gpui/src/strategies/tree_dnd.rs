@@ -1,6 +1,6 @@
-//! Буфер (копировать/вставить) и drag&drop дерева стратегий: в пределах ядра — перенос
-//! (`move_strategies`), между ядрами — копирование (`create_strategies`). Чистая логика над
-//! путями/наборами — в [`super::tree_ops`].
+//! Clipboard and drag-and-drop operations for the strategy tree. Dropping within one core moves
+//! strategies through `move_strategies`; dropping across cores copies them through
+//! `create_strategies`. [`super::tree_ops`] owns the pure path and collection logic.
 
 use super::tree_ops;
 use super::tree_ui::{FolderDrag, StratDrag};
@@ -8,7 +8,7 @@ use super::*;
 use moon_core::feed::NewStrategySpec;
 
 impl StrategiesView {
-    // ── Буфер (копировать/вставить) ──────────────────────────────────────────
+    // ── Clipboard: copy and paste ────────────────────────────────────────────
 
     pub(super) fn copy_selection(&mut self, cx: &mut Context<Self>) {
         let store = self.backend.read(cx).session.store();
@@ -31,16 +31,18 @@ impl StrategiesView {
         cx.notify();
     }
 
-    /// Внутренний буфер + ТЕКСТОВАЯ копия в системный буфер обмена: стратегию/папку
-    /// можно вставить в блокнот и переслать (обратно принимает `paste_into`).
+    /// Stores an internal clipboard and a textual copy in the system clipboard.
+    ///
+    /// A strategy or folder can therefore be pasted into a text editor, shared, and accepted back
+    /// by `paste_into`.
     fn set_clipboard(&mut self, clip: Vec<tree_ops::ClipItem>, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(tree_ops::clip_to_text(&clip)));
         self.clipboard = Some(clip);
     }
 
     pub(super) fn paste_into(&mut self, core: CoreId, target: String, cx: &mut Context<Self>) {
-        // Внутренний буфер; пусто → пробуем СИСТЕМНЫЙ (текстовый формат clip_to_text —
-        // так вставляется папка/стратегия, присланная другим пользователем текстом).
+        // Prefer the internal clipboard; when empty, parse the system clipboard's `clip_to_text`
+        // format so strategies or folders shared as text can be pasted.
         let clip = self.clipboard.clone().or_else(|| {
             cx.read_from_clipboard()
                 .and_then(|item| item.text())
@@ -55,9 +57,9 @@ impl StrategiesView {
                 .core(core)
                 .map(|cd| cd.strategies.iter().map(|r| r.name.clone()).collect())
                 .unwrap_or_default();
-            // Имена, отправленные прошлыми вставками и уже пришедшие эхом, из резерва
-            // выбрасываем; остальные считаем занятыми — иначе быстрые Ctrl+V читали
-            // один и тот же снимок store и плодили дубли имён.
+            // Remove reserved names already echoed by earlier pastes and treat the remaining names
+            // as occupied. Otherwise rapid Ctrl+V operations would read the same store snapshot
+            // and create duplicate names.
             self.pending_names
                 .retain(|(c, n)| *c != core || !existing.contains(n));
             let mut taken = existing;
@@ -79,7 +81,7 @@ impl StrategiesView {
                     .map(|(_, v)| v.clone())
             })
             .collect();
-        // Имя первой вставленной — выберем её, как только ядро пришлёт эхо.
+        // Select the first pasted name after the core echoes it back.
         let first_name = new_names.first().cloned();
         if let Err(error) = self.backend.read(cx).session.create_strategies(core, specs) {
             log::warn!("paste strategies failed: {error}");
@@ -87,8 +89,8 @@ impl StrategiesView {
         }
         self.pending_names
             .extend(new_names.into_iter().map(|n| (core, n)));
-        // Новые/вставленные стратегии всегда выключены — снимаем «только активные», иначе их
-        // не видно. Раскрываем целевое ядро, чтобы результат был на виду.
+        // New and pasted strategies are disabled. Clear the active-only filter and expand the
+        // target core so the result remains visible.
         self.filter.only_active = false;
         self.expanded_cores.insert(core);
         self.pending_select = first_name.map(|n| (core, n));
@@ -97,8 +99,8 @@ impl StrategiesView {
 
     // ── Drag & Drop ───────────────────────────────────────────────────────────
 
-    /// Сбросить перетаскиваемые СТРАТЕГИИ в целевую папку (`target` пуст = корень ядра).
-    /// В пределах ядра — перенос (`move_strategies`); между ядрами — копирование.
+    /// Drops dragged strategies into a target folder; an empty `target` means the core root.
+    /// Moves within one core through `move_strategies` and copies across cores.
     pub(super) fn drop_strategies(
         &mut self,
         target_core: CoreId,
@@ -167,8 +169,8 @@ impl StrategiesView {
         cx.notify();
     }
 
-    /// Сбросить перетаскиваемую ПАПКУ в целевую папку-родитель (`target` пуст = корень).
-    /// В пределах ядра — перенос поддерева; между ядрами — копирование.
+    /// Drops a dragged folder under a target parent; an empty `target` means the core root.
+    /// Moves the subtree within one core and copies it across cores.
     pub(super) fn drop_folder(
         &mut self,
         target_core: CoreId,
@@ -186,7 +188,7 @@ impl StrategiesView {
                     .unwrap_or_default()
             };
             if moves.is_empty() {
-                return; // в себя/потомка или пустая папка
+                return; // Reject self/descendant targets and empty folders.
             }
             if let Err(error) = self
                 .backend
@@ -225,8 +227,10 @@ impl StrategiesView {
         cx.notify();
     }
 
-    /// Список id для перетаскивания стратегии: весь мультивыбор этого ядра, если строка в
-    /// выборе; иначе только она.
+    /// Returns drag IDs for a strategy row.
+    ///
+    /// If the row belongs to the selection, include the entire selection from its core; otherwise
+    /// include only that row.
     pub(super) fn drag_ids_for(&self, core: CoreId, id: u64) -> Vec<u64> {
         if self.sel.contains(&(core, id)) {
             self.sel
@@ -240,7 +244,7 @@ impl StrategiesView {
     }
 }
 
-/// Преобразовать план вставки/создания в команды ядра.
+/// Converts a paste/create plan into core command specifications.
 fn specs_from(plan: Vec<tree_ops::NewStrategy>) -> Vec<NewStrategySpec> {
     plan.into_iter()
         .map(|n| NewStrategySpec {
