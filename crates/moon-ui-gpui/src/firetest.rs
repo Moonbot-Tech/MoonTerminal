@@ -1143,9 +1143,10 @@ impl Runtime {
         Ok(())
     }
 
-    /// Сменить язык интерфейса тем же live-apply путём, что и Settings::apply_settings:
-    /// глобальная локаль rust-i18n + `refresh_windows()` (БЕЗ пересоздания окон). Цель —
-    /// любой язык, отличный от текущего; исходный запоминаем для восстановления.
+    /// Switches the interface locale through the same live-redraw mechanism as
+    /// `Settings::apply_settings`: update rust-i18n's global locale and call `refresh_windows()`
+    /// without recreating windows. English switches to Russian; any other locale switches to
+    /// English. The original and target are recorded for verification and restoration.
     fn request_locale_switch(&mut self, backend: &mut Backend, cx: &mut Context<Backend>) {
         let original = backend.config.language;
         let target = if original == Language::En {
@@ -1165,8 +1166,9 @@ impl Runtime {
         ));
     }
 
-    /// Долёт смены языка: глобальная локаль обязана стать целевой, а tool-окна — остаться
-    /// теми же (смена языка живая, окна не пересоздаются — иначе dedup/раскладка ломаются).
+    /// Verifies that the global locale reached the target and that the tool-window identities did
+    /// not change. Locale application must redraw existing windows rather than recreate them,
+    /// which would break window deduplication and layout continuity.
     fn verify_locale_switch(&self, backend: &Backend) -> Result<(), String> {
         let (_, target) = self
             .locale_switch
@@ -1194,7 +1196,7 @@ impl Runtime {
         Ok(())
     }
 
-    /// Вернуть исходный язык, чтобы стадия не отравляла локаль для остального прогона/логов.
+    /// Restores the recorded original locale so this stage does not affect later stages or logs.
     fn restore_locale(&mut self, backend: &mut Backend, cx: &mut Context<Backend>) {
         if let Some((original, _)) = self.locale_switch.take() {
             backend.config.language = original;
