@@ -1,14 +1,15 @@
-//! Универсальное сохранение ширин колонок таблиц (`MoonDataTable`) в `layout.toml`.
+//! Generic `MoonDataTable` column-layout persistence in `layout.toml`.
 //!
-//! Любая таблица подключается двумя строками:
-//! - при создании state — засеять сохранённые ширины из layout:
-//!   `state.column_widths = table_persist::saved(backend, "orders-table");`
-//! - в `render` (или observe-гейте) — `table_persist::persist(&backend, "orders-table", &state, cx);`
+//! After choosing a stable persistence ID, a table restores widths when it creates state:
+//! `state.column_widths = table_persist::saved(backend, &id);`
+//! It then calls `table_persist::persist(&backend, &id, &state, cx)` from the state observer or
+//! another change gate. Context-sensitive panels derive `id` with [`ctx_id`]; the base portion
+//! normally matches the ID passed to `MoonDataTable::new`, while the `:dock`/`:win` suffix keeps
+//! layouts separate.
 //!
-//! Ключ — стабильный id таблицы (тот же, что в `MoonDataTable::new(id, …)`). Ширины идут в
-//! `layout.table_column_widths` и persist'ятся общим механизмом (`layout_dirty`). Новая таблица
-//! получает сохранение бесплатно — достаточно этих двух вызовов, ничего в этот модуль добавлять
-//! не нужно.
+//! Widths live in `layout.table_column_widths`. Mutations set `layout_dirty`, and the shared
+//! debounced/quit save path writes the layout. Visible-column sets use the parallel [`visible`]
+//! and [`set_visible`] helpers. Supporting another table requires no table-specific code here.
 
 use std::collections::HashMap;
 
@@ -17,15 +18,18 @@ use moon_ui::{MoonButton, MoonButtonSize, MoonDataTableState};
 
 use crate::Backend;
 
-/// Id хранилища ширин/полей с КОНТЕКСТОМ: `base:dock` (докнутая вкладка) либо `base:win`
-/// (раскрыто в отдельном окне/открепление). Разные контексты → разные сохранённые раскладки:
-/// узкой вкладке и широкому окну удобны разные ширины/наборы колонок.
+/// Returns a context-qualified storage ID for table widths and visible fields.
+///
+/// A docked tab uses `base:dock`; a detached or separately opened window uses `base:win`.
+/// Separate keys let a narrow tab and a wide window retain different widths and column sets.
 pub fn ctx_id(base: &str, detached: bool) -> String {
     format!("{base}:{}", if detached { "win" } else { "dock" })
 }
 
-/// Кнопка «⤢ авто» для dock-тулбара панели: полный сброс ширин колонок таблицы `state` к
-/// автофилу. Дубль к Shift+дабл-клику по разделителю. `id` — уникальный id элемента кнопки.
+/// Builds a toolbar button that resets every column width in `state` to automatic fill.
+///
+/// This is the button equivalent of Shift+double-clicking a divider. `id` must uniquely identify
+/// the button element. Persistence occurs when the state observer subsequently calls [`persist`].
 pub fn reset_button(id: &'static str, state: &Entity<MoonDataTableState>) -> AnyElement {
     let state = state.clone();
     MoonButton::new(SharedString::from(id))
@@ -38,8 +42,9 @@ pub fn reset_button(id: &'static str, state: &Entity<MoonDataTableState>) -> Any
         .into_any_element()
 }
 
-/// Сохранённые ширины колонок таблицы `id` — для засева `MoonDataTableState.column_widths` при
-/// создании панели. Пусто, если таблицу ещё не ресайзили.
+/// Returns stored column widths for `id` to seed `MoonDataTableState::column_widths`.
+///
+/// Returns an empty map when the layout contains no entry, including after a full reset.
 pub fn saved(backend: &Backend, id: &str) -> HashMap<String, f32> {
     backend
         .layout
@@ -49,9 +54,10 @@ pub fn saved(backend: &Backend, id: &str) -> HashMap<String, f32> {
         .unwrap_or_default()
 }
 
-/// Полный сброс ширин колонок таблицы к автофилу (кнопка «⤢ авто» / Shift+дабл-клик по
-/// разделителю). Чистит `column_widths` в state; observe панели дальше уберёт запись из layout
-/// через [`persist`]. No-op, если и так пусто.
+/// Resets all table column widths to automatic fill.
+///
+/// Clears `column_widths` in state and notifies observers. A panel observer then removes the
+/// layout entry through [`persist`]. Does nothing, including no notification, when already empty.
 pub fn reset(state: &Entity<MoonDataTableState>, cx: &mut App) {
     state.update(cx, |s, c| {
         if !s.column_widths.is_empty() {
@@ -61,17 +67,20 @@ pub fn reset(state: &Entity<MoonDataTableState>, cx: &mut App) {
     });
 }
 
-/// Сохранённый НАБОР видимых колонок таблицы `id` (ключи в каноничном порядке) — для
-/// восстановления при создании/откреплении панели. `None` = ничего не сохранено (дефолт таблицы,
-/// обычно «все видимы»). Часть единого дескриптора полей: наборы различаются на контекст
-/// (`:dock`/`:win`), поэтому `id` — тот же `ctx_id`, что и у ширин.
+/// Returns the stored SET of visible-column keys for `id` in canonical order.
+///
+/// Panels use it while being created or detached. `None` means there is no stored entry, so the
+/// table keeps its default, usually all columns visible. Pass the same context-qualified ID used
+/// for widths so docked (`:dock`) and windowed (`:win`) field sets remain separate.
 pub fn visible(backend: &Backend, id: &str) -> Option<Vec<String>> {
     backend.layout.table_visible_columns.get(id).cloned()
 }
 
-/// Персистит НАБОР видимых колонок таблицы `id` (ключи в каноничном порядке). Зовётся при каждом
-/// тогле видимости колонки. В layout пишет только при отличии, помечает `layout_dirty`. Пустой
-/// список сюда слать НЕЛЬЗЯ (таблица без колонок) — вызывающий не даёт погасить последнюю.
+/// Stores the SET of visible-column keys for `id` in canonical order.
+///
+/// Callers invoke this after a visibility toggle. Updates the in-memory layout and marks
+/// `layout_dirty` only when the list differs. This function does not reject an empty list; callers
+/// must keep at least one column visible to avoid persisting an unusable empty table.
 pub fn set_visible(backend: &Entity<Backend>, id: &str, keys: Vec<String>, cx: &mut App) {
     backend.update(cx, |b, _| {
         if b.layout.table_visible_columns.get(id) != Some(&keys) {
@@ -81,10 +90,13 @@ pub fn set_visible(backend: &Entity<Backend>, id: &str, keys: Vec<String>, cx: &
     });
 }
 
-/// Персистит текущие ширины колонок таблицы `id`, если они изменились. Зовётся в `render`/observe:
-/// дёшево (сравнение мапы), в layout пишет только при отличии и помечает `layout_dirty`. Пустая
-/// мапа (полный сброс к автофилу) — УДАЛЯЕТ запись из layout, чтобы сброс сохранялся и таблица
-/// открылась авто-ширинами.
+/// Stores the table's current column widths for `id` when they change.
+///
+/// Intended for a render/change observer: it only compares maps unless an update is needed.
+/// A changed non-empty map replaces the in-memory layout entry and marks `layout_dirty`. An empty
+/// map removes an existing entry and marks it dirty, preserving a full reset so the next panel
+/// instance opens with automatic widths. If both current state and layout entry are empty, this is
+/// a no-op.
 pub fn persist(
     backend: &Entity<Backend>,
     id: &str,
