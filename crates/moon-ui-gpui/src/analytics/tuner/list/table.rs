@@ -5,12 +5,13 @@
 use gpui::*;
 use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
+use std::collections::HashSet;
 
 use super::super::super::AnalyticsView;
 use super::super::{
-    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS,
-    SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_NAME_MIN_W, StratMode, metric_bit,
-    metric_cell,
+    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, CORE_W, CORE_W_MAX, KIND_MIN_W,
+    KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT,
+    SORT_NAME, STRAT_NAME_MIN_W, StratMode, metric_bit, metric_cell,
 };
 use super::MAX_ROWS;
 use crate::design;
@@ -28,6 +29,21 @@ impl AnalyticsView {
         // Resolved once for the whole list: this table is not virtualized, so a per-cell lookup
         // would clone the theme tokens twice for each of up to 300 rows × 7 columns.
         let scale = design::font_scale(cx);
+        // The core column's content-measured width, computed once here and handed to both the
+        // header and every row so they cannot disagree within a frame. `strat_core_w` documents
+        // the cache and how it is invalidated; this match is only its read.
+        let core_w = match self.strat_core_w {
+            Some((s, w)) if s == scale => w,
+            _ => {
+                let w = self
+                    .data
+                    .data()
+                    .map(|d| core_col_w(&d.strategies, scale, cx))
+                    .unwrap_or(CORE_W);
+                self.strat_core_w = Some((scale, w));
+                w
+            }
+        };
         // The filter bar creates the search input (needs &mut) — build it before the immutable
         // data read below.
         let filter_bar = self.strat_filter_bar(p, window, cx);
@@ -51,7 +67,7 @@ impl AnalyticsView {
                     } else {
                         let mut list = v_flex().w_full().gap_0();
                         for g in rows.into_iter().take(MAX_ROWS) {
-                            list = list.child(self.strategy_row(g, p, scale, cx));
+                            list = list.child(self.strategy_row(g, p, scale, core_w, cx));
                         }
                         (list.into_any_element(), total, shown)
                     }
@@ -143,7 +159,7 @@ impl AnalyticsView {
                     }),
             )
             .child(filter_bar)
-            .child(self.header_row(p, cx))
+            .child(self.header_row(p, core_w, cx))
             .child(
                 div()
                     .id("an-strat-list")
@@ -157,11 +173,15 @@ impl AnalyticsView {
     }
 
     /// A comparison-table row; a click selects/deselects the group.
+    ///
+    /// `core_w` is the content-measured core-column width (see [`core_col_w`]) — passed in
+    /// because the header must lay the same value out, or it drifts off the column.
     fn strategy_row(
         &self,
         g: &GroupStat,
         p: MoonPalette,
         scale: f32,
+        core_w: f32,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         // Anchor = amber; Ctrl-selected extras = a lighter amber. The anchor drives the
@@ -186,11 +206,7 @@ impl AnalyticsView {
                 _ => dot.border_1().border_color(moon_alpha(p.text_muted, 0.6)),
             }
         });
-        let core_label = if g.cores_n > 1 {
-            t!("report.cores_n", n = g.cores_n).to_string()
-        } else {
-            g.core.clone()
-        };
+        let core_text = core_label(g);
         // Name on the left (flexible, truncated), all fixed columns in one rigid
         // cluster on the right (justify_between): when flex distribution glitches on
         // resize, the columns do not drift out of alignment between rows.
@@ -236,8 +252,8 @@ impl AnalyticsView {
                     // (column selector); the name column on the left is always shown.
                     .children(self.col_shown(COL_BIT_KIND).then(|| {
                         div()
-                            .w(design::font_w_px(cx, 72.0))
-                            .min_w(design::font_w_px(cx, 48.0))
+                            .w(design::font_w_px(cx, KIND_W))
+                            .min_w(design::font_w_px(cx, KIND_MIN_W))
                             .flex_shrink_1()
                             .truncate()
                             .text_size(design::t_caption(cx))
@@ -246,12 +262,12 @@ impl AnalyticsView {
                     }))
                     .children(self.col_shown(COL_BIT_CORE).then(|| {
                         div()
-                            .w(design::font_w_px(cx, 88.0))
-                            .min_w(design::font_w_px(cx, 56.0))
+                            .w(design::font_w_px(cx, core_w))
+                            .min_w(design::font_w_px(cx, CORE_MIN_W))
                             .flex_shrink_1()
                             .truncate()
                             .text_color(moon(p.text_soft))
-                            .child(core_label)
+                            .child(core_text)
                     }))
                     .children(
                         METRIC_COLS
@@ -305,8 +321,14 @@ impl AnalyticsView {
 impl AnalyticsView {
     /// Comparison-table header: clicking a title sorts (descending; a repeat click —
     /// ascending); a ▼/▲ arrow marks the active column. Columns respect the visibility
-    /// selector; the strategy name is always shown.
-    fn header_row(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement + use<> {
+    /// selector; the strategy name is always shown. `core_w` mirrors the rows' measured
+    /// core-column width — the header shrinks and grows exactly like the cells under it.
+    fn header_row(
+        &self,
+        p: MoonPalette,
+        core_w: f32,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
         let scale = design::font_scale(cx);
         // One clickable sort header. `w = None` → flexible (the name column).
         let sortable = |id: SharedString,
@@ -367,7 +389,7 @@ impl AnalyticsView {
                             "an-hdr-kind".into(),
                             t!("analytics.col.kind").to_string(),
                             SORT_KIND,
-                            Some((72.0, 48.0)),
+                            Some((KIND_W, KIND_MIN_W)),
                             false,
                         )
                     }))
@@ -376,7 +398,7 @@ impl AnalyticsView {
                             "an-hdr-core".into(),
                             t!("analytics.col.core").to_string(),
                             SORT_CORE,
-                            Some((88.0, 56.0)),
+                            Some((core_w, CORE_MIN_W)),
                             false,
                         )
                     }))
@@ -406,4 +428,53 @@ impl AnalyticsView {
                     })),
             )
     }
+}
+
+/// The core cell's text: the localized "Cores: N" aggregate when the group spans several
+/// cores, otherwise the raw core (server) name.
+///
+/// A named function because [`core_col_w`] sizes the column to what the rows will draw:
+/// derived in two places, the two could disagree and the column would truncate the very
+/// label it was sized for.
+fn core_label(g: &GroupStat) -> String {
+    if g.cores_n > 1 {
+        t!("report.cores_n", n = g.cores_n).to_string()
+    } else {
+        g.core.clone()
+    }
+}
+
+/// Preferred width of the core column, in font-scaled BASE px (the callers wrap it in
+/// `font_w_px`): the widest single-core label the list can draw, measured in the font the
+/// cell renders with (the window root's mono family at body size), clamped to
+/// [`CORE_W`, `CORE_W_MAX`].
+///
+/// Content-measured because the single-core label is a free-form server name: any fixed
+/// width either truncates it on a wide window or wastes the row on a narrow one. Measured
+/// over ALL groups rather than the filtered view, so the column does not jump as the user
+/// types in the search box. Only DISTINCT names are measured — hundreds of groups share a
+/// handful of cores, and each measurement pays an uncached glyph layout per character (the
+/// cost note on `strips::FittedCells`); the caller additionally caches the result per data
+/// load. Multi-core rows draw the "Cores: N" aggregate instead of a name — at most ~12
+/// characters in every locale it stays under the `CORE_W` floor, so it is not measured,
+/// which also keeps the cached width independent of the active locale.
+fn core_col_w(groups: &[GroupStat], scale: f32, cx: &App) -> f32 {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut w = 0.0f32;
+    for g in groups {
+        // Measure `core_label` (the row's actual text), not raw `g.core`, so the width tracks the
+        // label formula; dedup on the raw name, which keys that label 1:1.
+        if g.cores_n <= 1 && seen.insert(g.core.as_str()) {
+            w = w.max(design::mono_body_text_width(
+                cx,
+                &core_label(g),
+                FontWeight::NORMAL.0,
+            ));
+        }
+    }
+    // The measurement returns font-scaled px, but the cell width goes through `font_w_px`,
+    // which scales again — divide back to base units (this also makes the cached value hold
+    // across Font-slider moves). Ceil so a fractional shortfall cannot ellipsize the widest
+    // name the column was sized for.
+    (w / scale).ceil().clamp(CORE_W, CORE_W_MAX)
 }

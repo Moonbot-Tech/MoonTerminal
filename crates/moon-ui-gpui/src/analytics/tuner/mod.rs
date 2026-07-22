@@ -60,8 +60,9 @@ use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 pub(in crate::analytics::tuner) use strat_columns::{
-    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS,
-    SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_NAME_MIN_W, metric_bit,
+    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, CORE_W, CORE_W_MAX, KIND_MIN_W,
+    KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT,
+    SORT_NAME, STRAT_NAME_MIN_W, metric_bit,
 };
 /// The default visible-column mask is read by the parent too (`analytics::mod`, when it
 /// creates the view).
