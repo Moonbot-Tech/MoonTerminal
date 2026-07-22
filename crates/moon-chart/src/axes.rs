@@ -1,27 +1,27 @@
-//! Чистая логика разметки осей: «круглые» шаги сетки цены/времени, число знаков
-//! после запятой, формат часов. UI-агностично (без gpui) — GPUI-оболочка
-//! (`moon-ui-gpui`) рисует шкалы поверх, беря отсюда тики. Порт из moonweb
+//! Pure axis-layout logic: "nice" price/time grid intervals, decimal precision,
+//! and clock formatting. UI-agnostic (no gpui) — the GPUI wrapper
+//! (`moon-ui-gpui`) draws the scales on top using ticks from here. Ported from moonweb
 //! (`coords.ts` niceInterval/priceDecimals).
 
-/// Срез состояния вида, нужный шкалам. Снимается ПОСЛЕ кадра (значения текущего
-/// кадра рендера). Общий тип для обеих оболочек.
+/// Snapshot of the view state captured for the current GPUI/chartdx scale consumer.
+/// Values come from the current render frame after that frame is rendered.
 #[derive(Clone, Copy)]
 pub struct AxisSnapshot {
-    /// Пикселей на миллисекунду (физ.) — ширина окна времени.
+    /// Physical pixels per millisecond — the width of the time window.
     pub px_per_ms: f32,
-    /// Доля окна-«будущего» справа (right_margin_frac).
+    /// Fraction of the "future" window on the right (right_margin_frac).
     pub right_margin_frac: f32,
-    /// Цена в центре зоны и видимый диапазон.
+    /// Price at the center of the area and the visible range.
     pub render_center: f32,
     pub render_range: f32,
-    /// Точка отсчёта времени (unix ms) и время у правого якоря (unix ms).
+    /// Time origin (unix ms) and the time at the right anchor (unix ms).
     pub epoch_ms: f64,
     pub right_time_ms: f64,
-    /// Смещение локального времени от UTC, сек (для подписей часов).
+    /// Local time offset from UTC in seconds (for clock labels).
     pub tz_offset_sec: i64,
 }
 
-/// «Круглый» шаг сетки цены для ~`target_lines` линий (порт niceInterval).
+/// "Nice" price-grid interval for approximately `target_lines` lines (ported from niceInterval).
 pub fn nice_interval(range: f32, target_lines: f32) -> f32 {
     let rough = range / target_lines.max(1.0);
     if !(rough > 0.0) {
@@ -41,7 +41,7 @@ pub fn nice_interval(range: f32, target_lines: f32) -> f32 {
     nice * mag
 }
 
-/// Знаков после запятой для цены такого порядка (порт priceDecimals).
+/// Number of decimal places for a price of this magnitude (ported from priceDecimals).
 pub fn price_decimals(price: f32) -> usize {
     let p = price.abs();
     if p >= 1000.0 {
@@ -55,7 +55,7 @@ pub fn price_decimals(price: f32) -> usize {
     }
 }
 
-/// «Круглый» шаг времени, сек, чтобы влезло ~`target` подписей.
+/// "Nice" time interval in seconds that fits approximately `target` labels.
 pub fn nice_time_step(window_sec: f64, target: f64) -> f64 {
     const STEPS: [f64; 16] = [
         1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1800.0, 3600.0, 7200.0,
@@ -70,7 +70,7 @@ pub fn nice_time_step(window_sec: f64, target: f64) -> f64 {
     STEPS[STEPS.len() - 1]
 }
 
-/// Часы локального времени из unix ms (HH:MM:SS или HH:MM).
+/// Local-time clock from unix ms (HH:MM:SS or HH:MM).
 pub fn fmt_clock(unix_ms: f64, offset_sec: i64, with_sec: bool) -> String {
     let total = (unix_ms / 1000.0).floor() as i64 + offset_sec;
     let sod = ((total % 86_400) + 86_400) % 86_400;
@@ -82,8 +82,8 @@ pub fn fmt_clock(unix_ms: f64, offset_sec: i64, with_sec: bool) -> String {
     }
 }
 
-/// Часы + дата, когда день НЕ сегодняшний: «ДД.ММ ЧЧ:ММ:СС» (на больших ТФ/окнах
-/// курсор гуляет по прошлым суткам — время без даты не читается).
+/// Clock and date when the day is NOT today: "DD.MM HH:MM:SS" (on larger timeframes/windows,
+/// the cursor moves across previous days, making a time without a date ambiguous).
 pub fn fmt_clock_dated(unix_ms: f64, offset_sec: i64, with_sec: bool, now_ms: f64) -> String {
     let day_of = |ms: f64| ((ms / 1000.0).floor() as i64 + offset_sec).div_euclid(86_400);
     let clock = fmt_clock(unix_ms, offset_sec, with_sec);
@@ -94,7 +94,7 @@ pub fn fmt_clock_dated(unix_ms: f64, offset_sec: i64, with_sec: bool, now_ms: f6
     format!("{day:02}.{month:02} {clock}")
 }
 
-/// Григорианская дата из числа суток от unix-эпохи (алгоритм civil_from_days).
+/// Gregorian date from the number of days since the unix epoch (civil_from_days algorithm).
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
