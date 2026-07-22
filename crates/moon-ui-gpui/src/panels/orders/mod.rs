@@ -1,13 +1,14 @@
-//! Панель «Ордера» — таблица открытых ордеров группы (все ядра), на всю ширину.
-//! Колонки как в оригинале (egui), отрисованные в стиле MoonPalette:
-//! Core · Side · Token · Size · SL · TS · Vstop · Buy · Cur.P · Fill · Strat.
+//! Orders panel: a full-width table of open orders across a group's cores.
+//! The columns follow the original egui view and use `MoonPalette` styling:
+//! Core · Side · Token · Size · Buy · Cur.P · TP.P · Fill · PnL · PnL% · PNL TP · SL · TS · Vstop · Strat.
 //!
-//! Сторона: BUY (лонг, ждёт) — зелёным, SHORT (шорт, ждёт) — красным, SELL
-//! (исполнился — позиция открыта/продаётся) — синим. Эмуляторный — «(E)».
-//! SL/TS/Vstop — флаги ON (зелёным) / OFF (тускло).
+//! Side: pending `BUY` and `Short-S` entries use the negative tone; executed `SELL` and
+//! `Short-B` exit legs use the info tone. Emulated orders add `(E)`.
+//! SL/TS/Vstop display effective ON/OFF flags; ON is positive, while OFF is muted except
+//! for SL, where it uses the danger tone.
 //!
-//! По функционалу разнесено: состояние/вид/жизненный цикл — здесь, поля-списки и
-//! меню сортировки — [`controls`], таблица/колонки/ячейки — [`table`].
+//! Responsibilities are split across this module for state, view, and lifecycle;
+//! [`controls`] for field selectors and sort menus; and [`table`] for table columns and cells.
 
 mod controls;
 mod table;
@@ -31,11 +32,13 @@ use crate::design;
 use crate::panels::{RenderGate, num};
 use moon_core::feed::OrderRow;
 use moon_core::session::CoreId;
-// Не используется в этом файле, но table.rs берёт через `use super::*`.
+// Used by `table.rs` through `use super::*`, though not directly by this module.
 use moon_core::symbol;
 
-/// Одна строка таблицы ордеров с привязкой к ядру-источнику (порт `OrderEntry`).
-/// Квоты рынка тут нет: ячейка токена режет её `symbol`-хелперами по имени рынка.
+/// One order-table row associated with its source core, ported from `OrderEntry`.
+///
+/// No quote asset is stored here; the token cell strips it from the displayed market name with
+/// `symbol` helpers.
 #[derive(Clone)]
 pub(super) struct OrderEntry {
     pub(super) core: CoreId,
@@ -47,25 +50,25 @@ pub(super) struct OrderEntry {
 struct OrdersCacheKey {
     data_sig: u64,
     view: OrdersViewState,
-    /// Выбранные ядра фильтра (отсортировано) — их смена меняет набор строк.
+    /// Sorted core-filter selection; changing it changes the row set.
     sel_cores: Vec<CoreId>,
     current: Option<(CoreId, String)>,
-    /// Монеты, открытые в Main группы — их изменение меняет подсветку и порядок строк.
+    /// Markets open in the group's Main stack; changes affect row highlighting and ordering.
     main_open: Vec<(CoreId, String)>,
 }
 
-/// Первичный ключ сортировки (тогл-группа в меню).
+/// Primary sort key selected by the menu's mutually exclusive options.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum PrimarySort {
     SellFirst,
     BuyFirst,
     Creation,
-    /// Прибыльные первыми: сортировка по локальному PnL по убыванию (+500 → −20).
+    /// Put profitable positions first by sorting locally calculated PnL in descending order.
     ProfitFirst,
 }
 
 impl PrimarySort {
-    /// Стабильный код для персиста (docks.json) — порт egui `to_u8`/`from_u8`.
+    /// Stable persistence code for `docks.json`, ported from egui's `to_u8`/`from_u8`.
     fn to_u8(self) -> u8 {
         match self {
             PrimarySort::Creation => 0,
@@ -84,15 +87,16 @@ impl PrimarySort {
     }
 }
 
-/// Подъём строк, открытых на Main, наверх списка (per-окно, сохраняется). Две взаимоисключающие
-/// галки в меню сортировки + возможность выключить.
+/// Persisted per-view mode for lifting rows associated with Main to the top of the list.
+///
+/// The sort menu exposes two mutually exclusive checked options, either of which can be disabled.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum MainOnTop {
-    /// Не поднимать (обычная сортировка).
+    /// Keep the regular sort order.
     Off,
-    /// Весь тикер по всем ядрам (если монета на Main — наверх идут все её ордера всех ядер).
+    /// Lift every order for a market open on Main, across all cores.
     AllTicker,
-    /// Только выделенные строки — по одной на каждую (монета+ядро), что на Main.
+    /// Lift only the highlighted row for each `(core, market)` pair open on Main.
     Highlighted,
 }
 
@@ -113,7 +117,7 @@ impl MainOnTop {
     }
 }
 
-/// Фильтр по типу ордера: все / реальные / эмуляторные.
+/// Order-kind filter: all, real, or emulated.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum OrderKind {
     All,
@@ -122,7 +126,7 @@ pub(super) enum OrderKind {
 }
 
 impl OrderKind {
-    /// Стабильный код для персиста (docks.json) — порт egui `to_u8`/`from_u8`.
+    /// Stable persistence code for `docks.json`, ported from egui's `to_u8`/`from_u8`.
     fn to_u8(self) -> u8 {
         match self {
             OrderKind::All => 0,
@@ -139,9 +143,11 @@ impl OrderKind {
     }
 }
 
-/// Колонки таблицы ордеров в каноничном порядке. Позиция в [`OrdCol::ALL`] = номер бита
-/// в маске видимости [`OrdersViewState::columns`]; строковый [`OrdCol::key`] — стабильный
-/// идентификатор для персиста (docks.json), НЕ завязан на порядок enum.
+/// Order-table columns in canonical order.
+///
+/// A column's position in [`OrdCol::ALL`] is its bit number in
+/// [`OrdersViewState::columns`]. [`OrdCol::key`] returns a stable `docks.json` persistence key
+/// independent of enum order.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum OrdCol {
     Core,
@@ -150,12 +156,12 @@ pub(super) enum OrdCol {
     Size,
     Buy,
     CurP,
-    /// Цена тейк-профита (целевая цена выходной ноги, `sell_price`).
+    /// Take-profit price: the exit leg's target price from `sell_price`.
     TpPrice,
     Fill,
     Pnl,
     PnlPct,
-    /// PnL, если позиция закроется по цене тейка (`(tp − entry)·qty·dir`).
+    /// Estimated PnL at the take-profit price: `(tp - entry) * qty * direction`.
     PnlTp,
     Sl,
     Ts,
@@ -164,9 +170,8 @@ pub(super) enum OrdCol {
 }
 
 impl OrdCol {
-    // Стопы (SL/TS/Vstop) стоят СПРАВА, рядом со «Strat» (просьба пользователя: важные
-    // цена/PnL — под рукой, стопы у стратегии). Цена TP — рядом с ценами (Buy/Cur.P),
-    // PNL TP — рядом с PnL/PnL%.
+    // Keep SL/TS/Vstop on the right beside Strat, leaving the important price and PnL fields
+    // together. TP price sits beside Buy/Cur.P, and PNL TP sits beside PnL/PnL%.
     pub(super) const ALL: [OrdCol; 15] = [
         OrdCol::Core,
         OrdCol::Side,
@@ -185,7 +190,7 @@ impl OrdCol {
         OrdCol::Strat,
     ];
 
-    /// Стабильный ключ для персиста (docks.json) и ключей элементов меню.
+    /// Stable key used by `docks.json` persistence and menu elements.
     pub(super) fn key(self) -> &'static str {
         match self {
             OrdCol::Core => "core",
@@ -206,7 +211,7 @@ impl OrdCol {
         }
     }
 
-    /// Бит колонки в маске видимости (по позиции в `ALL`).
+    /// Column bit in the visibility mask, derived from its position in [`Self::ALL`].
     pub(super) fn bit(self) -> u16 {
         let idx = OrdCol::ALL
             .iter()
@@ -220,29 +225,29 @@ impl OrdCol {
     }
 }
 
-/// Маска «все колонки видимы» — дефолт вида.
+/// Default view mask with every column visible.
 pub(super) const ALL_COLUMNS_MASK: u16 = (1u16 << OrdCol::ALL.len()) - 1;
 
-/// Состояние вида таблицы (источник + тип + фильтр + сортировка + видимые колонки). Своё у панели.
+/// Per-panel table view state: order kind, current-market filter, sorting, and visible columns.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct OrdersViewState {
     pub(super) kind: OrderKind,
     pub(super) only_current_market: bool,
     pub(super) primary: PrimarySort,
     pub(super) newest_first: bool,
-    /// Подъём открытых на Main строк наверх (выкл / весь тикер / только выделенные).
+    /// Whether to lift no Main rows, every matching market row, or only highlighted rows.
     pub(super) main_on_top: MainOnTop,
-    /// Битовая маска видимых колонок (бит = `OrdCol::bit`). Персистится списком ключей.
+    /// Visible-column bit mask, where each bit comes from [`OrdCol::bit`]. Persisted as keys.
     pub(super) columns: u16,
 }
 
 impl OrdersViewState {
-    /// Видима ли колонка в текущем виде.
+    /// Return whether a column is visible in the current view.
     pub(super) fn shows(&self, col: OrdCol) -> bool {
         self.columns & col.bit() != 0
     }
 
-    /// Видимые колонки в каноничном порядке.
+    /// Return visible columns in canonical order.
     pub(super) fn visible_columns(&self) -> Vec<OrdCol> {
         OrdCol::ALL
             .iter()
@@ -255,9 +260,9 @@ impl OrdersViewState {
 impl Default for OrdersViewState {
     fn default() -> Self {
         Self {
-            // По умолчанию — только РЕАЛЬНЫЕ ордера (без эмулятора) и SELL (позиции в работе)
-            // сверху: первым делом видно, что открыто/продаётся. Пользователь может сменить
-            // в меню сортировки/типа — выбор персистится в docks.json.
+            // By default, show only real orders and put executed entries first so active positions
+            // and their exit legs are immediately visible. The sort and kind menus persist changes
+            // to `docks.json`.
             kind: OrderKind::Real,
             only_current_market: false,
             primary: PrimarySort::SellFirst,
@@ -268,61 +273,69 @@ impl Default for OrdersViewState {
     }
 }
 
-/// Вход исполнен (позиция открыта) — по АВТОРИТЕТНОМУ статусу воркера, а не по `fill_pct`
-/// ноги. Стейт-машина фазовая для обоих направлений: `None`/`BuySet` = вход ещё ждёт;
-/// `BuyDone` (вход залился) и любая `Sell*` фаза (выход выставлен/идёт/закрыт) = в позиции.
-/// (Раньше брали `fill_pct` входной ноги, но для шорта она читалась из пустого `sell_order`
-/// → шорт навсегда висел как `Short-S`.)
+/// Return whether the entry has executed, using the authoritative worker status rather than a
+/// leg's `fill_pct`.
+///
+/// The phase machine is shared by both directions: `None` and `BuySet` mean the entry is pending;
+/// `BuyDone` and every represented `Sell*` phase mean the position has been entered. Using the
+/// entry leg's `fill_pct` previously read an empty `sell_order` for shorts and left them displayed
+/// as `Short-S` indefinitely.
 pub(super) fn executed(r: &OrderRow) -> bool {
     matches!(
         r.status.as_str(),
         "BuyDone" | "SellSet" | "SellDone" | "SellFail" | "SellCancel" | "SellAlmostDone"
     )
 }
-/// «Позиция в работе» (вход исполнен) — лонг ИЛИ шорт. Для сортировки SellFirst.
+/// Return whether either a long or short entry has executed, for `SellFirst` sorting.
 pub(super) fn is_sell(r: &OrderRow) -> bool {
     executed(r)
 }
-/// BUY — лонг, ещё не исполнен (ждёт покупки/входа). Только pending-вход лонга.
+/// Return whether this is a pending long entry, displayed as `BUY`.
 pub(super) fn is_buy(r: &OrderRow) -> bool {
     !r.is_short && !executed(r)
 }
 
-/// Панель «Ордера».
+/// Panel displaying open orders for one core group.
 pub struct OrdersPanel {
     pub(super) backend: Entity<Backend>,
     pub(super) group: String,
     pub(super) view: OrdersViewState,
-    /// Выбранные ядра фильтра (мультивыбор, как в «Отчёте»). Пусто = все ядра группы.
+    /// Multi-select core filter; an empty set means every core in the group.
     pub(super) sel_cores: HashSet<CoreId>,
-    /// Гейт перерисовки: ордерные ивенты летят часто, цены/P&L живут от рынка — общий
-    /// `RenderGate` (сигнатура ИЛИ 1 Гц-тик, пол 250мс) экономит UI-поток на холостом ходу.
+    /// Repaint gate for frequent order and market-driven price/PnL updates.
+    ///
+    /// `RenderGate` accepts a signature change or new one-second bucket subject to a 250 ms floor,
+    /// reducing idle UI work while still refreshing time-sensitive values.
     gate: RenderGate,
     cache_key: Option<OrdersCacheKey>,
     cached_entries: Rc<Vec<OrderEntry>>,
-    /// Retained-стейт таблицы (порядок/ширины колонок). Владеем сами — иначе порядок
-    /// жил бы в анонимном `use_keyed_state` окна и его нельзя было бы ни засеять из
-    /// `docks.json`, ни прочитать для персиста при drag-перестановке заголовков.
+    /// Retained table state containing column order and widths.
+    ///
+    /// Owning it here allows initialization from `docks.json` and persistence after header drag
+    /// reordering instead of leaving it in anonymous window `use_keyed_state` storage.
     table_state: Entity<MoonDataTableState>,
-    /// Последний персистнутый порядок колонок — чтобы `observe` не дампил док на каждый
-    /// `notify` стейта (выделение/ресайз), а только когда порядок реально сменился.
+    /// Last persisted column-order list, preventing selection or resize notifications from dumping
+    /// the dock unless that list actually changed.
     col_order_cache: Vec<SharedString>,
-    /// Id хранилища ширин колонок с контекстом (`orders-table:dock`/`:win`). В доке = `:dock`,
-    /// в откреплённом окне переключается на `:win` (`mark_table_detached`) — свои ширины на режим.
+    /// Context-qualified column-storage ID: `orders-table:dock` or `orders-table:win`.
+    /// [`Self::mark_table_detached`] switches detached windows to `:win`, keeping widths per mode.
     widths_id: String,
-    /// Монеты, открытые в стеке Main этой группы (`(ядро, рынок)`). Используется для сортировки
-    /// (поднять наверх). Обновляется в `rebuild_cache`.
+    /// `(core, market)` pairs open in this group's Main stack, used for lift-to-top sorting.
+    /// Rebuilt by [`Self::rebuild_cache`].
     main_open: Rc<HashSet<(CoreId, String)>>,
-    /// `(ядро, uid)` ПЕРВОГО ордера каждой Main-открытой пары — ровно эти строки подсвечиваем
-    /// (по одной на пару, а не все ордера монеты). Обновляется в `rebuild_cache`.
+    /// `(core, uid)` of the first base-sorted order for each Main-open `(core, market)` pair.
+    /// Exactly these rows are highlighted, one per pair. Rebuilt by [`Self::rebuild_cache`].
     highlight: Rc<HashSet<(CoreId, u64)>>,
-    /// Оптимистичная отрисовка тоглов SL/TS/Vstop: клик СРАЗУ рисует целевое состояние, не
-    /// дожидаясь пересборки строк от feed (та едет по ордер-событиям). Ключ (ядро, uid,
-    /// stop_tag) → (целевой флаг, момент клика). Запись живёт ≤3с — дальше истина сервера
-    /// (строки) главнее; сходятся обычно за тик, т.к. feed держит одноимённый override.
+    /// Optimistic SL/TS/Vstop rendering keyed by `(core, uid, stop_tag)`.
+    ///
+    /// A click immediately stores the target flag and timestamp instead of waiting for rows to be
+    /// rebuilt from order events. Each render removes entries aged three seconds or more before
+    /// building the cell snapshot, so stale overrides cannot be rendered again. Without an
+    /// intervening render, expired map entries can remain allocated longer. Feed rows normally
+    /// converge on the next tick because the feed keeps a matching override.
     pub(super) stop_overlay: std::collections::HashMap<(CoreId, u64, u8), (bool, Instant)>,
-    /// Счётчики для нижнего футера: реальные/эмуляторные ордера ДО фильтра типа (но после
-    /// фильтра ядра/текущего маркета). Обновляются в [`Self::rebuild_cache`].
+    /// Footer counts for real and emulated orders before the kind filter but after core and current
+    /// market filters. Updated by [`Self::rebuild_cache`].
     count_real: usize,
     count_emu: usize,
     dock: Option<WeakEntity<DockArea>>,
@@ -336,7 +349,8 @@ impl OrdersPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Перерисовка по дренажу backend — ТОЛЬКО когда реально изменились ордера.
+        // Repaint after a backend drain only when the represented cache key changed or the refresh
+        // gate admits its periodic update.
         cx.observe(&backend, |this, backend, cx| {
             crate::diag::bump(&crate::diag::ORDERS_OBS_FIRE);
             let now = moon_chart::paint::now_unix_ms();
@@ -351,9 +365,9 @@ impl OrdersPanel {
             }
         })
         .detach();
-        // Перестановка/ресайз колонок мутирует `table_state` и шлёт `notify`. Ловим его и,
-        // если СПИСОК ПОРЯДКА сменился, дампим док (персист в `docks.json`). Дамп читает эту
-        // же панель → откладываем через `cx.defer`, вне текущего borrow (как в `mutate`).
+        // Column reordering and resizing mutate `table_state` and emit `notify`. Observe those
+        // changes and dump the dock to `docks.json` only when `column_order` changes. The dump reads
+        // this panel, so defer it until after the current borrow, as in `mutate`.
         let widths_id = crate::table_persist::ctx_id("orders-table", false);
         let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
@@ -362,7 +376,7 @@ impl OrdersPanel {
             s
         });
         cx.observe(&table_state, |this, state, cx| {
-            // Ресайз колонки мутирует `table_state` → сохраняем ширины (универсальный сейвер).
+            // A column resize mutates `table_state`; persist widths through the shared storage.
             crate::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
             let cur = state.read(cx).column_order.clone();
             if cur != this.col_order_cache {
@@ -397,7 +411,7 @@ impl OrdersPanel {
         this
     }
 
-    /// Открытые ордера ядер группы (с именем ядра и quote) — порт `collect_orders`.
+    /// Collect open orders from every session in the group, attaching each source core and name.
     fn collect(&self, b: &Backend) -> Vec<OrderEntry> {
         let store = b.session.store();
         let mut rows = Vec::new();
@@ -420,7 +434,7 @@ impl OrdersPanel {
         rows
     }
 
-    /// (ядро, маркет) монеты, открытой на Main группы — для фильтра «только текущий».
+    /// Return the `(core, market)` targeted by the group's Main chart for current-market filtering.
     fn current_market(&self, b: &Backend) -> Option<(CoreId, String)> {
         b.main_chart_target(&self.group)
     }
@@ -439,8 +453,8 @@ impl OrdersPanel {
                 .only_current_market
                 .then(|| self.current_market(b))
                 .flatten(),
-            // Монеты, открытые в стеке Main (1 фулскрин или несколько в стеке). Подсветим по
-            // ОДНОЙ строке на каждую (монета+ядро); сортировка поднимает их наверх.
+            // Track every market open in the Main stack, whether it holds one fullscreen chart or
+            // several charts. One row per `(core, market)` is highlighted and may be lifted.
             main_open: b.main_open_markets(&self.group).to_vec(),
         }
     }
@@ -452,9 +466,11 @@ impl OrdersPanel {
         CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
     }
 
-    /// Тумблер выбранного ядра фильтра (мультивыбор, как в «Отчёте»). `None` — пункт «Все»
-    /// (все выбраны → очистить в «пусто = все»; иначе выбрать все ядра группы). `Some(id)` —
-    /// тогл одного ядра. Не персистится (как и прежний одиночный источник — сброс на «Все»).
+    /// Toggle the selected-core filter.
+    ///
+    /// `None` represents the All item: if every group core is explicitly selected, clear the set
+    /// back to the empty-means-all form; otherwise select every group core. `Some(id)` toggles one
+    /// core. The selection is not persisted and resets to all cores.
     pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
         let all: HashSet<CoreId> = self
             .backend
@@ -484,9 +500,8 @@ impl OrdersPanel {
         cx.notify();
     }
 
-    /// Клик по ячейке «Ядро»: выставить фильтр РОВНО на это ядро; повторный клик по уже
-    /// единственному выбранному ядру — сброс на «Все». Не мультитогл (в отличие от
-    /// [`Self::toggle_core`]), а «set-to-single / clear».
+    /// Set the filter to exactly one core after a Core-cell click, or clear it when that core is
+    /// already the sole selection. Unlike [`Self::toggle_core`], this is not a multi-select toggle.
     pub(super) fn filter_to_core(&mut self, id: CoreId, cx: &mut Context<Self>) {
         if self.sel_cores.len() == 1 && self.sel_cores.contains(&id) {
             self.sel_cores.clear();
@@ -498,9 +513,10 @@ impl OrdersPanel {
         cx.notify();
     }
 
-    /// Собрать и отфильтровать строки. Возвращает `(строки, реальных, эму)`, где счётчики
-    /// считаются ПОСЛЕ фильтра ядра/текущего маркета, но ДО фильтра типа (Все/Реальные/
-    /// Эмуляторные) — для нижнего футера «Всего N (real/emu)».
+    /// Collect, filter, and base-sort rows.
+    ///
+    /// Return `(rows, real_count, emulated_count)`. Counts apply the core and current-market filters
+    /// but precede the all/real/emulated kind filter, matching the footer totals.
     fn build_entries(
         &self,
         b: &Backend,
@@ -508,7 +524,8 @@ impl OrdersPanel {
         current: &Option<(CoreId, String)>,
     ) -> (Vec<OrderEntry>, usize, usize) {
         let mut entries = self.collect(b);
-        // Фильтр ядра (мультивыбор, пусто = все) + текущего маркета — БЕЗ фильтра типа.
+        // Apply the multi-select core filter, where empty means all, and the current-market filter
+        // before applying the order-kind filter.
         entries.retain(|e| {
             let by_source = self.sel_cores.is_empty() || self.sel_cores.contains(&e.core);
             by_source
@@ -518,10 +535,10 @@ impl OrdersPanel {
                         None => true,
                     })
         });
-        // Разбивка реальные/эму по этому набору (до фильтра типа) — для футера.
+        // Split this pre-kind-filter set into real and emulated footer counts.
         let count_real = entries.iter().filter(|e| !e.row.emulator).count();
         let count_emu = entries.len() - count_real;
-        // Фильтр типа ордера (Все / Реальные / Эмуляторные).
+        // Apply the all, real, or emulated order-kind filter.
         entries.retain(|e| match view.kind {
             OrderKind::All => true,
             OrderKind::Real => !e.row.emulator,
@@ -534,12 +551,12 @@ impl OrdersPanel {
     fn rebuild_cache(&mut self, b: &Backend) {
         let key = self.cache_key(b);
         self.main_open = Rc::new(key.main_open.iter().cloned().collect());
-        // Базовый порядок (первичная + новые/старые) + счётчики real/emu для футера.
+        // Build the primary plus newest/oldest base order and the real/emulated footer counts.
         let (mut entries, count_real, count_emu) = self.build_entries(b, &key.view, &key.current);
         self.count_real = count_real;
         self.count_emu = count_emu;
-        // Подсветка: ПЕРВАЯ строка каждой Main-открытой (монета+ядро) в базовом порядке — одна
-        // строка на пару (не все ордера монеты).
+        // Highlight the first row in base order for each Main-open `(core, market)` pair, not every
+        // order for that market.
         let mut seen: HashSet<(CoreId, String)> = HashSet::new();
         let mut highlight: HashSet<(CoreId, u64)> = HashSet::new();
         for e in entries.iter() {
@@ -548,7 +565,7 @@ impl OrdersPanel {
                 highlight.insert((e.core, e.row.uid));
             }
         }
-        // Подъём «Main сверху» — стабильно поверх базового порядка (внутри групп порядок сохранён).
+        // Stably lift Main-associated rows over the base order, preserving order within each group.
         match key.view.main_on_top {
             MainOnTop::Off => {}
             MainOnTop::Highlighted => {
@@ -565,9 +582,11 @@ impl OrdersPanel {
         self.cache_key = Some(key);
     }
 
-    /// Реконструкция из `docks.json`: как `new`, но применяет сохранённое состояние
-    /// вида (сортировка/тип/фильтр) из `PanelInfo`. `source` (ядро) не персистится —
-    /// сбрасывается на «Все ядра» (как в egui-оригинале).
+    /// Reconstruct the panel from `docks.json` by applying the `PanelInfo` view state after `new`.
+    ///
+    /// Sorting, order kind, current-market filtering, and column settings are restored. The core
+    /// selection is intentionally not persisted and therefore starts as all cores, matching the
+    /// original egui product behavior.
     pub fn restored(
         backend: Entity<Backend>,
         group: String,
@@ -577,11 +596,11 @@ impl OrdersPanel {
     ) -> Self {
         let mut this = Self::new(backend, group, window, cx);
         this.view = view_from_info(info);
-        // Per-контекст набор полей (единый дескриптор) ПЕРЕКРЫВАЕТ старый docks.json-набор:
-        // если пользователь настроил колонки в новом хранилище — оно и выигрывает; иначе остаётся
-        // docks.json-набор как миграционный сид (перепишется в universal при первом тогле).
+        // A per-context visible-column set in shared storage overrides the legacy `docks.json` set.
+        // Without one, the legacy set remains as a migration seed until the first column toggle
+        // writes it to shared storage.
         this.apply_ctx_columns(cx);
-        // Порядок колонок (drag) персистится отдельно от `view` (это не Copy-список).
+        // Persist drag-defined column order separately because it is not part of the copyable view.
         let order = column_order_from_info(info);
         if !order.is_empty() {
             this.col_order_cache = order.clone();
@@ -590,15 +609,15 @@ impl OrdersPanel {
         this
     }
 
-    /// Пометить панель как открытую в ОТКРЕПЛЁННОМ окне (зовётся из `detached::spawn` сразу
-    /// после создания): переключает контекст хранилища ширин/полей на `:win` и пере-засеивает
-    /// ширины И набор видимых колонок из сохранённого набора этого режима. Так у докнутой вкладки
-    /// и раскрытого окна свои ширины и свои поля.
-    /// Стейт таблицы — для кнопки «⤢ авто» в заголовке откреп-окна (detached.rs).
+    /// Return the retained table state used by the detached window's automatic-width reset button.
     pub(crate) fn table_state(&self) -> Entity<MoonDataTableState> {
         self.table_state.clone()
     }
 
+    /// Switch a newly created detached panel to the `:win` column-storage context.
+    ///
+    /// Called immediately after construction by the detached-window path. It reloads widths and
+    /// visible columns for that mode so docked and detached views keep independent settings.
     pub(crate) fn mark_table_detached(&mut self, cx: &mut Context<Self>) {
         self.widths_id = crate::table_persist::ctx_id("orders-table", true);
         let saved = crate::table_persist::saved(self.backend.read(cx), &self.widths_id);
@@ -612,10 +631,11 @@ impl OrdersPanel {
         cx.notify();
     }
 
-    /// Применить сохранённый per-контекст набор видимых колонок (`table_visible_columns` по
-    /// `widths_id`), если он есть. Единый дескриптор полей: набор различается на режим (докнутая
-    /// вкладка `:dock` vs откреплённое окно `:win`). Пустая/битая запись (0 валидных ключей) →
-    /// оставляем текущий вид (иначе показали бы пустую таблицу).
+    /// Apply a saved per-context visible-column set for `widths_id`, when valid.
+    ///
+    /// Docked `:dock` and detached `:win` modes use distinct shared-storage entries. An empty or
+    /// invalid entry with no recognized keys leaves the current view intact rather than producing
+    /// an empty table.
     fn apply_ctx_columns(&mut self, cx: &App) {
         if let Some(keys) = crate::table_persist::visible(self.backend.read(cx), &self.widths_id) {
             let mask = keys
@@ -628,8 +648,9 @@ impl OrdersPanel {
         }
     }
 
-    /// Сохранить текущий набор видимых колонок в per-контекст хранилище (`widths_id`). Зовётся из
-    /// [`Self::mutate`] при изменении маски видимости.
+    /// Save the current visible-column set in per-context storage under `widths_id`.
+    ///
+    /// Called by [`Self::mutate`] when the visibility mask changes.
     fn save_ctx_columns(&self, cx: &mut App) {
         let keys: Vec<String> = self
             .view
@@ -640,10 +661,10 @@ impl OrdersPanel {
         crate::table_persist::set_visible(&self.backend, &self.widths_id, keys, cx);
     }
 
-    /// Единая точка изменения состояния вида: применяет `f`, и ЕСЛИ вид изменился —
-    /// перерисовывает и ПЕРСИСТИТ (дамп дока в `dock_states` + `dock_dirty`). Дамп
-    /// делаем на уровне `App` (вне borrow самой панели) — иначе ре-энтранси при
-    /// `dock.dump()`, который читает в т.ч. эту панель. `OrdersViewState: Copy`.
+    /// Mutate the copyable view state and, only when it changes, rebuild, repaint, and persist it.
+    ///
+    /// Dock dumping occurs at the `App` level after releasing the panel borrow because
+    /// `dock.dump()` reads this panel and would otherwise re-enter it.
     pub(super) fn mutate(view: &Entity<Self>, app: &mut App, f: impl FnOnce(&mut OrdersViewState)) {
         let changed = view.update(app, |this, cx| {
             let mut next = this.view;
@@ -653,7 +674,7 @@ impl OrdersPanel {
                 this.view = next;
                 let backend = this.backend.clone();
                 this.rebuild_cache(backend.read(cx));
-                // Смена набора видимых колонок → персист в единый per-контекст дескриптор.
+                // Persist a changed visible-column set through the shared per-context descriptor.
                 if cols_changed {
                     this.save_ctx_columns(cx);
                 }
@@ -668,9 +689,10 @@ impl OrdersPanel {
         }
     }
 
-    /// Дамп текущей раскладки дока окна в backend (→ `docks.json`). Смена вида ордеров
-    /// не эмитит `DockEvent`, поэтому состояние вида сохраняем сами — иначе сортировка
-    /// сбрасывалась при переоткрытии.
+    /// Dump the current dock layout to backend state for `docks.json` persistence.
+    ///
+    /// Order-view changes emit no `DockEvent`, so this panel persists them directly to prevent the
+    /// sort and filter state from resetting when reopened.
     fn persist(view: &Entity<Self>, app: &mut App) {
         let (dock, group, backend) = {
             let p = view.read(app);
@@ -687,26 +709,27 @@ impl OrdersPanel {
     }
 }
 
-/// Ключ группировки по ОТОБРАЖАЕМОЙ стороне (с учётом исполнения → SELL). 0 = выше.
+/// Return the displayed-side grouping key, accounting for execution; zero sorts first.
 fn primary_key(p: PrimarySort, r: &OrderRow) -> u8 {
     match p {
-        // ProfitFirst сюда не доходит (обрабатывается отдельно в sort_entries), группа нейтральна.
+        // `ProfitFirst` is handled separately in `sort_entries`, so its group is neutral here.
         PrimarySort::Creation | PrimarySort::ProfitFirst => 0,
         PrimarySort::SellFirst => u8::from(!is_sell(r)),
         PrimarySort::BuyFirst => u8::from(!is_buy(r)),
     }
 }
 
-/// Базовая сортировка: первичная (SELL/BUY/Creation/Profit) + новые/старые. Подъём
-/// «Main сверху» применяется отдельно поверх (стабильно) в `rebuild_cache`.
+/// Apply the base primary sort plus the newest/oldest UID tie-breaker.
+///
+/// [`OrdersPanel::rebuild_cache`] subsequently applies the stable Main lift over this order.
 fn sort_entries(entries: &mut [OrderEntry], view: &OrdersViewState) {
-    // «Profit первые» — отдельная ветка: сортируем по PnL по убыванию (прибыльные вверху),
-    // без позиции (`None`) — вниз. Тай-брейк — по uid (новые/старые), как у других режимов.
+    // Profit-first sorting uses descending locally calculated PnL. Rows without a position sort
+    // last, with UID as the newest/oldest tie-breaker just like the other modes.
     if view.primary == PrimarySort::ProfitFirst {
         entries.sort_by(|a, b| {
             let pa = table::order_pnl(&a.row);
             let pb = table::order_pnl(&b.row);
-            // None считаем как −∞ (внизу списка).
+            // Treat `None` as negative infinity so it sorts at the bottom.
             let key = |v: Option<f64>| v.unwrap_or(f64::NEG_INFINITY);
             key(pb)
                 .partial_cmp(&key(pa))
@@ -728,8 +751,10 @@ fn sort_entries(entries: &mut [OrderEntry], view: &OrdersViewState) {
     });
 }
 
-/// Восстановить сохранённое состояние вида из `PanelInfo` (docks.json). Отсутствующие
-/// поля → дефолт. `source` не персистится (см. `dump`), всегда «Все ядра».
+/// Restore persisted view fields from `PanelInfo`, keeping defaults for absent fields.
+///
+/// The core selection is stored outside [`OrdersViewState`] and intentionally omitted from
+/// persistence, so restored panels start with all cores.
 fn view_from_info(info: &PanelInfo) -> OrdersViewState {
     let mut v = OrdersViewState::default();
     if let PanelInfo::Panel(j) = info {
@@ -748,8 +773,8 @@ fn view_from_info(info: &PanelInfo) -> OrdersViewState {
         if let Some(m) = j.get("main_on_top").and_then(|x| x.as_u64()) {
             v.main_on_top = MainOnTop::from_u8(m as u8);
         }
-        // Видимые колонки: список ключей → маска. Пустой/пропущенный список или ноль
-        // валидных ключей → оставляем дефолт (все видимы), чтобы не показать пустую таблицу.
+        // Convert visible-column keys to a mask. A missing or empty list, or one containing no valid
+        // keys, retains the all-visible default instead of producing an empty table.
         if let Some(arr) = j.get("columns").and_then(|x| x.as_array()) {
             let mask = arr
                 .iter()
@@ -764,8 +789,10 @@ fn view_from_info(info: &PanelInfo) -> OrdersViewState {
     v
 }
 
-/// Сохранённый порядок колонок (drag) из `PanelInfo` → список ключей. Берём только
-/// валидные `OrdCol`-ключи (устойчиво к мусору/переименованиям). Пусто → дефолт `ALL`.
+/// Read drag-defined column order from `PanelInfo` as a list of recognized [`OrdCol`] keys.
+///
+/// Ignoring unknown keys tolerates stale or malformed persistence data. An empty result leaves the
+/// table's default [`OrdCol::ALL`] order in effect.
 fn column_order_from_info(info: &PanelInfo) -> Vec<SharedString> {
     let PanelInfo::Panel(j) = info else {
         return Vec::new();
@@ -796,12 +823,13 @@ impl Panel for OrdersPanel {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
         crate::panel_meta::tab_label(self.panel_name())
     }
-    // × не удаляет панель, а возвращает её в нижнюю строку (см. Shell: PanelCloseRequested).
+    // Closing returns the panel to the bottom row rather than deleting it; see
+    // `Shell::PanelCloseRequested` handling.
     fn closable(&self, _cx: &App) -> bool {
         true
     }
-    // Вынесенная в split одиночная панель показывает заголовок (drag-ручка + ×), иначе у неё
-    // нет ни места тянуть, ни кнопки закрыть.
+    // A single panel split out on its own keeps its header so it still has a drag handle and close
+    // button.
     fn show_dock_header(&self, _cx: &App) -> bool {
         true
     }
@@ -809,8 +837,10 @@ impl Panel for OrdersPanel {
         crate::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, cx: &App) -> PanelState {
-        // Группа (для реконструкции) + состояние вида: сортировка/тип/фильтр. `source`
-        // (ядро) не сохраняем — id ядра не стабилен между запусками (как в egui).
+        // Persist the group for reconstruction and the view's sorting, kind, filter, and column
+        // settings. Since schema v11, Core IDs equal stable `ServerConfig.uid` values, but the
+        // product intentionally resets the selected-core filter to All instead of persisting it,
+        // matching the egui behavior.
         PanelState {
             panel_name: "Orders".to_string(),
             children: Vec::new(),
@@ -821,16 +851,16 @@ impl Panel for OrdersPanel {
                 "newest_first": self.view.newest_first,
                 "only_current": self.view.only_current_market,
                 "main_on_top": self.view.main_on_top.to_u8(),
-                // Видимые колонки — списком стабильных ключей (не маской: устойчиво к смене
-                // порядка enum). Отсутствие поля при restore → все колонки видимы.
+                // Store visible columns as stable keys rather than a mask so enum reordering is
+                // harmless. A missing field restores every column as visible.
                 "columns": self
                     .view
                     .visible_columns()
                     .iter()
                     .map(|c| c.key())
                     .collect::<Vec<_>>(),
-                // Порядок колонок после drag-перестановки заголовков (стабильные ключи).
-                // Живёт в `table_state`; читаем напрямую. Пустой → дефолтный порядок `ALL`.
+                // Persist header drag order as stable keys. It lives in `table_state`, so read it
+                // directly; an empty list leaves the default `ALL` order.
                 "column_order": self
                     .table_state
                     .read(cx)
@@ -874,7 +904,7 @@ impl Render for OrdersPanel {
         let entries = self.cached_entries.clone();
         let p = MoonPalette::active(cx);
 
-        // ── Панель управления ──
+        // Control bar.
         let mut controls = h_flex()
             .w_full()
             .flex_none()
@@ -895,9 +925,10 @@ impl Render for OrdersPanel {
             );
         }
 
-        // ── Виртуальная таблица в геометрии HTML-эталона ──
-        // Подсвечиваем по одной строке на Main-открытую (монета+ядро) — см. table::orders_table.
-        // Оптимистичные тоглы стопов: снимок живых (<3с) записей для ячеек SL/TS/Vstop.
+        // Virtualized table using the reference HTML geometry.
+        // Highlight one row per Main-open `(core, market)` pair; see `table::orders_table`.
+        // Prune optimistic stop toggles aged three seconds or more, then snapshot the survivors for
+        // SL/TS/Vstop cells.
         self.stop_overlay
             .retain(|_, (_, t)| t.elapsed() < Duration::from_secs(3));
         let stop_overlay: Rc<std::collections::HashMap<(CoreId, u64, u8), bool>> = Rc::new(
@@ -915,7 +946,7 @@ impl Render for OrdersPanel {
             cx,
         );
 
-        // ── Футер: всего открытых ордеров (реальных/эму) ──
+        // Footer with total, real, and emulated open-order counts.
         let total = self.count_real + self.count_emu;
         let footer = h_flex()
             .w_full()
@@ -956,8 +987,10 @@ impl Render for OrdersPanel {
     }
 }
 
-/// Сигнатура таблицы ордеров группы. Это именно table-rev, не rev линий графика:
-/// числовые поля/статусы в таблице должны обновляться независимо от userdata чарта.
+/// Return the group's order-table signature from each core's table revision.
+///
+/// This deliberately uses the table revision rather than chart-line revisions so numeric fields and
+/// statuses refresh independently of chart userdata.
 fn orders_sig(b: &Backend, group: &str) -> u64 {
     let store = b.session.store();
     b.session

@@ -1,4 +1,4 @@
-//! Таблица панели «Ордера»: колонки, строки/ячейки, клик по токену, тогл стопов.
+//! Orders panel table: columns, rows and cells, token actions, and stop toggles.
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
@@ -7,9 +7,11 @@ use moon_core::session::CoreId;
 use rust_i18n::t;
 use std::collections::HashSet;
 
-/// Открыть единое контекстное меню монеты по строке ордера (ПКМ на ячейке токена/стратегии).
-/// «Выбранные ядра» = мультивыбор фильтра ядер панели (`sel_cores`): пусто → все ядра группы,
-/// иначе выбранные (пункт «ЧС выбранных ядер» появляется только при >1).
+/// Open the shared coin context menu for an order row from its token or strategy cell.
+///
+/// The menu's selected cores come from the panel's `sel_cores` filter: an empty set expands to all
+/// cores in the group, while a non-empty set is passed through directly. The selected-cores
+/// blacklist entry appears only when that resulting list contains more than one core.
 #[allow(clippy::too_many_arguments)]
 fn open_row_coin_menu(
     core: CoreId,
@@ -61,7 +63,7 @@ fn open_row_coin_menu(
         strat_id,
         strat_name,
         order_uid: Some(uid),
-        // Строка таблицы — не конкретная нога линии: секция ордера = «Редактировать» + «Отменить».
+        // A table row is not a specific chart leg, so its order section offers Edit and Cancel.
         side: None,
         short,
         origin: CoinMenuOrigin::OrderTable,
@@ -82,12 +84,12 @@ pub(super) fn orders_table(
     let view = cx.entity();
     let table_rows = rows.clone();
     let p = MoonPalette::active(cx);
-    // Выделение строки/ячейки кликом нам не нужно (фронт форка ставит его жёстко: `select_row`
-    // выставляет и `selected_cell`) — сбрасываем ВСЕ три поля сразу после клика. `selected(...)`
-    // ниже используем ТОЛЬКО для подсветки монет, открытых в Main.
+    // Click selection is not needed. The fork frontend couples `select_row` to `selected_cell`, so
+    // clear all three selection fields immediately after a click. The `selected(...)` row flag
+    // below is reserved for highlighting markets open on Main.
     let state_reset = state.clone();
-    // Видимые колонки в каноничном порядке — общий список для header и строк. Drag-перестановку
-    // (`state.column_order`) применяет сам MoonDataTable: и к шапке, и к ячейкам тела.
+    // Share one canonically ordered visible-column list between the header and rows. MoonDataTable
+    // applies drag reordering from `state.column_order` to both header and body cells.
     let visible: Rc<Vec<OrdCol>> = Rc::new(
         OrdCol::ALL
             .iter()
@@ -128,9 +130,11 @@ pub(super) fn orders_table(
     )
 }
 
-/// Переводимый/отраслевой заголовок колонки. Core/Side/Token/Cur.P идут через словарь
-/// `orders.col.*`; Size/SL/TS/Vstop/Buy/Fill/Strat — отраслевые токены, намеренно НЕ
-/// переводим (см. locales/README.md). Общий для header и меню выбора полей.
+/// Return the column title shared by the table header and field-selection menu.
+///
+/// `Core`, `Side`, `Token`, `CurP`, `TpPrice`, and `PnlTp` use `orders.col.*` localization. Size,
+/// SL, TS, Vstop, Buy, Fill, PNL, PNL %, and Strat are intentionally untranslated domain tokens;
+/// see `locales/README.md`.
 pub(super) fn col_title(col: OrdCol) -> String {
     match col {
         OrdCol::Core => t!("orders.col.core").to_string(),
@@ -151,8 +155,11 @@ pub(super) fn col_title(col: OrdCol) -> String {
     }
 }
 
-/// Схема колонки: ключ/ширина/выравнивание. Порядок задаётся `OrdCol::ALL`. Ширина —
-/// логические px (минимум на узкой таблице, пропорциональный вес на широкой).
+/// Build a column's key, logical-pixel width, and alignment.
+///
+/// [`OrdCol::ALL`] defines canonical order. MoonDataTable treats the declared width as the base
+/// width and auto-layout weight. A narrow viewport may shrink it proportionally toward the shared
+/// 40px column floor, so the declared value is not a strict minimum.
 fn column_def(col: OrdCol) -> MoonDataTableColumn {
     let title = col_title(col);
     match col {
@@ -195,11 +202,13 @@ fn order_table_row(
             .map(|c| cell_for(*c, e, view, p, stop_overlay))
             .collect::<Vec<_>>(),
     )
-    // Подсветка ОДНОЙ строки на каждую Main-открытую (монета+ядро) — первый её ордер.
+    // Highlight one row per core-market pair open on Main: its first order in the base ordering.
     .selected(highlight.contains(&(e.core, e.row.uid)))
 }
 
-/// Тег вида стопа для ключей оверлея (синхронно с feed-слоем: SL=0, TS=1, VStop=2).
+/// Map a stop kind to an optimistic-overlay tag, mirroring the feed layer's mapping.
+///
+/// The stable mapping is SL = 0, TS = 1, and VStop = 2.
 pub(super) fn stop_tag(kind: OrderStopKind) -> u8 {
     match kind {
         OrderStopKind::StopLoss => 0,
@@ -208,9 +217,11 @@ pub(super) fn stop_tag(kind: OrderStopKind) -> u8 {
     }
 }
 
-/// Ячейка для одной колонки строки. Порядок ячеек ДОЛЖЕН совпадать с `column_def` по тем
-/// же видимым колонкам — оба идут по одному списку `cols`. Кегль/интерлиньяж/моно в
-/// element-ячейках НЕ задаём: их даёт стиль ячейки moonui каскадом (фикс `9a33dbf`).
+/// Build one cell for a row column.
+///
+/// Cell order must match [`column_def`]; both consume the same visible `cols` list. Element cells
+/// leave font size, line height, and monospace styling to the cascading Moon UI cell style
+/// introduced by fix `9a33dbf`.
 fn cell_for(
     col: OrdCol,
     e: &OrderEntry,
@@ -219,7 +230,7 @@ fn cell_for(
     stop_overlay: &std::collections::HashMap<(CoreId, u64, u8), bool>,
 ) -> MoonDataCell {
     let r = &e.row;
-    // Оптимистичный тогл: свежий клик (<3с) рисуется сразу, не дожидаясь строк от feed.
+    // Render a recent click optimistically for up to three seconds without waiting for feed rows.
     let flag = |kind: OrderStopKind, baked: bool| -> bool {
         stop_overlay
             .get(&(e.core, r.uid, stop_tag(kind)))
@@ -269,13 +280,17 @@ fn cell_for(
     }
 }
 
-/// Отображаемая сторона и её тон. Цвет = «вход исполнен» (синий, `Info`) vs «ждёт вход»
-/// (оранжевый, `Negative`); метка различает направление и фазу:
-/// - BUY — лонг/спот, вход (buy) ещё не исполнен;
-/// - SELL — лонг исполнен → нога выхода (sell);
-/// - Short-S — шорт, pending вход (sell-to-open);
-/// - Short-B — шорт исполнен → нога выхода (buy-to-close).
-/// Эмулятор → суффикс `(E)`.
+/// Return the displayed order side and tone.
+///
+/// An executed entry uses blue `Info`, while an entry still waiting uses orange `Negative`. The
+/// label distinguishes direction and lifecycle phase:
+///
+/// - `BUY`: long or spot buy entry is not yet executed;
+/// - `SELL`: long entry is executed and the sell exit leg is active;
+/// - `Short-S`: short sell-to-open entry is pending;
+/// - `Short-B`: short entry is executed and the buy-to-close exit leg is active.
+///
+/// Emulated orders add the `(E)` suffix.
 fn side_label(r: &OrderRow) -> (String, MoonTone) {
     let (side, tone) = match (r.is_short, executed(r)) {
         (false, false) => ("BUY", MoonTone::Negative),
@@ -291,21 +306,12 @@ fn side_label(r: &OrderRow) -> (String, MoonTone) {
     (side, tone)
 }
 
-/// Локальная оценка нереализованного PnL по исполненной части позиции:
-/// `(mark − entry) · filled_qty · dir`. Серверного PnL в `OrderRow` нет (как и в
-/// «Активах» — считаем сами). `None`, если позиции нет (нет исполнения) или входная
-/// цена не выставлена.
+/// Return the position quantity used by the PnL calculations.
 ///
-/// Вход = `buy_price` для ОБОИХ направлений. У Moonbot входная нога всегда `buy_order`
-/// (фазы «Buy*»=вход / «Sell*»=выход) — и у лонга, и у шорта; после филла ядро кладёт
-/// в `buy_price` среднюю цену позиции (`pos_price`, ровно то, что берут «Активы»).
-/// `sell_price` — это ВЫХОДНАЯ нога/цель (для шорта — цель профита НИЖЕ входа), брать её
-/// как «вход» шорта было багом: PnL считался от цены выхода, а не входа, и расходился с
-/// «Активами» (напр. VELVET: −3.96 от sell_price против ≈0 от pos_price).
-/// Количество в позиции для расчёта PnL. В позиции (вход исполнен ЛИБО активна выходная
-/// нога — ордер продажи из удерживаемого актива, где `fill_pct=0`) берём остаток выходной
-/// ноги (`remaining_size`), иначе исполненную часть входа (`size·fill_pct`). `None` — нет
-/// позиции (гейтил `fill_pct=0` для listing-sell/MoonHook → PnL показывался «–»).
+/// When `filled` indicates an executed entry or active exit leg, use `remaining_size` when positive
+/// and otherwise the original `size`. This preserves positions such as a sale from an already-held
+/// asset whose `fill_pct` is zero. Before that state, use the filled entry quantity
+/// (`size * fill_pct`). Return `None` when the resulting quantity is not positive.
 fn position_qty(r: &OrderRow) -> Option<f64> {
     let qty = if r.filled {
         if r.remaining_size > 0.0 {
@@ -319,6 +325,18 @@ fn position_qty(r: &OrderRow) -> Option<f64> {
     (qty > 0.0).then_some(qty)
 }
 
+/// Estimate unrealized PnL locally as `(mark - entry) * position_qty * direction`.
+///
+/// [`OrderRow`] carries no server PnL, so this table calculates it just as the Assets panel does.
+/// Return `None` when there is no position or either entry or mark price is unavailable.
+///
+/// `OrderRow::buy_price` is the normalized entry for both directions, and Moonbot models
+/// `buy_order` as the entry leg for both long and short lifecycle phases. After execution, the raw
+/// core snapshot stores a break-even price including commission in `buy_price`; the feed converter
+/// replaces it with the average position price (`pos_price`) before constructing `OrderRow`.
+/// `sell_price` is the exit target; for a profitable short it lies below entry. Treating it as a
+/// short entry previously calculated PnL from the exit price and diverged from Assets, for example
+/// VELVET showed -3.96 from `sell_price` versus about zero from `pos_price`.
 pub(super) fn order_pnl(r: &OrderRow) -> Option<f64> {
     let qty = position_qty(r)?;
     let entry = r.buy_price;
@@ -330,10 +348,11 @@ pub(super) fn order_pnl(r: &OrderRow) -> Option<f64> {
     Some((mark - entry) * qty * dir)
 }
 
-/// PnL, который получим, если позиция закроется по ЦЕНЕ ТЕЙКА (`sell_price`): та же
-/// формула, что и [`order_pnl`], но mark = цель тейка, а не текущая цена. Полезно при
-/// разбитой сетке Sell-ордеров — сколько прилетит на баланс при исполнении тейков.
-/// `None`, если нет позиции / нет входной цены / тейк не выставлен.
+/// Estimate PnL if the position closes at its take-profit price (`sell_price`).
+///
+/// This uses the same formula as [`order_pnl`] with the take target in place of the current mark,
+/// which shows the expected profit from a split grid of sell orders. Return `None` without a
+/// position, entry price, or take-profit price.
 fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
     let qty = position_qty(r)?;
     let entry = r.buy_price;
@@ -345,7 +364,7 @@ fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
     Some((tp - entry) * qty * dir)
 }
 
-/// PNL TP-ячейка: colored delta (как [`pnl_cell`]), `–` если нет позиции/тейка.
+/// Build the PNL TP cell as a signed colored delta, or a dash without a position or target.
 fn pnl_tp_cell(r: &OrderRow) -> MoonDataCell {
     match order_pnl_at_tp(r) {
         Some(v) => {
@@ -365,7 +384,7 @@ fn pnl_tp_cell(r: &OrderRow) -> MoonDataCell {
     }
 }
 
-/// PnL-ячейка: colored delta (зелёный/красный, со знаком), `–` если позиции нет.
+/// Build the PnL cell as a signed green or red delta, or a dash without a position.
 fn pnl_cell(r: &OrderRow) -> MoonDataCell {
     match order_pnl(r) {
         Some(v) => {
@@ -374,7 +393,7 @@ fn pnl_cell(r: &OrderRow) -> MoonDataCell {
             } else {
                 MoonTone::Danger
             };
-            // PnL: 2 знака без «$» в колонке (валютная величина, не adaptive-формат цен).
+            // Show two decimals without `$`; this is a currency amount, not an adaptive price.
             let text = if v >= 0.0 {
                 format!("+{v:.2}")
             } else {
@@ -386,11 +405,12 @@ fn pnl_cell(r: &OrderRow) -> MoonDataCell {
     }
 }
 
-/// PnL в процентах от входа: направленное движение цены `(mark − entry)/entry · dir · 100`.
-/// `None` по тем же условиям, что и [`order_pnl`] (нет исполнения / нет входной цены).
-/// Вход = `buy_price` для обоих направлений (см. [`order_pnl`]).
+/// Calculate directional PnL percentage as `(mark - entry) / entry * direction * 100`.
+///
+/// Return `None` under the same conditions as [`order_pnl`]. `buy_price` is the entry for both
+/// directions.
 fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
-    position_qty(r)?; // тот же гейт «в позиции», что и у order_pnl
+    position_qty(r)?; // Apply the same in-position gate as `order_pnl`.
     let entry = r.buy_price;
     let mark = r.price as f64;
     if entry <= 0.0 || mark <= 0.0 {
@@ -400,7 +420,7 @@ fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
     Some((mark - entry) / entry * dir * 100.0)
 }
 
-/// PnL%-ячейка: colored delta (зелёный/красный, со знаком, до сотых), `–` если позиции нет.
+/// Build the PnL-percent cell as a signed green or red value with two decimals, or a dash.
 fn pnl_pct_cell(r: &OrderRow) -> MoonDataCell {
     match order_pnl_pct(r) {
         Some(v) => {
@@ -420,13 +440,15 @@ fn pnl_pct_cell(r: &OrderRow) -> MoonDataCell {
     }
 }
 
-/// Кликабельный флаг стопа (SL/TS/Vstop) — ЭФФЕКТИВНОЕ положение («сработает ли»).
-/// `on` уже вычислен feed-слоем (convert.rs) по модели Moonbot: явный override терминала →
-/// иначе `per-order флаг ИЛИ стоп стратегии` (у ордера может не быть своего стопа — тогда
-/// действует стратегийный, на проводе per-order поля пустые). «ON» зелёным; «OFF» — для SL
-/// красным (позиция без стоп-лосса — риск), для TS/Vstop тускло.
-/// Клик тогает эффективное состояние (`set_order_stop` инверсией), уровень стопа
-/// восстанавливается feed-слоем (память/стратегия/дефолт) при повторном включении.
+/// Build a clickable SL, TS, or VStop flag showing whether that protection is effectively active.
+///
+/// The feed layer derives each baked flag from Moonbot's model: a terminal override, otherwise the
+/// per-order flag or inherited strategy stop. The `on` argument may temporarily replace that value
+/// with a recent optimistic click. `ON` is green; `OFF` is red for SL because an unprotected
+/// position is risky, and muted for TS or VStop.
+///
+/// Clicking sends the inverse effective state through `set_order_stop`. When re-enabled, the feed
+/// layer restores the stop level from memory, strategy settings, or defaults.
 fn flag_toggle_cell(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,
@@ -456,8 +478,8 @@ fn flag_toggle_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        // Кегль/шрифт наследуются от стиля ячейки (каскад moonui); переопределяем
-        // только тон и вес.
+        // Inherit font size and family from the cascading Moon UI cell style; override only tone
+        // and weight.
         .text_color(rgb(tone.color(p)))
         .font_weight(FontWeight::MEDIUM)
         .child(label)
@@ -467,8 +489,8 @@ fn flag_toggle_cell(
                 !on
             );
             view.update(app, |this, cx| {
-                // Оптимизм: рисуем целевое состояние сразу; истина сервера (строки от
-                // feed) перекроет оверлей при расхождении (запись живёт ≤3с).
+                // Draw the target state immediately. Feed rows remain authoritative and replace a
+                // disagreeing overlay after its lifetime of at most three seconds.
                 this.stop_overlay.insert(
                     (core, uid, stop_tag(kind)),
                     (!on, std::time::Instant::now()),
@@ -486,8 +508,9 @@ fn flag_toggle_cell(
     MoonDataCell::element(el)
 }
 
-/// Ячейка типа ордера (BUY/SELL/Short-S/Short-B) — кликабельна: открывает окно
-/// редактирования ордера (порт Moonbot «Active Order» dialog).
+/// Build a clickable BUY, SELL, Short-S, or Short-B cell that opens the order editor.
+///
+/// The editor ports Moonbot's Active Order dialog.
 fn side_cell(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,
@@ -513,10 +536,11 @@ fn side_cell(
         })
 }
 
-/// Ячейка стратегии ордера. Если ордер выставлен стратегией (`strat_id != 0`) —
-/// кликабельна: открывает окно «Стратегии» с переходом к этой стратегии на ядре
-/// ордера (снимает «только активные», раскрывает и выбирает). Ручной ордер без
-/// стратегии — обычный текст.
+/// Build the order's strategy cell.
+///
+/// A strategy order (`strat_id != 0`) is clickable and opens the Strategies window focused on that
+/// core and strategy, clearing active-only mode before expanding and selecting it. A manual order
+/// without a strategy renders as plain text.
 fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> MoonDataCell {
     let r = &e.row;
     if r.strat_id == 0 {
@@ -533,7 +557,7 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
     let view_menu = view.clone();
     let el = div()
         .id(SharedString::from(format!("ord-strat-{core}-{uid}")))
-        // Кликабельна вся ячейка (см. token_cell); колонка `.right()` → контент вправо.
+        // Make the full cell clickable, as in `token_cell`, and right-align its column content.
         .w_full()
         .h_full()
         .flex()
@@ -555,7 +579,7 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
                 app,
             );
         })
-        // ПКМ — единое контекстное меню монеты (та же строка ордера, стратегия известна).
+        // Right-click opens the shared coin menu with this order's known strategy context.
         .on_mouse_down(
             MouseButton::Right,
             move |e: &MouseDownEvent, window, app| {
@@ -577,11 +601,11 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
     MoonDataCell::element(el)
 }
 
-/// Ячейка токена (без quote: `ADAUSDT` → `ADA`), акцентом — намёк, что кликабельна.
-/// Клик открывает чарт монеты на Main НА ЯДРЕ ордера (порт клика по строке egui).
-/// Ячейка «Ядро» (имя ядра): клик выставляет фильтр панели РОВНО на это ядро (повторный
-/// клик по уже единственному выбранному — сброс на «Все»), как быстрый фильтр по колонке.
-/// Текст — тем же тусклым (Muted) стилем, что и прежняя `MoonDataCell::text`.
+/// Build the core-name cell as a quick single-core filter.
+///
+/// Clicking sets the panel filter to exactly this core. Clicking it again when it is the sole
+/// selection clears the set back to All. The text retains the muted style of the former plain
+/// `MoonDataCell::text` cell.
 fn core_cell(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,
@@ -604,12 +628,17 @@ fn core_cell(
         })
 }
 
+/// Build the clickable base-token cell, resolving the token from the display market name.
+///
+/// The quote is omitted (`ADAUSDT` becomes `ADA`) and accent styling signals interactivity.
+/// Left-click opens the exact order market on Main for the order's core without activating the
+/// Main window; right-click opens the shared coin context menu.
 fn token_cell(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,
     p: MoonPalette,
 ) -> impl IntoElement + 'static {
-    // Токен — из ОТОБРАЖАЕМОГО имени (mb_classic): «@206» → «UENA», а не сырой индекс.
+    // Resolve from the display (`mb_classic`) name so `@206` becomes `UENA`, not the raw index.
     let token = symbol::coin_of_market(&e.row.market_display).to_string();
     let coin = token.clone();
     let core = e.core;
@@ -624,8 +653,8 @@ fn token_cell(
 
     div()
         .id(SharedString::from(format!("ord-tok-{core}-{uid}")))
-        // Кликабельна ВСЯ ячейка (а не только текст токена) — по узкому тикеру в одну
-        // букву иначе сложно попасть. `.right()` колонки → прижимаем содержимое вправо.
+        // Make the full cell clickable because a one-letter ticker is otherwise a narrow target.
+        // The column is right-aligned, so align its content to the end as well.
         .w_full()
         .h_full()
         .flex()
@@ -640,14 +669,14 @@ fn token_cell(
                 this.backend.update(cx, |b, bcx| {
                     b.open_request = Some((core, market.clone()));
                     b.open_request_rev = b.open_request_rev.wrapping_add(1);
-                    // Клик в Ордерах открывает монету на Main, но окно НЕ поднимает.
+                    // Open the market on Main without activating the Main window.
                     b.open_request_activate = false;
                     bcx.notify();
                 });
             });
         })
-        // ПКМ — единое контекстное меню монеты (ЧС ядра/ядер/стратегии, переход к стратегии,
-        // редактирование/отмена ордера).
+        // Right-click opens the shared coin menu for core, selected-core, and strategy blacklists,
+        // strategy navigation, and order editing or cancellation.
         .on_mouse_down(
             MouseButton::Right,
             move |e: &MouseDownEvent, window, app| {
