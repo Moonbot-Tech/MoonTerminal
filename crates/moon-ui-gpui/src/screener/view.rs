@@ -1,5 +1,7 @@
-//! Состояние и окно «Скринер»: `ScreenerView` (фильтры/сортировка/пересборка строк),
-//! рендер окна, шапка и `open()`. Схема колонок и рендер строк — в [`super::table`].
+//! Screener state and window lifecycle.
+//!
+//! [`ScreenerView`] owns filters, sorting, cached-row rebuilds, window rendering, and the `open`
+//! entry point. Column definitions, value sorting, and row rendering live in [`super::table`].
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -22,32 +24,34 @@ use super::table::{COLS, ColDef, Entry, moon, moon_alpha, parse_vol, screener_ro
 
 const SCREENER_HEADER_H: f32 = 32.0;
 
-/// Фильтр по ядру (как источник в Ордерах): все ядра или одно конкретное.
+/// Core source filter: every core or one specific core, matching the Orders source selector.
 #[derive(Clone, Copy, PartialEq)]
 enum ScrSource {
     All,
     Core(CoreId),
 }
 
-/// Состояние окна «Скринер».
+/// State for the singleton Screener window.
 pub struct ScreenerView {
     pub(super) backend: Entity<Backend>,
-    /// Отфильтрованные и отсортированные строки текущего кадра.
+    /// Cached rows after the current source, coin, volume, and sort selections are applied.
     rows: Rc<Vec<Entry>>,
-    /// Всего строк до фильтра (для счётчика внизу).
+    /// Row count after source grouping but before coin and volume filters, shown in the footer.
     total: usize,
-    /// Фильтр по монете (подстрока, без регистра).
+    /// Case-insensitive market or coin substring filter.
     coin_input: Entity<MoonInputState>,
-    /// Минимальный 24ч объём (поддерживает суффиксы k/m).
+    /// Minimum 24-hour volume filter, accepting `k` and `m` suffixes.
     dvol_input: Entity<MoonInputState>,
-    /// Ключ сортировки (из `COLS`) + направление.
+    /// Sort key from `COLS` and descending/ascending direction.
     sort_key: String,
     sort_desc: bool,
-    /// Фильтр по ядру (не персистится — сессионное, как в Ордерах).
+    /// Session-only core filter, not persisted, as in Orders.
     source: ScrSource,
-    /// Видимые колонки (ключи из `COLS`). Персистится в layout (`screener_columns`).
+    /// Visible `COLS` keys persisted in per-context table storage.
+    ///
+    /// Legacy `layout.screener_columns` is read only as a migration fallback.
     visible_cols: HashSet<String>,
-    /// Состояние таблицы (перетаскивание/ширины колонок + индикатор сортировки).
+    /// Retained table state for drag order, column widths, and the sort indicator.
     table_state: Entity<MoonDataTableState>,
     gate: RenderGate,
     focus: FocusHandle,
@@ -67,7 +71,7 @@ impl ScreenerView {
             .detach();
         }
 
-        // Скринер всегда отдельное окно → контекст ширин фиксированный `:win`.
+        // Screener always runs in a separate window, so its width context is fixed to `:win`.
         let widths_id = crate::table_persist::ctx_id("screener-table", true);
         let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
@@ -77,16 +81,17 @@ impl ScreenerView {
             s.column_widths = saved_widths;
             s
         });
-        // Ресайз колонки мутирует state → сохраняем ширины (универсальный сейвер).
+        // Column resizing mutates table state; persist widths through the shared storage.
         let widths_id_obs = widths_id.clone();
         cx.observe(&table_state, move |this, state, cx| {
             crate::table_persist::persist(&this.backend, &widths_id_obs, &state, cx);
         })
         .detach();
 
-        // Живые данные: рынки обновляются пакетами каждую секунду, гейт держит
-        // перестройку на 1 Гц (секундное ведро; сигнатура не нужна — таблица
-        // живая всегда, пока есть ядра).
+        // Market-only feed changes publish new snapshots without notifying `Backend`. Notifications
+        // caused by other UI-state events provide opportunities to sample the latest snapshots. With
+        // a constant signature, the gate accepts at most one rebuild per wall-clock second when such
+        // notifications occur; there is no independent timer.
         cx.observe(&backend, |this, _, cx| {
             let now = moon_chart::paint::now_unix_ms();
             if this.gate.should_notify(0, now) {
@@ -96,7 +101,7 @@ impl ScreenerView {
         })
         .detach();
 
-        // Сохранять положение/размер окна в layout — открытие на прежнем месте.
+        // Persist window position and size in the layout so the window reopens in the same geometry.
         cx.observe_window_bounds(window, |this, window, cx| {
             let Some((x, y, w, h)) = crate::windowing::window_geom(window) else {
                 return;
@@ -111,9 +116,9 @@ impl ScreenerView {
         })
         .detach();
 
-        // Видимые колонки: единый per-контекст дескриптор (`table_visible_columns` по
-        // `screener-table:win`) — приоритетный источник; при его отсутствии мигрируем со старого
-        // `screener_columns`. Неизвестные ключи отбрасываем (колонку могли переименовать/удалить).
+        // Prefer the shared per-context `table_visible_columns` entry for `screener-table:win`.
+        // When absent, migrate from legacy `screener_columns`. Ignore unknown keys left by renamed
+        // or removed columns; an empty valid set falls back to every current column.
         let saved_cols = crate::table_persist::visible(backend.read(cx), &widths_id)
             .or_else(|| backend.read(cx).layout.screener_columns.clone());
         let visible_cols: HashSet<String> = match saved_cols {
@@ -150,7 +155,7 @@ impl ScreenerView {
         this
     }
 
-    /// Пересобрать строки: сбор по группам ядер → оверлей ордеров → фильтры → сортировка.
+    /// Rebuild cached rows by grouping cores, overlaying orders, filtering, and sorting.
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         crate::diag::bump(&crate::diag::SCREENER_REBUILD);
         let coin_filter = self.coin_input.read(cx).value().trim().to_uppercase();
@@ -158,9 +163,9 @@ impl ScreenerView {
 
         let b = self.backend.read(cx);
         let source = b.session.market_source();
-        // Группы дедупа: провайдер → все ядра его биржи (порядок стабилен по конфигу).
-        // При фильтре по ядру остаётся одна группа из него самого (аккаунтные
-        // колонки — только его), чарт открывается на нём же.
+        // Deduplicate by market-data provider: each group contains the consumer cores sharing that
+        // provider. With a core filter, the group contains only that core for account-derived fields,
+        // while market rows still come from its provider and charts open on the selected core.
         let mut groups: Vec<(CoreId, Vec<CoreId>)> = Vec::new();
         let mut names: HashMap<CoreId, SharedString> = HashMap::new();
         for s in b.session.sessions() {
@@ -183,7 +188,7 @@ impl ScreenerView {
         let mut entries: Vec<Entry> = Vec::new();
         for (provider, members) in &groups {
             let mut rows = source.screener_rows(*provider, members);
-            // Оверлей открытых ордеров по монете (сумма по ядрам группы).
+            // Overlay open-order counts by exact market, summed across the group's member cores.
             let mut order_counts: HashMap<&str, u32> = HashMap::new();
             let member_data: Vec<_> = members.iter().filter_map(|&m| store.core(m)).collect();
             for cd in &member_data {
@@ -194,8 +199,8 @@ impl ScreenerView {
             for row in &mut rows {
                 row.orders = order_counts.get(row.market.as_str()).copied().unwrap_or(0);
             }
-            // Ядро для колонки Core и открытия чарта: при фильтре — выбранное
-            // ядро (его ордера/линии на чарте), иначе провайдер группы.
+            // Use the selected core for the Core column and chart actions under a source filter;
+            // otherwise use the group's market-data provider.
             let open_core = match self.source {
                 ScrSource::Core(id) => id,
                 ScrSource::All => *provider,
@@ -240,8 +245,9 @@ impl ScreenerView {
         }
     }
 
-    /// Тогл видимости колонки + персист списка в layout (порядок каноничный из
-    /// `COLS`). Последнюю видимую колонку скрыть нельзя (таблица опустеет).
+    /// Toggle a column and persist the visible keys in canonical `COLS` order.
+    ///
+    /// The last visible column cannot be hidden because that would empty the table.
     fn toggle_col(&mut self, key: &str, cx: &mut Context<Self>) {
         if self.visible_cols.contains(key) {
             if self.visible_cols.len() == 1 {
@@ -254,8 +260,9 @@ impl ScreenerView {
         self.persist_visible_cols(cx);
     }
 
-    /// «Все»-тумблер колонок: включить все / повторно — оставить одну первую
-    /// (все скрыть нельзя — таблица опустеет).
+    /// Toggle every column on, or retain only the first when all are already visible.
+    ///
+    /// Keeping one column prevents the table from becoming empty.
     fn toggle_all_cols(&mut self, cx: &mut Context<Self>) {
         let all_on = COLS.iter().all(|c| self.visible_cols.contains(c.0));
         self.visible_cols = if all_on {
@@ -266,22 +273,24 @@ impl ScreenerView {
         self.persist_visible_cols(cx);
     }
 
-    /// Персист списка видимых колонок (порядок каноничный из `COLS`).
+    /// Persist visible column keys in canonical `COLS` order.
     fn persist_visible_cols(&self, cx: &mut Context<Self>) {
         let list: Vec<String> = COLS
             .iter()
             .filter(|c| self.visible_cols.contains(c.0))
             .map(|c| c.0.to_string())
             .collect();
-        // Единый per-контекст дескриптор полей (`screener-table:win`). Скринер всегда окно,
-        // потому контекст один; храним явный список видимых ключей (в т.ч. когда видимы все —
-        // список полный), устаревший `screener_columns` больше не пишем (мигрируем при чтении).
+        // Screener has only the `screener-table:win` context because it is always a window. Store an
+        // explicit key list, including the complete list when all columns are visible. Legacy
+        // `screener_columns` is no longer written and is used only during read-side migration.
         let id = crate::table_persist::ctx_id("screener-table", true);
         crate::table_persist::set_visible(&self.backend, &id, list, cx);
         cx.notify();
     }
 
-    /// Открыть монету на Main-стеке активной вкладки (как клик по токену в Ордерах).
+    /// Request the row's market on Main for its selected/provider core, as in an Orders token click.
+    ///
+    /// The request does not activate or raise the owning window.
     fn open_chart(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(e) = self.rows.get(ix) else {
             return;
@@ -305,7 +314,7 @@ impl ScreenerView {
         let sort_view = cx.entity();
         let dbl_view = cx.entity();
         let state_reset = self.table_state.clone();
-        // Видимые колонки в каноничном порядке — общий список для header и строк.
+        // Share one canonically ordered visible-column list between the header and row renderer.
         let visible: Rc<Vec<&'static ColDef>> = Rc::new(
             COLS.iter()
                 .filter(|c| self.visible_cols.contains(c.0))
@@ -347,7 +356,7 @@ impl ScreenerView {
                 dbl_view.update(app, |t, cx| t.open_chart(ix, cx));
             })
             .on_select_row(move |_ix, _window, app| {
-                // Выделение строк не используем (как Orders) — сбрасываем сразу.
+                // Row selection is unused, as in Orders, so clear every selection field immediately.
                 state_reset.update(app, |s, c| {
                     s.selected_row = None;
                     s.selected_column = None;
@@ -358,14 +367,14 @@ impl ScreenerView {
         )
     }
 
-    /// Поле-список ядра (Все ядра + подключённые) — как источник в Ордерах.
+    /// Build the All-cores plus session-core source selector, matching Orders.
     fn source_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let cores = {
             let b = self.backend.read(cx);
             crate::core_order::CoreOrder::new(&b.config)
                 .from_sessions(b.session.sessions(), |_| true)
         };
-        // Одна привязка локализованной подписи «Все ядра» на все её употребления.
+        // Resolve the localized All-cores label once for every use in this selector.
         let all_label = t!("screener.all_cores").to_string();
         let cur = match self.source {
             ScrSource::All => all_label.clone(),
@@ -388,9 +397,8 @@ impl ScreenerView {
         let items = radio_items(options, self.source, RadioMark::Check, move |app, src| {
             view.update(app, |t, cx| t.set_source(src, cx));
         });
-        // Ширина по контенту (единый расчёт с core_combo): кнопка под текущий выбор (пол —
-        // общий `CORES_TRIGGER_MIN_W`, потолок), меню под самый длинный пункт между полом 160
-        // и общим потолком.
+        // Use the shared core-combo width calculation: size the trigger for its current label within
+        // the common minimum and cap, and size the menu for its longest item with a 160 px minimum.
         let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
             cx,
             &cur,
@@ -408,13 +416,15 @@ impl ScreenerView {
             .items(items)
     }
 
-    /// Поле-список видимых колонок: чекбокс-тоглы, меню не закрывается на клик,
-    /// последнюю видимую колонку скрыть нельзя. Список персистится (layout).
+    /// Build the persistent visible-column menu with checkbox-style toggles.
+    ///
+    /// The menu remains open after clicks, and its last visible column is disabled so the table
+    /// cannot be emptied.
     fn columns_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let visible_count = self.visible_cols.len();
         let mut menu = MoonDropdown::new("screener-columns")
-            // Кнопка-глиф вместо поля со списком (общий вид селекторов колонок).
+            // Use the shared column-selector glyph button instead of a text-field trigger.
             .segment(moon_ui::MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
@@ -422,7 +432,7 @@ impl ScreenerView {
             .menu_width(design::font_w(cx, 170.0))
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
-        // «Все» — тумблер: включить все колонки / повторно — оставить одну первую.
+        // The All item enables every column or, when already checked, leaves only the first.
         let all_on = COLS.iter().all(|c| self.visible_cols.contains(c.0));
         let all_view = view.clone();
         menu = menu.item(
@@ -455,8 +465,8 @@ impl ScreenerView {
             .child(menu)
     }
 
-    /// Нижняя полоса: селектор ядра + фильтры Coin/DVol слева (как в Moonbot),
-    /// меню колонок и счётчик справа.
+    /// Build the bottom bar with Moonbot-style source, Coin, and DVol controls on the left and the
+    /// filtered/total count plus column menu on the right.
     fn bottom_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let label = |text: &'static str| {
             div()
@@ -576,14 +586,14 @@ fn screener_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         })
 }
 
-/// Открыть окно «Скринер» (tool-окно, singleton). Дедуп/фокус — в `Backend`.
+/// Open the singleton Screener tool window, focusing the existing backend-tracked handle when valid.
 pub fn open(
     backend: Entity<Backend>,
     owner: Option<AnyWindowHandle>,
     owner_display: Option<DisplayId>,
     cx: &mut App,
 ) {
-    // Уже открыто → сфокусировать.
+    // Focus an existing live window instead of opening a duplicate.
     if let Some(handle) = backend.read(cx).screener_window {
         if handle
             .update(cx, |_, window, _| window.activate_window())
@@ -603,7 +613,7 @@ pub fn open(
             size: size(px(g.w as f32), px(g.h as f32)),
         },
     );
-    // Мультимонитор: монитор по сохранённой точке (не-мак) либо от владельца.
+    // Choose a display from saved geometry when supported, otherwise fall back to the owner display.
     let display_id = crate::windowing::saved_or_owner_display_id(
         saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
         owner,
