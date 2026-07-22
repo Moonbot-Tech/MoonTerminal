@@ -1,13 +1,13 @@
-//! Откреплённые dock-панели в отдельных ОС-окнах (порт egui `app/detached.rs` +
-//! `WindowLayout.detached`). Панель «уходит» из дока (`TabPanel::remove_panel`) в своё
-//! окно; факт открепления и геометрия окна персистятся в `detached.json` и
-//! восстанавливаются на старте (панель сразу открывается отцепленной). Закрытие окна
-//! открепления → репин: панель возвращается в док окна-владельца (через
-//! `Backend.repin_request`, который дренит `Shell`).
+//! Dock panels detached into separate OS windows, ported from egui `app/detached.rs` and
+//! `WindowLayout.detached`. Detaching removes a panel from its dock through
+//! `TabPanel::remove_panel`. `detached.json` persists the detached state and current window
+//! geometry so startup can reopen the panel detached. Closing the detached window requests a repin
+//! through `Backend.repin_request`, which Shell drains to return the panel to its owner's dock.
 //!
-//! Контент окна — СВЕЖИЙ экземпляр панели (данные тянет из общего `Backend`, поэтому
-//! живой). Обёртка [`DetachedWindow`] рендерит его, следит за геометрией окна и просит
-//! репин по закрытию. Чарт-вкладки персистятся отдельно (нужна сериализация панелей).
+//! Each window contains a fresh panel instance backed by the shared `Backend`, so its data remains
+//! live. [`DetachedWindow`] renders it, observes window geometry, and requests repinning when
+//! released. Detached chart tabs use a separate persistence subsystem because their panel state
+//! requires serialization.
 
 use std::rc::Rc;
 
@@ -24,11 +24,11 @@ use crate::Backend;
 use crate::panels::{AssetsView, CoreStatusView, LogPanel, OrdersPanel, ReportPanel, StubPanel};
 use moon_core::config::paths;
 
-/// Одно откреплённое окно: какая панель (`panel_name`), из какой группы, геометрия окна.
+/// Persisted description of one detached panel window: panel name, source group, and geometry.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DetachedSpec {
     pub group: String,
-    /// `panel_name` панели: Orders / Assets / Log / Report.
+    /// Stable panel name: Orders, Assets, Log, Report, Alerts, or CoreStatus.
     pub panel: String,
     pub x: i32,
     pub y: i32,
@@ -37,7 +37,7 @@ pub struct DetachedSpec {
 }
 
 impl DetachedSpec {
-    /// Спека с дефолтной геометрией (каскад) — для первого открепления.
+    /// Creates a specification with the default geometry for a panel's first detachment.
     pub fn new(group: String, panel: String) -> Self {
         Self {
             group,
@@ -49,9 +49,9 @@ impl DetachedSpec {
         }
     }
 
-    /// Спека с ПОСЛЕДНЕЙ запомненной геометрией этой панели (`layout.detached_geom` —
-    /// память переживает возврат в док): повторное открепление встаёт на прежнее
-    /// место/размер. Нет памяти → дефолтный каскад.
+    /// Creates a specification using this panel's last geometry from `layout.detached_geom`. That
+    /// memory survives repinning, so detaching again restores the previous position and size. A
+    /// panel without saved geometry uses the default.
     pub fn with_saved_geom(
         backend: &Entity<crate::Backend>,
         app: &App,
@@ -74,13 +74,13 @@ impl DetachedSpec {
     }
 }
 
-/// Ключ памяти геометрии открепления в `layout.detached_geom`. Префикс `panel:`
-/// отделяет ключи GPUI dock-панелей от легаси-ключей egui (`g:<idx>`/`o:<idx>:<группа>`).
+/// Builds a detached-geometry key for `layout.detached_geom`. The `panel:` prefix separates GPUI
+/// dock-panel keys from legacy egui keys such as `g:<idx>` and `o:<idx>:<group>`.
 fn geom_key(group: &str, panel: &str) -> String {
     format!("panel:{group}/{panel}")
 }
 
-/// Загрузить список откреплённых из `detached.json` (нет/битый → пусто).
+/// Loads detached panel specifications from `detached.json`, returning an empty list if absent or invalid.
 pub fn load_all() -> Vec<DetachedSpec> {
     match std::fs::read_to_string(paths::detached_path()) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
@@ -91,7 +91,7 @@ pub fn load_all() -> Vec<DetachedSpec> {
     }
 }
 
-/// Записать список откреплённых в `detached.json` (не фатально).
+/// Saves detached panel specifications to `detached.json`; failures are logged but nonfatal.
 pub fn save_all(list: &[DetachedSpec]) {
     match serde_json::to_string_pretty(list) {
         Ok(s) => {
@@ -115,8 +115,8 @@ pub fn supports_panel(name: &str) -> bool {
     )
 }
 
-/// Свежий экземпляр dock-панели по `panel_name` как `Rc<dyn PanelView>` — для репина
-/// (вернуть в док) и как контент окна открепления.
+/// Builds a fresh dock-panel instance by name as `Rc<dyn PanelView>` for detached-window content or
+/// repinning into a dock.
 pub fn build_panel(
     name: &str,
     group: &str,
@@ -149,16 +149,17 @@ pub fn build_panel(
     Some(panel)
 }
 
-/// Обёртка-вид окна открепления: рендерит панель, следит за геометрией окна
-/// (пишет в `Backend.detached`, дебаунс-сейв делает дренаж), по закрытию просит репин.
+/// Detached-window wrapper that renders a panel, observes geometry, updates `Backend.detached`, and
+/// requests repinning on release. The backend drain performs the debounced save.
 pub struct DetachedWindow {
     backend: Entity<Backend>,
     group: String,
     panel: String,
     content: AnyView,
-    /// Кнопка «⤢ авто» в заголовке окна — сброс ширин таблицы панели (id, state).
-    /// В доке её даёт `Panel::toolbar_buttons` активной вкладки, у откреп-окна
-    /// свой заголовок — пробрасываем state таблицы явно. None — панель без таблицы.
+    /// ID and state for a configured window-header auto-width reset button. An active dock tab
+    /// supplies this through `Panel::toolbar_buttons`; a detached window has its own header, so
+    /// configured branches pass table state explicitly. None means this detached branch exposes no
+    /// reset callback; for example, Assets has table state but does not configure this button here.
     widths_reset: Option<(&'static str, Entity<moon_ui::MoonDataTableState>)>,
 }
 
@@ -172,14 +173,14 @@ impl DetachedWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Геометрия окна — causal bounds event, а не polling через render/backend pulse.
+        // Persist geometry from causal bounds events instead of polling during render or backend pulses.
         cx.observe_window_bounds(window, |this, window, cx| {
             this.persist_geometry(window, cx);
         })
         .detach();
-        // Закрытие окна → репин (вернуть панель в док окна-владельца). На выходе из
-        // приложения дренаж уже не обрабатывает запрос → спека остаётся в detached.json
-        // (панель восстановится отцепленной на следующем запуске).
+        // Closing requests a repin into the owner's dock. During shutdown, the final on_app_quit
+        // flush persists the detached specifications before windows are released, so release-time
+        // repin requests cannot erase the saved detachment for the next launch.
         let (g, p) = (group.clone(), panel.clone());
         cx.on_release(move |this, app| {
             this.backend.update(app, |b, _| {
@@ -215,8 +216,8 @@ impl DetachedWindow {
                     bk.detached_dirty = true;
                 }
             }
-            // Память геометрии НЕЗАВИСИМО от спеки: спека удаляется при возврате панели
-            // в док, а память остаётся — повторное открепление встанет на прежнее место.
+            // Retain geometry independently of the detached specification. Repinning removes the
+            // specification but keeps this memory, so the next detachment restores the same bounds.
             let key = geom_key(&group, &panel);
             let changed = bk
                 .layout
@@ -243,16 +244,14 @@ impl DetachedWindow {
 impl Render for DetachedWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::DETACHED_RENDER);
-        // Активность Main для авто-закрытия по неактивности: откреплённое окно (Ордера/Лог/…)
-        // несёт тот же `group`, что и Main, но это ОТДЕЛЬНОЕ ОС-окно — слушатель Shell его
-        // движений не видит. Поэтому пишем активность группе и отсюда (мышь над любым
-        // виджетом окна), пока это окно активно. Иначе график Main закрывался, хотя
-        // пользователь активно работал в окне ордеров.
+        // Detached panels share Main's group but live in a separate OS window whose mouse movement
+        // Shell cannot observe. Record group activity from any widget in this active window so Main's
+        // inactivity policy does not close its chart while the user works in a detached panel.
         {
             let backend = self.backend.clone();
             let group = self.group.clone();
-            // CAPTURE-фаза (как в Shell): проходит до элементных bubble-обработчиков и не
-            // подвержена их `stop_propagation` — отметка активности надёжна над любым виджетом.
+            // Use the capture phase, as Shell does, so activity is recorded before bubble handlers
+            // and cannot be suppressed by their stop_propagation calls.
             window.on_mouse_event::<MouseMoveEvent>(move |_e, phase, window, cx| {
                 if phase == DispatchPhase::Capture && window.is_window_active() {
                     backend.update(cx, |b, _| b.note_main_input(&group));
@@ -291,7 +290,8 @@ impl Render for DetachedWindow {
                             .min_w_0()
                             .items_center(),
                     )
-                    // «⤢ авто» — сброс ширин таблицы панели, как у активной вкладки дока.
+                    // Recalculate panel table widths when this button is clicked, matching the
+                    // active dock tab action.
                     .when_some(self.widths_reset.clone(), |this, (id, state)| {
                         this.child(crate::table_persist::reset_button(id, &state))
                     })
@@ -314,8 +314,8 @@ impl Render for DetachedWindow {
     }
 }
 
-/// Открыть окно открепления для спеки (на старте — по каждой сохранённой спеке; при
-/// клике «⧉» — по новой). Контент — свежая панель; геометрия — из спеки.
+/// Opens a detached window from a specification, either while restoring each saved specification at
+/// startup or after a new detach action. The content is a fresh panel and geometry comes from `spec`.
 pub fn spawn(
     app: &mut App,
     backend: &Entity<Backend>,
@@ -334,8 +334,8 @@ pub fn spawn(
         origin: point(px(spec.x as f32), px(spec.y as f32)),
         size: size(px(spec.w as f32), px(spec.h as f32)),
     };
-    // Мультимонитор: монитор по сохранённой точке (не-мак) либо от окна-владельца —
-    // иначе окно создаётся на primary (особенно macOS, где x/y относительны экрану).
+    // On multiple displays, choose by saved position outside macOS or fall back to the owner window.
+    // Otherwise the window opens on the primary display, especially on macOS where x/y are display-relative.
     let display_id =
         crate::windowing::saved_or_owner_display_id(Some(bounds.origin), owner, None, app);
     let opts = crate::windowing::detached_panel_window_options(
@@ -351,13 +351,15 @@ pub fn spawn(
     let spec = spec.clone();
     app.open_window(opts, move |window, cx| {
         crate::windowing::configure_shell_clear_color(window, cx);
-        // Кнопка «⤢ авто» заголовка окна — для панелей с ресайзабельной таблицей.
+        // Configure the window-header auto-width reset button only for the branches below that
+        // expose an explicit reset ID and table state.
         let mut widths_reset: Option<(&'static str, Entity<moon_ui::MoonDataTableState>)> = None;
         let content: AnyView = match spec.panel.as_str() {
             "Orders" => {
                 let p =
                     cx.new(|cx| OrdersPanel::new(backend.clone(), spec.group.clone(), window, cx));
-                // Открепление = контекст `:win` для ширин таблицы (своя раскладка на окно).
+                // Detached tables use the shared `:win` detached-mode width context and keys across
+                // windows, separate from the docked context but not unique per OS window.
                 p.update(cx, |this, cx| this.mark_table_detached(cx));
                 widths_reset = Some(("orders-reset-widths-win", p.read(cx).table_state()));
                 p.into()

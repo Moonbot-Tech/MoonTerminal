@@ -1,5 +1,5 @@
-//! Окна групп: список активных групп, фокус-монета по умолчанию и открытие/фокус
-//! окна группы (порт egui `App::show_group`). Вынесено из main.rs.
+//! Group-window support: enumerate active groups and open or focus their windows. Ported from egui
+//! `App::show_group` and extracted from `main.rs`.
 
 use gpui::*;
 
@@ -12,7 +12,7 @@ use crate::Backend;
 use crate::shell::Shell;
 use crate::windowing;
 
-/// Активные группы конфига (уникальные, в порядке появления). Нет — одна "default".
+/// Returns unique active configuration groups in encounter order, or a single `default` fallback.
 pub(crate) fn groups(cfg: &AppConfig) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for s in &cfg.servers {
@@ -26,9 +26,9 @@ pub(crate) fn groups(cfg: &AppConfig) -> Vec<String> {
     out
 }
 
-/// Открыть (или сфокусировать, если уже открыто) окно группы. Используется на старте
-/// по окну на группу и по кнопке 👁 «показать группу» в настройках (порт egui
-/// `App::show_group`). Геометрия — из сохранённой раскладки, иначе каскад по `offset`.
+/// Opens a group window or focuses it when already open. Startup calls this once per group, and the
+/// settings Show Group action calls it on demand, matching egui `App::show_group`. Geometry comes
+/// from the saved layout or uses a cascade derived from `offset`.
 pub(crate) fn spawn_group_window(
     cx: &mut App,
     backend: &Entity<Backend>,
@@ -38,7 +38,7 @@ pub(crate) fn spawn_group_window(
     layout: &WindowLayout,
     offset: f32,
 ) {
-    // Уже открыто → сфокусировать (handle.update вернёт Err, если окно закрыли).
+    // Focus an existing live window. handle.update returns an error for a window already closed.
     if let Some(handle) = backend.read(cx).group_windows.get(&group).copied() {
         if handle
             .update(cx, |_, window, _| window.activate_window())
@@ -47,8 +47,8 @@ pub(crate) fn spawn_group_window(
             return;
         }
     }
-    // НЕ открываем монету на Main автоматически при старте — Main стартует пустым (юзер сам
-    // открывает монету). (Раньше брали `server.market`, дефолт BTCUSDT.)
+    // Do not open a Main market automatically at startup. Main starts empty until the user selects
+    // one; the former behavior used server.market with BTCUSDT as fallback.
     let focus: Option<(CoreId, String)> = None;
     let saved = layout.groups.get(&group);
     let win_bounds = match saved {
@@ -61,12 +61,12 @@ pub(crate) fn spawn_group_window(
             size: size(px(1280.0), px(720.0)),
         },
     };
-    // Монитор — по сохранённому uuid дисплея (стабилен между запусками; на macOS x/y
-    // относительны своему экрану, contains-детект по ним бессмыслен). Фолбэк для старых
-    // layout без uuid — монитор, содержащий сохранённый origin (глобальные координаты,
-    // не-мак). Без display_id GPUI восстанавливает по scale primary-монитора, и на
-    // мониторе с другим DPI окно открывается смещённым/сжатым. MoonUI GPUI берёт scale
-    // целевого display ТОЛЬКО когда display_id задан. Round-trip как у detached-окон.
+    // Prefer the saved display UUID, which is stable across launches. If it is absent or unmatched,
+    // try saved-origin containment on every platform. This is reliable where origins use global
+    // coordinates; on macOS, display-relative x/y makes the fallback ambiguous but it still provides
+    // a best-effort match for legacy layouts. Without a display_id, GPUI restores using the primary
+    // display's scale, shifting or shrinking windows on displays with different DPI. MoonUI's GPUI
+    // uses the target scale only when display_id is set, matching the detached-window round trip.
     let origin = win_bounds.origin;
     let saved_uuid = saved.and_then(|g| g.display_uuid.as_deref());
     let display_id = saved_uuid
@@ -88,7 +88,7 @@ pub(crate) fn spawn_group_window(
     } else {
         WindowBounds::Windowed(win_bounds)
     };
-    // Значок окна группы из конфига (`GroupConfig.icon` → assets/icons/<id>.png, вшит в exe).
+    // Load the configured group-window icon from embedded `assets/icons/<id>.png`.
     let icon_id = cfg.group(&group).icon;
     let mut opts = windowing::trading_window_options(
         "MoonTerminal",
@@ -99,8 +99,9 @@ pub(crate) fn spawn_group_window(
         Some(size(px(520.0), px(340.0))),
     );
     opts.window_background = WindowBackgroundAppearance::Opaque;
-    // Цвет clear из темы (фон чарта): иначе не закрытые сценой пиксели = белые (дефолт рендерера),
-    // что мелькает при старте/ресайзе и под чартом (own-pass UnderScene нельзя перекрывать фоном).
+    // Clear with the theme's chart background. Otherwise scene-uncovered pixels use the renderer's
+    // white default and flash during startup or resize and beneath the chart, where an own-pass
+    // UnderScene layer cannot be covered by a later background.
     let cbg = cfg.chart_theme().bg;
     opts.window_clear_color = Some(gpui::rgb(
         ((cbg[0] as u32) << 16) | ((cbg[1] as u32) << 8) | cbg[2] as u32,

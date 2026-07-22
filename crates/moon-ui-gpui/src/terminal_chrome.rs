@@ -234,16 +234,16 @@ fn ticker_readout(
         cx.new(|_| moon_ui::MoonTooltipView::new(t!("header.ticker_tip").to_string()))
             .into()
     })
-    // Клик — открыть чарт монеты тикера на Main (как клик по тикеру в Ордерах/Активах);
-    // дабл-клик — попап выбора монеты/ядра. При дабл-клике первый клик успевает открыть
-    // чарт — безобидно (окно не поднимаем, activate=false).
+    // A single click opens the ticker coin's chart on Main, matching ticker clicks in Orders and
+    // Assets; a double-click opens the coin/core picker. The first click of a double-click may
+    // already queue a chart request, but it does not raise the window because `activate` is false.
     .on_click(move |ev: &ClickEvent, window, cx| {
         if ev.click_count() >= 2 {
             shell.update(cx, |s, cx| s.toggle_ticker_popup(window, cx));
             return;
         }
         let Some((core, market)) = sel.clone() else {
-            // Источник не разрезолвлен (нет ядра/рынка) — открывать нечего, ведём в попап.
+            // An unresolved source has no core or market to open, so show the picker instead.
             shell.update(cx, |s, cx| s.toggle_ticker_popup(window, cx));
             return;
         };
@@ -256,8 +256,18 @@ fn ticker_readout(
     })
 }
 
-/// Цена тикера: тысячи с пробелом и «$» в конце; дробная часть по величине
-/// (≥1000 → целое, ≥1 → 2 знака, иначе 4 значащих).
+/// Format a ticker price with a trailing dollar sign and magnitude-based precision.
+///
+/// Values at least 1000 are rounded to an integer and grouped with spaces, values at least 1 use
+/// two decimal places, and lower values use four decimal places.
+///
+/// # Arguments
+///
+/// * `v` - Price value to format.
+///
+/// # Returns
+///
+/// The formatted price string.
 fn fmt_ticker_price(v: f64) -> String {
     if v >= 1000.0 {
         let mut s = fmt::group_thousands(&format!("{v:.0}"));
@@ -270,9 +280,23 @@ fn fmt_ticker_price(v: f64) -> String {
     }
 }
 
-/// Селектор «активного торгового ядра» группы. Список ядер группы; текущий выбор =
-/// `Backend::active_trade_core` (авто-следование за фуллскрин-чартом + sticky-override
-/// при ручном выборе). Все торговые контролы тулбара/шапки читают это же ядро.
+/// Build the selector for a group's active trading core.
+///
+/// The choices come from the group's cores. [`Backend::active_trade_core`] prefers a still-valid
+/// sticky manual override, then the current trading target, and finally the group's first core.
+/// The trading target can come from Main's active fullscreen chart or a locked comparison anchor
+/// in an Add or Custom tab. All toolbar and header trading controls read the same active core.
+///
+/// # Arguments
+///
+/// * `group` - Group whose trading cores should be listed.
+/// * `backend` - Backend that owns core state and selection overrides.
+/// * `p` - Active palette used to render status and text colors.
+/// * `cx` - Application context used to read state and measure labels.
+///
+/// # Returns
+///
+/// The selector element, or a static placeholder when the group has no cores.
 fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> AnyElement {
     // The pill keeps a fixed height and full rounding; its content width is capped below so a long
     // user-defined name cannot displace the header's right-hand readouts.
@@ -283,7 +307,7 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
     let active = b.active_trade_core(group);
     let store = b.session.store();
 
-    // Нет ядер в группе — статичная заглушка вместо пустого дропдауна.
+    // Render a static placeholder instead of an empty drop-down when the group has no cores.
     if cores.is_empty() {
         return MoonTag::new()
             .outline()
@@ -332,15 +356,15 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         );
     }
 
-    // Каноничный визуал `MoonSelectorPill` (точка статуса со свечением + каретка-иконка) как
-    // триггер `MoonPopover`, контент — `MoonPopupMenu` со списком ядер. Всё напрямую из moonui:
-    // ни ручной стилизации триггера, ни хака размеров. Popover сам держит open-стейт (внутренний
-    // `use_keyed_state`) и тогглит по клику; `close_on_content_click` закрывает после выбора ядра.
+    // Use the canonical `MoonSelectorPill` visual, with a glowing status dot and caret icon, as
+    // the `MoonPopover` trigger. The content is a `MoonPopupMenu` listing the cores. These moonui
+    // components need no manual trigger styling or size workaround. The popover owns its open
+    // state through internal `use_keyed_state`, toggles on click, and closes after core selection.
     //
-    // Фон пилюли = `p.panel`; у `MoonSelectorPill` есть явный бордер `p.border` → «таблетка»
-    // читается даже на фоне шапки `shell_high` (в отличие от старого Panel-кейса без рамки).
+    // The pill uses `p.panel` as its background and `p.border` as an explicit border, keeping the
+    // shape legible against the `shell_high` header unlike the old borderless Panel variant.
     //
-    // Ширина меню — по самому длинному имени ядра (длинные имена клипались фикс-шириной).
+    // Size the menu to the longest core name; a fixed width clipped long names.
     let menu_w = design::menu_fit_width(cx, cores.iter().map(|(_, n)| n.as_str()), 180.0);
     MoonPopover::new("header-core-selector")
         .placement(MoonPopoverPlacement::BottomStart)
