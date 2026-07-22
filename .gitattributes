@@ -1,7 +1,7 @@
 * text=auto eol=lf
 /.gitattributes text eol=lf
 *.sh text eol=lf
-# Makefile требует LF (на macOS/Linux make ломается от \r).
+# Makefile requires LF (make breaks on \r on macOS/Linux).
 Makefile text eol=lf
 
 *.bmp binary
