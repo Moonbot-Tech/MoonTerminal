@@ -1,12 +1,12 @@
-//! «Тюнер фильтров» окна «Аналитика» — приём из «Аналитики V3» (Excel-дашборд):
-//! «что-если» по порогам рыночных полей отчёта. Считает KPI «Факт vs варианты»
-//! (вариант = набор диапазонов от/до по полям входа) и гистограмму распределения
-//! профита по КВАНТИЛЬНЫМ вёдрам выбранного поля (фиксированная шкала V3 нашим
-//! данным не подходит: значения в процентах и с дикими выбросами, а hvol/dvol —
-//! вообще объёмы). Источник — тот же UNION реплики и легаси, что у `analytics`.
+//! The Analytics window's filter tuner, adapted from Analytics V3 (an Excel dashboard):
+//! threshold what-if analysis for report market fields. It calculates the "Fact vs variants"
+//! KPIs (a variant is a set of lower/upper ranges on entry fields) and a profit-distribution
+//! histogram over QUANTILE buckets for the selected field. V3's fixed scale does not fit our
+//! data: values are percentages with extreme outliers, while hvol/dvol are volumes. The source
+//! is the same replica-and-legacy UNION used by `analytics`.
 //!
-//! Все функции ходят в SQLite полными сканами периода — вызывать ТОЛЬКО с
-//! background executor.
+//! Query and evaluation entry points that scan report periods belong on a background
+//! executor; pure formatting and metadata helpers do not scan those periods.
 
 use rusqlite::Connection;
 
@@ -14,43 +14,42 @@ use super::analytics::{unified_from, Query};
 use super::read_fail::read_fail;
 use super::{ReadFail, ReadResult};
 
-/// Класс поля — каким Ignore-флагом стратегии выключается его фильтр.
-/// `IgnoreFilters` выключает ВСЕ классы; `IgnoreDelta`/`IgnoreVolume` — свои.
-/// `DeltaSlot` — дельты, у которых в стратегии НЕТ собственных параметров:
-/// они подключаются через слоты Delta2/Delta3 (тип + min/max), т.е. в
-/// стратегию сохраняются максимум две; игнорятся как дельты.
+/// Field class indicating which strategy Ignore flag disables its filter.
+/// `IgnoreFilters` disables ALL classes; `IgnoreDelta` and `IgnoreVolume` disable their own.
+/// `DeltaSlot` covers deltas without dedicated strategy parameters: they use Delta2/Delta3
+/// slots (type plus min/max), so at most two can be saved in a strategy; they are ignored as
+/// deltas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldClass {
     Filter,
-    /// BV/SV-фильтр: свой включатель `UseBV_SV_Filter` (false = выключен)
-    /// поверх общего IgnoreFilters.
+    /// BV/SV filter: its own `UseBV_SV_Filter` switch (`false` means disabled)
+    /// in addition to the general `IgnoreFilters` flag.
     BvSv,
-    /// PriceBug: секция Filters/Ping со своим `IgnorePing`.
+    /// PriceBug: the Filters/Ping section with its own `IgnorePing` flag.
     Ping,
-    /// Секция Filters/Base со своим `IgnoreBase` (плечо, MarkPrice-дельта).
+    /// Filters/Base section with its own `IgnoreBase` flag (leverage and MarkPrice delta).
     Base,
     Delta,
     DeltaSlot,
     Volume,
 }
 
-/// Описание одного поля тюнера. ЕДИНСТВЕННОЕ место, которое правится при
-/// новой колонке отчёта или новом параметре стратегии: одна строка в `FIELDS`
-/// — всё остальное (SQL-проекция UNION'а, сетка UI, чипы, автоперебор,
-/// сохранение в стратегию) выводится из этой таблицы. Сами колонки в
-/// reports.sqlite доращиваются из схемы ядра автоматически (db/rep.rs).
+/// Description of one tuner field. This is the ONLY place to edit for a new report column or
+/// strategy parameter: one row in `FIELDS`; everything else (the UNION SQL projection, UI grid,
+/// chips, automatic search, and strategy persistence) is derived from this table. Columns in
+/// reports.sqlite are extended automatically from the core schema (db/rep.rs).
 pub struct FieldSpec {
-    /// Колонка реплики отчётов (lowercase).
+    /// Report-replica column (lowercase).
     pub col: &'static str,
-    /// Подпись в сетке (как в MB/V3).
+    /// Grid label (as in MB/V3).
     pub label: &'static str,
-    /// Класс = каким Ignore-флагом стратегии выключается фильтр.
+    /// Class indicating which strategy Ignore flag disables the filter.
     pub class: FieldClass,
-    /// Параметры-фильтры стратегии (Min, Max); None — в стратегию не пишется.
+    /// Strategy filter parameters (Min, Max); `None` means the value is not saved.
     pub p_min: Option<&'static str>,
     pub p_max: Option<&'static str>,
-    /// Значение `DeltaN_Type` для слот-полей (class == DeltaSlot): порог
-    /// пишется через слот Delta2/Delta3, а не собственными параметрами.
+    /// `DeltaN_Type` value for slot fields (`class == DeltaSlot`): the threshold is saved
+    /// through a Delta2/Delta3 slot instead of dedicated parameters.
     pub slot_type: Option<&'static str>,
 }
 
@@ -73,17 +72,17 @@ const fn field(
 }
 
 impl FieldSpec {
-    /// Есть ли способ записать порог в стратегию (параметры или слот).
-    /// Немаппленные поля (da1m, d5s) в сетке помечаются и по умолчанию
-    /// исключены из автоподбора.
+    /// Whether the threshold can be saved to the strategy through parameters or a slot.
+    /// Unmapped fields (da1m, d5s) are marked in the grid and excluded from automatic
+    /// suggestions by default.
     pub fn mapped(&self) -> bool {
         self.p_min.is_some() || self.p_max.is_some() || self.slot_type.is_some()
     }
 }
 
 impl FieldClass {
-    /// Родительская секция MoonBot: BV/SV живёт внутри Filters/Volume,
-    /// слоты Delta2/Delta3 — внутри Filters/Delta; прочие — сами себе.
+    /// Parent MoonBot section: BV/SV lives under Filters/Volume, Delta2/Delta3 slots live
+    /// under Filters/Delta, and every other class is its own parent.
     pub fn parent(self) -> FieldClass {
         match self {
             FieldClass::BvSv => FieldClass::Volume,
@@ -93,16 +92,16 @@ impl FieldClass {
     }
 }
 
-/// Поля отчёта, доступные фильтрам. ЕДИНСТВЕННЫЙ источник имён колонок,
-/// попадающих в SQL тюнера (вайтлист). Порядок = порядок в сетке и повторяет
-/// порядок секций Filters в MoonBot: Base → Ping → Volume (внутри — BV/SV)
-/// → Delta (внутри — слоты Delta2/Delta3). Маппинг на параметры сверен
-/// 2026-07-17 по union параметров всех видов стратегий. Поля БЕЗ параметров
-/// и слот-типа (da1m, d5s) показываются С ПОМЕТКОЙ «нет параметра»: что-если
-/// по ним считается, но записать порог в стратегию нечем. Типы слотов
-/// 2h/30m/Pump5m без колонки отчёта непредставимы.
+/// Report fields available to filters. This is the ONLY source of column names allowed into
+/// tuner SQL (the whitelist). The order matches the grid and the MoonBot Filters sections:
+/// Base -> Ping -> Volume (with BV/SV nested inside) -> Delta (with Delta2/Delta3 slots nested
+/// inside). The parameter mapping was checked on 2026-07-17 against the union of parameters
+/// from every strategy type. Fields WITHOUT parameters or a slot type (da1m, d5s) are shown
+/// with a "no parameter" marker: what-if calculations work for them, but there is nowhere to
+/// save the threshold in a strategy. Slot types 2h/30m/Pump5m have no report column and cannot
+/// be represented.
 pub const FIELDS: &[FieldSpec] = &[
-    // Filters/Base (IgnoreFilters | IgnoreBase): плечо и дельта mark-цены (±%).
+    // Filters/Base (IgnoreFilters | IgnoreBase): leverage and mark-price delta (±%).
     field(
         "lev",
         "Lev",
@@ -161,8 +160,8 @@ pub const FIELDS: &[FieldSpec] = &[
         Some("MinuteVolDeltaMax"),
         None,
     ),
-    // BV/SV — ПОДГРУППА Volume: свой включатель UseBV_SV_Filter поверх
-    // IgnoreVolume; параметры фильтра (не детектора BV_SV_Ratio!).
+    // BV/SV is a Volume SUBGROUP: its own UseBV_SV_Filter switch applies in addition to
+    // IgnoreVolume; these are filter parameters, not the BV_SV_Ratio detector parameters.
     field(
         "bvsvratio",
         "bvsv",
@@ -238,7 +237,7 @@ pub const FIELDS: &[FieldSpec] = &[
         Some("Delta_BTC_1m_Max"),
         None,
     ),
-    // Слоты Delta2/Delta3 — ПОДГРУППА Delta (в стратегию — макс 2).
+    // Delta2/Delta3 slots form a Delta SUBGROUP (at most two per strategy).
     field("d1h", "d1h", FieldClass::DeltaSlot, None, None, Some("1h")),
     field(
         "d15m",
@@ -268,7 +267,7 @@ pub const FIELDS: &[FieldSpec] = &[
     ),
 ];
 
-/// Значение `DeltaN_Type` для поля-слота (None — поле не слот).
+/// `DeltaN_Type` value for a slot field (`None` means the field is not a slot).
 pub fn slot_type_for(field: &str) -> Option<&'static str> {
     FIELDS
         .iter()
@@ -276,7 +275,7 @@ pub fn slot_type_for(field: &str) -> Option<&'static str> {
         .and_then(|s| s.slot_type)
 }
 
-/// Диапазон по одному полю; None — граница не задана.
+/// Range for one field; `None` means the bound is unset.
 #[derive(Clone, Debug, Default)]
 pub struct Bound {
     pub field: String,
@@ -284,19 +283,19 @@ pub struct Bound {
     pub to: Option<f64>,
 }
 
-/// WorkingTime: один диапазон времени стратегии. `Day` — окно времени СУТОК
-/// (минуты 0..1439, поле пишется как "чч:мм-чч:мм"); `Hour` — окно минут В КАЖДОМ
-/// ЧАСЕ (0..59, поле пишется как "N-M"). Оба — единый непрерывный диапазон
-/// (`от > до` = через край: конец суток/часа).
+/// WorkingTime: one strategy time range. `Day` is a time-of-day window (minutes 0..1439,
+/// serialized as "hh:mm-hh:mm"); `Hour` is a minute window within EVERY HOUR (0..59,
+/// serialized as "N-M"). Both are single continuous ranges (`from > to` wraps across the end
+/// of the day or hour).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TimeWindow {
     Day(u16, u16),
     Hour(u8, u8),
 }
 
-/// Время ОТКРЫТИЯ сделки для расписания: WorkingTime/WorkingWeekTime гейтят ВХОД в
-/// сделку, поэтому день/минуту берём из `buydate` (когда сделка открылась), а не из
-/// `closedate` (закрытие). Fallback на `closedate`, если открытие не записано (0/NULL).
+/// Trade OPEN time for schedules: WorkingTime/WorkingWeekTime gate ENTRY into a trade, so the
+/// day and minute come from `buydate` (when the trade opened), not `closedate` (when it closed).
+/// Fall back to `closedate` when the open time is missing (0/NULL).
 const OPEN_TS: &str = "COALESCE(NULLIF(o.buydate, 0), o.closedate)";
 
 /// A "what-if" variant = extra conditions on top of the base selection. Empty = "Fact".
@@ -308,11 +307,11 @@ const OPEN_TS: &str = "COALESCE(NULLIF(o.buydate, 0), o.closedate)";
 #[derive(Clone, Debug, Default)]
 pub struct Variant {
     pub bounds: Vec<Bound>,
-    /// WorkingWeekTime: непрерывный спан по МИНУТЕ НЕДЕЛИ `(от, до)`, минута недели
-    /// = `день*1440 + минута_суток` (0..10079, день 0=Пн..6=Вс); включительно,
-    /// `от > до` = через воскресенье→понедельник. `None` — без ограничения.
+    /// WorkingWeekTime: continuous inclusive span over the MINUTE OF THE WEEK `(from, to)`,
+    /// where the week minute is `day*1440 + minute_of_day` (0..10079, day 0=Mon..6=Sun).
+    /// `from > to` wraps from Sunday to Monday; `None` means unrestricted.
     pub week_span: Option<(u16, u16)>,
-    /// WorkingTime: одно окно времени. `None` — без ограничения по времени.
+    /// WorkingTime: one time window. `None` means unrestricted by time.
     pub tod: Option<TimeWindow>,
     /// The "By coin" axis, whitelist side: `Some(list)` keeps ONLY those coins, `None`
     /// places no restriction. Names are exactly as the `coin` column holds them — the
@@ -338,9 +337,9 @@ impl Variant {
         self.where_sql().is_empty()
     }
 
-    /// Хвост WHERE варианта. Поля гейтятся вайтлистом `FIELDS`; NULL считается
-    /// нулём (как в остальных фильтрах отчётов); числа — литералами (f64 из
-    /// формы, инъекции невозможны). Часы/дни/минуты — целые (тоже без инъекций).
+    /// Variant WHERE suffix. Fields are gated through the `FIELDS` whitelist; NULL counts as
+    /// zero (as in other report filters); numbers are literals from form-provided f64 values,
+    /// so they cannot inject SQL. Hours, days, and minutes are integers and likewise safe.
     fn where_sql(&self) -> String {
         let mut w = String::new();
         for b in &self.bounds {
@@ -355,8 +354,8 @@ impl Variant {
             }
         }
         if let Some((f, t)) = self.week_span {
-            // Минута недели по времени ОТКРЫТИЯ = день*1440 + минута_суток (0..10079,
-            // день 0=Пн..6=Вс); непрерывный спан, `от > до` = через воскресенье→пн.
+            // Week minute from OPEN time = day*1440 + minute_of_day (0..10079,
+            // day 0=Mon..6=Sun); a continuous span with `from > to` wrapping Sun -> Mon.
             let wk = format!(
                 "((((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7) * 1440 + ({OPEN_TS} % 86400) / 60)"
             );
@@ -417,12 +416,12 @@ pub(super) fn sql_str_list(items: &[String]) -> String {
     out
 }
 
-/// SQL-условие поля `WorkingTime`. `Day` — минута СУТОК `(closedate%86400)/60` в
-/// окне 0..1439; `Hour` — минута В ЧАСЕ `((closedate%86400)/60)%60` в окне 0..59.
-/// Окно `от <= до` → `BETWEEN`; `от > до` — через край (`<= до` ИЛИ `>= от`, иначе
-/// перевёрнутое окно молча давало бы 0 сделок). Литералы целые — инъекции невозможны.
+/// SQL condition for the `WorkingTime` field. `Day` uses the minute of day from `OPEN_TS` in
+/// 0..1439; `Hour` uses the minute within the hour from `OPEN_TS` in 0..59. A window with
+/// `from <= to` uses `BETWEEN`; `from > to` wraps (`<= to` OR `>= from`), because a reversed
+/// `BETWEEN` would silently select zero trades. Integer literals cannot inject SQL.
 fn time_window_where(tw: TimeWindow) -> String {
-    // Минута считается от ВРЕМЕНИ ОТКРЫТИЯ (расписание гейтит вход).
+    // Calculate the minute from OPEN TIME because the schedule gates entry.
     let (expr, f, t, hi): (String, u16, u16, u16) = match tw {
         TimeWindow::Day(f, t) => (format!("(({OPEN_TS} % 86400) / 60)"), f, t, 1439),
         TimeWindow::Hour(f, t) => (
@@ -440,15 +439,15 @@ fn time_window_where(tw: TimeWindow) -> String {
     }
 }
 
-/// Спан по минуте недели `(от, до)` (0..10079) → строка поля `WorkingWeekTime`
-/// `день.чч:мм-день.чч:мм` (день 1-based 1=Пн..7=Вс). Край на границе суток пишем
-/// коротко: начало дня (мин 0) → просто `день`, конец дня (мин 1439) → просто
-/// `день` — т.е. `1-5` = Пн 00:00 → Пт 23:59, `1.23:44-6.22:22` — с временем.
-/// Полную неделю вызывающий не пишет (== без ограничения).
+/// Convert a week-minute span `(from, to)` (0..10079) into a `WorkingWeekTime` field string,
+/// `day.hh:mm-day.hh:mm` (1-based day: 1=Mon..7=Sun). Shorten a bound on a day boundary to
+/// just `day`: minute 0 for the start and minute 1439 for the end. Thus `1-5` means Mon 00:00
+/// through Fri 23:59, while `1.23:44-6.22:22` includes explicit times. The caller does not
+/// write a full week because it means no restriction.
 pub fn format_week_span((f, t): (u16, u16)) -> String {
     let ends = |m: u16, at_end: bool| {
         let (day, tod) = ((m / 1440) % 7 + 1, m % 1440);
-        // Начало дня (0) для «от» и конец дня (1439) для «до» опускаем время.
+        // Omit the time for a start at minute 0 or an end at minute 1439.
         if (!at_end && tod == 0) || (at_end && tod == 1439) {
             day.to_string()
         } else {
@@ -458,8 +457,8 @@ pub fn format_week_span((f, t): (u16, u16)) -> String {
     format!("{}-{}", ends(f, false), ends(t, true))
 }
 
-/// `TimeWindow` → строка поля `WorkingTime`. `Day` → "чч:мм-чч:мм"; `Hour` → "N-M"
-/// (минуты в каждом часе — MoonBot различает по отсутствию ":").
+/// Convert `TimeWindow` into a `WorkingTime` field string. `Day` becomes "hh:mm-hh:mm";
+/// `Hour` becomes "N-M" (MoonBot identifies minutes within each hour by the absence of ":").
 pub fn format_working_time(tw: TimeWindow) -> String {
     match tw {
         TimeWindow::Day(f, t) => format!("{}-{}", fmt_min(f), fmt_min(t)),
@@ -467,12 +466,12 @@ pub fn format_working_time(tw: TimeWindow) -> String {
     }
 }
 
-/// Минуты дня → "чч:мм".
+/// Convert minutes of the day to "hh:mm".
 fn fmt_min(m: u16) -> String {
     format!("{:02}:{:02}", m / 60, m % 60)
 }
 
-/// KPI одной колонки матрицы «Факт vs v1..vN».
+/// KPI values for one column of the "Fact vs v1..vN" matrix.
 #[derive(Clone, Debug, Default)]
 pub struct VarStats {
     pub n: i64,
@@ -480,10 +479,10 @@ pub struct VarStats {
     pub profit: f64,
     pub pf: f64,
     pub avg: f64,
-    /// Средний выигрыш / средний проигрыш (по модулю).
+    /// Average win and absolute average loss.
     pub avg_win: f64,
     pub avg_loss: f64,
-    /// Средний размер входа (spentbtc; у нас котировка USDT).
+    /// Average entry size (`spentbtc`; our quote currency is USDT).
     pub avg_spent: f64,
     pub max_dd: f64,
 }
@@ -581,14 +580,14 @@ fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> ReadResu
     Ok(st)
 }
 
-/// Ведро гистограммы: `[lo, hi)` (последнее включает hi).
+/// Histogram bucket: `[lo, hi)`, with the last bucket including `hi`.
 #[derive(Clone, Debug)]
 pub struct HistBucket {
     pub lo: f64,
     pub hi: f64,
     pub n: i64,
     pub wins: i64,
-    /// Сумма выигрышей / сумма проигрышей (по модулю) ведра.
+    /// Bucket's sum of wins and absolute sum of losses.
     pub wsum: f64,
     pub lsum: f64,
 }
@@ -635,8 +634,8 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> ReadResult<Vec<HistBuck
     }
     pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-    // Квантильные края: want равнонаполненных вёдер, совпавшие края схлопываем
-    // (поля с массой одинаковых значений/нулей).
+    // Quantile edges for `want` equally populated buckets; collapse duplicate edges
+    // for fields with many identical values or zeros.
     let want = want.clamp(2, 64).min(pairs.len().max(2));
     let mut edges: Vec<f64> = Vec::with_capacity(want + 1);
     for i in 0..=want {
@@ -647,7 +646,7 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> ReadResult<Vec<HistBuck
         }
     }
     if edges.len() < 2 {
-        // Все значения одинаковые — одно ведро.
+        // Every value is identical, so use one bucket.
         edges = vec![pairs[0].0, pairs[0].0];
     }
 
@@ -679,7 +678,7 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> ReadResult<Vec<HistBuck
     Ok(out)
 }
 
-/// Параметры стратегии (min, max) для поля отчёта; (None, None) — маппинга нет.
+/// Strategy parameters (min, max) for a report field; `(None, None)` means no mapping.
 pub fn params_for(field: &str) -> (Option<&'static str>, Option<&'static str>) {
     FIELDS
         .iter()
@@ -688,8 +687,8 @@ pub fn params_for(field: &str) -> (Option<&'static str>, Option<&'static str>) {
         .unwrap_or((None, None))
 }
 
-/// Ядра, на которых стратегия сейчас существует (head'ы strategies.sqlite,
-/// deleted=0) — адресаты сохранения порогов.
+/// Cores where the strategy currently exists (strategies.sqlite heads with `deleted=0`),
+/// which are the targets for saving thresholds.
 pub fn strategy_cores(strategy_id: i64) -> Vec<u64> {
     let path = crate::config::paths::strategies_db_path();
     if !path.exists() {
@@ -709,42 +708,42 @@ pub fn strategy_cores(strategy_id: i64) -> Vec<u64> {
         .unwrap_or_default()
 }
 
-/// Фильтровая «карточка» стратегии: Ignore-флаги + НЕдефолтные пороги по
-/// полям тюнера. Флаги нужны и чипам (игнорируемый класс не показываем), и
-/// сохранению порогов (перед записью включить нужные классы).
+/// Strategy filter card: Ignore flags plus NON-default thresholds for tuner fields.
+/// The flags drive both chips (hide ignored classes) and threshold persistence
+/// (enable the required classes before writing).
 #[derive(Clone, Debug, Default)]
 pub struct StratFilters {
     pub found: bool,
     pub ignore_filters: bool,
     pub ignore_delta: bool,
     pub ignore_volume: bool,
-    /// Игнор секции Filters/Base (плечо, MarkPrice).
+    /// Whether the Filters/Base section (leverage, MarkPrice) is ignored.
     pub ignore_base: bool,
-    /// Включатель BV/SV-фильтра (`UseBV_SV_Filter`); false = выключен.
+    /// BV/SV filter switch (`UseBV_SV_Filter`); `false` means disabled.
     pub use_bvsv: bool,
-    /// Игнор секции Filters/Ping (PriceBug и пинги).
+    /// Whether the Filters/Ping section (PriceBug and pings) is ignored.
     pub ignore_ping: bool,
     pub bounds: std::collections::HashMap<&'static str, (Option<f64>, Option<f64>)>,
-    /// Занятые слоты Delta2/Delta3: (номер 2|3, поле отчёта, min, max).
-    /// Слоты с типом без колонки отчёта (2h/30m/Pump5m) не попадают.
+    /// Occupied Delta2/Delta3 slots: (number 2|3, report field, min, max).
+    /// Slots whose type has no report column (2h/30m/Pump5m) are omitted.
     pub slots: Vec<(u8, &'static str, Option<f64>, Option<f64>)>,
-    /// Слоты, занятые типом БЕЗ колонки отчёта (2h/30m/Pump5m) с настроенными
-    /// порогами: живой фильтр, который тюнер не видит — перезаписывать такой
-    /// слот сохранение должно в последнюю очередь (и с warn).
+    /// Slots occupied by a type WITHOUT a report column (2h/30m/Pump5m) and configured
+    /// thresholds: a live filter invisible to the tuner. Saving must overwrite such a slot
+    /// only as a last resort and with a warning.
     pub foreign_slots: Vec<(u8, String)>,
-    /// Текущий комментарий стратегии (поле Comment) — сохранение дописывает
-    /// в него штамп анализатора, не затирая описание пользователя.
+    /// Current strategy comment (`Comment` field); saving appends an analyzer stamp without
+    /// erasing the user's description.
     pub comment: String,
 }
 
 impl StratFilters {
-    /// Игнорируется ли класс поля текущими флагами стратегии.
+    /// Whether the current strategy flags ignore the field class.
     pub fn class_ignored(&self, class: FieldClass) -> bool {
         self.ignore_filters
             || match class {
                 FieldClass::Filter => false,
-                // BV/SV — подгруппа Filters/Volume: гейтится И IgnoreVolume,
-                // И собственным включателем UseBV_SV_Filter.
+                // BV/SV is a Filters/Volume subgroup gated by BOTH IgnoreVolume and its own
+                // UseBV_SV_Filter switch.
                 FieldClass::BvSv => self.ignore_volume || !self.use_bvsv,
                 FieldClass::Ping => self.ignore_ping,
                 FieldClass::Base => self.ignore_base,
@@ -753,7 +752,7 @@ impl StratFilters {
             }
     }
 
-    /// Слот, назначенный полю (если есть): (номер, min, max).
+    /// Slot assigned to the field, if any: (number, min, max).
     pub fn slot_of(&self, field: &str) -> Option<(u8, Option<f64>, Option<f64>)> {
         self.slots
             .iter()
@@ -762,10 +761,10 @@ impl StratFilters {
     }
 }
 
-/// Текущие значения параметров стратегии (для окна подтверждения записи:
-/// «сейчас → будет»). Ключи — имена параметров из списка правок; отсутствующий
-/// в raw_json ключ в ответ не попадает. Значения строками как в стратегии
-/// (булевы — YES/NO). Ходит в strategies.sqlite — вызывать с bg executor.
+/// Current strategy parameter values for the "now -> next" write-confirmation dialog.
+/// Keys are parameter names from the edit list; a key absent from raw_json is omitted from
+/// the result. Values are strings in strategy format (booleans are YES/NO). This accesses
+/// strategies.sqlite, so call it from a background executor.
 pub fn strategy_current_values(
     strategy_id: i64,
     core: Option<u64>,
@@ -853,11 +852,11 @@ pub fn strategy_current_values_opt(
     Some(out)
 }
 
-/// Пороговые параметры ВЫБРАННОЙ стратегии по полям тюнера.
-/// Источник — текущая версия в strategies.sqlite (raw_json нормализован со
-/// схемными дефолтами). `defaults` — дефолты схемы (lowercase имя → число):
-/// значение, РАВНОЕ дефолту, скрывается — это «фильтр не настроен», а не
-/// осознанный порог (…100T и т.п.). `found=false` — БД нет / не найдена.
+/// Threshold parameters of the SELECTED strategy for tuner fields.
+/// The source is the current strategies.sqlite version (raw_json normalized with schema
+/// defaults). `defaults` contains schema defaults (lowercase name -> number): a value EQUAL
+/// to its default is hidden because it means "filter not configured," not a deliberate
+/// threshold (such as ...100T). `found=false` means the database or row was not found.
 pub fn strategy_filters(
     strategy_id: i64,
     core: Option<u64>,
@@ -915,7 +914,7 @@ pub fn strategy_filters(
         if !f.is_finite() {
             return None;
         }
-        // Равно дефолту схемы = фильтр не настраивали — не показываем.
+        // A schema-default value means the filter was never configured, so hide it.
         if let Some(d) = defaults.get(&key.to_ascii_lowercase()) {
             if (f - d).abs() <= f64::EPSILON.max(d.abs() * 1e-9) {
                 return None;
@@ -923,7 +922,7 @@ pub fn strategy_filters(
         }
         Some(f)
     };
-    // Ignore-флаги: булево либо строка YES/TRUE/1.
+    // Ignore flags may be booleans or YES/TRUE/1 strings.
     let truthy = |key: &str| -> bool {
         match map.get(key) {
             Some(serde_json::Value::Bool(b)) => *b,
@@ -952,7 +951,7 @@ pub fn strategy_filters(
             out.bounds.insert(spec.col, (lo, hi));
         }
     }
-    // Слоты Delta2/Delta3: тип строкой («15m»/«Pump1h»/…) → поле отчёта.
+    // Delta2/Delta3 slots: map a string type ("15m"/"Pump1h"/...) to a report field.
     for (n, prefix) in [(2u8, "Delta2"), (3u8, "Delta3")] {
         let Some(serde_json::Value::String(t)) = map.get(&format!("{prefix}_Type")) else {
             continue;
@@ -965,8 +964,8 @@ pub fn strategy_filters(
             .find(|s| s.slot_type.is_some_and(|ty| ty.eq_ignore_ascii_case(t)))
             .map(|s| s.col)
         else {
-            // 2h/30m/Pump5m — колонки отчёта нет; с настроенными порогами это
-            // живой фильтр — помечаем слот занятым «чужим» типом.
+            // 2h/30m/Pump5m have no report column. With configured thresholds this is a
+            // live filter, so mark the slot as occupied by a foreign type.
             if lo.is_some() || hi.is_some() {
                 out.foreign_slots.push((n, t.to_string()));
             }
@@ -977,19 +976,19 @@ pub fn strategy_filters(
     out
 }
 
-/// Результат автоподбора: лучший диапазон поля.
+/// Automatic-suggestion result: the best range for a field.
 #[derive(Clone, Debug)]
 pub struct Suggestion {
     pub from: Option<f64>,
     pub to: Option<f64>,
-    /// Профит периода при таком фильтре и сколько сделок остаётся.
+    /// Period profit under this filter and the number of remaining trades.
     pub profit: f64,
     pub n: i64,
 }
 
-/// «Умное» округление границы подбора: 3 значащих цифры по разряду числа,
-/// НАРУЖУ (`up=false` — вниз для «от», `up=true` — вверх для «до»), чтобы
-/// округлённый диапазон не отрезал найденные сделки.
+/// Smart rounding for a suggested bound: three significant digits based on magnitude,
+/// OUTWARD (`up=false` rounds a lower bound down; `up=true` rounds an upper bound up), so
+/// the rounded range does not exclude any selected trades.
 pub fn round_bound(v: f64, up: bool) -> f64 {
     if v == 0.0 || !v.is_finite() {
         return v;
@@ -1055,10 +1054,11 @@ pub fn suggest_field(
     Ok(best_range(&mut vals, min_n.max(1) as usize, edges, round))
 }
 
-/// Результат автоподбора оси «По времени»: два независимых поля стратегии.
+/// Automatic-suggestion result for the "By time" axis: two independent strategy fields.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TimeSuggest {
-    /// WorkingWeekTime: лучший непрерывный спан по минуте недели (0..10079). `None` — без улучшения.
+    /// WorkingWeekTime: best continuous span over the week minute (0..10079).
+    /// `None` means no improvement.
     pub week_span: Option<(u16, u16)>,
     /// WorkingTime: the best window in the requested format. `None` — no improvement.
     pub tod: Option<TimeWindow>,
@@ -1104,8 +1104,9 @@ impl TimeAxes {
 /// checkboxes); with both `WorkingTime` formats checked the sweep tries each and keeps the
 /// better one, and a row that is unchecked but already holds a value pins the sweep inside
 /// it. The two fields are independent; each is `None` when the best candidate does not
-/// improve on the unrestricted sample. UTC weekday =
-/// `(((closedate/86400)+4)%7+6)%7` (0=Mon..6=Sun), minute = `(cd%86400)/60`.
+/// improve on the unrestricted sample. Using `OPEN_TS`, the UTC weekday is
+/// `(((OPEN_TS/86400)+4)%7+6)%7` (0=Mon..6=Sun), and the minute is
+/// `(OPEN_TS%86400)/60`.
 pub fn suggest_time(
     q: &Query,
     min_n: i64,
@@ -1268,10 +1269,10 @@ fn time_suggest_from_rows(
     }
 }
 
-/// Лучшее НЕПРЕРЫВНОЕ окно по минуте недели (0..10079 = день*1440 + минута_суток)
-/// по профиту, через квантильный `best_range`. `None` — если лучшее окно не
-/// улучшает полную неделю. Линейный поиск (`от <= до`) — окно ЧЕРЕЗ воскресенье
-/// автоподбором не предлагается (ручной ползунок это может).
+/// Best CONTINUOUS profit window over the week minute
+/// (0..10079 = day*1440 + minute_of_day), found through quantile-based `best_range`.
+/// Returns `None` when the best window does not improve on the full week. The linear search
+/// (`from <= to`) does not suggest a window wrapping PAST Sunday, though the manual slider can.
 fn best_week_span(
     rows: &[(i64, i64, f64)],
     min_n: usize,
@@ -1291,9 +1292,9 @@ fn best_week_span(
     })
 }
 
-/// Профили среднего профита для раскраски трёх ползунков «По времени»:
-/// `week[168]` (день×час, 0=Пн·00ч), `day[1440]` (минута суток), `hour[60]`
-/// (минута в часе). Значение ячейки = средний профит сделки в ней (0.0 если пусто).
+/// Average-profit profiles for coloring the three "By time" sliders:
+/// `week[168]` (day x hour, 0=Mon 00:00), `day[1440]` (minute of day), and `hour[60]`
+/// (minute within the hour). Each cell contains its average trade profit, or 0.0 if empty.
 #[derive(Clone, Copy, Debug)]
 pub struct SliderProfiles {
     pub week: [f32; 168],
@@ -1301,7 +1302,7 @@ pub struct SliderProfiles {
     pub hour: [f32; 60],
 }
 
-/// Посчитать `SliderProfiles` по тому же скоупу, что и автоподбор (`tuner_query`).
+/// Calculate `SliderProfiles` for the same scope as automatic suggestions (`tuner_query`).
 pub fn slider_profiles(q: &Query) -> ReadResult<SliderProfiles> {
     const CTX: &str = "tuner: slider_profiles";
     let conn = super::open_reader()?;
@@ -1335,7 +1336,7 @@ pub fn slider_profiles(q: &Query) -> ReadResult<SliderProfiles> {
     Ok(slider_profiles_from_rows(&trades))
 }
 
-/// Ядро `slider_profiles` над строками `(день, минута_суток, профит)` — для тестов.
+/// Core of `slider_profiles` over `(day, minute_of_day, profit)` rows, for tests.
 fn slider_profiles_from_rows(rows: &[(i64, i64, f64)]) -> SliderProfiles {
     let (mut ws, mut wc) = ([0f64; 168], [0u32; 168]);
     let (mut ds, mut dc) = (vec![0f64; 1440], vec![0u32; 1440]);
@@ -1348,7 +1349,7 @@ fn slider_profiles_from_rows(rows: &[(i64, i64, f64)]) -> SliderProfiles {
         let wk = wd as usize * 24 + h;
         ws[wk] += p;
         wc[wk] += 1;
-        ds[mi] += p; // минута суток 0..1439
+        ds[mi] += p; // Minute of day, 0..1439.
         dc[mi] += 1;
         hs[moh] += p;
         hc[moh] += 1;
@@ -1361,7 +1362,7 @@ fn slider_profiles_from_rows(rows: &[(i64, i64, f64)]) -> SliderProfiles {
     }
 }
 
-/// Лучший диапазон одного поля по выборке `(значение, профит)`.
+/// Best range for one field over `(value, profit)` samples.
 fn best_range(
     vals: &mut Vec<(f64, f64)>,
     min_n: usize,
@@ -1373,14 +1374,14 @@ fn best_range(
     }
     vals.sort_by(|a, b| a.0.total_cmp(&b.0));
     let len = vals.len();
-    // Корзин не больше, чем точек данных (лишние — избыточны). Верхний потолок 512
-    // поднят со 128 ради оси времени: при малом числе сделок на день это даёт
-    // нарезку «по каждой сделке» = максимальная точность окна. На РЕЗУЛЬТАТ фильтра
-    // `min(len)` не влияет: при edges ≥ len позиции `k*len/edges` покрывают ровно
-    // {0..len} — тот же набор различимых границ, что при edges=len, лишь без
-    // дублирующих итераций (у фильтра данных обычно тысячи → ветка и не срабатывает).
+    // Use no more buckets than data points because extra ones are redundant. The upper cap
+    // was raised from 128 to 512 for the time axis: with few trades per day, this gives one
+    // slice per trade and maximum window precision. `min(len)` does not affect the filter
+    // RESULT: when edges >= len, positions `k*len/edges` cover exactly {0..len}, the same set
+    // of distinct boundaries as edges=len, without duplicate iterations. Filter datasets
+    // usually contain thousands of rows, so this branch rarely applies there.
     let edges = edges.clamp(4, 512).min(len.max(4));
-    // Префиксные суммы профита + позиции квантильных краёв.
+    // Profit prefix sums plus quantile-edge positions.
     let mut pre = Vec::with_capacity(len + 1);
     pre.push(0.0f64);
     for (_, p) in vals.iter() {
@@ -1395,7 +1396,7 @@ fn best_range(
             if b - a < min_n {
                 continue;
             }
-            // Полное покрытие данных (min..max) — фильтр-пустышка, не кандидат.
+            // Full data coverage (min..max) is a no-op filter, not a candidate.
             if a == 0 && b == len {
                 continue;
             }
@@ -1405,9 +1406,9 @@ fn best_range(
             }
         }
     }
-    // Диапазон предлагаем только если он РЕАЛЬНО улучшает профит против
-    // «без фильтра» — больше, чем на float-шум суммирования (иначе диапазон,
-    // отрезающий только нулевые сделки, «выигрывает» на ~1e-12).
+    // Suggest a range only when it REALLY improves profit over no filter by more than
+    // floating-point summation noise. Otherwise a range excluding only zero-profit trades
+    // can appear to "win" by about 1e-12.
     let margin = total.abs().max(1.0) * 1e-9;
     best.filter(|(profit, _, _)| *profit > total + margin)
         .map(|(profit, i, j)| {

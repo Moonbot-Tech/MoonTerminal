@@ -72,20 +72,20 @@ fn variant_coins_quote_is_escaped() {
 
 #[test]
 fn variant_week_span_predicate() {
-    // Пн 00:00 → Сб 23:59 (мин недели 0..8639): непрерывный → BETWEEN, исключает Вс.
+    // Mon 00:00 -> Sat 23:59 (week minutes 0..8639): continuous -> BETWEEN, excluding Sun.
     let v = Variant {
         week_span: Some((0, 8639)),
         ..Default::default()
     };
     let w = v.where_sql();
-    // По времени ОТКРЫТИЯ (buydate), не closedate.
+    // Use OPEN_TS (buydate with a closedate fallback), not closedate alone.
     assert!(
         w.contains("BETWEEN 0 AND 8639") && w.contains("buydate"),
         "w={w}"
     );
     assert!(!v.is_empty(), "week_span-вариант не равен «Факту»");
 
-    // Через воскресенье→понедельник (от > до): Сб 12:00 (8640-720=7920) → Пн 12:00 (720).
+    // Wrap Sun -> Mon (from > to): Sat 12:00 (8640-720=7920) -> Mon 12:00 (720).
     let v = Variant {
         week_span: Some((7920, 720)),
         ..Default::default()
@@ -104,7 +104,7 @@ fn variant_week_span_predicate() {
 
 #[test]
 fn variant_time_window_predicate() {
-    // WorkingTime «Day» 09:00–21:00 → минута суток BETWEEN.
+    // WorkingTime `Day` 09:00-21:00 -> minute-of-day BETWEEN.
     let v = Variant {
         tod: Some(TimeWindow::Day(9 * 60, 21 * 60)),
         ..Default::default()
@@ -116,7 +116,7 @@ fn variant_time_window_predicate() {
     );
     assert!(!v.is_empty());
 
-    // «Day» через полночь (22:00–06:00) → «<= 360 OR >= 1320».
+    // `Day` wrapping past midnight (22:00-06:00) -> `<= 360 OR >= 1320`.
     let v = Variant {
         tod: Some(TimeWindow::Day(22 * 60, 6 * 60)),
         ..Default::default()
@@ -125,7 +125,7 @@ fn variant_time_window_predicate() {
     assert!(w.contains("<= 360 OR"), "через полночь до 06:00: {w}");
     assert!(w.contains(">= 1320"), "через полночь от 22:00: {w}");
 
-    // WorkingTime «Hour» 1–50 → минута В ЧАСЕ (mod 60) BETWEEN.
+    // WorkingTime `Hour` 1-50 -> minute-within-hour (mod 60) BETWEEN.
     let v = Variant {
         tod: Some(TimeWindow::Hour(1, 50)),
         ..Default::default()
@@ -133,7 +133,7 @@ fn variant_time_window_predicate() {
     let w = v.where_sql();
     assert!(w.contains("% 60) BETWEEN 1 AND 50"), "w={w}");
 
-    // week_span И tod складываются в один WHERE (обе оси).
+    // `week_span` AND `tod` combine into one WHERE clause (both axes).
     let v = Variant {
         week_span: Some((0, 8639)),
         tod: Some(TimeWindow::Day(1, 1430)),
@@ -146,11 +146,11 @@ fn variant_time_window_predicate() {
 
 #[test]
 fn working_time_format() {
-    // Минута недели: Пн 00:00 (0) → Сб 23:59 (8639) — края суток пишем коротко → «1-6».
+    // Week minute: Mon 00:00 (0) -> Sat 23:59 (8639); shorten day boundaries -> `1-6`.
     assert_eq!(format_week_span((0, 8639)), "1-6");
-    // С временем: Пн 23:44 (1424) → Сб 22:22 (5*1440+1342=8542) → «1.23:44-6.22:22».
+    // With times: Mon 23:44 (1424) -> Sat 22:22 (5*1440+1342=8542) -> `1.23:44-6.22:22`.
     assert_eq!(format_week_span((1424, 8542)), "1.23:44-6.22:22");
-    // WorkingTime Day → «чч:мм-чч:мм»; Hour → «N-M».
+    // WorkingTime Day -> `hh:mm-hh:mm`; Hour -> `N-M`.
     assert_eq!(
         format_working_time(TimeWindow::Day(1, 23 * 60 + 50)),
         "00:01-23:50"
@@ -285,17 +285,17 @@ fn suggest_time_pins_unchecked_row() {
 
 #[test]
 fn suggest_time_never_worse_than_base() {
-    // Оси недели и времени по отдельности «улучшают», но их пересечение могло бы
-    // выкинуть разные плюсовые сделки → профит НИЖЕ базового. Проверяем, что
-    // подбор этого не допускает (база — кандидат).
+    // The week and time axes each improve profit independently, but their intersection could
+    // remove different profitable trades and fall BELOW the baseline. Verify the suggestion
+    // prevents that by including the baseline as a candidate.
     let mut rows: Vec<(i64, i64, f64)> = Vec::new();
     for wd in 0..6i64 {
         for mn in (0..1440).step_by(20) {
-            rows.push((wd, mn, if mn / 60 == 3 { -2.0 } else { 1.0 })); // час 3 в минусе
+            rows.push((wd, mn, if mn / 60 == 3 { -2.0 } else { 1.0 })); // Hour 3 loses.
         }
     }
     for mn in (0..1440).step_by(20) {
-        rows.push((6, mn, -1.0)); // Вс в минусе
+        rows.push((6, mn, -1.0)); // Sunday loses.
     }
     let base: f64 = rows.iter().map(|r| r.2).sum();
     let s = time_suggest_from_rows(&rows, 1, 64, false, axes_of(true, true, true));
@@ -326,7 +326,7 @@ fn suggest_time_never_worse_than_base() {
 
 #[test]
 fn slider_profiles_bucketize() {
-    // Пн (wd0) 00:00 +2; Вт (wd1) 05:30 -4 → раскладка по трём осям.
+    // Mon (wd0) 00:00 +2; Tue (wd1) 05:30 -4 -> distribution across all three axes.
     let rows = vec![(0i64, 0i64, 2.0), (1i64, 5 * 60 + 30, -4.0)];
     let p = slider_profiles_from_rows(&rows);
     assert_eq!(p.week[0], 2.0, "неделя: Пн·00ч (wd0*24+0)");
@@ -339,11 +339,11 @@ fn slider_profiles_bucketize() {
 
 #[test]
 fn best_range_skips_noop_full_range() {
-    // Все сделки прибыльные: никакой поддиапазон не лучше «без фильтра» —
-    // пару min/max-пустышку предлагать нельзя.
+    // Every trade is profitable: no subrange beats no filter, so a no-op min/max pair
+    // must not be suggested.
     let mut vals: Vec<(f64, f64)> = (0..100).map(|i| (i as f64, 1.0)).collect();
     assert!(best_range(&mut vals, 1, 16, false).is_none());
-    // Нижняя треть в минусе: диапазон предлагается и он НЕ весь размах.
+    // The lower third loses: suggest a range that is NOT the full extent.
     let mut vals: Vec<(f64, f64)> = (0..99)
         .map(|i| (i as f64, if i < 33 { -1.0 } else { 1.0 }))
         .collect();
@@ -357,9 +357,8 @@ fn best_range_skips_noop_full_range() {
 
 #[test]
 fn round_falls_back_when_pair_stops_cutting() {
-    // Диапазон режет только два хвостовых минуса у самых краёв данных:
-    // округление наружу увело бы ОБЕ границы за min/max (пустышка) —
-    // должны остаться сырые режущие значения.
+    // The range cuts only two losing tail values at the data extremes. Outward rounding would
+    // move BOTH bounds beyond min/max and make a no-op, so keep the raw filtering values.
     let mut vals: Vec<(f64, f64)> = (0..100)
         .map(|i| (1000.0 + i as f64, if i < 2 { -5.0 } else { 1.0 }))
         .collect();

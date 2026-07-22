@@ -19,17 +19,17 @@ use rusqlite::Connection;
 use super::read_fail::read_fail;
 use super::{ReadFail, ReadResult, SideFilter};
 
-/// Фильтры выборки (общие для всех вкладок Аналитики).
+/// Selection filters shared by all Analytics tabs.
 #[derive(Clone, Debug, Default)]
 pub struct Query {
-    /// unix-сек UTC; `from < 0` — вся история. `to` эксклюзивно.
+    /// UTC Unix seconds; `from < 0` means all history. `to` is exclusive.
     pub from: i64,
     pub to: i64,
-    /// Выбранные ядра (мультивыбор как в Ордерах); пусто = все.
+    /// Selected cores (multi-select, as in Orders); empty means all cores.
     pub cores: Vec<u64>,
     pub side: SideFilter,
-    /// `None` — все, `Some(false)` — реальные, `Some(true)` — эмуляторные
-    /// (NULL в колонке считается «реальный», как в Отчёте).
+    /// `None` means all, `Some(false)` means real, and `Some(true)` means emulated.
+    /// A NULL column value counts as real, as it does in the Report window.
     pub emulator: Option<bool>,
     /// Scope: the SELECTED strategies as `(strategyid, core_uid)`. The list is split per
     /// core, so `None` in the second slot means "this strategy on any core" (a legacy key
@@ -59,10 +59,10 @@ pub struct Query {
 }
 
 impl Query {
-    /// WHERE периода+фильтров для ОДНОГО источника: условия только по колонкам,
-    /// которые у него ЕСТЬ (как `build_where` Отчёта — условие по отсутствующей
-    /// колонке валило бы весь SELECT). Плейсхолдеры ?1/?2 = from/to;
-    /// ядра/сторона/эму — литералами (целые из конфига, инъекции невозможны).
+    /// Build the period-and-filter WHERE clause for ONE source, referencing only columns
+    /// that source HAS (like the Report window's `build_where`; filtering on a missing
+    /// column would fail the entire SELECT). Placeholders ?1/?2 are from/to; cores, side,
+    /// and emulator are integer literals from configuration, so injection is impossible.
     fn where_sql(&self, cols: &std::collections::HashSet<String>, sid: &str) -> String {
         self.where_with(WHERE_PERIOD, cols, sid)
     }
@@ -138,9 +138,9 @@ impl Query {
     }
 }
 
-/// Базовые колонки, на которые проецируются оба источника отчётов; рыночные
-/// поля тюнера (`db::tuner::FIELDS`) дочейниваются АВТОМАТИЧЕСКИ — новое поле
-/// тюнера нельзя забыть добавить в проекцию (иначе его SQL молча падал).
+/// Base columns projected from both report sources. The tuner's market fields
+/// (`db::tuner::FIELDS`) are chained AUTOMATICALLY, so a new tuner field cannot be
+/// omitted from the projection and make its SQL fail silently.
 const UNIFIED_COLS: &[&str] = &[
     "core_uid",
     "core_name",
@@ -241,7 +241,7 @@ pub(super) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Option<St
     let mut branches = Vec::new();
     for src in super::read_sources_res(conn)? {
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
-            continue; // схема ядра ещё не пришла — агрегировать нечего
+            continue; // The core schema has not arrived yet, so there is nothing to aggregate.
         }
         // The branch table is aliased so the attribution's correlated subquery can name the
         // OUTER row explicitly. Unqualified `core_uid` inside it would bind to `strat.strategies`
@@ -275,22 +275,22 @@ pub(super) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Option<St
     }
 }
 
-/// Итог периода: счётчики + метрики, считанные по последовательности сделок
-/// (порядок по `closedate`): profit factor, max drawdown, серии, длительность.
+/// Period totals: counters and metrics computed from the trade sequence ordered by
+/// `closedate`, including profit factor, maximum drawdown, streaks, and duration.
 #[derive(Clone, Debug, Default)]
 pub struct PeriodStats {
     pub n: i64,
     pub wins: i64,
     pub losses: i64,
     pub profit: f64,
-    /// Сумма выигрышей / сумма проигрышей (0 проигрышей и есть выигрыши → 99).
+    /// Sum of wins divided by the sum of losses (99 when there are wins but no losses).
     pub pf: f64,
     pub avg: f64,
-    /// Максимальная просадка кумулятивной кривой профита за период.
+    /// Maximum drawdown of the cumulative profit curve over the period.
     pub max_dd: f64,
     pub win_streak: i64,
     pub loss_streak: i64,
-    /// Средняя длительность сделки (мин), по `closedate - buydate`.
+    /// Average trade duration in minutes, computed as `closedate - buydate`.
     pub avg_dur_min: f64,
 }
 
@@ -304,29 +304,27 @@ impl PeriodStats {
     }
 }
 
-/// Точка дневной (или недельной — см. `Summary::bucket_secs`) серии.
+/// A point in an hourly, daily, or weekly series; see `Summary::bucket_secs`.
 #[derive(Clone, Debug)]
 pub struct DayPoint {
-    /// Начало ведра (unix-секунды UTC).
+    /// Bucket start in UTC Unix seconds.
     pub start: i64,
     pub profit: f64,
     pub trades: i64,
 }
 
-/// Ячейка календарной тепловой карты: агрегат суток + вклад по ядрам (для
-/// сегментного бара в крупной карточке дня).
+/// A calendar heatmap cell containing the aggregate for one UTC day or hour.
 #[derive(Clone, Debug, Default)]
 pub struct DayCell {
-    /// Начало суток (unix-секунды UTC).
+    /// Cell start in UTC Unix seconds.
     pub start: i64,
     pub profit: f64,
     pub trades: i64,
-    /// Прибыльных сделок за день (для W/L и winrate ячейки); убытки = trades−wins.
+    /// Winning trades in the cell; losses equal `trades - wins`.
     pub wins: i64,
 }
 
-/// Серия одного ядра для нижнего чарта «Сводки»: профит по вёдрам той же
-/// сетки, что `Summary::days` (кумулятив строит UI).
+/// One core's profit and trade-count series in the same buckets as `Summary::days`.
 #[derive(Clone, Debug)]
 pub struct CoreSeries {
     pub uid: u64,
@@ -340,7 +338,7 @@ pub struct CoreSeries {
     pub trades: i64,
 }
 
-/// Строка топ-сделок (лучшие/худшие за период).
+/// A top-trade row from the period's best or worst trades.
 #[derive(Clone, Debug)]
 pub struct TopTrade {
     pub closedate: i64,
@@ -351,29 +349,30 @@ pub struct TopTrade {
     pub is_short: bool,
 }
 
-/// Агрегат группы (стратегия по id / монета).
+/// Aggregate for a strategy-and-core or coin group.
 ///
 /// `Default` is "a group with no trades": every field is already zero/empty/None, and callers
 /// need it to show a coin that is PRESENT in the set but was not traded in the current scope.
 #[derive(Clone, Debug, Default)]
 pub struct GroupStat {
-    /// Ключ группы: для стратегий — `strategyid` текстом, для монет — имя.
+    /// Group key: `strategyid@core_uid` for strategies, or the coin name for coins.
     pub key: String,
-    /// Отображаемое имя (для стратегий — из strategies.sqlite, иначе id).
+    /// Display name, read from strategies.sqlite for strategies or falling back to the id.
     pub name: String,
-    /// Тип стратегии (SignalType текущей версии); пусто у монет/без БД.
+    /// Strategy type (`SignalType` of the current version); empty for coins or without the DB.
     pub kind: String,
-    /// Имя одного из ядер группы + число разных ядер (колонка «Ядро»).
+    /// One core name from the group and the number of distinct cores (`Core` column).
     pub core: String,
     pub cores_n: i64,
-    /// Текущий статус в ядрах (по head'ам strategies.sqlite, максимум по
-    /// ядрам группы): None — БД стратегий нет / не стратегия; 0 — удалена
-    /// везде; 1 — есть, но выключена; 2 — есть и включена (галка).
+    /// Current status from the strategies.sqlite head for the strategy's core: `None`
+    /// means no strategy DB or a coin group; 0 means deleted, 1 present but disabled,
+    /// and 2 present and enabled.
     pub alive: Option<i64>,
     pub n: i64,
     pub profit: f64,
     pub wins: i64,
-    /// Сумма выигрышей / сумма проигрышей группы (99 = без проигрышей).
+    /// Group win sum divided by its loss sum. Returns 99 when the win sum is positive
+    /// and the loss sum is zero, or 0 when both sums are zero.
     pub pf: f64,
     pub best: f64,
     pub worst: f64,
@@ -410,7 +409,7 @@ impl GroupStat {
     }
 }
 
-/// Данные вкладки «Сводка» одним заходом.
+/// Data for the Summary tab, returned as one aggregate result.
 #[derive(Clone, Debug, Default)]
 pub struct Summary {
     pub cur: PeriodStats,
@@ -419,29 +418,30 @@ pub struct Summary {
     /// A failed comparison scan is non-fatal and yields `None`, preserving a
     /// readable current period while making its unavailable deltas explicit.
     pub prev: Option<PeriodStats>,
-    /// Размер ведра серии: сутки; для очень длинных периодов — неделя.
+    /// Series bucket size: one hour for periods up to a day, one day normally, or one week
+    /// for very long periods.
     pub bucket_secs: i64,
     pub days: Vec<DayPoint>,
     pub best: Vec<TopTrade>,
     pub worst: Vec<TopTrade>,
-    /// Группы по ID стратегии (`strategyid`; синк шлёт одинаковые id на все
-    /// ядра, а одноимённые РАЗНЫЕ стратегии не сливаются), прибыль по убыванию.
+    /// Strategy groups keyed by `strategyid@core_uid`, so the same id on different cores
+    /// stays separate and distinct strategies sharing a name do not merge; profit descends.
     pub strategies: Vec<GroupStat>,
-    /// Группы по монете, прибыль по убыванию.
+    /// Coin groups sorted by descending profit.
     pub coins: Vec<GroupStat>,
-    /// Серии по ядрам (сетка `days`, прибыль по убыванию итога) — нижний
-    /// чарт «Сводки» «прибыль по ядрам».
+    /// Per-core series on the `days` grid, sorted by descending total profit, for the
+    /// Summary charts and their popups.
     pub core_days: Vec<CoreSeries>,
-    /// Самый прибыльный час UTC: (час, профит, сделок).
+    /// Most profitable UTC hour as `(hour, profit, trades)`.
     pub best_hour: Option<(u32, f64, i64)>,
-    /// Profit per strategy type, descending. Filled ONLY for a day or less: on such a
-    /// period the per-day series is a single bar, so the chart groups by type instead.
-    /// Empty = a longer period, where the chart stays daily.
+    /// Profit per strategy type, descending. Filled only for periods of one day or less.
+    /// The main series is hourly for those periods, daily through 400 days, and weekly
+    /// for periods longer than 400 days.
     pub kinds: Vec<KindStat>,
-    /// Ядра, встречающиеся в реплике (для комбобокса фильтра) — БЕЗ учёта
-    /// фильтров, чтобы выбор не «схлопывал» список.
+    /// Cores found in the replica for the filter combo box, WITHOUT applying filters so a
+    /// selection cannot collapse the list.
     pub cores: Vec<(u64, String)>,
-    /// Фактические границы периода (после резолва «Все»).
+    /// Effective period bounds after resolving the All period.
     pub from: i64,
     pub to: i64,
 }
@@ -571,7 +571,8 @@ pub(super) fn summary_on(
     // that has something to show. `core_series` follows this bucket, so the per-core lines
     // and every popup come along for free.
     let one_day = len <= 86_400;
-    // Ведро серии: сутки, на многолетних «Все» — неделя (иначе тысячи баров).
+    // The series uses hourly buckets for periods up to a day, daily buckets normally, and
+    // weekly buckets for a multi-year All period to avoid thousands of bars.
     let bucket = if one_day {
         3_600
     } else if len / 86_400 > 400 {
@@ -688,13 +689,12 @@ fn kind_stats(
     Ok(out)
 }
 
-/// Плотная посуточная серия ячеек за период — для календарных тепловых карт
-/// («Год» GitHub-style / крупный «Месяц»). Одно ведро = сутки UTC; агрегат
-/// `GROUP BY closedate/86400, core_uid` даёт и суточный итог, и вклад по ядрам
-/// (сегментный бар в карточке). Диапазон заполняется ПОЛНОСТЬЮ (дни без сделок —
-/// пустые ячейки), чтобы сетка календаря была ровной; в отличие от `summary`
-/// НИКОГДА не укрупняет ведро до недели. None — схемы источников ещё нет;
-/// Some(пусто) — период без закрытых сделок.
+/// Dense daily cells for calendar heatmaps (GitHub-style Year or the large Month view).
+/// One bucket is one UTC day; `GROUP BY closedate/86400` yields its PnL, trade count, and
+/// wins. The range is filled COMPLETELY with empty cells for days without trades so the
+/// calendar grid remains regular; unlike [`summary`], it NEVER widens buckets to a week.
+/// `None` means a database, schema, or query read failed; `Some(empty)` means the period has
+/// no closed trades or the source schema has not arrived yet.
 ///
 /// NOTE: this surface still collapses a read failure into `None`, the pattern
 /// the rest of this module moved away from. Converting it is left to the owners
@@ -704,8 +704,8 @@ pub fn calendar_cells(q: &Query) -> Option<Vec<DayCell>> {
     calendar_cells_from(&super::open_reader().ok()?, q)
 }
 
-/// Ядро `calendar_cells` над готовым соединением — точка входа для юнит-тестов
-/// (сидируем in-memory `orders_rep`, проверяем бакетинг/дыры/разбивку по ядрам).
+/// Core of [`calendar_cells`] over an existing connection and the entry point for unit tests,
+/// which seed an in-memory `orders_rep` and verify bucketing, gaps, and win counts.
 fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
     let mut q = q.clone();
     let all_history = q.from < 0;
@@ -713,11 +713,11 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
         q.from = min_closedate(conn).ok()?;
     }
     let Some(src) = unified_from(conn, &q).ok()? else {
-        // Схемы источников ещё не пришли — пустой календарь (как `summary`
-        // отдаёт Some(default)), а НЕ None: иначе вкладка висла бы на «Загрузка».
+        // Source schemas have not arrived yet, so return an empty calendar (as `summary`
+        // returns its default), NOT None; otherwise the tab would remain on Loading.
         return Some(Vec::new());
     };
-    // Бакет по суткам: PnL, число сделок, прибыльных (для W/L и winrate).
+    // Daily bucket: PnL, trade count, and wins for W/L and win rate.
     let sql = format!(
         "SELECT (o.closedate / 86400) * 86400 AS d,
                 COALESCE(SUM(o.profitbtc), 0), COUNT(*), COALESCE(SUM(o.profitbtc > 0), 0)
@@ -750,11 +750,11 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
         );
     }
     if map.is_empty() {
-        return Some(Vec::new()); // период без сделок — пустой календарь
+        return Some(Vec::new()); // A period without trades has an empty calendar.
     }
-    // Границы плотной сетки: для «Все» — от первого дня с данными (иначе
-    // залили бы годы пустот от эпохи); для заданного периода — от его начала.
-    // `to` эксклюзивно → последний день = day(to-1); в будущее не заходим.
+    // Dense-grid bounds start at the first day with data for All (avoiding years of empty
+    // cells since the epoch), or at the requested period's start otherwise. Because `to` is
+    // exclusive, the last day is day(to - 1); do not extend into the future.
     let now = crate::util::now_unix_ms_i64() / 1000;
     let today0 = now.div_euclid(86_400) * 86_400;
     let day0 = if all_history {
@@ -778,14 +778,14 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
     Some(out)
 }
 
-/// Почасовые ячейки за период (для режима «День» календаря): `start` = начало
-/// ЧАСА UTC, PnL/сделки/wins. Разрежённо (только часы со сделками) — сетку
-/// 24×N строит UI. None — БД недоступна; Some(пусто) — период без сделок/схемы.
+/// Hourly cells for the calendar's Day mode: `start` is the UTC hour start, with PnL,
+/// trades, and wins. The result is sparse (only hours with trades); the UI builds the 24xN
+/// grid. `None` means the DB or query is unavailable; `Some(empty)` means no trades or schema.
 pub fn calendar_hours(q: &Query) -> Option<Vec<DayCell>> {
     let conn = super::open_reader().ok()?;
     let src = match unified_from(&conn, q) {
         Ok(Some(s)) => s,
-        Ok(None) => return Some(Vec::new()), // схема ещё не пришла
+        Ok(None) => return Some(Vec::new()), // The schema has not arrived yet.
         Err(_) => return None,
     };
     let sql = format!(
@@ -809,8 +809,8 @@ pub fn calendar_hours(q: &Query) -> Option<Vec<DayCell>> {
     Some(out)
 }
 
-/// Профиль «час дня» (0..23 UTC): PnL/сделки/прибыльных, агрегированные по
-/// всем дням периода. Ячейка нижней тепловой карты «Тюнинг → По времени».
+/// Hour-of-day profile (0..23 UTC): PnL, trades, and wins aggregated across all days in
+/// the period. This supplies a cell in the Tuning by-time lower heatmap.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HourStat {
     pub profit: f64,
@@ -818,12 +818,11 @@ pub struct HourStat {
     pub wins: i64,
 }
 
-/// Профили «по часам дня» сразу для нескольких периодов (текущий/неделя/месяц/
-/// 90д) — нижняя тепловая карта вкладки «Тюнинг → По времени». Один reader и
-/// один снапшот на ВСЕ диапазоны (столбцы одной карты должны видеть одну и ту
-/// же выборку). Фильтры (ядра/сторона/эму/стратегия) берутся из `base`; from/to
-/// каждого диапазона переопределяют период (`from < 0` → вся история). Возврат
-/// выровнен с `ranges`.
+/// Build hour-of-day profiles for several periods at once (current/week/month/90 days) for
+/// the Tuning by-time lower heatmap. One reader and one snapshot serve ALL ranges so columns
+/// in the same map see the same data. Core, side, emulator, and strategy filters come from
+/// `base`; each range's from/to override the period (`from < 0` means all history). The
+/// returned profiles align with `ranges`.
 pub fn hourly_profiles(base: &Query, ranges: &[(i64, i64)]) -> ReadResult<Vec<[HourStat; 24]>> {
     let conn = super::open_reader()?;
     let snap = super::read_snapshot(&conn)?;
@@ -835,7 +834,7 @@ pub fn hourly_profiles(base: &Query, ranges: &[(i64, i64)]) -> ReadResult<Vec<[H
     Ok(out)
 }
 
-/// Один столбец профиля «час дня» за `[from, to)` на готовом снапшоте.
+/// One hour-of-day profile column for `[from, to)` on an existing snapshot.
 fn hour_profile_one(
     conn: &Connection,
     base: &Query,
@@ -847,13 +846,13 @@ fn hour_profile_one(
     q.from = if from < 0 { min_closedate(conn)? } else { from };
     q.to = to;
     let mut prof = [HourStat::default(); 24];
-    // Схема источников ещё не пришла — пустой профиль (как `summary`/календарь).
+    // Source schemas have not arrived yet, so return an empty profile like summary/calendar.
     let Some(src) = unified_from(conn, &q)? else {
         return Ok(prof);
     };
-    // Час дня по времени ОТКРЫТИЯ сделки (buydate) — согласованно с расписанием и
-    // ползунками тюнера, которые гейтят ВХОД. Fallback на closedate, если открытие
-    // не записано (0/NULL). Период по-прежнему по closedate (окно анализа).
+    // Hour of day comes from the trade OPEN time (`buydate`), matching the schedule and tuner
+    // sliders that gate ENTRY. Fall back to `closedate` when the open time is absent (0/NULL).
+    // The period itself still uses `closedate`, which defines the analysis window.
     let sql = format!(
         "SELECT ((COALESCE(NULLIF(o.buydate, 0), o.closedate) % 86400) / 3600) AS h,
                 COALESCE(SUM(o.profitbtc), 0), COUNT(*), COALESCE(SUM(o.profitbtc > 0), 0)
@@ -1180,7 +1179,7 @@ fn scan_period(
             0.0
         };
     }
-    // Дырки серии (дни без сделок) заполняем нулями — бары ровные по времени.
+    // Fill series gaps (days without trades) with zeroes so bars stay evenly spaced in time.
     if !days.is_empty() {
         let mut filled = Vec::with_capacity(days.len());
         let mut t = days[0].start;
@@ -1272,7 +1271,7 @@ fn core_series(
     Ok(out)
 }
 
-/// Имя стратегии в SQL: из ATTACH-нутой БД стратегий либо голый id.
+/// Strategy name in SQL, from the attached strategy DB or falling back to the bare id.
 fn strategy_name_expr(has_names: bool) -> &'static str {
     if has_names {
         "COALESCE((SELECT st.name FROM strat.strategies st
@@ -1334,9 +1333,9 @@ fn groups(
     by_strategy: bool,
 ) -> ReadResult<Vec<GroupStat>> {
     const CTX: &str = "analytics: groups";
-    // Ключ стратегии — `id@core_uid`: разбивка ПО ЯДРАМ (видно работу стратегии на
-    // каждом ядре отдельно); переименования не плодят группы, одноимённые разные
-    // стратегии не сливаются; имя — только подпись.
+    // Strategy key is `id@core_uid`, splitting PER CORE so each core's activity is visible.
+    // Renames do not create groups, distinct strategies sharing a name do not merge, and the
+    // name is only a label.
     // Raw text of a strategy field from its current version, or a NULL literal when the
     // strategies DB is not attached.
     let field = |name: &str| {
@@ -1371,8 +1370,8 @@ fn groups(
         (
             "CAST(o.strategyid AS TEXT) || '@' || CAST(o.core_uid AS TEXT)".to_string(),
             format!("MAX({})", strategy_name_expr(has_names)),
-            // Тип (SignalType) из текущей версии стратегии (JSON1 доступен —
-            // rusqlite bundled).
+            // Type (`SignalType`) from the strategy's current version; JSON1 is available
+            // because rusqlite is bundled.
             if has_names {
                 "MAX(COALESCE((SELECT json_extract(v.raw_json, '$.SignalType')
                                FROM strat.strategy_versions v
@@ -1382,8 +1381,8 @@ fn groups(
             } else {
                 "''"
             },
-            // Статус «жива сейчас» по head'ам БД стратегий: 2 включена,
-            // 1 есть но выключена, 0 удалена; максимум по ядрам группы.
+            // Current status from the strategy DB heads: 2 means enabled, 1 present but
+            // disabled, and 0 deleted; take the maximum within the group.
             if has_names {
                 "MAX(COALESCE((SELECT CASE WHEN st.deleted <> 0 THEN 0
                                             WHEN COALESCE(st.checked,0) <> 0 THEN 2

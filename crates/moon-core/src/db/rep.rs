@@ -23,14 +23,14 @@ use rusqlite::Connection;
 
 pub(super) const TABLE: &str = "orders_rep";
 
-/// Сообщение SQLite-writer'у (единственному владельцу соединения на запись).
+/// Message for the SQLite writer, the sole owner of the write connection.
 pub enum DbMsg {
-    /// Схема реплики ядра (append-only) — создать/дорастить колонки.
+    /// Append-only core replica schema used to create or extend columns.
     Schema {
         core_uid: u64,
         schema: Arc<ReportSchema>,
     },
-    /// Typed upsert живой строки по `(core_uid, newrecid)` (идемпотентен).
+    /// Idempotently upsert a live typed row by `(core_uid, newrecid)`.
     Upsert {
         core_uid: u64,
         core_name: String,
@@ -40,36 +40,42 @@ pub enum DbMsg {
         core_uid: u64,
         rec_id: i64,
     },
-    /// Страница catch-up (flow-control контракт reports.md): writer применяет строки
-    /// и шлёт `page_applied` ПОСЛЕ коммита транзакции — до этого lib следующую
-    /// страницу не запрашивает (одна страница в полёте, backpressure by design).
+    /// Catch-up page under the report-replication flow-control contract.
+    ///
+    /// The writer applies rows and sends `page_applied` AFTER committing the
+    /// transaction. Until then, the library requests no next page, keeping one
+    /// page in flight and providing backpressure by design.
     Page {
         core_uid: u64,
         core_name: String,
         page: Arc<ReportSyncPage>,
         ack: MoonReports,
     },
-    /// Завершение catch-up (после ack последней страницы): коммит курсора, легаси-вычистка.
+    /// Complete catch-up after the final-page acknowledgement, commit the cursor,
+    /// and purge legacy rows.
     SyncComplete {
         core_uid: u64,
         done: ReportSyncComplete,
     },
 }
 
-/// То, что feed-поток получает как `ReportTx`: канал к writer'у + стартовые курсоры
-/// (посчитаны writer'ом при открытии БД — feed берёт свой при запуске sync).
+/// Value exposed to the feed thread as `ReportTx`: a writer channel and start cursors.
 ///
-/// Канал ОГРАНИЧЕН ([`super::REPORT_QUEUE_CAP`]): catch-up огромной истории льёт батчи
-/// быстрее, чем writer вставляет — безлимитная очередь съедала ВСЮ память машины
-/// (замерено: 88ГБ virtual commit → фриз системы). Заполнился — feed-поток ядра
-/// блокируется на send (backpressure), это касается практически только догонки.
+/// The writer computes the cursors when opening the database, and each feed takes
+/// its own cursor when starting sync. The channel is BOUNDED by
+/// [`super::REPORT_QUEUE_CAP`]: a large-history catch-up emits batches faster than
+/// the writer inserts them, and an unbounded queue once consumed ALL machine memory
+/// (88 GB virtual commit measured before the system froze). When full, `send` blocks
+/// the core feed thread to apply backpressure, which affects almost only catch-up.
 #[derive(Clone)]
 pub struct ReportSink {
     pub(super) tx: SyncSender<DbMsg>,
     pub(super) cursors: Arc<Mutex<HashMap<u64, i64>>>,
-    /// Открытые строки per core (newrecid, свежие первые, ≤100) на момент открытия БД —
-    /// feed регистрирует их `check_open_rows` (открытая сделка могла закрыться/удалиться
-    /// в оффлайне НИЖЕ курсора; результаты придут обычными RowUpsert/RowDelete).
+    /// Open rows per core at database open: `newrecid`, newest first, at most 100.
+    ///
+    /// The feed registers them with `check_open_rows` because an open trade may
+    /// have closed or been deleted offline BELOW the cursor. Results arrive as
+    /// ordinary `RowUpsert` or `RowDelete` messages.
     pub(super) open_rows: Arc<Mutex<HashMap<u64, Vec<i64>>>>,
 }
 
@@ -78,9 +84,12 @@ impl ReportSink {
         let _ = self.tx.send(msg);
     }
 
-    /// Курсор следующего sync-запроса ядра: 0 → fresh, >0 → resume(from).
-    /// По новому контракту reports.md курсор всегда `max(newRecID)+1` локальной реплики
-    /// (страницы ack'аются последовательно — дыр в хвосте не бывает и после краша).
+    /// Cursor for the core's next sync request: zero starts fresh and positive values resume.
+    ///
+    /// Under the report-replication flow-control contract, the cursor is always the local replica's
+    /// `max(newRecID) + 1`. Sequential page acknowledgements prevent a crash from
+    /// skipping successfully applied tail rows. Individual upsert errors are logged,
+    /// however, and page processing continues, so this is not a gap-free guarantee.
     pub fn next_cursor(&self, core_uid: u64) -> i64 {
         self.cursors
             .lock()
@@ -89,7 +98,7 @@ impl ReportSink {
             .unwrap_or(0)
     }
 
-    /// Открытые строки ядра для `check_open_rows` (пусто — нечего проверять).
+    /// Core's open rows for `check_open_rows`; empty means there is nothing to check.
     pub fn open_rows(&self, core_uid: u64) -> Vec<i64> {
         self.open_rows
             .lock()
@@ -99,11 +108,11 @@ impl ReportSink {
     }
 }
 
-/// Состояние typed-реплики внутри writer-потока.
+/// Typed-replica state owned by the writer thread.
 pub(super) struct RepState {
-    /// Схема per core (field_index → имя): нужна для маппинга строк.
+    /// Per-core schema mapping field indexes to names for row conversion.
     schemas: HashMap<u64, Arc<ReportSchema>>,
-    /// Кэш lowercase-имён колонок таблицы (не дёргать PRAGMA на каждую строку).
+    /// Cache of lowercase table-column names to avoid PRAGMA calls for every row.
     cols: HashSet<String>,
     cursors: Arc<Mutex<HashMap<u64, i64>>>,
     /// Whether the read-only legacy table still exists; completed typed syncs
@@ -117,19 +126,21 @@ pub(super) struct RepState {
     /// the batch; VACUUM is forbidden inside the transaction, and without it the
     /// database retains the dropped table's allocated space.
     pub(super) vacuum_pending: bool,
-    /// Все индексы реплики гарантированно созданы (не дёргать CREATE на
-    /// каждую схему ядра).
+    /// Whether every replica index is guaranteed to exist, avoiding CREATE calls
+    /// for every core schema.
     indexes_done: bool,
 }
 
-/// Индексы под горячие запросы реплики. Колонки приходят из схемы ядра в
-/// непредсказуемый момент, поэтому проверяем и на старте (в старой БД колонки
-/// уже есть), и после каждой схемы: создание только в ветке успешного ALTER
-/// теряло индекс НАВСЕГДА, если колонка старше кода индекса (или CREATE разово
-/// упал). Возвращает true, когда все индексы точно есть — больше не звать.
+/// Ensure indexes for hot replica queries.
+///
+/// Columns arrive from the core schema at unpredictable times, so check both at
+/// startup, when an old database may already have them, and after every schema.
+/// Creating an index only after a successful ALTER lost it PERMANENTLY when its
+/// column predated the index code or CREATE failed once. Returns `true` once all
+/// indexes definitely exist and no further calls are needed.
 fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> bool {
     let mut done = true;
-    // Дефолтный фильтр периода окна «Отчёт» (как idx_csr_closedate у легаси).
+    // Default period filter for the Reports window, like legacy `idx_csr_closedate`.
     if cols.contains("closedate") {
         if let Err(e) = conn.execute(
             &format!("CREATE INDEX IF NOT EXISTS idx_rep_closedate ON {TABLE}(closedate)"),
@@ -141,8 +152,8 @@ fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> bool {
     } else {
         done = false;
     }
-    // Аналитика версий стратегий (strat_db): выборка сделок одной стратегии +
-    // range-join по buydate к valid_from/valid_to версии.
+    // Strategy-version analytics (`strat_db`): select one strategy's trades and
+    // range-join `buydate` against the version's `valid_from` and `valid_to`.
     if cols.contains("strategyid") && cols.contains("buydate") {
         if let Err(e) = conn.execute(
             &format!(
@@ -198,7 +209,7 @@ pub(super) fn init(
         }
     }
     let legacy_exists = table_exists(conn, "closed_sell_reports");
-    // Уже синхронизированные ядра — из меты (переживает рестарт).
+    // Load already synchronized cores from metadata persisted across restarts.
     let mut synced: HashSet<u64> = HashSet::new();
     if let Ok(mut stmt) =
         conn.prepare("SELECT key FROM app_meta WHERE key LIKE 'rep_synced_%' AND value='1'")
@@ -228,8 +239,10 @@ pub(super) fn init(
     Ok(st)
 }
 
-/// Удалить легаси-строки ядра; опустевшую легаси-таблицу снести насовсем (маркер
-/// `legacy_dropped` — init_db больше не создаст). Общий путь SyncComplete и init-вычистки.
+/// Purge one core's legacy rows and permanently drop the empty legacy table.
+///
+/// The `legacy_dropped` marker prevents `init_db` from recreating it. This is the
+/// shared path for `SyncComplete` and initialization cleanup.
 fn purge_legacy(conn: &Connection, st: &mut RepState, core_uid: u64) {
     if !st.legacy_exists {
         return;
@@ -262,9 +275,11 @@ fn valid_ident(name: &str) -> bool {
             .all(|&c| c == b'_' || c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
-/// Append-only схема ядра → доращиваем недостающие колонки. Имя lowercase; `sql_spec`
-/// приходит от аутентифицированного ядра (тот же trust, что `sqlite_add_column_sql`
-/// самого moonproto), имя дополнительно валидируем как идентификатор.
+/// Extend the table with columns missing from the append-only core schema.
+///
+/// Names are lowercase. `sql_spec` comes from the authenticated core with the same
+/// trust as moonproto's own `sqlite_add_column_sql`; the name is additionally
+/// validated as an identifier.
 pub(super) fn apply_schema(
     conn: &Connection,
     st: &mut RepState,
@@ -297,17 +312,18 @@ pub(super) fn apply_schema(
             Err(e) => log::error!("отчёты(rep): ADD COLUMN {name} не удался: {e}"),
         }
     }
-    // Индексные колонки — авто (из схемы ядра), поэтому доводим индексы здесь,
-    // когда колонки точно есть; IF NOT EXISTS делает повторные вызовы бесплатными.
+    // Index columns arrive automatically from the core schema, so finish creating
+    // indexes here once columns definitely exist. IF NOT EXISTS makes repeats cheap.
     if !st.indexes_done {
         st.indexes_done = ensure_indexes(conn, &st.cols);
     }
     st.schemas.insert(core_uid, schema);
 }
 
-/// Идемпотентный upsert строки по `(core_uid, newrecid)`. Пишем только поля,
-/// присутствующие в строке (live-обновления могут быть частичными) — остальные
-/// значения не затираются.
+/// Idempotently upsert a row by `(core_uid, newrecid)`.
+///
+/// Write only fields present in the row because live updates may be partial;
+/// preserve all other values.
 pub(super) fn apply_upsert(
     conn: &Connection,
     st: &RepState,
@@ -359,8 +375,8 @@ pub(super) fn apply_upsert(
     for v in &vals {
         params.push(v);
     }
-    // prepare_cached: у батчей catch-up набор полей стабилен → SQL одинаков, компиляция
-    // на каждую строку была узким местом writer'а (очередь копилась → OOM).
+    // Catch-up batches have a stable field set, so `prepare_cached` can reuse the
+    // same SQL. Compiling every row used to bottleneck the writer and grow the queue to OOM.
     let mut stmt = conn.prepare_cached(&sql)?;
     stmt.execute(params.as_slice())?;
     Ok(())
@@ -374,10 +390,12 @@ pub(super) fn apply_delete(conn: &Connection, core_uid: u64, rec_id: i64) -> rus
     Ok(())
 }
 
-/// Страница catch-up: `database_recreated` → сброс реплики ядра (lib после ack сама
-/// рестартует операцию с нуля), затем идемпотентные upsert'ы строк. Возвращает `true`,
-/// если страницу можно ack'ать (ошибки отдельных строк логируются, но не стопорят
-/// поток — иначе догонка застряла бы навсегда).
+/// Apply a catch-up page, resetting the core replica when `database_recreated` is set.
+///
+/// When reset, the library restarts from zero after the acknowledgement; this page's
+/// rows are upserted idempotently in the meantime. Returns `true` when the page may
+/// be acknowledged. Individual row errors are logged without stopping the stream,
+/// which would otherwise leave catch-up stuck forever.
 pub(super) fn apply_page(
     conn: &Connection,
     st: &mut RepState,
@@ -405,8 +423,9 @@ pub(super) fn apply_page(
     true
 }
 
-/// `SyncComplete` (после ack последней страницы): коммит курсора, вычистка легаси-строк
-/// ядра (+DROP легаси-таблицы, когда она опустела — закладка на полный переезд).
+/// Handle `SyncComplete` after the final-page acknowledgement by committing the
+/// cursor and purging the core's legacy rows. Drop the legacy table once empty to
+/// complete the migration.
 pub(super) fn apply_sync_complete(
     conn: &Connection,
     st: &mut RepState,
@@ -430,10 +449,13 @@ pub(super) fn apply_sync_complete(
     purge_legacy(conn, st, core_uid);
 }
 
-/// Курсор ядра по локальной БД: новый контракт reports.md — ВСЕГДА `max(newRecID)+1`
-/// (страницы ack'аются последовательно, дыр в хвосте не бывает и после краша).
-/// 0 = реплика ядра пуста → fresh-sync. Оффлайн-изменения открытых строк ниже курсора
-/// закрывает `check_open_rows`, min-open-правила больше нет.
+/// Derive a core cursor from the local database under the report-replication flow-control contract.
+///
+/// The cursor is ALWAYS `max(newRecID) + 1`. Sequential page acknowledgements prevent
+/// a crash from skipping successfully applied tail rows, but individual upsert errors
+/// are logged while page processing continues, so other gaps can remain. Zero means the
+/// core replica is empty and requests a fresh sync. `check_open_rows` reconciles offline
+/// changes to open rows below the cursor, so the old minimum-open rule no longer applies.
 fn startup_cursor(conn: &Connection, uid: i64) -> i64 {
     conn.query_row(
         &format!("SELECT MAX(newrecid) FROM {TABLE} WHERE core_uid=?1"),
@@ -446,8 +468,10 @@ fn startup_cursor(conn: &Connection, uid: i64) -> i64 {
     .unwrap_or(0)
 }
 
-/// Открытые строки ядра (closedate пустой/нулевой), свежие первыми, ≤100 — набор для
-/// `check_open_rows` (lib сам сортирует/капит, но не гоняем лишнее через канал).
+/// Load at most 100 open core rows, with NULL or non-positive `closedate`, newest first.
+///
+/// The set feeds `check_open_rows`. The library also sorts and caps it, but avoiding
+/// excess channel traffic here is cheaper.
 fn open_row_ids(conn: &Connection, cols: &HashSet<String>, uid: i64) -> Vec<i64> {
     if !cols.contains("closedate") {
         return Vec::new();
