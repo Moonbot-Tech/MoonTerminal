@@ -8,7 +8,7 @@ fn dump(id: i64, name: &str, tp: i64, comment: &str) -> StratDump {
     let mut fields = Map::new();
     fields.insert("StrategyName".into(), Value::from(name));
     fields.insert("TakeProfit".into(), Value::from(tp));
-    fields.insert("Comment".into(), Value::from(comment)); // косметика (игнор)
+    fields.insert("Comment".into(), Value::from(comment)); // Cosmetic field (ignored).
     StratDump {
         strategy_id: id,
         name: name.into(),
@@ -43,9 +43,9 @@ fn setup() -> (Connection, State) {
     (conn, st)
 }
 
-/// Миграция индексов на БД старой версии: дублирующий idx_sv_lookup
-/// сносится, idx_strat_sid появляется и реально используется планировщиком
-/// для лукапов по strategy_id без core_uid (strategy_cores и т.п.).
+/// Regression target: deleting `idx_strat_sid` creation or legacy `idx_sv_lookup` cleanup from
+/// `write.rs:init` breaks the `has(...)` or query-plan assertion and would make upgraded databases
+/// retain extra version-write overhead or lose indexed tuner lookups by strategy ID.
 #[test]
 fn init_migrates_indexes() {
     let (conn, _) = setup();
@@ -84,14 +84,14 @@ fn init_migrates_indexes() {
 #[test]
 fn create_then_cosmetic_then_param() {
     let (conn, mut st) = setup();
-    // Создание → версия created.
+    // Creation produces a `created` version.
     apply_full_set(&conn, &mut st, 7, "core", true, &[dump(1, "A", 5, "x")]).unwrap();
     assert_eq!(versions(&conn, 1).len(), 1);
     assert_eq!(versions(&conn, 1)[0].0, "created");
-    // Косметика (Comment) — версия НЕ создаётся.
+    // Changing the cosmetic `Comment` field does not create a version.
     apply_full_set(&conn, &mut st, 7, "core", false, &[dump(1, "A", 5, "y")]).unwrap();
     assert_eq!(versions(&conn, 1).len(), 1);
-    // Реальная правка TakeProfit → версия params, прошлая закрыта valid_to.
+    // A real `TakeProfit` edit creates a `params` version and closes the previous one.
     apply_full_set(&conn, &mut st, 7, "core", false, &[dump(1, "A", 7, "y")]).unwrap();
     let v = versions(&conn, 1);
     assert_eq!(v.len(), 2);
@@ -105,7 +105,7 @@ fn create_then_cosmetic_then_param() {
 fn rename_does_not_version_but_updates_head() {
     let (conn, mut st) = setup();
     apply_full_set(&conn, &mut st, 7, "core", true, &[dump(1, "A", 5, "x")]).unwrap();
-    // StrategyName в игноре: переименование — только head, без версии.
+    // `StrategyName` is ignored, so renaming updates only the head without a new version.
     apply_full_set(&conn, &mut st, 7, "core", false, &[dump(1, "B", 5, "x")]).unwrap();
     assert_eq!(versions(&conn, 1).len(), 1);
     let name: String = conn
@@ -120,10 +120,10 @@ fn rename_does_not_version_but_updates_head() {
 fn restore_same_content_reopens_version() {
     let (conn, mut st) = setup();
     apply_full_set(&conn, &mut st, 7, "core", true, &[dump(1, "A", 5, "x")]).unwrap();
-    // Удалили (пропала из набора) → версия закрыта, head.deleted=1.
+    // Removing the strategy from the set closes its version and sets `head.deleted=1`.
     apply_full_set(&conn, &mut st, 7, "core", false, &[dump(2, "B", 3, "x")]).unwrap();
     assert!(versions(&conn, 1)[0].2.is_some(), "закрыта при удалении");
-    // Вернулась С ТЕМ ЖЕ контентом → НЕ новая версия, старая переоткрыта.
+    // Restoring the same content reopens the old version instead of creating a new one.
     apply_full_set(
         &conn,
         &mut st,
@@ -158,7 +158,7 @@ fn missing_marks_deleted_and_reappear_restores() {
         &[dump(1, "A", 5, "x"), dump(2, "B", 3, "x")],
     )
     .unwrap();
-    // Стратегия 2 пропала из полного набора → deleted, версия закрыта.
+    // Strategy 2 disappears from the complete set, so it is deleted and its version is closed.
     apply_full_set(&conn, &mut st, 7, "core", false, &[dump(1, "A", 5, "x")]).unwrap();
     let del: i64 = conn
         .query_row(
@@ -172,7 +172,7 @@ fn missing_marks_deleted_and_reappear_restores() {
         versions(&conn, 2)[0].2.is_some(),
         "версия удалённой закрыта"
     );
-    // Вернулась С ИЗМЕНЕНИЕМ (TP 3→9) → новая версия restored.
+    // Restoring it with a change (`TakeProfit` 3 to 9) creates a new `restored` version.
     apply_full_set(
         &conn,
         &mut st,
@@ -205,7 +205,7 @@ fn empty_set_does_not_mass_delete() {
 fn state_cache_survives_reload() {
     let (conn, mut st) = setup();
     apply_full_set(&conn, &mut st, 7, "core", true, &[dump(1, "A", 5, "x")]).unwrap();
-    // «Рестарт writer'а»: state перечитывается с диска, дедуп не ломается.
+    // Simulate a writer restart: reload state from disk and preserve deduplication.
     let mut st2 = init(&conn, &cfg()).unwrap();
     apply_full_set(&conn, &mut st2, 7, "core", false, &[dump(1, "A", 5, "x")]).unwrap();
     assert_eq!(
