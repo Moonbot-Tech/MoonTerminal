@@ -1,14 +1,15 @@
-//! Окно «Аналитика» — анализаторы отчётов поверх реплики `orders_rep`
-//! (см. план analytics-panel-plan: сводка → сравнения → heatmap → календарь).
+//! The Analytics window provides report analyzers over the `orders_rep` replica
+//! (see the analytics-panel-plan: summary → comparisons → heatmap → calendar).
 //!
-//! Отдельное singleton ОС-окно (паттерн «Скринер»): геометрия персистится в
-//! `layout.analytics_window`. Вкладки — полоса MoonButton (как в Настройках):
-//! «Сводка», «Стратегии», «Календарь» (тепловые карты). Плечо/Монеты — заглушки
-//! следующих этапов.
-//! Данные считает `moon_core::db::analytics` на background executor (полная
-//! выборка периода из SQLite — не на UI-потоке), перезапрашиваются ТОЛЬКО
-//! действием пользователя: открытие окна, смена периода/фильтра, повторный
-//! клик активного пресета периода (ручное обновление).
+//! It is a separate singleton OS window (following the Screener pattern), with geometry persisted
+//! in `layout.analytics_window`. Its MoonButton tab strip (as in Settings) contains Summary,
+//! Calendar, and Strategy Tuning; the tuning workspace provides By filter, By coin, and By time
+//! modes.
+//! `moon_core::db::analytics` computes the data on the background executor (the full-period
+//! SQLite query never runs on the UI thread). Data is re-queried ONLY in response to user actions:
+//! opening the window, changing the period or filters, or clicking the active period preset again
+//! to refresh manually. A tab switch reloads only when its data is stale, missing, or for a
+//! different period.
 
 mod calendar;
 /// Period presets, window tabs and date helpers — the time axis shared by every page.
@@ -16,9 +17,9 @@ mod period;
 mod summary;
 /// The window's top chrome: tabs, filter combos, date fields, period bar.
 mod toolbar;
-/// Страница «Тюнинг стратегий» целиком (список + тюнеры «По фильтру»/«По времени»
-/// + общая оболочка). Раньше плоский набор `strategies`/`tuner*`/`strat_time`/
-/// `time_tuner` в корне — теперь папка `tuner/`.
+/// The complete Strategy Tuning page (list, By filter/By coin/By time axes, and shared shell).
+/// The former flat set of `strategies`/`tuner*`/`strat_time`/`time_tuner` modules at the
+/// analytics root now lives under `tuner/`.
 mod tuner;
 
 // Pages reach these through the familiar `super::…`, unaware of the `period` module.
@@ -86,27 +87,27 @@ pub(crate) fn probe_select_spec() -> Option<&'static str> {
     .as_deref()
 }
 
-/// Задержка показа оверлея занятости: быстрые пересчёты не мигают затемнением.
+/// Delay before showing the busy overlay, so quick recomputations do not flash the dimmer.
 const BUSY_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
 
-/// Состояние окна «Аналитика».
+/// State of the Analytics window.
 pub struct AnalyticsView {
     backend: Entity<Backend>,
     tab: Tab,
-    /// Период вкладки «Сводка» (пресеты/«с»–«по»).
+    /// Period of the Summary tab (presets or the from/to range).
     period: Period,
-    /// Период вкладки «Тюнинг стратегий» — НЕЗАВИСИМЫЙ от «Сводки»: у каждой
-    /// вкладки своё окно времени, период-бар редактирует активную (`active_period`).
+    /// Period of the Strategy Tuning tab, INDEPENDENT of Summary: each tab has its own
+    /// time window, and the period bar edits the active one (`active_period`).
     strat_period: Period,
-    /// Период, которым сейчас посчитан `data` (сводка/список стратегий). При
-    /// входе на вкладку с другим окном времени — перечитываем.
+    /// Period currently represented by `data` (summary/strategy list). Entering a tab
+    /// with a different time window triggers a reload.
     data_period: Period,
-    /// Ядра из реплики (для комбобокса) + мультивыбор (пусто = все) — те же
-    /// контролы, что в «Ордерах»/«Отчёте».
+    /// Cores from the replica (for the combo box) plus multi-selection (empty = all), using
+    /// the same controls as Orders and Report.
     cores: Vec<(u64, String)>,
     sel_cores: HashSet<u64>,
     side: SideFilter,
-    /// None — все, Some(false) — реальные, Some(true) — эмуляторные.
+    /// `None` means all, `Some(false)` real, and `Some(true)` emulated.
     emu: Option<bool>,
     /// Background summary state with distinct loading, unavailable, ready, and
     /// failed outcomes so only a successful empty read appears empty.
@@ -130,14 +131,14 @@ pub struct AnalyticsView {
     /// reloaded and put the strategy's OLD values back — which is exactly what a successful
     /// write looks like. The edit was gone and the user had been told it was saved.
     pub(super) write_error: Option<String>,
-    /// Счётчик фоновых пересчётов (сводка/тюнер/гистограмма/подбор): >0 —
-    /// блокирующий оверлей «Загрузка…» поверх окна. Длинные сканы большой БД
-    /// иначе никак не видны, а клики по фильтрам/стратегиям копились в очередь.
+    /// Count of background operations: values above zero enable the blocking Loading overlay.
+    /// Without it, long scans of a large database are invisible while filter and strategy clicks
+    /// accumulate in the queue.
     busy_ops: usize,
-    /// Начало текущей серии пересчётов: оверлей показываем только спустя
-    /// BUSY_OVERLAY_DELAY — быстрые пересчёты не мигают затемнением.
+    /// Start of the current operation batch; the overlay appears only after
+    /// `BUSY_OVERLAY_DELAY`, so quick recomputations do not flash the dimmer.
     busy_since: Option<std::time::Instant>,
-    /// Номер запроса — устаревшие результаты отбрасываются.
+    /// Request sequence number used to discard stale results.
     seq: u64,
     /// Hovered bucket of the "Daily profit" chart — popup of that DAY's per-core values.
     pub(super) hover_daily_bucket: Option<usize>,
@@ -147,8 +148,8 @@ pub struct AnalyticsView {
     /// Hovered bar of the "by strategy type" chart (single-day periods only) — popup of the
     /// cores behind that type.
     pub(super) hover_kind: Option<usize>,
-    /// Вкладка «Стратегии»: выбранная группа `(strategyid текстом, имя)`
-    /// + её детализация.
+    /// Strategies tab: selected per-core row key (`strategyid@core_uid`), plus its name and
+    /// details. Legacy bare strategy IDs remain parseable.
     pub(super) sel_strategy: Option<(String, String)>,
     /// Multi-select (Ctrl): the EXTRA selected rows beyond the anchor (`sel_strategy`).
     /// The anchor drives scope/suggest/detail; these are bulk-write addressees only,
@@ -168,26 +169,26 @@ pub struct AnalyticsView {
     /// Visible-column bitmask of the strategy list, PER axis: the list sits beside a
     /// different tool in each mode and is asked a different question there.
     pub(super) strat_cols: moon_core::config::layout::StratColsByMode,
-    /// Вкладка «Календарь»: посуточные ячейки (PnL+сделки+wins) за период.
+    /// Calendar tab: cells (PnL, trades, and wins) for the loaded range; Day mode uses hourly cells.
     pub(super) cal_days: Option<Arc<Vec<DayCell>>>,
     cal_seq: u64,
-    /// Серия устарела относительно текущих фильтров — перечитать при входе.
+    /// Whether the series is stale for the current filters and must be reloaded on entry.
     cal_dirty: bool,
     cal_mode: calendar::CalMode,
-    /// Показанный месяц календаря `(год, месяц 1..12)` — СВОЯ навигация вкладки
-    /// (Назад/Вперёд); период-бар окна на «Календаре» не действует.
+    /// Displayed calendar month as `(year, month 1..12)`, controlled by the tab's OWN
+    /// Previous/Next navigation; the window period bar does not affect Calendar.
     pub(super) cal_ym: (i32, u32),
-    /// Выбранный день (start суток) для режима «День».
+    /// Selected day start for Day mode.
     pub(super) cal_day: i64,
-    /// Агрегат ПРЕДЫДУЩЕГО месяца `(profit, trades, wins)` — для дельт KPI
-    /// «к пред. периоду» (сравниваем месяц с месяцем, не 30 дней).
+    /// PREVIOUS month's aggregate `(profit, trades, wins)` for the KPI deltas against the
+    /// previous period (calendar month versus calendar month, not 30 days).
     pub(super) cal_prev: Option<(f64, i64, i64)>,
-    /// День под курсором в календаре (start суток) — подсветка ячейки.
+    /// Calendar day under the cursor, stored as the day start for cell highlighting.
     pub(super) cal_hover: Option<i64>,
-    /// Режим вкладки «Стратегии» (Обзор / Фильтры / Монеты). Приватность —
-    /// модульная: субмодули вкладок видят поля родителя без pub(super).
+    /// Strategies-tab mode (Filters / Coins / Time). Privacy is module-based: tab submodules
+    /// can see their parent's fields without `pub(super)`.
     strat_mode: tuner::StratMode,
-    /// Тюнер порогов (режим «Фильтры») — состояние в своём модуле.
+    /// Threshold tuner (Filters mode), with its state defined in its own module.
     tuner: tuner::TunerState,
     /// The "By coin" mode: the table's view controls, the picked coins that define
     /// variant v1, and the two background results it renders from.
@@ -195,27 +196,28 @@ pub struct AnalyticsView {
     /// The coin picker's read: the selected strategies' blacklist, with the core each coin
     /// belongs to and when it was added.
     coin_lists: tuner::CoinListsState,
-    /// Режим «По времени»: профили «час дня» по столбцам-периодам
-    /// (текущий/неделя/месяц/90д). None до первого расчёта / при ошибке чтения.
+    /// By time mode: the single hour-of-day profile for the selected Strategies period and
+    /// strategy-selection scope. `None` before the first computation or after a read error.
     pub(super) time_profiles: Option<Arc<Vec<[moon_core::db::analytics::HourStat; 24]>>>,
-    /// Профили среднего профита для раскраски ползунков «По времени»
-    /// (неделя×час / час суток / минута в часе). None до расчёта / при ошибке.
+    /// Average-profit profiles used to color the By time sliders
+    /// (weekday by hour / hour of day / minute of hour). `None` before computation or on error.
     pub(super) time_slider: Option<Arc<moon_core::db::tuner::SliderProfiles>>,
-    /// KPI «Факт vs варианты» режима «По времени»: столбцы Факт / v1 / v2 по
-    /// недельному расписанию из сетки — универсальная матрица в правом углу.
+    /// By time mode's Fact vs variants KPI: Fact / v1 / v2 columns for the weekly schedule
+    /// from the grid, rendered in the shared matrix at the right.
     pub(super) time_stats: LoadState<Vec<moon_core::db::tuner::VarStats>>,
-    /// Сетка недельного расписания (7 дней × от/до для v1/v2) режима «По времени».
+    /// By time v1/v2 bounds for the weekly span, time of day, and minute of hour.
     time_tuner: tuner::TimeTunerState,
     time_seq: u64,
-    /// Профиль устарел относительно текущих фильтров/периода — пересчитать при входе.
+    /// Whether By time data is stale for the current query and strategy-selection scope, including
+    /// the anchor and Ctrl-selected extras, and must be recomputed on entry.
     time_dirty: bool,
-    /// Bounds дорожек трёх ползунков «По времени» (неделя/сутки/час) — захват через
-    /// `canvas` для перевода координаты мыши в значение при drag.
+    /// Track bounds of the three By time sliders (week/day/hour), captured through `canvas`
+    /// to convert the mouse coordinate into a value while dragging.
     slider_track: [Option<gpui::Bounds<gpui::Pixels>>; 3],
-    /// Активный drag ползунка: `(поле 0..2, тянем ли левый хендл `от`)`.
+    /// Active slider drag: `(field 0..2, whether the left "from" handle is being dragged)`.
     slider_drag: Option<(usize, bool)>,
-    /// Календари произвольного диапазона «с»/«по» (moonui MoonCalendar в
-    /// попапах); выбор даты переключает период в Period::Custom.
+    /// Calendars for the custom from/to range (MoonUI `MoonCalendar` popups); selecting a date
+    /// switches the period to `Period::Custom`.
     cal_from: Entity<MoonCalendarState>,
     cal_to: Entity<MoonCalendarState>,
     cal_from_open: bool,
@@ -228,7 +230,7 @@ pub struct AnalyticsView {
 
 impl AnalyticsView {
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        // Геометрия окна — в layout (как Скринер/Стратегии).
+        // Window geometry lives in the layout, as it does for Screener and Strategies.
         cx.observe_window_bounds(window, |this, window, cx| {
             let Some((x, y, w, h)) = crate::windowing::window_geom(window) else {
                 return;
@@ -243,11 +245,11 @@ impl AnalyticsView {
         })
         .detach();
 
-        // Автоперечитки по новым отчётам НЕТ намеренно: пересчёт (полные сканы
-        // периода + группировки) запускается только действием пользователя —
-        // открытие окна, смена вкладки-периода-фильтра, повторный клик пресета.
+        // New reports intentionally trigger NO automatic reload: recomputation (full period scans
+        // plus grouping) starts only after a relevant user action such as opening the window,
+        // changing the period or filters, or clicking a preset again.
 
-        // Период: прошлый выбор из layout, дефолт — текущий календарный месяц.
+        // Period: the previous layout selection, defaulting to the current calendar month.
         let saved_period = backend
             .read(cx)
             .layout
@@ -256,7 +258,7 @@ impl AnalyticsView {
             .and_then(Period::from_id);
         // Read before `backend` is moved into the struct below.
         let attr_liq = backend.read(cx).layout.analytics_attribute_liq;
-        // Период «Тюнинга» персистится отдельным ключом (независим от «Сводки»).
+        // The Tuning period has its own persisted key, independent of Summary.
         let saved_strat_period = backend
             .read(cx)
             .layout
@@ -282,7 +284,7 @@ impl AnalyticsView {
                 by_mode
             })
         };
-        // Режим календаря из прошлого запуска (дефолт — «Месяц»).
+        // Calendar mode from the previous run, defaulting to Month.
         let saved_mode = backend
             .read(cx)
             .layout
@@ -291,7 +293,7 @@ impl AnalyticsView {
             .and_then(calendar::CalMode::from_id)
             .unwrap_or(calendar::CalMode::Month);
 
-        // Календари «с»/«по»: выбор дня закрывает попап и переключает период.
+        // From/to calendars: selecting a day closes the popup and switches the period.
         let cal_from = cx.new(|cx| MoonCalendarState::new(window, cx));
         let cal_to = cx.new(|cx| MoonCalendarState::new(window, cx));
         if let Some(Period::Custom(f, t)) = saved_period {
@@ -326,7 +328,7 @@ impl AnalyticsView {
             cores: Vec::new(),
             sel_cores: HashSet::new(),
             side: SideFilter::All,
-            // Дефолт «Реальные» — как в Отчёте (эмуляторные шумят статистику).
+            // Default to Real, as in Report, because emulated trades add noise to the statistics.
             emu: Some(false),
             data: LoadState::default(),
             undated: None,
@@ -387,9 +389,9 @@ impl AnalyticsView {
         this
     }
 
-    /// Период активной вкладки: «Тюнинг» ведёт СВОЁ окно времени, отдельное от
-    /// «Сводки». «Календарь» период-баром не пользуется (у него своя навигация),
-    /// но его reload_calendar строит запрос сам — сюда он не заходит.
+    /// Period of the active tab. Tuning keeps its OWN time window, separate from Summary.
+    /// Calendar does not use the period bar because it has its own navigation, and
+    /// `reload_calendar` builds its query directly without calling this method.
     fn active_period(&self) -> Period {
         match self.tab {
             Tab::Strategies => self.strat_period,
@@ -397,8 +399,8 @@ impl AnalyticsView {
         }
     }
 
-    /// Текущие фильтры одной структурой (общая для вкладок «Сводка»/«Тюнинг»);
-    /// период — активной вкладки (`active_period`).
+    /// Current filters in the structure shared by Summary and Tuning, using the active tab's
+    /// period (`active_period`).
     fn query(&self) -> Query {
         let (from, to) = self.active_period().range();
         Query {
@@ -412,7 +414,7 @@ impl AnalyticsView {
         }
     }
 
-    /// Выбранные ядра для запроса: пусто или все = без фильтра.
+    /// Selected cores for a query; empty or all means no core filter.
     fn cores_selected(&self) -> Vec<u64> {
         if self.sel_cores.is_empty() || self.sel_cores.len() == self.cores.len() {
             Vec::new()
@@ -421,8 +423,9 @@ impl AnalyticsView {
         }
     }
 
-    /// Старт/финиш фоновой операции: каждый spawn обязан декрементить ровно
-    /// один раз (ДО seq-проверки — устаревшие завершения тоже считаются).
+    /// Start/finish accounting for background operations. Every operation that calls
+    /// `op_started` must decrement exactly once, BEFORE its sequence check, because stale
+    /// completions still count.
     pub(super) fn op_started(&mut self) {
         self.busy_ops += 1;
         if self.busy_since.is_none() {
@@ -448,8 +451,8 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Показывать ли оверлей занятости; если серия ещё моложе задержки —
-    /// взводит таймер на перерисовку в момент её истечения.
+    /// Whether to show the busy overlay; if the batch is younger than the delay, arms a timer
+    /// to repaint when the delay expires.
     fn busy_overlay_due(&self, cx: &mut Context<Self>) -> bool {
         let Some(since) = self.busy_since else {
             return false;
@@ -470,7 +473,7 @@ impl AnalyticsView {
         false
     }
 
-    /// Фоновый расчёт сводки за текущий период/фильтры.
+    /// Reload the Analytics data and dependent views for the current period/filter scope.
     fn reload(&mut self, cx: &mut Context<Self>) {
         // Mark the request at its start so an error from another period cannot
         // remain under the current period label.
@@ -485,20 +488,22 @@ impl AnalyticsView {
         self.op_started();
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
-        // `data` считается за окно времени АКТИВНОЙ вкладки — фиксируем его.
+        // Record the ACTIVE tab's time window that `data` is being computed for.
         self.data_period = self.active_period();
-        // Тюнер зависит от тех же фильтров: сбрасываем; активному режиму —
-        // пересчёт сразу, иначе — при следующем входе в режим «Фильтры».
+        // The tuner uses the same filters: invalidate it and recompute immediately in the active
+        // mode, or defer recomputation until the next entry into Filters mode.
         self.tuner.invalidate();
-        // Ось «По времени» — тот же скоуп: отбросить её автоподбор в полёте, иначе
-        // стейл-результат от СТАРОГО запроса дописался бы в v1 (и стал бы Saveable).
+        // The By time axis uses the shared filters and `strat_period`. This common reload path
+        // conservatively retires its in-flight auto-suggestion even on a Summary-only period
+        // change; otherwise a stale result could be written into v1 and become saveable.
         self.time_tuner.invalidate_suggest();
         if self.tab == Tab::Strategies && self.strat_mode == tuner::StratMode::Filters {
             self.reload_tuner(cx);
             self.reload_hist(cx);
         }
-        // Профиль «По времени» зависит от тех же фильтров/периода: помечаем
-        // устаревшим; активному режиму — пересчёт сразу, иначе при входе.
+        // The By time profile likewise uses the shared filters and `strat_period`. Mark it stale
+        // here (conservatively on Summary-only period changes), then recompute it immediately in
+        // the active mode or defer until entry.
         self.time_dirty = true;
         if self.tab == Tab::Strategies && self.strat_mode == tuner::StratMode::Time {
             self.reload_time(cx);
@@ -512,8 +517,8 @@ impl AnalyticsView {
         // The list panels ride the same reload, so they are retired with it — otherwise a
         // reply already in flight for the previous scope lands under the new heading.
         self.coin_lists.invalidate();
-        // Календарь зависит от тех же фильтров: помечаем устаревшим;
-        // активной вкладке — пересчёт сразу, иначе при входе на неё.
+        // Calendar uses the same filters: mark it stale and recompute immediately on the active
+        // tab, or defer until entry.
         self.cal_dirty = true;
         if self.tab == Tab::Calendar {
             self.reload_calendar(cx);
@@ -535,7 +540,7 @@ impl AnalyticsView {
                 let _ = this.update(cx, |this, cx| {
                     this.op_finished(cx);
                     if this.seq != req {
-                        return; // период/фильтры уже сменили
+                        return; // The period or filters have already changed.
                     }
                     // Keep the last known core list when a read produces no
                     // summary: an empty `cores` makes `cores_selected()` read as
@@ -572,22 +577,22 @@ impl AnalyticsView {
     // recomputation belongs beside that page.
 
     fn set_period(&mut self, p: Period, window: &mut Window, cx: &mut Context<Self>) {
-        // Повторный клик по активному пресету = ручное обновление данных
-        // (автоперечитки по новым отчётам нет). Период-бар редактирует окно
-        // времени АКТИВНОЙ вкладки: «Сводка» и «Тюнинг» независимы.
+        // Clicking the active preset again manually refreshes the data because new reports do not
+        // trigger automatic reloads. The period bar edits the ACTIVE tab's time window: Summary
+        // and Tuning are independent.
         let strat = self.tab == Tab::Strategies;
         if strat {
             self.strat_period = p;
         } else {
             self.period = p;
         }
-        // Пресет побеждает произвольный диапазон: поля «с»/«по» очищаются.
+        // A preset supersedes the custom range, so clear the from/to fields.
         if !matches!(p, Period::Custom(..)) {
             for cal in [&self.cal_from, &self.cal_to] {
                 cal.update(cx, |s, cx| s.set_date(MoonDate::Single(None), window, cx));
             }
         }
-        // Выбор персистится в СВОЙ ключ — окно (и следующий запуск) откроется с ним.
+        // Persist the selection under its OWN key so the window reopens with it next time.
         let id = Some(p.persist_id());
         self.backend.update(cx, |b, _| {
             let slot = if strat {
@@ -604,9 +609,9 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Синхронизировать поля «с»/«по» (общие MoonCalendarState) с периодом
-    /// активной вкладки — при переключении вкладок период-бар должен показывать
-    /// СВОЙ диапазон вкладки, а не оставшийся от предыдущей.
+    /// Synchronize the shared `MoonCalendarState` from/to fields with the active tab's period,
+    /// so after a tab switch the period bar shows that tab's OWN range rather than the previous
+    /// tab's range.
     fn sync_period_pickers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (from_date, to_date) = match self.active_period() {
             Period::Custom(f, t) => (
@@ -623,8 +628,9 @@ impl AnalyticsView {
         });
     }
 
-    /// Пересчёт периода из календарей «с»/«по». Пустое «с» — вся история;
-    /// пустое «по» — до завтра; «по» раньше «с» — границы меняются местами.
+    /// Recompute the period from the from/to calendars. If both are empty, keep the existing
+    /// period. Otherwise, an empty from means all history, an empty to means until tomorrow, and
+    /// bounds are swapped if to precedes from.
     fn apply_custom_range(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut f = self.cal_from.read(cx).date().start();
         let mut t = self.cal_to.read(cx).date().start();
@@ -641,12 +647,13 @@ impl AnalyticsView {
         let now = moon_core::util::now_unix_ms_i64() / 1000;
         let tomorrow = now.div_euclid(86_400) * 86_400 + 86_400;
         let from = f.map(secs_of_day).unwrap_or(-1);
-        // «по» — включительно: конец диапазона = следующая полночь.
+        // The to date is inclusive, so the range ends at the following midnight.
         let to = t.map(|d| secs_of_day(d) + 86_400).unwrap_or(tomorrow);
         self.set_period(Period::Custom(from, to), window, cx);
     }
 
-    /// Тогл ядра в мультивыборе; `None` — тумблер «Все» (пусто ↔ все).
+    /// Toggle a core in the multi-selection. `None` is All: it fills an empty set with every core,
+    /// but clears any nonempty set. Both the empty and full representations query all cores.
     fn toggle_core(&mut self, core: Option<u64>, cx: &mut Context<Self>) {
         match core {
             None => {
@@ -703,8 +710,8 @@ impl Render for AnalyticsView {
             Tab::Strategies => self.strategies_tab(p, window, cx),
             Tab::Calendar => self.calendar_tab(p, cx),
         };
-        // Вкладки делят высоту сами (нижние плашки прибиты к низу окна,
-        // содержимое скроллится внутри) — внешнего скролла нет.
+        // Tabs divide their own height, pinning bottom bars to the window and scrolling content
+        // internally, so there is no outer scroll.
         let body_scrolls = false;
         let integrity = self.integrity_note(cx);
         let undated = self.undated_note(cx);
@@ -721,13 +728,13 @@ impl Render for AnalyticsView {
             .track_focus(&self.focus)
             .child(analytics_header(p, cx))
             .child(self.tabs_bar(p, cx))
-            // «Календарь» ведёт СВОЮ навигацию по месяцам — период-бар (с/по)
-            // на нём скрыт (у него своя строка Назад/месяц/Вперёд в теле).
+            // Calendar has its OWN month navigation, so hide the from/to period bar there; its
+            // body has a separate Previous/month/Next row.
             .when(self.tab != Tab::Calendar, |el| {
                 el.child(self.period_bar(p, cx))
             })
-            // Баннер целостности — на ЛЮБОЙ вкладке: повреждённая реплика важна
-            // и на «Календаре», который читает ту же базу.
+            // Show the integrity banner on EVERY tab: a damaged replica matters on Calendar too,
+            // because it reads the same database.
             .when_some(integrity, |el, (title, detail)| {
                 el.child(
                     // Do not use `.banner()`: MoonAlert renders the title only in the
@@ -785,8 +792,8 @@ impl Render for AnalyticsView {
                     .when(body_scrolls, |el| el.overflow_y_scroll())
                     .child(body),
             )
-            // Фоновый пересчёт дольше задержки: приглушаем окно и глушим
-            // клики (occlude) — иначе долгие сканы невидимы, а клики копятся.
+            // If a background operation outlasts the delay, dim the window and occlude clicks;
+            // otherwise long scans are invisible while clicks accumulate.
             .when(busy_overlay, |el| {
                 el.child(
                     div()
@@ -852,7 +859,8 @@ fn analytics_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         })
 }
 
-/// Открыть окно «Аналитика» (tool-окно, singleton). Дедуп/фокус — в `Backend`.
+/// Open the singleton Analytics tool window, activating the live handle stored in `Backend`
+/// when one exists and replacing a stale handle otherwise.
 pub fn open(
     backend: Entity<Backend>,
     owner: Option<AnyWindowHandle>,
