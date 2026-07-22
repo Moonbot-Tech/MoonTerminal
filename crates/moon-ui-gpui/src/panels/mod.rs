@@ -1,13 +1,17 @@
-//! Dock-панели окна группы (порт egui `src/dock/*`) как `moon_ui::Panel` —
-//! получают вкладки, сплиты, отцепление в окно и персист раскладки от `DockArea`
-//! через MoonPalette Dock/TabPanel. По файлу на панель:
-//! - [`chart`] — чарт (offscreen wgpu-движок + ввод + оси), центр дока;
-//! - [`detects`] — лента детектов группы (откпрепляемая);
-//! - [`orders`] — таблица открытых ордеров группы (фильтры/сортировка/клик→чарт);
-//! - [`order`] — кнопки BUY/SELL/Cancel/Panic;
-//! - [`log`] — вкладка «Лог» (источник/файл/поиск/только ошибки, виртуализирован);
-//! - [`report`] — вкладка «Отчёт» (закрытые сделки из SQLite, фильтры/сортировка);
-//! - [`stub`] — заглушка Активы до подключения данных.
+//! Group-window dock panels and related tool views, ported from egui's `src/dock/*`. Docked views
+//! implement `moon_ui::Panel`; `DockArea` supplies tabs, splits, detachment, and persisted layout
+//! with MoonPalette dock and tab styling. Modules are organized by surface:
+//! - [`chart`] renders the central chart and handles its input and axes;
+//! - [`detects`] shows the detachable group detection ribbon;
+//! - [`orders`] shows the group's open-order table, filters, sorting, and chart navigation;
+//! - [`assets`] shows balances and positions and supports wallet transfers;
+//! - [`alerts`] lists the group's local and core-managed chart alerts;
+//! - [`log`] provides virtualized live and file-backed log browsing;
+//! - [`report`] queries and filters closed trades from SQLite;
+//! - [`core_status`] renders per-core connection and resource telemetry;
+//! - [`order_edit`] opens the active-order editor;
+//! - [`common`] contains shared panel controls and rendering helpers;
+//! - [`stub`] is the fallback view for an unknown detached-panel name.
 
 mod alerts;
 mod assets;
