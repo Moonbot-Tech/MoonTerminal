@@ -1,24 +1,25 @@
-//! Per-tab/окно поле ввода монеты (поиск + выпадающий список «COIN - Server») —
-//! ШИМ над общим виджетом [`crate::controls::coin_search`].
+//! Per-tab/window coin input (search plus the "COIN - Server" dropdown), implemented as
+//! a SHIM over the shared [`crate::controls::coin_search`] widget.
 //!
-//! Сам виджет (поиск по market-юниверсу + рендер списка) переехал в `controls/coin_search.rs`:
-//! он общий для полоски вкладок, выносных окон, тикера курса в шапке и фильтра монеты
-//! «Отчёта». Здесь остаётся только чарт-специфика ([`MANUAL_COIN_TTL_MS`]) и ре-экспорт,
-//! чтобы вызовы `coin_search::search` / `coin_search::render_popup` в `chart_tabs`
-//! (и в `shell/ticker.rs`) продолжали работать без правок.
+//! The widget itself (market-universe search and list rendering) moved to
+//! `controls/coin_search.rs`. It is shared by the tab strip, detached windows, the header price
+//! ticker, and the Report coin filter. Only chart-specific behavior ([`MANUAL_COIN_TTL_MS`]) and
+//! re-exports remain here, allowing `coin_search::search` / `coin_search::render_popup` calls in
+//! `chart_tabs` (and `shell/ticker.rs`) to keep working unchanged.
 //!
-//! Поиск идёт по market-юниверсу ядер, относящихся к ВКЛАДКЕ (Main/выносное окно):
-//! Main и `Shared` → все ядра группы; `Core(id)` → одно ядро; `Bundle` → ядра связки.
-//! Выбор открывает монету на АКТИВНОЙ вкладке (Main → fullscreen-чарт; Add → стек) —
-//! это задаёт хозяин через `on_pick` (см. [`super::common::coin_pick_handler`]).
+//! Search covers the market universe of cores belonging to the tab (Main/detached window):
+//! Main and `Shared` use every core in the group, `Core(id)` uses one core, and `Bundle` uses the
+//! bundle's cores. A selection opens the coin on the ACTIVE tab (Main → fullscreen chart;
+//! Add/Custom → stack), as defined by the host through `on_pick` (see
+//! [`super::common::coin_pick_handler`]).
 
-/// Сколько совпадений тянуть из MoonProto-поиска на одно ядро.
+/// Maximum number of MoonProto search matches to retrieve per core.
 pub(super) use crate::controls::coin_search::COIN_SEARCH_LIMIT;
-/// Поиск монет и рендер выпадающего списка — общий виджет (`pub(crate)`: реюзает тикер
-/// курса в шапке, `shell/ticker.rs`).
+/// Shared coin search and dropdown renderer (`pub(crate)` because the header price ticker in
+/// `shell/ticker.rs` also reuses it).
 pub(crate) use crate::controls::coin_search::{render_popup, search};
 
-/// TTL «ручной» монеты в Add-стеке: фактически постоянная на сессию (≈1 год), чтобы открытая
-/// руками монета не выбывала по auto-TTL детектов. Main открывает без TTL (`open_or_focus`).
-/// Чарт-специфика — в общий виджет не уезжает.
+/// TTL of a manually added coin in an Add stack. It is effectively session-long (about one year),
+/// preventing a manually opened coin from expiring under the detections' automatic TTL. Main opens
+/// without a TTL (`open_or_focus`). This chart-specific policy does not belong in the shared widget.
 pub(super) const MANUAL_COIN_TTL_MS: f64 = 365.0 * 24.0 * 3600.0 * 1000.0;

@@ -1,7 +1,6 @@
-//! Откреп-вкладки чартов: жизненный цикл их ОС-окон (создание/восстановление/репин,
-//! персист геометрии и масштаба) и хост-вид окна `DetachedChartHost`. Вынесено из
-//! `chart_tabs` как отдельная подсистема выносных окон — сама полоска вкладок про неё
-//! знает лишь через несколько `pub(super)`-методов, дёргаемых из event/observe путей.
+//! Detached chart tabs: OS-window lifecycle, including creation, restoration, repinning, geometry
+//! and scale persistence, plus the `DetachedChartHost` window view. The tab strip interacts with
+//! this subsystem through a small set of `pub(super)` methods called from event and observe paths.
 
 use gpui::*;
 use moon_ui::{MoonBackgroundPolicy, Root};
@@ -13,10 +12,9 @@ use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
 impl ChartTabs {
-    /// Дабл-клик по чарту AddToChart-вкладки → открыть монету на Main + переключиться.
-    /// Собрать откреплённые окна чартов ЭТОЙ группы: восстановить (разминимизировать), показать
-    /// и каскадом вернуть на первичный монитор. Спасение, если окна свёрнуты/спрятаны/уехали за
-    /// экран (они независимы и не ходят за Main). Кнопка в полосе вкладок Main-окна группы.
+    /// Gather this group's detached chart windows from the Main window's tab-strip control.
+    /// Every platform activates them; Windows additionally restores, shows, and cascades them onto
+    /// the primary display, while the position reset is a no-op elsewhere.
     pub(super) fn gather_windows(&mut self, cx: &mut Context<Self>) {
         let group = self.group.clone();
         let handles: Vec<_> = self
@@ -35,8 +33,8 @@ impl ChartTabs {
         }
     }
 
-    /// Отцепить AddToChart/Custom-вкладку в отдельное ОС-окно (убрать из стрипа). Кастомная
-    /// вкладка живёт в `self.custom`, обычная — в `self.add`; обе используют `AddChartStack`.
+    /// Detach an AddToChart or Custom tab into a separate OS window and remove it from the strip.
+    /// Custom tabs live in `self.custom`, regular tabs in `self.add`, and both use `AddChartStack`.
     pub(super) fn detach(&mut self, tab: Tab, cx: &mut Context<Self>) {
         let (n, bucket, is_custom) = match tab.clone() {
             Tab::Add(n, b) => (n, b, false),
@@ -51,7 +49,7 @@ impl ChartTabs {
             return;
         };
         let panel = from[pos].2.clone();
-        // Геометрия: сохранённая (если уже откреплялась) или дефолт-каскад.
+        // Restore previously detached geometry or use the default cascade.
         let geom = self
             .spec_geom(cx, n, &bucket)
             .unwrap_or(chart_persist::WinGeom {
@@ -63,7 +61,7 @@ impl ChartTabs {
         if !self.open_chart_window(n, panel.clone(), bucket.clone(), geom, false, cx) {
             return;
         }
-        // Откреплённая вкладка держит свой спрос на стаканы (окно видимо) → снимаем suspend-гейт.
+        // A visible detached tab retains its own order-book demand, so clear the suspend gate.
         panel.update(cx, |p, pcx| {
             p.set_orderbook_suspended(false, pcx);
             p.set_scene_visible(false, pcx);
@@ -82,7 +80,7 @@ impl ChartTabs {
             self.sync_inactive_chart_visibility(cx);
             self.persist_scales(cx);
         }
-        // Пометить вкладку откреплённой в charts.json (восстановится окном на след. запуске).
+        // Mark the tab detached in `charts.json` so it restores as a window next launch.
         self.upsert_spec(cx, n, &bucket, |s| s.detached = Some(geom));
         moon_core::detect_diag::line(&format!(
             "[detach] n={n} bucket={bucket:?} → detached=Some({},{},{},{})",
@@ -91,11 +89,11 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// Открыть ОС-окно откреп-вкладки (общий код detach и восстановления при загрузке). Панель
-    /// держим в `detached` (ingest наполняет её по num/core); `gpu_canvas` переезжает вместе
-    /// с GPUI scene окна.
-    /// Хост (`DetachedChartHost`) сам пишет геометрию и просит репин по закрытию. Окно трекаем
-    /// по группе (закрытие окна группы закроет его — main.rs on_window_closed).
+    /// Open an OS window for a detached tab during either detachment or startup restoration.
+    /// The panel remains in `detached` so ordinary Add tabs receive ingest by number/core, while
+    /// Custom tabs seed from their specs and the `gpu_canvas` moves with the window's GPUI scene.
+    /// `DetachedChartHost` persists geometry and requests repinning on close; group tracking closes
+    /// it with the group window.
     fn open_chart_window(
         &mut self,
         n: u32,
@@ -105,11 +103,10 @@ impl ChartTabs {
         restored: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        // КРИТИЧНО для мультимонитора: без display_id окно создаётся на PRIMARY, и если
-        // сохранённые bounds вне primary — gpui откатывается на default_bounds() (центр + дефолт-
-        // размер). Монитор — по сохранённой точке (не-мак; тогда bounds валидны для него и окно
-        // встаёт точно, см. retrieve_window_placement) либо от окна группы-владельца (macOS:
-        // координаты относительны своему экрану, по точке монитор не определить).
+        // Multi-monitor restoration requires `display_id`; otherwise GPUI creates the window on
+        // the primary display and rejects bounds outside it. Non-macOS resolves the display from
+        // the saved point, while macOS uses the owning group window because coordinates are
+        // display-relative there.
         let origin = point(px(geom.x as f32), px(geom.y as f32));
         let owner = self
             .backend
@@ -130,16 +127,15 @@ impl ChartTabs {
             }),
             display_id,
         );
-        // Цвет clear окна — из темы (фон чарта). Тело окна прозрачное (own-pass UnderScene нельзя
-        // перекрывать), поэтому подложку под/между чартами даёт именно clear; без этого он белый.
+        // Clear with the themed chart background. The transparent window body must not cover the
+        // own-pass `UnderScene`, so clear color supplies the background beneath and between charts.
         let bg = self.theme.bg;
         opts.window_clear_color = Some(gpui::rgb(
             ((bg[0] as u32) << 16) | ((bg[1] as u32) << 8) | bg[2] as u32,
         ));
         let backend = self.backend.clone();
         let group = self.group.clone();
-        // Для восстановленного окна — сохранённый логический размер, чтобы скорректировать
-        // DPICHANGED-сжатие на первом render (см. DetachedChartHost.restore_size).
+        // Give restored windows their saved logical size so first render can correct DPI-change shrinkage.
         let restore_size = restored.then(|| size(px(geom.w as f32), px(geom.h as f32)));
         let host_bucket = bucket.clone();
         let opened = cx.open_window(opts, move |window, cx| {
@@ -176,7 +172,7 @@ impl ChartTabs {
         }
     }
 
-    /// Геометрия сохранённого откреп-окна вкладки (если есть в charts.json).
+    /// Return the persisted geometry for a detached tab window, if present in `charts.json`.
     fn spec_geom(
         &self,
         cx: &App,
@@ -191,8 +187,8 @@ impl ChartTabs {
             .and_then(|s| s.detached)
     }
 
-    /// Найти/создать спеку вкладки (group/num/bucket), применить мутатор, пометить dirty.
-    /// Тонкая обёртка над общим [`super::common::upsert_spec`] (один код с выносными окнами).
+    /// Find or create a tab spec by group, number, and bucket, apply a mutation, and mark it dirty.
+    /// This wraps [`super::common::upsert_spec`] so main and detached windows share one path.
     pub(super) fn upsert_spec(
         &self,
         cx: &mut Context<Self>,
@@ -203,12 +199,12 @@ impl ChartTabs {
         super::common::upsert_spec(&self.backend, &self.group, num, bucket, cx, f);
     }
 
-    /// Дренаж репина откреп-вкладок: хост закрыли (пользователь) → панель detached→add, спека
-    /// → НЕ откреплена. Зовётся из backend observe. (На выходе приложения запрос не обработается → спека
-    /// остаётся откреплённой → окно восстановится на след. запуске — как у detached.rs.)
+    /// Drain detached-tab repin requests after a user closes a host window.
+    /// Move the panel from `detached` to `add` and clear the spec's detached flag. During app quit
+    /// requests remain undrained so the detached window restores on the next launch.
     pub(super) fn drain_chart_repin(&mut self, cx: &mut Context<Self>) {
-        // На выходе из приложения НЕ репиним: закрытие откреп-окон при quit не должно сбрасывать
-        // detached (иначе окна не восстановятся). Финальный сейв уже сделан в on_app_quit.
+        // Never repin during app quit; closing detached windows must preserve restoration state,
+        // and `on_app_quit` has already performed the final save.
         if self.backend.read(cx).quitting {
             return;
         }
@@ -226,8 +222,7 @@ impl ChartTabs {
             out
         });
         for (n, bucket) in reqs {
-            // Кастомная вкладка возвращается в стрип как Custom (по наличию custom_coins/label
-            // в спеке), обычная — как Add.
+            // `custom_coins` alone classifies the tab as Custom; retrieve its optional label afterward.
             let (is_custom, custom_label) = {
                 let specs = &self.backend.read(cx).chart_specs;
                 let spec = specs.iter().find(|s| s.matches(&self.group, n, &bucket));
@@ -256,7 +251,7 @@ impl ChartTabs {
             moon_core::detect_diag::line(&format!(
                 "[repin] n={n} bucket={bucket:?} custom={is_custom} → detached=None (окно закрыли/репин)"
             ));
-            // Вернулась в стрип неактивной (active=Main) → запустить 5с-гейт стаканов для кастома.
+            // A repinned Custom tab is inactive in the strip, so start its five-second order-book gate.
             if is_custom {
                 self.refresh_orderbook_gates(cx);
             }
@@ -264,7 +259,8 @@ impl ChartTabs {
         }
     }
 
-    /// Сохранить масштаб каждой вкладки в charts.json (upsert при изменении). Main = num 0.
+    /// Persist changed scales for Main, regular Add tabs, and detached tabs to `charts.json`.
+    /// Main uses number zero; Custom tabs still in `self.custom` are omitted by this method.
     pub(super) fn persist_scales(&self, cx: &mut Context<Self>) {
         let mut items: Vec<(u32, ChartBucket, Option<f32>)> =
             vec![(0, ChartBucket::Shared, self.main.read(cx).scale())];
@@ -286,9 +282,9 @@ impl ChartTabs {
         }
     }
 
-    /// Восстановить отложенные откреп-окна (charts.json). Открывать ОС-окна В render НЕЛЬЗЯ
-    /// (рушит element-арену gpui: «ArenaRef after Arena was cleared»). Вызов идёт из
-    /// конструктора ChartTabs, а фактическое открытие откладываем через `cx.defer`.
+    /// Restore detached windows deferred from `charts.json`.
+    /// Opening OS windows during render invalidates GPUI's element arena, so construction queues
+    /// the work through `cx.defer` instead.
     pub(super) fn restore_detached(&mut self, cx: &mut Context<Self>) {
         if self.restore_pending.is_empty() {
             return;
@@ -298,8 +294,8 @@ impl ChartTabs {
         cx.defer(move |app| {
             this.update(app, |this, cx| {
                 let (epoch, theme) = (this.epoch, this.theme.clone());
-                // Откреп-чарты всегда independent: owned-связь поднимает Main при клике
-                // по графику на мультимониторе. Taskbar скрывается policy + Windows fallback.
+                // Detached charts are always independent because ownership would raise Main when
+                // clicking a chart on another display. Policy plus a Windows fallback hides taskbar entries.
                 for (n, bucket, geom, scale) in pending {
                     let backend = this.backend.clone();
                     let panel = cx.new(|_| {
@@ -308,8 +304,8 @@ impl ChartTabs {
                     if scale.is_some() {
                         panel.update(cx, |p, pcx| p.set_scale(scale, pcx));
                     }
-                    // Откреплённая КАСТОМНАЯ вкладка: ингест её не наполняет → заливаем тикеры из
-                    // спека (с раскладкой/ориентацией/пином) прямо сейчас, как при создании.
+                    // Detect ingest does not populate a detached custom tab, so seed its markets
+                    // and layout, orientation, and pin settings directly from the spec.
                     #[allow(clippy::type_complexity)]
                     let custom: Option<(
                         Vec<(CoreId, String)>,
@@ -398,8 +394,8 @@ impl ChartTabs {
                             this.custom_labels.insert(n, label);
                         }
                         this.next_custom_num = this.next_custom_num.max(n + 1);
-                        // Подписка ChartTabs на состав: пока окно открыто — персистит хост, но
-                        // после репина в стрип эта подписка снова обслуживает кастомную вкладку.
+                        // This membership subscription is ineffective while the stack is detached;
+                        // the detached host persists it then, and the subscription resumes after repin.
                         this.watch_custom_stack(n, &bucket, &panel, cx);
                     }
                     if this.open_chart_window(n, panel.clone(), bucket.clone(), geom, true, cx) {

@@ -1,10 +1,12 @@
-//! Попап «Свечи и трейды» — настройки отображения свечей/зоны трейдов АКТИВНОЙ вкладки
-//! или выносного окна (кнопка ❚ рядом с ⚙; per-вкладка, как настройки раскладки).
-//! Persist — спек вкладки в charts.json (`ChartTabSpec::candle_view`); вкладки без своего
-//! значения следуют глобальному дефолту `layout.candle_view`. Кнопка ⧉ распространяет
-//! набор на все вкладки/окна (как «применить ко всем» у ⚙) и обновляет глобальный дефолт.
-//! Все контролы stateless (сегменты/чекбоксы). Цвета свечей (up/down/нейтральный)
-//! редактируются в Настройках → «Интерфейс» (theme.toml, общие для всех окон).
+//! The "Candles and Trades" popup configures candle and trade-zone rendering for the ACTIVE tab
+//! or detached window (the ❚ button beside ⚙; per-tab like the layout settings).
+//! The tab spec persists to charts.json through `ChartTabSpec::candle_view`; tabs without an
+//! override follow the global `layout.candle_view` default. Like the ⚙ "apply to all" action, the
+//! ⧉ button distributes settings to all Add/Custom tabs and detached windows and updates the global
+//! default. It includes Main only when Main is the source (`include_main = true`); Add, Custom, and
+//! detached-window sources preserve Main's current view.
+//! All controls are stateless segments or checkboxes. Candle colors for up, down, and neutral are
+//! edited under Settings -> Interface in theme.toml and are shared by all windows.
 
 use gpui::*;
 use moon_core::market::candles::{
@@ -20,8 +22,10 @@ use rust_i18n::t;
 use super::common::{LayoutPopupHost, StackSetting};
 use crate::design;
 
-/// Таймфреймы (подпись) — синхронно с `CANDLE_TF_CHOICES_MIN` (30с удалён вовсе;
-/// легаси-конфиги с tf_min=0 клампятся к 1м в `tf_ms`).
+/// Time-frame labels kept in sync with `CANDLE_TF_CHOICES_MIN`.
+///
+/// The 30-second option was removed entirely; legacy configs with `tf_min=0` are clamped to one
+/// minute by `tf_ms`.
 const TFS: [(u32, &str); 6] = [
     (1, "1м"),
     (5, "5м"),
@@ -31,7 +35,7 @@ const TFS: [(u32, &str); 6] = [
     (1440, "1д"),
 ];
 
-/// Режимы: «Нет» (чистый тик-чарт) первым, дальше как в Moonbot.
+/// Modes with "Off" (a plain tick chart) first, followed by the Moonbot order.
 const MODES: [u8; 4] = [
     CANDLE_MODE_OFF,
     CANDLE_MODE_FILLED,
@@ -39,20 +43,21 @@ const MODES: [u8; 4] = [
     CANDLE_MODE_OUTLINE_IN_ZONE,
 ];
 
-/// Ступени «сколько последних свечей перерисовываем трейдами» (0 = только свечи) —
-/// они же для «скрыть последних свечей».
+/// Steps for how many recent candles are redrawn with trades, where zero means candles only.
+///
+/// The same steps are used for hiding recent candles.
 const ZONES: [u16; 7] = [0, 1, 2, 3, 5, 10, 20];
 
 const OUTLINES: [u8; 3] = [1, 2, 3];
 
-/// Ширина сценового попапа (лог. px): самый широкий ряд — зона (7 сегментов × 42) + поля/рамка.
+/// Scene-popup width in logical pixels; the widest row is seven 42-pixel zone segments plus framing.
 pub(super) fn content_width(cx: &App) -> Pixels {
     let pad = f32::from(design::ui_px(cx, 8.0));
     let fpx = f32::from(design::ui_px(cx, 6.0));
     px(7.0 * 42.0 + 2.0 * pad + 2.0 * fpx + 8.0)
 }
 
-/// Рамка-группа: тонкая граница + заголовок-капшен (копия layout_popup::framed).
+/// Build a framed group with a thin border and caption, mirroring `layout_popup::framed`.
 fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl IntoElement {
     v_flex()
         .w_full()
@@ -71,7 +76,7 @@ fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl Int
         .child(body)
 }
 
-/// Подпись + сегмент-контрол под ней (одна настройка).
+/// Build one setting as a caption with a segmented control below it.
 fn seg_row(
     id: String,
     caption: String,
@@ -108,7 +113,7 @@ fn seg_row(
         .child(seg)
 }
 
-/// Многострочный хинт под контролом.
+/// Build a multiline hint below a control.
 fn hint_block(key: &str, p: MoonPalette, cx: &App) -> impl IntoElement {
     v_flex().children(
         t!(key)
@@ -124,7 +129,7 @@ fn hint_block(key: &str, p: MoonPalette, cx: &App) -> impl IntoElement {
     )
 }
 
-/// Правка cfg цели: текущее значение → мутатор → применить к вкладке + persist в спек.
+/// Edit the target config by loading its current value, mutating it, and applying it to the tab spec.
 fn write_cfg<T: CandlePopupHost>(
     entity: &Entity<T>,
     app: &mut App,
@@ -137,7 +142,7 @@ fn write_cfg<T: CandlePopupHost>(
     });
 }
 
-/// Контент попапа. Значения читаются из цели на каждый рендер (stateless-контролы).
+/// Render popup content by reading target values on every render for the stateless controls.
 fn render_candle_popup<T: CandlePopupHost>(
     id: &str,
     entity: Entity<T>,
@@ -145,14 +150,14 @@ fn render_candle_popup<T: CandlePopupHost>(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    // --- Рамка «Свечи»: ТФ + режим + толщина контура ---
+    // --- Candles frame: time frame, mode, and outline thickness. ---
     let tf_row = {
         let entity = entity.clone();
         seg_row(
             format!("{id}-tf"),
             t!("chart.candles.tf").to_string(),
             TFS.iter()
-                // Легаси 30с (tf_min=0) подсвечиваем как 1м — к нему он и клампится.
+                // Highlight legacy 30-second configs (`tf_min=0`) as one minute, their clamp target.
                 .map(|(m, l)| {
                     (
                         l.to_string(),
@@ -221,7 +226,7 @@ fn render_candle_popup<T: CandlePopupHost>(
         )
     };
 
-    // --- Рамка «Трейды»: зона (K свечей) + скрытие свечей + лимит + галки + нейтраль ---
+    // --- Trades frame: K-candle zone, hidden candles, limit, checkboxes, and neutral mode. ---
     let zone_row = {
         let entity = entity.clone();
         seg_row(
@@ -242,7 +247,7 @@ fn render_candle_popup<T: CandlePopupHost>(
             },
         )
     };
-    // «Скрыть последних свечей»: в этих бакетах свечи не рисуются вовсе — только трейды.
+    // "Hide recent candles": these buckets draw no candles, only trades.
     let hide_row = {
         let entity = entity.clone();
         seg_row(
@@ -263,7 +268,7 @@ fn render_candle_popup<T: CandlePopupHost>(
             },
         )
     };
-    // Галка «Линии цены» — оранжевая LastPrice + голубая MarkPrice линии moonproto.
+    // "Price lines" toggles the orange LastPrice and blue MarkPrice MoonProto lines.
     let price_lines_cb = {
         let entity = entity.clone();
         MoonCheckbox::new(SharedString::from(format!("{id}-price-lines")))
@@ -297,16 +302,17 @@ fn render_candle_popup<T: CandlePopupHost>(
                 write_cfg(&entity, app, |c| c.neutral_in_zone = v);
             })
     };
-    // Цвета свечей (up/down/нейтральный) редактируются в Настройках → «Интерфейс»
-    // (тема одна на все окна и хранится в theme.toml со всеми цветами) — здесь только
-    // подсказка, где их менять.
+    // Candle colors for up, down, and neutral are edited under Settings -> Interface. The single
+    // theme is shared by all windows and stored with every color in theme.toml, so this only tells
+    // users where to edit them.
     let colors_hint = div()
         .text_size(design::t_caption(cx))
         .text_color(rgb(p.text_muted))
         .child(t!("chart.candles.colors_hint").to_string());
 
-    // Иконка «применить ко всем» (⧉) — как у попапа раскладки: раздать набор ЭТОЙ цели
-    // всем вкладкам/окнам + обновить глобальный дефолт (новые вкладки наследуют).
+    // The ⧉ "apply to all" icon mirrors the layout popup: distribute THIS target's settings to all
+    // non-Main tabs and windows, include Main only when it is the source, then update the global
+    // default inherited by new tabs.
     let apply_all_btn = {
         let entity = entity.clone();
         MoonButton::new(SharedString::from(format!("{id}-apply-all")))
@@ -377,26 +383,28 @@ fn render_candle_popup<T: CandlePopupHost>(
         .into_any_element()
 }
 
-/// Хозяин попапа свечей (полоска вкладок / шапка выносного окна). Цель — активная
-/// вкладка (полоска) либо панель окна; применение/persist — через [`LayoutPopupHost`]
-/// (`apply_tab_setting`), «ко всем» — своя реализация у каждого хозяина.
+/// Host for the candle popup in either the tab strip or a detached-window header.
+///
+/// The target is the strip's active tab or the window panel. Applying and persisting use
+/// [`LayoutPopupHost`] through `apply_tab_setting`; each host implements its own "apply to all".
 pub(super) trait CandlePopupHost: LayoutPopupHost {
     fn candle_popup_open(&self) -> bool;
     fn set_candle_popup_open(&mut self, open: bool);
     fn candle_popup_hovered(&self) -> bool;
     fn set_candle_popup_hovered(&mut self, hovered: bool);
-    /// Per-вкладочный override цели (None = следует глобальному дефолту).
+    /// Return the target's per-tab override, or `None` to follow the global default.
     fn candle_view_override(&self, cx: &App) -> Option<CandleViewCfg>;
-    /// «Применить ко всем»: раздать набор всем вкладкам/окнам + обновить глобальный дефолт.
+    /// Apply settings to all non-Main tabs and windows and update the global default. Include Main
+    /// only when the host's source is Main; Add, Custom, and detached sources leave it unchanged.
     fn apply_candle_view_all(&mut self, cfg: CandleViewCfg, cx: &mut Context<Self>);
 
-    /// Эффективный набор цели: свой override, иначе глобальный дефолт из layout.
+    /// Return the target's effective settings: its override or the global layout default.
     fn candle_view_current(&self, cx: &App) -> CandleViewCfg {
         self.candle_view_override(cx)
             .unwrap_or(self.backend().read(cx).layout.candle_view)
     }
 
-    /// Применить набор к цели (стек(и) + persist в спек вкладки).
+    /// Apply settings to the target stacks and persist them in the tab spec.
     fn apply_candle_view(&mut self, cfg: CandleViewCfg, cx: &mut Context<Self>) {
         self.apply_tab_setting(StackSetting::CandleView(cfg), cx);
     }
@@ -418,7 +426,9 @@ pub(super) trait CandlePopupHost: LayoutPopupHost {
     }
 }
 
-/// Оверлей попапа свечей (позиционируемая сцена с hover-закрытием). None, если закрыт.
+/// Build the candle-popup overlay as a positioned scene that closes after hover exit.
+///
+/// Returns `None` while the popup is closed.
 pub(super) fn candle_popup_overlay<T: CandlePopupHost>(
     this: &T,
     id_prefix: &'static str,
@@ -456,7 +466,7 @@ pub(super) fn candle_popup_overlay<T: CandlePopupHost>(
     )
 }
 
-/// Слой-перехватчик клика вне попапа свечей (закрыть). None, если закрыт.
+/// Build the outside-click dismissal layer for the candle popup, or `None` while it is closed.
 pub(super) fn candle_popup_dismiss<T: CandlePopupHost>(
     this: &T,
     id_prefix: &'static str,

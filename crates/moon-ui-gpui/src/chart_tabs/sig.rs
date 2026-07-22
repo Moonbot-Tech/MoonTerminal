@@ -1,6 +1,6 @@
-//! Сигнатура входов чарт-вкладок (`chart_tabs_sig`) — дешёвый хэш состояния `Backend`, что реально
-//! меняет полоску вкладок/стек этой группы. `ChartTabs` сравнивает его в backend-observe и
-//! пропускает дорогой проход, если ничего не изменилось. Плюс мелкие хелперы группы.
+//! Chart-tab input signature (`chart_tabs_sig`), a cheap hash of the `Backend` state that can
+//! actually change this group's tab strip or stack. `ChartTabs` compares it in its backend observer
+//! and skips the expensive pass when nothing changed. This module also contains small group helpers.
 
 use crate::Backend;
 use moon_core::session::CoreId;
@@ -32,7 +32,7 @@ pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
     if b.switch_charts_group.as_deref() == Some(group) {
         sig = sig.wrapping_mul(31).wrapping_add(b.switch_charts_rev);
     }
-    // Глобальный (без адресации группе) — Shift+Esc закрывает Main всех групп сразу.
+    // This revision is global rather than group-addressed because Shift+Esc closes every Main stack.
     sig = sig.wrapping_mul(31).wrapping_add(b.close_all_charts_rev);
     if b.close_active_chart_group.as_deref() == Some(group) {
         sig = sig.wrapping_mul(31).wrapping_add(b.close_active_chart_rev);
@@ -54,10 +54,10 @@ pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
     }
     let store = b.session.store();
     for s in b.session.sessions().iter().filter(|s| s.group == group) {
-        // Явно вкладываем САМ id ядра, а не только его detects_rev: добавление/удаление
-        // ядра в группе должно менять сигнатуру (→ ChartTabs::ingest перекомпонует вкладки)
-        // даже если у новичка ещё нет детектов (detects_rev=0). Раньше состав влиял лишь
-        // побочно через `*31`, что хрупко.
+        // Include the core ID itself, not only `detects_rev`: adding or removing a group core must
+        // change the signature so `ChartTabs::ingest` recomposes tabs even before a new core has
+        // detects (`detects_rev=0`). The previous composition only affected it indirectly through
+        // `*31`, which was fragile.
         sig = sig.wrapping_mul(31).wrapping_add(s.id);
         if let Some(d) = store.core(s.id) {
             sig = sig.wrapping_mul(31).wrapping_add(d.detects_rev);

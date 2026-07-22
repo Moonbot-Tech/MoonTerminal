@@ -1,6 +1,6 @@
-//! Общий слой вертикального стека чартов (Main + AddToChart): единый тип записи,
-//! хелперы масштаба/очистки и 3-режимная раскладка (FIT/SCROLL/COMPRESS), параметризованная
-//! фабрикой плитки. Нюансы Main (fullscreen / active / ПКМ-возврат) остаются в `MainChartStack`.
+//! Shared chart-stack layer for Main and AddToChart: one entry type, scale and cleanup helpers, and
+//! a three-mode FIT/SCROLL/COMPRESS layout parameterized by a tile factory. Main-specific behavior
+//! such as fullscreen, active selection, and right-click return remains in `MainChartStack`.
 
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -15,16 +15,18 @@ use crate::chart_persist::{StackLayoutMode, StackOrientation};
 use crate::panels::ChartPanel;
 use moon_core::session::CoreId;
 
-/// Одна запись (слот) стека: рынок ядра + его отдельный `ChartPanel`.
+/// One stack entry or slot containing a core market and its dedicated `ChartPanel`.
 pub(super) struct ChartStackEntry {
     pub core: CoreId,
     pub market: String,
     pub panel: Entity<ChartPanel>,
-    /// Когда график появился в слоте (для подсветки «нового» — пульс рамки `HIGHLIGHT`).
+    /// When the chart appeared in this slot, used for the `HIGHLIGHT` new-chart border pulse.
     pub arrived_at: Instant,
-    /// Слот пуст (график закрылся/истёк по TTL), но держится позиционно — только COMPRESS
-    /// (Fit+пиксели): соседи не сдвигаются и не меняют размер; новый занимает первый пустой;
-    /// сброс всех слотов — когда пустыми стали ВСЕ. Рисуется прозрачной плашкой.
+    /// Whether this slot is empty after its chart closed or expired by TTL but retains its position.
+    ///
+    /// This applies only to COMPRESS (Fit with pixels): neighbors do not move or resize, a new chart
+    /// occupies the first empty slot, and all slots reset once every slot is empty. It renders as a
+    /// transparent placeholder.
     pub vacated: bool,
 }
 
@@ -40,19 +42,20 @@ impl ChartStackEntry {
     }
 }
 
-/// Дефолтная высота слота в режиме Scroll (px), когда у вкладки нет своей.
+/// Default Scroll slot size in pixels when the tab has no override.
 pub(super) const DEFAULT_SCROLL_HEIGHT: u16 = 300;
 
-/// Ширина узкого слота соседа якоря в режиме метлы (= ширина стакана `GLASS_ZONE_PX` + рамки).
+/// Narrow comparison-follower width: order-book `GLASS_ZONE_PX` plus framing.
 pub(super) const COMPARE_BOOK_W: f32 = moon_chart::GLASS_ZONE_PX + 2.0;
 
-/// Мин. ширина слота ЯКОРЯ при метле в FIT-stretch (width=0): сам график ≥ 1.5× стакана, плюс ось
-/// цен и собственный стакан якоря (`1.5·GLASS + PRICE_AXIS_W + GLASS`). Якорь flex (растёт), но не
-/// ужимается ниже этого минимума.
+/// Minimum comparison-anchor slot width in FIT stretch mode (`width=0`).
+///
+/// The chart itself is at least 1.5 times the order book, plus the price axis and anchor's own order
+/// book (`1.5 * GLASS + PRICE_AXIS_W + GLASS`). The anchor flexes and grows but not below this floor.
 pub(super) const COMPARE_ANCHOR_MIN_W: f32 =
     moon_chart::GLASS_ZONE_PX * 2.5 + moon_chart::PRICE_AXIS_W;
 
-/// Роль слота в режиме сравнения (для размеров при метле). `Normal` — обычный размер.
+/// Slot role for comparison-mode sizing; `Normal` uses ordinary sizing.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompareRole {
     Normal,
@@ -60,12 +63,12 @@ pub(super) enum CompareRole {
     Follower,
 }
 
-/// Длительность подсветки рамки только что появившегося графика (пульс).
+/// Duration of the border pulse for a newly appeared chart.
 pub(super) const HIGHLIGHT: Duration = Duration::from_millis(2600);
 
-/// Пауза стабильности числа открытых графиков, после которой COMPRESS схлопывает придержанные
-/// пустые слоты — оставшиеся графики растягиваются на освободившееся место. Сбрасывается любым
-/// появлением/исчезновением графика (см. `AddChartStack::touch_count_change`).
+/// Stable-open-count delay before COMPRESS collapses retained empty slots and lets remaining charts
+/// expand into the released space. Any chart appearance or disappearance resets it; see
+/// `AddChartStack::touch_count_change`.
 pub(super) const COMPACT_STABLE: Duration = Duration::from_millis(5000);
 
 const STACK_GUTTER: f32 = 8.0;
@@ -73,13 +76,12 @@ const STACK_HEADER_H: f32 = 20.0;
 
 type VisibleRangeHandler = Box<dyn Fn(Range<usize>, &mut Window, &mut App)>;
 
-/// Визуальная оболочка одного chart-host в stack-режиме.
+/// Render the visual shell for one chart host in stack mode.
 ///
-/// Важно: body вокруг `ChartPanel` намеренно без `.bg()`. Chart own-pass рисуется через
-/// UnderScene, и любой непрозрачный quad над plot-зоной закроет график. Красим только header,
-/// border и отдельный gutter вне plot-зоны.
-/// `title_size` резолвится вызывающим (`design::t_body(cx)`): плитку строит
-/// `Clone + 'static` замыкание раскладки, куда `&App` не захватить.
+/// The body around `ChartPanel` deliberately has no `.bg()`. The chart own-pass renders through
+/// UnderScene, so any opaque quad over the plot zone would hide it. Only the header, border, and a
+/// separate gutter outside the plot zone receive color. The caller resolves `title_size` through
+/// `design::t_body(cx)` because the `Clone + 'static` layout closure cannot capture `&App`.
 pub(super) fn chart_stack_card(
     id: SharedString,
     label: impl Into<SharedString>,
@@ -150,10 +152,12 @@ pub(super) fn chart_stack_card(
         )
 }
 
-/// Разрешить раскладку стека из per-tab настроек вкладки в `(scroll, compress, высота_слота)`:
-/// - `Fit` + высота 0 → растяжение (делят высоту окна): `(false, false, _)`;
-/// - `Fit` + высота ≥20 → COMPRESS (фикс. высота, без скролла, сжатие): `(true, true, h)`;
-/// - `Scroll` → фикс. высота + скролл: `(true, false, h)`.
+/// Resolve per-tab stack layout settings into `(scroll, compress, slot_size)`.
+///
+/// - `Fit` with size zero stretches slots to share the window: `(false, false, _)`.
+/// - `Fit` with size at least 20 selects COMPRESS with fixed size and no scrolling:
+///   `(true, true, h)`.
+/// - `Scroll` uses fixed size with scrolling: `(true, false, h)`.
 pub(super) fn resolve_layout(
     mode: Option<StackLayoutMode>,
     height_fit: Option<u16>,
@@ -177,7 +181,7 @@ pub(super) fn resolve_layout(
     }
 }
 
-/// Применить масштаб ко всем панелям стека.
+/// Apply price scale to every panel in the stack.
 pub(super) fn set_panels_scale<S: 'static>(
     entries: &[ChartStackEntry],
     pct: Option<f32>,
@@ -188,7 +192,7 @@ pub(super) fn set_panels_scale<S: 'static>(
     }
 }
 
-/// Применить вкл/выкл стакана ко всем панелям стека.
+/// Apply the order-book toggle to every panel in the stack.
 pub(super) fn set_panels_orderbook_enabled<S: 'static>(
     entries: &[ChartStackEntry],
     enabled: bool,
@@ -200,7 +204,7 @@ pub(super) fn set_panels_orderbook_enabled<S: 'static>(
     }
 }
 
-/// Применить вкл/выкл заливки зоны управления ко всем панелям стека.
+/// Apply the control-zone fill toggle to every panel in the stack.
 pub(super) fn set_panels_show_zone<S: 'static>(
     entries: &[ChartStackEntry],
     show: bool,
@@ -211,7 +215,7 @@ pub(super) fn set_panels_show_zone<S: 'static>(
     }
 }
 
-/// Применить вкл/выкл авто-пина при ордере ко всем панелям стека.
+/// Apply the auto-pin-on-order toggle to every panel in the stack.
 pub(super) fn set_panels_auto_pin<S: 'static>(
     entries: &[ChartStackEntry],
     on: bool,
@@ -222,7 +226,7 @@ pub(super) fn set_panels_auto_pin<S: 'static>(
     }
 }
 
-/// Применить позиции кнопок рыночных действий (Cancel Buy / Panic Sell) ко всем панелям стека.
+/// Apply market-action button positions for Cancel Buy and Panic Sell to every stack panel.
 pub(super) fn set_panels_action_btn_pos<S: 'static>(
     entries: &[ChartStackEntry],
     cancel: crate::chart_persist::ChartBtnPos,
@@ -235,7 +239,7 @@ pub(super) fn set_panels_action_btn_pos<S: 'static>(
     }
 }
 
-/// Применить положение оси цен (Left/Right/Hide) ко всем панелям стека.
+/// Apply the Left, Right, or Hidden price-axis position to every stack panel.
 pub(super) fn set_panels_price_axis_pos<S: 'static>(
     entries: &[ChartStackEntry],
     pos: crate::chart_persist::PriceAxisPos,
@@ -246,7 +250,7 @@ pub(super) fn set_panels_price_axis_pos<S: 'static>(
     }
 }
 
-/// Применить видимость оси времени ко всем панелям стека.
+/// Apply time-axis visibility to every panel in the stack.
 pub(super) fn set_panels_time_axis_visible<S: 'static>(
     entries: &[ChartStackEntry],
     visible: bool,
@@ -258,7 +262,7 @@ pub(super) fn set_panels_time_axis_visible<S: 'static>(
     }
 }
 
-/// Применить видимость подписей у линий ко всем панелям стека.
+/// Apply line-label visibility to every panel in the stack.
 pub(super) fn set_panels_line_labels<S: 'static>(
     entries: &[ChartStackEntry],
     show: bool,
@@ -269,7 +273,7 @@ pub(super) fn set_panels_line_labels<S: 'static>(
     }
 }
 
-/// Применить вкл/выкл трейдов ликвидаций ко всем панелям стека.
+/// Apply the liquidation-trade toggle to every panel in the stack.
 pub(super) fn set_panels_liquidations<S: 'static>(
     entries: &[ChartStackEntry],
     enabled: bool,
@@ -281,7 +285,7 @@ pub(super) fn set_panels_liquidations<S: 'static>(
     }
 }
 
-/// Применить настройки отображения свечей ко всем панелям стека (None = глобальный дефолт).
+/// Apply candle rendering settings to every stack panel, with `None` meaning the global default.
 pub(super) fn set_panels_candle_view<S: 'static>(
     entries: &[ChartStackEntry],
     cfg: Option<moon_core::market::CandleViewCfg>,
@@ -292,7 +296,7 @@ pub(super) fn set_panels_candle_view<S: 'static>(
     }
 }
 
-/// Применить видимость подписей у перекрестия ко всем панелям стека.
+/// Apply crosshair-label visibility to every panel in the stack.
 pub(super) fn set_panels_cursor_labels<S: 'static>(
     entries: &[ChartStackEntry],
     show: bool,
@@ -303,9 +307,11 @@ pub(super) fn set_panels_cursor_labels<S: 'static>(
     }
 }
 
-/// Обработать клики по замку (режим сравнения): забрать pending у всех панелей. Если кликнули —
-/// переключить якорь: повторный клик по текущему якорю снимает сравнение; иначе назначить новый
-/// якорь и переставить его в индекс 0 (крайний левый). Возвращает true при изменении якоря/порядка.
+/// Handle comparison-lock clicks by draining pending requests from every panel.
+///
+/// A click toggles the anchor: clicking the current anchor again disables comparison; otherwise the
+/// clicked panel becomes the anchor and moves to index zero at the far left. Returns `true` when the
+/// anchor or order changes.
 pub(super) fn handle_compare_lock_requests<S: 'static>(
     entries: &mut Vec<ChartStackEntry>,
     anchor: &mut Option<(CoreId, String)>,
@@ -321,22 +327,23 @@ pub(super) fn handle_compare_lock_requests<S: 'static>(
         return false;
     };
     if anchor.as_ref() == Some(&key) {
-        *anchor = None; // повторный клик по якорю → выключить сравнение
+        *anchor = None; // clicking the anchor again disables comparison
     } else {
         if let Some(pos) = entries
             .iter()
             .position(|e| e.core == key.0 && e.market == key.1)
         {
             let e = entries.remove(pos);
-            entries.insert(0, e); // якорь — в начало ряда (налево)
+            entries.insert(0, e); // move the anchor to the row's left edge
         }
         *anchor = Some(key);
     }
     true
 }
 
-/// Обработать клики по метле (режим «только стакан» у соседей): забрать pending у всех панелей,
-/// при клике — переключить `broom_on`. Возвращает true при изменении.
+/// Handle broom clicks for follower order-book-only mode by draining every panel's pending request.
+///
+/// A click toggles `broom_on`. Returns `true` when it changes.
 pub(super) fn handle_compare_broom_requests<S: 'static>(
     entries: &[ChartStackEntry],
     broom_on: &mut bool,
@@ -354,15 +361,17 @@ pub(super) fn handle_compare_broom_requests<S: 'static>(
     clicked
 }
 
-/// Применить состояние сравнения к панелям: `compare_eligible = horizontal` на всех; при активном
-/// сравнении (horizontal И есть якорь) — пометить якорь и навязать ВСЕМ его Y-окно; иначе снять
-/// lock. Ведущее окно — ВСЕГДА у якоря (он стабилен между проходами observe, поэтому синхронизация
-/// сходится за пару проходов без notify-петли). Пан/зум по якорю двигает всех; драг соседа
-/// возвращается к окну якоря (синхрон от ведущего — пан-везде это отдельный шаг, см. docs-internal).
+/// Apply comparison state to panels, setting `compare_eligible = horizontal` on all of them.
 ///
-/// ВАЖНО: НЕ берём окно соседей как «ведущее» — `set_locked_y` пишет только поле панели, в движок
-/// применяется на render; в синхронном цикле observe→notify их `y_window()` ещё старое, и любая
-/// детекция «кто подвигал» по нему даёт скачущее окно → бесконечный цикл (зависание).
+/// With active comparison (horizontal with an anchor), mark the anchor and impose its Y window on
+/// every follower; otherwise clear the lock. The anchor is ALWAYS the leader and remains stable
+/// across observer passes, so synchronization converges in a few passes without a notification
+/// loop. Panning or zooming the anchor moves everyone; dragging a follower snaps back to the anchor
+/// window. Leader-to-all synchronization is separate from pan-everywhere; see internal docs.
+///
+/// IMPORTANT: never use a follower window as the leader. `set_locked_y` only writes a panel field
+/// and reaches the engine on render. During the synchronous observe-to-notify cycle its `y_window()`
+/// is still stale, so detecting which panel moved from it causes oscillation and an infinite loop.
 pub(super) fn apply_compare<S: 'static>(
     entries: &[ChartStackEntry],
     anchor: &Option<(CoreId, String)>,
@@ -384,30 +393,30 @@ pub(super) fn apply_compare<S: 'static>(
                 p.set_locked_y(None, c);
                 p.set_orderbook_only(false, c);
                 p.set_compare_broom_on(false, c);
-                // Сравнение неактивно → соседей нет; заодно гасится свой призрак.
+                // Inactive comparison has no peers; this also clears the panel's own ghost.
                 p.set_ghost_peers(Vec::new());
                 p.set_compare_ref_price(None);
             });
         }
         return;
     }
-    // Призрачное перекрестие «сквозь все чарты»: каждой панели — weak-хэндлы движков ОСТАЛЬНЫХ.
-    // Наведённая панель шлёт им цену под курсором на mouse-move (см. sync_native_cursor).
+    // Ghost crosshair across all charts: give each panel weak engine handles for every OTHER panel.
+    // The hovered panel sends them its cursor price on mouse movement; see `sync_native_cursor`.
     let ghosts: Vec<crate::chartdx::ChartGhostCursor> = entries
         .iter()
         .map(|e| e.panel.read(cx).ghost_cursor_handle())
         .collect();
     let key = key.unwrap();
-    // Ведущее окно — текущее окно ЯКОРЯ (стабильно в пределах цикла observe → сходимость).
-    // Якорь НЕ лочим: он остаётся в своём режиме (масштаб вкладки/авто/пан), а соседи копируют
-    // его живое окно. Иначе lock на якоре заморозил бы Y и масштаб/авто перестали бы работать.
+    // The leader is the anchor's current window, stable within an observer cycle for convergence.
+    // Do NOT lock the anchor: it retains its tab-scale, auto, or pan mode while followers copy its
+    // live window. Locking the anchor would freeze Y and disable scale and auto behavior.
     let window = entries
         .iter()
         .find(|e| e.core == key.0 && e.market == key.1)
         .and_then(|e| e.panel.read(cx).y_window());
     *shared = window;
-    // Last якоря для крупной дельты «+0.12%» соседей в метле (рисуется только у панелей в
-    // режиме «только стакан» — гейт на стороне text.rs по pr.orderbook_only).
+    // Anchor Last price for the large "+0.12%" follower delta in broom mode. It renders only on
+    // order-book-only panels, gated in `chartdx/text/prepare.rs::prepare_text` by `pr.orderbook_only`.
     let ref_price = entries
         .iter()
         .find(|e| e.core == key.0 && e.market == key.1)
@@ -423,9 +432,9 @@ pub(super) fn apply_compare<S: 'static>(
         e.panel.update(cx, |p, c| {
             p.set_compare_eligible(true, c);
             p.set_compare_anchor(is_anchor, c);
-            // Якорь свободен (respects scale/auto); соседи залочены на его окно.
+            // The anchor remains free and respects scale or auto; followers lock to its window.
             p.set_locked_y(if is_anchor { None } else { window }, c);
-            // Метла: «только стакан» у соседей; якорь полноценный, на нём горит кнопка-метла.
+            // Broom mode makes followers order-book-only; the full anchor shows the active broom button.
             p.set_orderbook_only(!is_anchor && orderbook_only, c);
             p.set_compare_broom_on(is_anchor && orderbook_only, c);
             p.set_ghost_peers(peers);
@@ -434,8 +443,10 @@ pub(super) fn apply_compare<S: 'static>(
     }
 }
 
-/// Роль слота `ix` в режиме метлы: `Normal` если «только стакан» выкл; иначе `Anchor` для слота-якоря
-/// (по `(core, market)`), `Follower` для остальных. Общая для Main/AddToChart стеков.
+/// Return slot `ix`'s broom-mode role for both Main and AddToChart stacks.
+///
+/// The role is `Normal` while order-book-only mode is off, `Anchor` for the `(core, market)` anchor,
+/// and `Follower` for every other slot.
 pub(super) fn compare_role(
     entries: &[ChartStackEntry],
     anchor: &Option<(CoreId, String)>,
@@ -460,10 +471,12 @@ pub(super) fn compare_role(
     }
 }
 
-/// Синхронизировать режим сравнения стека (общая для Main/AddToChart): в вертикали снять якорь;
-/// забрать клики замка/метлы у панелей (сменить/снять якорь, переставить влево; переключить «только
-/// стакан»); при снятом якоре выключить «только стакан»; навязать панелям общее Y-окно/флаги.
-/// Возвращает true, если якорь/порядок изменились (нужен notify стека).
+/// Synchronize stack comparison mode for Main and AddToChart.
+///
+/// Vertical layout clears the anchor. Drain panel lock and broom clicks to change or clear the
+/// anchor, move it left, and toggle order-book-only mode. Disable that mode without an anchor, then
+/// impose the shared Y window and flags on panels. Returns `true` when anchor or order changes and
+/// the stack needs notification.
 pub(super) fn sync_compare<S: 'static>(
     entries: &mut Vec<ChartStackEntry>,
     anchor: &mut Option<(CoreId, String)>,
@@ -487,10 +500,12 @@ pub(super) fn sync_compare<S: 'static>(
     changed
 }
 
-/// Применить новое значение поля-настройки стека ко всем панелям: если не изменилось — выйти; иначе
-/// записать поле, навязать панелям через `apply` и `cx.notify()`. Убирает повтор «if ==new return;
-/// assign; set_panels_*; notify» в сеттерах Main/AddToChart. `field` и `entries` — РАЗНЫЕ поля
-/// вызывающего стека (disjoint borrow), поэтому `apply` не захватывает `self`.
+/// Apply a new stack-setting field value to every panel.
+///
+/// Return when unchanged; otherwise assign the field, update panels through `apply`, and call
+/// `cx.notify()`. This removes repeated compare-assign-apply-notify sequences from Main and
+/// AddToChart setters. `field` and `entries` are disjoint fields of the calling stack, so `apply`
+/// does not capture `self`.
 pub(super) fn apply_setting<S, T, F>(
     field: &mut T,
     new: T,
@@ -510,23 +525,26 @@ pub(super) fn apply_setting<S, T, F>(
     cx.notify();
 }
 
-/// Убрать из стека панели без графиков. Возвращает true, если состав изменился.
+/// Remove panels without charts from a stack, returning whether its composition changed.
 pub(super) fn retain_nonempty_panels(entries: &mut Vec<ChartStackEntry>, cx: &App) -> bool {
     let before = entries.len();
     entries.retain(|e| e.panel.read(cx).pane_count() > 0);
     entries.len() != before
 }
 
-/// 3-режимная раскладка стека (режим — из Настроек), ориентация `horizontal`:
-///  • scroll=false               → FIT: панели делят высоту (верт.) / ширину (гор.) окна;
-///  • scroll=true, compress=false → SCROLL: фикс. размер `cfg_h`, скролл по вертикали
-///    (`MoonVirtualList`) либо по горизонтали (`overflow_x_scroll`-контейнер);
-///  • scroll=true, compress=true  → COMPRESS: фикс. размер, без скролла, сжатие при переполнении.
+/// Render the three-mode stack layout selected in Settings, with orientation from `horizontal`.
 ///
-/// `cfg_h` — фикс. размер слота вдоль оси стека (высота при верт., ширина при гор.). `panel_at`
-/// достаёт панель по индексу, `tile(s, ix, panel, size, flex, horizontal, border, ent)` строит
-/// одну плитку. FIT/COMPRESS итерируют переданный `s` (это `&self` вызывающего стека); вертикальный
-/// SCROLL берёт панели через weak-entity в App-контексте (иначе RefCell-паника при render).
+/// - `scroll=false` selects FIT: panels share window height vertically or width horizontally.
+/// - `scroll=true, compress=false` selects SCROLL: fixed `cfg_h` size with vertical
+///   `MoonVirtualList` or a horizontal `overflow_x_scroll` container.
+/// - `scroll=true, compress=true` selects COMPRESS: fixed size without scrolling, shrinking on
+///   overflow.
+///
+/// `cfg_h` is the fixed slot size along the stack axis: vertical height or horizontal width.
+/// `panel_at` retrieves a panel by index, while
+/// `tile(s, ix, panel, size, flex, horizontal, border, ent)` builds one tile. FIT and COMPRESS
+/// iterate the supplied `s`, which is the calling stack's `&self`; vertical SCROLL retrieves panels
+/// through a weak entity in App context to avoid a RefCell panic during render.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_chart_stack<S, P, T, R>(
     base_id: &str,
@@ -548,8 +566,8 @@ where
     S: Render + 'static,
     P: Fn(&S, usize) -> Option<Entity<ChartPanel>> + Clone + 'static,
     // tile(s, ix, panel, size, flex, min_w, horizontal, border, ent)
-    //   flex=true:  size → max_w, min_w → min_w (якорь-stretch).
-    //   flex=false: size → фикс. ширина БЕЗ сжатия (SCROLL переполняет → скролл).
+    //   flex=true:  size -> max_w, min_w -> min_w for a stretching anchor.
+    //   flex=false: size -> fixed width WITHOUT shrinking, so SCROLL overflows and can scroll.
     T: Fn(
             &S,
             usize,
@@ -563,18 +581,19 @@ where
         ) -> AnyElement
         + Clone
         + 'static,
-    // Роль слота в режиме метлы (Anchor берёт свою ширину, Follower — стакан). Normal = обычный.
+    // Broom-mode slot role: Anchor gets its own width, Follower gets order-book width, and Normal is ordinary.
     R: Fn(&S, usize) -> CompareRole + Clone + 'static,
 {
     if scroll && !compress {
         if horizontal {
-            // Горизонтальный SCROLL: `MoonVirtualList` умеет только вертикаль (gpui `uniform_list`),
-            // поэтому строим невиртуализированный ряд фикс-ширины в `overflow_x_scroll` (чартов
-            // единицы — виртуализация не нужна). Каждая плитка: фикс. ШИРИНА cfg_h, full height.
+            // Horizontal SCROLL: `MoonVirtualList` only supports vertical layout through GPUI's
+            // `uniform_list`, so build a non-virtualized fixed-width row in `overflow_x_scroll`.
+            // There are only a few charts, so virtualization is unnecessary. Each tile has fixed
+            // WIDTH `cfg_h` and full height.
             let mut tiles: Vec<AnyElement> = Vec::with_capacity(count);
             for ix in 0..count {
                 if let Some(panel) = panel_at(s, ix) {
-                    // SCROLL+метла: сосед — фикс. ширина стакана; якорь/обычный — своя ширина cfg_h.
+                    // SCROLL with broom: followers use fixed order-book width; anchor and Normal use `cfg_h`.
                     let w = if role(s, ix) == CompareRole::Follower {
                         COMPARE_BOOK_W
                     } else {
@@ -593,8 +612,8 @@ where
                     ));
                 }
             }
-            // overflow_x_scrollbar(): гориз. скролл + ВИДИМЫЙ скроллбар (moonui). Тайлы не сжимаются
-            // (min=max) → переполняют → есть что скроллить.
+            // `overflow_x_scrollbar()` provides horizontal scrolling with a visible MoonUI scrollbar.
+            // Tiles do not shrink (`min=max`), so they overflow and create scrollable content.
             return div()
                 .relative()
                 .size_full()
@@ -602,8 +621,8 @@ where
                 .overflow_x_scrollbar()
                 .into_any_element();
         }
-        // Вертикальный SCROLL: фикс. высота, виртуальный список со скроллбаром. Плитку строим через
-        // weak-entity (фабрика `MoonVirtualList` отдаёт `App`, а не `Context`).
+        // Vertical SCROLL uses fixed height and a virtual list with scrollbar. Build each tile through
+        // a weak entity because the `MoonVirtualList` factory receives `App`, not `Context`.
         let weak = entity.downgrade();
         let panel_at_v = panel_at.clone();
         let tile_v = tile.clone();
@@ -650,31 +669,32 @@ where
             .into_any_element();
     }
 
-    // FIT / COMPRESS: v_flex (верт.) / h_flex (гор.) на всё окно, без скролла.
-    // COMPRESS: каждый слот flex с cap = cfg_h (size=Some+flex=true → max по оси в плитке): мало
-    // графиков — каждый по cfg_h (хвост пустой), много — сжимаются до window/count. FIT: flex без cap.
+    // FIT and COMPRESS fill the window with vertical `v_flex` or horizontal `h_flex`, without scroll.
+    // In COMPRESS each slot flexes with a `cfg_h` cap (`size=Some`, `flex=true` sets an axis maximum):
+    // few charts each use `cfg_h` and leave a tail; many shrink toward `window/count`. FIT has no cap.
     let mut tiles: Vec<AnyElement> = Vec::with_capacity(count);
     for ix in 0..count {
-        // Размер слота вдоль оси. В режиме метлы:
-        //  • Anchor берёт СВОЮ ширину: compress → flex+max(cfg); stretch(0) → flex (растёт).
-        //  • Follower: stretch(0) → flex+max(стакан) (узкий, ужимается соразмерно — поведение при 0);
-        //              compress → flex без cap (делит остаток окна между стаканами).
-        //  • Normal — как обычно (compress → max cfg, иначе flex).
-        // (size=max_w, flex, min_w). Метла:
-        //  • Follower при width=0(stretch) → flex+max(стакан): ВСЕ стаканы равномерны, ужимаются.
-        //  • Follower при width>0(compress) → flex без cap: делят остаток окна между собой.
-        //  • Anchor при stretch → flex+min(1.5 стакана): остаётся больше, не схлопывается.
-        //  • Anchor при compress → flex+max(cfg): берёт свою (заданную) ширину.
-        //  • Normal — обычный (compress → max cfg, иначе flex).
+        // Slot size along the axis in broom mode:
+        // - Anchor uses its own width: compress is `flex+max(cfg)`, stretch zero is growing flex.
+        // - Follower with stretch zero is `flex+max(order book)`, narrow and proportionally
+        //   shrinkable; with compress it is uncapped flex sharing remaining window space.
+        // - Normal follows ordinary sizing: max cfg in compress, otherwise flex.
+        // For `(size=max_w, flex, min_w)` specifically:
+        // - Follower at width zero uses `flex+max(order book)`, keeping all order books even while
+        //   allowing them to shrink.
+        // - Follower at positive width uses uncapped flex and shares the remaining window.
+        // - Anchor in stretch uses `flex+min(1.5 order books)` so it remains larger and cannot collapse.
+        // - Anchor in compress uses `flex+max(cfg)` for its configured width.
+        // - Normal retains standard sizing: max cfg in compress and flex otherwise.
         let (size, flex, min_w) = match role(s, ix) {
-            // FIT width=0 (stretch): соседи равномерны (flex+max стакан), якорь больше (flex+min).
+            // FIT width zero: followers are even (`flex+max order book`); anchor is larger (`flex+min`).
             CompareRole::Follower if !compress => (Some(COMPARE_BOOK_W), true, None),
             CompareRole::Anchor if !compress => (None, true, Some(COMPARE_ANCHOR_MIN_W)),
-            // FIT width>0 (compress): якорь — ФИКС. заданная ширина px (без сжатия), соседи делят
-            // остаток окна постоянно (flex без cap).
+            // FIT positive width in compress: anchor has a FIXED configured pixel width without
+            // shrinking, while followers continuously share the remainder through uncapped flex.
             CompareRole::Anchor => (Some(cfg_h), false, None),
             CompareRole::Follower => (None, true, None),
-            // Обычный (не метла): COMPRESS → flex+max(cfg); FIT-stretch → flex.
+            // Normal non-broom sizing: COMPRESS is `flex+max(cfg)`; FIT stretch is flex.
             CompareRole::Normal => {
                 if compress {
                     (Some(cfg_h), true, None)
@@ -696,7 +716,7 @@ where
                 entity.clone(),
             )),
             None => {
-                // Пустой (держащийся) слот COMPRESS — прозрачная плашка тех же размеров (по оси).
+                // A retained empty COMPRESS slot is a transparent placeholder with the same axis size.
                 let mut e = div().relative().overflow_hidden();
                 e = if horizontal { e.h_full() } else { e.w_full() };
                 if flex {
@@ -715,7 +735,7 @@ where
                         };
                     }
                 } else if let Some(v) = size {
-                    // Фикс. БЕЗ сжатия (min=max=v) — иначе в SCROLL flex ужмёт и не будет переполнения.
+                    // Fixed WITHOUT shrinking (`min=max=v`); otherwise SCROLL flex removes overflow.
                     e = if horizontal {
                         e.w(px(v)).min_w(px(v))
                     } else {

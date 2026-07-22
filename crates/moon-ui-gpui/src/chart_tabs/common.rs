@@ -1,11 +1,11 @@
-//! Общая обвязка per-вкладочных настроек чарт-стека для ДВУХ хозяев: полоски вкладок
-//! (`ChartTabs`, активная вкладка) и выносного окна (`DetachedChartHost`, его панель).
-//! Здесь: значение настройки ([`StackSetting`]: применение к стеку + запись в спек),
-//! апсёрт спека, трейт [`LayoutPopupHost`] с общей логикой попапа раскладки ⚙
-//! (открыть/засеять/прочитать/закоммитить/закрыть + применение настроек) и общий рендер
-//! его оверлея/дисмисса, плюс трейт [`CoinPopupHost`] с обвязкой поля поиска монеты.
-//! Различия хозяев (какая вкладка/панель — цель, «применить ко всем», is_custom) остаются
-//! в их реализациях трейтов ([`super::settings`] / [`super::detached_host`]).
+//! Shared per-tab chart-stack settings plumbing for TWO hosts: the tab strip (`ChartTabs`, active
+//! tab) and a detached window (`DetachedChartHost`, its panel). This module contains the setting
+//! value ([`StackSetting`]: apply to a stack and write to a spec), spec upsert, the
+//! [`LayoutPopupHost`] trait with shared layout-popup logic (open/seed/read/commit/close plus
+//! setting application) and shared overlay/dismiss rendering, and the [`CoinPopupHost`] trait with
+//! coin-search input plumbing. Host-specific differences (the target tab/panel, Apply to all, and
+//! `is_custom`) remain in the trait implementations ([`super::settings`] /
+//! [`super::detached_host`]).
 
 use gpui::*;
 use moon_ui::{MoonInputState, MoonPalette};
@@ -16,39 +16,39 @@ use crate::chart_persist::{self, ChartBtnPos, PriceAxisPos, StackLayoutMode, Sta
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
-/// Одно per-вкладочное значение настройки чарт-стека. Умеет записать себя в спек
-/// (persist-половина, общая); применение к панелям — макросом [`set_stack_setting!`]
-/// (duck-typed: сеттеры одинаково называются у `MainChartStack` и `AddChartStack`).
+/// One per-tab chart-stack setting value. It can write itself to a spec (the shared persistence
+/// half); [`set_stack_setting!`] applies it to panels using identically named and typed setters on
+/// `MainChartStack` and `AddChartStack`.
 #[derive(Clone, Copy)]
 pub(super) enum StackSetting {
-    /// Режим раскладки + раздельные высоты Fit/Scroll.
+    /// Layout mode plus separate Fit and Scroll heights.
     Layout(Option<StackLayoutMode>, Option<u16>, Option<u16>),
-    /// Ориентация стека (верт/гор).
+    /// Stack orientation (vertical/horizontal).
     Orientation(StackOrientation),
-    /// Стакан вкл/выкл.
+    /// Order book enabled/disabled.
     Orderbook(bool),
-    /// Трейды ликвидаций вкл/выкл.
+    /// Liquidation trades enabled/disabled.
     Liquidations(bool),
-    /// Заливка зоны управления вкл/выкл.
+    /// Management-zone fill enabled/disabled.
     ShowZone(bool),
-    /// Авто-пин при ордере вкл/выкл.
+    /// Automatic pinning on order enabled/disabled.
     AutoPin(bool),
-    /// Позиции кнопок Cancel Buy / Panic Sell.
+    /// Cancel Buy / Panic Sell button positions.
     ActionPos(Option<ChartBtnPos>, Option<ChartBtnPos>),
-    /// Положение оси цен.
+    /// Price-axis position.
     PriceAxis(PriceAxisPos),
-    /// Видимость оси времени.
+    /// Time-axis visibility.
     TimeAxis(bool),
-    /// Подписи у ордер-линий.
+    /// Order-line labels.
     LineLabels(bool),
-    /// Подписи у перекрестия.
+    /// Crosshair labels.
     CursorLabels(bool),
-    /// Настройки отображения свечей/трейдов (попап ❚).
+    /// Candle/trade display settings (the ❚ popup).
     CandleView(moon_core::market::CandleViewCfg),
 }
 
 impl StackSetting {
-    /// Записать значение в спек вкладки (persist-часть `apply_*`, общая для обоих хозяев).
+    /// Write the value to a tab spec (the persistence half of `apply_*`, shared by both hosts).
     pub(super) fn write_spec(self, s: &mut chart_persist::ChartTabSpec) {
         match self {
             StackSetting::Layout(mode, hf, hs) => {
@@ -74,9 +74,9 @@ impl StackSetting {
     }
 }
 
-/// Применить [`StackSetting`] к стеку `$s` (внутри `entity.update`): один диспатч на все
-/// сеттеры. Макрос (а не функция), чтобы работать и с `MainChartStack`, и с `AddChartStack` —
-/// типы разные, но сеттеры совпадают по имени/сигнатуре.
+/// Apply [`StackSetting`] to stack `$s` inside `entity.update`, dispatching every setter in one
+/// place. This is a macro rather than a function so it works with both `MainChartStack` and
+/// `AddChartStack`: the types differ, but their setter names and signatures match.
 macro_rules! set_stack_setting {
     ($s:expr, $c:expr, $v:expr) => {
         match $v {
@@ -117,8 +117,8 @@ macro_rules! set_stack_setting {
 }
 pub(super) use set_stack_setting;
 
-/// Найти/создать спеку вкладки (group/num/bucket), применить мутатор, пометить dirty.
-/// Общий апсёрт для полоски вкладок и выносных окон.
+/// Find or create a tab spec by group/number/bucket, apply the mutator, and mark it dirty.
+/// This upsert is shared by the tab strip and detached windows.
 pub(super) fn upsert_spec(
     backend: &Entity<Backend>,
     group: &str,
@@ -134,8 +134,8 @@ pub(super) fn upsert_spec(
     });
 }
 
-/// Снимок текущих настроек вкладки-цели для отрисовки попапа ⚙ (эффективные значения,
-/// дефолты уже подставлены).
+/// Snapshot of the target tab's current settings for rendering the ⚙ popup, with defaults already
+/// resolved into effective values.
 pub(super) struct LayoutPopupSnapshot {
     pub mode: StackLayoutMode,
     pub orientation: StackOrientation,
@@ -151,11 +151,11 @@ pub(super) struct LayoutPopupSnapshot {
     pub cursor_labels: bool,
 }
 
-/// Хозяин попапа настроек раскладки ⚙. Требуемые методы — доступ к состоянию/цели
-/// (у `ChartTabs` цель = активная вкладка, у `DetachedChartHost` = панель окна);
-/// default-методы — ОБЩАЯ логика попапа и применения настроек (раньше дублировалась).
+/// Host of the ⚙ layout-settings popup. Required methods expose host state and the target
+/// (`ChartTabs` targets its active tab, while `DetachedChartHost` targets the window panel);
+/// default methods contain the SHARED popup and setting-application logic formerly duplicated.
 pub(super) trait LayoutPopupHost: Sized + 'static {
-    // --- состояние попапа/инпуты хозяина ---
+    // --- Host popup state and inputs ---
     fn popup_open(&self) -> bool;
     fn set_popup_open(&mut self, open: bool);
     fn popup_hovered(&self) -> bool;
@@ -164,29 +164,32 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
     fn scroll_input(&self) -> &Entity<MoonInputState>;
     fn rename_input(&self) -> &Entity<MoonInputState>;
 
-    // --- вкладка-цель ---
+    // --- Target tab ---
     fn backend(&self) -> &Entity<Backend>;
     fn spec_group(&self) -> &str;
-    /// Ключ персиста цели: (num, bucket).
+    /// Target persistence key: `(num, bucket)`.
     fn spec_key(&self) -> (u32, ChartBucket);
-    /// Текущая раскладка цели: (mode, height_fit, height_scroll).
+    /// Current target layout: `(mode, height_fit, height_scroll)`.
     fn current_layout(&self, cx: &App) -> (Option<StackLayoutMode>, Option<u16>, Option<u16>);
     fn current_orientation(&self, cx: &App) -> Option<StackOrientation>;
-    /// Позиции кнопок действий цели (сырые Option — для частичной правки cancel/panic).
+    /// Target action-button positions as raw `Option`s for independently editing cancel/panic.
     fn action_btn_pos_opt(&self, cx: &App) -> (Option<ChartBtnPos>, Option<ChartBtnPos>);
     fn layout_popup_snapshot(&self, cx: &App) -> LayoutPopupSnapshot;
-    /// Цель — кастомная (мульти-монетная) вкладка? (показ поля переименования).
+    /// Whether the target is a custom multi-coin tab, controlling rename-field visibility.
     fn popup_is_custom(&self, cx: &App) -> bool;
-    /// Засеять поле имени кастомной вкладки (no-op, если цель не кастомная).
+    /// Seed the custom-tab name field; a no-op when the target is not custom.
     fn seed_rename_input(&self, window: &mut Window, cx: &mut Context<Self>);
-    /// Применить значение к стеку(ам) цели (диспатч Main/активный стек либо панель окна).
+    /// Apply a value to the target stack(s), dispatching to Main/active stack or the window panel.
     fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>);
-    /// «Применить ко всем»: у полоски — напрямую ко всем стекам группы, у окна — через Backend.
+    /// Apply to all non-Main stacks. The strip also includes Main only when Main is the source
+    /// (`include_main = true`); Add, Custom, and detached-window sources leave Main unchanged.
+    /// Detached windows route the request through Backend because they cannot access group stacks.
     fn apply_all_from_popup(&mut self, cx: &mut Context<Self>);
 
-    // --- общая логика (default) ---
+    // --- Shared default logic ---
 
-    /// Применить настройку к цели + persist в спек (+ пересбор спроса стаканов для Orderbook).
+    /// Apply a setting to the target and persist it to the spec, rebuilding order-book demand for
+    /// an Orderbook change.
     fn apply_tab_setting(&mut self, v: StackSetting, cx: &mut Context<Self>) {
         self.set_on_stacks(v, cx);
         let (num, bucket) = self.spec_key();
@@ -195,25 +198,25 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
             v.write_spec(s)
         });
         if matches!(v, StackSetting::Orderbook(_)) {
-            // Пересобрать набор рынков, которым нужен стакан (мог измениться спрос).
+            // Rebuild the set of markets requiring an order book because demand may have changed.
             backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
         }
         cx.notify();
     }
 
-    /// Позиция кнопки Cancel Buy + persist (Panic Sell не трогаем).
+    /// Set and persist the Cancel Buy button position without changing Panic Sell.
     fn apply_cancel_pos(&mut self, pos: ChartBtnPos, cx: &mut Context<Self>) {
         let (_, panic) = self.action_btn_pos_opt(cx);
         self.apply_tab_setting(StackSetting::ActionPos(Some(pos), panic), cx);
     }
 
-    /// Позиция кнопки Panic Sell + persist (Cancel Buy не трогаем).
+    /// Set and persist the Panic Sell button position without changing Cancel Buy.
     fn apply_panic_pos(&mut self, pos: ChartBtnPos, cx: &mut Context<Self>) {
         let (cancel, _) = self.action_btn_pos_opt(cx);
         self.apply_tab_setting(StackSetting::ActionPos(cancel, Some(pos)), cx);
     }
 
-    /// Тоггл ориентации: текущая → противоположная.
+    /// Toggle from the current orientation to its opposite.
     fn toggle_orientation_setting(&mut self, cx: &mut Context<Self>) {
         use StackOrientation as O;
         let next = match self.current_orientation(cx).unwrap_or(O::Vertical) {
@@ -223,7 +226,7 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
         self.apply_tab_setting(StackSetting::Orientation(next), cx);
     }
 
-    /// Открыть/закрыть in-scene popup раскладки цели.
+    /// Open or close the target's in-scene layout popup.
     fn toggle_layout_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.popup_open() {
             self.close_layout_popup(true, cx);
@@ -235,8 +238,8 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
         }
     }
 
-    /// Засеять поля высоты ЭФФЕКТИВНЫМИ значениями (Fit→0, Scroll→дефолт) — иначе после
-    /// рестарта у неустановленных высот поле было бы пустым, без цифр.
+    /// Seed height fields with EFFECTIVE values (Fit → 0, Scroll → default); otherwise unset
+    /// heights would appear as blank fields after a restart.
     fn seed_layout_popup_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
         let (_, hf, hs) = self.current_layout(cx);
         let fit = hf.unwrap_or(0).to_string();
@@ -250,7 +253,7 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
         self.seed_rename_input(window, cx);
     }
 
-    /// Прочитать высоту режима из его поля (пусто → None; мусор → текущее значение цели).
+    /// Read a mode height from its field: blank → `None`, invalid → the target's current value.
     fn read_layout_height(&self, mode: StackLayoutMode, cx: &App) -> Option<u16> {
         let (_, fit_fallback, scroll_fallback) = self.current_layout(cx);
         let (input, fallback) = match mode {
@@ -269,7 +272,7 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
             .or(fallback)
     }
 
-    /// Закоммитить содержимое полей попапа в раскладку цели.
+    /// Commit the popup field contents to the target layout.
     fn commit_layout_popup(&mut self, cx: &mut Context<Self>) {
         let (mode, _, _) = self.current_layout(cx);
         let hf = self.read_layout_height(StackLayoutMode::Fit, cx);
@@ -293,10 +296,10 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
     }
 }
 
-/// Оверлей попапа раскладки ⚙ (общий рендер обоих хозяев): позиционируемая сцена с
-/// hover-закрытием + [`layout_popup::render_layout_popup`] со ВСЕМИ колбэками через трейт.
-/// `id_prefix` — "chart-layout" (полоска) / "detached-chart-layout" (окно); `top` — якорь.
-/// None, если попап закрыт.
+/// ⚙ layout-popup overlay shared by both hosts: a positioned scene with hover-close plus
+/// [`layout_popup::render_layout_popup`], with ALL callbacks routed through the trait.
+/// `id_prefix` is "chart-layout" for the strip or "detached-chart-layout" for a window; `top` is
+/// the anchor. Returns `None` while the popup is closed.
 pub(super) fn layout_popup_overlay<T: LayoutPopupHost>(
     this: &T,
     id_prefix: &'static str,
@@ -428,7 +431,8 @@ pub(super) fn layout_popup_overlay<T: LayoutPopupHost>(
     )
 }
 
-/// Слой-перехватчик клика вне попапа раскладки: закрыть с коммитом. None, если попап закрыт.
+/// Layer intercepting clicks outside the layout popup and closing it with a commit.
+/// Returns `None` while the popup is closed.
 pub(super) fn layout_popup_dismiss<T: LayoutPopupHost>(
     this: &T,
     id_prefix: &'static str,
@@ -450,25 +454,26 @@ pub(super) fn layout_popup_dismiss<T: LayoutPopupHost>(
     )
 }
 
-/// Хозяин поля поиска монеты (полоска вкладок / шапка выносного окна): куда открывать
-/// выбранную монету и как чистить поле/попап. Общая обвязка — [`coin_pick_handler`] /
-/// [`coin_dismiss_handler`]; сам рендер списка — [`super::coin_search::render_popup`].
+/// Host of a coin-search field (tab strip/detached-window header), defining where to open the
+/// selected coin and how to clear the field/popup. [`coin_pick_handler`] and
+/// [`coin_dismiss_handler`] provide shared plumbing; [`super::coin_search::render_popup`] renders
+/// the list itself.
 pub(super) trait CoinPopupHost: Sized + 'static {
-    /// Очистить поле монеты и закрыть список (после выбора / по клику вне).
+    /// Clear the coin field and close the list after selection or an outside click.
     fn clear_coin_search(&mut self, cx: &mut Context<Self>);
-    /// Открыть выбранную монету на цели хозяина (активная вкладка / стек окна).
+    /// Open the selected coin on the host target (active tab/window stack).
     fn open_picked_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>);
 }
 
-/// Обработчик выбора монеты из списка: открыть → очистить поле → закрыть попап.
+/// Handle a coin-list selection by opening it, clearing the field, and closing the popup.
 pub(super) fn coin_pick_handler<T: CoinPopupHost>(
     cx: &Context<T>,
     input: Entity<MoonInputState>,
 ) -> impl Fn(CoreId, String, &mut Window, &mut App) + Clone + 'static {
-    // ВАЖНО: НЕ читаем `cx.entity().read(cx)` здесь — этот хелпер вызывается во ВРЕМЯ
-    // рендера хоста (ChartTabs/DetachedChartHost), который уже занят как `&mut self` →
-    // `read` даёт панику «cannot read … while it is already being updated» (краш при
-    // открытии поиска монет). `coin_input` берём параметром у вызывающего (у него `&self`).
+    // IMPORTANT: do NOT read `cx.entity().read(cx)` here. This helper runs DURING host rendering
+    // (`ChartTabs`/`DetachedChartHost`), while the entity is already borrowed as `&mut self`, so a
+    // read panics with "cannot read … while it is already being updated" and crashes when coin
+    // search opens. The caller passes `coin_input` while it still has `&self`.
     let view = cx.entity();
     move |core, market, window, app| {
         view.update(app, |this, cx| this.open_picked_coin(core, market, cx));
@@ -479,7 +484,7 @@ pub(super) fn coin_pick_handler<T: CoinPopupHost>(
     }
 }
 
-/// Обработчик клика по слою-дисмиссеру списка монеты (геометрию слоя задаёт вызывающий).
+/// Handle a click on the coin list's dismiss layer; the caller defines the layer geometry.
 pub(super) fn coin_dismiss_handler<T: CoinPopupHost>(
     cx: &Context<T>,
 ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {

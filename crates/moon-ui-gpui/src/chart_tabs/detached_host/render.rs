@@ -1,6 +1,6 @@
-//! `impl Render for DetachedChartHost`: шапка окна (поиск монеты + масштаб + попап раскладки ⚙ +
-//! «закрыть все графики») над панелью чарт-стека. Оверлей попапа ⚙ и обвязка поиска монеты —
-//! общие с полоской вкладок ([`super::super::common`]).
+//! `Render` implementation for `DetachedChartHost`: a window header with market search, scale,
+//! the ⚙ layout popup, and "close all charts" above the chart-stack panel. The ⚙ popup overlay and
+//! market-search plumbing are shared with the tab strip through [`super::super::common`].
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -18,18 +18,18 @@ use crate::design;
 
 impl Render for DetachedChartHost {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Коррекция размера восстановленного окна (один раз): окно уже на целевом мониторе с
-        // верным scale → форсим сохранённый логический размер, перебивая DPICHANGED-сжатие.
+        // Correct a restored window's size once it is on the target display with the correct scale:
+        // force the saved logical size to override `WM_DPICHANGED` shrinkage.
         if let Some(sz) = self.restore_size.take() {
             window.resize(sz);
         }
-        // Убрать кнопку из таскбара (DeleteTab), оставив окно independent → FancyZones его видит.
-        // Несколько первых рендеров — на случай, если кнопка появляется чуть позже показа окна.
+        // Remove the taskbar button with `DeleteTab` while leaving the window independent so
+        // FancyZones can see it. Retry for the first few renders in case the button appears late.
         if self.taskbar_hide_ticks > 0 {
             crate::windowing::hide_window_from_taskbar(window);
             self.taskbar_hide_ticks -= 1;
         }
-        // [Shift+СКМ] на графике ЭТОГО окна → X-масштаб на панель окна + persist в спек.
+        // Shift+middle-click on THIS window's chart applies X scale to its panel and persists the spec.
         {
             let (rev, req) = {
                 let b = self.backend.read(cx);
@@ -56,7 +56,7 @@ impl Render for DetachedChartHost {
             }
         }
         let p = MoonPalette::active(cx);
-        // Масштаб — СВОЙ у этой панели (по-вкладочно), правится прямо в неё.
+        // Scale belongs to this panel per tab and is edited directly on it.
         let scale = self.panel.read(cx).scale();
         let panel = self.panel.clone();
         let close_all_panel = self.panel.clone();
@@ -74,13 +74,13 @@ impl Render for DetachedChartHost {
             cx,
         );
         let layout_dismiss = common::layout_popup_dismiss(self, "detached-chart-layout", cx);
-        // Попап «Свечи и трейды» (глобальный) — кнопка ❚ рядом с ⚙, якорь под шапкой.
+        // Per-window-tab "Candles and Trades" popup, opened by ❚ beside ⚙ and anchored below the header.
         let candle_popup_open = self.candle_popup_open;
         let candle_popup =
             candle_popup::candle_popup_overlay(self, "detached-chart-candles", px(38.0), cx);
         let candle_dismiss = candle_popup::candle_popup_dismiss(self, "detached-chart-candles", cx);
-        // Поле ввода монеты (поиск) шапки + список совпадений. Список рисуем на уровне v_flex
-        // (после тела), иначе тело окна (paint-порядок ниже) перекроет выпадашку из шапки.
+        // Header market-search input and matches. Render the list at the `v_flex` level after the
+        // body; otherwise the later-painted window body covers the header dropdown.
         let coin_search_el = div().w(design::font_w_px(cx, 80.0)).child(
             MoonInput::new("detached-coin-search")
                 .state(&self.coin_input)
@@ -104,7 +104,7 @@ impl Render for DetachedChartHost {
             .right(px(6.0))
             .top(px(38.0))
         });
-        // Перехватчик клика вне списка — только ниже шапки (top 34), чтобы не блокировать само поле.
+        // Catch outside clicks only below the 34-pixel header so the search field remains interactive.
         let coin_dismiss = self.coin_popup_open.then(|| {
             div()
                 .id("detached-coin-dismiss")
@@ -115,12 +115,12 @@ impl Render for DetachedChartHost {
                 .bottom(px(0.0))
                 .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx))
         });
-        // Шапка — ТОЛЬКО у выносных окон вкладок (в основном доке её нет): масштаб слева,
-        // «закрыть все графики» справа.
+        // Only detached tab windows have this header; the main dock does not. Scale is on the left,
+        // and "close all charts" is on the right.
         v_flex()
             .size_full()
             .relative()
-            // Фокусируемый корень + ловля хоткеев окна (единый диспетчер).
+            // Focusable root with window-hotkey handling through the shared dispatcher.
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_hotkey(ev, cx)))
             .child(
@@ -207,9 +207,9 @@ impl Render for DetachedChartHost {
                     .flex_1()
                     .w_full()
                     .overflow_hidden()
-                    // БЕЗ .bg(): own-pass чарта и его text layer лежат under-scene, любой
-                    // непрозрачный фон тела перекроет график. Подложку под/между чартами закрывает
-                    // тёмный clear окна (правка форка MoonUI), белого нет.
+                    // Deliberately no `.bg()`: the chart own-pass and text layer are under-scene, so
+                    // any opaque body background would cover the chart. The dark window clear from
+                    // the MoonUI fork fills beneath and between charts without a white background.
                     .child(self.panel.clone()),
             )
             .children(coin_dismiss)

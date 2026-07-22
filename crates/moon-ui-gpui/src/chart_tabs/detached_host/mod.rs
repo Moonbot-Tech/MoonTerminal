@@ -1,8 +1,8 @@
-//! Хост-вид ОС-окна откреплённой чарт-вкладки (`DetachedChartHost`): шапка (поиск монеты +
-//! масштаб + попап раскладки ⚙ + «закрыть все графики») над панелью чарт-стека. Сам пишет
-//! геометрию окна и per-tab настройки в `charts.json` и просит репин по закрытию. Жизненный
-//! цикл самого окна (создание/восстановление/репин) живёт в `windows.rs` (`impl ChartTabs`);
-//! общая логика попапа ⚙/поиска монеты — трейты [`super::common`] (реализации внизу).
+//! OS-window host view for a detached chart tab (`DetachedChartHost`): a header with market search,
+//! scale, the ⚙ layout popup, and "close all charts" above the chart-stack panel. It writes window
+//! geometry and per-tab settings to `charts.json` and requests repinning on close. Window creation,
+//! restoration, and repinning live in `windows.rs` under `impl ChartTabs`; traits from
+//! [`super::common`] provide shared ⚙ popup and market-search logic, implemented below.
 
 use gpui::*;
 use moon_ui::{MoonInputEvent, MoonInputState};
@@ -20,54 +20,63 @@ use moon_core::session::CoreId;
 
 mod render;
 
-/// Хост-вид окна откреплённой чарт-вкладки: шапка (масштаб + «закрыть все графики») + панель.
-/// Сам пишет геометрию окна в charts.json (`observe_window_bounds`) и просит репин по закрытию
-/// (`on_release` → `chart_repin_request`, дренит ChartTabs).
+/// Host view for a detached chart-tab window with a header and chart-stack panel.
+///
+/// The header contains scale and "close all charts" controls. The host writes window geometry to
+/// charts.json through `observe_window_bounds` and requests repinning on `on_release` through
+/// `chart_repin_request`, which `ChartTabs` drains.
 pub(super) struct DetachedChartHost {
     panel: Entity<AddChartStack>,
     backend: Entity<Backend>,
     group: String,
     num: u32,
     bucket: ChartBucket,
-    /// Можно ли сохранять геометрию из `observe_window_bounds`. У ВОССТАНОВЛЕННОГО окна сперва
-    /// false: авто-размещение gpui на не-primary DPI читается со сдвигом ×scale, и пересохранять
-    /// его НЕЛЬЗЯ (иначе позиция уезжает с каждым запуском). Армируется через ~1.5с — дальше
-    /// пишем только реальные перемещения пользователя. У свежего детача — сразу true.
+    /// Whether `observe_window_bounds` may persist geometry.
+    ///
+    /// A restored window starts false because GPUI auto-placement on a non-primary DPI can report a
+    /// scale-shifted value that MUST NOT overwrite the saved geometry or the position drifts each
+    /// launch. It arms after about 1.5 seconds so only real user moves are written. A newly detached
+    /// window starts true.
     persist_armed: bool,
-    /// Логический размер для коррекции на ПЕРВОМ render восстановленного окна: gpui создаёт окно
-    /// на primary, и `WM_DPICHANGED` при переезде на монитор с другим DPI пере-масштабирует
-    /// РАЗМЕР (позиция уже верная) → форсим сохранённый логический размер один раз. None у детача.
+    /// Saved logical size used to correct the FIRST render of a restored window.
+    ///
+    /// GPUI creates the window on the primary display, and `WM_DPICHANGED` rescales its SIZE while
+    /// moving to a display with another DPI even though position is already correct. Force the saved
+    /// logical size once. Newly detached windows use `None`.
     restore_size: Option<Size<Pixels>>,
-    /// Кнопку окна из таскбара убираем `ITaskbarList::DeleteTab` на первых рендерах (когда окно
-    /// уже показано и кнопка создана). Окно при этом остаётся обычным independent → FancyZones его
-    /// видит. Несколько тиков — подстраховка от гонки «кнопка ещё не появилась».
+    /// Remaining first renders that should call `ITaskbarList::DeleteTab` after the window is shown.
+    ///
+    /// The window remains normally independent so FancyZones can see it. Several attempts cover the
+    /// race where the taskbar button has not appeared yet.
     taskbar_hide_ticks: u8,
-    /// In-scene попап настроек раскладки этой вкладки (кнопка ⚙). Не отдельное ОС-окно:
-    /// chart text теперь лежит ниже обычной GPUI scene.
+    /// In-scene layout settings popup for this tab, opened by ⚙.
+    ///
+    /// It is not a separate OS window because chart text now lies below the normal GPUI scene.
     layout_popup_open: bool,
-    /// Был ли курсор внутри popup-а. Уход после первого входа закрывает popup и коммитит ввод.
+    /// Whether the cursor has entered the popup; leaving after first entry closes it and commits input.
     layout_popup_hovered: bool,
-    /// In-scene попап «Свечи и трейды» (кнопка ❚) — глобальные настройки отображения свечей.
+    /// In-scene "Candles and Trades" popup opened by ❚ for this window tab's candle settings.
     candle_popup_open: bool,
     candle_popup_hovered: bool,
-    /// Последняя виденная `chart_x_sync_rev` — [Shift+СКМ] в ЭТОМ окне применяет масштаб
-    /// к панели окна + persist в спек вкладки, одноразово.
+    /// Last observed `chart_x_sync_rev`; Shift+middle-click in THIS window applies scale to its panel
+    /// and persists it in the tab spec exactly once.
     last_x_sync_rev: u64,
-    /// Поле высоты режима Fit.
+    /// Size input for Fit mode.
     layout_fit_input: Entity<MoonInputState>,
-    /// Поле высоты режима Scroll.
+    /// Size input for Scroll mode.
     layout_scroll_input: Entity<MoonInputState>,
-    /// Поле имени кастомной вкладки (в попапе ⚙, только если окно — откреплённая Custom-вкладка).
+    /// Custom-tab name input in the ⚙ popup, only when this window holds a detached Custom tab.
     custom_name_input: Entity<MoonInputState>,
-    /// Поле ввода монеты (поиск) шапки окна; набор зависит от ядер bucket-а этого окна.
+    /// Window-header market-search input; its universe depends on this window bucket's cores.
     coin_input: Entity<MoonInputState>,
-    /// Текущий текст в поле монеты (зеркало `coin_input`).
+    /// Current market-search text mirroring `coin_input`.
     coin_query: String,
-    /// Открыт ли список совпадений монеты.
+    /// Whether the market-match list is open.
     coin_popup_open: bool,
-    /// Фокус корня окна — чтобы хоткеи (`on_key_down`) ловились, когда ничего другого не
-    /// сфокусировано. Фокусируем на создании; клик в поле монеты уводит фокус, но клавиши
-    /// всплывают обратно к корню. Пока только Scale +/− (масштаб панели окна).
+    /// Window-root focus handle for receiving `on_key_down` hotkeys when nothing else is focused.
+    ///
+    /// The root receives focus on creation. Clicking market input moves focus there, but key events
+    /// bubble back to the root. This currently covers Scale +/- for the window panel.
     focus: FocusHandle,
 }
 
@@ -83,21 +92,21 @@ impl DetachedChartHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Геометрия окна (causal bounds event) → charts.json («то же место» при загрузке).
+        // Persist geometry from causal bounds events to charts.json for restoration in the same place.
         cx.observe_window_bounds(window, |this, window, cx| {
             this.persist_geometry(window, cx);
         })
         .detach();
-        // Состав панели изменился (закрыли «×»/добавили монету) → если окно держит откреплённую
-        // кастомную вкладку, пере-персист её тикеров (diff внутри, no-op для обычных окон).
+        // When panel composition changes by closing or adding a market, persist ticker changes if
+        // this window holds a detached Custom tab. The helper diffs internally and no-ops otherwise.
         cx.observe(&panel, |this, _panel, cx| {
             this.persist_custom_coins_if_any(cx);
         })
         .detach();
-        // Восстановленное окно не пишет стартовые bounds сразу: на не-primary DPI GPUI/Win32
-        // могут прислать временную позицию/размер со scale-сдвигом. Это нельзя сохранять, иначе
-        // окно будет уезжать на каждом запуске. Через короткое окно стабилизации снова разрешаем
-        // обычный persist пользовательских move/resize. Свежий detach сохраняет геометрию сразу.
+        // A restored window does not write initial bounds immediately: on a non-primary DPI,
+        // GPUI/Win32 can report a temporary scale-shifted position or size. Saving it would drift the
+        // window each launch. Re-enable normal user move/resize persistence after a short settling
+        // period. A newly detached window persists geometry immediately.
         if restored {
             cx.spawn(async move |this, cx| {
                 let executor = cx.update(|cx| cx.background_executor().clone());
@@ -115,8 +124,8 @@ impl DetachedChartHost {
             })
             .detach();
         }
-        // Закрытие окна → репин в стрип (дренит ChartTabs). На выходе приложения запрос не
-        // обработается → спека остаётся откреплённой → окно восстановится на след. запуске.
+        // Closing requests repinning into the strip, drained by `ChartTabs`. During app shutdown the
+        // request is not handled, leaving the spec detached so the window restores next launch.
         let (g, n, c) = (group.clone(), num, bucket.clone());
         cx.on_release(move |this, app| {
             this.backend.update(app, |b, cx| {
@@ -126,7 +135,7 @@ impl DetachedChartHost {
         })
         .detach();
         let initial_x_sync_rev = backend.read(cx).chart_x_sync_rev;
-        // Восстановить сохранённую раскладку + флаг стакана вкладки из charts.json в панель.
+        // Restore this detached panel's saved per-tab display settings from charts.json.
         let (group2, num2, bucket2) = (group.clone(), num, bucket.clone());
         let saved = backend.read(cx).chart_specs.iter().find_map(|s| {
             s.matches(&group2, num2, &bucket2).then(|| {
@@ -177,7 +186,7 @@ impl DetachedChartHost {
             if candle_view.is_some() {
                 panel.update(cx, |p, pcx| p.set_candle_view(candle_view, pcx));
             }
-            // X-масштаб окна: свой из спека, иначе масштаб группы-родителя.
+            // Window X scale comes from its spec, falling back to the parent group's scale.
             let x_ppm = saved_x_ppm.or_else(|| {
                 backend
                     .read(cx)
@@ -237,7 +246,7 @@ impl DetachedChartHost {
             },
         )
         .detach();
-        // Поле имени кастомной вкладки: коммит переименования по Blur/Enter.
+        // Custom-tab name input commits renaming on Blur or Enter.
         let custom_name_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(
             &custom_name_input,
@@ -254,7 +263,7 @@ impl DetachedChartHost {
         let coin_input = cx.new(|cx| {
             MoonInputState::new(window, cx).placeholder(t!("chart.coin.search").to_string())
         });
-        // RU-раскладка → латиница прямо в поле (см. chart_tabs::new, тот же паттерн).
+        // Transliterate Russian keyboard layout to Latin directly in the field, matching `chart_tabs::new`.
         cx.subscribe_in(
             &coin_input,
             window,
@@ -276,8 +285,7 @@ impl DetachedChartHost {
             },
         )
         .detach();
-        // Фокус корня для хоткеев (масштаб): фокусируем сразу, чтобы Scale +/− работали
-        // без предварительного клика в тело окна.
+        // Focus the root immediately so Scale +/- hotkeys work without first clicking the window body.
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         Self {
@@ -304,9 +312,10 @@ impl DetachedChartHost {
         }
     }
 
-    /// Однозначная торговая цель окна откреплённого чарта: залоченный якорь сравнения либо
-    /// единственная монета окна. Многопанельное окно без якоря → `None` (цель неоднозначна,
-    /// торговые хоткеи пропускаем — не угадываем рынок).
+    /// Return the detached chart window's unambiguous trading target.
+    ///
+    /// The target is the locked comparison anchor or the window's sole market. A multi-panel window
+    /// without an anchor returns `None`, so trading hotkeys skip an ambiguous target.
     fn window_target(&self, cx: &App) -> Option<(CoreId, String)> {
         let p = self.panel.read(cx);
         if let Some(anchor) = p.compare_anchor() {
@@ -319,10 +328,11 @@ impl DetachedChartHost {
         None
     }
 
-    /// Хоткей окна откреплённого чарта через ЕДИНЫЙ распознаватель [`crate::hotkeys`].
-    /// Масштаб — свой у панели этого окна (применяем напрямую, rev-механизм групп не при
-    /// чём). Торговые/фигурные действия — через общий `apply` относительно цели ЭТОГО окна
-    /// (`window_target`); фигуры — глобальное состояние, работают всегда.
+    /// Handle a detached chart window hotkey through the single [`crate::hotkeys`] recognizer.
+    ///
+    /// Scale belongs to this window panel and is applied directly, without group revision routing.
+    /// Trading and figure actions use shared `apply` against THIS window's `window_target`; figures
+    /// are global state and always work.
     fn on_hotkey(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         use crate::hotkeys::HotkeyAction;
         let action = {
@@ -333,24 +343,24 @@ impl DetachedChartHost {
             return;
         };
         let handled = match action {
-            // Встроенный Ctrl+Shift+F10: сброс позиций всех окон.
+            // Built-in Ctrl+Shift+F10 resets every window position.
             HotkeyAction::ResetWindows => {
                 crate::windowing::reset_all_windows_onscreen(cx);
                 true
             }
-            // Встроенный Tab/Del: отмена ордера под курсором (чарт под мышью).
+            // Built-in Tab/Delete cancels the order under the cursor on the hovered chart.
             HotkeyAction::CancelHoveredOrder => {
                 crate::hotkeys::cancel_hovered_order(&self.backend, cx)
             }
-            // Del: приоритет — удалить выделенную фигуру; выделения нет → фолбэк на встроенную
-            // отмену ордера под курсором (fig_delete=Del иначе затенял бы её, см. Shell).
+            // Delete prioritizes the selected figure. With no selection, fall back to built-in order
+            // cancellation under the cursor; otherwise `fig_delete=Delete` would shadow it. See Shell.
             HotkeyAction::FigDelete => {
                 self.backend.update(cx, |b, bcx| {
-                    // Таргет/ядро FigDelete не использует.
+                    // `FigDelete` does not use a target or core.
                     crate::hotkeys::apply(action, b, bcx, None, None)
                 }) || crate::hotkeys::cancel_hovered_order(&self.backend, cx)
             }
-            // Встроенный Shift+Esc: закрыть все графики Main всех групп.
+            // Built-in Shift+Esc closes every group's Main charts.
             HotkeyAction::CloseAllCharts => {
                 self.backend.update(cx, |b, _| {
                     b.close_all_charts_rev = b.close_all_charts_rev.wrapping_add(1);
@@ -364,7 +374,7 @@ impl DetachedChartHost {
                 cx.notify();
                 true
             }
-            // Ручной ордер по цене под курсором — через чарт под мышью (`hovered_chart`).
+            // Place a manual order at the cursor price through the hovered chart.
             HotkeyAction::NewLong | HotkeyAction::NewShort => {
                 let short = matches!(action, HotkeyAction::NewShort);
                 let chart = self
@@ -391,7 +401,7 @@ impl DetachedChartHost {
         }
     }
 
-    /// Это окно — откреплённая кастомная вкладка? (спек с `custom_coins`).
+    /// Return whether this window is a detached Custom tab whose spec has `custom_coins`.
     fn is_custom(&self, cx: &App) -> bool {
         let (group, num, bucket) = (&self.group, self.num, &self.bucket);
         self.backend
@@ -401,8 +411,10 @@ impl DetachedChartHost {
             .any(|s| s.matches(group, num, bucket) && s.custom_coins.is_some())
     }
 
-    /// Переименовать кастомную вкладку этого окна (поле имени в попапе ⚙): пишем `custom_label`
-    /// в charts.json. Заголовок окна (через `chart_pane_label`) обновится на следующем render.
+    /// Rename this window's Custom tab from the name field in the ⚙ popup.
+    ///
+    /// This writes `custom_label` to charts.json. The window title updates through
+    /// `chart_pane_label` on the next render.
     fn rename_custom(&mut self, name: String, cx: &mut Context<Self>) {
         let name = name.trim().to_string();
         if name.is_empty() {
@@ -422,7 +434,7 @@ impl DetachedChartHost {
         cx.notify();
     }
 
-    /// Совпадения поля монеты для этого окна (ядра bucket-а).
+    /// Return market-search matches for this window from its bucket's cores.
     fn coin_results(&self, cx: &App) -> Vec<(CoreId, String, String)> {
         coin_search::search(
             self.backend.read(cx),
@@ -432,9 +444,10 @@ impl DetachedChartHost {
         )
     }
 
-    /// Если спек этого окна — кастомная вкладка (`custom_coins.is_some()`), переписать её тикеры
-    /// из текущего состава панели — ТОЛЬКО при изменении (observe-колбэк зовётся часто). Для
-    /// обычных AddToChart-окон — no-op.
+    /// Rewrite a Custom tab spec's tickers from the current panel composition only when changed.
+    ///
+    /// The observer calls this frequently. It applies only when `custom_coins.is_some()` and no-ops
+    /// for ordinary AddToChart windows.
     fn persist_custom_coins_if_any(&self, cx: &mut Context<Self>) {
         let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
         let is_custom = {
@@ -469,7 +482,7 @@ impl DetachedChartHost {
         });
     }
 
-    /// Текущая per-tab раскладка панели этого окна: `(mode, height_fit, height_scroll)`.
+    /// Return this window panel's current per-tab layout as `(mode, height_fit, height_scroll)`.
     fn panel_layout(&self, cx: &App) -> (Option<StackLayoutMode>, Option<u16>, Option<u16>) {
         let p = self.panel.read(cx);
         (
@@ -480,8 +493,8 @@ impl DetachedChartHost {
     }
 
     fn persist_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
-        // У восстановленного окна сохранение задержано до `persist_armed`: не даём стартовому
-        // авто-размещению GPUI/Win32 перезаписать сохранённую позицию DPI-мусором.
+        // A restored window defers saving until `persist_armed`, preventing initial GPUI/Win32
+        // auto-placement from replacing the saved position with DPI-shifted values.
         if !self.persist_armed {
             return;
         }
@@ -517,8 +530,10 @@ impl DetachedChartHost {
     }
 }
 
-/// Хозяин попапа «Свечи и трейды» (кнопка ❚): цель = панель ЭТОГО окна; «ко всем» —
-/// запрос группе через Backend (дренит полоска вкладок, как ChartApplyAll).
+/// Host for the "Candles and Trades" ❚ popup targeting THIS window's panel.
+///
+/// "Apply to all" sends a group request through Backend, drained by the tab strip like
+/// `ChartApplyAll`.
 impl super::candle_popup::CandlePopupHost for DetachedChartHost {
     fn candle_popup_open(&self) -> bool {
         self.candle_popup_open
@@ -540,8 +555,8 @@ impl super::candle_popup::CandlePopupHost for DetachedChartHost {
         cfg: moon_core::market::CandleViewCfg,
         cx: &mut Context<Self>,
     ) {
-        // Применить к себе сразу; остальным — через очередь Backend (дренит полоска группы).
-        // Вместе с набором копируем X-масштаб этого окна.
+        // Apply immediately to this window and queue the rest through Backend for the group strip to
+        // drain. Copy this window's X scale with the candle settings.
         self.apply_candle_view(cfg, cx);
         let x_ppm = self.panel.read(cx).x_ppm();
         let group = self.group.clone();
@@ -552,8 +567,10 @@ impl super::candle_popup::CandlePopupHost for DetachedChartHost {
     }
 }
 
-/// Хозяин попапа ⚙ со стороны выносного окна: цель = ЕДИНСТВЕННАЯ панель окна, ключ персиста —
-/// фиксированные (num, bucket) окна. Общая логика попапа/применений — default-методы трейта.
+/// Detached-window host for the ⚙ popup targeting the window's ONLY panel.
+///
+/// The window's fixed `(num, bucket)` is the persistence key. Trait default methods provide shared
+/// popup and application logic.
 impl LayoutPopupHost for DetachedChartHost {
     fn popup_open(&self) -> bool {
         self.layout_popup_open
@@ -621,7 +638,7 @@ impl LayoutPopupHost for DetachedChartHost {
     fn popup_is_custom(&self, cx: &App) -> bool {
         self.is_custom(cx)
     }
-    /// Имя кастомной вкладки — для поля переименования (только если окно держит Custom-вкладку).
+    /// Return the Custom tab name for renaming when this window holds a Custom tab.
     fn seed_rename_input(&self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_custom(cx) {
             let name = chart_pane_label(&self.backend, &self.group, self.num, &self.bucket, cx);
@@ -632,9 +649,10 @@ impl LayoutPopupHost for DetachedChartHost {
     fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>) {
         self.panel.update(cx, |s, c| set_stack_setting!(s, c, v));
     }
-    /// «Ко всем» из окна: у хоста нет доступа к стекам группы → шлём запрос через Backend
-    /// (`ChartApplyAll`, дренится полоской вкладок). Копируем ВСЕ настройки этого окна:
-    /// + масштаб + галку стакана. Main не трогаем (include_main=false).
+    /// Apply this window's settings to all by sending `ChartApplyAll` through Backend for the tab
+    /// strip to drain, because the host cannot access group stacks directly. Copy ALL window
+    /// settings, including scale and order-book toggle, while leaving Main unchanged with
+    /// `include_main=false`.
     fn apply_all_from_popup(&mut self, cx: &mut Context<Self>) {
         let (mode, _, _) = self.panel_layout(cx);
         let mode = Some(mode.unwrap_or(StackLayoutMode::Fit));
@@ -680,8 +698,9 @@ impl LayoutPopupHost for DetachedChartHost {
     }
 }
 
-/// Поиск монеты в шапке окна: выбранная монета открывается в стеке ЭТОГО окна; для откреплённой
-/// кастомной вкладки состав тикеров тут же пере-персистится.
+/// Window-header market search that opens the selected market in THIS window's stack.
+///
+/// For a detached Custom tab, the ticker composition is persisted immediately.
 impl CoinPopupHost for DetachedChartHost {
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();
@@ -692,8 +711,8 @@ impl CoinPopupHost for DetachedChartHost {
         self.panel.update(cx, |p, c| {
             p.add_coin(core, &market, coin_search::MANUAL_COIN_TTL_MS, c)
         });
-        // Если это окно — откреплённая КАСТОМНАЯ вкладка, держим её список тикеров в charts.json
-        // синхронным (добавили монету в окне → попадёт в персист и переживёт рестарт).
+        // If this is a detached Custom tab, keep its charts.json ticker list synchronized so a
+        // market added in the window persists across restart.
         self.persist_custom_coins_if_any(cx);
         cx.notify();
     }

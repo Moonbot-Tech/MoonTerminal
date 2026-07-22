@@ -1,6 +1,6 @@
-//! Main-вкладка чартов: один рынок = один отдельный `ChartPanel`/`gpu_canvas`, активный —
-//! fullscreen, ПКМ по области панели графика разворачивает весь stack. Вынесено из `chart_tabs` как
-//! самостоятельная вью-модель; общий рендер стека — в [`super::stack`].
+//! Main chart tab: each market owns a separate `ChartPanel`/`gpu_canvas`; the active chart is
+//! fullscreen, and right-clicking its chart plot expands the whole stack. The shared stack
+//! renderer lives in [`super::stack`].
 
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -21,10 +21,10 @@ use crate::panels::ChartPanel;
 use moon_core::config::ChartTheme;
 use moon_core::session::CoreId;
 
-/// Main-вкладка: один рынок = один отдельный `ChartPanel`/`gpu_canvas`.
-/// Обычный клик по рынку в таблицах открывает/фокусирует его fullscreen. ПКМ по области
-/// текущей панели, включая стакан/glass, переключает fullscreen ↔ весь stack, не возвращая
-/// несколько рынков внутрь одного `ChartEngine`.
+/// Main tab where each market owns a separate `ChartPanel`/`gpu_canvas`.
+/// A regular market click in a table opens or focuses it fullscreen. Right-clicking the current
+/// chart plot toggles between fullscreen and the whole stack; the order-book/control zone retains
+/// its trading actions. Multiple markets never return to one `ChartEngine`.
 pub(crate) struct MainChartStack {
     backend: Entity<Backend>,
     group: String,
@@ -34,46 +34,46 @@ pub(crate) struct MainChartStack {
     active: Option<usize>,
     show_stack: bool,
     scale: Option<f32>,
-    /// Per-tab режим раскладки (Fit/Scroll; None = дефолт Fit).
+    /// Per-tab layout mode (`Fit`/`Scroll`); `None` uses the default `Fit` mode.
     layout_mode: Option<StackLayoutMode>,
-    /// Высота слота для Fit: 0 = растяжение, ≥20 = compress. None = дефолт.
+    /// Slot height in `Fit` mode: zero stretches, while values of at least 20 compress.
     layout_height_fit: Option<u16>,
-    /// Высота слота для Scroll. None = дефолт.
+    /// Slot height in `Scroll` mode; `None` uses the default.
     layout_height_scroll: Option<u16>,
-    /// Показывать ли стакан на графиках вкладки (per-окно). None = дефолт (вкл).
+    /// Per-window order-book visibility for this tab; `None` defaults to enabled.
     orderbook_enabled: Option<bool>,
-    /// Рисовать ли трейды ликвидаций (per-окно). None = дефолт (вкл).
+    /// Per-window liquidation-trade visibility; `None` defaults to enabled.
     liquidations_enabled: Option<bool>,
-    /// Настройки отображения свечей/трейдов вкладки (None = глобальный дефолт).
+    /// Candle and trade display settings for the tab; `None` uses the global default.
     candle_view: Option<moon_core::market::CandleViewCfg>,
-    /// X-масштаб окна (px/ms, [Shift+СКМ] sync; None = 60с дефолт): наследуют новые
-    /// графики, применяется ко всем при sync.
+    /// Window X scale in px/ms, synchronized with Shift+middle-click; `None` is the 60-second default.
+    /// New charts inherit it, and synchronization applies it to every chart.
     x_ppm: Option<f32>,
-    /// Показывать ли заливку зоны управления (per-окно). None = дефолт (вкл).
+    /// Per-window control-zone fill visibility; `None` defaults to enabled.
     show_zone: Option<bool>,
-    /// Авто-пин графика при выставлении ордера (per-окно). None = дефолт (выкл).
+    /// Per-window automatic chart pinning when an order is placed; `None` defaults to disabled.
     auto_pin: Option<bool>,
-    /// Ориентация стека (per-окно). None = дефолт (Vertical).
+    /// Per-window stack orientation; `None` defaults to `Vertical`.
     layout_orientation: Option<StackOrientation>,
-    /// Позиции кнопок Cancel Buy / Panic Sell в зоне чарта (per-окно). None = дефолт (Right).
+    /// Per-window positions of the Cancel Buy and Panic Sell buttons; `None` defaults to `Right`.
     cancel_buy_pos: Option<ChartBtnPos>,
     panic_sell_pos: Option<ChartBtnPos>,
-    /// Положение оси цен (Left/Right/Hide) для графиков стека (per-окно). None = дефолт (Left).
+    /// Per-window price-axis position for stack charts; `None` defaults to `Left`.
     price_axis_pos: Option<PriceAxisPos>,
-    /// Видимость оси времени для графиков стека (per-окно). None = дефолт (вкл).
+    /// Per-window time-axis visibility for stack charts; `None` defaults to enabled.
     time_axis_visible: Option<bool>,
-    /// Видимость подписей у линий для графиков стека (per-окно). None = дефолт (вкл).
+    /// Per-window line-label visibility for stack charts; `None` defaults to enabled.
     line_labels: Option<bool>,
-    /// Видимость подписей у перекрестия для графиков стека (per-окно). None = дефолт (вкл).
+    /// Per-window crosshair-label visibility for stack charts; `None` defaults to enabled.
     cursor_labels: Option<bool>,
-    /// Якорь сравнения `(core, market)` — ведущий по цене (замок горит, стоит слева). None = выкл.
+    /// Comparison anchor `(core, market)` that leads the price scale; `None` disables comparison.
     compare_anchor: Option<(CoreId, String)>,
-    /// Общее Y-окно сравнения, следует за последней изменённой панелью.
+    /// Shared comparison Y range copied from the anchor's current Y window.
     compare_y: Option<(f32, f32)>,
-    /// Режим метлы: соседи якоря показывают «только стакан».
+    /// Broom mode makes the anchor's neighbors show only their order books.
     compare_orderbook_only: bool,
-    /// Армирован ли one-shot таймер авто-закрытия по неактивности (config `main_idle_close_secs`).
-    /// Тикает ~1 Гц, пока фича включена и есть графики; сам пере-армится. См. `arm_idle_timer`.
+    /// Whether the one-shot inactivity auto-close timer is armed.
+    /// It ticks at about 1 Hz while configured and charts exist, then rearms itself.
     idle_timer_armed: bool,
     scroll: MoonVirtualListScrollHandle,
 }
@@ -193,8 +193,8 @@ impl MainChartStack {
         panel
     }
 
-    /// Синхронизировать режим сравнения (как в `AddChartStack`): забрать клики замка, навязать
-    /// общее Y-окно/флаги. Возвращает true, если якорь/порядок изменились (нужен notify стека).
+    /// Synchronize comparison mode as in `AddChartStack`, consuming lock clicks and applying the
+    /// shared Y range and flags. Returns true when the anchor or order changed and the stack must notify.
     fn sync_compare(&mut self, cx: &mut Context<Self>) -> bool {
         sync_compare(
             &mut self.charts,
@@ -206,9 +206,9 @@ impl MainChartStack {
         )
     }
 
-    /// Хоткей `switch_charts`: перевести fullscreen на СЛЕДУЮЩИЙ чарт стека по кругу. Меньше
-    /// двух графиков — переключать нечего. Разворачивает fullscreen (гасит режим «весь stack»),
-    /// как обычный фокус графика, и синхронит активный таргет группы (торговые хоткеи идут на него).
+    /// Move fullscreen focus to the next chart cyclically for the `switch_charts` hotkey.
+    /// With fewer than two charts there is nothing to switch. This leaves whole-stack mode, just
+    /// like regular chart focus, and synchronizes the group's active trading target.
     pub(crate) fn cycle_active(&mut self, cx: &mut Context<Self>) {
         if self.charts.len() < 2 {
             return;
@@ -244,7 +244,7 @@ impl MainChartStack {
         self.show_stack = false;
         self.sync_visibility(cx);
         self.sync_backend_active(cx);
-        // Новый чарт: в режиме сравнения сразу получает eligible + общее Y-окно.
+        // In comparison mode, a new chart immediately receives eligibility and the shared Y range.
         self.sync_compare(cx);
         self.arm_idle_timer(cx);
         cx.notify();
@@ -271,10 +271,9 @@ impl MainChartStack {
         changed
     }
 
-    /// Армировать (если ещё нет) one-shot таймер авто-закрытия по неактивности. Тикает ~1 Гц,
-    /// пока фича включена (config `main_idle_close_secs` > 0) и есть графики; сам пере-армится
-    /// в колбэке. Запускается из событий открытия/фокуса графика и из timer callback,
-    /// не из render.
+    /// Arm the one-shot inactivity auto-close timer unless it is already armed.
+    /// It ticks at about 1 Hz while `main_idle_close_secs` is positive and charts exist, then rearms
+    /// itself in the callback. Chart open/focus events and the timer callback start it, not render.
     fn arm_idle_timer(&mut self, cx: &mut Context<Self>) {
         if self.idle_timer_armed
             || self.charts.is_empty()
@@ -298,10 +297,9 @@ impl MainChartStack {
         .detach();
     }
 
-    /// Встроенный Esc: закрыть ЧАРТ, который сейчас в фулскрине (и только его). Работает лишь в
-    /// режиме фулскрина (`!show_stack`, есть активный) — в тайловом стеке единого фулскрин-чарта
-    /// нет, там Esc ничего не закрывает. После закрытия оставшиеся показываем стеком (как при
-    /// авто-закрытии активного). Возвращает, было ли закрытие.
+    /// Close only the chart currently shown fullscreen for the built-in Escape action.
+    /// This works only in fullscreen mode (`!show_stack` with an active chart); Escape does nothing
+    /// in the tiled stack. Remaining charts return to stack view. Returns whether a chart closed.
     pub(crate) fn close_active_fullscreen(&mut self, cx: &mut Context<Self>) -> bool {
         if self.show_stack {
             return false;
@@ -312,14 +310,15 @@ impl MainChartStack {
         let entry = self.charts.remove(idx);
         entry.panel.update(cx, |p, pcx| p.close_all_panes(pcx));
         self.active = None;
-        // Остались графики — показываем их стеком (фулскрин закрытого больше некому отдать).
+        // Show remaining charts as a stack because the closed chart can no longer own fullscreen.
         self.show_stack = !self.charts.is_empty();
         cx.notify();
         true
     }
 
-    /// Закрыть ВСЕ графики Main-стека (встроенный Shift+Esc). Отписывает стаканы каждой панели
-    /// (`close_all_panes`), очищает стек. Возвращает, было ли что закрывать.
+    /// Close every chart in the Main stack for the built-in Shift+Escape action.
+    /// This releases each panel's order-book subscriptions and clears the stack. Returns whether
+    /// anything was available to close.
     pub(crate) fn close_all(&mut self, cx: &mut Context<Self>) -> bool {
         if self.charts.is_empty() {
             return false;
@@ -333,21 +332,18 @@ impl MainChartStack {
         true
     }
 
-    /// Авто-закрытие графиков по неактивности окна (config `main_idle_close_secs`, сек). Дедлайн
-    /// графика = max(последний активный ввод окна, время его прихода) + N → новейший закрывается
-    /// последним; ровно N сек после начала неактивности для уже открытых. Если закрылся активный
-    /// фулскрин-график — выходим из фулскрина (оставшиеся показываем стеком). Закрытие сразу
-    /// отписывает стаканы (через `close_all_panes` панели). Возвращает, было ли изменение.
+    /// Auto-close charts after the configured window inactivity interval in seconds.
+    /// Each deadline is `max(last_input, arrived_at) + interval`, with `arrived_at` used when no
+    /// input exists. Closing the active fullscreen chart returns the remainder to stack view and
+    /// immediately releases its order-book subscriptions.
     fn prune_idle(&mut self, cx: &mut Context<Self>) -> bool {
         let secs = self.backend.read(cx).main_idle_close_secs();
         if secs == 0 || self.charts.is_empty() {
             return false;
         }
-        // Не закрывать графики Main, пока в фокусе любое выносное ОКНО ГРАФИКА этой группы:
-        // его активность не даёт mouse-move в Main-окне (это другое ОС-окно), поэтому таймер
-        // иначе досчитал бы до закрытия, пока пользователь работает с откреплённым чартом.
-        // Освежаем отметку активности → после расфокуса окна Main получает полный TTL, а не
-        // закрывается мгновенно.
+        // Keep Main charts open while any detached chart window in this group is focused. Activity
+        // in that separate OS window does not produce mouse movement in Main, so refresh the group
+        // timestamp and grant Main a full TTL after the detached window loses focus.
         let group = self.group.clone();
         let chart_handles: Vec<_> = self
             .backend
@@ -367,8 +363,8 @@ impl MainChartStack {
         let ttl = Duration::from_secs(secs as u64);
         let last_input = self.backend.read(cx).main_input_at(&self.group);
         let now = Instant::now();
-        // Запиненный график (●) не закрываем по неактивности — как и TTL (`prune_ttl`) его
-        // пропускает. Флаги собираем заранее (read панели через cx), затем фильтруем.
+        // Inactivity does not close pinned charts, matching `prune_ttl`. Read pin flags through
+        // `cx` before filtering to avoid borrowing panels during mutation.
         let pinned: Vec<bool> = self
             .charts
             .iter()
@@ -394,7 +390,7 @@ impl MainChartStack {
             return false;
         }
         let active_closed = self.active.is_some_and(|a| expired.contains(&a));
-        // С конца, чтобы индексы не съезжали; перед удалением закрываем панель (отписка стаканов).
+        // Remove from the end to preserve indices, closing each panel first to release order books.
         for &ix in expired.iter().rev() {
             let entry = self.charts.remove(ix);
             entry.panel.update(cx, |p, pcx| p.close_all_panes(pcx));
@@ -403,7 +399,7 @@ impl MainChartStack {
             self.active = None;
             self.show_stack = false;
         } else {
-            // Активный закрылся в фулскрине → выходим из фулскрина, показываем оставшиеся стеком.
+            // If the active fullscreen chart closed, return the remaining charts to stack view.
             if active_closed && !self.show_stack {
                 self.show_stack = true;
             }
@@ -437,7 +433,7 @@ impl MainChartStack {
         self.layout_height_scroll
     }
 
-    /// Применить per-tab раскладку (режим + раздельные высоты Fit/Scroll) к этому стеку.
+    /// Apply a per-tab layout mode and separate Fit/Scroll heights to this stack.
     pub(crate) fn set_layout(
         &mut self,
         mode: Option<StackLayoutMode>,
@@ -461,7 +457,7 @@ impl MainChartStack {
         self.orderbook_enabled
     }
 
-    /// Вкл/выкл стакан для всех графиков стека (per-окно).
+    /// Enable or disable the order book for every chart in this stack and window.
     pub(crate) fn set_orderbook_enabled(&mut self, enabled: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(
             &mut self.orderbook_enabled,
@@ -476,7 +472,7 @@ impl MainChartStack {
         self.liquidations_enabled
     }
 
-    /// Вкл/выкл трейды ликвидаций для всех графиков стека (per-окно).
+    /// Enable or disable liquidation trades for every chart in this stack and window.
     pub(crate) fn set_liquidations_enabled(
         &mut self,
         enabled: Option<bool>,
@@ -495,8 +491,8 @@ impl MainChartStack {
         self.candle_view
     }
 
-    /// X-масштаб окна: запомнить для новых графиков; `apply` — применить ко всем открытым
-    /// ([Shift+СКМ] sync; при сидинге на старте открытых ещё нет).
+    /// Store the window X scale for new charts and, when `apply` is true, apply it to all open charts.
+    /// Startup seeding stores the scale before any charts are open; Shift+middle-click synchronizes it.
     pub(crate) fn set_x_ppm(&mut self, ppm: Option<f32>, apply: bool, cx: &mut Context<Self>) {
         self.x_ppm = ppm;
         for e in &self.charts {
@@ -514,7 +510,7 @@ impl MainChartStack {
         }
     }
 
-    /// Настройки отображения свечей/трейдов для всех графиков стека (per-вкладка).
+    /// Apply per-tab candle and trade display settings to every chart in the stack.
     pub(crate) fn set_candle_view(
         &mut self,
         cfg: Option<moon_core::market::CandleViewCfg>,
@@ -529,7 +525,7 @@ impl MainChartStack {
         self.show_zone
     }
 
-    /// Вкл/выкл заливку зоны управления для всех графиков стека (per-окно).
+    /// Enable or disable the control-zone fill for every chart in this stack and window.
     pub(crate) fn set_show_zone(&mut self, show: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.show_zone, show, &self.charts, cx, |c, cx| {
             set_panels_show_zone(c, show.unwrap_or(true), cx)
@@ -548,7 +544,7 @@ impl MainChartStack {
         self.price_axis_pos
     }
 
-    /// Положение оси цен (Left/Right/Hide) для всех графиков стека (per-окно).
+    /// Set the price-axis position for every chart in this stack and window.
     pub(crate) fn set_price_axis_pos(&mut self, pos: Option<PriceAxisPos>, cx: &mut Context<Self>) {
         apply_setting(&mut self.price_axis_pos, pos, &self.charts, cx, |c, cx| {
             set_panels_price_axis_pos(c, pos.unwrap_or_default(), cx)
@@ -559,7 +555,7 @@ impl MainChartStack {
         self.time_axis_visible
     }
 
-    /// Видимость оси времени для всех графиков стека (per-окно).
+    /// Set time-axis visibility for every chart in this stack and window.
     pub(crate) fn set_time_axis_visible(&mut self, visible: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(
             &mut self.time_axis_visible,
@@ -574,7 +570,7 @@ impl MainChartStack {
         self.line_labels
     }
 
-    /// Видимость подписей у линий для всех графиков стека (per-окно).
+    /// Set line-label visibility for every chart in this stack and window.
     pub(crate) fn set_line_labels(&mut self, show: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.line_labels, show, &self.charts, cx, |c, cx| {
             set_panels_line_labels(c, show.unwrap_or(true), cx)
@@ -585,14 +581,14 @@ impl MainChartStack {
         self.cursor_labels
     }
 
-    /// Видимость подписей у перекрестия для всех графиков стека (per-окно).
+    /// Set crosshair-label visibility for every chart in this stack and window.
     pub(crate) fn set_cursor_labels(&mut self, show: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.cursor_labels, show, &self.charts, cx, |c, cx| {
             set_panels_cursor_labels(c, show.unwrap_or(true), cx)
         });
     }
 
-    /// Позиции кнопок Cancel Buy / Panic Sell для всех графиков стека (per-окно).
+    /// Set Cancel Buy and Panic Sell button positions for every chart in this stack and window.
     pub(crate) fn set_action_btn_pos(
         &mut self,
         cancel: Option<ChartBtnPos>,
@@ -613,7 +609,7 @@ impl MainChartStack {
         cx.notify();
     }
 
-    /// Вкл/выкл авто-пин при ордере для всех графиков стека (per-окно).
+    /// Enable or disable automatic pinning on order placement for this stack and window.
     pub(crate) fn set_auto_pin(&mut self, on: Option<bool>, cx: &mut Context<Self>) {
         apply_setting(&mut self.auto_pin, on, &self.charts, cx, |c, cx| {
             set_panels_auto_pin(c, on.unwrap_or(false), cx)
@@ -624,7 +620,7 @@ impl MainChartStack {
         self.layout_orientation
     }
 
-    /// Сменить ориентацию стека (per-окно). Перестраивает текущее отображение.
+    /// Change the per-window stack orientation and rebuild the current display.
     pub(crate) fn set_orientation(
         &mut self,
         orientation: Option<StackOrientation>,
@@ -681,9 +677,9 @@ impl MainChartStack {
 
     fn sync_visibility(&mut self, cx: &mut Context<Self>) {
         for (ix, entry) in self.charts.iter().enumerate() {
-            // Fullscreen: ровно активный график видим. Stack: конкретные видимые tiles
-            // сами выставят visible=true в `ChartPanel::render`; offscreen элементы
-            // виртуального списка остаются false и не гоняют prepare.
+            // In fullscreen, only the active chart is visible. In stack mode, visible tiles set
+            // themselves visible in `ChartPanel::render`; offscreen virtual-list entries remain
+            // hidden and do not run preparation work.
             let visible = !self.show_stack && Some(ix) == self.active;
             let stack_scroll = self.show_stack;
             entry.panel.update(cx, |panel, _| {
@@ -708,7 +704,7 @@ impl MainChartStack {
 
     fn sync_backend_active(&self, cx: &mut Context<Self>) {
         let target = self.active_target(cx);
-        // Все монеты стека Main (без пустых держащихся слотов) — «Ордера» подсветят по одной строке.
+        // Publish all non-vacant Main-stack markets so Orders can highlight one row for each.
         let open: Vec<(CoreId, String)> = self
             .charts
             .iter()
@@ -784,9 +780,9 @@ impl MainChartStack {
         .on_mouse_up(
             MouseButton::Right,
             move |event: &MouseUpEvent, _window, app| {
-                // Возврат из фулскрина — короткий ПКМ по области панели. В зоне управления
-                // (стакан/резерв-полоса в режиме раздельных зон) ПКМ — только торговля, поэтому
-                // тоггл там НЕ срабатывает. RMB-drag цены остаётся зумом и не переключает stack.
+                // A short right-click in the panel area exits fullscreen. In the control zone
+                // (order book or reserved strip), right-click remains trading-only, while a
+                // right-button price drag remains zoom and does not toggle the stack.
                 let panel = panel_for_event.read(app);
                 if panel.window_pos_allows_main_stack_toggle(event.position)
                     && !panel.window_pos_in_control_zone(event.position, app)
@@ -797,8 +793,8 @@ impl MainChartStack {
                 }
             },
         );
-        // Поперёк оси — на всю ширину/высоту; вдоль оси — flex+cap (COMPRESS до size, сжатие),
-        // фикс (size без flex) или растяжение (FIT). Гор: ось = X (ширина), верт: ось = Y.
+        // Fill the cross axis. Along the stack axis use flex with a cap for COMPRESS, a fixed size,
+        // or stretching for FIT. Horizontal stacks use X as their axis; vertical stacks use Y.
         tile = if horizontal {
             tile.h_full()
         } else {
@@ -820,7 +816,7 @@ impl MainChartStack {
                 };
             }
         } else if let Some(v) = size {
-            // Фикс. БЕЗ сжатия (min=max=v): в SCROLL тайлы переполняют контейнер → есть скролл.
+            // Fixed without shrinking (`min == max == v`), so SCROLL tiles overflow and can scroll.
             tile = if horizontal {
                 tile.w(px(v)).min_w(px(v))
             } else {
@@ -869,7 +865,7 @@ impl Render for MainChartStack {
                 .into_any_element();
         }
 
-        // Stack: per-tab раскладка (FIT/SCROLL/COMPRESS + высота), иначе глобальный дефолт.
+        // Stack mode uses the per-tab FIT/SCROLL/COMPRESS layout and height, or the global default.
         let (scroll, compress, cfg_h) = resolve_layout(
             self.layout_mode,
             self.layout_height_fit,

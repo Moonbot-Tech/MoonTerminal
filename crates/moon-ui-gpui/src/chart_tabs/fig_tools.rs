@@ -1,7 +1,7 @@
-//! Кластер инструментов рисования фигур в полоске вкладок: кнопка-карандаш
-//! (тумблер режима рисования), инструменты (когда режим включён), кнопка «Alert»
-//! выделенной фигуры и попап стиля (ПКМ по карандашу): инструмент, цвет, толщина,
-//! непрозрачность, Solid/Dash. Вынесено из `strip.rs`.
+//! Figure-drawing tool cluster in the tab strip: a pencil button that toggles drawing mode, tools
+//! shown while that mode is enabled, an Alert button for the selected figure, and a style popup
+//! opened by right-clicking the pencil. The popup controls tool, color, thickness, opacity, and
+//! line kind: Solid, Dash, Dot, DashDot, or DashDotDot. Extracted from `strip.rs`.
 
 use gpui::*;
 use moon_ui::{
@@ -15,21 +15,22 @@ use rust_i18n::t;
 use super::ChartTabs;
 use crate::design;
 
-/// Палитра свотчей попапа (голубой дефолт + практичный набор). RGBA (a=255).
+/// Popup swatch palette with the blue default and a practical set, stored as RGBA with `a=255`.
 const SWATCHES: [[u8; 4]; 8] = [
-    [64, 196, 255, 255],  // голубой (дефолт)
-    [80, 220, 120, 255],  // зелёный
-    [240, 90, 90, 255],   // красный
-    [250, 200, 60, 255],  // жёлтый
-    [245, 150, 40, 255],  // оранжевый
-    [200, 110, 240, 255], // фиолетовый
-    [240, 240, 240, 255], // белый
-    [150, 160, 175, 255], // серый
+    [64, 196, 255, 255],  // blue (default)
+    [80, 220, 120, 255],  // green
+    [240, 90, 90, 255],   // red
+    [250, 200, 60, 255],  // yellow
+    [245, 150, 40, 255],  // orange
+    [200, 110, 240, 255], // purple
+    [240, 240, 240, 255], // white
+    [150, 160, 175, 255], // gray
 ];
 
-/// Шаг непрозрачности ±5% с посадкой на круглые проценты. Прежняя арифметика
-/// «±24 из 255» давала прыжки 100→91→81 и недостижимые значения (15% не
-/// выставлялось никак) — теперь любое кратное 5 в диапазоне 5..=100 достижимо.
+/// Step opacity by 5%, snapping to whole percentage points.
+///
+/// The previous +/-24-of-255 arithmetic jumped from 100 to 91 to 81 and made values such as 15%
+/// unreachable. Every multiple of five in `5..=100` is now reachable.
 fn opacity_step(a: u8, up: bool) -> u8 {
     let pct = (a as f32 / 255.0 * 100.0).round() as i32;
     let next = if up {
@@ -59,7 +60,7 @@ impl ChartTabs {
         };
         let view = cx.entity();
 
-        // Кнопка-карандаш: ЛКМ — тумблер режима рисования, ПКМ — попап стиля.
+        // Pencil button: left-click toggles drawing mode; right-click opens the style popup.
         let backend = self.backend.clone();
         let view_popup = view.clone();
         let pencil = div()
@@ -96,7 +97,7 @@ impl ChartTabs {
             );
         let _ = view_popup;
 
-        // Инструменты (только в режиме рисования): подсвечен активный.
+        // Tools shown only in drawing mode, with the active tool highlighted.
         let tool_btns = draw_mode.then(|| {
             let mut row = h_flex().items_center().gap(px(2.0));
             for (t, id, label) in TOOLS {
@@ -131,7 +132,7 @@ impl ChartTabs {
             .children(tool_btns)
     }
 
-    /// Попап стиля карандаша (ПКМ по карандашу): инструмент, цвет, толщина, непрозрачность, Kind.
+    /// Render the pencil style popup opened by right-click: tool, color, thickness, opacity, and kind.
     fn render_style_popup(
         &self,
         tool: FigureTool,
@@ -141,7 +142,7 @@ impl ChartTabs {
     ) -> impl IntoElement {
         let label = |s: &str| div().text_color(rgb(p.text_muted)).child(s.to_string());
 
-        // Ряд инструментов.
+        // Tool row.
         let mut tool_row = h_flex().items_center().gap(px(3.0));
         for (t, id, glyph) in TOOLS {
             let backend = self.backend.clone();
@@ -166,7 +167,7 @@ impl ChartTabs {
             );
         }
 
-        // Свотчи цвета + пикер произвольного цвета (Custom) в конце ряда.
+        // Color swatches followed by the arbitrary Custom color picker.
         let mut color_row = h_flex().items_center().gap(px(3.0)).flex_wrap();
         for (i, sw) in SWATCHES.iter().enumerate() {
             let backend = self.backend.clone();
@@ -190,7 +191,7 @@ impl ChartTabs {
                     .cursor_pointer()
                     .on_click(move |_, _w, app| {
                         backend.update(app, |b, bcx| {
-                            // Непрозрачность сохраняем из текущего стиля.
+                            // Preserve opacity from the current style.
                             let a = b.fig_style.color[3];
                             b.fig_style.color = [sw[0], sw[1], sw[2], a];
                             bcx.notify();
@@ -198,8 +199,8 @@ impl ChartTabs {
                     }),
             );
         }
-        // Произвольный цвет из палитры (не только фикс-набор): moonui MoonColorPicker,
-        // выбор пишется в fig_style через подписку в `ChartTabs::new`.
+        // Choose any palette color, not only a fixed swatch, through MoonUI's `MoonColorPicker`.
+        // The subscription in `ChartTabs::new` writes the selection to `fig_style`.
         color_row = color_row.child(
             div()
                 .id("fig-custom-color")
@@ -215,7 +216,7 @@ impl ChartTabs {
                 ),
         );
 
-        // Степперы толщины/непрозрачности + Kind Solid/Dash.
+        // Thickness and opacity steppers plus solid or dashed kind.
         let thickness_row = h_flex()
             .items_center()
             .gap(px(4.0))
@@ -253,7 +254,7 @@ impl ChartTabs {
                 s.color[3] = opacity_step(s.color[3], true)
             }));
 
-        // Вид линии (Kind): выпадашка из 5 значений (Solid/Dash/Dot/DashDot/DashDotDot).
+        // Line kind dropdown over every `LineKind::ALL` value: Solid, Dash, Dot, DashDot, DashDotDot.
         let backend_kind = self.backend.clone();
         let kind_items = crate::panels::radio_items(
             LineKind::ALL.iter().map(|k| {
@@ -292,8 +293,7 @@ impl ChartTabs {
             .top_full()
             .left_0()
             .mt(px(4.0))
-            // Ширина попапа растёт с кеглем — иначе на +6 подписи/значения
-            // переносились на вторую строку.
+            // Grow popup width with font size; otherwise labels and values wrapped at +6.
             .w(design::font_w_px(cx, 210.0))
             .p(px(8.0))
             .gap(px(6.0))
@@ -310,7 +310,7 @@ impl ChartTabs {
             .child(kind_row)
     }
 
-    /// Кнопка-степпер, правящая `fig_style` замыканием `edit`.
+    /// Build a stepper button that edits `fig_style` through the `edit` closure.
     fn step_btn(
         &self,
         id: &'static str,

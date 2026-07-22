@@ -1,6 +1,6 @@
-//! Рендер полоски чарт-вкладок (`impl Render for ChartTabs`): сам таб-стрип (Main + AddToChart),
-//! кнопки «собрать окна» (▦) и настроек раскладки (⚙ + canvas-проба её rect), плюс активная панель
-//! ниже. Логика вкладок/синхронизации — в [`super`] (mod.rs), выносные окна — в [`super::windows`].
+//! Chart-tab strip rendering for `ChartTabs`: the Main/AddToChart strip, gather-windows and layout
+//! controls, and the active panel below. Tab and synchronization logic lives in [`super`], while
+//! detached windows live in [`super::windows`].
 
 use std::rc::Rc;
 
@@ -18,8 +18,8 @@ use crate::design;
 
 impl Render for ChartTabs {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Снимок вкладок — чтобы callbacks не держали borrow self.add. (Tab, label, count для
-        // ширины, unread для бейджа, detachable.)
+        // Snapshot tabs so callbacks do not retain a borrow of `self.add`: identity, label, width
+        // count, unread badge count, and detachability.
         let mut tabs: Vec<(Tab, String, usize, usize, bool)> =
             vec![(Tab::Main, "Main".to_string(), 0, 0, false)];
         tabs.extend(self.add.iter().map(|(n, bucket, panel)| {
@@ -33,8 +33,8 @@ impl Render for ChartTabs {
                 true,
             )
         }));
-        // Кастомные (мульти-монетные) вкладки: своё имя, без бейджа, закрываемы (×). Дабл-клик
-        // НЕ открепляет (guard в on_click), но closable=true → крестик есть.
+        // Custom multi-market tabs use their own names, have no badge, and are closable. The shared
+        // click handler below detaches them on double-click just like Add tabs.
         tabs.extend(self.custom.iter().map(|(n, bucket, _)| {
             (
                 Tab::Custom(*n, bucket.clone()),
@@ -67,13 +67,11 @@ impl Render for ChartTabs {
             })
             .collect::<Vec<_>>();
         let view = cx.entity();
-        // MoonTabStrip рисует ВСЕ табы абсолютно и режет по `overflow_hidden` ПО СВОИМ
-        // bounds. Без явных bounds его root схлопывается в 0×0 → полоска невидима, а чарт
-        // (flex_1 ниже) забирает всю высоту (ровно баг «график есть, вкладок нет»). Даём
-        // ширину окна (контейнер ниже обрежет до ширины панели) и фикс. высоту полосы.
+        // `MoonTabStrip` absolutely positions every tab and clips to its own bounds. Explicit
+        // bounds prevent its root from collapsing to zero size and leaving the flexible chart to
+        // consume the full height. The lower container clips window width to the panel width.
         let strip_w = f32::from(window.viewport_size().width).max(1.0);
-        // Высота полосы = высоте таба (fit_height), чтобы при смене ui_scale/шрифта полоса и
-        // линия под ней не отъезжали от табов. См. chart_tab_strip_h.
+        // Match the strip height to `fit_height` so UI or font scaling keeps its underline aligned.
         let strip_h = chart_tab_strip_h(cx);
         let strip = MoonTabStrip::new("chart-tabs-strip")
             .padding_left(8.0)
@@ -88,7 +86,7 @@ impl Render for ChartTabs {
                         return;
                     };
                     view.update(app, |this, cx| {
-                        // Дабл-клик открепляет Add и Custom-вкладки в своё ОС-окно (Main — нет).
+                        // Double-click detaches Add and Custom tabs into OS windows, but never Main.
                         if matches!(tab_id, Tab::Add(..) | Tab::Custom(..))
                             && event.click_count() >= 2
                         {
@@ -110,7 +108,7 @@ impl Render for ChartTabs {
                             this.sync_active_scale(cx);
                             this.sync_inactive_chart_visibility(cx);
                             this.refresh_orderbook_gates(cx);
-                            // Торговый таргет: на compare-вкладке с замком — якорь (как Main-фулскрин).
+                            // A locked comparison tab uses its anchor as the trading target, like Main fullscreen.
                             this.sync_main_chart_target(cx);
                             this.persist_scales(cx);
                             cx.notify();
@@ -131,8 +129,7 @@ impl Render for ChartTabs {
                     view.update(app, |this, cx| {
                         this.add
                             .retain(|(n, c, _)| Tab::Add(*n, c.clone()) != tab_id);
-                        // Кастомную вкладку закрываем совсем: убираем стек, лейбл и её спек из
-                        // charts.json (закрытие = удаление сохранённой вкладки).
+                        // Fully close a custom tab by removing its stack, label, and persisted spec.
                         if let Tab::Custom(n, _) = &tab_id {
                             let n = *n;
                             this.custom
@@ -154,9 +151,8 @@ impl Render for ChartTabs {
                 }
             });
 
-        // Кнопка «собрать окна» — справа в полосе вкладок, ТОЛЬКО если у группы есть откреп-окна.
-        // Восстанавливает/показывает/возвращает на экран окна чартов, если они свёрнуты/спрятаны/
-        // уехали за пределы экранов (они независимы и не ходят за Main).
+        // Show Gather Windows on the strip's right only when this group has detached windows. It
+        // activates every window; on Windows it also restores and cascades them onto the primary display.
         let detached_count = self
             .backend
             .read(cx)
@@ -176,9 +172,8 @@ impl Render for ChartTabs {
                 .render()
         });
 
-        // Кнопка настроек раскладки активной вкладки (⚙) + дропдаун масштаба активной
-        // вкладки (рядом, слева) — оба per-вкладочные. Попап — обычный in-scene overlay:
-        // chart text рисуется under-scene и не пробивает UI-слои.
+        // The active tab's layout control and adjacent scale dropdown are both per-tab. Their popup
+        // is a regular in-scene overlay because chart text renders under the scene and cannot cover it.
         let popup_open = self.layout_popup_open;
         let p_strip = MoonPalette::active(cx);
         let scale_dropdown = crate::controls::scale_dropdown_for_tabs(
@@ -203,7 +198,7 @@ impl Render for ChartTabs {
                 })
                 .render()
         };
-        // Кнопка настроек отображения свечей/трейдов (❚) — ГЛОБАЛЬНЫЙ набор, рядом с ⚙.
+        // The candle/trade display control beside layout edits the global setting set.
         let candle_popup_open = self.candle_popup_open;
         let candle_btn = {
             let entity = cx.entity();
@@ -222,9 +217,9 @@ impl Render for ChartTabs {
                 })
                 .render()
         };
-        // Поле ввода монеты (поиск) — слева от масштаба, своё на окно; набор зависит от ядер
-        // активной вкладки. Список совпадений рисуем абсолютно от обёртки поля (top_full), а сам
-        // кластер выносим на уровень v_flex (ниже): overflow_hidden полоски не срежет выпадашку.
+        // The per-window market search sits left of scale and queries the active tab's cores.
+        // Absolutely position matches below its wrapper and place the cluster outside the strip's
+        // clipping layer so `overflow_hidden` cannot cut off the dropdown.
         let coin_popup = self.coin_popup_open.then(|| {
             let results = self.coin_results(cx);
             let view_toggle = cx.entity();
@@ -260,7 +255,7 @@ impl Render for ChartTabs {
                 ),
             )
             .children(coin_popup);
-        // Слой-перехватчик клика вне списка монеты (закрыть). Ниже кластера в z-порядке.
+        // Catch clicks outside the market list on a layer below the cluster to dismiss it.
         let coin_dismiss = self.coin_popup_open.then(|| {
             div()
                 .id("tabs-coin-dismiss")
@@ -271,8 +266,8 @@ impl Render for ChartTabs {
 
         let fig_tools = self.render_fig_tools(cx);
 
-        // Правый кластер полосы вкладок: [фигуры] [монета] [масштаб] [▦?] [⚙]. ⚙ держим у
-        // правого края (right≈6px) — попап раскладки якорится именно к нему (right(6) ниже).
+        // Right cluster: drawing tools, market, scale, optional gather, and layout. Keep layout at
+        // the right edge because its popup uses the same six-pixel right anchor below.
         let right_cluster = div().absolute().right(px(6.0)).top(px(4.0)).child(
             h_flex()
                 .items_center()
@@ -284,8 +279,8 @@ impl Render for ChartTabs {
                 .child(candle_btn)
                 .child(settings_btn),
         );
-        // Попап раскладки ⚙ активной вкладки + слой-дисмиссер: общий оверлей с выносными
-        // окнами (все колбэки — через LayoutPopupHost, см. chart_tabs/common.rs).
+        // Render the active tab's layout popup and dismiss layer through the same overlay and
+        // `LayoutPopupHost` callbacks used by detached windows.
         let apply_all_label = if matches!(self.active, Tab::Main) {
             t!("chart.layout.apply_all_windows").to_string()
         } else {
@@ -299,7 +294,7 @@ impl Render for ChartTabs {
             cx,
         );
         let layout_dismiss = common::layout_popup_dismiss(self, "chart-layout", cx);
-        // Попап «Свечи и трейды» (глобальный) — тот же якорь, что у ⚙.
+        // The global Candles and Trades popup shares the layout popup's anchor.
         let candle_popup = candle_popup::candle_popup_overlay(
             self,
             "chart-candles",
@@ -312,8 +307,8 @@ impl Render for ChartTabs {
             .size_full()
             .relative()
             .child(
-                // Только таб-стрип под overflow_hidden (режет лишние табы). Правый кластер и
-                // выпадашки — отдельными детьми v_flex ниже, чтобы их не срезало по высоте полосы.
+                // Clip only the tab strip to hide excess tabs. Keep the right cluster and dropdowns
+                // as separate children below so the strip height does not clip them.
                 div()
                     .h(px(strip_h))
                     .w_full()
@@ -328,8 +323,8 @@ impl Render for ChartTabs {
                     .min_h(px(0.0))
                     .child(self.active_element()),
             )
-            // coin_dismiss ниже кластера в z-порядке: клик по строке списка (в кластере) ловит
-            // строка, клик мимо — этот слой закрывает список.
+            // Keep `coin_dismiss` below the cluster: list rows handle their own clicks, while this
+            // layer catches clicks elsewhere and closes the list.
             .children(coin_dismiss)
             .child(right_cluster)
             .children(layout_dismiss)
