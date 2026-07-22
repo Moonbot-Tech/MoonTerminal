@@ -1,7 +1,7 @@
-//! Детерминированный СИНТЕТИЧЕСКИЙ фид для бенчмарка рендера (env MOON_SYNTH).
-//! НЕ ходит в сеть: шлёт Ready + Identity + AddToChart-детекты (создают контейнеры
-//! для стресс-окон) + поток тиков/стакана с фиксированной частотой. Цель — одинаковая
-//! воспроизводимая нагрузка в нативе и Tauri для честного сравнения CPU/GPU.
+//! Deterministic SYNTHETIC feed for render benchmarking (MOON_SYNTH environment variable).
+//! It does NOT access the network: it sends Ready + Identity + AddToChart detects (which create
+//! stress-window containers), plus fixed-frequency tick and order-book streams. The goal is an
+//! identical reproducible load in native and Tauri builds for a fair CPU/GPU comparison.
 
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -27,7 +27,7 @@ fn env_f64(k: &str, d: f64) -> f64 {
         .unwrap_or(d)
 }
 
-/// Детерминированный LCG — тот же, что в Tauri-синте (одинаковый поток данных).
+/// Deterministic LCG matching the Tauri synthesizer to produce the same data stream.
 struct Lcg(u64);
 impl Lcg {
     fn next(&mut self) -> u64 {
@@ -42,7 +42,7 @@ impl Lcg {
     }
 }
 
-/// Сигнатура под `feed::spawn` (как live::run, но без сети/reports).
+/// Runs with the `feed::spawn` signature, like live::run but without network access or reports.
 pub fn run(
     server: &ServerConfig,
     tx: &FeedTx,
@@ -66,14 +66,15 @@ pub fn run(
     );
 
     let _ = tx.send(FeedMsg::Status(ConnStatus::Ready));
-    // Синт-биржа (код 200) — координатор изберёт это ядро провайдером (одно на «биржу»).
+    // Synthetic exchange (code 200): the coordinator elects this core as its sole provider.
     let _ = tx.send(FeedMsg::Identity(ExchangeId::new(200)));
-    // Синт-база — USDT (для дефолтов размера ордера в UI).
+    // Synthetic base currency is USDT, used for UI order-size defaults.
     let _ = tx.send(FeedMsg::CoreBase {
         base: "USDT".to_string(),
     });
 
-    // AddToChart: окно w (1..=WINDOWS) ← CHARTS рынков в контейнер Chart{w}. TTL ~год.
+    // AddToChart: window w (1..=WINDOWS) receives CHARTS markets in the Chart{w} container.
+    // The TTL is approximately one year.
     let mut dets = Vec::new();
     let mut seq = 0u64;
     for w in 1..=windows {

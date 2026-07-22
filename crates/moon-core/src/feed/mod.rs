@@ -1,5 +1,5 @@
-//! Feed: граница между ядром и UI. Backend-поток (на ядро) шлёт `FeedMsg` в UI.
-//! UI никогда не вызывает moonproto напрямую. Режим один — live.
+//! Feed: the boundary between a core and the UI. One backend thread per core sends `FeedMsg`
+//! to the UI. The UI never calls moonproto directly. Live mode is the only mode.
 
 mod assets;
 pub mod live;
@@ -24,12 +24,14 @@ use crate::market::SharedMarketStore;
 pub type FeedRx = Receiver<FeedMsg>;
 pub type FeedWakeTx = Sender<()>;
 
-/// Метка «окно "Активы" недавно рендерилось» (unix ms). Штампует UI из рендера
-/// AssetsView; feed-потоки по ней выбирают темп полного `build_assets`: 1 Гц при
-/// живом окне, 5 с без него (снапшот всё равно нужен всегда — баланс шапки и
-/// метрика плеча читают `assets.global`/`assets.leverage`). Метка self-healing:
-/// окно закрыли/спрятали → рендеров нет → штамп стареет → медленный темп; сигнал
-/// «закрылось» не нужен. Глобальная, т.к. окно «Активы» одно на процесс.
+/// Timestamp indicating that any Assets view rendered recently, in Unix milliseconds.
+/// The UI stamps it from every `AssetsView::render`; feed threads use it to choose the cadence for
+/// a full `build_assets`: 1 Hz while at least one view is active, every 5 seconds otherwise. A
+/// snapshot is still always needed because the header balance and leverage metric read
+/// `assets.global`/`assets.leverage`. The marker is self-healing: when all views are closed or
+/// hidden, renders stop, the timestamp ages, and the cadence slows without separate close signals.
+/// It is shared across group, tool, and detached Assets views because any recent render requests
+/// the fast cadence for all feed threads.
 static ASSETS_VIEW_RENDER_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 fn unix_ms_now() -> i64 {
@@ -39,13 +41,15 @@ fn unix_ms_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Отметить рендер окна «Активы» (зовёт UI). Видимое окно рендерится ≥1 Гц
-/// (RenderGate панели), так что метка остаётся свежей, пока окно на экране.
+/// Record a render from any Assets view, as called by the UI.
+///
+/// A visible view renders at least once per second through the panel's `RenderGate`, so the shared
+/// marker remains fresh while any Assets view is on screen.
 pub fn note_assets_view_render() {
     ASSETS_VIEW_RENDER_MS.store(unix_ms_now(), std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Окно «Активы» рендерилось в последние ~3 с → его снапшот стоит обновлять часто.
+/// Return whether any Assets view rendered within roughly the last three seconds.
 pub(crate) fn assets_view_active() -> bool {
     unix_ms_now() - ASSETS_VIEW_RENDER_MS.load(std::sync::atomic::Ordering::Relaxed) < 3_000
 }
@@ -88,9 +92,11 @@ impl FeedTx {
     }
 }
 
-/// Спецификация новой стратегии (создание/вставка). `fields` — форматированные строки UI
-/// (как в `EditStrategyFields`); имя стратегии — поле `"StrategyName"`. feed конвертирует
-/// строки в `FieldValue` по схеме вида и назначает новый `strategy_id`.
+/// Specification for a new strategy created or pasted by the UI.
+///
+/// `fields` contains UI-formatted strings, as in `EditStrategyFields`, and the strategy name is
+/// stored in the `"StrategyName"` field. The feed converts the strings to `FieldValue` entries
+/// using the kind schema and assigns a new `strategy_id`.
 #[derive(Debug, Clone)]
 pub struct NewStrategySpec {
     pub kind_ordinal: u8,
@@ -98,62 +104,66 @@ pub struct NewStrategySpec {
     pub fields: Vec<(String, String)>,
 }
 
-/// Какой стоп-флаг ордера переключает клик по ячейке в таблице «Ордера».
+/// Order stop flag toggled by clicking a cell in the Orders table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrderStopKind {
-    /// Стоп-лосс (`SL`).
+    /// Stop loss (`SL`).
     StopLoss,
-    /// Трейлинг-стоп (`TS`).
+    /// Trailing stop (`TS`).
     Trailing,
     /// VStop.
     VStop,
 }
 
-/// Какую цену задаёт перетаскивание стоп/тейк-линии ордера на чарте. VStop (объёмный)
-/// и pending-условие сюда не входят — у них нет ценового уровня, который тянут мышью.
+/// Price set by dragging an order's stop or take-profit line on the chart.
+///
+/// Volume-based VStop and the pending condition are excluded because they have no price level
+/// that can be dragged with the mouse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrderLinePriceKind {
-    /// Стоп-лосс (`SL`) — фиксированная цена.
+    /// Stop loss (`SL`) at a fixed price.
     StopLoss,
-    /// Трейлинг-стоп (`TS`) — фиксированная цена.
+    /// Trailing stop (`TS`) at a fixed price.
     Trailing,
-    /// Take-Profit — абсолютная цена.
+    /// Take profit at an absolute price.
     TakeProfit,
 }
 
-/// Правка одной stop-группы (SL или TS) из окна редактирования ордера.
+/// Edit to one stop group, either SL or TS, from the order editor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StopGroupEdit {
-    /// Целевое состояние: стоп включён.
+    /// Target state: whether the stop is enabled.
     pub on: bool,
-    /// true = фиксированная абсолютная цена `price`; false = глобальный/процентный
-    /// режим (уровень из провода/стратегии/дефолта ClientSettings).
+    /// `true` uses `price` as a fixed absolute price; `false` uses the global or percentage mode
+    /// with a level from the wire, strategy, or `ClientSettings` default.
     pub fixed: bool,
-    /// Абсолютная цена фиксированного стопа (используется при `fixed`).
+    /// Absolute fixed-stop price, used when `fixed` is set.
     pub price: f64,
 }
 
-/// Правка take-profit из окна редактирования ордера.
+/// Take-profit edit from the order editor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TakeProfitEdit {
     pub on: bool,
-    /// Абсолютная цена TP (используется при `on`).
+    /// Absolute take-profit price, used when `on` is set.
     pub price: f64,
 }
 
-/// Правка VStop из окна редактирования ордера.
+/// VStop edit from the order editor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VStopEdit {
     pub on: bool,
-    /// true = `level` — фиксированная цена; false — процентный уровень.
+    /// `true` treats `level` as a fixed price; `false` treats it as a percentage level.
     pub fixed: bool,
     pub level: f64,
-    /// Объём-порог срабатывания («Vol <»).
+    /// Trigger volume threshold (`Vol <`).
     pub vol: f64,
 }
 
-/// Форма правок стопов ордера из окна редактирования («Активный ордер»). `None` в группе =
-/// пользователь её не менял — feed сохраняет её ЭФФЕКТИВНОЕ состояние (см. feed::order_edit).
+/// Order-stop edits from the Active Order editor.
+///
+/// `None` for a group means the user did not change it, so the feed preserves its effective
+/// state. See `feed::order_edit`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct OrderStopsForm {
     pub sl: Option<StopGroupEdit>,
@@ -163,86 +173,88 @@ pub struct OrderStopsForm {
 }
 
 impl OrderStopsForm {
-    /// Форма без правок — слать нечего.
+    /// Return whether the form contains no edits and therefore need not be sent.
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
 
-/// Команды координатора → backend ядра. Задают рыночную РОЛЬ ядра.
+/// Commands from the coordinator to a core backend that define the core's market role.
 #[derive(Debug, Clone)]
 pub enum CoreCmd {
-    /// Желаемая рыночная роль ядра (полное состояние, не дельта).
+    /// Desired market role of the core as full state, not a delta.
     ///
-    /// `provider=true` → ядро ретейнит ВСЕ трейды биржи (`subscribe_all_trades`) и
-    /// обслуживает рынки из `markets`: подписывает их стакан и читает их крестики,
-    /// помечая именем рынка. `provider=false` → никаких рыночных подписок (ядро
-    /// отдаёт только аккаунтный план: ордера/детекты/стратегии).
+    /// With `provider=true`, the core retains every exchange trade through
+    /// `subscribe_all_trades`, reads trades and history for each entry in `markets`, and subscribes
+    /// to order books only for `orderbook_markets`. With `provider=false`, it has no market
+    /// subscriptions and emits only account-plane data such as orders, detects, and strategies.
     SetMarket {
         provider: bool,
         markets: Vec<String>,
-        /// Подмножество `markets`, которым нужен стакан (есть ≥1 окно с включённым стаканом).
-        /// Подписку стакана держим только на них; остальные `markets` — без стакана.
+        /// Subset of `markets` that need an order book because at least one window enables it.
+        /// Order-book subscriptions are retained only for these markets.
         orderbook_markets: Vec<String>,
     },
-    /// Действие со стратегиями ядра. Сначала синхронизирует галки (`set_checked`
-    /// по каждой паре + `send_checked_delta`), затем, если задано, шлёт «старт
-    /// отмеченных» (`start_stop=Some(true)`) или «стоп отмеченных» (`Some(false)`).
-    /// `checks` — только изменённые галки; `start_stop=None` — лишь синхронизация.
+    /// Action on the core's strategies. It first synchronizes changed checkboxes by calling
+    /// `set_checked` for each pair and `send_checked_delta`, then optionally sends start checked
+    /// with `start_stop=Some(true)` or stop checked with `Some(false)`.
+    /// `checks` contains only changed checkboxes; `start_stop=None` only synchronizes them.
     StrategiesAction {
         checks: Vec<(u64, bool)>,
         start_stop: Option<bool>,
     },
-    /// Редактирование полей стратегий ОДНОГО ядра: на каждую стратегию свой набор
-    /// `(id, changes)` (имя→строка). ВАЖНО: все правки ядра идут ОДНОЙ командой — на стороне
-    /// feed клонируем полный снимок, патчим все указанные стратегии и шлём ОДИН
-    /// `sync_local_strategies`. Раздельные команды на каждую стратегию нельзя: `sync` целиком
-    /// заменяет набор, и второй sync перетёр бы правку первого (применялось бы к одной).
+    /// Field edits for strategies belonging to one core, with one `(id, changes)` map from field
+    /// name to string per strategy. All edits for the core must travel in one command: the feed
+    /// clones the full snapshot, patches every listed strategy, and sends one
+    /// `sync_local_strategies`. Separate commands are unsafe because each sync replaces the full
+    /// set, so the second sync would overwrite the first edit.
     EditStrategyFields {
         edits: Vec<(u64, Vec<(String, String)>)>,
     },
-    /// Удалить ОДНУ стратегию ядра по `id` (`TStratDelete` с `folder_path=""`). Необратимо.
-    /// Enforcement правила `checked` (только выключенные) — на стороне UI до отправки.
+    /// Logically delete one core strategy by `id` using `TStratDelete` with `folder_path=""`. Its
+    /// history remains in `strat_db`, and the UI can restore it under the same ID. The UI enforces
+    /// that only unchecked strategies can be deleted before sending the command.
     DeleteStrategy { id: u64 },
-    /// Удалить ПАПКУ целиком по пути (`TStratDelete` с `strategy_id=0`). Сервер сносит пустую
-    /// папку; стратегии под ней должны быть удалены/перенесены заранее (UI это гарантирует).
+    /// Delete an entire folder by path using `TStratDelete` with `strategy_id=0`.
+    /// The server removes an empty folder; the UI guarantees that contained strategies are moved
+    /// or deleted first.
     DeleteFolder { path: String },
-    /// Создать новые стратегии (создание / вставка из буфера, в т.ч. межъядерная). На стороне
-    /// feed: к ПОЛНОМУ набору добавляем по `StrategySnapshot::new` (новый id = max+1 ЦЕЛЕВОГО
-    /// ядра, поля из строк по схеме, `last_date=now`), один `sync_local_strategies`. Один набор
-    /// на ядро.
+    /// Create new strategies, including clipboard pastes within or between cores. The feed adds
+    /// each strategy to the full set through `StrategySnapshot::new`, assigns `max + 1` from the
+    /// target core, converts string fields through the schema, sets `last_date=now`, and sends one
+    /// `sync_local_strategies` per core.
     CreateStrategies { specs: Vec<NewStrategySpec> },
-    /// Восстановить УДАЛЁННУЮ стратегию под её СТАРЫМ id (история версий и
-    /// профит по ордерам продолжаются: join идёт по `strategyid`). feed пушит
-    /// снапшот с этим id в полный набор (`sync_local_strategies` шлёт id
-    /// клиента как есть — ядро принимает произвольные уникальные id, как и при
-    /// обычном create с max+1). Поля — из последней версии strat_db.
+    /// Restore a deleted strategy under its previous ID, preserving version history and
+    /// order-profit joins through `strategyid`. The feed inserts a snapshot carrying that ID into
+    /// the full set. `sync_local_strategies` sends the client ID unchanged, and the core accepts
+    /// arbitrary unique IDs just as it accepts `max + 1` on normal creation. Fields come from the
+    /// latest `strat_db` version.
     RestoreStrategy {
         id: u64,
         kind_ordinal: u8,
         folder_path: String,
         fields: Vec<(String, String)>,
     },
-    /// Сменить папку существующих стратегий (переименование папки / перенос). `moves` —
-    /// `(strategy_id, новый folder_path)`. feed правит `path` у указанных в полном наборе,
-    /// бампает `last_date`, шлёт один `sync_local_strategies`.
+    /// Move existing strategies or rename their folder. Each `moves` entry contains
+    /// `(strategy_id, new_folder_path)`. The feed patches `path` for the listed strategies in the
+    /// full set, advances `last_date`, and sends one `sync_local_strategies`.
     MoveStrategies { moves: Vec<(u64, String)> },
-    /// Перенос актива между кошельками ОДНОГО ядра (drag&drop в дереве «Активы»).
-    /// `from`/`to` — кошельки (Spot/Futures/Quarterly); `qty` в базовой монете.
+    /// Transfer an asset between wallets of one core through drag and drop in the Assets tree.
+    /// `from` and `to` are Spot, Futures, or Quarterly wallets; `qty` is in the base coin.
     TransferAsset {
         asset: String,
         qty: f64,
         from: WalletKind,
         to: WalletKind,
     },
-    /// Запросить свежий список transfer-активов ядра (по всем кошелькам).
+    /// Request a fresh list of the core's transferable assets across all wallets.
     RefreshTransferAssets,
-    /// Сконвертировать мелкие остатки («пыль») в BNB (необратимо). Per-core.
+    /// Permanently convert one core's small balances, or dust, to BNB.
     ConvertDust,
-    /// Поставить ордер вручную (ручная торговля с главного экрана) на `market`
-    /// ядра. `short` — сторона ПОЗИЦИИ (Long/Short, зеркало `is_short`); `size` —
-    /// размер в базовой монете; `strategy_id=None` → `StratID=0` (ордер без
-    /// стратегии). Транслируется в moonproto `new_order` (см. feed::trade).
+    /// Place a manual order from the main screen on the core's `market`. `short` is the position
+    /// side, mirroring `is_short`; `size` is in the base coin; `strategy_id=None` maps to
+    /// `StratID=0` for an order without a strategy. This becomes moonproto `new_order`; see
+    /// `feed::trade`.
     PlaceOrder {
         market: String,
         short: bool,
@@ -250,69 +262,70 @@ pub enum CoreCmd {
         size: f64,
         strategy_id: Option<u64>,
     },
-    /// Переставить (move/replace) существующий ордер ядра по `uid` на новую цену —
-    /// «потянуть за линию». Транслируется в moonproto `orders().move_order`.
+    /// Move or replace an existing core order by `uid` at a new price, as when dragging its line.
+    /// This becomes moonproto `orders().move_order`.
     MoveOrder { uid: u64, new_price: f64 },
-    /// Отменить ордер ядра по `uid`. Транслируется в moonproto `orders().cancel`.
+    /// Cancel a core order by `uid` through moonproto `orders().cancel`.
     CancelOrder { uid: u64 },
-    /// Включить/выключить стоп-флаг (SL/TS/VStop) КОНКРЕТНОГО ордера ядра по `uid` —
-    /// клик по ячейке в таблице «Ордера». feed читает удержанный снимок ордера, флипает
-    /// нужный флаг, СОХРАНЯЯ его уровень/spread/режим (percent|fixed), и шлёт
-    /// `orders().update_stops` (SL/TS) либо `orders().update_vstop` (VStop). Рантайм сам
-    /// гейтит отправку (send-if-changed) против своей живой модели ордеров.
+    /// Toggle the SL, TS, or VStop flag of one core order by `uid`, as triggered by a cell click in
+    /// the Orders table. The feed reads the retained order snapshot and flips the requested flag
+    /// while preserving its level, spread, and percentage or fixed mode. It sends
+    /// `orders().update_stops` for SL/TS or `orders().update_vstop` for VStop. The runtime itself
+    /// sends only when the result differs from its live order model.
     SetOrderStop {
         uid: u64,
         kind: OrderStopKind,
         on: bool,
     },
-    /// Передвинуть цену стоп/тейк-линии ордера перетаскиванием на чарте. feed читает
-    /// удержанный снимок ордера, ставит ФИКСИРОВАННЫЙ стоп (SL/TS) либо take-profit по
-    /// абсолютной цене, СОХРАНЯЯ остальные стопы, и шлёт `orders().update_stops`.
+    /// Move an order's stop or take-profit line by dragging it on the chart. The feed reads the
+    /// retained order snapshot, sets SL/TS to a fixed price or sets take profit to an absolute
+    /// price, preserves the other stops, and sends `orders().update_stops`.
     MoveOrderStopPrice {
         uid: u64,
         kind: OrderLinePriceKind,
         price: f64,
     },
-    /// Применить форму правок стопов ордера из окна редактирования («Активный ордер»):
-    /// SL/TS/TP/VStop разом — вкл/выкл, фиксированная цена или возврат к глобальному
-    /// уровню. SL/TS/TP собираются в ОДИН `update_stops` (нетронутые группы — эффективно,
-    /// как в `SetOrderStop`), VStop — отдельным `update_vstop`. См. feed::order_edit.
+    /// Apply all SL, TS, TP, and VStop edits from the Active Order editor at once, including
+    /// enabling, disabling, using a fixed price, or returning to the global level. SL, TS, and TP
+    /// are combined into one `update_stops`, with untouched groups preserved effectively as in
+    /// `SetOrderStop`; VStop uses a separate `update_vstop`. See `feed::order_edit`.
     UpdateOrderStopsForm { uid: u64, form: OrderStopsForm },
-    /// Точечная правка `ClientSettings` (TP/SL/выбор sell-пресета) из тулбара. feed берёт
-    /// УДЕРЖАННЫЙ снимок настроек, патчит его хелпером и шлёт целиком (`settings().send`).
+    /// Targeted `ClientSettings` edit from the toolbar, such as TP, SL, or sell-preset selection.
+    /// The feed patches the retained settings snapshot through its helper and sends it in full
+    /// with `settings().send`.
     EditClientSettings(ClientSettingsEdit),
-    /// Точечная правка управления плечом. feed патчит удержанный снимок и шлёт
-    /// (`settings().manage_leverage`).
+    /// Targeted leverage-management edit. The feed patches the retained snapshot and sends it
+    /// through `settings().manage_leverage`.
     EditLevManage(LevManageEdit),
-    /// Переключить hedge-mode аккаунта (dual-side позиции). РЕАЛЬНОЕ действие на бирже
-    /// через Engine API (`account().set_hedge_mode`).
+    /// Toggle account hedge mode for dual-side positions. This performs a live exchange action
+    /// through the Engine API's `account().set_hedge_mode`.
     SetHedgeMode(bool),
-    /// Установить плечо КОНКРЕТНОГО рынка (кнопка «Применить» у Lev в тулбаре). РЕАЛЬНОЕ
-    /// действие на бирже через Engine API (`account().set_leverage`); новое значение
-    /// вернётся balance-пушем рынка (`leverage_x`) и обновит карту плеч в ассетах.
+    /// Set leverage for one market from the toolbar's Lev Apply button. This performs a live
+    /// exchange action through the Engine API's `account().set_leverage`; the new value returns in
+    /// the market's balance push as `leverage_x` and updates the leverage map in assets.
     SetLeverage { market: String, leverage: i32 },
-    /// «Паник-селл» по рынку (кнопка на чарте). Транслируется в moonproto
-    /// `orders().switch_panic_sell_by_market(market, on)` — market-level panic sell
-    /// button semantics (тоггл panic-sell у ордеров рынка). РЕАЛЬНОЕ действие.
+    /// Toggle market-level panic sell from the chart button. This is a live action translated to
+    /// moonproto `orders().switch_panic_sell_by_market(market, on)`, which toggles panic sell on
+    /// the market's orders.
     PanicSellMarket { market: String, on: bool },
-    /// Паник-селл КОНКРЕТНОГО ордера по `uid` (`TTurnPanicSellCommand`). Используется
-    /// drag'ом sell-линии: перед move_order снимаем panic-флаг ЭТОГО ордера, иначе
-    /// паник-воркер ядра перевыставит цену обратно (см. AllowedDrop). РЕАЛЬНОЕ действие.
+    /// Toggle panic sell for one order by `uid` through `TTurnPanicSellCommand`. A sell-line drag
+    /// clears this order's panic flag before `move_order`; otherwise the core's panic worker would
+    /// restore the previous price. See `AllowedDrop`. This is a live action.
     TurnOrderPanicSell { uid: u64, on: bool },
-    /// Закрыть ПОЗИЦИЮ рынка ПО МАРКЕТУ (кнопка «Market sell» в Активах у строки с позицией).
+    /// Close a market position at market from the Market Sell button on an Assets position row.
     /// moonproto `trade().close_position(ClosePositionParams{market, market_sell:true})`
-    /// (`TDoClosePositionCommand`). РЕАЛЬНОЕ действие на бирже.
+    /// (`TDoClosePositionCommand`). This performs a live exchange action.
     MarketSellPosition { market: String },
-    /// Продать СПОТ-ТОКЕН рынка ПО МАРКЕТУ (кнопка «Market sell» в Активах у строки-холдинга).
-    /// moonproto `trade().sell_order(SellOrderParams{market, price:0=маркет, size})`
-    /// (`TDoSellOrderCommand`). РЕАЛЬНОЕ действие на бирже.
+    /// Sell a market's spot token at market from the Market Sell button on an Assets holding row.
+    /// This uses moonproto `trade().sell_order(SellOrderParams{market, price:0=market, size})`
+    /// (`TDoSellOrderCommand`) and performs a live exchange action.
     MarketSellToken { market: String, size: f64 },
-    /// Отменить ОЖИДАЮЩИЕ buy-ордера рынка (кнопка «Cancel Buy»). feed берёт удержанный
-    /// снимок, отбирает ордера рынка в buy-фазе до исполнения (`OS_None`/`BuySet`) и шлёт
-    /// по каждому `orders().cancel(uid)`. РЕАЛЬНОЕ действие.
+    /// Cancel pending buy orders for a market from the Cancel Buy button. The feed reads the
+    /// retained snapshot, selects the market's pre-fill buy-phase orders in `OS_None` or `BuySet`,
+    /// and sends `orders().cancel(uid)` for each. This is a live action.
     CancelMarketBuys { market: String },
-    /// «Join all sells» (ПКМ по линии sell): объединить sell-ордера рынка по стороне позиции.
-    /// Транслируется в moonproto `trade().join_orders(market, side)`. РЕАЛЬНОЕ действие.
+    /// Join all sell orders for a market and position side from a sell-line context menu.
+    /// This is a live action translated to moonproto `trade().join_orders(market, side)`.
     JoinSells { market: String, short: bool },
     /// Split the specific sell order selected from a line or row into `parts`.
     /// Protocol v4 addresses this live trading action by the server order `uid`.
@@ -321,30 +334,34 @@ pub enum CoreCmd {
     /// The feed sends this live trading action only when exactly one active sell
     /// order can be resolved; zero or multiple candidates are a no-op.
     SplitOrderForMarket { market: String, parts: i32 },
-    /// Старт/рестарт рантайма ядра (попап настроек ядра). moonproto `settings().restart_now()`:
-    /// старт рынка-рантайма + выход из passive + старт отмеченных стратегий. Стопа в протоколе нет.
+    /// Start or restart the core runtime from the core-settings popup through moonproto
+    /// `settings().restart_now()`. It starts the market runtime, leaves passive mode, and starts
+    /// checked strategies. The protocol has no stop operation.
     RestartNow,
-    /// Сброс счётчика прибыли ядра (сессия / всё время). moonproto `settings().reset_profit`.
+    /// Reset the core's session or all-time profit counter through moonproto
+    /// `settings().reset_profit`.
     ResetProfit(ResetProfitKind),
-    /// Отменить ВСЕ ордера ядра (попап настроек ядра, с подтверждением в UI). РЕАЛЬНОЕ действие
-    /// на бирже — moonproto `account().cancel_all_orders()`.
+    /// Cancel every order for the core from the confirmed core-settings action. This performs a
+    /// live exchange action through moonproto `account().cancel_all_orders()`.
     CancelAllOrders,
-    /// Чёрный список монет: вкл/выкл + текст списка. feed патчит удержанный снимок настроек
-    /// (`use_coins_black_list`/`coins_black_list_text`) и шлёт его целиком.
+    /// Set the coin blacklist state and text. The feed patches
+    /// `use_coins_black_list`/`coins_black_list_text` in the retained settings snapshot and sends
+    /// it in full.
     SetBlacklist { on: bool, text: String },
-    /// Локально (Active Lib): исключать монеты из ЧС при расчёте рыночной дельты. Не wire-поле
-    /// настроек — moonproto `settings().set_exclude_blacklisted_markets_from_exchange_delta`.
+    /// Locally exclude blacklisted coins from the Active Lib market-delta calculation. This is
+    /// not a wire settings field; it uses moonproto
+    /// `settings().set_exclude_blacklisted_markets_from_exchange_delta`.
     SetExcludeBlacklistedDelta(bool),
-    /// Заармить/обновить chart-алерт (нарисованную фигуру с галкой «Alert») на рынке ядра.
-    /// `blob` — сериализованный `TChartObject` (см. `alert_blob`). moonproto
-    /// `chart_alerts().upsert(market, obj_uid, blob)`. Сервер авторитетен; ответ вернётся
-    /// `Event::ChartAlert::Upserted`.
+    /// Arm or update a chart alert, represented by a drawn object with its Alert option enabled,
+    /// on a core market. `blob` is a serialized `TChartObject`; see `alert_blob`. This calls
+    /// moonproto `chart_alerts().upsert(market, obj_uid, blob)`. The server is authoritative and
+    /// returns `Event::ChartAlert::Upserted`.
     ChartAlertUpsert {
         market: String,
         obj_uid: u64,
         blob: Vec<u8>,
     },
-    /// Разоружить/удалить chart-алерт по `obj_uid`. moonproto `chart_alerts().delete`.
+    /// Disarm and delete a chart alert by `obj_uid` through moonproto `chart_alerts().delete`.
     ChartAlertDelete { market: String, obj_uid: u64 },
 }
 
@@ -372,7 +389,7 @@ impl Drop for CoreCmdTx {
     }
 }
 
-/// Хэндл backend-потока. Дроп закрывает каналы → поток завершается.
+/// Backend-thread handle whose drop closes the channels and terminates the thread.
 pub struct FeedHandle {
     pub rx: FeedRx,
     pub cmd_tx: CoreCmdTx,
@@ -380,15 +397,18 @@ pub struct FeedHandle {
     _join: std::thread::JoinHandle<()>,
 }
 
-/// Базовый шаг backoff и его потолок (между попытками первичного коннекта).
+/// Initial backoff step and its cap between initial connection attempts.
 const BACKOFF_MIN: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
-/// Сколько `live::run` должен продержаться, чтобы счесть коннект стабильным и
-/// сбросить backoff на минимум (редкий разрыв после долгой работы ≠ штормящий хост).
+/// Minimum `live::run` lifetime that marks a connection as stable and resets backoff.
+///
+/// A rare disconnect after a long run should not classify the host as repeatedly failing.
 const STABLE_AFTER: Duration = Duration::from_secs(60);
 
-/// Случайный множитель в диапазоне 0.75..1.25 (джиттер ±25%). Разносит во времени
-/// синхронные реконнекты множества ядер (упал хост → 200 ядер не бьются в такт).
+/// Apply a random multiplier in the 0.75..1.25 range for 25% jitter.
+///
+/// This spreads synchronized reconnects across many cores so a failed host does not make hundreds
+/// of cores retry in lockstep.
 fn jittered(d: Duration) -> Duration {
     let mut b = [0u8; 8];
     let _ = getrandom::getrandom(&mut b);
@@ -396,8 +416,9 @@ fn jittered(d: Duration) -> Duration {
     d.mul_f64(0.75 + frac * 0.5)
 }
 
-/// Поднимает live-backend для одного ядра (подключение есть всегда; подписка — по команде).
-/// `reports` — канал к SQLite-writer'у (None = БД недоступна, отчёты не пишем).
+/// Start the live backend for one core, keeping a connection at all times and subscribing on
+/// command. `reports` is the channel to the SQLite writer; `None` means the database is unavailable
+/// and reports are not written.
 pub fn spawn(
     server: ServerConfig,
     chart_memory_percent: u16,
@@ -415,11 +436,11 @@ pub fn spawn(
     let join = std::thread::Builder::new()
         .name(format!("feed-{}", server.id))
         .spawn(move || {
-            // Авто-реконнект на уровне приложения: если live::run упал (например,
-            // НЕ удалось первичное подключение — moonproto умеет реконнект только
-            // ПОСЛЕ успешного connect), повторяем с нарастающим backoff + джиттер.
-            // Штатный выход (Ok = координатор/UI ушёл) — завершаемся.
-            // Синт-ядро бенчмарка: гоним synth::run (без сети/реконнекта).
+            // Reconnect at the application layer when `live::run` fails, including an initial
+            // connection failure. Moonproto can reconnect only after a successful connection.
+            // Retry with exponential backoff and jitter; exit normally when `Ok` reports that the
+            // coordinator/UI has gone away. A synthetic benchmark core runs `synth::run` without
+            // networking or reconnects.
             if server.synthetic {
                 let _ = synth::run(&server, &tx, &cmd_rx, market.as_ref());
                 return;
@@ -439,8 +460,8 @@ pub fn spawn(
                 ) {
                     Ok(()) => break,
                     Err(e) => {
-                        // Коннект продержался долго перед падением → не штормящий хост,
-                        // лечим как свежий: сбрасываем backoff на минимум.
+                        // A long-lived connection is not a repeatedly failing host, so reset its
+                        // backoff before reconnecting.
                         if started.elapsed() >= STABLE_AFTER {
                             backoff = BACKOFF_MIN;
                         }
@@ -456,7 +477,7 @@ pub fn spawn(
                             ))))
                             .is_err()
                         {
-                            break; // UI закрыт
+                            break; // The UI is closed.
                         }
                         match run_wake_rx.recv_timeout(wait) {
                             Ok(()) => while run_wake_rx.try_recv().is_ok() {},

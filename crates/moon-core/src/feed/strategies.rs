@@ -1,5 +1,5 @@
-//! Стратегии на стороне feed: декаплинг схемы moonproto, алерт-параметры,
-//! формат/парсинг значений полей, имена видов.
+//! Feed-side strategies: moonproto schema decoupling, alert parameters,
+//! field-value formatting/parsing, and kind names.
 
 use moonproto::{
     FieldValue, StrategyFieldType, StrategyFieldUiKind, StrategySchema, StrategySnapshot,
@@ -7,24 +7,24 @@ use moonproto::{
 
 use super::{SchemaField, SchemaFieldUi, SchemaKind, SchemaSection, StrategySchemaModel};
 
-/// Параметры стратегии-источника, влияющие на UI детекта.
-/// Дефолт — (false, 60): кнопку-детект показываем только при SoundAlert=Yes,
-/// держим KeepAlert секунд.
+/// Source-strategy parameters that affect the detect UI.
+/// When resolved by [`alert_params`], missing fields default to (false, 60): show the detect
+/// button only when SoundAlert=Yes and retain it for KeepAlert seconds.
 #[derive(Default)]
 pub(super) struct AlertParams {
     pub sound_alert: bool,
     pub keep_alert_secs: u32,
-    /// Номер чарта-вкладки (0 = не добавлять).
+    /// Chart-tab number (0 means do not add).
     pub add_to_chart: u32,
     pub keep_in_chart_secs: u32,
-    /// Имя звука (стем wav: BABYTOY/ding1/…), если стратегия его задаёт. `None` —
-    /// звука нет. Извлекаем сканом строковых полей: имя поля звука в схеме
-    /// нестабильно, зато его ЗНАЧЕНИЕ совпадает со стемом файла.
+    /// Sound name (WAV stem such as BABYTOY/ding1/…) when set by the strategy. `None` means
+    /// no sound. This is extracted by scanning string fields: the sound field's schema name
+    /// is unstable, but its VALUE matches the file stem.
     pub sound_name: Option<String>,
 }
 
-/// Стемы вшитых звуков (нижний регистр) — для распознавания поля звука стратегии.
-/// Держим здесь (moon-core), т.к. извлечение идёт в feed-слое; список — зеркало
+/// Lowercase stems of embedded sounds, used to recognize a strategy's sound field.
+/// Kept here in moon-core because extraction happens in the feed layer; this list mirrors
 /// `moon-ui-gpui::sound::SOUNDS`.
 const SOUND_STEMS: &[&str] = &[
     "alarm",
@@ -47,15 +47,15 @@ const SOUND_STEMS: &[&str] = &[
     "yes_mast",
 ];
 
-/// Нормализует значение поля к стему звука: трим/нижний регистр + срез расширения
-/// (Moonbot хранит имя и как «BABYTOY», и как «BABYTOY.wav»). Не звук → None.
+/// Normalizes a field value to a sound stem by trimming, lowercasing, and stripping the extension.
+/// Moonbot stores names as both `BABYTOY` and `BABYTOY.wav`; a non-sound returns None.
 fn sound_stem(val: &str) -> Option<String> {
     let low = val.trim().to_ascii_lowercase();
     let stem = low.strip_suffix(".wav").unwrap_or(&low);
     SOUND_STEMS.contains(&stem).then(|| stem.to_string())
 }
 
-/// Ищет в полях стратегии значение-строку, совпадающее со стемом звука.
+/// Finds a string value in the strategy fields that matches a sound stem.
 fn sound_name_of(s: &StrategySnapshot) -> Option<String> {
     for (_, v) in s.fields.iter() {
         if let FieldValue::String(val) = v {
@@ -67,9 +67,9 @@ fn sound_name_of(s: &StrategySnapshot) -> Option<String> {
     None
 }
 
-/// Явно выбран «нет звука»: поле про звук (SoundKind/…) со значением `NONE`. Такой
-/// детект МОЛЧИТ и НЕ падает на дефолтный звук. Привязка к полю с «sound» в имени —
-/// чтобы случайное значение «none» в другом поле не заглушило звук.
+/// Detects an explicit `no sound` selection: a sound-related field (SoundKind/…) set to `NONE`.
+/// Such a detect stays SILENT and does NOT fall back to the default sound. Requiring `sound` in
+/// the field name prevents an unrelated `none` value from muting the sound.
 fn sound_is_none(s: &StrategySnapshot) -> bool {
     for (name, v) in s.fields.iter() {
         if let FieldValue::String(val) = v {
@@ -83,10 +83,10 @@ fn sound_is_none(s: &StrategySnapshot) -> bool {
     false
 }
 
-/// Алерт-дефолты из СХЕМЫ для вида стратегии: (SoundAlert, звук). Сервер НЕ шлёт
-/// поля, значение которых равно дефолту схемы (та же грабля, что у остальных полей
-/// стратегий) — стратегия с ДЕФОЛТНЫМ звуком приходит вовсе без поля звука, и скан
-/// снапшота его не видит. Достаём из default_value полей схемы этого вида.
+/// Reads alert defaults `(SoundAlert, sound)` from the SCHEMA for a strategy kind.
+/// The server does NOT send fields equal to their schema defaults (as with all other strategy
+/// fields), so a strategy using the DEFAULT sound arrives without a sound field and cannot be
+/// found by scanning the snapshot. Read it from this kind's schema-field `default_value`s.
 fn schema_alert_defaults(
     schema: &StrategySchema,
     s: &StrategySnapshot,
@@ -109,8 +109,8 @@ fn schema_alert_defaults(
     (sound_alert, sound)
 }
 
-/// Целочисленное значение поля стратегии (AddToChart/KeepInChart/KeepAlert) —
-/// принимаем ЛЮБОЙ числовой/булев тип moonproto, иначе `default`.
+/// Reads an integer strategy field (AddToChart/KeepInChart/KeepAlert), accepting ANY numeric
+/// or Boolean moonproto type and returning `default` otherwise.
 fn field_secs_or(s: &StrategySnapshot, name: &str, default: u32) -> u32 {
     match s.fields.get(name) {
         Some(FieldValue::Int32(v)) => (*v).max(0) as u32,
@@ -130,17 +130,17 @@ pub(super) fn alert_params(s: &StrategySnapshot, schema: Option<&StrategySchema>
     let (def_sound_alert, def_sound) = schema
         .map(|sc| schema_alert_defaults(sc, s))
         .unwrap_or((None, None));
-    // SoundAlert: поле в снапшоте есть → его значение; отсутствует → это значит
-    // «равно дефолту схемы» (сервер такие не шлёт) → берём дефолт схемы.
+    // SoundAlert: use the snapshot value when present. Absence means `equal to the schema
+    // default` (the server omits such values), so use the schema default.
     let sound_alert = if s.fields.get("SoundAlert").is_some() {
         s.field_bool_or_false("SoundAlert")
     } else {
         def_sound_alert.unwrap_or(false)
     };
-    // Звук стратегии: играем ИМЕННО тот, что задан.
-    //  • явный стем в снапшоте → он;
-    //  • SoundKind=NONE → тишина (НЕ дефолт);
-    //  • поля-звука нет (= равно дефолту схемы) → дефолт схемы при включённом SoundAlert.
+    // Play EXACTLY the sound selected by the strategy:
+    //  - an explicit stem in the snapshot wins;
+    //  - SoundKind=NONE means silence (NOT the default);
+    //  - no sound field (= schema default) uses the schema default when SoundAlert is enabled.
     let sound_name = if let Some(n) = sound_name_of(s) {
         Some(n)
     } else if sound_is_none(s) {
@@ -159,7 +159,7 @@ pub(super) fn alert_params(s: &StrategySnapshot, schema: Option<&StrategySchema>
     }
 }
 
-/// Форматирует значение поля стратегии в строку (read-only показ в плашках).
+/// Formats a strategy field value for read-only display in badges.
 pub(super) fn fmt_field(v: &FieldValue) -> String {
     match v {
         FieldValue::Bool(b) => if *b { "Yes" } else { "No" }.to_string(),
@@ -175,8 +175,8 @@ pub(super) fn fmt_field(v: &FieldValue) -> String {
     }
 }
 
-/// Собирает `FieldValue` из строки UI по ТИПУ поля: приоритет — тип существующего
-/// значения снимка, иначе тип из схемы, иначе строка. Кривое число → 0.
+/// Builds a `FieldValue` from a UI string according to the field TYPE, prioritizing the existing
+/// snapshot value's type, then the schema type, then string. An invalid number becomes 0.
 pub(super) fn fv_from_str(
     existing: Option<&FieldValue>,
     stype: Option<StrategyFieldType>,
@@ -191,7 +191,7 @@ pub(super) fn fv_from_str(
     let i = |def: i64| s.trim().parse::<i64>().unwrap_or(def);
     let u = || s.trim().parse::<u64>().unwrap_or(0);
     let f = || s.trim().parse::<f64>().unwrap_or(0.0);
-    // По существующему значению.
+    // Follow the existing value's type.
     if let Some(ev) = existing {
         return match ev {
             FieldValue::Bool(_) => FieldValue::Bool(b()),
@@ -206,7 +206,7 @@ pub(super) fn fv_from_str(
             FieldValue::String(_) => FieldValue::String(s.to_string()),
         };
     }
-    // По типу схемы.
+    // Follow the schema type.
     match stype {
         Some(StrategyFieldType::Bool) => FieldValue::Bool(b()),
         Some(StrategyFieldType::Int32) => FieldValue::Int32(i(0) as i32),
@@ -221,8 +221,8 @@ pub(super) fn fv_from_str(
     }
 }
 
-/// Декаплированная модель схемы из moonproto `StrategySchema`: по каждому виду —
-/// его секции (editor sections) с полями (имя/тип/вид виджета/пиклист/дефолт).
+/// Builds a decoupled model from moonproto `StrategySchema`: each kind contains its editor
+/// sections and their fields (name/type/widget kind/picklist/default).
 pub(super) fn build_schema_model(schema: &StrategySchema) -> StrategySchemaModel {
     let kinds = schema
         .kinds
@@ -266,10 +266,10 @@ fn map_ui(u: StrategyFieldUiKind) -> SchemaFieldUi {
     }
 }
 
-/// Дефолты полей схемы по видам: ordinal вида → [(имя, дефолт)]. Кэш feed-цикла
-/// (пересобирается по смене revision схемы) для нормализации дампов strat_db:
-/// сервер НЕ шлёт поля со значением, равным дефолту схемы, — без материализации
-/// дефолтов «исчезнувшее» (= ставшее дефолтным) поле плодило бы фантомные версии.
+/// Schema field defaults by kind: kind ordinal → [(name, default)]. This feed-loop cache is
+/// rebuilt when the schema revision changes and normalizes strat_db dumps. The server does NOT
+/// send fields whose value equals the schema default; without materializing defaults, a field
+/// that `disappeared` (= became default) would create phantom versions.
 pub(super) fn schema_default_fields(
     schema: &StrategySchema,
 ) -> std::collections::HashMap<u8, Vec<(String, FieldValue)>> {
@@ -288,7 +288,7 @@ pub(super) fn schema_default_fields(
     out
 }
 
-/// JSON-представление значения поля (для дампов strat_db).
+/// Converts a field value to its JSON representation for strat_db dumps.
 fn fv_json(v: &FieldValue) -> serde_json::Value {
     use serde_json::Value as J;
     match v {
@@ -305,9 +305,9 @@ fn fv_json(v: &FieldValue) -> serde_json::Value {
     }
 }
 
-/// Нормализованный дамп стратегии для strat_db: дефолты схемы её вида,
-/// перекрытые явными полями снапшота. Ключи `serde_json::Map` отсортированы
-/// (BTreeMap) — сериализация канонична, контент-сравнение стабильно.
+/// Builds a normalized strategy dump for strat_db: the kind's schema defaults overridden by
+/// explicit snapshot fields. `serde_json::Map` keys are sorted (BTreeMap), making serialization
+/// canonical and content comparison stable.
 pub(super) fn strat_db_dump(
     s: &StrategySnapshot,
     defaults: &std::collections::HashMap<u8, Vec<(String, FieldValue)>>,
@@ -328,7 +328,7 @@ pub(super) fn strat_db_dump(
         .map(str::to_string)
         .unwrap_or_else(|| format!("strat {}", s.strategy_id));
     crate::strat_db::StratDump {
-        // Signed-представление: ядро пишет strategyid ордера как Delphi signed.
+        // Signed representation: the core writes an order's strategyid as a Delphi signed value.
         strategy_id: s.strategy_id as i64,
         name,
         kind: strat_kind_name(s.kind().ordinal()).to_string(),
@@ -343,7 +343,7 @@ pub(super) fn strat_db_dump(
     }
 }
 
-/// Тип (вид) стратегии Moonbot по ordinal `StrategyKind`.
+/// Returns the Moonbot strategy type (kind) for a `StrategyKind` ordinal.
 pub(super) fn strat_kind_name(ordinal: u8) -> &'static str {
     match ordinal {
         0 => "Unknown",
@@ -374,9 +374,9 @@ pub(super) fn strat_kind_name(ordinal: u8) -> &'static str {
     }
 }
 
-/// Булево поле стратегии ордера с фолбэком на дефолт схемы. Сериализатор стратегий
-/// (Delphi и moonproto зеркально) НЕ передаёт поля со значением, равным дефолту схемы —
-/// отсутствующее поле значит «= дефолт», а не «false». Нет снапшота стратегии → false.
+/// Reads a Boolean order-strategy field, falling back to the schema default. The strategy
+/// serializer (mirrored by Delphi and moonproto) does NOT transmit fields equal to the schema
+/// default, so a missing field means `= default`, not `false`. No strategy snapshot means false.
 pub(super) fn strat_field_bool(
     snap: &moonproto::MoonStateSnapshot,
     strat_id: u64,
@@ -395,7 +395,7 @@ pub(super) fn strat_field_bool(
         .is_some_and(|v| matches!(v, FieldValue::Bool(true)))
 }
 
-/// Числовое поле стратегии ордера с фолбэком на дефолт схемы (см. [`strat_field_bool`]).
+/// Reads a numeric order-strategy field with schema-default fallback; see [`strat_field_bool`].
 pub(super) fn strat_field_double(
     snap: &moonproto::MoonStateSnapshot,
     strat_id: u64,
@@ -417,9 +417,9 @@ pub(super) fn strat_field_double(
         })
 }
 
-/// Эффективная стратегия ордера: своя (`strat_id != 0`) либо «ручная стратегия» из настроек
-/// ядра (`use_manual_strategy` → `manual_strategy_id`) — ручные ордера MB ведутся по ней.
-/// 0 = стратегии нет вовсе (стопы ручного ордера — из дефолтов ClientSettings).
+/// Resolves an order's effective strategy: its own (`strat_id != 0`) or the core settings'
+/// `manual strategy` (`use_manual_strategy` → `manual_strategy_id`), which governs manual MB
+/// orders. 0 means no strategy at all (manual-order stops use ClientSettings defaults).
 pub(super) fn effective_strat_id(snap: &moonproto::MoonStateSnapshot, strat_id: u64) -> u64 {
     if strat_id != 0 {
         return strat_id;

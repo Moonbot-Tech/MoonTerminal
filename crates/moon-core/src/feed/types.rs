@@ -1,38 +1,42 @@
-//! Доменные типы, которыми backend кормит UI. Не зависят от moonproto,
-//! чтобы UI/render-слой ничего не знал о транспорте.
+//! Domain types sent from the backend to the UI. They are independent of moonproto so the UI and
+//! rendering layer do not need to know about the transport.
 
-/// Сторона сделки.
+/// Side of a trade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     Buy,
     Sell,
 }
 
-/// Идентификатор биржи ядра — байт `ExchangeCode` из moonproto (спот/фьючи — РАЗНЫЕ
-/// коды: Binance=3, FBinance=4, ByBit=7, FBybit=2 …) ПЛЮС дискриминатор HIP-3 dex.
-/// Ключ дедупа рыночных данных: ядра с одинаковым `ExchangeId` видят идентичный
-/// рынок и могут делить одного провайдера. Hyperliquid-фьючи на РАЗНЫХ HIP-3 dex
-/// (`xyz`/`crypto`/…) имеют один и тот же `code`, но РАЗНЫЕ рыночные универсумы —
-/// поэтому в ключ входит хеш `dex_name`: иначе дедуп склеит их на одного провайдера,
-/// чей список рынков неполон (нет `xyz:HOOD` и т.п. → нет цены/стакана/трейдов/поиска).
-/// Держим как примитивы, чтобы доменные типы оставались независимыми от moonproto.
+/// Core exchange identifier composed of moonproto's `ExchangeCode` byte and a HIP-3 DEX
+/// discriminator.
+///
+/// Spot and futures exchanges have distinct codes, such as Binance=3, FBinance=4, ByBit=7, and
+/// FBybit=2. Cores with the same `ExchangeId` see identical market data and can share one provider.
+/// Hyperliquid futures on different HIP-3 DEXes such as `xyz` and `crypto` share the same `code`
+/// but have different market universes, so the key also contains a hash of `dex_name`. Without it,
+/// deduplication would merge them under one provider with an incomplete market list, causing
+/// missing prices, order books, trades, and search results such as `xyz:HOOD`. Primitive fields
+/// keep the domain types independent of moonproto.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExchangeId {
-    /// Байт `ExchangeCode` из moonproto.
+    /// `ExchangeCode` byte from moonproto.
     pub code: u8,
-    /// Дискриминатор HIP-3 dex (хеш `dex_name`); `0` — без dex (обычная биржа).
+    /// HIP-3 DEX discriminator derived from a `dex_name` hash; `0` means a regular non-DEX exchange.
     pub dex: u32,
 }
 
 impl ExchangeId {
-    /// Биржа без HIP-3 dex (обычные споты/фьючи). `dex = 0`.
+    /// Construct a regular spot or futures exchange without a HIP-3 DEX, using `dex = 0`.
     pub const fn new(code: u8) -> Self {
         Self { code, dex: 0 }
     }
 
-    /// Биржа с учётом HIP-3 dex. Пустое имя dex → `dex = 0` (как обычная биржа),
-    /// иначе детерминированный FNV-1a хеш имени (регистр имени НЕ нормализуем —
-    /// `dex_name` приходит из BaseCheck как есть и стабилен в рамках сессии).
+    /// Construct an exchange with a HIP-3 DEX discriminator.
+    ///
+    /// An empty DEX name maps to `dex = 0` like a regular exchange. Otherwise the discriminator is
+    /// a deterministic FNV-1a hash of the name. Letter case is deliberately not normalized because
+    /// `dex_name` arrives from BaseCheck unchanged and remains stable for the session.
     pub fn with_dex(code: u8, dex_name: &str) -> Self {
         Self {
             code,
@@ -41,7 +45,7 @@ impl ExchangeId {
     }
 }
 
-/// FNV-1a (32 бит). Пустой вход → `0`, чтобы «нет dex» и «dex длины 0» совпадали.
+/// Compute a 32-bit FNV-1a hash, mapping empty input to `0` so no DEX and an empty DEX coincide.
 fn fnv1a32(bytes: &[u8]) -> u32 {
     if bytes.is_empty() {
         return 0;
@@ -54,13 +58,13 @@ fn fnv1a32(bytes: &[u8]) -> u32 {
     hash
 }
 
-/// Один тик (сделка) — семантическая точка графика.
+/// One trade tick represented as a semantic chart point.
 #[derive(Debug, Clone, Copy)]
 pub struct Tick {
-    /// Unix-время в миллисекундах (из core: row.unix_millis()).
+    /// Unix time in milliseconds from the core's `row.unix_millis()`.
     pub time_ms: f64,
     pub price: f32,
-    /// Абсолютный объём сделки в базовой валюте.
+    /// Absolute trade quantity in the base currency.
     pub qty: f32,
     pub side: Side,
 }
@@ -72,38 +76,39 @@ pub enum PriceLineKind {
     Mark,
 }
 
-/// Точка retained price-line (LastPrice / MarkPrice), уже в unix ms.
+/// Retained LastPrice or MarkPrice line point with time already converted to Unix milliseconds.
 #[derive(Debug, Clone, Copy)]
 pub struct PricePoint {
     pub time_ms: f64,
     pub price: f32,
 }
 
-/// Уровень стакана.
+/// Order-book level.
 #[derive(Debug, Clone, Copy)]
 pub struct Level {
     pub price: f32,
     pub qty: f32,
 }
 
-/// Снимок верхушки стакана (bids/asks).
+/// Snapshot of the top order-book bids and asks.
 #[derive(Debug, Clone, Default)]
 pub struct OrderBook {
-    /// Биды — по убыванию цены.
+    /// Bids in descending price order.
     pub bids: Vec<Level>,
-    /// Аски — по возрастанию цены.
+    /// Asks in ascending price order.
     pub asks: Vec<Level>,
 }
 
-/// Точка серверной ордерной трассы для чарта, уже в unix ms.
+/// Point in a server-provided order trace for the chart, already in Unix milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OrderTracePoint {
     pub time_ms: f64,
     pub price: f32,
 }
 
-/// Серверная polyline-трасса buy/sell линии ордера. Moonproto остаётся внутри
-/// feed-слоя; UI получает только доменную структуру.
+/// Server-provided polyline trace for an order's buy or sell line.
+///
+/// Moonproto remains within the feed layer, while the UI receives only this domain structure.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct OrderTrace {
     pub points: Vec<OrderTracePoint>,
@@ -112,158 +117,167 @@ pub struct OrderTrace {
     pub stop_time_ms: Option<f64>,
 }
 
-/// Открытый ордер (для нижнего дока).
+/// Open order displayed in the bottom dock.
 #[derive(Debug, Clone)]
 pub struct OrderRow {
-    /// Имя рынка — КЛЮЧ данных (moonproto `market_name`): подписки/цена/открытие чарта/матчинг.
-    /// Для Hyperliquid-спота это индекс («@206»), НЕ человекочитаемое имя.
+    /// Market name used as the data key from moonproto `market_name` for subscriptions, prices,
+    /// chart opening, and matching. For Hyperliquid spot this is an index such as `@206`, not a
+    /// human-readable name.
     pub market: String,
-    /// Имя рынка для ОТОБРАЖЕНИЯ (`market_name_mb_classic`): «@206» → «UENAUSDT», обычные рынки
-    /// = `market`. Токен в таблице резолвим из него (`coin_of_market` → «UENA»), а данные — из
-    /// `market`. Разделение, чтобы не сломать матчинг/лукапы по ключу.
+    /// Display market name from `market_name_mb_classic`, such as `@206` becoming `UENAUSDT`;
+    /// regular markets equal `market`. The table resolves the token from this value through
+    /// `coin_of_market`, while data lookups use `market`. Keeping them separate preserves key-based
+    /// matching and lookups.
     pub market_display: String,
     /// true = Short, false = Long.
     pub is_short: bool,
-    /// Размер входной ноги (buy для long / sell для short), в базовой валюте.
+    /// Entry-leg size in the base currency: buy for long or sell for short.
     pub size: f64,
-    /// Остаток выходной ноги, в базовой валюте. Для подписи sell-линии на чарте:
-    /// Moonbot показывает именно QuantityRemaining, а не исходный размер входа.
+    /// Remaining exit-leg size in the base currency. The chart's sell-line label follows Moonbot
+    /// by showing `QuantityRemaining`, not the original entry size.
     pub remaining_size: f64,
-    /// SL/TS включены НА САМОМ ОРДЕРЕ (per-order `StopSettings`). Это то, что тогается кликом.
+    /// Whether SL/TS are enabled on the order's own per-order `StopSettings`. These flags are
+    /// toggled by a click.
     pub sl_on: bool,
     pub ts_on: bool,
-    /// SL/TS/VStop включены В СТРАТЕГИИ ордера (по `strat_id`; Delphi-поля `UseStopLoss`/
-    /// `UseTrailing`/`UseBV_SV_Stop`, отсутствующее в снимке поле = дефолт СХЕМЫ — сериализатор
-    /// пропускает дефолтные значения). Фолбэк-индикатор для колонок: если per-order флаг выкл,
-    /// но стратегия их применяет — показываем «унаследовано» (ордер защищён стратегией, хотя
-    /// свой флаг не выставлен).
+    /// Whether SL, TS, and VStop are enabled in the order's strategy, resolved by `strat_id` from
+    /// the Delphi fields `UseStopLoss`, `UseTrailing`, and `UseBV_SV_Stop`. A field absent from the
+    /// snapshot uses its schema default because the serializer omits default values. These are
+    /// fallback column indicators: when a per-order flag is off but the strategy enables it, the
+    /// UI shows the stop as inherited because the strategy still protects the order.
     pub sl_strat: bool,
     pub ts_strat: bool,
     pub vstop_strat: bool,
     pub vstop_on: bool,
-    // --- Сырые per-order параметры стопов с провода (окно редактирования ордера).
-    // Абсолютные цены линий (после разрешения процентов) — ниже, в категории C.
-    /// SL задан фиксированной ценой (wire `sl_fixed`); false = глобальный/процентный режим.
+    // --- Raw per-order stop parameters from the wire for the order editor. ---
+    // Absolute line prices after resolving percentages are below in category C.
+    /// Whether SL uses a fixed price from wire field `sl_fixed`; `false` selects global or
+    /// percentage mode.
     pub sl_fixed: bool,
-    /// TS задан фиксированной ценой (wire `trailing_fixed`).
+    /// Whether TS uses a fixed price from wire field `trailing_fixed`.
     pub ts_fixed: bool,
-    /// VStop: фиксированный уровень (wire `vstop_fixed`).
+    /// Whether VStop uses a fixed level from wire field `vstop_fixed`.
     pub vstop_fixed: bool,
-    /// VStop: сырой уровень с провода (цена, если `vstop_fixed`; иначе %).
+    /// Raw VStop level from the wire: a price when `vstop_fixed`, otherwise a percentage.
     pub vstop_level: f64,
-    /// VStop: объём-порог срабатывания («Vol <»).
+    /// VStop trigger volume threshold (`Vol <`).
     pub vstop_vol: f64,
-    /// Цена входа (buy_price).
+    /// Entry price from `buy_price`.
     pub buy_price: f64,
-    /// Цена продажи (sell_price); 0 = не выставлена.
+    /// Sell price from `sell_price`; `0` means unset.
     pub sell_price: f64,
-    /// Время создания ордера, unix мс (начало линии). 0 = неизвестно.
+    /// Order creation time in Unix milliseconds, used as the line start; `0` means unknown.
     pub create_time_ms: f64,
-    /// Текущая цена рынка (p_last).
+    /// Current market price from `p_last`.
     pub price: f32,
-    /// Заполнение входной ноги, %.
+    /// Entry-leg fill percentage.
     pub fill_pct: f32,
-    /// Имя/тип стратегии ордера (вместо числового strat_id).
+    /// Order strategy name or kind instead of its numeric `strat_id`.
     pub strat: String,
-    /// Числовой id стратегии ордера (== `StrategyRow::id`); 0 — ордер без стратегии.
-    /// Для подсчёта открытых ордеров по конкретной стратегии в дереве.
+    /// Numeric order strategy ID equal to `StrategyRow::id`; `0` means no strategy. Used to count
+    /// open orders for a particular strategy in the tree.
     pub strat_id: u64,
-    /// Имя статуса воркера (`OrderWorkerStatus.name()`): None/BuySet/BuyDone/SellSet/…
-    /// Авторитетная фаза вход/выход (lifecycle) — для классификации BUY/SELL/Short-S/Short-B,
-    /// т.к. `fill_pct` ноги для шорта не отражает исполнение входа.
+    /// Worker status name from `OrderWorkerStatus.name()`, such as None, BuySet, BuyDone, or
+    /// SellSet. This is the authoritative entry/exit lifecycle phase used to classify BUY, SELL,
+    /// Short-S, and Short-B because a short leg's `fill_pct` does not represent entry execution.
     pub status: String,
-    /// uid ордера (task id) — монотонен с созданием: больше = новее. Для сортировки
-    /// «по созданию / новые-старые первые» в окне ордеров.
+    /// Order `uid`, or task ID, which increases with creation so larger values are newer. Used for
+    /// creation-order sorting in either newest-first or oldest-first order.
     pub uid: u64,
-    /// Эмуляторный ордер (не реальный) — для фильтра и пометки «(E)».
+    /// Whether this is an emulated rather than live order, used for filtering and the `(E)` marker.
     pub emulator: bool,
-    /// Ордер терминальный (`job_is_done` у ядра) — исполнен/отменён, ждёт deferred-removal.
-    /// АВТОРИТЕТНЫЙ флаг закрытия (как Moonbot `o.IsClosed`): стор помечает линию закрытой
-    /// по нему СРАЗУ, пока ордер ещё в снимке, а не по исчезновению+грейс.
+    /// Whether the core considers the order terminal through `job_is_done`: filled or cancelled
+    /// and awaiting deferred removal. This is the authoritative closure flag, equivalent to
+    /// Moonbot's `o.IsClosed`; the store marks the line closed immediately while the order is still
+    /// present instead of waiting for disappearance plus a grace period.
     pub job_is_done: bool,
 
-    // --- Цены линий на чарте (категория C: горизонтали по цене) ---
-    // Считаются в feed-слое (live.rs) из StopSettings/buy_price/market-liq: проценты
-    // приводятся к абсолютной цене ТАМ, а рендер получает готовые цены и только
-    // маппит их в пиксели через shader-uniform. `None` = линия не активна.
-    /// Ордер ещё не исполнен (pending) — линию входа рисуем пунктиром.
+    // --- Chart line prices, category C: horizontal price levels. ---
+    // `feed/live/convert.rs::build_order_row` derives these from StopSettings, buy_price, and market
+    // liquidation data, resolving percentages into absolute prices there. Rendering receives final
+    // prices and only maps them to pixels through a shader uniform. `None` means the line is inactive.
+    /// Whether the order is still pending, which renders the entry line as dashed.
     pub pending: bool,
-    /// Входная нога исполнена (позиция открыта) — гейт для стоп/трейлинг/liq линий.
+    /// Whether the entry leg is filled and the position open, gating stop, trailing, and
+    /// liquidation lines.
     pub filled: bool,
-    /// Стоп-лосс (абсолютная цена).
+    /// Stop-loss absolute price.
     pub stop_loss: Option<f64>,
-    /// Трейлинг-стоп (абсолютная цена; для %-режима — оценка от входа).
+    /// Trailing-stop absolute price, estimated from the entry price in percentage mode.
     pub trailing: Option<f64>,
-    /// Тейк-профит (абсолютная цена).
+    /// Take-profit absolute price.
     pub take_profit: Option<f64>,
-    /// VStop (абсолютная цена уровня).
+    /// VStop level as an absolute price.
     pub vstop: Option<f64>,
-    /// Цена условия pending-ордера (BuyCondPrice).
+    /// Pending-order condition price from `BuyCondPrice`.
     pub pending_cond: Option<f64>,
-    /// Цена ликвидации позиции (из рынка, по стороне).
+    /// Position liquidation price from the market for the relevant side.
     pub liq: Option<f64>,
-    /// Локальный/серверный PanicSell флаг.
+    /// Local or server-provided PanicSell flag.
     pub panic_sell: bool,
     /// Moon-shot corridor active marker.
     pub is_moon_shot: bool,
     /// Corridor price band from server, 0/NaN means absent.
     pub corridor_price_down: f32,
     pub corridor_price_up: f32,
-    /// Серверная трасса buy-линии (если ядро её уже построило).
+    /// Server-provided buy-line trace when the core has built one.
     pub buy_trace: Option<OrderTrace>,
-    /// Серверная трасса sell-линии (если ядро её уже построило).
+    /// Server-provided sell-line trace when the core has built one.
     pub sell_trace: Option<OrderTrace>,
 }
 
-/// Один детект ядра (для тулбара/истории). Декаплено от moonproto.
+/// One core detect for the toolbar and history, decoupled from moonproto.
 #[derive(Debug, Clone)]
 pub struct DetectRow {
-    /// Монотонный per-core номер (курсор ингеста в ленту детектов).
+    /// Monotonic per-core sequence number used as the ingestion cursor for the detects feed.
     pub seq: u64,
-    /// Рынок (монета).
+    /// Market or coin.
     pub market: String,
-    /// Unix-время приёма, мс.
+    /// Receipt time in Unix milliseconds.
     pub time_ms: f64,
-    /// У стратегии-источника включён звук-алерт (SoundAlert=Yes) — только такие
-    /// детекты показываем кнопкой в ленте.
+    /// Whether the source strategy enables a sound alert through `SoundAlert=Yes`. The UI drops a
+    /// detect when both this and `is_alert` are false; drawn-object alerts may therefore render
+    /// without `sound_alert`. Detects auto-added to charts are excluded from the regular buttons.
     pub sound_alert: bool,
-    /// Сколько секунд держать кнопку (KeepAlert стратегии; дефолт 60).
+    /// Number of seconds to keep the button, from strategy `KeepAlert`, defaulting to 60.
     pub keep_alert_secs: u32,
-    /// AddToChart у стратегии — НОМЕР чарта-вкладки (1,2,3…), куда авто-добавить
-    /// график монеты. 0 = не добавлять (обычный детект-кнопка в ленте).
+    /// Strategy `AddToChart` tab number, such as 1, 2, or 3, to which the coin chart is added
+    /// automatically. `0` only disables automatic addition; a regular button still requires
+    /// `sound_alert` or `is_alert`.
     pub add_to_chart: u32,
-    /// KeepInChart, сек — сколько держать авто-график монеты во вкладке, прежде
-    /// чем закрыть (вкладка остаётся). Дефолт 60.
+    /// Strategy `KeepInChart` duration in seconds before closing the automatically added coin
+    /// chart while retaining the tab, defaulting to 60.
     pub keep_in_chart_secs: u32,
-    /// Имя звука стратегии (стем wav) — проиграть при приходе детекта. `None` — тихо.
+    /// Strategy sound name as a WAV stem to play when the detect arrives; `None` is silent.
     pub sound_name: Option<String>,
-    /// Детект — СРАБАТЫВАНИЕ АЛЕРТА (нарисованной фигуры, `DETECT_KIND_ALERT`). Такие
-    /// показываем и озвучиваем даже без стратегии (звук — дефолтный, если у стратегии нет).
+    /// Whether this detect is a drawn-object alert trigger, `DETECT_KIND_ALERT`. These are shown and
+    /// played even without a strategy, using the default sound when the strategy has none.
     pub is_alert: bool,
-    /// Ordinal вида стратегии-источника (`StrategyKind`, см. `strat_kind_name`).
-    /// 0 = Unknown / нет снимка стратегии; срабатывание алерта без стратегии → 22
-    /// (Alerts). Нужен для бейджа типа детекта в ленте.
+    /// Source strategy-kind ordinal from `StrategyKind`; see `strat_kind_name`. `0` means Unknown
+    /// or a missing strategy snapshot, while an alert trigger without a strategy maps to 22
+    /// (Alerts). Used for the detect-kind badge in the feed.
     pub kind: u8,
-    /// Направление стратегии-источника (`is_short`): true = шорт. Для обводки бейджа
-    /// по направлению в ленте детектов. Нет снимка стратегии → false (лонг).
+    /// Source strategy direction from `is_short`, where `true` means short. Used to outline the
+    /// feed badge by direction. A missing strategy snapshot defaults to `false`, or long.
     pub is_short: bool,
 }
 
-/// Одна строка серверного лога ядра (`Event::ServerLog`). Декаплено от moonproto.
+/// One core server-log line from `Event::ServerLog`, decoupled from moonproto.
 #[derive(Debug, Clone)]
 pub struct CoreLogLine {
-    /// Unix-время строки, мс (из `ServerLogEvent::unix_millis`).
+    /// Line time in Unix milliseconds from `ServerLogEvent::unix_millis`.
     pub time_ms: i64,
-    /// Локальное время терминала, когда feed-поток принял эту строку, мс unix.
+    /// Terminal-local receipt time recorded by the feed thread in Unix milliseconds.
     pub recv_ms: i64,
     pub msg: String,
 }
 
-/// Один chart-алерт, принятый ядром (`Event::ChartAlert::Upserted`). Алерт в
-/// Moonbot — это нарисованная на чарте фигура (линия/канал/фибо/…) с галкой
-/// «Alert»; `blob` — её непрозрачный бинарь `TChartObject.Save()`. Терминал
-/// хранит blob как есть: он нужен для повторного `upsert` (вкл/выкл алерта)
-/// и для реверса формата (этап 0). Декаплено от moonproto.
+/// One chart alert accepted by the core through `Event::ChartAlert::Upserted`.
+///
+/// In Moonbot an alert is a drawn chart object, such as a line, channel, or Fibonacci tool, with
+/// its Alert option enabled. `blob` is its opaque `TChartObject.Save()` binary. The terminal keeps
+/// it unchanged for subsequent `upsert` calls that enable or disable the alert and for format
+/// reverse engineering in phase zero. This type is decoupled from moonproto.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChartAlertRow {
     pub market: String,
@@ -271,16 +285,18 @@ pub struct ChartAlertRow {
     pub blob: Vec<u8>,
 }
 
-/// Изменение авторитетного набора chart-алертов ядра (сервер владеет набором;
-/// после реконнекта терминал запрашивает полный снапшот).
+/// Change to the core's authoritative chart-alert set.
+///
+/// The server owns the set, and the terminal requests a full snapshot after reconnecting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChartAlertUpdate {
     Upserted(ChartAlertRow),
     Deleted { market: String, obj_uid: u64 },
 }
 
-/// Какое Engine-действие подтвердило/отклонило ядро (`Event::EngineAction`).
-/// Декаплено от moonproto: UI форматирует текст тоста сам.
+/// Engine action accepted or rejected by the core through `Event::EngineAction`.
+///
+/// This is decoupled from moonproto so the UI formats the toast text itself.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineActionKind {
     CancelAllOrders,
@@ -310,38 +326,40 @@ pub enum EngineActionKind {
     ReloadOrderBook,
 }
 
-/// Результат асинхронного Engine-действия ядра. Приходит и при обрыве связи
-/// (`success=false`, «disconnected») — тост «не дошло» не теряется.
+/// Result of an asynchronous Engine action on the core.
+///
+/// A result also arrives on disconnect with `success=false` and a disconnected error, preserving
+/// the toast that reports the action was not delivered.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EngineActionResult {
     pub kind: EngineActionKind,
     pub success: bool,
-    /// Код ошибки биржи/ядра (0, если нет).
+    /// Exchange or core error code; `0` means no error.
     pub error_code: i32,
-    /// Текст ошибки (пуст при успехе).
+    /// Error text, empty on success.
     pub error_msg: String,
 }
 
-/// Одна стратегия ядра (для окна стратегий). Декаплено от moonproto.
+/// One core strategy for the Strategies window, decoupled from moonproto.
 #[derive(Debug, Clone)]
 pub struct StrategyRow {
     pub id: u64,
-    /// Имя стратегии (StrategyName) или fallback.
+    /// Strategy name from `StrategyName`, or a fallback.
     pub name: String,
-    /// Тип (вид) стратегии — человекочитаемо.
+    /// Human-readable strategy type or kind.
     pub kind: String,
-    /// Ordinal вида (для связи со схемой при показе секций/полей).
+    /// Kind ordinal used to associate the strategy with its schema sections and fields.
     pub kind_ordinal: u8,
-    /// Путь папки в дереве стратегий (например "test cpu/20").
+    /// Folder path in the strategy tree, such as `test cpu/20`.
     pub folder_path: String,
-    /// Отмечена (checked) = запущена.
+    /// Whether the strategy checkbox is checked; this selection does not prove it is running.
     pub checked: bool,
     pub is_short: bool,
-    /// Значения полей стратегии (имя → форматированная строка) для read-only плашек.
+    /// Strategy field values as name-to-formatted-string pairs that populate editable controls.
     pub fields: Vec<(String, String)>,
 }
 
-/// Вид виджета поля схемы (из moonproto `StrategyFieldUiKind`).
+/// Schema-field widget kind from moonproto `StrategyFieldUiKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchemaFieldUi {
     Edit,
@@ -350,48 +368,49 @@ pub enum SchemaFieldUi {
     Color,
 }
 
-/// Описание одного поля схемы стратегий (декаплено от moonproto).
+/// Description of one strategy-schema field, decoupled from moonproto.
 #[derive(Debug, Clone)]
 pub struct SchemaField {
     pub name: String,
-    /// Имя типа ("Bool"/"Int32"/"Double"/"String"/…) из схемы ядра. Используется в UI,
-    /// чтобы числовые поля не рисовались как многострочный memo (см. `is_memo_field`).
+    /// Type name from the core schema, such as `Bool`, `Int32`, `Double`, or `String`. The UI uses
+    /// it to avoid rendering numeric fields as multiline memos; see `is_memo_field`.
     pub type_name: String,
     pub ui: SchemaFieldUi,
-    /// Статический список значений (для Combo).
-    /// Пока не читается: нужно этапу полного редактирования полей стратегий.
+    /// Static value list used to populate the field's Combo editor.
     #[allow(dead_code)]
     pub picklist: Vec<String>,
-    /// Значение по умолчанию (форматированное), если есть в схеме.
+    /// Formatted default value when the schema provides one.
     pub default: Option<String>,
 }
 
-/// Секция (раздел) полей одного вида стратегии (main/filters/…).
+/// Field section for one strategy kind, such as main or filters.
 #[derive(Debug, Clone)]
 pub struct SchemaSection {
     pub title: String,
     pub fields: Vec<SchemaField>,
 }
 
-/// Схема одного вида стратегии: его секции.
+/// Schema for one strategy kind and its sections.
 #[derive(Debug, Clone)]
 pub struct SchemaKind {
     pub ordinal: u8,
-    /// Имя вида из схемы ядра (авторитетнее хардкода strat_kind_name).
-    /// Пока не читается: нужно этапу полного редактирования полей стратегий.
+    /// Kind name from the core schema, authoritative over hard-coded `strat_kind_name` and consumed
+    /// by strategy creation and kind/filter UI.
     #[allow(dead_code)]
     pub name: String,
     pub sections: Vec<SchemaSection>,
 }
 
-/// Полная схема стратегий ядра (все виды). Шлётся при смене revision схемы.
+/// Complete schema for all core strategy kinds, sent when the schema revision changes.
 #[derive(Debug, Clone, Default)]
 pub struct StrategySchemaModel {
     pub kinds: Vec<SchemaKind>,
 }
 
-/// Кошелёк биржи (для дерева переноса активов). Зеркало moonproto `ExchangeKind`
-/// (Spot=0/Futures=1/Quarterly=2), но декаплено — UI/стор не зависят от moonproto.
+/// Exchange wallet used by the asset-transfer tree.
+///
+/// This mirrors moonproto `ExchangeKind` with Spot=0, Futures=1, and Quarterly=2, but is decoupled
+/// so the UI and store do not depend on moonproto.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WalletKind {
     Spot,
@@ -400,10 +419,10 @@ pub enum WalletKind {
 }
 
 impl WalletKind {
-    /// Все кошельки в порядке отображения (как ветки дерева).
+    /// All wallets in display order as tree branches.
     pub const ALL: [WalletKind; 3] = [WalletKind::Spot, WalletKind::Futures, WalletKind::Quarterly];
 
-    /// Человекочитаемое имя ветки.
+    /// Return the human-readable branch label.
     pub fn label(self) -> &'static str {
         match self {
             WalletKind::Spot => "Спот",
@@ -412,7 +431,7 @@ impl WalletKind {
         }
     }
 
-    /// Стабильный код для персиста (раскрытые ветки/выбор).
+    /// Return the stable persistence code used for expanded branches and selection.
     pub fn to_u8(self) -> u8 {
         match self {
             WalletKind::Spot => 0,
@@ -430,74 +449,77 @@ impl WalletKind {
     }
 }
 
-/// Один актив/позиция ядра по рынку (для окна «Активы»). Декаплено от moonproto.
-/// USDT-нормализация стоимости и отсечение пыли делаются на стороне UI — в сторе
-/// держим полные данные.
+/// One core asset or position for a market in the Assets window, decoupled from moonproto.
+///
+/// The feed normalizes values to USDT, while the UI filters dust and the store retains all rows.
 #[derive(Debug, Clone)]
 pub struct AssetRow {
-    /// Имя рынка ядра, напр. "ADAUSDT".
+    /// Core market name, such as `ADAUSDT`.
     pub market: String,
-    /// Базовая монета (актив), напр. "ADA".
+    /// Base coin or asset, such as `ADA`.
     pub coin: String,
-    /// Котировочная валюта рынка, напр. "USDT"/"BTC".
+    /// Market quote currency, such as `USDT` or `BTC`.
     pub quote: String,
-    /// ListedType рынка: 0 unknown / 1 spot / 2 futures / 3 both.
+    /// Market `ListedType`: 0 unknown, 1 spot, 2 futures, or 3 both.
     pub listed: u8,
-    /// Баланс актива (asset_balance), в базовой монете.
+    /// Asset balance from `asset_balance`, in the base coin.
     pub qty: f64,
-    /// Полный баланс актива (asset_balance_full), в базовой монете.
+    /// Full asset balance from `asset_balance_full`, in the base coin.
     pub qty_full: f64,
-    /// Текущая цена рынка (p_last, в quote).
+    /// Current market price from `p_last`, denominated in the quote currency.
     pub price: f64,
-    /// Текущая стоимость баланса монеты в USDT (qty * price * курс quote/USDT).
-    /// Считается на ядре через `base_currency_price`. 0 = курс неизвестен.
+    /// Current held coin-balance value in USDT as
+    /// `max(abs(qty_full), abs(qty)) * price * quote/USDT rate`, calculated by the feed so locked
+    /// holdings remain valued. `0` means the rate is unknown.
     pub value_usdt: f64,
-    /// Стоимость минимального лота рынка в USDT (`MarketPrice::min_lot_size` × курс
-    /// quote/USDT). Балансы дешевле — непродаваемая пыль, UI их прячет. 0 = неизвестно.
+    /// Minimum market-lot value in USDT from `MarketPrice::min_lot_size * quote/USDT rate`.
+    /// Smaller balances are unsellable dust hidden by the UI; `0` means unknown.
     pub min_lot_usd: f64,
-    /// Монета строки — котируемая валюта аккаунта (USDT у USDT-ботов): её баланс —
-    /// не «купленная монета», UI прячет такую строку из таблицы активов.
+    /// Whether this row's coin is the account quote currency, such as USDT for a USDT bot. Its
+    /// balance is cash rather than a purchased coin, so the UI hides the row from the assets table.
     pub is_quote_asset: bool,
-    /// Mark-цена (для фьюч; 0 если нет).
+    /// Futures mark price; `0` means unavailable.
     pub mark_price: f64,
-    /// Размер позиции (pos_size).
+    /// Position size from `pos_size`.
     pub pos_size: f64,
-    /// Цена позиции (pos_price).
+    /// Position price from `pos_price`.
     pub pos_price: f64,
-    /// Цена ликвидации позиции (liq_price; 0 если нет).
+    /// Position liquidation price from `liq_price`; `0` means unavailable.
     pub liq_price: f64,
-    /// Плечо рынка на ЭТОМ ядре (`Market.leverage_x`). Per-core account-поле — показывается
-    /// в тулбаре (Lev зависит от ядра и монеты). 0 = неизвестно.
+    /// Market leverage for this core from `Market.leverage_x`. This per-core account field appears
+    /// in the toolbar because Lev depends on both the core and coin; `0` means unknown.
     pub leverage: i32,
-    /// ЖИВОЙ нереализованный PnL позиции в USDT: (текущая цена − цена открытия) × размер,
-    /// по ногам хеджа long/short если они есть, иначе нетто по `pos_dir`. Считается на
-    /// ядре при каждой пересборке снимка (~1 Гц) от mark/last-цены — НЕ серверный
-    /// `total_profit_*` (тот накопленный за период и замерзает между balance-пушами).
-    /// Нет позиции/цены входа (спот-баланс) → fallback: серверный total_profit × курс.
+    /// Live unrealized position PnL in USDT as `(current price - entry price) * size`, calculated
+    /// per long and short hedge leg when present, otherwise net by `pos_dir`. The feed rebuilds it
+    /// only after domain events, rate-capped at once per second while an Assets view rendered
+    /// recently and once per five seconds otherwise. This is not the server's period-accumulated
+    /// `total_profit_*`, which remains frozen between balance pushes. Without a position or entry
+    /// price, as for a spot balance, it falls back to server total profit times the conversion rate.
     pub pnl_usdt: f64,
 }
 
-/// Account-итоги ядра (`GlobalBalance`). Декаплено от moonproto.
+/// Core account totals from `GlobalBalance`, decoupled from moonproto.
 #[derive(Debug, Clone, Default)]
 pub struct GlobalBalanceRow {
-    /// BTC-эквивалент: доступно / заблокировано / полный (с нереализ. PnL).
+    /// BTC-equivalent available, locked, and full balances, including unrealized PnL in the latter.
     pub btc_total: f64,
     pub btc_locked: f64,
     pub btc_full: f64,
-    /// special_coin_balance (USDT для фьюч, BUSD/USDC в MA-режиме и т.п.).
+    /// `special_coin_balance`, such as USDT for futures or BUSD/USDC in MA mode.
     pub special_coin: f64,
-    /// Суммарный PnL ядра в БАЗОВОЙ валюте (серверный `total_pnl` = Moonbot RecalcTotalPnl:
-    /// сумма `total_profit` ТОЛЬКО по рынкам базовой валюты `is_btc_market`). Это «реальный»
-    /// PnL ядра — не равен сумме `profit_*` по всем строкам таблицы (там мешаются котировки).
+    /// Total core PnL in the base currency. The server's `total_pnl` is Moonbot
+    /// `RecalcTotalPnl`: the sum of `total_profit` only for base-currency markets marked
+    /// `is_btc_market`. This authoritative core PnL differs from summing `profit_*` across every
+    /// table row, where quote currencies are mixed.
     pub total_pnl: f64,
-    /// Свободный баланс аккаунта в USDT (btc_balance_total × курс базовой валюты→USDT).
-    /// Считается на ядре с УЧЁТОМ базовой валюты (для USDT-бота `btc_balance_*` уже в USDT,
-    /// курс=1; для BTC-бота — ×BTCUSDT). 0 = курс неизвестен.
+    /// Free account balance in USDT as `btc_balance_total * base-currency/USDT rate`. The core
+    /// accounts for the base currency: a USDT bot's `btc_balance_*` is already in USDT and uses a
+    /// rate of 1, while a BTC bot multiplies by BTCUSDT. `0` means the rate is unknown.
     pub free_usdt: f64,
-    /// Итоговый баланс аккаунта в USDT (btc_balance_full × курс, с нереализ. PnL).
+    /// Total account balance in USDT as `btc_balance_full * rate`, including unrealized PnL.
     pub total_usdt: f64,
-    /// Серверный PnL ядра (`total_pnl`), пересчитанный в USDT той же базовой ставкой, что
-    /// `free_usdt`/`total_usdt`. Это значение шапки «PnL» — берём с сервера, не суммируем сами.
+    /// Server-provided core PnL from `total_pnl`, converted to USDT with the same base rate as
+    /// `free_usdt` and `total_usdt`. The header PnL uses this value instead of a local sum.
     pub pnl_usdt: f64,
     /// Whether `free_usdt`/`total_usdt` carry a complete, finite USD valuation. Global equity
     /// requires a known base-currency rate; coin-wallet equity requires a valid price for every
@@ -510,44 +532,48 @@ pub struct GlobalBalanceRow {
     pub usd_rate_known: bool,
 }
 
-/// Снимок активов ядра (для окна «Активы»). Декаплено от moonproto.
+/// Core assets snapshot for the Assets window, decoupled from moonproto.
 #[derive(Debug, Clone, Default)]
 pub struct AssetsSnapshot {
     pub rows: Vec<AssetRow>,
     pub global: GlobalBalanceRow,
-    /// Ядро торгует фьючами (бит FUTURES из `exchange_type_mask` BaseCheck; CoinM тоже).
-    /// На фьюч-ядрах таблица активов показывает ТОЛЬКО открытые позиции — балансы там
-    /// котируемые (USDT/монеты маржи), а не купленные активы.
+    /// Whether the core trades futures, including CoinM, according to the FUTURES bit in
+    /// BaseCheck `exchange_type_mask`. For futures cores, the assets table shows only open
+    /// positions because balances there are quote or margin currencies rather than purchased
+    /// assets.
     pub futures_account: bool,
-    /// Базовая (котируемая) валюта аккаунта: `base_currency_name` из BaseCheck ("USDT"/
-    /// "USDC"/"BTC"/…). Нужна UI, чтобы прятать саму квоту из спот-активов (напр. USDC у
-    /// ядра, торгующего в BTCUSDC) — её баланс это кэш, а не купленная монета.
+    /// Account base or quote currency from BaseCheck `base_currency_name`, such as USDT, USDC, or
+    /// BTC. The UI uses it to hide the quote currency from spot assets, such as USDC on a core
+    /// trading BTCUSDC, because that balance is cash rather than a purchased coin.
     pub base_currency: String,
-    /// Имена ВСЕХ рынков ядра (каталог). UI гейтит по нему кнопку «Market sell»: продать
-    /// монету можно только если рынок `<coin><quote>` реально существует (напр. у USDT на
-    /// USDC-аккаунте рынка `USDTUSDC` нет → кнопка скрыта).
+    /// Names of every market in the core's catalog. The UI gates the Market Sell button on this
+    /// set because a coin can be sold only when `<coin><quote>` exists. For example, if a USDC
+    /// account has no `USDTUSDC` market, the button for USDT is hidden.
     pub markets: std::collections::HashSet<String>,
-    /// Плечо по рынку (`leverage_x`) — per-core, для ЛЮБОГО отслеживаемого рынка (не только с
-    /// позицией): тулбар Lev читает её для монеты main-чарта. Не включаем рынки без account-
-    /// данных (там ядро сбрасывает leverage_x в 1) — их плечо неизвестно, показываем «—».
+    /// Per-core leverage from `leverage_x` for every tracked market, not only markets with a
+    /// position. The toolbar reads it for the main chart's coin. Markets without account data are
+    /// omitted because the core resets their `leverage_x` to 1, leaving their actual leverage
+    /// unknown and displayed as a dash.
     pub leverage: std::collections::HashMap<String, i32>,
 }
 
-/// Один transfer-актив кошелька (для дерева переноса). Декаплено от moonproto.
+/// One transferable wallet asset for the transfer tree, decoupled from moonproto.
 #[derive(Debug, Clone)]
 pub struct TransferAssetRow {
-    /// Валюта/монета, напр. "USDT"/"BTC".
+    /// Currency or coin, such as USDT or BTC.
     pub currency: String,
-    /// Доступно к переносу (биржа).
+    /// Amount the exchange makes available for transfer.
     pub amount: f64,
-    /// Всего на кошельке.
+    /// Total amount in the wallet.
     pub total: f64,
-    /// Стоимость `total` в USDT (через рынок `<currency>USDT`). 0 = курс неизвестен.
+    /// Value of `total` in USDT through the feed's full `coin_to_usdt` pricing cascade; `0` means
+    /// the rate is unknown.
     pub value_usdt: f64,
 }
 
-/// Снимок transfer-активов ядра по кошелькам (Spot/Futures/Quarterly). Источник
-/// дерева переноса; обновляется по запросу (`refresh_transfer_assets`).
+/// Snapshot of a core's transferable assets across Spot, Futures, and Quarterly wallets.
+///
+/// This supplies the transfer tree and refreshes on request through `refresh_transfer_assets`.
 #[derive(Debug, Clone, Default)]
 pub struct TransferAssetsSnapshot {
     pub spot: Vec<TransferAssetRow>,
@@ -556,7 +582,7 @@ pub struct TransferAssetsSnapshot {
 }
 
 impl TransferAssetsSnapshot {
-    /// Активы выбранного кошелька (ветки дерева).
+    /// Return the assets for the selected wallet tree branch.
     pub fn wallet(&self, kind: WalletKind) -> &[TransferAssetRow] {
         match kind {
             WalletKind::Spot => &self.spot,
@@ -567,7 +593,7 @@ impl TransferAssetsSnapshot {
 }
 
 /// License/module/MoonCredits state of one Moonbot core.
-/// Декаплено от moonproto: UI видит только готовый аккаунтный snapshot.
+/// Decoupled from moonproto so the UI sees only a ready account snapshot.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LicenseState {
     pub paid_version: bool,
@@ -578,54 +604,59 @@ pub struct LicenseState {
     pub can_use_watcher: bool,
 }
 
-/// Снимок настроек клиента ядра (moonproto `ClientSettings`) — плоская проекция для UI
-/// (TP/SL/sell-пресеты в тулбаре). Декаплено от moonproto: raw-поля `s_price`/`sb_num`/…
-/// в проде `pub(crate)`, поэтому читаем их ТОЛЬКО через публичные хелперы команды.
+/// Core client-settings snapshot from moonproto `ClientSettings`, flattened for toolbar TP, SL,
+/// and sell presets. This is decoupled from moonproto: raw fields such as `s_price` and `sb_num`
+/// are `pub(crate)` in production and are read only through the command's public helpers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClientSettings {
-    /// Эффективный тейк-профит, % (`effective_take_profit_percent`). При `fixed_sell_mode`
-    /// равен проценту выбранного S-слота — НЕ показываем его на кнопке TP (см. `take_profit_main_pct`).
+    /// Effective take-profit percentage from `effective_take_profit_percent`. Under
+    /// `fixed_sell_mode` it equals the selected S-slot percentage and must not be shown on the TP
+    /// button; see `take_profit_main_pct`.
     pub take_profit_pct: f64,
-    /// «Свой» тейк-профит кнопки TP (из `x_sell`/scalp), НЕ зависит от `fixed_sell_mode` —
-    /// кнопка TP всегда показывает его, чтобы выбор S-слота не подменял отображаемый TP.
+    /// TP button's own take-profit value from `x_sell` or scalp, independent of `fixed_sell_mode`.
+    /// The button always shows this value so selecting an S slot does not replace its displayed TP.
     pub take_profit_main_pct: f64,
-    /// Расширенный диапазон TP (флаг `x_tmode`, «s9»): off = 0..100%, on = 100..900%
-    /// (на проводе хранится как `x_sell` ×10). Определяет диапазон слайдера и галку в попапе.
+    /// Extended TP range from the `x_tmode` or `s9` flag: off means 0..100%, on means 100..900%,
+    /// stored on the wire as `x_sell * 10`. This determines the slider range and popup checkbox.
     pub take_profit_extended: bool,
-    /// Режим fixed-sell включён.
+    /// Whether fixed-sell mode is enabled.
     pub fixed_sell_mode: bool,
     /// Stop-loss / price-drop level, % (`price_drop_level`).
     pub stop_loss_pct: f32,
-    /// Трейлинг-стоп, % (`trailing_drop`).
+    /// Trailing-stop percentage from `trailing_drop`.
     pub trailing_drop_pct: f32,
-    /// Глобальный тейк-профит включён (`use_g_take_profit`) + значение, % (`g_take_profit`).
+    /// Whether global take profit is enabled through `use_g_take_profit`, with its percentage from
+    /// `g_take_profit`.
     pub use_global_take_profit: bool,
     pub global_take_profit_pct: f64,
-    /// Паника при падении цены (`panic_if_price_drop`).
+    /// Panic-on-price-drop state from `panic_if_price_drop`.
     pub panic_if_price_drop: bool,
-    /// Режим эмулятора (`emu_mode`).
+    /// Emulator mode from `emu_mode`.
     pub emu_mode: bool,
     pub buy_iceberg: bool,
     pub sell_iceberg: bool,
     pub sign_orders: bool,
     pub use_stop_market: bool,
-    /// V-Stop по умолчанию: уровень падения объёма BID, % (`vol_drop_level`, целое).
+    /// Default VStop BID-volume drop level as an integer percentage from `vol_drop_level`.
     pub vol_drop_level: i32,
-    /// Чёрный список монет: включён (`use_coins_black_list`) + текст списка (`coins_black_list_text`).
+    /// Coin blacklist enabled state from `use_coins_black_list` and its text from
+    /// `coins_black_list_text`.
     pub use_blacklist: bool,
     pub blacklist_text: String,
-    /// 6 fixed-sell пресетов как видимые проценты (кнопки S1-S6).
+    /// Six fixed-sell presets as visible percentages for buttons S1-S6.
     pub fixed_sell_pcts: [f64; 6],
-    /// Выбранный fixed-sell слот, 1..=6 (`selected_fixed_sell_slot`).
+    /// Selected fixed-sell slot in 1..=6 from `selected_fixed_sell_slot`.
     pub fixed_sell_slot: usize,
-    /// Ручная стратегия включена (`use_manual_strategy`) — ручные ордера ведутся по ней
-    /// (sell/стопы ставит ядро из её полей), TP/S/SL тулбара к новым ордерам не применяются.
+    /// Whether the manual strategy is enabled through `use_manual_strategy`. Manual orders then
+    /// follow that strategy: the core places sells and stops from its fields, while toolbar TP, S,
+    /// and SL settings do not apply to new orders.
     pub use_manual_strategy: bool,
-    /// ID выбранной ручной стратегии (`manual_strategy_id`), 0 = не выбрана.
+    /// Selected manual-strategy ID from `manual_strategy_id`; `0` means none is selected.
     pub manual_strategy_id: u64,
 }
 
-/// Настройки управления плечом ядра (moonproto `LevManage`). Отдельный снимок, как в Moonbot.
+/// Core leverage-management settings from moonproto `LevManage`, kept as a separate snapshot as in
+/// Moonbot.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LevManageState {
     pub auto_max_order: bool,
@@ -638,92 +669,98 @@ pub struct LevManageState {
     pub lev_control: String,
 }
 
-/// Runtime-состояние ядра (moonproto `RuntimeState`): запущен ли рынок-рантайм и активна
-/// ли авто-детекция (false = passive mode).
+/// Core runtime state from moonproto `RuntimeState`: whether the market runtime is running and
+/// automatic detection is active. Passive mode is specifically `is_started=true` with
+/// `auto_detect_active=false`; a false value alone does not identify passive mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RuntimeState {
     pub is_started: bool,
     pub auto_detect_active: bool,
 }
 
-/// Точечная правка `ClientSettings` из тулбара. Применяется на фид-стороне к УДЕРЖАННОМУ
-/// moonproto-снимку (`client.snapshot().settings().client_settings`) через его хелперы —
-/// так сохраняются append-only tail/AutoStart-blob'ы, которые UI не видит. Затем снимок
-/// целиком уходит обратно в ядро (`settings().send`).
+/// Targeted `ClientSettings` edit from the toolbar.
+///
+/// The feed applies it through public helpers to the retained moonproto snapshot at
+/// `client.snapshot().settings().client_settings`, preserving append-only tails and AutoStart
+/// blobs invisible to the UI. It then sends the full snapshot back to the core through
+/// `settings().send`.
 #[derive(Debug, Clone, Copy)]
 pub enum ClientSettingsEdit {
-    /// Главный тейк-профит, % + режим расширенного диапазона (`x_tmode`/«s9»). При
-    /// `extended` пишем `x_tmode=true`, `x_sell=round(pct/10)` (100..900%); иначе
-    /// `x_tmode=false`, `x_sell=round(pct)` (1..100%). Снимает fixed-sell/scalp.
+    /// Main take-profit percentage and extended-range mode from `x_tmode` or `s9`. With
+    /// `extended`, writes `x_tmode=true` and `x_sell=round(pct/10)` for 100..900%; otherwise writes
+    /// `x_tmode=false` and `x_sell=round(pct)` for 1..100%. Clears fixed-sell and scalp modes.
     TakeProfit { pct: f64, extended: bool },
-    /// Stop-loss / price-drop level, % (знаковый: -20..+1 на ядре).
+    /// Stop-loss or price-drop level as a signed core percentage in -20..+1.
     StopLossPct(f32),
-    /// Скальп-тейк (суб-процентный TP через `x_sell_scalp`, x_sell=0): файн-слайдер TP.
-    /// На ядре шаг реально 1/50 = 0.02%. Снимает fixed-sell.
+    /// Scalp take profit for the fine TP slider, stored as a sub-percent value through
+    /// `x_sell_scalp` with `x_sell=0`. The core's actual step is 1/50, or 0.02%. Clears fixed-sell.
     ScalpTakeProfit(f64),
-    /// Выбрать fixed-sell слот 1..=6 (клик по S1-S6). Включает `fixed_sell_mode`.
+    /// Select a fixed-sell slot in 1..=6 from buttons S1-S6, enabling `fixed_sell_mode`.
     SelectFixedSellSlot(usize),
-    /// Вернуть управление главному TP: `fixed_sell_mode=false`, БЕЗ изменения значения TP
-    /// (`x_sell`/scalp не трогаем). Клик по кнопке TP / повторный клик по активному S-слоту.
+    /// Return control to the main TP by setting `fixed_sell_mode=false` without changing the TP
+    /// value in `x_sell` or scalp. Triggered by the TP button or a second click on the active S slot.
     EngageMainTakeProfit,
-    /// Значение fixed-sell пресета: слот 1..=6, видимый процент (колесо/инлайн-правка S-кнопки).
+    /// Fixed-sell preset value as a slot in 1..=6 and visible percentage, edited by the wheel or
+    /// inline editing on an S button.
     SetFixedSellPct { slot: usize, pct: f64 },
-    /// Стоп-маркет вместо стоп-лимита (`use_stop_market`).
+    /// Use a stop-market rather than stop-limit order through `use_stop_market`.
     UseStopMarket(bool),
-    /// Паника при падении цены (`panic_if_price_drop`).
+    /// Panic on price drop through `panic_if_price_drop`.
     PanicIfPriceDrop(bool),
-    /// Глобальный тейк-профит: вкл + значение, % (`use_g_take_profit`/`g_take_profit`).
+    /// Global take-profit enabled state and percentage through
+    /// `use_g_take_profit`/`g_take_profit`.
     GlobalTakeProfit { on: bool, pct: f64 },
-    /// Трейлинг-стоп, % (`trailing_drop`).
+    /// Trailing-stop percentage through `trailing_drop`.
     TrailingDrop(f32),
-    /// Айсберг ордеров покупки (`buy_iceberg`).
+    /// Buy-order iceberg mode through `buy_iceberg`.
     BuyIceberg(bool),
-    /// Айсберг ордеров продажи (`sell_iceberg`).
+    /// Sell-order iceberg mode through `sell_iceberg`.
     SellIceberg(bool),
-    /// Подпись ордеров (`sign_orders`).
+    /// Order signing through `sign_orders`.
     SignOrders(bool),
-    /// Режим эмулятора ядра (`emu_mode`).
+    /// Core emulator mode through `emu_mode`.
     EmuMode(bool),
-    /// V-Stop по умолчанию: уровень падения объёма BID, % (`vol_drop_level`, целое).
+    /// Default VStop BID-volume drop level as an integer percentage through `vol_drop_level`.
     VolDropLevel(i32),
-    /// Ручная стратегия: вкл/выкл + ID (`use_manual_strategy`/`manual_strategy_id`).
-    /// Выключение сохраняет ID — повторный тогл возвращает ту же стратегию.
+    /// Manual-strategy enabled state and ID through
+    /// `use_manual_strategy`/`manual_strategy_id`. Disabling preserves the ID so toggling it again
+    /// restores the same strategy.
     ManualStrategy { on: bool, id: u64 },
 }
 
-/// Какой счётчик прибыли сбрасывать (moonproto `ResetProfitKind`). Кнопки «Сессия»/«Всё время»
-/// в попапе настроек ядра.
+/// Profit counter to reset through moonproto `ResetProfitKind`, selected by the Session or
+/// All-Time buttons in the core-settings popup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResetProfitKind {
-    /// Текущая торговая сессия.
+    /// Current trading session.
     Session,
-    /// Всё накопленное время.
+    /// All accumulated time.
     All,
 }
 
-/// Точечная правка управления плечом (moonproto `LevManage`). Применяется к удержанному
-/// снимку и уходит через `settings().manage_leverage`.
+/// Targeted leverage-management edit for moonproto `LevManage`, applied to the retained snapshot
+/// and sent through `settings().manage_leverage`.
 #[derive(Debug, Clone, Copy)]
 pub enum LevManageEdit {
-    /// Зафиксировать целевое плечо: `auto_fix_lev=true` + `fix_lev=n`.
+    /// Fix the target leverage by setting `auto_fix_lev=true` and `fix_lev=n`.
     FixLev(i32),
-    /// Авто максимальный размер ордера (`auto_max_order`).
+    /// Automatic maximum order size through `auto_max_order`.
     AutoMaxOrder(bool),
-    /// Авто повышение плеча (`auto_lev_up`).
+    /// Automatic leverage increase through `auto_lev_up`.
     AutoLevUp(bool),
-    /// Изолированная маржа (`auto_isolated`; взаимоисключающа с кросс).
+    /// Isolated margin through `auto_isolated`, mutually exclusive with cross margin.
     AutoIsolated(bool),
-    /// Кросс-маржа (`auto_cross`; взаимоисключающа с изолированной).
+    /// Cross margin through `auto_cross`, mutually exclusive with isolated margin.
     AutoCross(bool),
-    /// Отчёт в Telegram (`tlg_report`).
+    /// Telegram reporting through `tlg_report`.
     TlgReport(bool),
 }
 
-/// Статус соединения с ядром.
+/// Connection status for a core.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnStatus {
     Connecting,
-    /// Промежуточная стадия подключения/инициализации (текст для бейджа).
+    /// Intermediate connection or initialization stage, carrying badge text.
     Stage(String),
     Ready,
     Failed(String),
@@ -776,59 +813,61 @@ impl MarketDirty {
     }
 }
 
-/// Сообщение от backend к UI.
+/// Message from a backend to the UI.
 ///
-/// Аккаунтные сообщения (Status/Orders/Detects/Strategies) несут готовый UI state
-/// конкретного ядра. Рыночные тики/стакан/price-lines через этот канал не едут:
-/// feed thread публикует их в MoonProto/MarketStore и шлёт только лёгкий
-/// [`MarketDataChanged`] wake для consumer-side pull.
+/// Account messages such as Status, Orders, Detects, and Strategies carry ready UI state for one
+/// core. Market ticks, order books, and price lines do not travel through this channel: the feed
+/// thread publishes them to MoonProto/MarketStore and sends only a lightweight
+/// [`MarketDataChanged`] wake-up for consumer-side pulling.
 #[derive(Debug, Clone)]
 pub enum FeedMsg {
     Status(ConnStatus),
-    /// Биржа ядра (из server_info после BaseCheck). Шлётся один раз.
+    /// Core exchange from `server_info` after BaseCheck, sent once.
     Identity(ExchangeId),
-    /// Базовая валюта аккаунта ядра ("USDT"/"BTC"/…) из `server_info`. Шлётся один раз
-    /// (рядом с `Identity`). Нужна UI для дефолтов размера ордера по базе (BTC vs USDT).
+    /// Core account base currency such as USDT or BTC from `server_info`, sent once alongside
+    /// `Identity`. The UI uses it for base-currency order-size defaults.
     CoreBase {
         base: String,
     },
-    /// Рыночный read-model изменился. Это лёгкий пинок consumer-side pull:
-    /// `SessionManager` отмечает dirty конкретных рынков, а видимые графики
-    /// сами подтягивают нужный snapshot. Сами тики/стакан через UI-channel не едут.
+    /// Notify that the market read model changed. This lightweight wake-up makes
+    /// `SessionManager` mark particular markets dirty while visible charts pull the snapshots they
+    /// need. The ticks and order book themselves do not travel through the UI channel.
     MarketDataChanged(Vec<MarketDirty>),
-    /// Открытые ордера ядра (все рынки).
+    /// Open core orders across all markets.
     Orders(Vec<OrderRow>),
-    /// Быстрый снимок ордеров только для chart/order-line стора. Таблица Orders
-    /// остаётся загейтена `Orders`, но график не должен терять короткий terminal
-    /// status между `OrderEvent::Updated` и deferred-removal.
+    /// Fast order snapshot only for the chart/order-line store. The Orders table remains gated by
+    /// `Orders`, while the chart retains a brief terminal status between `OrderEvent::Updated` and
+    /// deferred removal.
     OrderLines(Vec<OrderRow>),
-    /// Пачка новых детектов (накопленных за тик дренажа событий).
+    /// Batch of new detects accumulated during one event-drain tick.
     Detects(Vec<DetectRow>),
-    /// Пачка новых строк серверного лога ядра (за тик дренажа событий).
+    /// Batch of new core server-log lines accumulated during one event-drain tick.
     ServerLog(Vec<CoreLogLine>),
-    /// Снимок стратегий ядра (шлётся при изменении сигнатуры).
+    /// Core strategy snapshot sent when its signature changes.
     Strategies(Vec<StrategyRow>),
-    /// Схема стратегий ядра (секции/поля по видам). Шлётся при смене revision.
+    /// Core strategy schema with sections and fields by kind, sent when its revision changes.
     StrategySchema(StrategySchemaModel),
-    /// Снимок активов/позиций ядра (для окна «Активы»). Шлётся ~1 Гц по событию.
+    /// Core asset and position snapshot for the Assets window, sent after domain events at most
+    /// once per second while the window is active and once every five seconds otherwise.
     Assets(AssetsSnapshot),
-    /// Снимок transfer-активов ядра по кошелькам (для дерева переноса). Шлётся при
-    /// смене revision (обновляется по запросу `RefreshTransferAssets`).
+    /// Snapshot of transferable core assets by wallet for the transfer tree, sent when its revision
+    /// changes after a `RefreshTransferAssets` request.
     TransferAssets(TransferAssetsSnapshot),
-    /// License/Free-PRO/MoonCredits state ядра.
+    /// Core License, Free-PRO, and MoonCredits state.
     License(LicenseState),
-    /// Снимок настроек клиента ядра (TP/SL/sell/iceberg/…). Шлётся при `ClientSettingsUpdated`.
+    /// Core client-settings snapshot for TP, SL, sell, iceberg, and related settings, sent on
+    /// `ClientSettingsUpdated`.
     ClientSettings(ClientSettings),
-    /// Снимок управления плечом ядра. Шлётся при `LevManageUpdated`.
+    /// Core leverage-management snapshot sent on `LevManageUpdated`.
     LevManage(LevManageState),
-    /// Runtime/passive-mode state ядра. Шлётся при `RuntimeStateUpdated`.
+    /// Core runtime and passive-mode state sent on `RuntimeStateUpdated`.
     RuntimeState(RuntimeState),
-    /// Hedge-mode аккаунта ядра (dual-side позиции вкл/выкл). Шлётся при `HedgeModeUpdated`.
+    /// Core account hedge mode for dual-side positions, sent on `HedgeModeUpdated`.
     HedgeMode(bool),
-    /// Пачка результатов Engine-действий (плечо/hedge/cancel-all/перенос/…) за тик
-    /// дренажа событий. UI показывает их тостами в активном окне.
+    /// Batch of Engine-action results such as leverage, hedge, cancel-all, or transfer accumulated
+    /// during one event-drain tick. The UI displays them as toasts in the active window.
     EngineActions(Vec<EngineActionResult>),
-    /// Пачка изменений chart-алертов ядра за тик дренажа (гейт `feed.alerts`).
+    /// Batch of core chart-alert changes from one drain tick, gated by `feed.alerts`.
     ChartAlerts(Vec<ChartAlertUpdate>),
     /// Core resource telemetry from protocol-v4 `Event::KernelHealth`.
     /// Emitted for every health event; the store gates the Core Status table with

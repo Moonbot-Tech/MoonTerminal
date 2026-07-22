@@ -1,6 +1,6 @@
-//! Активы на стороне feed: декаплинг moonproto (markets/balances/transfer_assets)
-//! в доменные снимки `AssetsSnapshot` / `TransferAssetsSnapshot`. Moonproto остаётся
-//! внутри feed-слоя; стор/UI получают только доменные структуры.
+//! Feed-side assets: decouples moonproto (markets/balances/transfer_assets)
+//! into the `AssetsSnapshot` / `TransferAssetsSnapshot` domain snapshots. Moonproto remains
+//! inside the feed layer; the store/UI receive only domain structures.
 
 use moonproto::state::{BalancesState, ExchangeKind, MarketsState, TransferAssetsState};
 use moonproto::{BaseCurrency, OrderType};
@@ -10,7 +10,7 @@ use super::{
     WalletKind,
 };
 
-/// USD-стейблы — их курс к USDT считаем равным 1.
+/// USD stablecoins whose exchange rate to USDT is treated as 1.
 fn is_stable(q: &str) -> bool {
     matches!(
         q,
@@ -18,12 +18,12 @@ fn is_stable(q: &str) -> bool {
     )
 }
 
-/// Курс котировочной валюты `quote` в USDT (для USDT≈1, для BTC≈курс BTC/USDT).
-/// Берём штатный `base_currency_price` ядра; fallback — 1 для стейблов, иначе 0.
+/// Exchange rate of the `quote` currency in USDT (USDT≈1, BTC≈the BTC/USDT rate).
+/// Uses the core's standard `base_currency_price`; falls back to 1 for stablecoins, otherwise 0.
 ///
-/// ПУСТОЙ `quote` = USD-деноминированный контракт (Binance COIN-M: `BTCUSD_PERP`,
-/// `ETHUSD_260925` — котируются в USD, маржа в самой монете). Курс USD≈USDT=1, иначе
-/// `p_last` (уже цена монеты в USD) домножился бы на 0 и стоимость схлопнулась в ноль.
+/// An EMPTY `quote` denotes a USD-denominated contract (Binance COIN-M: `BTCUSD_PERP`,
+/// `ETHUSD_260925` are quoted in USD with margin in the coin itself). The USD≈USDT rate is 1;
+/// otherwise `p_last` (already the coin's USD price) would be multiplied by 0 and erase the value.
 fn quote_to_usdt(markets: &MarketsState, quote: &str) -> f64 {
     let q = quote.to_ascii_uppercase();
     if quote.trim().is_empty() {
@@ -36,8 +36,8 @@ fn quote_to_usdt(markets: &MarketsState, quote: &str) -> f64 {
         .unwrap_or_else(|| if is_stable(&q) { 1.0 } else { 0.0 })
 }
 
-/// Курс базовой валюты аккаунта (`base`) в USDT. Для USDT/стейблов = 1; иначе ищем
-/// рынок `<base>USDT` или `base_currency_price`. 0 = курс неизвестен.
+/// Exchange rate of the account's base currency (`base`) in USDT. USDT/stablecoins use 1;
+/// otherwise searches for the `<base>USDT` market or `base_currency_price`. 0 means unknown.
 fn base_rate(markets: &MarketsState, base: &str) -> f64 {
     let b = base.to_ascii_uppercase();
     if is_stable(&b) {
@@ -56,11 +56,11 @@ fn base_rate(markets: &MarketsState, base: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Стоимость `qty` монеты `currency` в USDT (стейбл — как есть). Курс: рынок
-/// `<CUR>USDT`, затем `<CUR>USDC` (≈USD), затем ЛЮБОЙ USD-деноминированный рынок
-/// монеты по префиксу `<CUR>USD` — на COIN-M/квартальных ядрах рынков `<CUR>USDT`
-/// НЕТ, но цена контрактов `BTCUSD_PERP`/`BTCUSD_260925` уже в USD (иначе весь
-/// квартальный кошелёк оценивался бы в 0 и прятался фильтром пыли). 0 = неизвестно.
+/// USDT value of `qty` units of `currency`. Stablecoins pass through unchanged; otherwise the
+/// rate comes from the exact currency-named market, `<CUR>USDT`, `<CUR>USDC` (≈USD), any
+/// USD-denominated contract with the `<CUR>USD` prefix, then the canonical-coin `coin_px`
+/// fallback. COIN-M/quarterly cores have no `<CUR>USDT` market, but contract prices such as
+/// `BTCUSD_PERP`/`BTCUSD_260925` are already in USD. 0 means unknown.
 fn coin_to_usdt(
     markets: &MarketsState,
     currency: &str,
@@ -72,9 +72,10 @@ fn coin_to_usdt(
         return qty;
     }
     let px = markets
-        // Рынок = САМО имя монеты: Hyperliquid спот-индексы («@699») зовутся так и есть,
-        // конкатенации «@699USDT»/«@699USDC» не существует → иначе кошелёк оценивался бы в 0
-        // и монета пряталась фильтром пыли. Пробуем первым (по исходному имени, без upper).
+        // The market can be the coin name ITSELF: Hyperliquid spot indexes such as `@699` use
+        // that exact name, and no `@699USDT`/`@699USDC` concatenation exists. Without this check,
+        // the wallet would be valued at 0 and hidden by the dust filter. Try it first using the
+        // original name without uppercasing.
         .price(currency)
         .map(|p| p.p_last)
         .filter(|x| *x > 0.0)
@@ -98,14 +99,14 @@ fn coin_to_usdt(
                 .map(|h| h.price().p_last)
                 .find(|x| *x > 0.0)
         })
-        // Hyperliquid-спот: рынок токена назван индексом («@206»), а кошелёк — именем («UENA»).
-        // Индекс `coin_px` мапит базовую монету рынка → цену, покрывая этот случай (цена рынка
-        // «@206» = цена UENA, quote USDC≈USD).
+        // Hyperliquid spot: the token market is named by index (`@206`), while the wallet uses
+        // the name (`UENA`). The `coin_px` index maps a market's base coin to its price, covering
+        // this case (`@206` market price = UENA price, with USDC≈USD as the quote).
         .or_else(|| coin_px.get(&cur).copied().filter(|x| *x > 0.0));
     px.map(|px| qty * px).unwrap_or(0.0)
 }
 
-/// Кошелёк домена → moonproto `ExchangeKind`.
+/// Converts a domain wallet to moonproto `ExchangeKind`.
 pub(super) fn to_exchange_kind(w: WalletKind) -> ExchangeKind {
     match w {
         WalletKind::Spot => ExchangeKind::Spot,
@@ -126,14 +127,14 @@ pub(super) fn build_assets(
 ) -> AssetsSnapshot {
     let mut rows = Vec::new();
     let mut leverage = std::collections::HashMap::new();
-    // Каталог имён рынков ядра — для гейта кнопки «Market sell» в UI (продать монету можно
-    // лишь если рынок `<coin><quote>` существует).
+    // Core market-name catalog for gating the UI's `Market sell` button. Sell resolution accepts
+    // the exact row market plus the `<coin><quote>` and `<coin>_<quote>` forms.
     let market_names: std::collections::HashSet<String> =
         markets.iter().map(|h| h.name().to_string()).collect();
-    // COIN-M / квартальные: кошелёк деноминирован в самой монете (BTC/ETH/…), а не в
-    // USDT, и ОДИН и тот же баланс монеты дублируется биржей на все её контракты
-    // (PERP + все экспирации). Считаем эквити как Σ по УНИКАЛЬНЫМ монетам (дедуп),
-    // иначе BTC учтётся трижды. `_full` = полный кошелёк, обычный = свободно.
+    // COIN-M / quarterly: the wallet is denominated in the coin itself (BTC/ETH/…), not USDT,
+    // and the exchange duplicates the SAME coin balance across all its contracts (PERP plus all
+    // expirations). Calculate equity as the sum over UNIQUE coins (deduplicated), or BTC would
+    // be counted three times. `_full` is the complete wallet; the plain field is the free amount.
     let mut seen_coin_wallet: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut coin_wallet_full_usdt = 0.0f64;
     let mut coin_wallet_free_usdt = 0.0f64;
@@ -148,8 +149,9 @@ pub(super) fn build_assets(
             && bp.pos_size == 0.0
             && bp.long_pos_size == 0.0
             && bp.short_pos_size == 0.0;
-        // Карта плеча per-core: рынки с позицией/балансом ЛИБО с реальным плечом (>1). Дефолт-1
-        // без account-данных НЕ кладём — там плечо неизвестно (ядро сбрасывает в 1), покажем «—».
+        // Per-core leverage map: markets with a position/balance OR actual leverage (>1). Do NOT
+        // store the default 1 without account data: leverage is unknown there (the core resets it
+        // to 1), so the UI should display `—`.
         if lev > 0 && (!empty || lev > 1) {
             leverage.insert(h.name().to_string(), lev);
         }
@@ -158,9 +160,9 @@ pub(super) fn build_assets(
         }
         let market = h.name().to_string();
         let price = h.price();
-        // coin = канонический токен (fallback market_currency); quote = base_currency;
-        // listed выводим как `Market::listed_type()` (SPOT если futures_type=EMPTY,
-        // иначе BOTH) — сам `ListedType` не реэкспортится из moonproto.
+        // coin = canonical token (falling back to market_currency); quote = base_currency;
+        // expose listed as `Market::listed_type()` would (SPOT when futures_type=EMPTY,
+        // otherwise BOTH), because moonproto does not re-export `ListedType` itself.
         let (coin, quote, listed) = h.with(|m| {
             let canon = m.market_currency_canonic.trim();
             let coin = if canon.is_empty() {
@@ -176,21 +178,20 @@ pub(super) fn build_assets(
             (coin, m.base_currency.clone(), listed)
         });
         let rate = quote_to_usdt(markets, &quote);
-        // Стоимость СТРОКИ — от ПОЛНОГО удерживаемого баланса (free + заблокировано в открытых
-        // sell-ордерах), как Moonbot: открытая поза держит всё количество в TP-ордерах (free≈0),
-        // но это по-прежнему наш актив — прятать его нельзя (иначе строка с value 0 уходит под
-        // фильтр пыли). `_full` может быть не заполнен биржей → берём max(full, free).
+        // ROW value uses the FULL held balance (free plus locked in open sell orders), as Moonbot
+        // does: an open position holds the entire quantity in TP orders (free≈0), but it remains
+        // our asset and must not be hidden (a row valued at 0 would fall below the dust filter).
+        // The exchange may omit `_full`, so use max(full, free).
         let held_qty = if bp.asset_balance_full.abs() > bp.asset_balance.abs() {
             bp.asset_balance_full
         } else {
             bp.asset_balance
         };
         let value_usdt = held_qty.abs() * price.p_last * rate;
-        // Дедуп монетных кошельков (COIN-M): суммируем стоимость КАЖДОЙ монеты один раз,
-        // независимо от числа её контрактов. Здесь эквити АККАУНТА — считаем от ПОЛНОГО
-        // остатка (в отличие от строк таблицы). Учитываем только реальный баланс монеты
-        // (asset_balance*), но НЕ чисто позиционные строки (pos без баланса — там монеты
-        // на кошельке нет, это дериватив на USDT-марже).
+        // Deduplicate coin wallets (COIN-M): sum EACH coin's value once regardless of its number
+        // of contracts. This is ACCOUNT equity, so calculate it from the FULL balance. Include
+        // only an actual coin balance (asset_balance*), NOT position-only rows: a position without
+        // a balance has no coin in the wallet and is a USDT-margined derivative.
         let qty_full_for_equity = if bp.asset_balance_full.abs() > bp.asset_balance.abs() {
             bp.asset_balance_full
         } else {
@@ -216,13 +217,14 @@ pub(super) fn build_assets(
                 coin_wallet_all_priced = false;
             }
         }
-        // min_lot_size ядра уже в котируемой валюте: max(step, min_qty)·цена и min_notional.
+        // The core's min_lot_size is already in quote currency:
+        // max(step, min_qty)·price and min_notional.
         let min_lot_usd = price.min_lot_size * rate;
         let is_quote_asset = coin.eq_ignore_ascii_case(base_currency.trim());
-        // ЖИВОЙ PnL позиции: (цена − вход) × размер × направление, в котируемой → USDT.
-        // Марк-цена (фьючи) точнее для PnL; нет марка — mid. Ноги хеджа приоритетнее
-        // нетто-позиции. Серверные total_profit_* НЕ используем для позиций: они
-        // накопленные за период и замерзают между balance-пушами.
+        // LIVE position PnL: (price − entry) × size × direction, converted from quote currency
+        // to USDT. The mark price is more accurate for futures PnL; fall back to mid. Hedge legs
+        // take precedence over the net position. Do NOT use server total_profit_* for positions:
+        // those values accumulate over a period and remain frozen between balance pushes.
         let mark = if price.mark_price > 0.0 {
             price.mark_price
         } else {
@@ -249,14 +251,15 @@ pub(super) fn build_assets(
         let pnl_usdt = if have_position_pnl {
             live_pnl * rate
         } else {
-            // Нет позиции/цены входа (спот-баланс без pos-данных) — серверный накопленный
-            // профит рынка (в котируемой валюте) как fallback.
+            // No position/entry price (a spot balance without position data): fall back to the
+            // server's accumulated market profit in quote currency.
             (bp.total_profit_b + bp.total_profit_l + bp.total_profit_s) * rate
         };
-        // Размер/цена позиции строки: нетто `pos_size`, а если ядро держит ноги РАЗДЕЛЬНО
-        // (hedge-режим либо сервер кладёт шорт в `short_pos_size`, а нетто = 0) — берём нетто
-        // ног (шорт отрицательный). Иначе реальный фьючер-шорт с `pos_size=0` не проходит
-        // `is_position` в UI и пропадает из «Активов» (баланса монеты у деривати­ва нет).
+        // Row position size/price: use net `pos_size`; if the core keeps legs SEPARATELY
+        // (hedge mode, or the server stores the short in `short_pos_size` while net = 0), use
+        // the net of the legs (short is negative). Otherwise a real futures short with
+        // `pos_size=0` fails the UI's `is_position` check and disappears from Assets (a
+        // derivative has no coin balance).
         let (pos_size, pos_price) = if bp.pos_size != 0.0 {
             (bp.pos_size, bp.pos_price)
         } else if bp.short_pos_size.abs() > bp.long_pos_size.abs() {
@@ -286,12 +289,13 @@ pub(super) fn build_assets(
         });
     }
     let g = balances.global();
-    // `btc_balance_*` исторически в БАЗОВОЙ валюте аккаунта (для USDT-бота это уже USDT,
-    // курс=1; для BTC-бота — BTC, курс=BTCUSDT). Курс берём по базовой валюте сервера.
+    // Historically, `btc_balance_*` is expressed in the account's BASE currency (already USDT
+    // for a USDT bot at rate 1; BTC for a BTC bot at the BTCUSDT rate). Derive the rate from the
+    // server's base currency.
     let rate = base_rate(markets, base_currency);
-    // Итог/свободно из global. ФОЛБЭК на `btc_total`, когда `btc_full` не заполнен: у
-    // некоторых спот-аккаунтов (напр. Binance spot USDC) биржа не отдаёт «full», и весь
-    // баланс лежит в «available» (`btc_total`) — иначе карта ядра показывала бы 0.
+    // Read total/free from global. Fall back to `btc_total` when `btc_full` is absent: for some
+    // spot accounts (for example, Binance spot USDC), the exchange does not publish `full`, and
+    // the entire balance is in `available` (`btc_total`); otherwise the core card would show 0.
     // A CORRUPT `btc_full` is not an absent one. The fallback above exists for accounts that
     // never publish the field — a clean `0.0` — and `NaN.abs() > 1e-9` is false, so without this
     // guard a non-finite value would take the same path and silently swap equity for available
@@ -304,9 +308,9 @@ pub(super) fn build_assets(
     };
     let global_total_usdt = global_full * rate;
     let global_free_usdt = g.btc_balance_total * rate;
-    // COIN-M: global в USDT-эквиваленте бесполезен (деноминирован в монете, курс не тот),
-    // но кошельки монет мы уже просуммировали с дедупом. Если global почти нулевой, а
-    // монетные кошельки есть — берём их (это и есть эквити квартального/COIN-M аккаунта).
+    // For COIN-M, global's USDT equivalent is unusable (it is denominated in the coin, so the
+    // rate is wrong), but the deduplicated coin wallets are already summed. If global is nearly
+    // zero while coin wallets exist, use them as the quarterly/COIN-M account equity.
     let coin_margined = global_total_usdt.abs() < 1.0 && coin_wallet_full_usdt > 1.0;
     let (total_usdt, free_usdt) = if coin_margined {
         (coin_wallet_full_usdt, coin_wallet_free_usdt)
@@ -339,16 +343,17 @@ pub(super) fn build_assets(
     }
 }
 
-/// Снимок transfer-активов ядра по кошелькам (Spot/Futures/Quarterly) для дерева переноса.
-/// USDT-стоимость каждой строки считаем по рынку `<currency>USDT` (для веток в USDT).
+/// Snapshot of the core's transfer assets by wallet (Spot/Futures/Quarterly) for the transfer tree.
+/// Calculates each row's USDT value through `coin_to_usdt`'s available market-price fallbacks.
 pub(super) fn build_transfer_assets(
     markets: &MarketsState,
     st: &TransferAssetsState,
 ) -> TransferAssetsSnapshot {
-    // Индекс «базовая монета рынка (UPPER) → цена». Покрывает Hyperliquid-спот: там рынок назван
-    // ИНДЕКСОМ («@206»), а кошелёк отдаёт токен по ИМЕНИ («UENA»), и конкатенация `UENA+quote`
-    // рынка не находит → стоимость 0 → холдинг прячется фильтром пыли. Строим ОДИН раз (скан на
-    // каждую монету дал бы O(рынки×монеты) — дорого по CPU); первый рынок монеты выигрывает.
+    // Index `market base coin (UPPER) → price`. This covers Hyperliquid spot, where the market is
+    // named by INDEX (`@206`) while the wallet exposes the token by NAME (`UENA`), so concatenating
+    // `UENA+quote` finds no market, produces a value of 0, and lets the dust filter hide the holding.
+    // Build it ONCE (scanning per coin would be O(markets×coins) and CPU-expensive); the first market
+    // for a coin wins.
     let mut coin_px: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     for h in markets.iter() {
         let px = h.price().p_last;
