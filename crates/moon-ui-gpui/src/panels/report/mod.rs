@@ -1,7 +1,8 @@
 //! Report panel ported from egui's `src/dock/report_view.rs`.
 //!
-//! It displays closed trades from the local SQLite database, with core, coin, side, date, and
-//! order-kind filters plus column selection above the table and exact period totals below it. The
+//! It displays closed trades from the local SQLite database, with core, coin, side, date,
+//! order-kind, and deleted-trades filters plus column selection above the table and exact period
+//! totals below it. The
 //! generic table supports every displayable database column and header-click sorting. A writer
 //! generation counter in `Backend.reports` triggers throttled automatic refreshes.
 //!
@@ -347,6 +348,8 @@ pub struct ReportPanel {
     pub(super) period: Period,
     /// All, real, or emulated order kind, defaulting to real as in Orders.
     pub(super) kind: ReportKind,
+    /// Show ONLY soft-deleted trades when set; hide them when clear (the default).
+    pub(super) deleted_only: bool,
     needs_query: bool,
     query_inflight: bool,
     query_seq: u64,
@@ -501,6 +504,7 @@ impl ReportPanel {
             side: SideFilter::All,
             period: Period::Today,
             kind: ReportKind::Real,
+            deleted_only: false,
             needs_query: true,
             query_inflight: false,
             query_seq: 0,
@@ -647,6 +651,7 @@ impl ReportPanel {
                 .into_owned(),
             side: self.side,
             emulator: self.kind.to_filter(),
+            deleted_only: self.deleted_only,
         }
     }
 
@@ -837,6 +842,13 @@ impl ReportPanel {
     pub(super) fn set_kind(&mut self, k: ReportKind, cx: &mut Context<Self>) {
         if self.kind != k {
             self.kind = k;
+            self.request_requery(cx);
+        }
+    }
+    /// Toggle the deleted-trades checkbox: off hides soft-deleted trades, on shows only them.
+    pub(super) fn set_deleted_only(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.deleted_only != on {
+            self.deleted_only = on;
             self.request_requery(cx);
         }
     }
@@ -1143,7 +1155,7 @@ impl Render for ReportPanel {
             .child(self.period_combo(cx))
             .child(self.kind_combo(cx))
             // Show manual From/To dates only in detached windows. Docked tabs rely on period presets
-            // to keep the core, coin, side, period, order-kind, and column controls compact.
+            // to keep the core, coin, side, period, order-kind, deleted, and column controls compact.
             .when(self.detached, |f| {
                 f.child(
                     div()
@@ -1168,6 +1180,7 @@ impl Render for ReportPanel {
                         .child(MoonInput::new("rep-to").state(&self.to).small()),
                 )
             })
+            .child(self.deleted_check(cx))
             .child(self.export_menu(cx))
             .child(self.columns_menu(cx));
 

@@ -137,6 +137,19 @@ impl ReportPanel {
             .items(items)
     }
 
+    /// Bare checkbox filtering soft-deleted trades: unchecked (the default) hides them,
+    /// checked shows ONLY them.
+    ///
+    /// No label — the tooltip carries the explanation, matching the glyph buttons beside it.
+    pub(super) fn deleted_check(&self, cx: &Context<Self>) -> impl IntoElement {
+        crate::panels::icon_checkbox(
+            "rep-deleted",
+            t!("report.filter.deleted_tip").to_string(),
+            self.deleted_only,
+            cx.listener(|t, on: &bool, _w, cx| t.set_deleted_only(*on, cx)),
+        )
+    }
+
     /// Build the CSV/XLSX export menu for the visible or full schema.
     ///
     /// Export uses the panel's current filter and sort order; the period may be a preset or

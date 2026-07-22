@@ -449,6 +449,10 @@ pub struct ReportFilter {
     /// Emulator orders: `None` selects all, `Some(false)` only real orders, and
     /// `Some(true)` only emulator orders. A NULL column value counts as real.
     pub emulator: Option<bool>,
+    /// Soft-deleted trades (the core-supplied `deleted` column): `false` hides them,
+    /// `true` shows ONLY them. A NULL column value counts as not deleted, matching
+    /// the analytics filter; a source without the column holds no soft-deleted rows.
+    pub deleted_only: bool,
 }
 
 /// Open a reader while distinguishing an absent replica from a SQLite failure.
@@ -726,6 +730,17 @@ fn build_where(
             Some(true) => sql.push_str(" AND COALESCE(emulator, 0) = 1"),
             Some(false) => sql.push_str(" AND COALESCE(emulator, 0) = 0"),
         }
+    }
+    // Deleted-mode semantics live on `ReportFilter::deleted_only`; the `1=0` arm makes
+    // a column-less source contribute nothing when only deleted rows are wanted.
+    if has("deleted") {
+        sql.push_str(if f.deleted_only {
+            " AND COALESCE(deleted, 0) <> 0"
+        } else {
+            " AND COALESCE(deleted, 0) = 0"
+        });
+    } else if f.deleted_only {
+        sql.push_str(" AND 1=0");
     }
     (sql, params)
 }

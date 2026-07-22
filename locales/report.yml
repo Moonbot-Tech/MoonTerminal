@@ -51,6 +51,12 @@ report.filter.date_ph:
   ru: "ГГГГ-ММ-ДД"
   en: "YYYY-MM-DD"
   es: "AAAA-MM-DD"
+# Bare checkbox between the order-kind combo and export. Off (default) hides trades
+# soft-deleted in the core's report; on shows ONLY them. Export follows the same filter.
+report.filter.deleted_tip:
+  ru: "Только удалённые из отчёта сделки. Выкл — удалённые скрыты."
+  en: "Only trades deleted from the report. Off — deleted trades are hidden."
+  es: "Solo operaciones eliminadas del informe. Desactivado: se ocultan."
 # The ▦ glyph is added separately in code; the dictionary contains text only.
 report.columns_menu:
   ru: "Колонки"

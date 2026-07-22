@@ -16,14 +16,15 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInput,
-    MoonInputState, MoonPalette, MoonSlider, MoonSliderState, MoonTextArea, MoonTooltipView,
-    h_flex, rgba_from, v_flex,
+    MoonInputState, MoonPalette, MoonSlider, MoonSliderState, MoonTextArea, h_flex, rgba_from,
+    v_flex,
 };
 use rust_i18n::t;
 
 use moon_core::feed::{ClientSettingsEdit, LevManageEdit, RuntimeState};
 use moon_core::session::CoreId;
 
+use crate::panels::icon_checkbox;
 use crate::{Backend, design};
 
 /// Ordinal of the Alerts strategy kind, matching MoonProto `StrategyKindId::ALERTS = 22`.
@@ -208,26 +209,6 @@ fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl Int
                 .child(title),
         )
         .child(body)
-}
-
-/// Builds an unlabeled icon checkbox with an enable/disable tooltip. A `div.id.tooltip` wrapper
-/// supplies the tooltip because an unlabeled `MoonCheckbox` has none.
-fn icon_checkbox(
-    id: &str,
-    tooltip: String,
-    checked: bool,
-    on_change: impl Fn(&bool, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    div()
-        .id(SharedString::from(format!("{id}-tip")))
-        .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tooltip.clone())).into())
-        .child(
-            MoonCheckbox::new(SharedString::from(id.to_string()))
-                .checked(checked)
-                .size(MoonCheckboxSize::Compact)
-                .on_change(on_change),
-        )
-        .into_any_element()
 }
 
 /// Builds a checkbox-slider-input parameter with a title above the control row. Shell subscriptions

@@ -25,7 +25,9 @@ mod orders;
 mod report;
 mod stub;
 
-pub(crate) use common::{RadioMark, RenderGate, data_table_host, detach_button, num, radio_items};
+pub(crate) use common::{
+    RadioMark, RenderGate, data_table_host, detach_button, icon_checkbox, num, radio_items,
+};
 pub(crate) use order_edit::open_order_edit;
 
 pub use alerts::AlertsPanel;
