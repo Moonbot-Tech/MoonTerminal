@@ -48,14 +48,14 @@ fn aggregate_late_resend_updates_old_bucket() {
     let trades = [
         tick(1.0 * M, 10.0, 1.0),
         tick(6.0 * M, 20.0, 1.0),
-        tick(2.0 * M, 30.0, 1.0), // поздний resend в первый бакет
+        tick(2.0 * M, 30.0, 1.0), // Late resend into the first bucket.
     ];
     let mut out = Vec::new();
     aggregate_trades(&trades, TF5, &mut out);
     assert_eq!(out.len(), 2);
     assert_eq!(out[0].high, 30.0);
     assert_eq!(out[0].volume, 2.0);
-    // close первого бакета остаётся 10.0 (порядок не восстанавливаем).
+    // The first bucket's close remains 10.0 because ordering is not reconstructed.
     assert_eq!(out[0].close, 10.0);
 }
 
@@ -80,14 +80,14 @@ fn resample_5m_to_15m() {
 
 #[test]
 fn rebuild_prefers_server_before_first_full_trade_bucket() {
-    // Сервер: бакеты 0 и 5м. Трейды начинаются ПОСРЕДИ бакета 5м (частичный) и
-    // покрывают бакет 10м целиком.
+    // The base has the 0- and 5-minute buckets, while trades produce local buckets at
+    // 5 and 10 minutes. Base coverage at the first local timestamp moves the overlay to 10.
     let server = [
         candle(0.0, 1.0, 2.0, 0.5, 1.5, 10.0),
         candle(5.0 * M, 1.5, 3.0, 1.0, 2.0, 10.0),
     ];
     let trades = [
-        tick(7.0 * M, 100.0, 1.0), // частичный бакет 5м — врёт (o=100)
+        tick(7.0 * M, 100.0, 1.0), // This row creates the covered 5-minute local bucket.
         tick(10.0 * M, 2.0, 1.0),
         tick(12.0 * M, 2.5, 1.0),
     ];
@@ -95,9 +95,9 @@ fn rebuild_prefers_server_before_first_full_trade_bucket() {
     s.rebuild(TF5, &server, TF5, &trades);
     let c = s.candles();
     assert_eq!(c.len(), 3);
-    // Бакет 5м — серверный (частичный локальный отброшен).
+    // The base row is retained at the covered first local timestamp.
     assert_eq!(c[1], server[1]);
-    // Бакет 10м — локальный.
+    // The 10-minute bucket is local.
     assert_eq!(c[2].t_open_ms, 10.0 * M);
     assert_eq!(c[2].open, 2.0);
     assert_eq!(c[2].close, 2.5);
@@ -107,14 +107,14 @@ fn rebuild_prefers_server_before_first_full_trade_bucket() {
 fn rebuild_without_server_takes_partial_first() {
     let trades = [tick(7.0 * M, 5.0, 1.0), tick(12.0 * M, 6.0, 1.0)];
     let mut s = CandleSeries::default();
-    s.rebuild(60_000, &[], TF5, &trades); // 1м ТФ — базы нет
+    s.rebuild(60_000, &[], TF5, &trades); // A 1-minute target cannot use a 5-minute base.
     assert_eq!(s.candles().len(), 2);
     assert_eq!(s.candles()[0].t_open_ms, 7.0 * M);
 }
 
 #[test]
 fn rebuild_resamples_native_base_tf() {
-    // База родного ТФ 30м, серия 60м → ресемпл пар.
+    // Resample pairs from a 30-minute base into a 60-minute series.
     let base = [
         candle(0.0, 1.0, 3.0, 0.5, 2.0, 1.0),
         candle(30.0 * M, 2.0, 4.0, 1.5, 3.0, 1.0),
@@ -122,7 +122,7 @@ fn rebuild_resamples_native_base_tf() {
     let mut s = CandleSeries::default();
     s.rebuild(60 * 60_000, &base, 30 * 60_000, &[]);
     assert_eq!(s.candles(), &[candle(0.0, 1.0, 4.0, 0.5, 3.0, 2.0)]);
-    // Некратная база (серия 5м, база 30м) — игнорируется.
+    // Ignore a non-divisible base: a 5-minute series cannot use a 30-minute base.
     let mut s2 = CandleSeries::default();
     s2.rebuild(TF5, &base, 30 * 60_000, &[]);
     assert!(s2.candles().is_empty());
@@ -136,7 +136,7 @@ fn push_trades_updates_live_and_seals() {
     assert!(s.push_trades(&[tick(2.0 * M, 12.0, 1.0)]));
     assert_eq!(s.candles().len(), 1);
     assert_eq!(s.candles()[0].high, 12.0);
-    assert!(s.push_trades(&[tick(6.0 * M, 8.0, 1.0)])); // кросс-бакет → новая свеча
+    assert!(s.push_trades(&[tick(6.0 * M, 8.0, 1.0)])); // A bucket crossing opens a candle.
     assert_eq!(s.candles().len(), 2);
     assert_eq!(s.candles()[1].open, 8.0);
     assert_ne!(s.revision(), rev);
@@ -154,7 +154,7 @@ fn price_range_covers_window_only() {
         TF5,
         &[],
     );
-    // Окно только по второму бакету — экстремумы первого не попадают.
+    // A window covering only the second bucket excludes the first bucket's extremes.
     let r = s.price_range(5.0 * M, 9.0 * M).unwrap();
     assert_eq!(r, (1.5, 3.0));
     assert_eq!(s.price_range(0.0, 20.0 * M).unwrap(), (0.5, 100.0));
@@ -162,20 +162,20 @@ fn price_range_covers_window_only() {
 
 #[test]
 fn normalize_ohlc_unswaps_server_wire_order() {
-    // Корректная свеча — как есть.
+    // Preserve an already valid candle.
     assert_eq!(
         normalize_ohlc(10.0, 12.0, 9.0, 11.0),
         (10.0, 12.0, 9.0, 11.0)
     );
-    // Свап (o,c,h,l) = (high, low, open, close): реальная свеча o=10 h=12 l=9 c=11
-    // приходит как o=12, c=9, h=10, l=11.
+    // With swapped (o,c,h,l) = (high, low, open, close), a real candle with
+    // o=10, h=12, l=9, c=11 arrives as o=12, c=9, h=10, l=11.
     let (o, h, l, c) = normalize_ohlc(12.0, 10.0, 11.0, 9.0);
     assert_eq!((o, h, l, c), (10.0, 12.0, 9.0, 11.0));
-    // Чистое падение без фитилей (o==h, c==l) — неотличимо от корректной и не ломается.
+    // A wickless bearish candle (o==h, c==l) is indistinguishable from valid data and stays intact.
     assert_eq!(normalize_ohlc(12.0, 12.0, 9.0, 9.0), (12.0, 12.0, 9.0, 9.0));
-    // Плоская свеча.
+    // Preserve a flat candle.
     assert_eq!(normalize_ohlc(5.0, 5.0, 5.0, 5.0), (5.0, 5.0, 5.0, 5.0));
-    // Мусор: диапазон растягивается, o/c как есть.
+    // For garbage input, expand the range while preserving o/c.
     let (o, h, l, c) = normalize_ohlc(10.0, 11.0, 12.0, 9.5);
     assert_eq!((o, c), (10.0, 9.5));
     assert_eq!((h, l), (12.0, 9.5));
@@ -183,17 +183,17 @@ fn normalize_ohlc_unswaps_server_wire_order() {
 
 #[test]
 fn orient_range_rows_by_direction() {
-    // Снимочные строки «только диапазон» (open==high, close==low).
+    // Snapshot rows contain only the range: open==high and close==low.
     let mut rows = vec![
-        candle(0.0, 12.0, 12.0, 10.0, 10.0, 1.0), // первая — как пришла (вниз)
-        candle(5.0 * M, 14.0, 14.0, 12.0, 12.0, 1.0), // mid 13 > 11 → вверх
-        candle(10.0 * M, 12.0, 12.0, 9.0, 9.0, 1.0), // mid 10.5 < 13 → вниз
+        candle(0.0, 12.0, 12.0, 10.0, 10.0, 1.0), // Keep the first row as received (down).
+        candle(5.0 * M, 14.0, 14.0, 12.0, 12.0, 1.0), // Midpoint 13 > 11: orient up.
+        candle(10.0 * M, 12.0, 12.0, 9.0, 9.0, 1.0), // Midpoint 10.5 < 13: orient down.
     ];
     orient_range_rows(&mut rows);
     assert_eq!((rows[0].open, rows[0].close), (12.0, 10.0));
-    assert_eq!((rows[1].open, rows[1].close), (12.0, 14.0)); // развёрнута вверх
+    assert_eq!((rows[1].open, rows[1].close), (12.0, 14.0)); // Reoriented upward.
     assert_eq!((rows[2].open, rows[2].close), (12.0, 9.0));
-    // Честная свеча (с фитилями) не трогается.
+    // Leave a real candle with wicks unchanged.
     let honest = candle(0.0, 10.0, 12.0, 9.0, 11.0, 1.0);
     let mut rows2 = vec![honest];
     orient_range_rows(&mut rows2);
@@ -217,10 +217,10 @@ fn cfg_defaults_sane() {
     assert_eq!(cfg.mode, CANDLE_MODE_OUTLINE_IN_ZONE);
     assert!(cfg.trade_candles > 0);
     assert!(cfg.price_lines);
-    // Неизвестный/убранный ТФ клампится к 5м (легаси 15м из старых конфигов).
+    // Clamp an unknown or removed timeframe to 5 minutes, including legacy 15-minute configs.
     let bad = CandleViewCfg { tf_min: 15, ..cfg };
     assert_eq!(bad.tf_ms(), TF5);
-    // Легаси 30с (код 0) сведён к 1м; сутки.
+    // Map legacy 30-second code 0 to 1 minute, and verify the one-day timeframe.
     assert_eq!(CandleViewCfg { tf_min: 0, ..cfg }.tf_ms(), 60_000);
     assert_eq!(
         CandleViewCfg {

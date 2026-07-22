@@ -1,4 +1,4 @@
-//! Жизненный цикл источника (клиенты/провайдеры/сбросы) + pull стакана `refresh_market`.
+//! Source lifecycle for clients, providers, resets, and `refresh_market` order-book pulls.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -42,8 +42,10 @@ impl MarketDataSource {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// Открыть локальный kline-кэш (klines.sqlite). Зовётся один раз на старте;
-    /// без вызова чарты живут как раньше (кэш опционален).
+    /// Open the local kline cache in `klines.sqlite`.
+    ///
+    /// Called once at startup. Charts retain their previous behavior when this optional cache is
+    /// not initialized.
     pub fn init_kline_cache(&self, path: std::path::PathBuf) {
         let cache = crate::market::kline_cache::KlineCache::open(path);
         let opened = cache.is_some();
@@ -56,13 +58,15 @@ impl MarketDataSource {
         }
     }
 
-    /// Фоновый регистратор 5м-свечей ВСЕХ рынков провайдеров: трейды по подписке текут
-    /// постоянно — агрегируем ЗАПЕЧАТАННЫЕ 5м-бары из трейд-рингов и складываем в
-    /// kline-кэш. Именно 5м (не 1м): merge переписывает суточный чанк монеты целиком,
-    /// при 1м это ~N рынков перезаписей КАЖДУЮ минуту — WAL раздувался на мегабайты за
-    /// минуты; при 5м пишем в 5 раз реже и чанки в 5 раз мельче (~7КБ/сутки/монета).
-    /// История любой монеты, даже ни разу не открытой, переживает рестарты и болезни
-    /// ядра; 1м-точность для открытых монет обеспечивают deep-запросы (kind1 в кэше).
+    /// Spawn the background 5-minute candle recorder for every provider market.
+    ///
+    /// Subscribed trades flow continuously, so sealed 5-minute bars are aggregated from trade rings
+    /// and stored in the kline cache. The recorder deliberately uses 5 minutes rather than 1 minute:
+    /// each merge rewrites a coin's entire daily chunk, and 1-minute data would rewrite roughly N
+    /// markets every minute, growing the WAL by megabytes within minutes. Five-minute data writes
+    /// five times less often with chunks about five times smaller, roughly 7 KB per coin per day.
+    /// History therefore survives restarts and core outages even for coins never opened, while deep
+    /// requests provide 1-minute precision for open coins through cache kind 1.
     fn spawn_kline_recorder(&self) {
         let source = self.clone();
         let _ = std::thread::Builder::new()
@@ -78,7 +82,7 @@ impl MarketDataSource {
 
     fn record_sealed_5m(&self, last_written: &mut HashMap<(CoreId, String), i64>) {
         const TF: i64 = 300_000;
-        // Снимок провайдеров под коротким read-локом; вся работа — вне лока.
+        // Snapshot providers under a short read lock and perform all work after releasing it.
         let (cache, providers) = {
             let inner = self.inner.read().expect("market source poisoned");
             let Some(cache) = inner.kline_cache.clone() else {
@@ -102,7 +106,8 @@ impl MarketDataSource {
         let cur_bucket = (now_ms / TF) * TF;
         let mut ticks: Vec<crate::feed::Tick> = Vec::new();
         let mut candles: Vec<crate::market::candles::ChartCandle> = Vec::new();
-        // Весь цикл (тысячи рынков) уезжает в кэш ОДНОЙ транзакцией — копим элементы.
+        // Accumulate items so the entire pass across thousands of markets reaches the cache in one
+        // transaction.
         let mut batch: Vec<crate::market::kline_cache::MergeItem> = Vec::new();
         for (provider, ex, slot) in providers {
             let Some(client) = slot.get() else { continue };
@@ -119,7 +124,7 @@ impl MarketDataSource {
                     continue;
                 };
                 let key = (provider, name.to_string());
-                // С начала бакета ПОСЛЕ последнего записанного; первый прогон — 15 мин.
+                // Start at the bucket after the last written one; the first pass covers 15 minutes.
                 let from_ms = last_written
                     .get(&key)
                     .map(|t| t + TF)
@@ -134,14 +139,14 @@ impl MarketDataSource {
                     reader.capacity(),
                     &mut trade_rows,
                 );
-                // Курсор двигаем даже без трейдов — тихие монеты не перечитываем вечно.
+                // Advance the cursor even without trades so quiet coins are not reread forever.
                 last_written.insert(key, cur_bucket - TF);
                 if trade_rows.is_empty() {
                     continue;
                 }
                 super::rows_to_ticks(&trade_rows, &mut ticks);
                 crate::market::candles::aggregate_trades(&ticks, TF, &mut candles);
-                // Текущий (незапечатанный) бакет не пишем — его допишет следующий прогон.
+                // Do not write the current unsealed bucket; the next pass will complete it.
                 candles.retain(|c| (c.t_open_ms as i64) < cur_bucket);
                 if !candles.is_empty() {
                     batch.push(crate::market::kline_cache::MergeItem {
@@ -156,8 +161,11 @@ impl MarketDataSource {
         cache.merge_batch(batch);
     }
 
-    /// Стабильные идентичности бирж провайдеров — ключ kline-кэша (ядра одной биржи
-    /// делят кэш; CoreId между сессиями нестабилен). Зовёт координатор при reconcile.
+    /// Set stable provider exchange identities used as kline-cache keys.
+    ///
+    /// The exchange identity lets cores on one exchange share the cache and keeps the cache address
+    /// stable when provider election changes. `CoreId` itself is a stable uid since schema v11, but
+    /// identifies one core. The coordinator calls this during reconciliation.
     pub fn set_provider_exchanges(
         &self,
         map: &HashMap<crate::session::CoreId, crate::feed::ExchangeId>,
@@ -181,8 +189,11 @@ impl MarketDataSource {
         bump_generation(&mut inner.provider_generations, core);
     }
 
-    /// Убрать клиента удалённого ядра (сервер исключён из конфига). Курсоры/ревизии,
-    /// где оно было провайдером, тоже снимаем, чтобы не держать мёртвые рынки.
+    /// Remove the client for a core whose server was removed from configuration.
+    ///
+    /// Also discard that core's cursors, revisions, order-book kind, and provider mapping. Existing
+    /// provider views in `SharedMarketStore` remain until the separate `drop_provider` lifecycle
+    /// operation removes them.
     pub fn remove_client(&self, core: CoreId) {
         let mut inner = self.inner.write().expect("market source poisoned");
         inner.clients.remove(&core);
@@ -214,8 +225,10 @@ impl MarketDataSource {
         inner.provider_orderbook_kind.insert(core, kind);
     }
 
-    /// Общая часть `reset_market`/`drop_market`: сброс курсора истории + bump всех
-    /// ревизий рынка; возвращает store для финального вызова.
+    /// Invalidate shared state for `reset_market` and `drop_market`.
+    ///
+    /// Removes the history cursor, increments every market revision, and returns the store for the
+    /// final operation.
     fn invalidate_market(&self, provider: CoreId, market: &str) -> SharedMarketStore {
         let mut inner = self.inner.write().expect("market source poisoned");
         inner.cursors.remove(&(provider, market.to_string()));
@@ -339,9 +352,9 @@ impl MarketDataSource {
         let key = (provider, market.to_string());
         let mut book_update: Option<OrderBook> = None;
         let mut has_book_snapshot = false;
-        // Какой kind фактически отдал снимок (для диагностики Hyperliquid/HIP-3 и
-        // spot/futures-расхождений между ядром и движком). None — снимка нет ни под
-        // одним kind (тогда вопрос в резолве имени, а не в kind).
+        // Record which kind actually supplied the snapshot for diagnosing Hyperliquid/HIP-3 and
+        // spot/futures mismatches between the core and engine. None means neither kind had a
+        // snapshot, pointing to name resolution rather than kind selection.
         let mut book_kind_used: Option<OrderBookKind> = None;
         let book_dirty_revision: u64;
         let book_due: bool;
@@ -367,15 +380,15 @@ impl MarketDataSource {
             book_due =
                 book_dirty || book_slot.is_some_and(|slot| cursor.last_book_slot != Some(slot));
             if book_due {
-                // Compat fallback по kind. Движок штампует стакан на проводе флагом
-                // book_kind (0=Futures/1=Spot), и классификация ядра в терминале не
-                // всегда совпадает: spot-ядра gs/bgs шлют книгу как Futures; перпы
-                // Hyperliquid HIP-3 (префикс «xyz:…», deployer-коды) тоже могут не
-                // совпасть с ожидаемым kind. Lookup идёт по (market_index, kind), а у
-                // одного рынка реально заполнен ровно один kind — поэтому пробуем
-                // ожидаемый, затем противоположный. На корректных ядрах противоположный
-                // запрос не делается (первый уже Some). Если оба None — дело не в kind,
-                // а в резолве имени (см. диагностику ниже).
+                // Apply a compatibility fallback by kind. The engine tags the wire order book with
+                // book_kind, where 0 is Futures and 1 is Spot, but the terminal's core classification
+                // does not always match. The gs/bgs spot cores send their books as Futures, and
+                // Hyperliquid HIP-3 perpetuals with prefixes such as `xyz:` or deployer codes may
+                // also differ from the expected kind. Lookup uses `(market_index, kind)`, while one
+                // market normally populates exactly one kind, so try the expected kind and then its
+                // opposite. Correctly classified cores stop after the first successful lookup. If
+                // both return None, name resolution rather than kind selection is the issue; see the
+                // diagnostics below.
                 let other_kind = match orderbook_kind {
                     OrderBookKind::Spot => OrderBookKind::Futures,
                     _ => OrderBookKind::Spot,

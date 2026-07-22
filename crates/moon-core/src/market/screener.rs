@@ -1,15 +1,15 @@
-//! Данные скринера («Таблица монет»): срез по ВСЕМ рынкам ядра-провайдера.
+//! Screener data (the "Coin Table"): a snapshot of ALL markets from a provider core.
 //!
-//! Рыночная часть (объёмы/дельты/фандинг/шаг цены) читается один раз с
-//! ядра-провайдера — тот же дедуп по бирже, что и весь market-слой: рынок
-//! `BTCUSDT@Bybit` идентичен у всех ядер этой биржи. Аккаунтная часть
-//! (сессионный профит/позиция/плечо) персональна для каждого ядра, поэтому
-//! суммируется по всем ядрам группы (`members`).
+//! Market fields (volumes, deltas, funding, and price step) are read once from the provider
+//! core, using the same per-exchange deduplication as the rest of the market layer: the
+//! `BTCUSDT@Bybit` market is identical across all cores on that exchange. Account fields are
+//! specific to each core, so the account overlay uses exactly the supplied `members`: session
+//! profit and position are summed, while leverage is selected as their maximum. A core-filtered
+//! caller may supply only the selected core and omit the market-data provider.
 //!
-//! Объёмы 1м/3м/5м и короткие дельты считает retained-история moonproto,
-//! которая на провайдере покрывает ВСЕ рынки биржи (`subscribe_all_trades` →
-//! `TradeStorageScope::All` + авто-свечи), поэтому колонки заполняются без
-//! точечных подписок.
+//! Moonproto retained history computes the 1m/3m/5m volumes and short-term deltas. On the
+//! provider it covers ALL exchange markets (`subscribe_all_trades` -> `TradeStorageScope::All`
+//! plus automatic candles), so these columns need no per-market subscriptions.
 
 use moonproto::MoonTime;
 
@@ -17,69 +17,69 @@ use crate::session::CoreId;
 
 use super::source::MarketDataSource;
 
-/// Строка скринера: рыночные данные провайдера + аккаунтный оверлей группы.
+/// Screener row combining provider market data with an overlay from the supplied members.
 #[derive(Clone, Debug, Default)]
 pub struct ScreenerRow {
-    /// Ядро-провайдер рыночных данных (для открытия чарта по строке).
+    /// Market-data provider core associated with this row.
     pub provider: CoreId,
-    /// Каноничное имя рынка = `MarketHandle::name()` (биржевое `bn_market_name`).
-    /// Именно по нему ключуются `handles_by_name`/подписки/поиск — display-имя
-    /// Moonbot (`market_name`) для открытия чарта НЕ годится (пустой чарт).
+    /// Canonical market name from `MarketHandle::name()` (exchange `bn_market_name`).
+    /// `handles_by_name`, subscriptions, and searches use this key. The Moonbot display name
+    /// (`market_name`) cannot open a chart and would produce an empty chart.
     pub market: String,
-    /// Монета («BTC»).
+    /// Coin symbol, such as `BTC`.
     pub coin: String,
-    /// 24ч объём из листа рынков сервера, в котируемой валюте.
+    /// 24-hour volume from the server's market list, in the quote currency.
     pub vol_24h: f64,
-    /// Часовой объём (сумма 5м-свечей за час), в котируемой валюте.
+    /// One-hour volume from 5-minute candles, in the quote currency.
     pub vol_1h: f64,
-    /// Скользящие объёмы сделок (окна 1/3/5 минут), в котируемой валюте.
+    /// Rolling trade volumes over 1-, 3-, and 5-minute windows, in the quote currency.
     pub vol_1m: f64,
     pub vol_3m: f64,
     pub vol_5m: f64,
-    /// Лучшая цена продажи.
+    /// Best ask price.
     pub ask: f64,
-    /// Максимум цены за последний час (по 5м-свечам + текущей).
+    /// Highest price in the last hour across 5-minute candles and the current candle.
     pub high_1h: f64,
-    /// Макс. размер ордера биржи в котируемой валюте (Moonbot Max.Order):
-    /// `max_notional`, фолбэк `max_qty × ask`. 0 — биржа лимит не отдала.
+    /// Exchange maximum order size in the quote currency (Moonbot Max.Order):
+    /// `max_notional`, falling back to `max_qty * ask`. Zero means no exchange limit was provided.
     pub max_order: f64,
-    /// Дельты, %. 24ч/1ч — знаковые серверные (`MarketDeltaState`, парность
-    /// Moonbot Coin1hDelta/Coin24hDelta); 3ч/15м/1м/72ч — derived-максимумы
-    /// retained-истории (беззнаковая величина движения, как в таблице Moonbot).
+    /// Percentage deltas. The 24h and 1h values are signed server values (`MarketDeltaState`,
+    /// matching Moonbot Coin1hDelta/Coin24hDelta); the 3h, 15m, 1m, and 72h values are derived
+    /// retained-history maxima: unsigned movement magnitudes matching the Moonbot table.
     pub d_24h: f64,
     pub d_3h: f64,
     pub d_1h: f64,
     pub d_15m: f64,
     pub d_1m: f64,
     pub d_72h: f64,
-    /// Фандинг, % (`funding_rate` × 100).
+    /// Funding percentage (`funding_rate * 100`).
     pub funding_pct: f64,
-    /// Отклонение mark price от last, %; None — mark не приходил.
+    /// Mark-price deviation from the last price, in percent; `None` if no mark price arrived.
     pub mark_delta_pct: Option<f64>,
-    /// Шаг цены графика (абсолютный).
+    /// Absolute chart price step.
     pub price_step: f64,
-    /// Макс. плечо рынка; 0 — спот/неизвестно.
+    /// Maximum market leverage; zero means spot or unknown.
     pub max_leverage: i32,
-    /// Активное плечо аккаунта (макс. по ядрам группы); 0 — не выставлено.
+    /// Active account leverage, maximized across supplied members; zero means unset.
     pub leverage_x: i32,
-    /// Isolated-маржа (от ядра с активным плечом); None — плечо не выставлено.
+    /// Whether margin is isolated on the core supplying active leverage; `None` if leverage is unset.
     pub isolated: Option<bool>,
-    /// Сессионный профит по монете (b+l+s), сумма по ядрам группы.
+    /// Per-coin session profit (b+l+s), summed across supplied members.
     pub session_pnl: f64,
-    /// Суммарная позиция по ядрам группы, в монете.
+    /// Aggregate position across supplied members, denominated in the coin.
     pub pos_size: f64,
-    /// Открытые ордера по монете (сумма по ядрам группы). Заполняет UI-оверлей
-    /// из `CoreData.orders` — market-слой ордеров не видит.
+    /// Open per-coin orders summed across supplied members. The UI overlay fills this from
+    /// `CoreData.orders` because the market layer does not see orders.
     pub orders: u32,
 }
 
 impl MarketDataSource {
-    /// Построить строки скринера для группы ядер одной биржи.
+    /// Builds screener rows for a group of cores on one exchange.
     ///
-    /// `provider` — ядро-провайдер рыночных данных группы (см.
-    /// [`MarketDataSource::provider_of`]), `members` — все ядра группы, чьи
-    /// аккаунтные поля складываются в оверлей. Пустой вектор — у провайдера
-    /// ещё нет клиента/снимка.
+    /// `provider` is the group's market-data provider core (see
+    /// [`MarketDataSource::provider_of`]); `members` is the exact set of cores whose account fields
+    /// contribute to the overlay. In core-filtered mode it may exclude `provider`. The function
+    /// returns an empty result if the provider has no client or snapshot yet.
     pub fn screener_rows(&self, provider: CoreId, members: &[CoreId]) -> Vec<ScreenerRow> {
         let Some(client) = self.core_client(provider) else {
             return Vec::new();
@@ -87,14 +87,13 @@ impl MarketDataSource {
         let Some(snap) = client.snapshot_versioned() else {
             return Vec::new();
         };
-        // Аккаунтные снимки ядер группы (провайдер — тоже член группы).
+        // Account snapshots come from exactly the supplied members; the provider is not implicit.
         let member_snaps: Vec<_> = members
             .iter()
             .filter_map(|&core| self.core_client(core)?.snapshot_versioned())
             .collect();
-        // Часовой хай: закрытые 5м-свечи штампуются КОНЦОМ периода, так что
-        // отсечка по времени честно ограничивает окно последним часом даже на
-        // рынках без свежих сделок.
+        // Closed 5-minute candles are timestamped at the END of their period, so the cutoff
+        // accurately limits the high window to the last hour even for markets with no recent trades.
         let hour_cutoff_ms = MoonTime::now().unix_millis() - 3_600_000;
 
         let markets = snap.markets();

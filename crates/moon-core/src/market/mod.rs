@@ -1,10 +1,10 @@
-//! Market-плоскость: ОБЩИЕ рыночные данные (крестики + стакан), дедуплицированные
-//! по ядру-провайдеру. Рынок `BTCUSDT@Binance Futures` идентичен у всех ядер этой
-//! биржи, поэтому его тянет одно избранное ядро (провайдер), а не все 200.
+//! Market plane: SHARED market data (ticks + order book), deduplicated by provider core.
+//! The `BTCUSDT@Binance Futures` market is identical across all cores on that exchange,
+//! so one elected core (the provider) fetches it instead of all 200 cores.
 //!
-//! Ключ хранилища — id ЯДРА-ПРОВАЙДЕРА (того, что реально несёт подписку). Этот же
-//! механизм покрывает оба режима: в dedup один провайдер на биржу, в per-core каждое
-//! ядро провайдер самому себе (см. `MarketDataMode`).
+//! The store key is the PROVIDER CORE id (the core that actually owns the subscription).
+//! The same mechanism supports both modes: dedup uses one provider per exchange, while
+//! per-core makes each core its own provider (see `MarketDataMode`).
 
 pub mod candles;
 pub mod kline_cache;
@@ -28,18 +28,19 @@ pub use source::{
 };
 
 /// Shared market buffer owned by moon-core, not by a GPUI entity. Live feeds only wake
-/// consumers; `SessionManager` pulls provider snapshots into this buffer for visible
-/// charts. Synthetic/compat feed messages can still publish here directly.
+/// consumers; retained chart history is read directly through `ChartHistoryCursor`, while
+/// order-book views are pulled into this buffer. Synthetic/compat feed messages can still
+/// publish here directly.
 pub type SharedMarketStore = Arc<RwLock<MarketStore>>;
 
-/// Режим источника рыночных данных (рубильник из настроек). Хранится в settings.toml
-/// кодом ("dedup"/"percore"); неизвестный код откатывается на дефолт.
+/// Market-data source mode selected in settings. Stored in `settings.toml` as
+/// `"dedup"` or `"percore"`; an unknown code falls back to the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MarketDataMode {
-    /// Один провайдер на биржу: все ядра биржи читают рынок с него. По умолчанию.
+    /// One provider per exchange: all cores on the exchange read market data from it. Default.
     #[default]
     Dedup,
-    /// Без дедупа: каждый чарт берёт рынок со своего ядра (ядро = свой провайдер).
+    /// No deduplication: each chart reads market data from its own core.
     PerCore,
 }
 
@@ -68,21 +69,21 @@ impl Serialize for MarketDataMode {
 
 impl<'de> Deserialize<'de> for MarketDataMode {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        // Неизвестный код не роняет разбор файла — откатываемся на дефолт.
+        // Keep an unknown code from failing file parsing by falling back to the default.
         let s = String::deserialize(d)?;
         Ok(MarketDataMode::from_code(&s).unwrap_or_default())
     }
 }
 
-/// Внутренний legacy/synth store одного рынка от одного провайдера.
+/// Internal legacy/synthetic store for one market from one provider.
 ///
-/// Production UI не должен читать отсюда latest price/history напрямую: история и
-/// latest-price идут через `MarketDataSource::read_chart_history_into/latest_price`,
-/// стакан — через `MarketDataSource::with_orderbook_view`.
+/// Production UI must not read the latest price or history directly from this store. History
+/// and the latest price go through `MarketDataSource::read_chart_history_into/latest_price`,
+/// and the order book goes through `MarketDataSource::with_orderbook_view`.
 pub struct MarketView {
     book: OrderBookModel,
     last_price: Option<f32>,
-    /// Время последнего тика (unix ms) — правый край графика следует за ним.
+    /// Retained timestamp metadata for legacy/synthetic ticks; chart reads do not use it here.
     last_tick_ms: Option<f64>,
     ticks_rev: u64,
     book_rev: u64,
@@ -113,7 +114,7 @@ impl MarketView {
     }
 }
 
-/// Рыночные данные всех провайдеров: провайдер → (рынок → данные).
+/// Market data for all providers: provider -> (market -> data).
 pub struct MarketStore {
     by_provider: HashMap<CoreId, HashMap<String, MarketView>>,
 }
@@ -129,13 +130,17 @@ impl MarketStore {
         }
     }
 
-    /// Данные рынка от конкретного провайдера (None, пока провайдер их не прислал).
+    /// Returns an installed market view for a provider.
+    ///
+    /// `reset` installs an empty view immediately, so `Some` does not mean provider data arrived.
     pub fn view(&self, provider: CoreId, market: &str) -> Option<&MarketView> {
         self.by_provider.get(&provider)?.get(market)
     }
 
-    /// Сбросить рынок провайдера на чистый: новое открытие или смена провайдера
-    /// (провайдер заново выгрузит retained-историю с начала кольца).
+    /// Installs an empty provider view for a new open or provider change.
+    ///
+    /// This does not reload retained history into the store. Charts read retained rows directly
+    /// through their `ChartHistoryCursor` via `MarketDataSource`.
     pub fn reset(&mut self, provider: CoreId, market: &str) {
         self.by_provider
             .entry(provider)
@@ -143,25 +148,25 @@ impl MarketStore {
             .insert(market.to_string(), MarketView::new());
     }
 
-    /// Рынок больше никто не смотрит — освобождаем (после linger-задержки).
+    /// Releases a market after its linger delay once no consumer is watching it.
     pub fn drop_market(&mut self, provider: CoreId, market: &str) {
         if let Some(m) = self.by_provider.get_mut(&provider) {
             m.remove(market);
         }
     }
 
-    /// Провайдер сменился/отвалился — выкидываем все его рынки.
+    /// Drops all markets when their provider changes or disconnects.
     pub fn drop_provider(&mut self, provider: CoreId) {
         self.by_provider.remove(&provider);
     }
 
-    /// Полный сброс (смена режима источника): провайдеры/рынки переизберутся заново.
+    /// Clears everything after a source-mode change so providers and markets can be re-elected.
     pub fn clear(&mut self) {
         self.by_provider.clear();
     }
 
-    /// Тики от провайдера (применяются, только если view для рынка существует —
-    /// его создаёт координатор через `reset` при попадании рынка в wanted).
+    /// Applies provider ticks only when the market view exists. The coordinator creates the
+    /// view through `reset` when the market enters the wanted set.
     pub fn apply_ticks(&mut self, provider: CoreId, market: &str, ticks: &[Tick]) {
         if let Some(v) = self
             .by_provider
@@ -172,7 +177,7 @@ impl MarketStore {
         }
     }
 
-    /// Снимок стакана от провайдера (как и тики — только при существующем view).
+    /// Applies a provider order-book snapshot only when the market view exists.
     pub fn apply_book(&mut self, provider: CoreId, market: &str, book: &OrderBook) {
         if let Some(v) = self
             .by_provider
