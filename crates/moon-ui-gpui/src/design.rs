@@ -123,14 +123,28 @@ pub fn solid(hex: u32) -> Rgba {
     rgb(hex)
 }
 
-/// Hex-токен палитры (`0xRRGGBB`) → непрозрачный `Hsla`. Единый хелпер: до
-/// рефактора дублировался в `screener/table.rs`, `panels/alerts.rs` и
-/// `strategies/mod.rs`.
+/// Convert a `0xRRGGBB` palette token to opaque `Hsla`.
+///
+/// This centralizes a conversion formerly duplicated in `screener/table.rs`, `panels/alerts.rs`,
+/// and `strategies/mod.rs`.
+///
+/// Args:
+///     hex: Palette color encoded as `0xRRGGBB`.
+///
+/// Returns:
+///     The color with alpha set to one.
 pub fn moon(hex: u32) -> Hsla {
     rgba_from(hex, 1.0)
 }
 
-/// То же, но с альфой.
+/// Convert a `0xRRGGBB` palette token to `Hsla` with an explicit alpha value.
+///
+/// Args:
+///     hex: Palette color encoded as `0xRRGGBB`.
+///     alpha: Alpha passed through to `rgba_from`.
+///
+/// Returns:
+///     The color with the requested alpha.
 pub fn moon_alpha(hex: u32, alpha: f32) -> Hsla {
     rgba_from(hex, alpha)
 }
@@ -149,7 +163,7 @@ pub fn danger_color(p: MoonPalette) -> u32 {
     if p.is_light() { p.red_text } else { p.red }
 }
 
-/// Convert a palette/config `[u8; 3]` colour to GPUI's `0xRRGGBB` representation.
+/// Convert GPUI's `0xRRGGBB` representation to palette/config `[u8; 3]` RGB bytes.
 pub fn u32_to_rgb(c: u32) -> [u8; 3] {
     [
         ((c >> 16) & 0xff) as u8,
@@ -158,17 +172,22 @@ pub fn u32_to_rgb(c: u32) -> [u8; 3] {
     ]
 }
 
+/// Convert palette/config `[u8; 3]` RGB bytes to GPUI's `0xRRGGBB` representation.
 pub fn rgb_to_u32(c: [u8; 3]) -> u32 {
     (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32
 }
 
-/// Палитра для `MoonColorPicker::colors(..)`: 12 оттенков × 5 яркостей + серая
-/// шкала (65 свотчей, строка сетки = 5 градаций одного тона). Свободного
-/// HSV-пикера у компонента форка НЕТ — без своей палитры он показывает лишь
-/// 10 цветов темы, что читалось как «цвет менять нельзя».
+/// Build the explicit palette supplied to `MoonColorPicker::colors`.
+///
+/// It contains five saturation/lightness variants for each of 12 hues plus five grays, for 65
+/// swatches total. Each picker row contains the five variants of one hue. The forked component has
+/// no free-form HSV picker and otherwise exposes only ten theme colors.
+///
+/// Returns:
+///     The complete ordered swatch palette.
 pub fn picker_palette() -> Vec<Hsla> {
     let mut out = Vec::with_capacity(65);
-    // (насыщенность, светлота): от светлого к тёмному в каждой строке.
+    // Pairs are ordered by decreasing lightness from light to dark; saturation varies independently.
     const SHADES: [(f32, f32); 5] = [
         (0.85, 0.72),
         (0.85, 0.58),
@@ -188,8 +207,16 @@ pub fn picker_palette() -> Vec<Hsla> {
     out
 }
 
-/// Hsla (из MoonColorPicker) → sRGB `[u8;3]` — для конфигов/полей, хранящих
-/// цвет байтами (fig_style, hex-поля стратегий).
+/// Convert a `MoonColorPicker` `Hsla` value to 8-bit sRGB for byte-backed color fields.
+///
+/// The alpha channel is intentionally omitted. Consumers include `fig_style` and strategy hex
+/// fields, which retain or encode alpha separately.
+///
+/// Args:
+///     h: Picker color to convert.
+///
+/// Returns:
+///     Rounded red, green, and blue bytes.
 pub fn hsla_to_rgb8(h: Hsla) -> [u8; 3] {
     let c: Rgba = h.into();
     [
@@ -235,35 +262,57 @@ pub fn line_px(cx: &App, value: f32) -> Pixels {
     px(line_value(cx, value))
 }
 
-/// Базовый кегль текста из темы moonui (`mono_font_size`, по умолчанию 11).
-/// Все три ступени ниже считаются от него, поэтому смена базы в `.toml`
-/// двигает их разом.
+/// Return the MoonUI theme's base terminal text size, `mono_font_size`, whose default is 11.
+///
+/// The three raw-GPUI text tiers below derive from this value, so a `.toml` base-size change moves
+/// them together.
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     The unscaled base font size.
 fn base_text(cx: &App) -> f32 {
     MoonTheme::active_tokens(cx).typography.mono_font_size
 }
 
-/// Три стандартные ступени кегля терминала — ТОЛЬКО для сырого gpui
-/// (`div().text_size(..)`), где нет компонента moonui и масштабировать некому.
-/// Считаются от базы темы moonui и проходят через `font()` (см. `text_px`),
-/// поэтому реагируют на слайдер «Шрифт» в Настройках.
+/// Return the caption text size for raw GPUI elements such as `div().text_size(...)`.
 ///
-/// У компонентов moonui (`MoonText`, `MoonButtonSegment`, `MoonDataCell`) свой
-/// кегль по умолчанию, и они САМИ прогоняют его через `tokens.font()`. Им сюда
-/// ничего передавать не надо: не задавать `font_size` вообще, а если нужен не
-/// дефолт — передавать базовое число. `t_*`/`font_value(..)` туда передавать
-/// НЕЛЬЗЯ — масштаб применится дважды.
+/// The raw-GPUI tiers derive from MoonUI's base and pass through `font()`, so they respond to the
+/// Settings Font slider. MoonUI components such as `MoonText`, `MoonButtonSegment`, and
+/// `MoonDataCell` already scale their own default or supplied base size. Do not pass a `t_*` result
+/// or `font_value(...)` into them, because that applies font scaling twice.
 ///
-/// `t_caption` ~9: бейджи, мелкие подписи, счётчики.
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     Approximately 9px at the default theme base with zero Font-slider delta, for badges, small
+///     labels, and counters. The application's default +2 delta makes it approximately 11px.
 pub fn t_caption(cx: &App) -> Pixels {
     text_px(cx, base_text(cx) - 2.0)
 }
 
-/// `t_body` 11: основной текст, таблицы, моно-значения. База темы.
+/// Return the theme-base body size for raw GPUI text, tables, and monospaced values.
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     Approximately 11px at the default theme base with zero Font-slider delta. The application's
+///     default +2 delta makes it approximately 13px.
 pub fn t_body(cx: &App) -> Pixels {
     text_px(cx, base_text(cx))
 }
 
-/// `t_title` ~14: заголовки и крупные акценты.
+/// Return the title size for raw GPUI headings and large accents.
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     Approximately 14px at the default theme base with zero Font-slider delta. The application's
+///     default +2 delta makes it approximately 16px.
 pub fn t_title(cx: &App) -> Pixels {
     text_px(cx, base_text(cx) + 3.0)
 }
@@ -282,14 +331,23 @@ pub fn mono_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
     ui_text_width(cx, text, base_text(cx), weight, true)
 }
 
-/// Ширина строки UI-шрифтом темы данного БАЗОВОГО кегля (масштаб «Шрифт» применяется
-/// внутри, как это делает `MoonText` — передавать сюда немасштабированное значение).
-/// Считается суммой advance'ов глифов через text_system: без кернинга/лигатур, но для
-/// подбора ширины попапов/меню под контент этого достаточно. Использовать для
-/// контент-зависимой геометрии (ширина меню по самому длинному пункту), НЕ для
-/// пиксель-точной вёрстки текста. `mono` — семейство шрифта: `true` для моно (Geist Mono,
-/// как меню/тулбар-контекст панелей), `false` для UI-шрифта — мерить надо тем же, каким
-/// текст реально рисуется, иначе оценка ширины расходится с рендером.
+/// Estimate text width at an unscaled base size using the active theme font.
+///
+/// Font scaling is applied internally, matching `MoonText`. The estimate sums per-character glyph
+/// advances from `text_system::layout_width`, without kerning or ligatures. It is suitable for
+/// content-driven geometry such as fitting a menu to its longest item, not pixel-exact text layout.
+/// Measure with the family that renders the text: `mono = true` selects the monospaced family such
+/// as Geist Mono, while `false` selects the UI family.
+///
+/// Args:
+///     cx: Application context providing active tokens and the text system.
+///     text: Text to measure.
+///     base_font_size: Unscaled base size; passing an already scaled value scales twice.
+///     weight: Font weight represented as the GPUI numeric value.
+///     mono: Whether to use the theme's monospaced rather than UI font family.
+///
+/// Returns:
+///     The summed glyph-advance estimate in pixels.
 pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32, mono: bool) -> f32 {
     let tokens = MoonTheme::active_tokens(cx);
     let size = px(tokens.font(base_font_size));
@@ -316,10 +374,10 @@ pub fn menu_fit_width<'a>(cx: &App, labels: impl IntoIterator<Item = &'a str>, m
         .fold(0.0, f32::max);
     (ui_value(cx, 6.0 * 2.0 + 5.0 + 4.0 * 2.0) + 12.0 + 2.0 + max_label_w)
         .ceil()
-        // Верхняя граница ≥ нижней обязательно: часть вызовов передаёт НЕмасштабированный
-        // `min_w` (шапка/MS — сырые 180/200), и при сильно уменьшенном кегле `font_w(MENU_MAX_W)`
-        // мог бы оказаться ниже `min_w` → паника `f32::clamp` (lo > hi). `.max(min_w)` держит
-        // инвариант: при вырожденном кегле пол побеждает потолок.
+        // Keep the upper bound at least as large as the lower bound. Some callers pass unscaled
+        // `min_w` values, such as the header's raw 180 or 200, while a heavily reduced font can make
+        // `font_w(MENU_MAX_W)` smaller. `.max(min_w)` prevents `f32::clamp` from panicking with
+        // `lo > hi`; in that degenerate case the floor wins over the ceiling.
         .clamp(min_w, font_w(cx, MENU_MAX_W).max(min_w))
 }
 
@@ -372,15 +430,17 @@ pub fn menu_fit_width_2col(cx: &App, label: &str, right_label: &str, min_w: f32)
         .clamp(min_w, font_w(cx, MENU_MAX_W).max(min_w))
 }
 
-/// Горизонтальный воздух вокруг метки кнопки-триггера `MoonDropdown`: у `MoonButton`
-/// pad_x=0 (FORK_BUGS), поэтому поля добавляем сами. Масштабируется под кегль. Визуальная
-/// настройка.
+/// Visual horizontal padding around a `MoonDropdown` trigger label.
+///
+/// The Action and Toolbar button sizes used by these content-sized dropdowns have zero horizontal
+/// padding, so this allowance supplies it. `fit_dropdown_trigger` scales the value with `ui_value`,
+/// following UI scale rather than Font-slider scale.
 const TRIGGER_PAD_X: f32 = 14.0;
 
-/// Потолок ширины кнопки-триггера `MoonDropdown` в плотном тулбаре панели: длинная подпись не
-/// должна раздвигать кнопку так, что соседние контролы уезжают за обрезаемый край панели —
-/// полное имя читается в раскрытом списке. Визуальная настройка (немасштабированная база
-/// для `font_w`).
+/// Unscaled visual ceiling for a `MoonDropdown` trigger in a compact panel toolbar.
+///
+/// Long labels are truncated before they push adjacent controls beyond the clipped panel edge; the
+/// full name remains available in the open menu. Callers scale this base through `font_w`.
 const TRIGGER_MAX_W: f32 = 260.0;
 
 /// Unscaled minimum trigger width for the core selectors used by `dropdown_content_widths`.
@@ -389,11 +449,12 @@ const TRIGGER_MAX_W: f32 = 260.0;
 /// lower bounds.
 pub const CORES_TRIGGER_MIN_W: f32 = 118.0;
 
-/// Грубый верхний предел ширины меню селектора: не даёт вырожденно-длинному имени ядра
-/// раздуть меню на пол-экрана (`MoonDropdown` двигает поповер, но НЕ ужимает его). Это
-/// ФИКСИРОВАННЫЙ бортик, НЕ фактическая ширина окна — в очень узком detached-окне при крупном
-/// кегле меню всё ещё может выйти за край (как и у шапки, общий предел `menu_fit_width`).
-/// Реальные имена ядер сюда не дотягивают. Немасштабированная база для `font_w`.
+/// Unscaled coarse ceiling for selector-menu width.
+///
+/// It prevents a pathological core name from expanding a menu across much of the screen.
+/// `MoonDropdown` repositions a popover but does not shrink it. This fixed guard is not the actual
+/// window width, so at a large font a menu can still extend beyond a very narrow detached window.
+/// Normal core names do not approach it. Callers scale this base through `font_w`.
 const MENU_MAX_W: f32 = 560.0;
 
 /// Calculate content-driven `MoonDropdown` trigger and menu widths.
@@ -470,18 +531,18 @@ pub fn fit_label(cx: &App, text: &str, max_w: f32) -> String {
 /// by measured glyph width so fallback Unicode glyphs remain within the budget; the ellipsis and
 /// caret remain visible. `cur` excludes the caret.
 fn fit_dropdown_trigger(cx: &App, cur: &str, min_w: f32, max_w: f32) -> (String, f32) {
-    const CARET: &str = " \u{25be}"; // пробел + ▾
+    const CARET: &str = " \u{25be}"; // space plus down-pointing caret
     let tw = |s: &str| ui_text_width(cx, s, 10.5, 400.0, true);
     let full = format!("{cur}{CARET}");
     let natural = (ui_value(cx, TRIGGER_PAD_X) + tw(&full)).ceil();
     if natural <= max_w {
         return (full, natural.max(min_w));
     }
-    // Над потолком → усечь имя, сохранив «… ▾». Имена ядер — произвольный Unicode; для глифов
-    // вне Geist Mono равноширинность не гарантирована, поэтому набираем префикс по фактической
-    // ширине КАЖДОГО символа, пока «префикс + … ▾» умещается в бюджет — метка не переливает
-    // кнопку ни при каком имени.
-    let suffix = format!("\u{2026}{CARET}"); // … + пробел + ▾
+    // Above the ceiling, truncate the name while preserving the ellipsis and caret. Core names are
+    // arbitrary Unicode, and fallback glyphs outside Geist Mono need not be equal-width, so build
+    // the prefix from each character's measured width until `prefix + ellipsis + caret` fills the
+    // budget without overflowing the button.
+    let suffix = format!("\u{2026}{CARET}"); // ellipsis plus space and down-pointing caret
     let budget = max_w - ui_value(cx, TRIGGER_PAD_X) - tw(&suffix);
     let mut head = String::new();
     let mut used = 0.0f32;
@@ -497,61 +558,107 @@ fn fit_dropdown_trigger(cx: &App, cur: &str, min_w: f32, max_w: f32) -> (String,
     (format!("{}{}", head.trim_end(), suffix), max_w)
 }
 
-/// Фактические (масштабированные под кегль) высоты строки/шапки MoonDataTable.
-/// Зеркалят fit_height-аргументы самого компонента (data_table.rs: строка
-/// `fit(row_h, 14.0, 5.5)`, шапка `fit(header_h, 11.0, 7.5)`), чтобы обёртки,
-/// считающие «натуральную» высоту таблицы, не отставали от неё при крупном
-/// шрифте (иначе строки клипались при +6).
+/// Return the effective font-scaled `MoonDataTable` row height.
+///
+/// This mirrors the component's `fit_height(row_h, 14.0, 5.5)` call so wrappers computing natural
+/// table height do not clip rows at large font settings.
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     The rendered row height in pixels.
 pub fn table_row_h(cx: &App) -> f32 {
     fit_h_value(cx, TABLE_ROW_H, 14.0, 5.5)
 }
 
+/// Return the effective font-scaled `MoonDataTable` header height.
+///
+/// This mirrors the component's `fit_height(header_h, 11.0, 7.5)` call.
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     The rendered header height in pixels.
 pub fn table_head_h(cx: &App) -> f32 {
     fit_h_value(cx, TABLE_HEAD_H, 11.0, 7.5)
 }
 
-/// Масштаб текущего кегля относительно базового (1.0 при нулевой дельте
-/// слайдера «Шрифт»). Геометрия через `ui()` дельту слайдера НЕ видит —
-/// поэтому фиксированные ширины, держащие текст (поля значений, попапы,
-/// инпуты), надо умножать на этот коэффициент, иначе крупный шрифт
-/// обрезается/переносится.
+/// Return the current font-size scale relative to the theme base.
+///
+/// The result is one when the Settings Font slider has zero delta. Geometry passed through `ui()`
+/// does not see that delta, so fixed-width text containers such as value fields, popups, and inputs
+/// use this factor to avoid clipping or wrapping larger text.
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     The active scaled base font size divided by the unscaled base.
 pub fn font_scale(cx: &App) -> f32 {
     let b = base_text(cx);
     font_value(cx, b) / b
 }
 
-/// Ширина, растущая вместе с кеглем: `base` при нулевой дельте слайдера.
-/// Для контейнеров текста фиксированной ширины (см. `font_scale`).
+/// Scale a fixed text-container width with the font and return `Pixels`.
+///
+/// Args:
+///     cx: Application context used to calculate [`font_scale`].
+///     base: Width at zero Font-slider delta.
+///
+/// Returns:
+///     The font-scaled width as `Pixels`.
 pub fn font_w_px(cx: &App, base: f32) -> Pixels {
     px(base * font_scale(cx))
 }
 
-/// То же, но `f32` — для билдеров moonui, берущих сырые пиксели БЕЗ
-/// собственного масштабирования (`menu_width`/`trigger_width`/`MoonButton::width`
-/// кладут значение в `px(..)` как есть — проверено по форку).
+/// Scale a fixed text-container width with the font and return raw pixels as `f32`.
+///
+/// Use this for MoonUI builders that apply raw `px(...)` without their own scaling, including
+/// `menu_width`, `trigger_width`, and `MoonButton::width`.
+///
+/// Args:
+///     cx: Application context used to calculate [`font_scale`].
+///     base: Width at zero Font-slider delta.
+///
+/// Returns:
+///     The font-scaled raw pixel width.
 pub fn font_w(cx: &App, base: f32) -> f32 {
     base * font_scale(cx)
 }
 
-/// Скругления — из метрик moonui (`MoonMetrics::TERMINAL`), не свои числа.
-/// Сырых `px(N)` в `rounded()` не писать. Пилюли (`SEL_H / 2.0`, `999.0`) — не
-/// радиус, а форма, сюда не входят.
-///
-/// `*_BASE` — базовое (немасштабированное) число для билдеров moonui, которые
-/// скейлят сами (`MoonButtonSize::Custom { radius }`); `r_*` — готовые `Pixels`
-/// для сырого gpui `.rounded()`. Путать нельзя: масштаб применится дважды.
-///
-/// ВНИМАНИЕ: у moonui всего ДВЕ ступени радиуса. Для мелких чипов/свотчей своей
-/// ступени у неё нет (третья ступень `radius_sm` запрошена у авторов MoonUI).
+// Radius tokens come from `MoonMetrics::TERMINAL`, rather than local numeric values. Avoid raw
+// `px(N)` in `.rounded()`. Pill values such as `SEL_H / 2.0` or `999.0` describe shape, not a radius
+// tier, and are outside this rule. `*_BASE` values are unscaled inputs for MoonUI builders that scale
+// internally, such as `MoonButtonSize::Custom { radius }`; `r_*` functions return ready-to-use
+// `Pixels` for raw GPUI `.rounded()`. Mixing them applies scaling twice.
+//
+// `MoonMetrics` exposes these two shared radius tokens and no shared small-radius token for chips or
+// swatches; a third `radius_sm` metric has been requested upstream.
+/// Unscaled shared `button_radius` token for MoonUI builders that apply UI scaling internally.
 pub const R_BUTTON_BASE: f32 = M.button_radius;
+/// Unscaled shared `container_radius` token for MoonUI builders that apply UI scaling internally.
 pub const R_CONTAINER_BASE: f32 = M.container_radius;
 
-/// `r_button` (moonui `button_radius`, 4): кнопки, карточки, попапы, панели.
+/// Return the scaled MoonUI `button_radius`, default 4, for buttons, cards, popups, and panels.
+///
+/// Args:
+///     cx: Application context used to apply UI scaling.
+///
+/// Returns:
+///     The ready-to-use raw-GPUI radius.
 pub fn r_button(cx: &App) -> Pixels {
     ui_px(cx, R_BUTTON_BASE)
 }
 
-/// `r_container` (moonui `container_radius`, 8): диалоги, модалки, контейнеры.
+/// Return the scaled MoonUI `container_radius`, default 8, for dialogs, modals, and containers.
+///
+/// Args:
+///     cx: Application context used to apply UI scaling.
+///
+/// Returns:
+///     The ready-to-use raw-GPUI radius.
 pub fn r_container(cx: &App) -> Pixels {
     ui_px(cx, R_CONTAINER_BASE)
 }
