@@ -1,10 +1,9 @@
-//! Окно редактирования активного ордера («Active Order», порт Moonbot-диалога).
-//! Открывается кликом по типу BUY/SELL в таблице «Ордера» и из контекстного меню
-//! линии ордера на чарте. Read-only: монета/сторона/статус/размер/стратегия/условие
-//! входа (протокол не даёт их менять). Редактируется: цена активной ноги
-//! (`move_order`) и стопы SL/TS/TP/VStop (`update_order_stops`, см.
-//! moon-core feed::order_edit — диффом против начального состояния, нетронутые
-//! группы не шлются).
+//! Active Order editor, ported from the Moonbot dialog. It opens from the side/type cell in the
+//! Orders table or the chart order-line context menu. Market, side, status, size, strategy, and the
+//! pending entry condition are read-only because the protocol does not edit them here. The active
+//! leg price is submitted through `move_order`; changed SL, TS, TP, and VStop groups are submitted
+//! through `update_order_stops` and `moon-core::feed::order_edit`. Cancel, the close button, and
+//! overlay dismissal discard the dialog state without submitting it.
 
 use gpui::*;
 use moon_core::feed::{OrderRow, OrderStopsForm, StopGroupEdit, TakeProfitEdit, VStopEdit};
@@ -19,7 +18,7 @@ use rust_i18n::t;
 use crate::Backend;
 use crate::design::{self, moon};
 
-/// Начальные значения формы — база для диффа на OK (нетронутое не шлём).
+/// Initial form values used to omit unchanged fields when OK builds its edit commands.
 #[derive(Clone, Copy)]
 struct InitVals {
     price: f64,
@@ -37,15 +36,16 @@ struct InitVals {
     vstop_vol: f64,
 }
 
-/// Состояние открытого диалога (тоглы + инпуты). Живёт, пока открыт диалог,
-/// закрытие бросает Entity.
+/// Toggle and input state captured by the open dialog. Closing or replacing the unique dialog drops
+/// its captured entity after the dialog closures are released.
 pub struct OrderEditState {
     backend: Entity<Backend>,
     core: CoreId,
     uid: u64,
     row: OrderRow,
     core_name: String,
-    /// Вход исполнен → активная нога SELL (двигаем цену выхода), иначе BUY.
+    /// Whether the worker status says entry execution completed. Executed orders seed the editable
+    /// price from `row.sell_price`; pending orders seed it from `row.buy_price`.
     executed: bool,
     sl_on: bool,
     sl_fixed: bool,
@@ -63,8 +63,8 @@ pub struct OrderEditState {
     vstop_vol_input: Entity<MoonInputState>,
 }
 
-/// Цена для инпута: минимальная запись без хвостовых нулей (без научной нотации,
-/// в отличие от Display у f64 на микропрайсах). 0/NaN → пустая строка.
+/// Formats a price with up to eight fixed decimal places and removes trailing zeroes, avoiding
+/// scientific notation. Zero and non-finite values produce an empty string.
 fn fmt_edit(v: f64) -> String {
     if !v.is_finite() || v == 0.0 {
         return String::new();
@@ -75,17 +75,18 @@ fn fmt_edit(v: f64) -> String {
         .to_string()
 }
 
-/// Парс числа из инпута: запятая как точка, мусор → None.
+/// Parses an input as `f64` after accepting commas as decimal points. Invalid syntax returns `None`;
+/// callers apply any required positivity and finiteness checks.
 fn parse_num(s: &str) -> Option<f64> {
     s.trim().replace(',', ".").parse::<f64>().ok()
 }
 
-/// Значение изменилось (относительный eps — цены бывают и 60000, и 1e-6).
+/// Compares numeric edits with a relative epsilon suitable for both large and micro prices.
 fn differs(a: f64, b: f64) -> bool {
     (a - b).abs() > a.abs().max(b.abs()) * 1e-9 + 1e-12
 }
 
-/// Отображаемая сторона ордера (как в таблице «Ордера»).
+/// Returns the same long/short and entry/exit side label and tone used by the Orders table.
 fn side_label(r: &OrderRow, executed: bool) -> (&'static str, MoonTone) {
     match (r.is_short, executed) {
         (false, false) => ("BUY", MoonTone::Negative),
@@ -95,8 +96,9 @@ fn side_label(r: &OrderRow, executed: bool) -> (&'static str, MoonTone) {
     }
 }
 
-/// Открыть диалог редактирования ордера `uid` ядра `core` в текущем окне. Ордер
-/// ищется в снимке store; не найден (уже закрыт) → молча ничего.
+/// Opens the unique order editor for `uid` from `core` in the current window. The initial draft is
+/// copied from the current store snapshot; a missing or already closed order logs a warning and no
+/// dialog is opened.
 pub(crate) fn open_order_edit(
     backend: Entity<Backend>,
     core: CoreId,
@@ -211,7 +213,7 @@ pub(crate) fn open_order_edit(
     });
 }
 
-/// Строка «подпись: значение» инфоблока.
+/// Builds one label-value row in the read-only information block.
 fn info_kv(p: MoonPalette, label: String, value: impl IntoElement) -> impl IntoElement {
     h_flex()
         .gap_1()
@@ -241,7 +243,7 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
         r.status.clone()
     };
 
-    // ── Инфоблок (read-only) ──
+    // Build the read-only order summary.
     let info = v_flex()
         .w_full()
         .gap_1()
@@ -255,7 +257,7 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
                     div()
                         .text_color(moon(p.accent))
                         .font_weight(FontWeight::SEMIBOLD)
-                        // Формат пары как на графике: `BTC_USDT` → `BTC-USDT` (см. п.27a UX-фидбека).
+                        // Match chart pair formatting, for example `BTC_USDT` to `BTC-USDT`.
                         .child(symbol::display_pair(&r.market_display)),
                 ))
                 .child(info_kv(
@@ -297,7 +299,7 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
                 )),
         );
 
-    // ── Условие входа (pending) — read-only, протокол не даёт менять ──
+    // Show the pending entry condition as read-only protocol data when present.
     let cond = r.pending_cond.map(|c| {
         div()
             .w_full()
@@ -305,7 +307,7 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
             .child(t!("orders.edit.cond", p = crate::panels::num(c)).to_string())
     });
 
-    // ── Цена активной ноги ──
+    // Build the active entry- or exit-leg price editor.
     let price_title = if s.executed {
         t!("orders.edit.sell_price").to_string()
     } else {
@@ -338,7 +340,7 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
                 ),
         );
 
-    // ── Стопы ──
+    // Build stop toggles and the numeric inputs enabled by their current modes.
     let toggle = |id: &'static str,
                   label: String,
                   checked: bool,
@@ -364,7 +366,7 @@ fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyElement {
             )
             .into_any_element()
     };
-    // Инпут-число: `w=0` — резиновый (занимает остаток строки), иначе фикс-ширина.
+    // A zero width makes the numeric input fill the remaining row; otherwise it stays fixed-width.
     let num_input = |id: &'static str, input: &Entity<MoonInputState>, enabled: bool, w: f32| {
         let host = if w > 0.0 {
             div().w(px(w)).flex_none()
@@ -510,15 +512,18 @@ fn dialog_footer(state: Entity<OrderEditState>, p: MoonPalette) -> AnyElement {
         .into_any_element()
 }
 
-/// Применить правки: цена активной ноги (`move_order`, если менялась) + дифф-форма
-/// стопов (`update_order_stops`, нетронутые группы = None).
+/// Builds and submits edits from the dialog draft. A changed, positive, finite active-leg price is
+/// sent through `move_order`; each changed stop group is included in `OrderStopsForm`, while an
+/// untouched group remains `None`. `update_order_stops` treats an entirely empty form as a no-op.
+/// The move command is queued before the stop form; submission is not atomic, and the first error is
+/// returned so the OK handler can keep the dialog open and show a notification.
 fn apply(state: &Entity<OrderEditState>, cx: &mut App) -> anyhow::Result<()> {
     let (backend, core, uid, form, new_price) = {
         let s = state.read(cx);
         let init = s.init;
         let val = |input: &Entity<MoonInputState>| parse_num(&input.read(cx).value());
 
-        // Цена активной ноги: валидная, изменившаяся → move_order.
+        // Submit the active-leg price only when it is positive, finite, and meaningfully changed.
         let new_price =
             val(&s.price_input).filter(|p| *p > 0.0 && p.is_finite() && differs(*p, init.price));
 
