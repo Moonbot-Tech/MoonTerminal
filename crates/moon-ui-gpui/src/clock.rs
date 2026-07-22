@@ -1,10 +1,11 @@
-//! Часы в правом углу шапки: «HH:MM:SS (UTC±N)». Время — текущее UTC + выбранное смещение
-//! (пояс), тикает раз в секунду вместе с ре-рендером Shell. Клик по элементу открывает
-//! `MoonPopover` со списком поясов (UTC-12..+14 + системный, если дробный); выбор персистится
-//! в layout (`Backend::set_header_clock_offset_min`, общий на все окна).
+//! Clock in the header's right corner, formatted as `HH:MM:SS (UTC+/-N)`. It displays current UTC
+//! plus the selected timezone offset and advances once per second with the shell rerender. Clicking
+//! it opens a `MoonPopover` listing UTC-12 through UTC+14 plus a fractional system offset when
+//! applicable. The selection persists in the layout through
+//! `Backend::set_header_clock_offset_min` and is shared by all windows.
 //!
-//! Правило метки: если выбранное смещение совпадает с системным поясом (отображаемое время =
-//! системным часам), метку «(UTC…)» не показываем — на экране просто локальное время.
+//! When the selected offset matches the system timezone, the displayed time is already local, so
+//! the `(UTC...)` label is omitted.
 
 use gpui::*;
 use moon_ui::{
@@ -16,12 +17,13 @@ use rust_i18n::t;
 use crate::Backend;
 use crate::design;
 
-/// Диапазон поясов в меню (целые часы). Дробные (India +5:30, Nepal +5:45) добавляются
-/// отдельно, только если таков системный пояс, — иначе их из целочисленного списка не выбрать.
+/// Inclusive menu range of whole-hour timezones. A fractional offset such as India +5:30 or Nepal
+/// +5:45 is added separately only when it matches the system timezone, because the whole-hour list
+/// cannot otherwise select it.
 const TZ_MIN_H: i32 = -12;
 const TZ_MAX_H: i32 = 14;
 
-/// Текущее UTC в секундах эпохи (кросс-платформенно, без внешних крейтов).
+/// Returns current UTC as cross-platform epoch seconds without external crates.
 fn now_unix_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -29,15 +31,15 @@ fn now_unix_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// «HH:MM:SS» для текущего UTC + смещение `off_min` (минуты). `rem_euclid` держит корректный
-/// час при отрицательных смещениях/переходе через полночь.
+/// Formats current UTC plus the minute offset `off_min` as `HH:MM:SS`. `rem_euclid` preserves the
+/// correct time of day for negative offsets and midnight crossings.
 fn hms(off_min: i32) -> String {
     let day = (now_unix_secs() + off_min as i64 * 60).rem_euclid(86_400);
     let (h, m, s) = (day / 3600, (day % 3600) / 60, day % 60);
     format!("{h:02}:{m:02}:{s:02}")
 }
 
-/// Подпись пояса: «UTC», «UTC+3», «UTC-5:30».
+/// Formats a timezone label such as `UTC`, `UTC+3`, or `UTC-5:30`.
 fn tz_label(off_min: i32) -> String {
     if off_min == 0 {
         return "UTC".to_string();
@@ -76,34 +78,36 @@ fn clock_parts(off_min: i32, sys_min: i32) -> (String, Option<String>) {
     (hms(off_min), tz)
 }
 
-/// Смещение системного пояса от UTC в минутах (восток положителен). Нужно для правила
-/// «скрыть метку, если выбранное = системному».
+/// Returns the system timezone offset from UTC in minutes, positive eastward. This supports hiding
+/// the label when the selected offset matches the system offset.
 #[cfg(windows)]
 fn system_offset_min() -> i32 {
     use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime};
-    // 0.61: обе возвращают SYSTEMTIME по значению. Вызовы соседние → час/минута стабильны.
+    // Since windows 0.61, both functions return SYSTEMTIME by value. Adjacent calls keep the hour
+    // and minute stable in normal operation.
     let (utc, loc) = unsafe { (GetSystemTime(), GetLocalTime()) };
     let utc_min = utc.wHour as i32 * 60 + utc.wMinute as i32;
     let loc_min = loc.wHour as i32 * 60 + loc.wMinute as i32;
     let mut diff = loc_min - utc_min;
-    // Локальная и UTC-дата могут отличаться (напр. UTC 23:30 ↔ локально 01:30) → развернуть.
+    // Local and UTC dates can differ, for example UTC 23:30 versus local 01:30, so unwrap the day.
     if diff > 14 * 60 {
         diff -= 24 * 60;
     } else if diff < -14 * 60 {
         diff += 24 * 60;
     }
-    // Реальные пояса кратны 15 мин; округляем — гасит дрожь на границе минуты между вызовами.
+    // Real timezones use 15-minute increments. Rounding suppresses jitter if the calls straddle a minute.
     ((diff as f32 / 15.0).round() as i32) * 15
 }
 
-/// Не-Windows: определять системный пояс нечем (moon-chart намеренно windows-free) → считаем
-/// систему в UTC. Часы работают, метка «(UTC)» просто не скрывается.
+/// Uses UTC as the system timezone outside Windows because `moon-chart` intentionally provides no
+/// platform-specific timezone lookup. The clock still works, but the `(UTC)` label remains visible.
 #[cfg(not(windows))]
 fn system_offset_min() -> i32 {
     0
 }
 
-/// Часы правого угла шапки: время + (опционально) метка пояса, клик — попап выбора пояса.
+/// The corresponding top-right header clock shows the time and an optional timezone label; clicking
+/// it opens the timezone-selection popup.
 /// Rendered width of the header clock, in the units the header lays its children out with.
 ///
 /// `shell::ticker` positions the rate ticker's popup by summing everything between the ticker and
@@ -133,8 +137,8 @@ pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl
     let sys = system_offset_min();
     let (time, tz) = clock_parts(off, sys);
 
-    // Список смещений меню: целые часы + системный пояс (если дробный и ещё не в списке), чтобы
-    // на India/Nepal можно было прийти к «= системному» и погасить метку.
+    // List whole-hour offsets plus a fractional system timezone not already present, allowing India
+    // or Nepal system zones to be selected exactly and thereby hide the label.
     let mut offsets: Vec<i32> = (TZ_MIN_H..=TZ_MAX_H).map(|h| h * 60).collect();
     if !offsets.contains(&sys) {
         offsets.push(sys);
@@ -156,7 +160,7 @@ pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl
         let backend = backend.clone();
         items.push(
             MoonMenuItem::with_key(format!("tz-{m}"), tz_label(m))
-                // Время в этом поясе (снимок; пока попап открыт — тикает с ре-рендером Shell).
+                // Snapshot the time in this zone; it advances with shell rerenders while the popup is open.
                 .right_label(hms(m))
                 .selected(m == off)
                 .checked(m == off)
@@ -206,7 +210,7 @@ pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl
                 .width(menu_w)
                 .size(MoonMenuSize::Compact)
                 .mono(true)
-                // ~11 пунктов видно, дальше скролл (список из 27+ поясов).
+                // Show about 11 of the 27 or more zones at once and scroll the remainder.
                 .max_height(300.0)
                 .items(items)
                 .render(),
