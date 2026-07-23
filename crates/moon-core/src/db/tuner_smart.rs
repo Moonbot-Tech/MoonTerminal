@@ -14,10 +14,10 @@
 //! The database is scanned once and all later work stays in memory, so call this ONLY from a
 //! background executor.
 
-use super::analytics::{unified_from, Query};
+use super::analytics::Query;
 use super::read_fail::read_fail;
 use super::tuner::{FieldClass, FIELDS};
-use super::{ReadFail, ReadResult};
+use super::ReadResult;
 
 /// Sentinel bin for a value below the first quantile edge. Quantile edges currently include
 /// the observed minimum, making this a defensive, unreachable case for derived bins. The edge
@@ -100,14 +100,7 @@ pub fn smart_suggest(
 ) -> ReadResult<Option<SmartResult>> {
     const CTX: &str = "tuner: smart_suggest";
     let ne = edges_want.clamp(EDGES_MIN, EDGES_MAX);
-    let conn = super::open_reader()?;
-    let mut q = q.clone();
-    if q.from < 0 {
-        q.from = 1;
-    }
-    let Some(src) = unified_from(&conn, &q)? else {
-        return Err(ReadFail::NotReady);
-    };
+    let (conn, q, src) = super::tuner::open_tuner_source(q)?;
     let nf = FIELDS.len();
     let cols = FIELDS
         .iter()
@@ -292,7 +285,7 @@ pub fn smart_suggest(
                 // beyond floating-point noise because bin sums and `tot_p`
                 // accumulate in different orders; otherwise an equivalent trade
                 // set can win by about 1e-12 and leave a no-op filter.
-                let mut best_p = tot_p + tot_p.abs().max(1.0) * 1e-9;
+                let mut best_p = tot_p + super::metrics::improvement_margin(tot_p);
                 // Only two Delta2/Delta3 slots exist. If two other slots already
                 // have ranges, this field may only choose no filter.
                 let slot_full = is_slot[fi]
@@ -402,16 +395,8 @@ pub fn smart_suggest(
             let (i, j) = (*s).filter(|(i, j)| !(*i == 0 && *j == ne))?;
             let (mut from, mut to) = (edges[fi][i], edges[fi][j]);
             if round {
-                let (rf, rt) = (
-                    super::tuner::round_bound(from, false),
-                    super::tuner::round_bound(to, true),
-                );
-                // Outward rounding can move both distribution-edge bounds past
-                // the observed range and turn the pair into a no-op filter.
-                // Preserve raw bounds in that case.
-                if rf > edges[fi][0] || rt < edges[fi][ne] {
-                    (from, to) = (rf, rt);
-                }
+                (from, to) =
+                    super::tuner::round_pair_outward(from, to, edges[fi][0], edges[fi][ne]);
             }
             Some(SmartField {
                 field: FIELDS[fi].col,
