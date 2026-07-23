@@ -367,9 +367,9 @@ analytics.undated_title:
   en: "Trades with no close date"
   es: "Operaciones sin fecha de cierre"
 analytics.undated_detail:
-  ru: "%{n} закрытых сделок (PnL %{pnl}) не входят НИ В ОДИН период — ядро не прислало дату закрытия. Ни одна цифра в этом окне их не учитывает."
-  en: "%{n} closed trades (PnL %{pnl}) fall into NO period — the core never sent a close date. No figure in this window counts them."
-  es: "%{n} operaciones cerradas (PnL %{pnl}) no entran en NINGÚN período: el núcleo no envió la fecha de cierre. Ninguna cifra de esta ventana las cuenta."
+  ru: "%{n} закрытых сделок (PnL %{pnl} USDT) не входят НИ В ОДИН период — ядро не прислало дату закрытия. Ни одна цифра в этом окне их не учитывает."
+  en: "%{n} closed trades (PnL %{pnl} USDT) fall into NO period — the core never sent a close date. No figure in this window counts them."
+  es: "%{n} operaciones cerradas (PnL %{pnl} USDT) no entran en NINGÚN período: el núcleo no envió la fecha de cierre. Ninguna cifra de esta ventana las cuenta."
 analytics.integrity_damaged:
   ru: "Реплика отчётов повреждена (проверка целостности SQLite)."
   en: "The reports replica is damaged (SQLite integrity check)."
@@ -380,9 +380,9 @@ analytics.integrity_unchecked:
   es: "No se realizó la verificación de integridad de la réplica."
 
 analytics.kpi.profit:
-  ru: "Прибыль, USDT"
-  en: "Profit, USDT"
-  es: "Beneficio, USDT"
+  ru: "Прибыль, %{unit}"
+  en: "Profit, %{unit}"
+  es: "Beneficio, %{unit}"
 analytics.kpi.trades:
   ru: "Сделки"
   en: "Trades"
@@ -421,14 +421,14 @@ analytics.cum_title:
   en: "Cumulative profit"
   es: "Beneficio acumulado"
 analytics.cum_sub:
-  ru: "USDT, по дням закрытия"
-  en: "USDT, by close date"
-  es: "USDT, por fecha de cierre"
+  ru: "%{unit}, по дням закрытия"
+  en: "%{unit}, by close date"
+  es: "%{unit}, por fecha de cierre"
 # On a period of a day or less the series grid is hours, and the caption has to say so.
 analytics.cum_sub_hours:
-  ru: "USDT, по часам закрытия"
-  en: "USDT, by close hour"
-  es: "USDT, por hora de cierre"
+  ru: "%{unit}, по часам закрытия"
+  en: "%{unit}, by close hour"
+  es: "%{unit}, por hora de cierre"
 # Stands in for the daily chart on a period of a day or less, where "by day" is a single
 # bar: split by strategy type (SignalType) instead, and move the cores into the popup.
 analytics.kinds_title:
@@ -436,17 +436,17 @@ analytics.kinds_title:
   en: "Profit by strategy type"
   es: "Beneficio por tipo de estrategia"
 analytics.kinds_sub:
-  ru: "USDT за период, наведи — ядра типа"
-  en: "USDT for the period, hover for its cores"
-  es: "USDT del período, pasa el cursor para ver sus núcleos"
+  ru: "%{unit} за период, наведи — ядра типа"
+  en: "%{unit} for the period, hover for its cores"
+  es: "%{unit} del período, pasa el cursor para ver sus núcleos"
 analytics.daily_title:
   ru: "Дневная прибыль"
   en: "Daily profit"
   es: "Beneficio diario"
 analytics.daily_sub:
-  ru: "USDT за сутки"
-  en: "USDT per day"
-  es: "USDT por día"
+  ru: "%{unit} за сутки"
+  en: "%{unit} per day"
+  es: "%{unit} por día"
 
 analytics.best_trades:
   ru: "Топ-5 сделок"
@@ -494,17 +494,17 @@ analytics.insights_sub:
   en: "automatic conclusions for the period"
   es: "conclusiones automáticas del período"
 analytics.ins.best_strategy:
-  ru: "Лучшая стратегия — %{name}: %{profit} USDT при winrate %{wr}%."
-  en: "Best strategy — %{name}: %{profit} USDT at %{wr}% winrate."
-  es: "Mejor estrategia — %{name}: %{profit} USDT con %{wr}% de winrate."
+  ru: "Лучшая стратегия — %{name}: %{profit} при winrate %{wr}%."
+  en: "Best strategy — %{name}: %{profit} at %{wr}% winrate."
+  es: "Mejor estrategia — %{name}: %{profit} con %{wr}% de winrate."
 analytics.ins.top_coin:
   ru: "Монета %{name} дала %{share}% всей прибыли периода."
   en: "Coin %{name} produced %{share}% of the period's profit."
   es: "La moneda %{name} generó el %{share}% del beneficio del período."
 analytics.ins.worst_coin:
-  ru: "Проблемная монета — %{name}: %{profit} USDT за период."
-  en: "Problem coin — %{name}: %{profit} USDT over the period."
-  es: "Moneda problemática — %{name}: %{profit} USDT en el período."
+  ru: "Проблемная монета — %{name}: %{profit} за период."
+  en: "Problem coin — %{name}: %{profit} over the period."
+  es: "Moneda problemática — %{name}: %{profit} en el período."
 analytics.ins.pf:
   ru: "Profit Factor %{pf} — %{verdict}; макс. серия побед — %{w}, поражений — %{l}."
   en: "Profit Factor %{pf} — %{verdict}; longest win streak — %{w}, loss streak — %{l}."
@@ -526,9 +526,9 @@ analytics.ins.pf_bad:
   en: "needs optimization"
   es: "requiere optimización"
 analytics.ins.best_hour:
-  ru: "Самый прибыльный час — %{hour} UTC (%{profit} USDT, %{n} сделок)."
-  en: "Most profitable hour — %{hour} UTC (%{profit} USDT, %{n} trades)."
-  es: "Hora más rentable — %{hour} UTC (%{profit} USDT, %{n} operaciones)."
+  ru: "Самый прибыльный час — %{hour} UTC (%{profit}, %{n} сделок)."
+  en: "Most profitable hour — %{hour} UTC (%{profit}, %{n} trades)."
+  es: "Hora más rentable — %{hour} UTC (%{profit}, %{n} operaciones)."
 
 analytics.strat.title:
   ru: "Тюнинг"

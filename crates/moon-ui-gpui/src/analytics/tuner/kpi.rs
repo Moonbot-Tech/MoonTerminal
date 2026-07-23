@@ -86,7 +86,7 @@ pub(super) fn kpi_matrix_card(
             Cell::Int,
         ),
         (
-            t!("analytics.kpi.profit").to_string(),
+            t!("analytics.kpi.profit", unit = crate::analytics::pnl_unit_label()).to_string(),
             |s| s.profit,
             Some(true),
             Cell::Pnl,

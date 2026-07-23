@@ -44,6 +44,19 @@ pub(super) fn fmt_signed(v: f64) -> String {
     }
 }
 
+/// Signed profit carrying the FULL unit for prose (the insights sentences): "+15.34%" in percent
+/// mode, "+15.34 USDT" in money mode. [`fmt_signed`] leaves a money figure unitless because its
+/// column header or KPI label supplies the "USDT" — a free-standing sentence has no such label, so
+/// the word rides along here. A non-finite value stays a bare em dash.
+fn fmt_signed_unit(v: f64) -> String {
+    let s = fmt_signed(v);
+    if s == "—" || super::pnl_is_pct() {
+        s
+    } else {
+        format!("{s} USDT")
+    }
+}
+
 /// Return the terminal colour for the same rounded sign used by [`fmt_signed`].
 ///
 /// Positive values are green, negative values are orange, and zero or a non-finite rounding result
@@ -137,9 +150,14 @@ impl AnalyticsView {
                             // The subtitle names the grid the DB actually chose: on a
                             // single-day period the curve is hourly, not per day.
                             if data.bucket_secs < 86_400 {
-                                t!("analytics.cum_sub_hours").to_string()
+                                t!(
+                                    "analytics.cum_sub_hours",
+                                    unit = crate::analytics::pnl_unit_label()
+                                )
+                                .to_string()
                             } else {
-                                t!("analytics.cum_sub").to_string()
+                                t!("analytics.cum_sub", unit = crate::analytics::pnl_unit_label())
+                                    .to_string()
                             },
                             Some(head),
                             cumulative::cumulative_area(
@@ -165,7 +183,8 @@ impl AnalyticsView {
                         let (title, sub, body) = if by_kind {
                             (
                                 t!("analytics.kinds_title").to_string(),
-                                t!("analytics.kinds_sub").to_string(),
+                                t!("analytics.kinds_sub", unit = crate::analytics::pnl_unit_label())
+                                    .to_string(),
                                 charts::kind_bars(
                                     &data.kinds,
                                     &data.core_days,
@@ -178,7 +197,8 @@ impl AnalyticsView {
                         } else {
                             (
                                 t!("analytics.daily_title").to_string(),
-                                t!("analytics.daily_sub").to_string(),
+                                t!("analytics.daily_sub", unit = crate::analytics::pnl_unit_label())
+                                    .to_string(),
                                 charts::daily_bars(
                                     &data.days,
                                     &data.core_days,
@@ -274,7 +294,7 @@ impl AnalyticsView {
             .child(kpi(
                 p,
                 cx,
-                t!("analytics.kpi.profit"),
+                t!("analytics.kpi.profit", unit = crate::analytics::pnl_unit_label()),
                 profit_el,
                 delta(cur.profit, prev.as_ref().map(|v| v.profit)),
                 false,
@@ -588,7 +608,7 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
             t!(
                 "analytics.ins.best_strategy",
                 name = strat_display(&best.name),
-                profit = fmt_signed(best.profit),
+                profit = fmt_signed_unit(best.profit),
                 wr = format!("{:.1}", best.winrate())
             )
             .to_string(),
@@ -608,7 +628,7 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
             t!(
                 "analytics.ins.worst_coin",
                 name = worst.name,
-                profit = fmt_signed(worst.profit)
+                profit = fmt_signed_unit(worst.profit)
             )
             .to_string(),
         );
@@ -637,7 +657,7 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
             t!(
                 "analytics.ins.best_hour",
                 hour = format!("{h:02}:00"),
-                profit = fmt_signed(profit),
+                profit = fmt_signed_unit(profit),
                 n = n
             )
             .to_string(),
@@ -709,3 +729,6 @@ pub(super) fn strat_display(name: &str) -> String {
         name.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests;

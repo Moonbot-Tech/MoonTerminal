@@ -113,6 +113,14 @@ pub(in crate::analytics) fn pnl_is_pct() -> bool {
 pub(in crate::analytics) fn pnl_suffix() -> &'static str {
     if pnl_is_pct() { "%" } else { "" }
 }
+/// Standalone unit token for a label or axis caption that stands BESIDE a profit figure rather
+/// than riding on it: "USDT" in money mode, "%" in percent mode. A number already carries its own
+/// unit via `pnl_suffix`, so this is only for the surrounding label. Currency tickers are
+/// language-neutral (see locales/README.md), so — like `pnl_suffix` — it lives in code, not the
+/// dictionary, and slots into a `%{unit}` placeholder.
+pub(in crate::analytics) fn pnl_unit_label() -> &'static str {
+    if pnl_is_pct() { "%" } else { "USDT" }
+}
 
 /// State of the Analytics window.
 pub struct AnalyticsView {
