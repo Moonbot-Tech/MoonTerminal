@@ -16,7 +16,8 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
 use moonproto::{
-    MoonReports, ReportRow as RepRow, ReportSchema, ReportSyncComplete, ReportSyncPage, ReportValue,
+    MoonReports, ReportRow as RepRow, ReportRowsDeleted, ReportSchema, ReportSyncComplete,
+    ReportSyncPage, ReportValue,
 };
 use rusqlite::types::Value;
 use rusqlite::Connection;
@@ -39,6 +40,16 @@ pub enum DbMsg {
     Delete {
         core_uid: u64,
         rec_id: i64,
+    },
+    /// Bulk soft-delete or restore broadcast by the core: set the `deleted` flag on every
+    /// replica row of this core whose `newrecid` is in one of the ranges or the singles.
+    ///
+    /// Distinct from [`DbMsg::Delete`], which hard-removes one row — this only flips the flag
+    /// the Report and Analytics filters read, so `deleted = false` restores the rows rather
+    /// than dropping them.
+    SetDeleted {
+        core_uid: u64,
+        change: ReportRowsDeleted,
     },
     /// Catch-up page under the report-replication flow-control contract.
     ///
@@ -387,6 +398,54 @@ pub(super) fn apply_delete(conn: &Connection, core_uid: u64, rec_id: i64) -> rus
         &format!("DELETE FROM {TABLE} WHERE core_uid=?1 AND newrecid=?2"),
         rusqlite::params![core_uid as i64, rec_id],
     )?;
+    Ok(())
+}
+
+/// Apply a core-broadcast bulk soft-delete/restore ([`moonproto::ReportEvent::RowsDeleted`]):
+/// set the `deleted` flag to the operation's value on every replica row of this core whose
+/// `newrecid` is in one of the inclusive ranges or the singles list.
+///
+/// Guarded on the `deleted` column existing in the schema cache, mirroring the read side's
+/// `has("deleted")`: moonproto broadcasts `RowsDeleted` without a schema gate and treats the
+/// field as possibly-absent, so a core whose report schema omits `deleted` is a clean no-op
+/// here instead of a "no such column" error per event. Ranges and singles run as separate
+/// statements, but the caller invokes this inside the writer's batch transaction (see the
+/// writer loop in `db::mod`), so the whole operation commits atomically with the rest of the
+/// batch. Each `UPDATE` shape is `prepare_cached` and reused across its loop, as in
+/// [`apply_upsert`].
+pub(super) fn apply_set_deleted(
+    conn: &Connection,
+    st: &RepState,
+    core_uid: u64,
+    change: &ReportRowsDeleted,
+) -> rusqlite::Result<()> {
+    if change.is_empty() || !st.cols.contains("deleted") {
+        return Ok(());
+    }
+    // `deleted` is stored as 0/1, matching the `COALESCE(deleted, 0)` the read filters use.
+    let flag = i64::from(change.deleted);
+    let uid = core_uid as i64;
+    {
+        let mut stmt = conn.prepare_cached(&format!(
+            "UPDATE {TABLE} SET deleted=?1 WHERE core_uid=?2 AND newrecid BETWEEN ?3 AND ?4"
+        ))?;
+        for range in change.ranges.iter() {
+            stmt.execute(rusqlite::params![
+                flag,
+                uid,
+                range.from_rec_id,
+                range.to_rec_id
+            ])?;
+        }
+    }
+    {
+        let mut stmt = conn.prepare_cached(&format!(
+            "UPDATE {TABLE} SET deleted=?1 WHERE core_uid=?2 AND newrecid=?3"
+        ))?;
+        for &rec_id in change.singles.iter() {
+            stmt.execute(rusqlite::params![flag, uid, rec_id])?;
+        }
+    }
     Ok(())
 }
 
