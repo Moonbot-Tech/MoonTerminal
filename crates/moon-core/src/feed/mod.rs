@@ -290,6 +290,16 @@ pub enum CoreCmd {
     /// are combined into one `update_stops`, with untouched groups preserved effectively as in
     /// `SetOrderStop`; VStop uses a separate `update_vstop`. See `feed::order_edit`.
     UpdateOrderStopsForm { uid: u64, form: OrderStopsForm },
+    /// Soft-delete (`deleted=true`) or restore (`false`) report rows on this core, addressed by
+    /// `newrecid` ranges and singles — the Report panel's "deletion mode". The core commits it to
+    /// its report database and echoes `ReportEvent::RowsDeleted` to all subscribers, which flips
+    /// the local replica's `deleted` flag; nothing is applied locally until that echo. Soft, not
+    /// physical: a `deleted=false` batch restores the rows.
+    SetReportRowsDeleted {
+        deleted: bool,
+        ranges: Vec<moonproto::ReportRecIdRange>,
+        singles: Vec<i64>,
+    },
     /// Targeted `ClientSettings` edit from the toolbar, such as TP, SL, or sell-preset selection.
     /// The feed patches the retained settings snapshot through its helper and sends it in full
     /// with `settings().send`.

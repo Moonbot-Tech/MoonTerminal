@@ -485,6 +485,27 @@ pub(super) fn drain_commands(
                 order_edit::update_order_stops_form(client, server.id, uid, form);
                 *orders_mutated = true;
             }
+            Ok(CoreCmd::SetReportRowsDeleted {
+                deleted,
+                ranges,
+                singles,
+            }) => {
+                // Soft-delete/restore intent. The core commits it and echoes
+                // `ReportEvent::RowsDeleted`, which flips the local `deleted` flag; nothing is
+                // written locally here. Not an order mutation, so no snapshot is forced.
+                match client
+                    .reports()
+                    .set_rows_deleted(deleted, &ranges, &singles)
+                {
+                    Ok(n) => log::info!(
+                        "core {} set report rows deleted={deleted} -> {n} батч(ей)",
+                        server.id
+                    ),
+                    Err(error) => {
+                        log::warn!("core {} set_rows_deleted failed: {error}", server.id)
+                    }
+                }
+            }
             Ok(CoreCmd::PanicSellMarket { market, on }) => {
                 trade::panic_sell_market(client, server.id, market, on);
                 *orders_mutated = true;

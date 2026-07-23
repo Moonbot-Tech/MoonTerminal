@@ -433,6 +433,12 @@ pub struct ReportTable {
     /// report coin click open the chart ON THE CORE that made the trade
     /// (`core_uid` equals the runtime `CoreId`).
     pub core_uids: Vec<u64>,
+    /// `newrecid` (the replica replication key) for each row, parallel to `rows`.
+    ///
+    /// Also a hidden service column. It is the id the soft-delete protocol addresses, so the
+    /// Report panel's deletion mode reads it to build `set_report_rows_deleted`. Legacy rows,
+    /// which have no `newrecid` and cannot be soft-deleted, carry `0` — never a real rec id.
+    pub rec_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -797,10 +803,19 @@ pub fn query_reports(
     let dir = if desc { "DESC" } else { "ASC" };
 
     // Query the top N from EACH source separately so indexes work, then merge below.
-    let mut merged: Vec<(u64, Vec<Value>)> = Vec::new();
+    // Each entry is `(core_uid, rec_id, data)`; `rec_id` is the replica `newrecid` or 0 for a
+    // legacy row that has none.
+    let mut merged: Vec<(u64, i64, Vec<Value>)> = Vec::new();
     for src in read_sources_res(conn)? {
         let (where_sql, mut params) = build_where(f, &src.cols);
         let select = source_select(&src, &cols);
+        // `newrecid` is a real column only on the typed replica; a legacy source projects 0, which
+        // marks its rows as not soft-deletable (0 is never a real rec id).
+        let rec_id_select = if src.cols.contains("newrecid") {
+            "newrecid"
+        } else {
+            "0"
+        };
         // Sort in SQL only if the source has the column. The legacy `id` alias is
         // visible to ORDER BY; otherwise source order is irrelevant because the merge reorders it.
         let sortable = src.cols.contains(&col) || (src.legacy && col == "id");
@@ -810,7 +825,7 @@ pub fn query_reports(
             "1".to_string()
         };
         let sql = format!(
-            "SELECT core_uid, {select} FROM {}{where_sql} ORDER BY {order} LIMIT ?",
+            "SELECT core_uid, {rec_id_select}, {select} FROM {}{where_sql} ORDER BY {order} LIMIT ?",
             src.table
         );
         params.push(Box::new(limit as i64));
@@ -820,11 +835,12 @@ pub fn query_reports(
         let mapped = stmt
             .query_map(refs.as_slice(), |r| {
                 let core_uid = r.get::<_, i64>(0)? as u64;
+                let rec_id = r.get::<_, i64>(1)?;
                 let mut v = Vec::with_capacity(n);
                 for i in 0..n {
-                    v.push(r.get::<_, Value>(i + 1)?);
+                    v.push(r.get::<_, Value>(i + 2)?);
                 }
-                Ok((core_uid, v))
+                Ok((core_uid, rec_id, v))
             })
             .map_err(|e| read_fail(CTX, e))?;
         // Every row is a trade the user is entitled to see, and the same rows
@@ -836,8 +852,8 @@ pub fn query_reports(
 
     // Merge with NULL always last, like `{col} IS NULL` in SQL, then apply direction.
     merged.sort_by(|a, b| {
-        let va = sort_ix.and_then(|i| a.1.get(i)).unwrap_or(&Value::Null);
-        let vb = sort_ix.and_then(|i| b.1.get(i)).unwrap_or(&Value::Null);
+        let va = sort_ix.and_then(|i| a.2.get(i)).unwrap_or(&Value::Null);
+        let vb = sort_ix.and_then(|i| b.2.get(i)).unwrap_or(&Value::Null);
         match (matches!(va, Value::Null), matches!(vb, Value::Null)) {
             (true, true) => std::cmp::Ordering::Equal,
             (true, false) => std::cmp::Ordering::Greater,
@@ -856,14 +872,17 @@ pub fn query_reports(
 
     let mut rows = Vec::with_capacity(merged.len());
     let mut core_uids = Vec::with_capacity(merged.len());
-    for (uid, row) in merged {
+    let mut rec_ids = Vec::with_capacity(merged.len());
+    for (uid, rec_id, row) in merged {
         core_uids.push(uid);
+        rec_ids.push(rec_id);
         rows.push(row);
     }
     Ok(ReportTable {
         cols,
         rows,
         core_uids,
+        rec_ids,
     })
 }
 

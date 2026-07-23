@@ -331,6 +331,31 @@ impl SessionManager {
         )
     }
 
+    /// Soft-delete (`deleted=true`) or restore (`false`) report rows on `core`, addressed by
+    /// `newrecid` ranges and singles (the Report panel's deletion mode). An empty selection is a
+    /// no-op. The core echoes `ReportEvent::RowsDeleted`, which flips the local replica's
+    /// `deleted` flag; the Report panel refreshes from that echo, not optimistically.
+    pub fn set_report_rows_deleted(
+        &self,
+        core: CoreId,
+        deleted: bool,
+        ranges: Vec<moonproto::ReportRecIdRange>,
+        singles: Vec<i64>,
+    ) -> Result<()> {
+        if ranges.is_empty() && singles.is_empty() {
+            return Ok(());
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::SetReportRowsDeleted {
+                deleted,
+                ranges,
+                singles,
+            },
+            "set report rows deleted",
+        )
+    }
+
     /// Move an order's stop or take-profit line by dragging it on the chart. The absolute `price`
     /// sets SL or TS to a fixed-price stop, or sets take profit to an absolute price; the other
     /// stops are preserved. A non-positive `price` is ignored.
