@@ -110,12 +110,14 @@ pub(super) enum OrdCol {
     Ts,
     Vstop,
     Strat,
+    /// Strategy user-assigned name (`StrategyName`), distinct from the `Strat` kind column.
+    StratName,
 }
 
 impl OrdCol {
     // Keep SL/TS/Vstop on the right beside Strat, leaving the important price and PnL fields
     // together. TP price sits beside Buy/Cur.P, and PNL TP sits beside PnL/PnL%.
-    pub(super) const ALL: [OrdCol; 15] = [
+    pub(super) const ALL: [OrdCol; 16] = [
         OrdCol::Core,
         OrdCol::Side,
         OrdCol::Token,
@@ -131,6 +133,7 @@ impl OrdCol {
         OrdCol::Ts,
         OrdCol::Vstop,
         OrdCol::Strat,
+        OrdCol::StratName,
     ];
 
     /// Stable key used by `docks.json` persistence and menu elements.
@@ -151,16 +154,20 @@ impl OrdCol {
             OrdCol::PnlPct => "pnl.pct",
             OrdCol::PnlTp => "pnl.tp",
             OrdCol::Strat => "strat",
+            OrdCol::StratName => "strat_name",
         }
     }
 
     /// Column bit in the visibility mask, derived from its position in [`Self::ALL`].
-    pub(super) fn bit(self) -> u16 {
+    ///
+    /// The mask is [`u32`] so that the count of columns can grow past 16 without overflowing the
+    /// `1 << idx` shift.
+    pub(super) fn bit(self) -> u32 {
         let idx = OrdCol::ALL
             .iter()
             .position(|c| *c == self)
             .unwrap_or_default();
-        1u16 << idx
+        1u32 << idx
     }
 
     pub(super) fn from_key(key: &str) -> Option<OrdCol> {
@@ -169,7 +176,7 @@ impl OrdCol {
 }
 
 /// Default view mask with every column visible.
-pub(super) const ALL_COLUMNS_MASK: u16 = (1u16 << OrdCol::ALL.len()) - 1;
+pub(super) const ALL_COLUMNS_MASK: u32 = (1u32 << OrdCol::ALL.len()) - 1;
 
 /// Per-panel table view state: order kind, current-market filter, sorting, and visible columns.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -181,7 +188,7 @@ pub(crate) struct OrdersViewState {
     /// Whether to lift no Main rows, every matching market row, or only highlighted rows.
     pub(super) main_on_top: MainOnTop,
     /// Visible-column bit mask, where each bit comes from [`OrdCol::bit`]. Persisted as keys.
-    pub(super) columns: u16,
+    pub(super) columns: u32,
 }
 
 impl OrdersViewState {

@@ -25,6 +25,7 @@ fn test_order_with_buy_trace() -> OrderRow {
         price: 61_000.0,
         fill_pct: 0.0,
         strat: "test".into(),
+        strat_name: String::new(),
         strat_id: 0,
         status: String::new(),
         uid: 42,

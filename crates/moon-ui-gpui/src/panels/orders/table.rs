@@ -73,7 +73,7 @@ fn open_row_coin_menu(
 
 pub(super) fn orders_table(
     rows: Rc<Vec<OrderEntry>>,
-    columns: u16,
+    columns: u32,
     state: &Entity<MoonDataTableState>,
     highlight: Rc<HashSet<(CoreId, u64)>>,
     stop_overlay: Rc<std::collections::HashMap<(CoreId, u64, u8), bool>>,
@@ -132,9 +132,9 @@ pub(super) fn orders_table(
 
 /// Return the column title shared by the table header and field-selection menu.
 ///
-/// `Core`, `Side`, `Token`, `CurP`, `TpPrice`, and `PnlTp` use `orders.col.*` localization. Size,
-/// SL, TS, Vstop, Buy, Fill, PNL, PNL %, and Strat are intentionally untranslated domain tokens;
-/// see `locales/README.md`.
+/// `Core`, `Side`, `Token`, `CurP`, `TpPrice`, `PnlTp`, and `StratName` use `orders.col.*`
+/// localization. Size, SL, TS, Vstop, Buy, Fill, PNL, PNL %, and Strat are intentionally
+/// untranslated domain tokens; see `locales/README.md`.
 pub(super) fn col_title(col: OrdCol) -> String {
     match col {
         OrdCol::Core => t!("orders.col.core").to_string(),
@@ -152,6 +152,7 @@ pub(super) fn col_title(col: OrdCol) -> String {
         OrdCol::PnlPct => "PNL %".to_string(),
         OrdCol::PnlTp => t!("orders.col.pnl_tp").to_string(),
         OrdCol::Strat => "Strat".to_string(),
+        OrdCol::StratName => t!("orders.col.strat_name").to_string(),
     }
 }
 
@@ -178,6 +179,9 @@ fn column_def(col: OrdCol) -> MoonDataTableColumn {
         OrdCol::PnlPct => numeric_column("pnl.pct", title, 64.0),
         OrdCol::PnlTp => numeric_column("pnl.tp", title, 72.0),
         OrdCol::Strat => numeric_column("strat", title, 90.0),
+        // A name is variable-length text, so left-align it like the Core column rather than the
+        // right-aligned Strat kind column.
+        OrdCol::StratName => MoonDataTableColumn::new("strat_name", title, 120.0),
     }
 }
 
@@ -277,6 +281,7 @@ fn cell_for(
         OrdCol::PnlPct => pnl_pct_cell(r),
         OrdCol::PnlTp => pnl_tp_cell(r),
         OrdCol::Strat => strat_cell(e, view, p),
+        OrdCol::StratName => strat_name_cell(e, view, p),
     }
 }
 
@@ -536,6 +541,59 @@ fn side_cell(
         })
 }
 
+/// Open the Strategies window focused on this order's core and strategy.
+///
+/// Shared by the `Strat` (kind) and `StratName` (name) cells, which both navigate to the same
+/// strategy. Clears active-only mode before expanding and selecting it.
+fn open_strat_goto(
+    view: &Entity<OrdersPanel>,
+    core: CoreId,
+    strat_id: u64,
+    window: &mut Window,
+    app: &mut App,
+) {
+    let backend = view.read(app).backend.clone();
+    let owner_display = window.display(app).map(|d| d.id());
+    crate::strategies::open_goto(
+        backend,
+        core,
+        strat_id,
+        Some(window.window_handle()),
+        owner_display,
+        app,
+    );
+}
+
+/// Build the order's strategy-name cell.
+///
+/// Shows the strategy's user-assigned `StrategyName` for a strategy order (`strat_id != 0`),
+/// clickable to open the Strategies window on that core and strategy. A manual order, or a strategy
+/// with no name set, renders as a muted dash. This is distinct from [`strat_cell`], which shows the
+/// strategy TYPE (kind).
+fn strat_name_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> MoonDataCell {
+    let r = &e.row;
+    if r.strat_id == 0 || r.strat_name.is_empty() {
+        return MoonDataCell::text("–").tone(MoonTone::Muted);
+    }
+    let core = e.core;
+    let uid = r.uid;
+    let strat_id = r.strat_id;
+    let view = view.clone();
+    let el = div()
+        .id(SharedString::from(format!("ord-stratname-{core}-{uid}")))
+        // Make the full cell clickable, as in `strat_cell`. Left-aligned, matching its column.
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .text_color(rgb(MoonTone::Muted.color(p)))
+        .font_weight(FontWeight::MEDIUM)
+        .child(r.strat_name.clone())
+        .on_click(move |_, window, app| open_strat_goto(&view, core, strat_id, window, app));
+    MoonDataCell::element(el)
+}
+
 /// Build the order's strategy cell.
 ///
 /// A strategy order (`strat_id != 0`) is clickable and opens the Strategies window focused on that
@@ -549,7 +607,9 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
     let core = e.core;
     let uid = r.uid;
     let strat_id = r.strat_id;
-    let strat_name = r.strat.clone();
+    // The strategy KIND, passed to the coin menu as its strategy label. Named to disambiguate from
+    // the order's user-assigned `strat_name` field rendered by `strat_name_cell`.
+    let strat_kind = r.strat.clone();
     let market_menu = r.market.clone();
     let coin_menu = symbol::coin_of_market(&r.market).to_string();
     let short = r.is_short;
@@ -567,18 +627,7 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
         .text_color(rgb(MoonTone::Muted.color(p)))
         .font_weight(FontWeight::MEDIUM)
         .child(r.strat.clone())
-        .on_click(move |_, window, app| {
-            let backend = view.read(app).backend.clone();
-            let owner_display = window.display(app).map(|d| d.id());
-            crate::strategies::open_goto(
-                backend,
-                core,
-                strat_id,
-                Some(window.window_handle()),
-                owner_display,
-                app,
-            );
-        })
+        .on_click(move |_, window, app| open_strat_goto(&view, core, strat_id, window, app))
         // Right-click opens the shared coin menu with this order's known strategy context.
         .on_mouse_down(
             MouseButton::Right,
@@ -589,7 +638,7 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
                     coin_menu.clone(),
                     uid,
                     Some(strat_id),
-                    Some(strat_name.clone()),
+                    Some(strat_kind.clone()),
                     short,
                     &view_menu,
                     e.position,
@@ -645,7 +694,8 @@ fn token_cell(
     let market = e.row.market.clone();
     let uid = e.row.uid;
     let strat_id = (e.row.strat_id != 0).then_some(e.row.strat_id);
-    let strat_name = strat_id.map(|_| e.row.strat.clone());
+    // The strategy KIND label for the coin menu; see the note in `strat_cell`.
+    let strat_kind = strat_id.map(|_| e.row.strat.clone());
     let short = e.row.is_short;
     let view = view.clone();
     let view_menu = view.clone();
@@ -683,7 +733,7 @@ fn token_cell(
                     coin.clone(),
                     uid,
                     strat_id,
-                    strat_name.clone(),
+                    strat_kind.clone(),
                     short,
                     &view_menu,
                     e.position,

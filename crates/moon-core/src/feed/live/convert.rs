@@ -279,9 +279,20 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     } else {
         o.market_name.clone()
     };
-    let strat = match snap.strats().snapshot(o.strat_id) {
-        Some(s) => strat_kind_name(s.kind().ordinal()).to_string(),
-        None => o.strat_id.to_string(),
+    // `strat` is the strategy TYPE (kind), `strat_name` its user-assigned `StrategyName`. Both come
+    // from one snapshot lookup; a manual order or an unknown snapshot leaves the name empty.
+    //
+    // These are captured at row-build time. `strat` (kind) is immutable for a strategy's lifetime,
+    // but `StrategyName` is user-editable, so a rename does not refresh the Orders panel's Name
+    // column until that core's next order event bumps `orders_table_rev`. This is deliberate: the
+    // panel signature keys on order revisions, not strategy revisions, to avoid rebuilding the table
+    // on every unrelated strategy edit. The stale name self-heals on the next order tick.
+    let (strat, strat_name) = match snap.strats().snapshot(o.strat_id) {
+        Some(s) => (
+            strat_kind_name(s.kind().ordinal()).to_string(),
+            s.strategy_name().unwrap_or_default().to_string(),
+        ),
+        None => (o.strat_id.to_string(), String::new()),
     };
     // The entry leg is ALWAYS `buy_order`, for both longs and shorts. The state machine is phased:
     // entry is `Buy*`, exit is `Sell*`; a short's entry also lives in buy_order/buy_price, while
@@ -580,6 +591,7 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
         price: last,
         fill_pct,
         strat,
+        strat_name,
         strat_id: o.strat_id,
         status: o.status.name().to_string(),
         uid: o.uid,

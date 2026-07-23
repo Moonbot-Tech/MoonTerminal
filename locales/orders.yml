@@ -50,6 +50,11 @@ orders.col.pnl_tp:
   ru: "PNL TP"
   en: "PNL TP"
   es: "PNL TP"
+# Strategy user-assigned name column, distinct from the Strat (kind) column.
+orders.col.strat_name:
+  ru: "Имя"
+  en: "Name"
+  es: "Nombre"
 orders.open_hint:
   ru: "Открыть чарт на Main (это ядро)"
   en: "Open chart on Main (this core)"
