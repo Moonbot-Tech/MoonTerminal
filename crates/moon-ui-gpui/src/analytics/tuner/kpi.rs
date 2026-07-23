@@ -8,7 +8,7 @@ use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
-use super::super::summary::{fmt_signed, sign_color};
+use super::super::summary::{fmt_signed, fmt_signed_plain, sign_color};
 use super::super::{AnalyticsView, LoadState};
 use super::shared::card;
 use crate::design;
@@ -67,20 +67,29 @@ pub(super) fn kpi_matrix_card(
             );
         }
     };
-    // (label, value, higher=better; None — no comparison against the fact)
-    type Row = (String, fn(&VarStats) -> f64, Option<bool>, bool);
+    // How a cell's number reads: an integer count, a profit value (carries the active
+    // USDT/percent unit), or a dimensionless ratio (profit factor, winrate) that must NOT
+    // pick up the "%" suffix in percent mode.
+    #[derive(Clone, Copy)]
+    enum Cell {
+        Int,
+        Pnl,
+        Ratio,
+    }
+    // (label, value, higher=better; None — no comparison against the fact; cell format)
+    type Row = (String, fn(&VarStats) -> f64, Option<bool>, Cell);
     let rows: Vec<Row> = vec![
         (
             t!("analytics.kpi.trades").to_string(),
             |s| s.n as f64,
             None,
-            true,
+            Cell::Int,
         ),
         (
             t!("analytics.kpi.profit").to_string(),
             |s| s.profit,
             Some(true),
-            false,
+            Cell::Pnl,
         ),
         // Order mirrors the strategy table on the left of this screen; kept by hand, since
         // these rows carry comparison flags the table's descriptors have no notion of.
@@ -88,37 +97,37 @@ pub(super) fn kpi_matrix_card(
             t!("analytics.kpi.avg_short").to_string(),
             |s| s.avg,
             Some(true),
-            false,
+            Cell::Pnl,
         ),
         (
             t!("analytics.kpi.winrate").to_string(),
             |s| s.winrate(),
             Some(true),
-            false,
+            Cell::Ratio,
         ),
         (
             t!("analytics.col.pf").to_string(),
             |s| s.pf,
             Some(true),
-            false,
+            Cell::Ratio,
         ),
         (
             t!("analytics.tuner.avg_win").to_string(),
             |s| s.avg_win,
             Some(true),
-            false,
+            Cell::Pnl,
         ),
         (
             t!("analytics.tuner.avg_loss").to_string(),
             |s| s.avg_loss,
             Some(false),
-            false,
+            Cell::Pnl,
         ),
         (
             t!("analytics.kpi.maxdd").to_string(),
             |s| s.max_dd,
             Some(false),
-            false,
+            Cell::Pnl,
         ),
     ];
     let col_w = 92.0;
@@ -165,7 +174,7 @@ pub(super) fn kpi_matrix_card(
     }
 
     let mut body = v_flex().w_full().child(head);
-    for (label, get, better, int) in rows {
+    for (label, get, better, cell) in rows {
         let fact = get(&stats[0]);
         let mut row = h_flex()
             .w_full()
@@ -178,10 +187,10 @@ pub(super) fn kpi_matrix_card(
             .child(div().flex_1().text_color(moon(p.text_soft)).child(label));
         for (i, s) in stats.iter().enumerate() {
             let v = get(s);
-            let text = if int {
-                format!("{}", v as i64)
-            } else {
-                fmt_signed(v)
+            let text = match cell {
+                Cell::Int => format!("{}", v as i64),
+                Cell::Pnl => fmt_signed(v),
+                Cell::Ratio => fmt_signed_plain(v),
             };
             let color = match better {
                 // A variant is coloured against the fact; the fact itself by sign.

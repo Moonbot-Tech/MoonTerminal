@@ -22,10 +22,11 @@ use moon_core::util::fmt::compact;
 
 /// Sign + compact form with no fraction — the hour cells are narrow.
 fn hour_pnl(v: f64) -> String {
+    let suffix = crate::analytics::pnl_suffix();
     if v > 0.0 {
-        format!("+{}", compact(v, 0))
+        format!("+{}{}", compact(v, 0), suffix)
     } else {
-        compact(v, 0)
+        format!("{}{}", compact(v, 0), suffix)
     }
 }
 
@@ -196,7 +197,15 @@ impl AnalyticsView {
                         .text_size(design::t_caption(cx))
                         .whitespace_nowrap()
                         .text_color(moon(sign_color(p, avg)))
-                        .child(format!("{}$", compact(avg, 1))),
+                        .child(format!(
+                            "{}{}",
+                            compact(avg, 1),
+                            if crate::analytics::pnl_is_pct() {
+                                "%"
+                            } else {
+                                "$"
+                            }
+                        )),
                 );
             }
             head = head.child(hc);

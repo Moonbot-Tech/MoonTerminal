@@ -82,7 +82,10 @@ fn clamp_feedback_converges_for_every_layout() {
             prev = cur;
             cur = next;
             steps += 1;
-            assert!(steps < 32, "clamp must converge, not loop: {names:?} vp={vp}");
+            assert!(
+                steps < 32,
+                "clamp must converge, not loop: {names:?} vp={vp}"
+            );
         }
     }
 }

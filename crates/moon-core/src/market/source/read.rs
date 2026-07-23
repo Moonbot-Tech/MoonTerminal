@@ -24,9 +24,9 @@ fn deep_row_candle(r: &moonproto::DeepPrice) -> crate::market::candles::ChartCan
 }
 
 use super::{
-    CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, DetectSnapshot,
-    LatestPriceError, MarketDataSource, MarketRevisions, MarketTickerReadout, drain_price_line,
-    moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks, trade_price_range,
+    drain_price_line, moon_time_from_rel_ms, price_rows_to_points, rows_to_ticks,
+    trade_price_range, CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead,
+    DetectSnapshot, LatestPriceError, MarketDataSource, MarketRevisions, MarketTickerReadout,
 };
 use crate::market::candles::ChartCandle;
 

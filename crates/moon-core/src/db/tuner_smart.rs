@@ -114,7 +114,7 @@ pub fn smart_suggest(
         .map(|s| format!("o.\"{}\"", s.col))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!("SELECT {cols}, COALESCE(o.profitbtc,0) FROM {src}");
+    let sql = format!("SELECT {cols}, COALESCE(o.pnl,0) FROM {src}");
 
     // Scan profit and effective values (COALESCE 0) into column-oriented memory.
     let mut profits: Vec<f64> = Vec::new();

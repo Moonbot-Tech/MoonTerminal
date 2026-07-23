@@ -17,7 +17,7 @@
 use rusqlite::Connection;
 
 use super::read_fail::read_fail;
-use super::{ReadFail, ReadResult, SideFilter};
+use super::{ProfitMetric, ReadFail, ReadResult, SideFilter};
 
 /// Selection filters shared by all Analytics tabs.
 #[derive(Clone, Debug, Default)]
@@ -56,6 +56,10 @@ pub struct Query {
     /// the two panels are allowed to disagree here. Anyone "fixing" that divergence should
     /// know it was chosen.
     pub attribute_liq: bool,
+    /// Which quantity every profit figure is measured in: absolute money (`Usdt`) or
+    /// return on spent capital (`Percent`, the report's `Profit` column). Applied once in
+    /// [`unified_from`]'s projected `pnl` column, so every reader below shares the choice.
+    pub metric: ProfitMetric,
 }
 
 impl Query {
@@ -238,10 +242,19 @@ pub(super) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Option<St
     // Is the strategy database attached? Probed rather than passed down: the callers that
     // attach it do so on this same connection, and the tests deliberately do not.
     let has_names = q.attribute_liq && strategies_attached(conn);
+    // Percent mode measures each trade as profit ÷ spent, so a trade without a positive
+    // `spentbtc` has no percent at all.
+    let pct = q.metric == ProfitMetric::Percent;
     let mut branches = Vec::new();
     for src in super::read_sources_res(conn)? {
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
             continue; // The core schema has not arrived yet, so there is nothing to aggregate.
+        }
+        // A source without `spentbtc` (e.g. the legacy `closed_sell_reports`) can form no
+        // percent, so in percent mode it contributes NOTHING — not a column of NULLs that the
+        // COUNT(*)/COALESCE(pnl,0) consumers below would miscount as zero-profit losing trades.
+        if pct && !src.cols.contains("spentbtc") {
+            continue;
         }
         // The branch table is aliased so the attribution's correlated subquery can name the
         // OUTER row explicitly. Unqualified `core_uid` inside it would bind to `strat.strategies`
@@ -262,10 +275,24 @@ pub(super) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Option<St
             })
             .collect::<Vec<_>>()
             .join(", ");
+        // The active profit metric, projected ONCE here as `pnl` so every aggregation below and
+        // the tuner sweep read one column. `Usdt` is the raw money; `Percent` is the report's
+        // `Profit` column (profit ÷ spent × 100 = return on spent capital). The `spentbtc > 0`
+        // filter appended below (percent mode) guarantees the ratio is finite and non-NULL, so
+        // COUNT, SUM, wins, streaks and the top list all describe the SAME set of trades. Sign is
+        // preserved (spent > 0), so win/loss, profit factor and best/worst stay correct on `pnl`.
+        let pnl = if pct {
+            "r.\"profitbtc\" / r.\"spentbtc\" * 100.0 AS \"pnl\""
+        } else {
+            "r.\"profitbtc\" AS \"pnl\""
+        };
+        let mut where_sql = q.where_sql(&src.cols, &sid);
+        if pct {
+            where_sql.push_str(" AND spentbtc > 0");
+        }
         branches.push(format!(
-            "SELECT {proj} FROM {} r WHERE {}",
-            src.table,
-            q.where_sql(&src.cols, &sid)
+            "SELECT {proj}, {pnl} FROM {} r WHERE {where_sql}",
+            src.table
         ));
     }
     if branches.is_empty() {
@@ -646,7 +673,7 @@ fn kind_stats(
     };
     let sql = format!(
         "SELECT {kind} AS k, o.core_uid, MAX(COALESCE(o.core_name,'')),
-                COUNT(*), COALESCE(SUM(o.profitbtc),0)
+                COUNT(*), COALESCE(SUM(o.pnl),0)
          FROM {src} GROUP BY k, o.core_uid"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
@@ -720,7 +747,7 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
     // Daily bucket: PnL, trade count, and wins for W/L and win rate.
     let sql = format!(
         "SELECT (o.closedate / 86400) * 86400 AS d,
-                COALESCE(SUM(o.profitbtc), 0), COUNT(*), COALESCE(SUM(o.profitbtc > 0), 0)
+                COALESCE(SUM(o.pnl), 0), COUNT(*), COALESCE(SUM(o.pnl > 0), 0)
          FROM {src} GROUP BY d ORDER BY d"
     );
     let mut stmt = conn.prepare(&sql).ok()?;
@@ -790,7 +817,7 @@ pub fn calendar_hours(q: &Query) -> Option<Vec<DayCell>> {
     };
     let sql = format!(
         "SELECT (o.closedate / 3600) * 3600 AS h,
-                COALESCE(SUM(o.profitbtc), 0), COUNT(*), COALESCE(SUM(o.profitbtc > 0), 0)
+                COALESCE(SUM(o.pnl), 0), COUNT(*), COALESCE(SUM(o.pnl > 0), 0)
          FROM {src} GROUP BY h ORDER BY h"
     );
     let mut stmt = conn.prepare(&sql).ok()?;
@@ -855,7 +882,7 @@ fn hour_profile_one(
     // The period itself still uses `closedate`, which defines the analysis window.
     let sql = format!(
         "SELECT ((COALESCE(NULLIF(o.buydate, 0), o.closedate) % 86400) / 3600) AS h,
-                COALESCE(SUM(o.profitbtc), 0), COUNT(*), COALESCE(SUM(o.profitbtc > 0), 0)
+                COALESCE(SUM(o.pnl), 0), COUNT(*), COALESCE(SUM(o.pnl > 0), 0)
          FROM {src} GROUP BY h ORDER BY h"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
@@ -1109,7 +1136,7 @@ fn scan_period(
     let mut days: Vec<DayPoint> = Vec::new();
     let mut hours = [(0.0f64, 0i64); 24];
     let sql = format!(
-        "SELECT o.closedate, COALESCE(o.buydate, o.closedate), COALESCE(o.profitbtc, 0)
+        "SELECT o.closedate, COALESCE(o.buydate, o.closedate), COALESCE(o.pnl, 0)
          FROM {src} ORDER BY o.closedate"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
@@ -1220,7 +1247,7 @@ fn core_series(
     let nb = days.len();
     let sql = format!(
         "SELECT o.core_uid, COALESCE(o.core_name,''), o.closedate,
-                COALESCE(o.profitbtc,0)
+                COALESCE(o.pnl,0)
          FROM {src}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
@@ -1295,9 +1322,9 @@ fn top_trades(
     let name = strategy_name_expr(has_names);
     let sql = format!(
         "SELECT o.closedate, COALESCE(o.coin,''), {name}, o.core_name,
-                COALESCE(o.profitbtc,0), COALESCE(o.isshort,0)
-         FROM {src} WHERE o.profitbtc IS NOT NULL
-         ORDER BY o.profitbtc {order} LIMIT 5"
+                COALESCE(o.pnl,0), COALESCE(o.isshort,0)
+         FROM {src} WHERE o.pnl IS NOT NULL
+         ORDER BY o.pnl {order} LIMIT 5"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
     let rows = stmt
@@ -1411,11 +1438,11 @@ fn groups(
     let sql = format!(
         "SELECT {key} AS k, {name}, {kind}, MAX(o.core_name), COUNT(DISTINCT o.core_uid),
                 {alive},
-                COUNT(*), COALESCE(SUM(o.profitbtc),0),
-                COALESCE(SUM(o.profitbtc > 0),0),
-                COALESCE(SUM(CASE WHEN o.profitbtc > 0 THEN o.profitbtc END),0),
-                COALESCE(SUM(CASE WHEN o.profitbtc <= 0 THEN -o.profitbtc END),0),
-                COALESCE(MAX(o.profitbtc),0), COALESCE(MIN(o.profitbtc),0),
+                COUNT(*), COALESCE(SUM(o.pnl),0),
+                COALESCE(SUM(o.pnl > 0),0),
+                COALESCE(SUM(CASE WHEN o.pnl > 0 THEN o.pnl END),0),
+                COALESCE(SUM(CASE WHEN o.pnl <= 0 THEN -o.pnl END),0),
+                COALESCE(MAX(o.pnl),0), COALESCE(MIN(o.pnl),0),
                 {lastedit}, {blacklist}, {whitelist}
          FROM {src}
          GROUP BY k ORDER BY 8 DESC"
@@ -1433,12 +1460,12 @@ fn groups(
     Ok(out)
 }
 
-/// The liquidation-attribution flag must reach the generated SQL from every call site.
-#[cfg(test)]
-mod liq_wiring_tests;
 /// What attributing a LIQUIDATION row to its named strategy does to the figures.
 #[cfg(test)]
 mod liq_attribution_tests;
+/// The liquidation-attribution flag must reach the generated SQL from every call site.
+#[cfg(test)]
+mod liq_wiring_tests;
 /// The strategy scope of a query — the tuner's Ctrl multi-select depends on it entirely.
 #[cfg(test)]
 mod scope_tests;

@@ -528,7 +528,7 @@ fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> ReadResu
     let mut st = VarStats::default();
     let wh = v.where_sql();
     let sql = format!(
-        "SELECT COALESCE(o.profitbtc,0), COALESCE(o.spentbtc,0)
+        "SELECT COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)
          FROM {src} WHERE 1=1{wh} ORDER BY o.closedate"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
@@ -612,7 +612,7 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> ReadResult<Vec<HistBuck
         return Err(ReadFail::NotReady);
     };
     let sql = format!(
-        "SELECT o.\"{field}\", COALESCE(o.profitbtc,0)
+        "SELECT o.\"{field}\", COALESCE(o.pnl,0)
          FROM {src} WHERE o.\"{field}\" IS NOT NULL"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
@@ -1032,7 +1032,7 @@ pub fn suggest_field(
         return Err(ReadFail::NotReady);
     };
     let sql = format!(
-        "SELECT o.\"{field}\", COALESCE(o.profitbtc,0)
+        "SELECT o.\"{field}\", COALESCE(o.pnl,0)
          FROM {src} WHERE o.\"{field}\" IS NOT NULL"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
@@ -1131,7 +1131,7 @@ pub fn suggest_time(
     let sql = format!(
         "SELECT ((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7 AS wd,
                 ({OPEN_TS} % 86400) / 60 AS mn,
-                COALESCE(o.profitbtc, 0)
+                COALESCE(o.pnl, 0)
          FROM {src}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
@@ -1316,7 +1316,7 @@ pub fn slider_profiles(q: &Query) -> ReadResult<SliderProfiles> {
     let sql = format!(
         "SELECT ((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7 AS wd,
                 ({OPEN_TS} % 86400) / 60 AS mn,
-                COALESCE(o.profitbtc, 0)
+                COALESCE(o.pnl, 0)
          FROM {src}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;

@@ -449,6 +449,22 @@ pub enum SideFilter {
     Short,
 }
 
+/// Which quantity every profit figure in the Analytics window is measured in.
+///
+/// `Usdt` sums the raw `profitbtc` (absolute money in the pair quote currency, as before).
+/// `Percent` measures each trade as `profitbtc / spentbtc * 100` — the exact formula of the
+/// MoonBot report's `Profit` column: return on the capital spent, independent of order size.
+/// The choice is a per-`Query` lens, applied once in the source projection (see
+/// `analytics::unified_from`), so every aggregation and the tuner sweep read the same metric.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProfitMetric {
+    /// Absolute money — the historical behaviour and the `ProfitUSDT` report column.
+    #[default]
+    Usdt,
+    /// Return on spent capital in percent — the report's `Profit` column.
+    Percent,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ReportFilter {
     /// Selected cores for the multi-select filter; empty means all cores.

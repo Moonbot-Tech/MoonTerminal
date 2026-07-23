@@ -176,13 +176,11 @@ pub(super) fn daily_bars(
                     .text_size(px(8.0))
                     .whitespace_nowrap()
                     .text_color(moon(super::sign_color(p, d.profit)))
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .justify_center()
-                            .child(moon_core::util::fmt::compact(d.profit, 0)),
-                    ),
+                    .child(div().w_full().flex().justify_center().child(format!(
+                        "{}{}",
+                        moon_core::util::fmt::compact(d.profit, 0),
+                        crate::analytics::pnl_suffix()
+                    ))),
             );
         }
         row = row.child(col);

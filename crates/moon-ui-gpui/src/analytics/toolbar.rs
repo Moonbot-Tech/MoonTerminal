@@ -14,8 +14,8 @@ use super::{AnalyticsView, Period, Tab};
 use crate::design;
 use crate::design::moon;
 use crate::load_state::LoadState;
-use moon_core::db::SideFilter;
 use moon_core::db::integrity::Integrity;
+use moon_core::db::{ProfitMetric, SideFilter};
 
 /// What the "undated trades" strip should be right now.
 ///
@@ -102,6 +102,44 @@ impl AnalyticsView {
             .child(self.core_combo(cx))
             .child(self.side_combo(cx))
             .child(self.kind_combo(cx))
+            .child(self.metric_combo(cx))
+    }
+
+    /// Profit metric combo (USDT / Profit %): switches every figure and the tuner sweep
+    /// between absolute money and the report's `Profit` column (profit ÷ spent).
+    fn metric_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let cur = match self.metric {
+            ProfitMetric::Usdt => t!("analytics.metric.usdt"),
+            ProfitMetric::Percent => t!("analytics.metric.pct"),
+        };
+        let view = cx.entity();
+        let items = crate::panels::radio_items(
+            [
+                (
+                    ProfitMetric::Usdt,
+                    "am-usd".into(),
+                    t!("analytics.metric.usdt").to_string().into(),
+                ),
+                (
+                    ProfitMetric::Percent,
+                    "am-pct".into(),
+                    t!("analytics.metric.pct").to_string().into(),
+                ),
+            ],
+            self.metric,
+            crate::panels::RadioMark::Highlight,
+            move |app, m| {
+                view.update(app, |t, c| t.set_metric(m, c));
+            },
+        );
+        MoonDropdown::new("an-metric")
+            .label(format!("{cur} ▾"))
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Action)
+            .trigger_width(design::font_w(cx, 78.0))
+            .menu_width(design::font_w(cx, 120.0))
+            .menu_size(MoonMenuSize::Compact)
+            .items(items)
     }
 
     /// Cores combo — multi-select (the shared widget, as in Orders/Report).
