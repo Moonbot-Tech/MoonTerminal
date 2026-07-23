@@ -16,9 +16,9 @@ use moon_ui::{
     MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta, h_flex,
 };
 
-use super::logic::{build_node, ensure_folder, folder_counts, toggle};
-use super::tree_ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag};
-use super::{Key, StrategiesView, moon_alpha};
+use super::super::logic::{build_node, ensure_folder, folder_counts, toggle};
+use super::super::{Key, StrategiesView, moon_alpha};
+use super::ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag};
 use crate::design;
 use moon_core::feed::StrategyRow;
 use moon_core::session::{CoreId, CoreStore};
@@ -30,7 +30,7 @@ fn id_core(core: CoreId) -> SharedString {
 fn id_folder(core: CoreId, path: &str) -> SharedString {
     SharedString::from(format!("f:{core}:{path}"))
 }
-pub(super) fn id_strat(core: CoreId, id: u64) -> SharedString {
+pub(crate) fn id_strat(core: CoreId, id: u64) -> SharedString {
     SharedString::from(format!("s:{core}:{id}"))
 }
 fn id_del_folder(core: CoreId) -> SharedString {
@@ -41,7 +41,7 @@ fn id_del_strat(core: CoreId, id: u64) -> SharedString {
 }
 
 /// Data for one tree row, looked up by node ID from `render_row` and decorators.
-pub(super) enum NodeData {
+pub(crate) enum NodeData {
     Core {
         core: CoreId,
         label: String,
@@ -84,16 +84,16 @@ pub(super) enum NodeData {
 }
 
 /// Adapter result containing tree items, the side map, expanded IDs, and visible flat order.
-pub(super) struct MoonTreeBuild {
-    pub(super) items: Vec<MoonTreeItem>,
-    pub(super) node_data: HashMap<SharedString, NodeData>,
-    pub(super) expanded_ids: Vec<SharedString>,
-    pub(super) flat: Vec<Key>,
-    pub(super) searching: bool,
+pub(crate) struct MoonTreeBuild {
+    pub(crate) items: Vec<MoonTreeItem>,
+    pub(crate) node_data: HashMap<SharedString, NodeData>,
+    pub(crate) expanded_ids: Vec<SharedString>,
+    pub(crate) flat: Vec<Key>,
+    pub(crate) searching: bool,
 }
 
 /// Builds an owned MoonTree representation from the store without exposing store borrows.
-pub(super) fn build(
+pub(crate) fn build(
     view: &StrategiesView,
     store: &CoreStore,
     cores: &crate::core_order::OrderedCores,
@@ -236,7 +236,7 @@ pub(super) fn build(
 
 #[allow(clippy::too_many_arguments)]
 fn convert_node(
-    node: &super::logic::FolderNode,
+    node: &super::super::logic::FolderNode,
     core: CoreId,
     all_strats: &[StrategyRow],
     order_counts: &HashMap<u64, usize>,

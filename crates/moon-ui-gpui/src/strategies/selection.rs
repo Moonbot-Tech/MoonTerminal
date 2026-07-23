@@ -105,7 +105,7 @@ impl StrategiesView {
         }
         let key: Key = (core, strat_id);
         self.expanded_cores.insert(core);
-        self.expand_path(core, tree_ops::path_segments(&row.folder_path));
+        self.expand_path(core, tree::ops::path_segments(&row.folder_path));
         self.sel.clear();
         self.sel.insert(key);
         self.anchor = Some(key);
@@ -166,7 +166,7 @@ impl StrategiesView {
                 .map(|r| r.folder_path.clone())
                 .collect();
             for path in paths {
-                self.expand_path(*c, tree_ops::path_segments(&path));
+                self.expand_path(*c, tree::ops::path_segments(&path));
             }
         }
     }

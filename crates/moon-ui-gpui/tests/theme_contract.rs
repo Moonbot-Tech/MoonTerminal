@@ -261,10 +261,12 @@ fn terminal_windows_use_closed_window_frame_api() {
 fn terminal_overlays_use_moonui_window_layers_and_moon_components() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let strategies_mod = fs::read_to_string(root.join("strategies").join("mod.rs")).unwrap();
-    let strategies_tree = fs::read_to_string(root.join("strategies").join("tree_ui.rs")).unwrap();
+    let strategies_tree =
+        fs::read_to_string(root.join("strategies").join("tree").join("ui.rs")).unwrap();
     let strategies_dialogs =
-        fs::read_to_string(root.join("strategies").join("tree_dialogs.rs")).unwrap();
-    let strategies_menu = fs::read_to_string(root.join("strategies").join("tree_menu.rs")).unwrap();
+        fs::read_to_string(root.join("strategies").join("tree").join("dialogs.rs")).unwrap();
+    let strategies_menu =
+        fs::read_to_string(root.join("strategies").join("tree").join("menu.rs")).unwrap();
     let strategies_params = fs::read_to_string(root.join("strategies").join("params.rs")).unwrap();
     let assets_mod = fs::read_to_string(root.join("panels").join("assets").join("mod.rs")).unwrap();
     let assets_wallets =
@@ -291,7 +293,7 @@ fn terminal_overlays_use_moonui_window_layers_and_moon_components() {
     assert!(
         strategies_menu.contains("MoonContextMenuWindowExt")
             && strategies_menu.contains("window.open_moon_context_menu(")
-            && !strategies_mod.contains("menu: Option<tree_ui::ContextMenu>")
+            && !strategies_mod.contains("menu: Option<tree::ui::ContextMenu>")
             && !strategies_mod.contains("menu_overlay(cx)")
             && !strategies_tree.contains("fn menu_overlay(")
             && !strategies_tree.contains("let mut list = v_flex()")
@@ -516,7 +518,7 @@ fn toolbar_row_budget_counts_every_rule_it_draws() {
 /// "simplifies" it back to `cx.entity()`, which compiles and behaves correctly for one session.
 #[test]
 fn moon_tree_closures_hold_weak_view_handles() {
-    let text = read_src("strategies/tree_moon.rs");
+    let text = read_src("strategies/tree/moon.rs");
 
     assert!(
         text.contains("cx.entity().downgrade()"),

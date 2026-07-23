@@ -17,15 +17,9 @@ mod sections;
 mod selection;
 mod split;
 mod state;
-mod tree;
-mod tree_dialogs;
-mod tree_dnd;
-mod tree_menu;
-mod tree_moon;
 // `pub(crate)` exposes `unique_name`, `set_field`, and `STRATEGY_NAME_FIELD` to the Analytics
 // tuner's Make Copy operation.
-pub(crate) mod tree_ops;
-mod tree_ui;
+pub(crate) mod tree;
 mod versions;
 mod window;
 
@@ -115,7 +109,7 @@ pub struct StrategiesView {
     /// Field-dependency rules from `param_deps.toml`, hot-reloaded only with the opt-in environment flag.
     rules: Rules,
     /// Copied strategy or folder source data, retained for cross-core pasting.
-    clipboard: Option<Vec<tree_ops::ClipItem>>,
+    clipboard: Option<Vec<tree::ops::ClipItem>>,
     /// Names submitted for creation but not yet echoed by the core, keyed by core and name.
     /// Reserving them prevents rapid pastes from reading one store snapshot and generating the same
     /// name repeatedly. A reservation is cleared once the name appears in the store.
@@ -125,7 +119,7 @@ pub struct StrategiesView {
     /// Empty UI folders before their first strategy is added, keyed by core and slash-separated path.
     ui_folders: HashSet<(CoreId, String)>,
     /// Active create, rename, or confirmation modal for a tree operation.
-    op: Option<tree_ui::TreeOp>,
+    op: Option<tree::ui::TreeOp>,
     /// Create/rename modal input, recreated on each opening to use the current initial value.
     op_input: Option<Entity<MoonInputState>>,
     /// Initial value used when rendering the next `op_input` instance.
@@ -156,7 +150,7 @@ impl Render for StrategiesView {
         // Build the owned MoonTree adapter without leaking a store borrow, then synchronize state.
         let build = {
             let store = self.backend.read(cx).session.store();
-            tree_moon::build(self, store, &cores)
+            tree::moon::build(self, store, &cores)
         };
         self.flat_order = build.flat;
         let searching = build.searching;
@@ -167,7 +161,7 @@ impl Render for StrategiesView {
             // Navigate by temporarily selecting the MoonTree item to obtain its index and scroll
             // to it, then clear that selection because `sel` renders the highlight.
             if let Some((core, id)) = goto {
-                let item = MoonTreeItem::new(tree_moon::id_strat(core, id), "");
+                let item = MoonTreeItem::new(tree::moon::id_strat(core, id), "");
                 st.set_selected_item(Some(&item), c);
                 if let Some(ix) = st.selected_index() {
                     st.scroll_to_item(ix, ScrollStrategy::Center);

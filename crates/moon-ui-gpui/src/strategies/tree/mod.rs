@@ -2,7 +2,15 @@
 //! filters, staged checkboxes, and start/stop (Apply) buttons. These methods extend
 //! `StrategiesView`; state and pure helpers live in [`super`] and [`super::logic`].
 
+pub(crate) mod dialogs;
+pub(crate) mod dnd;
+pub(crate) mod menu;
+pub(crate) mod moon;
+pub(crate) mod ops;
+pub(crate) mod ui;
+
 use super::*;
+
 use rust_i18n::t;
 
 impl StrategiesView {
@@ -10,14 +18,14 @@ impl StrategiesView {
         &self,
         store: &CoreStore,
         cores: &crate::core_order::OrderedCores,
-        node_data: std::rc::Rc<std::collections::HashMap<SharedString, super::tree_moon::NodeData>>,
+        node_data: std::rc::Rc<std::collections::HashMap<SharedString, moon::NodeData>>,
         cx: &Context<Self>,
     ) -> AnyElement {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
 
         // MoonTree itself is headless and owns flattening, virtualization, and drag-and-drop.
-        // The `CoreStore -> MoonTreeItem` adapter plus rows, DnD, and menus live in `super::tree_moon`.
+        // The `CoreStore -> MoonTreeItem` adapter plus rows, DnD, and menus live in `moon`.
         let tree_el = self.moon_tree_el(node_data, cx);
 
         // Search, strategy-kind filter, and direction filter.

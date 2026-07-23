@@ -1,9 +1,9 @@
 //! Right-click context menu for strategy-tree folders and strategies. MoonUI Root owns the open
 //! menu, while actions delegate to the modal and clipboard methods.
 
-use super::tree_ops;
-use super::tree_ui::{ContextMenu, MenuTarget};
-use super::*;
+use super::super::*;
+use super::ops;
+use super::ui::{ContextMenu, MenuTarget};
 use moon_ui::{MoonContextMenuWindowExt as _, MoonWindowExt as _};
 use rust_i18n::t;
 
@@ -58,7 +58,7 @@ impl StrategiesView {
                         }),
                 );
                 if can_paste {
-                    let t = tree_ops::join_path(path);
+                    let t = ops::join_path(path);
                     items.push(
                         MoonMenuItem::with_key(
                             "paste-here",
@@ -76,7 +76,7 @@ impl StrategiesView {
                         }),
                     );
                 }
-                let t = tree_ops::join_path(path);
+                let t = ops::join_path(path);
                 items.push(
                     MoonMenuItem::with_key(
                         "new-strategy-here",
@@ -92,7 +92,7 @@ impl StrategiesView {
                         }
                     }),
                 );
-                let t = tree_ops::join_path(path);
+                let t = ops::join_path(path);
                 items.push(
                     MoonMenuItem::with_key(
                         "new-folder-here",
