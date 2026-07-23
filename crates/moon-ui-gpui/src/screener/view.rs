@@ -103,7 +103,7 @@ impl ScreenerView {
 
         // Persist window position and size in the layout so the window reopens in the same geometry.
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some((x, y, w, h)) = crate::windowing::window_geom(window) else {
+            let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
                 return;
             };
             this.backend.update(cx, |b, _| {
@@ -614,13 +614,13 @@ pub fn open(
         },
     );
     // Choose a display from saved geometry when supported, otherwise fall back to the owner display.
-    let display_id = crate::windowing::saved_or_owner_display_id(
+    let display_id = crate::window::windowing::saved_or_owner_display_id(
         saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
         owner,
         owner_display,
         cx,
     );
-    let mut opts = crate::windowing::tool_window_options(
+    let mut opts = crate::window::windowing::tool_window_options(
         t!("screener.window_title").to_string(),
         WindowBounds::Windowed(bounds),
         Some(size(px(900.0), px(480.0))),
@@ -629,11 +629,11 @@ pub fn open(
     opts.display_id = display_id;
     let b = backend.clone();
     if let Ok(handle) = cx.open_window(opts, move |window, cx| {
-        crate::windowing::configure_shell_clear_color(window, cx);
+        crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| ScreenerView::new(b, window, cx));
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     }) {
         backend.update(cx, |bk, _| bk.screener_window = Some(handle));
-        crate::windowing::activate_new_window(handle.into(), cx);
+        crate::window::windowing::activate_new_window(handle.into(), cx);
     }
 }

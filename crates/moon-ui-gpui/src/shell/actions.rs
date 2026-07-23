@@ -157,7 +157,7 @@ impl Shell {
             }
             // Built-in Ctrl+Shift+F10 restores all windows to on-screen positions.
             HotkeyAction::ResetWindows => {
-                crate::windowing::reset_all_windows_onscreen(cx);
+                crate::window::windowing::reset_all_windows_onscreen(cx);
                 true
             }
             // Built-in Tab/Delete cancels the order tracked by the hovered chart.

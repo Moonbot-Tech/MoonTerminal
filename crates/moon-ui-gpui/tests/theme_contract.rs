@@ -89,7 +89,7 @@ fn chart_background_policy_keeps_gpu_canvas_under_scene() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let detached = fs::read_to_string(root.join("detached.rs")).unwrap();
+    let detached = fs::read_to_string(root.join("window").join("detached.rs")).unwrap();
 
     assert!(
         chartdx.contains("gpui::gpu_canvas(self.canvas.clone())")
@@ -148,8 +148,8 @@ fn main_chart_stack_rmb_toggle_uses_full_chart_area_not_plot_only() {
 #[test]
 fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let windowing = fs::read_to_string(root.join("windowing.rs")).unwrap();
-    let detached = fs::read_to_string(root.join("detached.rs")).unwrap();
+    let windowing = fs::read_to_string(root.join("window").join("windowing.rs")).unwrap();
+    let detached = fs::read_to_string(root.join("window").join("detached.rs")).unwrap();
     let chart_tabs_mod = fs::read_to_string(root.join("chart_tabs").join("mod.rs")).unwrap();
     let chart_tabs_windows =
         fs::read_to_string(root.join("chart_tabs").join("windows.rs")).unwrap();
@@ -231,7 +231,7 @@ fn terminal_windows_use_closed_window_frame_api() {
         let rel_text = rel.to_string_lossy().replace('\\', "/");
         for (line_ix, line) in text.lines().enumerate() {
             let trimmed = line.trim();
-            let is_windowing = rel_text == "windowing.rs";
+            let is_windowing = rel_text == "window/windowing.rs";
             let is_design = rel_text == "design.rs";
             if trimmed.contains("MoonWindowChrome::new")
                 || trimmed.contains("MoonWindowChromeButton")

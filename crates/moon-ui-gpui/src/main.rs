@@ -23,14 +23,11 @@ mod chartdx;
 mod chrome;
 mod controls;
 mod core_order;
-mod crash;
-mod debug_window;
 mod design;
-mod detached;
 mod diag;
+mod diagnostics;
 mod display_text;
 mod firetest;
-mod group_window;
 mod hotkeys;
 mod load_state;
 mod media;
@@ -41,7 +38,7 @@ mod settings;
 mod shell;
 mod startup;
 mod strategies;
-mod windowing;
+mod window;
 
 pub(crate) use startup::install_moon_theme_for_config;
 
@@ -52,6 +49,7 @@ use gpui::*;
 
 use chartdx::ChartDataHandle;
 use persistence::chart_persist;
+use window::detached;
 
 use moon_ui::{DockAreaState, Root};
 

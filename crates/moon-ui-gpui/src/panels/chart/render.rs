@@ -546,7 +546,7 @@ impl Render for ChartPanel {
                     move |bounds, _, window, cx| {
                         let sf = window.scale_factor();
                         let firetest_probe = crate::firetest::ChartProbe::new(
-                            crate::windowing::window_hwnd(window),
+                            crate::window::windowing::window_hwnd(window),
                             f32::from(window.window_bounds().get_bounds().origin.x),
                             f32::from(window.window_bounds().get_bounds().origin.y),
                             f32::from(bounds.origin.x),

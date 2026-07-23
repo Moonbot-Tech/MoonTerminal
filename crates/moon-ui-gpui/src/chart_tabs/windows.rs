@@ -27,7 +27,7 @@ impl ChartTabs {
             .collect();
         for (i, handle) in handles.into_iter().enumerate() {
             let _ = handle.update(cx, |_, window, _| {
-                crate::windowing::reset_window_onscreen(window, i);
+                crate::window::windowing::reset_window_onscreen(window, i);
                 window.activate_window();
             });
         }
@@ -115,8 +115,9 @@ impl ChartTabs {
             .get(&self.group)
             .copied()
             .map(Into::into);
-        let display_id = crate::windowing::saved_or_owner_display_id(Some(origin), owner, None, cx);
-        let mut opts = crate::windowing::detached_chart_window_options(
+        let display_id =
+            crate::window::windowing::saved_or_owner_display_id(Some(origin), owner, None, cx);
+        let mut opts = crate::window::windowing::detached_chart_window_options(
             format!(
                 "MoonTerminal — {}",
                 chart_pane_label(&self.backend, &self.group, n, &bucket, cx)
@@ -139,7 +140,7 @@ impl ChartTabs {
         let restore_size = restored.then(|| size(px(geom.w as f32), px(geom.h as f32)));
         let host_bucket = bucket.clone();
         let opened = cx.open_window(opts, move |window, cx| {
-            crate::windowing::configure_chart_clear_color(window, cx);
+            crate::window::windowing::configure_chart_clear_color(window, cx);
             let host = cx.new(|cx| {
                 DetachedChartHost::new(
                     panel,

@@ -14,8 +14,10 @@ use moon_core::config::{AppConfig, UiThemeMode, WindowLayout};
 use moon_core::metrics::{Metrics, MetricsSnapshot};
 use moon_core::session::{CoreId, SessionManager};
 
+use crate::diagnostics::crash;
 use crate::persistence::{chart_persist, dock_persist};
-use crate::{Backend, crash, detached, diag, firetest};
+use crate::window::detached;
+use crate::{Backend, diag, firetest};
 
 fn embedded_fonts() -> Vec<Cow<'static, [u8]>> {
     vec![
@@ -198,7 +200,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
     // Configure file logging from the config and purge old log files once at startup.
     moon_core::applog::set_file_logging(cfg.log_to_file, cfg.log_retention_days);
     moon_core::applog::purge_old();
-    let group_list = crate::group_window::groups(&cfg);
+    let group_list = crate::window::group_window::groups(&cfg);
     log::info!("groups: {group_list:?} (servers: {})", cfg.servers.len());
 
     // Use one time origin for sessions and chart views, equivalent to epoch_ms in egui.
@@ -586,10 +588,13 @@ pub(crate) fn run() -> anyhow::Result<()> {
                     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
                     if open_debug_10 {
                         log::info!("diag auto-open: spawning 10 live-market chart windows");
-                        crate::debug_window::spawn_debug_chart_windows(cx, coord_backend.clone());
+                        crate::diagnostics::debug_window::spawn_debug_chart_windows(
+                            cx,
+                            coord_backend.clone(),
+                        );
                     }
                     for g in show_reqs {
-                        crate::group_window::spawn_group_window(
+                        crate::window::group_window::spawn_group_window(
                             cx,
                             &coord_backend,
                             &coord_cfg,
@@ -646,7 +651,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         .detach();
         // Open one window per group through the same helper used by the "show group" eye button.
         for (i, group) in group_list.into_iter().enumerate() {
-            crate::group_window::spawn_group_window(
+            crate::window::group_window::spawn_group_window(
                 cx,
                 &backend,
                 &cfg,

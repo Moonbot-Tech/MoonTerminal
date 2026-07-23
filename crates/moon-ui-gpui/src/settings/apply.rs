@@ -171,8 +171,11 @@ impl SettingsView {
         for h in chart_handles {
             let _ = h.update(cx, |_, window, _| window.remove_window());
         }
-        for (i, g) in crate::group_window::groups(&cfg).into_iter().enumerate() {
-            crate::group_window::spawn_group_window(
+        for (i, g) in crate::window::group_window::groups(&cfg)
+            .into_iter()
+            .enumerate()
+        {
+            crate::window::group_window::spawn_group_window(
                 cx,
                 &self.backend,
                 &cfg,
@@ -192,7 +195,7 @@ impl SettingsView {
     fn reconcile_group_windows(&mut self, cx: &mut Context<Self>) {
         let (close_group, close_detached, spawn_groups, cfg, epoch, layout) =
             self.backend.update(cx, |b, _| {
-                let want = crate::group_window::groups(&b.config);
+                let want = crate::window::group_window::groups(&b.config);
                 let want_set: HashSet<&str> = want.iter().map(String::as_str).collect();
                 // Collect windows belonging to groups that no longer exist.
                 let close_group: Vec<WindowHandle<Root>> = b
@@ -238,7 +241,7 @@ impl SettingsView {
             let _ = h.update(cx, |_, window, _| window.remove_window());
         }
         for (i, g) in spawn_groups.into_iter().enumerate() {
-            crate::group_window::spawn_group_window(
+            crate::window::group_window::spawn_group_window(
                 cx,
                 &self.backend,
                 &cfg,

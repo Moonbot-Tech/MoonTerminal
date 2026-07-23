@@ -20,7 +20,7 @@ use moon_core::session::CoreId;
 use crate::Backend;
 use crate::design;
 use crate::panels::ChartPanel;
-use crate::windowing;
+use crate::window::windowing;
 
 #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
 struct DebugPerfWindow {

@@ -10,7 +10,7 @@ use moon_core::session::CoreId;
 
 use crate::Backend;
 use crate::shell::Shell;
-use crate::windowing;
+use crate::window::windowing;
 
 /// Returns unique active configuration groups in encounter order, or a single `default` fallback.
 pub(crate) fn groups(cfg: &AppConfig) -> Vec<String> {
