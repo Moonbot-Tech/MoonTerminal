@@ -108,7 +108,7 @@ impl ChartPanel {
         // plot, book, and axis gutter. Broom mode hides the local axis, but unlike ChartDataState
         // this helper still derives glass width from `orderbook_enabled` and does not model the
         // engine's full-width book-only rendering.
-        use crate::chart_persist::PriceAxisPos;
+        use crate::persistence::chart_persist::PriceAxisPos;
         let axis_pos = if self.orderbook_only {
             PriceAxisPos::Hide
         } else {

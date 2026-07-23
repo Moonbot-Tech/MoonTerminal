@@ -13,8 +13,10 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use crate::chart_persist::{ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation};
 use crate::design;
+use crate::persistence::chart_persist::{
+    ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
+};
 
 /// Mode order in the popup's two-position segmented control.
 pub(super) const POPUP_MODES: [StackLayoutMode; 2] =

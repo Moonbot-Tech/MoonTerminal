@@ -22,7 +22,7 @@ impl ChartDataState {
             orderbook_enabled: true,
             liquidations_enabled: true,
             orderbook_only: false,
-            price_axis_pos: crate::chart_persist::PriceAxisPos::Left,
+            price_axis_pos: crate::persistence::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,
             candle_view: moon_core::market::CandleViewCfg::default(),
             default_x_ppm: None,

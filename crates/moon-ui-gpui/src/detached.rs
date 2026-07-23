@@ -261,7 +261,7 @@ impl Render for DetachedWindow {
         let p = MoonPalette::active(cx);
         let title = format!(
             "{} · {}",
-            crate::panel_meta::panel_title(&self.panel),
+            crate::persistence::panel_meta::panel_title(&self.panel),
             self.group
         );
         v_flex()
@@ -293,7 +293,7 @@ impl Render for DetachedWindow {
                     // Recalculate panel table widths when this button is clicked, matching the
                     // active dock tab action.
                     .when_some(self.widths_reset.clone(), |this, (id, state)| {
-                        this.child(crate::table_persist::reset_button(id, &state))
+                        this.child(crate::persistence::table_persist::reset_button(id, &state))
                     })
                     .when(crate::design::show_custom_window_controls(), |this| {
                         this.child(
@@ -341,7 +341,7 @@ pub fn spawn(
     let opts = crate::windowing::detached_panel_window_options(
         format!(
             "{} — MoonTerminal",
-            crate::panel_meta::panel_title(&spec.panel)
+            crate::persistence::panel_meta::panel_title(&spec.panel)
         ),
         WindowBounds::Windowed(bounds),
         display_id,

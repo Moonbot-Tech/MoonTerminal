@@ -6,11 +6,11 @@
 //! ASCII case-insensitive, so names such as `BABYTOY` and `ding1` match their embedded files.
 
 /// Embedded sounds as lowercase stems paired with WAV bytes.
-/// `include_bytes!` paths are relative to this file in `crates/moon-ui-gpui/src`.
+/// `include_bytes!` paths are relative to this file in `crates/moon-ui-gpui/src/media`.
 macro_rules! sounds {
     ($($stem:literal => $file:literal),* $(,)?) => {
         pub const SOUNDS: &[(&str, &[u8])] = &[
-            $(($stem, include_bytes!(concat!("../../../assets/sounds/", $file)))),*
+            $(($stem, include_bytes!(concat!("../../../../assets/sounds/", $file)))),*
         ];
     };
 }

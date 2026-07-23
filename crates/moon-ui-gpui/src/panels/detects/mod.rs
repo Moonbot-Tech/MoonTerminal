@@ -375,13 +375,13 @@ impl Panel for DetectsPanel {
     }
     /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        crate::panel_meta::tab_label(self.panel_name())
+        crate::persistence::panel_meta::tab_label(self.panel_name())
     }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        crate::panel_meta::panel_title(self.panel_name())
+        crate::persistence::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
-        crate::dock_persist::panel_state_with_group("Detects", &self.group)
+        crate::persistence::dock_persist::panel_state_with_group("Detects", &self.group)
     }
 }
 

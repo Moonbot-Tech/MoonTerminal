@@ -117,7 +117,7 @@ impl AssetsView {
             // theme-scaled icon size, without assuming source dimensions. A missing icon gets an
             // equal-width empty cell to align tickers.
             let icon_side = design::ui_px(cx, 16.0);
-            let icon: AnyElement = match crate::coin_icons::coin_icon(&a.currency) {
+            let icon: AnyElement = match crate::media::coin_icons::coin_icon(&a.currency) {
                 Some(tex) => img(tex)
                     .w(icon_side)
                     .h(icon_side)

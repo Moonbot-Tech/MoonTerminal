@@ -63,7 +63,7 @@ impl Panel for StubPanel {
         self.title.clone()
     }
     fn dump(&self, _cx: &App) -> PanelState {
-        crate::dock_persist::panel_state_with_group(self.name, &self.group)
+        crate::persistence::dock_persist::panel_state_with_group(self.name, &self.group)
     }
     /// Retain the owning dock so the detach action can remove this source panel after spawning.
     fn on_added_to(

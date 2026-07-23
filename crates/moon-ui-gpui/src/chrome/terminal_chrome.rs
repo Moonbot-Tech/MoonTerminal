@@ -132,7 +132,7 @@ pub fn header(
                 // UTC clock with an optional offset label; clicking opens the timezone picker. Its
                 // MoonPopover is anchored to this trigger, so unlike the ticker it needs no offset
                 // arithmetic.
-                .child(crate::clock::header_clock(&backend, p, cx))
+                .child(crate::chrome::clock::header_clock(&backend, p, cx))
                 .when(design::show_custom_window_controls(), |this| {
                     this.child(
                         MoonWindowFrame::main("terminal-header-controls", 0.0)

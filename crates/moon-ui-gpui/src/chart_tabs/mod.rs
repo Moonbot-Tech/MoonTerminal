@@ -30,7 +30,7 @@ use common::LayoutPopupHost;
 pub(crate) use main_stack::MainChartStack;
 use sig::{chart_tabs_sig, core_belongs_to_group};
 
-use crate::chart_persist::StackLayoutMode;
+use crate::persistence::chart_persist::StackLayoutMode;
 
 use gpui::*;
 use moon_ui::{
@@ -40,7 +40,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::Backend;
-use crate::chart_persist;
+use crate::persistence::chart_persist;
 use moon_core::config::{ChartBucket, ChartTheme};
 use moon_core::session::CoreId;
 
@@ -776,14 +776,14 @@ impl Panel for ChartTabs {
     }
     /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        crate::panel_meta::tab_label(self.panel_name())
+        crate::persistence::panel_meta::tab_label(self.panel_name())
     }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        crate::panel_meta::panel_title(self.panel_name())
+        crate::persistence::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
         // Do not persist AddToChart tabs; runtime detects recreate them.
-        crate::dock_persist::panel_state_with_group("ChartTabs", &self.group)
+        crate::persistence::dock_persist::panel_state_with_group("ChartTabs", &self.group)
     }
     fn background_policy(&self, _cx: &App) -> MoonBackgroundPolicy {
         MoonBackgroundPolicy::NoFill

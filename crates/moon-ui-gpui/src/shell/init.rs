@@ -18,8 +18,8 @@ use moon_core::session::CoreId;
 
 use super::Shell;
 use crate::chart_tabs::ChartTabs;
-use crate::dock_persist::DOCK_VERSION;
 use crate::panels::{AssetsView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel};
+use crate::persistence::dock_persist::DOCK_VERSION;
 use crate::{Backend, controls, core_settings_popup};
 
 impl Shell {

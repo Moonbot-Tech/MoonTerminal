@@ -158,7 +158,7 @@ pub struct AssetsView {
     /// side of the footer is built to prevent.
     cached_value_excluded: usize,
     /// Asset-table column widths and sorting state. Its widths persist through
-    /// [`crate::table_persist`].
+    /// [`crate::persistence::table_persist`].
     table_state: Entity<MoonDataTableState>,
     /// Contextual width-storage ID: `assets-table:dock` for a dock tab and `assets-table:win` for
     /// standalone or detached views with wallets. Each mode retains independent widths.
@@ -211,8 +211,8 @@ impl AssetsView {
 
         // Standalone and detached views with wallet containers use the `:win` width context; dock
         // tabs use `:dock`, retaining separate widths for each mode.
-        let widths_id = crate::table_persist::ctx_id("assets-table", show_wallets);
-        let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
+        let widths_id = crate::persistence::table_persist::ctx_id("assets-table", show_wallets);
+        let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.column_widths = saved_widths;
@@ -220,7 +220,7 @@ impl AssetsView {
         });
         // Column resizing mutates the state; persist the resulting widths through the shared saver.
         cx.observe(&table_state, |this, state, cx| {
-            crate::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
+            crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
         })
         .detach();
 
@@ -864,7 +864,7 @@ impl Panel for AssetsView {
     }
     /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        crate::panel_meta::tab_label(self.panel_name())
+        crate::persistence::panel_meta::tab_label(self.panel_name())
     }
     fn closable(&self, _cx: &App) -> bool {
         true
@@ -873,14 +873,14 @@ impl Panel for AssetsView {
         true
     }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        crate::panel_meta::panel_title(self.panel_name())
+        crate::persistence::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
         let group = match &self.scope {
             AssetsScope::Group(g) => g.clone(),
             AssetsScope::All => String::new(),
         };
-        crate::dock_persist::panel_state_with_group("Assets", &group)
+        crate::persistence::dock_persist::panel_state_with_group("Assets", &group)
     }
     fn on_added_to(
         &mut self,
@@ -899,7 +899,10 @@ impl Panel for AssetsView {
     ) -> Option<Vec<AnyElement>> {
         let backend = self.backend.clone();
         Some(vec![
-            crate::table_persist::reset_button("assets-reset-widths", &self.table_state),
+            crate::persistence::table_persist::reset_button(
+                "assets-reset-widths",
+                &self.table_state,
+            ),
             MoonButton::new("assets-open-global")
                 .ghost()
                 .size(MoonButtonSize::Action)
@@ -1043,7 +1046,10 @@ fn assets_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .border_color(rgb(p.border))
         .child(
             MoonWindowFrame::tool("assets-titlebar-title", 0.0)
-                .title_cluster(crate::panel_meta::panel_title("Assets").to_string(), cx)
+                .title_cluster(
+                    crate::persistence::panel_meta::panel_title("Assets").to_string(),
+                    cx,
+                )
                 .h_full()
                 .flex_1()
                 .min_w_0(),

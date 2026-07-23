@@ -294,7 +294,7 @@ impl RenderState {
             // Price-axis side: Hide omits the cursor-price plate because no axis or gutter exists;
             // Right places it at the panel's right edge beyond the order book. Keep this synchronized
             // with `text/prepare.rs::prepare_text`.
-            use crate::chart_persist::PriceAxisPos;
+            use crate::persistence::chart_persist::PriceAxisPos;
             let axis_hidden = matches!(pr.price_axis_pos, PriceAxisPos::Hide);
             let axis_on_right = matches!(pr.price_axis_pos, PriceAxisPos::Right);
 

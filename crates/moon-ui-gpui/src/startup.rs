@@ -14,7 +14,8 @@ use moon_core::config::{AppConfig, UiThemeMode, WindowLayout};
 use moon_core::metrics::{Metrics, MetricsSnapshot};
 use moon_core::session::{CoreId, SessionManager};
 
-use crate::{Backend, chart_persist, crash, detached, diag, dock_persist, firetest};
+use crate::persistence::{chart_persist, dock_persist};
+use crate::{Backend, crash, detached, diag, firetest};
 
 fn embedded_fonts() -> Vec<Cow<'static, [u8]>> {
     vec![

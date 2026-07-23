@@ -421,7 +421,7 @@ fn header_ticker_popup_accounts_for_the_clock_beside_it() {
     // `clock_parts` and reimplement the strings or the timezone-visibility rule for itself, which
     // is exactly the drift that puts the popup off its trigger, and a name-only check stays green
     // through it.
-    let clock = read_src("clock.rs");
+    let clock = read_src("chrome/clock.rs");
     for signature in ["fn header_clock_width", "fn header_clock("] {
         let body = fn_body(&clock, signature);
         assert!(

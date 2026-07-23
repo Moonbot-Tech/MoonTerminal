@@ -5,7 +5,7 @@
 //! only when metric values change.
 //!
 //! Like the Assets panel, it is scoped to a window group and can live in a dock
-//! tab or a detached window. [`crate::table_persist`] stores separate column
+//! tab or a detached window. [`crate::persistence::table_persist`] stores separate column
 //! widths for `:dock` and `:win`. This module owns data and lifecycle; [`table`]
 //! owns table rendering.
 
@@ -76,15 +76,15 @@ impl CoreStatusView {
         })
         .detach();
 
-        let widths_id = crate::table_persist::ctx_id("core-status-table", detached);
-        let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
+        let widths_id = crate::persistence::table_persist::ctx_id("core-status-table", detached);
+        let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.column_widths = saved_widths;
             s
         });
         cx.observe(&table_state, |this, state, cx| {
-            crate::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
+            crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
         })
         .detach();
 
@@ -232,7 +232,7 @@ impl Panel for CoreStatusView {
     }
     /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        crate::panel_meta::tab_label(self.panel_name())
+        crate::persistence::panel_meta::tab_label(self.panel_name())
     }
     fn closable(&self, _cx: &App) -> bool {
         true
@@ -241,10 +241,10 @@ impl Panel for CoreStatusView {
         true
     }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        crate::panel_meta::panel_title(self.panel_name())
+        crate::persistence::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
-        crate::dock_persist::panel_state_with_group("CoreStatus", &self.group)
+        crate::persistence::dock_persist::panel_state_with_group("CoreStatus", &self.group)
     }
     fn on_added_to(
         &mut self,
@@ -259,7 +259,7 @@ impl Panel for CoreStatusView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
-        Some(vec![crate::table_persist::reset_button(
+        Some(vec![crate::persistence::table_persist::reset_button(
             "core-status-reset-widths",
             &self.table_state,
         )])

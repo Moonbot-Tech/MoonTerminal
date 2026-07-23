@@ -12,7 +12,9 @@ use moon_ui::{MoonInputState, MoonPalette};
 
 use super::{layout_popup, stack};
 use crate::Backend;
-use crate::chart_persist::{self, ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation};
+use crate::persistence::chart_persist::{
+    self, ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
+};
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 

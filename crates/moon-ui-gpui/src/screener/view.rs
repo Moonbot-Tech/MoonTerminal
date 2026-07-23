@@ -72,8 +72,8 @@ impl ScreenerView {
         }
 
         // Screener always runs in a separate window, so its width context is fixed to `:win`.
-        let widths_id = crate::table_persist::ctx_id("screener-table", true);
-        let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
+        let widths_id = crate::persistence::table_persist::ctx_id("screener-table", true);
+        let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.sort_column = Some("vol24".into());
@@ -84,7 +84,7 @@ impl ScreenerView {
         // Column resizing mutates table state; persist widths through the shared storage.
         let widths_id_obs = widths_id.clone();
         cx.observe(&table_state, move |this, state, cx| {
-            crate::table_persist::persist(&this.backend, &widths_id_obs, &state, cx);
+            crate::persistence::table_persist::persist(&this.backend, &widths_id_obs, &state, cx);
         })
         .detach();
 
@@ -119,7 +119,7 @@ impl ScreenerView {
         // Prefer the shared per-context `table_visible_columns` entry for `screener-table:win`.
         // When absent, migrate from legacy `screener_columns`. Ignore unknown keys left by renamed
         // or removed columns; an empty valid set falls back to every current column.
-        let saved_cols = crate::table_persist::visible(backend.read(cx), &widths_id)
+        let saved_cols = crate::persistence::table_persist::visible(backend.read(cx), &widths_id)
             .or_else(|| backend.read(cx).layout.screener_columns.clone());
         let visible_cols: HashSet<String> = match saved_cols {
             Some(list) => {
@@ -283,8 +283,8 @@ impl ScreenerView {
         // Screener has only the `screener-table:win` context because it is always a window. Store an
         // explicit key list, including the complete list when all columns are visible. Legacy
         // `screener_columns` is no longer written and is used only during read-side migration.
-        let id = crate::table_persist::ctx_id("screener-table", true);
-        crate::table_persist::set_visible(&self.backend, &id, list, cx);
+        let id = crate::persistence::table_persist::ctx_id("screener-table", true);
+        crate::persistence::table_persist::set_visible(&self.backend, &id, list, cx);
         cx.notify();
     }
 

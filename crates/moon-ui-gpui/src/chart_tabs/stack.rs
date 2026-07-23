@@ -11,8 +11,8 @@ use moon_ui::{
     MoonVirtualListScrollHandle, h_flex, v_flex,
 };
 
-use crate::chart_persist::{StackLayoutMode, StackOrientation};
 use crate::panels::ChartPanel;
+use crate::persistence::chart_persist::{StackLayoutMode, StackOrientation};
 use moon_core::session::CoreId;
 
 /// One stack entry or slot containing a core market and its dedicated `ChartPanel`.
@@ -229,8 +229,8 @@ pub(super) fn set_panels_auto_pin<S: 'static>(
 /// Apply market-action button positions for Cancel Buy and Panic Sell to every stack panel.
 pub(super) fn set_panels_action_btn_pos<S: 'static>(
     entries: &[ChartStackEntry],
-    cancel: crate::chart_persist::ChartBtnPos,
-    panic: crate::chart_persist::ChartBtnPos,
+    cancel: crate::persistence::chart_persist::ChartBtnPos,
+    panic: crate::persistence::chart_persist::ChartBtnPos,
     cx: &mut Context<S>,
 ) {
     for e in entries {
@@ -242,7 +242,7 @@ pub(super) fn set_panels_action_btn_pos<S: 'static>(
 /// Apply the Left, Right, or Hidden price-axis position to every stack panel.
 pub(super) fn set_panels_price_axis_pos<S: 'static>(
     entries: &[ChartStackEntry],
-    pos: crate::chart_persist::PriceAxisPos,
+    pos: crate::persistence::chart_persist::PriceAxisPos,
     cx: &mut Context<S>,
 ) {
     for e in entries {

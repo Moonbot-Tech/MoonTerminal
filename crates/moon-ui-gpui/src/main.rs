@@ -19,11 +19,9 @@
 mod analytics;
 mod axes;
 mod backend;
-mod chart_persist;
 mod chart_tabs;
 mod chartdx;
-mod clock;
-mod coin_icons;
+mod chrome;
 mod controls;
 mod core_order;
 mod core_settings_popup;
@@ -31,27 +29,21 @@ mod crash;
 mod debug_window;
 mod design;
 mod detached;
-mod detect_sound;
 mod diag;
 mod display_text;
-mod dock_persist;
-mod figures_backend;
 mod firetest;
 mod group_window;
 mod hotkeys;
-mod icons;
 mod input;
 mod load_state;
-mod panel_meta;
+mod media;
 mod panels;
+mod persistence;
 mod screener;
 mod settings;
 mod shell;
-mod sound;
 mod startup;
 mod strategies;
-mod table_persist;
-mod terminal_chrome;
 mod windowing;
 
 pub(crate) use startup::install_moon_theme_for_config;
@@ -62,6 +54,7 @@ use std::time::Instant;
 use gpui::*;
 
 use chartdx::ChartDataHandle;
+use persistence::chart_persist;
 
 use moon_ui::{DockAreaState, Root};
 

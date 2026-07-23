@@ -434,8 +434,9 @@ impl ReportPanel {
             .as_ref()
             .and_then(db::load_sort)
             .unwrap_or_else(|| ("buydate".to_string(), true));
-        let widths_id = crate::table_persist::ctx_id("report-table", false);
-        let mut saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
+        let widths_id = crate::persistence::table_persist::ctx_id("report-table", false);
+        let mut saved_widths =
+            crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         complete_widths(&mut saved_widths, &init_cols);
         let table_state = cx.new(|_| MoonDataTableState::new());
         table_state.update(cx, |state, _| {
@@ -446,7 +447,7 @@ impl ReportPanel {
         // persist them through the shared storage.
         cx.observe(&table_state, |this, state, cx| {
             this.clamp_table_widths(&state, cx);
-            crate::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
+            crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
         })
         .detach();
 
@@ -584,8 +585,9 @@ impl ReportPanel {
     /// layouts, and enable the detached-only manual date controls.
     pub(crate) fn mark_table_detached(&mut self, cx: &mut Context<Self>) {
         self.detached = true;
-        self.widths_id = crate::table_persist::ctx_id("report-table", true);
-        let mut saved = crate::table_persist::saved(self.backend.read(cx), &self.widths_id);
+        self.widths_id = crate::persistence::table_persist::ctx_id("report-table", true);
+        let mut saved =
+            crate::persistence::table_persist::saved(self.backend.read(cx), &self.widths_id);
         complete_widths(&mut saved, &self.cols);
         self.table_state.update(cx, |s, c| {
             s.column_widths = saved;
@@ -600,7 +602,9 @@ impl ReportPanel {
     /// Docked `:dock` and detached `:win` modes have distinct shared-storage entries. An empty set
     /// leaves the current selection intact rather than producing an empty table.
     fn apply_ctx_columns(&mut self, cx: &App) {
-        if let Some(keys) = crate::table_persist::visible(self.backend.read(cx), &self.widths_id) {
+        if let Some(keys) =
+            crate::persistence::table_persist::visible(self.backend.read(cx), &self.widths_id)
+        {
             let set: HashSet<String> = keys.into_iter().collect();
             if !set.is_empty() {
                 self.visible = set;
@@ -621,7 +625,12 @@ impl ReportPanel {
             .map(|c| c.to_string())
             .collect();
         if !keys.is_empty() {
-            crate::table_persist::set_visible(&self.backend, &self.widths_id, keys, cx);
+            crate::persistence::table_persist::set_visible(
+                &self.backend,
+                &self.widths_id,
+                keys,
+                cx,
+            );
         }
     }
 
@@ -1136,13 +1145,13 @@ impl Panel for ReportPanel {
     }
     /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        crate::panel_meta::tab_label(self.panel_name())
+        crate::persistence::panel_meta::tab_label(self.panel_name())
     }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        crate::panel_meta::panel_title(self.panel_name())
+        crate::persistence::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
-        crate::dock_persist::panel_state_with_group("Report", &self.group)
+        crate::persistence::dock_persist::panel_state_with_group("Report", &self.group)
     }
     fn on_added_to(
         &mut self,
@@ -1158,7 +1167,10 @@ impl Panel for ReportPanel {
         _cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
         Some(vec![
-            crate::table_persist::reset_button("report-reset-widths", &self.table_state),
+            crate::persistence::table_persist::reset_button(
+                "report-reset-widths",
+                &self.table_state,
+            ),
             crate::panels::detach_button(
                 "Report",
                 self.group.clone(),

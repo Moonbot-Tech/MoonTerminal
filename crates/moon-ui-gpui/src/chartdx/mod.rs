@@ -362,7 +362,7 @@ struct PaneRender {
     orderbook_only: bool,
     /// Price-axis position (`Left`, `Right`, or `Hide`), controlling label side and reserved gutter.
     /// Applied to every engine panel.
-    price_axis_pos: crate::chart_persist::PriceAxisPos,
+    price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
     /// Whether the time axis and its bottom-label gutter are visible. Disabled lets the plot fill
     /// slot height. Applied to every engine panel.
     time_axis_visible: bool,
@@ -446,7 +446,7 @@ impl PaneRender {
             orderbook_enabled: true,
             liquidations_enabled: true,
             orderbook_only: false,
-            price_axis_pos: crate::chart_persist::PriceAxisPos::Left,
+            price_axis_pos: crate::persistence::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,
             gpu_prepare_dirty: true,
         }
@@ -681,7 +681,7 @@ struct ChartDataState {
     orderbook_only: bool,
     /// Per-window price-axis position (`Left`, `Right`, or `Hide`) controlling gutter layout and
     /// label side. Defaults to Left, the historical left gutter.
-    price_axis_pos: crate::chart_persist::PriceAxisPos,
+    price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
     /// Whether the per-window time axis, bottom labels, and gutter are visible. Disabled lets the
     /// plot fill the full height. Enabled by default.
     time_axis_visible: bool,

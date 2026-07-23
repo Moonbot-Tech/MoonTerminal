@@ -36,7 +36,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::Backend;
-use crate::icons::IconSet;
+use crate::media::icons::IconSet;
 use moon_core::config::{AppConfig, CoreSortMode, Language};
 use moon_core::market::MarketDataMode;
 

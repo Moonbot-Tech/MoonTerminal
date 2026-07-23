@@ -12,7 +12,7 @@ use crate::axes;
 
 use super::render_input;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};
-use crate::chart_persist::ChartBtnPos;
+use crate::persistence::chart_persist::ChartBtnPos;
 
 /// Market-action button type for the chart overlay.
 #[derive(Clone, Copy)]
@@ -148,7 +148,7 @@ impl Render for ChartPanel {
         self.input.pane_rects = self.chart.pane_rects();
         // Input hit testing needs the axis side to account for plot inset/width. Broom mode hides it.
         self.input.price_axis_pos = if self.orderbook_only {
-            crate::chart_persist::PriceAxisPos::Hide
+            crate::persistence::chart_persist::PriceAxisPos::Hide
         } else {
             self.price_axis_pos
         };
@@ -168,7 +168,7 @@ impl Render for ChartPanel {
         // With a right/hidden axis or broom mode, the plot begins at the slot edge with no offset.
         let axis_off = if matches!(
             self.price_axis_pos,
-            crate::chart_persist::PriceAxisPos::Left
+            crate::persistence::chart_persist::PriceAxisPos::Left
         ) && !self.orderbook_only
         {
             moon_chart::PRICE_AXIS_W
@@ -287,7 +287,7 @@ impl Render for ChartPanel {
                 let glass_reserve = moon_chart::GLASS_ZONE_PX.min(pane_w * 0.5);
                 let right_axis_reserve = if matches!(
                     self.price_axis_pos,
-                    crate::chart_persist::PriceAxisPos::Right
+                    crate::persistence::chart_persist::PriceAxisPos::Right
                 ) {
                     moon_chart::PRICE_AXIS_W
                 } else {
@@ -424,7 +424,7 @@ impl Render for ChartPanel {
                 };
                 let left_pad = if matches!(
                     self.price_axis_pos,
-                    crate::chart_persist::PriceAxisPos::Left
+                    crate::persistence::chart_persist::PriceAxisPos::Left
                 ) {
                     moon_chart::PRICE_AXIS_W
                 } else {
@@ -433,7 +433,7 @@ impl Render for ChartPanel {
                 let right_pad = moon_chart::GLASS_ZONE_PX
                     + if matches!(
                         self.price_axis_pos,
-                        crate::chart_persist::PriceAxisPos::Right
+                        crate::persistence::chart_persist::PriceAxisPos::Right
                     ) {
                         moon_chart::PRICE_AXIS_W
                     } else {

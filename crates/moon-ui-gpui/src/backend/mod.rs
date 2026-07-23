@@ -2,6 +2,9 @@
 //! `main.rs`, the crate root, so its private fields are visible to descendant modules. Methods in
 //! this sibling module use `pub(crate)` because private items here would not be crate-wide.
 
+mod detect_sound;
+mod figures;
+
 use std::time::{Duration, Instant};
 
 use gpui::Context;

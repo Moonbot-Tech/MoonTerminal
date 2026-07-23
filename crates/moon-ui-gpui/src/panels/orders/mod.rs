@@ -368,8 +368,8 @@ impl OrdersPanel {
         // Column reordering and resizing mutate `table_state` and emit `notify`. Observe those
         // changes and dump the dock to `docks.json` only when `column_order` changes. The dump reads
         // this panel, so defer it until after the current borrow, as in `mutate`.
-        let widths_id = crate::table_persist::ctx_id("orders-table", false);
-        let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
+        let widths_id = crate::persistence::table_persist::ctx_id("orders-table", false);
+        let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.column_widths = saved_widths;
@@ -377,7 +377,7 @@ impl OrdersPanel {
         });
         cx.observe(&table_state, |this, state, cx| {
             // A column resize mutates `table_state`; persist widths through the shared storage.
-            crate::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
+            crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
             let cur = state.read(cx).column_order.clone();
             if cur != this.col_order_cache {
                 this.col_order_cache = cur;
@@ -619,8 +619,9 @@ impl OrdersPanel {
     /// Called immediately after construction by the detached-window path. It reloads widths and
     /// visible columns for that mode so docked and detached views keep independent settings.
     pub(crate) fn mark_table_detached(&mut self, cx: &mut Context<Self>) {
-        self.widths_id = crate::table_persist::ctx_id("orders-table", true);
-        let saved = crate::table_persist::saved(self.backend.read(cx), &self.widths_id);
+        self.widths_id = crate::persistence::table_persist::ctx_id("orders-table", true);
+        let saved =
+            crate::persistence::table_persist::saved(self.backend.read(cx), &self.widths_id);
         self.table_state.update(cx, |s, c| {
             s.column_widths = saved;
             c.notify();
@@ -637,7 +638,9 @@ impl OrdersPanel {
     /// invalid entry with no recognized keys leaves the current view intact rather than producing
     /// an empty table.
     fn apply_ctx_columns(&mut self, cx: &App) {
-        if let Some(keys) = crate::table_persist::visible(self.backend.read(cx), &self.widths_id) {
+        if let Some(keys) =
+            crate::persistence::table_persist::visible(self.backend.read(cx), &self.widths_id)
+        {
             let mask = keys
                 .iter()
                 .filter_map(|k| OrdCol::from_key(k))
@@ -658,7 +661,7 @@ impl OrdersPanel {
             .iter()
             .map(|c| c.key().to_string())
             .collect();
-        crate::table_persist::set_visible(&self.backend, &self.widths_id, keys, cx);
+        crate::persistence::table_persist::set_visible(&self.backend, &self.widths_id, keys, cx);
     }
 
     /// Mutate the copyable view state and, only when it changes, rebuild, repaint, and persist it.
@@ -821,7 +824,7 @@ impl Panel for OrdersPanel {
     }
     /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        crate::panel_meta::tab_label(self.panel_name())
+        crate::persistence::panel_meta::tab_label(self.panel_name())
     }
     // Closing returns the panel to the bottom row rather than deleting it; see
     // `Shell::PanelCloseRequested` handling.
@@ -834,7 +837,7 @@ impl Panel for OrdersPanel {
         true
     }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        crate::panel_meta::panel_title(self.panel_name())
+        crate::persistence::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, cx: &App) -> PanelState {
         // Persist the group for reconstruction and the view's sorting, kind, filter, and column
@@ -885,7 +888,10 @@ impl Panel for OrdersPanel {
         _cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
         Some(vec![
-            crate::table_persist::reset_button("orders-reset-widths", &self.table_state),
+            crate::persistence::table_persist::reset_button(
+                "orders-reset-widths",
+                &self.table_state,
+            ),
             crate::panels::detach_button(
                 "Orders",
                 self.group.clone(),
