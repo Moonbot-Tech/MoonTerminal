@@ -1,10 +1,10 @@
 //! Clipboard and drag-and-drop operations for the strategy tree. Dropping within one core moves
 //! strategies through `move_strategies`; dropping across cores copies them through
-//! `create_strategies`. [`super::tree_ops`] owns the pure path and collection logic.
+//! `create_strategies`. [`super::ops`] owns the pure path and collection logic.
 
-use super::tree_ops;
-use super::tree_ui::{FolderDrag, StratDrag};
-use super::*;
+use super::super::*;
+use super::ops;
+use super::ui::{FolderDrag, StratDrag};
 use moon_core::feed::NewStrategySpec;
 
 impl StrategiesView {
@@ -17,7 +17,7 @@ impl StrategiesView {
             return;
         }
         let refs: Vec<&StrategyRow> = rows.iter().map(|(_, r)| r).collect();
-        self.set_clipboard(tree_ops::copy_rows(&refs), cx);
+        self.set_clipboard(ops::copy_rows(&refs), cx);
         cx.notify();
     }
 
@@ -25,7 +25,7 @@ impl StrategiesView {
         let clip = {
             let store = self.backend.read(cx).session.store();
             let Some(cd) = store.core(core) else { return };
-            tree_ops::copy_folder(&cd.strategies, &path)
+            ops::copy_folder(&cd.strategies, &path)
         };
         self.set_clipboard(clip, cx);
         cx.notify();
@@ -35,8 +35,8 @@ impl StrategiesView {
     ///
     /// A strategy or folder can therefore be pasted into a text editor, shared, and accepted back
     /// by `paste_into`.
-    fn set_clipboard(&mut self, clip: Vec<tree_ops::ClipItem>, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(tree_ops::clip_to_text(&clip)));
+    fn set_clipboard(&mut self, clip: Vec<ops::ClipItem>, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(ops::clip_to_text(&clip)));
         self.clipboard = Some(clip);
     }
 
@@ -46,7 +46,7 @@ impl StrategiesView {
         let clip = self.clipboard.clone().or_else(|| {
             cx.read_from_clipboard()
                 .and_then(|item| item.text())
-                .and_then(|t| tree_ops::clip_from_text(&t))
+                .and_then(|t| ops::clip_from_text(&t))
         });
         let Some(clip) = clip else {
             return;
@@ -69,7 +69,7 @@ impl StrategiesView {
                     .filter(|(c, _)| *c == core)
                     .map(|(_, n)| n.clone()),
             );
-            let plan = tree_ops::paste_plan(&clip, &tree_ops::split_path(&target), &taken);
+            let plan = ops::paste_plan(&clip, &ops::split_path(&target), &taken);
             specs_from(plan)
         };
         let new_names: Vec<String> = specs
@@ -77,7 +77,7 @@ impl StrategiesView {
             .filter_map(|s| {
                 s.fields
                     .iter()
-                    .find(|(n, _)| n == tree_ops::STRATEGY_NAME_FIELD)
+                    .find(|(n, _)| n == ops::STRATEGY_NAME_FIELD)
                     .map(|(_, v)| v.clone())
             })
             .collect();
@@ -124,7 +124,7 @@ impl StrategiesView {
                             .collect()
                     })
                     .unwrap_or_default();
-                tree_ops::move_to(&rows, &target)
+                ops::move_to(&rows, &target)
             };
             if let Err(error) = self
                 .backend
@@ -147,12 +147,12 @@ impl StrategiesView {
                             .collect()
                     })
                     .unwrap_or_default();
-                let clip = tree_ops::copy_rows(&rows);
+                let clip = ops::copy_rows(&rows);
                 let taken: std::collections::HashSet<String> = store
                     .core(target_core)
                     .map(|c| c.strategies.iter().map(|r| r.name.clone()).collect())
                     .unwrap_or_default();
-                specs_from(tree_ops::paste_plan(&clip, &target, &taken))
+                specs_from(ops::paste_plan(&clip, &target, &taken))
             };
             if let Err(error) = self
                 .backend
@@ -184,7 +184,7 @@ impl StrategiesView {
                 let store = self.backend.read(cx).session.store();
                 store
                     .core(target_core)
-                    .map(|c| tree_ops::move_folder(&c.strategies, &path, &target))
+                    .map(|c| ops::move_folder(&c.strategies, &path, &target))
                     .unwrap_or_default()
             };
             if moves.is_empty() {
@@ -204,13 +204,13 @@ impl StrategiesView {
                 let store = self.backend.read(cx).session.store();
                 let clip = store
                     .core(drag.core)
-                    .map(|c| tree_ops::copy_folder(&c.strategies, &path))
+                    .map(|c| ops::copy_folder(&c.strategies, &path))
                     .unwrap_or_default();
                 let taken: std::collections::HashSet<String> = store
                     .core(target_core)
                     .map(|c| c.strategies.iter().map(|r| r.name.clone()).collect())
                     .unwrap_or_default();
-                specs_from(tree_ops::paste_plan(&clip, &target, &taken))
+                specs_from(ops::paste_plan(&clip, &target, &taken))
             };
             if let Err(error) = self
                 .backend
@@ -245,7 +245,7 @@ impl StrategiesView {
 }
 
 /// Converts a paste/create plan into core command specifications.
-fn specs_from(plan: Vec<tree_ops::NewStrategy>) -> Vec<NewStrategySpec> {
+fn specs_from(plan: Vec<ops::NewStrategy>) -> Vec<NewStrategySpec> {
     plan.into_iter()
         .map(|n| NewStrategySpec {
             kind_ordinal: n.kind_ordinal,

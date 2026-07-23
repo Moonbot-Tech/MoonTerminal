@@ -2,9 +2,9 @@
 //! deletion. MoonUI Root owns the open dialog; this module builds its body and footer and
 //! dispatches confirmed operations to `moon-core`.
 
-use super::tree_ops;
-use super::tree_ui::TreeOp;
-use super::*;
+use super::super::*;
+use super::ops;
+use super::ui::TreeOp;
 use anyhow::Result;
 use moon_core::feed::NewStrategySpec;
 use moon_ui::{MoonNotification, MoonWindowExt as _};
@@ -440,8 +440,8 @@ impl StrategiesView {
     ) {
         let store = self.backend.read(cx).session.store();
         let Some(cd) = store.core(core) else { return };
-        let under = tree_ops::rows_under(&cd.strategies, &path);
-        if !tree_ops::all_off(&under) {
+        let under = ops::rows_under(&cd.strategies, &path);
+        if !ops::all_off(&under) {
             return; // Running strategies prevent deletion.
         }
         let label = t!(
@@ -473,7 +473,7 @@ impl StrategiesView {
             else {
                 return Ok(());
             };
-            let ns = tree_ops::new_strategy(&kind, &name, &target);
+            let ns = ops::new_strategy(&kind, &name, &target);
             NewStrategySpec {
                 kind_ordinal: ns.kind_ordinal,
                 folder_path: ns.folder_path,
@@ -504,7 +504,7 @@ impl StrategiesView {
             let Some(cd) = store.core(core) else {
                 return Ok(());
             };
-            tree_ops::rename_folder(&cd.strategies, old_path, new_name)
+            ops::rename_folder(&cd.strategies, old_path, new_name)
         };
         self.backend.read(cx).session.move_strategies(core, moves)?;
         // Rename an empty UI-only folder locally only after the move command succeeds.
@@ -538,7 +538,7 @@ impl StrategiesView {
         self.backend
             .read(cx)
             .session
-            .delete_folder(core, tree_ops::join_path(path))?;
+            .delete_folder(core, ops::join_path(path))?;
         self.remove_ui_folder(core, path);
         Ok(())
     }

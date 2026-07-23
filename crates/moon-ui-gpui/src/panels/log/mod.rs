@@ -363,10 +363,7 @@ impl LogPanel {
             return; // No candidate core resolved the coin to a market; leave the UI unchanged.
         };
         self.backend.update(cx, |b, bcx| {
-            b.open_request = Some((core, market));
-            b.open_request_rev = b.open_request_rev.wrapping_add(1);
-            // Open the market on Main without raising its window, as Orders and Detects do.
-            b.open_request_activate = false;
+            b.open_on_main((core, market), false);
             bcx.notify();
         });
     }

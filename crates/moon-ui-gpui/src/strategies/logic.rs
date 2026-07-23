@@ -10,7 +10,7 @@ use moon_core::session::{CoreId, CoreStore};
 
 use super::filter::StrategyFilter;
 use super::rules::{Rules, Values};
-use super::tree_ops::path_segments;
+use super::tree::ops::path_segments;
 use super::{Key, StrategiesView};
 
 /// Find a strategy row in the core store.

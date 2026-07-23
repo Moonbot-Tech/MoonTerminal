@@ -1,15 +1,15 @@
 //! Strategy-tree operation types for modals, menus, and DnD payloads, plus shared selection,
-//! UI-folder, and toolbar helpers. Modals live in [`super::tree_dialogs`], clipboard and DnD in
-//! [`super::tree_dnd`], context menus in [`super::tree_menu`], and pure path and collection logic
-//! in [`super::tree_ops`].
+//! UI-folder, and toolbar helpers. Modals live in [`super::dialogs`], clipboard and DnD in
+//! [`super::dnd`], context menus in [`super::menu`], and pure path and collection logic
+//! in [`super::ops`].
 
-use super::tree_ops;
-use super::*;
+use super::super::*;
+use super::ops;
 use rust_i18n::t;
 
 /// Active mutually exclusive operation modal rendered over the window.
 #[derive(Clone)]
-pub(super) enum TreeOp {
+pub(crate) enum TreeOp {
     /// Create a strategy in a target folder using the selected kind ordinal.
     CreateStrategy {
         core: CoreId,
@@ -123,9 +123,9 @@ impl StrategiesView {
     // ── UI-only folders, empty until populated ────────────────────────────────
 
     pub(super) fn add_ui_folder(&mut self, core: CoreId, parent: &str, name: &str) {
-        let mut parts = tree_ops::split_path(parent);
+        let mut parts = ops::split_path(parent);
         parts.push(name.to_string());
-        self.ui_folders.insert((core, tree_ops::join_path(&parts)));
+        self.ui_folders.insert((core, ops::join_path(&parts)));
         // Expand the core and parent chain, excluding the new folder itself, so it is immediately
         // visible.
         self.expanded_cores.insert(core);
@@ -134,7 +134,7 @@ impl StrategiesView {
     }
 
     pub(super) fn remove_ui_folder(&mut self, core: CoreId, path: &[String]) {
-        let key = tree_ops::join_path(path);
+        let key = ops::join_path(path);
         self.ui_folders
             .retain(|(c, p)| !(*c == core && (p == &key || p.starts_with(&format!("{key}/")))));
     }
@@ -143,10 +143,10 @@ impl StrategiesView {
         if old_path.is_empty() {
             return;
         }
-        let old_key = tree_ops::join_path(old_path);
+        let old_key = ops::join_path(old_path);
         let mut np = old_path.to_vec();
         *np.last_mut().unwrap() = new_name.to_string();
-        let new_key = tree_ops::join_path(&np);
+        let new_key = ops::join_path(&np);
         let affected: Vec<String> = self
             .ui_folders
             .iter()
@@ -165,13 +165,13 @@ impl StrategiesView {
         self.ui_folders
             .iter()
             .filter(|(c, _)| *c == core)
-            .map(|(_, p)| tree_ops::split_path(p))
+            .map(|(_, p)| ops::split_path(p))
             .collect()
     }
 
     // ── Keyboard: Ctrl+C, Ctrl+V, and Delete ──────────────────────────────────
 
-    pub(super) fn handle_tree_key(
+    pub(crate) fn handle_tree_key(
         &mut self,
         ev: &KeyDownEvent,
         window: &mut Window,
@@ -188,7 +188,7 @@ impl StrategiesView {
             };
             if no_sel {
                 if let Some((core, path)) = self.selected_folder.clone() {
-                    let path = tree_ops::split_path(&path);
+                    let path = ops::split_path(&path);
                     self.copy_folder(core, path, cx);
                     return;
                 }

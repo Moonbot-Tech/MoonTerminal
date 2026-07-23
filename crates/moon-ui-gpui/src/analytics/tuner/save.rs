@@ -120,7 +120,7 @@ impl AnalyticsView {
     /// (empty = auto); it is additionally uniqued on each core. The copy arrives
     /// DISABLED (the create_strategies rule) — which is safe.
     fn create_strategy_copy(&mut self, dlg: &super::shared::SaveDialog, cx: &mut Context<Self>) {
-        use crate::strategies::tree_ops::{STRATEGY_NAME_FIELD, set_field, unique_name};
+        use crate::strategies::tree::ops::{STRATEGY_NAME_FIELD, set_field, unique_name};
         let Some(target) = dlg.targets.first() else {
             return;
         };

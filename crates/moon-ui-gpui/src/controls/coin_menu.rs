@@ -96,9 +96,7 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
                 move |_, window, app| {
                     window.close_context_menu(app);
                     backend_open.update(app, |b, bcx| {
-                        b.open_request = Some((core, market.clone()));
-                        b.open_request_rev = b.open_request_rev.wrapping_add(1);
-                        b.open_request_activate = false;
+                        b.open_on_main((core, market.clone()), false);
                         bcx.notify();
                     });
                 },

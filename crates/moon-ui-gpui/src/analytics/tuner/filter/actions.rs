@@ -342,7 +342,7 @@ impl AnalyticsView {
                 }
             }
         }
-        let proposed = crate::strategies::tree_ops::unique_name(&taken, &target.name);
+        let proposed = crate::strategies::tree::ops::unique_name(&taken, &target.name);
         self.tuner.copy_name = proposed.clone();
         // A fresh name input on every open (so the default is rendered from its start).
         self.tuner.inputs.remove("copy-name");

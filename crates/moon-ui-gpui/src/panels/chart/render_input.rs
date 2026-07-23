@@ -149,10 +149,7 @@ pub(super) fn mouse_down_left(
     let mut opened_to_main = false;
     if let Some((core, market)) = this.input.pending_to_main.take() {
         this.backend.update(cx, |b, bcx| {
-            b.open_request = Some((core, market));
-            b.open_request_rev = b.open_request_rev.wrapping_add(1);
-            // This chart-double-click path also activates and raises the Main window.
-            b.open_request_activate = true;
+            b.open_on_main((core, market), true);
             bcx.notify();
         });
         opened_to_main = true;

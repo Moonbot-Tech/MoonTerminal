@@ -156,8 +156,11 @@ impl AnalyticsView {
                                 )
                                 .to_string()
                             } else {
-                                t!("analytics.cum_sub", unit = crate::analytics::pnl_unit_label())
-                                    .to_string()
+                                t!(
+                                    "analytics.cum_sub",
+                                    unit = crate::analytics::pnl_unit_label()
+                                )
+                                .to_string()
                             },
                             Some(head),
                             cumulative::cumulative_area(
@@ -183,8 +186,11 @@ impl AnalyticsView {
                         let (title, sub, body) = if by_kind {
                             (
                                 t!("analytics.kinds_title").to_string(),
-                                t!("analytics.kinds_sub", unit = crate::analytics::pnl_unit_label())
-                                    .to_string(),
+                                t!(
+                                    "analytics.kinds_sub",
+                                    unit = crate::analytics::pnl_unit_label()
+                                )
+                                .to_string(),
                                 charts::kind_bars(
                                     &data.kinds,
                                     &data.core_days,
@@ -197,8 +203,11 @@ impl AnalyticsView {
                         } else {
                             (
                                 t!("analytics.daily_title").to_string(),
-                                t!("analytics.daily_sub", unit = crate::analytics::pnl_unit_label())
-                                    .to_string(),
+                                t!(
+                                    "analytics.daily_sub",
+                                    unit = crate::analytics::pnl_unit_label()
+                                )
+                                .to_string(),
                                 charts::daily_bars(
                                     &data.days,
                                     &data.core_days,
@@ -294,7 +303,10 @@ impl AnalyticsView {
             .child(kpi(
                 p,
                 cx,
-                t!("analytics.kpi.profit", unit = crate::analytics::pnl_unit_label()),
+                t!(
+                    "analytics.kpi.profit",
+                    unit = crate::analytics::pnl_unit_label()
+                ),
                 profit_el,
                 delta(cur.profit, prev.as_ref().map(|v| v.profit)),
                 false,

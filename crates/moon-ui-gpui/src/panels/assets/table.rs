@@ -596,10 +596,7 @@ fn coin_cell(
             }
             view.update(app, |this, cx| {
                 this.backend.update(cx, |b, bcx| {
-                    b.open_request = Some((core, market.clone()));
-                    b.open_request_rev = b.open_request_rev.wrapping_add(1);
-                    // Open the market on Main without activating its window, matching Orders.
-                    b.open_request_activate = false;
+                    b.open_on_main((core, market.clone()), false);
                     bcx.notify();
                 });
             });

@@ -123,9 +123,7 @@ fn coin_cell(
             let market = backend.read(app);
             let market = resolve_market(market, core_uid, &coin);
             backend.update(app, |b, bcx| {
-                b.open_request = Some((core_uid, market.clone()));
-                b.open_request_rev = b.open_request_rev.wrapping_add(1);
-                b.open_request_activate = false;
+                b.open_on_main((core_uid, market.clone()), false);
                 bcx.notify();
             });
         })

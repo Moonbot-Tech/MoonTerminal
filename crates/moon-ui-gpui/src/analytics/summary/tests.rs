@@ -46,7 +46,10 @@ fn insight_sentence_unit_follows_the_metric() {
     };
     set_pnl_pct(true);
     let pct = render();
-    assert!(!pct.contains("USDT"), "percent mode still shows USDT: {pct}");
+    assert!(
+        !pct.contains("USDT"),
+        "percent mode still shows USDT: {pct}"
+    );
     set_pnl_pct(false);
     let usdt = render();
     assert!(usdt.contains("USDT"), "usdt mode lost the unit: {usdt}");
