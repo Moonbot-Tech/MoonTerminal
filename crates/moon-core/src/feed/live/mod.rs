@@ -742,6 +742,12 @@ pub fn run(
                                     core_uid: server.uid,
                                     rec_id: *rec_id,
                                 }),
+                                // Bulk soft-delete/restore echo: flip the `deleted` flag on the
+                                // named rows rather than dropping them, so a restore can undo it.
+                                ReportEvent::RowsDeleted(change) => sink.send(DbMsg::SetDeleted {
+                                    core_uid: server.uid,
+                                    change: change.clone(),
+                                }),
                                 ReportEvent::SyncStarted { request, .. } => log::info!(
                                     "отчёты: core={} sync начат (from_rec_id={})",
                                     server.uid,

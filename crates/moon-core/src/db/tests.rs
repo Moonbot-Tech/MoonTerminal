@@ -339,3 +339,106 @@ fn max_core_uid_folds_both_report_schemas() {
         .unwrap();
     assert!(matches!(max_core_uid(&conn), Ok(Some(30))));
 }
+
+/// A core-broadcast bulk soft-delete flips `deleted` for exactly the rows named by its ranges
+/// and singles, scoped to the core, and a later restore (`deleted = false`) clears it back —
+/// so the Report/Analytics filters see the same set the core did, and an undo is possible.
+#[test]
+fn set_deleted_flips_named_rows_and_scopes_to_core() {
+    use moonproto::{ReportRecIdRange, ReportRowsDeleted};
+
+    let conn = Connection::open_in_memory().unwrap();
+    init_db(&conn).unwrap();
+    // Create the replica WITH `deleted` before rep_init, so the schema cache (`st.cols`) carries
+    // it — the state apply_schema leaves once the core has declared the column, before any
+    // RowsDeleted arrives.
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (core_uid INTEGER NOT NULL, core_name TEXT NOT NULL,
+            newrecid INTEGER NOT NULL, deleted INTEGER, PRIMARY KEY (core_uid, newrecid));",
+    )
+    .unwrap();
+    let st = test_support::rep_init(&conn);
+
+    // newrecid 1..=6 for the target core 2, plus a decoy row on core 3 that shares a newrecid
+    // inside the affected range — it must stay untouched (the op is per core).
+    conn.execute_batch(
+        "INSERT INTO orders_rep (core_uid, core_name, newrecid, deleted) VALUES
+            (2, 'Rep', 1, 0), (2, 'Rep', 2, 0), (2, 'Rep', 3, 0),
+            (2, 'Rep', 4, 0), (2, 'Rep', 5, 0), (2, 'Rep', 6, 0),
+            (3, 'Other', 3, 0);",
+    )
+    .unwrap();
+
+    let deleted_of = |core: i64, rec: i64| -> i64 {
+        conn.query_row(
+            "SELECT deleted FROM orders_rep WHERE core_uid=?1 AND newrecid=?2",
+            rusqlite::params![core, rec],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+
+    // Soft-delete the range 2..=4 and the single 6; leave 1 and 5 alone.
+    let del = ReportRowsDeleted::new(true, [ReportRecIdRange::new(2, 4)], [6]);
+    super::rep::apply_set_deleted(&conn, &st, 2, &del).unwrap();
+
+    for rec in [2, 3, 4, 6] {
+        assert_eq!(
+            deleted_of(2, rec),
+            1,
+            "rec {rec} должен быть помечен удалённым"
+        );
+    }
+    for rec in [1, 5] {
+        assert_eq!(deleted_of(2, rec), 0, "rec {rec} вне набора — не трогать");
+    }
+    assert_eq!(
+        deleted_of(3, 3),
+        0,
+        "строка другого ядра с тем же newrecid не затрагивается"
+    );
+
+    // Restore the same set: the flag clears, proving this is a reversible flag, not a DELETE.
+    let restore = ReportRowsDeleted::new(false, [ReportRecIdRange::new(2, 4)], [6]);
+    super::rep::apply_set_deleted(&conn, &st, 2, &restore).unwrap();
+    for rec in 1..=6 {
+        assert_eq!(deleted_of(2, rec), 0, "rec {rec} восстановлен");
+    }
+
+    // Every original row still exists — a restore must not have dropped anything.
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM orders_rep WHERE core_uid=2",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 6, "soft-delete/restore не удаляет строки");
+}
+
+/// A core whose replica schema never declared `deleted` gets a clean no-op — not a
+/// "no such column" error per event — mirroring the read side's `has("deleted")` guard.
+#[test]
+fn set_deleted_without_column_is_a_noop() {
+    use moonproto::{ReportRecIdRange, ReportRowsDeleted};
+
+    let conn = Connection::open_in_memory().unwrap();
+    init_db(&conn).unwrap();
+    // Skeleton only: rep_init creates (core_uid, core_name, newrecid) and NO `deleted` column,
+    // so the schema cache does not carry it.
+    let st = test_support::rep_init(&conn);
+    conn.execute(
+        "INSERT INTO orders_rep (core_uid, core_name, newrecid) VALUES (2, 'Rep', 3)",
+        [],
+    )
+    .unwrap();
+
+    let del = ReportRowsDeleted::new(true, [ReportRecIdRange::new(1, 5)], [3]);
+    // The absent column must not surface as an error, and must not touch the row.
+    super::rep::apply_set_deleted(&conn, &st, 2, &del)
+        .expect("отсутствие колонки — no-op, не ошибка");
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM orders_rep", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1, "no-op не трогает строки");
+}

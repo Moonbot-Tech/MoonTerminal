@@ -395,6 +395,11 @@ fn apply_msg(
                 log::error!("отчёты(rep): delete rec_id={rec_id} ядра {core_uid} упал: {e}");
             }
         }
+        DbMsg::SetDeleted { core_uid, change } => {
+            if let Err(e) = rep::apply_set_deleted(conn, rep_state, core_uid, &change) {
+                log::error!("отчёты(rep): set-deleted ядра {core_uid} упал: {e}");
+            }
+        }
         DbMsg::Page {
             core_uid,
             core_name,
