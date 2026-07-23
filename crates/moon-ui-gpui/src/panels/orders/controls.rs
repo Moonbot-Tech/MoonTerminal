@@ -86,7 +86,8 @@ impl OrdersPanel {
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         // The All item enables every column; clicking it again leaves only the first canonical one.
-        let full_mask = OrdCol::ALL.iter().fold(0u16, |m, c| m | c.bit());
+        // `ALL_COLUMNS_MASK` is the single source of truth for "every column visible".
+        let full_mask = ALL_COLUMNS_MASK;
         let all_on = cur.columns == full_mask;
         let all_view = view.clone();
         menu = menu.item(

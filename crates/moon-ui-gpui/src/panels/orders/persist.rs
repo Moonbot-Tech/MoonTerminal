@@ -42,7 +42,7 @@ impl OrdersPanel {
             let mask = keys
                 .iter()
                 .filter_map(|k| OrdCol::from_key(k))
-                .fold(0u16, |m, c| m | c.bit());
+                .fold(0u32, |m, c| m | c.bit());
             if mask != 0 {
                 self.view.columns = mask;
             }
@@ -139,7 +139,7 @@ fn view_from_info(info: &PanelInfo) -> OrdersViewState {
                 .iter()
                 .filter_map(|x| x.as_str())
                 .filter_map(OrdCol::from_key)
-                .fold(0u16, |m, c| m | c.bit());
+                .fold(0u32, |m, c| m | c.bit());
             if mask != 0 {
                 v.columns = mask;
             }

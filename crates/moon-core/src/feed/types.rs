@@ -172,8 +172,13 @@ pub struct OrderRow {
     pub price: f32,
     /// Entry-leg fill percentage.
     pub fill_pct: f32,
-    /// Order strategy name or kind instead of its numeric `strat_id`.
+    /// Order strategy kind name (e.g. `Delta`, `Combo`), or the numeric `strat_id` when the
+    /// strategy snapshot is unknown. This is the strategy TYPE, not its user-assigned name; see
+    /// [`Self::strat_name`].
     pub strat: String,
+    /// Order strategy user-assigned name (`StrategyName`). Empty for a manual order
+    /// (`strat_id == 0`) or a strategy that has no name set.
+    pub strat_name: String,
     /// Numeric order strategy ID equal to `StrategyRow::id`; `0` means no strategy. Used to count
     /// open orders for a particular strategy in the tree.
     pub strat_id: u64,

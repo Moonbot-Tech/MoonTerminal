@@ -1,6 +1,7 @@
 //! Orders panel: a full-width table of open orders across a group's cores.
 //! The columns follow the original egui view and use `MoonPalette` styling:
-//! Core · Side · Token · Size · Buy · Cur.P · TP.P · Fill · PnL · PnL% · PNL TP · SL · TS · Vstop · Strat.
+//! Core · Side · Token · Size · Buy · Cur.P · TP.P · Fill · PnL · PnL% · PNL TP · SL · TS · Vstop ·
+//! Strat (kind) · Name (strategy name).
 //!
 //! Side: pending `BUY` and `Short-S` entries use the negative tone; executed `SELL` and
 //! `Short-B` exit legs use the info tone. Emulated orders add `(E)`.
@@ -19,7 +20,7 @@ mod view;
 
 pub(crate) use sort::executed;
 use sort::{orders_sig, sort_entries};
-use view::{MainOnTop, OrdCol, OrderKind, OrdersViewState, PrimarySort};
+use view::{ALL_COLUMNS_MASK, MainOnTop, OrdCol, OrderKind, OrdersViewState, PrimarySort};
 
 use std::collections::HashSet;
 use std::rc::Rc;

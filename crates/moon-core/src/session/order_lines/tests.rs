@@ -24,6 +24,7 @@ fn order(uid: u64) -> OrderRow {
         price: 60_000.0,
         fill_pct: 0.0,
         strat: "test".into(),
+        strat_name: String::new(),
         strat_id: 0,
         status: String::new(),
         uid,
