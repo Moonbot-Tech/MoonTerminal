@@ -28,8 +28,9 @@ use moon_ui::{MoonBackgroundPolicy, Panel, PanelEvent};
 
 use rust_i18n::t;
 
+use crate::Backend;
 use crate::chartdx::ChartEngine;
-use crate::{Backend, input};
+use crate::chartdx::input;
 use moon_chart::container::ContainerKind;
 use moon_chart::paint::now_unix_ms;
 use moon_core::config::{ChartBucket, ChartTheme, OrdersStyleSet};

@@ -273,7 +273,7 @@ impl RenderState {
         let border = self.readout_border;
         let border_px = self.readout_border_px;
         let m = [border_px, 1.0, 1.0, 0.0];
-        let tz_offset_sec = crate::axes::local_offset_sec();
+        let tz_offset_sec = crate::chartdx::axes::local_offset_sec();
         let cursor = self.cursor;
         let slot_origin = self.slot_origin;
 

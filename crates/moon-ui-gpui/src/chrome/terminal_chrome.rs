@@ -407,7 +407,7 @@ fn core_gear_button(
         // Use the content module's width basis so both boxes follow the same font scale.
         .width(design::popover_outer_width(
             cx,
-            design::font_w(cx, crate::core_settings_popup::CONTENT_W),
+            design::font_w(cx, crate::shell::core_settings_popup::CONTENT_W),
         ))
         .open(open)
         .on_open_change(move |open, window, cx| {

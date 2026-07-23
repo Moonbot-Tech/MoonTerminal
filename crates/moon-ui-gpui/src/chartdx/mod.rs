@@ -8,6 +8,7 @@
 //! orchestrator: per-pane data preparation WITHOUT rendering plus the `gpu_canvas` element that
 //! draws inside the GPUI frame.
 
+pub mod axes;
 mod backend;
 #[cfg(windows)]
 pub mod background;
@@ -15,6 +16,7 @@ pub mod background;
 mod base;
 #[cfg(windows)]
 pub mod candles;
+pub mod input;
 // Engine orchestration extracted from this file into impl blocks; structures remain declared below.
 // Child modules can access ancestor-private fields, so only code location changed, not behavior.
 #[cfg(windows)]

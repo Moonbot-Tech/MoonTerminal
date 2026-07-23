@@ -15,6 +15,7 @@
 
 mod actions;
 mod core_settings;
+pub(crate) mod core_settings_popup;
 mod docks;
 mod init;
 mod metrics;

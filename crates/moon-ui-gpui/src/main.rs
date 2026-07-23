@@ -17,14 +17,12 @@
 //! live in [`backend`], while the application startup and lifecycle live in [`startup`].
 
 mod analytics;
-mod axes;
 mod backend;
 mod chart_tabs;
 mod chartdx;
 mod chrome;
 mod controls;
 mod core_order;
-mod core_settings_popup;
 mod crash;
 mod debug_window;
 mod design;
@@ -34,7 +32,6 @@ mod display_text;
 mod firetest;
 mod group_window;
 mod hotkeys;
-mod input;
 mod load_state;
 mod media;
 mod panels;

@@ -8,7 +8,7 @@ use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonRe
 
 use moon_chart::paint::now_unix_ms;
 
-use crate::axes;
+use crate::chartdx::axes;
 
 use super::render_input;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};
