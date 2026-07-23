@@ -171,6 +171,15 @@ pub struct AnalyticsView {
     /// Visible-column bitmask of the strategy list, PER axis: the list sits beside a
     /// different tool in each mode and is asked a different question there.
     pub(super) strat_cols: moon_core::config::layout::StratColsByMode,
+    /// Content-measured preferred width of the strategy list's core column as
+    /// `(font_scale_it_was_measured_under, width_in_base_px)` (`tuner::list::table::core_col_w`).
+    /// Filled lazily on render; measuring lays out a glyph per character for every distinct core
+    /// name, too much to repay on an idle repaint. Invalidated two ways: cleared to `None` where
+    /// `data` is replaced (`data.apply`, the single site — the names may have changed), and
+    /// recomputed when the stored font scale no longer matches the current one, so a Font-slider
+    /// move OR a theme whose mode carries a different base mono size re-measures instead of
+    /// scaling a width that assumed the old base.
+    strat_core_w: Option<(f32, f32)>,
     /// Calendar tab: cells (PnL, trades, and wins) for the loaded range; Day mode uses hourly cells.
     pub(super) cal_days: Option<Arc<Vec<DayCell>>>,
     cal_seq: u64,
@@ -334,6 +343,7 @@ impl AnalyticsView {
             strat_search_input: None,
             strat_sort: Some(("analytics.col.profit".to_string(), true)),
             strat_cols: saved_strat_cols,
+            strat_core_w: None,
             cal_days: None,
             cal_seq: 0,
             cal_dirty: true,
@@ -524,6 +534,9 @@ impl AnalyticsView {
                     this.cores = d.cores.clone();
                 }
                 this.data.apply(data);
+                // The set of core names may have changed with the data — remeasure the
+                // list's core column on the next render.
+                this.strat_core_w = None;
                 // A failed read leaves it unknown rather than "nothing missing": the
                 // origin already logged why, and a silent zero here would be the very
                 // thing this banner exists to stop.

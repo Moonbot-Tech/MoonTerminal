@@ -50,6 +50,25 @@ pub(super) const COL_BIT_LASTEDIT: u16 = 1u16 << (2 + METRIC_COLS.len() as u16);
 pub(super) const LASTEDIT_W: f32 = 110.0;
 /// How narrow that stamp may be squeezed before it stops being readable.
 pub(super) const LASTEDIT_MIN_W: f32 = 78.0;
+/// Width (font-scaled px) of the strategy-kind identity column. Kind is a short type name
+/// ("EMA", "Drop"), so a fixed width serves it — shared by the row and the header, which
+/// used to carry these numbers as separate literals.
+pub(super) const KIND_W: f32 = 72.0;
+/// How narrow the kind column may be squeezed once row space runs short.
+pub(super) const KIND_MIN_W: f32 = 48.0;
+/// FLOOR of the core column's preferred width. Unlike every other column this one is
+/// content-measured per data load (`list::table::core_col_w`): its single-core label is a
+/// free-form server name, which no fixed width fits — 88 truncated real names on a wide
+/// window while the flexible name column held the slack. The floor is what the column takes
+/// when every measured name is shorter, and when there is nothing to measure yet; it also
+/// covers the multi-core aggregate label ("Núcleos: 999", the longest locale form, stays
+/// under it at body size).
+pub(super) const CORE_W: f32 = 88.0;
+/// How narrow the core column may be squeezed once row space runs short.
+pub(super) const CORE_MIN_W: f32 = 56.0;
+/// Ceiling of the measured core width: one anomalously named server must not push the
+/// metric columns off the row.
+pub(super) const CORE_W_MAX: f32 = 240.0;
 /// Full mask — every toggleable column visible (kind, core, all metric columns, lastedit).
 ///
 /// NOT the default: the fixed columns then total more than the left column is wide, and since
@@ -93,9 +112,9 @@ pub(in crate::analytics) const STRAT_COLS_DEFAULT_COINS: u16 =
 mod tests {
     use super::super::columns::{COL_PROFIT, COL_TRADES, COL_WINRATE, MetricCol};
     use super::{
-        COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, LASTEDIT_MIN_W, METRIC_COLS, STRAT_COLS_ALL,
-        STRAT_COLS_DEFAULT, STRAT_COLS_DEFAULT_COINS, STRAT_MIN_PANEL_W, STRAT_NAME_MIN_W,
-        metric_bit,
+        COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, KIND_MIN_W, LASTEDIT_MIN_W,
+        METRIC_COLS, STRAT_COLS_ALL, STRAT_COLS_DEFAULT, STRAT_COLS_DEFAULT_COINS,
+        STRAT_MIN_PANEL_W, STRAT_NAME_MIN_W, metric_bit,
     };
 
     /// What the row spends outside the metric descriptors AT ITS FLOOR: the two identity
@@ -106,10 +125,12 @@ mod tests {
     fn fixed_extras(mask: u16) -> f32 {
         let mut w = 8.0 * 2.0 + (6.0 + 6.0) + 8.0;
         if mask & COL_BIT_KIND != 0 {
-            w += 48.0 + 8.0;
+            w += KIND_MIN_W + 8.0;
         }
         if mask & COL_BIT_CORE != 0 {
-            w += 56.0 + 8.0;
+            // The core column's PREFERRED width is content-measured, but "does this fit"
+            // is a question about floors, and its floor is fixed.
+            w += CORE_MIN_W + 8.0;
         }
         if mask & COL_BIT_LASTEDIT != 0 {
             w += LASTEDIT_MIN_W + 8.0;
