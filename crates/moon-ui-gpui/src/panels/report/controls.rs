@@ -150,6 +150,32 @@ impl ReportPanel {
         )
     }
 
+    /// Detached-window trash button that toggles deletion mode and doubles as its Save.
+    ///
+    /// A square icon button matching the main toolbar's window launchers (raw `ICON_BTN_W`, an SVG
+    /// glyph, `ToolbarCompact`). Soft (inactive) → click enters the mode and shows the `deleted`
+    /// checkbox column; while in the mode with no edits, a click leaves it; once any checkbox
+    /// changed it turns amber and a click commits (see [`ReportPanel::on_delete_button`]).
+    /// `selected` marks the active mode so it reads as pressed even before an edit arms the amber.
+    pub(super) fn delete_mode_button(&self, cx: &Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let variant = if self.delete_dirty() {
+            MoonButtonVariant::Amber
+        } else {
+            MoonButtonVariant::Soft
+        };
+        MoonButton::new("rep-delmode")
+            // Icon-only width stays raw, like the toolbar launchers — one source in `controls::toolbar`.
+            .width(crate::controls::toolbar::ICON_BTN_W)
+            .variant(variant)
+            .size(MoonButtonSize::ToolbarCompact)
+            .selected(self.delete_mode)
+            .leading_icon(MoonButtonIconSlot::new("icons/delete.svg").color(p.text_soft))
+            .tooltip(t!("report.delete_mode_tip").to_string())
+            .on_click(cx.listener(|t, _, window, c| t.on_delete_button(window, c)))
+            .render()
+    }
+
     /// Build the CSV/XLSX export menu for the visible or full schema.
     ///
     /// Export uses the panel's current filter and sort order; the period may be a preset or

@@ -89,8 +89,9 @@ const SL_TOGGLE_TRACK_W: f32 = 35.0;
 const SL_TOGGLE_LABEL_W: f32 = 13.0;
 /// Base width of the Live/Pause button.
 const LIVE_W: f32 = 62.0;
-/// Raw width of each icon-only singleton-window button.
-const ICON_BTN_W: f32 = 30.0;
+/// Raw width of each icon-only singleton-window button. Shared so the Report panel's trash
+/// button (`panels::report::controls`) matches the toolbar launchers from one source.
+pub(crate) const ICON_BTN_W: f32 = 30.0;
 /// Base width of the Settings button while its label is visible.
 const SETTINGS_BTN_W: f32 = 92.0;
 /// Caption of the sell group — unlike `Size` it carries no unit, the cells already show percents.

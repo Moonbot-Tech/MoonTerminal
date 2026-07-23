@@ -442,3 +442,68 @@ fn set_deleted_without_column_is_a_noop() {
         .unwrap();
     assert_eq!(n, 1, "no-op не трогает строки");
 }
+
+/// `query_reports` returns `rec_ids` parallel to `rows`: the replica `newrecid` for replica rows
+/// and `0` for a legacy row that has none. The deletion-mode checkboxes address rows by this id,
+/// so a wrong or misaligned value would soft-delete the wrong trade.
+#[test]
+fn query_reports_exposes_rec_ids_aligned_to_rows() {
+    let conn = Connection::open_in_memory().unwrap();
+    init_db(&conn).unwrap();
+
+    // Legacy source: one row, no `newrecid` -> expected rec_id 0.
+    conn.execute_batch(
+        "CREATE TABLE closed_sell_reports (
+            core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, db_id INTEGER NOT NULL,
+            coin TEXT, closedate INTEGER, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
+            PRIMARY KEY (core_uid, db_id));
+         INSERT INTO closed_sell_reports (core_uid, core_name, db_id, coin, closedate, created_ms, updated_ms)
+         VALUES (1, 'Legacy', 42, 'ZZZ', 1780000000, 0, 0);",
+    )
+    .unwrap();
+
+    test_support::rep_init(&conn);
+
+    // Replica rows carry a real `newrecid`; the coin distinguishes each row so the oracle can map
+    // it back to the newrecid it was inserted with, independently of the projection under test.
+    conn.execute_batch(
+        "ALTER TABLE orders_rep ADD COLUMN coin TEXT;
+         ALTER TABLE orders_rep ADD COLUMN closedate INTEGER;
+         INSERT INTO orders_rep (core_uid, core_name, newrecid, coin, closedate) VALUES
+            (2, 'Rep', 7, 'AAA', 1780000100),
+            (2, 'Rep', 8, 'BBB', 1780000200);",
+    )
+    .unwrap();
+
+    let t = query_reports(&conn, &ReportFilter::default(), "coin", false, 10).expect("выборка");
+    assert_eq!(t.rows.len(), 3, "две строки реплики + одна легаси");
+    assert_eq!(t.rec_ids.len(), t.rows.len(), "rec_ids параллельны rows");
+    assert_eq!(
+        t.core_uids.len(),
+        t.rows.len(),
+        "core_uids параллельны rows"
+    );
+
+    // Oracle: expected newrecid per coin, from the inserts above (legacy has none -> 0).
+    let coin_ix = t
+        .cols
+        .iter()
+        .position(|c| c == "coin")
+        .expect("есть колонка coin");
+    for i in 0..t.rows.len() {
+        let coin = match &t.rows[i][coin_ix] {
+            Value::Text(s) => s.as_str(),
+            v => panic!("coin не текст: {v:?}"),
+        };
+        let expected = match coin {
+            "AAA" => 7,
+            "BBB" => 8,
+            "ZZZ" => 0, // legacy: not soft-deletable
+            other => panic!("неожиданная монета {other}"),
+        };
+        assert_eq!(
+            t.rec_ids[i], expected,
+            "rec_id строки {coin} должен быть {expected}"
+        );
+    }
+}

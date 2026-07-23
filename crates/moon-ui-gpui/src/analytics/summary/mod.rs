@@ -15,11 +15,12 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{Summary, TopTrade};
 use moon_core::util::fmt::{self, compact};
 
-/// Format a compact signed value such as `+341.2`, `-40.1`, or `0`.
+/// Format a compact signed value such as `+341.2`, `-40.1`, or `0` — WITHOUT any unit.
 ///
-/// Rounding happens before sign selection, so a value that rounds to zero has no minus sign.
-/// Returns an em dash when the input or rounded result is non-finite.
-pub(super) fn fmt_signed(v: f64) -> String {
+/// For dimensionless figures like profit factor. Rounding happens before sign selection, so a
+/// value that rounds to zero has no minus sign. Returns an em dash when the input or rounded
+/// result is non-finite.
+pub(in crate::analytics) fn fmt_signed_plain(v: f64) -> String {
     let Some(v) = fmt::round_to(v, 2) else {
         return "—".to_string();
     };
@@ -27,6 +28,19 @@ pub(super) fn fmt_signed(v: f64) -> String {
         format!("+{}", compact(v, 2))
     } else {
         compact(v, 2)
+    }
+}
+
+/// Format a compact signed PROFIT, carrying the active metric's unit: "%" in percent mode
+/// (the report `Profit` column), nothing in USDT mode. Every profit figure on the window goes
+/// through here, so the unit follows the toolbar switch everywhere at once. The em dash for a
+/// non-finite value is never given a unit.
+pub(super) fn fmt_signed(v: f64) -> String {
+    let s = fmt_signed_plain(v);
+    if s == "—" {
+        s
+    } else {
+        format!("{}{}", s, super::pnl_suffix())
     }
 }
 
@@ -246,7 +260,11 @@ impl AnalyticsView {
         let profit_el = colored_value(p, cur.profit, format!("{}", fmt_signed(cur.profit)));
         let dd_el = div()
             .text_color(moon(p.orange))
-            .child(format!("−{}", compact(cur.max_dd, 2)))
+            .child(format!(
+                "−{}{}",
+                compact(cur.max_dd, 2),
+                crate::analytics::pnl_suffix()
+            ))
             .into_any_element();
         let avg_el = colored_value(p, cur.avg, fmt_signed(cur.avg));
         h_flex()

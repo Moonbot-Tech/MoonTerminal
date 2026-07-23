@@ -240,9 +240,8 @@ impl AnalyticsView {
                         .collect()
                 })
                 .await;
-            let wrote =
-                cx.update(|cx| {
-                    this.update(cx, |this, cx| {
+            let wrote = cx.update(|cx| {
+                this.update(cx, |this, cx| {
                     let changes = Arc::new(changes);
                     // Group validated targets by core: one edit command per core.
                     let mut by_core: HashMap<u64, Vec<(u64, Vec<(String, String)>)>> =
@@ -289,7 +288,10 @@ impl AnalyticsView {
                             },
                         };
                         for c in cores {
-                            by_core.entry(c).or_default().push((t.sid as u64, mine.clone()));
+                            by_core
+                                .entry(c)
+                                .or_default()
+                                .push((t.sid as u64, mine.clone()));
                         }
                     }
                     let mut sent_cores = 0usize;
@@ -368,7 +370,7 @@ impl AnalyticsView {
                     true
                 })
                 .unwrap_or(false)
-                });
+            });
             // Nothing was sent, so there is no echo coming and nothing to re-read. Running
             // the follow-up reloads anyway would erase the edit the failure just preserved.
             if !wrote {

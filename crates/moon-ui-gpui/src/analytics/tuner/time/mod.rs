@@ -287,7 +287,15 @@ fn hour_column(
     // Loss = orange (same as sign_color and the "Summary" bars), NOT red.
     let bar_color = if profit > 0.0 { p.green } else { p.orange };
     let value = if has {
-        format!("{}$", fmt_signed(profit))
+        format!(
+            "{}{}",
+            fmt_signed(profit),
+            if crate::analytics::pnl_is_pct() {
+                ""
+            } else {
+                "$"
+            }
+        )
     } else {
         "—".to_string()
     };

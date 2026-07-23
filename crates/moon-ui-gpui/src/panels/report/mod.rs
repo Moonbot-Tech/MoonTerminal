@@ -24,11 +24,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use moon_ui::MoonWindowExt as _;
 use moon_ui::{
-    DockArea, MoonButtonSize, MoonButtonVariant, MoonDataCell, MoonDataRow, MoonDataTable,
-    MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent,
-    MoonInputState, MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonTone, Panel,
-    PanelEvent, PanelState, StyledExt, h_flex, v_flex,
+    DockArea, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
+    MoonCheckboxSize, MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn,
+    MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
+    MoonMenuSize, MoonNotification, MoonPalette, MoonTone, Panel, PanelEvent, PanelState,
+    StyledExt, h_flex, v_flex,
 };
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -250,6 +252,9 @@ fn plan_clamp(
 pub(super) struct ReportData {
     pub(super) rows: Vec<Vec<Value>>,
     pub(super) core_uids: Vec<u64>,
+    /// `newrecid` per row, parallel to `rows`; `0` for a legacy row that cannot be soft-deleted.
+    /// The deletion-mode checkboxes read it to address rows in `set_report_rows_deleted`.
+    pub(super) rec_ids: Vec<i64>,
     /// Exact `(profit sum, order count)` over the full filter, not the displayed top N.
     totals: (f64, i64),
 }
@@ -306,6 +311,7 @@ fn run_report_query(
         data: ReportData {
             rows: table.rows,
             core_uids: table.core_uids,
+            rec_ids: table.rec_ids,
             totals,
         },
     })
@@ -350,6 +356,14 @@ pub struct ReportPanel {
     pub(super) kind: ReportKind,
     /// Show ONLY soft-deleted trades when set; hide them when clear (the default).
     pub(super) deleted_only: bool,
+    /// Deletion mode (detached window only): the `deleted` column's checkboxes become editable and
+    /// the trash button turns into a Save. Toggled by [`Self::on_delete_button`].
+    pub(super) delete_mode: bool,
+    /// Uncommitted deletion-mode edits: `(core_uid, newrecid) -> desired deleted flag`, holding
+    /// only rows whose desired state DIFFERS from the database, so a non-empty map means the Save
+    /// is armed. Cleared on commit ([`Self::commit_deletions`]); kept across background refreshes
+    /// so an in-flight edit is not lost when the writer generation bumps.
+    pub(super) pending_deleted: std::collections::HashMap<(u64, i64), bool>,
     needs_query: bool,
     query_inflight: bool,
     query_seq: u64,
@@ -505,6 +519,8 @@ impl ReportPanel {
             period: Period::Today,
             kind: ReportKind::Real,
             deleted_only: false,
+            delete_mode: false,
+            pending_deleted: std::collections::HashMap::new(),
             needs_query: true,
             query_inflight: false,
             query_seq: 0,
@@ -852,6 +868,95 @@ impl ReportPanel {
             self.request_requery(cx);
         }
     }
+
+    /// Whether the deletion-mode Save is armed: in mode with at least one uncommitted edit.
+    pub(super) fn delete_dirty(&self) -> bool {
+        self.delete_mode && !self.pending_deleted.is_empty()
+    }
+
+    /// The trash button: enter deletion mode, or — once in it — Save the edits when any exist, else
+    /// leave the mode. This one control is both the toggle and the commit, per the panel spec. The
+    /// `deleted` checkbox column is force-shown while the mode is on (see the render), so entering
+    /// needs no persisted column change.
+    pub(super) fn on_delete_button(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.delete_mode {
+            self.delete_mode = true;
+            cx.notify();
+        } else if self.pending_deleted.is_empty() {
+            self.delete_mode = false;
+            cx.notify();
+        } else {
+            self.commit_deletions(window, cx);
+        }
+    }
+
+    /// Record one checkbox edit. Stores the desired flag only when it DIFFERS from the database
+    /// value `orig`, so toggling a row back to its original state disarms it. Legacy rows
+    /// (`rec == 0`) have no `newrecid` and cannot be soft-deleted, so they are ignored.
+    pub(super) fn set_row_deleted(
+        &mut self,
+        core: u64,
+        rec: i64,
+        want: bool,
+        orig: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if rec == 0 {
+            return;
+        }
+        if want == orig {
+            self.pending_deleted.remove(&(core, rec));
+        } else {
+            self.pending_deleted.insert((core, rec), want);
+        }
+        cx.notify();
+    }
+
+    /// Send the pending edits to their cores, grouped into one soft-delete and one restore batch
+    /// per core. Edits whose core accepted the send are dropped and the mode is left; edits whose
+    /// core rejected it (offline / removed from the session set) are KEPT so the amber Save stays
+    /// armed and the intent is not silently lost, with a toast reporting the failure. The rows
+    /// change on screen only when each core's `ReportEvent::RowsDeleted` echo lands and the replica
+    /// refreshes — not optimistically.
+    fn commit_deletions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // (to_delete, to_restore) newrecid lists per core.
+        let mut per_core: std::collections::HashMap<u64, (Vec<i64>, Vec<i64>)> =
+            std::collections::HashMap::new();
+        for (&(core, rec), &want) in self.pending_deleted.iter() {
+            let entry = per_core.entry(core).or_default();
+            if want {
+                entry.0.push(rec);
+            } else {
+                entry.1.push(rec);
+            }
+        }
+        let mut failed: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        self.backend.update(cx, |b, _| {
+            for (core, (del, res)) in per_core {
+                for (deleted, recs) in [(true, del), (false, res)] {
+                    if !recs.is_empty()
+                        && b.session
+                            .set_report_rows_deleted(core, deleted, Vec::new(), recs)
+                            .is_err()
+                    {
+                        failed.insert(core);
+                    }
+                }
+            }
+        });
+        // Keep only the edits whose core rejected the send; the rest reached their core.
+        self.pending_deleted
+            .retain(|(core, _), _| failed.contains(core));
+        if failed.is_empty() {
+            self.delete_mode = false;
+        } else {
+            window.push_notification(
+                MoonNotification::error(t!("report.delete_send_failed").to_string()),
+                cx,
+            );
+        }
+        cx.notify();
+    }
     /// Toggle a column by name and persist it using [`Self::persist_visible`].
     ///
     /// Hiding the last column writes an empty `app_meta` set but does not erase a prior per-context
@@ -953,6 +1058,9 @@ impl ReportPanel {
         let table_state = self.table_state.clone();
         let row_cols = self.cols.clone();
         let cols = columns::report_columns(&self.cols, vis);
+        // Deletion-mode inputs for the `deleted` checkbox cell, snapshotted for the row builder.
+        let delete_mode = self.delete_mode;
+        let pending = Rc::new(self.pending_deleted.clone());
         // With no explicit filter, the coin menu may act on every core currently
         // known to the report selector.
         let selected_cores: Rc<Vec<u64>> = Rc::new(if self.sel_cores.is_empty() {
@@ -977,6 +1085,8 @@ impl ReportPanel {
                     &selected_cores,
                     &backend,
                     &view_row,
+                    delete_mode,
+                    &pending,
                     p,
                 )
             })
@@ -1181,15 +1291,25 @@ impl Render for ReportPanel {
                 )
             })
             .child(self.deleted_check(cx))
+            // Deletion mode is a detached-window-only action (the compact docked filter row has no
+            // space for per-row checkboxes), and only meaningful when the schema has a `deleted`
+            // column to edit — otherwise the button would be a dead control.
+            .when(
+                self.detached && self.cols.iter().any(|c| c == "deleted"),
+                |f| f.child(self.delete_mode_button(cx)),
+            )
             .child(self.export_menu(cx))
             .child(self.columns_menu(cx));
 
-        // Table.
+        // Table. Deletion mode force-shows the `deleted` checkbox column without persisting it, so
+        // the mode is self-contained and leaves the saved column set untouched on exit.
         let vis: Vec<usize> = self
             .cols
             .iter()
             .enumerate()
-            .filter(|(_, c)| self.visible.contains(c.as_str()))
+            .filter(|(_, c)| {
+                self.visible.contains(c.as_str()) || (self.delete_mode && c.as_str() == "deleted")
+            })
             .map(|(i, _)| i)
             .collect();
         // Resolve `LoadState` before inspecting schema or visibility. A failed

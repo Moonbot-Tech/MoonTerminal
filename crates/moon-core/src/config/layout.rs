@@ -218,6 +218,11 @@ pub struct WindowLayout {
     /// window deliberately does NOT follow it.
     #[serde(default)]
     pub analytics_attribute_liq: bool,
+    /// Analytics profit metric: `false` = absolute USDT (default, and every existing config),
+    /// `true` = percent (the report `Profit` column, profit ÷ spent). A per-window display
+    /// lens, so it lives here rather than being reset each session.
+    #[serde(default)]
+    pub analytics_profit_percent: bool,
     /// The "closed trades the core never dated" banner: the count it was dismissed at.
     ///
     /// `None` — never dismissed, so it shows whenever there is anything to say. Otherwise it

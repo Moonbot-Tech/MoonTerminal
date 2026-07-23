@@ -19,6 +19,23 @@ fn seed(rows: &[(i64, i64, f64)]) -> Connection {
     c
 }
 
+/// `orders_rep` carrying `spentbtc` too, so the Percent metric can form `profit / spent`.
+fn seed_spent(rows: &[(i64, i64, f64, f64)]) -> Connection {
+    let c = Connection::open_in_memory().unwrap();
+    c.execute_batch(
+        "CREATE TABLE orders_rep(closedate INTEGER, core_uid INTEGER, profitbtc REAL, spentbtc REAL);",
+    )
+    .unwrap();
+    for (d, uid, p, s) in rows {
+        c.execute(
+            "INSERT INTO orders_rep(closedate, core_uid, profitbtc, spentbtc) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![d, uid, p, s],
+        )
+        .unwrap();
+    }
+    c
+}
+
 // 2021-01-01 00:00:00 UTC.
 const D0: i64 = 1_609_459_200;
 
@@ -71,6 +88,65 @@ fn respects_period_bounds_excluding_to() {
     assert_eq!(days.len(), 3);
     assert_eq!(days[0].trades, 1);
     assert!(days.iter().all(|d| (d.profit - 99.0).abs() > 1e-9)); // Day 3 is excluded.
+}
+
+#[test]
+fn percent_metric_is_profit_over_spent() {
+    // Same day, two trades: +10 on 200 spent = +5%, -3 on 60 spent = -5%.
+    let c = seed_spent(&[(D0 + 3_600, 1, 10.0, 200.0), (D0 + 7_200, 1, -3.0, 60.0)]);
+    let base = Query {
+        from: D0,
+        to: D0 + 86_400,
+        ..Default::default()
+    };
+    // USDT (default): raw money, 10 - 3 = 7.
+    let usd = calendar_cells_from(&c, &base).unwrap();
+    assert!((usd[0].profit - 7.0).abs() < 1e-9, "usd={}", usd[0].profit);
+    // Percent: each trade as profit/spent*100, summed: +5 + (-5) = 0.
+    let pct = calendar_cells_from(
+        &c,
+        &Query {
+            metric: crate::db::ProfitMetric::Percent,
+            ..base.clone()
+        },
+    )
+    .unwrap();
+    assert!((pct[0].profit - 0.0).abs() < 1e-9, "pct={}", pct[0].profit);
+    // Sign is preserved, so win/loss classification is unchanged by the metric.
+    assert_eq!((pct[0].trades, pct[0].wins), (2, 1));
+}
+
+#[test]
+fn percent_metric_excludes_zero_spent() {
+    // A trade with no spent has no percent, so in percent mode it is EXCLUDED entirely — never
+    // a divide-by-zero, and never a phantom zero-profit trade that would skew count/winrate.
+    let c = seed_spent(&[(D0 + 3_600, 1, 10.0, 200.0), (D0 + 7_200, 1, 4.0, 0.0)]);
+    let pct = calendar_cells_from(
+        &c,
+        &Query {
+            from: D0,
+            to: D0 + 86_400,
+            metric: crate::db::ProfitMetric::Percent,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // Only the +5% trade survives: one trade, one win, +5% — the zero-spent row is gone from
+    // COUNT and SUM alike, so the two agree.
+    assert!((pct[0].profit - 5.0).abs() < 1e-9, "pct={}", pct[0].profit);
+    assert_eq!((pct[0].trades, pct[0].wins), (1, 1));
+
+    // In USDT mode the same zero-spent row is still counted (no spent filter there).
+    let usd = calendar_cells_from(
+        &c,
+        &Query {
+            from: D0,
+            to: D0 + 86_400,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(usd[0].trades, 2);
 }
 
 #[test]

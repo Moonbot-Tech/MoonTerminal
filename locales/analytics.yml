@@ -801,6 +801,16 @@ analytics.attr_liq:
   ru: "парсер ликвидаций"
   en: "liquidation parser"
   es: "parser de liquidaciones"
+# The profit metric switch: absolute money (USDT) vs the report's Profit column (profit / spent).
+# Both labels are units / a report column name, identical across languages.
+analytics.metric.usdt:
+  ru: "USDT"
+  en: "USDT"
+  es: "USDT"
+analytics.metric.pct:
+  ru: "Profit %"
+  en: "Profit %"
+  es: "Profit %"
 analytics.coins.save_edit:
   ru: "%{plus} · %{minus}"
   en: "%{plus} · %{minus}"

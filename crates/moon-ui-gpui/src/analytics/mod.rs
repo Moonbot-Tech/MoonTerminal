@@ -40,8 +40,8 @@ use rust_i18n::t;
 
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
-use moon_core::db::SideFilter;
 use moon_core::db::analytics::{DayCell, Query, Summary};
+use moon_core::db::{ProfitMetric, SideFilter};
 
 use crate::load_state::{LoadState, note_el};
 
@@ -92,6 +92,28 @@ pub(crate) fn probe_select_spec() -> Option<&'static str> {
 /// Delay before showing the busy overlay, so quick recomputations do not flash the dimmer.
 const BUSY_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
 
+// Percent-vs-USDT profit unit for this frame's profit formatters.
+//
+// Set once from the active metric at the top of `AnalyticsView::render` and read by the shared
+// profit formatters (`summary::fmt_signed`, the calendar and tuner cells), so a "%" suffix
+// appears in percent mode without threading the metric through every signature. The window
+// renders on the UI thread, so a thread-local stays consistent within a frame.
+thread_local! {
+    static PNL_PCT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Record the active profit unit for this frame's formatters.
+pub(in crate::analytics) fn set_pnl_pct(on: bool) {
+    PNL_PCT.with(|c| c.set(on));
+}
+/// Is the window rendering percent profit (report `Profit` column) rather than USDT?
+pub(in crate::analytics) fn pnl_is_pct() -> bool {
+    PNL_PCT.with(|c| c.get())
+}
+/// Unit suffix for a profit-metric figure: "%" in percent mode, empty in USDT mode.
+pub(in crate::analytics) fn pnl_suffix() -> &'static str {
+    if pnl_is_pct() { "%" } else { "" }
+}
+
 /// State of the Analytics window.
 pub struct AnalyticsView {
     backend: Entity<Backend>,
@@ -111,6 +133,9 @@ pub struct AnalyticsView {
     side: SideFilter,
     /// `None` means all, `Some(false)` real, and `Some(true)` emulated.
     emu: Option<bool>,
+    /// Profit metric: absolute money (`Usdt`) or the report `Profit` column
+    /// (`Percent` = profit ÷ spent). Persisted in `layout.analytics_profit_percent`.
+    metric: ProfitMetric,
     /// Background summary state with distinct loading, unavailable, ready, and
     /// failed outcomes so only a successful empty read appears empty.
     pub(super) data: LoadState<Summary>,
@@ -262,6 +287,12 @@ impl AnalyticsView {
         // Persisted "By filter" search knobs; `TunerState::load` owns their normalization.
         let saved_tuner_iters = backend.read(cx).layout.analytics_tuner_iters;
         let saved_tuner_edges = backend.read(cx).layout.analytics_tuner_edges;
+        // Profit metric from the previous run (default USDT).
+        let saved_metric = if backend.read(cx).layout.analytics_profit_percent {
+            ProfitMetric::Percent
+        } else {
+            ProfitMetric::Usdt
+        };
         // Visible strategy-list columns from the previous run, one mask per axis. An older
         // config holding the single-mask key seeds all three, so a choice already made is
         // carried over instead of reset; absent entirely, each axis takes its own default.
@@ -324,6 +355,7 @@ impl AnalyticsView {
             side: SideFilter::All,
             // Default to Real, as in Report, because emulated trades add noise to the statistics.
             emu: Some(false),
+            metric: saved_metric,
             data: LoadState::default(),
             undated: None,
             attr_liq,
@@ -399,6 +431,7 @@ impl AnalyticsView {
             emulator: self.emu,
             strategies: Vec::new(),
             attribute_liq: self.attr_liq,
+            metric: self.metric,
         }
     }
 
@@ -673,6 +706,21 @@ impl AnalyticsView {
             cx.notify();
         }
     }
+
+    /// Switch the profit metric (USDT ⇔ percent). Every figure and the tuner sweep are
+    /// computed under it, so the switch persists and reloads — it is not a display-only toggle.
+    fn set_metric(&mut self, metric: ProfitMetric, cx: &mut Context<Self>) {
+        if self.metric == metric {
+            return;
+        }
+        self.metric = metric;
+        self.backend.update(cx, |b, _| {
+            b.layout.analytics_profit_percent = metric == ProfitMetric::Percent;
+            b.layout_dirty = true;
+        });
+        self.reload(cx);
+        cx.notify();
+    }
 }
 
 impl EventEmitter<()> for AnalyticsView {}
@@ -685,6 +733,8 @@ impl Focusable for AnalyticsView {
 impl Render for AnalyticsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
+        // Arm the profit formatters for this frame: "%" suffix in percent mode, none in USDT.
+        set_pnl_pct(self.metric == ProfitMetric::Percent);
         let chrome_width = match window.window_bounds() {
             WindowBounds::Windowed(b)
             | WindowBounds::Maximized(b)

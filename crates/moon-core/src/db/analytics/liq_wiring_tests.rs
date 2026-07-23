@@ -23,6 +23,7 @@ fn q(on: bool) -> Query {
         emulator: None,
         strategies: Vec::new(),
         attribute_liq: on,
+        metric: Default::default(),
     }
 }
 

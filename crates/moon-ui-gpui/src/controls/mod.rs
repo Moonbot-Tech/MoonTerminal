@@ -26,7 +26,7 @@ mod manual_strat;
 mod metric;
 mod scale;
 mod strips;
-mod toolbar;
+pub(crate) mod toolbar;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
 pub(crate) use core_combo::core_combo;
