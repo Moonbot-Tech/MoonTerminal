@@ -507,7 +507,10 @@ impl ChartEngine {
     }
 
     /// Sets the per-window price-axis position for every engine pane. Returns true on change.
-    pub fn set_price_axis_pos(&mut self, pos: crate::chart_persist::PriceAxisPos) -> bool {
+    pub fn set_price_axis_pos(
+        &mut self,
+        pos: crate::persistence::chart_persist::PriceAxisPos,
+    ) -> bool {
         let mut data = self.data.borrow_mut();
         if data.price_axis_pos == pos {
             return false;

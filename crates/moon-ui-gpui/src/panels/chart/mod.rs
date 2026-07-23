@@ -28,8 +28,9 @@ use moon_ui::{MoonBackgroundPolicy, Panel, PanelEvent};
 
 use rust_i18n::t;
 
+use crate::Backend;
 use crate::chartdx::ChartEngine;
-use crate::{Backend, input};
+use crate::chartdx::input;
 use moon_chart::container::ContainerKind;
 use moon_chart::paint::now_unix_ms;
 use moon_core::config::{ChartBucket, ChartTheme, OrdersStyleSet};
@@ -109,11 +110,11 @@ pub struct ChartPanel {
     /// disabled by default.
     auto_pin: bool,
     /// Per-window/tab positions of the market-action buttons in the chart area; defaults to Right.
-    cancel_buy_pos: crate::chart_persist::ChartBtnPos,
-    panic_sell_pos: crate::chart_persist::ChartBtnPos,
+    cancel_buy_pos: crate::persistence::chart_persist::ChartBtnPos,
+    panic_sell_pos: crate::persistence::chart_persist::ChartBtnPos,
     /// Per-window/tab price-axis position. It is applied through the engine's
     /// `set_price_axis_pos` and affects layout and hit-testing; defaults to Left.
-    price_axis_pos: crate::chart_persist::PriceAxisPos,
+    price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
     /// Per-window/tab time-axis visibility. It is applied through the engine's
     /// `set_time_axis_visible` and affects plot height in layout and hit-testing; enabled by default.
     time_axis_visible: bool,
@@ -638,8 +639,8 @@ impl ChartPanel {
     /// Sets the per-window/tab positions of Cancel Buy and Panic Sell in the chart area.
     pub fn set_action_btn_pos(
         &mut self,
-        cancel_buy: crate::chart_persist::ChartBtnPos,
-        panic_sell: crate::chart_persist::ChartBtnPos,
+        cancel_buy: crate::persistence::chart_persist::ChartBtnPos,
+        panic_sell: crate::persistence::chart_persist::ChartBtnPos,
         cx: &mut Context<Self>,
     ) {
         if self.cancel_buy_pos != cancel_buy || self.panic_sell_pos != panic_sell {
@@ -700,7 +701,7 @@ impl ChartPanel {
     /// affects plot, order-book, and gutter layout and hit-testing.
     pub fn set_price_axis_pos(
         &mut self,
-        pos: crate::chart_persist::PriceAxisPos,
+        pos: crate::persistence::chart_persist::PriceAxisPos,
         cx: &mut Context<Self>,
     ) {
         if self.price_axis_pos != pos {

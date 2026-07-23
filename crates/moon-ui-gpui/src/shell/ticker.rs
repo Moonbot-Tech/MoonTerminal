@@ -111,7 +111,7 @@ impl Shell {
         // font-scaled, so the divider term stays raw.
         let right = f32::from(design::ui_px(cx, design::HEADER_PAD_X))
             + controls_w
-            + crate::clock::header_clock_width(&self.backend, cx)
+            + crate::chrome::clock::header_clock_width(&self.backend, cx)
             + cluster_gap
             + 1.0
             + cluster_gap;

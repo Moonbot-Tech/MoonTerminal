@@ -251,7 +251,7 @@ impl AnalyticsView {
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Window geometry lives in the layout, as it does for Screener and Strategies.
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some((x, y, w, h)) = crate::windowing::window_geom(window) else {
+            let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
                 return;
             };
             this.backend.update(cx, |b, _| {
@@ -921,13 +921,13 @@ pub fn open(
             size: size(px(g.w as f32), px(g.h as f32)),
         },
     );
-    let display_id = crate::windowing::saved_or_owner_display_id(
+    let display_id = crate::window::windowing::saved_or_owner_display_id(
         saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
         owner,
         owner_display,
         cx,
     );
-    let mut opts = crate::windowing::tool_window_options(
+    let mut opts = crate::window::windowing::tool_window_options(
         t!("analytics.window_title").to_string(),
         WindowBounds::Windowed(bounds),
         Some(size(px(860.0), px(520.0))),
@@ -936,11 +936,11 @@ pub fn open(
     opts.display_id = display_id;
     let b = backend.clone();
     if let Ok(handle) = cx.open_window(opts, move |window, cx| {
-        crate::windowing::configure_shell_clear_color(window, cx);
+        crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| AnalyticsView::new(b, window, cx));
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     }) {
         backend.update(cx, |bk, _| bk.analytics_window = Some(handle));
-        crate::windowing::activate_new_window(handle.into(), cx);
+        crate::window::windowing::activate_new_window(handle.into(), cx);
     }
 }

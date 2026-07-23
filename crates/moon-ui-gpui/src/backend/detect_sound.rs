@@ -3,7 +3,7 @@
 //! `DetectRow.sound_name`, just like an ordinary detect. This is a `Backend` method because it needs
 //! the core store. Feed draining invokes the scan; revision and sequence cursors avoid redundant
 //! work and startup backlog. Each pass selects at most one eligible new detect per core, without an
-//! audio queue. `sound::play` is asynchronous on Windows, where a later sound interrupts the one
+//! audio queue. `media::sound::play` is asynchronous on Windows, where a later sound interrupts the one
 //! already playing.
 
 use crate::Backend;
@@ -63,7 +63,7 @@ impl Backend {
             self.last_detect_seq.insert(core, cur_max);
             if let Some(name) = sound {
                 moon_core::detect_diag::line(&format!("[sound] core={core} play={name}"));
-                crate::sound::play(&name);
+                crate::media::sound::play(&name);
             } else {
                 moon_core::detect_diag::line(&format!(
                     "[sound] core={core} silent: {} new detects, среди них нет is_alert/SoundAlert",

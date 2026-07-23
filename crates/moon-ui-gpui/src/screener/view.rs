@@ -72,8 +72,8 @@ impl ScreenerView {
         }
 
         // Screener always runs in a separate window, so its width context is fixed to `:win`.
-        let widths_id = crate::table_persist::ctx_id("screener-table", true);
-        let saved_widths = crate::table_persist::saved(backend.read(cx), &widths_id);
+        let widths_id = crate::persistence::table_persist::ctx_id("screener-table", true);
+        let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.sort_column = Some("vol24".into());
@@ -84,7 +84,7 @@ impl ScreenerView {
         // Column resizing mutates table state; persist widths through the shared storage.
         let widths_id_obs = widths_id.clone();
         cx.observe(&table_state, move |this, state, cx| {
-            crate::table_persist::persist(&this.backend, &widths_id_obs, &state, cx);
+            crate::persistence::table_persist::persist(&this.backend, &widths_id_obs, &state, cx);
         })
         .detach();
 
@@ -103,7 +103,7 @@ impl ScreenerView {
 
         // Persist window position and size in the layout so the window reopens in the same geometry.
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some((x, y, w, h)) = crate::windowing::window_geom(window) else {
+            let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
                 return;
             };
             this.backend.update(cx, |b, _| {
@@ -119,7 +119,7 @@ impl ScreenerView {
         // Prefer the shared per-context `table_visible_columns` entry for `screener-table:win`.
         // When absent, migrate from legacy `screener_columns`. Ignore unknown keys left by renamed
         // or removed columns; an empty valid set falls back to every current column.
-        let saved_cols = crate::table_persist::visible(backend.read(cx), &widths_id)
+        let saved_cols = crate::persistence::table_persist::visible(backend.read(cx), &widths_id)
             .or_else(|| backend.read(cx).layout.screener_columns.clone());
         let visible_cols: HashSet<String> = match saved_cols {
             Some(list) => {
@@ -283,8 +283,8 @@ impl ScreenerView {
         // Screener has only the `screener-table:win` context because it is always a window. Store an
         // explicit key list, including the complete list when all columns are visible. Legacy
         // `screener_columns` is no longer written and is used only during read-side migration.
-        let id = crate::table_persist::ctx_id("screener-table", true);
-        crate::table_persist::set_visible(&self.backend, &id, list, cx);
+        let id = crate::persistence::table_persist::ctx_id("screener-table", true);
+        crate::persistence::table_persist::set_visible(&self.backend, &id, list, cx);
         cx.notify();
     }
 
@@ -614,13 +614,13 @@ pub fn open(
         },
     );
     // Choose a display from saved geometry when supported, otherwise fall back to the owner display.
-    let display_id = crate::windowing::saved_or_owner_display_id(
+    let display_id = crate::window::windowing::saved_or_owner_display_id(
         saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
         owner,
         owner_display,
         cx,
     );
-    let mut opts = crate::windowing::tool_window_options(
+    let mut opts = crate::window::windowing::tool_window_options(
         t!("screener.window_title").to_string(),
         WindowBounds::Windowed(bounds),
         Some(size(px(900.0), px(480.0))),
@@ -629,11 +629,11 @@ pub fn open(
     opts.display_id = display_id;
     let b = backend.clone();
     if let Ok(handle) = cx.open_window(opts, move |window, cx| {
-        crate::windowing::configure_shell_clear_color(window, cx);
+        crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| ScreenerView::new(b, window, cx));
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     }) {
         backend.update(cx, |bk, _| bk.screener_window = Some(handle));
-        crate::windowing::activate_new_window(handle.into(), cx);
+        crate::window::windowing::activate_new_window(handle.into(), cx);
     }
 }

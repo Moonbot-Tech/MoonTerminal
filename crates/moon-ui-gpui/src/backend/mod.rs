@@ -2,6 +2,9 @@
 //! `main.rs`, the crate root, so its private fields are visible to descendant modules. Methods in
 //! this sibling module use `pub(crate)` because private items here would not be crate-wide.
 
+mod detect_sound;
+mod figures;
+
 use std::time::{Duration, Instant};
 
 use gpui::Context;
@@ -637,7 +640,7 @@ impl Backend {
         if self.session.sessions().is_empty() {
             return false;
         }
-        if crate::debug_window::debug_chart_target(self).is_none() {
+        if crate::diagnostics::debug_window::debug_chart_target(self).is_none() {
             return false;
         }
         self.diag_open_10_btc_done = true;

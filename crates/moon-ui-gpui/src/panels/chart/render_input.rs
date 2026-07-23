@@ -5,7 +5,7 @@
 
 use gpui::*;
 
-use crate::input;
+use crate::chartdx::input;
 
 use super::ChartPanel;
 use super::trade::TradeMouseButton;

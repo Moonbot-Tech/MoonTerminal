@@ -192,7 +192,7 @@ impl Shell {
                     .on_click({
                         let group = self.group.clone();
                         move |_, window, cx| {
-                            crate::debug_window::open_debug_perf_window(
+                            crate::diagnostics::debug_window::open_debug_perf_window(
                                 cx,
                                 backend.clone(),
                                 group.clone(),

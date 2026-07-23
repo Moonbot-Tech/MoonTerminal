@@ -9,7 +9,7 @@ use rust_i18n::t;
 
 use super::common::CoinPopupHost;
 use super::{AddChartStack, CUSTOM_NUM_BASE, ChartTabs, Tab, coin_search};
-use crate::chart_persist::{StackLayoutMode, StackOrientation};
+use crate::persistence::chart_persist::{StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
@@ -359,7 +359,7 @@ impl ChartTabs {
             Option<bool>,
             Option<(CoreId, String)>,
             bool,
-            Option<crate::chart_persist::PriceAxisPos>,
+            Option<crate::persistence::chart_persist::PriceAxisPos>,
             Option<bool>,
             Option<bool>,
             Option<bool>,

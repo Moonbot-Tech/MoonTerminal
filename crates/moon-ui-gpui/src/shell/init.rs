@@ -18,9 +18,10 @@ use moon_core::session::CoreId;
 
 use super::Shell;
 use crate::chart_tabs::ChartTabs;
-use crate::dock_persist::DOCK_VERSION;
 use crate::panels::{AssetsView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel};
-use crate::{Backend, controls, core_settings_popup};
+use crate::persistence::dock_persist::DOCK_VERSION;
+use crate::shell::core_settings_popup;
+use crate::{Backend, controls};
 
 impl Shell {
     /// Construct a group window shell, restore or create its dock, and wire its long-lived inputs.

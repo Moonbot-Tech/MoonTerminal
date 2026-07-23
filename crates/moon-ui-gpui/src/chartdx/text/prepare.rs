@@ -66,7 +66,7 @@ impl RenderState {
             // Price-axis side: Left places labels in the gutter left of the plot; Right places
             // them at the panel's right edge (the gutter beyond the order book); Hide omits the
             // axis. All variants anchor text by its right edge (alignment 1.0).
-            use crate::chart_persist::PriceAxisPos;
+            use crate::persistence::chart_persist::PriceAxisPos;
             let axis_hidden = matches!(price_axis_pos, PriceAxisPos::Hide);
             let axis_on_right = matches!(price_axis_pos, PriceAxisPos::Right);
             let axis_label_x = if axis_on_right {

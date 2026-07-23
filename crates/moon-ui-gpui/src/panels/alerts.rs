@@ -391,7 +391,7 @@ impl AlertsPanel {
     fn sound_dropdown(&self, cx: &Context<Self>) -> impl IntoElement {
         let cur = self.backend.read(cx).default_alert_sound.clone();
         let backend = self.backend.clone();
-        let options: Vec<(&'static str, SharedString, SharedString)> = crate::sound::names()
+        let options: Vec<(&'static str, SharedString, SharedString)> = crate::media::sound::names()
             .map(|n| {
                 (
                     n,
@@ -409,7 +409,7 @@ impl AlertsPanel {
                     b.default_alert_sound = name.to_string();
                     bcx.notify();
                 });
-                crate::sound::play(name);
+                crate::media::sound::play(name);
             },
         );
         MoonDropdown::new("alerts-sound")
@@ -425,7 +425,9 @@ impl AlertsPanel {
 
 /// Return the static sound name matching `cur`, as required by `radio_items`' copied selection.
 fn leak_str(cur: &str) -> &'static str {
-    crate::sound::names().find(|n| *n == cur).unwrap_or("ding1")
+    crate::media::sound::names()
+        .find(|n| *n == cur)
+        .unwrap_or("ding1")
 }
 
 impl EventEmitter<PanelEvent> for AlertsPanel {}
@@ -447,13 +449,13 @@ impl Panel for AlertsPanel {
     }
     /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
-        crate::panel_meta::tab_label(self.panel_name())
+        crate::persistence::panel_meta::tab_label(self.panel_name())
     }
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        crate::panel_meta::panel_title(self.panel_name())
+        crate::persistence::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
-        crate::dock_persist::panel_state_with_group("Alerts", &self.group)
+        crate::persistence::dock_persist::panel_state_with_group("Alerts", &self.group)
     }
     fn on_added_to(
         &mut self,

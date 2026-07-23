@@ -10,7 +10,8 @@ use moon_ui::{DockArea, DockPlacement, DockSplitPlacement, PanelInfo, PanelState
 use moon_core::config::GroupLayout;
 use moon_core::config::layout::DockSplitSlot;
 
-use crate::{Backend, detached};
+use crate::Backend;
+use crate::window::detached;
 
 use super::Shell;
 

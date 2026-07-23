@@ -36,7 +36,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::Backend;
-use crate::icons::IconSet;
+use crate::media::icons::IconSet;
 use moon_core::config::{AppConfig, CoreSortMode, Language};
 use moon_core::market::MarketDataMode;
 
@@ -212,7 +212,7 @@ impl SettingsView {
         // Persist the Settings window position and size in layout so it reopens in the same place.
         // The debounced persistence loop drains `layout_dirty`, as it does for Strategies/Assets.
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some((x, y, w, h)) = crate::windowing::window_geom(window) else {
+            let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
                 return;
             };
             this.backend.update(cx, |b, _| {
@@ -463,13 +463,13 @@ pub fn open(
     );
     // Select a display from the saved position when supported, or from the owner. Without a
     // display ID, GPUI creates the window on the primary display and may discard off-screen bounds.
-    let display_id = crate::windowing::saved_or_owner_display_id(
+    let display_id = crate::window::windowing::saved_or_owner_display_id(
         saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
         owner,
         owner_display,
         cx,
     );
-    let mut opts = crate::windowing::tool_window_options(
+    let mut opts = crate::window::windowing::tool_window_options(
         t!("settings.window_title").to_string(),
         WindowBounds::Windowed(bounds),
         Some(size(px(620.0), px(420.0))),
@@ -478,13 +478,13 @@ pub fn open(
     opts.display_id = display_id;
     let b = backend.clone();
     match cx.open_window(opts, move |window, cx| {
-        crate::windowing::configure_shell_clear_color(window, cx);
+        crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| SettingsView::new(b, window, cx));
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
     }) {
         Ok(handle) => {
             backend.update(cx, |b, _| b.settings_window = Some(handle));
-            crate::windowing::activate_new_window(handle.into(), cx);
+            crate::window::windowing::activate_new_window(handle.into(), cx);
         }
         Err(_) => {
             backend.update(cx, |b, cx| {

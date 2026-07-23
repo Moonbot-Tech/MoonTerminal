@@ -41,7 +41,7 @@ pub struct ChartInput {
     ///
     /// This controls plot width and the left offset used to calculate `cursor_x`; its default is
     /// `Left`, matching the panel default.
-    pub price_axis_pos: crate::chart_persist::PriceAxisPos,
+    pub price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
     /// Market queued by an eligible chart double-click for the caller to take and open on Main.
     pub pending_to_main: Option<(CoreId, String)>,
 
@@ -76,7 +76,7 @@ impl ChartInput {
                 self.last_ptr.0.clamp(0.0, fallback_w.max(1.0)),
             );
         };
-        use crate::chart_persist::PriceAxisPos;
+        use crate::persistence::chart_persist::PriceAxisPos;
         let price_axis_w = if matches!(self.price_axis_pos, PriceAxisPos::Hide) {
             0.0
         } else {

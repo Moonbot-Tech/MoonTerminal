@@ -13,7 +13,7 @@ use moon_ui::{
 
 use crate::Backend;
 use crate::design;
-use crate::detached::DetachedSpec;
+use crate::window::detached::DetachedSpec;
 
 /// Formats a quantity or price with the shared adaptive number formatter.
 pub(crate) fn num(v: f64) -> String {
@@ -164,7 +164,7 @@ pub fn detach_button(
             let spec =
                 DetachedSpec::with_saved_geom(&backend, app, group.clone(), name.to_string());
             if let Err(err) =
-                crate::detached::spawn(app, &backend, &spec, Some(window.window_handle()))
+                crate::window::detached::spawn(app, &backend, &spec, Some(window.window_handle()))
             {
                 log::warn!("detach panel failed group={} panel={name}: {err:#}", group);
                 return;

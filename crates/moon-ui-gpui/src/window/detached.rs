@@ -198,7 +198,7 @@ impl DetachedWindow {
     }
 
     fn persist_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(geom) = crate::windowing::window_geom(window) else {
+        let Some(geom) = crate::window::windowing::window_geom(window) else {
             return;
         };
         let (group, panel) = (self.group.clone(), self.panel.clone());
@@ -261,7 +261,7 @@ impl Render for DetachedWindow {
         let p = MoonPalette::active(cx);
         let title = format!(
             "{} · {}",
-            crate::panel_meta::panel_title(&self.panel),
+            crate::persistence::panel_meta::panel_title(&self.panel),
             self.group
         );
         v_flex()
@@ -293,7 +293,7 @@ impl Render for DetachedWindow {
                     // Recalculate panel table widths when this button is clicked, matching the
                     // active dock tab action.
                     .when_some(self.widths_reset.clone(), |this, (id, state)| {
-                        this.child(crate::table_persist::reset_button(id, &state))
+                        this.child(crate::persistence::table_persist::reset_button(id, &state))
                     })
                     .when(crate::design::show_custom_window_controls(), |this| {
                         this.child(
@@ -337,11 +337,11 @@ pub fn spawn(
     // On multiple displays, choose by saved position outside macOS or fall back to the owner window.
     // Otherwise the window opens on the primary display, especially on macOS where x/y are display-relative.
     let display_id =
-        crate::windowing::saved_or_owner_display_id(Some(bounds.origin), owner, None, app);
-    let opts = crate::windowing::detached_panel_window_options(
+        crate::window::windowing::saved_or_owner_display_id(Some(bounds.origin), owner, None, app);
+    let opts = crate::window::windowing::detached_panel_window_options(
         format!(
             "{} — MoonTerminal",
-            crate::panel_meta::panel_title(&spec.panel)
+            crate::persistence::panel_meta::panel_title(&spec.panel)
         ),
         WindowBounds::Windowed(bounds),
         display_id,
@@ -350,7 +350,7 @@ pub fn spawn(
     let backend = backend.clone();
     let spec = spec.clone();
     app.open_window(opts, move |window, cx| {
-        crate::windowing::configure_shell_clear_color(window, cx);
+        crate::window::windowing::configure_shell_clear_color(window, cx);
         // Configure the window-header auto-width reset button only for the branches below that
         // expose an explicit reset ID and table state.
         let mut widths_reset: Option<(&'static str, Entity<moon_ui::MoonDataTableState>)> = None;

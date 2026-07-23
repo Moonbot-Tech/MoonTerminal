@@ -559,7 +559,7 @@ fn coin_cell(
     let market_menu = market.clone();
     // Use an `assets/coins` icon when available; omit both icon and reserved space otherwise because
     // the narrow ticker column relies on table alignment.
-    let icon = crate::coin_icons::coin_icon(&coin);
+    let icon = crate::media::coin_icons::coin_icon(&coin);
     div()
         .id(SharedString::from(format!(
             "asset-coin-{core}-{}",

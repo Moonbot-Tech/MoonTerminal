@@ -32,7 +32,7 @@ fn color(hex: u32) -> Hsla {
 }
 
 fn local_offset_sec() -> i64 {
-    crate::axes::local_offset_sec()
+    crate::chartdx::axes::local_offset_sec()
 }
 
 fn readout_rect_dst(

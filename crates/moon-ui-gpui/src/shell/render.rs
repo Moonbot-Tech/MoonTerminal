@@ -8,7 +8,8 @@ use gpui::*;
 use moon_ui::{MoonPalette, MoonWindowFrame, v_flex};
 
 use super::Shell;
-use crate::{controls, design, terminal_chrome};
+use crate::chrome::terminal_chrome;
+use crate::{controls, design};
 
 impl Shell {
     /// Build the CONTENT of the open trading-metric popup (TP/SL/leverage), or `None` when closed.

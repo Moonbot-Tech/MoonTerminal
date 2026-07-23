@@ -82,11 +82,14 @@ impl ChartDataState {
             // Price-axis position is per window. Order-book-only mode forcibly hides the axis,
             // overriding the per-tab setting. Hide removes the gutter and returns its space to the plot.
             let axis_pos = if self.orderbook_only {
-                crate::chart_persist::PriceAxisPos::Hide
+                crate::persistence::chart_persist::PriceAxisPos::Hide
             } else {
                 self.price_axis_pos
             };
-            let price_axis_w = if matches!(axis_pos, crate::chart_persist::PriceAxisPos::Hide) {
+            let price_axis_w = if matches!(
+                axis_pos,
+                crate::persistence::chart_persist::PriceAxisPos::Hide
+            ) {
                 0.0
             } else {
                 moon_chart::PRICE_AXIS_W * self.last_ppp
@@ -119,14 +122,20 @@ impl ChartDataState {
             // the right edge. Right starts the plot at the left edge, then places the book and the
             // axis gutter to its right. Hide removes the axis, starts the plot at the left edge,
             // and keeps the book at the right edge.
-            let axis_on_left = matches!(axis_pos, crate::chart_persist::PriceAxisPos::Left);
+            let axis_on_left = matches!(
+                axis_pos,
+                crate::persistence::chart_persist::PriceAxisPos::Left
+            );
             let chart_x = if axis_on_left {
                 rect.x + price_axis_w
             } else {
                 rect.x
             };
             let chart_w = (rect.w - price_axis_w - glass_w).max(1.0);
-            let glass_x = if matches!(axis_pos, crate::chart_persist::PriceAxisPos::Right) {
+            let glass_x = if matches!(
+                axis_pos,
+                crate::persistence::chart_persist::PriceAxisPos::Right
+            ) {
                 chart_x + chart_w
             } else {
                 rect.x + (rect.w - glass_w).max(1.0)

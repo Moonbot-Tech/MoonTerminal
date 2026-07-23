@@ -14,7 +14,7 @@ use super::common::{
 };
 use super::{AddChartStack, chart_pane_label, coin_search};
 use crate::Backend;
-use crate::chart_persist::{self, StackLayoutMode, StackOrientation};
+use crate::persistence::chart_persist::{self, StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
@@ -345,7 +345,7 @@ impl DetachedChartHost {
         let handled = match action {
             // Built-in Ctrl+Shift+F10 resets every window position.
             HotkeyAction::ResetWindows => {
-                crate::windowing::reset_all_windows_onscreen(cx);
+                crate::window::windowing::reset_all_windows_onscreen(cx);
                 true
             }
             // Built-in Tab/Delete cancels the order under the cursor on the hovered chart.
@@ -498,7 +498,7 @@ impl DetachedChartHost {
         if !self.persist_armed {
             return;
         }
-        let Some((x, y, w, h)) = crate::windowing::window_geom(window) else {
+        let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
             moon_core::detect_diag::line(&format!(
                 "[geom] n={} НЕ Windowed → геометрия не сохранена",
                 self.num

@@ -1,12 +1,12 @@
 //! Hosts the core-settings popover opened by the gear button beside the header core selector.
 //! Owns open state, seeds persistent editors from the active core, synchronizes blacklist editors,
-//! and tracks Cancel All confirmation. `crate::core_settings_popup` renders the content.
+//! and tracks Cancel All confirmation. `crate::shell::core_settings_popup` renders the content.
 
 use gpui::*;
 
 use moon_ui::MoonPalette;
 
-use crate::core_settings_popup;
+use crate::shell::core_settings_popup;
 
 use super::Shell;
 

@@ -16,8 +16,10 @@ use super::stack::{
     set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible, sync_compare,
 };
 use crate::Backend;
-use crate::chart_persist::{ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation};
 use crate::panels::ChartPanel;
+use crate::persistence::chart_persist::{
+    ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
+};
 use moon_core::config::{ChartBucket, ChartTheme};
 use moon_core::session::CoreId;
 

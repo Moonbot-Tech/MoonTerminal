@@ -9,7 +9,7 @@ use gpui::*;
 use super::common::{LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting};
 use super::{AddChartStack, ChartTabs, Tab};
 use crate::Backend;
-use crate::chart_persist::{ChartBtnPos, StackLayoutMode, StackOrientation};
+use crate::persistence::chart_persist::{ChartBtnPos, StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 use moon_ui::MoonInputState;
 
@@ -130,7 +130,10 @@ impl ChartTabs {
     }
 
     /// Return the active tab's price-axis position, defaulting to Left for `None`.
-    pub(super) fn active_price_axis_pos(&self, cx: &App) -> crate::chart_persist::PriceAxisPos {
+    pub(super) fn active_price_axis_pos(
+        &self,
+        cx: &App,
+    ) -> crate::persistence::chart_persist::PriceAxisPos {
         let v = match &self.active {
             Tab::Main => self.main.read(cx).price_axis_pos(),
             Tab::Add(n, b) | Tab::Custom(n, b) => self
@@ -215,7 +218,7 @@ impl ChartTabs {
         orientation: Option<StackOrientation>,
         cancel_pos: Option<ChartBtnPos>,
         panic_pos: Option<ChartBtnPos>,
-        price_axis_pos: Option<crate::chart_persist::PriceAxisPos>,
+        price_axis_pos: Option<crate::persistence::chart_persist::PriceAxisPos>,
         time_axis_visible: Option<bool>,
         line_labels: Option<bool>,
         cursor_labels: Option<bool>,

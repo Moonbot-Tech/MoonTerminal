@@ -1,7 +1,7 @@
 // NOT `use super::*`: the glob would pull in the `gpui::test` macro, and `#[test]` would
 // expand into itself (recursion limit).
 use super::DOCK_TAB_ORDER;
-use crate::panel_meta::tab_label;
+use crate::persistence::panel_meta::tab_label;
 
 #[test]
 fn every_home_tab_has_a_localized_label() {
