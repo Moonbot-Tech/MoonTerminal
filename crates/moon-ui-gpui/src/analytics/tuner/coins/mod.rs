@@ -585,7 +585,14 @@ impl AnalyticsView {
             )
             .to_string(),
         )];
-        kpi_matrix_card(&self.coins.kpi, self.scope_label(), &labels, p, cx)
+        kpi_matrix_card(
+            &self.coins.kpi,
+            self.scope_label(),
+            &labels,
+            self.kpi_collapsed,
+            p,
+            cx,
+        )
     }
 }
 

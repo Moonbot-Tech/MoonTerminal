@@ -223,6 +223,12 @@ pub struct WindowLayout {
     /// lens, so it lives here rather than being reset each session.
     #[serde(default)]
     pub analytics_profit_percent: bool,
+    /// Analytics "Fact vs variants" KPI matrix: `true` collapses it to its two top rows
+    /// (trades + profit), freeing vertical room on short screens where the fields grid below
+    /// it would otherwise not fit. A display lens, so it persists rather than resetting each
+    /// session. `false` (default, every existing config) shows the full matrix.
+    #[serde(default)]
+    pub analytics_kpi_collapsed: bool,
     /// The "closed trades the core never dated" banner: the count it was dismissed at.
     ///
     /// `None` — never dismissed, so it shows whenever there is anything to say. Otherwise it

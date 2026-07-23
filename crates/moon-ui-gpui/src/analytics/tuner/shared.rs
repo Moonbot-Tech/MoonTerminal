@@ -72,11 +72,14 @@ pub(super) struct SaveDialog {
 }
 
 /// Tuner state inside `AnalyticsView`.
-/// A card with a title and a subtitle (the shared look of the Analytics cards).
+/// A card with a title and a subtitle (the shared look of the Analytics cards). `accessory`
+/// is an optional element pinned to the RIGHT of the title bar (e.g. the KPI collapse caret);
+/// `None` leaves the header exactly as the plain cards have it.
 pub(super) fn card(
     title: String,
     sub: String,
     body: AnyElement,
+    accessory: Option<AnyElement>,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
@@ -99,6 +102,11 @@ pub(super) fn card(
                 .text_color(moon(p.text_muted))
                 .child(sub),
         );
+    }
+    // A flex spacer eats the middle so the accessory sits at the right edge regardless of
+    // the title/subtitle width.
+    if let Some(acc) = accessory {
+        head = head.child(div().flex_1()).child(acc);
     }
     v_flex()
         .w_full()

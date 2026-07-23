@@ -26,7 +26,14 @@ impl AnalyticsView {
         cx: &Context<Self>,
     ) -> AnyElement {
         // An empty label list → the "v{i}" fallback (as it historically was).
-        kpi_matrix_card(&self.tuner.stats, self.scope_label(), &[], p, cx)
+        kpi_matrix_card(
+            &self.tuner.stats,
+            self.scope_label(),
+            &[],
+            self.kpi_collapsed,
+            p,
+            cx,
+        )
     }
 
     /// Histogram of the selected field: wins up, losses down, the count and the edges.
@@ -132,6 +139,7 @@ impl AnalyticsView {
             title,
             t!("analytics.tuner.hist_sub").to_string(),
             body,
+            None,
             p,
             cx,
         )

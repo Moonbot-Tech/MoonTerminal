@@ -10,7 +10,7 @@ use rust_i18n::t;
 
 use super::super::summary::{fmt_signed, fmt_signed_plain, sign_color};
 use super::super::{AnalyticsView, LoadState};
-use super::shared::card;
+use super::shared::{card, glyph_btn};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::VarStats;
@@ -46,13 +46,38 @@ impl VarLabel {
 /// It is a line of its own rather than a longer title on purpose: that text grows with the
 /// data, and inside a fixed-width column a one-liner wraps wherever it happens to run out —
 /// which put "129)" alone on the next row and shoved the whole header down.
+///
+/// `collapsed` folds the matrix to its two top rows (trades + profit), keeping the column
+/// headings — the caret in the title bar toggles it, for short screens where the fields grid
+/// below would not otherwise fit.
 pub(super) fn kpi_matrix_card(
     stats: &LoadState<Vec<VarStats>>,
     scope: String,
     var_labels: &[VarLabel],
+    collapsed: bool,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
+    // ▲ (expanded) folds up to the two rows; ▼ (collapsed) unfolds back — the up/down
+    // convention of the strategy tree. Glyph and tooltip are chosen together so they cannot
+    // drift apart.
+    let (caret_glyph, caret_tip) = if collapsed {
+        ("▼", t!("analytics.tuner.kpi_expand").to_string())
+    } else {
+        ("▲", t!("analytics.tuner.kpi_collapse").to_string())
+    };
+    // The collapse caret is part of the title bar in EVERY state — built up front so it does
+    // not blink out while the matrix is loading or after a read error.
+    let caret = glyph_btn(
+        "an-tuner-kpi-collapse",
+        caret_glyph,
+        caret_tip,
+        p.text,
+        p,
+        cx,
+    )
+    .on_click(cx.listener(|this, _, _, cx| this.toggle_kpi_collapsed(cx)))
+    .into_any_element();
     // No empty state by design: `stats.len() == variants.len()` always, so
     // the only non-data cases are loading / not-ready / read failure.
     let stats = match stats.view(|_| false) {
@@ -62,6 +87,7 @@ pub(super) fn kpi_matrix_card(
                 t!("analytics.tuner.kpi_title").to_string(),
                 scope,
                 super::super::note_el("an-tuner-kpi-note", note, 8.0, p, cx),
+                Some(caret),
                 p,
                 cx,
             );
@@ -78,6 +104,9 @@ pub(super) fn kpi_matrix_card(
     }
     // (label, value, higher=better; None — no comparison against the fact; cell format)
     type Row = (String, fn(&VarStats) -> f64, Option<bool>, Cell);
+    // The first two entries are the headline pair (trades + profit); collapsed mode shows
+    // exactly these via `COLLAPSED_ROWS`. Keep them first if this vec is ever reordered.
+    const COLLAPSED_ROWS: usize = 2;
     let rows: Vec<Row> = vec![
         (
             t!("analytics.kpi.trades").to_string(),
@@ -86,7 +115,11 @@ pub(super) fn kpi_matrix_card(
             Cell::Int,
         ),
         (
-            t!("analytics.kpi.profit", unit = crate::analytics::pnl_unit_label()).to_string(),
+            t!(
+                "analytics.kpi.profit",
+                unit = crate::analytics::pnl_unit_label()
+            )
+            .to_string(),
             |s| s.profit,
             Some(true),
             Cell::Pnl,
@@ -173,8 +206,15 @@ pub(super) fn kpi_matrix_card(
         );
     }
 
+    // Collapsed keeps only the headline rows; the column headings stay, so the Fact-vs-variant
+    // comparison is still readable, just short enough for the grid below.
+    let shown = if collapsed {
+        COLLAPSED_ROWS
+    } else {
+        rows.len()
+    };
     let mut body = v_flex().w_full().child(head);
-    for (label, get, better, cell) in rows {
+    for (label, get, better, cell) in rows.into_iter().take(shown) {
         let fact = get(&stats[0]);
         let mut row = h_flex()
             .w_full()
@@ -221,6 +261,7 @@ pub(super) fn kpi_matrix_card(
         t!("analytics.tuner.kpi_title").to_string(),
         scope,
         body.into_any_element(),
+        Some(caret),
         p,
         cx,
     )

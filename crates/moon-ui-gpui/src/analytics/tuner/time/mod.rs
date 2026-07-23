@@ -179,7 +179,14 @@ impl AnalyticsView {
     /// the scope of the selected strategy. The same widget as in "By filter".
     fn time_kpi(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         // An empty label list → "v1"/"v2" (as in "By filter").
-        kpi_matrix_card(&self.time_tuner.stats, self.scope_label(), &[], p, cx)
+        kpi_matrix_card(
+            &self.time_tuner.stats,
+            self.scope_label(),
+            &[],
+            self.kpi_collapsed,
+            p,
+            cx,
+        )
     }
 
     /// The bottom "by hour" chart for the selected period: header + 24 hour columns at full width.
