@@ -196,9 +196,7 @@ impl AlertsPanel {
                 .child(r.market.clone())
                 .on_click(move |_, _w, app| {
                     backend_open.update(app, |b, bcx| {
-                        b.open_request = Some((core, open_market.clone()));
-                        b.open_request_rev = b.open_request_rev.wrapping_add(1);
-                        b.open_request_activate = true;
+                        b.open_on_main((core, open_market.clone()), true);
                         bcx.notify();
                     });
                 });

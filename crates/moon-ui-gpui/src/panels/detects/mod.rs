@@ -321,10 +321,7 @@ impl DetectsPanel {
         self.items
             .retain(|it| !(it.core == core && it.market == market));
         self.backend.update(cx, |b, bcx| {
-            b.open_request = Some((core, market.clone()));
-            b.open_request_rev = b.open_request_rev.wrapping_add(1);
-            // A detection click opens the market on Main without activating its window.
-            b.open_request_activate = false;
+            b.open_on_main((core, market.clone()), false);
             bcx.notify();
         });
         self.arm_prune_timer(cx);

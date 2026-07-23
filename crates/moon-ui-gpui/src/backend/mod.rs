@@ -618,14 +618,24 @@ impl Backend {
         };
 
         self.diag_open_done = true;
-        self.open_request = Some((core, market.clone()));
-        self.open_request_rev = self.open_request_rev.wrapping_add(1);
-        self.open_request_activate = false;
+        self.open_on_main((core, market.clone()), false);
         if std::env::var_os("MOON_RENDER_DIAG_PAUSE_AFTER_OPEN").is_some() {
             self.follow = false;
         }
         log::info!("diag auto-open: core={core} name={name} market={market}");
         cx.notify();
+    }
+
+    /// Request opening `target` on the group's Main chart, bumping `open_request_rev` so the
+    /// group's `ChartTabs` wakes for exactly this request instead of a fallback render.
+    ///
+    /// `activate` raises and focuses the Main window: the chart double-click and the Alerts coin
+    /// click pass `true`, while table, detect, log, and screener navigation pass `false` to open
+    /// the market without stealing focus from the current window.
+    pub(crate) fn open_on_main(&mut self, target: (CoreId, String), activate: bool) {
+        self.open_request = Some(target);
+        self.open_request_rev = self.open_request_rev.wrapping_add(1);
+        self.open_request_activate = activate;
     }
 
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]

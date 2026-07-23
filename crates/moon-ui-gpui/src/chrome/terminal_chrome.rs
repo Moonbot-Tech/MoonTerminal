@@ -248,9 +248,7 @@ fn ticker_readout(
             return;
         };
         backend.update(cx, |b, bcx| {
-            b.open_request = Some((core, market));
-            b.open_request_rev = b.open_request_rev.wrapping_add(1);
-            b.open_request_activate = false;
+            b.open_on_main((core, market), false);
             bcx.notify();
         });
     })
