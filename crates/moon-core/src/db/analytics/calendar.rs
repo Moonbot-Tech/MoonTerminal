@@ -6,6 +6,11 @@ use super::super::read_fail::read_fail;
 use super::super::ReadResult;
 use super::{min_closedate, unified_from, Query};
 
+/// The per-cell aggregate shared by every calendar view: profit sum, trade count, and win
+/// count (`pnl > 0`). ONE definition so the daily grid, the hour grid, and the hour-of-day
+/// profile can never disagree about what counts as a winning trade.
+const CELL_AGG: &str = "COALESCE(SUM(o.pnl), 0), COUNT(*), COALESCE(SUM(o.pnl > 0), 0)";
+
 /// A calendar heatmap cell containing the aggregate for one UTC day or hour.
 #[derive(Clone, Debug, Default)]
 pub struct DayCell {
@@ -48,7 +53,7 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
     // Daily bucket: PnL, trade count, and wins for W/L and win rate.
     let sql = format!(
         "SELECT (o.closedate / 86400) * 86400 AS d,
-                COALESCE(SUM(o.pnl), 0), COUNT(*), COALESCE(SUM(o.pnl > 0), 0)
+                {CELL_AGG}
          FROM {src} GROUP BY d ORDER BY d"
     );
     let mut stmt = conn.prepare(&sql).ok()?;
@@ -118,7 +123,7 @@ pub fn calendar_hours(q: &Query) -> Option<Vec<DayCell>> {
     };
     let sql = format!(
         "SELECT (o.closedate / 3600) * 3600 AS h,
-                COALESCE(SUM(o.pnl), 0), COUNT(*), COALESCE(SUM(o.pnl > 0), 0)
+                {CELL_AGG}
          FROM {src} GROUP BY h ORDER BY h"
     );
     let mut stmt = conn.prepare(&sql).ok()?;
@@ -183,7 +188,7 @@ fn hour_profile_one(
     // The period itself still uses `closedate`, which defines the analysis window.
     let sql = format!(
         "SELECT ((COALESCE(NULLIF(o.buydate, 0), o.closedate) % 86400) / 3600) AS h,
-                COALESCE(SUM(o.pnl), 0), COUNT(*), COALESCE(SUM(o.pnl > 0), 0)
+                {CELL_AGG}
          FROM {src} GROUP BY h ORDER BY h"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
