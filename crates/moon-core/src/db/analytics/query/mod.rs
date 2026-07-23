@@ -350,3 +350,7 @@ pub(in crate::db) fn attach_strategies(conn: &Connection) -> bool {
         }
     }
 }
+
+/// Strategy scope, liquidation-attribution expression, and the flag-wiring contract.
+#[cfg(test)]
+mod tests;

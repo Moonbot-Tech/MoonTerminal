@@ -489,17 +489,8 @@ fn core_series(
     Ok(out)
 }
 
-/// What attributing a LIQUIDATION row to its named strategy does to the figures.
-#[cfg(test)]
-mod liq_attribution_tests;
-/// The liquidation-attribution flag must reach the generated SQL from every call site.
-#[cfg(test)]
-mod liq_wiring_tests;
-/// The strategy scope of a query — the tuner's Ctrl multi-select depends on it entirely.
-#[cfg(test)]
-mod scope_tests;
-
 /// Regression tests for the read-failure contract: a damaged replica must
-/// surface as an error, never as an empty period.
+/// surface as an error, never as an empty period. (Scope, attribution, and wiring tests
+/// live beside their code in `query/tests.rs`; calendar tests in `calendar/tests.rs`.)
 #[cfg(test)]
-mod read_failure_tests;
+mod tests;
