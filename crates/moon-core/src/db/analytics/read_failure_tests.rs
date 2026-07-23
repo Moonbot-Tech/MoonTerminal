@@ -1,6 +1,7 @@
 use super::super::test_support::{
     build_replica, corrupt_leaf_page, remove_db, spread_rows, temp_db,
 };
+use super::super::SideFilter;
 use super::*;
 
 /// Build the minimal real-trade query used by analytics regression tests.
