@@ -145,6 +145,14 @@ analytics.tuner.kpi_title:
   ru: "Факт vs варианты"
   en: "Fact vs variants"
   es: "Real vs variantes"
+analytics.tuner.kpi_collapse:
+  ru: "Свернуть — только сделки и профит"
+  en: "Collapse — trades and profit only"
+  es: "Contraer — solo operaciones y beneficio"
+analytics.tuner.kpi_expand:
+  ru: "Развернуть все показатели"
+  en: "Expand all metrics"
+  es: "Expandir todas las métricas"
 analytics.tuner.metric:
   ru: "Показатель"
   en: "Metric"

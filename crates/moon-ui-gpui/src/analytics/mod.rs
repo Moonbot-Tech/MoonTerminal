@@ -232,6 +232,11 @@ pub struct AnalyticsView {
     /// Strategies-tab mode (Filters / Coins / Time). Privacy is module-based: tab submodules
     /// can see their parent's fields without `pub(super)`.
     strat_mode: tuner::StratMode,
+    /// Collapse the shared "Fact vs variants" KPI matrix to its two top rows (trades +
+    /// profit). One flag for every axis (the matrix is the same widget in each), so the
+    /// choice is consistent across Filters/Coins/Time. Persisted in
+    /// `layout.analytics_kpi_collapsed`; a display lens, so toggling only repaints.
+    kpi_collapsed: bool,
     /// Threshold tuner (Filters mode), with its state defined in its own module.
     tuner: tuner::TunerState,
     /// The "By coin" mode: the table's view controls, the picked coins that define
@@ -301,6 +306,8 @@ impl AnalyticsView {
         } else {
             ProfitMetric::Usdt
         };
+        // KPI matrix collapse state from the previous run (default expanded).
+        let saved_kpi_collapsed = backend.read(cx).layout.analytics_kpi_collapsed;
         // Visible strategy-list columns from the previous run, one mask per axis. An older
         // config holding the single-mask key seeds all three, so a choice already made is
         // carried over instead of reset; absent entirely, each axis takes its own default.
@@ -401,6 +408,7 @@ impl AnalyticsView {
             } else {
                 tuner::StratMode::Filters
             },
+            kpi_collapsed: saved_kpi_collapsed,
             tuner: tuner::TunerState::load(saved_tuner_iters, saved_tuner_edges),
             coins: tuner::CoinsState::default(),
             coin_lists: tuner::CoinListsState::default(),
@@ -727,6 +735,18 @@ impl AnalyticsView {
             b.layout_dirty = true;
         });
         self.reload(cx);
+        cx.notify();
+    }
+
+    /// Collapse/expand the shared "Fact vs variants" KPI matrix. Collapsed keeps only its two
+    /// top rows (trades + profit), so the fields grid below it fits on short screens. A pure
+    /// display lens — unlike `set_metric` it changes no query, so it only persists and repaints.
+    fn toggle_kpi_collapsed(&mut self, cx: &mut Context<Self>) {
+        self.kpi_collapsed = !self.kpi_collapsed;
+        self.backend.update(cx, |b, _| {
+            b.layout.analytics_kpi_collapsed = self.kpi_collapsed;
+            b.layout_dirty = true;
+        });
         cx.notify();
     }
 }
