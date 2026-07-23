@@ -19,6 +19,7 @@ pub mod analytics;
 pub mod coin_lists;
 pub mod integrity;
 pub mod maint;
+pub mod metrics;
 pub(crate) mod read_fail;
 mod rep;
 #[cfg(test)]
@@ -482,22 +483,31 @@ pub struct ReportFilter {
     pub deleted_only: bool,
 }
 
+/// Map a database path to a read outcome BEFORE opening it: a genuinely absent file becomes
+/// `NotReady`, while any other metadata error becomes `Failed`.
+///
+/// NOT `Path::exists`: it reports false for a permission or metadata error too, which would
+/// take the silent `NotReady` branch and tell the user the replica is merely not synced yet —
+/// only a genuine absence may say that. The check still has to happen because
+/// `Connection::open` would otherwise CREATE an empty database in place of the missing one.
+/// `ctx` names the caller for the failure log. Shared by every path that opens a replica or
+/// the strategy database read-only (the callers are this module and its descendants, so a
+/// plain-private item reaches all of them without widening visibility to the crate root).
+fn metadata_gate(path: &std::path::Path, ctx: &'static str) -> ReadResult<()> {
+    match std::fs::metadata(path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ReadFail::NotReady),
+        Err(e) => Err(read_fail::io_fail(ctx, &e)),
+    }
+}
+
 /// Open a reader while distinguishing an absent replica from a SQLite failure.
 ///
 /// A genuinely absent file maps to `NotReady`; metadata and SQLite open errors
 /// map to `Failed` so callers cannot present them as an empty period.
 pub fn open_reader() -> ReadResult<Connection> {
     let path = paths::reports_db_path();
-    // NOT `Path::exists`: it reports false for a permission or metadata error
-    // too, which would take the silent `NotReady` branch and tell the user the
-    // replica is merely not synced yet. Only a genuine absence may say that.
-    // The check still has to happen because `Connection::open` would otherwise
-    // CREATE an empty database in place of the missing one.
-    match std::fs::metadata(&path) {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(ReadFail::NotReady),
-        Err(e) => return Err(read_fail::io_fail("отчёты(reader): доступ к файлу", &e)),
-    }
+    metadata_gate(&path, "отчёты(reader): доступ к файлу")?;
     let conn = Connection::open(&path).map_err(|e| read_fail("отчёты(reader)", e))?;
     let _ = conn.busy_timeout(Duration::from_secs(3));
     // The strategy database rides along on EVERY reader.
@@ -541,17 +551,19 @@ pub fn load_sort(conn: &Connection) -> Option<(String, bool)> {
     Some((key, desc != "0"))
 }
 
+/// Upsert one `app_meta` key/value pair. The single place the shared settings table is written.
+/// Plain-private: every caller is this module or a descendant (`rep`).
+fn meta_set(conn: &Connection, key: &str, value: &str) {
+    let _ = conn.execute(
+        "INSERT INTO app_meta(key,value) VALUES(?1,?2)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        rusqlite::params![key, value],
+    );
+}
+
 pub fn save_sort(conn: &Connection, key: &str, desc: bool) {
-    let _ = conn.execute(
-        "INSERT INTO app_meta(key,value) VALUES('sort_key',?1)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        rusqlite::params![key],
-    );
-    let _ = conn.execute(
-        "INSERT INTO app_meta(key,value) VALUES('sort_desc',?1)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        rusqlite::params![if desc { "1" } else { "0" }],
-    );
+    meta_set(conn, "sort_key", key);
+    meta_set(conn, "sort_desc", if desc { "1" } else { "0" });
 }
 
 /// Load the saved comma-separated set of visible report columns, or `None` if never saved.
@@ -573,12 +585,7 @@ pub fn load_visible(conn: &Connection) -> Option<Vec<String>> {
 
 /// Save the visible report-column names as a comma-separated set.
 pub fn save_visible(conn: &Connection, cols: &[&str]) {
-    let csv = cols.join(",");
-    let _ = conn.execute(
-        "INSERT INTO app_meta(key,value) VALUES('report_visible',?1)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        rusqlite::params![csv],
-    );
+    meta_set(conn, "report_visible", &cols.join(","));
 }
 
 /// Build the runtime display-column list from the typed and legacy schemas.
@@ -913,11 +920,7 @@ pub fn query_reports(
 pub fn open_readonly() -> ReadResult<Connection> {
     let path = paths::reports_db_path();
     // Same reasoning as `open_reader`: only a genuine absence may report `NotReady`.
-    match std::fs::metadata(&path) {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(ReadFail::NotReady),
-        Err(e) => return Err(read_fail::io_fail("отчёты(ro): доступ к файлу", &e)),
-    }
+    metadata_gate(&path, "отчёты(ro): доступ к файлу")?;
     Connection::open_with_flags(
         &path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,

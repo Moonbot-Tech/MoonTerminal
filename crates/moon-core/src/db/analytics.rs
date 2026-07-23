@@ -16,6 +16,7 @@
 
 use rusqlite::Connection;
 
+use super::metrics::{profit_factor, winrate};
 use super::read_fail::read_fail;
 use super::{ProfitMetric, ReadFail, ReadResult, SideFilter};
 
@@ -63,6 +64,17 @@ pub struct Query {
 }
 
 impl Query {
+    /// Resolve the "all history" sentinel: a negative `from` means the whole replica, which
+    /// every single-scan tuner reader (the KPI matrix, the histogram, the sweep, the coin
+    /// groups) represents as `from = 1` — the earliest possible second, distinct from the
+    /// `min_closedate` floor the summary and calendar use. ONE definition of the sentinel so
+    /// the coin table and the KPI matrix beside it cannot resolve "all history" to two spans.
+    pub(super) fn floor_all_history(&mut self) {
+        if self.from < 0 {
+            self.from = 1;
+        }
+    }
+
     /// Build the period-and-filter WHERE clause for ONE source, referencing only columns
     /// that source HAS (like the Report window's `build_where`; filtering on a missing
     /// column would fail the entire SELECT). Placeholders ?1/?2 are from/to; cores, side,
@@ -323,11 +335,7 @@ pub struct PeriodStats {
 
 impl PeriodStats {
     pub fn winrate(&self) -> f64 {
-        if self.n > 0 {
-            self.wins as f64 / self.n as f64 * 100.0
-        } else {
-            0.0
-        }
+        winrate(self.wins, self.n)
     }
 }
 
@@ -420,11 +428,7 @@ pub struct GroupStat {
 
 impl GroupStat {
     pub fn winrate(&self) -> f64 {
-        if self.n > 0 {
-            self.wins as f64 / self.n as f64 * 100.0
-        } else {
-            0.0
-        }
+        winrate(self.wins, self.n)
     }
 
     pub fn avg(&self) -> f64 {
@@ -980,9 +984,7 @@ pub fn strategies_for_coins(q: &Query, coins: &[String]) -> ReadResult<Vec<Strin
     let conn = &*snap;
     let mut q = q.clone();
     // The same floor the coin table and the KPI use — one screen, one period.
-    if q.from < 0 {
-        q.from = 1;
-    }
+    q.floor_all_history();
     let Some(src) = unified_from(conn, &q)? else {
         return Err(ReadFail::NotReady);
     };
@@ -1026,9 +1028,7 @@ pub fn coin_groups(q: &Query) -> ReadResult<Vec<GroupStat>> {
     // The same floor `variant_stats` uses, NOT `min_closedate`: the coin table and the
     // "Fact vs v1" matrix sit on one screen and must cover the same span — resolving
     // "all history" differently here would let the two halves describe two periods.
-    if q.from < 0 {
-        q.from = 1;
-    }
+    q.floor_all_history();
     let Some(src) = unified_from(conn, &q)? else {
         return Err(ReadFail::NotReady);
     };
@@ -1049,13 +1049,7 @@ fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
         n: r.get(6)?,
         profit: r.get(7)?,
         wins: r.get(8)?,
-        pf: if lsum > 0.0 {
-            wsum / lsum
-        } else if wsum > 0.0 {
-            99.0
-        } else {
-            0.0
-        },
+        pf: profit_factor(wsum, lsum),
         best: r.get(11)?,
         worst: r.get(12)?,
         lastedit: r.get::<_, Option<String>>(13)?.unwrap_or_default(),
@@ -1198,13 +1192,7 @@ fn scan_period(
     if st.n > 0 {
         st.avg = st.profit / st.n as f64;
         st.avg_dur_min = dur_ms_total as f64 / st.n as f64 / 60.0;
-        st.pf = if lsum > 0.0 {
-            wsum / lsum
-        } else if wsum > 0.0 {
-            99.0
-        } else {
-            0.0
-        };
+        st.pf = profit_factor(wsum, lsum);
     }
     // Fill series gaps (days without trades) with zeroes so bars stay evenly spaced in time.
     if !days.is_empty() {

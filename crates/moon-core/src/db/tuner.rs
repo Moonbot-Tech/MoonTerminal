@@ -11,6 +11,7 @@
 use rusqlite::Connection;
 
 use super::analytics::{unified_from, Query};
+use super::metrics::{improvement_margin, profit_factor, winrate};
 use super::read_fail::read_fail;
 use super::{ReadFail, ReadResult};
 
@@ -489,12 +490,89 @@ pub struct VarStats {
 
 impl VarStats {
     pub fn winrate(&self) -> f64 {
-        if self.n > 0 {
-            self.wins as f64 / self.n as f64 * 100.0
-        } else {
-            0.0
+        winrate(self.wins, self.n)
+    }
+}
+
+/// Open a reader and build the unified tuner source for `q`, applying the tuner's all-history
+/// floor (`from = 1`, the same floor `coin_groups`/`strategies_for_coins` use so the coin
+/// table and the KPI matrix cover one period). `NotReady` when no source carries the required
+/// schema. Returns the connection, the floored query, and the `FROM` source string.
+///
+/// The plain-reader preamble shared by every non-snapshot tuner scan; `variant_stats` pins a
+/// WAL snapshot of its own instead and does not use this.
+pub(super) fn open_tuner_source(q: &Query) -> ReadResult<(Connection, Query, String)> {
+    let conn = super::open_reader()?;
+    let mut q = q.clone();
+    q.floor_all_history();
+    let Some(src) = unified_from(&conn, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
+    Ok((conn, q, src))
+}
+
+/// Scan one field into `(value, pnl)` pairs over the period, dropping NULL and non-finite
+/// values (COALESCE gives NULL pnl a 0). Shared by `histogram` and `suggest_field`; `ctx`
+/// names the CALLER for the read-failure log, so a failure keeps pointing at the surface the
+/// user is looking at rather than at this shared helper.
+fn scan_field_pairs(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+    field: &str,
+    ctx: &'static str,
+) -> ReadResult<Vec<(f64, f64)>> {
+    let sql = format!(
+        "SELECT o.\"{field}\", COALESCE(o.pnl,0)
+         FROM {src} WHERE o.\"{field}\" IS NOT NULL"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(ctx, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
+        })
+        .map_err(|e| read_fail(ctx, e))?;
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for row in rows {
+        let pair = row.map_err(|e| read_fail(ctx, e))?;
+        if pair.0.is_finite() {
+            out.push(pair);
         }
     }
+    Ok(out)
+}
+
+/// Scan the period into `(weekday, minute_of_day, pnl)` rows from the trade OPEN time
+/// (`OPEN_TS`): weekday `0=Mon..6=Sun`, minute `0..1439`. Shared by `suggest_time` and
+/// `slider_profiles`, whose only difference is what they do with the rows afterward; `ctx`
+/// names the CALLER for the read-failure log.
+fn scan_time_rows(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+    ctx: &'static str,
+) -> ReadResult<Vec<(i64, i64, f64)>> {
+    let sql = format!(
+        "SELECT ((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7 AS wd,
+                ({OPEN_TS} % 86400) / 60 AS mn,
+                COALESCE(o.pnl, 0)
+         FROM {src}"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(ctx, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, f64>(2)?,
+            ))
+        })
+        .map_err(|e| read_fail(ctx, e))?;
+    let mut out: Vec<(i64, i64, f64)> = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| read_fail(ctx, e))?);
+    }
+    Ok(out)
 }
 
 /// Compute KPI values in input order; an empty variant represents the baseline.
@@ -510,9 +588,7 @@ pub fn variant_stats(q: &Query, variants: &[Variant]) -> ReadResult<Vec<VarStats
     // to would still be published as one coherent comparison.
     let snap = super::read_snapshot(&conn)?;
     let mut q = q.clone();
-    if q.from < 0 {
-        q.from = 1;
-    }
+    q.floor_all_history();
     let Some(src) = unified_from(&snap, &q)? else {
         return Err(ReadFail::NotReady);
     };
@@ -569,13 +645,7 @@ fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> ReadResu
         } else {
             0.0
         };
-        st.pf = if lsum > 0.0 {
-            wsum / lsum
-        } else if wsum > 0.0 {
-            99.0
-        } else {
-            0.0
-        };
+        st.pf = profit_factor(wsum, lsum);
     }
     Ok(st)
 }
@@ -598,37 +668,12 @@ pub struct HistBucket {
 /// values returns an empty vector. `NotReady` means the replica or required
 /// schema is absent; `Failed` means opening or scanning it failed.
 pub fn histogram(q: &Query, field: &str, want: usize) -> ReadResult<Vec<HistBucket>> {
-    const CTX: &str = "tuner: histogram";
     if !FIELDS.iter().any(|s| s.col == field) {
         // Programmer error (unknown field), not a read failure.
         return Ok(Vec::new());
     }
-    let conn = super::open_reader()?;
-    let mut q = q.clone();
-    if q.from < 0 {
-        q.from = 1;
-    }
-    let Some(src) = unified_from(&conn, &q)? else {
-        return Err(ReadFail::NotReady);
-    };
-    let sql = format!(
-        "SELECT o.\"{field}\", COALESCE(o.pnl,0)
-         FROM {src} WHERE o.\"{field}\" IS NOT NULL"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
-    let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to], |r| {
-            Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
-        })
-        .map_err(|e| read_fail(CTX, e))?;
-    let mut pairs: Vec<(f64, f64)> = Vec::new();
-    for row in rows {
-        let pair = row.map_err(|e| read_fail(CTX, e))?;
-        if pair.0.is_finite() {
-            pairs.push(pair);
-        }
-    }
-    drop(stmt);
+    let (conn, q, src) = open_tuner_source(q)?;
+    let mut pairs = scan_field_pairs(&conn, &q, &src, field, "tuner: histogram")?;
     if pairs.is_empty() {
         return Ok(Vec::new());
     }
@@ -687,15 +732,53 @@ pub fn params_for(field: &str) -> (Option<&'static str>, Option<&'static str>) {
         .unwrap_or((None, None))
 }
 
+/// Open strategies.sqlite READ-ONLY, or `None` when it is absent or will not open.
+///
+/// A 3 s `busy_timeout` covers the strat_db writer committing on its own thread; without it a
+/// write landing under our read is an instant SQLITE_BUSY that a caller would misread as "no
+/// such strategy". Shared by every strategy read in this module.
+fn open_strategies_ro() -> Option<Connection> {
+    let path = crate::config::paths::strategies_db_path();
+    if !path.exists() {
+        return None;
+    }
+    let conn =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
+    Some(conn)
+}
+
+/// The current version's `raw_json` for a strategy, scoped to `core` when known.
+///
+/// `None` — no live head row for this `(strategy_id, core)`. Rows are per-core
+/// (`strategyid@core_uid`), so scoping to the exact core reflects the SAME core a write
+/// targets, not the newest-checked one. Shared by `strategy_current_values_opt` and
+/// `strategy_filters`.
+fn load_head_raw_json(conn: &Connection, strategy_id: i64, core: Option<u64>) -> Option<String> {
+    let core_clause = if core.is_some() {
+        " AND s.core_uid = ?2"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT v.raw_json FROM strategies s
+             JOIN strategy_versions v
+               ON v.core_uid = s.core_uid AND v.strategy_id = s.strategy_id
+             WHERE s.strategy_id = ?1{core_clause} AND s.deleted = 0 AND v.valid_to IS NULL
+             ORDER BY s.checked DESC LIMIT 1"
+    );
+    match core {
+        Some(c) => conn
+            .query_row(&sql, rusqlite::params![strategy_id, c as i64], |r| r.get(0))
+            .ok(),
+        None => conn.query_row(&sql, [strategy_id], |r| r.get(0)).ok(),
+    }
+}
+
 /// Cores where the strategy currently exists (strategies.sqlite heads with `deleted=0`),
 /// which are the targets for saving thresholds.
 pub fn strategy_cores(strategy_id: i64) -> Vec<u64> {
-    let path = crate::config::paths::strategies_db_path();
-    if !path.exists() {
-        return Vec::new();
-    }
-    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-    else {
+    let Some(conn) = open_strategies_ro() else {
         return Vec::new();
     };
     conn.prepare("SELECT core_uid FROM strategies WHERE strategy_id = ?1 AND deleted = 0")
@@ -791,39 +874,8 @@ pub fn strategy_current_values_opt(
     keys: &[String],
 ) -> Option<std::collections::HashMap<String, String>> {
     let mut out = std::collections::HashMap::new();
-    let path = crate::config::paths::strategies_db_path();
-    if !path.exists() {
-        return None;
-    }
-    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-    else {
-        return None;
-    };
-    // The strat_db writer commits on its own thread; without this a write landing under our
-    // read is an instant SQLITE_BUSY, which a caller would then have to read as "could not
-    // verify" on an ordinary healthy database.
-    let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
-    // Rows are per-core (`strategyid@core_uid`): scope to the exact core when known, so the
-    // "now" preview reflects the SAME core the write targets, not the newest-checked core.
-    let core_clause = if core.is_some() {
-        " AND s.core_uid = ?2"
-    } else {
-        ""
-    };
-    let sql = format!(
-        "SELECT v.raw_json FROM strategies s
-             JOIN strategy_versions v
-               ON v.core_uid = s.core_uid AND v.strategy_id = s.strategy_id
-             WHERE s.strategy_id = ?1{core_clause} AND s.deleted = 0 AND v.valid_to IS NULL
-             ORDER BY s.checked DESC LIMIT 1"
-    );
-    let raw: Option<String> = match core {
-        Some(c) => conn
-            .query_row(&sql, rusqlite::params![strategy_id, c as i64], |r| r.get(0))
-            .ok(),
-        None => conn.query_row(&sql, [strategy_id], |r| r.get(0)).ok(),
-    };
-    let raw = raw?;
+    let conn = open_strategies_ro()?;
+    let raw = load_head_raw_json(&conn, strategy_id, core)?;
     let Ok(serde_json::Value::Object(map)) = serde_json::from_str(&raw) else {
         return None;
     };
@@ -863,35 +915,14 @@ pub fn strategy_filters(
     defaults: &std::collections::HashMap<String, f64>,
 ) -> StratFilters {
     let mut out = StratFilters::default();
-    let path = crate::config::paths::strategies_db_path();
-    if !path.exists() {
-        return out;
-    }
-    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-    else {
-        return out;
-    };
     // Rows are per-core: scope the strategy card (Ignore flags, thresholds) to the SELECTED
     // core so the save diff is computed against the exact core the write targets.
-    let core_clause = if core.is_some() {
-        " AND s.core_uid = ?2"
-    } else {
-        ""
+    let Some(conn) = open_strategies_ro() else {
+        return out;
     };
-    let sql = format!(
-        "SELECT v.raw_json FROM strategies s
-             JOIN strategy_versions v
-               ON v.core_uid = s.core_uid AND v.strategy_id = s.strategy_id
-             WHERE s.strategy_id = ?1{core_clause} AND s.deleted = 0 AND v.valid_to IS NULL
-             ORDER BY s.checked DESC LIMIT 1"
-    );
-    let raw: Option<String> = match core {
-        Some(c) => conn
-            .query_row(&sql, rusqlite::params![strategy_id, c as i64], |r| r.get(0))
-            .ok(),
-        None => conn.query_row(&sql, [strategy_id], |r| r.get(0)).ok(),
+    let Some(raw) = load_head_raw_json(&conn, strategy_id, core) else {
+        return out;
     };
-    let Some(raw) = raw else { return out };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return out;
     };
@@ -1003,6 +1034,18 @@ pub fn round_bound(v: f64, up: bool) -> f64 {
     r * step
 }
 
+/// Round `(from, to)` outward to three significant digits, but keep the RAW pair when doing so
+/// would push both bounds past the observed range `[lo, hi]` and turn the pair into a no-op
+/// filter. Shared by `best_range` and `tuner_smart::smart_suggest`.
+pub(super) fn round_pair_outward(from: f64, to: f64, lo: f64, hi: f64) -> (f64, f64) {
+    let (rf, rt) = (round_bound(from, false), round_bound(to, true));
+    if rf > lo || rt < hi {
+        (rf, rt)
+    } else {
+        (from, to)
+    }
+}
+
 /// Find the best threshold range for one field.
 ///
 /// `edges` controls the quantile search resolution. With `round`, boundaries
@@ -1018,37 +1061,12 @@ pub fn suggest_field(
     edges: usize,
     round: bool,
 ) -> ReadResult<Option<Suggestion>> {
-    const CTX: &str = "tuner: suggest_field";
     if !FIELDS.iter().any(|s| s.col == field) {
         // Programmer error (unknown field), not a read failure.
         return Ok(None);
     }
-    let conn = super::open_reader()?;
-    let mut q = q.clone();
-    if q.from < 0 {
-        q.from = 1;
-    }
-    let Some(src) = unified_from(&conn, &q)? else {
-        return Err(ReadFail::NotReady);
-    };
-    let sql = format!(
-        "SELECT o.\"{field}\", COALESCE(o.pnl,0)
-         FROM {src} WHERE o.\"{field}\" IS NOT NULL"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
-    let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to], |r| {
-            Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
-        })
-        .map_err(|e| read_fail(CTX, e))?;
-    let mut vals: Vec<(f64, f64)> = Vec::new();
-    for row in rows {
-        let pair = row.map_err(|e| read_fail(CTX, e))?;
-        if pair.0.is_finite() {
-            vals.push(pair);
-        }
-    }
-    drop(stmt);
+    let (conn, q, src) = open_tuner_source(q)?;
+    let mut vals = scan_field_pairs(&conn, &q, &src, field, "tuner: suggest_field")?;
     // The outer result reports read status; the inner option reports whether a
     // threshold improves on the baseline.
     Ok(best_range(&mut vals, min_n.max(1) as usize, edges, round))
@@ -1114,40 +1132,13 @@ pub fn suggest_time(
     round: bool,
     axes: TimeAxes,
 ) -> ReadResult<TimeSuggest> {
-    const CTX: &str = "tuner: suggest_time";
     // Nothing is checked → nothing to search; skip the scan instead of reading the whole
     // period only to throw it away.
     if axes.is_empty() {
         return Ok(TimeSuggest::default());
     }
-    let conn = super::open_reader()?;
-    let mut q = q.clone();
-    if q.from < 0 {
-        q.from = 1;
-    }
-    let Some(src) = unified_from(&conn, &q)? else {
-        return Err(ReadFail::NotReady);
-    };
-    let sql = format!(
-        "SELECT ((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7 AS wd,
-                ({OPEN_TS} % 86400) / 60 AS mn,
-                COALESCE(o.pnl, 0)
-         FROM {src}"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
-    let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, f64>(2)?,
-            ))
-        })
-        .map_err(|e| read_fail(CTX, e))?;
-    let mut trades: Vec<(i64, i64, f64)> = Vec::new();
-    for row in rows {
-        trades.push(row.map_err(|e| read_fail(CTX, e))?);
-    }
+    let (conn, q, src) = open_tuner_source(q)?;
+    let trades = scan_time_rows(&conn, &q, &src, "tuner: suggest_time")?;
     Ok(time_suggest_from_rows(&trades, min_n, edges, round, axes))
 }
 
@@ -1250,7 +1241,7 @@ fn time_suggest_from_rows(
     // The baseline (no window of our own, but already inside any pin) is the starting
     // candidate; every other one has to BEAT it.
     let base: f64 = rows.iter().map(|r| r.2).sum();
-    let margin = base.abs().max(1.0) * 1e-9;
+    let margin = improvement_margin(base);
     let mut best: (Option<(u16, u16)>, Option<TimeWindow>, f64) = (None, None, base);
     for wk in [None, week] {
         for td in [None, day_w, hour_w] {
@@ -1304,35 +1295,8 @@ pub struct SliderProfiles {
 
 /// Calculate `SliderProfiles` for the same scope as automatic suggestions (`tuner_query`).
 pub fn slider_profiles(q: &Query) -> ReadResult<SliderProfiles> {
-    const CTX: &str = "tuner: slider_profiles";
-    let conn = super::open_reader()?;
-    let mut q = q.clone();
-    if q.from < 0 {
-        q.from = 1;
-    }
-    let Some(src) = unified_from(&conn, &q)? else {
-        return Err(ReadFail::NotReady);
-    };
-    let sql = format!(
-        "SELECT ((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7 AS wd,
-                ({OPEN_TS} % 86400) / 60 AS mn,
-                COALESCE(o.pnl, 0)
-         FROM {src}"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
-    let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, f64>(2)?,
-            ))
-        })
-        .map_err(|e| read_fail(CTX, e))?;
-    let mut trades: Vec<(i64, i64, f64)> = Vec::new();
-    for row in rows {
-        trades.push(row.map_err(|e| read_fail(CTX, e))?);
-    }
+    let (conn, q, src) = open_tuner_source(q)?;
+    let trades = scan_time_rows(&conn, &q, &src, "tuner: slider_profiles")?;
     Ok(slider_profiles_from_rows(&trades))
 }
 
@@ -1409,7 +1373,7 @@ fn best_range(
     // Suggest a range only when it REALLY improves profit over no filter by more than
     // floating-point summation noise. Otherwise a range excluding only zero-profit trades
     // can appear to "win" by about 1e-12.
-    let margin = total.abs().max(1.0) * 1e-9;
+    let margin = improvement_margin(total);
     best.filter(|(profit, _, _)| *profit > total + margin)
         .map(|(profit, i, j)| {
             let (a, b) = (pos[i], pos[j]);
@@ -1417,13 +1381,7 @@ fn best_range(
             // minimum or maximum rather than an open interval.
             let (mut from, mut to) = (vals[a].0, vals[b - 1].0);
             if round {
-                let (rf, rt) = (round_bound(from, false), round_bound(to, true));
-                // Outward rounding can move both distribution-edge bounds past
-                // the observed range and make the pair filter nothing. Preserve
-                // raw bounds in that case.
-                if rf > vals[0].0 || rt < vals[len - 1].0 {
-                    (from, to) = (rf, rt);
-                }
+                (from, to) = round_pair_outward(from, to, vals[0].0, vals[len - 1].0);
             }
             Suggestion {
                 from: Some(from),

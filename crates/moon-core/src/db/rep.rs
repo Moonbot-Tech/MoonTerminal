@@ -608,9 +608,5 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
 }
 
 fn meta_set_i64(conn: &Connection, key: &str, val: i64) {
-    let _ = conn.execute(
-        "INSERT INTO app_meta(key,value) VALUES(?1,?2)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        rusqlite::params![key, val.to_string()],
-    );
+    super::meta_set(conn, key, &val.to_string());
 }
