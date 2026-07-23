@@ -1,4 +1,5 @@
 use super::*;
+use rusqlite::types::Value;
 
 /// Replica indexes are also created for databases whose columns predate the index code.
 ///
