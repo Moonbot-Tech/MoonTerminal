@@ -24,6 +24,7 @@ pub mod hotkeys;
 pub mod lang;
 pub mod layout;
 pub mod moonbot_import;
+pub mod news_tags;
 pub mod orders;
 pub mod paths;
 pub mod secrets;
@@ -40,6 +41,7 @@ mod toml_io;
 mod uid_counter;
 
 pub use badges::{BadgeEntry, BadgesConfig};
+pub use news_tags::NewsTagColors;
 pub use detect_view::{
     detect_slot_count, DetectChart, DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg,
     DetectViewFile, DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI,

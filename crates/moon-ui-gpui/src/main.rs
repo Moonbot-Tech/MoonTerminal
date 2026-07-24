@@ -167,6 +167,9 @@ struct Backend {
     /// Per-group detect-strip presentation: dimensions, chart, rail, and size slots.
     /// Stored in the portable `detects_view.toml` and saved immediately because the file is small.
     detects_view: moon_core::config::DetectViewFile,
+    /// Global per-tag colours for the News panel (tag name → palette key). Stored in the small
+    /// portable `news_tags.json` and saved immediately on change.
+    news_tag_colors: moon_core::config::NewsTagColors,
     /// Cache of the default header-ticker source when no choice is saved, as `(core, market)`.
     /// Resolved lazily from exact BTCUSDT or UBTCUSDC matches, then the first broader `BTC` search
     /// result as a fallback, and not persisted.

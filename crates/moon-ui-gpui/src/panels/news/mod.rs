@@ -12,13 +12,15 @@
 
 mod render;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize,
-    MoonPalette, Panel, PanelEvent, PanelState, h_flex, v_flex,
+    DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, Panel,
+    PanelEvent, PanelState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -77,11 +79,32 @@ impl NewsLang {
     }
 }
 
+/// The fixed palette a user can assign to a tag. Keys persist in `news_tags.json` and resolve to
+/// theme colours via [`key_color`]; storing keys (not RGB) keeps the colour theme-adaptive. Limited
+/// to the distinct hues `MoonPalette` actually carries (no teal/violet token exists upstream).
+pub(super) const TAG_PALETTE: [&str; 4] = ["red", "amber", "green", "blue"];
+
+/// Resolve a palette colour key to the active theme colour, or `None` for an unknown/neutral key.
+pub(super) fn key_color(key: &str, p: MoonPalette) -> Option<u32> {
+    match key {
+        "red" => Some(p.red),
+        "amber" => Some(p.amber),
+        "green" => Some(p.green),
+        "blue" => Some(p.blue),
+        _ => None,
+    }
+}
+
 /// Group-scoped News panel for a dock tab or detached window.
 pub struct NewsView {
     backend: Entity<Backend>,
     group: String,
     lang: NewsLang,
+    /// Tags the user unchecked in the Tags popover. A card is hidden only if it has tags and every
+    /// one of them is hidden, so tagless news always shows.
+    hidden_tags: HashSet<String>,
+    /// Whether the Tags popover is open.
+    tags_open: bool,
     cache_sig: Option<u64>,
     cached: Rc<Vec<NewsItem>>,
     dock: Option<WeakEntity<DockArea>>,
@@ -111,6 +134,8 @@ impl NewsView {
             backend,
             group,
             lang: NewsLang::Ru,
+            hidden_tags: HashSet::new(),
+            tags_open: false,
             cache_sig: None,
             cached: Rc::new(Vec::new()),
             dock: None,
@@ -126,16 +151,19 @@ impl NewsView {
         CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
     }
 
-    /// Fold scoped cores' id + news revision into a change signature.
+    /// Fold scoped cores' id + news revision, plus the global tag-colour revision, into a change
+    /// signature. The colour rev makes a colour edit in one open News view repaint the others.
     fn news_sig(&self, b: &Backend) -> u64 {
         let store = b.session.store();
-        self.scope_cores(b).iter().fold(0u64, |a, (id, _)| {
+        let base = self.scope_cores(b).iter().fold(0u64, |a, (id, _)| {
             let rev = store.core(*id).map(|c| c.news_rev).unwrap_or(0);
             a.wrapping_mul(31)
                 .wrapping_add(*id)
                 .wrapping_mul(31)
                 .wrapping_add(rev)
-        })
+        });
+        base.wrapping_mul(31)
+            .wrapping_add(b.news_tag_colors.rev())
     }
 
     /// Merge the scoped cores' logical news by `meta.id` (preferring a translated copy), newest first.
@@ -188,6 +216,59 @@ impl NewsView {
         }
     }
 
+    /// Unique tags across the merged items, in first-seen order — the Tags popover's row set.
+    fn tag_catalog(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for item in self.cached.iter() {
+            for tag in &item.tags {
+                if !out.iter().any(|t| t == tag) {
+                    out.push(tag.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether a card is visible under the tag filter: tagless cards always show; a tagged card
+    /// shows unless every one of its tags is hidden.
+    fn is_visible(&self, item: &NewsItem) -> bool {
+        item.tags.is_empty() || item.tags.iter().any(|t| !self.hidden_tags.contains(t))
+    }
+
+    /// Assign or clear a tag's colour on the global config, saving on a real change. Notifies the
+    /// Backend (not just self) so EVERY open News view repaints: each observe fires and sees the
+    /// tag-colour rev change in its signature.
+    fn set_tag_color(&mut self, tag: &str, key: Option<&str>, cx: &mut Context<Self>) {
+        self.backend.update(cx, |b, bcx| {
+            if b.news_tag_colors.set(tag, key) {
+                b.news_tag_colors.save();
+                bcx.notify();
+            }
+        });
+    }
+
+    /// Toggle one tag's visibility in the filter.
+    fn toggle_tag_hidden(&mut self, tag: &str, hidden: bool, cx: &mut Context<Self>) {
+        let changed = if hidden {
+            self.hidden_tags.insert(tag.to_string())
+        } else {
+            self.hidden_tags.remove(tag)
+        };
+        if changed {
+            cx.notify();
+        }
+    }
+
+    /// Show all tags (clear the filter) or hide all — the popover's "show all / hide all" actions.
+    fn set_all_tags_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
+        if hidden {
+            self.hidden_tags = self.tag_catalog().into_iter().collect();
+        } else {
+            self.hidden_tags.clear();
+        }
+        cx.notify();
+    }
+
     /// Build the language selector dropdown.
     fn lang_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let items: Vec<(NewsLang, String)> =
@@ -217,6 +298,179 @@ impl NewsView {
                         view.update(app, |t, c| t.set_lang(lang, c));
                     })
             }))
+    }
+
+    /// The "Теги" popover: a trigger button plus a deferred overlay listing every tag with a
+    /// visibility checkbox and a colour-swatch picker.
+    fn tags_popover(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let entity = cx.entity();
+        let trigger = MoonButton::new("news-tags-trigger")
+            .label(format!("{} ▾", t!("news.tags")))
+            .variant(MoonButtonVariant::Soft)
+            .size(MoonButtonSize::Action)
+            .render();
+        MoonPopover::new("news-tags-popover")
+            .placement(MoonPopoverPlacement::BottomStart)
+            .width(248.0)
+            .close_on_content_click(false)
+            // Swatch clicks and the close button are the explicit dismissal paths; an outside-click
+            // close would fight the picker interactions like the detects popover.
+            .overlay_closable(false)
+            .open(self.tags_open)
+            .on_open_change(move |open, _w, app| {
+                entity.update(app, |t, cx| {
+                    t.tags_open = open;
+                    cx.notify();
+                });
+            })
+            .trigger(trigger)
+            .content(self.tags_content(p, cx))
+    }
+
+    /// Build the popover body: show-all/hide-all header plus one row per tag.
+    fn tags_content(&self, p: MoonPalette, cx: &mut Context<Self>) -> AnyElement {
+        let catalog = self.tag_catalog();
+        let empty = catalog.is_empty();
+        let head = h_flex()
+            .w_full()
+            .items_center()
+            .gap(design::ui_px(cx, 6.0))
+            .child(
+                MoonButton::new("news-tags-showall")
+                    .label(t!("news.tags.show_all").to_string())
+                    .size(MoonButtonSize::Micro)
+                    .variant(MoonButtonVariant::Ghost)
+                    .on_click(cx.listener(|this, _, _w, cx| this.set_all_tags_hidden(false, cx)))
+                    .render(),
+            )
+            .child(
+                MoonButton::new("news-tags-hideall")
+                    .label(t!("news.tags.hide_all").to_string())
+                    .size(MoonButtonSize::Micro)
+                    .variant(MoonButtonVariant::Ghost)
+                    .on_click(cx.listener(|this, _, _w, cx| this.set_all_tags_hidden(true, cx)))
+                    .render(),
+            )
+            .child(div().flex_1())
+            .child(
+                MoonButton::new("news-tags-close")
+                    .label("✕")
+                    .size(MoonButtonSize::Micro)
+                    .variant(MoonButtonVariant::Ghost)
+                    .on_click(cx.listener(|this, _, _w, cx| {
+                        this.tags_open = false;
+                        cx.notify();
+                    }))
+                    .render(),
+            );
+        let colors = self.backend.read(cx).news_tag_colors.clone();
+        let rows: Vec<AnyElement> = catalog
+            .into_iter()
+            .map(|tag| {
+                let current = colors.color(&tag).map(str::to_string);
+                self.tag_row(tag, current, p, cx)
+            })
+            .collect();
+        v_flex()
+            .id("news-tags-content")
+            .w_full()
+            .p(design::ui_px(cx, 8.0))
+            .gap(design::ui_px(cx, 4.0))
+            .bg(rgb(p.panel_high))
+            .border_1()
+            .border_color(rgb(p.border))
+            .rounded(design::r_button(cx))
+            .font_family(design::mono())
+            .child(head)
+            .when(empty, |this| {
+                this.child(
+                    div()
+                        .text_size(design::t_caption(cx))
+                        .text_color(rgb(p.text_muted))
+                        .child(t!("news.tags.empty").to_string()),
+                )
+            })
+            .children(rows)
+            .into_any_element()
+    }
+
+    /// One tag row: visibility checkbox · name · palette swatches (+ "none").
+    fn tag_row(
+        &self,
+        tag: String,
+        current: Option<String>,
+        p: MoonPalette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let hidden = self.hidden_tags.contains(&tag);
+        let cb_tag = tag.clone();
+        let checkbox = MoonCheckbox::new(SharedString::from(format!("news-tagvis-{tag}")))
+            .checked(!hidden)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(cx.listener(move |this, checked: &bool, _w, cx| {
+                this.toggle_tag_hidden(&cb_tag, !*checked, cx);
+            }));
+
+        let mut swatches = h_flex().items_center().gap(design::ui_px(cx, 4.0));
+        for key in TAG_PALETTE {
+            let c = key_color(key, p).unwrap_or(p.text_muted);
+            let selected = current.as_deref() == Some(key);
+            let sw_tag = tag.clone();
+            swatches = swatches.child(
+                div()
+                    .id(SharedString::from(format!("nt-{tag}-{key}")))
+                    .w(design::ui_px(cx, 14.0))
+                    .h(design::ui_px(cx, 14.0))
+                    .rounded(design::ui_px(cx, 3.0))
+                    .bg(rgb(c))
+                    .cursor_pointer()
+                    .border_color(rgb(if selected { p.text } else { p.border }))
+                    .map(|d| if selected { d.border_2() } else { d.border_1() })
+                    .on_click(cx.listener(move |this, _, _w, cx| {
+                        this.set_tag_color(&sw_tag, Some(key), cx);
+                    })),
+            );
+        }
+        let none_selected = current.is_none();
+        let none_tag = tag.clone();
+        swatches = swatches.child(
+            div()
+                .id(SharedString::from(format!("nt-{tag}-none")))
+                .w(design::ui_px(cx, 14.0))
+                .h(design::ui_px(cx, 14.0))
+                .rounded(design::ui_px(cx, 3.0))
+                .bg(rgb(p.surface))
+                .cursor_pointer()
+                .border_color(rgb(if none_selected { p.text } else { p.border }))
+                .map(|d| if none_selected { d.border_2() } else { d.border_1() })
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .child("×")
+                .on_click(cx.listener(move |this, _, _w, cx| {
+                    this.set_tag_color(&none_tag, None, cx);
+                })),
+        );
+
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap(design::ui_px(cx, 8.0))
+            .py(design::ui_px(cx, 2.0))
+            .child(checkbox)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(p.text))
+                    .child(format!("#{tag}")),
+            )
+            .child(swatches)
+            .into_any_element()
     }
 }
 
@@ -272,9 +526,16 @@ impl Panel for NewsView {
 impl Render for NewsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        let items = self.cached.clone();
         let now = moon_chart::paint::now_unix_ms() as i64;
         let lang = self.lang;
+        let colors = self.backend.read(cx).news_tag_colors.clone();
+        // Apply the tag-visibility filter (small N, cheap to materialize).
+        let visible: Vec<NewsItem> = self
+            .cached
+            .iter()
+            .filter(|it| self.is_visible(it))
+            .cloned()
+            .collect();
 
         let controls = h_flex()
             .w_full()
@@ -284,15 +545,22 @@ impl Render for NewsView {
             .px_2()
             .py_1()
             .child(self.lang_combo(cx))
+            .child(self.tags_popover(cx))
             .child(div().flex_1())
             .child(
                 div()
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text_muted))
-                    .child(format!("{}", items.len())),
+                    .child(format!("{}", visible.len())),
             );
 
-        let body: AnyElement = if items.is_empty() {
+        let body: AnyElement = if visible.is_empty() {
+            // Distinguish "no news at all" from "all news hidden by the tag filter".
+            let msg = if self.cached.is_empty() {
+                t!("news.empty")
+            } else {
+                t!("news.empty_filtered")
+            };
             div()
                 .flex_1()
                 .w_full()
@@ -300,7 +568,7 @@ impl Render for NewsView {
                 .items_center()
                 .justify_center()
                 .text_color(rgb(p.text_soft))
-                .child(t!("news.empty").to_string())
+                .child(msg.to_string())
                 .into_any_element()
         } else {
             v_flex()
@@ -310,9 +578,9 @@ impl Render for NewsView {
                 .min_h(px(0.0))
                 .overflow_y_scroll()
                 .children(
-                    items
+                    visible
                         .iter()
-                        .map(|it| render::news_card(it, lang, now, p, cx)),
+                        .map(|it| render::news_card(it, lang, &colors, now, p, cx)),
                 )
                 .into_any_element()
         };

@@ -1,20 +1,22 @@
 //! News card rendering: one card per logical news item, plus the small time/chip helpers.
 //!
 //! Visual language matches the terminal: a neutral source badge on the left, a right-aligned
-//! relative time, blue ticker chips, the body in the selected language (English fallback), and muted
-//! tag chips. Cards are separated by a hairline so items read as distinct blocks.
+//! relative time, blue ticker chips, the body in the selected language (English fallback), and tag
+//! chips that colour by the user's per-tag palette choice. A card whose tags are coloured also grows
+//! a left rail split into one segment per coloured tag. Cards are separated by a hairline.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
-use super::NewsLang;
+use super::{NewsLang, key_color};
 use crate::design;
+use moon_core::config::NewsTagColors;
 use moon_core::feed::NewsItem;
 
-/// Build a soft tinted badge (source / ticker / pending) using the house `MoonBadge`, sized to the
-/// card's caption tier. `color` (a `MoonPalette` token) tints both the fill and the text.
+/// Build a soft tinted badge (source / ticker / coloured tag) using the house `MoonBadge`, sized to
+/// the card's caption tier. `color` (a `MoonPalette` token) tints both the fill and the text.
 fn badge(text: impl Into<SharedString>, color: u32) -> impl IntoElement {
     MoonBadge::new(text)
         .variant(MoonBadgeVariant::Soft)
@@ -25,15 +27,35 @@ fn badge(text: impl Into<SharedString>, color: u32) -> impl IntoElement {
         .render()
 }
 
-/// Build one news card for `item` in the selected `lang`.
+/// Build one news card for `item` in the selected `lang`, colouring tags via `colors`.
 pub(super) fn news_card(
     item: &NewsItem,
     lang: NewsLang,
+    colors: &NewsTagColors,
     now_ms: i64,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
     let caption = design::t_caption(cx);
+
+    // Left rail: one segment per COLOURED tag (neutral tags take no segment), in tag order.
+    let rail_colors: Vec<u32> = item
+        .tags
+        .iter()
+        .filter_map(|t| colors.color(t).and_then(|k| key_color(k, p)))
+        .collect();
+    let rail = (!rail_colors.is_empty()).then(|| {
+        div()
+            .absolute()
+            .left(px(0.0))
+            .top(px(0.0))
+            .bottom(px(0.0))
+            .w(px(3.0))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .children(rail_colors.iter().map(|&c| div().flex_1().bg(rgb(c))))
+    });
 
     // --- meta row: source badge (left) · pending badge · spacer · relative time (right) ---
     let mut meta = h_flex()
@@ -73,22 +95,27 @@ pub(super) fn news_card(
             .child(body_text.to_string())
     });
 
-    // --- tag chips ---
+    // --- tag chips: coloured ones become a standout badge, neutral ones stay muted "#tag" text ---
     let tags = (!item.tags.is_empty()).then(|| {
         h_flex()
             .w_full()
             .flex_wrap()
             .gap(design::ui_px(cx, 6.0))
             .children(item.tags.iter().map(|tag| {
-                div()
-                    .flex_none()
-                    .text_size(caption)
-                    .text_color(rgb(p.text_muted))
-                    .child(format!("#{tag}"))
+                match colors.color(tag).and_then(|k| key_color(k, p)) {
+                    Some(c) => badge(tag.clone(), c).into_any_element(),
+                    None => div()
+                        .flex_none()
+                        .text_size(caption)
+                        .text_color(rgb(p.text_muted))
+                        .child(format!("#{tag}"))
+                        .into_any_element(),
+                }
             }))
     });
 
     v_flex()
+        .relative()
         .w_full()
         .flex_none()
         .gap(design::ui_px(cx, 6.0))
@@ -96,6 +123,7 @@ pub(super) fn news_card(
         .py(design::ui_px(cx, 9.0))
         .border_b_1()
         .border_color(rgb(p.border))
+        .when_some(rail, |this, r| this.child(r))
         .child(meta)
         .when_some(tickers, |this, t| this.child(t))
         .when_some(body, |this, b| this.child(b))
