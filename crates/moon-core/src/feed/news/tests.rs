@@ -25,29 +25,8 @@ fn parse_frame_reads_meta_body_coins_and_tags() {
     assert_eq!(item.coins, vec!["BTC", "ETH", "SOL"]);
     // Fragments joined with a single space.
     assert_eq!(item.en, "BTC moves higher");
-    assert_eq!(
-        item.tags.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
-        vec!["ETF", "Macro"]
-    );
+    assert_eq!(item.tags, vec!["ETF", "Macro"]);
     assert!(item.is_original);
-}
-
-#[test]
-fn tag_entity_strips_hash_and_keeps_service_colour() {
-    let item = parse_frame(
-        r##"{"meta":{"id":"e"},"news":{"en":["x"]},
-            "tags":{"entity":[{"text":"#ElonMusk","color":"#1E90FF"},{"text":"NoColour"}]}}"##,
-    )
-    .unwrap();
-    assert_eq!(item.tags.len(), 2);
-    // Leading '#' dropped; service colour retained.
-    assert_eq!(item.tags[0].text, "ElonMusk");
-    assert_eq!(item.tags[0].color.as_deref(), Some("#1E90FF"));
-    // Case-folded identity so it matches the lowercase catalog name.
-    assert_eq!(item.tags[0].key(), "elonmusk");
-    // Missing colour is None, not an empty string.
-    assert_eq!(item.tags[1].text, "NoColour");
-    assert_eq!(item.tags[1].color, None);
 }
 
 #[test]
@@ -58,10 +37,7 @@ fn tag_entity_dedups_and_strips_multiple_hashes() {
     )
     .unwrap();
     // "##listing" -> "listing"; "#Listing" dedups by case-folded key; "# spaced " -> "spaced".
-    assert_eq!(
-        item.tags.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
-        vec!["listing", "spaced"]
-    );
+    assert_eq!(item.tags, vec!["listing", "spaced"]);
 }
 
 #[test]

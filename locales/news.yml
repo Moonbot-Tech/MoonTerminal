@@ -38,10 +38,18 @@ news.tags:
   ru: "Теги"
   en: "Tags"
   es: "Etiquetas"
-news.tags.all:
-  ru: "Все теги"
-  en: "All tags"
-  es: "Todas las etiquetas"
+news.tags.show_all:
+  ru: "Показать всё"
+  en: "Show all"
+  es: "Mostrar todo"
+news.tags.hide_all:
+  ru: "Снять всё"
+  en: "Hide all"
+  es: "Ocultar todo"
+news.tags.empty:
+  ru: "Тегов пока нет"
+  en: "No tags yet"
+  es: "Sin etiquetas"
 news.lat.terminal:
   ru: "принято терминалом"
   en: "received by terminal"

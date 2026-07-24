@@ -14,8 +14,9 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{NewsView, parse_hex};
+use super::{NewsView, key_color};
 use crate::design;
+use moon_core::config::NewsTagColors;
 use moon_core::feed::NewsItem;
 
 /// Build a soft tinted badge (source / ticker / coloured tag) using the house `MoonBadge`, sized to
@@ -59,11 +60,12 @@ fn pending(item: &NewsItem, translate: bool) -> bool {
 }
 
 /// Build one news card for `item`. `translate` selects translated vs original body; `expanded`
-/// controls the latency chain (toggled by the chevron via `cx`); tags colour from the service's own
-/// per-tag hex (`NewsTag::color`).
+/// controls the latency chain (toggled by the chevron via `cx`); tags colour from the user's LOCAL
+/// assignment (`colors`), not the wire.
 pub(super) fn news_card(
     item: &NewsItem,
     translate: bool,
+    colors: &NewsTagColors,
     now_ms: i64,
     expanded: bool,
     p: MoonPalette,
@@ -75,7 +77,7 @@ pub(super) fn news_card(
     let rail_colors: Vec<u32> = item
         .tags
         .iter()
-        .filter_map(|t| t.color.as_deref().and_then(parse_hex))
+        .filter_map(|t| colors.color(&t.to_lowercase()).and_then(|k| key_color(k, p)))
         .collect();
     let rail = (!rail_colors.is_empty()).then(|| {
         div()
@@ -90,7 +92,7 @@ pub(super) fn news_card(
             .children(rail_colors.iter().map(|&c| div().flex_1().bg(rgb(c))))
     });
 
-    // --- meta row: source · pending · inline tickers · spacer · relative time · expand chevron ---
+    // --- meta row: source · inline tickers · spacer · relative time · pending · expand chevron ---
     let mut meta = h_flex()
         .w_full()
         .items_center()
@@ -99,12 +101,23 @@ pub(super) fn news_card(
     if !item.source.is_empty() {
         meta = meta.child(badge(item.source.to_uppercase(), p.text_muted));
     }
-    if pending(item, translate) {
-        meta = meta.child(badge(t!("news.pending").to_string(), p.amber));
-    }
-    // Tickers sit on the source line, right after the source.
+    // Tickers sit on the source line, right after the source. Clicking one opens the coin on Main
+    // (or a cores picker when several cores trade it) via NewsView::open_coin.
     for coin in &item.coins {
-        meta = meta.child(badge(coin.clone(), p.blue));
+        let coin_c = coin.clone();
+        meta = meta.child(
+            div()
+                .id(SharedString::from(format!("news-coin-{}-{coin}", item.id)))
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this: &mut NewsView, ev: &MouseDownEvent, window, cx| {
+                        this.open_coin(&coin_c, ev.position, window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(badge(coin.clone(), p.blue)),
+        );
     }
     let id = item.id.clone();
     let chevron = MoonButton::new(SharedString::from(format!("news-exp-{}", item.id)))
@@ -113,16 +126,18 @@ pub(super) fn news_card(
         .variant(MoonButtonVariant::Ghost)
         .on_click(cx.listener(move |this: &mut NewsView, _, _w, cx| this.toggle_expand(&id, cx)))
         .render();
-    meta = meta
-        .child(div().flex_1())
-        .child(
-            div()
-                .flex_none()
-                .text_size(caption)
-                .text_color(rgb(p.text_muted))
-                .child(rel_time(item.time_ms, now_ms)),
-        )
-        .child(chevron);
+    meta = meta.child(div().flex_1()).child(
+        div()
+            .flex_none()
+            .text_size(caption)
+            .text_color(rgb(p.text_muted))
+            .child(rel_time(item.time_ms, now_ms)),
+    );
+    // "Translation pending" sits on the right, after the time, only while awaiting the RU text.
+    if pending(item, translate) {
+        meta = meta.child(badge(t!("news.pending").to_string(), p.amber));
+    }
+    meta = meta.child(chevron);
 
     let latency = expanded.then(|| latency_block(item, p, cx));
 
@@ -143,8 +158,8 @@ pub(super) fn news_card(
             .flex_wrap()
             .gap(design::ui_px(cx, 6.0))
             .children(item.tags.iter().map(|tag| {
-                let label = format!("#{}", tag.text);
-                match tag.color.as_deref().and_then(parse_hex) {
+                let label = format!("#{tag}");
+                match colors.color(&tag.to_lowercase()).and_then(|k| key_color(k, p)) {
                     Some(c) => badge(label, c).into_any_element(),
                     None => div()
                         .flex_none()

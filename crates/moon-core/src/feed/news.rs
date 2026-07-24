@@ -13,27 +13,6 @@
 
 use serde_json::Value;
 
-/// One tag on a news item, from `tags.entity[*]`. The news service delivers each entity as
-/// `{"text":"#ElonMusk","color":"#1E90FF"}` — a display label and a suggested hex colour. `text` is
-/// stored WITHOUT its leading `#` (the UI adds it), and `color` is the service's own hex, used as the
-/// default tint unless the user overrides it.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct NewsTag {
-    /// Tag label without a leading `#`, e.g. `ElonMusk`. Never empty.
-    pub text: String,
-    /// Service-suggested hex colour (`#RRGGBB`), or `None`. The catalog carries no colour; only the
-    /// per-item entity does.
-    pub color: Option<String>,
-}
-
-impl NewsTag {
-    /// Case-folded identity used to dedup and to key filter/override state, so `#ElonMusk` (item) and
-    /// `#elonmusk` (catalog) are the same tag.
-    pub fn key(&self) -> String {
-        self.text.to_lowercase()
-    }
-}
-
 /// One logical news item: the row shown to the user, built from one or more wire frames sharing a
 /// `meta.id`. Moonproto-free.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -61,8 +40,9 @@ pub struct NewsItem {
     pub ru: String,
     /// Spanish body (`news.es`), possibly empty until a translation frame arrives.
     pub es: String,
-    /// Tags attached to this item (`tags.entity[*]`), each with the service's suggested colour.
-    pub tags: Vec<NewsTag>,
+    /// Tags attached to this item (`tags.entity[*].text`), without a leading `#`, deduped case-
+    /// insensitively. Colours are assigned locally (`NewsTagColors`), not taken from the wire.
+    pub tags: Vec<String>,
     /// Whether this row is still an original (`meta.isOriginal`); once a translation frame merges in,
     /// it becomes `false` and later original frames for the same id are ignored.
     pub is_original: bool,
@@ -151,9 +131,9 @@ pub fn parse_frame(json: &str) -> Option<NewsItem> {
         .and_then(|t| t.get("entity"))
         .and_then(Value::as_array)
         .map(|arr| {
-            // Dedup by case-folded key so a frame that repeats an entity does not double the chip
-            // and rail; keep the first occurrence (and its colour).
-            let mut out: Vec<NewsTag> = Vec::new();
+            // Labels without a leading '#', deduped by case-folded key so a frame that repeats an
+            // entity does not double the chip and rail; keep the first occurrence.
+            let mut out: Vec<String> = Vec::new();
             for e in arr {
                 let Some(text) = e.get("text").and_then(Value::as_str).map(strip_hash) else {
                     continue;
@@ -161,18 +141,13 @@ pub fn parse_frame(json: &str) -> Option<NewsItem> {
                 if text.is_empty() {
                     continue;
                 }
+                // Dedup by the same case-folded key the UI uses (`to_lowercase`), so an item can't
+                // carry two rail/chip entries for one logical tag.
                 let key = text.to_lowercase();
-                if out.iter().any(|t| t.key() == key) {
+                if out.iter().any(|t| t.to_lowercase() == key) {
                     continue;
                 }
-                out.push(NewsTag {
-                    color: e
-                        .get("color")
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string),
-                    text,
-                });
+                out.push(text);
             }
             out
         })
