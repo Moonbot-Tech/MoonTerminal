@@ -291,9 +291,17 @@ impl AssetsView {
         })
     }
 
-    /// Toggles the multi-core filter. `None` represents All: an explicit full selection collapses
-    /// to the equivalent empty-means-all state; otherwise it selects every scoped core. `Some(id)`
-    /// toggles one core. The filter is not persisted and reopens as All.
+    /// Toggles the multi-core filter. `None` represents All: a selection containing every scoped
+    /// core collapses to the equivalent empty-means-all state; otherwise it selects every scoped
+    /// core. Stale ids do not stand in for current cores. `Some(id)` toggles one core. The filter is
+    /// not persisted and reopens as All.
+    ///
+    /// Args:
+    ///     id: Core to toggle, or `None` for the All row.
+    ///     cx: View context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; the in-memory filter and cached rows are updated in place.
     pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
         let all: HashSet<CoreId> = self
             .scope_cores(self.backend.read(cx))
@@ -301,13 +309,7 @@ impl AssetsView {
             .map(|(id, _)| id)
             .collect();
         match id {
-            None => {
-                if !all.is_empty() && self.sel_cores.len() == all.len() {
-                    self.sel_cores.clear();
-                } else {
-                    self.sel_cores = all;
-                }
-            }
+            None => crate::controls::toggle_all_core_selection(&mut self.sel_cores, all),
             Some(id) => {
                 if !self.sel_cores.remove(&id) {
                     self.sel_cores.insert(id);

@@ -480,6 +480,23 @@ pub fn dropdown_content_widths<'a>(
     (label, trigger_w, menu_w)
 }
 
+/// Build a dropdown label inside one fixed, font-scaled trigger width.
+///
+/// Unlike [`dropdown_content_widths`], this never derives geometry from the current selection.
+/// Multi-select menus use it so an open popover remains anchored while its summary changes.
+///
+/// Args:
+///     cx: Application context used for text measurement and font scaling.
+///     cur: Current label without the caret.
+///     width: Unscaled fixed trigger width.
+///
+/// Returns:
+///     The fitted label with its caret and the font-scaled fixed width.
+pub fn fixed_dropdown_trigger(cx: &App, cur: &str, width: f32) -> (String, f32) {
+    let width = font_w(cx, width);
+    fit_dropdown_trigger(cx, cur, width, width)
+}
+
 /// Truncate `text` with an ellipsis to the available prefix budget, returning the result and width.
 ///
 /// Text is arbitrary Unicode and equal glyph width is not guaranteed outside Geist Mono, so the

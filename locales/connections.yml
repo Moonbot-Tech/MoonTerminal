@@ -72,10 +72,6 @@ conn.groups_panel_tip:
   ru: "Группа = отдельное главное окно. Внутри группы ядра автоматически собраны по бирже, которую сообщает подключение. Колонка «Чарты» сводит детекты с нескольких ядер группы в один график."
   en: "A group = a separate main window. Within each group, cores are collected automatically by the exchange reported by their connection. The “Charts” column merges detects from several group cores into one chart."
   es: "Un grupo = una ventana principal aparte. Dentro de cada grupo, los núcleos se agrupan automáticamente por la bolsa indicada por su conexión. La columna «Gráficos» une las detecciones de varios núcleos del grupo en un solo gráfico."
-conn.exchange_unknown:
-  ru: "Биржа не определена"
-  en: "Exchange not identified"
-  es: "Bolsa sin identificar"
 conn.pending_cores:
   ru: "Новые ядра — настройте перед сохранением"
   en: "New cores — configure before saving"

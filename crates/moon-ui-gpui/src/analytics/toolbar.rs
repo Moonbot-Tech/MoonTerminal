@@ -142,17 +142,29 @@ impl AnalyticsView {
             .items(items)
     }
 
-    /// Cores combo — multi-select (the shared widget, as in Orders/Report).
+    /// Render the exchange-grouped core multi-selector shared with Orders and Report.
+    ///
+    /// Args:
+    ///     cx: Analytics context used to read current cores and wire selection callbacks.
+    ///
+    /// Returns:
+    ///     The configured fixed-trigger dropdown.
     fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         // Raw DB result (names from `reports.sqlite`, possibly including cores whose server was
         // deleted) — ranked here, on render, against the current config.
-        let cores = crate::core_order::CoreOrder::new(&self.backend.read(cx).config)
-            .from_db(self.cores.clone());
+        let (cores, exchange_names) = {
+            let backend = self.backend.read(cx);
+            (
+                crate::core_order::CoreOrder::new(&backend.config).from_db(self.cores.clone()),
+                backend.session.market_source().core_exchange_names(),
+            )
+        };
         crate::controls::core_combo(
             cx,
             "an-core",
             &cores,
+            &exchange_names,
             &self.sel_cores,
             t!("report.all_cores").to_string(),
             |n| t!("report.cores_n", n = n).to_string(),

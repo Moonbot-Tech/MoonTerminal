@@ -4,7 +4,7 @@
 //! carry the privately constructed [`OrderedCores`] marker; arbitrary row shapes use
 //! [`CoreOrder::sort_by`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use moon_core::config::{AppConfig, CoreSortMode};
 use moon_core::session::CoreId;
@@ -32,6 +32,42 @@ impl IntoIterator for OrderedCores {
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
+}
+
+/// Partition ordered rows into unknown-first, alphabetically named exchange sections.
+///
+/// Callers decide membership and row order before invoking this helper. The returned member
+/// indices preserve that input order inside each exchange, while a [`BTreeMap`] makes known
+/// exchange sections deterministic. A missing exchange remains explicit rather than being guessed
+/// from a user-defined core name.
+///
+/// Args:
+///     rows: `(source index, reported exchange name)` pairs in the desired member order.
+///
+/// Returns:
+///     Exchange names and the source indices belonging to each section.
+pub(crate) fn exchange_sections<'a>(
+    rows: impl IntoIterator<Item = (usize, Option<&'a str>)>,
+) -> Vec<(Option<&'a str>, Vec<usize>)> {
+    let mut unknown = Vec::new();
+    let mut known: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, exchange) in rows {
+        match exchange {
+            Some(name) => known.entry(name).or_default().push(index),
+            None => unknown.push(index),
+        }
+    }
+
+    let mut sections = Vec::with_capacity(known.len() + usize::from(!unknown.is_empty()));
+    if !unknown.is_empty() {
+        sections.push((None, unknown));
+    }
+    sections.extend(
+        known
+            .into_iter()
+            .map(|(name, members)| (Some(name), members)),
+    );
+    sections
 }
 
 /// Insertion-order key, shared by both `Added*` modes so they cannot drift apart.

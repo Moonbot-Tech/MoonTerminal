@@ -17,6 +17,7 @@ mod actions;
 mod core_settings;
 pub(crate) mod core_settings_popup;
 mod docks;
+mod header;
 mod init;
 mod metrics;
 mod render;
@@ -129,6 +130,11 @@ pub(crate) struct Shell {
     /// mouse movement over an inactive window cannot reset the timer. Set by the window-activation
     /// observer and also used to gate engine-action toasts.
     window_active: bool,
+    /// Whether the active-core selector in the header is open.
+    ///
+    /// Shell owns this state so selecting a core can close the popover while clicks on exchange
+    /// labels and the scroll area leave it open.
+    header_core_selector_open: bool,
     /// Whether the controlled `MoonPopover` on the core-settings button is open.
     /// The popover handles outside-click dismissal, while opening seeds its editor fields.
     core_settings_open: bool,

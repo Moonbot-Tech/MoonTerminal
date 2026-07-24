@@ -7,18 +7,32 @@ impl OrdersPanel {
     /// Builds the multi-select core dropdown shared with the Report and Assets panels through
     /// [`crate::controls::core_combo`].
     ///
-    /// Its label shows All Cores for an empty or cardinality-matched selection, a resolved core name
-    /// for a sole selection, or the localized core count otherwise.
+    /// Its fixed-width label shows All Cores for an empty or complete selection and the localized
+    /// current-core count otherwise, including a sole selection.
+    ///
+    /// Args:
+    ///     cores: Group cores in canonical display order.
+    ///     cx: Panel context used to read exchanges and wire selection callbacks.
+    ///
+    /// Returns:
+    ///     The configured fixed-trigger dropdown.
     pub(super) fn source_combo(
         &self,
         cores: &OrderedCores,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity();
+        let exchange_names = self
+            .backend
+            .read(cx)
+            .session
+            .market_source()
+            .core_exchange_names();
         crate::controls::core_combo(
             cx,
             "orders-source",
             cores,
+            &exchange_names,
             &self.sel_cores,
             t!("orders.all_cores").to_string(),
             |n| t!("orders.cores_n", n = n).to_string(),

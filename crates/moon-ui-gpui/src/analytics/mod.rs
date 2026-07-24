@@ -451,13 +451,15 @@ impl AnalyticsView {
         }
     }
 
-    /// Selected cores for a query; empty or all means no core filter.
+    /// Return selected cores for a query, using an empty vector only for implicit or complete All.
+    ///
+    /// Returns:
+    ///     Explicit selected ids for a partial or stale selection, or empty for no core filter.
     fn cores_selected(&self) -> Vec<u64> {
-        if self.sel_cores.is_empty() || self.sel_cores.len() == self.cores.len() {
-            Vec::new()
-        } else {
-            self.sel_cores.iter().copied().collect()
-        }
+        crate::controls::normalized_core_filter_ids(
+            self.cores.iter().map(|(core, _)| *core),
+            &self.sel_cores,
+        )
     }
 
     /// Start/finish accounting for background operations. Every operation that calls
@@ -686,16 +688,22 @@ impl AnalyticsView {
         self.set_period(Period::Custom(from, to), window, cx);
     }
 
-    /// Toggle a core in the multi-selection. `None` is All: it fills an empty set with every core,
-    /// but clears any nonempty set. Both the empty and full representations query all cores.
+    /// Toggle one core or the All row in the multi-selection.
+    ///
+    /// The All row clears a selection containing every current core, or replaces any partial or
+    /// stale selection with the current full set. Both empty and full representations query all.
+    ///
+    /// Args:
+    ///     core: Core to toggle, or `None` for the All row.
+    ///     cx: Analytics context used to reload data and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; the in-memory filter and loaded analytics are updated in place.
     fn toggle_core(&mut self, core: Option<u64>, cx: &mut Context<Self>) {
         match core {
             None => {
-                if self.sel_cores.is_empty() {
-                    self.sel_cores = self.cores.iter().map(|(c, _)| *c).collect();
-                } else {
-                    self.sel_cores.clear();
-                }
+                let all = self.cores.iter().map(|(core, _)| *core).collect();
+                crate::controls::toggle_all_core_selection(&mut self.sel_cores, all);
             }
             Some(c) => {
                 if !self.sel_cores.remove(&c) {

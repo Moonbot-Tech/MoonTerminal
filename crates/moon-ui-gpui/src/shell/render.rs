@@ -59,6 +59,13 @@ impl Shell {
 
 impl Render for Shell {
     /// Render the group window with its two chrome rows, dock, status bar, and anchored popovers.
+    ///
+    /// Args:
+    ///     window: Current OS window used for viewport state and input hooks.
+    ///     cx: Shell context used to read state, build elements, and wire callbacks.
+    ///
+    /// Returns:
+    ///     The complete window element tree for the current frame.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::SHELL_RENDER);
 
@@ -149,6 +156,7 @@ impl Render for Shell {
                 self.backend.clone(),
                 cx.entity(),
                 ticker_sel,
+                self.header_core_selector_open,
                 self.core_settings_open,
                 core_settings_content,
                 chrome_width,

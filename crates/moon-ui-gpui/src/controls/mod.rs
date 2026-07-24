@@ -9,8 +9,8 @@
 //! - [`coin_menu`] provides the shared coin context menu;
 //! - [`coin_search`] provides coin search and the shared `COIN - Server` dropdown for chart tabs,
 //!   the header ticker, and the Report coin filter;
-//! - [`core_combo`] provides the shared multi-select core picker for Orders, Report, Assets,
-//!   Analytics, and Core Status;
+//! - [`core_combo`] provides exchange grouping plus the shared multi-select core picker for Orders,
+//!   Report, Assets, Analytics, and Core Status;
 //! - [`fmt`] formats size, sell, and field values and computes mouse-wheel steps;
 //! - [`manual_strat`] provides the header's manual-strategy toggle and picker;
 //! - [`metric`] provides TP/SL/leverage trigger buttons and popup content;
@@ -29,7 +29,9 @@ mod strips;
 pub(crate) mod toolbar;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
-pub(crate) use core_combo::core_combo;
+pub(crate) use core_combo::{
+    core_combo, core_menu_sections, normalized_core_filter_ids, toggle_all_core_selection,
+};
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use manual_strat::manual_strategy_controls;
 pub(crate) use manual_strat::select_manual_strategy;

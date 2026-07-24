@@ -239,9 +239,16 @@ impl OrdersPanel {
 
     /// Toggle the selected-core filter.
     ///
-    /// `None` represents the All item: if every group core is explicitly selected, clear the set
-    /// back to the empty-means-all form; otherwise select every group core. `Some(id)` toggles one
-    /// core. The selection is not persisted and resets to all cores.
+    /// `None` represents the All item: if every group core is selected, clear the set back to the
+    /// empty-means-all form; otherwise select every group core. Stale ids do not stand in for
+    /// current cores. `Some(id)` toggles one core. The selection is not persisted and resets to all.
+    ///
+    /// Args:
+    ///     id: Core to toggle, or `None` for the All row.
+    ///     cx: Panel context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; the in-memory filter and cached rows are updated in place.
     pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
         let all: HashSet<CoreId> = self
             .backend
@@ -253,13 +260,7 @@ impl OrdersPanel {
             .map(|s| s.id)
             .collect();
         match id {
-            None => {
-                if !all.is_empty() && self.sel_cores.len() == all.len() {
-                    self.sel_cores.clear();
-                } else {
-                    self.sel_cores = all;
-                }
-            }
+            None => crate::controls::toggle_all_core_selection(&mut self.sel_cores, all),
             Some(id) => {
                 if !self.sel_cores.remove(&id) {
                     self.sel_cores.insert(id);

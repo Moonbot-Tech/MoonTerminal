@@ -17,7 +17,7 @@ use rust_i18n::t;
 
 use moon_core::session::CoreId;
 
-use crate::panels::{RadioMark, RenderGate, data_table_host, radio_items};
+use crate::panels::{RenderGate, data_table_host};
 use crate::{Backend, design};
 
 use super::table::{COLS, ColDef, Entry, moon, moon_alpha, parse_vol, screener_row, sort_entries};
@@ -365,12 +365,24 @@ impl ScreenerView {
         )
     }
 
-    /// Build the All-cores plus session-core source selector, matching Orders.
+    /// Build the All-cores plus exchange-grouped session-core source selector.
+    ///
+    /// A disconnected selected core remains visible as its numeric id until the user chooses a
+    /// current source, rather than being mislabeled as All cores.
+    ///
+    /// Args:
+    ///     cx: Screener context used to read sessions, exchanges, and selection state.
+    ///
+    /// Returns:
+    ///     The configured source dropdown.
     fn source_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        let cores = {
+        let (cores, exchange_names) = {
             let b = self.backend.read(cx);
-            crate::core_order::CoreOrder::new(&b.config)
-                .from_sessions(b.session.sessions(), |_| true)
+            (
+                crate::core_order::CoreOrder::new(&b.config)
+                    .from_sessions(b.session.sessions(), |_| true),
+                b.session.market_source().core_exchange_names(),
+            )
         };
         // Resolve the localized All-cores label once for every use in this selector.
         let all_label = t!("screener.all_cores").to_string();
@@ -380,27 +392,51 @@ impl ScreenerView {
                 .iter()
                 .find(|(c, _)| *c == id)
                 .map(|(_, n)| n.clone())
-                .unwrap_or_else(|| all_label.clone()),
+                .unwrap_or_else(|| format!("#{id}")),
         };
+        let unknown_exchange = t!("common.exchange_unknown").to_string();
+        let sections = crate::controls::core_menu_sections(&cores, &exchange_names);
         let view = cx.entity();
-        let mut options: Vec<(ScrSource, SharedString, SharedString)> =
-            vec![(ScrSource::All, "all".into(), all_label.clone().into())];
-        for (id, name) in cores.iter() {
-            options.push((
-                ScrSource::Core(*id),
-                format!("core-{id}").into(),
-                name.clone().into(),
-            ));
+        let all_view = view.clone();
+        let mut items = vec![
+            MoonMenuItem::with_key("all", all_label.clone())
+                .checked(self.source == ScrSource::All)
+                .on_click(move |_, _, app| {
+                    all_view.update(app, |this, cx| this.set_source(ScrSource::All, cx));
+                }),
+        ];
+        if !sections.is_empty() {
+            items.push(MoonMenuItem::separator());
         }
-        let items = radio_items(options, self.source, RadioMark::Check, move |app, src| {
-            view.update(app, |t, cx| t.set_source(src, cx));
-        });
-        // Use the shared core-combo width calculation: size the trigger for its current label within
-        // the common minimum and cap, and size the menu for its longest item with a 160 px minimum.
+        for (exchange, members) in &sections {
+            items.push(MoonMenuItem::label(
+                exchange.unwrap_or(unknown_exchange.as_str()),
+            ));
+            for (id, name) in members {
+                let id = *id;
+                let item_view = view.clone();
+                items.push(
+                    MoonMenuItem::with_key(format!("core-{id}"), *name)
+                        .checked(self.source == ScrSource::Core(id))
+                        .on_click(move |_, _, app| {
+                            item_view
+                                .update(app, |this, cx| this.set_source(ScrSource::Core(id), cx));
+                        }),
+                );
+            }
+        }
+        // Keep the selected core name in this single-select trigger, while sizing the menu for both
+        // exchange headers and core names.
         let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
             cx,
             &cur,
-            std::iter::once(all_label.as_str()).chain(cores.iter().map(|(_, n)| n.as_str())),
+            std::iter::once(all_label.as_str())
+                .chain(
+                    sections
+                        .iter()
+                        .map(|(exchange, _)| exchange.unwrap_or(unknown_exchange.as_str())),
+                )
+                .chain(cores.iter().map(|(_, name)| name.as_str())),
             design::CORES_TRIGGER_MIN_W,
             160.0,
         );
@@ -411,6 +447,7 @@ impl ScreenerView {
             .trigger_width(trigger_w)
             .menu_width(menu_w)
             .menu_size(MoonMenuSize::Compact)
+            .menu_max_height(design::ui_value(cx, 360.0))
             .items(items)
     }
 
