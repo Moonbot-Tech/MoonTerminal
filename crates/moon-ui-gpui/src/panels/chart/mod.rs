@@ -15,6 +15,7 @@
 
 mod figures;
 mod geom;
+mod news;
 mod refs;
 mod render;
 mod render_input;
@@ -188,6 +189,8 @@ pub struct ChartPanel {
     /// Point of the most recent order-line hover hit-test. The Delphi-style movement threshold keeps
     /// subpixel raw mouse movement from scanning the lines again.
     order_hover_probe: Option<(f32, f32)>,
+    /// News marks for this chart's coin plus their hover state; see [`news`].
+    news: news::NewsState,
     /// Figure-drawing state for this panel: pencil draft, hover, and drag.
     fig_draft: Option<figures::FigDraft>,
     /// Screen point where the latest draft node was placed. Releasing sufficiently far away
@@ -220,6 +223,10 @@ impl ChartPanel {
         // Pencil and selection state changes in the tab strip or through hotkeys reach this panel
         // through the backend observer; propagate them into the figure engine.
         self.sync_fig_visual(cx);
+        // News arrives on the same observer; the signature gate makes the common case a no-op. Its
+        // gems are own-pass and present themselves, so a news item never wakes the GPUI scene — an
+        // open hover card catches up on the next repaint.
+        self.sync_news_marks(cx);
         self.clear_settled_order_drag_preview(cx) && self.apply_order_visual(cx)
     }
 
@@ -358,6 +365,7 @@ impl ChartPanel {
             pending_order_drag: None,
             order_hover: None,
             order_hover_probe: None,
+            news: news::NewsState::default(),
             fig_draft: None,
             fig_draw_down: None,
             fig_hover: None,
@@ -476,6 +484,7 @@ impl ChartPanel {
             pending_order_drag: None,
             order_hover: None,
             order_hover_probe: None,
+            news: news::NewsState::default(),
             fig_draft: None,
             fig_draw_down: None,
             fig_hover: None,

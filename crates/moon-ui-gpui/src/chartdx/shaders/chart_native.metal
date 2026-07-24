@@ -547,26 +547,61 @@ fragment float4 seg_fragment(SOut in [[stage_in]]) {
     return in.color;
 }
 
-struct MOut { float4 position [[position]]; float4 color; float2 local; float shape [[flat]]; float thick [[flat]]; float sz [[flat]]; };
+// shape: 0 = cross, 1 = filled knot, 2 = news gem (pos.z half height, pos.w half width, m.z/m.w the
+// tag-colour wedge). m.y anchor: 0 = price, 1 = plot bottom (pos.y is physical px above the bottom
+// edge, plus a horizontal clip to the plot). Keep in sync with order_lines.hlsl / native_marker.wgsl.
+struct MOut { float4 position [[position]]; float4 color; float2 local; float shape [[flat]]; float thick [[flat]]; float sz [[flat]]; float2 xclip [[flat]]; float2 wedge [[flat]]; };
+
+constant float GEM_FACET_GAP = 0.055;
+constant float GEM_LEFT_SHADE = 0.78;
+constant float GEM_TWO_PI = 6.28318531;
 
 vertex MOut marker_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                           constant ChartView& cv [[buffer(0)]],
                           const device GpuMarker* markers [[buffer(1)]]) {
     GpuMarker mk = markers[iid];
-    float2 center = round(data_to_px(cv, mk.pos.x, mk.pos.y));
+    float2 c = data_to_px(cv, mk.pos.x, mk.pos.y);
+    bool bottom = mk.m.y > 0.5;
+    if (bottom) c.y = cv.bounds.y + cv.bounds.w - mk.pos.y;
+    float2 center = round(c);
     float half_sz = max(mk.pos.z, 1.0);
-    float2 local = CORNERS_ALT[vid] * half_sz;
-    return { to_clip(center + local, cv.resolution), mk.color, local, mk.m.x, mk.pos.w, half_sz };
+    // The gem is taller than wide; every other marker keeps its square quad.
+    float2 half_ext = (mk.m.x >= 1.5) ? float2(max(mk.pos.w, 1.0), half_sz) : float2(half_sz, half_sz);
+    float2 local = CORNERS_ALT[vid] * half_ext;
+    // Price-anchored markers keep their historical reach (order lines extend into the book zone).
+    float2 xclip = bottom ? float2(cv.bounds.x, cv.bounds.x + cv.bounds.z) : float2(-1e30, 1e30);
+    float2 wedge = float2(mk.m.z, max(mk.m.w, 1.0));
+    return { to_clip(center + local, cv.resolution), mk.color, local, mk.m.x, mk.pos.w, half_sz, xclip, wedge };
 }
 
 fragment float4 marker_fragment(MOut in [[stage_in]]) {
+    if (in.position.x < in.xclip.x || in.position.x > in.xclip.y) discard_fragment();
     if (in.shape < 0.5) {
         float h = max(in.thick, 1.0) * 0.5;
         float d1 = abs(in.local.x - in.local.y) * 0.70710678;
         float d2 = abs(in.local.x + in.local.y) * 0.70710678;
         if (min(d1, d2) > h) discard_fragment();
-    } else if (length(in.local) > in.sz) {
-        discard_fragment();
+        return in.color;
     }
-    return in.color;
+    if (in.shape < 1.5) {
+        if (length(in.local) > in.sz) discard_fragment();
+        return in.color;
+    }
+    // News gem: a vertically elongated diamond, optionally cut into wedges by tag colour.
+    float hw = max(in.thick, 1.0);
+    if (abs(in.local.x) / hw + abs(in.local.y) / max(in.sz, 1.0) > 1.0) discard_fragment();
+    if (in.wedge.y > 1.5) {
+        // Wedge index runs clockwise from the top tip, so a two-colour gem splits left/right.
+        float ang = atan2(in.local.x, -in.local.y);
+        if (ang < 0.0) ang += GEM_TWO_PI;
+        float f = ang / GEM_TWO_PI * in.wedge.y;
+        float idx = floor(f);
+        if (abs(idx - in.wedge.x) > 0.5) discard_fragment();
+        // Facet gaps only ABOVE the center: with an even wedge count one boundary lands exactly on
+        // the bottom tip, and cutting there would lift the gem off the axis it marks.
+        float frac = f - idx;
+        if (in.local.y < 0.0 && (frac < GEM_FACET_GAP || frac > 1.0 - GEM_FACET_GAP)) discard_fragment();
+    }
+    float shade = (in.local.x < 0.0) ? GEM_LEFT_SHADE : 1.0;
+    return float4(in.color.rgb * shade, in.color.a);
 }

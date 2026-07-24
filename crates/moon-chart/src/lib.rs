@@ -19,6 +19,8 @@ pub use moon_core::data;
 pub mod figures;
 pub use figures::build_figure_geometry;
 pub mod layers;
+pub mod news_marks;
+pub use news_marks::build_news_geometry;
 pub mod order_geometry;
 pub use order_geometry::build_order_geometry;
 pub mod paint;

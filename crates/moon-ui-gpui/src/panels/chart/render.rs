@@ -471,6 +471,13 @@ impl Render for ChartPanel {
         } else {
             None
         };
+        // News card: the live modifier state beats the cached flag, because GPUI delivers modifier
+        // changes only along the focus path. Re-validate the hover first — the chart scrolls between
+        // pointer events, so a mark can slide out from under a resting cursor.
+        let news_ctrl = window.modifiers().secondary();
+        self.revalidate_news_hover(cx);
+        let news_card = self.news_card(ppp, news_ctrl, palette, cx);
+
         let show_empty_logo = axis_panes.is_empty();
         let (slot_w, _) = self.chart.slot_dev_size();
         let logo_w = ((slot_w as f32 / ppp) * 0.28).clamp(180.0, 280.0);
@@ -518,6 +525,13 @@ impl Render for ChartPanel {
             )
             .on_mouse_move(cx.listener(render_input::mouse_move))
             .on_hover(cx.listener(render_input::hover))
+            // Ctrl gates the news-mark card. Without this the card would only appear after the
+            // pointer moved AGAIN, so pressing Ctrl while already parked on a ring did nothing.
+            .on_modifiers_changed(cx.listener(
+                |this: &mut ChartPanel, e: &ModifiersChangedEvent, _w, cx| {
+                    this.note_news_modifiers(e.modifiers, cx);
+                },
+            ))
             // The own-pass engine synchronously obtains slot geometry from `GpuFrameInfo.bounds`
             // in `frame()`; see data_state::apply_slot_geometry. The first present therefore uses
             // the real slot, without expanding to a default size or lagging during reflow.
@@ -577,6 +591,9 @@ impl Render for ChartPanel {
                     .h(px(h))
                     .bg(rgba_from(palette.blue, 0.03))
             }))
+            // News-mark card: above the chart, below every chart control (close/pin/lock/broom and
+            // the action buttons), so it can never swallow a trading click's target.
+            .children(news_card)
             .children(close_btns.into_iter().map(|(idx, right, top)| {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-close-{idx}")))

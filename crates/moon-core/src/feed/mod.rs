@@ -4,6 +4,7 @@
 mod assets;
 pub mod live;
 pub mod news;
+pub mod news_marks;
 mod order_edit;
 mod strategies;
 pub mod synth;

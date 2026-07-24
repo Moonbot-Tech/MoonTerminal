@@ -3,8 +3,48 @@
 //! and Custom panels share these paths. Split from `chart.rs`.
 
 use gpui::*;
+use moon_core::figures::FigNode;
 
 use super::ChartPanel;
+
+/// Mapping between one pane's plot data coordinates (time/price) and its device pixels.
+///
+/// Shared by every interactive chart layer — figures place their nodes through it, news marks place
+/// their gems — so a single description of "where does this moment sit on screen" serves all of them
+/// and cannot drift between two copies.
+pub(super) struct PaneMap {
+    pub plot: moon_chart::view::Rect,
+    pub epoch_ms: f64,
+    pub left_rel: f32,
+    pub window_ms: f32,
+    pub center: f32,
+    pub range: f32,
+}
+
+impl PaneMap {
+    pub fn time_at_x(&self, x: f32) -> f64 {
+        let rel = self.left_rel + (x - self.plot.x) / self.plot.w.max(1.0) * self.window_ms;
+        self.epoch_ms + rel as f64
+    }
+    pub fn x_of_time(&self, time_ms: f64) -> f32 {
+        let rel = (time_ms - self.epoch_ms) as f32;
+        self.plot.x + (rel - self.left_rel) / self.window_ms.max(1e-3) * self.plot.w
+    }
+    pub fn price_at_y(&self, y: f32) -> f64 {
+        let rel_y = ((y - self.plot.y) / self.plot.h.max(1.0)).clamp(0.0, 1.0);
+        (self.center + (0.5 - rel_y) * self.range) as f64
+    }
+    pub fn y_of_price(&self, price: f64) -> f32 {
+        let rel_y = 0.5 - (price as f32 - self.center) / self.range.max(1e-9);
+        self.plot.y + rel_y * self.plot.h
+    }
+    pub fn node_at(&self, pos: (f32, f32)) -> FigNode {
+        FigNode {
+            time_ms: self.time_at_x(pos.0),
+            price: self.price_at_y(pos.1),
+        }
+    }
+}
 
 impl ChartPanel {
     pub(super) fn chart_local(&self, pos: Point<Pixels>) -> Option<((f32, f32), bool)> {
@@ -164,6 +204,35 @@ impl ChartPanel {
 
     pub(super) fn local_plot_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {
         self.local_pane_areas(pane).map(|(plot, _)| plot)
+    }
+
+    /// Build a pane's plot mapping, or return `None` when the pane has no valid view.
+    pub(super) fn pane_map(&self, pane: usize) -> Option<PaneMap> {
+        let plot = self.local_plot_rect(pane)?;
+        let (epoch_ms, left_rel, window_ms, center, range) =
+            self.chart.with_container(|container| {
+                container.pane(pane).map(|p| {
+                    let (l, w) = p.view.visible_x(plot.w);
+                    (
+                        p.view.epoch_ms,
+                        l,
+                        w,
+                        p.view.render_center,
+                        p.view.render_range,
+                    )
+                })
+            })?;
+        if !(range > 0.0) || window_ms <= 0.0 {
+            return None;
+        }
+        Some(PaneMap {
+            plot,
+            epoch_ms,
+            left_rel,
+            window_ms,
+            center,
+            range,
+        })
     }
 
     fn local_glass_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {

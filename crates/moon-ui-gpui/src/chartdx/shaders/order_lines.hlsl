@@ -106,29 +106,68 @@ float4 seg_fragment(SOut i) : SV_Target {
     return float4(i.color.rgb, i.color.a);
 }
 
-// ── Marker (MarkerInstance: color, pos=(t_rel,price,size,thickness), m=(shape,_,_,_)) ─
+// ── Marker (MarkerInstance: color, pos=(t_rel,price,size,thickness), m=(shape,anchor,sector,sectors)) ─
+// shape: 0 = cross, 1 = filled knot, 2 = news gem. anchor: 0 = price (Y through the chart transform),
+// 1 = plot bottom (pos.y is physical px ABOVE the bottom edge, and the mark is clipped to the plot
+// horizontally so it cannot spill into the axis gutter or the order book as it scrolls off).
+// The gem reads pos.z as half HEIGHT and pos.w as half WIDTH, and paints only wedge m.z of m.w —
+// one instance per tag colour, which is how a news mark carries several colours at once.
 struct Marker { float4 color; float4 pos; float4 m; };
 StructuredBuffer<Marker> markers : register(t1);
-struct MOut { float4 pos : SV_Position; float4 color : COLOR0; float2 local : TEXCOORD0; nointerpolation float shape : TEXCOORD1; nointerpolation float thick : TEXCOORD2; nointerpolation float sz : TEXCOORD3; };
+struct MOut { float4 pos : SV_Position; float4 color : COLOR0; float2 local : TEXCOORD0; nointerpolation float shape : TEXCOORD1; nointerpolation float thick : TEXCOORD2; nointerpolation float sz : TEXCOORD3; nointerpolation float2 xclip : TEXCOORD4; nointerpolation float2 wedge : TEXCOORD5; };
+
+// Gap between wedges, as a fraction of one wedge, and the shading of the gem's left face. Together
+// they are what makes a multi-colour mark read as a cut gem rather than as a flat blob.
+static const float GEM_FACET_GAP = 0.055;
+static const float GEM_LEFT_SHADE = 0.78;
+static const float GEM_TWO_PI = 6.28318531;
 
 MOut marker_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     Marker mk = markers[iid];
     float2 c = data_to_px(mk.pos.x, mk.pos.y);
+    bool bottom = mk.m.y > 0.5;
+    if (bottom) c.y = cv_bounds.y + cv_bounds.w - mk.pos.y;
     float2 center = float2(round(c.x), round(c.y));
     float half_sz = max(mk.pos.z, 1.0);
+    // The gem is taller than wide; every other marker keeps its square quad.
+    float2 half_ext = (mk.m.x >= 1.5) ? float2(max(mk.pos.w, 1.0), half_sz) : float2(half_sz, half_sz);
     float2 corner = CORNERS[vid];
-    float2 px = center + corner * half_sz;
-    MOut o; o.pos = float4(to_clip(px), 0, 1); o.color = mk.color; o.local = corner * half_sz;
-    o.shape = mk.m.x; o.thick = mk.pos.w; o.sz = half_sz; return o;
+    float2 px = center + corner * half_ext;
+    MOut o; o.pos = float4(to_clip(px), 0, 1); o.color = mk.color; o.local = corner * half_ext;
+    o.shape = mk.m.x; o.thick = mk.pos.w; o.sz = half_sz;
+    // Price-anchored markers keep their historical reach (order lines extend into the book zone).
+    o.xclip = bottom ? float2(cv_bounds.x, cv_bounds.x + cv_bounds.z) : float2(-1e30, 1e30);
+    o.wedge = float2(mk.m.z, max(mk.m.w, 1.0));
+    return o;
 }
 float4 marker_fragment(MOut i) : SV_Target {
+    if (i.pos.x < i.xclip.x || i.pos.x > i.xclip.y) discard;
     if (i.shape < 0.5) {
         float h = max(i.thick, 1.0) * 0.5;
         float d1 = abs(i.local.x - i.local.y) * 0.70710678;
         float d2 = abs(i.local.x + i.local.y) * 0.70710678;
         if (min(d1, d2) > h) discard;
-    } else {
-        if (length(i.local) > i.sz) discard;
+        return float4(i.color.rgb, i.color.a);
     }
-    return float4(i.color.rgb, i.color.a);
+    if (i.shape < 1.5) {
+        if (length(i.local) > i.sz) discard;
+        return float4(i.color.rgb, i.color.a);
+    }
+    // News gem: a vertically elongated diamond, optionally cut into wedges by tag colour.
+    float hw = max(i.thick, 1.0);
+    if (abs(i.local.x) / hw + abs(i.local.y) / max(i.sz, 1.0) > 1.0) discard;
+    if (i.wedge.y > 1.5) {
+        // Wedge index runs clockwise from the top tip, so a two-colour gem splits left/right.
+        float ang = atan2(i.local.x, -i.local.y);
+        if (ang < 0.0) ang += GEM_TWO_PI;
+        float f = ang / GEM_TWO_PI * i.wedge.y;
+        float idx = floor(f);
+        if (abs(idx - i.wedge.x) > 0.5) discard;
+        // Facet gaps only ABOVE the center: with an even wedge count one boundary lands exactly on
+        // the bottom tip, and cutting there would lift the gem off the axis it marks.
+        float frac = f - idx;
+        if (i.local.y < 0.0 && (frac < GEM_FACET_GAP || frac > 1.0 - GEM_FACET_GAP)) discard;
+    }
+    float shade = (i.local.x < 0.0) ? GEM_LEFT_SHADE : 1.0;
+    return float4(i.color.rgb * shade, i.color.a);
 }

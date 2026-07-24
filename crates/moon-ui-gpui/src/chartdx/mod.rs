@@ -26,6 +26,7 @@ pub mod cursor;
 mod data_state;
 mod engine;
 mod figures_sync;
+mod news_sync;
 pub use engine::ChartGhostCursor;
 pub(crate) use figures_sync::FigureVisual;
 #[cfg(windows)]
@@ -318,6 +319,8 @@ struct PaneRender {
     last_order_drag_preview: Option<(u64, LineKind, u32)>,
     /// Figure signature from store and interaction encoded into userdata; `u64::MAX` means dirty.
     last_figures_sig: u64,
+    /// News-mark signature encoded into userdata; `u64::MAX` means dirty.
+    last_news_sig: u64,
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
     /// `prepare_text` draws them and maps Y through `view` each frame.
     order_labels: Vec<OrderLabel>,
@@ -429,6 +432,7 @@ impl PaneRender {
             last_order_highlight_uid: None,
             last_order_drag_preview: None,
             last_figures_sig: u64::MAX,
+            last_news_sig: u64::MAX,
             order_labels: Vec::new(),
             order_label_order: Vec::new(),
             orderbook_labels: Vec::new(),
@@ -706,6 +710,11 @@ struct ChartDataState {
     /// This panel's figure interaction state for drawing preview, hover, and selection plus its revision.
     figure_visual: figures_sync::FigureVisual,
     figure_visual_rev: u64,
+    /// This panel's news marks (tag-coloured gems on the plot's bottom edge) plus their revision;
+    /// see `news_sync`. Shared with the panel, which hit-tests the same list.
+    news_marks: std::rc::Rc<Vec<moon_chart::news_marks::NewsMark>>,
+    /// Index of the mark under the cursor, drawn grown from the axis.
+    news_hovered: Option<usize>,
     market_source: Option<MarketDataSource>,
     last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,

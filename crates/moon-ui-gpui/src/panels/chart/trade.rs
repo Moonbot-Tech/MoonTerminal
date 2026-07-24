@@ -25,7 +25,7 @@ const ORDER_HOVER_MOVE_Y: f32 = 0.5;
 /// Return whether the cursor moved far enough since the previous probe to recompute line hover.
 ///
 /// A missing previous point, on first entry or return to the chart, always requires a probe.
-fn hover_probe_due(prev: Option<(f32, f32)>, pos: (f32, f32)) -> bool {
+pub(super) fn hover_probe_due(prev: Option<(f32, f32)>, pos: (f32, f32)) -> bool {
     match prev {
         Some((px, py)) => {
             (pos.0 - px).abs() >= ORDER_HOVER_MOVE_X || (pos.1 - py).abs() >= ORDER_HOVER_MOVE_Y

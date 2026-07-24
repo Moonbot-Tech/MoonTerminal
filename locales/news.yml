@@ -110,3 +110,8 @@ news.search:
   ru: "Поиск по новостям…"
   en: "Search news…"
   es: "Buscar noticias…"
+# Chart news marks: the gems on the chart's bottom edge and their Ctrl-hover card.
+news.chart.more:
+  ru: "ещё %{n}"
+  en: "%{n} more"
+  es: "%{n} más"

@@ -421,8 +421,14 @@ impl AppConfig {
             return Ok(None);
         }
 
+        // `MOON_CONFIG_PLAINTEXT_SYNTHETIC=1` makes that core the SYNTHETIC feed (`feed::synth`):
+        // no network, no API key, a deterministic tick/book/news stream. It is how chart behaviour
+        // that needs specific market or news data is driven locally without touching a real config.
+        let synthetic = std::env::var_os("MOON_CONFIG_PLAINTEXT_SYNTHETIC").is_some();
         let key = match std::env::var("MOON_CONFIG_PLAINTEXT_KEY") {
             Ok(key) if !key.trim().is_empty() => key,
+            // A synthetic core never authenticates, so it needs no key.
+            _ if synthetic => "synthetic".to_string(),
             _ => {
                 let path = std::env::var("MOON_CONFIG_PLAINTEXT_KEY_FILE").map_err(|_| {
                     anyhow::anyhow!(
@@ -461,7 +467,7 @@ impl AppConfig {
                 group,
                 market,
                 color: servers::default_color(),
-                synthetic: false,
+                synthetic,
                 chart_bundle: String::new(),
                 order_sizes: None,
                 order_size_sel: None,

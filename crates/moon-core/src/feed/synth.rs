@@ -2,10 +2,16 @@
 //! It does NOT access the network: it sends Ready + Identity + AddToChart detects (which create
 //! stress-window containers), plus fixed-frequency tick and order-book streams. The goal is an
 //! identical reproducible load in native and Tauri builds for a fair CPU/GPU comparison.
+//!
+//! It also emits synthetic NEWS for its markets, which is the only way to drive the chart's news
+//! marks (the gems on the plot's bottom edge and their Ctrl-hover card) without a live news
+//! subscription: real news for a chosen coin inside the chart's visible window cannot be summoned
+//! on demand. See `MOON_SYNTH_NEWS*` below.
 
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+use super::news::{NewsItem, NewsSnapshot, NEWS_RING_CAP};
 use super::{
     ConnStatus, CoreCmd, DetectRow, ExchangeId, FeedMsg, FeedTx, Level, MarketDirty,
     MarketDirtyFlags, OrderBook, Side, Tick,
@@ -97,6 +103,28 @@ pub fn run(
     }
     let _ = tx.send(FeedMsg::Detects(dets));
 
+    // Synthetic news for the chart's news marks. `MOON_SYNTH_NEWS` is how many items exist at
+    // startup (0 disables the whole news stream), spaced `MOON_SYNTH_NEWS_SPACING_SEC` apart going
+    // back from now so several marks land inside the chart's default window; after that one new
+    // item arrives every `MOON_SYNTH_NEWS_EVERY_SEC` so the live path (a mark appearing on a
+    // running chart) is driveable too.
+    let news_count = env_usize("MOON_SYNTH_NEWS", 4);
+    let news_spacing_sec = env_f64("MOON_SYNTH_NEWS_SPACING_SEC", 90.0).max(1.0);
+    let news_every = Duration::from_secs_f64(env_f64("MOON_SYNTH_NEWS_EVERY_SEC", 30.0).max(1.0));
+    let mut news: Vec<NewsItem> = Vec::new();
+    let mut news_seq = 0u64;
+    if news_count > 0 {
+        for k in (0..news_count).rev() {
+            news.push(synth_news_item(
+                &mut news_seq,
+                &markets,
+                now_ms() as i64 - (k as f64 * news_spacing_sec * 1000.0) as i64,
+            ));
+        }
+        let _ = tx.send(news_msg(&news));
+    }
+    let mut last_news = Instant::now();
+
     let mut price: Vec<f64> = (0..n).map(|i| 100.0 * (i as f64 + 1.0)).collect();
     let mut rng = Lcg(seed);
     let tick_dt = Duration::from_secs_f64(1.0 / tps);
@@ -174,6 +202,54 @@ pub fn run(
                 return Ok(());
             }
         }
+        if news_count > 0 && last_news.elapsed() >= news_every {
+            last_news = Instant::now();
+            news.push(synth_news_item(&mut news_seq, &markets, now_ms() as i64));
+            // The wire carries a ring, not a delta: keep the same cap the core's ring uses.
+            if news.len() > NEWS_RING_CAP {
+                news.drain(..news.len() - NEWS_RING_CAP);
+            }
+            if tx.send(news_msg(&news)).is_err() {
+                return Ok(());
+            }
+        }
         std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// The whole synthetic news ring as one wire message, with a small tag catalog to exercise the
+/// tag filter. Sent on startup and again for every added item, because news travels as a ring.
+fn news_msg(news: &[NewsItem]) -> FeedMsg {
+    FeedMsg::News(NewsSnapshot {
+        items: news.to_vec(),
+        catalog: vec!["synth".to_string(), "listing".to_string()],
+    })
+}
+
+/// One synthetic news item at `time_ms`, tagged with EVERY synthetic market's coin so any open
+/// synthetic chart shows its mark. Bodies are long enough to exercise the hover card's wrapping.
+fn synth_news_item(seq: &mut u64, markets: &[String], time_ms: i64) -> NewsItem {
+    let id = *seq;
+    *seq += 1;
+    NewsItem {
+        id: format!("synth-{id}"),
+        time_ms,
+        recv_time_ms: Some(time_ms + 120),
+        send_time_ms: Some(time_ms + 180),
+        recv_terminal_ms: None,
+        source: "synth".to_string(),
+        author: None,
+        coins: markets.to_vec(),
+        en: format!(
+            "Synthetic news #{id}: an exchange announced a listing, a halt and a fee change in one \
+             paragraph, which is long on purpose so the chart's hover card has to wrap it."
+        ),
+        ru: format!(
+            "Синтетическая новость №{id}: биржа объявила листинг, остановку торгов и изменение \
+             комиссий одним абзацем — намеренно длинным, чтобы карточка на графике переносила текст."
+        ),
+        es: String::new(),
+        tags: vec!["synth".to_string()],
+        is_original: true,
     }
 }

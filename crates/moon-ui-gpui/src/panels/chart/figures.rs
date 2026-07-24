@@ -13,6 +13,7 @@ use moon_core::figures::{FigNode, Figure, FigureKind, FigureTool};
 use moon_core::session::CoreId;
 
 use super::ChartPanel;
+use super::geom::PaneMap;
 use crate::chartdx::FigureVisual;
 
 /// Figure-line hit-test threshold in pixels before scaling by pixels-per-point, matching order lines.
@@ -61,41 +62,6 @@ pub(super) enum FigGrab {
     Body,
 }
 
-/// Mapping between pane-plot data coordinates and device pixels.
-struct Map {
-    plot: moon_chart::view::Rect,
-    epoch_ms: f64,
-    left_rel: f32,
-    window_ms: f32,
-    center: f32,
-    range: f32,
-}
-
-impl Map {
-    fn time_at_x(&self, x: f32) -> f64 {
-        let rel = self.left_rel + (x - self.plot.x) / self.plot.w.max(1.0) * self.window_ms;
-        self.epoch_ms + rel as f64
-    }
-    fn x_of_time(&self, time_ms: f64) -> f32 {
-        let rel = (time_ms - self.epoch_ms) as f32;
-        self.plot.x + (rel - self.left_rel) / self.window_ms.max(1e-3) * self.plot.w
-    }
-    fn price_at_y(&self, y: f32) -> f64 {
-        let rel_y = ((y - self.plot.y) / self.plot.h.max(1.0)).clamp(0.0, 1.0);
-        (self.center + (0.5 - rel_y) * self.range) as f64
-    }
-    fn y_of_price(&self, price: f64) -> f32 {
-        let rel_y = 0.5 - (price as f32 - self.center) / self.range.max(1e-9);
-        self.plot.y + rel_y * self.plot.h
-    }
-    fn node_at(&self, pos: (f32, f32)) -> FigNode {
-        FigNode {
-            time_ms: self.time_at_x(pos.0),
-            price: self.price_at_y(pos.1),
-        }
-    }
-}
-
 /// Return the pixel distance from a point to a line segment.
 fn seg_dist(px: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
@@ -110,35 +76,6 @@ fn seg_dist(px: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
 }
 
 impl ChartPanel {
-    /// Build a pane's plot mapping, or return `None` when the pane has no valid view.
-    fn fig_map(&self, pane: usize) -> Option<Map> {
-        let plot = self.local_plot_rect(pane)?;
-        let (epoch_ms, left_rel, window_ms, center, range) =
-            self.chart.with_container(|container| {
-                container.pane(pane).map(|p| {
-                    let (l, w) = p.view.visible_x(plot.w);
-                    (
-                        p.view.epoch_ms,
-                        l,
-                        w,
-                        p.view.render_center,
-                        p.view.render_range,
-                    )
-                })
-            })?;
-        if !(range > 0.0) || window_ms <= 0.0 {
-            return None;
-        }
-        Some(Map {
-            plot,
-            epoch_ms,
-            left_rel,
-            window_ms,
-            center,
-            range,
-        })
-    }
-
     /// Return the `(core, market)` chart key for a pane index.
     fn fig_pane_key(&self, pane: usize) -> Option<(CoreId, String)> {
         self.chart
@@ -174,7 +111,7 @@ impl ChartPanel {
         if self.glass_pane_at(pos).is_some() {
             return false;
         }
-        let Some(map) = self.fig_map(pane) else {
+        let Some(map) = self.pane_map(pane) else {
             return false;
         };
         // With no active draft, modifier-click grabs/selects an existing node or body first. Empty
@@ -304,7 +241,7 @@ impl ChartPanel {
             return false;
         }
         let (pane, tool) = (d.pane, d.tool);
-        let Some(map) = self.fig_map(pane) else {
+        let Some(map) = self.pane_map(pane) else {
             return false;
         };
         let node = map.node_at(pos);
@@ -318,7 +255,7 @@ impl ChartPanel {
         &mut self,
         pane: usize,
         pos: (f32, f32),
-        map: &Map,
+        map: &PaneMap,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some((core, market)) = self.fig_pane_key(pane) else {
@@ -422,7 +359,7 @@ impl ChartPanel {
         if pressed_left {
             if let Some(drag) = &self.fig_drag {
                 let pane = self.input.pane_at(pos.0, pos.1);
-                let Some(map) = pane.and_then(|p| self.fig_map(p)) else {
+                let Some(map) = pane.and_then(|p| self.pane_map(p)) else {
                     return false;
                 };
                 let target = FigNode {
@@ -459,7 +396,7 @@ impl ChartPanel {
         let draft_pane = self.fig_draft.as_ref().map(|d| d.pane);
         if let Some(dp) = draft_pane {
             if self.input.pane_at(pos.0, pos.1) == Some(dp) {
-                if let Some(map) = self.fig_map(dp) {
+                if let Some(map) = self.pane_map(dp) {
                     let node = map.node_at(pos);
                     if let Some(d) = &mut self.fig_draft {
                         if d.cursor != node {
@@ -493,7 +430,7 @@ impl ChartPanel {
             return None;
         }
         let (core, market) = self.fig_pane_key(pane)?;
-        let map = self.fig_map(pane)?;
+        let map = self.pane_map(pane)?;
         let threshold = HIT_PX * self.last_ppp.max(1.0);
         let b = self.backend.read(cx);
         let store = b.figures.borrow();
@@ -664,7 +601,7 @@ fn draft_preview(d: &FigDraft) -> Option<Figure> {
 }
 
 /// Return the pixel distance from a point to the nearest part of a figure body.
-fn hit_body(fig: &Figure, pos: (f32, f32), map: &Map) -> f32 {
+fn hit_body(fig: &Figure, pos: (f32, f32), map: &PaneMap) -> f32 {
     match &fig.kind {
         FigureKind::HLine { price } => (pos.1 - map.y_of_price(*price)).abs(),
         FigureKind::Segment { a, b } => seg_dist(pos, node_px(a, map), node_px(b, map)),
@@ -681,7 +618,7 @@ fn hit_body(fig: &Figure, pos: (f32, f32), map: &Map) -> f32 {
 }
 
 /// Return the selected figure node or channel line under the cursor for dragging.
-fn hit_node(fig: &Figure, pos: (f32, f32), map: &Map, threshold: f32) -> Option<FigGrab> {
+fn hit_node(fig: &Figure, pos: (f32, f32), map: &PaneMap, threshold: f32) -> Option<FigGrab> {
     let near = |n: &FigNode| {
         let p = node_px(n, map);
         ((pos.0 - p.0).powi(2) + (pos.1 - p.1).powi(2)).sqrt() <= threshold
@@ -723,7 +660,7 @@ fn hit_node(fig: &Figure, pos: (f32, f32), map: &Map, threshold: f32) -> Option<
     }
 }
 
-fn node_px(n: &FigNode, map: &Map) -> (f32, f32) {
+fn node_px(n: &FigNode, map: &PaneMap) -> (f32, f32) {
     (map.x_of_time(n.time_ms), map.y_of_price(n.price))
 }
 
@@ -731,7 +668,7 @@ fn node_px(n: &FigNode, map: &Map) -> (f32, f32) {
 ///
 /// Preserving this offset prevents a drag from snapping the figure to the cursor. Horizontal lines
 /// and channels do not use time, so their time offset is zero.
-fn grab_offset(fig: &Figure, grab: FigGrab, map: &Map, pos: (f32, f32)) -> (f64, f64) {
+fn grab_offset(fig: &Figure, grab: FigGrab, map: &PaneMap, pos: (f32, f32)) -> (f64, f64) {
     let cur = FigNode {
         time_ms: map.time_at_x(pos.0),
         price: map.price_at_y(pos.1),
