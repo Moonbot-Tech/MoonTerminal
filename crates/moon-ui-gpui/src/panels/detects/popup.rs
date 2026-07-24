@@ -120,7 +120,7 @@ pub(super) fn toolbar(
         .render();
     let popover = MoonPopover::new("detects-view-popover")
         .placement(MoonPopoverPlacement::BottomStart)
-        .width(POPUP_W)
+        .content_width_ui(POPUP_W)
         .close_on_content_click(false)
         // Dropdown menus occupy separate deferred layers and may extend beyond the popover. Without
         // this override, clicking those extensions counts as an outside click and closes the popover.
@@ -267,11 +267,12 @@ fn slot_cell(
         },
     );
     let dropdown = MoonDropdown::new(SharedString::from(format!("det-slot-{tab}-{slot_ix}")))
-        .label(format!("{} ▾", t!(field_key(slot.field))))
+        .label(t!(field_key(slot.field)).to_string())
+        .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::Micro)
-        .trigger_width(design::font_w(cx, 76.0))
-        .menu_width(design::font_w(cx, 130.0))
+        .trigger_width_scaled(76.0)
+        .menu_width_scaled(130.0)
         .menu_size(MoonMenuSize::Compact)
         .items(items);
 

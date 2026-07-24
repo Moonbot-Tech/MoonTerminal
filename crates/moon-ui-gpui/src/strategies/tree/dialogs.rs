@@ -114,13 +114,14 @@ fn op_dialog_body(
                 )
                 .child(
                     MoonDropdown::new("create-kind")
-                        .label(format!("{kind_name} ▾"))
+                        .label(kind_name)
+                        .trigger_caret(true)
                         .trigger_variant(MoonButtonVariant::Soft)
                         .trigger_size(MoonButtonSize::Action)
-                        .trigger_width(design::font_w(cx, 320.0))
-                        .menu_width(design::font_w(cx, 320.0))
+                        .trigger_width_scaled(320.0)
+                        .menu_width_scaled(320.0)
                         .menu_size(MoonMenuSize::Compact)
-                        .menu_max_height(240.0)
+                        .menu_max_height_ui(240.0)
                         .items(kind_items),
                 );
             if let Some(input) = input {

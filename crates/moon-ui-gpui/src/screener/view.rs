@@ -425,29 +425,15 @@ impl ScreenerView {
                 );
             }
         }
-        // Keep the selected core name in this single-select trigger, while sizing the menu for both
-        // exchange headers and core names.
-        let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
-            cx,
-            &cur,
-            std::iter::once(all_label.as_str())
-                .chain(
-                    sections
-                        .iter()
-                        .map(|(exchange, _)| exchange.unwrap_or(unknown_exchange.as_str())),
-                )
-                .chain(cores.iter().map(|(_, name)| name.as_str())),
-            design::CORES_TRIGGER_MIN_W,
-            160.0,
-        );
         MoonDropdown::new("screener-source")
-            .label(trigger_label)
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(trigger_w)
-            .menu_width(menu_w)
+            .fit_trigger_width(118.0, 260.0)
+            .fit_menu_width(160.0, 560.0)
             .menu_size(MoonMenuSize::Compact)
-            .menu_max_height(design::ui_value(cx, 360.0))
+            .menu_max_height_ui(360.0)
             .items(items)
     }
 
@@ -463,8 +449,8 @@ impl ScreenerView {
             .segment(moon_ui::MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 34.0))
-            .menu_width(design::font_w(cx, 170.0))
+            .trigger_width_scaled(34.0)
+            .menu_width_scaled(170.0)
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         // The All item enables every column or, when already checked, leaves only the first.

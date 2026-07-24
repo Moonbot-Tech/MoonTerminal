@@ -143,7 +143,6 @@ impl AssetsView {
             .market_source()
             .core_exchange_names();
         crate::controls::core_combo(
-            cx,
             "assets-core",
             cores,
             &exchange_names,

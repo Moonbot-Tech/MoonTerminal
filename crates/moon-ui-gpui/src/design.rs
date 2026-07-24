@@ -362,218 +362,6 @@ pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32, mon
         .sum()
 }
 
-/// Size a compact `MoonPopupMenu` for its longest label.
-///
-/// The calculation mirrors MoonUI's monospaced compact-row metrics: 9.5px text at up to weight
-/// 600, scaled horizontal padding and gap, plus the unscaled check column and border. `min_w` is
-/// the lower bound; the scaled `MENU_MAX_W` is the upper bound unless it falls below `min_w`.
-pub fn menu_fit_width<'a>(cx: &App, labels: impl IntoIterator<Item = &'a str>, min_w: f32) -> f32 {
-    let max_label_w = labels
-        .into_iter()
-        .map(|l| ui_text_width(cx, l, 9.5, 600.0, true))
-        .fold(0.0, f32::max);
-    (ui_value(cx, 6.0 * 2.0 + 5.0 + 4.0 * 2.0) + 12.0 + 2.0 + max_label_w)
-        .ceil()
-        // Keep the upper bound at least as large as the lower bound. Some callers pass unscaled
-        // `min_w` values, such as the header's raw 180 or 200, while a heavily reduced font can make
-        // `font_w(MENU_MAX_W)` smaller. `.max(min_w)` prevents `f32::clamp` from panicking with
-        // `lo > hi`; in that degenerate case the floor wins over the ceiling.
-        .clamp(min_w, font_w(cx, MENU_MAX_W).max(min_w))
-}
-
-const CORE_MENU_LABEL_W: f32 = 256.0;
-const COMPACT_CHECKED_MENU_SCALED_CHROME_W: f32 = 6.0 * 2.0 + 5.0 * 2.0 + 4.0 * 2.0;
-const COMPACT_CHECKED_MENU_FIXED_CHROME_W: f32 = 12.0 + 2.0;
-
-/// Return the fixed width shared by core-selection menus.
-///
-/// The text column has the same scale as the compact menu's 9.5px monospaced font. Its surrounding
-/// padding and gaps follow the independent UI scale, so neither setting can consume the label
-/// budget. At default scales the text column plus chrome reconstructs the 300px design width.
-/// A caller-specific minimum may enlarge the menu but never makes the shared baseline narrower.
-///
-/// Args:
-///     cx: Application context used to apply the active font and UI scales.
-///     min_w: Unscaled caller-specific minimum width.
-///
-/// Returns:
-///     The fixed core-menu width in rendered pixels.
-pub fn core_menu_width(cx: &App, min_w: f32) -> f32 {
-    let compact_text_scale = font_value(cx, 9.5) / 9.5;
-    core_menu_width_for_scales(compact_text_scale, ui_value(cx, 1.0), font_w(cx, min_w))
-}
-
-/// Calculate core-menu width from already resolved text, UI, and minimum scales.
-///
-/// Args:
-///     compact_text_scale: Rendered compact-menu font size divided by its 9.5px base.
-///     ui_scale: Resolved UI scale after MoonUI's lower-bound handling.
-///     min_rendered_w: Caller-specific minimum after its own scale has been applied.
-///
-/// Returns:
-///     The rendered menu width whose text and chrome budgets scale independently.
-pub(crate) fn core_menu_width_for_scales(
-    compact_text_scale: f32,
-    ui_scale: f32,
-    min_rendered_w: f32,
-) -> f32 {
-    (CORE_MENU_LABEL_W * compact_text_scale + compact_checked_menu_chrome_width_for_scale(ui_scale))
-        .max(min_rendered_w)
-}
-
-/// Return the non-text width of a compact checked `MoonPopupMenu` row.
-///
-/// Args:
-///     cx: Application context used to apply the active UI scale.
-///
-/// Returns:
-///     Menu and row padding, two flex gaps, the check slot, and the two menu borders.
-fn compact_checked_menu_chrome_width(cx: &App) -> f32 {
-    compact_checked_menu_chrome_width_for_scale(ui_value(cx, 1.0))
-}
-
-/// Calculate compact checked-menu chrome width from an already resolved UI scale.
-///
-/// Args:
-///     ui_scale: Resolved UI scale after MoonUI's lower-bound handling.
-///
-/// Returns:
-///     Scaled menu and row spacing plus the fixed check slot and menu borders.
-fn compact_checked_menu_chrome_width_for_scale(ui_scale: f32) -> f32 {
-    COMPACT_CHECKED_MENU_SCALED_CHROME_W * ui_scale + COMPACT_CHECKED_MENU_FIXED_CHROME_W
-}
-
-/// Return the text budget inside a compact checked `MoonPopupMenu` row.
-///
-/// This mirrors the same compact-row chrome used by [`menu_fit_width`]: menu and row padding plus
-/// two item gaps follow UI scale, while the 12px check slot and two 1px borders remain unscaled.
-///
-/// Args:
-///     cx: Application context used to apply the active UI scale.
-///     menu_w: Rendered outer menu width.
-///
-/// Returns:
-///     Non-negative rendered width available to the row label.
-pub fn menu_item_label_width(cx: &App, menu_w: f32) -> f32 {
-    (menu_w - compact_checked_menu_chrome_width(cx)).max(0.0)
-}
-
-/// Outer `MoonPopover::width` that hosts content of intrinsic width `content_w`.
-///
-/// MoonUI renders `.w(px(width)).p(px(tokens.ui(6.0))).border(px(1.0))`. GPUI treats that
-/// width as the border box, leaving `width - 2*ui(6) - 2` for content. The padding tracks
-/// the UI scale, while MoonUI's hard-coded 1px border does not.
-///
-/// `content_w` must already be in the scale its content actually uses — wrap it in `font_w`
-/// for our own font-scaled blocks, pass it raw for a moonui widget with a fixed px width.
-///
-/// Interim (FORK_BUGS): delete when `MoonPopover` grows a fit-to-content mode upstream.
-pub fn popover_outer_width(cx: &App, content_w: f32) -> f32 {
-    content_w + 2.0 * ui_value(cx, 6.0) + 2.0
-}
-
-/// Outer width of a default-size `MoonCalendar` — the value to hand [`popover_outer_width`].
-///
-/// For default `Size::Medium`, MoonUI's month/year grid is 264px wide, while the day grid is
-/// `7*size_9 + 6*gap_0p5` = 16.5rem. The calendar root adds `p_3` (0.75rem per side) and a
-/// 1px border per side. `MoonRoot` sets the window rem from `cx.theme().font_size`, which
-/// `MoonTheme` synchronizes to `base_font_size()`, so the rem-based day grid can exceed 264px.
-///
-/// Interim (FORK_BUGS), same removal trigger as [`popover_outer_width`].
-pub fn calendar_outer_width(cx: &App) -> f32 {
-    // Month/year grid (calendar.rs, Size::Medium) vs the day grid's 7*2.25rem + 6*0.125rem;
-    // the root adds p_3 (0.75rem) per side plus the 1px border.
-    const MONTH_GRID_W: f32 = 264.0;
-    const DAY_GRID_REMS: f32 = 16.5;
-    let rem = MoonTheme::active_tokens(cx).base_font_size();
-    MONTH_GRID_W.max(DAY_GRID_REMS * rem) + 1.5 * rem + 2.0
-}
-
-/// Width of a `MoonPopupMenu` (Compact) row carrying a `MoonMenuItem::right_label`.
-///
-/// [`menu_fit_width`] reserves one item gap. A row with a right label has four children —
-/// check slot, label, flex spacer, and right label — so MoonUI applies three gaps. This helper
-/// conservatively measures the main label at the compact size of 9.5 and weight 600; MoonUI
-/// renders the right label at size 9.0 and weight 400.
-///
-/// Takes the already-chosen widest pair rather than an iterator: measuring one string costs an
-/// uncached `layout_line` per CHARACTER on `&App`, so the caller picks the candidate. In a mono
-/// menu that is simply the longest label by character count.
-pub fn menu_fit_width_2col(cx: &App, label: &str, right_label: &str, min_w: f32) -> f32 {
-    let content = ui_text_width(cx, label, 9.5, 600.0, true)
-        + ui_text_width(cx, right_label, 9.0, 400.0, true);
-    (ui_value(cx, 6.0 * 2.0 + 5.0 * 3.0 + 4.0 * 2.0) + 12.0 + 2.0 + content)
-        .ceil()
-        .clamp(min_w, font_w(cx, MENU_MAX_W).max(min_w))
-}
-
-/// Visual horizontal padding around a `MoonDropdown` trigger label.
-///
-/// The Action and Toolbar button sizes used by these content-sized dropdowns have zero horizontal
-/// padding, so this allowance supplies it. `fit_dropdown_trigger` scales the value with `ui_value`,
-/// following UI scale rather than Font-slider scale.
-const TRIGGER_PAD_X: f32 = 14.0;
-
-/// Unscaled visual ceiling for a `MoonDropdown` trigger in a compact panel toolbar.
-///
-/// Long labels are truncated before they push adjacent controls beyond the clipped panel edge; the
-/// full name remains available in the open menu. Callers scale this base through `font_w`.
-const TRIGGER_MAX_W: f32 = 260.0;
-
-/// Unscaled minimum trigger width for the core selectors used by `dropdown_content_widths`.
-///
-/// The trigger grows with its content up to `TRIGGER_MAX_W`; Log panel fields provide their own
-/// lower bounds.
-pub const CORES_TRIGGER_MIN_W: f32 = 118.0;
-
-/// Unscaled coarse ceiling for selector-menu width.
-///
-/// It prevents a pathological core name from expanding a menu across much of the screen.
-/// `MoonDropdown` repositions a popover but does not shrink it. This fixed guard is not the actual
-/// window width, so at a large font a menu can still extend beyond a very narrow detached window.
-/// Normal core names do not approach it. Callers scale this base through `font_w`.
-const MENU_MAX_W: f32 = 560.0;
-
-/// Calculate content-driven `MoonDropdown` trigger and menu widths.
-///
-/// Returns the trigger label with its caret, the trigger width, and the menu width. `cur` excludes
-/// the caret; `menu_labels` contains every menu label. The trigger is bounded by `min_trigger_w`
-/// and `TRIGGER_MAX_W`, truncating with an ellipsis at the ceiling; the menu is bounded by
-/// `min_menu_w` and `MENU_MAX_W`.
-pub fn dropdown_content_widths<'a>(
-    cx: &App,
-    cur: &str,
-    menu_labels: impl IntoIterator<Item = &'a str>,
-    min_trigger_w: f32,
-    min_menu_w: f32,
-) -> (String, f32, f32) {
-    let (label, trigger_w) = fit_dropdown_trigger(
-        cx,
-        cur,
-        font_w(cx, min_trigger_w),
-        font_w(cx, TRIGGER_MAX_W),
-    );
-    let menu_w = menu_fit_width(cx, menu_labels, font_w(cx, min_menu_w));
-    (label, trigger_w, menu_w)
-}
-
-/// Build a dropdown label inside one fixed, font-scaled trigger width.
-///
-/// Unlike [`dropdown_content_widths`], this never derives geometry from the current selection.
-/// Multi-select menus use it so an open popover remains anchored while its summary changes.
-///
-/// Args:
-///     cx: Application context used for text measurement and font scaling.
-///     cur: Current label without the caret.
-///     width: Unscaled fixed trigger width.
-///
-/// Returns:
-///     The fitted label with its caret and the font-scaled fixed width.
-pub fn fixed_dropdown_trigger(cx: &App, cur: &str, width: f32) -> (String, f32) {
-    let width = font_w(cx, width);
-    fit_dropdown_trigger(cx, cur, width, width)
-}
-
 /// Truncate `text` with an ellipsis to the available prefix budget, returning the result and width.
 ///
 /// Text is arbitrary Unicode and equal glyph width is not guaranteed outside Geist Mono, so the
@@ -612,44 +400,8 @@ pub fn fit_text(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> (Strin
 }
 
 /// [`fit_text`] at the size a selector pill draws its label.
-///
-/// For labels that carry their own chrome (a `MoonSelectorPill` draws its own caret), where
-/// [`fit_dropdown_trigger`]'s caret-and-width contract does not apply.
 pub fn fit_label(cx: &App, text: &str, max_w: f32) -> String {
     fit_text(text, max_w, |s| ui_text_width(cx, s, 10.5, 400.0, true)).0
-}
-
-/// Build a `MoonDropdown` trigger label and width for the current selection.
-///
-/// The width grows between `min_w` and `max_w`. At the ceiling, the monospaced label is truncated
-/// by measured glyph width so fallback Unicode glyphs remain within the budget; the ellipsis and
-/// caret remain visible. `cur` excludes the caret.
-fn fit_dropdown_trigger(cx: &App, cur: &str, min_w: f32, max_w: f32) -> (String, f32) {
-    const CARET: &str = " \u{25be}"; // space plus down-pointing caret
-    let tw = |s: &str| ui_text_width(cx, s, 10.5, 400.0, true);
-    let full = format!("{cur}{CARET}");
-    let natural = (ui_value(cx, TRIGGER_PAD_X) + tw(&full)).ceil();
-    if natural <= max_w {
-        return (full, natural.max(min_w));
-    }
-    // Above the ceiling, truncate the name while preserving the ellipsis and caret. Core names are
-    // arbitrary Unicode, and fallback glyphs outside Geist Mono need not be equal-width, so build
-    // the prefix from each character's measured width until `prefix + ellipsis + caret` fills the
-    // budget without overflowing the button.
-    let suffix = format!("\u{2026}{CARET}"); // ellipsis plus space and down-pointing caret
-    let budget = max_w - ui_value(cx, TRIGGER_PAD_X) - tw(&suffix);
-    let mut head = String::new();
-    let mut used = 0.0f32;
-    let mut buf = [0u8; 4];
-    for ch in cur.chars() {
-        let w = tw(ch.encode_utf8(&mut buf));
-        if used + w > budget {
-            break;
-        }
-        used += w;
-        head.push(ch);
-    }
-    (format!("{}{}", head.trim_end(), suffix), max_w)
 }
 
 /// Return the effective font-scaled `MoonDataTable` row height.
@@ -681,9 +433,8 @@ pub fn table_head_h(cx: &App) -> f32 {
 
 /// Return the current font-size scale relative to the theme base.
 ///
-/// The result is one when the Settings Font slider has zero delta. Geometry passed through `ui()`
-/// does not see that delta, so fixed-width text containers such as value fields, popups, and inputs
-/// use this factor to avoid clipping or wrapping larger text.
+/// Delegates to MoonUI so the Settings Font slider and fixed-width text containers share one width
+/// scale definition.
 ///
 /// Args:
 ///     cx: Application context used to read active theme tokens.
@@ -691,8 +442,7 @@ pub fn table_head_h(cx: &App) -> f32 {
 /// Returns:
 ///     The active scaled base font size divided by the unscaled base.
 pub fn font_scale(cx: &App) -> f32 {
-    let b = base_text(cx);
-    font_value(cx, b) / b
+    MoonTheme::active_tokens(cx).font_width_scale()
 }
 
 /// Scale a fixed text-container width with the font and return `Pixels`.
@@ -704,7 +454,7 @@ pub fn font_scale(cx: &App) -> f32 {
 /// Returns:
 ///     The font-scaled width as `Pixels`.
 pub fn font_w_px(cx: &App, base: f32) -> Pixels {
-    px(base * font_scale(cx))
+    px(font_w(cx, base))
 }
 
 /// Scale a fixed text-container width with the font and return raw pixels as `f32`.
@@ -719,7 +469,7 @@ pub fn font_w_px(cx: &App, base: f32) -> Pixels {
 /// Returns:
 ///     The font-scaled raw pixel width.
 pub fn font_w(cx: &App, base: f32) -> f32 {
-    base * font_scale(cx)
+    MoonTheme::active_tokens(cx).font_width(base)
 }
 
 // Radius tokens come from `MoonMetrics::TERMINAL`, rather than local numeric values. Avoid raw

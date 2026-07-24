@@ -143,11 +143,12 @@ impl AnalyticsView {
             },
         );
         MoonDropdown::new("an-metric")
-            .label(format!("{cur} ▾"))
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 78.0))
-            .menu_width(design::font_w(cx, 120.0))
+            .trigger_width_scaled(78.0)
+            .menu_width_scaled(120.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -171,7 +172,6 @@ impl AnalyticsView {
             )
         };
         crate::controls::core_combo(
-            cx,
             "an-core",
             &cores,
             &exchange_names,
@@ -218,11 +218,12 @@ impl AnalyticsView {
             },
         );
         MoonDropdown::new("an-side")
-            .label(format!("{cur} ▾"))
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 69.0))
-            .menu_width(design::font_w(cx, 120.0))
+            .trigger_width_scaled(69.0)
+            .menu_width_scaled(120.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -260,11 +261,12 @@ impl AnalyticsView {
             },
         );
         MoonDropdown::new("an-kind")
-            .label(format!("{cur} ▾"))
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 102.0))
-            .menu_width(design::font_w(cx, 138.0))
+            .trigger_width_scaled(102.0)
+            .menu_width_scaled(138.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -294,11 +296,7 @@ impl AnalyticsView {
         let view = cx.entity();
         MoonPopover::new(if is_to { "an-date-to" } else { "an-date-from" })
             .placement(MoonPopoverPlacement::BottomStart)
-            // The mirror of MoonCalendar's private layout lives in `calendar_outer_width`.
-            .width(design::popover_outer_width(
-                cx,
-                design::calendar_outer_width(cx),
-            ))
+            .fit_content()
             .open(open)
             .on_open_change(move |o, _, app| {
                 view.update(app, |t, cx| {

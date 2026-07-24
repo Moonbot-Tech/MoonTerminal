@@ -575,14 +575,15 @@ impl SettingsView {
         row.child(
             MoonDropdown::new(SharedString::from(id))
                 .label(current.label())
+                .trigger_caret(true)
                 .trigger_size(MoonButtonSize::Micro)
                 .trigger_variant(if current == MouseGestureBinding::None {
                     MoonButtonVariant::Neutral
                 } else {
                     MoonButtonVariant::Blue
                 })
-                .trigger_width(design::font_w(cx, 176.0))
-                .menu_width(design::font_w(cx, 228.0))
+                .trigger_width_scaled(176.0)
+                .menu_width_scaled(228.0)
                 .menu_size(MoonMenuSize::Compact)
                 .disabled(disabled)
                 .items(items),

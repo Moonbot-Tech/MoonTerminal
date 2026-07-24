@@ -1,28 +1,89 @@
-//! Order-size (F1-F6) and fixed-sell (S1-S6) preset strips with click, double-click, and
-//! Ctrl+wheel interaction, plus their shared `strip_with_overlay` frame.
+//! Order-size (F1-F6) and fixed-sell (S1-S6) preset strips with native click, double-click,
+//! Ctrl+wheel, tooltip, and inline-edit behavior.
 
 use gpui::*;
-
-use moon_ui::{MoonAccent, MoonInput, MoonInputState, MoonSegmentItem, MoonSegmentedControl};
-
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
+use moon_ui::{MoonAccent, MoonInput, MoonInputState, MoonSegmentItem, MoonSegmentedControl};
 use rust_i18n::t;
 
 use super::fmt::{fmt_adaptive, fmt_sell_pct, scroll_dy, wheel_step};
-use crate::{Backend, design};
+use crate::Backend;
 
-/// Direction of one preset step for a wheel gesture, or `None` for "leave the value alone".
+/// Base floor for a preset cell's fitted width.
+const MIN_CELL_W: f32 = 34.0;
+/// Base ceiling for a preset cell's fitted width.
 ///
-/// Two conditions, both required.
+/// An anomalous value cannot stretch the toolbar across the window; MoonUI truncates only the
+/// visible label while the inline editor still exposes the complete value.
+const MAX_CELL_W: f32 = 104.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Action selected by an order-size preset click.
+enum SizeClickAction {
+    Select(usize),
+    Edit(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Action selected by a fixed-sell preset click.
+enum SellClickAction {
+    SelectFixed(usize),
+    EngageMain,
+    Edit(usize),
+}
+
+/// Resolve an order-size click without coupling click-count semantics to backend mutation.
 ///
-/// **Ctrl**, because the strips sit in a dense toolbar where a bare wheel would silently rewrite
-/// trading parameters: the order size goes into the core's config, the sell percentage straight
-/// into the core. An accidental scroll over the toolbar must not do that, and it has no undo.
+/// Args:
+///     index: Zero-based preset index.
+///     click_count: Native click count reported by GPUI.
 ///
-/// **Non-zero Y**, because `ScrollDelta` is two-dimensional: a horizontal gesture (trackpad,
-/// shift-scroll) carries `y == 0`, and a naive `y > 0.0` would read it as "down" and shrink the
-/// parameter from sideways movement.
+/// Returns:
+///     Selection for a single click or inline editing for a double-or-later click.
+fn size_click_action(index: usize, click_count: usize) -> SizeClickAction {
+    if click_count >= 2 {
+        SizeClickAction::Edit(index)
+    } else {
+        SizeClickAction::Select(index)
+    }
+}
+
+/// Resolve a fixed-sell click without coupling click-count semantics to backend mutation.
+///
+/// Args:
+///     index: Zero-based preset index.
+///     selected_slot: Currently engaged one-based fixed-sell slot.
+///     click_count: Native click count reported by GPUI.
+///
+/// Returns:
+///     Inline editing for a double-or-later click, main take profit when the active slot is clicked,
+///     or the one-based fixed-sell slot to engage.
+fn sell_click_action(
+    index: usize,
+    selected_slot: Option<usize>,
+    click_count: usize,
+) -> SellClickAction {
+    if click_count >= 2 {
+        SellClickAction::Edit(index)
+    } else if selected_slot == Some(index + 1) {
+        SellClickAction::EngageMain
+    } else {
+        SellClickAction::SelectFixed(index + 1)
+    }
+}
+
+/// Return the direction of one preset step, or `None` when the gesture must not edit a value.
+///
+/// Ctrl prevents an ordinary toolbar scroll from rewriting trading parameters. A non-zero
+/// vertical delta excludes horizontal trackpad gestures.
+///
+/// Args:
+///     modifiers: Keyboard modifiers captured with the wheel event.
+///     delta: Two-dimensional wheel or trackpad delta.
+///
+/// Returns:
+///     `Some(true)` for an upward step, `Some(false)` for a downward step, or `None`.
 fn wheel_step_dir(modifiers: Modifiers, delta: ScrollDelta) -> Option<bool> {
     if !modifiers.control {
         return None;
@@ -34,131 +95,93 @@ fn wheel_step_dir(modifiers: Modifiers, delta: ScrollDelta) -> Option<bool> {
     Some(dy > 0.0)
 }
 
-/// Base horizontal padding on each side of a `MoonSegmentedControl` cell.
+/// Six preset items fitted by MoonUI before the toolbar computes its row budget.
 ///
-/// `HOTKEY_GAP` counts even though our hotkey text is empty: flex puts a gap between children
-/// whether or not the first one is empty, so the cell spends those pixels either way.
-///
-/// Interim (FORK_BUGS), same class and same removal trigger as `design::popover_outer_width` and
-/// its siblings: `MoonSegmentItem` exposes only `.width(f32)`, so from outside the library there is
-/// no way to ask a cell what it needs. Delete these four and measure through the widget once
-/// `MoonSegmentedControl` grows a fit-to-content mode upstream. Until then a padding change in
-/// `segment.rs` mis-sizes every toolbar cell with nothing here to catch it.
-const CELL_PAD_X: f32 = 11.0;
-/// Base gap reserved between the cell's empty hotkey slot and its label.
-const CELL_HOTKEY_GAP: f32 = 5.0;
-/// Base font size used by a preset-cell label.
-const CELL_LABEL_SIZE: f32 = 11.0;
-/// Weight of the SELECTED cell, which draws semibold and is therefore wider than an unselected
-/// one. Measuring by the heavier of the two is what stops a cell from growing at the moment it is
-/// clicked, which would nudge the whole strip on every selection.
-const CELL_LABEL_WEIGHT: f32 = 500.0;
-/// Base floor for a cell's width — it is a mouse target. A short value ("1%") would otherwise collapse
-/// into a slit that is awkward to hit.
-const MIN_CELL_W: f32 = 34.0;
-/// Base ceiling for a cell's width before its visible label is truncated and pixel-rounded.
-///
-/// The width follows the content, and the content comes from outside: an order-size preset is
-/// hand-edited and accepts any positive `f64`, the sell percentages come from the core. With no
-/// ceiling a single value like 1e308 formats to hundreds of digits and stretches both the strip and
-/// its interaction layer across thousands of pixels — no amount of caption collapsing rescues that
-/// row. A label past the ceiling is truncated with an ellipsis; the ceiling is wide enough that
-/// only an anomalous value reaches it. Double-clicking the cell still exposes the full value in the
-/// inline editor.
-const MAX_CELL_W: f32 = 104.0;
-
-/// A strip's six cells, each fitted to the width ceiling, with the widths they were fitted to.
-///
-/// Labels and widths travel TOGETHER because they are one result: the strip and its interaction
-/// layer must be handed the same truncated label and the same width, or they disagree about what a
-/// cell contains and where it sits — the exact drift [`strip_with_overlay`] spends a paragraph
-/// guarding against. Passing the pair as one value puts that coupling in the type instead of in
-/// prose.
+/// Rendering and budgeting consume the same resolved items, so Terminal does not mirror segment
+/// padding, gaps, selected text weight, truncation, or pixel rounding.
 pub(super) struct FittedCells {
-    labels: [String; 6],
-    widths: [f32; 6],
+    items: [MoonSegmentItem; 6],
 }
 
 impl FittedCells {
-    /// Fit `labels` to the cell ceiling at the current theme and font size.
+    /// Fit all preset labels through MoonUI at the current theme and font size.
     ///
-    /// The width follows the label, which is what keeps the text from being squeezed inside a box
-    /// that did not grow with it: a cell's padding goes through `ui()` and its label through
-    /// `font()`, so only a measured width tracks the Font slider on both. Widths are rounded up to
-    /// whole pixels — a fractional width is one more way for the strip and the overlay to round
-    /// differently.
+    /// Args:
+    ///     cx: Application context used by MoonUI for theme-aware measurement.
+    ///     labels: The six complete preset values.
     ///
-    /// Consequence accepted, not fixed: a step that changes a value's DIGIT COUNT (900 -> 1000)
-    /// rewidths its cell and shifts the ones after it, under a stationary cursor during Ctrl+wheel.
-    /// Quantizing the width to hide that would hand back the slack the measurement exists to
-    /// reclaim, and the cell being edited keeps the cursor either way — the cells to its right move.
+    /// Returns:
+    ///     Six fitted items with stable, pre-render resolved widths.
     pub(super) fn fit(cx: &App, labels: [String; 6]) -> Self {
-        let pad = design::ui_value(cx, CELL_PAD_X) * 2.0 + design::ui_value(cx, CELL_HOTKEY_GAP);
-        let min = design::font_w(cx, MIN_CELL_W);
-        let max_text = (design::font_w(cx, MAX_CELL_W) - pad).max(0.0);
-        // Measured at the selected cell's size and weight, and once per label: measuring costs an
-        // uncached glyph layout per character, and this runs every frame for twelve cells.
-        let measure =
-            |s: &str| design::ui_text_width(cx, s, CELL_LABEL_SIZE, CELL_LABEL_WEIGHT, true);
-        let mut fitted: [String; 6] = std::array::from_fn(|_| String::new());
-        let mut widths = [0.0f32; 6];
-        for (i, label) in labels.into_iter().enumerate() {
-            let (text, text_w) = design::fit_text(&label, max_text, &measure);
-            fitted[i] = text;
-            widths[i] = cell_width(text_w, pad, min);
-        }
         Self {
-            labels: fitted,
-            widths,
+            items: labels
+                .map(|label| MoonSegmentItem::new("", label).fit_width(cx, MIN_CELL_W, MAX_CELL_W)),
         }
     }
 
-    /// The strip's total width — for the toolbar row's budget.
+    /// Return the exact total width consumed by all six rendered cells.
+    ///
+    /// Returns:
+    ///     Combined fitted width in rendered pixels.
     pub(super) fn total_width(&self) -> f32 {
-        self.widths.iter().sum()
+        self.items.iter().map(MoonSegmentItem::resolved_width).sum()
     }
 }
 
-/// One cell's width from its measured label, the cell's own padding, and the floor.
+/// Format six preset values or no-core placeholders.
 ///
-/// Split off from [`FittedCells::fit`] deliberately: everything there hangs off `App` (theme, Font
-/// slider, text system) while this is pure arithmetic a test can pin.
-fn cell_width(text_w: f32, pad: f32, min: f32) -> f32 {
-    (text_w + pad).max(min).ceil()
-}
-
-/// Preset cell labels, or dashes when there is no core.
+/// Args:
+///     values: Complete values for the focused core, if one exists.
+///     fmt: Value formatter shared by all six cells.
 ///
-/// One function for both strips: the no-core placeholder is a single decision, and written twice it
-/// can be changed on one strip and forgotten on the other.
+/// Returns:
+///     Six display labels.
 fn labels(values: Option<[f64; 6]>, fmt: impl Fn(f64) -> String) -> [String; 6] {
     std::array::from_fn(|i| match values {
-        Some(v) => fmt(v[i]),
-        None => "—".to_string(),
+        Some(values) => fmt(values[i]),
+        None => "\u{2014}".to_string(),
     })
 }
 
-/// Order-size cell labels.
+/// Return order-size labels, or dashes when no core is focused.
 ///
-/// A dash rather than the config default: with no core there is no account whose presets these
-/// would be, and six plausible round numbers standing where a value belongs read as that account's
-/// settings. Every other figure on the row already degrades to a dash in the same state.
+/// Args:
+///     values: Complete order-size values for the focused core, if one exists.
+///
+/// Returns:
+///     Six formatted order-size labels.
 pub(super) fn size_labels(values: Option<[f64; 6]>) -> [String; 6] {
     labels(values, fmt_adaptive)
 }
 
-/// Fixed-sell cell labels.
+/// Return fixed-sell percentage labels, or dashes when no core is focused.
+///
+/// Args:
+///     pcts: Complete fixed-sell percentages for the focused core, if one exists.
+///
+/// Returns:
+///     Six formatted percentage labels.
 pub(super) fn sell_labels(pcts: Option<[f64; 6]>) -> [String; 6] {
-    labels(pcts, |p| format!("{}%", fmt_sell_pct(p)))
+    labels(pcts, |pct| format!("{}%", fmt_sell_pct(pct)))
 }
 
-/// Order-size preset strip (values, no F1-F6 captions). Values come from the core's config, the
-/// selection is stored per core in `Backend::order_size_sel`; with no core there is neither, so
-/// `sel` is `None` and nothing is lit. Interaction rides a transparent overlay over each button
-/// (`MoonSegmentedControl` does not tell click, double-click and wheel apart itself): single click
-/// = select; double click = inline edit (`order_size_edit_req`); CTRL+WHEEL = step the value by its
-/// order of magnitude (see [`wheel_step_dir`] — a bare wheel leaves it alone). `core=None` → no
-/// interaction.
+/// Build the order-size preset strip.
+///
+/// Single click selects and persists a preset, double click requests inline editing, and
+/// Ctrl+wheel changes the value by its order of magnitude. No focused core disables all cells and
+/// suppresses their handlers and tooltips.
+///
+/// Args:
+///     cells: MoonUI-fitted preset cells used by both rendering and toolbar budgeting.
+///     sel: Selected zero-based preset index.
+///     edit_ix: Zero-based cell to replace with the inline editor.
+///     input: Shared editor state.
+///     backend: Application state receiving edits.
+///     core: Focused core; absence disables the strip.
+///     unit: Optional account currency shown in tooltips.
+///
+/// Returns:
+///     The configured segmented control.
 pub(super) fn size_strip(
     cells: &FittedCells,
     sel: Option<usize>,
@@ -168,75 +191,82 @@ pub(super) fn size_strip(
     core: Option<CoreId>,
     unit: Option<&str>,
 ) -> impl IntoElement {
-    // The unit goes in the cell's tooltip: on a narrow window the group caption "Size, USDT"
-    // collapses, while the tooltip is reachable at every width. No core, no invented unit.
+    let interactive = core.is_some();
     let unit = unit.map(str::to_string);
-    let items: Vec<MoonSegmentItem> = (0..6)
-        .map(|i| {
-            let mut it = MoonSegmentItem::new("", cells.labels[i].clone()).width(cells.widths[i]);
-            if sel == Some(i) {
-                it = it.selected(true);
-            }
-            it
-        })
-        .collect();
-    let seg = MoonSegmentedControl::new("toolbar-size-presets")
+    let items = (0..6).map(|index| {
+        let mut item = cells.items[index]
+            .clone()
+            .selected(sel == Some(index))
+            .disabled(!interactive);
+        if interactive {
+            item = item.tooltip(match unit.as_deref() {
+                Some(unit) => t!("toolbar.size_hint", n = index + 1, unit = unit).to_string(),
+                None => t!("toolbar.size_hint_nounit", n = index + 1).to_string(),
+            });
+        }
+        item
+    });
+
+    let click_backend = backend.clone();
+    let mut segment = MoonSegmentedControl::new("toolbar-size-presets")
         .accent(MoonAccent::Amber)
         .items(items)
-        .render();
+        .on_click(move |index, event, _, app| {
+            let Some(core) = core else { return };
+            click_backend.update(app, |backend, cx| {
+                match size_click_action(index, event.click_count()) {
+                    SizeClickAction::Select(index) => {
+                        backend.set_order_size_sel(core, index);
+                    }
+                    SizeClickAction::Edit(index) => {
+                        backend.order_size_edit_req = Some((core, index));
+                    }
+                }
+                backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
+                cx.notify();
+            });
+        })
+        .on_scroll(move |index, event, _, app| {
+            let Some(up) = wheel_step_dir(event.modifiers, event.delta) else {
+                return;
+            };
+            let Some(core) = core else { return };
+            backend.update(app, |backend, cx| {
+                let current = backend.order_size_value(core, index);
+                let next = wheel_step(current, up, 1.0);
+                if next != current {
+                    backend.set_order_size_value(core, index, next);
+                    backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
+                    cx.notify();
+                }
+            });
+        });
 
-    let backend_click = backend.clone();
-    strip_with_overlay(
-        seg,
-        "size",
-        &cells.widths,
-        edit_ix,
-        "toolbar-size-edit",
-        input,
-        core.is_some(),
-        move |i| match unit.as_deref() {
-            Some(u) => t!("toolbar.size_hint", n = i + 1, unit = u).to_string(),
-            None => t!("toolbar.size_hint_nounit", n = i + 1).to_string(),
-        },
-        // Single click selects a preset; double click requests inline editing through `order_size_edit_req`.
-        move |i, dbl, cx| {
-            let Some(core) = core else { return };
-            backend_click.update(cx, |b, bcx| {
-                if dbl {
-                    b.order_size_edit_req = Some((core, i));
-                } else {
-                    // Select and persist in config so the choice survives a restart.
-                    b.set_order_size_sel(core, i);
-                }
-                b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                bcx.notify();
-            });
-        },
-        // Ctrl+wheel adjusts the value with the full magnitude-based step (`frac = 1.0`).
-        move |i, up, cx| {
-            let Some(core) = core else { return };
-            backend.update(cx, |b, bcx| {
-                let cur = b.order_size_value(core, i);
-                let next = wheel_step(cur, up, 1.0);
-                if next != cur {
-                    b.set_order_size_value(core, i, next);
-                    b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                    bcx.notify();
-                }
-            });
-        },
-    )
+    if let Some(index) = edit_ix.filter(|index| interactive && *index < 6) {
+        segment = segment.replace_item(
+            index,
+            MoonInput::new("toolbar-size-edit").state(input).small(),
+        );
+    }
+    segment.render()
 }
 
-/// Builds fixed-sell preset cells beside the TP button without per-cell S1-S6 labels.
+/// Build the fixed-sell preset strip beside the main take-profit button.
 ///
-/// The toolbar may wrap the strip in a collapsible `Sell` group caption. Displayed percentages
-/// start from the active core's `ClientSettings` snapshot, with process-lifetime local overrides
-/// masking individual values. `sel_slot=Some` highlights that engaged slot; `None` leaves every S
-/// cell dim and may represent main TP, no core, or manual-strategy mode, so it does not by itself
-/// imply that TP is lit. When interaction is enabled, clicking engages a slot, while clicking the
-/// active slot again requests main TP. With no core, the toolbar supplies dash cells and disables
-/// interaction.
+/// Single click engages a slot (or restores main TP when clicking the active slot), double click
+/// requests inline editing, and Ctrl+wheel changes the core-owned percentage. No focused core or
+/// manual-strategy mode disables all cells because the toolbar passes `None` in both states.
+///
+/// Args:
+///     cells: MoonUI-fitted preset cells used by both rendering and toolbar budgeting.
+///     sel_slot: Selected one-based fixed-sell slot.
+///     edit_ix: Zero-based cell to replace with the inline editor.
+///     input: Shared editor state.
+///     backend: Application state receiving edits.
+///     core: Focused interactive core; absence disables the strip.
+///
+/// Returns:
+///     The configured segmented control.
 pub(super) fn sell_strip(
     cells: &FittedCells,
     sel_slot: Option<usize>,
@@ -245,69 +275,69 @@ pub(super) fn sell_strip(
     backend: Entity<Backend>,
     core: Option<CoreId>,
 ) -> impl IntoElement {
-    let items: Vec<MoonSegmentItem> = (0..6)
-        .map(|i| {
-            let mut it = MoonSegmentItem::new("", cells.labels[i].clone()).width(cells.widths[i]);
-            if sel_slot == Some(i + 1) {
-                it = it.selected(true);
-            }
-            it
-        })
-        .collect();
-    let seg = MoonSegmentedControl::new("toolbar-sell-presets")
+    let interactive = core.is_some();
+    let items = (0..6).map(|index| {
+        let mut item = cells.items[index]
+            .clone()
+            .selected(sel_slot == Some(index + 1))
+            .disabled(!interactive);
+        if interactive {
+            item = item.tooltip(t!("toolbar.sell_hint", n = index + 1).to_string());
+        }
+        item
+    });
+
+    let click_backend = backend.clone();
+    let mut segment = MoonSegmentedControl::new("toolbar-sell-presets")
         .accent(MoonAccent::Blue)
         .items(items)
-        .render();
-
-    let backend_click = backend.clone();
-    strip_with_overlay(
-        seg,
-        "sell",
-        &cells.widths,
-        edit_ix,
-        "toolbar-sell-edit",
-        input,
-        core.is_some(),
-        |i| t!("toolbar.sell_hint", n = i + 1).to_string(),
-        // Single click engages a slot and dims TP. Clicking the active slot again restores TP,
-        // dimming S without changing TP's value. Double click edits the percentage inline.
-        move |i, dbl, cx| {
+        .on_click(move |index, event, _, app| {
             let Some(core) = core else { return };
-            backend_click.update(cx, |b, bcx| {
-                if dbl {
-                    b.sell_edit_req = Some((core, i));
-                } else {
-                    // A second click on the lit slot returns to the main TP.
-                    let (edit, local_slot) = if sel_slot == Some(i + 1) {
-                        (ClientSettingsEdit::EngageMainTakeProfit, None)
-                    } else {
-                        (ClientSettingsEdit::SelectFixedSellSlot(i + 1), Some(i + 1))
-                    };
-                    b.set_fixed_sell_slot_local(core, local_slot);
-                    b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                    if let Err(error) = b.session.edit_client_settings(core, edit) {
-                        log::warn!("toggle fixed-sell slot failed: {error}");
+            click_backend.update(app, |backend, cx| {
+                match sell_click_action(index, sel_slot, event.click_count()) {
+                    SellClickAction::Edit(index) => {
+                        backend.sell_edit_req = Some((core, index));
+                    }
+                    SellClickAction::EngageMain => {
+                        backend.set_fixed_sell_slot_local(core, None);
+                        backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
+                        if let Err(error) = backend
+                            .session
+                            .edit_client_settings(core, ClientSettingsEdit::EngageMainTakeProfit)
+                        {
+                            log::warn!("toggle fixed-sell slot failed: {error}");
+                        }
+                    }
+                    SellClickAction::SelectFixed(slot) => {
+                        backend.set_fixed_sell_slot_local(core, Some(slot));
+                        backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
+                        if let Err(error) = backend.session.edit_client_settings(
+                            core,
+                            ClientSettingsEdit::SelectFixedSellSlot(slot),
+                        ) {
+                            log::warn!("toggle fixed-sell slot failed: {error}");
+                        }
                     }
                 }
-                bcx.notify();
+                cx.notify();
             });
-        },
-        // Ctrl+wheel adjusts the percentage with a half-size magnitude step (`frac = 0.5`). Read
-        // the current core-owned value from the ClientSettings snapshot.
-        move |i, up, cx| {
+        })
+        .on_scroll(move |index, event, _, app| {
+            let Some(up) = wheel_step_dir(event.modifiers, event.delta) else {
+                return;
+            };
             let Some(core) = core else { return };
-            backend.update(cx, |b, bcx| {
-                let cur = b.fixed_sell_pct(core, i);
-                let next = wheel_step(cur, up, 0.5);
-                if next != cur {
-                    // Optimistically update the local cache and redraw immediately, then notify the core too.
-                    b.set_fixed_sell_pct_local(core, i, next);
-                    b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                    bcx.notify();
-                    if let Err(error) = b.session.edit_client_settings(
+            backend.update(app, |backend, cx| {
+                let current = backend.fixed_sell_pct(core, index);
+                let next = wheel_step(current, up, 0.5);
+                if next != current {
+                    backend.set_fixed_sell_pct_local(core, index, next);
+                    backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
+                    cx.notify();
+                    if let Err(error) = backend.session.edit_client_settings(
                         core,
                         ClientSettingsEdit::SetFixedSellPct {
-                            slot: i + 1,
+                            slot: index + 1,
                             pct: next,
                         },
                     ) {
@@ -315,90 +345,15 @@ pub(super) fn sell_strip(
                     }
                 }
             });
-        },
-    )
-}
+        });
 
-/// Shared frame for both preset strips (size/sell): the segmented control plus a transparent
-/// interaction layer over it (`MoonSegmentedControl` does not tell click, double-click and wheel
-/// apart itself), in which the cell being edited is replaced by an inline input. Size and sell
-/// differ only in `on_click`/`on_wheel`; the wheel gate ([`wheel_step_dir`]) itself is shared, so
-/// Ctrl is required on both strips. `overlay=false` (no core) → no interaction.
-///
-/// **The interaction layer is THE SAME flex row as the cells, not absolute offsets summed from the
-/// preceding widths.** GPUI runs every length through `round_to_device_pixel` (`moon-gpui/src/
-/// taffy.rs`, `impl ToTaffy<f32> for AbsoluteLength`): each cell's width is rounded on its own,
-/// while an absolute prefix sum is rounded once as a whole — so the two roundings diverge and the
-/// error accumulates left to right (on fractional widths and a fractional device scale, up to
-/// several pixels by the sixth slot). Sharing the width array does NOT fix it: same numbers,
-/// different rounding order. The only dependable guarantee is the same layout — same widths, same
-/// siblings, same container — so taffy rounds both rows identically.
-///
-/// Consequence for edits: the layer's root must never gain padding, a border or a `gap`; any of
-/// them shifts every hit target off its cell. `MoonSegmentedControl::item_gap` is left at its zero
-/// default for the same reason — a non-zero one would have to be duplicated here.
-///
-/// `tooltip` supplies the hint BY SLOT NUMBER: the overlay covers the cell and swallows hover, so
-/// `MoonSegmentedControl` cannot carry its own hint — and has no tooltip in its API anyway. It is
-/// also the only place the user learns that Ctrl+wheel exists.
-#[allow(clippy::too_many_arguments)]
-fn strip_with_overlay(
-    seg: impl IntoElement,
-    id_prefix: &'static str,
-    widths: &[f32; 6],
-    edit_ix: Option<usize>,
-    edit_input_id: &'static str,
-    input: &Entity<MoonInputState>,
-    overlay: bool,
-    tooltip: impl Fn(usize) -> String + Clone + 'static,
-    on_click: impl Fn(usize, bool, &mut App) + Clone + 'static,
-    on_wheel: impl Fn(usize, bool, &mut App) + Clone + 'static,
-) -> impl IntoElement {
-    let mut root = div().relative().flex().items_center().child(seg);
-    // Bound the index at the boundary rather than trusting it: it arrives from an edit REQUEST
-    // (a hotkey, a double click) that this function does not own.
-    let edit_ix = edit_ix.filter(|i| *i < 6);
-
-    // The layer is needed without interaction too — while a cell is being edited inline. A core
-    // always exists when an edit was requested, but the two conditions stay separate so the input
-    // cannot disappear under `overlay=false`.
-    if overlay || edit_ix.is_some() {
-        let mut layer = div().absolute().inset_0().flex().items_center();
-        for i in 0..6 {
-            let cell = div().w(px(widths[i])).h_full();
-            layer = layer.child(if edit_ix == Some(i) {
-                // This is the cell being edited: the input REPLACES the hit target, or the same
-                // click would land both in the field and in the preset-selection handler.
-                cell.child(MoonInput::new(edit_input_id).state(input).small())
-                    .into_any_element()
-            } else if overlay {
-                let on_click = on_click.clone();
-                let on_wheel = on_wheel.clone();
-                let hint = tooltip(i);
-                cell.id(SharedString::from(format!("{id_prefix}-hit-{i}")))
-                    // The cell is clickable, but the overlay swallows the segment's hover — the
-                    // cursor is the only sign of interactivity until the tooltip appears.
-                    .cursor_pointer()
-                    .tooltip(move |_window, cx| {
-                        cx.new(|_| moon_ui::MoonTooltipView::new(hint.clone()))
-                            .into()
-                    })
-                    .on_mouse_down(MouseButton::Left, move |ev, _w, cx| {
-                        on_click(i, ev.click_count >= 2, cx);
-                    })
-                    .on_scroll_wheel(move |ev, _w, cx| {
-                        if let Some(up) = wheel_step_dir(ev.modifiers, ev.delta) {
-                            on_wheel(i, up, cx);
-                        }
-                    })
-                    .into_any_element()
-            } else {
-                cell.into_any_element()
-            });
-        }
-        root = root.child(layer);
+    if let Some(index) = edit_ix.filter(|index| interactive && *index < 6) {
+        segment = segment.replace_item(
+            index,
+            MoonInput::new("toolbar-sell-edit").state(input).small(),
+        );
     }
-    root
+    segment.render()
 }
 
 #[cfg(test)]

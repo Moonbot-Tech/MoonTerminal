@@ -279,11 +279,12 @@ impl ChartTabs {
             .child(label(&t!("chart.fig.kind")))
             .child(
                 MoonDropdown::new("fig-kind")
-                    .label(format!("{} ▾", style.kind.label()))
+                    .label(style.kind.label())
+                    .trigger_caret(true)
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Micro)
-                    .trigger_width(design::font_w(cx, 120.0))
-                    .menu_width(design::font_w(cx, 130.0))
+                    .trigger_width_scaled(120.0)
+                    .menu_width_scaled(130.0)
                     .menu_size(MoonMenuSize::Compact)
                     .items(kind_items),
             );

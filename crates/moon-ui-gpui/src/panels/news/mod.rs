@@ -374,22 +374,16 @@ impl NewsView {
             1 => self.coin_filter.iter().next().cloned().unwrap_or_default(),
             n => t!("news.coin.n", n = n).to_string(),
         };
-        let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
-            cx,
-            &cur,
-            std::iter::once(all_label.as_str()).chain(coins.iter().map(String::as_str)),
-            design::CORES_TRIGGER_MIN_W,
-            140.0,
-        );
         let entity = cx.entity();
         let ent_all = entity.clone();
         let mut menu = MoonDropdown::new("news-coins")
-            .label(trigger_label)
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(trigger_w)
-            .menu_width(menu_w)
-            .menu_max_height(360.0)
+            .fit_trigger_width(118.0, 260.0)
+            .fit_menu_width(140.0, 560.0)
+            .menu_max_height_ui(360.0)
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false)
             .item(
@@ -431,7 +425,7 @@ impl NewsView {
         let content = self.tags_content(cx);
         MoonPopover::new("news-tags-popover")
             .placement(MoonPopoverPlacement::BottomStart)
-            .width(260.0)
+            .content_width_ui(260.0)
             .close_on_content_click(false)
             // Close on an outside click, like the Main core-settings popover. Swatch/checkbox clicks
             // are INSIDE the content, and `close_on_content_click(false)` keeps them from dismissing
@@ -448,8 +442,7 @@ impl NewsView {
             .content(content)
     }
 
-    /// The Tags trigger label: `"Теги · все"` when nothing is filtered, else `"Теги N/M"` where M is
-    /// every tag PLUS the "no tags" bucket and N is how many of them are shown.
+    /// Return the localized Tags trigger label and its visible-count summary.
     fn tags_label(&self, settings: &NewsTagSettings) -> String {
         let rows = self.tag_rows();
         let total = rows.len() + 1; // +1 for the "no tags" bucket
@@ -462,22 +455,18 @@ impl NewsView {
         }
     }
 
-    /// The Tags popover trigger — the same `MoonButton` (Soft/Action) the coin dropdown emits, sized
-    /// with the shared `dropdown_content_widths` so it gets the same min width + padding + caret as the
-    /// coin pill. The dynamic `label` (count) fills that width, so a short "Теги" no longer over-pads.
-    /// No `on_click`: the popover wrapper owns open/close; `selected` brightens it while filtering.
+    /// Build the Tags popover trigger with the same fitted geometry as the coin dropdown.
+    ///
+    /// The popover wrapper owns open/close behavior; `selected` brightens the trigger while a
+    /// filter is active.
     fn tags_trigger(&self, label: String, active: bool, cx: &App) -> impl IntoElement + use<> {
-        let (label, trigger_w, _) = design::dropdown_content_widths(
-            cx,
-            &label,
-            std::iter::once(label.as_str()),
-            design::CORES_TRIGGER_MIN_W,
-            80.0,
-        );
+        let (label, trigger_w) =
+            MoonDropdown::fitted_trigger_label(cx, &label, MoonButtonSize::Action, 118.0, 260.0);
         MoonButton::new("news-tags-trigger")
             .label(label)
             .variant(MoonButtonVariant::Soft)
             .size(MoonButtonSize::Action)
+            .mono(true)
             .selected(active)
             .width(trigger_w)
             .render()

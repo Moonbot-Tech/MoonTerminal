@@ -26,7 +26,6 @@ impl ReportPanel {
             )
         };
         crate::controls::core_combo(
-            cx,
             "rep-core",
             &cores,
             &exchange_names,
@@ -73,11 +72,12 @@ impl ReportPanel {
             },
         );
         MoonDropdown::new("rep-side")
-            .label(format!("{cur} ▾"))
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 69.0))
-            .menu_width(design::font_w(cx, 120.0))
+            .trigger_width_scaled(69.0)
+            .menu_width_scaled(120.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -115,11 +115,12 @@ impl ReportPanel {
             },
         );
         MoonDropdown::new("rep-kind")
-            .label(format!("{cur} ▾"))
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 102.0))
-            .menu_width(design::font_w(cx, 138.0))
+            .trigger_width_scaled(102.0)
+            .menu_width_scaled(138.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -141,11 +142,12 @@ impl ReportPanel {
             },
         );
         MoonDropdown::new("rep-period")
-            .label(format!("{} ▾", self.period.label()))
+            .label(self.period.label())
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 100.0))
-            .menu_width(design::font_w(cx, 130.0))
+            .trigger_width_scaled(100.0)
+            .menu_width_scaled(130.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -240,8 +242,8 @@ impl ReportPanel {
                     .segment(moon_ui::MoonButtonSegment::new("⇩"))
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
-                    .trigger_width(design::font_w(cx, 34.0))
-                    .menu_width(design::font_w(cx, 200.0))
+                    .trigger_width_scaled(34.0)
+                    .menu_width_scaled(200.0)
                     .menu_size(MoonMenuSize::Compact)
                     .items(items),
             )
@@ -287,9 +289,9 @@ impl ReportPanel {
                     .segment(moon_ui::MoonButtonSegment::new("▦"))
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
-                    .trigger_width(design::font_w(cx, 34.0))
-                    .menu_width(design::font_w(cx, 230.0))
-                    .menu_max_height(420.0)
+                    .trigger_width_scaled(34.0)
+                    .menu_width_scaled(230.0)
+                    .menu_max_height_ui(420.0)
                     .menu_size(MoonMenuSize::Compact)
                     .close_on_select(false)
                     .items(items),

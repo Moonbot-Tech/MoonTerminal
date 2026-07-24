@@ -1,12 +1,27 @@
+//! Regression coverage for preset-strip wheel gating and handler wiring.
+
 // NOT `use super::*`: the glob would pull in the `gpui::test` macro, and `#[test]` would
 // expand into itself (recursion limit).
-use super::{cell_width, wheel_step_dir};
+use super::{
+    SellClickAction, SizeClickAction, sell_click_action, size_click_action, wheel_step_dir,
+};
 use gpui::{Modifiers, Point, ScrollDelta};
 
+/// Build a vertical line-based scroll delta for wheel-gate tests.
+///
+/// Args:
+///     y: Signed vertical line delta.
+///
+/// Returns:
+///     A vertical `ScrollDelta`.
 fn lines(y: f32) -> ScrollDelta {
     ScrollDelta::Lines(Point { x: 0.0, y })
 }
 
+/// Build modifiers containing only Ctrl.
+///
+/// Returns:
+///     Ctrl-only modifiers.
 fn ctrl() -> Modifiers {
     Modifiers {
         control: true,
@@ -14,86 +29,75 @@ fn ctrl() -> Modifiers {
     }
 }
 
+/// `strips.rs:wheel_step_dir` must reject an unmodified wheel gesture.
+///
+/// Removing the modifier gate would let ordinary toolbar scrolling silently rewrite an order size
+/// or sell percentage.
 #[test]
 fn bare_wheel_never_changes_a_preset() {
-    // Removing the modifier gate would let scrolling over the toolbar silently rewrite the
-    // order size in the config and the sell percentage in the core.
     assert_eq!(wheel_step_dir(Modifiers::default(), lines(1.0)), None);
     assert_eq!(wheel_step_dir(Modifiers::default(), lines(-1.0)), None);
 }
 
+/// `strips.rs:wheel_step_dir` must preserve both Ctrl-wheel directions.
+///
+/// Reversing the Y comparison or rejecting Ctrl-modified input changes a trading value in the
+/// wrong direction or leaves it unchanged.
 #[test]
 fn ctrl_wheel_reports_direction() {
-    // Reversing the Y comparison or rejecting Ctrl-modified input makes one of these assertions
-    // fail before a preset is adjusted in the wrong direction or not adjusted at all.
     assert_eq!(wheel_step_dir(ctrl(), lines(1.0)), Some(true));
     assert_eq!(wheel_step_dir(ctrl(), lines(-1.0)), Some(false));
 }
 
+/// `strips.rs:wheel_step_dir` must reject a horizontal trackpad gesture.
+///
+/// Treating zero Y as a downward step would shrink a trading parameter during sideways scrolling.
 #[test]
 fn horizontal_gesture_is_not_a_downward_step() {
-    // ScrollDelta is two-dimensional: a sideways gesture carries y == 0. A naive `y > 0.0`
-    // would return "down" and SHRINK a trading parameter from horizontal scrolling.
     assert_eq!(wheel_step_dir(ctrl(), lines(0.0)), None);
 }
 
-/// Regression: dropping cell padding from `cell_width` squeezes the rendered preset label.
+/// `strips.rs:size_click_action` must preserve selection and double-click editing with the native
+/// clicked index. Reversing or collapsing the click-count branch selects a preset when the user
+/// requested its inline editor.
 #[test]
-fn a_cell_leaves_room_for_its_own_label() {
-    // Plausible future edit: `controls::strips::cell_width` loses its `pad` term — someone
-    // decides the measured text width is enough and drops the cell's own padding
-    // (`CELL_PAD_X` + `CELL_HOTKEY_GAP`) as slack. Visible consequence: the label is squeezed
-    // inside a box that was never sized for it again — exactly the crowding at a larger font
-    // that made the width content-measured in the first place.
-    //
-    // The oracle is independent of the code: the test supplies both quantities, and "a cell is
-    // never narrower than its content plus its padding" comes from the contract, not from the
-    // implementation.
-    let text = 40.0;
-    let pad = 27.0;
-    assert!(
-        cell_width(text, pad, 34.0) >= text + pad,
-        "a cell must fit its label together with its own padding"
+fn order_size_clicks_preserve_selection_and_edit_semantics() {
+    assert_eq!(size_click_action(4, 1), SizeClickAction::Select(4));
+    assert_eq!(size_click_action(2, 2), SizeClickAction::Edit(2));
+    assert_eq!(size_click_action(5, 3), SizeClickAction::Edit(5));
+}
+
+/// `strips.rs:sell_click_action` must distinguish fixed-slot selection, active-slot restoration,
+/// and double-click editing. Treating the selected slot as zero-based or evaluating it before the
+/// double-click branch changes the live take-profit mode instead of opening the editor.
+#[test]
+fn fixed_sell_clicks_preserve_slot_and_edit_semantics() {
+    assert_eq!(
+        sell_click_action(3, Some(1), 1),
+        SellClickAction::SelectFixed(4)
     );
+    assert_eq!(
+        sell_click_action(3, Some(4), 1),
+        SellClickAction::EngageMain
+    );
+    assert_eq!(sell_click_action(3, Some(4), 2), SellClickAction::Edit(3));
 }
 
-/// Regression: removing the minimum width makes short preset cells difficult to click.
+/// Both `strips.rs:size_strip` and `sell_strip` must route native MoonUI scroll callbacks through
+/// the Ctrl gate.
+///
+/// Reading the raw delta in either callback would defeat the gate while leaving the pure helper
+/// tests green.
 #[test]
-fn a_short_label_still_gets_a_clickable_cell() {
-    // The floor is a mouse target: "1%" is narrower than the padding on its own, and without
-    // the clamp the cell would collapse into a slit that is awkward to hit.
-    assert_eq!(cell_width(6.0, 4.0, 34.0), 34.0);
-}
-
-/// Regression: removing pixel rounding can desynchronize cells from their hit targets.
-#[test]
-fn a_cell_width_is_whole_pixels() {
-    // A second plausible edit to the same function, likelier than losing `pad`: `.ceil()` looks
-    // like cosmetic rounding and gets removed as redundant. But a fractional width is precisely
-    // the source of rounding divergence between the strip and its interaction layer that the
-    // layer was rewritten as a flex row to avoid (see `strip_with_overlay`) — GPUI rounds every
-    // length to a device pixel separately.
-    //
-    // The input is fractional ON PURPOSE: on the whole-number inputs of the two tests above,
-    // losing `.ceil()` would go unnoticed.
-    assert_eq!(cell_width(40.5, 26.0, 34.0), 67.0);
-}
-
-#[test]
-fn wheel_handler_consults_the_gate_rather_than_the_raw_delta() {
-    // Guards the CALL SITE, which the three tests above cannot reach: they all exercise the
-    // pure `wheel_step_dir` helper, so reading the raw delta directly in `on_scroll_wheel`
-    // would defeat the Ctrl gate entirely and leave every one of them green. The gate is only
-    // effective if the handler actually calls it.
+fn both_wheel_handlers_consult_the_gate_rather_than_the_raw_delta() {
     let source = include_str!("../strips.rs");
     let implementation = source.split("#[cfg(test)]").next().unwrap_or(source);
-    let handler = implementation
-        .split(".on_scroll_wheel(")
-        .nth(1)
-        .expect("the strip overlay must still install a scroll-wheel handler");
 
-    assert!(
-        handler.contains("wheel_step_dir(ev.modifiers, ev.delta)"),
-        "the wheel handler must route through wheel_step_dir, not read the delta directly"
+    assert_eq!(
+        implementation
+            .matches("wheel_step_dir(event.modifiers, event.delta)")
+            .count(),
+        2,
+        "both preset strips must route native wheel events through wheel_step_dir"
     );
 }

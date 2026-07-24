@@ -22,10 +22,6 @@ const CAPTION_SIZE: f32 = 10.0;
 
 /// Caption for a preset group, muted and one step below the strip's own cells.
 ///
-/// A SIBLING of the strip, never a child: `strips::strip_with_overlay` lays its interaction layer
-/// over the strip's own box, so anything inserted INSIDE the strip would shift every cell out from
-/// under its hit target.
-///
 /// `MoonLabel` rather than a hand-rolled text div: it applies the theme's mono family and runs the
 /// size through `tokens.font()` itself, so the caption follows the Font slider like every other
 /// MoonUI text. Pass the BASE size — a pre-scaled `design::t_*` value would be scaled twice.
@@ -479,14 +475,10 @@ pub fn toolbar(
                 // Manual strategy mode disables all click, wheel, and double-click interaction.
                 focus_core.filter(|_| !manual_on),
             );
-            // Dim ONLY the sell block: manual-strategy mode stops its slots from being applied,
-            // while the TP button beside it stays live.
+            // MoonUI dims disabled cells once. An outer opacity would multiply that alpha in
+            // manual-strategy mode and make the values substantially darker than other disabled
+            // controls, while the TP button beside them intentionally stays live.
             let sell_block = captioned_strip(fit.sell_caption, p, strip, cx);
-            let sell_block = if manual_on {
-                div().opacity(0.55).child(sell_block).into_any_element()
-            } else {
-                sell_block.into_any_element()
-            };
             section()
                 .child(metric_button(
                     TradeMetric::Tp,

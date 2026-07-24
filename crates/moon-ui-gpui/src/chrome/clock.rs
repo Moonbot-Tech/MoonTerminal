@@ -145,16 +145,6 @@ pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl
         offsets.sort_unstable();
     }
 
-    // All zone labels use the menu's mono font, so character count identifies the widest one.
-    // Measure only that candidate because text measurement is uncached and this path renders on
-    // every 1 Hz clock tick. The fixed-width placeholder matches every `hms` value.
-    let widest_tz = offsets
-        .iter()
-        .map(|&m| tz_label(m))
-        .max_by_key(|s| s.chars().count())
-        .unwrap_or_default();
-    let menu_w = design::menu_fit_width_2col(cx, &widest_tz, "00:00:00", 156.0);
-
     let mut items = Vec::with_capacity(offsets.len());
     for m in offsets {
         let backend = backend.clone();
@@ -202,16 +192,16 @@ pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl
 
     MoonPopover::new("header-clock-popover")
         .placement(MoonPopoverPlacement::BottomEnd)
-        .width(design::popover_outer_width(cx, menu_w))
+        .fit_content()
         .close_on_content_click(true)
         .trigger(row)
         .content(
             MoonPopupMenu::new("header-clock-menu")
-                .width(menu_w)
+                .fit_width(156.0, 560.0)
                 .size(MoonMenuSize::Compact)
                 .mono(true)
                 // Show about 11 of the 27 or more zones at once and scroll the remainder.
-                .max_height(300.0)
+                .max_height_ui(300.0)
                 .items(items)
                 .render(),
         )

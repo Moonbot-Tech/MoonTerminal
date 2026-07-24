@@ -200,8 +200,8 @@ impl MetricTarget {
 
 /// Base width of a metric popup's content — slider, field, checkboxes.
 ///
-/// Unscaled: it goes through `design::font_w` because the content includes labels and inputs that
-/// grow with the Font slider, while `MoonPopover::width` puts its argument into `px(..)` verbatim.
+/// Unscaled: `MoonPopover::content_width_font` applies the font scale before it adds the
+/// component-owned popup padding and border.
 const POPUP_CONTENT_W: f32 = 220.0;
 
 /// A trading-metric button together with its anchored popup.
@@ -223,7 +223,7 @@ pub(super) fn metric_button(
     popup: Option<AnyElement>,
     shell: Entity<Shell>,
     p: MoonPalette,
-    cx: &App,
+    _cx: &App,
 ) -> impl IntoElement {
     // "Lit" = the popup is open OR the metric is engaged (for TP: fixed-sell is off). That is what
     // makes TP and the S slots mutually exclusive — either TP is lit or exactly one S slot is. A
@@ -249,10 +249,7 @@ pub(super) fn metric_button(
     let trigger = btn.text_segment(value_str, color, 500.0).render();
     MoonPopover::new(SharedString::from(metric.popover_id()))
         .placement(MoonPopoverPlacement::BottomStart)
-        .width(design::popover_outer_width(
-            cx,
-            design::font_w(cx, POPUP_CONTENT_W),
-        ))
+        .content_width_font(POPUP_CONTENT_W)
         // A disabled metric (SL with its toggle off) does not open: there is nothing to edit.
         //
         // Guarding `open` with `enabled` here would be inert — `MoonPopover::render` returns the

@@ -322,7 +322,6 @@ impl CoreStatusView {
             .market_source()
             .core_exchange_names();
         let combo = crate::controls::core_combo(
-            cx,
             "core-status-core",
             cores,
             &exchange_names,

@@ -249,14 +249,15 @@ impl SettingsView {
 
         MoonDropdown::new(SharedString::from(format!("feed-{i}")))
             .label(format!("{on}/8"))
+            .trigger_caret(true)
             .trigger_variant(if tinted {
                 MoonButtonVariant::Amber
             } else {
                 MoonButtonVariant::Neutral
             })
             .trigger_size(MoonButtonSize::Micro)
-            .trigger_width(design::font_w(cx, 52.0))
-            .menu_width(design::font_w(cx, 272.0))
+            .trigger_width_scaled(52.0)
+            .menu_width_scaled(272.0)
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false)
             .items(items)

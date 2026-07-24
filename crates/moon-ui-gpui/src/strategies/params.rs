@@ -404,29 +404,27 @@ impl StrategiesView {
                     );
                 }
                 let trigger_label = if differ {
-                    "≠ ▾".to_string()
+                    "≠".to_string()
                 } else {
-                    format!(
-                        "{} ▾",
-                        if value.is_empty() {
-                            "—".to_string()
-                        } else {
-                            value.clone()
-                        }
-                    )
+                    if value.is_empty() {
+                        "—".to_string()
+                    } else {
+                        value.clone()
+                    }
                 };
                 MoonDropdown::new(SharedString::from(format!("field-combo-{row_id}")))
                     .label(trigger_label)
+                    .trigger_caret(true)
                     .trigger_variant(if dirty || differ {
                         MoonButtonVariant::Amber
                     } else {
                         MoonButtonVariant::Soft
                     })
                     .trigger_size(MoonButtonSize::Action)
-                    .trigger_width(design::font_w(cx, 180.0))
-                    .menu_width(design::font_w(cx, 220.0))
+                    .trigger_width_scaled(180.0)
+                    .menu_width_scaled(220.0)
                     .menu_size(MoonMenuSize::Compact)
-                    .menu_max_height(220.0)
+                    .menu_max_height_ui(220.0)
                     .disabled(!active)
                     .items(items)
                     .into_any_element()

@@ -162,7 +162,15 @@ impl AlertsPanel {
             .unwrap_or_else(|| "—".to_string())
     }
 
-    fn table(&self, p: MoonPalette, cx: &App) -> impl IntoElement {
+    /// Render the current alert rows and their navigation controls.
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///     _cx: Application context retained for the panel-rendering signature.
+    ///
+    /// Returns:
+    ///     The complete alerts table.
+    fn table(&self, p: MoonPalette, _cx: &App) -> impl IntoElement {
         let header = h_flex()
             .w_full()
             .px(px(8.0))
@@ -224,11 +232,12 @@ impl AlertsPanel {
             });
             let strat_dd =
                 MoonDropdown::new(SharedString::from(format!("alert-strat-{core}-{fid}")))
-                    .label(format!("{} ▾", self.strategy_name(core, r.strategy_id)))
+                    .label(self.strategy_name(core, r.strategy_id))
+                    .trigger_caret(true)
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
-                    .trigger_width(design::font_w(cx, 150.0))
-                    .menu_width(design::font_w(cx, 200.0))
+                    .trigger_width_scaled(150.0)
+                    .menu_width_scaled(200.0)
                     .menu_size(MoonMenuSize::Compact)
                     .items(items);
 
@@ -411,11 +420,12 @@ impl AlertsPanel {
             },
         );
         MoonDropdown::new("alerts-sound")
-            .label(format!("{cur} ▾"))
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 120.0))
-            .menu_width(design::font_w(cx, 150.0))
+            .trigger_width_scaled(120.0)
+            .menu_width_scaled(150.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }

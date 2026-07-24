@@ -307,11 +307,12 @@ impl StrategiesView {
             ),
         ];
         MoonDropdown::new("strat-create")
-            .label(format!("＋ {} ▾", t!("strat.menu_create")))
+            .label(format!("＋ {}", t!("strat.menu_create")))
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 110.0))
-            .menu_width(design::font_w(cx, 180.0))
+            .trigger_width_scaled(110.0)
+            .menu_width_scaled(180.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
             .into_any_element()

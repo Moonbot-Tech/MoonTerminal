@@ -394,43 +394,37 @@ fn core_selector(
 
     // The header renders continuously, but exchange discovery scans every client snapshot. Build
     // the hidden menu only after controlled open state triggers a repaint.
-    let (menu_w, items) = if open {
+    let items = if open {
         let exchange_names = b.session.market_source().core_exchange_names();
         let unknown_exchange = t!("common.exchange_unknown").to_string();
         let sections = crate::controls::core_menu_sections(&cores, &exchange_names);
-        let menu_w = design::core_menu_width(cx, 180.0);
         let mut items = Vec::with_capacity(cores.len() + sections.len());
         for (exchange, members) in sections {
             let exchange = exchange.unwrap_or(unknown_exchange.as_str());
-            items.push(MoonMenuItem::label(crate::controls::core_menu_label(
-                cx, exchange, menu_w,
-            )));
+            items.push(MoonMenuItem::label(exchange));
             for (id, name) in members {
                 let backend = backend.clone();
                 let group = group.to_string();
                 let item_shell = shell.clone();
                 items.push(
-                    MoonMenuItem::with_key(
-                        format!("core-{id}"),
-                        crate::controls::core_menu_label(cx, name, menu_w),
-                    )
-                    .selected(active == Some(id))
-                    .checked(active == Some(id))
-                    .on_click(move |_, _, cx| {
-                        backend.update(cx, |b, bcx| {
-                            b.set_active_trade_core(&group, id);
-                            bcx.notify();
-                        });
-                        item_shell.update(cx, |shell, cx| {
-                            shell.set_header_core_selector_open(false, cx);
-                        });
-                    }),
+                    MoonMenuItem::with_key(format!("core-{id}"), name)
+                        .selected(active == Some(id))
+                        .checked(active == Some(id))
+                        .on_click(move |_, _, cx| {
+                            backend.update(cx, |b, bcx| {
+                                b.set_active_trade_core(&group, id);
+                                bcx.notify();
+                            });
+                            item_shell.update(cx, |shell, cx| {
+                                shell.set_header_core_selector_open(false, cx);
+                            });
+                        }),
                 );
             }
         }
-        (menu_w, items)
+        items
     } else {
-        (design::core_menu_width(cx, 180.0), Vec::new())
+        Vec::new()
     };
 
     // Use the canonical `MoonSelectorPill` visual, with a glowing status dot and caret icon, as
@@ -444,7 +438,7 @@ fn core_selector(
     //
     MoonPopover::new("header-core-selector")
         .placement(MoonPopoverPlacement::BottomStart)
-        .width(design::popover_outer_width(cx, menu_w))
+        .fit_content()
         .open(open)
         .on_open_change(move |open, _, cx| {
             shell.update(cx, |shell, cx| {
@@ -475,9 +469,9 @@ fn core_selector(
         )
         .content(
             MoonPopupMenu::new("header-core-menu")
-                .width(menu_w)
+                .fit_width(180.0, 560.0)
                 .size(MoonMenuSize::Compact)
-                .max_height(design::ui_value(cx, 520.0))
+                .max_height_ui(520.0)
                 .items(items)
                 .render(),
         )
@@ -492,15 +486,11 @@ fn core_gear_button(
     shell: Entity<Shell>,
     open: bool,
     content: Option<AnyElement>,
-    cx: &App,
+    _cx: &App,
 ) -> impl IntoElement {
     MoonPopover::new("core-gear-popover")
         .placement(MoonPopoverPlacement::BottomStart)
-        // Use the content module's width basis so both boxes follow the same font scale.
-        .width(design::popover_outer_width(
-            cx,
-            design::font_w(cx, crate::shell::core_settings_popup::CONTENT_W),
-        ))
+        .content_width_font(crate::shell::core_settings_popup::CONTENT_W)
         .open(open)
         .on_open_change(move |open, window, cx| {
             shell.update(cx, |s, cx| s.set_core_settings_open(open, window, cx));

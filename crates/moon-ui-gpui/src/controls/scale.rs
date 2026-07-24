@@ -3,8 +3,6 @@
 use gpui::*;
 use rust_i18n::t;
 
-use crate::design;
-
 use moon_ui::{
     MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize,
     MoonPalette, MoonTooltipView,
@@ -69,7 +67,7 @@ pub(crate) fn step_scale(current: Option<f32>, zoom_in: bool) -> Option<f32> {
 /// `ToolbarCompact`), and the `on_pick` destination. Appearance, tooltip, magnifier, and the
 /// localized short Auto marker are shared.
 fn scale_dropdown(
-    cx: &App,
+    _cx: &App,
     scale: Option<f32>,
     tip_id: &'static str,
     dropdown_id: &'static str,
@@ -105,10 +103,10 @@ fn scale_dropdown(
         })
         .child(
             MoonDropdown::new(dropdown_id)
-                .trigger_width(design::font_w(cx, 72.0))
+                .trigger_width_scaled(72.0)
                 .trigger_variant(MoonButtonVariant::Neutral)
                 .trigger_size(trigger_size)
-                .menu_width(design::font_w(cx, 116.0))
+                .menu_width_scaled(116.0)
                 .menu_size(MoonMenuSize::Compact)
                 .segment(
                     MoonButtonSegment::new("🔍")

@@ -131,18 +131,9 @@ pub fn manual_strategy_controls(
                 }),
         )
         .child({
-            // Size the menu for the longest strategy name or the empty-list placeholder.
-            let menu_w = design::menu_fit_width(
-                cx,
-                manuals
-                    .iter()
-                    .map(|(_, n)| n.as_str())
-                    .chain(manuals.is_empty().then(|| empty_label.as_str())),
-                200.0,
-            );
             MoonPopover::new("header-ms-selector")
                 .placement(MoonPopoverPlacement::BottomStart)
-                .width(design::popover_outer_width(cx, menu_w))
+                .fit_content()
                 .close_on_content_click(true)
                 .trigger(
                     MoonSelectorPill::new("header-ms-pill")
@@ -158,7 +149,7 @@ pub fn manual_strategy_controls(
                 )
                 .content(
                     MoonPopupMenu::new("header-ms-menu")
-                        .width(menu_w)
+                        .fit_width(200.0, 560.0)
                         .size(MoonMenuSize::Compact)
                         .items(items)
                         .render(),

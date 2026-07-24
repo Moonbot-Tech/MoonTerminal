@@ -14,7 +14,7 @@
 //! - [`fmt`] formats size, sell, and field values and computes mouse-wheel steps;
 //! - [`manual_strat`] provides the header's manual-strategy toggle and picker;
 //! - [`metric`] provides TP/SL/leverage trigger buttons and popup content;
-//! - [`strips`] provides size and sell preset strips with overlay interaction;
+//! - [`strips`] provides size and sell preset strips with native MoonUI interaction;
 //! - [`scale`] provides price-scale dropdowns for tabs and AddToChart stacks;
 //! - [`toolbar`] composes the toolbar row.
 
@@ -30,8 +30,7 @@ pub(crate) mod toolbar;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
 pub(crate) use core_combo::{
-    core_combo, core_menu_label, core_menu_sections, normalized_core_filter_ids,
-    toggle_all_core_selection,
+    core_combo, core_menu_sections, normalized_core_filter_ids, toggle_all_core_selection,
 };
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use manual_strat::manual_strategy_controls;

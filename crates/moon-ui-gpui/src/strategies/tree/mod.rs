@@ -181,13 +181,14 @@ impl StrategiesView {
             );
         }
         MoonDropdown::new("strat-kind-filter")
-            .label(format!("{current} ▾"))
+            .label(current)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 116.0))
-            .menu_width(design::font_w(cx, 180.0))
+            .trigger_width_scaled(116.0)
+            .menu_width_scaled(180.0)
             .menu_size(MoonMenuSize::Compact)
-            .menu_max_height(240.0)
+            .menu_max_height_ui(240.0)
             .items(items)
             .into_any_element()
     }
@@ -217,11 +218,12 @@ impl StrategiesView {
             );
         }
         MoonDropdown::new("strat-dir-filter")
-            .label(format!("{current} ▾"))
+            .label(current)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 80.0))
-            .menu_width(design::font_w(cx, 120.0))
+            .trigger_width_scaled(80.0)
+            .menu_width_scaled(120.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
             .into_any_element()

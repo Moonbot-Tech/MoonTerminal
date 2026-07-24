@@ -276,11 +276,12 @@ impl AnalyticsView {
             .unwrap_or_else(|| t!("report.filter.all").to_string());
         let view = cx.entity();
         let mut menu = MoonDropdown::new("an-strat-type")
-            .label(format!("{label} ▾"))
+            .label(label)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Micro)
-            .trigger_width(design::font_w(cx, 116.0))
-            .menu_width(design::font_w(cx, 150.0))
+            .trigger_width_scaled(116.0)
+            .menu_width_scaled(150.0)
             .menu_size(MoonMenuSize::Compact);
         let all_view = view.clone();
         menu = menu.item(
@@ -318,11 +319,12 @@ impl AnalyticsView {
         let cur = self.strat_lists;
         let view = cx.entity();
         let mut menu = MoonDropdown::new("an-strat-lists")
-            .label(format!("{} ▾", cur.label()))
+            .label(cur.label())
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Micro)
-            .trigger_width(design::font_w(cx, 96.0))
-            .menu_width(design::font_w(cx, 130.0))
+            .trigger_width_scaled(96.0)
+            .menu_width_scaled(130.0)
             .menu_size(MoonMenuSize::Compact);
         for f in [
             StratListFilter::All,
@@ -356,8 +358,8 @@ impl AnalyticsView {
             .segment(MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Micro)
-            .trigger_width(design::font_w(cx, 30.0))
-            .menu_width(design::font_w(cx, 160.0))
+            .trigger_width_scaled(30.0)
+            .menu_width_scaled(160.0)
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         let all_view = view.clone();

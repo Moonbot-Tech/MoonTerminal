@@ -29,7 +29,6 @@ impl OrdersPanel {
             .market_source()
             .core_exchange_names();
         crate::controls::core_combo(
-            cx,
             "orders-source",
             cores,
             &exchange_names,
@@ -74,11 +73,12 @@ impl OrdersPanel {
             move |app, k| Self::mutate(&view, app, |v| v.kind = k),
         );
         MoonDropdown::new("orders-kind")
-            .label(format!("{cur} ▾"))
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 102.0))
-            .menu_width(design::font_w(cx, 138.0))
+            .trigger_width_scaled(102.0)
+            .menu_width_scaled(138.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }
@@ -95,8 +95,8 @@ impl OrdersPanel {
             .segment(moon_ui::MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 34.0))
-            .menu_width(design::font_w(cx, 170.0))
+            .trigger_width_scaled(34.0)
+            .menu_width_scaled(170.0)
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
         // The All item enables every column; clicking it again leaves only the first canonical one.
@@ -158,8 +158,8 @@ impl OrdersPanel {
             .label("⚙")
             .trigger_variant(MoonButtonVariant::Ghost)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(design::font_w(cx, 34.0))
-            .menu_width(design::font_w(cx, 220.0))
+            .trigger_width_scaled(34.0)
+            .menu_width_scaled(220.0)
             .menu_size(MoonMenuSize::Normal)
             .item(
                 MoonMenuItem::with_key("m-onlycur", t!("orders.only_current").to_string())

@@ -3,8 +3,6 @@
 use super::*;
 use rust_i18n::t;
 
-use crate::design;
-
 impl LogPanel {
     /// Build the pseudo-source-first, exchange-grouped log-source dropdown.
     ///
@@ -86,28 +84,15 @@ impl LogPanel {
                 );
             }
         }
-        // Derive widths from content because `LogSource::Core` items include variable-length core
-        // names. Exchange headers participate in the menu width, while the trigger and menu retain
-        // separate 150- and 180-pixel floors.
-        let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
-            cx,
-            &cur,
-            sources.iter().map(|item| item.display.as_str()).chain(
-                sections
-                    .iter()
-                    .map(|(exchange, _)| exchange.unwrap_or(unknown_exchange.as_str())),
-            ),
-            150.0,
-            180.0,
-        );
         MoonDropdown::new("log-source")
-            .label(trigger_label)
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(trigger_w)
-            .menu_width(menu_w)
+            .fit_trigger_width(150.0, 260.0)
+            .fit_menu_width(180.0, 560.0)
             .menu_size(MoonMenuSize::Compact)
-            .menu_max_height(design::ui_value(cx, 360.0))
+            .menu_max_height_ui(360.0)
             .items(items)
     }
 
@@ -142,22 +127,13 @@ impl LogPanel {
                     }),
             );
         }
-        // Derive widths from potentially long log-file names. The trigger and menu use separate
-        // 180- and 220-pixel floors; the shared helper applies scaled ceilings and ellipsizes the
-        // trigger label when it reaches its cap.
-        let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
-            cx,
-            &cur,
-            std::iter::once(live.as_str()).chain(files.iter().map(String::as_str)),
-            180.0,
-            220.0,
-        );
         MoonDropdown::new("log-file")
-            .label(trigger_label)
+            .label(cur)
+            .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width(trigger_w)
-            .menu_width(menu_w)
+            .fit_trigger_width(180.0, 260.0)
+            .fit_menu_width(220.0, 560.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }

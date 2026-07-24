@@ -203,10 +203,11 @@ impl AnalyticsView {
             "tun-cfg-ed-{}",
             if time { "t" } else { "f" }
         )))
-        .label(format!("{edges} ▾"))
+        .label(edges.to_string())
+        .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::Micro)
-        .menu_width(design::font_w(cx, 64.0))
+        .menu_width_scaled(64.0)
         .menu_size(MoonMenuSize::Compact)
         .items(ed_items);
         let mut cfg_row = h_flex()
