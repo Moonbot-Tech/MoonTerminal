@@ -3,7 +3,8 @@
 //!
 //! Collapsed, a card shows source and inline ticker chips (left), a right-aligned relative age, and
 //! an expand chevron; the body (translated or original) and tag chips follow. Expanding reveals the
-//! delivery latency chain (terminal receipt → service send → service receive → publication).
+//! delivery latency chain (terminal receipt → service send → service receive → publication, the
+//! service rows timed from publication).
 //! Coloured tags become filled badges and add a left rail split by colour. Cards are hairline-split.
 
 use gpui::prelude::FluentBuilder;
@@ -196,21 +197,31 @@ pub(super) fn news_card(
         .into_any_element()
 }
 
-/// Build the delivery-latency chain: terminal receipt (anchor) then service send / receive /
-/// publication, each as a signed millisecond delta from the anchor plus its absolute clock. Rows for
-/// absent timestamps are skipped.
+/// Build the delivery-latency chain: terminal receipt, service send / receive, publication — each
+/// with its absolute clock, and the service rows additionally as a signed millisecond delta from
+/// PUBLICATION. Rows for absent timestamps are skipped.
+///
+/// The anchor is publication, and the terminal row deliberately carries NO delta, because that is
+/// the one subtraction that would cross two machines' clocks: publication, service receive and
+/// service send are all stamped by the news service (`meta.timeMs`/`recvTime`/`sendTime`), while the
+/// terminal row is this PC's own clock at the moment the store first saw the id
+/// (`CoreStore::apply`). Anchoring on the terminal row made every delta carry the offset between
+/// those clocks, which is how a service send could read as 102 ms AFTER the terminal already had it;
+/// and for news backfilled from the core's ring on connect, that stamp is the moment of connect, so
+/// the deltas measured how long ago the terminal was started (−888661 ms on a 15-minute-old item)
+/// rather than anything about delivery. What is left is a property of the news itself: the same item
+/// now shows the same chain whenever it is opened.
 fn latency_block(item: &NewsItem, p: MoonPalette, cx: &App) -> impl IntoElement {
-    let anchor = item.recv_terminal_ms.filter(|&t| t > 0);
-    let row = |label: String, ms: Option<i64>, is_anchor: bool| -> Option<Div> {
+    let anchor = (item.time_ms > 0).then_some(item.time_ms);
+    let row = |label: String, ms: Option<i64>, from_service: bool| -> Option<Div> {
         let ms = ms.filter(|&t| t > 0)?;
-        let val = if is_anchor {
-            hms_ms(ms)
-        } else if let Some(a) = anchor {
-            let d = a - ms;
-            let sign = if d >= 0 { "−" } else { "+" };
-            format!("{sign}{} {} · {}", d.abs(), t!("news.lat.unit"), hms_ms(ms))
-        } else {
-            hms_ms(ms)
+        let val = match anchor.filter(|_| from_service) {
+            Some(a) => {
+                let d = ms - a;
+                let sign = if d >= 0 { "+" } else { "−" };
+                format!("{sign}{} {} · {}", d.abs(), t!("news.lat.unit"), hms_ms(ms))
+            }
+            None => hms_ms(ms),
         };
         Some(
             h_flex()
@@ -230,22 +241,24 @@ fn latency_block(item: &NewsItem, p: MoonPalette, cx: &App) -> impl IntoElement 
         .border_1()
         .border_color(rgb(p.border))
         .text_size(design::t_caption(cx))
-        .children(row(t!("news.lat.terminal").to_string(), anchor, true))
+        // The terminal row keeps its clock reading only — no delta, see above.
+        .children(row(
+            t!("news.lat.terminal").to_string(),
+            item.recv_terminal_ms,
+            false,
+        ))
         .children(row(
             t!("news.lat.send").to_string(),
             item.send_time_ms,
-            false,
+            true,
         ))
         .children(row(
             t!("news.lat.recv").to_string(),
             item.recv_time_ms,
-            false,
+            true,
         ))
-        .children(row(
-            t!("news.lat.pub").to_string(),
-            (item.time_ms > 0).then_some(item.time_ms),
-            false,
-        ))
+        // Publication is the anchor, so it shows its own clock without a delta from itself.
+        .children(row(t!("news.lat.pub").to_string(), anchor, false))
 }
 
 /// Format the publication age as a compact localized relative time, starting at SECONDS.
