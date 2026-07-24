@@ -607,6 +607,11 @@ pub struct LicenseState {
     pub moon_credits_hold: i32,
     pub moon_credits_auction: i32,
     pub can_use_watcher: bool,
+    /// News-module subscription validity, Unix ms, or `None` when the core reports no subscription.
+    /// The News panel shows it as the feed's "subscription until" status.
+    pub news_valid_until: Option<i64>,
+    /// Whether the news-module trial has been consumed.
+    pub news_trial_used: bool,
 }
 
 /// Core client-settings snapshot from moonproto `ClientSettings`, flattened for toolbar TP, SL,

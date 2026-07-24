@@ -60,6 +60,14 @@ pub(super) fn license_state_from_proto(
         moon_credits_hold: license.moon_credits_hold,
         moon_credits_auction: license.moon_credits_auction,
         can_use_watcher: license.can_use_watcher,
+        // News-module subscription/trial, previously dropped; surfaced in the News panel footer.
+        // Guard non-positive (pre-1970 Delphi) times to None, matching the sibling time converters,
+        // so a malformed stamp reads as "no subscription" rather than "expired".
+        news_valid_until: license
+            .news_valid_until
+            .map(|t| t.unix_millis())
+            .filter(|&ms| ms > 0),
+        news_trial_used: license.news_trial_used,
     }
 }
 

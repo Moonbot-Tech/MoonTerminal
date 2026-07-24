@@ -25,6 +25,9 @@ pub struct NewsItem {
     pub recv_time_ms: Option<i64>,
     /// News-service send time, Unix ms (`meta.sendTime`), or `None`.
     pub send_time_ms: Option<i64>,
+    /// Terminal receive time, Unix ms — stamped by the store on first sight of this `meta.id` (the
+    /// wire carries no such stamp). `None` until the store fills it; the reducer leaves it unset.
+    pub recv_terminal_ms: Option<i64>,
     /// Source code, e.g. `toa` / `nm` (`meta.source`).
     pub source: String,
     /// Optional author text (`meta.author`).
@@ -139,6 +142,8 @@ pub fn parse_frame(json: &str) -> Option<NewsItem> {
         time_ms,
         recv_time_ms: as_i64(meta.get("recvTime")),
         send_time_ms: as_i64(meta.get("sendTime")),
+        // Filled by the store from `news_seen_at`, not from the wire.
+        recv_terminal_ms: None,
         source: meta
             .get("source")
             .and_then(Value::as_str)

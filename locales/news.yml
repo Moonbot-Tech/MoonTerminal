@@ -39,9 +39,9 @@ news.empty:
   en: "No news yet"
   es: "No hay noticias todavía"
 news.empty_filtered:
-  ru: "Все новости скрыты фильтром тегов"
-  en: "All news hidden by the tag filter"
-  es: "Todas las noticias ocultas por el filtro de etiquetas"
+  ru: "Ничего не найдено по фильтрам"
+  en: "No news matches the filters"
+  es: "Ninguna noticia coincide con los filtros"
 news.tags:
   ru: "Теги"
   en: "Tags"
@@ -58,3 +58,59 @@ news.tags.empty:
   ru: "Тегов пока нет"
   en: "No tags yet"
   es: "Sin etiquetas"
+news.lat.terminal:
+  ru: "принято терминалом"
+  en: "received by terminal"
+  es: "recibido por terminal"
+news.lat.send:
+  ru: "отправка сервисом"
+  en: "service sent"
+  es: "enviado por servicio"
+news.lat.recv:
+  ru: "приём сервисом"
+  en: "service received"
+  es: "recibido por servicio"
+news.lat.pub:
+  ru: "публикация"
+  en: "published"
+  es: "publicado"
+news.lat.unit:
+  ru: "мс"
+  en: "ms"
+  es: "ms"
+news.live:
+  ru: "в эфире"
+  en: "live"
+  es: "en directo"
+news.sub.until:
+  ru: "Подписка до"
+  en: "Subscribed until"
+  es: "Suscrito hasta"
+news.sub.expired:
+  ru: "Подписка истекла"
+  en: "Subscription expired"
+  es: "Suscripción vencida"
+news.sub.none:
+  ru: "Нет подписки на новости"
+  en: "No news subscription"
+  es: "Sin suscripción de noticias"
+news.coin:
+  ru: "Монета"
+  en: "Coin"
+  es: "Moneda"
+news.coin.all:
+  ru: "все"
+  en: "all"
+  es: "todas"
+news.search:
+  ru: "Поиск по новостям…"
+  en: "Search news…"
+  es: "Buscar noticias…"
+news.day.today:
+  ru: "Сегодня"
+  en: "Today"
+  es: "Hoy"
+news.day.yesterday:
+  ru: "Вчера"
+  en: "Yesterday"
+  es: "Ayer"

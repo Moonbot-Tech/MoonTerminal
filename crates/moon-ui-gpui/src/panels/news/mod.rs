@@ -19,8 +19,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
-    MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, Panel,
-    PanelEvent, PanelState, h_flex, v_flex,
+    MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette,
+    MoonPopover, MoonPopoverPlacement, Panel, PanelEvent, PanelState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -95,14 +95,56 @@ pub(super) fn key_color(key: &str, p: MoonPalette) -> Option<u32> {
     }
 }
 
+/// Format Unix ms as a `DD.MM.YYYY` UTC date for the subscription pill and day separators.
+fn fmt_date(ms: i64) -> String {
+    chrono::DateTime::from_timestamp(ms / 1000, 0)
+        .map(|dt| dt.format("%d.%m.%Y").to_string())
+        .unwrap_or_default()
+}
+
+/// Whether any of the item's text (all languages), tickers, or tags contain the lowercased query.
+fn item_matches_query(item: &NewsItem, q: &str) -> bool {
+    item.en.to_lowercase().contains(q)
+        || item.ru.to_lowercase().contains(q)
+        || item.es.to_lowercase().contains(q)
+        || item.coins.iter().any(|c| c.to_lowercase().contains(q))
+        || item.tags.iter().any(|t| t.to_lowercase().contains(q))
+}
+
+/// Build a sticky-styled day header for the feed. `day`/`today` are UTC day numbers (ms / 86.4M).
+fn day_separator(day: i64, today: i64, p: MoonPalette, cx: &App) -> AnyElement {
+    let label = if day == today {
+        t!("news.day.today").to_string()
+    } else if day == today - 1 {
+        t!("news.day.yesterday").to_string()
+    } else {
+        fmt_date(day.saturating_mul(86_400_000))
+    };
+    div()
+        .w_full()
+        .flex_none()
+        .px(design::ui_px(cx, 12.0))
+        .py(design::ui_px(cx, 4.0))
+        .text_size(design::t_caption(cx))
+        .text_color(rgb(p.text_faint))
+        .child(label)
+        .into_any_element()
+}
+
 /// Group-scoped News panel for a dock tab or detached window.
 pub struct NewsView {
     backend: Entity<Backend>,
     group: String,
     lang: NewsLang,
+    /// Selected coin filter; `None` shows every coin.
+    coin_filter: Option<String>,
+    /// Free-text search over body/tickers/tags.
+    query: Entity<MoonInputState>,
     /// Tags the user unchecked in the Tags popover. A card is hidden only if it has tags and every
     /// one of them is hidden, so tagless news always shows.
     hidden_tags: HashSet<String>,
+    /// Card ids whose latency chain is currently expanded.
+    expanded: HashSet<String>,
     /// Whether the Tags popover is open.
     tags_open: bool,
     cache_sig: Option<u64>,
@@ -115,7 +157,7 @@ impl NewsView {
     pub fn new(
         backend: Entity<Backend>,
         group: String,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         // Rebuild + repaint only when the scoped cores' news revision changes. News is event-driven
@@ -130,11 +172,24 @@ impl NewsView {
         })
         .detach();
 
+        // Search input: a change only re-filters at render time, so just repaint.
+        let query =
+            cx.new(|cx| MoonInputState::new(window, cx).placeholder(t!("news.search").to_string()));
+        cx.subscribe(&query, |_this, _e, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+
         let mut this = Self {
             backend,
             group,
             lang: NewsLang::Ru,
+            coin_filter: None,
+            query,
             hidden_tags: HashSet::new(),
+            expanded: HashSet::new(),
             tags_open: false,
             cache_sig: None,
             cached: Rc::new(Vec::new()),
@@ -216,6 +271,14 @@ impl NewsView {
         }
     }
 
+    /// Toggle a card's expanded latency chain.
+    fn toggle_expand(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.expanded.remove(id) {
+            self.expanded.insert(id.to_string());
+        }
+        cx.notify();
+    }
+
     /// Unique tags across the merged items, in first-seen order — the Tags popover's row set.
     fn tag_catalog(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
@@ -229,10 +292,91 @@ impl NewsView {
         out
     }
 
-    /// Whether a card is visible under the tag filter: tagless cards always show; a tagged card
+    /// Whether a card passes the tag-visibility filter: tagless cards always show; a tagged card
     /// shows unless every one of its tags is hidden.
-    fn is_visible(&self, item: &NewsItem) -> bool {
+    fn tag_visible(&self, item: &NewsItem) -> bool {
         item.tags.is_empty() || item.tags.iter().any(|t| !self.hidden_tags.contains(t))
+    }
+
+    /// Whether a card passes ALL active filters: tag visibility, the coin filter, and the search
+    /// query (already lowercased).
+    fn passes(&self, item: &NewsItem, q: &str) -> bool {
+        self.tag_visible(item)
+            && self
+                .coin_filter
+                .as_ref()
+                .is_none_or(|c| item.coins.iter().any(|x| x == c))
+            && (q.is_empty() || item_matches_query(item, q))
+    }
+
+    /// Unique coins across the merged items, sorted — the coin filter's options.
+    fn coin_catalog(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for item in self.cached.iter() {
+            for c in &item.coins {
+                if !out.iter().any(|x| x == c) {
+                    out.push(c.clone());
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    fn set_coin_filter(&mut self, coin: Option<String>, cx: &mut Context<Self>) {
+        if self.coin_filter != coin {
+            self.coin_filter = coin;
+            cx.notify();
+        }
+    }
+
+    /// Build the coin filter dropdown ("Монета: все" plus one entry per coin present).
+    fn coin_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let coins = self.coin_catalog();
+        let all = t!("news.coin.all").to_string();
+        let sel = self.coin_filter.clone();
+        let cur = format!(
+            "{}: {}",
+            t!("news.coin"),
+            sel.clone().unwrap_or_else(|| all.clone())
+        );
+        let mut labels: Vec<String> = vec![all.clone()];
+        labels.extend(coins.iter().cloned());
+        let (label, trigger_w, menu_w) =
+            design::dropdown_content_widths(cx, &cur, labels.iter().map(String::as_str), 120.0, 130.0);
+        let view = cx.entity();
+        let mut items: Vec<MoonMenuItem> = Vec::new();
+        {
+            let view = view.clone();
+            items.push(
+                MoonMenuItem::with_key("nc-all", all)
+                    .selected(sel.is_none())
+                    .on_click(move |_, _, app| {
+                        view.update(app, |t, c| t.set_coin_filter(None, c));
+                    }),
+            );
+        }
+        for (i, coin) in coins.into_iter().enumerate() {
+            let view = view.clone();
+            let selected = sel.as_deref() == Some(coin.as_str());
+            let coin_for_click = coin.clone();
+            items.push(
+                MoonMenuItem::with_key(format!("nc-{i}"), coin)
+                    .selected(selected)
+                    .on_click(move |_, _, app| {
+                        let c = coin_for_click.clone();
+                        view.update(app, |t, cx| t.set_coin_filter(Some(c), cx));
+                    }),
+            );
+        }
+        MoonDropdown::new("news-coin")
+            .label(label)
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Action)
+            .trigger_width(trigger_w)
+            .menu_width(menu_w)
+            .menu_size(MoonMenuSize::Compact)
+            .items(items)
     }
 
     /// Assign or clear a tag's colour on the global config, saving on a real change. Notifies the
@@ -472,6 +616,61 @@ impl NewsView {
             .child(swatches)
             .into_any_element()
     }
+
+    /// Latest news-subscription validity (Unix ms) across the scoped cores, or `None` if no core
+    /// reports one. News arrives from any subscribed core, so the longest-valid wins.
+    fn subscription_until(&self, b: &Backend) -> Option<i64> {
+        let store = b.session.store();
+        self.scope_cores(b)
+            .iter()
+            .filter_map(|(id, _)| {
+                store
+                    .core(*id)
+                    .and_then(|c| c.license.as_ref())
+                    .and_then(|l| l.news_valid_until)
+            })
+            .max()
+    }
+
+    /// Render the footer: a live indicator and the news-subscription status pill.
+    fn footer(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
+        let now = moon_chart::paint::now_unix_ms() as i64;
+        let (color, text) = match self.subscription_until(self.backend.read(cx)) {
+            Some(ms) if ms > now => (
+                design::positive_color(p),
+                format!("{} {}", t!("news.sub.until"), fmt_date(ms)),
+            ),
+            Some(_) => (design::danger_color(p), t!("news.sub.expired").to_string()),
+            None => (p.text_muted, t!("news.sub.none").to_string()),
+        };
+        let pill = div()
+            .flex_none()
+            .px(design::ui_px(cx, 8.0))
+            .py(design::ui_px(cx, 1.0))
+            .rounded(design::r_button(cx))
+            .text_size(design::t_caption(cx))
+            .text_color(rgb(color))
+            .bg(design::moon_alpha(color, 0.10))
+            .border_1()
+            .border_color(design::moon_alpha(color, 0.22))
+            .child(text);
+        h_flex()
+            .w_full()
+            .flex_none()
+            .items_center()
+            .gap(design::ui_px(cx, 6.0))
+            .px_2()
+            .py_1()
+            .child(design::status_dot(p.green, cx))
+            .child(
+                div()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_muted))
+                    .child(t!("news.live").to_string()),
+            )
+            .child(div().flex_1())
+            .child(pill)
+    }
 }
 
 impl EventEmitter<PanelEvent> for NewsView {}
@@ -529,23 +728,35 @@ impl Render for NewsView {
         let now = moon_chart::paint::now_unix_ms() as i64;
         let lang = self.lang;
         let colors = self.backend.read(cx).news_tag_colors.clone();
-        // Apply the tag-visibility filter (small N, cheap to materialize).
+        let expanded = self.expanded.clone();
+        let q = self.query.read(cx).value().trim().to_lowercase();
+        // Apply the tag / coin / search filters (small N, cheap to materialize).
         let visible: Vec<NewsItem> = self
             .cached
             .iter()
-            .filter(|it| self.is_visible(it))
+            .filter(|it| self.passes(it, &q))
             .cloned()
             .collect();
 
         let controls = h_flex()
             .w_full()
             .flex_none()
+            .flex_wrap()
             .gap_2()
             .items_center()
             .px_2()
             .py_1()
+            .child(self.coin_combo(cx))
             .child(self.lang_combo(cx))
             .child(self.tags_popover(cx))
+            .child(
+                div().w(design::font_w_px(cx, 150.0)).flex_none().child(
+                    MoonInput::new("news-search")
+                        .state(&self.query)
+                        .small()
+                        .cleanable(true),
+                ),
+            )
             .child(div().flex_1())
             .child(
                 div()
@@ -571,17 +782,32 @@ impl Render for NewsView {
                 .child(msg.to_string())
                 .into_any_element()
         } else {
+            // Interleave day separators (Today / Yesterday / date) as the day changes.
+            let today = now / 86_400_000;
+            let mut children: Vec<AnyElement> = Vec::new();
+            let mut last_day: Option<i64> = None;
+            for it in &visible {
+                // Group by publication day — the SAME key the list is sorted by — so day headers
+                // stay monotonic and mark when the news happened, not when this session received it.
+                let day = if it.time_ms > 0 {
+                    it.time_ms / 86_400_000
+                } else {
+                    i64::MIN
+                };
+                if last_day != Some(day) {
+                    last_day = Some(day);
+                    children.push(day_separator(day, today, p, cx));
+                }
+                let exp = expanded.contains(&it.id);
+                children.push(render::news_card(it, lang, &colors, now, exp, p, cx));
+            }
             v_flex()
                 .id("news-feed")
                 .flex_1()
                 .w_full()
                 .min_h(px(0.0))
                 .overflow_y_scroll()
-                .children(
-                    visible
-                        .iter()
-                        .map(|it| render::news_card(it, lang, &colors, now, p, cx)),
-                )
+                .children(children)
                 .into_any_element()
         };
 
@@ -596,5 +822,7 @@ impl Render for NewsView {
             .child(controls)
             .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
             .child(body)
+            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
+            .child(self.footer(p, cx))
     }
 }
