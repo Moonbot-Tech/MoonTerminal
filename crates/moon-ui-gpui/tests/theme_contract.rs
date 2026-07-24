@@ -693,6 +693,59 @@ fn status_bar_connection_and_license_are_localized() {
     }
 }
 
+/// The three status groups must remain visibly distinct while retaining every live RAM metric.
+///
+/// Plausible production regression: in `shell/status_bar.rs:Shell::status_bar`, replace the
+/// `group_separator()` immediately after `license_text` with `separator()`. The named group-count
+/// assertion reddens, because connection/license and BOOK/FPS would collapse into one dotted run.
+#[test]
+fn status_bar_keeps_three_glanceable_groups() {
+    let text = read_src("shell/status_bar.rs");
+    let left_items = text
+        .split_once(".items([")
+        .expect("status bar must define its left items")
+        .1
+        .split_once(".right_items(right_items)")
+        .expect("status bar must keep actions in the right region")
+        .0;
+    let groups = left_items
+        .split("MoonStatusItem::group_separator()")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        groups.len(),
+        3,
+        "status_bar.rs must keep exactly three ordered left-side groups"
+    );
+    for (group, required) in [
+        (groups[0], ["status_text", "license_text"].as_slice()),
+        (
+            groups[1],
+            ["\"BOOK\"", "book_levels", "\"FPS\"", "fps"].as_slice(),
+        ),
+        (
+            groups[2],
+            [
+                "\"CPU APP/SYS\"",
+                "snap.cpu_process",
+                "snap.cpu_system",
+                "\"GPU\"",
+                "snap.gpu_process",
+                "\"RAM\"",
+                "snap.mem_mb",
+                "snap.mem_delta_mb",
+            ]
+            .as_slice(),
+        ),
+    ] {
+        for marker in required {
+            assert!(
+                group.contains(marker),
+                "status-bar group must contain {marker}"
+            );
+        }
+    }
+}
+
 #[test]
 fn toolbar_row_budget_counts_every_rule_it_draws() {
     // `controls::toolbar::row_fit` decides which of the row's labels collapse by summing the row's

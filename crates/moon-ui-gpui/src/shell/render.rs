@@ -196,7 +196,7 @@ impl Render for Shell {
                     ),
             )
             // ── Status bar, fully ported from egui's lower `shell::ui` panel ──
-            .child(self.status_bar(conn, license, snap, book_levels, fps, cx))
+            .child(self.status_bar(conn, license, snap, book_levels, fps, chrome_width, cx))
             .child(
                 MoonWindowFrame::main("moon-main-window-frame", chrome_width)
                     .header_height(design::HEADER_TOP_H)
