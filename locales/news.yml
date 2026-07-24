@@ -1,0 +1,40 @@
+# News panel: language selector, relative time, translation-pending badge, and empty state.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
+_version: 2
+
+news.lang.ru:
+  ru: "Русский"
+  en: "Russian"
+  es: "Ruso"
+news.lang.en:
+  ru: "Английский"
+  en: "English"
+  es: "Inglés"
+news.lang.es:
+  ru: "Испанский"
+  en: "Spanish"
+  es: "Español"
+news.pending:
+  ru: "перевод ожидается"
+  en: "translation pending"
+  es: "traducción pendiente"
+news.time.now:
+  ru: "только что"
+  en: "just now"
+  es: "ahora mismo"
+news.time.min:
+  ru: "%{n} мин назад"
+  en: "%{n} min ago"
+  es: "hace %{n} min"
+news.time.hour:
+  ru: "%{n} ч назад"
+  en: "%{n} h ago"
+  es: "hace %{n} h"
+news.time.day:
+  ru: "%{n} дн назад"
+  en: "%{n} d ago"
+  es: "hace %{n} d"
+news.empty:
+  ru: "Новостей пока нет"
+  en: "No news yet"
+  es: "No hay noticias todavía"

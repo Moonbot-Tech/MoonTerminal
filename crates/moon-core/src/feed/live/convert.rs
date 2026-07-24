@@ -9,9 +9,18 @@ use moonproto::{Event, MoonClient, OrderWorkerStatus};
 use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
     ClientSettings, ClientSettingsEdit, CoreSysStatus, EngineActionKind, EngineActionResult,
-    LevManageEdit, LevManageState, LicenseState, OrderRow, OrderTrace, OrderTracePoint,
+    LevManageEdit, LevManageState, LicenseState, NewsSnapshot, OrderRow, OrderTrace, OrderTracePoint,
     RuntimeState, WalletKind,
 };
+
+/// Project moonproto's retained `NewsState` into a moonproto-free [`NewsSnapshot`]: reduce its flat
+/// frame ring into logical items. Called only when an `Event::News` arrives, mirroring the
+/// license/settings snapshot idiom.
+pub(super) fn news_snapshot_from_proto(news: &moonproto::state::NewsState) -> NewsSnapshot {
+    NewsSnapshot {
+        items: crate::feed::news::reduce(news.items()),
+    }
+}
 
 fn trace_point(p: OrderTraceChartPoint) -> OrderTracePoint {
     OrderTracePoint {

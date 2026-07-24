@@ -878,6 +878,11 @@ pub enum FeedMsg {
     /// Emitted for every health event; the store gates the Core Status table with
     /// `sys_rev` only when metric values change.
     SysStatus(CoreSysStatus),
+    /// Core news snapshot: logical news items plus the tags catalog, rebuilt from the retained
+    /// moonproto `NewsState` when any `Event::News` arrives. Moonproto-free — the reduction lives in
+    /// `feed::news` and the projection in `feed::live::convert`. The store gates the News panel with
+    /// `news_rev` only when the reduced snapshot changes.
+    News(super::news::NewsSnapshot),
 }
 
 /// Latest resource telemetry for one core, from protocol v4 `Event::KernelHealth`.

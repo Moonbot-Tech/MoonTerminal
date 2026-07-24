@@ -33,7 +33,8 @@ use moon_core::session::CoreId;
 /// - v4 added the Core Status bottom tab and reset layouts so the new tab appeared.
 /// - v5 temporarily disabled Core Status because, at that time, log-derived data was insufficient
 ///   and typed moonproto fields were not yet available; resetting removed the previously saved tab.
-pub const DOCK_VERSION: usize = 5;
+/// - v6 added the News bottom tab and reset layouts so the new tab appeared.
+pub const DOCK_VERSION: usize = 6;
 
 /// Map each group name to its serialized `DockArea` state.
 pub type DockMap = HashMap<String, DockAreaState>;

@@ -527,8 +527,8 @@ pub fn run(
                         log::info!("core {} balance event after refresh: {bev:?}", server.id);
                     }
                 }
-                // News/tags feed: deliberately not consumed yet (no UI surface). An
-                // explicit arm keeps this a documented decision, not a silent drop.
+                // News/tags feed is consumed below via `news_snapshot_from_proto` reading the
+                // retained `client.snapshot().news()`, matching the license/KernelHealth idiom.
                 Event::News(_) => {}
                 // `Event::KernelHealth` is consumed below via `settings_event_snapshot`
                 // reading the retained `kernel_health()` snapshot, not here.
@@ -628,6 +628,20 @@ pub fn run(
         );
         if let Some(sys) = sys_status {
             if tx.send(FeedMsg::SysStatus(sys)).is_err() {
+                break;
+            }
+        }
+        // News/tags: read the retained `NewsState` only when an `Event::News` arrived, matching the
+        // license/settings idiom. The store gates the panel with `news_rev` only on a real change,
+        // so a duplicate frame that reduces to the same logical set does not repaint.
+        let news = settings_event_snapshot(
+            &events,
+            &client,
+            |ev| matches!(ev, &Event::News(_)),
+            |state| Some(convert::news_snapshot_from_proto(state.news())),
+        );
+        if let Some(news) = news {
+            if tx.send(FeedMsg::News(news)).is_err() {
                 break;
             }
         }
