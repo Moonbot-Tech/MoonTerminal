@@ -10,7 +10,7 @@
 
 use moon_core::figures::{FigNode, Figure, FigureKind, LineKind};
 
-use crate::layers::{LineInstance, MarkerInstance, SegInstance};
+use crate::layers::{LineInstance, MarkerInstance, SegInstance, MARKER_SHAPE_KNOT};
 
 /// Opacity of an idle (inactive) figure.
 const FIG_IDLE_ALPHA: f32 = 0.85;
@@ -19,6 +19,8 @@ const FIG_ACTIVE_THICKNESS: f32 = 1.9;
 const FIG_ARMED_THICKNESS: f32 = 2.2;
 /// Size of a selected figure's knot/handle, in pixels.
 const FIG_KNOT_SIZE: f32 = 4.5;
+/// Outline thickness of that knot, in pixels.
+const FIG_KNOT_THICKNESS: f32 = 1.5;
 const SEG_PATTERN_SOLID: f32 = 0.0;
 const SEG_PATTERN_DASH: f32 = 1.0; // DashDotDot in the shader is the closest available dashed pattern.
 const SEG_PATTERN_DOT: f32 = 2.0;
@@ -164,14 +166,14 @@ fn push_figure(
 fn push_knots(fig: &Figure, color: [f32; 4], epoch_ms: f64, markers: &mut Vec<MarkerInstance>) {
     let to_rel = |t_ms: f64| (t_ms - epoch_ms) as f32;
     let mut knot = |t_rel: f32, price: f64| {
-        markers.push(MarkerInstance {
+        markers.push(MarkerInstance::at_price(
             t_rel,
-            price: price as f32,
-            size: FIG_KNOT_SIZE,
-            thickness: 1.5,
-            shape: 1.0,
+            price as f32,
+            FIG_KNOT_SIZE,
+            FIG_KNOT_THICKNESS,
+            MARKER_SHAPE_KNOT,
             color,
-        });
+        ));
     };
     match &fig.kind {
         // Horizontal lines and channels have no knots; drag the line itself (hover → thick → drag).

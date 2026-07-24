@@ -9,7 +9,9 @@ const MB_TRACE_LIGHT_RANGE_MS: f32 = 0.02 * 86_400_000.0;
 /// Moonbot draws MoonShot area with fixed 0.15 opacity, independent from order line alpha.
 const MB_MOONSHOT_ZONE_ALPHA: f32 = 0.15;
 
-use crate::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
+use crate::layers::{
+    LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_CROSS, MARKER_SHAPE_KNOT,
+};
 
 use moon_core::config::{LineStyle, OrdersStyle};
 use moon_core::session::order_lines::{LineKind, OrderLineStore, RetainedOrder};
@@ -346,14 +348,14 @@ pub fn build_order_geometry(
                         color: col,
                     });
                     if st.start_marker {
-                        markers.push(MarkerInstance {
-                            t_rel: to_rel(start_t),
-                            price: preview_price,
-                            size: st.marker_size * highlight_marker_mul,
-                            thickness: st.marker_thickness * highlight_thickness_mul,
-                            shape: 0.0,
-                            color: col,
-                        });
+                        markers.push(MarkerInstance::at_price(
+                            to_rel(start_t),
+                            preview_price,
+                            st.marker_size * highlight_marker_mul,
+                            st.marker_thickness * highlight_thickness_mul,
+                            MARKER_SHAPE_CROSS,
+                            col,
+                        ));
                     }
                 }
                 continue;
@@ -420,37 +422,37 @@ pub fn build_order_geometry(
             // duplicate knots on the primary line because the trace is already a separate object.
             if st.knots && !has_server_trace {
                 for i in 1..n {
-                    markers.push(MarkerInstance {
-                        t_rel: to_rel(points[i].0),
-                        price: cur_p,
-                        size: st.knot_size * highlight_marker_mul,
-                        thickness: st.marker_thickness * highlight_thickness_mul,
-                        shape: 1.0,
-                        color: col,
-                    });
+                    markers.push(MarkerInstance::at_price(
+                        to_rel(points[i].0),
+                        cur_p,
+                        st.knot_size * highlight_marker_mul,
+                        st.marker_thickness * highlight_thickness_mul,
+                        MARKER_SHAPE_KNOT,
+                        col,
+                    ));
                 }
             }
 
             // Start and end crosses sit at the ends of the straight line (at the current price).
             if st.start_marker {
-                markers.push(MarkerInstance {
-                    t_rel: t0_rel,
-                    price: cur_p,
-                    size: st.marker_size * highlight_marker_mul,
-                    thickness: st.marker_thickness * highlight_thickness_mul,
-                    shape: 0.0,
-                    color: col,
-                });
+                markers.push(MarkerInstance::at_price(
+                    t0_rel,
+                    cur_p,
+                    st.marker_size * highlight_marker_mul,
+                    st.marker_thickness * highlight_thickness_mul,
+                    MARKER_SHAPE_CROSS,
+                    col,
+                ));
             }
             if st.end_marker && ended {
-                markers.push(MarkerInstance {
-                    t_rel: t1_rel,
-                    price: cur_p,
-                    size: st.marker_size * highlight_marker_mul,
-                    thickness: st.marker_thickness * highlight_thickness_mul,
-                    shape: 0.0,
-                    color: col,
-                });
+                markers.push(MarkerInstance::at_price(
+                    t1_rel,
+                    cur_p,
+                    st.marker_size * highlight_marker_mul,
+                    st.marker_thickness * highlight_thickness_mul,
+                    MARKER_SHAPE_CROSS,
+                    col,
+                ));
             }
         }
     }

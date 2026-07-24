@@ -14,14 +14,16 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{NewsView, key_color};
+use super::{NewsView, tag_color};
 use crate::design;
-use moon_core::config::NewsTagSettings;
+use moon_core::config::{Language, NewsTagSettings};
 use moon_core::feed::NewsItem;
 
 /// Build a soft tinted badge (source / ticker / coloured tag) using the house `MoonBadge`, sized to
 /// the card's caption tier. `color` (a `MoonPalette` token) tints both the fill and the text.
-fn badge(text: impl Into<SharedString>, color: u32) -> impl IntoElement {
+///
+/// Also used by the chart's news-mark hover card, so both surfaces label a source identically.
+pub(crate) fn badge(text: impl Into<SharedString>, color: u32) -> impl IntoElement {
     MoonBadge::new(text)
         .variant(MoonBadgeVariant::Soft)
         .size(MoonBadgeSize::Tiny)
@@ -44,13 +46,14 @@ pub(super) fn hms_ms(ms: i64) -> String {
 }
 
 /// Body text for the card. `translate` on shows the Russian translation (English fallback until it
-/// arrives); off shows the news as delivered (English/original).
+/// arrives); off shows the news as delivered (English/original). The fallback rule itself lives on
+/// [`NewsItem::body`], shared with the chart's news-mark card.
 fn body_text(item: &NewsItem, translate: bool) -> &str {
-    if translate && !item.ru.is_empty() {
-        &item.ru
+    item.body(if translate {
+        Language::Ru
     } else {
-        &item.en
-    }
+        Language::En
+    })
 }
 
 /// Whether a translation is being waited on: requested but the Russian text is still absent, so the
@@ -77,11 +80,7 @@ pub(super) fn news_card(
     let rail_colors: Vec<u32> = item
         .tags
         .iter()
-        .filter_map(|t| {
-            colors
-                .color(&t.to_lowercase())
-                .and_then(|k| key_color(k, p))
-        })
+        .filter_map(|t| tag_color(t, colors, p))
         .collect();
     let rail = (!rail_colors.is_empty()).then(|| {
         div()
@@ -168,10 +167,7 @@ pub(super) fn news_card(
             .gap(design::ui_px(cx, 6.0))
             .children(item.tags.iter().map(|tag| {
                 let label = format!("#{tag}");
-                match colors
-                    .color(&tag.to_lowercase())
-                    .and_then(|k| key_color(k, p))
-                {
+                match tag_color(tag, colors, p) {
                     Some(c) => badge(label, c).into_any_element(),
                     None => div()
                         .flex_none()

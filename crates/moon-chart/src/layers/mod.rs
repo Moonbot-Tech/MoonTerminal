@@ -4,4 +4,7 @@
 
 pub mod order_lines;
 
-pub use order_lines::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
+pub use order_lines::{
+    LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_ANCHOR_BOTTOM,
+    MARKER_ANCHOR_PRICE, MARKER_SHAPE_CROSS, MARKER_SHAPE_KNOT,
+};

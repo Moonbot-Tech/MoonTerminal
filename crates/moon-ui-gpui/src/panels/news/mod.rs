@@ -17,6 +17,9 @@
 
 mod render;
 
+// The chart's news-mark hover card reuses this panel's badge so a source reads the same on both.
+pub(crate) use render::badge as news_badge;
+
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -36,6 +39,8 @@ use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use moon_core::config::NewsTagSettings;
 use moon_core::feed::NewsItem;
+// The tag filter is shared with the chart's news marks so hiding a topic clears it from both.
+use moon_core::feed::news_marks::tag_visible;
 use moon_core::session::CoreId;
 
 /// Ceiling on logical items shown after the cross-core merge. The per-core ring is 50, so this is a
@@ -48,7 +53,7 @@ const MAX_NEWS_DISPLAY: usize = 200;
 pub(super) const TAG_PALETTE: [&str; 4] = ["red", "amber", "green", "blue"];
 
 /// Resolve a palette colour key to the active theme colour, or `None` for an unknown/neutral key.
-pub(super) fn key_color(key: &str, p: MoonPalette) -> Option<u32> {
+fn key_color(key: &str, p: MoonPalette) -> Option<u32> {
     match key {
         "red" => Some(p.red),
         "amber" => Some(p.amber),
@@ -56,6 +61,25 @@ pub(super) fn key_color(key: &str, p: MoonPalette) -> Option<u32> {
         "blue" => Some(p.blue),
         _ => None,
     }
+}
+
+/// The colour a single tag paints with, or `None` when the user left it neutral.
+///
+/// THE one place a tag becomes a colour: the panel's rail and chips and the chart's news marks all
+/// call it, so a gem's wedges cannot disagree with the card that explains them.
+pub(crate) fn tag_color(tag: &str, settings: &NewsTagSettings, p: MoonPalette) -> Option<u32> {
+    settings
+        .color(&tag.to_lowercase())
+        .and_then(|k| key_color(k, p))
+}
+
+/// Fold the tag palette's colours into a signature, so a theme switch rebuilds anything that
+/// resolved a tag colour earlier (the chart's marks bake them into GPU instances).
+pub(crate) fn tag_palette_sig(p: MoonPalette) -> u64 {
+    TAG_PALETTE
+        .iter()
+        .filter_map(|k| key_color(k, p))
+        .fold(0u64, |acc, c| acc.wrapping_mul(31).wrapping_add(c as u64))
 }
 
 /// Format Unix ms as a `DD.MM.YYYY` UTC date for the subscription pill.
@@ -72,18 +96,6 @@ fn item_matches_query(item: &NewsItem, q: &str) -> bool {
         || item.es.to_lowercase().contains(q)
         || item.coins.iter().any(|c| c.to_lowercase().contains(q))
         || item.tags.iter().any(|t| t.to_lowercase().contains(q))
-}
-
-/// Tag visibility against the persisted filter: a tagged card shows unless EVERY one of its tags is
-/// hidden; a tagless card shows unless the user hid tagless news.
-fn tag_visible(item: &NewsItem, settings: &NewsTagSettings) -> bool {
-    if item.tags.is_empty() {
-        !settings.hide_untagged()
-    } else {
-        item.tags
-            .iter()
-            .any(|t| !settings.is_hidden(&t.to_lowercase()))
-    }
 }
 
 /// Group-scoped News panel for a dock tab or detached window.

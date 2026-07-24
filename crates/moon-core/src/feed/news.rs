@@ -13,6 +13,11 @@
 
 use serde_json::Value;
 
+/// Frames a core's news ring holds — the bound every news list in the terminal ultimately sits
+/// under. Named so a consumer that has to reproduce the ring (the synthetic feed) cannot drift from
+/// it by carrying its own literal.
+pub const NEWS_RING_CAP: usize = 50;
+
 /// One logical news item: the row shown to the user, built from one or more wire frames sharing a
 /// `meta.id`. Moonproto-free.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -60,6 +65,24 @@ pub struct NewsSnapshot {
 }
 
 impl NewsItem {
+    /// The body in `lang`, falling back to the English original while a translation is missing.
+    ///
+    /// Every surface that shows a news body goes through this: the News panel (choosing by its
+    /// Translate toggle) and the chart's hover card (choosing by the UI locale). The fallback rule
+    /// belongs to the item, not to each caller.
+    pub fn body(&self, lang: crate::config::Language) -> &str {
+        let text = match lang {
+            crate::config::Language::Ru => self.ru.as_str(),
+            crate::config::Language::Es => self.es.as_str(),
+            crate::config::Language::En => self.en.as_str(),
+        };
+        if text.is_empty() {
+            &self.en
+        } else {
+            text
+        }
+    }
+
     /// Merge a later frame with the same `meta.id` into this original row: replace the translated
     /// texts, combined ticker list, and tags; keep identity, times, source, and author from the first
     /// accepted frame. Sets `is_original` from the incoming frame so an accepted translation locks out

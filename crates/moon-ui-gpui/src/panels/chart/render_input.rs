@@ -366,6 +366,12 @@ pub(super) fn mouse_move(
         }
         // Update figure-draft preview under the cursor and figure hover highlighting.
         this.update_fig_pointer(pos, within, false, cx);
+        // News marks: one Y comparison unless the pointer is in the marks' row along the bottom
+        // edge. Repaints only while the Ctrl card is on screen.
+        this.note_news_modifiers(e.modifiers, cx);
+        if this.sync_news_hover(pos, within, cx) {
+            cx.notify();
+        }
         let order_hover_changed = if within {
             this.sync_order_hover(pos, cx)
         } else {
@@ -455,6 +461,11 @@ pub(super) fn hover(
         let had_order_hover = this.order_hover.take().is_some();
         if had_order_drag || had_order_hover {
             this.apply_order_visual(_cx);
+            _cx.notify();
+        }
+        // Leaving the slot must also drop a news card: the pointer can exit without a final
+        // mouse-move inside the chart.
+        if this.clear_news_hover(_cx) {
             _cx.notify();
         }
         let changed =

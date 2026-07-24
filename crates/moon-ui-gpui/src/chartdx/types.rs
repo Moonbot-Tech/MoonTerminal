@@ -511,6 +511,9 @@ pub fn mk_of(m: &MarkerInstance) -> MarkerGpu {
     MarkerGpu {
         color: m.color,
         pos: [m.t_rel, m.price, m.size, m.thickness],
-        m: [m.shape, 0.0, 0.0, 0.0],
+        // m.y carries the anchor mode: the shaders read `pos.y` as a price or, when it is set, as
+        // an offset above the plot's bottom edge. m.z/m.w slice the news gem into tag-coloured
+        // wedges (one instance per wedge); every other marker passes 0 of 1.
+        m: [m.shape, m.anchor, m.sector, m.sectors],
     }
 }
