@@ -21,14 +21,16 @@ use serde::{Deserialize, Serialize};
 use rust_i18n::t;
 
 use crate::Backend;
-use crate::panels::{AssetsView, CoreStatusView, LogPanel, OrdersPanel, ReportPanel, StubPanel};
+use crate::panels::StubPanel;
+use crate::panels::registry;
 use moon_core::config::paths;
 
 /// Persisted description of one detached panel window: panel name, source group, and geometry.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DetachedSpec {
     pub group: String,
-    /// Stable panel name: Orders, Assets, Log, Report, Alerts, or CoreStatus.
+    /// Stable panel name. Detachable panels are enumerated once in [`crate::panels::registry`];
+    /// an unknown name restores as a [`StubPanel`].
     pub panel: String,
     pub x: i32,
     pub y: i32,
@@ -109,14 +111,13 @@ pub fn save_all(list: &[DetachedSpec]) {
 
 /// True for panels that can be moved into a detached OS window.
 pub fn supports_panel(name: &str) -> bool {
-    matches!(
-        name,
-        "Orders" | "Assets" | "Log" | "Report" | "Alerts" | "CoreStatus"
-    )
+    registry::supports(name)
 }
 
-/// Builds a fresh dock-panel instance by name as `Rc<dyn PanelView>` for detached-window content or
-/// repinning into a dock.
+/// Builds a fresh dock-panel instance by name as `Rc<dyn PanelView>` for repinning into a dock.
+///
+/// `None` info means the panel starts from defaults, which is correct for a repin: the panel's
+/// view state was not persisted in the dock JSON while it lived in a detached window.
 pub fn build_panel(
     name: &str,
     group: &str,
@@ -124,29 +125,8 @@ pub fn build_panel(
     window: &mut Window,
     cx: &mut App,
 ) -> Option<Rc<dyn PanelView>> {
-    let panel: Rc<dyn PanelView> =
-        match name {
-            "Orders" => Rc::new(
-                cx.new(|cx| OrdersPanel::new(backend.clone(), group.to_string(), window, cx)),
-            ),
-            "Log" => {
-                Rc::new(cx.new(|cx| LogPanel::new(backend.clone(), group.to_string(), window, cx)))
-            }
-            "Report" => Rc::new(
-                cx.new(|cx| ReportPanel::new(backend.clone(), group.to_string(), window, cx)),
-            ),
-            "Assets" => Rc::new(cx.new(|cx| {
-                AssetsView::restored_group(backend.clone(), group.to_string(), window, cx)
-            })),
-            "Alerts" => Rc::new(cx.new(|cx| {
-                crate::panels::AlertsPanel::new(backend.clone(), group.to_string(), window, cx)
-            })),
-            "CoreStatus" => Rc::new(cx.new(|cx| {
-                CoreStatusView::restored_group(backend.clone(), group.to_string(), window, cx)
-            })),
-            _ => return None,
-        };
-    Some(panel)
+    let kind = registry::find(name)?;
+    Some(kind.build_docked(backend, group, None, window, cx))
 }
 
 /// Detached-window wrapper that renders a panel, observes geometry, updates `Backend.detached`, and
@@ -351,47 +331,16 @@ pub fn spawn(
     let spec = spec.clone();
     app.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
-        // Configure the window-header auto-width reset button only for the branches below that
-        // expose an explicit reset ID and table state.
+        // Build the panel in detached-window mode from the registry. Known panels supply their
+        // view and any header auto-width reset binding; an unknown name falls back to a stub.
         let mut widths_reset: Option<(&'static str, Entity<moon_ui::MoonDataTableState>)> = None;
-        let content: AnyView = match spec.panel.as_str() {
-            "Orders" => {
-                let p =
-                    cx.new(|cx| OrdersPanel::new(backend.clone(), spec.group.clone(), window, cx));
-                // Detached tables use the shared `:win` detached-mode width context and keys across
-                // windows, separate from the docked context but not unique per OS window.
-                p.update(cx, |this, cx| this.mark_table_detached(cx));
-                widths_reset = Some(("orders-reset-widths-win", p.read(cx).table_state()));
-                p.into()
+        let content: AnyView = match registry::find(spec.panel.as_str()) {
+            Some(kind) => {
+                let detached = kind.build_detached(&backend, &spec.group, window, cx);
+                widths_reset = detached.widths_reset;
+                detached.view
             }
-            "Log" => cx
-                .new(|cx| LogPanel::new(backend.clone(), spec.group.clone(), window, cx))
-                .into(),
-            "Report" => {
-                let p =
-                    cx.new(|cx| ReportPanel::new(backend.clone(), spec.group.clone(), window, cx));
-                p.update(cx, |this, cx| this.mark_table_detached(cx));
-                widths_reset = Some(("report-reset-widths-win", p.read(cx).table_state()));
-                p.into()
-            }
-            "Assets" => cx
-                .new(|cx| {
-                    AssetsView::detached_group(backend.clone(), spec.group.clone(), window, cx)
-                })
-                .into(),
-            "CoreStatus" => {
-                let p = cx.new(|cx| {
-                    CoreStatusView::detached_group(backend.clone(), spec.group.clone(), window, cx)
-                });
-                widths_reset = Some(("core-status-reset-widths-win", p.read(cx).table_state()));
-                p.into()
-            }
-            "Alerts" => cx
-                .new(|cx| {
-                    crate::panels::AlertsPanel::new(backend.clone(), spec.group.clone(), window, cx)
-                })
-                .into(),
-            _ => cx
+            None => cx
                 .new(|cx| {
                     StubPanel::new(
                         "?",

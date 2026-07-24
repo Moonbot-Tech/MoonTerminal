@@ -11,6 +11,8 @@
 //! - [`core_status`] renders per-core connection and resource telemetry;
 //! - [`order_edit`] opens the active-order editor;
 //! - [`common`] contains shared panel controls and rendering helpers;
+//! - [`registry`] is the single source of truth for building each detachable panel docked and
+//!   detached, driving persistence registration, detachment, and the default home strip;
 //! - [`stub`] is the fallback view for an unknown detached-panel name.
 
 mod alerts;
@@ -22,6 +24,7 @@ mod detects;
 mod log;
 mod order_edit;
 mod orders;
+pub(crate) mod registry;
 mod report;
 mod stub;
 
