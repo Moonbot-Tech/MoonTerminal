@@ -129,6 +129,10 @@ impl Shell {
                 // A split leaf records a split slot; a tab records its index. These stores are
                 // mutually exclusive, so recording one clears the other; `None` changes neither.
                 let key = format!("{group}:{panel_name}");
+                if crate::diag::is_enabled() {
+                    let outline = dock.update(app, |area, cx| tree_outline(&area.dump(cx).center));
+                    dock_log(&format!("[dock] detach {key}: tree={outline}"));
+                }
                 match captured_slot(&dock, &panel_name, app) {
                     Some(DockSlot::Split {
                         siblings,
@@ -138,6 +142,10 @@ impl Shell {
                         size,
                         sibling_size,
                     }) => {
+                        dock_log(&format!(
+                            "[dock] detach {key}: split index={index} placement={placement} \
+                             siblings={siblings:?} slot_panels={slot_panels:?}"
+                        ));
                         backend.update(app, |b, _| {
                             b.layout.dock_split_slot.insert(
                                 key.clone(),
@@ -155,10 +163,10 @@ impl Shell {
                         });
                     }
                     Some(DockSlot::Tab { ix, left }) => {
-                        log::info!(
+                        dock_log(&format!(
                             "[dock] detach {key}: tab ix={ix} left={:?}",
                             left.as_deref().unwrap_or("<leftmost>")
-                        );
+                        ));
                         backend.update(app, |b, _| {
                             b.layout.dock_tab_index.insert(key.clone(), ix);
                             // An empty string means leftmost; otherwise store the left neighbor name.
@@ -169,7 +177,11 @@ impl Shell {
                             b.layout_dirty = true;
                         });
                     }
-                    None => {}
+                    None => {
+                        dock_log(&format!(
+                            "[dock] detach {key}: no slot captured (panel not found in dock)"
+                        ));
+                    }
                 }
                 let owner = window.window_handle();
                 if let Err(err) = detached::spawn(app, &backend, &spec, Some(owner)) {
@@ -295,6 +307,56 @@ fn strip_names(node: &PanelState) -> Option<Vec<String>> {
     node.children.iter().find_map(strip_names)
 }
 
+/// Append one dock-diagnostic line to `dock_diag.log` (in the working directory) and the app log,
+/// but only when render diagnostics are enabled (`MOON_RENDER_DIAG`, same gate as `diag.rs`).
+///
+/// Gated because the debug binary is built for the `windows` subsystem (no console; `[profile.dev]`
+/// disables debug assertions, so `not(debug_assertions)` holds even in debug): `[dock]` events reach
+/// neither a redirected stderr nor a terminal — only the in-memory Log tab, which cannot be read
+/// while a detached Log window is what is being reproduced. A per-line-flushed file is the only
+/// channel that also survives a subsequent hang: the last line written localizes the freeze. Off by
+/// default so ordinary detach/restore neither grows a file in the process CWD nor spams the Log tab.
+fn dock_log(msg: &str) {
+    use std::io::Write;
+    if !crate::diag::is_enabled() {
+        return;
+    }
+    log::info!("{msg}");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("dock_diag.log")
+    {
+        let _ = writeln!(f, "{msg}");
+    }
+}
+
+/// Render a compact one-line outline of a dock subtree for diagnostics, e.g.
+/// `Split(H)[Tabs[Orders,Log,Alerts], Panel(Report), Panel(Assets)]`.
+///
+/// Restoration bugs are position defects in a tree the static logs do not show, so a single
+/// reproduction with the whole tree printed pins the exact node shape (a lone tab strip vs a
+/// bare split leaf) that decides which restore path runs.
+fn tree_outline(node: &PanelState) -> String {
+    match &node.info {
+        PanelInfo::Tabs { active_index } => {
+            let kids: Vec<&str> = node.children.iter().map(|c| c.panel_name.as_str()).collect();
+            format!("Tabs@{active_index}[{}]", kids.join(","))
+        }
+        PanelInfo::Stack { axis, .. } => {
+            let dir = if *axis == 0 { "H" } else { "V" };
+            let kids: Vec<String> = node.children.iter().map(tree_outline).collect();
+            format!("Split({dir})[{}]", kids.join(", "))
+        }
+        PanelInfo::Panel(_) if node.panel_name.is_empty() => "Panel(<empty>)".to_string(),
+        PanelInfo::Panel(_) => format!("Panel({})", node.panel_name),
+        PanelInfo::Tiles { .. } => {
+            let kids: Vec<&str> = node.children.iter().map(|c| c.panel_name.as_str()).collect();
+            format!("Tiles[{}]", kids.join(","))
+        }
+    }
+}
+
 fn restore_panel_to_home_tabs(
     dock: &Entity<DockArea>,
     backend: &Entity<Backend>,
@@ -305,12 +367,13 @@ fn restore_panel_to_home_tabs(
     app: &mut App,
 ) {
     let key = format!("{group}:{panel_name}");
-    log::info!("[dock] restore {key}: begin (prefer_split={prefer_split})");
+    dock_log(&format!(
+        "[dock] restore {key}: begin (prefer_split={prefer_split})"
+    ));
     let Some(panel) = detached::build_panel(panel_name, group, backend, window, app) else {
-        log::info!("[dock] restore {key}: build_panel returned none");
+        dock_log(&format!("[dock] restore {key}: build_panel returned none"));
         return;
     };
-    log::info!("[dock] restore {key}: panel built");
     // Restoration priority:
     //   1) for `prefer_split`, restore the split slot beside a surviving sibling;
     //   2) restore into the home tab strip relative to the remembered left neighbor, falling back
@@ -346,10 +409,13 @@ fn restore_panel_to_home_tabs(
             })
             .unwrap_or_default()
     });
-    log::info!(
-        "[dock] restore {key}: strip={strip:?} tab_ix={tab_ix:?} left={:?}",
-        tab_left.as_deref()
-    );
+    if crate::diag::is_enabled() {
+        let before = dock.update(app, |area, cx| tree_outline(&area.dump(cx).center));
+        dock_log(&format!(
+            "[dock] restore {key}: strip={strip:?} tab_ix={tab_ix:?} left={:?} tree={before}",
+            tab_left.as_deref()
+        ));
+    }
     dock.update(app, |area, cx| {
         area.remove_panel_by_name(panel_name, window, cx);
         if let Some(slot) = &split {
@@ -362,9 +428,33 @@ fn restore_panel_to_home_tabs(
             // A zero size means flex layout, represented by no fixed slot size.
             let panel_size = (slot.size > 0.0).then_some(slot.size);
             let sibling_size = (slot.sibling_size > 0.0).then_some(slot.sibling_size);
-            let anchors: Vec<&str> = slot.siblings.iter().map(|s| s.as_str()).collect();
+            // Fork work-around for `insert_panel_beside_sibling` Case 1: one sibling slot holding one
+            // panel means the panel shared a TWO-slot split with a lone neighbor, which COLLAPSES on
+            // detach — the neighbor is absorbed into a same-orientation parent split. Case 1 then
+            // re-inserts by the STALE `index` (the panel's position in the vanished inner split),
+            // landing it at the wrong end of the parent row (e.g. Report ahead of the Orders strip
+            // instead of beside Assets). Passing NO anchors makes the fork skip Case 1 and take Case 2,
+            // which wraps the neighbor and places the panel on `placement` — rebuilding the pair in
+            // place. See docs-internal/FORK_BUGS.md.
+            //
+            // Scope is deliberately `slot_panels.len() == 1`, not merely `siblings.len() == 1`: a lone
+            // neighbor PANEL makes Case 2's `smallest_subtree_with_all` resolve to exactly that leaf, so
+            // the wrap is precise. A multi-panel neighbor slot could have been dragged apart while this
+            // panel was detached, and forcing Case 2 there would wrap their smallest common ancestor (up
+            // to the whole row) — a wider blast radius than the Case-1 mis-index. Those keep the old
+            // path. `siblings.len() == 1` counts NAMED neighbor slots and assumes real panels are named
+            // (an unnamed split leaf could undercount), which holds for every panel this app docks.
             let slot_panels: Vec<&str> = slot.slot_panels.iter().map(|s| s.as_str()).collect();
-            if !anchors.is_empty()
+            let two_slot_single_neighbor = slot.siblings.len() == 1 && slot_panels.len() == 1;
+            let anchors: Vec<&str> = if two_slot_single_neighbor {
+                Vec::new()
+            } else {
+                slot.siblings.iter().map(|s| s.as_str()).collect()
+            };
+            // Call with anchors (normal Case-1-first path) or when deliberately forcing the wrap for a
+            // single-neighbor collapse. A malformed persisted entry (`siblings` empty via serde default)
+            // still falls through to the tab restore below, as before this work-around.
+            if (!anchors.is_empty() || two_slot_single_neighbor)
                 && area.insert_panel_beside_sibling(
                     panel.clone(),
                     &anchors,
@@ -377,7 +467,7 @@ fn restore_panel_to_home_tabs(
                     cx,
                 )
             {
-                log::info!("[dock] restore {key}: placed beside sibling (split)");
+                dock_log(&format!("[dock] restore {key}: placed beside sibling (split)"));
                 return;
             }
         }
@@ -394,13 +484,19 @@ fn restore_panel_to_home_tabs(
                 .unwrap_or_else(|| dock_home_priority(panel_name)),
             None => tab_ix.unwrap_or_else(|| dock_home_priority(panel_name)),
         };
-        log::info!("[dock] restore {key}: -> ix={ix}, inserting");
+        dock_log(&format!("[dock] restore {key}: -> ix={ix}, inserting"));
         if !area.insert_panel_into_home_tabs(panel.clone(), ix, &DOCK_TAB_ORDER, window, cx) {
+            dock_log(&format!(
+                "[dock] restore {key}: home-tab insert failed, add_panel(Bottom) fallback"
+            ));
             area.add_panel(panel, DockPlacement::Bottom, None, window, cx);
         }
-        log::info!("[dock] restore {key}: inserted");
+        dock_log(&format!("[dock] restore {key}: inserted"));
     });
-    log::info!("[dock] restore {key}: done");
+    if crate::diag::is_enabled() {
+        let after = dock.update(app, |area, cx| tree_outline(&area.dump(cx).center));
+        dock_log(&format!("[dock] restore {key}: done tree={after}"));
+    }
 }
 
 /// Remembered dock placement used when restoring a panel.
