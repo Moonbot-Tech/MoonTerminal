@@ -32,7 +32,14 @@ pub(super) enum UndatedBanner {
 }
 
 impl AnalyticsView {
-    /// Tab bar (same shape as the Settings tab bar).
+    /// Build the top-level tab bar and retain page changes for later window recreation.
+    ///
+    /// Args:
+    ///     p: Active palette for selected and unselected buttons.
+    ///     cx: Analytics context used to wire click handlers.
+    ///
+    /// Returns:
+    ///     The rendered tab-strip element.
     pub(super) fn tabs_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let mut row = h_flex()
             .flex_none()
@@ -66,6 +73,9 @@ impl AnalyticsView {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if this.tab != t {
                             this.tab = t;
+                            this.backend.update(cx, |b, _| {
+                                b.ui_session.analytics.tab = t;
+                            });
                             // Each tab remembers its OWN time window: re-sync the
                             // period bar and the "from"/"to" fields to the active tab.
                             this.sync_period_pickers(window, cx);

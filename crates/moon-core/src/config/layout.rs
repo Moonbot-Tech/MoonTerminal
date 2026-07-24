@@ -141,6 +141,12 @@ pub struct WindowLayout {
     /// Group windows by group name.
     #[serde(default)]
     pub groups: HashMap<String, GroupLayout>,
+    /// Last active trading-core UID in each Main window group.
+    ///
+    /// A live session with the same stable UID must still belong to the group before the UI uses
+    /// the value. Stale entries remain references for the durable UID high-water mark.
+    #[serde(default)]
+    pub active_trade_core_by_group: HashMap<String, u64>,
     /// Legacy egui detached-tab records; the live detached-window list uses `detached.json`.
     #[serde(default)]
     pub detached: Vec<DetachedLayout>,
@@ -334,10 +340,18 @@ impl WindowLayout {
 
     /// Highest core uid this layout still references.
     ///
-    /// Feeds the durable uid high-water mark: the header ticker is stored by uid, so reissuing
-    /// one a saved layout still names would silently rebind that ticker to the new core.
+    /// Feeds the durable uid high-water mark: the header ticker and active trade-core selections
+    /// are stored by UID, so reissuing one would silently bind saved UI state to a new core.
+    ///
+    /// Returns:
+    ///     The largest stable core UID referenced by layout state, if any.
     pub fn max_core_uid(&self) -> Option<u64> {
-        self.header_ticker.as_ref().map(|t| t.core_uid)
+        self.header_ticker
+            .as_ref()
+            .map(|ticker| ticker.core_uid)
+            .into_iter()
+            .chain(self.active_trade_core_by_group.values().copied())
+            .max()
     }
 
     /// Writes layout.toml (non-fatal: errors are only logged).
@@ -347,3 +361,6 @@ impl WindowLayout {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -38,6 +38,7 @@ mod settings;
 mod shell;
 mod startup;
 mod strategies;
+mod ui_session;
 mod window;
 
 pub(crate) use startup::install_moon_theme_for_config;
@@ -49,6 +50,7 @@ use gpui::*;
 
 use chartdx::ChartDataHandle;
 use persistence::chart_persist;
+use ui_session::UiSessionState;
 use window::detached;
 
 use moon_ui::{DockAreaState, Root};
@@ -117,10 +119,6 @@ struct Backend {
     /// Markets open in each group's Main-tab stack: `group -> [(core, market)]`.
     /// The Orders view highlights one row for each pair the user opened on Main.
     main_open_markets: HashMap<String, Vec<(CoreId, String)>>,
-    /// Manual active-trading-core selection in the header, mapped from group to core.
-    /// This sticky override suppresses automatic fullscreen-chart following while the core remains
-    /// in the group, until the user opens a fullscreen chart for another core. See `active_trade_core`.
-    trade_core_override: HashMap<String, CoreId>,
     /// Active committed in-memory configuration, including theme, order style, and servers.
     /// Dirty edits may remain ahead of disk until the debounced persistence path saves them.
     config: AppConfig,
@@ -164,6 +162,8 @@ struct Backend {
     /// the debounced coordination loop. Ported from egui's `WindowLayout` and `layout.toml`.
     layout: WindowLayout,
     layout_dirty: bool,
+    /// Process-lifetime window state that survives view replacement but is never serialized.
+    ui_session: UiSessionState,
     /// Per-group detect-strip presentation: dimensions, chart, rail, and size slots.
     /// Stored in the portable `detects_view.toml` and saved immediately because the file is small.
     detects_view: moon_core::config::DetectViewFile,

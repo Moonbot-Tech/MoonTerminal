@@ -17,7 +17,7 @@ use moon_core::session::{CoreId, SessionManager};
 use crate::diagnostics::crash;
 use crate::persistence::{chart_persist, dock_persist};
 use crate::window::detached;
-use crate::{Backend, diag, firetest};
+use crate::{Backend, UiSessionState, diag, firetest};
 
 fn embedded_fonts() -> Vec<Cow<'static, [u8]>> {
     vec![
@@ -116,6 +116,12 @@ fn observed_uid_floor(
 ///
 /// Core-keyed durable state is loaded before configuration because config loading may assign and
 /// persist missing uids; observing the floor afterwards would be too late to prevent reuse.
+///
+/// Returns:
+///     `Ok(())` after the application event loop exits normally.
+///
+/// Errors:
+///     Returns startup argument or configuration-loading failures before the event loop begins.
 pub(crate) fn run() -> anyhow::Result<()> {
     // Build env_logger as a Logger (rather than calling .init()) and wrap it in TeeLogger, which
     // duplicates emitted records into the in-memory ring shown by the Log tab (ported from egui main).
@@ -264,7 +270,6 @@ pub(crate) fn run() -> anyhow::Result<()> {
             last_open_sync: Instant::now() - Duration::from_secs(10),
             main_chart_targets: HashMap::new(),
             main_open_markets: HashMap::new(),
-            trade_core_override: HashMap::new(),
             config: cfg.clone(),
             preview: None,
             open_request: None,
@@ -287,6 +292,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             debug_main_chart_handles: HashMap::new(),
             layout: layout.clone(),
             layout_dirty: false,
+            ui_session: UiSessionState::default(),
             detects_view: moon_core::config::DetectViewFile::load(),
             header_ticker_default: None,
             last_header_ticker_refresh: None,

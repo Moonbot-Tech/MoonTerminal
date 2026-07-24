@@ -13,6 +13,12 @@ impl ChartTabs {
     /// The tab key is the core's `ChartBucket` (per-core, shared, or named bundle), resolved from
     /// core config and global `charts_split_by_core`. This does not switch `active`, preserving the
     /// behavior that a detect must not pull the user to a chart.
+    ///
+    /// Args:
+    ///     cx: Parent context used to read Backend detects and create or update stacks.
+    ///
+    /// Returns:
+    ///     Nothing; new detects and stack observers are incorporated in place.
     pub(super) fn ingest(&mut self, cx: &mut Context<Self>) {
         let (split, fresh, cursors): (
             bool,
@@ -199,6 +205,7 @@ impl ChartTabs {
                     });
                 }
                 panel.update(cx, |p, pcx| p.add_coin(core, &market, ttl, pcx));
+                self.watch_regular_stack_target(&panel, cx);
                 self.add.push((n, bucket.clone(), panel));
                 // Order tabs by `(number, bucket)`, matching egui's `sort_by_key` behavior.
                 self.add.sort_by_key(|(num, c, _)| (*num, c.clone()));

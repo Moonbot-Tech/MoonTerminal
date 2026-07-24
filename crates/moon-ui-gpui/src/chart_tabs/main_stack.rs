@@ -81,6 +81,18 @@ pub(crate) struct MainChartStack {
 }
 
 impl MainChartStack {
+    /// Construct a group's Main chart stack and optionally open its initial target.
+    ///
+    /// Args:
+    ///     backend: Shared application state used by chart panels and market publication.
+    ///     group: Main window group that owns this stack.
+    ///     focus_open: Optional core and market to focus during construction.
+    ///     epoch: Chart time origin passed to child panels.
+    ///     theme: Runtime chart rendering theme.
+    ///     cx: Stack context used to create and observe panels.
+    ///
+    /// Returns:
+    ///     An initialized Main stack.
     pub(super) fn new(
         backend: Entity<Backend>,
         group: String,
@@ -126,6 +138,15 @@ impl MainChartStack {
         this
     }
 
+    /// Create and configure one Main chart panel with the stack's current presentation settings.
+    ///
+    /// Args:
+    ///     core: Live core that supplies the market.
+    ///     market: Canonical market name to open.
+    ///     cx: Stack context used to create the panel and retain its observer.
+    ///
+    /// Returns:
+    ///     The configured chart-panel entity.
     fn create_panel(
         &self,
         core: CoreId,
@@ -142,7 +163,7 @@ impl MainChartStack {
             let mut dirty = this.prune_empty(cx);
             if dirty {
                 this.sync_visibility(cx);
-                this.sync_backend_active(cx);
+                this.sync_backend_open_markets(cx);
             }
             dirty |= this.sync_compare(cx);
             if dirty {
@@ -211,6 +232,12 @@ impl MainChartStack {
     /// Move fullscreen focus to the next chart cyclically for the `switch_charts` hotkey.
     /// With fewer than two charts there is nothing to switch. This leaves whole-stack mode, just
     /// like regular chart focus, and synchronizes the group's active trading target.
+    ///
+    /// Args:
+    ///     cx: Stack context used to update visibility, open markets, and observers.
+    ///
+    /// Returns:
+    ///     Nothing; stacks with fewer than two charts are unchanged.
     pub(crate) fn cycle_active(&mut self, cx: &mut Context<Self>) {
         if self.charts.len() < 2 {
             return;
@@ -220,11 +247,20 @@ impl MainChartStack {
         self.active = Some(next);
         self.show_stack = false;
         self.sync_visibility(cx);
-        self.sync_backend_active(cx);
+        self.sync_backend_open_markets(cx);
         self.arm_idle_timer(cx);
         cx.notify();
     }
 
+    /// Focus an existing Main chart or create it when the core-market pair is not open.
+    ///
+    /// Args:
+    ///     core: Live core that owns the market.
+    ///     market: Canonical market name.
+    ///     cx: Stack context used to create panels and publish open markets.
+    ///
+    /// Returns:
+    ///     Nothing; the requested chart becomes the fullscreen active entry.
     pub(super) fn open_or_focus(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
         if let Some(ix) = self
             .charts
@@ -234,7 +270,7 @@ impl MainChartStack {
             self.active = Some(ix);
             self.show_stack = false;
             self.sync_visibility(cx);
-            self.sync_backend_active(cx);
+            self.sync_backend_open_markets(cx);
             self.arm_idle_timer(cx);
             cx.notify();
             return;
@@ -245,7 +281,7 @@ impl MainChartStack {
         self.active = Some(self.charts.len() - 1);
         self.show_stack = false;
         self.sync_visibility(cx);
-        self.sync_backend_active(cx);
+        self.sync_backend_open_markets(cx);
         // In comparison mode, a new chart immediately receives eligibility and the shared Y range.
         self.sync_compare(cx);
         self.arm_idle_timer(cx);
@@ -338,6 +374,12 @@ impl MainChartStack {
     /// Each deadline is `max(last_input, arrived_at) + interval`, with `arrived_at` used when no
     /// input exists. Closing the active fullscreen chart returns the remainder to stack view and
     /// immediately releases its order-book subscriptions.
+    ///
+    /// Args:
+    ///     cx: Stack context used to inspect windows, close panels, and publish open markets.
+    ///
+    /// Returns:
+    ///     `true` when at least one idle chart was removed.
     fn prune_idle(&mut self, cx: &mut Context<Self>) -> bool {
         let secs = self.backend.read(cx).main_idle_close_secs();
         if secs == 0 || self.charts.is_empty() {
@@ -408,7 +450,7 @@ impl MainChartStack {
             self.active = Some(self.active.unwrap_or(0).min(self.charts.len() - 1));
         }
         self.sync_visibility(cx);
-        self.sync_backend_active(cx);
+        self.sync_backend_open_markets(cx);
         cx.notify();
         true
     }
@@ -704,8 +746,17 @@ impl MainChartStack {
         }
     }
 
-    fn sync_backend_active(&self, cx: &mut Context<Self>) {
-        let target = self.active_target(cx);
+    /// Publish the non-vacant markets currently open in this Main stack.
+    ///
+    /// `ChartTabs` separately owns the anchor-aware trading target, so this child stack must not
+    /// publish or persist a competing target.
+    ///
+    /// Args:
+    ///     cx: Stack context used to update the shared Backend.
+    ///
+    /// Returns:
+    ///     Nothing; the Backend's group market list is replaced.
+    fn sync_backend_open_markets(&self, cx: &mut Context<Self>) {
         // Publish all non-vacant Main-stack markets so Orders can highlight one row for each.
         let open: Vec<(CoreId, String)> = self
             .charts
@@ -713,20 +764,18 @@ impl MainChartStack {
             .filter(|e| !e.vacated)
             .map(|e| (e.core, e.market.clone()))
             .collect();
-        self.backend.update(cx, |b, _| {
-            b.set_main_chart_target(&self.group, target);
-            b.set_main_open_markets(&self.group, open);
-        });
-        #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
-        {
-            if let Some(handle) = self.debug_data_handle(cx) {
-                self.backend.update(cx, |b, _| {
-                    b.register_debug_main_chart(self.group.clone(), handle);
-                });
-            }
-        }
+        self.backend
+            .update(cx, |b, _| b.set_main_open_markets(&self.group, open));
     }
 
+    /// Toggle one clicked chart between fullscreen and whole-stack presentation.
+    ///
+    /// Args:
+    ///     ix: Index of the clicked chart.
+    ///     cx: Stack context used to update visibility and notify the parent.
+    ///
+    /// Returns:
+    ///     Nothing; an out-of-range index is ignored.
     fn toggle_from_chart(&mut self, ix: usize, cx: &mut Context<Self>) {
         if ix >= self.charts.len() {
             return;
@@ -734,7 +783,7 @@ impl MainChartStack {
         self.active = Some(ix);
         self.show_stack = !self.show_stack;
         self.sync_visibility(cx);
-        self.sync_backend_active(cx);
+        self.sync_backend_open_markets(cx);
         cx.notify();
     }
 

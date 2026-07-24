@@ -284,19 +284,83 @@ impl Backend {
         self.chart_consumers.clone()
     }
 
+    /// Return whether a live core currently belongs to a Main window group.
+    ///
+    /// Args:
+    ///     group: Window group that must own the core.
+    ///     core: Stable core UID to validate.
+    ///
+    /// Returns:
+    ///     `true` only while the matching live session remains in `group`.
+    pub(crate) fn core_belongs_to_group(&self, group: &str, core: CoreId) -> bool {
+        self.session
+            .sessions()
+            .iter()
+            .any(|session| session.id == core && session.group == group)
+    }
+
+    /// Seed the group's runtime Main target without replacing a durable manual selection.
+    ///
+    /// Construction publishes restored Main state once after startup. Treating that baseline as a
+    /// user-visible target change would immediately overwrite the core restored from layout.toml.
+    ///
+    /// Args:
+    ///     group: Window group whose initial target is being published.
+    ///     target: Restored active core and market, or `None`. Invalid cross-group targets are
+    ///         treated as absent.
+    ///
+    /// Returns:
+    ///     Nothing; only the process-lifetime target cache is initialized.
+    pub(crate) fn initialize_main_chart_target(
+        &mut self,
+        group: &str,
+        target: Option<(CoreId, String)>,
+    ) {
+        let target = target.filter(|(core, _)| self.core_belongs_to_group(group, *core));
+        self.store_main_chart_target(group, target);
+    }
+
+    /// Publish the group's current Main trading target and remember a genuine core change.
+    ///
+    /// Repeated synchronization of the same target preserves a manual header selection. Moving
+    /// Main or a locked comparison anchor to another core makes that core the new durable
+    /// selection, matching what the header shows after the existing sticky choice yields.
+    ///
+    /// Args:
+    ///     group: Window group whose target changed.
+    ///     target: Active core and market, or `None` when no Main trading target exists. A target
+    ///         whose live core no longer belongs to `group` is treated as `None`.
+    ///
+    /// Returns:
+    ///     Nothing; runtime target state and, on a core change, layout state are updated in place.
     pub(crate) fn set_main_chart_target(&mut self, group: &str, target: Option<(CoreId, String)>) {
-        // Clear the sticky override whenever the new fullscreen target differs from the previous
-        // target core, including when no previous target existed. Preserve it only for the same
-        // target core or when fullscreen is removed.
+        let target = target.filter(|(core, _)| self.core_belongs_to_group(group, *core));
+        if self.main_chart_targets.get(group) == target.as_ref() {
+            return;
+        }
+        let prev_core = self.main_chart_targets.get(group).map(|(core, _)| *core);
         if let Some((new_core, _)) = &target {
-            let prev_core = self.main_chart_targets.get(group).map(|(c, _)| *c);
             if prev_core != Some(*new_core) {
-                self.trade_core_override.remove(group);
+                self.set_active_trade_core(group, *new_core);
             }
         }
+        self.store_main_chart_target(group, target);
+    }
+
+    /// Replace one group's process-lifetime Main target cache entry.
+    ///
+    /// Args:
+    ///     group: Window group that owns the entry.
+    ///     target: Validated core and market, or `None` to remove the entry.
+    ///
+    /// Returns:
+    ///     Nothing; durable selection state is not changed here.
+    fn store_main_chart_target(&mut self, group: &str, target: Option<(CoreId, String)>) {
         match target {
             Some(target) => {
-                self.main_chart_targets.insert(group.to_string(), target);
+                if self.main_chart_targets.get(group) != Some(&target) {
+                    self.main_chart_targets.insert(group.to_string(), target);
+                }
             }
             None => {
                 self.main_chart_targets.remove(group);
@@ -304,8 +368,18 @@ impl Backend {
         }
     }
 
+    /// Return the group's current Main trading target while it still belongs to that live group.
+    ///
+    /// Args:
+    ///     group: Window group whose target is requested.
+    ///
+    /// Returns:
+    ///     The stored core and market, or `None` when absent or stale after a group move.
     pub(crate) fn main_chart_target(&self, group: &str) -> Option<(CoreId, String)> {
-        self.main_chart_targets.get(group).cloned()
+        self.main_chart_targets
+            .get(group)
+            .filter(|(core, _)| self.core_belongs_to_group(group, *core))
+            .cloned()
     }
 
     /// Publish the markets open in a group's Main stack from `MainChartStack`.
@@ -359,16 +433,17 @@ impl Backend {
 
     /// Return the group's active trading core for the header and toolbar.
     ///
-    /// A still-valid sticky header selection takes precedence, followed by the fullscreen chart's
-    /// core and then the group's first core. This keeps the toolbar populated before a chart opens.
+    /// A still-valid remembered header selection takes precedence, followed by the visible chart
+    /// target and then the group's first core. This keeps the toolbar populated before a chart opens.
+    ///
+    /// Args:
+    ///     group: Window group whose trading controls need a core.
+    ///
+    /// Returns:
+    ///     A live core belonging to the group, or `None` when the group has no live cores.
     pub(crate) fn active_trade_core(&self, group: &str) -> Option<CoreId> {
-        if let Some(&core) = self.trade_core_override.get(group) {
-            let in_group = self
-                .session
-                .sessions()
-                .iter()
-                .any(|s| s.id == core && s.group == group);
-            if in_group {
+        if let Some(&core) = self.layout.active_trade_core_by_group.get(group) {
+            if self.core_belongs_to_group(group, core) {
                 return Some(core);
             }
         }
@@ -378,9 +453,24 @@ impl Backend {
             .or_else(|| self.group_cores(group).first().map(|(id, _)| *id))
     }
 
-    /// Store the active trading core selected manually in the header.
-    pub(crate) fn set_trade_core_override(&mut self, group: &str, core: CoreId) {
-        self.trade_core_override.insert(group.to_string(), core);
+    /// Set the group's active trading core in the shared durable layout.
+    ///
+    /// Args:
+    ///     group: Window group that owns the selection.
+    ///     core: Stable UID of the selected live core. Values outside `group` are ignored.
+    ///
+    /// Returns:
+    ///     Nothing; a changed selection marks layout persistence dirty.
+    pub(crate) fn set_active_trade_core(&mut self, group: &str, core: CoreId) {
+        if !self.core_belongs_to_group(group, core) {
+            return;
+        }
+        if self.layout.active_trade_core_by_group.get(group) != Some(&core) {
+            self.layout
+                .active_trade_core_by_group
+                .insert(group.to_string(), core);
+            self.layout_dirty = true;
+        }
     }
 
     /// Refresh the cached fallback ticker from the first canonical live core.

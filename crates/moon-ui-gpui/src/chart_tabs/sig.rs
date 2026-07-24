@@ -1,15 +1,22 @@
 //! Chart-tab input signature (`chart_tabs_sig`), a cheap hash of the `Backend` state that can
 //! actually change this group's tab strip or stack. `ChartTabs` compares it in its backend observer
-//! and skips the expensive pass when nothing changed. This module also contains small group helpers.
+//! and skips the expensive pass when nothing changed.
 
 use crate::Backend;
-use moon_core::session::CoreId;
 
+/// Hash Backend inputs that can change one group's chart-tab composition or commands.
+///
+/// Args:
+///     b: Shared runtime state observed by `ChartTabs`.
+///     group: Main window group whose relevant inputs are hashed.
+///
+/// Returns:
+///     A cheap deterministic signature for early-return comparisons.
 pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
     let mut sig = if b
         .open_request
         .as_ref()
-        .is_some_and(|(core, _)| core_belongs_to_group(b, group, *core))
+        .is_some_and(|(core, _)| b.core_belongs_to_group(group, *core))
     {
         b.open_request_rev
     } else {
@@ -17,7 +24,7 @@ pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
     };
     if b.open_compare_request
         .as_ref()
-        .is_some_and(|(core, _)| core_belongs_to_group(b, group, *core))
+        .is_some_and(|(core, _)| b.core_belongs_to_group(group, *core))
     {
         sig = sig
             .wrapping_mul(31)
@@ -73,11 +80,4 @@ fn text_sig(text: &str) -> u64 {
         sig = sig.wrapping_mul(0x100000001b3);
     }
     sig
-}
-
-pub(super) fn core_belongs_to_group(b: &Backend, group: &str, core: CoreId) -> bool {
-    b.session
-        .sessions()
-        .iter()
-        .any(|s| s.id == core && s.group == group)
 }

@@ -145,6 +145,232 @@ fn main_chart_stack_rmb_toggle_uses_full_chart_area_not_plot_only() {
     );
 }
 
+/// Protects the process boundary of Analytics UI memory.
+///
+/// The plausible edit is rebuilding `AnalyticsView` from hard-coded defaults or moving its
+/// snapshot into `WindowLayout`. Closing the tool window would then forget the tab/filter, or a
+/// full application restart would incorrectly retain them.
+#[test]
+fn analytics_reopen_state_is_process_lifetime_only() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let main = fs::read_to_string(root.join("main.rs")).unwrap();
+    let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
+    let analytics = fs::read_to_string(root.join("analytics").join("mod.rs")).unwrap();
+    let toolbar = fs::read_to_string(root.join("analytics").join("toolbar.rs")).unwrap();
+    let ui_session = fs::read_to_string(root.join("ui_session.rs")).unwrap();
+    let layout = fs::read_to_string(
+        root.parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("moon-core")
+            .join("src")
+            .join("config")
+            .join("layout.rs"),
+    )
+    .unwrap();
+
+    assert!(
+        main.contains("ui_session: UiSessionState,")
+            && startup.contains("ui_session: UiSessionState::default(),"),
+        "Backend must create one process-lifetime UiSessionState at application startup"
+    );
+    assert!(
+        analytics.contains("let session = backend.read(cx).ui_session.analytics.clone();")
+            && analytics.contains("sel_cores: session.sel_cores")
+            && analytics.contains("b.ui_session.analytics.sel_cores = selected;")
+            && toolbar.contains("b.ui_session.analytics.tab = t;"),
+        "Analytics construction and both user choices must share the Backend UI-session snapshot"
+    );
+    let tab_init = analytics
+        .find("tab: if probe {")
+        .expect("Analytics must retain the probe-first tab branch");
+    let tab_init = &analytics[tab_init..];
+    let probe_tab = tab_init
+        .find("Tab::Strategies")
+        .expect("probe mode must still open Strategy Tuning");
+    let remembered_tab = tab_init
+        .find("session.tab")
+        .expect("normal mode must restore the remembered tab");
+    assert!(
+        probe_tab < remembered_tab,
+        "MOON_ANALYTICS_PROBE must override the remembered normal-session tab"
+    );
+    assert!(
+        !ui_session.contains("Serialize")
+            && !layout.contains("UiSessionState")
+            && !layout.contains("AnalyticsSessionState"),
+        "process-lifetime UI state must not enter the serialized WindowLayout"
+    );
+}
+
+/// Protects durable per-group Main-core selection and authoritative target ownership.
+///
+/// The plausible edit is restoring a separate `trade_core_override` map or writing the current
+/// Main target from a child stack or on every sync. Restart would forget manual choices, while a
+/// hidden, detached, or stale cross-group chart could overwrite the visible anchor and route
+/// trading hotkeys to the wrong core.
+#[test]
+fn active_trade_core_selection_is_layout_backed_and_sticky() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let main = fs::read_to_string(root.join("main.rs")).unwrap();
+    let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
+    let backend = fs::read_to_string(root.join("backend").join("mod.rs")).unwrap();
+    let chrome = fs::read_to_string(root.join("chrome").join("terminal_chrome.rs")).unwrap();
+    let chart_tabs = fs::read_to_string(root.join("chart_tabs").join("mod.rs")).unwrap();
+    let main_stack = fs::read_to_string(root.join("chart_tabs").join("main_stack.rs")).unwrap();
+    let ingest = fs::read_to_string(root.join("chart_tabs").join("ingest.rs")).unwrap();
+    let windows = fs::read_to_string(root.join("chart_tabs").join("windows.rs")).unwrap();
+    let layout = fs::read_to_string(
+        root.parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("moon-core")
+            .join("src")
+            .join("config")
+            .join("layout.rs"),
+    )
+    .unwrap();
+    let production = format!("{main}\n{startup}\n{backend}\n{chrome}");
+
+    assert!(
+        !production.contains("trade_core_override"),
+        "the superseded Backend-only active-core path must stay removed"
+    );
+    assert!(
+        layout.contains("pub active_trade_core_by_group: HashMap<String, u64>")
+            && startup.contains("layout: layout.clone(),"),
+        "the stable per-group core UID must live in the layout loaded at startup"
+    );
+    assert!(
+        chart_tabs.contains(
+            "this.sync_active_scale(cx);\n        this.initialize_main_chart_target(cx);"
+        ),
+        "restored Main state must initialize its runtime target without replacing the saved core"
+    );
+    let initial_target_start = backend
+        .find("pub(crate) fn initialize_main_chart_target")
+        .expect("initial Main target setter must exist");
+    let initial_target_end = backend[initial_target_start..]
+        .find("pub(crate) fn set_main_chart_target")
+        .map(|offset| initial_target_start + offset)
+        .expect("runtime Main target setter must follow initialization");
+    let initial_target_setter = &backend[initial_target_start..initial_target_end];
+    assert!(
+        initial_target_setter.contains("self.store_main_chart_target(group, target);")
+            && !initial_target_setter.contains("set_active_trade_core"),
+        "startup target initialization must preserve the durable manual header selection"
+    );
+
+    let mut sources = Vec::new();
+    rust_sources(&root, &mut sources);
+    let mut target_publishers = Vec::new();
+    for path in sources {
+        let source = fs::read_to_string(&path).unwrap();
+        for (line_ix, line) in source.lines().enumerate() {
+            if line.contains(".set_main_chart_target(") {
+                target_publishers.push(format!("{}:{}", path.display(), line_ix + 1));
+            }
+        }
+    }
+    assert_eq!(
+        target_publishers.len(),
+        1,
+        "ChartTabs must be the sole Main-target publisher; found: {target_publishers:?}"
+    );
+    assert!(
+        chart_tabs.contains("b.set_main_chart_target(&self.group, target)")
+            && !main_stack.contains(".set_main_chart_target("),
+        "the sole publisher must compute the visible anchor-aware target at ChartTabs level"
+    );
+    assert!(
+        chart_tabs.contains("cx.observe(&main, |this, _main, cx| {")
+            && chart_tabs.contains("this.sync_main_chart_target(cx);")
+            && ingest.contains("self.watch_regular_stack_target(&panel, cx);")
+            && windows.contains("this.watch_regular_stack_target(&panel, cx);"),
+        "Main plus runtime-created and restored ordinary stacks must refresh the authoritative target"
+    );
+    let detach_start = windows
+        .find("pub(super) fn detach")
+        .expect("chart detach handler must exist");
+    let detach_end = windows[detach_start..]
+        .find("fn open_chart_window")
+        .map(|offset| detach_start + offset)
+        .expect("detached-window opener must follow the detach handler");
+    let detach_handler = &windows[detach_start..detach_end];
+    assert!(
+        detach_handler.contains("if self.active == tab {")
+            && detach_handler.contains("self.active = Tab::Main;")
+            && detach_handler.contains("self.sync_main_chart_target(cx);"),
+        "detaching the active comparison tab must replace its target with visible Main"
+    );
+
+    let target_start = backend
+        .find("pub(crate) fn set_main_chart_target")
+        .expect("Main target setter must exist");
+    let target_end = backend[target_start..]
+        .find("pub(crate) fn main_chart_target")
+        .map(|offset| target_start + offset)
+        .expect("Main target getter must follow its setter");
+    let target_setter = &backend[target_start..target_end];
+    assert!(
+        target_setter.contains("if prev_core != Some(*new_core)")
+            && target_setter.contains("self.set_active_trade_core(group, *new_core);")
+            && target_setter
+                .matches("self.set_active_trade_core(group, *new_core);")
+                .count()
+                == 1,
+        "same-core Main syncs must preserve a manual choice; only a core change may replace it"
+    );
+    assert!(
+        target_setter
+            .contains("target.filter(|(core, _)| self.core_belongs_to_group(group, *core))"),
+        "invalid incoming Main targets must be discarded before persistence"
+    );
+
+    let target_getter_start = target_end;
+    let target_getter_end = backend[target_getter_start..]
+        .find("pub(crate) fn set_main_open_markets")
+        .map(|offset| target_getter_start + offset)
+        .expect("Main open-market setter must follow the target getter");
+    let target_getter = &backend[target_getter_start..target_getter_end];
+    assert!(
+        target_getter.contains(".filter(|(core, _)| self.core_belongs_to_group(group, *core))"),
+        "every direct Main-target consumer must receive None after a core leaves the group"
+    );
+
+    let active_start = backend
+        .find("pub(crate) fn active_trade_core")
+        .expect("active trade-core resolver must exist");
+    let active_end = backend[active_start..]
+        .find("pub(crate) fn set_active_trade_core")
+        .map(|offset| active_start + offset)
+        .expect("active trade-core setter must follow its resolver");
+    let active_resolver = &backend[active_start..active_end];
+    assert!(
+        active_resolver.contains("self.layout.active_trade_core_by_group.get(group)")
+            && active_resolver.contains("self.core_belongs_to_group(group, core)")
+            && active_resolver.contains("self.main_chart_target(group)"),
+        "saved cores must be used only while a live session still belongs to the same group"
+    );
+
+    let setter_start = active_end;
+    let setter_end = backend[setter_start..]
+        .find("/// Refresh the cached fallback ticker")
+        .map(|offset| setter_start + offset)
+        .expect("ticker method must follow the active trade-core setter");
+    let active_setter = &backend[setter_start..setter_end];
+    assert!(
+        active_setter.contains("if !self.core_belongs_to_group(group, core)")
+            && active_setter.contains(".active_trade_core_by_group")
+            && active_setter.contains(".insert(group.to_string(), core);")
+            && active_setter.contains("self.layout_dirty = true;")
+            && chrome.contains("b.set_active_trade_core(&group, id);"),
+        "manual selection must update layout, mark persistence dirty, and use the shared setter"
+    );
+}
+
 #[test]
 fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

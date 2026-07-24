@@ -28,7 +28,7 @@ use std::collections::HashMap;
 pub(crate) use add_stack::AddChartStack;
 use common::LayoutPopupHost;
 pub(crate) use main_stack::MainChartStack;
-use sig::{chart_tabs_sig, core_belongs_to_group};
+use sig::chart_tabs_sig;
 
 use crate::persistence::chart_persist::StackLayoutMode;
 
@@ -153,6 +153,19 @@ pub struct ChartTabs {
 }
 
 impl ChartTabs {
+    /// Construct a group's chart-tab controller and restore its persisted chart presentation.
+    ///
+    /// Args:
+    ///     backend: Shared application state and persistence handles.
+    ///     group: Main window group owned by this tab controller.
+    ///     focus_open: Optional core and market to open initially in Main.
+    ///     epoch: Chart time origin passed to child stacks.
+    ///     theme: Runtime chart palette and rendering theme.
+    ///     window: Owning GPUI window used by tab controls and restored child windows.
+    ///     cx: Entity context used to create children and retain observers.
+    ///
+    /// Returns:
+    ///     A ready tab controller with process and durable state wired to its children.
     pub fn new(
         backend: Entity<Backend>,
         group: String,
@@ -307,6 +320,13 @@ impl ChartTabs {
         if group_x_ppm.is_some() {
             main.update(cx, |s, c| s.set_x_ppm(group_x_ppm, false, c));
         }
+        cx.observe(&main, |this, _main, cx| {
+            // Main owns focus changes, while ChartTabs owns the visible anchor-aware group target.
+            this.sync_main_chart_target(cx);
+            #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
+            this.sync_debug_main_chart(cx);
+        })
+        .detach();
         cx.observe(&backend, |this, backend, cx| {
             // Drain apply-to-all requests from detached windows before the signature early return.
             this.drain_apply_all(cx);
@@ -463,7 +483,7 @@ impl ChartTabs {
         this.restore_detached(cx);
         this.restore_custom_tabs(cx);
         this.sync_active_scale(cx);
-        this.sync_main_chart_target(cx);
+        this.initialize_main_chart_target(cx);
         this.persist_scales(cx);
         this
     }
@@ -474,7 +494,7 @@ impl ChartTabs {
             b.open_request
                 .as_ref()
                 .cloned()
-                .filter(|(core, _)| core_belongs_to_group(b, self.group.as_str(), *core))
+                .filter(|(core, _)| b.core_belongs_to_group(self.group.as_str(), *core))
         };
         let Some((pending_core, pending_market)) = pending else {
             return;
@@ -520,7 +540,7 @@ impl ChartTabs {
             b.open_compare_request
                 .as_ref()
                 .cloned()
-                .filter(|(core, _)| core_belongs_to_group(b, self.group.as_str(), *core))
+                .filter(|(core, _)| b.core_belongs_to_group(self.group.as_str(), *core))
         };
         let Some((pending_core, pending_market)) = pending else {
             return;
@@ -596,6 +616,13 @@ impl ChartTabs {
         }
     }
 
+    /// Resolve the visible trading target, preferring an active comparison anchor over Main.
+    ///
+    /// Args:
+    ///     cx: Application context used to read child stack state.
+    ///
+    /// Returns:
+    ///     The visible core and market, or `None` when no chart supplies a target.
     fn main_chart_target(&self, cx: &App) -> Option<(CoreId, String)> {
         // A locked comparison anchor acts like Main fullscreen for trading: its `(core, market)`
         // becomes the group target for F1-F6, S1-S6, and cancel-buy hotkeys.
@@ -607,17 +634,74 @@ impl ChartTabs {
         self.main.read(cx).active_target(cx)
     }
 
+    /// Observe an ordinary AddToChart stack as a possible visible trading-target source.
+    ///
+    /// The observer is installed when either a live detect or startup restoration creates the
+    /// stack. Detached stacks are harmless because `active_stack` excludes them; the same observer
+    /// becomes effective if the panel is later repinned into the tab strip.
+    ///
+    /// Args:
+    ///     stack: Ordinary AddToChart stack whose comparison anchor may change.
+    ///     cx: Parent `ChartTabs` context used to retain the observer.
+    ///
+    /// Returns:
+    ///     Nothing; notifications recompute the target only while this stack is active.
+    pub(super) fn watch_regular_stack_target(
+        &self,
+        stack: &Entity<AddChartStack>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.observe(stack, |this, stack, cx| {
+            let is_active = this
+                .active_stack()
+                .is_some_and(|active| active.entity_id() == stack.entity_id());
+            if is_active {
+                this.sync_main_chart_target(cx);
+            }
+        })
+        .detach();
+    }
+
+    /// Seed Backend with the restored target without replacing a durable header selection.
+    ///
+    /// Args:
+    ///     cx: Parent context used to read the restored visible target and update Backend.
+    ///
+    /// Returns:
+    ///     Nothing; this one-time construction path updates runtime target state only.
+    fn initialize_main_chart_target(&self, cx: &mut Context<Self>) {
+        let target = self.main_chart_target(cx);
+        self.backend.update(cx, |b, _| {
+            b.initialize_main_chart_target(&self.group, target)
+        });
+    }
+
+    /// Publish a runtime target change after construction and update durable selection semantics.
+    ///
+    /// Args:
+    ///     cx: Parent context used to resolve the visible target and update Backend.
+    ///
+    /// Returns:
+    ///     Nothing; Backend decides whether the target core genuinely changed.
     fn sync_main_chart_target(&self, cx: &mut Context<Self>) {
         let target = self.main_chart_target(cx);
         self.backend
             .update(cx, |b, _| b.set_main_chart_target(&self.group, target));
-        #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
-        {
-            if let Some(handle) = self.main.read(cx).debug_data_handle(cx) {
-                self.backend.update(cx, |b, _| {
-                    b.register_debug_main_chart(self.group.clone(), handle)
-                });
-            }
+    }
+
+    /// Refresh the debug-only Main chart handle after Main itself changes.
+    ///
+    /// Args:
+    ///     cx: Parent context used to read Main and update Backend diagnostics.
+    ///
+    /// Returns:
+    ///     Nothing; absent debug data leaves the previous handle untouched.
+    #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
+    fn sync_debug_main_chart(&self, cx: &mut Context<Self>) {
+        if let Some(handle) = self.main.read(cx).debug_data_handle(cx) {
+            self.backend.update(cx, |b, _| {
+                b.register_debug_main_chart(self.group.clone(), handle)
+            });
         }
     }
 

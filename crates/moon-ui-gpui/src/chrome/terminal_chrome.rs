@@ -324,14 +324,14 @@ fn fit_header_core_trigger(
 /// Build the selector for a group's active trading core.
 ///
 /// The choices come from the group's cores. [`Backend::active_trade_core`] prefers a still-valid
-/// sticky manual override, then the current trading target, and finally the group's first core.
+/// remembered selection, then the current trading target, and finally the group's first core.
 /// The trading target can come from Main's active fullscreen chart or a locked comparison anchor
 /// in an Add or Custom tab. All toolbar and header trading controls read the same active core.
 ///
 /// # Arguments
 ///
 /// * `group` - Group whose trading cores should be listed.
-/// * `backend` - Backend that owns core state and selection overrides.
+/// * `backend` - Backend that owns core state and the remembered group selection.
 /// * `shell` - Shell that owns the selector's controlled open state.
 /// * `open` - Whether the selector popover is currently open.
 /// * `p` - Active palette used to render status and text colors.
@@ -418,7 +418,7 @@ fn core_selector(
                     .checked(active == Some(id))
                     .on_click(move |_, _, cx| {
                         backend.update(cx, |b, bcx| {
-                            b.set_trade_core_override(&group, id);
+                            b.set_active_trade_core(&group, id);
                             bcx.notify();
                         });
                         item_shell.update(cx, |shell, cx| {

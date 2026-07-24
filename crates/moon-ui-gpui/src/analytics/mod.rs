@@ -122,6 +122,28 @@ pub(in crate::analytics) fn pnl_unit_label() -> &'static str {
     if pnl_is_pct() { "%" } else { "USDT" }
 }
 
+/// Process-lifetime Analytics choices restored when its OS window is recreated.
+#[derive(Clone)]
+pub(crate) struct AnalyticsSessionState {
+    /// Last top-level page selected by the user.
+    tab: Tab,
+    /// Explicit core filter, preserving the selector's empty/full/stale set semantics.
+    sel_cores: HashSet<u64>,
+}
+
+impl Default for AnalyticsSessionState {
+    /// Create the state used for the first Analytics open in a fresh process.
+    ///
+    /// Returns:
+    ///     Summary-tab state with the empty core set that represents all current cores.
+    fn default() -> Self {
+        Self {
+            tab: Tab::Summary,
+            sel_cores: HashSet::new(),
+        }
+    }
+}
+
 /// State of the Analytics window.
 pub struct AnalyticsView {
     backend: Entity<Backend>,
@@ -261,6 +283,15 @@ pub struct AnalyticsView {
 }
 
 impl AnalyticsView {
+    /// Build an Analytics view from durable layout preferences and process-lifetime UI choices.
+    ///
+    /// Args:
+    ///     backend: Shared application state containing layout and UI-session snapshots.
+    ///     window: Newly opened Analytics window used to observe geometry and create controls.
+    ///     cx: View context used to subscribe controls and start the initial reload.
+    ///
+    /// Returns:
+    ///     A fully initialized Analytics view.
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Window geometry lives in the layout, as it does for Screener and Strategies.
         cx.observe_window_bounds(window, |this, window, cx| {
@@ -332,6 +363,7 @@ impl AnalyticsView {
             .as_deref()
             .and_then(calendar::CalMode::from_id)
             .unwrap_or(calendar::CalMode::Month);
+        let session = backend.read(cx).ui_session.analytics.clone();
 
         // From/to calendars: selecting a day closes the popup and switches the period.
         let cal_from = cx.new(|cx| MoonCalendarState::new(window, cx));
@@ -361,12 +393,12 @@ impl AnalyticsView {
         let probe = probe_enabled();
         let mut this = Self {
             backend,
-            tab: if probe { Tab::Strategies } else { Tab::Summary },
+            tab: if probe { Tab::Strategies } else { session.tab },
             period: saved_period.unwrap_or(Period::CurMonth),
             strat_period: saved_strat_period.unwrap_or(Period::CurMonth),
             data_period: saved_period.unwrap_or(Period::CurMonth),
             cores: Vec::new(),
-            sel_cores: HashSet::new(),
+            sel_cores: session.sel_cores,
             side: SideFilter::All,
             // Default to Real, as in Report, because emulated trades add noise to the statistics.
             emu: Some(false),
@@ -711,6 +743,10 @@ impl AnalyticsView {
                 }
             }
         }
+        let selected = self.sel_cores.clone();
+        self.backend.update(cx, |b, _| {
+            b.ui_session.analytics.sel_cores = selected;
+        });
         self.reload(cx);
         cx.notify();
     }

@@ -35,6 +35,13 @@ impl ChartTabs {
 
     /// Detach an AddToChart or Custom tab into a separate OS window and remove it from the strip.
     /// Custom tabs live in `self.custom`, regular tabs in `self.add`, and both use `AddChartStack`.
+    ///
+    /// Args:
+    ///     tab: Attached AddToChart or Custom tab to move into its own window.
+    ///     cx: Parent context used to open the window and synchronize active state.
+    ///
+    /// Returns:
+    ///     Nothing; Main and missing tabs are ignored, as is a failed window creation.
     pub(super) fn detach(&mut self, tab: Tab, cx: &mut Context<Self>) {
         let (n, bucket, is_custom) = match tab.clone() {
             Tab::Add(n, b) => (n, b, false),
@@ -79,6 +86,7 @@ impl ChartTabs {
             self.sync_active_scale(cx);
             self.sync_inactive_chart_visibility(cx);
             self.persist_scales(cx);
+            self.sync_main_chart_target(cx);
         }
         // Mark the tab detached in `charts.json` so it restores as a window next launch.
         self.upsert_spec(cx, n, &bucket, |s| s.detached = Some(geom));
@@ -286,6 +294,12 @@ impl ChartTabs {
     /// Restore detached windows deferred from `charts.json`.
     /// Opening OS windows during render invalidates GPUI's element arena, so construction queues
     /// the work through `cx.defer` instead.
+    ///
+    /// Args:
+    ///     cx: Parent context used to defer window creation and retain stack observers.
+    ///
+    /// Returns:
+    ///     Nothing; pending specifications are drained and restored asynchronously.
     pub(super) fn restore_detached(&mut self, cx: &mut Context<Self>) {
         if self.restore_pending.is_empty() {
             return;
@@ -398,6 +412,8 @@ impl ChartTabs {
                         // This membership subscription is ineffective while the stack is detached;
                         // the detached host persists it then, and the subscription resumes after repin.
                         this.watch_custom_stack(n, &bucket, &panel, cx);
+                    } else {
+                        this.watch_regular_stack_target(&panel, cx);
                     }
                     if this.open_chart_window(n, panel.clone(), bucket.clone(), geom, true, cx) {
                         panel.update(cx, |p, pcx| p.set_scene_visible(false, pcx));
