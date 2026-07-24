@@ -18,9 +18,8 @@ use moon_core::config::paths;
 
 use crate::Backend;
 use crate::chart_tabs::ChartTabs;
-use crate::panels::{
-    AlertsPanel, AssetsView, CoreStatusView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel,
-};
+use crate::panels::DetectsPanel;
+use crate::panels::registry;
 use moon_core::session::CoreId;
 
 /// Dock-layout schema version used to accept or reject saved layouts during restoration.
@@ -115,7 +114,8 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
             Rc::new(cx.new(|cx| ChartTabs::new(backend, group, focus, epoch, theme, window, cx)))
         });
     }
-    // The detect tape recovers its group from state.
+    // The detect tape recovers its group from state and is constructed without a `Window`, so it
+    // stays outside the shared registry alongside ChartTabs.
     {
         let backend = backend.clone();
         register_panel(cx, "Detects", move |_state, info, _window, cx| {
@@ -124,61 +124,14 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
             Rc::new(cx.new(|cx| DetectsPanel::new(backend, group, cx)))
         });
     }
-    // The orders table recovers its group from state.
-    {
+    // Every detachable panel (Orders, Assets, Report, Alerts, Log, CoreStatus) registers from the
+    // single registry: `build_docked` with the persisted `PanelInfo` reapplies saved view state
+    // (Orders' sort/kind/filter/columns) and recovers the group.
+    for kind in registry::DOCK_PANELS {
         let backend = backend.clone();
-        register_panel(cx, "Orders", move |_state, info, window, cx| {
+        register_panel(cx, kind.name, move |_state, info, window, cx| {
             let group = group_of(info);
-            let backend = backend.clone();
-            // `restored` applies the saved sort, order type, and filter view state.
-            Rc::new(cx.new(|cx| OrdersPanel::restored(backend, group, info, window, cx)))
-        });
-    }
-    // Assets recovers its group from state and shows that group's live grouped table only;
-    // `restored_group` disables the wallet transfer tree.
-    {
-        let backend = backend.clone();
-        register_panel(cx, "Assets", move |_s, info, window, cx| {
-            let group = group_of(info);
-            let backend = backend.clone();
-            Rc::new(cx.new(|cx| AssetsView::restored_group(backend, group, window, cx)))
-        });
-    }
-    // Log recovers its group from state and needs `window` for its search `InputState`.
-    {
-        let backend = backend.clone();
-        register_panel(cx, "Log", move |_s, info, window, cx| {
-            let group = group_of(info);
-            let backend = backend.clone();
-            Rc::new(cx.new(|cx| LogPanel::new(backend, group, window, cx)))
-        });
-    }
-    // Report recovers its group from state and needs `window` for filter `InputState` values.
-    {
-        let backend = backend.clone();
-        register_panel(cx, "Report", move |_s, info, window, cx| {
-            let group = group_of(info);
-            let backend = backend.clone();
-            Rc::new(cx.new(|cx| ReportPanel::new(backend, group, window, cx)))
-        });
-    }
-    // Alerts recovers its group from state and needs `window` for its filter `InputState`.
-    {
-        let backend = backend.clone();
-        register_panel(cx, "Alerts", move |_s, info, window, cx| {
-            let group = group_of(info);
-            let backend = backend.clone();
-            Rc::new(cx.new(|cx| AlertsPanel::new(backend, group, window, cx)))
-        });
-    }
-    // The retained Core Status factory recovers its group and reads typed protocol-v4
-    // `Event::KernelHealth` telemetry converted by `sys_status_from_proto` into the core store.
-    {
-        let backend = backend.clone();
-        register_panel(cx, "CoreStatus", move |_s, info, window, cx| {
-            let group = group_of(info);
-            let backend = backend.clone();
-            Rc::new(cx.new(|cx| CoreStatusView::restored_group(backend, group, window, cx)))
+            kind.build_docked(&backend, &group, Some(info), window, cx)
         });
     }
 }

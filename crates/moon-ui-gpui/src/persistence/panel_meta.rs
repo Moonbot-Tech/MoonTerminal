@@ -1,8 +1,9 @@
 //! Localized dock-panel labels — the single `panel_name` → `t!("dock.tab.*")` map.
 //!
 //! `panel_name()` is the STABLE IDENTITY of a panel: layout persistence (`dock_persist`), the
-//! detached-window registry (`detached`), and `shell::docks::DOCK_TAB_ORDER` all match on it, and
-//! MoonUI's dock does the same internally. It stays an English literal and is never translated.
+//! detachable-panel registry (`panels::registry`, which also feeds the home strip in
+//! `shell::docks`), and the detached-window specs (`detached`) all match on it, and MoonUI's dock
+//! does the same internally. It stays an English literal and is never translated.
 //!
 //! What the user actually reads lives here, and all three surfaces route through it: the dock tab
 //! (`Panel::tab_name`), the panel header (`Panel::title`), and the detached-window title. Keeping

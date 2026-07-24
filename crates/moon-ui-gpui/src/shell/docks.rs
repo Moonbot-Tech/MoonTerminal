@@ -11,47 +11,25 @@ use moon_core::config::GroupLayout;
 use moon_core::config::layout::DockSplitSlot;
 
 use crate::Backend;
+use crate::panels::registry::home_ordered_names;
 use crate::window::detached;
 
 use super::Shell;
 
-/// Canonical order of the default bottom-row home strip.
-///
-/// This list identifies the home strip and supplies the final fallback insertion priority.
-/// Restoration first prefers a remembered split slot when allowed, then persisted
-/// `dock_tab_left`/`dock_tab_index`; only after those fail does [`dock_home_priority`] use this
-/// canonical order.
-///
-/// The array must list ALL bottom-row tabs (`shell/init.rs`), not only those whose order seems to
-/// matter: [`strip_names`] identifies the "home" strip by the presence of any name from here, so a
-/// missing panel left alone in the strip makes that strip unfindable — restoring a detached panel
-/// then falls back to `add_panel(Bottom)` and creates a second bottom zone instead of inserting
-/// into the existing one.
-///
-/// The identification is a heuristic, and completeness cuts both ways: because it matches the FIRST
-/// strip holding any of these names, a user who has dragged one of them into a different strip that
-/// comes earlier in depth-first order makes that strip win. Restoring by a stable strip identity
-/// rather than by name would remove the ambiguity, but that is a MoonUI-side change.
-// `CoreStatus` remains outside the default bottom strip even though its panel now consumes typed
-// protocol-v4 `KernelHealth` state. Add it here if the default tab is re-enabled; the historical
-// log-parser limitation is no longer the reason for its omission.
-pub(super) const DOCK_TAB_ORDER: [&str; 5] = ["Orders", "Assets", "Report", "Alerts", "Log"];
-
 /// Return the final fallback home index for a bottom-row panel.
 ///
-/// Remembered split placement and persisted left-neighbor/tab-index placement take priority. If
-/// those cannot place the panel, this index is clamped to the current tab count so a partially
-/// detached set still preserves `Orders < Assets < Report < Alerts < Log` relative order.
+/// The home-strip order is [`home_ordered_names`], derived from `panels::registry`. Remembered
+/// split placement and persisted left-neighbor/tab-index placement take priority; if those cannot
+/// place the panel, this index is clamped to the current tab count so a partially detached set
+/// still preserves the `Orders < Assets < Report < Alerts < Log` relative order.
 ///
-/// The order must mirror the push order in `shell/init.rs`, which is what a FRESH layout renders.
-/// An existing user is unaffected either way: a saved layout whose `DOCK_VERSION` still matches is
-/// restored verbatim, so changing this array reorders nothing already on screen — closing a tab and
-/// letting it come back is what re-seats it here.
+/// The order mirrors the default-layout push order in `shell/init.rs` because both derive from the
+/// registry. An existing user is unaffected either way: a saved layout whose `DOCK_VERSION` still
+/// matches is restored verbatim, so changing the registry order reorders nothing already on
+/// screen — closing a tab and letting it come back is what re-seats it here.
 fn dock_home_priority(name: &str) -> usize {
-    DOCK_TAB_ORDER
-        .iter()
-        .position(|n| *n == name)
-        .unwrap_or(DOCK_TAB_ORDER.len())
+    let order = home_ordered_names();
+    order.iter().position(|n| *n == name).unwrap_or(order.len())
 }
 
 impl Shell {
@@ -294,13 +272,16 @@ impl Shell {
     }
 }
 
-/// Return left-to-right names from the first tab strip containing any [`DOCK_TAB_ORDER`] panel.
+/// Return left-to-right names from the first tab strip containing any [`home_ordered_names`] panel.
 ///
 /// This identifies the home strip for stable restoration relative to the remembered left neighbor.
 fn strip_names(node: &PanelState) -> Option<Vec<String>> {
     if let PanelInfo::Tabs { .. } = &node.info {
         let names: Vec<String> = node.children.iter().map(|c| c.panel_name.clone()).collect();
-        if names.iter().any(|n| DOCK_TAB_ORDER.contains(&n.as_str())) {
+        if names
+            .iter()
+            .any(|n| home_ordered_names().contains(&n.as_str()))
+        {
             return Some(names);
         }
     }
@@ -340,7 +321,11 @@ fn dock_log(msg: &str) {
 fn tree_outline(node: &PanelState) -> String {
     match &node.info {
         PanelInfo::Tabs { active_index } => {
-            let kids: Vec<&str> = node.children.iter().map(|c| c.panel_name.as_str()).collect();
+            let kids: Vec<&str> = node
+                .children
+                .iter()
+                .map(|c| c.panel_name.as_str())
+                .collect();
             format!("Tabs@{active_index}[{}]", kids.join(","))
         }
         PanelInfo::Stack { axis, .. } => {
@@ -351,7 +336,11 @@ fn tree_outline(node: &PanelState) -> String {
         PanelInfo::Panel(_) if node.panel_name.is_empty() => "Panel(<empty>)".to_string(),
         PanelInfo::Panel(_) => format!("Panel({})", node.panel_name),
         PanelInfo::Tiles { .. } => {
-            let kids: Vec<&str> = node.children.iter().map(|c| c.panel_name.as_str()).collect();
+            let kids: Vec<&str> = node
+                .children
+                .iter()
+                .map(|c| c.panel_name.as_str())
+                .collect();
             format!("Tiles[{}]", kids.join(","))
         }
     }
@@ -467,7 +456,9 @@ fn restore_panel_to_home_tabs(
                     cx,
                 )
             {
-                dock_log(&format!("[dock] restore {key}: placed beside sibling (split)"));
+                dock_log(&format!(
+                    "[dock] restore {key}: placed beside sibling (split)"
+                ));
                 return;
             }
         }
@@ -485,7 +476,7 @@ fn restore_panel_to_home_tabs(
             None => tab_ix.unwrap_or_else(|| dock_home_priority(panel_name)),
         };
         dock_log(&format!("[dock] restore {key}: -> ix={ix}, inserting"));
-        if !area.insert_panel_into_home_tabs(panel.clone(), ix, &DOCK_TAB_ORDER, window, cx) {
+        if !area.insert_panel_into_home_tabs(panel.clone(), ix, home_ordered_names(), window, cx) {
             dock_log(&format!(
                 "[dock] restore {key}: home-tab insert failed, add_panel(Bottom) fallback"
             ));

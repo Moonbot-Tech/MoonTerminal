@@ -18,7 +18,7 @@ use moon_core::session::CoreId;
 
 use super::Shell;
 use crate::chart_tabs::ChartTabs;
-use crate::panels::{AssetsView, DetectsPanel, LogPanel, OrdersPanel, ReportPanel};
+use crate::panels::DetectsPanel;
 use crate::persistence::dock_persist::DOCK_VERSION;
 use crate::shell::core_settings_popup;
 use crate::{Backend, controls};
@@ -86,49 +86,21 @@ impl Shell {
                 .filter(|s| s.group == group)
                 .map(|s| s.panel.clone())
                 .collect();
+            // Build the default bottom strip from the panel registry in home-tab order (Orders,
+            // Assets, Report, Alerts, Log — the trading tabs first, the diagnostic Log last;
+            // CoreStatus is intentionally not a default tab, `home_order: None`). This order is the
+            // left-to-right tab order and is the SAME source `shell::docks` uses to re-seat a
+            // returning panel, so the two cannot disagree. A panel whose window startup restores
+            // detached is skipped so it is not also docked here; `build_docked(None)` starts each
+            // panel fresh, matching a first-run layout.
             let mut bottom_tabs: Vec<Rc<dyn PanelView>> = Vec::new();
-            if !detached_set.contains("Orders") {
-                bottom_tabs.push(Rc::new(
-                    cx.new(|cx| OrdersPanel::new(backend.clone(), group.clone(), window, cx)),
-                ));
-            }
-            if !detached_set.contains("Assets") {
-                bottom_tabs.push(Rc::new(cx.new(|cx| {
-                    AssetsView::restored_group(backend.clone(), group.clone(), window, cx)
-                })));
-            }
-            // CoreStatus remains omitted from the default bottom tabs, but its panel now consumes
-            // typed protocol-v4 `KernelHealth` state. The older log-parser limitation is historical,
-            // not a current data dependency. To enable the default tab, uncomment this block and
-            // restore `CoreStatus` in `DOCK_TAB_ORDER`.
-            // if !detached_set.contains("CoreStatus") {
-            //     bottom_tabs.push(Rc::new(cx.new(|cx| {
-            //         crate::panels::CoreStatusView::restored_group(
-            //             backend.clone(),
-            //             group.clone(),
-            //             window,
-            //             cx,
-            //         )
-            //     })));
-            // }
-            if !detached_set.contains("Report") {
-                bottom_tabs.push(Rc::new(
-                    cx.new(|cx| ReportPanel::new(backend.clone(), group.clone(), window, cx)),
-                ));
-            }
-            if !detached_set.contains("Alerts") {
-                bottom_tabs.push(Rc::new(cx.new(|cx| {
-                    crate::panels::AlertsPanel::new(backend.clone(), group.clone(), window, cx)
-                })));
-            }
-            // Log LAST: it is the diagnostic surface, read on demand, while the tabs before it are
-            // the trading ones. Push order here is the left-to-right tab order, and it must match
-            // `DOCK_TAB_ORDER` — that array decides where a closed or re-docked panel comes back,
-            // so a disagreement makes a returning tab land somewhere it was never shown.
-            if !detached_set.contains("Log") {
-                bottom_tabs.push(Rc::new(
-                    cx.new(|cx| LogPanel::new(backend.clone(), group.clone(), window, cx)),
-                ));
+            for name in crate::panels::registry::home_ordered_names() {
+                if detached_set.contains(*name) {
+                    continue;
+                }
+                if let Some(kind) = crate::panels::registry::find(name) {
+                    bottom_tabs.push(kind.build_docked(&backend, &group, None, window, cx));
+                }
             }
 
             // Place the entire default layout in the center split: charts on the left, Detects in
