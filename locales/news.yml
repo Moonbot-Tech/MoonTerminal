@@ -1,27 +1,19 @@
-# News panel: language selector, relative time, translation-pending badge, and empty state.
+# News panel: translate toggle, coin/tag filters, relative time, latency chain, subscription.
 # rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
 _version: 2
 
-news.lang.ru:
-  ru: "Русский"
-  en: "Russian"
-  es: "Ruso"
-news.lang.en:
-  ru: "Английский"
-  en: "English"
-  es: "Inglés"
-news.lang.es:
-  ru: "Испанский"
-  en: "Spanish"
-  es: "Español"
+news.translate:
+  ru: "Перевод"
+  en: "Translate"
+  es: "Traducir"
 news.pending:
   ru: "перевод ожидается"
   en: "translation pending"
   es: "traducción pendiente"
-news.time.now:
-  ru: "только что"
-  en: "just now"
-  es: "ahora mismo"
+news.time.sec:
+  ru: "%{n}с назад"
+  en: "%{n}s ago"
+  es: "hace %{n}s"
 news.time.min:
   ru: "%{n} мин назад"
   en: "%{n} min ago"
@@ -99,18 +91,14 @@ news.coin:
   en: "Coin"
   es: "Moneda"
 news.coin.all:
-  ru: "все"
-  en: "all"
-  es: "todas"
+  ru: "Все"
+  en: "All"
+  es: "Todas"
+news.coin.empty:
+  ru: "Монет пока нет"
+  en: "No coins yet"
+  es: "Sin monedas"
 news.search:
   ru: "Поиск по новостям…"
   en: "Search news…"
   es: "Buscar noticias…"
-news.day.today:
-  ru: "Сегодня"
-  en: "Today"
-  es: "Hoy"
-news.day.yesterday:
-  ru: "Вчера"
-  en: "Yesterday"
-  es: "Ayer"
