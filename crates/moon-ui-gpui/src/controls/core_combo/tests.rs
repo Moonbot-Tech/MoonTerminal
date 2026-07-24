@@ -3,8 +3,10 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    core_menu_sections, normalized_core_filter_ids, selection_summary, toggle_all_core_selection,
+    core_menu_sections, fit_core_menu_label, normalized_core_filter_ids, selection_summary,
+    toggle_all_core_selection,
 };
+use crate::design::core_menu_width_for_scales;
 
 /// `core_combo.rs:core_menu_sections` must keep unidentified cores first, sort exchange sections,
 /// and preserve the incoming canonical member order. Replacing the shared section helper with one
@@ -120,4 +122,44 @@ fn query_filter_keeps_stale_equal_cardinality_selection_explicit() {
 
     let full_with_stale = HashSet::from([1, 2, 99]);
     assert!(normalized_core_filter_ids([1, 2], &full_with_stale).is_empty());
+}
+
+/// `core_combo.rs:fit_core_menu_label` must preserve an exact boundary and ellipsize a one-character
+/// overflow. Replacing the bounded fit with the raw label lets a longer configured name escape the
+/// stable menu width and obscure neighbouring UI.
+#[test]
+fn menu_label_preserves_the_boundary_and_ellipsizes_one_past_it() {
+    let sample = "AWS$22 ~ F-BN / SHOT_FUT (SUB_11) USDC";
+    let measure = |text: &str| text.chars().count() as f32;
+    let limit = measure(sample);
+
+    assert_eq!(fit_core_menu_label(sample, limit, measure), sample);
+    assert_eq!(
+        fit_core_menu_label(&format!("{sample}X"), limit, measure),
+        "AWS$22 ~ F-BN / SHOT_FUT (SUB_11) USD…"
+    );
+}
+
+/// `design.rs:core_menu_width_for_scales` must reserve enough compact-menu text width for the
+/// screenshot label at every supported Font-slider value, independently of UI scale. Reducing
+/// `CORE_MENU_LABEL_W` to 180 truncates the named assertion and makes ordinary configured servers
+/// unreadable in every core selector.
+#[test]
+fn core_menu_geometry_keeps_the_screenshot_label_at_extreme_scales() {
+    const SAMPLE: &str = "AWS$22 ~ F-BN / SHOT_FUT (SUB_11) USDC";
+    // A conservative 6px advance represents one 9.5px Geist Mono glyph. The 30px scaled chrome
+    // and 14px fixed chrome are independently derived from MoonPopupMenu's compact checked row.
+    for compact_text_scale in [7.5 / 9.5, 1.0, 11.5 / 9.5, 15.5 / 9.5] {
+        for ui_scale in [0.25, 1.0, 3.0] {
+            let menu_w = core_menu_width_for_scales(compact_text_scale, ui_scale, 0.0);
+            let label_w = menu_w - 30.0 * ui_scale - 14.0;
+            let measure = |text: &str| text.chars().count() as f32 * 6.0 * compact_text_scale;
+
+            assert_eq!(
+                fit_core_menu_label(SAMPLE, label_w, measure),
+                SAMPLE,
+                "label clipped at compact_text_scale={compact_text_scale}, ui_scale={ui_scale}"
+            );
+        }
+    }
 }

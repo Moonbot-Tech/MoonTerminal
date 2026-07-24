@@ -8,7 +8,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize,
-    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSelectorPill,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
     MoonSelectorSegment, MoonTag, MoonWindowFrame, h_flex,
 };
 use rust_i18n::t;
@@ -301,6 +301,26 @@ fn fmt_ticker_price(v: f64) -> String {
     }
 }
 
+/// Fit a header core label and return the selector pill's content-driven width.
+///
+/// Args:
+///     text: Full active-core label.
+///     max_label_w: Maximum rendered width available to the label.
+///     chrome_w: Rendered pill width outside the label.
+///     measure: Function returning rendered width for arbitrary label fragments.
+///
+/// Returns:
+///     The fitted label and its measured width plus pill chrome, rounded to a whole pixel.
+fn fit_header_core_trigger(
+    text: &str,
+    max_label_w: f32,
+    chrome_w: f32,
+    measure: impl Fn(&str) -> f32,
+) -> (String, f32) {
+    let (label, label_w) = design::fit_text(text, max_label_w, measure);
+    (label, (label_w + chrome_w).ceil())
+}
+
 /// Build the selector for a group's active trading core.
 ///
 /// The choices come from the group's cores. [`Backend::active_trade_core`] prefers a still-valid
@@ -356,17 +376,21 @@ fn core_selector(
     } else {
         design::danger_color(p)
     };
-    // Capped: a core name is arbitrary user text and this pill sizes to its content, so an
-    // uncapped one pushes the clock and the window controls off the header. Full name stays in
-    // the menu below.
-    let active_name = design::fit_label(
-        cx,
-        &active
-            .and_then(|id| cores.iter().find(|(cid, _)| *cid == id))
-            .map(|(_, n)| n.clone())
-            .unwrap_or_else(|| "—".to_string()),
+    // Normal labels size the pill to their measured content, avoiding an empty tail. The text cap
+    // still prevents an anomalously long configured name from displacing the rest of the header.
+    let raw_active_name = active
+        .and_then(|id| cores.iter().find(|(cid, _)| *cid == id))
+        .map(|(_, n)| n.clone())
+        .unwrap_or_else(|| "—".to_string());
+    // Chrome outside the label: left/right padding, status dot, gap, and borders. The absolute
+    // caret occupies the right-padding reservation instead of adding another flex child.
+    let (active_name, trigger_w) = fit_header_core_trigger(
+        &raw_active_name,
         design::font_w(cx, design::HEADER_LABEL_MAX_W),
+        design::ui_value(cx, 44.0),
+        |text| design::ui_text_width(cx, text, 10.5, 500.0, true),
     );
+    let trigger_h = design::ui_value(cx, SEL_H);
 
     // The header renders continuously, but exchange discovery scans every client snapshot. Build
     // the hidden menu only after controlled open state triggers a repaint.
@@ -374,49 +398,46 @@ fn core_selector(
         let exchange_names = b.session.market_source().core_exchange_names();
         let unknown_exchange = t!("common.exchange_unknown").to_string();
         let sections = crate::controls::core_menu_sections(&cores, &exchange_names);
-        // Size for both core names and exchange headers; either can be the widest visible row.
-        let menu_w = design::menu_fit_width(
-            cx,
-            sections
-                .iter()
-                .map(|(exchange, _)| exchange.unwrap_or(unknown_exchange.as_str()))
-                .chain(cores.iter().map(|(_, name)| name.as_str())),
-            design::font_w(cx, 180.0),
-        );
+        let menu_w = design::core_menu_width(cx, 180.0);
         let mut items = Vec::with_capacity(cores.len() + sections.len());
         for (exchange, members) in sections {
-            items.push(MoonMenuItem::label(
-                exchange.unwrap_or(unknown_exchange.as_str()),
-            ));
+            let exchange = exchange.unwrap_or(unknown_exchange.as_str());
+            items.push(MoonMenuItem::label(crate::controls::core_menu_label(
+                cx, exchange, menu_w,
+            )));
             for (id, name) in members {
                 let backend = backend.clone();
                 let group = group.to_string();
                 let item_shell = shell.clone();
                 items.push(
-                    MoonMenuItem::with_key(format!("core-{id}"), name)
-                        .selected(active == Some(id))
-                        .checked(active == Some(id))
-                        .on_click(move |_, _, cx| {
-                            backend.update(cx, |b, bcx| {
-                                b.set_trade_core_override(&group, id);
-                                bcx.notify();
-                            });
-                            item_shell.update(cx, |shell, cx| {
-                                shell.set_header_core_selector_open(false, cx);
-                            });
-                        }),
+                    MoonMenuItem::with_key(
+                        format!("core-{id}"),
+                        crate::controls::core_menu_label(cx, name, menu_w),
+                    )
+                    .selected(active == Some(id))
+                    .checked(active == Some(id))
+                    .on_click(move |_, _, cx| {
+                        backend.update(cx, |b, bcx| {
+                            b.set_trade_core_override(&group, id);
+                            bcx.notify();
+                        });
+                        item_shell.update(cx, |shell, cx| {
+                            shell.set_header_core_selector_open(false, cx);
+                        });
+                    }),
                 );
             }
         }
         (menu_w, items)
     } else {
-        (design::font_w(cx, 180.0), Vec::new())
+        (design::core_menu_width(cx, 180.0), Vec::new())
     };
 
     // Use the canonical `MoonSelectorPill` visual, with a glowing status dot and caret icon, as
-    // the `MoonPopover` trigger. The content is a `MoonPopupMenu` listing the cores. These moonui
-    // components need no manual trigger styling or size workaround. Shell controls open state so
-    // selecting a core closes the popover while exchange labels and scroll interactions do not.
+    // the `MoonPopover` trigger. The explicit bounds below give its absolute root a measurable,
+    // content-driven anchor; the content remains a `MoonPopupMenu` listing the cores. Shell
+    // controls open state so selecting a core closes the popover while exchange labels and scroll
+    // interactions do not.
     //
     // The pill uses `p.panel` as its background and `p.border` as an explicit border, keeping the
     // shape legible against the `shell_high` header unlike the old borderless Panel variant.
@@ -431,16 +452,26 @@ fn core_selector(
             });
         })
         .trigger(
-            MoonSelectorPill::new("header-core-pill")
-                .height(SEL_H)
-                .radius(SEL_H / 2.0)
-                .leading_dot(dot_color)
-                .segment(
-                    MoonSelectorSegment::new(active_name)
-                        .color(p.text)
-                        .weight(500.0),
-                )
-                .render(),
+            // MoonSelectorPill::bounds is absolute. This explicit in-flow box therefore owns the
+            // exact geometry MoonPopover measures and keeps BottomStart anchored to its left edge.
+            div()
+                .relative()
+                .flex_none()
+                .w(px(trigger_w))
+                .h(px(trigger_h))
+                .child(
+                    MoonSelectorPill::new("header-core-pill")
+                        .bounds(MoonRect::new(0.0, 0.0, trigger_w, trigger_h))
+                        .height(SEL_H)
+                        .radius(SEL_H / 2.0)
+                        .leading_dot(dot_color)
+                        .segment(
+                            MoonSelectorSegment::new(active_name)
+                                .color(p.text)
+                                .weight(500.0),
+                        )
+                        .render(),
+                ),
         )
         .content(
             MoonPopupMenu::new("header-core-menu")
@@ -531,3 +562,6 @@ fn balance_label(
         )
     })
 }
+
+#[cfg(test)]
+mod tests;

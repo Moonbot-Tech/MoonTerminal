@@ -381,6 +381,83 @@ pub fn menu_fit_width<'a>(cx: &App, labels: impl IntoIterator<Item = &'a str>, m
         .clamp(min_w, font_w(cx, MENU_MAX_W).max(min_w))
 }
 
+const CORE_MENU_LABEL_W: f32 = 256.0;
+const COMPACT_CHECKED_MENU_SCALED_CHROME_W: f32 = 6.0 * 2.0 + 5.0 * 2.0 + 4.0 * 2.0;
+const COMPACT_CHECKED_MENU_FIXED_CHROME_W: f32 = 12.0 + 2.0;
+
+/// Return the fixed width shared by core-selection menus.
+///
+/// The text column has the same scale as the compact menu's 9.5px monospaced font. Its surrounding
+/// padding and gaps follow the independent UI scale, so neither setting can consume the label
+/// budget. At default scales the text column plus chrome reconstructs the 300px design width.
+/// A caller-specific minimum may enlarge the menu but never makes the shared baseline narrower.
+///
+/// Args:
+///     cx: Application context used to apply the active font and UI scales.
+///     min_w: Unscaled caller-specific minimum width.
+///
+/// Returns:
+///     The fixed core-menu width in rendered pixels.
+pub fn core_menu_width(cx: &App, min_w: f32) -> f32 {
+    let compact_text_scale = font_value(cx, 9.5) / 9.5;
+    core_menu_width_for_scales(compact_text_scale, ui_value(cx, 1.0), font_w(cx, min_w))
+}
+
+/// Calculate core-menu width from already resolved text, UI, and minimum scales.
+///
+/// Args:
+///     compact_text_scale: Rendered compact-menu font size divided by its 9.5px base.
+///     ui_scale: Resolved UI scale after MoonUI's lower-bound handling.
+///     min_rendered_w: Caller-specific minimum after its own scale has been applied.
+///
+/// Returns:
+///     The rendered menu width whose text and chrome budgets scale independently.
+pub(crate) fn core_menu_width_for_scales(
+    compact_text_scale: f32,
+    ui_scale: f32,
+    min_rendered_w: f32,
+) -> f32 {
+    (CORE_MENU_LABEL_W * compact_text_scale + compact_checked_menu_chrome_width_for_scale(ui_scale))
+        .max(min_rendered_w)
+}
+
+/// Return the non-text width of a compact checked `MoonPopupMenu` row.
+///
+/// Args:
+///     cx: Application context used to apply the active UI scale.
+///
+/// Returns:
+///     Menu and row padding, two flex gaps, the check slot, and the two menu borders.
+fn compact_checked_menu_chrome_width(cx: &App) -> f32 {
+    compact_checked_menu_chrome_width_for_scale(ui_value(cx, 1.0))
+}
+
+/// Calculate compact checked-menu chrome width from an already resolved UI scale.
+///
+/// Args:
+///     ui_scale: Resolved UI scale after MoonUI's lower-bound handling.
+///
+/// Returns:
+///     Scaled menu and row spacing plus the fixed check slot and menu borders.
+fn compact_checked_menu_chrome_width_for_scale(ui_scale: f32) -> f32 {
+    COMPACT_CHECKED_MENU_SCALED_CHROME_W * ui_scale + COMPACT_CHECKED_MENU_FIXED_CHROME_W
+}
+
+/// Return the text budget inside a compact checked `MoonPopupMenu` row.
+///
+/// This mirrors the same compact-row chrome used by [`menu_fit_width`]: menu and row padding plus
+/// two item gaps follow UI scale, while the 12px check slot and two 1px borders remain unscaled.
+///
+/// Args:
+///     cx: Application context used to apply the active UI scale.
+///     menu_w: Rendered outer menu width.
+///
+/// Returns:
+///     Non-negative rendered width available to the row label.
+pub fn menu_item_label_width(cx: &App, menu_w: f32) -> f32 {
+    (menu_w - compact_checked_menu_chrome_width(cx)).max(0.0)
+}
+
 /// Outer `MoonPopover::width` that hosts content of intrinsic width `content_w`.
 ///
 /// MoonUI renders `.w(px(width)).p(px(tokens.ui(6.0))).border(px(1.0))`. GPUI treats that

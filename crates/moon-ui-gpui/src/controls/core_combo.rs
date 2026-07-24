@@ -2,9 +2,9 @@
 //! Analytics views.
 //!
 //! The trigger has fixed compact geometry so an open menu stays anchored while selections change.
-//! The menu is divided into exchange sections and grows for its longest core or section label up to
-//! the shared upper bound. `CoreId` aliases `u64`, so the builder uses `u64` for every caller. Each
-//! caller supplies its localized labels and defines the behavior of its own `toggle_core` callback.
+//! The exchange-grouped menu has one stable width, and anomalously long labels ellipsize inside it.
+//! `CoreId` aliases `u64`, so the builder uses `u64` for every caller. Each caller supplies its
+//! localized labels and defines the behavior of its own `toggle_core` callback.
 
 use std::collections::{HashMap, HashSet};
 
@@ -50,6 +50,37 @@ pub(crate) fn core_menu_sections<'a>(
         )
     })
     .collect()
+}
+
+/// Fit a menu label to an explicit width with a caller-supplied measurement function.
+///
+/// Keeping this pure separates the boundary behavior from GPUI font lookup so the production
+/// renderer and deterministic regression test exercise the same truncation decision.
+///
+/// Args:
+///     label: Full label from server configuration or exchange discovery.
+///     max_w: Maximum rendered width available to the label.
+///     measure: Function returning rendered width for arbitrary label fragments.
+///
+/// Returns:
+///     The original label when it fits, otherwise a prefix ending in an ellipsis.
+fn fit_core_menu_label(label: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
+    design::fit_text(label, max_w, measure).0
+}
+
+/// Fit a core-menu label using the compact MoonUI menu's actual font and chrome metrics.
+///
+/// Args:
+///     cx: Application context used for text measurement.
+///     label: Full label from server configuration or exchange discovery.
+///     menu_w: Rendered fixed menu width.
+///
+/// Returns:
+///     A left-start label that fits the checked-item text column.
+pub(crate) fn core_menu_label(cx: &App, label: &str, menu_w: f32) -> String {
+    fit_core_menu_label(label, design::menu_item_label_width(cx, menu_w), |text| {
+        design::ui_text_width(cx, text, 9.5, 600.0, true)
+    })
 }
 
 /// Toggle the All row against the membership of the currently available cores.
@@ -131,9 +162,9 @@ fn selection_summary(
 ///
 /// The trigger shows `all_label` for an empty selection or one containing every available core.
 /// Every partial selection shows `cores_n(N)` for the available selected cores, including one core.
-/// Fixed trigger geometry keeps the open menu anchored, while the menu grows for its longest core
-/// or exchange label up to the shared cap. The All item calls `on_toggle(None, app)`, while a core
-/// item calls `on_toggle(Some(id), app)`.
+/// Fixed trigger and menu geometry keep the open menu anchored while selections and label lengths
+/// change. Labels beyond the shared text budget end in an ellipsis. The All item calls
+/// `on_toggle(None, app)`, while a core item calls `on_toggle(Some(id), app)`.
 ///
 /// Args:
 ///     cx: Application context used for text and layout measurements.
@@ -143,7 +174,7 @@ fn selection_summary(
 ///     selected: Currently selected core ids.
 ///     all_label: Localized label for an empty or complete selection and the All item.
 ///     cores_n: Localized formatter for every partial selection count.
-///     min_menu_w: Lower bound for menu width, not a fixed width.
+///     min_menu_w: Caller-specific lower bound for the shared fixed menu width.
 ///     on_toggle: Callback receiving `None` for All or `Some(id)` for one core.
 ///
 /// Returns:
@@ -167,17 +198,7 @@ where
     let sections = core_menu_sections(cores, exchange_names);
     let (trigger_label, trigger_w) =
         design::fixed_dropdown_trigger(cx, &cur, design::CORES_TRIGGER_MIN_W);
-    let menu_w = design::menu_fit_width(
-        cx,
-        std::iter::once(all_label.as_str())
-            .chain(
-                sections
-                    .iter()
-                    .map(|(exchange, _)| exchange.unwrap_or(unknown_exchange.as_str())),
-            )
-            .chain(cores.iter().map(|(_, name)| name.as_str())),
-        design::font_w(cx, min_menu_w),
-    );
+    let menu_w = design::core_menu_width(cx, min_menu_w);
     let toggle_all = on_toggle.clone();
     let mut menu = MoonDropdown::new(id)
         .label(trigger_label)
@@ -190,7 +211,7 @@ where
         .close_on_select(false)
         .item(
             // The All item delegates clearing or selecting every core to the caller.
-            MoonMenuItem::with_key(format!("{id}-all"), all_label)
+            MoonMenuItem::with_key(format!("{id}-all"), core_menu_label(cx, &all_label, menu_w))
                 .checked(all_on)
                 .selected(all_on)
                 .on_click(move |_, _, app| toggle_all(None, app)),
@@ -199,17 +220,19 @@ where
         menu = menu.item(MoonMenuItem::separator());
     }
     for (exchange, members) in sections {
-        menu = menu.item(MoonMenuItem::label(
-            exchange.unwrap_or(unknown_exchange.as_str()),
-        ));
+        let exchange = exchange.unwrap_or(unknown_exchange.as_str());
+        menu = menu.item(MoonMenuItem::label(core_menu_label(cx, exchange, menu_w)));
         for (core, name) in members {
             let on = selected.contains(&core);
             let on_toggle = on_toggle.clone();
             menu = menu.item(
-                MoonMenuItem::with_key(format!("{id}-core-{core}"), name)
-                    .checked(on)
-                    .selected(on)
-                    .on_click(move |_, _, app| on_toggle(Some(core), app)),
+                MoonMenuItem::with_key(
+                    format!("{id}-core-{core}"),
+                    core_menu_label(cx, name, menu_w),
+                )
+                .checked(on)
+                .selected(on)
+                .on_click(move |_, _, app| on_toggle(Some(core), app)),
             );
         }
     }
