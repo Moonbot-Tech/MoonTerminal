@@ -76,12 +76,14 @@ pub fn repair_ui_font_delta(value: f32) -> f32 {
     }
 }
 
+/// Return MoonProto's production-baseline retained-history depth percentage.
 pub fn default_chart_memory_percent() -> u16 {
-    100
+    moonproto::state::MarketHistorySizing::DEFAULT_BUDGET_PERCENT
 }
 
+/// Clamp a persisted retained-history depth to MoonProto's supported startup range.
 pub fn clamp_chart_memory_percent(value: u16) -> u16 {
-    value.clamp(100, 800)
+    moonproto::state::MarketHistorySizing::clamp_budget_percent(value)
 }
 
 pub fn default_chart_stack_height() -> u16 {
@@ -208,8 +210,12 @@ pub struct SettingsFile {
     /// font_delta so the component theme has one source of truth.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
-    /// Retained chart-history budget multiplier relative to the RAM-based baseline.
-    /// 100 = automatic baseline, 800 = 8x, as in Delphi UseMemForCharts.
+    /// Startup retained-history depth percentage passed to MoonProto.
+    ///
+    /// The legacy field name is retained for on-disk compatibility. Dense market/category
+    /// histories allocate lazily; 75 shortens heavy histories, 100 is the production baseline,
+    /// and 800 is the maximum. A saved value applies when a feed client is created or respawned,
+    /// not by resizing an existing client in place.
     #[serde(default = "default_chart_memory_percent")]
     pub chart_memory_percent: u16,
     /// Legacy (schema < v13): hotkeys lived in this section and now use a separate portable
@@ -230,3 +236,6 @@ pub struct SettingsFile {
     #[serde(default)]
     pub servers: Vec<ServerMeta>,
 }
+
+#[cfg(test)]
+mod tests;

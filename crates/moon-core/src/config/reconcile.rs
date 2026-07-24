@@ -46,7 +46,10 @@ pub struct Merged {
     pub ui_theme_mode: UiThemeMode,
     /// Overall UI geometry scale.
     pub ui_scale: f32,
-    /// Retained chart-history budget multiplier.
+    /// Startup retained-history depth percentage applied when MoonProto feed clients are created.
+    ///
+    /// The legacy field name is retained for persisted-config compatibility; it no longer denotes
+    /// a process-wide RAM budget, and an existing client is not resized in place.
     pub chart_memory_percent: u16,
     /// How core lists are ordered app-wide.
     pub core_sort: CoreSortMode,

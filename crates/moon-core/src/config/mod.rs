@@ -133,7 +133,10 @@ pub struct AppConfig {
     pub ui_theme_mode: UiThemeMode,
     /// Overall UI geometry scale. Defaults to 1.0.
     pub ui_scale: f32,
-    /// RAM-budget multiplier for retained market history. 100 = automatic baseline, 800 = 8x.
+    /// Startup retained-history depth percentage passed to MoonProto.
+    ///
+    /// Dense market/category histories allocate lazily. The legacy field name remains for config
+    /// compatibility; the value is applied when a feed client is created or explicitly respawned.
     pub chart_memory_percent: u16,
     /// Order of every core list in the application (`settings.toml`). Defaults to `Name`.
     pub core_sort: CoreSortMode,
