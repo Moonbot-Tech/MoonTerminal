@@ -19,6 +19,7 @@ use crate::feed::{
 pub(super) fn news_snapshot_from_proto(news: &moonproto::state::NewsState) -> NewsSnapshot {
     NewsSnapshot {
         items: crate::feed::news::reduce(news.items()),
+        catalog: crate::feed::news::parse_catalog(news.tags_json()),
     }
 }
 

@@ -13,6 +13,27 @@
 
 use serde_json::Value;
 
+/// One tag on a news item, from `tags.entity[*]`. The news service delivers each entity as
+/// `{"text":"#ElonMusk","color":"#1E90FF"}` — a display label and a suggested hex colour. `text` is
+/// stored WITHOUT its leading `#` (the UI adds it), and `color` is the service's own hex, used as the
+/// default tint unless the user overrides it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NewsTag {
+    /// Tag label without a leading `#`, e.g. `ElonMusk`. Never empty.
+    pub text: String,
+    /// Service-suggested hex colour (`#RRGGBB`), or `None`. The catalog carries no colour; only the
+    /// per-item entity does.
+    pub color: Option<String>,
+}
+
+impl NewsTag {
+    /// Case-folded identity used to dedup and to key filter/override state, so `#ElonMusk` (item) and
+    /// `#elonmusk` (catalog) are the same tag.
+    pub fn key(&self) -> String {
+        self.text.to_lowercase()
+    }
+}
+
 /// One logical news item: the row shown to the user, built from one or more wire frames sharing a
 /// `meta.id`. Moonproto-free.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -40,22 +61,22 @@ pub struct NewsItem {
     pub ru: String,
     /// Spanish body (`news.es`), possibly empty until a translation frame arrives.
     pub es: String,
-    /// Tags attached to this item (`tags.entity[*].text`).
-    pub tags: Vec<String>,
+    /// Tags attached to this item (`tags.entity[*]`), each with the service's suggested colour.
+    pub tags: Vec<NewsTag>,
     /// Whether this row is still an original (`meta.isOriginal`); once a translation frame merges in,
     /// it becomes `false` and later original frames for the same id are ignored.
     pub is_original: bool,
 }
 
-/// A moonproto-free per-core news snapshot: the logical news items.
-///
-/// The service-wide tags CATALOG (`tags_json`, distinct from each item's own `tags`) is intentionally
-/// not carried yet — it only feeds the tag filter/color surface, which is a later phase, so projecting
-/// it now would be dead state that also churns `news_rev` on a tags-only relay.
+/// A moonproto-free per-core news snapshot: the logical news items plus the service tag catalog.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct NewsSnapshot {
     /// Logical news items in first-seen (chronological) order; the UI sorts for display.
     pub items: Vec<NewsItem>,
+    /// The service-wide tag vocabulary (`tags_json`), tag labels without a leading `#`, deduped in
+    /// catalog order. Distinct from each item's own `tags`: entity tags are sparse (only some news
+    /// carry them), so the catalog is what fills the Tags filter with every known topic.
+    pub catalog: Vec<String>,
 }
 
 impl NewsItem {
@@ -130,11 +151,30 @@ pub fn parse_frame(json: &str) -> Option<NewsItem> {
         .and_then(|t| t.get("entity"))
         .and_then(Value::as_array)
         .map(|arr| {
-            arr.iter()
-                .filter_map(|e| e.get("text").and_then(Value::as_str))
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect()
+            // Dedup by case-folded key so a frame that repeats an entity does not double the chip
+            // and rail; keep the first occurrence (and its colour).
+            let mut out: Vec<NewsTag> = Vec::new();
+            for e in arr {
+                let Some(text) = e.get("text").and_then(Value::as_str).map(strip_hash) else {
+                    continue;
+                };
+                if text.is_empty() {
+                    continue;
+                }
+                let key = text.to_lowercase();
+                if out.iter().any(|t| t.key() == key) {
+                    continue;
+                }
+                out.push(NewsTag {
+                    color: e
+                        .get("color")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string),
+                    text,
+                });
+            }
+            out
         })
         .unwrap_or_default();
     Some(NewsItem {
@@ -164,6 +204,38 @@ pub fn parse_frame(json: &str) -> Option<NewsItem> {
             .and_then(Value::as_bool)
             .unwrap_or(true),
     })
+}
+
+/// Parse the service tag catalog JSON (`{"count":N,"tags":[{"name":"#listing",...},...]}`) into the
+/// tag labels, each without its leading `#`, deduped case-insensitively in catalog order. Returns an
+/// empty vec for `None`/invalid input. The catalog is the full vocabulary that fills the Tags filter.
+pub fn parse_catalog(json: Option<&str>) -> Vec<String> {
+    let Some(json) = json else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<Value>(json) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    if let Some(arr) = v.get("tags").and_then(Value::as_array) {
+        for e in arr {
+            let Some(name) = e.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let name = strip_hash(name);
+            if !name.is_empty() && !out.iter().any(|x| x.eq_ignore_ascii_case(&name)) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// Drop leading `#`(es) and surrounding whitespace from a tag label. The service delivers tags as
+/// `#ElonMusk` / `#listing`; the terminal stores the bare label and re-adds the `#` for display. The
+/// re-trim after stripping keeps a degenerate `"# Elon"` from carrying a leading space into its key.
+fn strip_hash(s: &str) -> String {
+    s.trim().trim_start_matches('#').trim().to_string()
 }
 
 /// Read `meta.id`, which the service may encode as a string or a number, into a non-empty `String`.

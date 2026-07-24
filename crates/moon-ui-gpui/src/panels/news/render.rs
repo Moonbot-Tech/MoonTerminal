@@ -14,9 +14,8 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{NewsView, key_color};
+use super::{NewsView, parse_hex};
 use crate::design;
-use moon_core::config::NewsTagColors;
 use moon_core::feed::NewsItem;
 
 /// Build a soft tinted badge (source / ticker / coloured tag) using the house `MoonBadge`, sized to
@@ -60,11 +59,11 @@ fn pending(item: &NewsItem, translate: bool) -> bool {
 }
 
 /// Build one news card for `item`. `translate` selects translated vs original body; `expanded`
-/// controls the latency chain (toggled by the chevron via `cx`); tags colour via `colors`.
+/// controls the latency chain (toggled by the chevron via `cx`); tags colour from the service's own
+/// per-tag hex (`NewsTag::color`).
 pub(super) fn news_card(
     item: &NewsItem,
     translate: bool,
-    colors: &NewsTagColors,
     now_ms: i64,
     expanded: bool,
     p: MoonPalette,
@@ -76,7 +75,7 @@ pub(super) fn news_card(
     let rail_colors: Vec<u32> = item
         .tags
         .iter()
-        .filter_map(|t| colors.color(t).and_then(|k| key_color(k, p)))
+        .filter_map(|t| t.color.as_deref().and_then(parse_hex))
         .collect();
     let rail = (!rail_colors.is_empty()).then(|| {
         div()
@@ -144,13 +143,14 @@ pub(super) fn news_card(
             .flex_wrap()
             .gap(design::ui_px(cx, 6.0))
             .children(item.tags.iter().map(|tag| {
-                match colors.color(tag).and_then(|k| key_color(k, p)) {
-                    Some(c) => badge(tag.clone(), c).into_any_element(),
+                let label = format!("#{}", tag.text);
+                match tag.color.as_deref().and_then(parse_hex) {
+                    Some(c) => badge(label, c).into_any_element(),
                     None => div()
                         .flex_none()
                         .text_size(caption)
                         .text_color(rgb(p.text_muted))
-                        .child(format!("#{tag}"))
+                        .child(label)
                         .into_any_element(),
                 }
             }))

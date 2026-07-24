@@ -38,18 +38,10 @@ news.tags:
   ru: "Теги"
   en: "Tags"
   es: "Etiquetas"
-news.tags.show_all:
-  ru: "Показать всё"
-  en: "Show all"
-  es: "Mostrar todo"
-news.tags.hide_all:
-  ru: "Снять всё"
-  en: "Hide all"
-  es: "Ocultar todo"
-news.tags.empty:
-  ru: "Тегов пока нет"
-  en: "No tags yet"
-  es: "Sin etiquetas"
+news.tags.all:
+  ru: "Все теги"
+  en: "All tags"
+  es: "Todas las etiquetas"
 news.lat.terminal:
   ru: "принято терминалом"
   en: "received by terminal"
@@ -86,18 +78,14 @@ news.sub.none:
   ru: "Нет подписки на новости"
   en: "No news subscription"
   es: "Sin suscripción de noticias"
-news.coin:
-  ru: "Монета"
-  en: "Coin"
-  es: "Moneda"
 news.coin.all:
-  ru: "Все"
-  en: "All"
-  es: "Todas"
-news.coin.empty:
-  ru: "Монет пока нет"
-  en: "No coins yet"
-  es: "Sin monedas"
+  ru: "Все монеты"
+  en: "All coins"
+  es: "Todas las monedas"
+news.coin.n:
+  ru: "%{n} монет"
+  en: "%{n} coins"
+  es: "%{n} monedas"
 news.search:
   ru: "Поиск по новостям…"
   en: "Search news…"
