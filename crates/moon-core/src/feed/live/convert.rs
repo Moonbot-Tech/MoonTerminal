@@ -9,8 +9,8 @@ use moonproto::{Event, MoonClient, OrderWorkerStatus};
 use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
     ClientSettings, ClientSettingsEdit, CoreSysStatus, EngineActionKind, EngineActionResult,
-    LevManageEdit, LevManageState, LicenseState, NewsSnapshot, OrderRow, OrderTrace, OrderTracePoint,
-    RuntimeState, WalletKind,
+    LevManageEdit, LevManageState, LicenseState, NewsSnapshot, OrderRow, OrderTrace,
+    OrderTracePoint, RuntimeState, WalletKind,
 };
 
 /// Project moonproto's retained `NewsState` into a moonproto-free [`NewsSnapshot`]: reduce its flat

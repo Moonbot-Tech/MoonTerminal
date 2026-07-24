@@ -12,7 +12,7 @@
 //! since moonproto has no terminal→core translate command), and a text search. The Tags popover is
 //! filled from the service tag CATALOG (every known topic), not just the tags present on the loaded
 //! items, because entity tags are sparse. Tag colours are assigned LOCALLY and persisted in
-//! `news_tags.json` (`NewsTagColors`); the wire colour is ignored because different news cores carry
+//! `news_tags.json` (`NewsTagSettings`); the wire colour is ignored because different news cores carry
 //! different colour settings. This module owns data, filters, and lifecycle; [`render`] owns cards.
 
 mod render;
@@ -25,8 +25,8 @@ use gpui::*;
 use moon_ui::{
     DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
     MoonContextMenuWindowExt as _, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
-    MoonMenuItem, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonWindowExt as _,
-    Panel, PanelEvent, PanelState, h_flex, v_flex,
+    MoonMenuItem, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonTooltipView,
+    MoonWindowExt as _, Panel, PanelEvent, PanelState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -34,6 +34,7 @@ use crate::Backend;
 use crate::controls::coin_search;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
+use moon_core::config::NewsTagSettings;
 use moon_core::feed::NewsItem;
 use moon_core::session::CoreId;
 
@@ -73,6 +74,18 @@ fn item_matches_query(item: &NewsItem, q: &str) -> bool {
         || item.tags.iter().any(|t| t.to_lowercase().contains(q))
 }
 
+/// Tag visibility against the persisted filter: a tagged card shows unless EVERY one of its tags is
+/// hidden; a tagless card shows unless the user hid tagless news.
+fn tag_visible(item: &NewsItem, settings: &NewsTagSettings) -> bool {
+    if item.tags.is_empty() {
+        !settings.hide_untagged()
+    } else {
+        item.tags
+            .iter()
+            .any(|t| !settings.is_hidden(&t.to_lowercase()))
+    }
+}
+
 /// Group-scoped News panel for a dock tab or detached window.
 pub struct NewsView {
     backend: Entity<Backend>,
@@ -83,9 +96,6 @@ pub struct NewsView {
     coin_filter: HashSet<String>,
     /// Free-text search over body/tickers/tags.
     query: Entity<MoonInputState>,
-    /// Tags the user unchecked in the Tags popover, by case-folded key (`tag.to_lowercase()`). A card
-    /// is hidden only if it has tags and every one of them is hidden, so tagless news always shows.
-    hidden_tags: HashSet<String>,
     /// Card ids whose latency chain is currently expanded.
     expanded: HashSet<String>,
     /// The merged service tag catalog across the scoped cores (labels without a leading `#`) — the
@@ -134,7 +144,6 @@ impl NewsView {
             translate: true,
             coin_filter: HashSet::new(),
             query,
-            hidden_tags: HashSet::new(),
             expanded: HashSet::new(),
             catalog: Vec::new(),
             tags_open: false,
@@ -165,7 +174,8 @@ impl NewsView {
                 .wrapping_mul(31)
                 .wrapping_add(rev)
         });
-        base.wrapping_mul(31).wrapping_add(b.news_tag_colors.rev())
+        base.wrapping_mul(31)
+            .wrapping_add(b.news_tag_settings.rev())
     }
 
     /// Merge the scoped cores' logical news by `meta.id` (preferring a translated copy), newest first.
@@ -229,11 +239,6 @@ impl NewsView {
         self.cache_sig = Some(self.news_sig(b));
         self.cached = Rc::new(self.collect(b));
         self.catalog = self.collect_catalog(b);
-        // Drop hidden-tag keys that are no longer selectable (an item-only tag that left the ring and
-        // is absent from the catalog), so the master toggle's "all shown" state cannot be stuck by a
-        // key with no visible row. Catalog tags persist, so a real topic is never forgotten.
-        let keys: HashSet<String> = self.tag_rows().into_iter().map(|(k, _)| k).collect();
-        self.hidden_tags.retain(|k| keys.contains(k));
     }
 
     fn set_translate(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -253,20 +258,17 @@ impl NewsView {
 
     // ---- filters ------------------------------------------------------------------------------
 
-    /// Whether a card passes ALL active filters: coin selection, tag visibility, and the search
-    /// query (already lowercased).
-    fn passes(&self, item: &NewsItem, q: &str) -> bool {
-        self.coin_ok(item) && self.tag_visible(item) && (q.is_empty() || item_matches_query(item, q))
+    /// Whether a card passes ALL active filters: coin selection, tag visibility (from the persisted
+    /// settings), and the search query (already lowercased).
+    fn passes(&self, item: &NewsItem, q: &str, settings: &NewsTagSettings) -> bool {
+        self.coin_ok(item)
+            && tag_visible(item, settings)
+            && (q.is_empty() || item_matches_query(item, q))
     }
 
     /// Coin filter: empty selection shows all; otherwise the item must carry a selected coin.
     fn coin_ok(&self, item: &NewsItem) -> bool {
         self.coin_filter.is_empty() || item.coins.iter().any(|c| self.coin_filter.contains(c))
-    }
-
-    /// Tag visibility: tagless cards always show; a tagged card shows unless every tag is hidden.
-    fn tag_visible(&self, item: &NewsItem) -> bool {
-        item.tags.is_empty() || item.tags.iter().any(|t| !self.hidden_tags.contains(&t.to_lowercase()))
     }
 
     /// Unique coins across the merged items, sorted — the Coin popover's row set.
@@ -325,25 +327,38 @@ impl NewsView {
         rows
     }
 
-    fn toggle_tag_hidden(&mut self, tag: &str, hidden: bool, cx: &mut Context<Self>) {
-        let changed = if hidden {
-            self.hidden_tags.insert(tag.to_string())
-        } else {
-            self.hidden_tags.remove(tag)
-        };
-        if changed {
-            cx.notify();
-        }
+    /// Hide or show a single tag in the persisted settings, saving + notifying on a real change.
+    fn toggle_tag_hidden(&mut self, key: &str, hidden: bool, cx: &mut Context<Self>) {
+        self.backend.update(cx, |b, bcx| {
+            if b.news_tag_settings.set_hidden(key, hidden) {
+                b.news_tag_settings.save();
+                bcx.notify();
+            }
+        });
     }
 
-    /// Show all tags (clear the filter) or hide all — the Tags dropdown's master toggle.
+    /// Master toggle: show all (clear every hidden tag AND show tagless) or hide all (hide every
+    /// listed tag AND tagless). Persisted.
     fn set_all_tags_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
-        if hidden {
-            self.hidden_tags = self.tag_rows().into_iter().map(|(k, _)| k).collect();
-        } else {
-            self.hidden_tags.clear();
-        }
-        cx.notify();
+        let keys: Vec<String> = self.tag_rows().into_iter().map(|(k, _)| k).collect();
+        self.backend.update(cx, |b, bcx| {
+            let a = b.news_tag_settings.set_all_hidden(keys, hidden);
+            let c = b.news_tag_settings.set_hide_untagged(hidden);
+            if a || c {
+                b.news_tag_settings.save();
+                bcx.notify();
+            }
+        });
+    }
+
+    /// Hide or show tagless news in the persisted settings.
+    fn set_hide_untagged(&mut self, hide: bool, cx: &mut Context<Self>) {
+        self.backend.update(cx, |b, bcx| {
+            if b.news_tag_settings.set_hide_untagged(hide) {
+                b.news_tag_settings.save();
+                bcx.notify();
+            }
+        });
     }
 
     // ---- dropdowns (cores-style checkbox multi-select) ----------------------------------------
@@ -404,22 +419,24 @@ impl NewsView {
     }
 
     /// The Tags filter: a custom popover (a `MoonDropdown`'s menu items hold only a checkbox + label,
-    /// so the colour picker cannot live there). Trigger is a cores-style pill; the body has a
-    /// show-all/hide-all header and one row per tag (catalog + loaded items) with a visibility
-    /// checkbox and a LOCAL colour picker.
+    /// so the colour picker cannot live there). The trigger is the SAME `MoonButton` the coin dropdown
+    /// emits, so the pills match; the body has a show-all/hide-all header, a "no tags" toggle, and one
+    /// row per tag (catalog + loaded items) with a visibility checkbox and a LOCAL colour picker.
     fn tags_popover(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
         let entity = cx.entity();
-        let active = !self.hidden_tags.is_empty();
-        let trigger = self.tags_trigger(active, p, cx);
-        let content = self.tags_content(p, cx);
+        let settings = self.backend.read(cx).news_tag_settings.clone();
+        let active = settings.any_filter();
+        let label = self.tags_label(&settings);
+        let trigger = self.tags_trigger(label, active, cx);
+        let content = self.tags_content(cx);
         MoonPopover::new("news-tags-popover")
             .placement(MoonPopoverPlacement::BottomStart)
             .width(260.0)
             .close_on_content_click(false)
-            // Dismiss only via the ✕ button or the trigger toggle; an outside-click close would fight
-            // the swatch/checkbox interactions (which keep the popover open).
-            .overlay_closable(false)
+            // Close on an outside click, like the Main core-settings popover. Swatch/checkbox clicks
+            // are INSIDE the content, and `close_on_content_click(false)` keeps them from dismissing
+            // it, so the picker still works.
+            .overlay_closable(true)
             .open(self.tags_open)
             .on_open_change(move |open, _w, app| {
                 entity.update(app, |t, cx| {
@@ -431,31 +448,47 @@ impl NewsView {
             .content(content)
     }
 
-    /// A cores-pill-style trigger for the Tags popover (label + caret), brightened when a filter is
-    /// engaged. The returned element is fully owned (`use<>`), so it does not hold `cx`'s borrow and
-    /// the caller can still build the content mutably.
-    fn tags_trigger(&self, active: bool, p: MoonPalette, cx: &App) -> impl IntoElement + use<> {
-        h_flex()
-            .flex_none()
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .px(design::ui_px(cx, 10.0))
-            .py(design::ui_px(cx, 4.0))
-            .rounded(design::r_button(cx))
-            .bg(rgb(p.surface))
-            .border_1()
-            .border_color(rgb(p.border))
-            .cursor_pointer()
-            .text_size(design::t_body(cx))
-            .text_color(rgb(if active { p.text } else { p.text_dim }))
-            .child(t!("news.tags").to_string())
-            .child(div().text_size(design::t_caption(cx)).child("▾"))
+    /// The Tags trigger label: `"Теги · все"` when nothing is filtered, else `"Теги N/M"` where M is
+    /// every tag PLUS the "no tags" bucket and N is how many of them are shown.
+    fn tags_label(&self, settings: &NewsTagSettings) -> String {
+        let rows = self.tag_rows();
+        let total = rows.len() + 1; // +1 for the "no tags" bucket
+        let shown = rows.iter().filter(|(k, _)| !settings.is_hidden(k)).count()
+            + usize::from(!settings.hide_untagged());
+        if shown >= total {
+            format!("{} · {}", t!("news.tags"), t!("news.tags.all_count"))
+        } else {
+            format!("{} {shown}/{total}", t!("news.tags"))
+        }
     }
 
-    /// Popover body: show-all/hide-all header + close, then one row per tag.
-    fn tags_content(&self, p: MoonPalette, cx: &mut Context<Self>) -> AnyElement {
+    /// The Tags popover trigger — the same `MoonButton` (Soft/Action) the coin dropdown emits, sized
+    /// with the shared `dropdown_content_widths` so it gets the same min width + padding + caret as the
+    /// coin pill. The dynamic `label` (count) fills that width, so a short "Теги" no longer over-pads.
+    /// No `on_click`: the popover wrapper owns open/close; `selected` brightens it while filtering.
+    fn tags_trigger(&self, label: String, active: bool, cx: &App) -> impl IntoElement + use<> {
+        let (label, trigger_w, _) = design::dropdown_content_widths(
+            cx,
+            &label,
+            std::iter::once(label.as_str()),
+            design::CORES_TRIGGER_MIN_W,
+            80.0,
+        );
+        MoonButton::new("news-tags-trigger")
+            .label(label)
+            .variant(MoonButtonVariant::Soft)
+            .size(MoonButtonSize::Action)
+            .selected(active)
+            .width(trigger_w)
+            .render()
+    }
+
+    /// Popover body: show-all/hide-all header, a "no tags" visibility toggle, then one row per tag.
+    fn tags_content(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = MoonPalette::active(cx);
         let rows = self.tag_rows();
         let empty = rows.is_empty();
+        let settings = self.backend.read(cx).news_tag_settings.clone();
         let head = h_flex()
             .w_full()
             .items_center()
@@ -488,12 +521,14 @@ impl NewsView {
                     }))
                     .render(),
             );
-        let colors = self.backend.read(cx).news_tag_colors.clone();
+        // "No tags" visibility toggle — untagged news carry nothing to colour, so it has no swatches.
+        let untagged = self.untagged_row(!settings.hide_untagged(), p, cx);
         let tag_rows: Vec<AnyElement> = rows
             .into_iter()
             .map(|(key, label)| {
-                let current = colors.color(&key).map(str::to_string);
-                self.tag_row(key, label, current, p, cx)
+                let hidden = settings.is_hidden(&key);
+                let current = settings.color(&key).map(str::to_string);
+                self.tag_row(key, label, hidden, current, p, cx)
             })
             .collect();
         v_flex()
@@ -507,6 +542,7 @@ impl NewsView {
             .rounded(design::r_button(cx))
             .font_family(design::mono())
             .child(head)
+            .child(untagged)
             .when(empty, |this| {
                 this.child(
                     div()
@@ -527,17 +563,44 @@ impl NewsView {
             .into_any_element()
     }
 
+    /// The "no tags" row: a visibility checkbox for news that carry no tags at all (no colour picker).
+    /// `shown` is the checkbox state (checked = show tagless news).
+    fn untagged_row(&self, shown: bool, p: MoonPalette, cx: &mut Context<Self>) -> AnyElement {
+        let checkbox = MoonCheckbox::new("news-untagged-vis")
+            .checked(shown)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(cx.listener(|this, checked: &bool, _w, cx| {
+                this.set_hide_untagged(!*checked, cx);
+            }));
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap(design::ui_px(cx, 8.0))
+            .py(design::ui_px(cx, 2.0))
+            .child(checkbox)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(p.text_muted))
+                    .child(t!("news.tags.untagged").to_string()),
+            )
+            .into_any_element()
+    }
+
     /// One tag row: visibility checkbox · `#label` · palette swatches (+ "none"). `key` is the
-    /// case-folded identity used for hide state and the colour map; `label` is the display form.
+    /// case-folded identity used for hide state and the colour map; `label` is the display form;
+    /// `hidden`/`current` are read from the persisted settings by the caller.
     fn tag_row(
         &self,
         key: String,
         label: String,
+        hidden: bool,
         current: Option<String>,
         p: MoonPalette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let hidden = self.hidden_tags.contains(&key);
         let cb_key = key.clone();
         let checkbox = MoonCheckbox::new(SharedString::from(format!("news-tagvis-{key}")))
             .checked(!hidden)
@@ -577,7 +640,13 @@ impl NewsView {
                 .bg(rgb(p.surface))
                 .cursor_pointer()
                 .border_color(rgb(if none_selected { p.text } else { p.border }))
-                .map(|d| if none_selected { d.border_2() } else { d.border_1() })
+                .map(|d| {
+                    if none_selected {
+                        d.border_2()
+                    } else {
+                        d.border_1()
+                    }
+                })
                 .flex()
                 .items_center()
                 .justify_center()
@@ -611,8 +680,8 @@ impl NewsView {
     /// Backend so every open News view repaints (each observe sees the colour rev change).
     fn set_tag_color(&mut self, key: &str, color: Option<&str>, cx: &mut Context<Self>) {
         self.backend.update(cx, |b, bcx| {
-            if b.news_tag_colors.set(key, color) {
-                b.news_tag_colors.save();
+            if b.news_tag_settings.set_color(key, color) {
+                b.news_tag_settings.save();
                 bcx.notify();
             }
         });
@@ -665,25 +734,24 @@ impl NewsView {
             }
             _ => {
                 let backend = self.backend.clone();
-                let items: Vec<MoonMenuItem> = rows
-                    .into_iter()
-                    .map(|(core, market, name)| {
-                        let label = match exchanges.get(&core) {
-                            Some(ex) if !ex.is_empty() => format!("{name} · {ex}"),
-                            _ => name,
-                        };
-                        let backend = backend.clone();
-                        MoonMenuItem::with_key(format!("news-coin-core-{core}"), label).on_click(
-                            move |_, window, app| {
-                                window.close_context_menu(app);
-                                backend.update(app, |b, bcx| {
-                                    b.open_on_main((core, market.clone()), false);
-                                    bcx.notify();
-                                });
-                            },
-                        )
-                    })
-                    .collect();
+                let items: Vec<MoonMenuItem> =
+                    rows.into_iter()
+                        .map(|(core, market, name)| {
+                            let label = match exchanges.get(&core) {
+                                Some(ex) if !ex.is_empty() => format!("{name} · {ex}"),
+                                _ => name,
+                            };
+                            let backend = backend.clone();
+                            MoonMenuItem::with_key(format!("news-coin-core-{core}"), label)
+                                .on_click(move |_, window, app| {
+                                    window.close_context_menu(app);
+                                    backend.update(app, |b, bcx| {
+                                        b.open_on_main((core, market.clone()), false);
+                                        bcx.notify();
+                                    });
+                                })
+                        })
+                        .collect();
                 window.open_moon_context_menu(cx, "news-coin-cores", pos, items, 240.0);
             }
         }
@@ -717,7 +785,11 @@ impl NewsView {
             Some(_) => (design::danger_color(p), t!("news.sub.expired").to_string()),
             None => (p.text_muted, t!("news.sub.none").to_string()),
         };
+        // The subscription is arranged in MoonBot (Menu → Moon News); the pill tooltips that and
+        // clicks through to the module page.
+        let tip = t!("news.sub.tooltip").to_string();
         let pill = div()
+            .id("news-sub-pill")
             .flex_none()
             .px(design::ui_px(cx, 8.0))
             .py(design::ui_px(cx, 1.0))
@@ -727,6 +799,14 @@ impl NewsView {
             .bg(design::moon_alpha(color, 0.10))
             .border_1()
             .border_color(design::moon_alpha(color, 0.22))
+            .cursor_pointer()
+            .tooltip(move |_w, cx| {
+                cx.new(|_| MoonTooltipView::new(tip.clone()).max_width(320.0))
+                    .into()
+            })
+            .on_click(|_, _w, app: &mut App| {
+                app.open_url("https://moonbot.pro/moonbot-pro/modules/moon-news")
+            })
             .child(text);
         h_flex()
             .w_full()
@@ -801,14 +881,14 @@ impl Render for NewsView {
         let p = MoonPalette::active(cx);
         let now = moon_chart::paint::now_unix_ms() as i64;
         let translate = self.translate;
-        let colors = self.backend.read(cx).news_tag_colors.clone();
+        let settings = self.backend.read(cx).news_tag_settings.clone();
         let expanded = self.expanded.clone();
         let q = self.query.read(cx).value().trim().to_lowercase();
         // Apply the coin / tag / search filters (small N, cheap to materialize).
         let visible: Vec<NewsItem> = self
             .cached
             .iter()
-            .filter(|it| self.passes(it, &q))
+            .filter(|it| self.passes(it, &q, &settings))
             .cloned()
             .collect();
 
@@ -870,7 +950,7 @@ impl Render for NewsView {
                 .overflow_y_scroll()
                 .children(visible.iter().map(|it| {
                     let exp = expanded.contains(&it.id);
-                    render::news_card(it, translate, &colors, now, exp, p, cx)
+                    render::news_card(it, translate, &settings, now, exp, p, cx)
                 }))
                 .into_any_element()
         };

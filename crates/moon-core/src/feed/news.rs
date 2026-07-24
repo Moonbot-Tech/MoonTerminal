@@ -41,7 +41,7 @@ pub struct NewsItem {
     /// Spanish body (`news.es`), possibly empty until a translation frame arrives.
     pub es: String,
     /// Tags attached to this item (`tags.entity[*].text`), without a leading `#`, deduped case-
-    /// insensitively. Colours are assigned locally (`NewsTagColors`), not taken from the wire.
+    /// insensitively. Colours are assigned locally (`NewsTagSettings`), not taken from the wire.
     pub tags: Vec<String>,
     /// Whether this row is still an original (`meta.isOriginal`); once a translation frame merges in,
     /// it becomes `false` and later original frames for the same id are ignored.

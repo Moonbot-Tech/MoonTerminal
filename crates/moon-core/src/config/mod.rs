@@ -41,7 +41,6 @@ mod toml_io;
 mod uid_counter;
 
 pub use badges::{BadgeEntry, BadgesConfig};
-pub use news_tags::NewsTagColors;
 pub use detect_view::{
     detect_slot_count, DetectChart, DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg,
     DetectViewFile, DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI,
@@ -52,6 +51,7 @@ pub use hotkeys::{
 };
 pub use lang::Language;
 pub use layout::{DetachedLayout, GeomRect, GroupLayout, WindowLayout};
+pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use schema::UiThemeMode;
 pub use secrets::Secret;

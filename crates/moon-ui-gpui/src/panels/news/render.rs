@@ -16,7 +16,7 @@ use rust_i18n::t;
 
 use super::{NewsView, key_color};
 use crate::design;
-use moon_core::config::NewsTagColors;
+use moon_core::config::NewsTagSettings;
 use moon_core::feed::NewsItem;
 
 /// Build a soft tinted badge (source / ticker / coloured tag) using the house `MoonBadge`, sized to
@@ -65,7 +65,7 @@ fn pending(item: &NewsItem, translate: bool) -> bool {
 pub(super) fn news_card(
     item: &NewsItem,
     translate: bool,
-    colors: &NewsTagColors,
+    colors: &NewsTagSettings,
     now_ms: i64,
     expanded: bool,
     p: MoonPalette,
@@ -77,7 +77,11 @@ pub(super) fn news_card(
     let rail_colors: Vec<u32> = item
         .tags
         .iter()
-        .filter_map(|t| colors.color(&t.to_lowercase()).and_then(|k| key_color(k, p)))
+        .filter_map(|t| {
+            colors
+                .color(&t.to_lowercase())
+                .and_then(|k| key_color(k, p))
+        })
         .collect();
     let rail = (!rail_colors.is_empty()).then(|| {
         div()
@@ -111,10 +115,12 @@ pub(super) fn news_card(
                 .cursor_pointer()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this: &mut NewsView, ev: &MouseDownEvent, window, cx| {
-                        this.open_coin(&coin_c, ev.position, window, cx);
-                        cx.stop_propagation();
-                    }),
+                    cx.listener(
+                        move |this: &mut NewsView, ev: &MouseDownEvent, window, cx| {
+                            this.open_coin(&coin_c, ev.position, window, cx);
+                            cx.stop_propagation();
+                        },
+                    ),
                 )
                 .child(badge(coin.clone(), p.blue)),
         );
@@ -126,18 +132,21 @@ pub(super) fn news_card(
         .variant(MoonButtonVariant::Ghost)
         .on_click(cx.listener(move |this: &mut NewsView, _, _w, cx| this.toggle_expand(&id, cx)))
         .render();
-    meta = meta.child(div().flex_1()).child(
-        div()
-            .flex_none()
-            .text_size(caption)
-            .text_color(rgb(p.text_muted))
-            .child(rel_time(item.time_ms, now_ms)),
-    );
-    // "Translation pending" sits on the right, after the time, only while awaiting the RU text.
+    meta = meta.child(div().flex_1());
+    // "Translation pending" sits just LEFT of the time while awaiting the RU text, so from the right
+    // edge the order reads: time, then the pending badge.
     if pending(item, translate) {
         meta = meta.child(badge(t!("news.pending").to_string(), p.amber));
     }
-    meta = meta.child(chevron);
+    meta = meta
+        .child(
+            div()
+                .flex_none()
+                .text_size(caption)
+                .text_color(rgb(p.text_muted))
+                .child(rel_time(item.time_ms, now_ms)),
+        )
+        .child(chevron);
 
     let latency = expanded.then(|| latency_block(item, p, cx));
 
@@ -159,7 +168,10 @@ pub(super) fn news_card(
             .gap(design::ui_px(cx, 6.0))
             .children(item.tags.iter().map(|tag| {
                 let label = format!("#{tag}");
-                match colors.color(&tag.to_lowercase()).and_then(|k| key_color(k, p)) {
+                match colors
+                    .color(&tag.to_lowercase())
+                    .and_then(|k| key_color(k, p))
+                {
                     Some(c) => badge(label, c).into_any_element(),
                     None => div()
                         .flex_none()
@@ -223,8 +235,16 @@ fn latency_block(item: &NewsItem, p: MoonPalette, cx: &App) -> impl IntoElement 
         .border_color(rgb(p.border))
         .text_size(design::t_caption(cx))
         .children(row(t!("news.lat.terminal").to_string(), anchor, true))
-        .children(row(t!("news.lat.send").to_string(), item.send_time_ms, false))
-        .children(row(t!("news.lat.recv").to_string(), item.recv_time_ms, false))
+        .children(row(
+            t!("news.lat.send").to_string(),
+            item.send_time_ms,
+            false,
+        ))
+        .children(row(
+            t!("news.lat.recv").to_string(),
+            item.recv_time_ms,
+            false,
+        ))
         .children(row(
             t!("news.lat.pub").to_string(),
             (item.time_ms > 0).then_some(item.time_ms),

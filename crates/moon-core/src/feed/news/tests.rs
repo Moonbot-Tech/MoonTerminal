@@ -71,8 +71,9 @@ fn missing_id_or_meta_is_invalid() {
 
 #[test]
 fn newline_fragments_are_normalized_to_spaces() {
-    let item = parse_frame(r#"{"meta":{"id":"a"},"news":{"en":["line one\r\nline two","\n three "]}}"#)
-        .unwrap();
+    let item =
+        parse_frame(r#"{"meta":{"id":"a"},"news":{"en":["line one\r\nline two","\n three "]}}"#)
+            .unwrap();
     assert_eq!(item.en, "line one line two three");
 }
 

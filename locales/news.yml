@@ -50,6 +50,14 @@ news.tags.empty:
   ru: "Тегов пока нет"
   en: "No tags yet"
   es: "Sin etiquetas"
+news.tags.untagged:
+  ru: "Без тегов"
+  en: "Untagged"
+  es: "Sin etiquetas"
+news.tags.all_count:
+  ru: "все"
+  en: "all"
+  es: "todas"
 news.lat.terminal:
   ru: "принято терминалом"
   en: "received by terminal"
@@ -86,6 +94,10 @@ news.sub.none:
   ru: "Нет подписки на новости"
   en: "No news subscription"
   es: "Sin suscripción de noticias"
+news.sub.tooltip:
+  ru: "Подписка оформляется в MoonBot: Меню → Moon News. Клик — открыть сайт."
+  en: "Subscribe in MoonBot: Menu → Moon News. Click to open the site."
+  es: "Suscríbete en MoonBot: Menú → Moon News. Clic para abrir el sitio."
 news.coin.all:
   ru: "Все монеты"
   en: "All coins"
