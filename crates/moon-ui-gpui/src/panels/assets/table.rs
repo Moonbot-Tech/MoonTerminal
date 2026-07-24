@@ -126,13 +126,27 @@ impl AssetsView {
             )
     }
 
-    /// Render the shared searchable core multi-selector with its localized summary label.
+    /// Render the shared exchange-grouped core multi-selector with its localized summary label.
+    ///
+    /// Args:
+    ///     cores: Scoped cores in canonical display order.
+    ///     cx: View context used to read exchanges and wire selection callbacks.
+    ///
+    /// Returns:
+    ///     The configured fixed-trigger dropdown.
     pub(super) fn core_combo(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        let exchange_names = self
+            .backend
+            .read(cx)
+            .session
+            .market_source()
+            .core_exchange_names();
         crate::controls::core_combo(
             cx,
             "assets-core",
             cores,
+            &exchange_names,
             &self.sel_cores,
             t!("assets.all_cores").to_string(),
             |n| t!("assets.cores_n", n = n).to_string(),

@@ -177,8 +177,15 @@ impl CoreStatusView {
 
     /// Toggle one core in the multi-select filter, or toggle the All item.
     ///
-    /// `Some(id)` toggles one core. `None` uses only cardinality: it clears a selection
-    /// whose size equals the non-empty scoped set, otherwise replacing it with that full set.
+    /// `Some(id)` toggles one core. `None` clears a selection containing every non-empty scoped
+    /// core, otherwise replacing it with that full set. Stale ids do not stand in for current cores.
+    ///
+    /// Args:
+    ///     id: Core to toggle, or `None` for the All row.
+    ///     cx: View context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; the in-memory filter and cached rows are updated in place.
     pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
         let all: HashSet<CoreId> = self
             .scope_cores(self.backend.read(cx))
@@ -186,13 +193,7 @@ impl CoreStatusView {
             .map(|(id, _)| id)
             .collect();
         match id {
-            None => {
-                if !all.is_empty() && self.sel_cores.len() == all.len() {
-                    self.sel_cores.clear();
-                } else {
-                    self.sel_cores = all;
-                }
-            }
+            None => crate::controls::toggle_all_core_selection(&mut self.sel_cores, all),
             Some(id) => {
                 if !self.sel_cores.remove(&id) {
                     self.sel_cores.insert(id);
@@ -305,12 +306,26 @@ impl Render for CoreStatusView {
 
 impl CoreStatusView {
     /// Render the core multi-selector in the top bar.
+    ///
+    /// Args:
+    ///     cores: Scoped cores in canonical display order.
+    ///     cx: View context used to read exchanges and wire selection callbacks.
+    ///
+    /// Returns:
+    ///     The top-bar row containing the fixed-trigger dropdown.
     fn core_bar(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        let exchange_names = self
+            .backend
+            .read(cx)
+            .session
+            .market_source()
+            .core_exchange_names();
         let combo = crate::controls::core_combo(
             cx,
             "core-status-core",
             cores,
+            &exchange_names,
             &self.sel_cores,
             t!("core_status.all_cores").to_string(),
             |n| t!("core_status.cores_n", n = n).to_string(),

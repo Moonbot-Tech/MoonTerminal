@@ -1,37 +1,148 @@
 //! Shared checkbox-based core multi-selector used by the Orders, Report, Assets, Core Status, and
 //! Analytics views.
 //!
-//! The trigger and menu are content-sized through `design::dropdown_content_widths`, with their old
-//! fixed widths retained as lower bounds. The trigger grows to its compact-toolbar cap and then
-//! ellipsizes the label; the menu grows for its longest item up to the shared upper bound. `CoreId`
-//! aliases `u64`, so the builder uses `u64` for every caller. Each caller supplies its localized
-//! labels and defines the behavior of its own `toggle_core` callback.
+//! The trigger has fixed compact geometry so an open menu stays anchored while selections change.
+//! The menu is divided into exchange sections and grows for its longest core or section label up to
+//! the shared upper bound. `CoreId` aliases `u64`, so the builder uses `u64` for every caller. Each
+//! caller supplies its localized labels and defines the behavior of its own `toggle_core` callback.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use gpui::App;
+use rust_i18n::t;
 
 use crate::core_order::OrderedCores;
 use crate::design;
 use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize};
 
+/// One exchange section as its reported name and canonically ordered core rows.
+pub(crate) type CoreMenuSection<'a> = (Option<&'a str>, Vec<(u64, &'a str)>);
+
+/// Group canonically ordered cores by their reported exchange names.
+///
+/// The common ordering helper owns unknown-first and alphabetical exchange ordering. This adapter
+/// maps its stable source indices back to the core ids and display names consumed by menus.
+///
+/// Args:
+///     cores: Core ids and display names in canonical order.
+///     exchange_names: Reported display exchange names keyed by core id.
+///
+/// Returns:
+///     Exchange sections whose member order matches `cores`.
+pub(crate) fn core_menu_sections<'a>(
+    cores: &'a [(u64, String)],
+    exchange_names: &'a HashMap<u64, String>,
+) -> Vec<CoreMenuSection<'a>> {
+    crate::core_order::exchange_sections(cores.iter().enumerate().map(|(index, (core, _))| {
+        (
+            index,
+            exchange_names.get(core).map(|exchange| exchange.as_str()),
+        )
+    }))
+    .into_iter()
+    .map(|(exchange, members)| {
+        (
+            exchange,
+            members
+                .into_iter()
+                .map(|index| (cores[index].0, cores[index].1.as_str()))
+                .collect(),
+        )
+    })
+    .collect()
+}
+
+/// Toggle the All row against the membership of the currently available cores.
+///
+/// Args:
+///     selected: Mutable selected-core set using empty as the implicit All representation.
+///     available: Current core ids in the selector's scope.
+///
+/// Returns:
+///     Nothing; `selected` is cleared when it already contains every available core, or replaced
+///     with `available` otherwise.
+pub(crate) fn toggle_all_core_selection(selected: &mut HashSet<u64>, available: HashSet<u64>) {
+    if !available.is_empty() && available.iter().all(|core| selected.contains(core)) {
+        selected.clear();
+    } else {
+        *selected = available;
+    }
+}
+
+/// Normalize a multi-core selection for consumers where an empty vector means no filter.
+///
+/// Args:
+///     available: Current core ids in the consumer's scope.
+///     selected: Currently selected core ids.
+///
+/// Returns:
+///     An empty vector when selection is implicit or contains every available core; otherwise the
+///     explicit selected ids, including stale ids that must not silently broaden the result.
+pub(crate) fn normalized_core_filter_ids(
+    available: impl IntoIterator<Item = u64>,
+    selected: &HashSet<u64>,
+) -> Vec<u64> {
+    let available: Vec<u64> = available.into_iter().collect();
+    let all_selected =
+        !available.is_empty() && available.iter().all(|core| selected.contains(core));
+    if selected.is_empty() || all_selected {
+        Vec::new()
+    } else {
+        selected.iter().copied().collect()
+    }
+}
+
+/// Resolve the trigger summary without exposing a sole core's variable-length name.
+///
+/// Empty selections and selections containing every available core retain the existing All
+/// representation. Every partial selection uses the localized count of available selected cores,
+/// including one core, so selection changes cannot replace a compact summary with arbitrary user
+/// text. Stale ids do not make an equal-sized partial selection look complete.
+///
+/// Args:
+///     cores: Available core ids and names.
+///     selected: Currently selected core ids.
+///     all_label: Localized All label.
+///     cores_n: Localized core-count formatter.
+///
+/// Returns:
+///     The localized trigger summary without its caret and whether the All row is selected.
+fn selection_summary(
+    cores: &[(u64, String)],
+    selected: &HashSet<u64>,
+    all_label: &str,
+    cores_n: &impl Fn(usize) -> String,
+) -> (String, bool) {
+    let selected_available = cores
+        .iter()
+        .filter(|(core, _)| selected.contains(core))
+        .count();
+    let all_selected = !cores.is_empty() && selected_available == cores.len();
+    let all_on = selected.is_empty() || all_selected;
+    let label = if all_on {
+        all_label.to_string()
+    } else {
+        cores_n(selected_available)
+    };
+    (label, all_on)
+}
+
 /// Build a checkbox-based core multi-selector whose menu stays open across item clicks.
 ///
-/// The trigger shows `all_label` for an empty selection or when the nonempty `cores` and `selected`
-/// collections have equal lengths. This all-selected check is cardinality-only and does not verify
-/// that selected ids belong to `cores`, so an equal-sized set containing unknown ids is also treated
-/// as full. Otherwise the trigger shows the sole selected core's name when present in `cores`, or
-/// `cores_n(N)`. It grows to the internal cap before its label is ellipsized; the menu grows for its
-/// longest item up to the shared cap. The All item calls `on_toggle(None, app)`, while a core item
-/// calls `on_toggle(Some(id), app)`.
+/// The trigger shows `all_label` for an empty selection or one containing every available core.
+/// Every partial selection shows `cores_n(N)` for the available selected cores, including one core.
+/// Fixed trigger geometry keeps the open menu anchored, while the menu grows for its longest core
+/// or exchange label up to the shared cap. The All item calls `on_toggle(None, app)`, while a core
+/// item calls `on_toggle(Some(id), app)`.
 ///
 /// Args:
 ///     cx: Application context used for text and layout measurements.
-///     id: Dropdown id and prefix for the `{id}-all` and `{id}-{i}` item keys.
+///     id: Dropdown id and prefix for the `{id}-all` and `{id}-core-{core}` item keys.
 ///     cores: Ordered core ids and display names.
+///     exchange_names: Reported display exchange names keyed by core id.
 ///     selected: Currently selected core ids.
-///     all_label: Localized label for the empty or cardinality-matched selection and the All item.
-///     cores_n: Localized formatter for a selection count or an unresolved sole id.
+///     all_label: Localized label for an empty or complete selection and the All item.
+///     cores_n: Localized formatter for every partial selection count.
 ///     min_menu_w: Lower bound for menu width, not a fixed width.
 ///     on_toggle: Callback receiving `None` for All or `Some(id)` for one core.
 ///
@@ -41,6 +152,7 @@ pub(crate) fn core_combo<F>(
     cx: &App,
     id: &'static str,
     cores: &OrderedCores,
+    exchange_names: &HashMap<u64, String>,
     selected: &HashSet<u64>,
     all_label: String,
     cores_n: impl Fn(usize) -> String,
@@ -50,32 +162,21 @@ pub(crate) fn core_combo<F>(
 where
     F: Fn(Option<u64>, &mut App) + Clone + 'static,
 {
-    // The current all-selected state compares cardinality only; it does not validate membership of
-    // `selected` in `cores`.
-    let all_selected = !cores.is_empty() && selected.len() == cores.len();
-    let all_on = selected.is_empty() || all_selected;
-    let cur = match selected.len() {
-        0 => all_label.clone(),
-        _ if all_selected => all_label.clone(),
-        1 => {
-            let sel = *selected.iter().next().unwrap();
-            cores
-                .iter()
-                .find(|(c, _)| *c == sel)
-                .map(|(_, n)| n.clone())
-                .unwrap_or_else(|| cores_n(1))
-        }
-        n => cores_n(n),
-    };
-    // Share the content-width calculation with `screener::source_combo`: size the trigger for the
-    // current selection between `CORES_TRIGGER_MIN_W` and the compact-toolbar cap, and size the menu
-    // for its longest item between `min_menu_w` and the shared cap.
-    let (trigger_label, trigger_w, menu_w) = design::dropdown_content_widths(
+    let (cur, all_on) = selection_summary(cores, selected, &all_label, &cores_n);
+    let unknown_exchange = t!("common.exchange_unknown").to_string();
+    let sections = core_menu_sections(cores, exchange_names);
+    let (trigger_label, trigger_w) =
+        design::fixed_dropdown_trigger(cx, &cur, design::CORES_TRIGGER_MIN_W);
+    let menu_w = design::menu_fit_width(
         cx,
-        &cur,
-        std::iter::once(all_label.as_str()).chain(cores.iter().map(|(_, n)| n.as_str())),
-        design::CORES_TRIGGER_MIN_W,
-        min_menu_w,
+        std::iter::once(all_label.as_str())
+            .chain(
+                sections
+                    .iter()
+                    .map(|(exchange, _)| exchange.unwrap_or(unknown_exchange.as_str())),
+            )
+            .chain(cores.iter().map(|(_, name)| name.as_str())),
+        design::font_w(cx, min_menu_w),
     );
     let toggle_all = on_toggle.clone();
     let mut menu = MoonDropdown::new(id)
@@ -84,7 +185,7 @@ where
         .trigger_size(MoonButtonSize::Action)
         .trigger_width(trigger_w)
         .menu_width(menu_w)
-        .menu_max_height(360.0)
+        .menu_max_height(design::ui_value(cx, 360.0))
         .menu_size(MoonMenuSize::Compact)
         .close_on_select(false)
         .item(
@@ -94,16 +195,26 @@ where
                 .selected(all_on)
                 .on_click(move |_, _, app| toggle_all(None, app)),
         );
-    for (i, (core, name)) in cores.iter().enumerate() {
-        let core = *core;
-        let on = selected.contains(&core);
-        let on_toggle = on_toggle.clone();
-        menu = menu.item(
-            MoonMenuItem::with_key(format!("{id}-{i}"), name.clone())
-                .checked(on)
-                .selected(on)
-                .on_click(move |_, _, app| on_toggle(Some(core), app)),
-        );
+    if !sections.is_empty() {
+        menu = menu.item(MoonMenuItem::separator());
+    }
+    for (exchange, members) in sections {
+        menu = menu.item(MoonMenuItem::label(
+            exchange.unwrap_or(unknown_exchange.as_str()),
+        ));
+        for (core, name) in members {
+            let on = selected.contains(&core);
+            let on_toggle = on_toggle.clone();
+            menu = menu.item(
+                MoonMenuItem::with_key(format!("{id}-core-{core}"), name)
+                    .checked(on)
+                    .selected(on)
+                    .on_click(move |_, _, app| on_toggle(Some(core), app)),
+            );
+        }
     }
     menu
 }
+
+#[cfg(test)]
+mod tests;

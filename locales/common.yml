@@ -1,5 +1,5 @@
-# Strings shared by multiple panels: placeholders for background loading and report-database read
-# errors; see `crates/moon-ui-gpui/src/load_state.rs`.
+# Strings shared by multiple panels: loading placeholders, report-database errors, and generic
+# labels such as an unidentified exchange.
 # rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
 _version: 2
 
@@ -35,3 +35,7 @@ common.db_not_ready:
   ru: "База отчётов ещё не синхронизирована."
   en: "The reports database is not synced yet."
   es: "La base de datos de informes aún no está sincronizada."
+common.exchange_unknown:
+  ru: "Биржа не определена"
+  en: "Exchange not identified"
+  es: "Bolsa sin identificar"

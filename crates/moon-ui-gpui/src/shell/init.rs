@@ -25,6 +25,18 @@ use crate::{Backend, controls};
 
 impl Shell {
     /// Construct a group window shell, restore or create its dock, and wire its long-lived inputs.
+    ///
+    /// Args:
+    ///     backend: Shared backend entity for the group window.
+    ///     group: Window group name.
+    ///     focus: Optional core and market to focus when constructing the chart area.
+    ///     epoch: Initial chart epoch.
+    ///     theme: Initial chart theme.
+    ///     window: Window used to construct dock and input entities.
+    ///     cx: Shell context used to create child entities and subscriptions.
+    ///
+    /// Returns:
+    ///     A fully initialized shell with all controlled popovers closed.
     pub(crate) fn new(
         backend: Entity<Backend>,
         group: String,
@@ -58,7 +70,7 @@ impl Shell {
         if let Some(state) = saved {
             dock.update(cx, |area, cx| {
                 if let Err(e) = area.load(state, window, cx) {
-                    log::warn!("не восстановил раскладку доков группы {group}: {e}");
+                    log::warn!("failed to restore dock layout for group {group}: {e}");
                 }
             });
         } else {
@@ -517,6 +529,7 @@ impl Shell {
             open_metric_popup: None,
             focus,
             window_active: true,
+            header_core_selector_open: false,
             core_settings_open: false,
             core_settings_cancel_confirm: false,
             core_settings_bl_expanded: false,

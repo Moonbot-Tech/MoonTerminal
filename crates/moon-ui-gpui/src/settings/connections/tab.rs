@@ -1,7 +1,7 @@
 //! Connections tab assembly: pending-core, group, and exchange branch headers; icon picker;
 //! market-data and core-order selectors; and the editable hierarchy with its top add button.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::*;
@@ -31,32 +31,24 @@ pub(super) fn pending_server_indices(servers: &[ServerRowMeta]) -> Vec<usize> {
 ///
 /// Known exchange names use stable alphabetical order. Member indices retain draft order here and
 /// are ranked through `CoreOrder` by the renderer, keeping membership and user ordering separate.
+///
+/// Args:
+///     servers: Draft and saved server rows from Connections settings.
+///     group: Window group whose saved server rows should be included.
+///
+/// Returns:
+///     Exchange names and their source indices, with the unidentified section first.
 pub(super) fn exchange_sections<'a>(
     servers: &'a [ServerRowMeta],
     group: &str,
 ) -> Vec<(Option<&'a str>, Vec<usize>)> {
-    let mut unknown = Vec::new();
-    let mut known: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for (index, (_, uid, _, server_group, exchange)) in servers.iter().enumerate() {
-        if *uid == 0 || server_group != group {
-            continue;
-        }
-        match exchange.as_deref() {
-            Some(name) => known.entry(name).or_default().push(index),
-            None => unknown.push(index),
-        }
-    }
-
-    let mut sections = Vec::with_capacity(known.len() + usize::from(!unknown.is_empty()));
-    if !unknown.is_empty() {
-        sections.push((None, unknown));
-    }
-    sections.extend(
-        known
-            .into_iter()
-            .map(|(name, members)| (Some(name), members)),
-    );
-    sections
+    crate::core_order::exchange_sections(
+        servers
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, uid, _, server_group, _))| *uid != 0 && server_group == group)
+            .map(|(index, (_, _, _, _, exchange))| (index, exchange.as_deref())),
+    )
 }
 
 impl SettingsView {
@@ -480,7 +472,7 @@ impl SettingsView {
                 let identified = exchange.is_some();
                 let exchange_name = exchange
                     .map(str::to_string)
-                    .unwrap_or_else(|| t!("conn.exchange_unknown").to_string());
+                    .unwrap_or_else(|| t!("common.exchange_unknown").to_string());
                 list_col = list_col.child(Self::subsection_header_row(
                     SharedString::from(format!("exchange-{group_index}-{exchange_index}")),
                     exchange_name,

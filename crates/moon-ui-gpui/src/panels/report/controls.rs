@@ -7,16 +7,29 @@ use rust_i18n::t;
 impl ReportPanel {
     /// Render the shared multi-select core combo.
     ///
-    /// An empty set means all cores; the label shows all, a sole name, or the selected count.
+    /// An empty set means all cores; every partial selection shows the selected count.
+    ///
+    /// Args:
+    ///     cx: Panel context used to order database cores, read exchanges, and wire callbacks.
+    ///
+    /// Returns:
+    ///     The configured fixed-trigger dropdown.
     pub(super) fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         // Rank the raw DB result at render time; the query has no config and may include
         // deleted cores with database-owned names.
-        let cores = CoreOrder::new(&self.backend.read(cx).config).from_db(self.cores.clone());
+        let (cores, exchange_names) = {
+            let backend = self.backend.read(cx);
+            (
+                CoreOrder::new(&backend.config).from_db(self.cores.clone()),
+                backend.session.market_source().core_exchange_names(),
+            )
+        };
         crate::controls::core_combo(
             cx,
             "rep-core",
             &cores,
+            &exchange_names,
             &self.sel_cores,
             t!("report.all_cores").to_string(),
             |n| t!("report.cores_n", n = n).to_string(),

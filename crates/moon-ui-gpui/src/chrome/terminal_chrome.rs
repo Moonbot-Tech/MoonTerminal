@@ -23,11 +23,27 @@ use crate::{Backend, design};
 /// Compose the terminal header for one group from the current backend and shell state.
 ///
 /// `chrome_width` is the window width and controls priority-based ticker collapse on narrow windows.
+///
+/// Args:
+///     group: Group whose header is being rendered.
+///     backend: Backend providing core, balance, and ticker state.
+///     shell: Shell owning controlled header popovers and window actions.
+///     ticker_sel: Optional core and market selected for the ticker readout.
+///     core_selector_open: Whether the active-core selector is open.
+///     core_settings_open: Whether the core-settings popover is open.
+///     core_settings_content: Lazily built content for the open core-settings popover.
+///     chrome_width: Current window width used for responsive ticker visibility.
+///     p: Active palette.
+///     cx: Application context used to read state and build elements.
+///
+/// Returns:
+///     The complete terminal header element.
 pub fn header(
     group: &str,
     backend: Entity<Backend>,
     shell: Entity<Shell>,
     ticker_sel: Option<(moon_core::session::CoreId, String)>,
+    core_selector_open: bool,
     core_settings_open: bool,
     core_settings_content: Option<AnyElement>,
     chrome_width: f32,
@@ -76,7 +92,14 @@ pub fn header(
         // widgets, so NOT a drag zone (a click would otherwise drag the window).
         .child(
             design::chrome_section(cx)
-                .child(core_selector(group, &backend, p, cx))
+                .child(core_selector(
+                    group,
+                    &backend,
+                    shell.clone(),
+                    core_selector_open,
+                    p,
+                    cx,
+                ))
                 .child(core_gear_button(
                     shell.clone(),
                     core_settings_open,
@@ -289,13 +312,22 @@ fn fmt_ticker_price(v: f64) -> String {
 ///
 /// * `group` - Group whose trading cores should be listed.
 /// * `backend` - Backend that owns core state and selection overrides.
+/// * `shell` - Shell that owns the selector's controlled open state.
+/// * `open` - Whether the selector popover is currently open.
 /// * `p` - Active palette used to render status and text colors.
 /// * `cx` - Application context used to read state and measure labels.
 ///
 /// # Returns
 ///
 /// The selector element, or a static placeholder when the group has no cores.
-fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> AnyElement {
+fn core_selector(
+    group: &str,
+    backend: &Entity<Backend>,
+    shell: Entity<Shell>,
+    open: bool,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
     // The pill keeps a fixed height and full rounding; its content width is capped below so a long
     // user-defined name cannot displace the header's right-hand readouts.
     const SEL_H: f32 = 26.0;
@@ -336,38 +368,68 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
         design::font_w(cx, design::HEADER_LABEL_MAX_W),
     );
 
-    let mut items = Vec::with_capacity(cores.len());
-    for (id, name) in cores.iter() {
-        let id = *id;
-        let backend = backend.clone();
-        let group = group.to_string();
-        items.push(
-            MoonMenuItem::with_key(format!("core-{id}"), name.clone())
-                .selected(active == Some(id))
-                .checked(active == Some(id))
-                .on_click(move |_, _, cx| {
-                    backend.update(cx, |b, bcx| {
-                        b.set_trade_core_override(&group, id);
-                        bcx.notify();
-                    });
-                }),
+    // The header renders continuously, but exchange discovery scans every client snapshot. Build
+    // the hidden menu only after controlled open state triggers a repaint.
+    let (menu_w, items) = if open {
+        let exchange_names = b.session.market_source().core_exchange_names();
+        let unknown_exchange = t!("common.exchange_unknown").to_string();
+        let sections = crate::controls::core_menu_sections(&cores, &exchange_names);
+        // Size for both core names and exchange headers; either can be the widest visible row.
+        let menu_w = design::menu_fit_width(
+            cx,
+            sections
+                .iter()
+                .map(|(exchange, _)| exchange.unwrap_or(unknown_exchange.as_str()))
+                .chain(cores.iter().map(|(_, name)| name.as_str())),
+            design::font_w(cx, 180.0),
         );
-    }
+        let mut items = Vec::with_capacity(cores.len() + sections.len());
+        for (exchange, members) in sections {
+            items.push(MoonMenuItem::label(
+                exchange.unwrap_or(unknown_exchange.as_str()),
+            ));
+            for (id, name) in members {
+                let backend = backend.clone();
+                let group = group.to_string();
+                let item_shell = shell.clone();
+                items.push(
+                    MoonMenuItem::with_key(format!("core-{id}"), name)
+                        .selected(active == Some(id))
+                        .checked(active == Some(id))
+                        .on_click(move |_, _, cx| {
+                            backend.update(cx, |b, bcx| {
+                                b.set_trade_core_override(&group, id);
+                                bcx.notify();
+                            });
+                            item_shell.update(cx, |shell, cx| {
+                                shell.set_header_core_selector_open(false, cx);
+                            });
+                        }),
+                );
+            }
+        }
+        (menu_w, items)
+    } else {
+        (design::font_w(cx, 180.0), Vec::new())
+    };
 
     // Use the canonical `MoonSelectorPill` visual, with a glowing status dot and caret icon, as
     // the `MoonPopover` trigger. The content is a `MoonPopupMenu` listing the cores. These moonui
-    // components need no manual trigger styling or size workaround. The popover owns its open
-    // state through internal `use_keyed_state`, toggles on click, and closes after core selection.
+    // components need no manual trigger styling or size workaround. Shell controls open state so
+    // selecting a core closes the popover while exchange labels and scroll interactions do not.
     //
     // The pill uses `p.panel` as its background and `p.border` as an explicit border, keeping the
     // shape legible against the `shell_high` header unlike the old borderless Panel variant.
     //
-    // Size the menu to the longest core name; a fixed width clipped long names.
-    let menu_w = design::menu_fit_width(cx, cores.iter().map(|(_, n)| n.as_str()), 180.0);
     MoonPopover::new("header-core-selector")
         .placement(MoonPopoverPlacement::BottomStart)
         .width(design::popover_outer_width(cx, menu_w))
-        .close_on_content_click(true)
+        .open(open)
+        .on_open_change(move |open, _, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.set_header_core_selector_open(open, cx);
+            });
+        })
         .trigger(
             MoonSelectorPill::new("header-core-pill")
                 .height(SEL_H)
@@ -384,6 +446,7 @@ fn core_selector(group: &str, backend: &Entity<Backend>, p: MoonPalette, cx: &Ap
             MoonPopupMenu::new("header-core-menu")
                 .width(menu_w)
                 .size(MoonMenuSize::Compact)
+                .max_height(design::ui_value(cx, 520.0))
                 .items(items)
                 .render(),
         )

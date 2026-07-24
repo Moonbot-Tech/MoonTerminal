@@ -5,18 +5,21 @@ use super::*;
 impl ReportPanel {
     /// Toggle a core in the multi-selection.
     ///
-    /// `None` is the All toggle: it builds the current core set, then clears the selection when that
-    /// set is non-empty and its cardinality matches the selection's cardinality. This check does not
-    /// compare membership. Otherwise it replaces the selection with the current core set.
+    /// `None` is the All toggle: it builds the current core set, then clears the selection when
+    /// every current core is selected. Otherwise it replaces the selection with the current set;
+    /// stale ids never stand in for current cores.
+    ///
+    /// Args:
+    ///     uid: Core to toggle, or `None` for the All row.
+    ///     cx: Panel context used to request a filtered database query.
+    ///
+    /// Returns:
+    ///     Nothing; the in-memory filter is updated and a requery is scheduled.
     pub(super) fn toggle_core(&mut self, uid: Option<u64>, cx: &mut Context<Self>) {
         match uid {
             None => {
                 let all: HashSet<u64> = self.cores.iter().map(|(u, _)| *u).collect();
-                if !all.is_empty() && self.sel_cores.len() == all.len() {
-                    self.sel_cores.clear();
-                } else {
-                    self.sel_cores = all;
-                }
+                crate::controls::toggle_all_core_selection(&mut self.sel_cores, all);
             }
             Some(uid) => {
                 if !self.sel_cores.remove(&uid) {
@@ -210,7 +213,7 @@ impl ReportPanel {
                 .collect()
         };
         if cols.is_empty() {
-            log::warn!("отчёт: экспорт без колонок (таблица пуста?)");
+            log::warn!("report export has no columns (table empty?)");
             return;
         }
         let filter = self.filter(cx);
@@ -232,11 +235,11 @@ impl ReportPanel {
                 .await;
             let note = match result {
                 Ok((n, path)) => {
-                    log::info!("отчёт: экспортировано {n} строк → {}", path.display());
+                    log::info!("report exported {n} rows -> {}", path.display());
                     MoonNotification::success(t!("report.export.ok", n = n).to_string())
                 }
                 Err(e) => {
-                    log::error!("отчёт: экспорт не выполнен: {e:#}");
+                    log::error!("report export failed: {e:#}");
                     // Do not auto-hide: the user must notice that the requested
                     // export did not complete.
                     MoonNotification::error(format!("{e}"))
