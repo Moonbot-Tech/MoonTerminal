@@ -21,7 +21,9 @@ use gpui::{AnyView, App, AppContext, Entity, Window};
 use moon_ui::{MoonDataTableState, PanelInfo, PanelView};
 
 use crate::Backend;
-use crate::panels::{AlertsPanel, AssetsView, CoreStatusView, LogPanel, OrdersPanel, ReportPanel};
+use crate::panels::{
+    AlertsPanel, AssetsView, CoreStatusView, LogPanel, NewsView, OrdersPanel, ReportPanel,
+};
 
 /// A detached-window panel plus the optional auto-width reset binding its window header exposes.
 ///
@@ -164,6 +166,21 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
         mk_detached: |b, g, w, cx| DetachedContent {
             view: cx
                 .new(|cx| LogPanel::new(b.clone(), g.to_string(), w, cx))
+                .into(),
+            widths_reset: None,
+        },
+    },
+    DockPanelKind {
+        name: "News",
+        home_order: Some(5),
+        // News has no persisted view state and no resizable table, so both builders start fresh and
+        // expose no width-reset button, mirroring Alerts/Log.
+        mk_docked: |b, g, _info, w, cx| {
+            Rc::new(cx.new(|cx| NewsView::new(b.clone(), g.to_string(), w, cx)))
+        },
+        mk_detached: |b, g, w, cx| DetachedContent {
+            view: cx
+                .new(|cx| NewsView::new(b.clone(), g.to_string(), w, cx))
                 .into(),
             widths_reset: None,
         },

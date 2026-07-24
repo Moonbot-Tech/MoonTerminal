@@ -9,9 +9,19 @@ use moonproto::{Event, MoonClient, OrderWorkerStatus};
 use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
     ClientSettings, ClientSettingsEdit, CoreSysStatus, EngineActionKind, EngineActionResult,
-    LevManageEdit, LevManageState, LicenseState, OrderRow, OrderTrace, OrderTracePoint,
-    RuntimeState, WalletKind,
+    LevManageEdit, LevManageState, LicenseState, NewsSnapshot, OrderRow, OrderTrace,
+    OrderTracePoint, RuntimeState, WalletKind,
 };
+
+/// Project moonproto's retained `NewsState` into a moonproto-free [`NewsSnapshot`]: reduce its flat
+/// frame ring into logical items. Called only when an `Event::News` arrives, mirroring the
+/// license/settings snapshot idiom.
+pub(super) fn news_snapshot_from_proto(news: &moonproto::state::NewsState) -> NewsSnapshot {
+    NewsSnapshot {
+        items: crate::feed::news::reduce(news.items()),
+        catalog: crate::feed::news::parse_catalog(news.tags_json()),
+    }
+}
 
 fn trace_point(p: OrderTraceChartPoint) -> OrderTracePoint {
     OrderTracePoint {
@@ -51,6 +61,14 @@ pub(super) fn license_state_from_proto(
         moon_credits_hold: license.moon_credits_hold,
         moon_credits_auction: license.moon_credits_auction,
         can_use_watcher: license.can_use_watcher,
+        // News-module subscription/trial, previously dropped; surfaced in the News panel footer.
+        // Guard non-positive (pre-1970 Delphi) times to None, matching the sibling time converters,
+        // so a malformed stamp reads as "no subscription" rather than "expired".
+        news_valid_until: license
+            .news_valid_until
+            .map(|t| t.unix_millis())
+            .filter(|&ms| ms > 0),
+        news_trial_used: license.news_trial_used,
     }
 }
 

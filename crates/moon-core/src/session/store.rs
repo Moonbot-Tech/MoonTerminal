@@ -5,12 +5,12 @@
 //! Revision counters replace dirty flags: each panel decides when to reload its data, which matters
 //! when one core is displayed in multiple panels.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::applog::LogLine;
 use crate::feed::{
     AssetsSnapshot, ChartAlertUpdate, ClientSettings, ConnStatus, DetectRow, EngineActionResult,
-    FeedMsg, LevManageState, LicenseState, OrderRow, RuntimeState, StrategyRow,
+    FeedMsg, LevManageState, LicenseState, NewsSnapshot, OrderRow, RuntimeState, StrategyRow,
     StrategySchemaModel, TransferAssetsSnapshot,
 };
 use crate::session::order_lines::OrderLineStore;
@@ -138,6 +138,13 @@ pub struct CoreData {
     /// Latest typed core resource telemetry from protocol-v4 `Event::KernelHealth`.
     /// The Core Status table observes it through `sys_rev`.
     pub sys: crate::feed::CoreSysStatus,
+    /// Latest reduced news snapshot (logical items + tags catalog) for this core. The News panel
+    /// observes it through `news_rev` and merges across the scoped cores by `meta.id`.
+    pub news: NewsSnapshot,
+    /// Terminal receive time (Unix ms) per news `meta.id`, stamped on first sight, so the News
+    /// panel's latency chain has a "received by terminal" anchor the wire does not carry. Pruned to
+    /// the ids still in the current ring.
+    news_seen_at: HashMap<String, i64>,
     /// Advances for every new combined order-row batch and gates the Orders table.
     pub orders_table_rev: u64,
     /// Advances only when chart order-line geometry or state changes.
@@ -159,6 +166,9 @@ pub struct CoreData {
     /// Advances only when typed `KernelHealth` metric values change, gating the
     /// Core Status table without repainting for receipt-time-only updates.
     pub sys_rev: u64,
+    /// Advances only when the reduced news snapshot changes, gating the News panel without
+    /// repainting for duplicate frames that reduce to the same logical set.
+    pub news_rev: u64,
 }
 
 impl CoreData {
@@ -183,6 +193,8 @@ impl CoreData {
             log: VecDeque::new(),
             server_log_raw: VecDeque::new(),
             sys: crate::feed::CoreSysStatus::default(),
+            news: NewsSnapshot::default(),
+            news_seen_at: HashMap::new(),
             orders_table_rev: 0,
             order_lines_rev: 0,
             order_lines_rev_ms: 0,
@@ -200,6 +212,7 @@ impl CoreData {
             log_rev: 0,
             chart_alerts_rev: 0,
             sys_rev: 0,
+            news_rev: 0,
         }
     }
 
@@ -372,6 +385,24 @@ impl CoreData {
                         self.server_log_raw.drain(0..drop);
                     }
                     self.log_rev = self.log_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::News(mut news) => {
+                // Stamp each item's terminal-receive time from the first sight of its id (the wire
+                // carries none), then prune ids that dropped out of the ring so the map stays bounded.
+                let now = now_unix_ms_i64();
+                let mut live: HashSet<String> = HashSet::with_capacity(news.items.len());
+                for item in &mut news.items {
+                    let t = *self.news_seen_at.entry(item.id.clone()).or_insert(now);
+                    item.recv_terminal_ms = Some(t);
+                    live.insert(item.id.clone());
+                }
+                self.news_seen_at.retain(|id, _| live.contains(id));
+                // Bump the repaint signature only when the reduced snapshot actually changed, so a
+                // duplicate frame or an unchanged tags relay does not wake the panel.
+                if self.news != news {
+                    self.news = news;
+                    self.news_rev = self.news_rev.wrapping_add(1);
                 }
             }
             // Identity and market wake-up messages are not routed into this store.

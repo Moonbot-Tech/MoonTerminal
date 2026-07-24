@@ -24,6 +24,7 @@ pub mod hotkeys;
 pub mod lang;
 pub mod layout;
 pub mod moonbot_import;
+pub mod news_tags;
 pub mod orders;
 pub mod paths;
 pub mod secrets;
@@ -50,6 +51,7 @@ pub use hotkeys::{
 };
 pub use lang::Language;
 pub use layout::{DetachedLayout, GeomRect, GroupLayout, WindowLayout};
+pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use schema::UiThemeMode;
 pub use secrets::Secret;

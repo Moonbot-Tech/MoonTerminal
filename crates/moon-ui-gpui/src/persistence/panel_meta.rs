@@ -21,6 +21,7 @@ pub(crate) fn tab_label(name: &str) -> Option<SharedString> {
         "Orders" => t!("dock.tab.orders"),
         "Assets" => t!("dock.tab.assets"),
         "Log" => t!("dock.tab.log"),
+        "News" => t!("dock.tab.news"),
         "Report" => t!("dock.tab.report"),
         "Alerts" => t!("dock.tab.alerts"),
         "Detects" => t!("dock.tab.detects"),

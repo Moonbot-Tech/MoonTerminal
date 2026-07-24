@@ -3,12 +3,14 @@
 
 mod assets;
 pub mod live;
+pub mod news;
 mod order_edit;
 mod strategies;
 pub mod synth;
 mod trade;
 pub mod types;
 
+pub use news::{NewsItem, NewsSnapshot};
 pub use types::*;
 
 use std::sync::mpsc::{Receiver, SendError, Sender};

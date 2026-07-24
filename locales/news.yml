@@ -1,0 +1,112 @@
+# News panel: translate toggle, coin/tag filters, relative time, latency chain, subscription.
+# rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
+_version: 2
+
+news.translate:
+  ru: "Перевод"
+  en: "Translate"
+  es: "Traducir"
+news.pending:
+  ru: "перевод ожидается"
+  en: "translation pending"
+  es: "traducción pendiente"
+news.time.sec:
+  ru: "%{n}с назад"
+  en: "%{n}s ago"
+  es: "hace %{n}s"
+news.time.min:
+  ru: "%{n} мин назад"
+  en: "%{n} min ago"
+  es: "hace %{n} min"
+news.time.hour:
+  ru: "%{n} ч назад"
+  en: "%{n} h ago"
+  es: "hace %{n} h"
+news.time.day:
+  ru: "%{n} дн назад"
+  en: "%{n} d ago"
+  es: "hace %{n} d"
+news.empty:
+  ru: "Новостей пока нет"
+  en: "No news yet"
+  es: "No hay noticias todavía"
+news.empty_filtered:
+  ru: "Ничего не найдено по фильтрам"
+  en: "No news matches the filters"
+  es: "Ninguna noticia coincide con los filtros"
+news.tags:
+  ru: "Теги"
+  en: "Tags"
+  es: "Etiquetas"
+news.tags.show_all:
+  ru: "Показать всё"
+  en: "Show all"
+  es: "Mostrar todo"
+news.tags.hide_all:
+  ru: "Снять всё"
+  en: "Hide all"
+  es: "Ocultar todo"
+news.tags.empty:
+  ru: "Тегов пока нет"
+  en: "No tags yet"
+  es: "Sin etiquetas"
+news.tags.untagged:
+  ru: "Без тегов"
+  en: "Untagged"
+  es: "Sin etiquetas"
+news.tags.all_count:
+  ru: "все"
+  en: "all"
+  es: "todas"
+news.lat.terminal:
+  ru: "принято терминалом"
+  en: "received by terminal"
+  es: "recibido por terminal"
+news.lat.send:
+  ru: "отправка сервисом"
+  en: "service sent"
+  es: "enviado por servicio"
+news.lat.recv:
+  ru: "приём сервисом"
+  en: "service received"
+  es: "recibido por servicio"
+news.lat.pub:
+  ru: "публикация"
+  en: "published"
+  es: "publicado"
+news.lat.unit:
+  ru: "мс"
+  en: "ms"
+  es: "ms"
+news.live:
+  ru: "в эфире"
+  en: "live"
+  es: "en directo"
+news.sub.until:
+  ru: "Подписка до"
+  en: "Subscribed until"
+  es: "Suscrito hasta"
+news.sub.expired:
+  ru: "Подписка истекла"
+  en: "Subscription expired"
+  es: "Suscripción vencida"
+news.sub.none:
+  ru: "Нет подписки на новости"
+  en: "No news subscription"
+  es: "Sin suscripción de noticias"
+news.sub.tooltip:
+  ru: "Подписка оформляется в MoonBot: Меню → Moon News. Клик — открыть сайт."
+  en: "Subscribe in MoonBot: Menu → Moon News. Click to open the site."
+  es: "Suscríbete en MoonBot: Menú → Moon News. Clic para abrir el sitio."
+news.coin.all:
+  ru: "Все монеты"
+  en: "All coins"
+  es: "Todas las monedas"
+news.coin.n:
+  ru: "%{n} монет"
+  en: "%{n} coins"
+  es: "%{n} monedas"
+news.search:
+  ru: "Поиск по новостям…"
+  en: "Search news…"
+  es: "Buscar noticias…"

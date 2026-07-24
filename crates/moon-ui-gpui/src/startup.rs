@@ -294,6 +294,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             layout_dirty: false,
             ui_session: UiSessionState::default(),
             detects_view: moon_core::config::DetectViewFile::load(),
+            news_tag_settings: moon_core::config::NewsTagSettings::load(),
             header_ticker_default: None,
             last_header_ticker_refresh: None,
             dock_states,

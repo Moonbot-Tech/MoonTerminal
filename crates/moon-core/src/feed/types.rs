@@ -607,6 +607,11 @@ pub struct LicenseState {
     pub moon_credits_hold: i32,
     pub moon_credits_auction: i32,
     pub can_use_watcher: bool,
+    /// News-module subscription validity, Unix ms, or `None` when the core reports no subscription.
+    /// The News panel shows it as the feed's "subscription until" status.
+    pub news_valid_until: Option<i64>,
+    /// Whether the news-module trial has been consumed.
+    pub news_trial_used: bool,
 }
 
 /// Core client-settings snapshot from moonproto `ClientSettings`, flattened for toolbar TP, SL,
@@ -878,6 +883,11 @@ pub enum FeedMsg {
     /// Emitted for every health event; the store gates the Core Status table with
     /// `sys_rev` only when metric values change.
     SysStatus(CoreSysStatus),
+    /// Core news snapshot: logical news items plus the tags catalog, rebuilt from the retained
+    /// moonproto `NewsState` when any `Event::News` arrives. Moonproto-free — the reduction lives in
+    /// `feed::news` and the projection in `feed::live::convert`. The store gates the News panel with
+    /// `news_rev` only when the reduced snapshot changes.
+    News(super::news::NewsSnapshot),
 }
 
 /// Latest resource telemetry for one core, from protocol v4 `Event::KernelHealth`.

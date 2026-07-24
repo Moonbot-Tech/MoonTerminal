@@ -19,6 +19,10 @@ dock.tab.log:
   ru: "Лог"
   en: "Log"
   es: "Registro"
+dock.tab.news:
+  ru: "Новости"
+  en: "News"
+  es: "Noticias"
 dock.tab.report:
   ru: "Отчёт"
   en: "Report"

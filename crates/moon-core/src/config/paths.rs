@@ -137,6 +137,11 @@ pub fn badges_path() -> PathBuf {
     cfg_dir().join("badges.json")
 }
 
+/// Local per-tag colours for the News panel, in a small portable JSON file.
+pub fn news_tags_path() -> PathBuf {
+    cfg_dir().join("news_tags.json")
+}
+
 /// Detect-tape presentation (dimensions/chart/rail/size slots, per group) in a separate
 /// portable file that can be shared through Copy/Paste in the ⚙ popup.
 pub fn detects_view_path() -> PathBuf {
