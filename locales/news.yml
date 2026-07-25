@@ -10,6 +10,14 @@ news.pending:
   ru: "перевод ожидается"
   en: "translation pending"
   es: "traducción pendiente"
+news.copy:
+  ru: "Скопировать в буфер обмена"
+  en: "Copy to clipboard"
+  es: "Copiar al portapapeles"
+news.copied:
+  ru: "Новость скопирована"
+  en: "News copied"
+  es: "Noticia copiada"
 news.time.sec:
   ru: "%{n}с назад"
   en: "%{n}s ago"

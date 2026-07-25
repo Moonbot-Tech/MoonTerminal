@@ -1,10 +1,10 @@
 //! News card rendering: one card per logical news item, its expandable latency chain, and the small
 //! time/chip helpers.
 //!
-//! Collapsed, a card shows source and inline ticker chips (left), a right-aligned relative age, and
-//! an expand chevron; the body (translated or original) and tag chips follow. Expanding reveals the
-//! delivery latency chain (terminal receipt → service send → service receive → publication, the
-//! service rows timed from publication).
+//! Collapsed, a card shows source and inline ticker chips (left), a right-aligned relative age, a
+//! copy-to-clipboard button and an expand chevron; the body (translated or original) and tag chips
+//! follow. Expanding reveals the delivery latency chain (terminal receipt → service send → service
+//! receive → publication, the service rows timed from publication).
 //! Coloured tags become filled badges and add a left rail split by colour. Cards are hairline-split.
 
 use gpui::prelude::FluentBuilder;
@@ -62,7 +62,10 @@ pub(super) fn hms_ms(ms: i64) -> String {
 /// Body text for the card. `translate` on shows the Russian translation (English fallback until it
 /// arrives); off shows the news as delivered (English/original). The fallback rule itself lives on
 /// [`NewsItem::body`], shared with the chart's news-mark card.
-fn body_text(item: &NewsItem, translate: bool) -> &str {
+///
+/// Also what the clipboard copies, so the pasted text cannot be in a language the card was not
+/// showing.
+pub(super) fn body_text(item: &NewsItem, translate: bool) -> &str {
     item.body(if translate {
         Language::Ru
     } else {
@@ -145,6 +148,24 @@ pub(super) fn news_card(
         .variant(MoonButtonVariant::Ghost)
         .on_click(cx.listener(move |this: &mut NewsView, _, _w, cx| this.toggle_expand(&id, cx)))
         .render();
+    // Copy the card as Telegram-ready text. The string is built ON CLICK, not here: this runs for
+    // every visible card on every repaint, and the text is a full article body plus a handful of
+    // allocations that nobody reads until the button is pressed. Only the id is captured, and the
+    // item is looked up in the panel's own list — the same route the chevron takes.
+    //
+    // MoonUI's copy icon rather than a glyph, at the chevron's size and ghost weight, deliberately
+    // a different mark from the header's detach button so a card control does not read as a window
+    // control.
+    let copy_id = item.id.clone();
+    let copy = MoonButton::new(SharedString::from(format!("news-copy-{}", item.id)))
+        .icon("icons/copy.svg")
+        .size(MoonButtonSize::Micro)
+        .variant(MoonButtonVariant::Ghost)
+        .tooltip(t!("news.copy").to_string())
+        .on_click(cx.listener(move |this: &mut NewsView, _, window, cx| {
+            this.copy_card(&copy_id, window, cx);
+        }))
+        .render();
     meta = meta.child(div().flex_1());
     // "Translation pending" sits just LEFT of the time while awaiting the RU text, so from the right
     // edge the order reads: time, then the pending badge.
@@ -159,6 +180,7 @@ pub(super) fn news_card(
                 .text_color(rgb(p.text_muted))
                 .child(rel_time(item.time_ms, now_ms)),
         )
+        .child(copy)
         .child(chevron);
 
     let latency = expanded.then(|| latency_block(item, p, cx));

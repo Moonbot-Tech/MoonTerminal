@@ -15,6 +15,7 @@
 //! `news_tags.json` (`NewsTagSettings`); the wire colour is ignored because different news cores carry
 //! different colour settings. This module owns data, filters, and lifecycle; [`render`] owns cards.
 
+mod clip;
 mod render;
 mod unread;
 
@@ -29,8 +30,8 @@ use gpui::*;
 use moon_ui::{
     DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
     MoonContextMenuWindowExt as _, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
-    MoonMenuItem, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonTooltipView,
-    MoonWindowExt as _, Panel, PanelEvent, PanelState, h_flex, v_flex,
+    MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonTooltipView, MoonWindowExt as _, Panel, PanelEvent, PanelState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -360,6 +361,24 @@ impl NewsView {
             self.translate = on;
             cx.notify();
         }
+    }
+
+    /// Copy one card to the clipboard as Telegram-ready text, and say so.
+    ///
+    /// Looked up by id rather than handed the item, so the render path captures nothing but the id
+    /// and the text is built only when the button is actually pressed. An item that yields no text
+    /// at all writes NOTHING: silently wiping what the user had in their clipboard is worse than a
+    /// button that appears to do nothing.
+    fn copy_card(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = self.cached.iter().find(|it| it.id == id) else {
+            return;
+        };
+        let text = clip::telegram_text(item, self.translate);
+        if text.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        window.push_notification(MoonNotification::success(t!("news.copied").to_string()), cx);
     }
 
     /// Toggle a card's expanded latency chain.
@@ -952,11 +971,7 @@ impl Panel for NewsView {
     /// user switched counters off for this panel, or when nothing is unread.
     ///
     /// Reads the cached badge state rather than the settings maps — this is a per-frame path.
-    fn title_suffix(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    fn title_suffix(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (_, counters_on, merged) = self.badge;
         if !counters_on {
             return None;
