@@ -192,3 +192,57 @@ fn signature_ignores_the_order_cores_are_walked_in() {
         signature(&two, &NewsTagSettings::default())
     );
 }
+
+/// Catches drawing the gem at publication instead of delivery: MoonBot marks news where the bot
+/// GOT it, and the terminal must agree — a mark at publication claims the news was actionable
+/// seconds before any client could have had it.
+#[test]
+fn a_mark_sits_at_the_moment_the_service_sent_the_news() {
+    let mut it = item("a", 5_000, &["BTC"], &[]);
+    it.recv_time_ms = Some(5_006);
+    it.send_time_ms = Some(11_160);
+    let store = store_with(&[(1, vec![it])]);
+
+    let marks = collect(&store, "BTCUSDT", &NewsTagSettings::default(), NOW);
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].1, 11_160, "the gem must sit at the send stamp");
+    // The item keeps its publication stamp, which is what the hover card shows beside the mark.
+    assert_eq!(marks[0].0.time_ms, 5_000);
+}
+
+/// Catches letting the terminal's own receipt into the mark time: it is stamped by this PC's clock
+/// and, for news backfilled on connect, is the moment of connect — the mark would land hours from
+/// the candle it belongs to.
+#[test]
+fn the_terminals_own_receipt_never_places_a_mark() {
+    let mut it = item("a", 0, &["BTC"], &[]);
+    it.recv_terminal_ms = Some(900_000);
+    let store = store_with(&[(1, vec![it])]);
+
+    assert!(collect(&store, "BTCUSDT", &NewsTagSettings::default(), NOW).is_empty());
+}
+
+/// Catches moving the FEED's clock along with the chart's: the panel orders and counts by when the
+/// news existed, and only the gem moved to delivery.
+#[test]
+fn the_feed_clock_still_reports_publication() {
+    let mut it = item("a", 5_000, &["BTC"], &[]);
+    it.send_time_ms = Some(11_160);
+    assert_eq!(usable_time_ms(&it, NOW), Some(5_000));
+    assert_eq!(usable_delivery_time_ms(&it, NOW), Some(11_160));
+}
+
+/// Catches applying the future-skew guard to the winner instead of to each candidate: a service
+/// that rescaled only its send stamp would cost the item its place on the chart entirely, when the
+/// next stamp in the chain is right there.
+#[test]
+fn a_skewed_send_stamp_falls_through_to_the_next_one() {
+    let mut it = item("a", 5_000, &["BTC"], &[]);
+    it.send_time_ms = Some(NOW + 5_000_000);
+    it.recv_time_ms = Some(5_006);
+    let store = store_with(&[(1, vec![it])]);
+
+    let marks = collect(&store, "BTCUSDT", &NewsTagSettings::default(), NOW);
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].1, 5_006);
+}

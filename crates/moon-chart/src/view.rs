@@ -45,6 +45,14 @@ const MAX_WINDOW_MS: f32 = 31_536_000_000.0;
 /// differently in different places, causing the camera, data, and labels to diverge and the
 /// chart to drift left of the order book at deep zoom-out. The guard must be below the minimum ppm.
 pub const MIN_PX_PER_MS: f32 = 1e-9;
+/// Smallest visible price window, as a fraction of the price itself.
+///
+/// RELATIVE on purpose. An absolute floor is a floor for one order of magnitude only: `1e-6` is a
+/// rounding error on a $60k coin and eighty times the whole price of one trading at 1.2e-8, where
+/// it pinned the window open and made every scale read thousands of percent. Same lesson the order
+/// book's span guard learned.
+const MIN_RANGE_FRAC: f32 = 1e-6;
+
 /// Default visible window used to select a pixel-smooth live scale.
 const DEFAULT_WINDOW_MS: f32 = 60_000.0;
 /// Minimum visible window at maximum zoom-in (previously limited to the default 60 s).
@@ -74,8 +82,18 @@ pub struct ChartView {
     /// Manual Y view after vertical drag/RMB zoom. Reset by scale buttons but not by the Live
     /// button: Live controls only X/latest.
     pub manual_price: bool,
-    /// Last fixed percentage (range = center*percent), used for drift mode.
+    /// Last fixed percentage (range = price*percent), used for drift mode.
     pub scale_percent: f32,
+    /// The price a scale percentage is measured against: the rendered centre, FROZEN while the user
+    /// holds a manual Y view.
+    ///
+    /// Not the live centre, because a vertical drag moves that without changing any zoom, and the
+    /// same window would then restate itself — a 1% chart dragged far enough would report 2%. Not
+    /// the last trade either: panned into history, the window belongs to the prices on screen, and
+    /// dividing it by today's price would call a 12% window "0.12%". Taken from `render_center`
+    /// rather than `center_price` so it inherits the same snapping: an unsnapped divisor would make
+    /// the reported figure flicker between two integers on ordinary ticks.
+    scale_anchor: f32,
     /// Derived pixels per price unit (cached for panning/hit testing).
     pub px_per_price: f32,
 
@@ -119,6 +137,7 @@ impl ChartView {
             auto_price: true,
             manual_price: false,
             scale_percent: 0.10,
+            scale_anchor: 0.0,
             px_per_price: 0.5,
             render_center: 0.0,
             render_range: 1.0,
@@ -316,11 +335,21 @@ impl ChartView {
 
     /// Applies a Y window for comparison mode: set center+range and freeze auto-fit (`manual_price`).
     /// Idempotent: returns `false` if the values already match, preventing a broadcast loop.
+    ///
+    /// The floor and the equality epsilon are RELATIVE to the window being applied. Absolute ones
+    /// belonged to a single order of magnitude: on a 1.2e-8 instrument `1e-6` both widened the
+    /// requested window by ~800× and made two genuinely different windows compare equal, so a
+    /// micro-priced follower silently stopped tracking its anchor.
+    ///
+    /// The anchor lock also re-references the scale: the window handed over belongs to the ANCHOR,
+    /// so the percentage must be read against the anchor's price, not against whatever this chart
+    /// was showing before the lock.
     pub fn set_y_window(&mut self, center: f32, range: f32) -> bool {
-        let range = range.max(1e-6);
+        let range = range.max(Self::min_range(center));
+        let eps = Self::min_range(center);
         let same = self.manual_price
-            && (self.center_price - center).abs() < 1e-6
-            && (self.price_range - range).abs() < 1e-6;
+            && (self.center_price - center).abs() < eps
+            && (self.price_range - range).abs() < eps;
         if same {
             return false;
         }
@@ -330,7 +359,43 @@ impl ChartView {
         self.price_range = range;
         self.render_center = center;
         self.render_range = range;
+        if center.is_finite() && center > 0.0 {
+            self.scale_anchor = center;
+        }
         true
+    }
+
+    /// The price a scale percentage is measured against, or `None` while the view has no price at
+    /// all (a chart opened before its first tick).
+    ///
+    /// [`Self::scale_anchor`] holds it: the rendered centre, frozen for as long as the user holds a
+    /// manual Y view. `center_price` is the fallback for the frames before the first `update_y`.
+    /// NO fallback to `price_range` — a range is not a price, and dividing the window by itself
+    /// would report a confident "100%" for a chart that knows nothing.
+    ///
+    /// Accepts any positive finite price: instruments trade down to 1e-8, and a threshold that
+    /// looks generous for a major coin silently blanks the badge for a micro-priced one.
+    pub fn scale_ref_price(&self) -> Option<f32> {
+        [self.scale_anchor, self.center_price]
+            .into_iter()
+            .find(|p| p.is_finite() && *p > 0.0)
+    }
+
+    /// The visible Y window as a percentage of [`Self::scale_ref_price`], or `None` when there is
+    /// no price to measure against or the result is not a number a badge can show.
+    ///
+    /// This is what the on-chart scale badge reports, and the only place the figure is computed.
+    pub fn visible_scale_percent(&self) -> Option<f32> {
+        let reference = self.scale_ref_price()?;
+        let pct = self.render_range / reference * 100.0;
+        // Bounded on purpose: `as i32` saturates, so an absurd ratio would paint "2147483647%"
+        // instead of admitting it has nothing sensible to say.
+        (self.render_range > 0.0 && pct.is_finite() && pct < 100_000.0).then_some(pct)
+    }
+
+    /// The smallest window allowed for a chart priced at `price` — see [`MIN_RANGE_FRAC`].
+    fn min_range(price: f32) -> f32 {
+        (price.abs() * MIN_RANGE_FRAC).max(f32::MIN_POSITIVE)
     }
 
     /// Fixed percentage: visible range = price*percent (like the moonweb ZoomBar).
@@ -338,12 +403,9 @@ impl ChartView {
         self.auto_price = false;
         self.manual_price = false;
         self.scale_percent = percent;
-        let base = if self.center_price.abs() > 1e-6 {
-            self.center_price.abs()
-        } else {
-            self.price_range
-        };
-        self.price_range = (base * percent).max(1e-6);
+        // Same reference the badge divides by, so the chosen step and the reported figure agree.
+        let base = self.scale_ref_price().unwrap_or(self.price_range);
+        self.price_range = (base * percent).max(Self::min_range(base));
         self.render_range = self.price_range;
         self.render_center = self.center_price;
     }
@@ -413,7 +475,7 @@ impl ChartView {
         let factor = 2f32.powf(-cum_dy / YSCALE_PX_PER_2X);
         let r = (start_range * factor).clamp(start_range * 0.25, start_range * 4.0);
         self.center_price = start_center;
-        self.price_range = r.max(1e-6);
+        self.price_range = r.max(Self::min_range(start_center));
         self.manual_price = true;
         self.render_center = self.center_price;
         self.render_range = self.price_range;
@@ -458,14 +520,22 @@ impl ChartView {
                     // In live mode, keep the last price centered and expand the range symmetrically
                     // so neither tick tails nor order lines are clipped. ×1.20 leaves about 10%
                     // padding at each edge, keeping lines away from the top and bottom.
-                    let half = (c - lo).max(hi - c).max(c.abs() * 0.0005 + 1e-6);
+                    let half = (c - lo)
+                        .max(hi - c)
+                        .max(c.abs() * 0.0005 + Self::min_range(c));
                     Some(half * 2.0 * 1.20)
                 }
                 (true, Some((lo, hi)), Some(c)) => {
-                    Some((hi - lo).abs().max(c.abs() * 0.0005 + 1e-6) * 1.20)
+                    Some((hi - lo).abs().max(c.abs() * 0.0005 + Self::min_range(c)) * 1.20)
                 }
-                (true, None, Some(c)) => Some((c.abs() * 0.001).max(1e-6)),
-                (false, _, Some(c)) => Some((c.abs() * self.scale_percent).max(1e-6)),
+                (true, None, Some(c)) => Some((c.abs() * 0.001).max(Self::min_range(c))),
+                // Fixed percent: sized off the SAME reference `set_scale_percent` and the badge
+                // use, or the click's range would be overwritten on the very next frame by a
+                // differently-based one.
+                (false, _, Some(c)) => {
+                    let base = self.scale_ref_price().unwrap_or_else(|| c.abs());
+                    Some((base * self.scale_percent).max(Self::min_range(base)))
+                }
                 _ => None,
             };
 
@@ -488,7 +558,7 @@ impl ChartView {
             if let Some(c) = target_center {
                 if self.center_price == 0.0 || !live {
                     self.center_price = c;
-                } else if self.price_range > 1e-9 {
+                } else if self.price_range > Self::min_range(self.center_price) {
                     let drift = (c - self.center_price).abs() / self.price_range;
                     if drift > CENTER_BUFFER {
                         self.center_price += (c - self.center_price) * tick_lerp;
@@ -496,31 +566,50 @@ impl ChartView {
                 }
             }
         }
-        if !(self.price_range > 1e-9) {
-            self.price_range = self.center_price.abs() * 0.10 + 1.0;
+        // A degenerate range gets a default that is a FRACTION OF THE PRICE. The old `+ 1.0`
+        // was a whole price unit — on a 1.2e-8 instrument, eight orders of magnitude of chart —
+        // and it became reachable once the floors above stopped being absolute.
+        if !(self.price_range > Self::min_range(self.center_price)) {
+            self.price_range = if self.center_price.abs() > 0.0 {
+                self.center_price.abs() * 0.10
+            } else {
+                1.0
+            };
         }
         // Snap Y. In live mode, render_* is piecewise constant: keep the range until the target
         // moves beyond ±RANGE_HYST, and keep the center until the price moves by more than
         // CENTER_SNAP_PX px. In manual mode, follow input exactly for responsive dragging;
         // the render cache is rebuilt transiently during interaction.
         if live && !self.manual_price {
-            let target = self.price_range.max(1e-9);
+            let target = self.price_range.max(Self::min_range(self.center_price));
             if !self.auto_price
-                || !(self.render_range > 1e-9)
+                || !(self.render_range > Self::min_range(self.center_price))
                 || target > self.render_range * RANGE_HYST
                 || target < self.render_range / RANGE_HYST
             {
                 self.render_range = target;
             }
-            let ppp = (area_h / self.render_range.max(1e-9)).max(1e-6);
+            let ppp =
+                (area_h / self.render_range.max(Self::min_range(self.center_price))).max(1e-6);
             if (self.center_price - self.render_center).abs() * ppp > CENTER_SNAP_PX {
                 self.render_center = self.center_price;
             }
         } else {
-            self.render_range = self.price_range.max(1e-9);
+            self.render_range = self.price_range.max(Self::min_range(self.center_price));
             self.render_center = self.center_price;
         }
-        self.px_per_price = (area_h / self.render_range.max(1e-9)).max(1e-6);
+        // Guarded by the same relative floor as the range itself: an absolute 1e-9 here would
+        // misstate pixels-per-price by half on a window narrower than that, which is an ordinary
+        // window for a micro-priced instrument.
+        self.px_per_price =
+            (area_h / self.render_range.max(Self::min_range(self.center_price))).max(1e-6);
+        // Re-anchor the scale reference while the view follows the data — and NOT while the user
+        // holds a manual Y view, which is what makes a vertical drag leave the reported scale
+        // alone. Taken after the snap, so the reference is as piecewise-constant as the range it
+        // divides and the figure cannot dither on ordinary ticks.
+        if !self.manual_price && self.render_center.is_finite() && self.render_center > 0.0 {
+            self.scale_anchor = self.render_center;
+        }
     }
 }
 

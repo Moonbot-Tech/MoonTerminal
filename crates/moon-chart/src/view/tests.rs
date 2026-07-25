@@ -145,3 +145,130 @@ fn explicit_follow_off_has_no_auto_return() {
     assert!(!view.tick_auto_live(now + 10_000.0));
     assert!(!view.follow);
 }
+
+/// A live view settled on `price` with a window of `price * pct`, driven through the same
+/// per-frame path the chart uses, so the reference the badge divides by is whatever that path left
+/// behind rather than a value the test poked in.
+fn settled_view(price: f32, pct: f32, now: f64) -> ChartView {
+    let mut view = ChartView::new(0.0);
+    view.resume_live(now);
+    for i in 0..4 {
+        let half = price * pct * 0.5;
+        view.update_y(
+            now + i as f64 * 16.0,
+            400.0,
+            Some((price - half, price + half)),
+            Some(price),
+        );
+    }
+    view.set_scale_percent(pct);
+    view.update_y(now + 100.0, 400.0, Some((price, price)), Some(price));
+    view
+}
+
+/// Catches measuring the visible scale against the CENTRE OF THE VIEWPORT: a vertical drag moves
+/// that centre without touching the zoom, so the badge restated a scale that had not changed —
+/// drag a 1% chart down far enough and it read 2%.
+#[test]
+fn vertical_panning_does_not_change_the_reported_scale() {
+    let now = 100_000.0;
+    let mut view = settled_view(1000.0, 0.01, now);
+    let before = view.visible_scale_percent().expect("scale before the pan");
+
+    // Drag the chart by half its price: with the window at 1% of 1000 that is 500 price units,
+    // over the `px_per_price` the settled view computed. Under the old formula the same window
+    // would then read against 1500 instead of 1000 — 1% becoming 0.67%.
+    let dy = 500.0 * view.px_per_price;
+    view.pan_y_px(dy, now);
+    view.update_y(now + 200.0, 400.0, Some((1000.0, 1000.0)), Some(1000.0));
+
+    let after = view.visible_scale_percent().expect("scale after the pan");
+    assert!(
+        (after - before).abs() < 1e-3,
+        "panning changed the reported scale: {before} → {after}"
+    );
+    // And the old formula really would have: the centre now sits at half the price.
+    assert!(
+        (view.render_center - 1500.0).abs() < 1.0,
+        "the pan did not move the centre as intended: {}",
+        view.render_center
+    );
+}
+
+/// Catches a scale reference that keeps following the live price while the user holds a manual Y
+/// view: the window is frozen, so the figure must be frozen with it.
+#[test]
+fn a_frozen_view_reports_a_frozen_scale_while_the_price_moves() {
+    let now = 100_000.0;
+    let mut view = settled_view(1000.0, 0.01, now);
+    view.pan_y_px(1.0, now);
+    let before = view.visible_scale_percent().expect("scale while frozen");
+
+    for i in 1..20 {
+        let price = 1000.0 + i as f32 * 50.0;
+        view.update_y(now + 200.0 + i as f64 * 16.0, 400.0, None, Some(price));
+    }
+
+    let after = view
+        .visible_scale_percent()
+        .expect("scale after the price ran");
+    assert!(
+        (after - before).abs() < 1e-3,
+        "the frozen view's scale followed the live price: {before} → {after}"
+    );
+}
+
+/// Catches reporting a confident percentage for a chart that has no price at all: the badge must
+/// hide instead of dividing the window by itself and announcing "100%".
+#[test]
+fn a_chart_without_a_price_reports_no_scale() {
+    let view = ChartView::new(0.0);
+    assert_eq!(view.scale_ref_price(), None);
+    assert_eq!(view.visible_scale_percent(), None);
+}
+
+/// Catches floors tuned for major coins: instruments trade down to 1e-8, where an absolute guard
+/// like `1e-6` is eighty times the whole price. Every step the toolbar ships is checked, because
+/// the tighter ones fail first: 5% and 2% of 1.2e-8 fall under guards that 10% clears.
+#[test]
+fn every_toolbar_step_reports_its_scale_on_a_micro_priced_instrument() {
+    let now = 100_000.0;
+    for step in [0.50, 0.20, 0.10, 0.05, 0.02] {
+        let view = settled_view(1.2e-8, step, now);
+        let pct = view
+            .visible_scale_percent()
+            .unwrap_or_else(|| panic!("no scale reported for step {step}"));
+        let expected = step * 100.0;
+        assert!(
+            (pct - expected).abs() < expected * 0.1,
+            "step {step}: reported {pct}%, expected about {expected}%"
+        );
+    }
+}
+
+/// Catches a comparison-lock follower measuring the ANCHOR's window against its own price: the
+/// window handed over belongs to the anchor, so the percentage must be read against the anchor too
+/// — otherwise the same lock badges 1% or 20% depending on what the follower showed beforehand.
+#[test]
+fn a_locked_follower_reports_the_anchors_scale() {
+    let now = 100_000.0;
+    let mut follower = settled_view(3000.0, 0.05, now);
+    follower.set_y_window(60_000.0, 600.0);
+    let pct = follower.visible_scale_percent().expect("locked scale");
+    assert!((pct - 1.0).abs() < 0.05, "locked follower reported {pct}%");
+}
+
+/// Catches the fixed-percent frame path sizing the window off a different reference than the click
+/// did: the range set by the step would be overwritten on the next frame, flashing the zoom.
+#[test]
+fn a_selected_step_survives_the_next_frame() {
+    let now = 100_000.0;
+    let mut view = settled_view(1000.0, 0.02, now);
+    let after_click = view.render_range;
+    view.update_y(now + 300.0, 400.0, Some((999.0, 1001.0)), Some(1000.0));
+    let next_frame = view.render_range;
+    assert!(
+        (next_frame - after_click).abs() / after_click < 0.05,
+        "the step's range was rewritten by the next frame: {after_click} → {next_frame}"
+    );
+}

@@ -56,8 +56,9 @@ pub(super) struct Scan {
 
 /// Scan the feed once for everything the badge needs.
 ///
-/// Item time comes from `news_marks::usable_time_ms`, the same decision the chart's marks make, so
-/// an item drawn there is counted here and a stamp from a skewed clock is ignored by both.
+/// Item time comes from `news_marks::usable_time_ms` — the FEED's clock, when the news existed,
+/// which is also what orders the panel. The chart draws its gems at delivery instead; both reject a
+/// stamp from a skewed clock the same way.
 pub(super) fn scan(
     items: &[NewsItem],
     watermark: i64,
