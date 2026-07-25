@@ -15,11 +15,8 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{NewsView, clip, tag_color};
+use super::{NewsView, tag_color};
 use crate::design;
-
-/// MoonUI's clipboard icon, shipped in its asset bundle (registered at startup via `MoonAssets`).
-const MOON_ICON_COPY: &str = "icons/copy.svg";
 use moon_core::config::{Language, NewsTagSettings};
 use moon_core::feed::NewsItem;
 
@@ -65,7 +62,10 @@ pub(super) fn hms_ms(ms: i64) -> String {
 /// Body text for the card. `translate` on shows the Russian translation (English fallback until it
 /// arrives); off shows the news as delivered (English/original). The fallback rule itself lives on
 /// [`NewsItem::body`], shared with the chart's news-mark card.
-fn body_text(item: &NewsItem, translate: bool) -> &str {
+///
+/// Also what the clipboard copies, so the pasted text cannot be in a language the card was not
+/// showing.
+pub(super) fn body_text(item: &NewsItem, translate: bool) -> &str {
     item.body(if translate {
         Language::Ru
     } else {
@@ -148,19 +148,23 @@ pub(super) fn news_card(
         .variant(MoonButtonVariant::Ghost)
         .on_click(cx.listener(move |this: &mut NewsView, _, _w, cx| this.toggle_expand(&id, cx)))
         .render();
-    // Copy the card as Telegram-ready text. Built here, where the item and the translate toggle
-    // both are, so the clipboard gets the body the user is actually looking at.
-    let clip_text = clip::telegram_text(item, translate);
-    // MoonUI's own copy icon rather than a glyph: same size and ghost weight as the detach button,
-    // deliberately a different mark, so a card control is not mistaken for a window control.
+    // Copy the card as Telegram-ready text. The string is built ON CLICK, not here: this runs for
+    // every visible card on every repaint, and the text is a full article body plus a handful of
+    // allocations that nobody reads until the button is pressed. Only the id is captured, and the
+    // item is looked up in the panel's own list — the same route the chevron takes.
+    //
+    // MoonUI's copy icon rather than a glyph, at the chevron's size and ghost weight, deliberately
+    // a different mark from the header's detach button so a card control does not read as a window
+    // control.
+    let copy_id = item.id.clone();
     let copy = MoonButton::new(SharedString::from(format!("news-copy-{}", item.id)))
-        .icon(MOON_ICON_COPY)
+        .icon("icons/copy.svg")
         .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Ghost)
         .tooltip(t!("news.copy").to_string())
-        .on_click(move |_, _w, app: &mut App| {
-            app.write_to_clipboard(ClipboardItem::new_string(clip_text.clone()));
-        })
+        .on_click(cx.listener(move |this: &mut NewsView, _, window, cx| {
+            this.copy_card(&copy_id, window, cx);
+        }))
         .render();
     meta = meta.child(div().flex_1());
     // "Translation pending" sits just LEFT of the time while awaiting the RU text, so from the right

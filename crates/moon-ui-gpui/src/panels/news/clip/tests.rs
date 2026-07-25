@@ -92,14 +92,25 @@ fn the_terminal_receipt_is_not_part_of_the_delay() {
     assert_eq!(text, "25.07.2026 08:26:50 UTC\n\nx");
 }
 
-/// Catches double-prefixing a tag that already carries its `#`.
+/// Catches emitting a stray blank line or a trailing newline for an item whose body never arrived —
+/// a header-only card is what a frame with no text reduces to.
 #[test]
-fn a_tag_is_not_hashed_twice() {
-    let tagged = NewsItem {
-        tags: vec!["#hack".to_string()],
-        en: "x".to_string(),
+fn a_body_less_item_ends_after_its_topics() {
+    let headless_body = NewsItem {
+        time_ms: TIME_MS,
+        source: "toa".to_string(),
+        tags: vec!["listing".to_string()],
         ..NewsItem::default()
     };
-    assert!(telegram_text(&tagged, false).contains("#hack"));
-    assert!(!telegram_text(&tagged, false).contains("##"));
+    assert_eq!(
+        telegram_text(&headless_body, false),
+        "TOA · 25.07.2026 08:26:50 UTC\n\n#listing"
+    );
+}
+
+/// Catches handing an empty string to the clipboard for a frame that reduced to nothing: the caller
+/// keys on this to leave whatever the user already had.
+#[test]
+fn an_empty_item_yields_nothing_at_all() {
+    assert_eq!(telegram_text(&NewsItem::default(), false), "");
 }

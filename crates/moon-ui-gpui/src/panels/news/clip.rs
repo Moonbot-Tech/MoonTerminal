@@ -11,7 +11,6 @@
 
 use rust_i18n::t;
 
-use moon_core::config::Language;
 use moon_core::feed::NewsItem;
 
 /// Build the clipboard text for `item`.
@@ -19,43 +18,31 @@ use moon_core::feed::NewsItem;
 /// `translate` picks the same body the card is showing, so what lands in the clipboard is what the
 /// user was reading — not a different language they never saw.
 pub(super) fn telegram_text(item: &NewsItem, translate: bool) -> String {
-    let mut out = String::new();
+    // Head block: what the item is, on consecutive lines. Body and topics follow after a blank
+    // line. Assembled from the parts that exist, so an item missing any of them cannot leave a
+    // stray separator or a trailing newline behind.
+    let head: Vec<String> = [header(item), tickers(item)]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect();
 
-    let head = header(item);
-    if !head.is_empty() {
-        out.push_str(&head);
-        out.push('\n');
-    }
+    // Topics last, on the line right after the body: they file the item, they are not what it
+    // says, and a wall of hashtags between the headline and the text is how a forwarded post reads
+    // worst. The body is the one the card is showing — `render::body_text` owns that rule.
+    let tail: Vec<String> = [
+        super::render::body_text(item, translate).to_string(),
+        tags(item),
+    ]
+    .into_iter()
+    .filter(|s| !s.is_empty())
+    .collect();
 
-    let tickers = tickers(item);
-    if !tickers.is_empty() {
-        out.push_str(&tickers);
-        out.push('\n');
+    match (head.is_empty(), tail.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => head.join("\n"),
+        (true, false) => tail.join("\n"),
+        (false, false) => format!("{}\n\n{}", head.join("\n"), tail.join("\n")),
     }
-
-    let body = item.body(if translate {
-        Language::Ru
-    } else {
-        Language::En
-    });
-    if !body.is_empty() {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(body);
-    }
-
-    // Topics last, on the line right after the body: they are how the item is filed, not what it
-    // says, and a wall of hashtags between the headline and the text is what a forwarded post
-    // reads worst as.
-    let tags = tags(item);
-    if !tags.is_empty() {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(&tags);
-    }
-    out
 }
 
 /// `SOURCE · DD.MM.YYYY HH:MM:SS UTC (+2349 мс)`, dropping any part the item lacks.
@@ -76,11 +63,15 @@ fn header(item: &NewsItem) -> String {
 
 /// How long the news service held the item, as `+2349 мс`, or `None` when it cannot be measured.
 ///
-/// The service's receive and send stamps are BOTH offsets from publication — two marks on one
-/// scale, not two legs of a journey — so the delay end to end is the LATEST of them, never their
-/// sum. The terminal's own receipt is deliberately excluded: it is stamped by this PC's clock, so
-/// pulling it into the same figure would measure the gap between two machines' clocks, and for news
-/// backfilled from the core's ring on connect it is the moment of connect rather than of delivery.
+/// The service's receive and send stamps are absolute Unix ms, like publication, so each becomes an
+/// offset by subtracting the same anchor — two marks on one scale, not two legs of a journey. The
+/// delay end to end is therefore the LATEST of them, never their sum. The terminal's own receipt is
+/// deliberately excluded: it is stamped by this PC's clock, so pulling it into the same figure
+/// would measure the gap between two machines' clocks, and for news backfilled from the core's ring
+/// on connect it is the moment of connect rather than of delivery.
+///
+/// Saturating arithmetic, like `rel_time`: these stamps are service-controlled, and this build runs
+/// with overflow checks off, so a rescaled value must clamp rather than wrap into a nonsense delay.
 fn delay(item: &NewsItem) -> Option<String> {
     let anchor = (item.time_ms > 0).then_some(item.time_ms)?;
     let last = [item.recv_time_ms, item.send_time_ms]
@@ -88,9 +79,13 @@ fn delay(item: &NewsItem) -> Option<String> {
         .flatten()
         .filter(|t| *t > 0)
         .max()?;
-    let d = last - anchor;
+    let d = last.saturating_sub(anchor);
     let sign = if d >= 0 { "+" } else { "−" };
-    Some(format!("{sign}{} {}", d.abs(), t!("news.lat.unit")))
+    Some(format!(
+        "{sign}{} {}",
+        d.saturating_abs(),
+        t!("news.lat.unit")
+    ))
 }
 
 /// The item's tickers as cashtags on one line: `$AERGO $BTC`.
@@ -104,18 +99,12 @@ fn tickers(item: &NewsItem) -> String {
 
 /// The item's topics as hashtags on one line: `#Crypto #Exchange`.
 ///
-/// A tag that already carries its `#` is not given a second one; tags arrive from the service
-/// without it, but a user-facing string is not a place to trust that blindly.
+/// The stored tags carry no `#` — `feed::news::strip_hash` removes it at parse — so this only adds
+/// the one Telegram needs.
 fn tags(item: &NewsItem) -> String {
     item.tags
         .iter()
-        .map(|t| {
-            let t = t.trim();
-            match t.strip_prefix('#') {
-                Some(rest) => format!("#{rest}"),
-                None => format!("#{t}"),
-            }
-        })
+        .map(|t| format!("#{t}"))
         .collect::<Vec<_>>()
         .join(" ")
 }
