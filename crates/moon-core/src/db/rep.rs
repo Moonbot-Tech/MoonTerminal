@@ -12,6 +12,7 @@
 //! are reconciled separately through `check_open_rows`.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
@@ -88,19 +89,24 @@ pub struct ReportSink {
     /// have closed or been deleted offline BELOW the cursor. Results arrive as
     /// ordinary `RowUpsert` or `RowDelete` messages.
     pub(super) open_rows: Arc<Mutex<HashMap<u64, Vec<i64>>>>,
+    /// Coalesces the terminal channel-closed diagnostic if the writer thread panics.
+    pub(super) send_failed: Arc<AtomicBool>,
 }
 
 impl ReportSink {
+    /// Send one replica event, blocking when the bounded writer queue applies backpressure.
     pub fn send(&self, msg: DbMsg) {
-        let _ = self.tx.send(msg);
+        if self.tx.send(msg).is_err() && !self.send_failed.swap(true, Ordering::AcqRel) {
+            log::error!("reports: writer channel closed; replica event was not persisted");
+        }
     }
 
     /// Cursor for the core's next sync request: zero starts fresh and positive values resume.
     ///
     /// Under the report-replication flow-control contract, the cursor is always the local replica's
     /// `max(newRecID) + 1`. Sequential page acknowledgements prevent a crash from
-    /// skipping successfully applied tail rows. Individual upsert errors are logged,
-    /// however, and page processing continues, so this is not a gap-free guarantee.
+    /// skipping successfully applied tail rows. Any row failure aborts and retries its
+    /// whole writer batch before the cursor can advance.
     pub fn next_cursor(&self, core_uid: u64) -> i64 {
         self.cursors
             .lock()
@@ -120,6 +126,7 @@ impl ReportSink {
 }
 
 /// Typed-replica state owned by the writer thread.
+#[derive(Clone)]
 pub(super) struct RepState {
     /// Per-core schema mapping field indexes to names for row conversion.
     schemas: HashMap<u64, Arc<ReportSchema>>,
@@ -149,36 +156,30 @@ pub(super) struct RepState {
 /// Creating an index only after a successful ALTER lost it PERMANENTLY when its
 /// column predated the index code or CREATE failed once. Returns `true` once all
 /// indexes definitely exist and no further calls are needed.
-fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> bool {
+fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> rusqlite::Result<bool> {
     let mut done = true;
     // Default period filter for the Reports window, like legacy `idx_csr_closedate`.
     if cols.contains("closedate") {
-        if let Err(e) = conn.execute(
+        conn.execute(
             &format!("CREATE INDEX IF NOT EXISTS idx_rep_closedate ON {TABLE}(closedate)"),
             [],
-        ) {
-            log::warn!("отчёты(rep): индекс idx_rep_closedate не создался: {e}");
-            done = false;
-        }
+        )?;
     } else {
         done = false;
     }
     // Strategy-version analytics (`strat_db`): select one strategy's trades and
     // range-join `buydate` against the version's `valid_from` and `valid_to`.
     if cols.contains("strategyid") && cols.contains("buydate") {
-        if let Err(e) = conn.execute(
+        conn.execute(
             &format!(
                 "CREATE INDEX IF NOT EXISTS idx_rep_strat ON {TABLE}(core_uid, strategyid, buydate)"
             ),
             [],
-        ) {
-            log::warn!("отчёты(rep): индекс idx_rep_strat не создался: {e}");
-            done = false;
-        }
+        )?;
     } else {
         done = false;
     }
-    done
+    Ok(done)
 }
 
 /// Initialize the replica table, per-core cursors, and open-row sets.
@@ -232,7 +233,7 @@ pub(super) fn init(
             }));
         }
     }
-    let indexes_done = ensure_indexes(conn, &cols);
+    let indexes_done = ensure_indexes(conn, &cols)?;
     let mut st = RepState {
         schemas: HashMap::new(),
         cols,
@@ -245,7 +246,7 @@ pub(super) fn init(
     // Purge rows left after SyncComplete by older terminal versions that still
     // consumed the legacy close-SQL stream; otherwise the merged reader sees duplicates.
     for uid in st.synced.clone() {
-        purge_legacy(conn, &mut st, uid);
+        purge_legacy(conn, &mut st, uid)?;
     }
     Ok(st)
 }
@@ -254,25 +255,25 @@ pub(super) fn init(
 ///
 /// The `legacy_dropped` marker prevents `init_db` from recreating it. This is the
 /// shared path for `SyncComplete` and initialization cleanup.
-fn purge_legacy(conn: &Connection, st: &mut RepState, core_uid: u64) {
+fn purge_legacy(conn: &Connection, st: &mut RepState, core_uid: u64) -> rusqlite::Result<()> {
     if !st.legacy_exists {
-        return;
+        return Ok(());
     }
-    let _ = conn.execute(
+    conn.execute(
         "DELETE FROM closed_sell_reports WHERE core_uid=?1",
         [core_uid as i64],
-    );
-    let left: i64 = conn
-        .query_row("SELECT COUNT(*) FROM closed_sell_reports", [], |r| r.get(0))
-        .unwrap_or(1);
-    if left == 0 && conn.execute("DROP TABLE closed_sell_reports", []).is_ok() {
+    )?;
+    let left: i64 = conn.query_row("SELECT COUNT(*) FROM closed_sell_reports", [], |r| r.get(0))?;
+    if left == 0 {
+        conn.execute("DROP TABLE closed_sell_reports", [])?;
         st.legacy_exists = false;
         st.vacuum_pending = true;
-        meta_set_i64(conn, "legacy_dropped", 1);
+        meta_set_i64(conn, "legacy_dropped", 1)?;
         log::info!(
             "отчёты(rep): легаси-таблица closed_sell_reports снесена — все ядра на typed-реплике"
         );
     }
+    Ok(())
 }
 
 /// Whether a lowercase key is a safe SQLite identifier (guards against injection
@@ -296,7 +297,7 @@ pub(super) fn apply_schema(
     st: &mut RepState,
     core_uid: u64,
     schema: Arc<ReportSchema>,
-) {
+) -> rusqlite::Result<()> {
     for f in schema.fields() {
         let name = f.name.to_ascii_lowercase();
         if name == "newrecid" || st.cols.contains(&name) {
@@ -304,31 +305,28 @@ pub(super) fn apply_schema(
         }
         if !valid_ident(&name) {
             log::warn!(
-                "отчёты(rep): поле схемы «{}» — не идентификатор, пропущено",
+                "reports(rep): rejecting invalid schema identifier '{}'",
                 f.name
             );
-            continue;
+            return Err(rusqlite::Error::InvalidParameterName(name));
         }
-        match conn.execute(
+        conn.execute(
             &format!("ALTER TABLE {TABLE} ADD COLUMN \"{name}\" {}", f.sql_spec),
             [],
-        ) {
-            Ok(_) => {
-                log::info!(
-                    "отчёты(rep): колонка «{name}» {} (схема ядра {core_uid})",
-                    f.sql_spec
-                );
-                st.cols.insert(name);
-            }
-            Err(e) => log::error!("отчёты(rep): ADD COLUMN {name} не удался: {e}"),
-        }
+        )?;
+        log::info!(
+            "reports(rep): added column '{name}' {} for core schema {core_uid}",
+            f.sql_spec
+        );
+        st.cols.insert(name);
     }
     // Index columns arrive automatically from the core schema, so finish creating
     // indexes here once columns definitely exist. IF NOT EXISTS makes repeats cheap.
     if !st.indexes_done {
-        st.indexes_done = ensure_indexes(conn, &st.cols);
+        st.indexes_done = ensure_indexes(conn, &st.cols)?;
     }
     st.schemas.insert(core_uid, schema);
+    Ok(())
 }
 
 /// Idempotently upsert a row by `(core_uid, newrecid)`.
@@ -344,10 +342,10 @@ pub(super) fn apply_upsert(
 ) -> rusqlite::Result<()> {
     let Some(schema) = st.schemas.get(&core_uid) else {
         log::warn!(
-            "отчёты(rep): строка rec_id={} ядра {core_uid} до схемы — пропущена",
+            "reports(rep): rejecting rec_id={} for core {core_uid} before its schema",
             row.rec_id
         );
-        return Ok(());
+        return Err(rusqlite::Error::InvalidQuery);
     };
     let mut names: Vec<String> = Vec::with_capacity(row.fields.len());
     let mut vals: Vec<Value> = Vec::with_capacity(row.fields.len());
@@ -452,46 +450,49 @@ pub(super) fn apply_set_deleted(
 /// Apply a catch-up page, resetting the core replica when `database_recreated` is set.
 ///
 /// When reset, the library restarts from zero after the acknowledgement; this page's
-/// rows are upserted idempotently in the meantime. Returns `true` when the page may
-/// be acknowledged. Individual row errors are logged without stopping the stream,
-/// which would otherwise leave catch-up stuck forever.
+/// rows are upserted idempotently in the meantime. Any row failure aborts the
+/// writer transaction so the page cannot be acknowledged with a hole.
 pub(super) fn apply_page(
     conn: &Connection,
     st: &mut RepState,
     core_uid: u64,
     core_name: &str,
     page: &ReportSyncPage,
-) -> bool {
+) -> rusqlite::Result<()> {
     if page.database_recreated {
-        let _ = conn.execute(
+        conn.execute(
             &format!("DELETE FROM {TABLE} WHERE core_uid=?1"),
             [core_uid as i64],
-        );
+        )?;
         log::warn!(
             "отчёты(rep): ядро {core_uid} пересоздало БД — реплика сброшена, lib рестартует sync"
         );
     }
     for row in page.rows.iter() {
-        if let Err(e) = apply_upsert(conn, st, core_uid, core_name, row) {
-            log::error!(
-                "отчёты(rep): страница ядра {core_uid}: upsert rec_id={} упал: {e}",
-                row.rec_id
-            );
-        }
+        apply_upsert(conn, st, core_uid, core_name, row)?;
     }
-    true
+    Ok(())
 }
 
-/// Handle `SyncComplete` after the final-page acknowledgement by committing the
-/// cursor and purging the core's legacy rows. Drop the legacy table once empty to
-/// complete the migration.
+/// Stage `SyncComplete` database effects while keeping the in-memory cursor unchanged.
+///
+/// The legacy migration completes in the transaction; cursor publication happens only
+/// after the caller commits that transaction successfully.
 pub(super) fn apply_sync_complete(
     conn: &Connection,
     st: &mut RepState,
     core_uid: u64,
-    done: &ReportSyncComplete,
-) {
-    meta_set_i64(conn, &format!("rep_synced_{core_uid}"), 1);
+) -> rusqlite::Result<()> {
+    meta_set_i64(conn, &format!("rep_synced_{core_uid}"), 1)?;
+    st.synced.insert(core_uid);
+    purge_legacy(conn, st, core_uid)
+}
+
+/// Publish the in-memory cursor side effect of a committed `SyncComplete`.
+///
+/// Keeping this outside [`apply_sync_complete`] prevents a rolled-back batch
+/// from advancing reconnect beyond rows that never reached SQLite.
+pub(super) fn commit_sync_complete(st: &RepState, core_uid: u64, done: &ReportSyncComplete) {
     if let Ok(mut m) = st.cursors.lock() {
         m.insert(core_uid, done.next_from_rec_id.max(1));
     }
@@ -502,19 +503,14 @@ pub(super) fn apply_sync_complete(
         done.max_rec_id,
         done.next_from_rec_id,
     );
-
-    // A complete typed replica supersedes this core's legacy rows. No legacy
-    // write path remains, so the read-only rows cannot reappear after this purge.
-    purge_legacy(conn, st, core_uid);
 }
 
 /// Derive a core cursor from the local database under the report-replication flow-control contract.
 ///
 /// The cursor is ALWAYS `max(newRecID) + 1`. Sequential page acknowledgements prevent
-/// a crash from skipping successfully applied tail rows, but individual upsert errors
-/// are logged while page processing continues, so other gaps can remain. Zero means the
-/// core replica is empty and requests a fresh sync. `check_open_rows` reconciles offline
-/// changes to open rows below the cursor, so the old minimum-open rule no longer applies.
+/// a crash or row failure from skipping tail rows because a failed page is never acknowledged.
+/// Zero means the core replica is empty and requests a fresh sync. `check_open_rows` reconciles
+/// offline changes to open rows below the cursor, so the old minimum-open rule no longer applies.
 fn startup_cursor(conn: &Connection, uid: i64) -> i64 {
     conn.query_row(
         &format!("SELECT MAX(newrecid) FROM {TABLE} WHERE core_uid=?1"),
@@ -607,6 +603,6 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
     .unwrap_or(false)
 }
 
-fn meta_set_i64(conn: &Connection, key: &str, val: i64) {
-    super::meta_set(conn, key, &val.to_string());
+fn meta_set_i64(conn: &Connection, key: &str, val: i64) -> rusqlite::Result<()> {
+    super::meta_set(conn, key, &val.to_string())
 }

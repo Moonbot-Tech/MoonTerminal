@@ -32,15 +32,15 @@ pub mod tuner_smart;
 pub use dates::{fmt_unix, fmt_unix_date, fmt_unix_secs, parse_ymd};
 pub use read_fail::{FailKind, ReadFail, ReadResult};
 pub use rep::{DbMsg, ReportSink};
-pub use report_read::{
-    display_columns, distinct_cores, max_core_uid, query_reports, query_totals, DISPLAY_COLUMNS,
-    ProfitMetric, ReportFilter, ReportTable, SideFilter,
-};
 pub(crate) use report_read::max_core_uid_in;
+pub use report_read::{
+    display_columns, distinct_cores, max_core_uid, query_reports, query_totals, ProfitMetric,
+    ReportFilter, ReportTable, SideFilter, DISPLAY_COLUMNS,
+};
 
 use read_fail::read_fail;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,12 +52,17 @@ use crate::config::paths;
 /// Feed-to-writer sink for typed replication messages plus per-core start cursors.
 pub type ReportTx = ReportSink;
 
-/// Database handle containing the write channel and a generation counter.
+/// Database handle containing the writer channel and post-commit publication state.
 ///
-/// The counter advances after writes so the Reports window can refresh without polling.
+/// The generation is the source of truth; the bounded dirty edge only wakes report-derived UI
+/// consumers after a successful commit.
 pub struct ReportsHandle {
+    /// Typed replication sink used by core feed sessions.
     pub tx: ReportTx,
+    /// Monotonic committed report generation.
     pub generation: Arc<AtomicU64>,
+    /// Coalescing post-commit edge consumed by UI coordination.
+    pub commit_dirty: Arc<AtomicBool>,
 }
 
 /// Initialize shared report metadata and any still-present read-only legacy table.
@@ -167,6 +172,120 @@ pub fn report_row_count() -> ReadResult<i64> {
 /// core feed thread waits for the writer, naturally throttling catch-up.
 const REPORT_QUEUE_CAP: usize = 16_384;
 
+/// Maximum attempts for one owned writer batch before the writer fails closed.
+const REPORT_BATCH_ATTEMPTS: usize = 4;
+
+/// Publish one successfully committed writer batch to report-data consumers.
+///
+/// The dirty bit is a bounded one-slot signal. Repeated commits coalesce while it is already set
+/// without losing the generation that consumers use as the source of truth.
+///
+/// Args:
+///     generation: Monotonic report snapshot revision shared with readers.
+///     commit_dirty: Coalescing dirty bit sampled by UI coordination.
+///
+/// The function has no return value.
+fn publish_report_commit(generation: &AtomicU64, commit_dirty: &AtomicBool) {
+    publish_after_generation(generation, || {
+        commit_dirty.store(true, Ordering::Release);
+    });
+}
+
+/// Advance the authoritative revision before exposing its causal wake edge.
+fn publish_after_generation(generation: &AtomicU64, publish_edge: impl FnOnce()) {
+    generation.fetch_add(1, Ordering::Relaxed);
+    publish_edge();
+}
+
+/// Commit one stateful batch without exposing speculative in-memory mutations.
+///
+/// The callback receives the same owned batch indirectly on every attempt. A failed
+/// begin, apply, or commit drops the transaction and candidate state, then retries
+/// with bounded backoff. Exhaustion returns the last SQLite error so the caller can
+/// enter recovery without acknowledging or skipping data.
+fn commit_stateful_batch<S: Clone, T>(
+    conn: &Connection,
+    state: &mut S,
+    mut apply: impl FnMut(&Connection, &mut S) -> rusqlite::Result<T>,
+) -> rusqlite::Result<T> {
+    let mut last_error = None;
+    for attempt in 0..REPORT_BATCH_ATTEMPTS {
+        let transaction = match conn.unchecked_transaction() {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                last_error = Some(error);
+                if attempt + 1 < REPORT_BATCH_ATTEMPTS {
+                    std::thread::sleep(Duration::from_millis(25u64 << attempt));
+                }
+                continue;
+            }
+        };
+        let mut candidate = state.clone();
+        match apply(&transaction, &mut candidate) {
+            Ok(effects) => match transaction.commit() {
+                Ok(()) => {
+                    *state = candidate;
+                    return Ok(effects);
+                }
+                Err(error) => last_error = Some(error),
+            },
+            Err(error) => last_error = Some(error),
+        }
+        if attempt + 1 < REPORT_BATCH_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(25u64 << attempt));
+        }
+    }
+    Err(last_error.unwrap_or(rusqlite::Error::InvalidQuery))
+}
+
+/// Keep one owned writer batch fail-closed until SQLite accepts it.
+///
+/// Each round retains the transaction-level retry policy from [`commit_stateful_batch`].
+/// Exhausted rounds invoke `wait`, which applies production backoff without dropping the batch
+/// or closing the bounded channel. Tests inject a non-blocking wait to exercise recovery.
+fn commit_stateful_batch_until_success<S: Clone, T>(
+    conn: &Connection,
+    state: &mut S,
+    mut apply: impl FnMut(&Connection, &mut S) -> rusqlite::Result<T>,
+    mut wait: impl FnMut(u32, &rusqlite::Error),
+) -> T {
+    let mut failed_rounds = 0u32;
+    loop {
+        match commit_stateful_batch(conn, state, |transaction, candidate| {
+            apply(transaction, candidate)
+        }) {
+            Ok(effects) => return effects,
+            Err(error) => {
+                failed_rounds = failed_rounds.saturating_add(1);
+                wait(failed_rounds, &error);
+            }
+        }
+    }
+}
+
+/// Result row returned by SQLite's live-safe passive WAL checkpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WalCheckpointStatus {
+    busy: i64,
+    log_frames: i64,
+    checkpointed_frames: i64,
+}
+
+/// Checkpoint every currently available WAL frame without waiting for readers.
+fn passive_wal_checkpoint(conn: &Connection) -> rusqlite::Result<WalCheckpointStatus> {
+    conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+        Ok(WalCheckpointStatus {
+            busy: row.get(0)?,
+            log_frames: row.get(1)?,
+            checkpointed_frames: row.get(2)?,
+        })
+    })
+}
+
+/// Start the sole report-replica writer and mark its shared state dirty after each commit.
+///
+/// Returns:
+///     The writer handle, or `None` when the database or writer thread cannot be initialized.
 pub fn spawn_writer() -> Option<ReportsHandle> {
     let (tx, rx): (std::sync::mpsc::SyncSender<DbMsg>, Receiver<DbMsg>) =
         std::sync::mpsc::sync_channel(REPORT_QUEUE_CAP);
@@ -193,6 +312,8 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
     };
     let generation = Arc::new(AtomicU64::new(0));
     let gen_writer = generation.clone();
+    let commit_dirty = Arc::new(AtomicBool::new(false));
+    let writer_commit_dirty = commit_dirty.clone();
     if let Err(e) = std::thread::Builder::new()
         .name("reports-db".into())
         .spawn(move || {
@@ -225,60 +346,82 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                     }
                 }
                 thr_count += batch.len() as u64;
-                let txn = match conn.unchecked_transaction() {
-                    Ok(t) => t,
-                    Err(e) => {
-                        log::error!("отчёты: transaction не открылась: {e}");
-                        continue;
-                    }
-                };
-                // Acknowledge pages (`page_applied`) AFTER commit. Under the flow-control
-                // contract, the library requests no next page until this one reaches disk.
-                let mut acks = Vec::new();
-                for msg in batch {
-                    apply_msg(&txn, &mut rep_state, msg, &mut acks);
-                }
-                match txn.commit() {
-                    Ok(()) => {
-                        for (ack, page) in acks {
-                            if let Err(e) = ack.page_applied(&page) {
-                                log::warn!("отчёты(rep): page_applied не ушёл: {e:?}");
+                // Keep the owned batch until one whole attempt commits. ACK indices are
+                // recreated per attempt and become observable only after that commit.
+                let ack_indices = commit_stateful_batch_until_success(
+                    &conn,
+                    &mut rep_state,
+                    |transaction, candidate| {
+                        let mut ack_indices = Vec::new();
+                        for (index, msg) in batch.iter().enumerate() {
+                            if apply_msg(transaction, candidate, msg)? {
+                                ack_indices.push(index);
                             }
                         }
+                        Ok(ack_indices)
+                    },
+                    |failed_rounds, error| {
+                        let delay =
+                            Duration::from_secs(1u64 << failed_rounds.saturating_sub(1).min(5));
+                        log::error!(
+                            "reports: writer batch still blocked after {} attempts; retrying in \
+                             {}s: {error}",
+                            failed_rounds as usize * REPORT_BATCH_ATTEMPTS,
+                            delay.as_secs()
+                        );
+                        std::thread::sleep(delay);
+                    },
+                );
+                for msg in &batch {
+                    if let DbMsg::SyncComplete { core_uid, done } = msg {
+                        rep::commit_sync_complete(&rep_state, *core_uid, done);
                     }
-                    Err(e) => log::error!("отчёты: commit батча упал: {e}"),
+                }
+                publish_report_commit(&gen_writer, &writer_commit_dirty);
+                for index in ack_indices {
+                    let DbMsg::Page { ack, page, .. } = &batch[index] else {
+                        continue;
+                    };
+                    if let Err(error) = ack.page_applied(page) {
+                        log::warn!("reports(rep): page_applied failed: {error:?}");
+                    }
                 }
                 // If this batch dropped the legacy table, run a one-off VACUUM outside the
                 // transaction to reclaim its hundreds of MB. Only the writer is blocked.
                 if rep_state.vacuum_pending {
-                    rep_state.vacuum_pending = false;
                     let t = std::time::Instant::now();
                     match conn.execute("VACUUM", []) {
-                        Ok(_) => log::info!(
-                            "отчёты: VACUUM после сноса легаси — {}с",
-                            t.elapsed().as_secs()
-                        ),
+                        Ok(_) => {
+                            rep_state.vacuum_pending = false;
+                            log::info!(
+                                "reports: post-legacy VACUUM completed in {}s",
+                                t.elapsed().as_secs()
+                            );
+                        }
                         Err(e) => log::warn!("отчёты: VACUUM не удался: {e}"),
                     }
                 }
-                gen_writer.fetch_add(1, Ordering::Relaxed);
-                // LAZY WAL checkpoint. SQLite's PASSIVE auto-checkpoint normally keeps `-wal`
-                // small on its own; forcing TRUNCATE every time would cause an unnecessary CPU
-                // spike while the writer thread copies WAL into the main file. Call TRUNCATE
-                // ONLY when `-wal` has actually grown because auto-checkpointing cannot keep up,
-                // for example when a Reports reader prevents reset. This avoids normal-case
-                // spikes without allowing disk usage to grow by hundreds of MB. Check the size
-                // every 60 seconds; stat is cheap.
+                // A passive checkpoint never waits for an Analytics reader. Inspect its
+                // returned progress instead of mistaking a busy result row for success.
                 if last_ckpt.elapsed() >= Duration::from_secs(60) {
                     last_ckpt = std::time::Instant::now();
                     let wal_big = std::fs::metadata(&wal_path)
                         .map(|m| m.len() > 32 * 1024 * 1024)
                         .unwrap_or(false);
                     if wal_big {
-                        if let Err(e) =
-                            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
-                        {
-                            log::debug!("отчёты: wal_checkpoint не удался: {e}");
+                        match passive_wal_checkpoint(&conn) {
+                            Ok(status) if status.checkpointed_frames < status.log_frames => {
+                                log::debug!(
+                                    "reports: WAL reader pins {} of {} frames (busy={})",
+                                    status.log_frames - status.checkpointed_frames,
+                                    status.log_frames,
+                                    status.busy
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                log::debug!("reports: wal_checkpoint failed: {error}");
+                            }
                         }
                     }
                 }
@@ -309,62 +452,51 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
             tx,
             cursors,
             open_rows,
+            send_failed: Arc::new(AtomicBool::new(false)),
         },
         generation,
+        commit_dirty,
     })
 }
 
 /// Apply one typed-replica writer message.
 ///
-/// Successful pages append their acknowledgements to `acks`; the caller sends
-/// `page_applied` only after the surrounding transaction commits.
+/// Returns `true` only for a page whose acknowledgement may be sent after the
+/// surrounding transaction commits.
 fn apply_msg(
     conn: &Connection,
     rep_state: &mut rep::RepState,
-    msg: DbMsg,
-    acks: &mut Vec<(
-        moonproto::MoonReports,
-        std::sync::Arc<moonproto::ReportSyncPage>,
-    )>,
-) {
+    msg: &DbMsg,
+) -> rusqlite::Result<bool> {
     match msg {
-        DbMsg::Schema { core_uid, schema } => rep::apply_schema(conn, rep_state, core_uid, schema),
+        DbMsg::Schema { core_uid, schema } => {
+            rep::apply_schema(conn, rep_state, *core_uid, schema.clone())?;
+        }
         DbMsg::Upsert {
             core_uid,
             core_name,
             row,
-        } => {
-            if let Err(e) = rep::apply_upsert(conn, rep_state, core_uid, &core_name, &row) {
-                log::error!(
-                    "отчёты(rep): upsert rec_id={} ядра {core_uid} упал: {e}",
-                    row.rec_id
-                );
-            }
-        }
+        } => rep::apply_upsert(conn, rep_state, *core_uid, core_name, row)?,
         DbMsg::Delete { core_uid, rec_id } => {
-            if let Err(e) = rep::apply_delete(conn, core_uid, rec_id) {
-                log::error!("отчёты(rep): delete rec_id={rec_id} ядра {core_uid} упал: {e}");
-            }
+            rep::apply_delete(conn, *core_uid, *rec_id)?;
         }
         DbMsg::SetDeleted { core_uid, change } => {
-            if let Err(e) = rep::apply_set_deleted(conn, rep_state, core_uid, &change) {
-                log::error!("отчёты(rep): set-deleted ядра {core_uid} упал: {e}");
-            }
+            rep::apply_set_deleted(conn, rep_state, *core_uid, change)?;
         }
         DbMsg::Page {
             core_uid,
             core_name,
             page,
-            ack,
+            ..
         } => {
-            if rep::apply_page(conn, rep_state, core_uid, &core_name, &page) {
-                acks.push((ack, page));
-            }
+            rep::apply_page(conn, rep_state, *core_uid, core_name, page)?;
+            return Ok(true);
         }
-        DbMsg::SyncComplete { core_uid, done } => {
-            rep::apply_sync_complete(conn, rep_state, core_uid, &done);
+        DbMsg::SyncComplete { core_uid, done: _ } => {
+            rep::apply_sync_complete(conn, rep_state, *core_uid)?;
         }
     }
+    Ok(false)
 }
 
 // ============================================================================
@@ -423,6 +555,22 @@ pub fn read_snapshot(conn: &Connection) -> ReadResult<rusqlite::Transaction<'_>>
         .map_err(|e| read_fail("отчёты: снимок для чтения", e))
 }
 
+/// Run a multi-query read inside one pinned SQLite snapshot.
+///
+/// Args:
+///     conn: Reader connection with every required database already attached.
+///     read: Query batch that must observe one committed report generation.
+///
+/// Returns:
+///     The batch result, or a classified snapshot/query failure.
+pub(in crate::db) fn with_read_snapshot<T>(
+    conn: &Connection,
+    read: impl FnOnce(&Connection) -> ReadResult<T>,
+) -> ReadResult<T> {
+    let snapshot = read_snapshot(conn)?;
+    read(&snapshot)
+}
+
 pub fn load_sort(conn: &Connection) -> Option<(String, bool)> {
     let key: String = conn
         .query_row("SELECT value FROM app_meta WHERE key='sort_key'", [], |r| {
@@ -441,17 +589,18 @@ pub fn load_sort(conn: &Connection) -> Option<(String, bool)> {
 
 /// Upsert one `app_meta` key/value pair. The single place the shared settings table is written.
 /// Plain-private: every caller is this module or a descendant (`rep`).
-fn meta_set(conn: &Connection, key: &str, value: &str) {
-    let _ = conn.execute(
+fn meta_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
         "INSERT INTO app_meta(key,value) VALUES(?1,?2)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         rusqlite::params![key, value],
-    );
+    )?;
+    Ok(())
 }
 
 pub fn save_sort(conn: &Connection, key: &str, desc: bool) {
-    meta_set(conn, "sort_key", key);
-    meta_set(conn, "sort_desc", if desc { "1" } else { "0" });
+    let _ = meta_set(conn, "sort_key", key);
+    let _ = meta_set(conn, "sort_desc", if desc { "1" } else { "0" });
 }
 
 /// Load the saved comma-separated set of visible report columns, or `None` if never saved.
@@ -473,7 +622,7 @@ pub fn load_visible(conn: &Connection) -> Option<Vec<String>> {
 
 /// Save the visible report-column names as a comma-separated set.
 pub fn save_visible(conn: &Connection, cols: &[&str]) {
-    meta_set(conn, "report_visible", &cols.join(","));
+    let _ = meta_set(conn, "report_visible", &cols.join(","));
 }
 
 /// Report read source: a table, its columns, and a legacy flag.

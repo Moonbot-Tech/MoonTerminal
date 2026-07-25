@@ -1,5 +1,184 @@
 use super::*;
 use rusqlite::types::Value;
+use std::cell::Cell;
+
+/// `db/mod.rs:publish_report_commit` must set the dirty bit after the generation bump; removing
+/// that store leaves an open Report or Analytics view stale until an unrelated Backend repaint.
+#[test]
+fn committed_batch_publication_is_bounded_and_advances_generation() {
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+
+    publish_report_commit(&generation, &dirty);
+    publish_report_commit(&generation, &dirty);
+
+    assert_eq!(generation.load(Ordering::Relaxed), 2);
+    assert!(dirty.swap(false, Ordering::Acquire));
+    assert!(!dirty.swap(false, Ordering::Acquire));
+}
+
+/// `db/mod.rs:publish_after_generation` must advance the generation before invoking
+/// the edge publisher; swapping those statements lets the UI consume an edge while
+/// still observing the previous report revision.
+#[test]
+fn committed_batch_publishes_only_after_generation_advance() {
+    let generation = AtomicU64::new(41);
+    let observed = Cell::new(0);
+
+    publish_after_generation(&generation, || {
+        observed.set(generation.load(Ordering::Relaxed));
+    });
+
+    assert_eq!(observed.get(), 42);
+}
+
+/// `db/mod.rs:commit_stateful_batch` must retry the same owned work with a fresh
+/// candidate state; returning after the first failed commit loses the batch, while
+/// reusing its candidate applies in-memory effects twice.
+#[test]
+fn failed_commit_retries_without_leaking_candidate_state() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute("CREATE TABLE sample(value INTEGER)", [])
+        .unwrap();
+    let attempts = Cell::new(0usize);
+    let mut state = 0usize;
+
+    let committed_attempt = commit_stateful_batch(&conn, &mut state, |transaction, candidate| {
+        let attempt = attempts.get() + 1;
+        attempts.set(attempt);
+        *candidate += 1;
+        transaction
+            .execute("INSERT INTO sample VALUES (1)", [])
+            .unwrap();
+        if attempt == 1 {
+            transaction.execute_batch("ROLLBACK").unwrap();
+        }
+        Ok(attempt)
+    })
+    .unwrap();
+
+    assert_eq!(committed_attempt, 2);
+    assert_eq!(state, 1);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM sample", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+/// `db/mod.rs:commit_stateful_batch_until_success` must begin a new retry round after the
+/// transaction-level allowance is exhausted; returning the first error closes the sole writer
+/// and makes every later live report event disappear until process restart.
+#[test]
+fn exhausted_retry_round_keeps_the_owned_batch() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute("CREATE TABLE sample(value INTEGER)", [])
+        .unwrap();
+    let attempts = Cell::new(0usize);
+    let waits = Cell::new(0usize);
+    let mut state = 0usize;
+
+    let committed_attempt = commit_stateful_batch_until_success(
+        &conn,
+        &mut state,
+        |transaction, candidate| {
+            let attempt = attempts.get() + 1;
+            attempts.set(attempt);
+            *candidate += 1;
+            transaction.execute("INSERT INTO sample VALUES (1)", [])?;
+            if attempt <= REPORT_BATCH_ATTEMPTS {
+                transaction.execute_batch("ROLLBACK")?;
+            }
+            Ok(attempt)
+        },
+        |_, _| waits.set(waits.get() + 1),
+    );
+
+    assert_eq!(committed_attempt, REPORT_BATCH_ATTEMPTS + 1);
+    assert_eq!(waits.get(), 1);
+    assert_eq!(state, 1);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM sample", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+/// `db/mod.rs:passive_wal_checkpoint` must return SQLite's progress tuple; replacing
+/// it with an ignored row hides the pinned reader that prevents full checkpointing.
+#[test]
+fn passive_checkpoint_reports_a_pinned_reader() {
+    static NEXT_DB: AtomicU64 = AtomicU64::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "moonterminal-checkpoint-{}-{}.sqlite",
+        std::process::id(),
+        NEXT_DB.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&path);
+    let writer = Connection::open(&path).unwrap();
+    writer.pragma_update(None, "journal_mode", "WAL").unwrap();
+    writer
+        .execute_batch("CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES (0);")
+        .unwrap();
+    let reader = Connection::open(&path).unwrap();
+    let snapshot = reader.unchecked_transaction().unwrap();
+    let _: i64 = snapshot
+        .query_row("SELECT value FROM sample", [], |row| row.get(0))
+        .unwrap();
+    for value in 1..=32 {
+        writer
+            .execute("UPDATE sample SET value=?1", [value])
+            .unwrap();
+    }
+
+    let status = passive_wal_checkpoint(&writer).unwrap();
+
+    assert_eq!(status.busy, 0);
+    assert!(status.log_frames > status.checkpointed_frames);
+    drop(snapshot);
+    drop(reader);
+    drop(writer);
+    let _ = std::fs::remove_file(path);
+}
+
+/// `db/mod.rs:with_read_snapshot` must keep the transaction around the whole callback; replacing
+/// it with `read(conn)` lets the second statement observe a WAL commit that the first did not,
+/// producing internally inconsistent compound Analytics results.
+#[test]
+fn compound_read_keeps_one_wal_snapshot() {
+    static NEXT_DB: AtomicU64 = AtomicU64::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "moonterminal-read-snapshot-{}-{}.sqlite",
+        std::process::id(),
+        NEXT_DB.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&path);
+    let writer = Connection::open(&path).unwrap();
+    writer.pragma_update(None, "journal_mode", "WAL").unwrap();
+    writer
+        .execute_batch("CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES (1);")
+        .unwrap();
+    let reader = Connection::open(&path).unwrap();
+
+    let (before, after) = with_read_snapshot(&reader, |snapshot| {
+        let before: i64 = snapshot
+            .query_row("SELECT value FROM sample", [], |row| row.get(0))
+            .map_err(|error| read_fail("test: first snapshot read", error))?;
+        writer.execute("UPDATE sample SET value = 2", []).unwrap();
+        let after: i64 = snapshot
+            .query_row("SELECT value FROM sample", [], |row| row.get(0))
+            .map_err(|error| read_fail("test: second snapshot read", error))?;
+        Ok((before, after))
+    })
+    .unwrap();
+
+    assert_eq!((before, after), (1, 1));
+    drop(reader);
+    drop(writer);
+    let _ = std::fs::remove_file(path);
+}
 
 /// Replica indexes are also created for databases whose columns predate the index code.
 ///
@@ -104,14 +283,7 @@ fn union_reader_and_legacy_drop() {
     assert!((profit - 2.0).abs() < 1e-9);
 
     // SyncComplete for core 1 purges its legacy rows; the empty table is then dropped.
-    let done = moonproto::ReportSyncComplete {
-        ticket: moonproto::ReportSyncTicket { sync_id: 1 },
-        page_count: 0,
-        total_rows: 0,
-        max_rec_id: 10,
-        next_from_rec_id: 11,
-    };
-    rep::apply_sync_complete(&conn, &mut st, 1, &done);
+    rep::apply_sync_complete(&conn, &mut st, 1).unwrap();
     let legacy_left = table_columns_res(&conn).expect("схема читается");
     assert!(legacy_left.is_empty(), "легаси-таблица должна быть снесена");
     let t = query_reports(&conn, &ReportFilter::default(), "closedate", true, 10)
