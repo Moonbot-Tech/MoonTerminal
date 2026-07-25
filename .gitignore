@@ -35,8 +35,9 @@ render_diag.log
 /CLAUDE.md
 /AGENTS.md
 /DisQuestions
-# Personal bits of .claude/: per-machine settings, runtime locks and local-only skills.
-# The team's shared .claude/settings.json and .claude/hooks/ STAY tracked.
+# Shared agent entry points and implementations STAY tracked:
+# .claude/settings.json, .codex/hooks.json, and .agent-hooks/.
+# Only the following per-machine Claude settings, runtime locks, and skills are ignored.
 /.claude/settings.local.json
 /.claude/scheduled_tasks.lock
 /.claude/skills/

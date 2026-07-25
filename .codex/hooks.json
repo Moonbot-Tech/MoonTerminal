@@ -1,0 +1,29 @@
+{
+  "description": "Shared MoonTerminal startup checks and repository conventions.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.agent-hooks/session_moon_sync.sh\"",
+            "commandWindows": "$gitRoot = Split-Path (Split-Path (Get-Command git).Source -Parent) -Parent; $repoRoot = git rev-parse --show-toplevel; & (Join-Path $gitRoot 'bin\\bash.exe') \"$repoRoot/.agent-hooks/session_moon_sync.sh\"",
+            "timeout": 360,
+            "statusMessage": "Checking MoonTerminal and Moonbot dependency freshness"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.agent-hooks/session_conventions.sh\"",
+            "commandWindows": "$gitRoot = Split-Path (Split-Path (Get-Command git).Source -Parent) -Parent; $repoRoot = git rev-parse --show-toplevel; & (Join-Path $gitRoot 'bin\\bash.exe') \"$repoRoot/.agent-hooks/session_conventions.sh\"",
+            "timeout": 15,
+            "statusMessage": "Loading MoonTerminal contribution conventions"
+          }
+        ]
+      }
+    ]
+  }
+}

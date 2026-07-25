@@ -5,11 +5,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_moon_sync.sh\""
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.agent-hooks/session_moon_sync.sh\""
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_conventions.sh\""
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.agent-hooks/session_conventions.sh\""
           }
         ]
       }
