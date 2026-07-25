@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
     core_menu_sections, normalized_core_filter_ids, selection_summary, toggle_all_core_selection,
+    toggle_exchange_cores,
 };
 
 /// `core_combo.rs:core_menu_sections` must keep unidentified cores first, sort exchange sections,
@@ -107,6 +108,38 @@ fn all_toggle_replaces_stale_equal_cardinality_selection() {
     selected.insert(99);
     toggle_all_core_selection(&mut selected, available);
     assert!(selected.is_empty());
+}
+
+/// `core_combo.rs:toggle_exchange_cores` must remove an exchange only when every available member
+/// is selected while preserving other exchanges. Replacing `all` with `any` removes a partial
+/// exchange instead of completing it; unconditional extension makes the second click unable to
+/// clear its checkmarks.
+#[test]
+fn exchange_toggle_adds_or_removes_only_available_members() {
+    let available = HashSet::from([1, 2, 3, 4]);
+    let mut selected = HashSet::new();
+
+    assert!(toggle_exchange_cores(&mut selected, &available, [1, 2, 99]));
+    assert_eq!(selected, HashSet::from([1, 2]));
+
+    selected.insert(4);
+    assert!(toggle_exchange_cores(&mut selected, &available, [1, 2]));
+    assert_eq!(selected, HashSet::from([4]));
+
+    selected.insert(1);
+    assert!(toggle_exchange_cores(&mut selected, &available, [1, 2]));
+    assert_eq!(selected, HashSet::from([1, 2, 4]));
+
+    let mut exchange_only = HashSet::from([1, 2]);
+    assert!(toggle_exchange_cores(
+        &mut exchange_only,
+        &available,
+        [1, 2]
+    ));
+    assert!(exchange_only.is_empty());
+
+    assert!(!toggle_exchange_cores(&mut selected, &available, [98, 99]));
+    assert_eq!(selected, HashSet::from([1, 2, 4]));
 }
 
 /// `core_combo.rs:normalized_core_filter_ids` must compare available membership before returning

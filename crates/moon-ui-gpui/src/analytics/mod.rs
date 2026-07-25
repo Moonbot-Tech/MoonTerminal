@@ -1140,6 +1140,36 @@ impl AnalyticsView {
                 }
             }
         }
+        self.core_selection_changed(cx);
+    }
+
+    /// Toggle every still-available core from one clicked exchange section.
+    ///
+    /// Empty means All before the click, so the first exchange selection becomes explicit. A second
+    /// click removes the exchange when all of its available cores are selected. Partial selections
+    /// retain cores from other exchanges, while a stale-only batch is a no-op.
+    ///
+    /// Args:
+    ///     exchange_cores: Core ids captured from the rendered Analytics exchange section.
+    ///     cx: Analytics context used to persist and reload a changed selection.
+    ///
+    /// Returns:
+    ///     Nothing; a changed selection is persisted and loaded atomically.
+    fn toggle_exchange_cores(&mut self, exchange_cores: Vec<u64>, cx: &mut Context<Self>) {
+        let available = self.cores.iter().map(|(core, _)| *core).collect();
+        if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
+            self.core_selection_changed(cx);
+        }
+    }
+
+    /// Persist the Analytics core filter and reload every dependent surface.
+    ///
+    /// Args:
+    ///     cx: Analytics context used to update session state, reload data, and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; the current core selection is published and reloaded in place.
+    fn core_selection_changed(&mut self, cx: &mut Context<Self>) {
         let selected = self.sel_cores.clone();
         self.backend.update(cx, |b, _| {
             b.ui_session.analytics.sel_cores = selected;
