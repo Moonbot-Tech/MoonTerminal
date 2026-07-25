@@ -123,6 +123,10 @@ impl StratMode {
 
 impl AnalyticsView {
     /// Change the selected strategy: detail + tuner scope.
+    ///
+    /// Args:
+    ///     sel: New anchor strategy key and display name, or `None` for all strategies.
+    ///     cx: GPUI context used to start replacement axis reads and repaint.
     fn set_sel_strategy(&mut self, sel: Option<(String, String)>, cx: &mut Context<Self>) {
         self.sel_strategy = sel;
         // The tuner/profile scope changed — the old computations (suggest included) are wrong.
@@ -130,7 +134,7 @@ impl AnalyticsView {
         // The "By time" schedule grid is PER strategy: reset it so the previous strategy's
         // v1 does not leak onto the new one (otherwise Save would write foreign values).
         self.time_tuner.reset_grid();
-        self.time_tuner.dirty = true;
+        self.time_tuner.invalidate();
         // The coin lists were edited against the PREVIOUS strategy; carried over they would
         // read as "this strategy's coins". `invalidate` retires them along with the numbers.
         self.coins.invalidate();
@@ -185,7 +189,7 @@ impl AnalyticsView {
         // with entirely different lists, so naming one picks whichever copy comes first.
         // A bare `strategyid` is accepted too and takes the first core carrying it.
         let want = super::probe_select_spec().unwrap_or("");
-        let pick = self.data.data().and_then(|d| {
+        let pick = self.strategy_data.data().and_then(|d| {
             if want.is_empty() {
                 // Nothing addressed: take the BIGGEST blacklist, since the unnamed form
                 // exists to exercise the field's ordering and shading at once, and a
@@ -250,12 +254,12 @@ impl AnalyticsView {
     /// Deliberately NOT `set_sel_strategy`: that resets the schedule grid, and multi-select
     /// exists precisely to tune values once and write them to many strategies. The anchor's
     /// own coin detail does not change either.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to start replacement axis reads and repaint.
     fn selection_scope_changed(&mut self, cx: &mut Context<Self>) {
         self.tuner.invalidate();
-        // A bare `dirty` write, NOT `time_tuner.invalidate()`: this path has never retired
-        // an in-flight time suggestion (unlike the filter axis' `invalidate` above), and the
-        // refactor keeps that behavior rather than silently changing it.
-        self.time_tuner.dirty = true;
+        self.time_tuner.invalidate();
         // The coin table's numbers AND its lists are scoped to the whole selection, so
         // adding or removing a strategy retires both — including any unsaved tick, whose
         // baseline (the union of the selected strategies' saved lists) just changed.
@@ -326,7 +330,10 @@ impl AnalyticsView {
             return;
         }
         self.strat_mode = mode;
-        self.reload_axis_if_stale(mode, cx);
+        self.backend.update(cx, |backend, _| {
+            backend.ui_session.analytics.strat_mode = mode;
+        });
+        self.request_axis_if_stale(mode, cx);
         cx.notify();
     }
 
@@ -431,16 +438,49 @@ impl AnalyticsView {
         }
     }
 
-    /// Reload an axis only when its data is stale — the dispatch for ENTERING an axis
-    /// (a mode button, a tab switch): fresh data stays, a stale axis recomputes.
-    pub(super) fn reload_axis_if_stale(&mut self, mode: StratMode, cx: &mut Context<Self>) {
-        let stale = match mode {
+    /// Reload a report-stale axis without overlapping its full-history scans.
+    ///
+    /// Args:
+    ///     mode: Visible tuning axis to refresh.
+    ///     show_overlay: Whether queued user work requires blocking progress feedback.
+    ///     cx: GPUI context used to execute the serialized reads.
+    pub(super) fn reload_axis_after_report(
+        &mut self,
+        mode: StratMode,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
+        match mode {
+            StratMode::Filters => self.reload_tuner_after_report(show_overlay, cx),
+            StratMode::Time => self.reload_time_after_report(show_overlay, cx),
+            StratMode::Coins => self.reload_coins_after_report(show_overlay, cx),
+        }
+    }
+
+    /// Return whether one tuning axis is stale for the current report and user scope.
+    ///
+    /// Args:
+    ///     mode: Tuning axis whose cached state should be inspected.
+    ///
+    /// Returns:
+    ///     `true` when entering the axis must trigger a recomputation.
+    pub(super) fn axis_needs_reload(&self, mode: StratMode) -> bool {
+        match mode {
             StratMode::Filters => self.tuner.needs_reload(),
             StratMode::Time => self.time_tuner.needs_reload(),
             StratMode::Coins => self.coins.needs_reload(),
-        };
-        if stale {
-            self.reload_axis(mode, cx);
+        }
+    }
+
+    /// Queue a stale tab-entry axis behind any Analytics database work already in flight.
+    ///
+    /// Args:
+    ///     mode: Newly visible tuning axis.
+    ///     cx: GPUI context used to arm the shared report refresh gate.
+    pub(super) fn request_axis_if_stale(&mut self, mode: StratMode, cx: &mut Context<Self>) {
+        if self.axis_needs_reload(mode) {
+            self.report_busy_retries.reset();
+            self.request_report_refresh(true, cx);
         }
     }
 

@@ -157,6 +157,7 @@ fn analytics_reopen_state_is_process_lifetime_only() {
     let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
     let analytics = fs::read_to_string(root.join("analytics").join("mod.rs")).unwrap();
     let toolbar = fs::read_to_string(root.join("analytics").join("toolbar.rs")).unwrap();
+    let tuner = fs::read_to_string(root.join("analytics").join("tuner").join("mod.rs")).unwrap();
     let ui_session = fs::read_to_string(root.join("ui_session.rs")).unwrap();
     let layout = fs::read_to_string(
         root.parent()
@@ -178,9 +179,11 @@ fn analytics_reopen_state_is_process_lifetime_only() {
     assert!(
         analytics.contains("let session = backend.read(cx).ui_session.analytics.clone();")
             && analytics.contains("sel_cores: session.sel_cores")
+            && analytics.contains("session.strat_mode")
             && analytics.contains("b.ui_session.analytics.sel_cores = selected;")
-            && toolbar.contains("b.ui_session.analytics.tab = t;"),
-        "Analytics construction and both user choices must share the Backend UI-session snapshot"
+            && toolbar.contains("b.ui_session.analytics.tab = t;")
+            && tuner.contains("backend.ui_session.analytics.strat_mode = mode;"),
+        "Analytics construction and all reopen choices must share the Backend UI-session snapshot"
     );
     let tab_init = analytics
         .find("tab: if probe {")
@@ -202,6 +205,256 @@ fn analytics_reopen_state_is_process_lifetime_only() {
             && !layout.contains("AnalyticsSessionState"),
         "process-lifetime UI state must not enter the serialized WindowLayout"
     );
+}
+
+/// `startup.rs` must notify the dedicated report revision entity rather than the
+/// global Backend; restoring `mark_backend_dirty` repaints every shell for each
+/// report burst and makes Report/Analytics wake fan-out scale with window count.
+#[test]
+fn report_commits_use_a_dedicated_revision_channel() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
+    let analytics = fs::read_to_string(root.join("analytics").join("mod.rs")).unwrap();
+    let report = fs::read_to_string(root.join("panels").join("report").join("state.rs")).unwrap();
+
+    assert!(
+        startup.contains("coord_report_revision.update(cx, |_, cx| cx.notify());")
+            && analytics.contains("cx.observe(&report_revision")
+            && report.contains("cx.observe(&report_revision"),
+        "report-derived consumers must observe only the dedicated revision entity"
+    );
+    let commit_block = startup
+        .split("consume_report_commit(coord_report_dirty.as_deref()")
+        .nth(1)
+        .expect("startup must consume the committed-report edge");
+    let commit_block = commit_block
+        .split("b.maybe_diag_open_first_market")
+        .next()
+        .unwrap();
+    assert!(
+        !commit_block.contains("mark_backend_dirty"),
+        "a report commit must not notify the global Backend entity"
+    );
+}
+
+/// `analytics/mod.rs:refresh_visible_report_data` must route a stale Strategies
+/// base through `strategy_base_data`; replacing it with `reload_summary` restores
+/// the full charts/rankings scan on every high-rate report refresh.
+#[test]
+fn strategies_refresh_uses_the_compact_base() {
+    let analytics = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("analytics")
+            .join("mod.rs"),
+    )
+    .unwrap();
+    assert!(
+        analytics.contains(
+            "self.reload_strategy_base(true, true, show_overlay, cx)"
+        ) && analytics.contains("moon_core::db::analytics::strategy_base_data(&q, read_cores)"),
+        "Strategies refresh must not pay for the full Summary surface"
+    );
+}
+
+/// Automatic report reads must reuse stale Analytics content without dimming the whole window.
+///
+/// The plausible regression is replacing `show_overlay` with `true` at any `spawn_db` call below:
+/// every trade burst then raises the delayed busy overlay and Strategy Tuning visibly flashes
+/// every 5-10 seconds even though its old snapshot is still safe to display.
+#[test]
+fn automatic_analytics_refresh_keeps_the_busy_overlay_hidden() {
+    for (rel, signatures) in [
+        (
+            "analytics/mod.rs",
+            &["fn reload_summary(", "fn reload_strategy_base("][..],
+        ),
+        (
+            "analytics/calendar/mod.rs",
+            &["fn reload_calendar_inner("][..],
+        ),
+        (
+            "analytics/tuner/filter/mod.rs",
+            &["fn reload_tuner_inner("][..],
+        ),
+        (
+            "analytics/tuner/time/mod.rs",
+            &["fn reload_time_inner("][..],
+        ),
+        (
+            "analytics/tuner/coins/load.rs",
+            &["fn reload_coins_inner("][..],
+        ),
+    ] {
+        let source = read_src(rel);
+        for signature in signatures {
+            let after_signature = source
+                .split_once(signature)
+                .unwrap_or_else(|| panic!("{rel} must contain {signature}"))
+                .1;
+            let spawn_args = after_signature
+                .split_once("self.spawn_db(")
+                .unwrap_or_else(|| panic!("{rel}: {signature} must start its database read"))
+                .1
+                .trim_start();
+            assert!(
+                spawn_args.starts_with("show_overlay,"),
+                "{rel}: {signature} must pass the explicit presentation policy to spawn_db"
+            );
+        }
+    }
+
+    let analytics = read_src("analytics/mod.rs");
+    assert!(
+        analytics.contains(
+            "this.reload_axis_after_report(this.strat_mode, show_overlay, cx);"
+        ),
+        "the Strategy base-to-axis chain must retain the original manual/background overlay policy"
+    );
+}
+
+/// `analytics/calendar/mod.rs:reload_calendar_inner` must read Calendar and its undated
+/// warning through one compound API; restoring the old metadata follow-up can publish
+/// adjacent report generations as one visible state under continuous ingestion.
+#[test]
+fn calendar_refresh_keeps_visible_metadata_in_one_snapshot() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let calendar = fs::read_to_string(
+        root.join("src")
+            .join("analytics")
+            .join("calendar")
+            .join("mod.rs"),
+    )
+    .unwrap();
+    let core_analytics = fs::read_to_string(
+        root.parent()
+            .unwrap()
+            .join("moon-core")
+            .join("src")
+            .join("db")
+            .join("analytics")
+            .join("mod.rs"),
+    )
+    .unwrap();
+    let calendar_data = fn_body(&core_analytics, "pub fn calendar_data(");
+
+    assert!(
+        calendar.contains("moon_core::db::analytics::calendar_data(")
+            && !calendar.contains("fn reload_report_metadata(")
+            && calendar_data
+                .contains("period: calendar::calendar_period_from(snapshot, q, previous, hourly)")
+            && calendar_data.contains("undated: undated_closes_on(snapshot, q)"),
+        "Calendar cells and undated metadata must be derived from the same read snapshot"
+    );
+}
+
+/// All tabs must share the one-minute core-selector cadence. Moving `distinct_cores`
+/// back into the unconditional Summary or Strategies payload restores a full-table
+/// grouping on every automatic refresh under continuous ingestion.
+#[test]
+fn analytics_core_metadata_is_throttled_across_tabs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let analytics_ui =
+        fs::read_to_string(root.join("src").join("analytics").join("mod.rs")).unwrap();
+    let calendar_ui = fs::read_to_string(
+        root.join("src")
+            .join("analytics")
+            .join("calendar")
+            .join("mod.rs"),
+    )
+    .unwrap();
+    let core_analytics = fs::read_to_string(
+        root.parent()
+            .unwrap()
+            .join("moon-core")
+            .join("src")
+            .join("db")
+            .join("analytics")
+            .join("mod.rs"),
+    )
+    .unwrap();
+    let summary_read = fn_body(&core_analytics, "pub fn summary_data(");
+    let strategy_read = fn_body(&core_analytics, "pub fn strategy_base_data(");
+    let strategy_base = fn_body(&core_analytics, "fn strategy_base_on(");
+    let summary = fn_body(&core_analytics, "pub(super) fn summary_on(");
+
+    assert!(
+        analytics_ui.contains("moon_core::db::analytics::summary_data(&q, read_cores)")
+            && analytics_ui
+                .contains("moon_core::db::analytics::strategy_base_data(&q, read_cores)")
+            && calendar_ui.contains("let refresh_cores = self.core_metadata_due(cx);")
+            && analytics_ui.contains("fn core_metadata_due(")
+            && summary_read.contains("cores: read_cores.then(")
+            && strategy_read.contains("cores: read_cores.then(")
+            && !strategy_base.contains("distinct_cores")
+            && summary.contains("cores: if read_cores {"),
+        "Summary, Strategies, and Calendar must use the shared throttled core metadata path"
+    );
+}
+
+/// Manual v1 edits must retire a suggestion started from an older draft. Removing
+/// either call lets a late Filter/Time sweep silently overwrite the user's input.
+#[test]
+fn manual_v1_edits_retire_filter_and_time_suggestions() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("analytics")
+        .join("tuner");
+    let filter = fs::read_to_string(root.join("filter").join("mod.rs")).unwrap();
+    let filter_actions = fs::read_to_string(root.join("filter").join("actions.rs")).unwrap();
+    let time = fs::read_to_string(root.join("time").join("grid.rs")).unwrap();
+    fn method<'a>(source: &'a str, signature: &str) -> &'a str {
+        source
+            .split_once(signature)
+            .unwrap_or_else(|| panic!("expected method `{signature}`"))
+            .1
+            .split("\n    }\n")
+            .next()
+            .unwrap()
+    }
+
+    for (source, signature, invalidation) in [
+        (
+            &filter,
+            "fn commit_bound(",
+            "self.tuner.invalidate_suggest();",
+        ),
+        (
+            &filter,
+            "fn apply_bounds(",
+            "self.tuner.invalidate_suggest();",
+        ),
+        (
+            &filter_actions,
+            "fn copy_v2_to_v1(",
+            "self.tuner.invalidate_suggest();",
+        ),
+        (
+            &filter_actions,
+            "fn clear_variant(",
+            "self.tuner.invalidate_suggest();",
+        ),
+        (
+            &time,
+            "fn commit_time(",
+            "self.time_tuner.invalidate_suggest();",
+        ),
+        (
+            &time,
+            "fn clear_field(",
+            "self.time_tuner.invalidate_suggest();",
+        ),
+        (
+            &time,
+            "fn set_v1_cell(",
+            "self.time_tuner.invalidate_suggest();",
+        ),
+    ] {
+        assert!(
+            method(source, signature).contains(invalidation),
+            "{signature} must retire the in-flight suggestion before changing v1"
+        );
+    }
 }
 
 /// Protects durable per-group Main-core selection and authoritative target ownership.

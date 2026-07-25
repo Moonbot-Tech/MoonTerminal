@@ -29,6 +29,8 @@ pub(super) enum UndatedBanner {
     Full(String, String),
     /// Dismissed at this count or above: one muted line and a way back.
     Collapsed(String),
+    /// The undated-close query failed, so absence cannot be claimed.
+    Failed(String, String),
 }
 
 impl AnalyticsView {
@@ -83,22 +85,35 @@ impl AnalyticsView {
                             // was built for → reload, or the strategy list and the
                             // summary would show another tab's period. reload() also
                             // pulls the active tab's secondary data (tuner/profile).
-                            let period_changed = matches!(t, Tab::Summary | Tab::Strategies)
-                                && this.active_period() != this.data_period;
+                            let period_changed = match t {
+                                Tab::Summary => this.active_period() != this.data_period,
+                                Tab::Strategies => {
+                                    this.active_period() != this.strategy_data_period
+                                }
+                                Tab::Calendar => false,
+                            };
+                            let base_dirty = match t {
+                                Tab::Summary => this.data_dirty,
+                                Tab::Strategies => this.strategy_dirty,
+                                Tab::Calendar => false,
+                            };
                             if period_changed {
                                 this.reload(cx);
+                            } else if matches!(t, Tab::Summary | Tab::Strategies) && base_dirty {
+                                // A hidden base view can lag a generation while Calendar alone
+                                // refreshes. Catch it up on entry without destructive scope
+                                // invalidation, which would erase tuner drafts.
+                                this.request_report_refresh(true, cx);
                             } else {
-                                // Entering "Strategies" recomputes ONLY a stale axis. Without
-                                // it a core/side/emulator change made on another tab leaves
-                                // the axis showing the PREVIOUS scope's numbers under the new
-                                // scope's rows — the period is unchanged, so nothing else
-                                // ever recomputes it.
+                                // Tab-entry catch-up uses the report gate so it cannot overlap
+                                // an automatic full-period scan already in flight.
                                 if t == Tab::Strategies {
-                                    this.reload_axis_if_stale(this.strat_mode, cx);
+                                    this.request_axis_if_stale(this.strat_mode, cx);
                                 }
-                                if t == Tab::Calendar && (this.cal_days.is_none() || this.cal_dirty)
+                                if t == Tab::Calendar
+                                    && (this.cal_days.data().is_none() || this.cal_dirty)
                                 {
-                                    this.reload_calendar(cx);
+                                    this.request_report_refresh(true, cx);
                                 }
                             }
                             cx.notify();
@@ -373,6 +388,12 @@ impl AnalyticsView {
     /// the window's own filters, so the sentence describes exactly the rows the figures beside
     /// it were computed from — minus the ones that could not be.
     pub(super) fn undated_note(&self, cx: &Context<Self>) -> UndatedBanner {
+        if let Some(error) = &self.undated_error {
+            return UndatedBanner::Failed(
+                t!("common.db_read_failed").to_string(),
+                error.to_string(),
+            );
+        }
         let Some(u) = self.undated else {
             return UndatedBanner::None;
         };
@@ -463,6 +484,12 @@ impl AnalyticsView {
                         .on_click(cx.listener(|this, _, _, cx| this.undated_show(cx)))
                         .render(),
                 ),
+            UndatedBanner::Failed(title, detail) => row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(MoonAlert::error("an-undated-error", detail).title(title)),
+            ),
         };
         row.child(div().flex_none().child(toggle))
     }
@@ -536,11 +563,25 @@ impl AnalyticsView {
             .child(self.date_field(false, p, cx))
             .child(self.date_field(true, p, cx));
         // Keep read failure distinct from both an empty count and loading.
-        let (counter, counter_failed) = match &self.data {
-            LoadState::Loading { .. } => ("…".to_string(), false),
-            LoadState::Ready(d) => (t!("analytics.trades_count", n = d.cur.n).to_string(), false),
-            LoadState::NotReady => (String::new(), false),
-            LoadState::Failed(_) => (t!("common.db_read_failed_short").to_string(), true),
+        let (counter, counter_failed) = match self.tab {
+            Tab::Strategies => match &self.strategy_data {
+                LoadState::Loading { .. } => ("…".to_string(), false),
+                LoadState::Ready(data) => (
+                    t!("analytics.trades_count", n = data.trades).to_string(),
+                    false,
+                ),
+                LoadState::NotReady => (String::new(), false),
+                LoadState::Failed(_) => (t!("common.db_read_failed_short").to_string(), true),
+            },
+            _ => match &self.data {
+                LoadState::Loading { .. } => ("…".to_string(), false),
+                LoadState::Ready(data) => (
+                    t!("analytics.trades_count", n = data.cur.n).to_string(),
+                    false,
+                ),
+                LoadState::NotReady => (String::new(), false),
+                LoadState::Failed(_) => (t!("common.db_read_failed_short").to_string(), true),
+            },
         };
         h_flex()
             .flex_none()

@@ -76,8 +76,14 @@ impl AnalyticsView {
                                     let on = *ch;
                                     view.update(app, |this, cx| {
                                         match kind {
-                                            TunerKind::Filter => this.tuner.round_results = on,
-                                            TunerKind::Time => this.time_tuner.round_results = on,
+                                            TunerKind::Filter => {
+                                                this.tuner.round_results = on;
+                                                this.tuner.invalidate_suggest();
+                                            }
+                                            TunerKind::Time => {
+                                                this.time_tuner.round_results = on;
+                                                this.time_tuner.invalidate_suggest();
+                                            }
                                             // No rounding on this axis — the control is hidden.
                                             TunerKind::Coins => {}
                                         }
@@ -186,11 +192,15 @@ impl AnalyticsView {
                     match kind {
                         TunerKind::Filter => {
                             this.tuner.edges = n;
+                            this.tuner.invalidate_suggest();
                             // Only this axis persists its depth — the layout key is the filter
                             // tuner's, and the time sweep fixes its own.
                             this.persist_tuner_edges(cx);
                         }
-                        TunerKind::Time => this.time_tuner.edges = n,
+                        TunerKind::Time => {
+                            this.time_tuner.edges = n;
+                            this.time_tuner.invalidate_suggest();
+                        }
                         // This row is not drawn on the coin axis, so the control that
                         // would fire this cannot exist there.
                         TunerKind::Coins => {}
@@ -361,13 +371,23 @@ impl AnalyticsView {
             ) {
                 let value = state.read(cx).value().to_string();
                 match (kind, which) {
-                    (TunerKind::Filter, 1) => this.tuner.min_trades = value,
+                    (TunerKind::Filter, 1) => {
+                        this.tuner.min_trades = value;
+                        this.tuner.invalidate_suggest();
+                    }
                     (TunerKind::Filter, _) => {
                         this.tuner.iters = value;
+                        this.tuner.invalidate_suggest();
                         this.persist_tuner_iters(cx);
                     }
-                    (TunerKind::Time, 1) => this.time_tuner.min_trades = value,
-                    (TunerKind::Time, _) => this.time_tuner.iters = value,
+                    (TunerKind::Time, 1) => {
+                        this.time_tuner.min_trades = value;
+                        this.time_tuner.invalidate_suggest();
+                    }
+                    (TunerKind::Time, _) => {
+                        this.time_tuner.iters = value;
+                        this.time_tuner.invalidate_suggest();
+                    }
                     (TunerKind::Coins, _) => {}
                 }
                 if !matches!(ev, MoonInputEvent::Change) {

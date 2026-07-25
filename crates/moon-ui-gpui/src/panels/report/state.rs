@@ -93,9 +93,9 @@ impl ReportPanel {
             })
             .detach();
         }
-        // Backend observation requests a refresh only when the report writer's generation changes.
-        // Filter edits notify and query immediately; generation-driven refreshes use the throttle.
-        cx.observe(&backend, |this, _b, cx| {
+        // The dedicated report-revision channel avoids repainting every shell on each commit.
+        let report_revision = backend.read(cx).report_revision.clone();
+        cx.observe(&report_revision, |this, _revision, cx| {
             if let Some(g) = &this.generation {
                 let v = g.load(Ordering::Relaxed);
                 if v != this.last_gen {

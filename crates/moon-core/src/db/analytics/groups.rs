@@ -163,13 +163,33 @@ pub(super) fn kind_stats(
 ///
 /// An empty `coins` selects nothing and is answered without touching the database.
 pub fn strategies_for_coins(q: &Query, coins: &[String]) -> ReadResult<Vec<String>> {
-    const CTX: &str = "analytics: strategies_for_coins";
     if coins.is_empty() {
         return Ok(Vec::new());
     }
     let conn = super::super::open_reader()?;
-    let snap = super::super::read_snapshot(&conn)?;
-    let conn = &*snap;
+    super::super::with_read_snapshot(&conn, |snapshot| {
+        strategies_for_coins_on(snapshot, q, coins)
+    })
+}
+
+/// Find picked-coin strategy keys on an existing connection or compound-read snapshot.
+///
+/// Args:
+///     conn: Existing SQLite connection whose snapshot should be queried.
+///     q: Report scope.
+///     coins: Exact report coin names selected by the user.
+///
+/// Returns:
+///     Matching `strategyid@core_uid` keys or a classified read failure.
+pub(in crate::db) fn strategies_for_coins_on(
+    conn: &Connection,
+    q: &Query,
+    coins: &[String],
+) -> ReadResult<Vec<String>> {
+    const CTX: &str = "analytics: strategies_for_coins";
+    if coins.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut q = q.clone();
     // The same floor the coin table and the KPI use — one screen, one period.
     q.floor_all_history();
@@ -208,10 +228,18 @@ pub fn strategies_for_coins(q: &Query, coins: &[String]) -> ReadResult<Vec<Strin
 /// `NotReady` when no source has the required schema.
 pub fn coin_groups(q: &Query) -> ReadResult<Vec<GroupStat>> {
     let conn = super::super::open_reader()?;
-    // One snapshot, like every other aggregation: the writer commits between
-    // statements during catch-up.
-    let snap = super::super::read_snapshot(&conn)?;
-    let conn = &*snap;
+    super::super::with_read_snapshot(&conn, |snapshot| coin_groups_on(snapshot, q))
+}
+
+/// Aggregate coins on an existing connection or compound-read snapshot.
+///
+/// Args:
+///     conn: Existing SQLite connection whose snapshot should be queried.
+///     q: Report scope and period.
+///
+/// Returns:
+///     Per-coin aggregates or a classified read failure.
+pub(in crate::db) fn coin_groups_on(conn: &Connection, q: &Query) -> ReadResult<Vec<GroupStat>> {
     let mut q = q.clone();
     // The same floor `variant_stats` uses, NOT `min_closedate`: the coin table and the
     // "Fact vs v1" matrix sit on one screen and must cover the same span — resolving

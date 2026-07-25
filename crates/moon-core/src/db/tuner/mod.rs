@@ -10,7 +10,9 @@
 
 use rusqlite::Connection;
 
-use super::analytics::{unified_from, Query};
+use super::analytics::{
+    coin_groups_on, strategies_for_coins_on, unified_from, GroupStat, HourStat, Query,
+};
 use super::metrics::{improvement_margin, profit_factor, winrate};
 use super::read_fail::read_fail;
 use super::{ReadFail, ReadResult};
@@ -205,6 +207,144 @@ impl VarStats {
     }
 }
 
+/// Report-derived results rendered together by the By-time tuner axis.
+pub struct TimeTunerData {
+    /// Hour-of-day profile for the visible period.
+    pub profiles: ReadResult<Vec<[HourStat; 24]>>,
+    /// Fact-versus-schedule KPI values.
+    pub stats: ReadResult<Vec<VarStats>>,
+    /// Color profiles for the three schedule sliders.
+    pub slider: ReadResult<SliderProfiles>,
+}
+
+/// Report-derived results rendered together by the By-filter tuner axis.
+pub struct FilterTunerData {
+    /// Fact-versus-threshold KPI values.
+    pub stats: ReadResult<Vec<VarStats>>,
+    /// Distribution for the currently selected report field.
+    pub histogram: ReadResult<Vec<HistBucket>>,
+}
+
+/// Read the By-filter KPI and histogram from one SQLite snapshot.
+pub fn filter_tuner_data(
+    q: &Query,
+    variants: &[Variant],
+    field: &str,
+    buckets: usize,
+) -> FilterTunerData {
+    let compound = super::open_reader().and_then(|conn| {
+        super::with_read_snapshot(&conn, |snapshot| {
+            Ok(FilterTunerData {
+                stats: variant_stats_on(snapshot, q, variants),
+                histogram: histogram_on(snapshot, q, field, buckets),
+            })
+        })
+    });
+    match compound {
+        Ok(data) => data,
+        Err(error) => FilterTunerData {
+            stats: Err(error.clone()),
+            histogram: Err(error),
+        },
+    }
+}
+
+/// Read every report-derived By-time result from one SQLite snapshot.
+///
+/// Args:
+///     q: Shared report scope and period.
+///     variants: Ordered baseline and schedule counterfactuals.
+///
+/// Returns:
+///     Independently classified surface results that all observed one committed generation.
+pub fn time_tuner_data(q: &Query, variants: &[Variant]) -> TimeTunerData {
+    let compound = super::open_reader().and_then(|conn| {
+        super::with_read_snapshot(&conn, |snapshot| {
+            let slider = time::slider_profiles_on(snapshot, q);
+            let profiles = slider
+                .as_ref()
+                .map(|profiles| vec![profiles.entry_hours])
+                .map_err(Clone::clone);
+            Ok(TimeTunerData {
+                profiles,
+                stats: variant_stats_on(snapshot, q, variants),
+                slider,
+            })
+        })
+    });
+    match compound {
+        Ok(data) => data,
+        Err(error) => TimeTunerData {
+            profiles: Err(error.clone()),
+            stats: Err(error.clone()),
+            slider: Err(error),
+        },
+    }
+}
+
+/// Report-derived results rendered together by the By-coin tuner axis.
+pub struct CoinTunerData {
+    /// Per-coin aggregates for the selected strategy scope.
+    pub stats: ReadResult<Vec<GroupStat>>,
+    /// Fact-versus-working-list KPI values.
+    pub kpi: ReadResult<Vec<VarStats>>,
+    /// Strategy keys behind the currently picked coins.
+    pub picked_strategies: ReadResult<Vec<String>>,
+}
+
+/// Read every report-derived By-coin result from one SQLite snapshot.
+///
+/// Args:
+///     q: Selected-strategy report scope used by the table and KPI.
+///     variants: Ordered baseline and working-list counterfactuals.
+///     picked_q: All-strategies scope used by the picked-coin highlight.
+///     picked: Exact report coin names currently selected.
+///
+/// Returns:
+///     Independently classified surface results that all observed one committed generation.
+pub fn coin_tuner_data(
+    q: &Query,
+    variants: &[Variant],
+    picked_q: &Query,
+    picked: &[String],
+) -> CoinTunerData {
+    let compound = super::open_reader().and_then(|conn| {
+        super::with_read_snapshot(&conn, |snapshot| {
+            Ok(CoinTunerData {
+                stats: coin_groups_on(snapshot, q),
+                kpi: variant_stats_on(snapshot, q, variants),
+                picked_strategies: strategies_for_coins_on(snapshot, picked_q, picked),
+            })
+        })
+    });
+    match compound {
+        Ok(data) => data,
+        Err(error) => CoinTunerData {
+            stats: Err(error.clone()),
+            kpi: Err(error.clone()),
+            picked_strategies: Err(error),
+        },
+    }
+}
+
+/// Build the unified tuner source on an existing connection, applying the shared all-history
+/// floor.
+///
+/// Args:
+///     conn: Existing report reader or compound-read snapshot.
+///     q: Report scope and period.
+///
+/// Returns:
+///     The floored query and `FROM` source, or `NotReady` when no source can answer.
+fn tuner_source_on(conn: &Connection, q: &Query) -> ReadResult<(Query, String)> {
+    let mut q = q.clone();
+    q.floor_all_history();
+    let Some(src) = unified_from(conn, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
+    Ok((q, src))
+}
+
 /// Open a reader and build the unified tuner source for `q`, applying the tuner's all-history
 /// floor (`from = 1`, the same floor `coin_groups`/`strategies_for_coins` use so the coin
 /// table and the KPI matrix cover one period). `NotReady` when no source carries the required
@@ -214,11 +354,7 @@ impl VarStats {
 /// WAL snapshot of its own instead and does not use this.
 pub(super) fn open_tuner_source(q: &Query) -> ReadResult<(Connection, Query, String)> {
     let conn = super::open_reader()?;
-    let mut q = q.clone();
-    q.floor_all_history();
-    let Some(src) = unified_from(&conn, &q)? else {
-        return Err(ReadFail::NotReady);
-    };
+    let (q, src) = tuner_source_on(&conn, q)?;
     Ok((conn, q, src))
 }
 
@@ -263,6 +399,21 @@ fn scan_time_rows(
     src: &str,
     ctx: &'static str,
 ) -> ReadResult<Vec<(i64, i64, f64)>> {
+    let mut out = Vec::new();
+    visit_time_rows(conn, q, src, ctx, |weekday, minute, profit| {
+        out.push((weekday, minute, profit));
+    })?;
+    Ok(out)
+}
+
+/// Stream `(weekday, minute_of_day, pnl)` rows to a bounded-memory consumer.
+fn visit_time_rows(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+    ctx: &'static str,
+    mut visit: impl FnMut(i64, i64, f64),
+) -> ReadResult<()> {
     let sql = format!(
         "SELECT ((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7 AS wd,
                 ({OPEN_TS} % 86400) / 60 AS mn,
@@ -279,11 +430,11 @@ fn scan_time_rows(
             ))
         })
         .map_err(|e| read_fail(ctx, e))?;
-    let mut out: Vec<(i64, i64, f64)> = Vec::new();
     for row in rows {
-        out.push(row.map_err(|e| read_fail(ctx, e))?);
+        let (weekday, minute, profit) = row.map_err(|e| read_fail(ctx, e))?;
+        visit(weekday, minute, profit);
     }
-    Ok(out)
+    Ok(())
 }
 
 /// Compute KPI values in input order; an empty variant represents the baseline.
@@ -293,19 +444,27 @@ fn scan_time_rows(
 /// when opening the replica, pinning the snapshot, or scanning a variant fails.
 pub fn variant_stats(q: &Query, variants: &[Variant]) -> ReadResult<Vec<VarStats>> {
     let conn = super::open_reader()?;
-    // One snapshot for the whole comparison. Each variant is its own scan, and
-    // this table exists precisely to score variants AGAINST the baseline — a row
-    // computed over a different set of trades than the baseline it is compared
-    // to would still be published as one coherent comparison.
-    let snap = super::read_snapshot(&conn)?;
-    let mut q = q.clone();
-    q.floor_all_history();
-    let Some(src) = unified_from(&snap, &q)? else {
-        return Err(ReadFail::NotReady);
-    };
+    super::with_read_snapshot(&conn, |snapshot| variant_stats_on(snapshot, q, variants))
+}
+
+/// Compute variant KPIs on an existing connection or compound-read snapshot.
+///
+/// Args:
+///     conn: Existing SQLite connection whose snapshot should be queried.
+///     q: Report scope and period.
+///     variants: Ordered baseline and counterfactual definitions.
+///
+/// Returns:
+///     KPI values in input order or a classified read failure.
+fn variant_stats_on(
+    conn: &Connection,
+    q: &Query,
+    variants: &[Variant],
+) -> ReadResult<Vec<VarStats>> {
+    let (q, src) = tuner_source_on(conn, q)?;
     variants
         .iter()
-        .map(|v| one_variant(&snap, &src, &q, v))
+        .map(|variant| one_variant(conn, &src, &q, variant))
         .collect()
 }
 
@@ -379,12 +538,23 @@ pub struct HistBucket {
 /// values returns an empty vector. `NotReady` means the replica or required
 /// schema is absent; `Failed` means opening or scanning it failed.
 pub fn histogram(q: &Query, field: &str, want: usize) -> ReadResult<Vec<HistBucket>> {
+    let conn = super::open_reader()?;
+    super::with_read_snapshot(&conn, |snapshot| histogram_on(snapshot, q, field, want))
+}
+
+/// Build histogram buckets on an existing connection or compound snapshot.
+fn histogram_on(
+    conn: &Connection,
+    q: &Query,
+    field: &str,
+    want: usize,
+) -> ReadResult<Vec<HistBucket>> {
     if !FIELDS.iter().any(|s| s.col == field) {
         // Programmer error (unknown field), not a read failure.
         return Ok(Vec::new());
     }
-    let (conn, q, src) = open_tuner_source(q)?;
-    let mut pairs = scan_field_pairs(&conn, &q, &src, field, "tuner: histogram")?;
+    let (q, src) = tuner_source_on(conn, q)?;
+    let mut pairs = scan_field_pairs(conn, &q, &src, field, "tuner: histogram")?;
     if pairs.is_empty() {
         return Ok(Vec::new());
     }

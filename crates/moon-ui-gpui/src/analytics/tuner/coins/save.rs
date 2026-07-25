@@ -57,6 +57,9 @@ impl AnalyticsView {
     /// Opens the dialog only after EVERY target's live value has been re-read, so the
     /// confirmation can state what the overwrite would discard — and say so when it could not
     /// look, rather than letting silence pass for "checked".
+    ///
+    /// Args:
+    ///     cx: GPUI context used to read live values and open the guarded dialog.
     pub(in crate::analytics::tuner) fn coins_open_save_dialog(&mut self, cx: &mut Context<Self>) {
         let targets = self.selected_targets();
         if targets.is_empty() {
@@ -168,104 +171,111 @@ impl AnalyticsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
-                    // BEFORE the generation check: a retired request still owes its decrement,
-                    // and skipping it pins the blocking "Loading..." overlay for the session.
-                    this.op_finished(cx);
-                    let now: Vec<(i64, Option<u64>)> = this
-                        .selected_targets()
-                        .iter()
-                        .map(|t| (t.sid, t.core))
-                        .collect();
-                    if now != req {
-                        // The user moved to another strategy. Silence is right: they are
-                        // looking elsewhere, and a banner about the old one would be noise.
-                        log::info!("analytics: 'Save' (coins) - the selection changed, dropped");
-                        return;
-                    }
-                    if this.coins.lists_rev != rev {
-                        // Same strategies, but the lists underneath moved (a tick, or a
-                        // period/filter change). The delta was computed against the old
-                        // baseline, so it cannot be trusted — and unlike a selection change
-                        // the user is still looking at this panel, so a dropped click needs
-                        // to leave a mark rather than nothing at all.
-                        this.set_write_error(t!("analytics.coins.save_moved").to_string(), cx);
-                        return;
-                    }
-                    // ONE VALUE PER STRATEGY: its own live list with the edit replayed on top.
-                    //
-                    // A target whose list could not be read is DROPPED together with its
-                    // value, so the two stay index-aligned. Refusing the whole save instead
-                    // made any selection containing a strategy deleted on its core permanently
-                    // unsavable, because that read never succeeds.
-                    let mut writable: Vec<SaveTarget> = Vec::with_capacity(targets.len());
-                    let mut per_target: Vec<Vec<(String, String)>> =
-                        Vec::with_capacity(targets.len());
-                    // Seeded with the targets whose cores never resolved: both mean "this
-                    // strategy was not written and we could not find out why".
-                    let mut unreadable = unresolved;
-                    for (t, cur) in targets.into_iter().zip(live.iter()) {
-                        let Some(map) = cur else {
-                            // Every write is a whole-field overwrite, so without this
-                            // strategy's current list there is nothing to replay the edit
-                            // ONTO, and the edit alone would erase everything else it holds.
-                            unreadable += 1;
-                            continue;
-                        };
-                        per_target.push(
-                            delta
-                                .iter()
-                                .map(|(key, added, removed)| {
-                                    let fresh = map.get(key).map(String::as_str).unwrap_or("");
-                                    (key.clone(), apply_delta(fresh, added, removed))
-                                })
-                                .collect(),
-                        );
-                        writable.push(t);
-                    }
-                    if writable.is_empty() {
-                        this.set_write_error(
-                            t!("analytics.coins.save_unreadable", n = unreadable).to_string(),
-                            cx,
-                        );
-                        return;
-                    }
-                    let n_targets = writable.len();
-                    let mut notes: Vec<Option<String>> = delta
-                        .iter()
-                        .map(|(_, added, removed)| Some(edit_note(added, removed, n_targets)))
-                        .collect();
-                    // A field that ends up EMPTY somewhere is called out: an untick-all wipes
-                    // that strategy's list, and a bare "-N (...)" reads like an ordinary
-                    // removal. The dialog's own blank-value warning cannot fire here, because
-                    // a row carrying a note never draws the value branch.
-                    for (i, (key, _, _)) in delta.iter().enumerate() {
-                        let empties = per_target
+                    'completion: {
+                        let now: Vec<(i64, Option<u64>)> = this
+                            .selected_targets()
                             .iter()
-                            .any(|v| v.iter().any(|(k, val)| k == key && val.trim().is_empty()));
-                        if empties {
-                            if let Some(Some(note)) = notes.get_mut(i) {
-                                note.push_str(" · ");
-                                note.push_str(&t!("analytics.tuner.save_clears"));
+                            .map(|t| (t.sid, t.core))
+                            .collect();
+                        if now != req {
+                            // The user moved to another strategy. Silence is right: they are
+                            // looking elsewhere, and a banner about the old one would be noise.
+                            log::info!(
+                                "analytics: 'Save' (coins) - the selection changed, dropped"
+                            );
+                            break 'completion;
+                        }
+                        if this.coins.lists_rev != rev {
+                            // Same strategies, but the lists underneath moved (a tick, or a
+                            // period/filter change). The delta was computed against the old
+                            // baseline, so it cannot be trusted — and unlike a selection change
+                            // the user is still looking at this panel, so a dropped click needs
+                            // to leave a mark rather than nothing at all.
+                            this.set_write_error(t!("analytics.coins.save_moved").to_string(), cx);
+                            break 'completion;
+                        }
+                        // ONE VALUE PER STRATEGY: its own live list with the edit replayed on top.
+                        //
+                        // A target whose list could not be read is DROPPED together with its
+                        // value, so the two stay index-aligned. Refusing the whole save instead
+                        // made any selection containing a strategy deleted on its core permanently
+                        // unsavable, because that read never succeeds.
+                        let mut writable: Vec<SaveTarget> = Vec::with_capacity(targets.len());
+                        let mut per_target: Vec<Vec<(String, String)>> =
+                            Vec::with_capacity(targets.len());
+                        // Seeded with the targets whose cores never resolved: both mean "this
+                        // strategy was not written and we could not find out why".
+                        let mut unreadable = unresolved;
+                        for (t, cur) in targets.into_iter().zip(live.iter()) {
+                            let Some(map) = cur else {
+                                // Every write is a whole-field overwrite, so without this
+                                // strategy's current list there is nothing to replay the edit
+                                // ONTO, and the edit alone would erase everything else it holds.
+                                unreadable += 1;
+                                continue;
+                            };
+                            per_target.push(
+                                delta
+                                    .iter()
+                                    .map(|(key, added, removed)| {
+                                        let fresh = map.get(key).map(String::as_str).unwrap_or("");
+                                        (key.clone(), apply_delta(fresh, added, removed))
+                                    })
+                                    .collect(),
+                            );
+                            writable.push(t);
+                        }
+                        if writable.is_empty() {
+                            this.set_write_error(
+                                t!("analytics.coins.save_unreadable", n = unreadable).to_string(),
+                                cx,
+                            );
+                            break 'completion;
+                        }
+                        let n_targets = writable.len();
+                        let mut notes: Vec<Option<String>> = delta
+                            .iter()
+                            .map(|(_, added, removed)| Some(edit_note(added, removed, n_targets)))
+                            .collect();
+                        // A field that ends up EMPTY somewhere is called out: an untick-all wipes
+                        // that strategy's list, and a bare "-N (...)" reads like an ordinary
+                        // removal. The dialog's own blank-value warning cannot fire here, because
+                        // a row carrying a note never draws the value branch.
+                        for (i, (key, _, _)) in delta.iter().enumerate() {
+                            let empties = per_target.iter().any(|v| {
+                                v.iter().any(|(k, val)| k == key && val.trim().is_empty())
+                            });
+                            if empties {
+                                if let Some(Some(note)) = notes.get_mut(i) {
+                                    note.push_str(" · ");
+                                    note.push_str(&t!("analytics.tuner.save_clears"));
+                                }
                             }
                         }
+                        let mut warns = Vec::new();
+                        if unreadable > 0 {
+                            warns.push(
+                                t!("analytics.coins.save_skipped", n = unreadable).to_string(),
+                            );
+                        }
+                        // The dialog draws one row per FIELD; the anchor's values fill it, and the
+                        // note beside each says what the EDIT is - the same for every target,
+                        // because it is the edit rather than a value.
+                        let shown = per_target.first().cloned().unwrap_or_default();
+                        this.open_change_dialog(
+                            writable,
+                            shown,
+                            Some(per_target),
+                            notes,
+                            warns,
+                            false,
+                            cx,
+                        );
                     }
-                    let mut warns = Vec::new();
-                    if unreadable > 0 {
-                        warns.push(t!("analytics.coins.save_skipped", n = unreadable).to_string());
-                    }
-                    // The dialog draws one row per FIELD; the anchor's values fill it, and the
-                    // note beside each says what the EDIT is - the same for every target,
-                    // because it is the edit rather than a value.
-                    let shown = per_target.first().cloned().unwrap_or_default();
-                    this.open_change_dialog(
-                        writable,
-                        shown,
-                        Some(per_target),
-                        notes,
-                        warns,
-                        false,
-                        cx,
-                    );
+                    // Balance and schedule only after every guarded completion path has stored
+                    // its dialog or failure state.
+                    this.op_finished(cx);
+                    this.schedule_report_refresh(cx);
                 });
             });
         })

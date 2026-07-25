@@ -98,6 +98,8 @@ struct Backend {
     /// The session uses `tx` across starts and reconnects; the Report panel uses
     /// `generation` to trigger reads. `None` means the database is unavailable.
     reports: Option<moon_core::db::ReportsHandle>,
+    /// Dedicated wake channel for report-derived consumers.
+    report_revision: Entity<ReportRevision>,
     metrics: Metrics,
     snap: MetricsSnapshot,
     /// Desired open markets as `(core, market)`, derived from `chart_market_refs`.
@@ -358,6 +360,9 @@ struct Backend {
     /// not restored on the next start; the repin drain checks this flag.
     quitting: bool,
 }
+
+/// Notification-only entity for committed report revisions.
+struct ReportRevision;
 
 fn main() -> anyhow::Result<()> {
     startup::run()

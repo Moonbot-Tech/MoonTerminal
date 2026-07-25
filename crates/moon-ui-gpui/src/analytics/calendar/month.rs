@@ -18,6 +18,15 @@ use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::DayCell;
 
 impl AnalyticsView {
+    /// Render the selected month with KPI, day grid, and active-day balance.
+    ///
+    /// Args:
+    ///     days: Daily Calendar cells for the displayed month.
+    ///     p: Active MoonUI palette.
+    ///     cx: GPUI view context used for sizing and listeners.
+    ///
+    /// Returns:
+    ///     The complete Month-mode content below Calendar navigation.
     pub(super) fn calendar_month(
         &self,
         days: &[DayCell],
@@ -70,6 +79,19 @@ impl AnalyticsView {
             .into_any_element()
     }
 
+    /// Render Month KPI values and deltas against the loaded previous-month aggregate.
+    ///
+    /// Args:
+    ///     profit: Current-month profit.
+    ///     trades: Current-month trade count.
+    ///     wins: Current-month winning-trade count.
+    ///     losses: Current-month losing-trade count.
+    ///     wr: Current-month win rate in percent.
+    ///     p: Active MoonUI palette.
+    ///     cx: GPUI view context used for sizing.
+    ///
+    /// Returns:
+    ///     The Month KPI row.
     #[allow(clippy::too_many_arguments)]
     fn cal_kpi(
         &self,
@@ -83,8 +105,9 @@ impl AnalyticsView {
     ) -> impl IntoElement {
         // Deltas are against the PREVIOUS month (not 30 days); None when the
         // previous month is missing or zero.
-        let (pp, pt, pw) = self.cal_prev.unwrap_or((0.0, 0, 0));
-        let has = self.cal_prev.is_some();
+        let previous = self.cal_prev.data().and_then(|value| **value);
+        let (pp, pt, pw) = previous.unwrap_or((0.0, 0, 0));
+        let has = previous.is_some();
         let dp = move |c: f64, pr: f64| -> Option<f64> {
             (has && pr.abs() > f64::EPSILON).then(|| (c - pr) / pr.abs() * 100.0)
         };

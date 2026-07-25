@@ -19,6 +19,9 @@ impl AnalyticsView {
     ///
     /// `NotReady` and failed reads are published through the shared KPI load
     /// state; a valid result updates only fields enabled for search.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to execute and publish the suggestion.
     pub(in crate::analytics::tuner) fn suggest_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
@@ -55,49 +58,52 @@ impl AnalyticsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    'completion: {
+                        if this.tuner.sugg_seq != req {
+                            break 'completion;
+                        }
+                        this.tuner.sugg_busy = false;
+                        // A non-successful read must not look like "found nothing": the
+                        // button would just stop spinning and leave no trace.
+                        let sugg = match sugg {
+                            Ok(v) => v,
+                            Err(e) => {
+                                log::warn!("analytics: smart suggestion failed — {e}");
+                                if this.tuner.seq == stats_req {
+                                    this.tuner.stats.apply(Err(e));
+                                }
+                                cx.notify();
+                                break 'completion;
+                            }
+                        };
+                        if let Some(res) = sugg {
+                            log::info!(
+                                "analytics: smart suggestion — profit {:+.2}, trades {}, rounds {}",
+                                res.profit,
+                                res.n,
+                                res.rounds
+                            );
+                            let by_field: HashMap<&str, _> =
+                                res.fields.into_iter().map(|f| (f.field, f)).collect();
+                            for fi in 0..FIELDS.len() {
+                                // Leave fields that were not searched alone (fixed/disabled).
+                                if !this.tuner.enabled[fi] {
+                                    continue;
+                                }
+                                let (from, to) = by_field
+                                    .get(FIELDS[fi].col)
+                                    .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
+                                    .unwrap_or_default();
+                                this.tuner.bounds[0][fi] = (from, to);
+                                this.tuner.inputs.remove(&format!("tv0f{fi}a"));
+                                this.tuner.inputs.remove(&format!("tv0f{fi}b"));
+                            }
+                            this.reload_tuner(cx);
+                        }
+                        cx.notify();
+                    }
                     this.op_finished(cx);
-                    if this.tuner.sugg_seq != req {
-                        return;
-                    }
-                    this.tuner.sugg_busy = false;
-                    // A non-successful read must not look like "found nothing": the
-                    // button would just stop spinning and leave no trace.
-                    let sugg = match sugg {
-                        Ok(v) => v,
-                        Err(e) => {
-                            log::warn!("analytics: smart suggestion failed — {e}");
-                            if this.tuner.seq == stats_req {
-                                this.tuner.stats.apply(Err(e));
-                            }
-                            cx.notify();
-                            return;
-                        }
-                    };
-                    if let Some(res) = sugg {
-                        log::info!(
-                            "analytics: smart suggestion — profit {:+.2}, trades {}, rounds {}",
-                            res.profit,
-                            res.n,
-                            res.rounds
-                        );
-                        let by_field: HashMap<&str, _> =
-                            res.fields.into_iter().map(|f| (f.field, f)).collect();
-                        for fi in 0..FIELDS.len() {
-                            // Leave fields that were not searched alone (fixed/disabled).
-                            if !this.tuner.enabled[fi] {
-                                continue;
-                            }
-                            let (from, to) = by_field
-                                .get(FIELDS[fi].col)
-                                .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
-                                .unwrap_or_default();
-                            this.tuner.bounds[0][fi] = (from, to);
-                            this.tuner.inputs.remove(&format!("tv0f{fi}a"));
-                            this.tuner.inputs.remove(&format!("tv0f{fi}b"));
-                        }
-                        this.reload_tuner(cx);
-                    }
-                    cx.notify();
+                    this.schedule_report_refresh(cx);
                 });
             });
         })
@@ -108,6 +114,9 @@ impl AnalyticsView {
     ///
     /// `NotReady` and failed reads are published through the shared KPI load
     /// state; a valid `None` means no threshold improves on the baseline.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to execute and publish the suggestion.
     pub(in crate::analytics::tuner) fn suggest_one_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
@@ -130,27 +139,30 @@ impl AnalyticsView {
                 .await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
-                    this.op_finished(cx);
-                    if this.tuner.sugg_seq != req {
-                        return;
-                    }
-                    this.tuner.sugg_busy = false;
-                    match sugg {
-                        Ok(Some(s)) => {
-                            let from = s.from.map(fmt_bound).unwrap_or_default();
-                            let to = s.to.map(fmt_bound).unwrap_or_default();
-                            this.apply_bounds(0, fi, from, to, cx);
+                    'completion: {
+                        if this.tuner.sugg_seq != req {
+                            break 'completion;
                         }
-                        // A genuine "no threshold beats the baseline".
-                        Ok(None) => {}
-                        Err(e) => {
-                            log::warn!("analytics: threshold suggestion failed — {e}");
-                            if this.tuner.seq == stats_req {
-                                this.tuner.stats.apply(Err(e));
+                        this.tuner.sugg_busy = false;
+                        match sugg {
+                            Ok(Some(s)) => {
+                                let from = s.from.map(fmt_bound).unwrap_or_default();
+                                let to = s.to.map(fmt_bound).unwrap_or_default();
+                                this.apply_bounds(0, fi, from, to, cx);
+                            }
+                            // A genuine "no threshold beats the baseline".
+                            Ok(None) => {}
+                            Err(e) => {
+                                log::warn!("analytics: threshold suggestion failed — {e}");
+                                if this.tuner.seq == stats_req {
+                                    this.tuner.stats.apply(Err(e));
+                                }
                             }
                         }
+                        cx.notify();
                     }
-                    cx.notify();
+                    this.op_finished(cx);
+                    this.schedule_report_refresh(cx);
                 });
             });
         })
@@ -187,6 +199,7 @@ impl AnalyticsView {
         fi: Option<usize>,
         cx: &mut Context<Self>,
     ) {
+        self.tuner.invalidate_suggest();
         let range: Vec<usize> = match fi {
             Some(fi) => vec![fi],
             None => (0..FIELDS.len()).collect(),
@@ -207,6 +220,9 @@ impl AnalyticsView {
     /// Clear a variant column (the cross in the grid header) — only rows whose
     /// checkbox is ENABLED: unchecked ones are fixed filters, we leave them alone.
     pub(in crate::analytics::tuner) fn clear_variant(&mut self, vi: usize, cx: &mut Context<Self>) {
+        if vi == 0 {
+            self.tuner.invalidate_suggest();
+        }
         for fi in 0..FIELDS.len() {
             if !self.tuner.enabled[fi] {
                 continue;

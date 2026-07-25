@@ -22,33 +22,88 @@ pub struct DayCell {
     pub wins: i64,
 }
 
+/// Current Calendar cells and the optional previous-period aggregate from one SQLite snapshot.
+#[derive(Clone, Debug, Default)]
+pub struct CalendarPeriod {
+    /// Daily or hourly cells for the visible Calendar scope.
+    pub current: Vec<DayCell>,
+    /// Previous-period `(profit, trades, wins)` used by the Month KPI.
+    pub previous: Option<(f64, i64, i64)>,
+}
+
+/// Read a Calendar period over an existing connection or pinned compound snapshot.
+///
+/// Args:
+///     conn: Existing SQLite connection whose snapshot should serve both periods.
+///     q: Visible Calendar scope and time range.
+///     previous: Optional comparison scope.
+///     hourly: Whether the visible result uses hour buckets.
+///
+/// Returns:
+///     Both Calendar results, or one classified failure for the pair.
+pub(super) fn calendar_period_from(
+    conn: &Connection,
+    q: &Query,
+    previous: Option<&Query>,
+    hourly: bool,
+) -> ReadResult<CalendarPeriod> {
+    let current = if hourly {
+        calendar_hours_from(conn, q)?
+    } else {
+        calendar_cells_from(conn, q)?
+    };
+    let previous = previous
+        .map(|query| {
+            calendar_cells_from(conn, query).map(|days| {
+                days.iter().fold((0.0f64, 0i64, 0i64), |total, day| {
+                    (
+                        total.0 + day.profit,
+                        total.1 + day.trades,
+                        total.2 + day.wins,
+                    )
+                })
+            })
+        })
+        .transpose()?;
+    Ok(CalendarPeriod { current, previous })
+}
+
 /// Dense daily cells for calendar heatmaps (GitHub-style Year or the large Month view).
 /// One bucket is one UTC day; `GROUP BY closedate/86400` yields its PnL, trade count, and
 /// wins. The range is filled COMPLETELY with empty cells for days without trades so the
 /// calendar grid remains regular; unlike [`summary`], it NEVER widens buckets to a week.
-/// `None` means a database, schema, or query read failed; `Some(empty)` means the period has
-/// no closed trades or the source schema has not arrived yet.
+/// An empty result means the period has no closed trades or the source schema has not arrived yet;
+/// database and query failures remain classified so UI callers can retry transient contention.
 ///
-/// NOTE: this surface still collapses a read failure into `None`, the pattern
-/// the rest of this module moved away from. Converting it is left to the owners
-/// of the calendar feature rather than rewritten here; the `.ok()?` calls below
-/// only adapt it to the now-fallible helpers.
-pub fn calendar_cells(q: &Query) -> Option<Vec<DayCell>> {
-    calendar_cells_from(&super::super::open_reader().ok()?, q)
+/// Args:
+///     q: Report scope and time range to aggregate.
+///
+/// Returns:
+///     Dense daily cells or a classified database read failure.
+pub fn calendar_cells(q: &Query) -> ReadResult<Vec<DayCell>> {
+    calendar_cells_from(&super::super::open_reader()?, q)
 }
 
 /// Core of [`calendar_cells`] over an existing connection and the entry point for unit tests,
 /// which seed an in-memory `orders_rep` and verify bucketing, gaps, and win counts.
-fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
+///
+/// Args:
+///     conn: Existing SQLite connection whose snapshot should be queried.
+///     q: Report scope and time range to aggregate.
+///
+/// Returns:
+///     Dense daily cells or a classified database read failure.
+fn calendar_cells_from(conn: &Connection, q: &Query) -> ReadResult<Vec<DayCell>> {
+    const CTX: &str = "analytics: calendar_cells";
     let mut q = q.clone();
     let all_history = q.from < 0;
     if all_history {
-        q.from = min_closedate(conn).ok()?;
+        q.from = min_closedate(conn)?;
     }
-    let Some(src) = unified_from(conn, &q).ok()? else {
+    let Some(src) = unified_from(conn, &q)? else {
         // Source schemas have not arrived yet, so return an empty calendar (as `summary`
-        // returns its default), NOT None; otherwise the tab would remain on Loading.
-        return Some(Vec::new());
+        // returns its default), not an error; otherwise the tab would remain on Loading.
+        return Ok(Vec::new());
     };
     // Daily bucket: PnL, trade count, and wins for W/L and win rate.
     let sql = format!(
@@ -56,7 +111,7 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
                 {CELL_AGG}
          FROM {src} GROUP BY d ORDER BY d"
     );
-    let mut stmt = conn.prepare(&sql).ok()?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok((
@@ -66,10 +121,11 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
                 r.get::<_, i64>(3)?,
             ))
         })
-        .ok()?;
+        .map_err(|e| read_fail(CTX, e))?;
     let mut map: std::collections::HashMap<i64, DayCell> = std::collections::HashMap::new();
     let (mut first, mut last) = (i64::MAX, i64::MIN);
-    for (d, profit, n, wins) in rows.flatten() {
+    for row in rows {
+        let (d, profit, n, wins) = row.map_err(|e| read_fail(CTX, e))?;
         first = first.min(d);
         last = last.max(d);
         map.insert(
@@ -83,7 +139,7 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
         );
     }
     if map.is_empty() {
-        return Some(Vec::new()); // A period without trades has an empty calendar.
+        return Ok(Vec::new()); // A period without trades has an empty calendar.
     }
     // Dense-grid bounds start at the first day with data for All (avoiding years of empty
     // cells since the epoch), or at the requested period's start otherwise. Because `to` is
@@ -108,26 +164,43 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> Option<Vec<DayCell>> {
         }));
         t += 86_400;
     }
-    Some(out)
+    Ok(out)
 }
 
 /// Hourly cells for the calendar's Day mode: `start` is the UTC hour start, with PnL,
 /// trades, and wins. The result is sparse (only hours with trades); the UI builds the 24xN
-/// grid. `None` means the DB or query is unavailable; `Some(empty)` means no trades or schema.
-pub fn calendar_hours(q: &Query) -> Option<Vec<DayCell>> {
-    let conn = super::super::open_reader().ok()?;
-    let src = match unified_from(&conn, q) {
-        Ok(Some(s)) => s,
-        Ok(None) => return Some(Vec::new()), // The schema has not arrived yet.
-        Err(_) => return None,
+/// grid. An empty result means no trades or source schema; failures remain classified.
+///
+/// Args:
+///     q: Report scope and one-day time range to aggregate.
+///
+/// Returns:
+///     Sparse hourly cells or a classified database read failure.
+pub fn calendar_hours(q: &Query) -> ReadResult<Vec<DayCell>> {
+    calendar_hours_from(&super::super::open_reader()?, q)
+}
+
+/// Core of [`calendar_hours`] over an existing connection or pinned read snapshot.
+///
+/// Args:
+///     conn: Existing SQLite connection whose snapshot should be queried.
+///     q: Report scope and one-day time range to aggregate.
+///
+/// Returns:
+///     Sparse hourly cells or a classified database read failure.
+fn calendar_hours_from(conn: &Connection, q: &Query) -> ReadResult<Vec<DayCell>> {
+    const CTX: &str = "analytics: calendar_hours";
+    let src = match unified_from(conn, q)? {
+        Some(s) => s,
+        None => return Ok(Vec::new()), // The schema has not arrived yet.
     };
     let sql = format!(
         "SELECT (o.closedate / 3600) * 3600 AS h,
                 {CELL_AGG}
          FROM {src} GROUP BY h ORDER BY h"
     );
-    let mut stmt = conn.prepare(&sql).ok()?;
-    let out = stmt
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok(DayCell {
                 start: r.get(0)?,
@@ -136,10 +209,12 @@ pub fn calendar_hours(q: &Query) -> Option<Vec<DayCell>> {
                 wins: r.get(3)?,
             })
         })
-        .ok()?
-        .flatten()
-        .collect();
-    Some(out)
+        .map_err(|e| read_fail(CTX, e))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| read_fail(CTX, e))?);
+    }
+    Ok(out)
 }
 
 /// Hour-of-day profile (0..23 UTC): PnL, trades, and wins aggregated across all days in
@@ -158,8 +233,23 @@ pub struct HourStat {
 /// returned profiles align with `ranges`.
 pub fn hourly_profiles(base: &Query, ranges: &[(i64, i64)]) -> ReadResult<Vec<[HourStat; 24]>> {
     let conn = super::super::open_reader()?;
-    let snap = super::super::read_snapshot(&conn)?;
-    let conn = &*snap;
+    super::super::with_read_snapshot(&conn, |snapshot| hourly_profiles_on(snapshot, base, ranges))
+}
+
+/// Build hour-of-day profiles on an existing connection or shared compound-read snapshot.
+///
+/// Args:
+///     conn: Existing SQLite connection whose snapshot should be queried.
+///     base: Shared report scope.
+///     ranges: Ordered time ranges to aggregate.
+///
+/// Returns:
+///     Profiles aligned with `ranges`, or a classified read failure.
+fn hourly_profiles_on(
+    conn: &Connection,
+    base: &Query,
+    ranges: &[(i64, i64)],
+) -> ReadResult<Vec<[HourStat; 24]>> {
     let mut out = Vec::with_capacity(ranges.len());
     for &(from, to) in ranges {
         out.push(hour_profile_one(conn, base, from, to)?);

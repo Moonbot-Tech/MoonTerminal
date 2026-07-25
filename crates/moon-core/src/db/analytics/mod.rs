@@ -24,10 +24,13 @@ mod calendar;
 mod groups;
 mod query;
 
-pub use calendar::{calendar_cells, calendar_hours, hourly_profiles, DayCell, HourStat};
+pub use calendar::{
+    calendar_cells, calendar_hours, hourly_profiles, CalendarPeriod, DayCell, HourStat,
+};
 pub use groups::{coin_groups, strategies_for_coins, GroupStat, KindCore, KindStat, TopTrade};
 pub use query::Query;
 
+pub(in crate::db) use groups::{coin_groups_on, strategies_for_coins_on};
 pub(in crate::db) use query::{attach_strategies, unified_from};
 use groups::{groups, kind_stats, top_trades};
 use query::{effective_sid_expr, strategies_attached, WHERE_UNDATED};
@@ -135,6 +138,41 @@ pub struct UndatedCloses {
     pub profit: f64,
 }
 
+/// Independently classified data rendered from one report snapshot.
+pub struct AnalyticsRead<T> {
+    /// Primary surface payload.
+    pub data: ReadResult<T>,
+    /// Closed rows excluded from every dated period.
+    pub undated: ReadResult<UndatedCloses>,
+    /// Optional throttled core-selector refresh.
+    pub cores: Option<ReadResult<Vec<(u64, String)>>>,
+}
+
+/// Calendar payload and its always-visible metadata from one report snapshot.
+pub struct CalendarRead {
+    /// Visible Calendar cells and optional comparison aggregate.
+    pub period: ReadResult<CalendarPeriod>,
+    /// Closed rows excluded from every dated Calendar cell.
+    pub undated: ReadResult<UndatedCloses>,
+    /// Optional throttled core-selector refresh.
+    pub cores: Option<ReadResult<Vec<(u64, String)>>>,
+}
+
+/// Minimal base required by the Strategies tab.
+#[derive(Clone, Debug, Default)]
+pub struct StrategyBase {
+    /// Strategy rows keyed by strategy and core.
+    pub strategies: Vec<GroupStat>,
+    /// Total trades represented by the strategy rows.
+    pub trades: i64,
+    /// Coin groups used by the By-coin axis.
+    pub coins: Vec<GroupStat>,
+    /// Effective lower period bound.
+    pub from: i64,
+    /// Effective exclusive upper period bound.
+    pub to: i64,
+}
+
 impl UndatedCloses {
     /// Nothing to report — the usual case, and the one the UI must stay silent about.
     pub fn is_empty(&self) -> bool {
@@ -144,10 +182,15 @@ impl UndatedCloses {
 
 /// Count them under the CURRENT filters but outside any period — see [`UndatedCloses`].
 pub fn undated_closes(q: &Query) -> ReadResult<UndatedCloses> {
-    const CTX: &str = "analytics: trades with no close date";
     let conn = super::open_reader()?;
+    super::with_read_snapshot(&conn, |snapshot| undated_closes_on(snapshot, q))
+}
+
+/// Count undated closes on an existing report snapshot.
+fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> {
+    const CTX: &str = "analytics: trades with no close date";
     let mut out = UndatedCloses::default();
-    for src in super::read_sources_res(&conn)? {
+    for src in super::read_sources_res(conn)? {
         // A source without these columns cannot hold such a row, and asking would fail the
         // whole statement rather than contribute zero.
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
@@ -171,6 +214,125 @@ pub fn undated_closes(q: &Query) -> ReadResult<UndatedCloses> {
     Ok(out)
 }
 
+/// Read Summary and its undated-close warning from one committed snapshot.
+///
+/// Args:
+///     q: Summary scope and period.
+///     read_cores: Whether the shared core-selector cadence is due.
+///
+/// Returns:
+///     Independently classified visible results from one snapshot.
+pub fn summary_data(q: &Query, read_cores: bool) -> AnalyticsRead<Summary> {
+    let compound = super::open_reader().and_then(|conn| {
+        let has_strat_names = strategies_attached(&conn);
+        super::with_read_snapshot(&conn, |snapshot| {
+            Ok(AnalyticsRead {
+                data: summary_on(snapshot, q, has_strat_names, false),
+                undated: undated_closes_on(snapshot, q),
+                cores: read_cores.then(|| super::distinct_cores(snapshot)),
+            })
+        })
+    });
+    match compound {
+        Ok(data) => data,
+        Err(error) => AnalyticsRead {
+            data: Err(error.clone()),
+            undated: Err(error.clone()),
+            cores: read_cores.then_some(Err(error)),
+        },
+    }
+}
+
+/// Read only the list/coin base needed by Strategies, plus its undated warning.
+///
+/// Args:
+///     q: Strategies scope and period.
+///     read_cores: Whether the shared core-selector cadence is due.
+///
+/// Returns:
+///     Independently classified visible results from one snapshot.
+pub fn strategy_base_data(q: &Query, read_cores: bool) -> AnalyticsRead<StrategyBase> {
+    let compound = super::open_reader().and_then(|conn| {
+        let has_strat_names = strategies_attached(&conn);
+        super::with_read_snapshot(&conn, |snapshot| {
+            Ok(AnalyticsRead {
+                data: strategy_base_on(snapshot, q, has_strat_names),
+                undated: undated_closes_on(snapshot, q),
+                cores: read_cores.then(|| super::distinct_cores(snapshot)),
+            })
+        })
+    });
+    match compound {
+        Ok(data) => data,
+        Err(error) => AnalyticsRead {
+            data: Err(error.clone()),
+            undated: Err(error.clone()),
+            cores: read_cores.then_some(Err(error)),
+        },
+    }
+}
+
+/// Read Calendar cells and visible report metadata from one committed snapshot.
+///
+/// Args:
+///     q: Visible Calendar scope and time range.
+///     previous: Optional comparison scope.
+///     hourly: Whether Calendar renders hour buckets.
+///     read_cores: Whether the throttled core selector is due for refresh.
+///
+/// Returns:
+///     Independently classified Calendar, undated, and optional core results.
+pub fn calendar_data(
+    q: &Query,
+    previous: Option<&Query>,
+    hourly: bool,
+    read_cores: bool,
+) -> CalendarRead {
+    let compound = super::open_reader().and_then(|conn| {
+        super::with_read_snapshot(&conn, |snapshot| {
+            Ok(CalendarRead {
+                period: calendar::calendar_period_from(snapshot, q, previous, hourly),
+                undated: undated_closes_on(snapshot, q),
+                cores: read_cores.then(|| super::distinct_cores(snapshot)),
+            })
+        })
+    });
+    match compound {
+        Ok(data) => data,
+        Err(error) => CalendarRead {
+            period: Err(error.clone()),
+            undated: Err(error.clone()),
+            cores: read_cores.then_some(Err(error)),
+        },
+    }
+}
+
+/// Build the Strategies base without the Summary-only series and rankings.
+fn strategy_base_on(
+    conn: &Connection,
+    q: &Query,
+    has_strat_names: bool,
+) -> ReadResult<StrategyBase> {
+    let mut q = q.clone();
+    if q.from < 0 {
+        q.from = min_closedate(conn)?;
+    }
+    let Some(src) = unified_from(conn, &q)? else {
+        return Err(ReadFail::NotReady);
+    };
+    let mut names = has_strat_names;
+    let strategies =
+        with_name_fallback(&mut names, |enabled| groups(conn, &src, &q, enabled, true))?;
+    let trades = strategies.iter().map(|strategy| strategy.n).sum();
+    Ok(StrategyBase {
+        strategies,
+        trades,
+        coins: with_name_fallback(&mut names, |enabled| groups(conn, &src, &q, enabled, false))?,
+        from: q.from,
+        to: q.to,
+    })
+}
+
 /// Aggregate the selected period and filters without collapsing read failures.
 ///
 /// Returns `NotReady` when the replica or required core schema is absent, and
@@ -186,18 +348,20 @@ pub fn summary(q: &Query) -> ReadResult<Summary> {
     // during catch-up — without this they could disagree about which trades the
     // period contains while being published as one coherent result.
     let snap = super::read_snapshot(&conn)?;
-    summary_on(&snap, q, has_strat_names)
+    summary_on(&snap, q, has_strat_names, true)
 }
 
 /// Aggregate a summary on an existing connection for tests and [`summary`].
 ///
 /// `has_strat_names` is supplied so tests do not attach the developer's real
-/// strategies database. Missing required source schema returns `NotReady`;
-/// schema, query, and row failures return `Failed`.
+/// strategies database. `read_cores` skips the throttled selector scan for
+/// compound UI reads. Missing required source schema returns `NotReady`; schema,
+/// query, and row failures return `Failed`.
 pub(super) fn summary_on(
     conn: &Connection,
     q: &Query,
     has_strat_names: bool,
+    read_cores: bool,
 ) -> ReadResult<Summary> {
     let mut q = q.clone();
     if q.from < 0 {
@@ -258,7 +422,11 @@ pub(super) fn summary_on(
         } else {
             Vec::new()
         },
-        cores: super::distinct_cores(conn)?,
+        cores: if read_cores {
+            super::distinct_cores(conn)?
+        } else {
+            Vec::new()
+        },
         from: q.from,
         to: q.to,
     })

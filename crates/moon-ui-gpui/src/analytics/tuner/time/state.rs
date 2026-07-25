@@ -4,7 +4,6 @@
 //! it lives in `grid`, the recompute in `time/mod.rs`.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use gpui::{Bounds, Entity, Pixels};
 use moon_ui::MoonInputState;
@@ -53,11 +52,11 @@ pub(in crate::analytics) struct TimeTunerState {
     pub(in crate::analytics::tuner) sugg_seq: u64,
     // ── Background-load results and staleness of the axis (see `reload_time`) ──
     /// The single hour-of-day profile for the selected Strategies period and
-    /// strategy-selection scope. `None` before the first computation or after a read error.
-    pub(in crate::analytics::tuner) profiles: Option<Arc<Vec<[HourStat; 24]>>>,
+    /// strategy-selection scope, including classified loading and failure states.
+    pub(in crate::analytics::tuner) profiles: LoadState<Vec<[HourStat; 24]>>,
     /// Average-profit profiles used to color the By time sliders
-    /// (weekday by hour / hour of day / minute of hour). `None` before computation or on error.
-    pub(in crate::analytics::tuner) slider: Option<Arc<SliderProfiles>>,
+    /// (weekday by hour / hour of day / minute of hour), including classified read failures.
+    pub(in crate::analytics::tuner) slider: LoadState<SliderProfiles>,
     /// The Fact vs variants KPI: Fact / v1 / v2 columns for the weekly schedule
     /// from the grid, rendered in the shared matrix at the right.
     pub(in crate::analytics::tuner) stats: LoadState<Vec<VarStats>>,
@@ -94,8 +93,8 @@ impl TimeTunerState {
             round_results: true,
             sugg_busy: false,
             sugg_seq: 0,
-            profiles: None,
-            slider: None,
+            profiles: LoadState::default(),
+            slider: LoadState::default(),
             stats: LoadState::default(),
             seq: 0,
             dirty: true,
@@ -107,16 +106,54 @@ impl TimeTunerState {
     /// Whether the axis must recompute on entry: nothing loaded yet, or the loaded
     /// data is stale relative to the current query/selection scope.
     pub(in crate::analytics) fn needs_reload(&self) -> bool {
-        self.profiles.is_none() || self.dirty
+        self.profiles.data().is_none() || self.dirty
     }
 
     /// The query (period/filters) changed: the loaded data is stale AND an in-flight
     /// auto-suggestion belongs to the old scope — retire both, as the sibling axes'
     /// `invalidate` methods do. The grid values themselves are deliberately kept
     /// (they are the user's edit, not derived data).
+    ///
+    /// The method has no return value; callers start or defer the replacement request.
     pub(in crate::analytics) fn invalidate(&mut self) {
+        self.seq = self.seq.wrapping_add(1);
         self.invalidate_suggest();
         self.dirty = true;
+    }
+
+    /// Mark report-derived results stale without retiring an in-flight consistent snapshot.
+    ///
+    /// A report commit does not change the selected strategy or the user's schedule draft. The
+    /// active request may therefore publish its pinned SQLite snapshot, while `dirty` guarantees
+    /// the generation gate schedules a trailing catch-up.
+    ///
+    /// The method has no return value.
+    pub(in crate::analytics) fn mark_report_stale(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Apply raw strategy schedule fields while distinguishing a failed read from empty values.
+    ///
+    /// Args:
+    ///     current: Confirmed fields and ignore flags, or `None` when the strategy row was
+    ///         unreadable.
+    ///     preserve_missing: Whether an unreadable row should retain the previous baseline.
+    ///
+    /// Explicit scope changes pass `false` so fields from the old strategy cannot remain visible.
+    pub(in crate::analytics::tuner) fn apply_current_read(
+        &mut self,
+        current: Option<([String; 2], bool, bool)>,
+        preserve_missing: bool,
+    ) {
+        if let Some((current, ignore_time, ignore_filters)) = current {
+            self.current_raw = current;
+            self.ignore_cur = ignore_time;
+            self.ign_filters_cur = ignore_filters;
+        } else if !preserve_missing {
+            self.current_raw = Default::default();
+            self.ignore_cur = false;
+            self.ign_filters_cur = false;
+        }
     }
 
     /// Span of variant `vi` over the minute of the week (field 0). Empty → None; a missing edge →
@@ -364,3 +401,6 @@ pub(in crate::analytics::tuner) fn parse_time(s: &str) -> Option<u16> {
         s.parse::<u16>().ok().map(|v| v.min(1439))
     }
 }
+
+#[cfg(test)]
+mod tests;

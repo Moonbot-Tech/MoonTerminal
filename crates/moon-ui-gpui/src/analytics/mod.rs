@@ -6,16 +6,17 @@
 //! Calendar, and Strategy Tuning; the tuning workspace provides By filter, By coin, and By time
 //! modes.
 //! `moon_core::db::analytics` computes the data on the background executor (the full-period
-//! SQLite query never runs on the UI thread). Data is re-queried ONLY in response to user actions:
-//! opening the window, changing the period or filters, or clicking the active period preset again
-//! to refresh manually. A tab switch reloads only when its data is stale, missing, or for a
-//! different period.
+//! SQLite query never runs on the UI thread). Direct scope edits reload immediately; stale
+//! tab/mode entry and committed report generations use the shared quiet-period and maximum-wait
+//! gate. Hidden surfaces remain marked stale until entry, and automatic scans never overlap.
 
 /// The shared spawn+overlay envelope of every background DB read.
 mod bg;
 mod calendar;
 /// Period presets, window tabs and date helpers — the time axis shared by every page.
 mod period;
+/// Generation-aware load shedding for automatic report-driven refreshes.
+mod refresh;
 mod summary;
 /// The window's top chrome: tabs, filter combos, date fields, period bar.
 mod toolbar;
@@ -29,6 +30,7 @@ pub(in crate::analytics) use period::{Period, Tab, day_of_secs, fmt_day, secs_of
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -40,10 +42,11 @@ use rust_i18n::t;
 
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
-use moon_core::db::analytics::{DayCell, Query, Summary};
-use moon_core::db::{ProfitMetric, SideFilter};
+use moon_core::db::analytics::{DayCell, Query, StrategyBase, Summary};
+use moon_core::db::{FailKind, ProfitMetric, ReadFail, SideFilter};
 
 use crate::load_state::{LoadState, note_el};
+use refresh::{BusyRetryBudget, RefreshGate, RefreshPlan, VisibleRefresh, visible_refresh};
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
 
@@ -129,6 +132,8 @@ pub(crate) struct AnalyticsSessionState {
     tab: Tab,
     /// Explicit core filter, preserving the selector's empty/full/stale set semantics.
     sel_cores: HashSet<u64>,
+    /// Last Strategies axis selected while this process is running.
+    strat_mode: tuner::StratMode,
 }
 
 impl Default for AnalyticsSessionState {
@@ -140,6 +145,7 @@ impl Default for AnalyticsSessionState {
         Self {
             tab: Tab::Summary,
             sel_cores: HashSet::new(),
+            strat_mode: tuner::StratMode::Filters,
         }
     }
 }
@@ -147,6 +153,12 @@ impl Default for AnalyticsSessionState {
 /// State of the Analytics window.
 pub struct AnalyticsView {
     backend: Entity<Backend>,
+    /// Report-writer generation observed only while this window exists.
+    report_generation: Option<Arc<AtomicU64>>,
+    /// Debounce/max-wait state for automatic report-driven refreshes.
+    report_refresh: RefreshGate,
+    /// Bounded automatic Busy retries for the active contention episode.
+    report_busy_retries: BusyRetryBudget,
     tab: Tab,
     /// Period of the Summary tab (presets or the from/to range).
     period: Period,
@@ -156,9 +168,17 @@ pub struct AnalyticsView {
     /// Period currently represented by `data` (summary/strategy list). Entering a tab
     /// with a different time window triggers a reload.
     data_period: Period,
+    /// Whether `data` predates the latest committed report generation.
+    data_dirty: bool,
     /// Cores from the replica (for the combo box) plus multi-selection (empty = all), using
     /// the same controls as Orders and Report.
     cores: Vec<(u64, String)>,
+    /// Last successful core-list query; frequent report refreshes reuse it for up to one minute.
+    last_cores_at: Option<std::time::Instant>,
+    /// Whether Calendar skipped a core-list query that still needs a trailing refresh.
+    core_refresh_needed: bool,
+    /// Whether a trailing core-list refresh timer is already scheduled.
+    core_refresh_timer_armed: bool,
     sel_cores: HashSet<u64>,
     side: SideFilter,
     /// `None` means all, `Some(false)` real, and `Some(true)` emulated.
@@ -169,13 +189,19 @@ pub struct AnalyticsView {
     /// Background summary state with distinct loading, unavailable, ready, and
     /// failed outcomes so only a successful empty read appears empty.
     pub(super) data: LoadState<Summary>,
+    /// Compact strategy-list and coin-universe base, separate from the expensive Summary.
+    pub(super) strategy_data: LoadState<StrategyBase>,
+    /// Period currently represented by `strategy_data`.
+    strategy_data_period: Period,
+    /// Whether the compact Strategies base predates the latest report generation.
+    strategy_dirty: bool,
     /// Closed trades the core never dated, under the CURRENT filters.
     ///
-    /// `None` while unknown (not read yet, or the read failed — logged at the origin): the
-    /// banner is a claim about missing money, and it must not appear on a guess. Read on
-    /// every filter change alongside the summary, since it shares the same filters and is
-    /// deliberately outside the period.
+    /// `None` while unknown. Failures are tracked separately so the banner never claims that
+    /// missing rows do not exist merely because the metadata query failed.
     pub(super) undated: Option<moon_core::db::analytics::UndatedCloses>,
+    /// Classified failure of the latest undated-close read.
+    pub(super) undated_error: Option<ReadFail>,
     /// Attribute LIQUIDATION trades to the strategy named in the row (see
     /// `db::analytics::Query::attribute_liq`).
     ///
@@ -192,6 +218,11 @@ pub struct AnalyticsView {
     /// Without it, long scans of a large database are invisible while filter and strategy clicks
     /// accumulate in the queue.
     busy_ops: usize,
+    /// Every Analytics database task, including non-overlay selection cues and debounced rescans.
+    ///
+    /// Automatic report refresh waits for this to reach zero so a burst cannot start a second
+    /// full-period scan over an existing `overlay = false` task.
+    db_ops: usize,
     /// Start of the current operation batch; the overlay appears only after
     /// `BUSY_OVERLAY_DELAY`, so quick recomputations do not flash the dimmer.
     busy_since: Option<std::time::Instant>,
@@ -230,15 +261,15 @@ pub struct AnalyticsView {
     /// `(font_scale_it_was_measured_under, width_in_base_px)` (`tuner::list::table::core_col_w`).
     /// Filled lazily on render; measuring lays out a glyph per character for every distinct core
     /// name, too much to repay on an idle repaint. Invalidated two ways: cleared to `None` where
-    /// `data` is replaced (`data.apply`, the single site — the names may have changed), and
+    /// `strategy_data` is replaced (the names may have changed), and
     /// recomputed when the stored font scale no longer matches the current one, so a Font-slider
     /// move OR a theme whose mode carries a different base mono size re-measures instead of
     /// scaling a width that assumed the old base.
     strat_core_w: Option<(f32, f32)>,
     /// Calendar tab: cells (PnL, trades, and wins) for the loaded range; Day mode uses hourly cells.
-    pub(super) cal_days: Option<Arc<Vec<DayCell>>>,
+    pub(super) cal_days: LoadState<Vec<DayCell>>,
     cal_seq: u64,
-    /// Whether the series is stale for the current filters and must be reloaded on entry.
+    /// Whether the series is stale for the current scope or report generation.
     cal_dirty: bool,
     cal_mode: calendar::CalMode,
     /// Displayed calendar month as `(year, month 1..12)`, controlled by the tab's OWN
@@ -248,7 +279,7 @@ pub struct AnalyticsView {
     pub(super) cal_day: i64,
     /// PREVIOUS month's aggregate `(profit, trades, wins)` for the KPI deltas against the
     /// previous period (calendar month versus calendar month, not 30 days).
-    pub(super) cal_prev: Option<(f64, i64, i64)>,
+    pub(super) cal_prev: LoadState<Option<(f64, i64, i64)>>,
     /// Calendar day under the cursor, stored as the day start for cell highlighting.
     pub(super) cal_hover: Option<i64>,
     /// Strategies-tab mode (Filters / Coins / Time). Privacy is module-based: tab submodules
@@ -308,9 +339,21 @@ impl AnalyticsView {
         })
         .detach();
 
-        // New reports intentionally trigger NO automatic reload: recomputation (full period scans
-        // plus grouping) starts only after a relevant user action such as opening the window,
-        // changing the period or filters, or clicking a preset again.
+        // Observe the dedicated post-commit wake channel only while this view exists.
+        let report_generation = backend
+            .read(cx)
+            .reports
+            .as_ref()
+            .map(|reports| reports.generation.clone());
+        let initial_report_generation = report_generation
+            .as_ref()
+            .map(|generation| generation.load(Ordering::Relaxed))
+            .unwrap_or(0);
+        let report_revision = backend.read(cx).report_revision.clone();
+        cx.observe(&report_revision, |this, _revision, cx| {
+            this.observe_report_generation(cx);
+        })
+        .detach();
 
         // Period: the previous layout selection, defaulting to the current calendar month.
         let saved_period = backend
@@ -393,21 +436,33 @@ impl AnalyticsView {
         let probe = probe_enabled();
         let mut this = Self {
             backend,
+            report_generation,
+            report_refresh: RefreshGate::new(initial_report_generation, std::time::Instant::now()),
+            report_busy_retries: BusyRetryBudget::default(),
             tab: if probe { Tab::Strategies } else { session.tab },
             period: saved_period.unwrap_or(Period::CurMonth),
             strat_period: saved_strat_period.unwrap_or(Period::CurMonth),
             data_period: saved_period.unwrap_or(Period::CurMonth),
+            data_dirty: false,
             cores: Vec::new(),
+            last_cores_at: None,
+            core_refresh_needed: false,
+            core_refresh_timer_armed: false,
             sel_cores: session.sel_cores,
             side: SideFilter::All,
             // Default to Real, as in Report, because emulated trades add noise to the statistics.
             emu: Some(false),
             metric: saved_metric,
             data: LoadState::default(),
+            strategy_data: LoadState::default(),
+            strategy_data_period: saved_strat_period.unwrap_or(Period::CurMonth),
+            strategy_dirty: true,
             undated: None,
+            undated_error: None,
             attr_liq,
             write_error: None,
             busy_ops: 0,
+            db_ops: 0,
             busy_since: None,
             seq: 0,
             hover_daily_bucket: None,
@@ -423,7 +478,7 @@ impl AnalyticsView {
             strat_sort: Some(("analytics.col.profit".to_string(), true)),
             strat_cols: saved_strat_cols,
             strat_core_w: None,
-            cal_days: None,
+            cal_days: LoadState::default(),
             cal_seq: 0,
             cal_dirty: true,
             cal_mode: saved_mode,
@@ -433,12 +488,12 @@ impl AnalyticsView {
                 (d.year(), d.month())
             },
             cal_day: (moon_core::util::now_unix_ms_i64() / 1000).div_euclid(86_400) * 86_400,
-            cal_prev: None,
+            cal_prev: LoadState::default(),
             cal_hover: None,
             strat_mode: if probe {
                 tuner::StratMode::Coins
             } else {
-                tuner::StratMode::Filters
+                session.strat_mode
             },
             kpi_collapsed: saved_kpi_collapsed,
             tuner: tuner::TunerState::load(saved_tuner_iters, saved_tuner_edges),
@@ -457,6 +512,154 @@ impl AnalyticsView {
         this
     }
 
+    /// Return the latest report generation visible to this Analytics window.
+    ///
+    /// Returns:
+    ///     The writer generation, or zero when the report database is unavailable.
+    fn current_report_generation(&self) -> u64 {
+        self.report_generation
+            .as_ref()
+            .map(|generation| generation.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    /// Mark report-derived caches stale and schedule a load-shed automatic refresh.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to schedule or start the refresh.
+    fn observe_report_generation(&mut self, cx: &mut Context<Self>) {
+        let generation = self.current_report_generation();
+        if !self
+            .report_refresh
+            .observe_generation(generation, std::time::Instant::now())
+        {
+            return;
+        }
+        self.report_busy_retries.observe_generation();
+        self.mark_report_data_stale();
+        self.schedule_report_refresh(cx);
+    }
+
+    /// Mark report-derived results stale without clearing drafts or retiring snapshot progress.
+    ///
+    /// The method has no return value; the refresh gate later reloads the visible surface.
+    fn mark_report_data_stale(&mut self) {
+        self.data_dirty = true;
+        self.strategy_dirty = true;
+        self.cal_dirty = true;
+        self.tuner.mark_report_stale();
+        self.time_tuner.mark_report_stale();
+        self.coins.mark_report_stale();
+    }
+
+    /// Acknowledge every committed generation visible when a refresh begins.
+    fn acknowledge_report_refresh(&mut self) {
+        let generation = self.current_report_generation();
+        self.report_refresh
+            .refresh_started(generation, std::time::Instant::now());
+    }
+
+    /// Settle the Busy retry episode and optionally schedule its next bounded attempt.
+    ///
+    /// Permanent corruption and unclassified I/O failures remain visible instead of creating an
+    /// endless full-history retry loop.
+    ///
+    /// Args:
+    ///     error: Transient read failure, or `None` when the read escaped SQLite contention.
+    ///     cx: GPUI context used to arm the quiet-period retry.
+    fn settle_report_refresh_retry(
+        &mut self,
+        error: Option<&ReadFail>,
+        cx: &mut Context<Self>,
+    ) {
+        if error.and_then(ReadFail::kind) != Some(FailKind::Busy) {
+            self.report_busy_retries.resolve();
+            return;
+        }
+        if !self.report_busy_retries.claim() {
+            log::warn!("analytics: automatic database retry budget exhausted");
+            return;
+        }
+        self.report_refresh
+            .request_refresh(std::time::Instant::now(), false);
+        self.schedule_report_refresh(cx);
+    }
+
+    /// Queue a visible catch-up behind any Analytics database work already in flight.
+    ///
+    /// Args:
+    ///     show_overlay: Whether a user action requires blocking progress feedback.
+    ///     cx: GPUI context used to arm the shared refresh gate.
+    pub(super) fn request_report_refresh(
+        &mut self,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.report_refresh
+            .request_refresh(std::time::Instant::now(), show_overlay);
+        self.schedule_report_refresh(cx);
+    }
+
+    /// Plan or start the sole trailing report refresh for this open window.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to arm a timer or start database work.
+    pub(super) fn schedule_report_refresh(&mut self, cx: &mut Context<Self>) {
+        let db_active = self.db_ops > 0 || self.busy_ops > 0;
+        match self
+            .report_refresh
+            .plan(std::time::Instant::now(), db_active)
+        {
+            RefreshPlan::Idle => {}
+            RefreshPlan::Now { show_overlay } => {
+                self.refresh_visible_report_data(show_overlay, cx);
+            }
+            RefreshPlan::After(wait) => {
+                cx.spawn(async move |this, cx| {
+                    let executor = cx.update(|cx| cx.background_executor().clone());
+                    executor.timer(wait).await;
+                    let _ = cx.update(|cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            this.report_refresh.timer_fired();
+                            this.schedule_report_refresh(cx);
+                        });
+                    });
+                })
+                .detach();
+            }
+        }
+    }
+
+    /// Recompute only the surface visible when a report-driven refresh becomes due.
+    ///
+    /// Strategies uses a compact list/coin base instead of paying for Summary-only charts,
+    /// rankings, comparisons, and per-core series on every report commit.
+    ///
+    /// Args:
+    ///     show_overlay: Whether coalesced user work requires blocking progress feedback.
+    ///     cx: GPUI context used to start the visible surface's background reads.
+    fn refresh_visible_report_data(
+        &mut self,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.acknowledge_report_refresh();
+        let base_dirty = match self.tab {
+            Tab::Strategies => self.strategy_dirty || self.core_refresh_needed,
+            _ => self.data_dirty,
+        };
+        match visible_refresh(self.tab, base_dirty) {
+            VisibleRefresh::Summary => self.reload_summary(true, show_overlay, cx),
+            VisibleRefresh::StrategyBaseAndAxis => {
+                self.reload_strategy_base(true, true, show_overlay, cx);
+            }
+            VisibleRefresh::StrategyAxis => {
+                self.reload_axis_after_report(self.strat_mode, show_overlay, cx);
+            }
+            VisibleRefresh::Calendar => self.reload_calendar_after_report(show_overlay, cx),
+        }
+    }
+
     /// Period of the active tab. Tuning keeps its OWN time window, separate from Summary.
     /// Calendar does not use the period bar because it has its own navigation, and
     /// `reload_calendar` builds its query directly without calling this method.
@@ -465,6 +668,59 @@ impl AnalyticsView {
             Tab::Strategies => self.strat_period,
             _ => self.period,
         }
+    }
+
+    /// Decide whether the shared core selector is due and preserve its original deadline.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to arm the sole trailing metadata timer.
+    ///
+    /// Returns:
+    ///     `true` when the caller should include cores in its compound snapshot.
+    fn core_metadata_due(&mut self, cx: &mut Context<Self>) -> bool {
+        let wait = refresh::core_metadata_wait(self.last_cores_at, std::time::Instant::now());
+        self.core_refresh_needed = true;
+        if wait.is_zero() {
+            return true;
+        }
+        self.schedule_core_metadata_refresh(wait, cx);
+        false
+    }
+
+    /// Arm one trailing core-list refresh shared by every Analytics tab.
+    ///
+    /// Args:
+    ///     wait: Remaining time until the one-minute metadata cadence.
+    ///     cx: GPUI context used to run and publish the timer.
+    fn schedule_core_metadata_refresh(
+        &mut self,
+        wait: std::time::Duration,
+        cx: &mut Context<Self>,
+    ) {
+        if self.core_refresh_timer_armed {
+            return;
+        }
+        self.core_refresh_timer_armed = true;
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(wait).await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.core_refresh_timer_armed = false;
+                    if !this.core_refresh_needed {
+                        return;
+                    }
+                    let remaining =
+                        refresh::core_metadata_wait(this.last_cores_at, std::time::Instant::now());
+                    if remaining.is_zero() {
+                        this.request_report_refresh(false, cx);
+                    } else {
+                        this.schedule_core_metadata_refresh(remaining, cx);
+                    }
+                });
+            });
+        })
+        .detach();
     }
 
     /// Current filters in the structure shared by Summary and Tuning, using the active tab's
@@ -494,9 +750,11 @@ impl AnalyticsView {
         )
     }
 
-    /// Start/finish accounting for background operations. Every operation that calls
-    /// `op_started` must decrement exactly once, BEFORE its sequence check, because stale
-    /// completions still count.
+    /// Start accounting for a blocking background operation.
+    ///
+    /// Every operation that calls `op_started` must decrement exactly once, including stale
+    /// completions. Completion handlers publish or discard their result first, then balance this
+    /// counter before deferred report work is scheduled.
     pub(super) fn op_started(&mut self) {
         self.busy_ops += 1;
         if self.busy_since.is_none() {
@@ -514,6 +772,10 @@ impl AnalyticsView {
         cx.notify();
     }
 
+    /// Finish one blocking operation.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to repaint the overlay.
     pub(super) fn op_finished(&mut self, cx: &mut Context<Self>) {
         self.busy_ops = self.busy_ops.saturating_sub(1);
         if self.busy_ops == 0 {
@@ -544,8 +806,62 @@ impl AnalyticsView {
         false
     }
 
-    /// Reload the Analytics data and dependent views for the current period/filter scope.
+    /// Reload Analytics after a user-controlled period or filter scope change.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to start all required background reads.
     fn reload(&mut self, cx: &mut Context<Self>) {
+        self.report_busy_retries.reset();
+        self.acknowledge_report_refresh();
+        // The tuner uses the same filters: invalidate it and recompute immediately in the active
+        // mode, or defer recomputation until the next entry into Filters mode.
+        self.tuner.invalidate();
+        // The By time axis uses the shared filters and `strat_period`. This common reload path
+        // conservatively retires its in-flight auto-suggestion even on a Summary-only period
+        // change; otherwise a stale result could be written into v1 and become saveable.
+        // The profile is marked stale the same way, recomputed immediately below when the
+        // axis is the active one, or deferred until entry.
+        self.time_tuner.invalidate();
+        // The "By coin" axis lives on the same scope (its "Fact vs v1" matrix included):
+        // mark it stale. It is NOT started here, unlike the other axes: it expands its coin
+        // lists against the base coin set that this very request is about to replace, so
+        // starting it now would plan against the PREVIOUS period's coins (or, on a first
+        // show, against none at all). It is armed from the completion handler below.
+        self.coins.invalidate();
+        // The list panels ride the same reload, so they are retired with it — otherwise a
+        // reply already in flight for the previous scope lands under the new heading.
+        self.coin_lists.invalidate();
+        // Calendar uses the same filters: mark it stale and recompute immediately on the active
+        // tab, or defer until entry.
+        self.cal_seq = self.cal_seq.wrapping_add(1);
+        self.cal_dirty = true;
+        if self.tab == Tab::Calendar {
+            self.reload_calendar(cx);
+        }
+        self.data_dirty = true;
+        self.strategy_dirty = true;
+        self.undated = None;
+        self.undated_error = None;
+        match self.tab {
+            Tab::Summary => self.reload_summary(false, true, cx),
+            Tab::Strategies => self.reload_strategy_base(false, true, true, cx),
+            Tab::Calendar => {}
+        }
+    }
+
+    /// Reload the full Summary without resetting tuner drafts.
+    ///
+    /// Args:
+    ///     after_report: Whether report-style catch-up may preserve the previous undated value
+    ///         while exposing a classified read error.
+    ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
+    ///     cx: GPUI context used to run and publish the shared background query.
+    fn reload_summary(
+        &mut self,
+        after_report: bool,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
         // Mark the request at its start so an error from another period cannot
         // remain under the current period label.
         self.data.begin();
@@ -558,96 +874,177 @@ impl AnalyticsView {
         self.hover_kind = None;
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
+        let report_req = self.current_report_generation();
         // Record the ACTIVE tab's time window that `data` is being computed for.
         self.data_period = self.active_period();
-        // The tuner uses the same filters: invalidate it and recompute immediately in the active
-        // mode, or defer recomputation until the next entry into Filters mode.
-        self.tuner.invalidate();
-        // The By time axis uses the shared filters and `strat_period`. This common reload path
-        // conservatively retires its in-flight auto-suggestion even on a Summary-only period
-        // change; otherwise a stale result could be written into v1 and become saveable.
-        // The profile is marked stale the same way, recomputed immediately below when the
-        // axis is the active one, or deferred until entry.
-        self.time_tuner.invalidate();
-        // The active Filters/Time axis recomputes now. "By coin" is the deliberate
-        // exception — see the `coins.invalidate()` comment below.
-        if self.tab == Tab::Strategies
-            && matches!(
-                self.strat_mode,
-                tuner::StratMode::Filters | tuner::StratMode::Time
-            )
-        {
-            self.reload_axis(self.strat_mode, cx);
-        }
-        // The "By coin" axis lives on the same scope (its "Fact vs v1" matrix included):
-        // mark it stale. It is NOT started here, unlike the other axes: it expands its coin
-        // lists against the base coin set that this very request is about to replace, so
-        // starting it now would plan against the PREVIOUS period's coins (or, on a first
-        // show, against none at all). It is armed from the completion handler below.
-        self.coins.invalidate();
-        // The list panels ride the same reload, so they are retired with it — otherwise a
-        // reply already in flight for the previous scope lands under the new heading.
-        self.coin_lists.invalidate();
-        // Calendar uses the same filters: mark it stale and recompute immediately on the active
-        // tab, or defer until entry.
-        self.cal_dirty = true;
-        if self.tab == Tab::Calendar {
-            self.reload_calendar(cx);
-        }
         let q = self.query();
-        let undated_q = q.clone();
+        let read_cores = self.core_metadata_due(cx);
         self.spawn_db(
-            true,
+            show_overlay,
             cx,
-            move || {
-                let d = moon_core::db::analytics::summary(&q);
-                // Rides the same pass: it answers a question ABOUT this filter set, and
-                // a second round trip would let the two disagree about which cores.
-                let u = moon_core::db::analytics::undated_closes(&undated_q);
-                (d, u)
-            },
-            move |this, (data, undated), cx| {
+            move || moon_core::db::analytics::summary_data(&q, read_cores),
+            move |this, result, cx| {
                 if this.seq != req {
                     return; // The period or filters have already changed.
                 }
-                // Keep the last known core list when a read produces no
-                // summary: an empty `cores` makes `cores_selected()` read as
-                // "no filter", which renders as if every core were selected.
-                if let Ok(d) = &data {
-                    this.cores = d.cores.clone();
+                let data = result.data;
+                let undated = result.undated;
+                let cores = result.cores;
+                let data_error = data.as_ref().err().cloned();
+                let undated_error = undated.as_ref().err().cloned();
+                let cores_error = cores
+                    .as_ref()
+                    .and_then(|cores| cores.as_ref().err())
+                    .cloned();
+                let retry_error = data_error
+                    .as_ref()
+                    .filter(|error| error.kind() == Some(FailKind::Busy))
+                    .or_else(|| {
+                        undated
+                            .as_ref()
+                            .err()
+                            .filter(|error| error.kind() == Some(FailKind::Busy))
+                    })
+                    .or_else(|| {
+                        cores_error
+                            .as_ref()
+                            .filter(|error| error.kind() == Some(FailKind::Busy))
+                    })
+                    .cloned();
+                if let Some(Ok(cores)) = cores {
+                    this.cores = cores;
+                    this.last_cores_at = Some(std::time::Instant::now());
+                    this.core_refresh_needed = false;
                 }
                 this.data.apply(data);
-                // The set of core names may have changed with the data — remeasure the
-                // list's core column on the next render.
-                this.strat_core_w = None;
-                // A failed read leaves it unknown rather than "nothing missing": the
-                // origin already logged why, and a silent zero here would be the very
-                // thing this banner exists to stop.
-                this.undated = undated.ok();
-                // Observation channel only — see `probe_selects_strategy`. It adopts a
-                // strategy, which starts the coin reload itself; the arm below is then
-                // skipped so the two do not race two full passes over the same period.
-                let probe_took_over = probe_selects_strategy() && this.probe_select_first(cx);
-                // Now that the base coin set belongs to this scope, the coin axis can
-                // plan against it.
-                if !probe_took_over
-                    && this.tab == Tab::Strategies
-                    && this.strat_mode == tuner::StratMode::Coins
-                {
-                    this.reload_axis_if_stale(tuner::StratMode::Coins, cx);
-                }
+                this.data_dirty = refresh::report_result_is_stale(
+                    report_req,
+                    this.current_report_generation(),
+                    data_error.is_some() || undated_error.is_some() || cores_error.is_some(),
+                );
+                this.apply_undated_result(undated, after_report);
+                this.settle_report_refresh_retry(retry_error.as_ref(), cx);
                 cx.notify();
             },
         );
     }
 
+    /// Reload the compact Strategies base and optionally continue with its visible axis.
+    ///
+    /// Args:
+    ///     after_report: Whether to preserve report-style catch-up and retry semantics.
+    ///     chain_visible_axis: Whether a successful base read should continue into the active axis.
+    ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
+    ///     cx: GPUI context used to run and publish the shared background query.
+    fn reload_strategy_base(
+        &mut self,
+        after_report: bool,
+        chain_visible_axis: bool,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.strategy_data.begin();
+        self.seq = self.seq.wrapping_add(1);
+        let req = self.seq;
+        let report_req = self.current_report_generation();
+        self.strategy_data_period = self.strat_period;
+        let q = self.query();
+        let read_cores = self.core_metadata_due(cx);
+        self.spawn_db(
+            show_overlay,
+            cx,
+            move || moon_core::db::analytics::strategy_base_data(&q, read_cores),
+            move |this, result, cx| {
+                if this.seq != req {
+                    return;
+                }
+                let data = result.data;
+                let undated = result.undated;
+                let cores = result.cores;
+                let data_error = data.as_ref().err().cloned();
+                let undated_error = undated.as_ref().err().cloned();
+                let cores_error = cores
+                    .as_ref()
+                    .and_then(|cores| cores.as_ref().err())
+                    .cloned();
+                let retry_error = data_error
+                    .as_ref()
+                    .filter(|error| error.kind() == Some(FailKind::Busy))
+                    .or_else(|| {
+                        undated_error
+                            .as_ref()
+                            .filter(|error| error.kind() == Some(FailKind::Busy))
+                    })
+                    .or_else(|| {
+                        cores_error
+                            .as_ref()
+                            .filter(|error| error.kind() == Some(FailKind::Busy))
+                    })
+                    .cloned();
+                if let Some(Ok(cores)) = cores {
+                    this.cores = cores;
+                    this.last_cores_at = Some(std::time::Instant::now());
+                    this.core_refresh_needed = false;
+                }
+                this.strategy_data.apply(data);
+                this.strategy_dirty = refresh::report_result_is_stale(
+                    report_req,
+                    this.current_report_generation(),
+                    data_error.is_some() || undated_error.is_some() || cores_error.is_some(),
+                );
+                this.strat_core_w = None;
+                this.apply_undated_result(undated, after_report);
+                let probe_took_over = probe_selects_strategy() && this.probe_select_first(cx);
+                if refresh::strategy_base_allows_axis(
+                    data_error.is_some(),
+                    undated_error.is_some(),
+                    cores_error.is_some(),
+                )
+                    && !probe_took_over
+                    && chain_visible_axis
+                    && this.tab == Tab::Strategies
+                {
+                    this.reload_axis_after_report(this.strat_mode, show_overlay, cx);
+                }
+                this.settle_report_refresh_retry(retry_error.as_ref(), cx);
+                cx.notify();
+            },
+        );
+    }
+
+    /// Apply an undated-close result without erasing a same-scope value on automatic failure.
+    fn apply_undated_result(
+        &mut self,
+        result: moon_core::db::ReadResult<moon_core::db::analytics::UndatedCloses>,
+        preserve_previous: bool,
+    ) {
+        match result {
+            Ok(undated) => {
+                self.undated = Some(undated);
+                self.undated_error = None;
+            }
+            Err(error) => {
+                if !preserve_previous {
+                    self.undated = None;
+                }
+                self.undated_error = Some(error);
+            }
+        }
+    }
+
     // cal_query/cal_query_prev/reload_calendar live in calendar/mod.rs — a page's
     // recomputation belongs beside that page.
 
+    /// Apply a period preset to the active tab and reload its scope immediately.
+    ///
+    /// Args:
+    ///     p: Period selected by the user.
+    ///     window: Window owning the shared date-picker states.
+    ///     cx: GPUI context used to persist the choice and start the reload.
     fn set_period(&mut self, p: Period, window: &mut Window, cx: &mut Context<Self>) {
-        // Clicking the active preset again manually refreshes the data because new reports do not
-        // trigger automatic reloads. The period bar edits the ACTIVE tab's time window: Summary
-        // and Tuning are independent.
+        // Clicking the active preset remains an immediate manual refresh, independent of the
+        // load-shed automatic path. The period bar edits the ACTIVE tab's time window: Summary and
+        // Tuning are independent.
         let strat = self.tab == Tab::Strategies;
         if strat {
             self.strat_period = p;

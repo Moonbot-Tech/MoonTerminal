@@ -36,7 +36,7 @@ fn single_day_uses_hourly_grid_and_kinds_reconcile() {
         ],
     );
 
-    let s = summary_on(&conn, &q(day, day + 86_400), false).expect("healthy DB reads");
+    let s = summary_on(&conn, &q(day, day + 86_400), false, false).expect("healthy DB reads");
     assert_eq!(s.bucket_secs, 3_600, "a day or less → hourly grid");
     // The grid steps by exactly an hour with no holes (empty hours are zero-filled —
     // a chart's X axis has to be continuous), and three of them hold the trades.
@@ -76,7 +76,7 @@ fn single_day_uses_hourly_grid_and_kinds_reconcile() {
     );
 
     // A longer period keeps the daily grid and computes no type split at all.
-    let wide = summary_on(&conn, &q(day - 86_400, day + 86_400), false).expect("reads");
+    let wide = summary_on(&conn, &q(day - 86_400, day + 86_400), false, false).expect("reads");
     assert_eq!(wide.bucket_secs, 86_400, "two days → daily grid");
     assert!(wide.kinds.is_empty(), "no type split on a long period");
 
@@ -100,8 +100,8 @@ fn healthy_summary_exact_values() {
         ],
     );
 
-    let s = summary_on(&conn, &q(day - 86_400, day + 86_400), false)
-        .expect("здоровая БД должна читаться");
+    let s = summary_on(&conn, &q(day - 86_400, day + 86_400), false, true)
+        .expect("healthy database must remain readable");
     assert_eq!(s.cur.n, 4);
     assert_eq!(s.cur.wins, 2);
     assert_eq!(s.cur.losses, 2);
@@ -116,13 +116,13 @@ fn healthy_summary_exact_values() {
     // Cumulative profit 10 -> 6 -> 12 -> 10 has a maximum drawdown of 4.
     assert!((s.cur.max_dd - 4.0).abs() < 1e-9, "max_dd={}", s.cur.max_dd);
     assert!((s.cur.avg - 2.5).abs() < 1e-9);
-    assert_eq!(s.coins.len(), 2, "две монеты");
+    assert_eq!(s.coins.len(), 2, "two coins");
     assert_eq!(s.cores, vec![(1u64, "CORE-A".to_string())]);
     assert_eq!(s.best.len(), 4);
 
     // A genuinely empty period succeeds with zero counters.
-    let empty = summary_on(&conn, &q(day - 10 * 86_400, day - 9 * 86_400), false)
-        .expect("пустой период — успешное чтение");
+    let empty = summary_on(&conn, &q(day - 10 * 86_400, day - 9 * 86_400), false, false)
+        .expect("an empty period is a successful read");
     assert_eq!(empty.cur.n, 0);
 
     drop(conn);
@@ -139,7 +139,7 @@ fn corrupt_replica_surfaces_error_not_empty() {
     let conn = build_replica(&path, &spread_rows(day, 2000));
 
     // Prove the fixture is healthy before introducing damage.
-    let before = summary_on(&conn, &q(day - 86_400, day + 10 * 86_400), false)
+    let before = summary_on(&conn, &q(day - 86_400, day + 10 * 86_400), false, false)
         .expect("до порчи БД читается");
     assert_eq!(before.cur.n, 2000);
 
@@ -173,7 +173,7 @@ fn corrupt_replica_surfaces_error_not_empty() {
         "скан периода обязан вернуть ошибку, а не усечённую статистику"
     );
 
-    let res = summary_on(&conn, &wide, false);
+    let res = summary_on(&conn, &wide, false, false);
 
     assert!(
         !matches!(res, Ok(_)),

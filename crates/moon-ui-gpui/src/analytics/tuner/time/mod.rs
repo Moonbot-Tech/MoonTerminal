@@ -3,7 +3,7 @@
 //! the schedule grid; at the bottom, full width — a SINGLE "by hour of day" chart
 //! for the SELECTED period: 24 hour columns left to right, each with a vertical
 //! PnL bar growing from the center line (green up / orange down) + the value.
-//! Data comes from `hourly_profiles` (one range = the selected period).
+//! Data comes from one bounded streaming time-profile scan of the selected period.
 
 // Files of this axis.
 /// Its weekly schedule grid.
@@ -15,8 +15,6 @@ mod sliders;
 /// Its own state: the schedule values, their parsers and the suggestion settings.
 pub(in crate::analytics::tuner) mod state;
 
-use std::sync::Arc;
-
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -27,22 +25,54 @@ use super::super::summary::{fmt_signed, sign_color};
 use super::kpi::kpi_matrix_card;
 use crate::design;
 use crate::design::{moon, moon_alpha};
-use moon_core::db::analytics::{HourStat, hourly_profiles};
-use moon_core::db::tuner::variant_stats;
+use moon_core::db::analytics::HourStat;
 
 impl AnalyticsView {
-    /// Background computation of the "hour of day" profiles for all columns at once
-    /// (a single snapshot). The base is the "Tuning" filters + the scope of the
-    /// selected strategy (`tuner_query`); columns: the tab's active period, 7d, 30d, 90d.
+    /// Recompute the time axis after a user-controlled draft or scope change.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to run and publish the combined background read.
     pub(in crate::analytics) fn reload_time(&mut self, cx: &mut Context<Self>) {
+        self.reload_time_inner(false, true, cx);
+    }
+
+    /// Recompute report-stale time data and retry transient database contention.
+    ///
+    /// Args:
+    ///     show_overlay: Whether queued user work requires blocking progress feedback.
+    ///     cx: GPUI context used to run and publish the combined background read.
+    pub(in crate::analytics) fn reload_time_after_report(
+        &mut self,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.reload_time_inner(true, show_overlay, cx);
+    }
+
+    /// Start one time-axis snapshot with behavior selected by its reload cause.
+    ///
+    /// Args:
+    ///     after_report: Whether to preserve report-style draft and retry semantics.
+    ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
+    ///     cx: GPUI context used to run and publish the combined background read.
+    fn reload_time_inner(
+        &mut self,
+        after_report: bool,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !after_report {
+            self.report_busy_retries.reset();
+            self.tuner.mark_dialog_draft_changed();
+        }
         self.time_tuner.dirty = false;
         self.time_tuner.seq = self.time_tuner.seq.wrapping_add(1);
         let req = self.time_tuner.seq;
+        let report_req = self.current_report_generation();
+        self.time_tuner.profiles.begin();
+        self.time_tuner.slider.begin();
         self.time_tuner.stats.begin();
         let base = self.tuner_query();
-        // One "by hour" profile for the SELECTED period only (the bottom chart is a single
-        // full-width chart now, not the old 7/30/90-day columns).
-        let ranges = vec![(base.from, base.to)];
         // The KPI variants are built by the schedule GRID, not by the profile — the two
         // queries are independent: profiles feed the heatmap, variant_stats feeds
         // "Fact vs v1/v2".
@@ -56,26 +86,23 @@ impl AnalyticsView {
         let sid = sid_core.map(|(s, _)| s);
         let core = sid_core.and_then(|(_, c)| c);
         self.spawn_db(
-            true,
+            show_overlay,
             cx,
             move || {
-                let profiles = hourly_profiles(&base, &ranges);
-                let stats = variant_stats(&base, &variants);
-                // Coloring profiles for the sliders (week×hour / hour / minute of hour).
-                let slider = moon_core::db::tuner::slider_profiles(&base);
+                let report = moon_core::db::tuner::time_tuner_data(&base, &variants);
                 // Raw field values + the ignore flags (for display and the Save logic).
-                let (current, ig_time, ig_filters): ([String; 2], bool, bool) = sid
-                    .map(|sid| {
-                        let m = moon_core::db::tuner::strategy_current_values(
-                            sid,
-                            core,
-                            &[
-                                "WorkingWeekTime".to_string(),
-                                "WorkingTime".to_string(),
-                                "IgnoreTime".to_string(),
-                                "IgnoreFilters".to_string(),
-                            ],
-                        );
+                let current: Option<([String; 2], bool, bool)> = match sid {
+                    Some(sid) => moon_core::db::tuner::strategy_current_values_opt(
+                        sid,
+                        core,
+                        &[
+                            "WorkingWeekTime".to_string(),
+                            "WorkingTime".to_string(),
+                            "IgnoreTime".to_string(),
+                            "IgnoreFilters".to_string(),
+                        ],
+                    )
+                    .map(|m| {
                         let truthy = |k: &str| {
                             matches!(
                                 m.get(k).map(|s| s.trim().to_ascii_uppercase()).as_deref(),
@@ -90,22 +117,46 @@ impl AnalyticsView {
                             truthy("IgnoreTime"),
                             truthy("IgnoreFilters"),
                         )
-                    })
-                    .unwrap_or_default();
-                (profiles, stats, current, slider, ig_time, ig_filters)
+                    }),
+                    None => Some(Default::default()),
+                };
+                (report.profiles, report.stats, current, report.slider)
             },
-            move |this, (profiles, stats, current, slider, ig_time, ig_filters), cx| {
+            move |this, (profiles, stats, current, slider), cx| {
                 if this.time_tuner.seq != req {
                     return; // the period/filters/strategy/grid have already changed
                 }
-                // The profile (heatmap) and the KPI are independent: a profile error is
-                // shown as "no data", a KPI error as Failed in the matrix.
-                this.time_tuner.profiles = profiles.ok().map(Arc::new);
-                this.time_tuner.slider = slider.ok().map(Arc::new);
+                let retry = profiles
+                    .as_ref()
+                    .err()
+                    .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
+                    .or_else(|| {
+                        stats
+                            .as_ref()
+                            .err()
+                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
+                    })
+                    .or_else(|| {
+                        slider
+                            .as_ref()
+                            .err()
+                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
+                    })
+                    .cloned();
+                this.time_tuner.dirty = super::super::refresh::report_result_is_stale(
+                    report_req,
+                    this.current_report_generation(),
+                    profiles.is_err() || stats.is_err() || slider.is_err() || current.is_none(),
+                );
+                // The profile, slider colors, and KPI are independent load surfaces, so each
+                // retains its own classified error instead of collapsing it to "no data".
+                this.time_tuner.profiles.apply(profiles);
+                this.time_tuner.slider.apply(slider);
                 this.time_tuner.stats.apply(stats);
-                this.time_tuner.current_raw = current;
-                this.time_tuner.ignore_cur = ig_time;
-                this.time_tuner.ign_filters_cur = ig_filters;
+                this.time_tuner.apply_current_read(current, after_report);
+                if after_report {
+                    this.settle_report_refresh_retry(retry.as_ref(), cx);
+                }
                 cx.notify();
             },
         );
@@ -189,15 +240,23 @@ impl AnalyticsView {
         )
     }
 
-    /// The bottom "by hour" chart for the selected period: header + 24 hour columns at full width.
+    /// Build the bottom "by hour" chart for the selected period.
+    ///
+    /// Args:
+    ///     p: Active Moon palette.
+    ///     cx: GPUI application context used for scaled dimensions and labels.
+    ///
+    /// Returns:
+    ///     The chart card or its classified loading/error placeholder.
     fn time_heatmap(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
         // The single profile = the selected period (see `reload_time`).
-        let prof = self
-            .time_tuner
-            .profiles
-            .as_ref()
-            .and_then(|v| v.first())
-            .copied();
+        let profiles = match self.time_tuner.profiles.view(|_| false) {
+            Ok(profiles) => profiles,
+            Err(note) => {
+                return crate::load_state::note_el("an-time-profile-note", note, 8.0, p, cx);
+            }
+        };
+        let prof = profiles.first().copied();
         // Scope: the selected strategy's name, their count, or "all strategies".
         let scope = self.scope_label();
         // Bar scale — max |PnL| across the 24 hours of the selected period.

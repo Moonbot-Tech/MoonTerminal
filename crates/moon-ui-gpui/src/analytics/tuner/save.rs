@@ -58,17 +58,17 @@ impl AnalyticsView {
             return;
         }
         let keys: Vec<String> = changes.iter().map(|(k, _)| k.clone()).collect();
-        // The scope this dialog belongs to. `TunerState::invalidate` — fired by any selection
-        // or filter change — drops `save_dialog` and advances this. Without the check, a
-        // selection change during the read RESURRECTED the dialog afterwards, on targets the
-        // panel had already discarded, and confirming wrote an edit that was no longer shown.
-        let req = self.tuner.seq;
+        // The user scope and draft this dialog belongs to. Report generations retire only
+        // analytical results, while scope changes and draft edits advance `dialog_seq`. Without
+        // this separate guard, a live report refresh dropped valid Save clicks; using no guard
+        // instead resurrected dialogs for selections the panel had already discarded.
+        let req = self.tuner.dialog_seq;
         self.spawn_db(
             true,
             cx,
             move || moon_core::db::tuner::strategy_current_values(sid, core, &keys),
             move |this, olds_map, cx| {
-                if this.tuner.seq != req {
+                if this.tuner.dialog_seq != req {
                     log::info!("analytics: the confirmation's scope changed, dialog dropped");
                     return;
                 }

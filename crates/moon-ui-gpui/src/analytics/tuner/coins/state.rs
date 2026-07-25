@@ -16,7 +16,9 @@ use moon_ui::{MoonInputState, MoonSliderState};
 
 use super::super::COIN_DEFAULT_SORT;
 use crate::load_state::LoadState;
+use moon_core::db::ReadResult;
 use moon_core::db::analytics::GroupStat;
+use moon_core::db::coin_lists::CoinListRows;
 use moon_core::db::tuner::{VarStats, Variant};
 
 /// Which coins the table shows. A coin may sit in BOTH lists — the views are separate
@@ -47,7 +49,22 @@ pub(in crate::analytics::tuner) struct CoinLists {
 }
 
 impl CoinLists {
+    /// Build the tuner's saved-list baseline from the same fallible snapshot the picker renders.
+    ///
+    /// Args:
+    ///     rows: Strategy-list rows read in one transaction.
+    ///
+    /// Returns:
+    ///     Both list sides as normalized matching-token sets.
+    pub(in crate::analytics::tuner) fn from_rows(rows: &CoinListRows) -> Self {
+        Self {
+            black: rows.black.iter().map(|row| row.coin.clone()).collect(),
+            white: rows.white.iter().map(|row| row.coin.clone()).collect(),
+        }
+    }
+
     /// Parse raw `CoinsBlackList` / `CoinsWhiteList` field values into matchable tokens.
+    #[cfg(test)]
     pub(in crate::analytics::tuner) fn parse(black: &str, white: &str) -> Self {
         Self {
             black: moon_core::symbol::parse_coin_list(black),
@@ -55,20 +72,15 @@ impl CoinLists {
         }
     }
 
-    /// Fold another strategy's lists in. Several strategies are tuned as one set, so their
-    /// lists are UNIONED by coin — adding the sizes would double-count every coin two of
-    /// them happen to share.
-    pub(in crate::analytics::tuner) fn merge(&mut self, other: Self) {
-        self.black.extend(other.black);
-        self.white.extend(other.white);
-    }
-
     pub(in crate::analytics::tuner) fn is_empty(&self) -> bool {
         self.black.is_empty() && self.white.is_empty()
     }
 
-    /// A copy — the working set starts life as the saved one.
-    fn duplicate(&self) -> Self {
+    /// Return an independent copy used to seed or rebase a working list.
+    ///
+    /// Returns:
+    ///     Both list sides with cloned token sets.
+    pub(in crate::analytics::tuner) fn duplicate(&self) -> Self {
         Self {
             black: self.black.clone(),
             white: self.white.clone(),
@@ -80,7 +92,14 @@ impl CoinLists {
     ///
     /// Applied to BOTH sides. The whitelist is edited by its own tick column and written by
     /// the same Save, so a removal lost here reaches a strategy just as a blacklist one does.
-    fn with_delta(mut self, was: &Self, now: &Self) -> Self {
+    ///
+    /// Args:
+    ///     was: Previous saved baseline against which the draft was made.
+    ///     now: Working draft containing the user's additions and removals.
+    ///
+    /// Returns:
+    ///     `self` with the draft delta replayed on its baseline.
+    pub(in crate::analytics::tuner) fn with_delta(mut self, was: &Self, now: &Self) -> Self {
         fn replay(base: &mut HashSet<String>, was: &HashSet<String>, now: &HashSet<String>) {
             // The two difference sets are disjoint, so the order of these loops does not
             // matter. What makes a coin the user unticked stay UNTICKED even when the core
@@ -163,7 +182,7 @@ pub(in crate::analytics) struct CoinsState {
     /// The pending debounced KPI rescan. Held so the next edit REPLACES it — dropping a
     /// gpui `Task` cancels it, so a burst of ticks leaves one timer, not one per click.
     pub(in crate::analytics::tuner) kpi_task: Option<gpui::Task<()>>,
-    /// The loaded numbers no longer match the current filters/selection.
+    /// The loaded numbers no longer match the current scope or report generation.
     pub(in crate::analytics::tuner) dirty: bool,
     /// The built row model, kept across repaints (see `super::rows`).
     pub(in crate::analytics::tuner) rows: Option<super::rows::RowsCache>,
@@ -199,19 +218,35 @@ impl Default for CoinsState {
 }
 
 impl CoinsState {
+    /// Mark report-derived coin statistics stale while preserving working lists and picks.
+    ///
+    /// Report commits can change the table, KPI, and picked-strategy highlight. They cannot change
+    /// the strategy fields that form `saved`/`work`, so clearing those drafts here would turn live
+    /// refresh into data loss.
+    ///
+    /// The method has no return value; callers subsequently reload the active report-derived view.
+    pub(in crate::analytics) fn mark_report_stale(&mut self) {
+        self.dirty = true;
+    }
+
     /// The scope changed (period, filters, selected strategies): every number and both
     /// coin lists belong to the previous scope now.
     ///
-    /// Advances BOTH generations even when no replacement load starts here — otherwise a
+    /// Advances all three request generations even when no replacement load starts here —
+    /// otherwise a
     /// request already in flight for the old scope passes its own sequence check on
     /// arrival and publishes the previous strategies' numbers and lists, clearing `dirty`
     /// on the way out so nothing ever recomputes them. (Same reason
     /// `TunerState::invalidate` advances its three.)
+    ///
+    /// The method has no return value; callers start or defer replacement reads.
     pub(in crate::analytics) fn invalidate(&mut self) {
         self.dirty = true;
-        self.lists_rev = self.lists_rev.wrapping_add(1);
         self.seq = self.seq.wrapping_add(1);
         self.kpi_seq = self.kpi_seq.wrapping_add(1);
+        self.picked_seq = self.picked_seq.wrapping_add(1);
+        self.kpi_task = None;
+        self.lists_rev = self.lists_rev.wrapping_add(1);
         // `stats`/`kpi` are guarded by `LoadState`, but the lists are plain sets: left
         // standing they would mark rows with the PREVIOUS strategies' lists under the new
         // selection's name until the background read lands.
@@ -220,7 +255,6 @@ impl CoinsState {
         // The picked coins and the strategies behind them belong to the previous scope too.
         self.picked.clear();
         self.picked_strats.clear();
-        self.picked_seq = self.picked_seq.wrapping_add(1);
         self.settle_filter();
     }
 
@@ -262,6 +296,18 @@ impl CoinsState {
         }
         self.work = work;
         self.saved = saved;
+    }
+
+    /// Adopt a saved-list read only when the strategies snapshot was available.
+    ///
+    /// Args:
+    ///     result: Fallible saved-list baseline read.
+    ///
+    /// A failed read deliberately leaves both baseline and draft unchanged.
+    pub(in crate::analytics::tuner) fn adopt_if_ready(&mut self, result: ReadResult<CoinLists>) {
+        if let Ok(saved) = result {
+            self.adopt(saved);
+        }
     }
 
     /// Throw the edit away and go back to what the strategies have saved.
@@ -391,6 +437,28 @@ impl CoinsState {
 }
 
 impl CoinPlan {
+    /// Build a plan from a fresh saved baseline with the request-start draft replayed.
+    ///
+    /// Args:
+    ///     fresh_saved: Saved lists read by the current background request.
+    ///     previous_saved: Saved baseline visible when the request started.
+    ///     previous_work: Working draft visible when the request started.
+    ///     universe: Report coin rows used to expand list tokens.
+    ///
+    /// Returns:
+    ///     A plan matching the working lists that `CoinsState::adopt` will publish.
+    pub(in crate::analytics::tuner) fn build_rebased(
+        fresh_saved: &CoinLists,
+        previous_saved: &CoinLists,
+        previous_work: &CoinLists,
+        universe: &[GroupStat],
+    ) -> CoinPlan {
+        let work = fresh_saved
+            .duplicate()
+            .with_delta(previous_saved, previous_work);
+        CoinPlan::build(&work, universe)
+    }
+
     /// Build the plan from BARE lists, so the background reload can score the lists it just
     /// read without waiting for them to reach the view first. Reading them from state there
     /// is what left v1 missing until the user clicked something.

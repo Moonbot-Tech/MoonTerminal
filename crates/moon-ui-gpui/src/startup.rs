@@ -4,6 +4,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -18,6 +19,17 @@ use crate::diagnostics::crash;
 use crate::persistence::{chart_persist, dock_persist};
 use crate::window::detached;
 use crate::{Backend, UiSessionState, diag, firetest};
+
+/// Consume one coalesced post-commit edge and notify report-data observers.
+///
+/// Args:
+///     dirty: Optional writer edge; absent when report storage failed to initialize.
+///     on_commit: Notification emitted exactly once for a set edge.
+fn consume_report_commit(dirty: Option<&std::sync::atomic::AtomicBool>, on_commit: impl FnOnce()) {
+    if dirty.is_some_and(|dirty| dirty.swap(false, Ordering::AcqRel)) {
+        on_commit();
+    }
+}
 
 fn embedded_fonts() -> Vec<Cow<'static, [u8]>> {
     vec![
@@ -237,10 +249,13 @@ pub(crate) fn run() -> anyhow::Result<()> {
             specs
         };
 
-        // Start the report writer. The session receives its `tx` for typed
-        // `Event::Report` replication, while Backend retains `generation` for
-        // Report-panel refreshes. `None` means the database is unavailable.
+        // Start the report writer. The session receives its `tx` for typed `Event::Report`
+        // replication, while Backend retains `generation` for report-derived views. The
+        // one-bit signal is only a causal edge after commit; generation remains the source of
+        // truth, and an already-set bit safely coalesces a catch-up burst.
         let reports = moon_core::db::spawn_writer();
+        let report_dirty = reports.as_ref().map(|reports| reports.commit_dirty.clone());
+        let report_revision = cx.new(|_| crate::ReportRevision);
         // Check the complete replica once because individual reads only detect
         // damage on pages reached by their query.
         moon_core::db::integrity::spawn_check();
@@ -255,6 +270,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             ),
             epoch,
             reports,
+            report_revision: report_revision.clone(),
             metrics: Metrics::new(),
             snap: MetricsSnapshot::default(),
             // open = markets of OPEN chart panels, as in App::about_to_wait in egui.
@@ -538,6 +554,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
         let coord_backend = backend.clone();
         let coord_cfg = cfg.clone();
         let coord_layout = layout.clone();
+        let coord_report_dirty = report_dirty;
+        let coord_report_revision = report_revision;
         cx.spawn(async move |cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let mut last_report = Instant::now();
@@ -546,6 +564,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
             loop {
                 executor.timer(Duration::from_millis(100)).await;
                 cx.update(|cx| {
+                    consume_report_commit(coord_report_dirty.as_deref(), || {
+                        coord_report_revision.update(cx, |_, cx| cx.notify());
+                    });
                     let (show_reqs, open_debug_10) = coord_backend.update(cx, |b, cx| {
                         b.maybe_diag_open_first_market(cx);
                         b.refresh_header_ticker_default(false);
@@ -757,3 +778,6 @@ pub(crate) fn run() -> anyhow::Result<()> {
     });
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

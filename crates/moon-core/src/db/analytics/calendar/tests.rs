@@ -63,15 +63,17 @@ fn buckets_by_utc_day_fills_gaps_and_counts_wins() {
     assert_eq!((days[2].trades, days[2].wins, days[2].profit), (1, 0, -3.0));
 }
 
+/// `calendar/mod.rs:calendar_cells_from` must return `Ok(empty)` for an initialized source with no
+/// trades; treating it as a read failure leaves a new Calendar tab in a retry loop.
 #[test]
-fn empty_period_is_some_empty_not_none() {
+fn empty_period_is_successful_empty() {
     let c = seed(&[]);
     let q = Query {
         from: D0,
         to: D0 + 86_400,
         ..Default::default()
     };
-    // A schema with no trades yields an empty calendar, NOT None or an infinite fill.
+    // A schema with no trades yields a successful empty calendar, not an infinite fill.
     assert_eq!(calendar_cells_from(&c, &q).unwrap().len(), 0);
 }
 
@@ -88,6 +90,41 @@ fn respects_period_bounds_excluding_to() {
     assert_eq!(days.len(), 3);
     assert_eq!(days[0].trades, 1);
     assert!(days.iter().all(|d| (d.profit - 99.0).abs() > 1e-9)); // Day 3 is excluded.
+}
+
+/// `calendar/mod.rs:calendar_period_from` must query the supplied comparison period on the same
+/// connection; accidentally reusing the current query makes the Month KPI compare a month with
+/// itself and report a false zero delta.
+#[test]
+fn calendar_period_keeps_current_and_comparison_scopes_distinct() {
+    let c = seed(&[
+        (D0 - 86_400 + 100, 1, -5.0),
+        (D0 + 100, 1, 7.0),
+        (D0 + 200, 1, 2.0),
+    ]);
+    let current = Query {
+        from: D0,
+        to: D0 + 86_400,
+        ..Default::default()
+    };
+    let previous = Query {
+        from: D0 - 86_400,
+        to: D0,
+        ..Default::default()
+    };
+
+    let period = calendar_period_from(&c, &current, Some(&previous), false).unwrap();
+
+    assert_eq!(period.current.len(), 1);
+    assert_eq!(
+        (
+            period.current[0].profit,
+            period.current[0].trades,
+            period.current[0].wins,
+        ),
+        (9.0, 2, 2)
+    );
+    assert_eq!(period.previous, Some((-5.0, 1, 0)));
 }
 
 #[test]

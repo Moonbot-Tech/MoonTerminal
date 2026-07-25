@@ -1,7 +1,105 @@
 //! Unit tests for persisted filter-tuner controls.
 
-use super::{DEFAULT_EDGES, DEFAULT_ITERS, EDGE_OPTIONS, iters_of, restore_edges, restore_iters};
+use super::{
+    DEFAULT_EDGES, DEFAULT_ITERS, EDGE_OPTIONS, TunerState, iters_of, restore_edges, restore_iters,
+    staged_dirty,
+};
+use moon_core::db::tuner::StratFilters;
 use moon_core::db::tuner_smart::{EDGES_MAX, EDGES_MIN, RESTARTS_MAX, RESTARTS_MIN};
+
+/// `filter/state.rs:TunerState::mark_report_stale` must not add the draft resets or request
+/// generation bumps from `invalidate`; the former clears edits and the latter starves a long
+/// filter scan while new trades keep arriving.
+#[test]
+fn report_staleness_preserves_filter_drafts() {
+    let mut state = TunerState::load(None, None);
+    state.bounds[0][0] = ("1".into(), "2".into());
+    state.staged_ignore.insert("IgnoreFilters", true);
+    let (seq, hist_seq, sugg_seq, dialog_seq) =
+        (state.seq, state.hist_seq, state.sugg_seq, state.dialog_seq);
+
+    state.mark_report_stale();
+
+    assert!(
+        !state.variants()[1].is_empty(),
+        "the KPI consumer must still receive the staged bound"
+    );
+    assert!(
+        staged_dirty(&state.strat, &state.staged_ignore),
+        "the Save consumer must still see the staged ignore edit"
+    );
+    assert_eq!(state.seq, seq);
+    assert_eq!(state.hist_seq, hist_seq);
+    assert_eq!(state.sugg_seq, sugg_seq);
+    assert_eq!(
+        state.dialog_seq, dialog_seq,
+        "report data cannot invalidate a pending Save dialog"
+    );
+    assert!(state.needs_reload());
+}
+
+/// `filter/state.rs:TunerState::invalidate` must advance every read generation; replacing it with
+/// report-only staleness lets old KPI, histogram, or suggestion completions publish in a new scope.
+#[test]
+fn scope_change_retires_all_filter_requests() {
+    let mut state = TunerState::load(None, None);
+    let (seq, hist_seq, sugg_seq) = (state.seq, state.hist_seq, state.sugg_seq);
+
+    state.invalidate();
+
+    assert_ne!(state.seq, seq);
+    assert_ne!(state.hist_seq, hist_seq);
+    assert_ne!(state.sugg_seq, sugg_seq);
+    assert!(state.needs_reload());
+}
+
+/// `filter/state.rs:TunerState::needs_reload` must include `hist_dirty`; checking only KPI state
+/// leaves an old histogram pinned when an automatic KPI finishes after the user leaves Filters.
+#[test]
+fn stale_histogram_keeps_the_filter_axis_reloadable() {
+    let mut state = TunerState::load(None, None);
+    state.stats.apply(Ok(Vec::new()));
+    state.dirty = false;
+    state.hist_dirty = true;
+
+    assert!(state.needs_reload());
+}
+
+/// `filter/state.rs:TunerState::apply_strategy_read` must preserve a confirmed Save baseline
+/// when an automatic refresh cannot read the strategy row; replacing it with an unconditional
+/// assignment turns the next Save preview into a diff against invented defaults.
+#[test]
+fn automatic_missing_strategy_read_preserves_the_save_baseline() {
+    let mut state = TunerState::load(None, None);
+    state.apply_strategy_read(
+        StratFilters {
+            found: true,
+            ignore_filters: true,
+            ..Default::default()
+        },
+        false,
+    );
+
+    state.apply_strategy_read(StratFilters::default(), true);
+
+    assert!(state.strat.found);
+    assert!(state.strat.ignore_filters);
+}
+
+/// `filter/state.rs:TunerState::mark_dialog_draft_changed` must advance `dialog_seq`; removing
+/// that update lets an async Save preview open for the draft that existed before the user's edit.
+#[test]
+fn draft_change_retires_pending_save_preview() {
+    let mut state = TunerState::load(None, None);
+    let pending_preview = state.dialog_seq;
+
+    state.mark_dialog_draft_changed();
+
+    assert_ne!(
+        state.dialog_seq, pending_preview,
+        "the pending Save preview must no longer match the edited draft"
+    );
+}
 
 /// Every depth the dropdown offers must be one the search will actually honour.
 ///

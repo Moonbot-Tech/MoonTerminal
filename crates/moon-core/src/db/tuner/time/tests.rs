@@ -180,15 +180,23 @@ fn suggest_time_never_worse_than_base() {
     );
 }
 
+/// `time/mod.rs:SliderProfileAccumulator::push` must update `entry_hours` in the same
+/// streaming pass; removing that update restores a second full-period query for the heatmap.
 #[test]
 fn slider_profiles_bucketize() {
     // Mon (wd0) 00:00 +2; Tue (wd1) 05:30 -4 -> distribution across all three axes.
     let rows = vec![(0i64, 0i64, 2.0), (1i64, 5 * 60 + 30, -4.0)];
     let p = slider_profiles_from_rows(&rows);
-    assert_eq!(p.week[0], 2.0, "неделя: Пн·00ч (wd0*24+0)");
-    assert_eq!(p.week[24 + 5], -4.0, "неделя: Вт·05ч (wd1*24+5)");
-    assert_eq!(p.day[0], 2.0, "сутки: минута 0");
-    assert_eq!(p.day[5 * 60 + 30], -4.0, "сутки: минута 330 (05:30)");
+    assert_eq!(p.week[0], 2.0, "week: Mon hour 0");
+    assert_eq!(p.week[24 + 5], -4.0, "week: Tue hour 5");
+    assert_eq!(p.day[0], 2.0, "day: minute 0");
+    assert_eq!(p.day[5 * 60 + 30], -4.0, "day: minute 330");
     assert_eq!(p.hour[0], 2.0);
     assert_eq!(p.hour[30], -4.0);
+    assert_eq!(p.entry_hours[0].profit, 2.0);
+    assert_eq!(p.entry_hours[0].trades, 1);
+    assert_eq!(p.entry_hours[0].wins, 1);
+    assert_eq!(p.entry_hours[5].profit, -4.0);
+    assert_eq!(p.entry_hours[5].trades, 1);
+    assert_eq!(p.entry_hours[5].wins, 0);
 }

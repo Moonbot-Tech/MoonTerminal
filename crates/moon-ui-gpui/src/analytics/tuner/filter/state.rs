@@ -73,9 +73,12 @@ pub(in crate::analytics) struct TunerState {
     pub(in crate::analytics::tuner) sugg_busy: bool,
     /// The open save confirmation dialog (the list of changes).
     pub(in crate::analytics::tuner) save_dialog: Option<Arc<SaveDialog>>,
-    /// Data is stale (the scope/filters changed) — we keep showing the old one
-    /// without a "Loading…" flash, but recompute on entering the mode.
+    /// KPI/strategy data is stale after a scope or report-generation change.
     pub(in crate::analytics::tuner) dirty: bool,
+    /// The selected-field histogram is stale after a scope or report-generation change.
+    pub(in crate::analytics::tuner) hist_dirty: bool,
+    /// Whether the current histogram generation still has a database scan in flight.
+    pub(in crate::analytics::tuner) hist_loading: bool,
     /// Staged state of the clickable "ignore" subheadings: flag → the desired
     /// ignore state (semantics: "ignore"; inverted for UseBV_SV_Filter).
     pub(in crate::analytics::tuner) staged_ignore: HashMap<&'static str, bool>,
@@ -97,6 +100,8 @@ pub(in crate::analytics) struct TunerState {
     pub(in crate::analytics::tuner) seq: u64,
     pub(in crate::analytics::tuner) hist_seq: u64,
     pub(in crate::analytics::tuner) sugg_seq: u64,
+    /// User-scope and draft revision guarding asynchronous confirmation-dialog preparation.
+    pub(in crate::analytics::tuner) dialog_seq: u64,
 }
 
 impl TunerState {
@@ -117,6 +122,8 @@ impl TunerState {
             sugg_busy: false,
             save_dialog: None,
             dirty: false,
+            hist_dirty: false,
+            hist_loading: false,
             staged_ignore: HashMap::new(),
             iters: restore_iters(saved_iters),
             min_trades: String::new(),
@@ -127,6 +134,7 @@ impl TunerState {
             seq: 0,
             hist_seq: 0,
             sugg_seq: 0,
+            dialog_seq: 0,
         }
     }
 
@@ -135,24 +143,63 @@ impl TunerState {
     /// Current data remains until recomputation completes to avoid a loading
     /// flash; a completed non-data result clears it. Recompute on mode entry or
     /// an explicit reload.
+    ///
+    /// The method has no return value; callers start or defer replacement reads.
     pub(in crate::analytics) fn invalidate(&mut self) {
         self.dirty = true;
-        self.save_dialog = None;
-        self.staged_ignore.clear();
-        // Advance every generation even when no replacement starts immediately,
-        // so a request from another scope cannot publish KPI, clear `dirty`, or
-        // apply v1 bounds here.
+        self.hist_dirty = true;
         self.seq = self.seq.wrapping_add(1);
         self.hist_seq = self.hist_seq.wrapping_add(1);
+        self.hist_loading = false;
         self.sugg_seq = self.sugg_seq.wrapping_add(1);
-        // Clear busy with the generation change because an orphaned request
-        // exits before its completion handler can re-enable suggestion buttons.
         self.sugg_busy = false;
+        self.mark_dialog_draft_changed();
+        self.save_dialog = None;
+        self.staged_ignore.clear();
+    }
+
+    /// Retire asynchronous Save-dialog preparation after a user scope or draft change.
+    pub(in crate::analytics) fn mark_dialog_draft_changed(&mut self) {
+        self.dialog_seq = self.dialog_seq.wrapping_add(1);
+    }
+
+    /// Retire an auto-suggestion whose inputs or v1 destination changed manually.
+    pub(in crate::analytics) fn invalidate_suggest(&mut self) {
+        self.sugg_seq = self.sugg_seq.wrapping_add(1);
+        self.sugg_busy = false;
+    }
+
+    /// Mark report-derived calculations stale without discarding the user's staged tuner edits.
+    ///
+    /// A new trade changes KPI and histogram inputs, but it does not change the selected strategy,
+    /// draft bounds, staged ignore switches, or an already-open confirmation dialog.
+    ///
+    /// The method has no return value; callers subsequently reload the active report-derived view.
+    pub(in crate::analytics) fn mark_report_stale(&mut self) {
+        self.dirty = true;
+        self.hist_dirty = true;
+    }
+
+    /// Apply a selected-strategy snapshot without inventing an empty automatic-refresh baseline.
+    ///
+    /// Args:
+    ///     strat: Lossy strategy read whose `found` flag distinguishes a confirmed row.
+    ///     preserve_missing: Whether an unreadable row should retain the previous baseline.
+    ///
+    /// Explicit scope changes pass `false` so fields from the old strategy cannot remain visible.
+    pub(in crate::analytics::tuner) fn apply_strategy_read(
+        &mut self,
+        strat: StratFilters,
+        preserve_missing: bool,
+    ) {
+        if strat.found || !preserve_missing {
+            self.strat = Arc::new(strat);
+        }
     }
 
     /// Whether entering the "Filters" mode requires a recomputation.
     pub(in crate::analytics) fn needs_reload(&self) -> bool {
-        self.stats.data().is_none() || self.dirty
+        self.stats.data().is_none() || self.dirty || self.hist_dirty
     }
 
     /// Variants for the query: [the empty "Fact", v1..vN].

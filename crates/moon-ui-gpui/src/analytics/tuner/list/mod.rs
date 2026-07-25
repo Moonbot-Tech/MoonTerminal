@@ -176,7 +176,7 @@ impl AnalyticsView {
 
     /// Distinct strategy kinds present in the loaded list (sorted, for the type dropdown).
     fn strat_kinds(&self) -> Vec<String> {
-        self.data
+        self.strategy_data
             .view(|_| false)
             .ok()
             .map(|d| {

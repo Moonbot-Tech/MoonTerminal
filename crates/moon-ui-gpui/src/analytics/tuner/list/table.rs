@@ -36,7 +36,7 @@ impl AnalyticsView {
             Some((s, w)) if s == scale => w,
             _ => {
                 let w = self
-                    .data
+                    .strategy_data
                     .data()
                     .map(|d| core_col_w(&d.strategies, scale, cx))
                     .unwrap_or(CORE_W);
@@ -48,7 +48,7 @@ impl AnalyticsView {
         // data read below.
         let filter_bar = self.strat_filter_bar(p, window, cx);
         let (list, total, shown): (AnyElement, usize, usize) =
-            match self.data.view(|d| d.strategies.is_empty()) {
+            match self.strategy_data.view(|d| d.strategies.is_empty()) {
                 Ok(d) => {
                     // Filter + sort per the bar; count reflects the filtered set.
                     let rows = self.visible_strategies(&d.strategies);

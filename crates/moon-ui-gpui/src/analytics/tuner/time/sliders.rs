@@ -181,8 +181,16 @@ impl AnalyticsView {
         (frac * Self::slider_max(field) as f32).round() as u16
     }
 
-    /// Write the slider's range into the row's fields. A full range → clear it ('no
-    /// restriction'). The WT rows (1/2) are mutually exclusive. Recomputes the KPIs.
+    /// Write the slider's range into the row's fields. A full range clears the restriction.
+    ///
+    /// The WorkingTime rows are mutually exclusive. KPI recomputation remains deferred until
+    /// slider release so drag motion cannot create a query storm.
+    ///
+    /// Args:
+    ///     field: Time field whose visible slider range changed.
+    ///     from: First slider endpoint in field-specific units.
+    ///     to: Second slider endpoint in field-specific units.
+    ///     cx: GPUI context used to retire a pending Save preview and repaint the range.
     fn set_slider_range(&mut self, field: usize, from: u16, to: u16, cx: &mut Context<Self>) {
         let max = Self::slider_max(field);
         let (from, to) = (from.min(to), from.max(to));
@@ -206,6 +214,7 @@ impl AnalyticsView {
         if !full && field == 2 {
             self.clear_field(0, 1);
         }
+        self.tuner.mark_dialog_draft_changed();
         // NO reload_time: while dragging we only move the fields/strip; the KPIs are
         // recomputed ONCE on release (`slider_release`) — otherwise a storm of SQL queries.
         cx.notify();
@@ -245,13 +254,25 @@ impl AnalyticsView {
         self.slider_drag_to(field, is_from, value, cx);
     }
 
-    /// The block of three sliders below the row grid.
+    /// Build the block of three schedule sliders below the row grid.
+    ///
+    /// Args:
+    ///     p: Active Moon palette.
+    ///     cx: GPUI context used to render the slider tracks.
+    ///
+    /// Returns:
+    ///     The slider block or its classified loading/error placeholder.
     pub(in crate::analytics::tuner) fn time_sliders(
         &mut self,
         p: MoonPalette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let prof = self.time_tuner.slider.clone();
+        let prof = match self.time_tuner.slider.view(|_| false) {
+            Ok(prof) => prof.clone(),
+            Err(note) => {
+                return crate::load_state::note_el("an-time-slider-note", note, 8.0, p, cx);
+            }
+        };
         let mut col = v_flex()
             .w_full()
             .flex_none()
@@ -261,7 +282,7 @@ impl AnalyticsView {
             .border_t_1()
             .border_color(moon(p.border));
         for field in 0..3usize {
-            col = col.child(self.time_slider_row(field, prof.as_deref(), p, cx));
+            col = col.child(self.time_slider_row(field, Some(prof.as_ref()), p, cx));
         }
         col.into_any_element()
     }

@@ -51,10 +51,49 @@ impl AnalyticsView {
         q
     }
 
-    /// Background recompute of the per-variant KPI matrix (+ the selected strategy's thresholds).
+    /// Recompute the per-variant KPI matrix and selected strategy thresholds.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to run and publish the background read.
     pub(in crate::analytics) fn reload_tuner(&mut self, cx: &mut Context<Self>) {
+        self.reload_tuner_inner(false, true, cx);
+    }
+
+    /// Recompute report-derived filter data without invalidating a pending Save dialog.
+    ///
+    /// The histogram starts only after this query completes so an automatic refresh never runs
+    /// two full-history filter scans concurrently.
+    ///
+    /// Args:
+    ///     show_overlay: Whether queued user work requires blocking progress feedback.
+    ///     cx: GPUI context used to execute the serialized background reads.
+    pub(in crate::analytics) fn reload_tuner_after_report(
+        &mut self,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.reload_tuner_inner(true, show_overlay, cx);
+    }
+
+    /// Start the KPI query with behavior selected by its reload cause.
+    ///
+    /// Args:
+    ///     after_report: Whether to preserve the Save dialog and read KPI/histogram atomically.
+    ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
+    ///     cx: GPUI context used to execute and publish the reads.
+    fn reload_tuner_inner(
+        &mut self,
+        after_report: bool,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !after_report {
+            self.report_busy_retries.reset();
+            self.tuner.mark_dialog_draft_changed();
+        }
         self.tuner.seq = self.tuner.seq.wrapping_add(1);
         let req = self.tuner.seq;
+        let report_req = self.current_report_generation();
         let q = self.tuner_query();
         // The "in strategy" chips are the ANCHOR's own thresholds — a per-strategy value
         // that only means something for a lone selection (`current_if_single` blanks them
@@ -67,6 +106,14 @@ impl AnalyticsView {
         let sid = anchor.map(|(s, _)| s);
         let core = anchor.and_then(|(_, c)| c);
         let variants = self.tuner.variants();
+        let field = FIELDS[self.tuner.sel_field].col.to_string();
+        let hist_req = after_report.then(|| {
+            self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
+            self.tuner.hist_dirty = false;
+            self.tuner.hist_loading = true;
+            self.tuner.hist.begin();
+            self.tuner.hist_seq
+        });
         // Core schema defaults (numeric fields): the chips hide values equal to the
         // default — 'filter not configured' is not a threshold.
         let defaults: HashMap<String, f64> = {
@@ -104,35 +151,93 @@ impl AnalyticsView {
         // non-data result drops them.
         self.tuner.stats.begin();
         self.spawn_db(
-            true,
+            show_overlay,
             cx,
             move || {
-                let stats = moon_core::db::tuner::variant_stats(&q, &variants);
+                let (stats, histogram) = if after_report {
+                    let result = moon_core::db::tuner::filter_tuner_data(
+                        &q,
+                        &variants,
+                        &field,
+                        HIST_BUCKETS,
+                    );
+                    (result.stats, Some(result.histogram))
+                } else {
+                    (moon_core::db::tuner::variant_stats(&q, &variants), None)
+                };
                 let sf = sid
                     .map(|sid| moon_core::db::tuner::strategy_filters(sid, core, &defaults))
                     .unwrap_or_default();
-                (stats, sf)
+                (stats, histogram, sf)
             },
-            move |this, (stats, strat), cx| {
+            move |this, (stats, histogram, strat), cx| {
+                let mut hist_error = None;
+                if let (Some(hist_req), Some(histogram)) = (hist_req, histogram) {
+                    if this.tuner.hist_seq == hist_req {
+                        this.tuner.hist_loading = false;
+                        hist_error = histogram.as_ref().err().cloned();
+                        this.tuner.hist.apply(histogram);
+                        this.tuner.hist_dirty = super::super::refresh::report_result_is_stale(
+                            report_req,
+                            this.current_report_generation(),
+                            hist_error.is_some(),
+                        );
+                    }
+                }
                 if this.tuner.seq != req {
+                    if let Some(error) = hist_error.as_ref() {
+                        this.settle_report_refresh_retry(Some(error), cx);
+                    }
+                    cx.notify();
                     return;
                 }
+                let error = stats.as_ref().err().cloned();
                 // A completed non-data result clears stale numbers because
                 // values under a changed period label must belong to it.
                 this.tuner.stats.apply(stats);
-                this.tuner.strat = Arc::new(strat);
-                this.tuner.dirty = false;
+                // `strategy_filters` is intentionally lossy and reports an unreadable row as
+                // `found=false`. An automatic report refresh must not turn that ambiguity into
+                // an empty Save baseline; explicit scope changes may clear the old strategy.
+                this.tuner.apply_strategy_read(strat, after_report);
+                this.tuner.dirty = super::super::refresh::report_result_is_stale(
+                    report_req,
+                    this.current_report_generation(),
+                    error.is_some(),
+                );
+                let retry_error = error
+                    .as_ref()
+                    .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
+                    .or_else(|| {
+                        hist_error
+                            .as_ref()
+                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
+                    });
+                this.settle_report_refresh_retry(retry_error, cx);
                 cx.notify();
             },
         );
     }
 
-    /// Background histogram of the selected field.
+    /// Recompute the selected field's histogram after a user-controlled change.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to run and publish the background read.
     pub(in crate::analytics) fn reload_hist(&mut self, cx: &mut Context<Self>) {
+        self.reload_hist_inner(cx);
+    }
+
+    /// Start a user-requested histogram query.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to execute and publish the histogram read.
+    fn reload_hist_inner(&mut self, cx: &mut Context<Self>) {
         self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
         let req = self.tuner.hist_seq;
+        let report_req = self.current_report_generation();
         let q = self.tuner_query();
         let field = FIELDS[self.tuner.sel_field].col.to_string();
+        self.tuner.hist_dirty = false;
+        self.tuner.hist_loading = true;
         self.tuner.hist.begin();
         self.spawn_db(
             true,
@@ -142,7 +247,14 @@ impl AnalyticsView {
                 if this.tuner.hist_seq != req {
                     return;
                 }
+                this.tuner.hist_loading = false;
+                let error = hist.as_ref().err().cloned();
                 this.tuner.hist.apply(hist);
+                this.tuner.hist_dirty = super::super::refresh::report_result_is_stale(
+                    report_req,
+                    this.current_report_generation(),
+                    error.is_some(),
+                );
                 cx.notify();
             },
         );
@@ -166,6 +278,9 @@ impl AnalyticsView {
             return;
         }
         *cur = value;
+        if vi == 0 {
+            self.tuner.invalidate_suggest();
+        }
         self.reload_tuner(cx);
         cx.notify();
     }
@@ -184,6 +299,9 @@ impl AnalyticsView {
             return;
         }
         self.tuner.bounds[vi][fi] = (from, to);
+        if vi == 0 {
+            self.tuner.invalidate_suggest();
+        }
         // Recreate the inputs (drop the cache): a fresh default_value is drawn from
         // the START of the string; sync_value left the caret at the end — a long value
         // 'scrolled off' to the right and only its tail was visible.
@@ -262,6 +380,7 @@ impl AnalyticsView {
                                     for (fi, spec) in FIELDS.iter().enumerate() {
                                         this.tuner.enabled[fi] = on && spec.mapped();
                                     }
+                                    this.tuner.invalidate_suggest();
                                     cx.notify();
                                 });
                             }
@@ -378,6 +497,7 @@ impl AnalyticsView {
                                     let on = *ch;
                                     view.update(app, |this, cx| {
                                         this.tuner.enabled[fi] = on;
+                                        this.tuner.invalidate_suggest();
                                         cx.notify();
                                     });
                                 }
@@ -467,6 +587,7 @@ impl AnalyticsView {
                         .child(text)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.tuner.enabled[fi] = false;
+                            this.tuner.invalidate_suggest();
                             this.apply_bounds(0, fi, from_s.clone(), to_s.clone(), cx);
                             cx.notify();
                         }))
@@ -612,6 +733,7 @@ impl AnalyticsView {
                         } else {
                             this.tuner.staged_ignore.insert(flag, !now);
                         }
+                        this.tuner.mark_dialog_draft_changed();
                         cx.notify();
                     })),
             );

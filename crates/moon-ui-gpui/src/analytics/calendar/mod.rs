@@ -15,8 +15,6 @@ mod day;
 mod month;
 mod year;
 
-use std::sync::Arc;
-
 use chrono::{Datelike, NaiveDate};
 use gpui::*;
 use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
@@ -25,7 +23,39 @@ use rust_i18n::t;
 use super::AnalyticsView;
 use crate::design;
 use crate::design::moon;
-use moon_core::db::analytics::Query;
+use crate::load_state::{LoadState, note_el};
+use moon_core::db::ReadResult;
+use moon_core::db::analytics::{CalendarPeriod, DayCell, Query};
+
+/// Store one consistent Calendar period result without collapsing classified read failures.
+///
+/// Args:
+///     days: Current-period UI load state.
+///     previous: Previous-month aggregate UI load state.
+///     period_result: Current cells and optional comparison from one SQLite snapshot.
+///     has_previous: Whether the active mode requested a comparison period.
+///
+/// Returns:
+///     `true` when the shared period read failed.
+fn apply_calendar_results(
+    days: &mut LoadState<Vec<DayCell>>,
+    previous: &mut LoadState<Option<(f64, i64, i64)>>,
+    period_result: ReadResult<CalendarPeriod>,
+    has_previous: bool,
+) -> bool {
+    match period_result {
+        Ok(period) => {
+            days.apply(Ok(period.current));
+            previous.apply(Ok(period.previous));
+            false
+        }
+        Err(error) => {
+            days.apply(Err(error.clone()));
+            previous.apply(if has_previous { Err(error) } else { Ok(None) });
+            true
+        }
+    }
+}
 
 /// Calendar mode (the tab's toggle buttons).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -225,18 +255,33 @@ impl AnalyticsView {
         })
     }
 
+    /// Render Calendar data or its classified current/previous-period read failure.
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///     cx: GPUI view context used for sizing and event listeners.
+    ///
+    /// Returns:
+    ///     The complete Calendar tab element.
     pub(super) fn calendar_tab(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
-        let Some(days) = self.cal_days.clone() else {
-            return v_flex()
-                .size_full()
-                .child(self.cal_nav(p, cx))
-                .child(
-                    div()
-                        .p(design::ui_px(cx, 18.0))
-                        .text_color(moon(p.text_muted))
-                        .child(t!("common.loading").to_string()),
-                )
-                .into_any_element();
+        let days = match self.cal_days.view(|_| false) {
+            Ok(days) => days.clone(),
+            Err(note) => {
+                return v_flex()
+                    .size_full()
+                    .child(self.cal_nav(p, cx))
+                    .child(note_el("analytics-calendar-read", note, 18.0, p, cx))
+                    .into_any_element();
+            }
+        };
+        if self.cal_mode == CalMode::Month {
+            if let Err(note) = self.cal_prev.view(|_| false) {
+                return v_flex()
+                    .size_full()
+                    .child(self.cal_nav(p, cx))
+                    .child(note_el("analytics-calendar-prev-read", note, 18.0, p, cx))
+                    .into_any_element();
+            }
         };
         // Frame: the nav bar (like Summary's period bar) + the mode's content.
         let content = match self.cal_mode {
@@ -385,45 +430,111 @@ impl AnalyticsView {
         })
     }
 
-    /// Background recompute of the daily (or hourly, in "Day" mode) series.
+    /// Recompute the daily, or hourly in Day mode, series on the background executor.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to start and publish the calendar query.
     pub(super) fn reload_calendar(&mut self, cx: &mut Context<Self>) {
+        self.reload_calendar_inner(false, true, cx);
+    }
+
+    /// Recompute Calendar and its visible report metadata through the serialized catch-up path.
+    ///
+    /// Args:
+    ///     show_overlay: Whether queued user work requires blocking progress feedback.
+    ///     cx: GPUI context used to run the serialized background reads.
+    pub(super) fn reload_calendar_after_report(
+        &mut self,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.reload_calendar_inner(true, show_overlay, cx);
+    }
+
+    /// Start the Calendar query with optional post-commit metadata chaining.
+    ///
+    /// Args:
+    ///     after_report: Whether to preserve report-style catch-up and retry semantics.
+    ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
+    ///     cx: GPUI context used to execute and publish the reads.
+    fn reload_calendar_inner(
+        &mut self,
+        after_report: bool,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !after_report {
+            self.report_busy_retries.reset();
+        }
+        self.acknowledge_report_refresh();
         self.cal_dirty = false;
+        self.cal_days.begin();
+        self.cal_prev.begin();
         // The hovered day from the old series is no longer under the cursor —
         // clear the stuck highlight (the new series may not contain that day).
         self.cal_hover = None;
         self.cal_seq = self.cal_seq.wrapping_add(1);
         let req = self.cal_seq;
+        let report_req = self.current_report_generation();
         let q = self.cal_query();
         let q_prev = self.cal_query_prev();
+        let has_previous = q_prev.is_some();
         // "Day" loads HOURLY cells (a 24×N grid); the other modes load daily.
         let hourly = self.cal_mode == CalMode::Day;
+        let refresh_cores = self.core_metadata_due(cx);
         self.spawn_db(
-            true,
+            show_overlay,
             cx,
             move || {
-                let cur = if hourly {
-                    moon_core::db::analytics::calendar_hours(&q)
-                } else {
-                    moon_core::db::analytics::calendar_cells(&q)
-                };
-                // Previous month's aggregate (profit, trades, wins) for the KPI deltas.
-                let prev = q_prev
-                    .and_then(|qp| moon_core::db::analytics::calendar_cells(&qp))
-                    .map(|d| {
-                        d.iter().fold((0.0f64, 0i64, 0i64), |a, c| {
-                            (a.0 + c.profit, a.1 + c.trades, a.2 + c.wins)
-                        })
-                    });
-                (cur, prev)
+                moon_core::db::analytics::calendar_data(&q, q_prev.as_ref(), hourly, refresh_cores)
             },
-            move |this, (cur, prev), cx| {
+            move |this, data, cx| {
                 if this.cal_seq != req {
                     return; // mode/filters already changed
                 }
-                this.cal_days = cur.map(Arc::new);
-                this.cal_prev = prev;
+                let retry = data
+                    .period
+                    .as_ref()
+                    .err()
+                    .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
+                    .or_else(|| {
+                        data.cores
+                            .as_ref()
+                            .and_then(|cores| cores.as_ref().err())
+                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
+                    })
+                    .or_else(|| {
+                        data.undated
+                            .as_ref()
+                            .err()
+                            .filter(|error| error.kind() == Some(moon_core::db::FailKind::Busy))
+                    })
+                    .cloned();
+                let metadata_failed = data.cores.as_ref().is_some_and(|cores| cores.is_err())
+                    || data.undated.is_err();
+                let read_failed = apply_calendar_results(
+                    &mut this.cal_days,
+                    &mut this.cal_prev,
+                    data.period,
+                    has_previous,
+                );
+                if let Some(Ok(cores)) = data.cores {
+                    this.cores = cores;
+                    this.last_cores_at = Some(std::time::Instant::now());
+                    this.core_refresh_needed = false;
+                }
+                this.apply_undated_result(data.undated, true);
+                this.cal_dirty = super::refresh::report_result_is_stale(
+                    report_req,
+                    this.current_report_generation(),
+                    read_failed || metadata_failed,
+                );
+                this.settle_report_refresh_retry(retry.as_ref(), cx);
                 cx.notify();
             },
         );
     }
 }
+
+#[cfg(test)]
+mod tests;

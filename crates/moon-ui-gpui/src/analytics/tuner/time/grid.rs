@@ -51,6 +51,9 @@ impl AnalyticsView {
             return;
         }
         *cur = value;
+        if vi == 0 {
+            self.time_tuner.invalidate_suggest();
+        }
         // "Day" and "In hour" are one WorkingTime field: filling one clears the other.
         if field == 1 {
             self.clear_field(vi, 2);
@@ -64,6 +67,9 @@ impl AnalyticsView {
     /// Clear both bounds of field `field` in variant `vi` (no recompute — internal helper).
     pub(in crate::analytics::tuner) fn clear_field(&mut self, vi: usize, field: usize) {
         self.time_tuner.bounds[vi][field] = (String::new(), String::new());
+        if vi == 0 {
+            self.time_tuner.invalidate_suggest();
+        }
         self.time_tuner.inputs.remove(&format!("tt{vi}f{field}a"));
         self.time_tuner.inputs.remove(&format!("tt{vi}f{field}b"));
     }
@@ -181,6 +187,7 @@ impl AnalyticsView {
         to: String,
     ) {
         self.time_tuner.bounds[0][field] = (from, to);
+        self.time_tuner.invalidate_suggest();
         self.time_tuner.inputs.remove(&format!("tt0f{field}a"));
         self.time_tuner.inputs.remove(&format!("tt0f{field}b"));
     }
@@ -224,10 +231,14 @@ impl AnalyticsView {
 
     /// `IgnoreTime` switch (YES/NO). A click toggles the manual stage; if we land back on the
     /// current value the stage is dropped (automatic logic). Affects Save, not the KPIs.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to retire a pending Save preview and repaint the switch.
     fn toggle_ignore_time(&mut self, cx: &mut Context<Self>) {
         let cur = self.time_tuner.ignore_cur;
         let next = !self.time_tuner.ignore_effective();
         self.time_tuner.ignore_staged = (next != cur).then_some(next);
+        self.tuner.mark_dialog_draft_changed();
         cx.notify();
     }
 

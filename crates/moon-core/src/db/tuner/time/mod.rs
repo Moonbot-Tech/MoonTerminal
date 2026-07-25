@@ -1,4 +1,9 @@
-use super::{best_range, improvement_margin, open_tuner_source, scan_time_rows, Query, ReadResult};
+use rusqlite::Connection;
+
+use super::{
+    best_range, improvement_margin, open_tuner_source, scan_time_rows, tuner_source_on,
+    visit_time_rows, HourStat, Query, ReadResult,
+};
 
 /// WorkingTime: one strategy time range. `Day` is a time-of-day window (minutes 0..1439,
 /// serialized as "hh:mm-hh:mm"); `Hour` is a minute window within EVERY HOUR (0..59,
@@ -261,38 +266,105 @@ pub struct SliderProfiles {
     pub week: [f32; 168],
     pub day: [f32; 1440],
     pub hour: [f32; 60],
+    /// Entry-hour KPI profile derived by the same streaming row pass.
+    pub entry_hours: [HourStat; 24],
 }
 
 /// Calculate `SliderProfiles` for the same scope as automatic suggestions (`tuner_query`).
 pub fn slider_profiles(q: &Query) -> ReadResult<SliderProfiles> {
-    let (conn, q, src) = open_tuner_source(q)?;
-    let trades = scan_time_rows(&conn, &q, &src, "tuner: slider_profiles")?;
-    Ok(slider_profiles_from_rows(&trades))
+    let conn = super::super::open_reader()?;
+    super::super::with_read_snapshot(&conn, |snapshot| slider_profiles_on(snapshot, q))
+}
+
+/// Calculate slider profiles on an existing connection or compound-read snapshot.
+///
+/// Args:
+///     conn: Existing SQLite connection whose snapshot should be queried.
+///     q: Report scope and period.
+///
+/// Returns:
+///     Three color profiles or a classified read failure.
+pub(super) fn slider_profiles_on(conn: &Connection, q: &Query) -> ReadResult<SliderProfiles> {
+    let (q, src) = tuner_source_on(conn, q)?;
+    let mut accumulator = SliderProfileAccumulator::new();
+    visit_time_rows(
+        conn,
+        &q,
+        &src,
+        "tuner: slider_profiles",
+        |weekday, minute, profit| accumulator.push(weekday, minute, profit),
+    )?;
+    Ok(accumulator.finish())
 }
 
 /// Core of `slider_profiles` over `(day, minute_of_day, profit)` rows, for tests.
+#[cfg(test)]
 fn slider_profiles_from_rows(rows: &[(i64, i64, f64)]) -> SliderProfiles {
-    let (mut ws, mut wc) = ([0f64; 168], [0u32; 168]);
-    let (mut ds, mut dc) = (vec![0f64; 1440], vec![0u32; 1440]);
-    let (mut hs, mut hc) = ([0f64; 60], [0u32; 60]);
+    let mut accumulator = SliderProfileAccumulator::new();
     for &(wd, mn, p) in rows {
+        accumulator.push(wd, mn, p);
+    }
+    accumulator.finish()
+}
+
+/// Fixed-size accumulator for the three time heatmaps.
+struct SliderProfileAccumulator {
+    week_sum: [f64; 168],
+    week_count: [u32; 168],
+    day_sum: Vec<f64>,
+    day_count: Vec<u32>,
+    hour_sum: [f64; 60],
+    hour_count: [u32; 60],
+    entry_hours: [HourStat; 24],
+}
+
+impl SliderProfileAccumulator {
+    /// Allocate the fixed 168/1440/60 buckets.
+    fn new() -> Self {
+        Self {
+            week_sum: [0.0; 168],
+            week_count: [0; 168],
+            day_sum: vec![0.0; 1440],
+            day_count: vec![0; 1440],
+            hour_sum: [0.0; 60],
+            hour_count: [0; 60],
+            entry_hours: [HourStat::default(); 24],
+        }
+    }
+
+    /// Add one decoded report row, ignoring invalid time coordinates.
+    fn push(&mut self, wd: i64, mn: i64, profit: f64) {
         if !(0..7).contains(&wd) || !(0..1440).contains(&mn) {
-            continue;
+            return;
         }
         let (mi, h, moh) = (mn as usize, (mn / 60) as usize, (mn % 60) as usize);
         let wk = wd as usize * 24 + h;
-        ws[wk] += p;
-        wc[wk] += 1;
-        ds[mi] += p; // Minute of day, 0..1439.
-        dc[mi] += 1;
-        hs[moh] += p;
-        hc[moh] += 1;
+        self.week_sum[wk] += profit;
+        self.week_count[wk] += 1;
+        self.day_sum[mi] += profit;
+        self.day_count[mi] += 1;
+        self.hour_sum[moh] += profit;
+        self.hour_count[moh] += 1;
+        self.entry_hours[h].profit += profit;
+        self.entry_hours[h].trades += 1;
+        self.entry_hours[h].wins += i64::from(profit > 0.0);
     }
-    let avg = |s: f64, c: u32| if c > 0 { (s / c as f64) as f32 } else { 0.0 };
-    SliderProfiles {
-        week: std::array::from_fn(|i| avg(ws[i], wc[i])),
-        day: std::array::from_fn(|i| avg(ds[i], dc[i])),
-        hour: std::array::from_fn(|i| avg(hs[i], hc[i])),
+
+    /// Finish the bounded accumulator as average-profit profiles.
+    fn finish(self) -> SliderProfiles {
+        let avg = |sum: f64, count: u32| {
+            if count > 0 {
+                (sum / count as f64) as f32
+            } else {
+                0.0
+            }
+        };
+        SliderProfiles {
+            week: std::array::from_fn(|i| avg(self.week_sum[i], self.week_count[i])),
+            day: std::array::from_fn(|i| avg(self.day_sum[i], self.day_count[i])),
+            hour: std::array::from_fn(|i| avg(self.hour_sum[i], self.hour_count[i])),
+            entry_hours: self.entry_hours,
+        }
     }
 }
 

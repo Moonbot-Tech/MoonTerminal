@@ -1,5 +1,7 @@
 use super::{CoinFilter, CoinLists, CoinsState, coin_token};
+use moon_core::db::ReadFail;
 use moon_core::db::analytics::GroupStat;
+use moon_core::db::coin_lists::{CoinListEntries, CoinListRow, CoinListRows};
 
 fn coin(name: &str) -> GroupStat {
     GroupStat {
@@ -21,14 +23,46 @@ fn lists_match_report_coin_names() {
     assert!(CoinLists::parse("", "").is_empty());
 }
 
-/// Several strategies are tuned as one set: their lists UNION by coin. Summing the
-/// sizes would count a coin twice for every pair that happens to share it.
+/// `coins/state.rs:CoinLists::from_rows` must preserve both sides of the shared fallible
+/// snapshot; dropping either iterator makes a successful reload erase that side before Save.
 #[test]
-fn merge_unions_rather_than_sums() {
-    let mut l = CoinLists::parse("BTC, ETH", "");
-    l.merge(CoinLists::parse("ETH, SOL", "DOGE"));
-    assert_eq!(l.black.len(), 3, "BTC/ETH/SOL — ETH counted once");
-    assert_eq!(l.white.len(), 1);
+fn snapshot_rows_supply_both_saved_list_sides() {
+    let rows = CoinListRows {
+        black: vec![CoinListRow {
+            coin: "BTC".into(),
+            entries: vec!["BTC".into()],
+            core_uid: 1,
+            core_name: "core".into(),
+            since_ms: None,
+            before_ms: None,
+        }],
+        white: vec![CoinListEntries {
+            coin: "ETH".into(),
+            entries: vec!["ETH".into()],
+            core_uid: 1,
+        }],
+    };
+
+    let lists = CoinLists::from_rows(&rows);
+
+    assert_eq!(lists.black.into_iter().collect::<Vec<_>>(), vec!["BTC"]);
+    assert_eq!(lists.white.into_iter().collect::<Vec<_>>(), vec!["ETH"]);
+}
+
+/// `coins/state.rs:CoinsState::adopt_if_ready` must leave state untouched on `ReadFail`;
+/// replacing the error arm with `adopt(default)` erases an unsaved draft after a transient
+/// strategies-database failure and makes the next Save destructive.
+#[test]
+fn failed_saved_list_read_preserves_the_draft() {
+    let mut state = CoinsState::default();
+    state.adopt(CoinLists::parse("BTC", ""));
+    state.toggle(true, coin_token("ETH"));
+
+    state.adopt_if_ready(Err(ReadFail::NotReady));
+
+    assert!(state.saved.black.contains("BTC"));
+    assert!(state.work.black.contains("ETH"));
+    assert!(state.has_changes());
 }
 
 /// v1 is "the same trades with these lists applied": whitelist keeps, blacklist drops,
@@ -142,6 +176,59 @@ fn invalidate_retires_in_flight_requests() {
     assert_ne!(s.kpi_seq, kpi, "the KPI request generation must advance");
     assert!(s.needs_reload());
     assert!(s.work.is_empty() && s.saved.is_empty(), "lists retired too");
+}
+
+/// `coins/state.rs:CoinsState::mark_report_stale` must not add list resets or request generation
+/// bumps from `invalidate`; the former erases unsaved edits and the latter starves long scans
+/// while trades keep arriving.
+#[test]
+fn report_staleness_preserves_working_lists_and_picks() {
+    let mut s = CoinsState::default();
+    s.adopt(CoinLists::parse("BTC", ""));
+    s.toggle(true, coin_token("ETH"));
+    s.pick_coin("SOL".into(), false);
+    let (seq, kpi, picked) = (s.seq, s.kpi_seq, s.picked_seq);
+
+    s.mark_report_stale();
+
+    assert!(s.has_changes(), "the Revert affordance must remain active");
+    assert!(
+        s.is_changed(&coin_token("ETH")),
+        "the Changed view must retain the pending ETH edit"
+    );
+    s.pick_coin("SOL".into(), false);
+    assert!(
+        s.picked.is_empty(),
+        "clicking the preserved sole pick must clear it"
+    );
+    assert_eq!(s.seq, seq);
+    assert_eq!(s.kpi_seq, kpi);
+    assert_eq!(s.picked_seq, picked);
+    assert!(s.needs_reload());
+}
+
+/// `coins/state.rs:CoinPlan::build_rebased` must replay the request-start draft onto the fresh
+/// saved baseline; replacing its rebased work with `fresh_saved` displays KPI for a different
+/// list than the checked rows.
+#[test]
+fn refreshed_baseline_plan_keeps_the_request_start_draft() {
+    let old_saved = CoinLists::parse("BTC", "");
+    let old_work = CoinLists::parse("BTC, ETH", "");
+    let fresh_saved = CoinLists::parse("BTC, SOL", "");
+    let rebased = fresh_saved.duplicate().with_delta(&old_saved, &old_work);
+    let plan = super::CoinPlan::build_rebased(
+        &fresh_saved,
+        &old_saved,
+        &old_work,
+        &[coin("BTC"), coin("ETH"), coin("SOL"), coin("DOGE")],
+    );
+
+    assert!(rebased.black.contains("ETH"));
+    assert!(rebased.black.contains("SOL"));
+    assert_eq!(
+        plan.variants[1].coins_out,
+        vec!["BTC".to_string(), "ETH".to_string(), "SOL".to_string()]
+    );
 }
 
 /// Selecting nothing leaves no list to filter by; staying on the blacklist view would

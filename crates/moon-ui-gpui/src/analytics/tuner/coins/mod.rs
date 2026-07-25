@@ -413,7 +413,7 @@ impl AnalyticsView {
         // `|_| false` on the scoped read: an empty scope is a real answer (the strategy
         // traded nothing this period), so only loading / not-ready / failed produce a note.
         let ready = match (
-            self.data.view(|d| d.coins.is_empty()),
+            self.strategy_data.view(|d| d.coins.is_empty()),
             self.coins.stats.view(|_| false),
         ) {
             (Err(note), _) | (Ok(_), Err(note)) => Err(note),
