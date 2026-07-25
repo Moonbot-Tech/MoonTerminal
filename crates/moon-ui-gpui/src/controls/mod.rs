@@ -30,7 +30,8 @@ pub(crate) mod toolbar;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
 pub(crate) use core_combo::{
-    core_combo, core_menu_sections, normalized_core_filter_ids, toggle_all_core_selection,
+    core_combo, core_combo_with_exchange_toggle, core_menu_sections, normalized_core_filter_ids,
+    toggle_all_core_selection, toggle_exchange_cores,
 };
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use manual_strat::manual_strategy_controls;

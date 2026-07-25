@@ -4,9 +4,11 @@
 //! The trigger has fixed compact geometry so an open menu stays anchored while selections change.
 //! MoonUI fits the exchange-grouped menu and ellipsizes anomalously long labels inside its cap.
 //! `CoreId` aliases `u64`, so the builder uses `u64` for every caller. Each caller supplies its
-//! localized labels and defines the behavior of its own `toggle_core` callback.
+//! localized labels and defines the behavior of its own `toggle_core` callback. Analytics opts into
+//! clickable exchange rows; every other consumer retains non-interactive section labels.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use gpui::App;
 use rust_i18n::t;
@@ -66,6 +68,41 @@ pub(crate) fn toggle_all_core_selection(selected: &mut HashSet<u64>, available: 
     } else {
         *selected = available;
     }
+}
+
+/// Toggle every currently available core from one exchange in an explicit selection.
+///
+/// An empty selection represents All before this action, so the first click inserts the exchange
+/// ids and narrows it to that exchange. When every available exchange member is explicitly
+/// selected, the next click removes them. Cores selected from other exchanges remain unchanged,
+/// and render-time ids that are no longer available are ignored.
+///
+/// Args:
+///     selected: Mutable selected-core set using empty as the implicit All representation.
+///     available: Current core ids in the Analytics selector.
+///     exchange: Core ids captured from one rendered exchange section.
+///
+/// Returns:
+///     Whether at least one available exchange core changed selection state.
+pub(crate) fn toggle_exchange_cores(
+    selected: &mut HashSet<u64>,
+    available: &HashSet<u64>,
+    exchange: impl IntoIterator<Item = u64>,
+) -> bool {
+    let exchange: HashSet<u64> = exchange
+        .into_iter()
+        .filter(|core| available.contains(core))
+        .collect();
+    if exchange.is_empty() {
+        return false;
+    }
+
+    if exchange.iter().all(|core| selected.contains(core)) {
+        selected.retain(|core| !exchange.contains(core));
+    } else {
+        selected.extend(exchange);
+    }
+    true
 }
 
 /// Normalize a multi-core selection for consumers where an empty vector means no filter.
@@ -132,7 +169,8 @@ fn selection_summary(
 /// Every partial selection shows `cores_n(N)` for the available selected cores, including one core.
 /// Fixed trigger geometry keeps the open menu anchored while selections change. MoonUI fits the
 /// menu and truncates labels against its own row geometry. The All item calls
-/// `on_toggle(None, app)`, while a core item calls `on_toggle(Some(id), app)`.
+/// `on_toggle(None, app)`, while a core item calls `on_toggle(Some(id), app)`. Exchange section
+/// labels remain non-interactive.
 ///
 /// Args:
 ///     id: Dropdown id and prefix for the `{id}-all` and `{id}-core-{core}` item keys.
@@ -155,6 +193,96 @@ pub(crate) fn core_combo<F>(
     cores_n: impl Fn(usize) -> String,
     min_menu_w: f32,
     on_toggle: F,
+) -> MoonDropdown
+where
+    F: Fn(Option<u64>, &mut App) + Clone + 'static,
+{
+    build_core_combo(
+        id,
+        cores,
+        exchange_names,
+        selected,
+        all_label,
+        cores_n,
+        min_menu_w,
+        on_toggle,
+        None,
+    )
+}
+
+/// Build the Analytics core selector with clickable MoonUI exchange rows.
+///
+/// All and individual-core rows retain [`core_combo`] behavior. Each known exchange section becomes
+/// one MoonUI action label that submits all of its member ids in a single callback while retaining
+/// section-label typography. The unknown section remains a non-interactive label because it does
+/// not represent a reported exchange.
+///
+/// Args:
+///     id: Dropdown id and prefix for generated item keys.
+///     cores: Ordered core ids and display names.
+///     exchange_names: Reported display exchange names keyed by core id.
+///     selected: Currently selected core ids.
+///     all_label: Localized label for an empty or complete selection and the All item.
+///     cores_n: Localized formatter for every partial selection count.
+///     min_menu_w: Caller-specific lower bound for the fitted menu width.
+///     on_toggle: Callback receiving `None` for All or `Some(id)` for one core.
+///     on_toggle_exchange: Callback receiving every core id in the clicked exchange section.
+///
+/// Returns:
+///     The configured Analytics multi-select dropdown.
+pub(crate) fn core_combo_with_exchange_toggle<F, G>(
+    id: &'static str,
+    cores: &OrderedCores,
+    exchange_names: &HashMap<u64, String>,
+    selected: &HashSet<u64>,
+    all_label: String,
+    cores_n: impl Fn(usize) -> String,
+    min_menu_w: f32,
+    on_toggle: F,
+    on_toggle_exchange: G,
+) -> MoonDropdown
+where
+    F: Fn(Option<u64>, &mut App) + Clone + 'static,
+    G: Fn(Vec<u64>, &mut App) + 'static,
+{
+    build_core_combo(
+        id,
+        cores,
+        exchange_names,
+        selected,
+        all_label,
+        cores_n,
+        min_menu_w,
+        on_toggle,
+        Some(Rc::new(on_toggle_exchange)),
+    )
+}
+
+/// Build the shared dropdown with an optional batch-selection handler for known exchanges.
+///
+/// Args:
+///     id: Dropdown id and prefix for generated item keys.
+///     cores: Ordered core ids and display names.
+///     exchange_names: Reported display exchange names keyed by core id.
+///     selected: Currently selected core ids.
+///     all_label: Localized label for an empty or complete selection and the All item.
+///     cores_n: Localized formatter for every partial selection count.
+///     min_menu_w: Caller-specific lower bound for the fitted menu width.
+///     on_toggle: Callback receiving `None` for All or `Some(id)` for one core.
+///     on_toggle_exchange: Optional callback for one known exchange's complete core-id batch.
+///
+/// Returns:
+///     The configured multi-select dropdown.
+fn build_core_combo<F>(
+    id: &'static str,
+    cores: &OrderedCores,
+    exchange_names: &HashMap<u64, String>,
+    selected: &HashSet<u64>,
+    all_label: String,
+    cores_n: impl Fn(usize) -> String,
+    min_menu_w: f32,
+    on_toggle: F,
+    on_toggle_exchange: Option<Rc<dyn Fn(Vec<u64>, &mut App)>>,
 ) -> MoonDropdown
 where
     F: Fn(Option<u64>, &mut App) + Clone + 'static,
@@ -183,9 +311,23 @@ where
     if !sections.is_empty() {
         menu = menu.item(MoonMenuItem::separator());
     }
-    for (exchange, members) in sections {
-        let exchange = exchange.unwrap_or(unknown_exchange.as_str());
-        menu = menu.item(MoonMenuItem::label(exchange));
+    for (section_index, (exchange, members)) in sections.into_iter().enumerate() {
+        let exchange_label = exchange.unwrap_or(unknown_exchange.as_str());
+        if let (Some(_), Some(on_toggle_exchange)) = (exchange, on_toggle_exchange.as_ref()) {
+            let exchange_cores: Vec<u64> = members.iter().map(|(core, _)| *core).collect();
+            let on_toggle_exchange = on_toggle_exchange.clone();
+            menu = menu.item(
+                MoonMenuItem::action_label(
+                    format!("{id}-exchange-{section_index}"),
+                    exchange_label,
+                )
+                .on_click(move |_, _, app| {
+                    on_toggle_exchange(exchange_cores.clone(), app);
+                }),
+            );
+        } else {
+            menu = menu.item(MoonMenuItem::label(exchange_label));
+        }
         for (core, name) in members {
             let on = selected.contains(&core);
             let on_toggle = on_toggle.clone();
