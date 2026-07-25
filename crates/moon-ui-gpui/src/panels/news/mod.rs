@@ -15,6 +15,7 @@
 //! `news_tags.json` (`NewsTagSettings`); the wire colour is ignored because different news cores carry
 //! different colour settings. This module owns data, filters, and lifecycle; [`render`] owns cards.
 
+mod clip;
 mod render;
 mod unread;
 

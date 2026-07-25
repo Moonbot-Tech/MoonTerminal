@@ -1,10 +1,10 @@
 //! News card rendering: one card per logical news item, its expandable latency chain, and the small
 //! time/chip helpers.
 //!
-//! Collapsed, a card shows source and inline ticker chips (left), a right-aligned relative age, and
-//! an expand chevron; the body (translated or original) and tag chips follow. Expanding reveals the
-//! delivery latency chain (terminal receipt → service send → service receive → publication, the
-//! service rows timed from publication).
+//! Collapsed, a card shows source and inline ticker chips (left), a right-aligned relative age, a
+//! copy-to-clipboard button and an expand chevron; the body (translated or original) and tag chips
+//! follow. Expanding reveals the delivery latency chain (terminal receipt → service send → service
+//! receive → publication, the service rows timed from publication).
 //! Coloured tags become filled badges and add a left rail split by colour. Cards are hairline-split.
 
 use gpui::prelude::FluentBuilder;
@@ -15,8 +15,11 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{NewsView, tag_color};
+use super::{NewsView, clip, tag_color};
 use crate::design;
+
+/// MoonUI's clipboard icon, shipped in its asset bundle (registered at startup via `MoonAssets`).
+const MOON_ICON_COPY: &str = "icons/copy.svg";
 use moon_core::config::{Language, NewsTagSettings};
 use moon_core::feed::NewsItem;
 
@@ -145,6 +148,20 @@ pub(super) fn news_card(
         .variant(MoonButtonVariant::Ghost)
         .on_click(cx.listener(move |this: &mut NewsView, _, _w, cx| this.toggle_expand(&id, cx)))
         .render();
+    // Copy the card as Telegram-ready text. Built here, where the item and the translate toggle
+    // both are, so the clipboard gets the body the user is actually looking at.
+    let clip_text = clip::telegram_text(item, translate);
+    // MoonUI's own copy icon rather than a glyph: same size and ghost weight as the detach button,
+    // deliberately a different mark, so a card control is not mistaken for a window control.
+    let copy = MoonButton::new(SharedString::from(format!("news-copy-{}", item.id)))
+        .icon(MOON_ICON_COPY)
+        .size(MoonButtonSize::Micro)
+        .variant(MoonButtonVariant::Ghost)
+        .tooltip(t!("news.copy").to_string())
+        .on_click(move |_, _w, app: &mut App| {
+            app.write_to_clipboard(ClipboardItem::new_string(clip_text.clone()));
+        })
+        .render();
     meta = meta.child(div().flex_1());
     // "Translation pending" sits just LEFT of the time while awaiting the RU text, so from the right
     // edge the order reads: time, then the pending badge.
@@ -159,6 +176,7 @@ pub(super) fn news_card(
                 .text_color(rgb(p.text_muted))
                 .child(rel_time(item.time_ms, now_ms)),
         )
+        .child(copy)
         .child(chevron);
 
     let latency = expanded.then(|| latency_block(item, p, cx));
