@@ -170,6 +170,13 @@ struct Backend {
     /// Global News-panel tag settings: per-tag colours + the tag-visibility filter. Stored in the
     /// small portable `news_tags.json` and saved immediately on change.
     news_tag_settings: moon_core::config::NewsTagSettings,
+    /// Dock-tab unread counters: per-panel display switches and per-panel/group read watermarks.
+    /// Stored in the small portable `tab_badges.json`.
+    tab_badges: moon_core::config::TabBadgeSettings,
+    /// Whether `tab_badges` has unsaved changes. The read watermark moves from the render path, so
+    /// the write is deferred to the same debounce loop that persists the layout instead of putting
+    /// an fsync in a frame.
+    tab_badges_dirty: bool,
     /// Cache of the default header-ticker source when no choice is saved, as `(core, market)`.
     /// Resolved lazily from exact BTCUSDT or UBTCUSDC matches, then the first broader `BTC` search
     /// result as a fallback, and not persisted.

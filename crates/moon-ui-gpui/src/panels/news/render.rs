@@ -34,6 +34,19 @@ pub(crate) fn badge(text: impl Into<SharedString>, color: u32) -> impl IntoEleme
         .render()
 }
 
+/// The same badge carrying a COUNT, clamped by the component to `99+` so a long count cannot
+/// stretch the surface it sits on (a dock tab).
+pub(super) fn count_badge(n: usize, color: u32) -> impl IntoElement {
+    MoonBadge::new("")
+        .count_max(n, 99)
+        .variant(MoonBadgeVariant::Soft)
+        .size(MoonBadgeSize::Tiny)
+        .bg_color(color)
+        .text_color(color)
+        .mono(true)
+        .render()
+}
+
 /// Format Unix ms as `HH:MM:SS.mmm` UTC time-of-day, by manual arithmetic like the header clock.
 pub(super) fn hms_ms(ms: i64) -> String {
     let day = ms.rem_euclid(86_400_000);

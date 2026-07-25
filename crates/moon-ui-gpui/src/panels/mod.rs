@@ -14,6 +14,7 @@
 //! - [`common`] contains shared panel controls and rendering helpers;
 //! - [`registry`] is the single source of truth for building each detachable panel docked and
 //!   detached, driving persistence registration, detachment, and the default home strip;
+//! - [`tab_menu`] builds the right-click menu for the dock tabs that have one;
 //! - [`stub`] is the fallback view for an unknown detached-panel name.
 
 mod alerts;
@@ -29,6 +30,7 @@ mod orders;
 pub(crate) mod registry;
 mod report;
 mod stub;
+pub(crate) mod tab_menu;
 
 pub(crate) use common::{
     RadioMark, RenderGate, data_table_host, detach_button, icon_checkbox, num, radio_items,

@@ -295,6 +295,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
             ui_session: UiSessionState::default(),
             detects_view: moon_core::config::DetectViewFile::load(),
             news_tag_settings: moon_core::config::NewsTagSettings::load(),
+            tab_badges: moon_core::config::TabBadgeSettings::load(),
+            tab_badges_dirty: false,
             header_ticker_default: None,
             last_header_ticker_refresh: None,
             dock_states,
@@ -467,6 +469,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
                     detached::save_all(&b.detached);
                     b.detached_dirty = false;
                 }
+                if b.tab_badges_dirty {
+                    b.tab_badges.save();
+                    b.tab_badges_dirty = false;
+                }
                 if b.figures.borrow().dirty {
                     b.figures.borrow_mut().save();
                 }
@@ -567,6 +573,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
                         if b.chart_specs_dirty {
                             chart_persist::save_all(&b.chart_specs);
                             b.chart_specs_dirty = false;
+                        }
+                        if b.tab_badges_dirty {
+                            b.tab_badges.save();
+                            b.tab_badges_dirty = false;
                         }
                         if b.figures.borrow().dirty {
                             b.figures.borrow_mut().save();
