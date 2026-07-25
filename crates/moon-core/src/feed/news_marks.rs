@@ -39,6 +39,16 @@ pub const MAX_CHART_MARKS: usize = 64;
 /// of tolerance covers ordinary clock skew between the news service and this machine.
 const FUTURE_SKEW_MS: i64 = 60_000;
 
+/// The item's time if it is usable at all: a stamp from [`mark_time_ms`], rejected when it sits
+/// further ahead of `now_ms` than [`FUTURE_SKEW_MS`].
+///
+/// THE one place that decides whether a news item has a time worth acting on. Every consumer goes
+/// through it — the chart's marks and the dock tab's unread counters — so an item cannot be drawn
+/// on one surface and invisible to the other.
+pub fn usable_time_ms(item: &NewsItem, now_ms: i64) -> Option<i64> {
+    mark_time_ms(item).filter(|t| *t <= now_ms + FUTURE_SKEW_MS)
+}
+
 /// The time a news item is marked at on the chart, Unix ms, or `None` when the item carries no
 /// usable timestamp (which keeps it off the chart entirely).
 ///
@@ -107,7 +117,7 @@ pub fn collect(
             if !names_coin(item, &coin_key) || !tag_visible(item, settings) {
                 continue;
             }
-            let Some(time_ms) = mark_time_ms(item).filter(|t| *t <= now_ms + FUTURE_SKEW_MS) else {
+            let Some(time_ms) = usable_time_ms(item, now_ms) else {
                 continue;
             };
             match seen.get(&item.id) {

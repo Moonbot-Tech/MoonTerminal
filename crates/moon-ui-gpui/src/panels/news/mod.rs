@@ -16,6 +16,7 @@
 //! different colour settings. This module owns data, filters, and lifecycle; [`render`] owns cards.
 
 mod render;
+mod unread;
 
 // The chart's news-mark hover card reuses this panel's badge so a source reads the same on both.
 pub(crate) use render::badge as news_badge;
@@ -46,6 +47,10 @@ use moon_core::session::CoreId;
 /// Ceiling on logical items shown after the cross-core merge. The per-core ring is 50, so this is a
 /// generous cap across a multi-core group.
 const MAX_NEWS_DISPLAY: usize = 200;
+
+/// Stable panel identity: the dock persistence key, and the key this panel's tab-badge state
+/// (counter switches, read watermark) is stored under.
+const PANEL_NAME: &str = "News";
 
 /// The fixed palette a user can assign to a tag. Keys persist in `news_tags.json` and resolve to
 /// theme colours via [`key_color`]; storing keys (not RGB) keeps the colour theme-adaptive. Limited
@@ -117,6 +122,18 @@ pub struct NewsView {
     tags_open: bool,
     cache_sig: Option<u64>,
     cached: Rc<Vec<NewsItem>>,
+    /// What the counters were last computed from: `(watermark, counters_on, merged)`. Cached so the
+    /// per-frame badge path tests fields instead of hashing panel names in the settings maps, and
+    /// so the observe hook can tell a badge-only change from a feed change.
+    badge: (i64, bool, bool),
+    /// Unread counts per tag-colour bucket, recomputed with the news set and the read watermark.
+    unread: unread::Counts,
+    /// Unread items counted once each (not per colour) — what the merged badge shows.
+    unread_total: usize,
+    /// Newest usable news time in the merged feed, already past the future-skew guard. Cached so
+    /// marking the feed read is O(1) and stable between rebuilds — a value recomputed from the
+    /// clock would creep forward and rewrite the settings file on every frame.
+    newest_ms: i64,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
@@ -130,11 +147,26 @@ impl NewsView {
     ) -> Self {
         // Rebuild + repaint only when the scoped cores' news revision changes. News is event-driven
         // and low-volume, so no periodic idle refresh is needed.
+        //
+        // A moved watermark or a flipped switch is handled separately from a changed feed: it needs
+        // the counters recomputed, not the cross-core merge redone.
         cx.observe(&backend, |this, backend, cx| {
             let b = backend.read(cx);
             let sig = this.news_sig(b);
             if this.cache_sig != Some(sig) {
                 this.rebuild(b);
+                // First feed this profile ever receives: the core backfills its whole ring on
+                // connect, and announcing history nobody was ever offered is noise, not news. Anchor
+                // on it once — the panel need not have been looked at, and after this the watermark
+                // is non-zero forever. Runs here rather than in the constructor because at
+                // construction the session store is still empty (`newest_ms == 0`), which is the
+                // state that made an earlier attempt at this a silent no-op.
+                if this.badge.0 == 0 && this.newest_ms > 0 {
+                    this.mark_read(cx);
+                }
+                cx.notify();
+            } else if this.badge != this.badge_state(b) {
+                this.recount(b);
                 cx.notify();
             }
         })
@@ -161,11 +193,23 @@ impl NewsView {
             tags_open: false,
             cache_sig: None,
             cached: Rc::new(Vec::new()),
+            badge: (0, true, false),
+            unread: unread::Counts::default(),
+            unread_total: 0,
+            newest_ms: 0,
             dock: None,
             focus: cx.focus_handle(),
         };
         let b = this.backend.clone();
         this.rebuild(b.read(cx));
+        // Opening the panel for the first time on a profile that never had one: whatever the store
+        // already holds is history nobody was offered, so anchor on it HERE, before the next item
+        // arrives. Doing it only from the observe hook would delay the anchor to the next feed
+        // change and swallow that change with it. The hook keeps the cold-start case, where the
+        // store is still empty at construction and there is nothing to anchor on yet.
+        if this.badge.0 == 0 && this.newest_ms > 0 {
+            this.mark_read(cx);
+        }
         this
     }
 
@@ -174,9 +218,11 @@ impl NewsView {
         CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
     }
 
-    /// Fold the scoped cores' id + news revision, plus the local tag-colour revision, into a change
-    /// signature. `news_rev` bumps on a snapshot change (items OR catalog); the colour rev makes a
-    /// colour edit in one open News view repaint the others.
+    /// Fold the scoped cores' id + news revision, plus the local tag-colour revision and the tab-
+    /// badge revision, into a change signature. `news_rev` bumps on a snapshot change (items OR
+    /// catalog); the colour rev makes a colour edit in one open News view repaint the others; the
+    /// badge rev carries the read watermark, so marking the feed read recounts the badge through
+    /// the same single path a new item takes.
     fn news_sig(&self, b: &Backend) -> u64 {
         let store = b.session.store();
         let base = self.scope_cores(b).iter().fold(0u64, |a, (id, _)| {
@@ -188,6 +234,19 @@ impl NewsView {
         });
         base.wrapping_mul(31)
             .wrapping_add(b.news_tag_settings.rev())
+    }
+
+    /// The badge state this panel renders from: the read watermark plus the two display switches.
+    ///
+    /// Deliberately NOT folded into [`Self::news_sig`]: the settings revision behind it is global,
+    /// so a read-mark in one window group would re-run every other group's cross-core merge. This
+    /// is compared field by field instead, and a change costs a recount of the list already built.
+    fn badge_state(&self, b: &Backend) -> (i64, bool, bool) {
+        (
+            b.tab_badges.watermark(PANEL_NAME, &self.group),
+            b.tab_badges.counters_visible(PANEL_NAME),
+            b.tab_badges.counters_merged(PANEL_NAME),
+        )
     }
 
     /// Merge the scoped cores' logical news by `meta.id` (preferring a translated copy), newest first.
@@ -251,6 +310,49 @@ impl NewsView {
         self.cache_sig = Some(self.news_sig(b));
         self.cached = Rc::new(self.collect(b));
         self.catalog = self.collect_catalog(b);
+        self.recount(b);
+    }
+
+    /// Recompute the badge counters against the stored watermark, without touching the feed.
+    ///
+    /// Split from [`Self::rebuild`] because marking read or flipping a switch changes only the
+    /// counters: the merged item list, its sort and the tag catalog are all unaffected, and redoing
+    /// them would put a cross-core merge on the path of every read-mark in every window group.
+    fn recount(&mut self, b: &Backend) {
+        let now = moon_chart::paint::now_unix_ms() as i64;
+        self.badge = self.badge_state(b);
+        let scan = unread::scan(&self.cached, self.badge.0, now, &b.news_tag_settings);
+        self.unread = scan.counts;
+        self.unread_total = scan.total;
+        self.newest_ms = scan.newest_ms;
+    }
+
+    /// Mark everything currently in the feed as read, if that moves the watermark forward.
+    ///
+    /// The mark is [`Self::newest_ms`], which changes only on a rebuild, so a run of frames with no
+    /// new news marks nothing. The write is DEFERRED: `tab_badges_dirty` is drained by the same
+    /// debounce loop that persists the layout, because this runs from the render path and a
+    /// synchronous fsync there would stall the frame.
+    ///
+    /// This view recounts ITSELF rather than waiting for its own `observe` to fire. Called from the
+    /// render path, the backend notify it emits lands mid-draw, where the window suppresses
+    /// notifications for entities it is already drawing — so the observe hook may never run and the
+    /// tab would keep showing counts the user has just read. Other views in other groups still get
+    /// there through the notify; this one does not depend on it.
+    fn mark_read(&mut self, cx: &mut Context<Self>) {
+        let mark = self.newest_ms;
+        if mark <= 0 || self.badge.0 >= mark {
+            return;
+        }
+        self.backend.update(cx, |b, bcx| {
+            if b.tab_badges.mark_read(PANEL_NAME, &self.group, mark) {
+                b.tab_badges_dirty = true;
+                bcx.notify();
+            }
+        });
+        let b = self.backend.clone();
+        self.recount(b.read(cx));
+        cx.notify();
     }
 
     fn set_translate(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -837,11 +939,34 @@ impl Focusable for NewsView {
 
 impl Panel for NewsView {
     fn panel_name(&self) -> &'static str {
-        "News"
+        PANEL_NAME
     }
     /// Visible tab caption. `panel_name` is the stable persistence key and stays untouched.
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
         crate::persistence::panel_meta::tab_label(self.panel_name())
+    }
+    /// Unread counters on the dock tab, one pill per tag colour (or a single merged pill).
+    ///
+    /// The dock asks only the tabs that are NOT in front, so this never has to ask whether it is
+    /// being looked at: a feed on screen is already the answer to "what is new". `None` when the
+    /// user switched counters off for this panel, or when nothing is unread.
+    ///
+    /// Reads the cached badge state rather than the settings maps — this is a per-frame path.
+    fn title_suffix(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (_, counters_on, merged) = self.badge;
+        if !counters_on {
+            return None;
+        }
+        unread::badges(
+            self.unread,
+            merged.then_some(self.unread_total),
+            MoonPalette::active(cx),
+            cx,
+        )
     }
     fn closable(&self, _cx: &App) -> bool {
         true
@@ -853,7 +978,7 @@ impl Panel for NewsView {
         crate::persistence::panel_meta::panel_title(self.panel_name())
     }
     fn dump(&self, _cx: &App) -> PanelState {
-        crate::persistence::dock_persist::panel_state_with_group("News", &self.group)
+        crate::persistence::dock_persist::panel_state_with_group(PANEL_NAME, &self.group)
     }
     fn on_added_to(
         &mut self,
@@ -869,7 +994,7 @@ impl Panel for NewsView {
         _cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
         Some(vec![crate::panels::detach_button(
-            "News",
+            PANEL_NAME,
             self.group.clone(),
             self.backend.clone(),
             self.dock.clone(),
@@ -878,7 +1003,15 @@ impl Panel for NewsView {
 }
 
 impl Render for NewsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Drawing the feed IS reading it, and this is the one place that means the same thing on
+        // every surface: the front dock tab, a detached window, a tile. The window-active guard is
+        // what stops the pile from being consumed unseen — an unfocused window still repaints on
+        // the shell's clock tick, and "the tab was in front while you worked in another app" is
+        // not "you read it".
+        if window.is_window_active() {
+            self.mark_read(cx);
+        }
         let p = MoonPalette::active(cx);
         let now = moon_chart::paint::now_unix_ms() as i64;
         let translate = self.translate;

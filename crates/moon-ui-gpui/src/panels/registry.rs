@@ -52,6 +52,12 @@ pub(crate) struct DockPanelKind {
     /// tab (CoreStatus). Drives both the default-layout push order (`shell::init`) and the restore
     /// priority plus home-strip identification (`shell::docks`) via [`home_ordered_names`].
     pub(crate) home_order: Option<u8>,
+    /// Whether this panel's dock tab carries unread counters split by News tag colour — which is
+    /// what decides that its tab has a right-click menu at all, and that the menu offers the
+    /// "do not split by colour" switch. Drives [`crate::panels::tab_menu`], so a panel that starts
+    /// counting declares it HERE rather than in a second list beside this one. A panel whose
+    /// counter is not colour-split will need its own shape here; today none is.
+    pub(crate) tab_colour_counters: bool,
     /// Build the panel for a dock. `info` = `Some` on registry restore lets Orders reapply its saved
     /// sort/kind/filter/columns; `info` = `None` (repin or default layout) starts it fresh, because
     /// its view state was not persisted in the dock JSON while it lived detached.
@@ -94,6 +100,7 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
     DockPanelKind {
         name: "Orders",
         home_order: Some(0),
+        tab_colour_counters: false,
         mk_docked: |b, g, info, w, cx| {
             let panel = cx.new(|cx| match info {
                 // Restore replays saved view state; a repin or fresh layout starts from defaults.
@@ -116,6 +123,7 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
     DockPanelKind {
         name: "Assets",
         home_order: Some(1),
+        tab_colour_counters: false,
         // Docked Assets shows its group's live grouped table only (`restored_group`).
         mk_docked: |b, g, _info, w, cx| {
             Rc::new(cx.new(|cx| AssetsView::restored_group(b.clone(), g.to_string(), w, cx)))
@@ -131,6 +139,7 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
     DockPanelKind {
         name: "Report",
         home_order: Some(2),
+        tab_colour_counters: false,
         mk_docked: |b, g, _info, w, cx| {
             Rc::new(cx.new(|cx| ReportPanel::new(b.clone(), g.to_string(), w, cx)))
         },
@@ -147,6 +156,7 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
     DockPanelKind {
         name: "Alerts",
         home_order: Some(3),
+        tab_colour_counters: false,
         mk_docked: |b, g, _info, w, cx| {
             Rc::new(cx.new(|cx| AlertsPanel::new(b.clone(), g.to_string(), w, cx)))
         },
@@ -160,6 +170,7 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
     DockPanelKind {
         name: "Log",
         home_order: Some(4),
+        tab_colour_counters: false,
         mk_docked: |b, g, _info, w, cx| {
             Rc::new(cx.new(|cx| LogPanel::new(b.clone(), g.to_string(), w, cx)))
         },
@@ -173,6 +184,7 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
     DockPanelKind {
         name: "News",
         home_order: Some(5),
+        tab_colour_counters: true,
         // News has no persisted view state and no resizable table, so both builders start fresh and
         // expose no width-reset button, mirroring Alerts/Log.
         mk_docked: |b, g, _info, w, cx| {
@@ -189,6 +201,7 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
         name: "CoreStatus",
         // Deliberately not a default bottom tab; see the home-strip note in `shell::docks`.
         home_order: None,
+        tab_colour_counters: false,
         mk_docked: |b, g, _info, w, cx| {
             Rc::new(cx.new(|cx| CoreStatusView::restored_group(b.clone(), g.to_string(), w, cx)))
         },

@@ -30,6 +30,7 @@ pub mod paths;
 pub mod secrets;
 pub mod servers;
 pub mod storage;
+pub mod tab_badges;
 pub mod theme;
 
 mod backup;
@@ -56,6 +57,7 @@ pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use schema::UiThemeMode;
 pub use secrets::Secret;
 pub use servers::{ChartBucket, CoreSortMode, FeedFlags, ServerConfig};
+pub use tab_badges::TabBadgeSettings;
 pub use theme::{ChartTheme, ChartThemeSet};
 // Keep the counter private to `config` so external code cannot construct or replace it.
 use uid_counter::UidCounter;

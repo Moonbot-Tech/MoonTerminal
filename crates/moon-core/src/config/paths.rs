@@ -142,6 +142,12 @@ pub fn news_tags_path() -> PathBuf {
     cfg_dir().join("news_tags.json")
 }
 
+/// Dock-tab unread counters: per-panel display switches and read watermarks, in a small portable
+/// JSON file.
+pub fn tab_badges_path() -> PathBuf {
+    cfg_dir().join("tab_badges.json")
+}
+
 /// Detect-tape presentation (dimensions/chart/rail/size slots, per group) in a separate
 /// portable file that can be shared through Copy/Paste in the ⚙ popup.
 pub fn detects_view_path() -> PathBuf {

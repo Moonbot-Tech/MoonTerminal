@@ -245,6 +245,16 @@ dock.tab.repin:
   en: "Return to dock"
   es: "Volver al panel"
 
+# --- Tab right-click menu (unread counters) ---
+dock.tab_menu.counters:
+  ru: "Отображать счётчики"
+  en: "Show counters"
+  es: "Mostrar contadores"
+dock.tab_menu.no_colour_split:
+  ru: "Не разделять по цветам"
+  en: "Do not split by colour"
+  es: "No separar por colores"
+
 # --- Log ---
 log.source.local:
   ru: "Локальный"

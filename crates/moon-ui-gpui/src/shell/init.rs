@@ -202,13 +202,29 @@ impl Shell {
 
         // Dump every dock event, including drag, split, resize, detach, and close, into Backend.
         // The drain timer debounces persistence to `docks.json`.
-        cx.subscribe(&dock, |this, dock, event: &DockEvent, cx| {
+        cx.subscribe_in(&dock, window, |this, dock, event: &DockEvent, window, cx| {
             match event {
                 DockEvent::DetachRequested { panel_name } => {
                     this.defer_detach_panel(panel_name.to_string(), cx);
                 }
                 DockEvent::PanelCloseRequested { panel_name } => {
                     this.defer_restore_closed_panel(panel_name.to_string(), cx);
+                }
+                DockEvent::TabContextMenu {
+                    panel_name,
+                    position,
+                } => {
+                    // The dock carries no menu of its own; display policy for a tab lives here.
+                    // Returns early: a right-click moved no panel, so re-dumping the dock tree and
+                    // rewriting `docks.json` below would be work for nothing.
+                    crate::panels::tab_menu::open(
+                        panel_name,
+                        *position,
+                        &this.backend.clone(),
+                        window,
+                        cx,
+                    );
+                    return;
                 }
                 DockEvent::LayoutChanged => {}
             }
