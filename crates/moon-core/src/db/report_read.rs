@@ -453,8 +453,8 @@ pub fn max_core_uid(conn: &Connection) -> ReadResult<Option<u64>> {
         if !src.cols.contains("core_uid") {
             continue;
         }
-        // MAX over the leading PK column is an index seek. The selector-shaped GROUP BY in
-        // `distinct_cores` would instead scan every row of a replica that reaches hundreds of MB.
+        // MAX over the leading PK column is an index seek, and one seek is all this needs —
+        // `distinct_cores` below walks every core because it must NAME them all.
         max = max.max(max_core_uid_in(conn, src.table, CTX)?);
     }
     Ok(max)
@@ -470,17 +470,52 @@ pub fn distinct_cores(conn: &Connection) -> ReadResult<Vec<(u64, String)>> {
     let mut out: Vec<(u64, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for src in read_sources_res(conn)? {
-        let order = if src.legacy {
-            "MAX(COALESCE(updated_ms, 0))"
+        let table = src.table;
+        // Within each source, cores come out newest-first (sources are then concatenated, so
+        // every replica core still precedes a legacy-only one). HOW that order is computed
+        // depends on whether the source's recency key is index-ordered, and the two answers are
+        // not interchangeable — each statement is the fast one for its table and the slow one
+        // for the other.
+        let sql = if src.legacy {
+            // The legacy table's key (`updated_ms`) sits in no index, so asking per core for
+            // its newest row would sort that core's rows, once per core: measured 317 ms
+            // against 150 ms for this single grouped pass on a 300k-row legacy table. This
+            // read-only, transitional table therefore keeps the statement it always had —
+            // including its reliance on SQLite's bare-column rule to pick the name.
+            format!(
+                "SELECT core_uid, core_name FROM {table}
+                 GROUP BY core_uid ORDER BY MAX(COALESCE(updated_ms, 0)) DESC"
+            )
         } else {
-            "MAX(newrecid)"
+            // The replica's key IS index-ordered (`newrecid` is the second column of the
+            // primary key), so walk the distinct `core_uid` values by seeking past each one — a
+            // LOOSE INDEX SCAN — instead of reading every row in the table to answer a question
+            // about 19 values. Measured on a 458 MB replica (529 862 rows): 250 ms for the
+            // grouped pass against under a millisecond here. Both panels now throttle the core
+            // list to once a minute, so it is no longer paid per reload — but it is still paid
+            // on every panel construction, and `report/state.rs` pays it synchronously on the
+            // UI thread. It is what the app's own "медленный query 298ms" warning was reporting.
+            //
+            // The rows are IDENTICAL, order included (verified one by one against the old
+            // statement on that replica): the name comes from the core's newest row, which is
+            // the row SQLite's bare-column rule for a lone min/max aggregate was already
+            // picking — implicitly, and only while that query keeps exactly one such aggregate.
+            format!(
+                "WITH RECURSIVE cores(uid) AS (
+                     SELECT MIN(core_uid) FROM {table}
+                     UNION ALL
+                     SELECT (SELECT MIN(core_uid) FROM {table} WHERE core_uid > cores.uid)
+                     FROM cores WHERE cores.uid IS NOT NULL
+                 )
+                 SELECT uid,
+                        (SELECT core_name FROM {table}
+                         WHERE core_uid = cores.uid ORDER BY newrecid DESC LIMIT 1),
+                        (SELECT MAX(newrecid) FROM {table} WHERE core_uid = cores.uid)
+                 FROM cores WHERE uid IS NOT NULL
+                 ORDER BY 3 DESC"
+            )
         };
-        let mut stmt = conn
-            .prepare(&format!(
-                "SELECT core_uid, core_name FROM {} GROUP BY core_uid ORDER BY {order} DESC",
-                src.table
-            ))
-            .map_err(|e| read_fail(CTX, e))?;
+        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
         let rows = stmt
             .query_map([], |r| {
                 Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?))

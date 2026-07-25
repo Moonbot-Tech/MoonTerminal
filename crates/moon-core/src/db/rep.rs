@@ -149,35 +149,77 @@ pub(super) struct RepState {
     indexes_done: bool,
 }
 
-/// Ensure indexes for hot replica queries.
+/// Every index the replica's read paths need, as `(name, columns)`.
+///
+/// ONE list, so "which indexes exist" has a single answer: [`ensure_indexes`] creates each
+/// entry whose columns the replica already has, its guard is derived from those same columns,
+/// and the index test iterates this table instead of repeating the names.
+///
+/// - `idx_rep_closedate` — the Report window's default period filter, like the legacy
+///   `idx_csr_closedate`.
+/// - `idx_rep_core_close` — period AND core filter TOGETHER. Analytics and the Report window
+///   both narrow by `core_uid IN (...)` plus a `closedate` range, and neither other index can
+///   serve that pair: without this one the planner falls back to a `core_uid`-leading index
+///   (`idx_rep_strat` on the real replica, the primary key on a small one) and then reads the
+///   whole history of every selected core out of the table just to test `closedate` row by
+///   row. Measured on a 458 MB replica (529 862 rows, 19 cores) with 13 cores selected and the
+///   period "today": every Analytics statement cost 0.7-1.0 s REGARDLESS of the period — one
+///   day cost exactly as much as all history — and one Summary load ran ~10 s; with this index
+///   the same load is ~50 ms. The trailing `closedate` is the whole point: it keeps the period
+///   range inside the index, so a core's off-period rows are never touched.
+///
+///   The 2026-07-17 index audit deferred exactly this index as "not hurting yet", over the
+///   writer paying for it on every catch-up row. Re-measured on disk under WAL in the shape
+///   `apply_upsert` writes (52 columns, batches of 512): 100 000 upserts cost 1.44 s without
+///   it and 1.79 s with it when close dates grow with time, as a catch-up stream's do (+63% in
+///   the worst case of dates arriving unsorted). That is a one-off second per 100k caught-up
+///   rows, against ten seconds on every filter change.
+/// - `idx_rep_strat` — strategy-version analytics (`strat_db`): select one strategy's trades
+///   and range-join `buydate` against the version's `valid_from` and `valid_to`.
+pub(super) const REP_INDEXES: &[(&str, &[&str])] = &[
+    ("idx_rep_closedate", &["closedate"]),
+    ("idx_rep_core_close", &["core_uid", "closedate"]),
+    ("idx_rep_strat", &["core_uid", "strategyid", "buydate"]),
+];
+
+/// Create every [`REP_INDEXES`] entry whose columns the replica already has.
 ///
 /// Columns arrive from the core schema at unpredictable times, so check both at
 /// startup, when an old database may already have them, and after every schema.
 /// Creating an index only after a successful ALTER lost it PERMANENTLY when its
 /// column predated the index code or CREATE failed once. Returns `true` once all
-/// indexes definitely exist and no further calls are needed.
+/// indexes definitely exist and no further calls are needed; a failing CREATE
+/// propagates, because a replica that cannot be indexed is a reason to refuse the
+/// writer rather than to run without indexes.
+///
+/// On an existing replica the first pass is a one-off full-table read per missing index, and it
+/// happens here — on the startup thread, before the first window exists. Measured at 0.4 s over
+/// 529 862 rows (458 MB) with `idx_rep_core_close` the only one missing; a cold or bigger
+/// replica costs more. Nothing else reports that pause, so time the pass and log it when it
+/// actually cost something: a one-off delay with no line in the log is indistinguishable from a
+/// hang.
 fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> rusqlite::Result<bool> {
+    let started = std::time::Instant::now();
     let mut done = true;
-    // Default period filter for the Reports window, like legacy `idx_csr_closedate`.
-    if cols.contains("closedate") {
-        conn.execute(
-            &format!("CREATE INDEX IF NOT EXISTS idx_rep_closedate ON {TABLE}(closedate)"),
-            [],
-        )?;
-    } else {
-        done = false;
-    }
-    // Strategy-version analytics (`strat_db`): select one strategy's trades and
-    // range-join `buydate` against the version's `valid_from` and `valid_to`.
-    if cols.contains("strategyid") && cols.contains("buydate") {
+    for (name, index_cols) in REP_INDEXES {
+        // A column the core schema has not sent yet: the index waits for a later schema rather
+        // than being created without it, and `done` stays false so the caller keeps retrying.
+        if !index_cols.iter().all(|c| cols.contains(*c)) {
+            done = false;
+            continue;
+        }
+        // Name and columns are the literals above, never data, so the interpolation is safe.
         conn.execute(
             &format!(
-                "CREATE INDEX IF NOT EXISTS idx_rep_strat ON {TABLE}(core_uid, strategyid, buydate)"
+                "CREATE INDEX IF NOT EXISTS {name} ON {TABLE}({})",
+                index_cols.join(", ")
             ),
             [],
         )?;
-    } else {
-        done = false;
+    }
+    let took = started.elapsed();
+    if took >= std::time::Duration::from_millis(200) {
+        log::info!("reports(rep): replica indexes built in {took:?} (one-off)");
     }
     Ok(done)
 }

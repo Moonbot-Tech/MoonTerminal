@@ -27,7 +27,7 @@ pub(super) struct ReportData {
 
 /// One completed background batch: data, schema, and optional core refresh.
 ///
-/// An empty `cores` vector is also used when the expensive core query is skipped.
+/// An empty `cores` vector is also used when the core query is skipped (see `with_cores`).
 struct ReportRead {
     cores: Vec<(u64, String)>,
     cols: Vec<String>,
@@ -38,7 +38,8 @@ struct ReportRead {
 ///
 /// `NotReady` means the reports replica is absent. `Failed` means opening the
 /// connection, pinning the snapshot, probing schema, or running any query failed.
-/// `with_cores` skips the expensive full-database grouping on most rounds.
+/// `with_cores` skips the core list on most rounds — a throttle from when that list cost a
+/// full-database grouping (`db::distinct_cores`, since rewritten as a loose index scan).
 fn run_report_query(
     filter: ReportFilter,
     sort_key: String,
@@ -154,7 +155,10 @@ impl ReportPanel {
         // Keep stale rows while a refresh is in flight to avoid flicker. A
         // completed `NotReady` or `Failed` result discards them through `LoadState`.
         self.data.begin();
-        // Refresh the core list at most once per minute because it groups across the full database.
+        // Refresh the core list at most once per minute. On a fully migrated replica the
+        // grouping this throttle was built for is gone (`db::distinct_cores` now seeks), so the
+        // interval could be shortened — but the legacy source still pays for a grouped pass,
+        // so it keeps guarding a real cost on a half-migrated install. Left as is.
         let with_cores = self
             .last_cores_at
             .map(|t| t.elapsed() >= std::time::Duration::from_secs(60))
