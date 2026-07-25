@@ -39,23 +39,28 @@ pub const MAX_CHART_MARKS: usize = 64;
 /// of tolerance covers ordinary clock skew between the news service and this machine.
 const FUTURE_SKEW_MS: i64 = 60_000;
 
-/// The item's time if it is usable at all: a stamp from [`mark_time_ms`], rejected when it sits
+/// When the news existed, if that time is usable at all: [`mark_time_ms`], rejected when it sits
 /// further ahead of `now_ms` than [`FUTURE_SKEW_MS`].
 ///
-/// THE one place that decides whether a news item has a time worth acting on. Every consumer goes
-/// through it — the chart's marks and the dock tab's unread counters — so an item cannot be drawn
-/// on one surface and invisible to the other.
+/// The feed's own clock: what orders the panel and drives the unread counters.
 pub fn usable_time_ms(item: &NewsItem, now_ms: i64) -> Option<i64> {
     mark_time_ms(item).filter(|t| *t <= now_ms + FUTURE_SKEW_MS)
 }
 
-/// The time a news item is marked at on the chart, Unix ms, or `None` when the item carries no
-/// usable timestamp (which keeps it off the chart entirely).
+/// When the news became actionable, if that time is usable at all: [`delivery_time_ms`] under the
+/// same future-skew guard.
 ///
-/// PUBLICATION time (`meta.timeMs`) is the anchor: it is when the news existed in the world, so the
-/// mark lines up with the candles that reacted to it. The remaining stamps are fallbacks for items
-/// that arrive without one, in the order they happen: the service received it, the service sent it,
-/// and finally the terminal's own receipt, which is only ever late.
+/// The chart's clock: where a gem is drawn. Both guards share [`FUTURE_SKEW_MS`], so a rescaled
+/// stamp is rejected identically whichever question is being asked.
+pub fn usable_delivery_time_ms(item: &NewsItem, now_ms: i64) -> Option<i64> {
+    delivery_time_ms(item).filter(|t| *t <= now_ms + FUTURE_SKEW_MS)
+}
+
+/// When the news EXISTED, Unix ms, or `None` when the item carries no usable timestamp.
+///
+/// Publication (`meta.timeMs`) is the anchor: it is the moment the news appeared in the world. The
+/// rest are fallbacks for items that arrive without one, in the order those moments happen. This is
+/// the time the feed is ordered and counted by — what the news is, not when it reached anyone.
 pub fn mark_time_ms(item: &NewsItem) -> Option<i64> {
     [
         Some(item.time_ms),
@@ -66,6 +71,23 @@ pub fn mark_time_ms(item: &NewsItem) -> Option<i64> {
     .into_iter()
     .flatten()
     .find(|&t| t > 0)
+}
+
+/// When the news became ACTIONABLE — the moment the service sent it out, Unix ms.
+///
+/// This is where the chart marks it, matching MoonBot, which marks news at the moment the bot got
+/// it. Publication is when the world learned; this is the earliest a client here could have. The
+/// gap between the two is the delivery delay, and drawing the mark at the later moment is what
+/// makes that gap visible: the move starts left of the gem, and the distance is what the delay cost.
+///
+/// The terminal's own receipt is deliberately NOT in the chain, even last: it is stamped by this
+/// PC's clock, and for news backfilled from the core's ring on connect it is the moment of connect,
+/// which would park a mark hours away from its candle.
+pub fn delivery_time_ms(item: &NewsItem) -> Option<i64> {
+    [item.send_time_ms, item.recv_time_ms, Some(item.time_ms)]
+        .into_iter()
+        .flatten()
+        .find(|&t| t > 0)
 }
 
 /// Whether an item passes the persisted tag filter: a tagged item shows unless EVERY one of its tags
@@ -93,8 +115,10 @@ fn names_coin(item: &NewsItem, coin_key: &str) -> bool {
 
 /// The news marks for `market` with their mark times, oldest FIRST, capped at [`MAX_CHART_MARKS`].
 ///
-/// Item and time are returned together so a caller cannot end up with two lists that drifted apart:
-/// the chart indexes marks and hover text by the same position.
+/// The time returned is the DELIVERY time ([`usable_delivery_time_ms`]) — where the gem is drawn —
+/// while the item it comes with still carries its publication stamp, which is what the hover card
+/// shows beside it. Item and time travel together so a caller cannot end up with two lists that
+/// drifted apart: the chart indexes marks and hover text by the same position.
 ///
 /// `now_ms` is the caller's clock, used only to reject stamps from the future (see
 /// [`FUTURE_SKEW_MS`]).
@@ -117,7 +141,7 @@ pub fn collect(
             if !names_coin(item, &coin_key) || !tag_visible(item, settings) {
                 continue;
             }
-            let Some(time_ms) = usable_time_ms(item, now_ms) else {
+            let Some(time_ms) = usable_delivery_time_ms(item, now_ms) else {
                 continue;
             };
             match seen.get(&item.id) {

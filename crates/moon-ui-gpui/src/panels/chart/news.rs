@@ -362,10 +362,21 @@ impl ChartPanel {
     }
 }
 
+/// How much later than publication the mark sits, in ms, or `None` when there is nothing to say.
+///
+/// The mark is drawn at delivery — when the news became actionable — while the item keeps its
+/// publication stamp. The difference is the delivery delay, the same figure the copied text puts in
+/// brackets. Saturating: these stamps are service-controlled.
+fn delivery_lag_ms(item: &NewsItem, mark_time_ms: i64) -> Option<i64> {
+    let published = (item.time_ms > 0).then_some(item.time_ms)?;
+    let lag = mark_time_ms.saturating_sub(published);
+    (lag > 0).then_some(lag)
+}
+
 /// One news item inside the card: the clock, its tag-colour dots and source, then the body.
 fn news_row(item: &NewsItem, mark: &NewsMark, now_ms: i64, p: MoonPalette, cx: &App) -> AnyElement {
-    // The chart's own axis formatter, so the card and the axis under it cannot disagree about when
-    // the news landed — and it adds the date when the mark is not from today.
+    // The chart's own axis formatter, so the card and the axis under it cannot disagree about where
+    // the gem sits — and it adds the date when the mark is not from today.
     let clock = fmt_clock_dated(
         mark.time_ms as f64,
         crate::chartdx::axes::local_offset_sec(),
@@ -384,6 +395,19 @@ fn news_row(item: &NewsItem, mark: &NewsMark, now_ms: i64, p: MoonPalette, cx: &
                 .font_family(design::mono())
                 .child(clock),
         );
+    // The gem sits at DELIVERY; this says how much later than publication that was, so the gap
+    // between the move and the mark has a number on it. Absent when the item carries no
+    // publication stamp of its own, or when the two coincide.
+    if let Some(lag) = delivery_lag_ms(item, mark.time_ms) {
+        head = head.child(
+            div()
+                .flex_none()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.amber))
+                .font_family(design::mono())
+                .child(format!("+{lag} {}", t!("news.lat.unit"))),
+        );
+    }
     // The same colours the gem is cut into, so the card explains what a coloured mark meant.
     for &color in mark.colors() {
         head = head.child(design::status_dot(color, cx));
