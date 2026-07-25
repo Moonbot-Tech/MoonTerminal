@@ -231,3 +231,18 @@ fn the_feed_clock_still_reports_publication() {
     assert_eq!(usable_time_ms(&it, NOW), Some(5_000));
     assert_eq!(usable_delivery_time_ms(&it, NOW), Some(11_160));
 }
+
+/// Catches applying the future-skew guard to the winner instead of to each candidate: a service
+/// that rescaled only its send stamp would cost the item its place on the chart entirely, when the
+/// next stamp in the chain is right there.
+#[test]
+fn a_skewed_send_stamp_falls_through_to_the_next_one() {
+    let mut it = item("a", 5_000, &["BTC"], &[]);
+    it.send_time_ms = Some(NOW + 5_000_000);
+    it.recv_time_ms = Some(5_006);
+    let store = store_with(&[(1, vec![it])]);
+
+    let marks = collect(&store, "BTCUSDT", &NewsTagSettings::default(), NOW);
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].1, 5_006);
+}

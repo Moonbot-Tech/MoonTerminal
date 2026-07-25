@@ -47,13 +47,19 @@ pub fn usable_time_ms(item: &NewsItem, now_ms: i64) -> Option<i64> {
     mark_time_ms(item).filter(|t| *t <= now_ms + FUTURE_SKEW_MS)
 }
 
-/// When the news became actionable, if that time is usable at all: [`delivery_time_ms`] under the
-/// same future-skew guard.
+/// When the news became actionable, if that time is usable at all — the chart's clock, where a gem
+/// is drawn.
 ///
-/// The chart's clock: where a gem is drawn. Both guards share [`FUTURE_SKEW_MS`], so a rescaled
-/// stamp is rejected identically whichever question is being asked.
+/// The guard is applied to each CANDIDATE, not to the winner: a service that rescaled only its send
+/// stamp should cost the item its precision, not its place on the chart, so the next stamp in the
+/// chain takes over. Same [`FUTURE_SKEW_MS`] as the feed's clock, so a stamp centuries ahead is
+/// rejected identically whichever question is being asked.
 pub fn usable_delivery_time_ms(item: &NewsItem, now_ms: i64) -> Option<i64> {
-    delivery_time_ms(item).filter(|t| *t <= now_ms + FUTURE_SKEW_MS)
+    let horizon = now_ms + FUTURE_SKEW_MS;
+    [item.send_time_ms, item.recv_time_ms, Some(item.time_ms)]
+        .into_iter()
+        .flatten()
+        .find(|&t| t > 0 && t <= horizon)
 }
 
 /// When the news EXISTED, Unix ms, or `None` when the item carries no usable timestamp.

@@ -227,19 +227,35 @@ fn a_chart_without_a_price_reports_no_scale() {
     assert_eq!(view.visible_scale_percent(), None);
 }
 
-/// Catches a reference threshold tuned for major coins: instruments trade down to 1e-8, and a
-/// guard like `> 1e-6` blanks the badge — or pins it to a fallback — for every micro-priced one.
+/// Catches floors tuned for major coins: instruments trade down to 1e-8, where an absolute guard
+/// like `1e-6` is eighty times the whole price. Every step the toolbar ships is checked, because
+/// the tighter ones fail first: 5% and 2% of 1.2e-8 fall under guards that 10% clears.
 #[test]
-fn a_micro_priced_instrument_still_reports_its_scale() {
+fn every_toolbar_step_reports_its_scale_on_a_micro_priced_instrument() {
     let now = 100_000.0;
-    let view = settled_view(1.2e-8, 0.10, now);
-    let pct = view
-        .visible_scale_percent()
-        .expect("scale for a micro price");
-    assert!(
-        (pct - 10.0).abs() < 1.0,
-        "micro-priced scale misreported: {pct}"
-    );
+    for step in [0.50, 0.20, 0.10, 0.05, 0.02] {
+        let view = settled_view(1.2e-8, step, now);
+        let pct = view
+            .visible_scale_percent()
+            .unwrap_or_else(|| panic!("no scale reported for step {step}"));
+        let expected = step * 100.0;
+        assert!(
+            (pct - expected).abs() < expected * 0.1,
+            "step {step}: reported {pct}%, expected about {expected}%"
+        );
+    }
+}
+
+/// Catches a comparison-lock follower measuring the ANCHOR's window against its own price: the
+/// window handed over belongs to the anchor, so the percentage must be read against the anchor too
+/// — otherwise the same lock badges 1% or 20% depending on what the follower showed beforehand.
+#[test]
+fn a_locked_follower_reports_the_anchors_scale() {
+    let now = 100_000.0;
+    let mut follower = settled_view(3000.0, 0.05, now);
+    follower.set_y_window(60_000.0, 600.0);
+    let pct = follower.visible_scale_percent().expect("locked scale");
+    assert!((pct - 1.0).abs() < 0.05, "locked follower reported {pct}%");
 }
 
 /// Catches the fixed-percent frame path sizing the window off a different reference than the click

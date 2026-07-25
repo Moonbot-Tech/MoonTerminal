@@ -335,11 +335,21 @@ impl ChartView {
 
     /// Applies a Y window for comparison mode: set center+range and freeze auto-fit (`manual_price`).
     /// Idempotent: returns `false` if the values already match, preventing a broadcast loop.
+    ///
+    /// The floor and the equality epsilon are RELATIVE to the window being applied. Absolute ones
+    /// belonged to a single order of magnitude: on a 1.2e-8 instrument `1e-6` both widened the
+    /// requested window by ~800× and made two genuinely different windows compare equal, so a
+    /// micro-priced follower silently stopped tracking its anchor.
+    ///
+    /// The anchor lock also re-references the scale: the window handed over belongs to the ANCHOR,
+    /// so the percentage must be read against the anchor's price, not against whatever this chart
+    /// was showing before the lock.
     pub fn set_y_window(&mut self, center: f32, range: f32) -> bool {
-        let range = range.max(1e-6);
+        let range = range.max(Self::min_range(center));
+        let eps = Self::min_range(center);
         let same = self.manual_price
-            && (self.center_price - center).abs() < 1e-6
-            && (self.price_range - range).abs() < 1e-6;
+            && (self.center_price - center).abs() < eps
+            && (self.price_range - range).abs() < eps;
         if same {
             return false;
         }
@@ -349,6 +359,9 @@ impl ChartView {
         self.price_range = range;
         self.render_center = center;
         self.render_range = range;
+        if center.is_finite() && center > 0.0 {
+            self.scale_anchor = center;
+        }
         true
     }
 
@@ -462,7 +475,7 @@ impl ChartView {
         let factor = 2f32.powf(-cum_dy / YSCALE_PX_PER_2X);
         let r = (start_range * factor).clamp(start_range * 0.25, start_range * 4.0);
         self.center_price = start_center;
-        self.price_range = r.max(1e-6);
+        self.price_range = r.max(Self::min_range(start_center));
         self.manual_price = true;
         self.render_center = self.center_price;
         self.render_range = self.price_range;
@@ -545,7 +558,7 @@ impl ChartView {
             if let Some(c) = target_center {
                 if self.center_price == 0.0 || !live {
                     self.center_price = c;
-                } else if self.price_range > 1e-9 {
+                } else if self.price_range > Self::min_range(self.center_price) {
                     let drift = (c - self.center_price).abs() / self.price_range;
                     if drift > CENTER_BUFFER {
                         self.center_price += (c - self.center_price) * tick_lerp;
@@ -553,31 +566,43 @@ impl ChartView {
                 }
             }
         }
-        if !(self.price_range > 1e-9) {
-            self.price_range = self.center_price.abs() * 0.10 + 1.0;
+        // A degenerate range gets a default that is a FRACTION OF THE PRICE. The old `+ 1.0`
+        // was a whole price unit — on a 1.2e-8 instrument, eight orders of magnitude of chart —
+        // and it became reachable once the floors above stopped being absolute.
+        if !(self.price_range > Self::min_range(self.center_price)) {
+            self.price_range = if self.center_price.abs() > 0.0 {
+                self.center_price.abs() * 0.10
+            } else {
+                1.0
+            };
         }
         // Snap Y. In live mode, render_* is piecewise constant: keep the range until the target
         // moves beyond ±RANGE_HYST, and keep the center until the price moves by more than
         // CENTER_SNAP_PX px. In manual mode, follow input exactly for responsive dragging;
         // the render cache is rebuilt transiently during interaction.
         if live && !self.manual_price {
-            let target = self.price_range.max(1e-9);
+            let target = self.price_range.max(Self::min_range(self.center_price));
             if !self.auto_price
-                || !(self.render_range > 1e-9)
+                || !(self.render_range > Self::min_range(self.center_price))
                 || target > self.render_range * RANGE_HYST
                 || target < self.render_range / RANGE_HYST
             {
                 self.render_range = target;
             }
-            let ppp = (area_h / self.render_range.max(1e-9)).max(1e-6);
+            let ppp =
+                (area_h / self.render_range.max(Self::min_range(self.center_price))).max(1e-6);
             if (self.center_price - self.render_center).abs() * ppp > CENTER_SNAP_PX {
                 self.render_center = self.center_price;
             }
         } else {
-            self.render_range = self.price_range.max(1e-9);
+            self.render_range = self.price_range.max(Self::min_range(self.center_price));
             self.render_center = self.center_price;
         }
-        self.px_per_price = (area_h / self.render_range.max(1e-9)).max(1e-6);
+        // Guarded by the same relative floor as the range itself: an absolute 1e-9 here would
+        // misstate pixels-per-price by half on a window narrower than that, which is an ordinary
+        // window for a micro-priced instrument.
+        self.px_per_price =
+            (area_h / self.render_range.max(Self::min_range(self.center_price))).max(1e-6);
         // Re-anchor the scale reference while the view follows the data — and NOT while the user
         // holds a manual Y view, which is what makes a vertical drag leave the reported scale
         // alone. Taken after the snap, so the reference is as piecewise-constant as the range it
