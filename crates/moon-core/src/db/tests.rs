@@ -199,15 +199,17 @@ fn rep_indexes_created_for_preexisting_columns() {
     )
     .unwrap();
     test_support::rep_init(&conn);
-    let n: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='index'
-             AND name IN ('idx_rep_closedate','idx_rep_strat')",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(n, 2, "оба индекса должны существовать после init");
+    // Against the declaration itself, so a new entry there cannot be missed here.
+    for (name, _) in rep::REP_INDEXES {
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "индекс {name} не создан после init");
+    }
     // The planner actually uses the index for the default period filter.
     let plan: String = conn
         .query_row(
@@ -220,6 +222,136 @@ fn rep_indexes_created_for_preexisting_columns() {
     assert!(
         plan.contains("idx_rep_closedate"),
         "план без индекса: {plan}"
+    );
+}
+
+/// A period query narrowed to SOME cores must resolve the period INSIDE the index.
+///
+/// This pins the plan that made Analytics take ~10 s on a 458 MB replica: without
+/// `idx_rep_core_close` the planner serves the `core_uid` equality from a core-leading index
+/// and then tests `closedate` against the table for every row those cores ever produced — so
+/// "today" costs as much as "all history". The source comes from `unified_from`, the production
+/// builder, rather than a lookalike assembled here: a filter change that moved `closedate` out
+/// of an indexable position would otherwise leave this green while the panel went back to ten
+/// seconds.
+#[test]
+fn rep_core_and_period_filter_uses_composite_index() {
+    let path = test_support::temp_db("core-close");
+    let conn = test_support::build_replica(&path, &test_support::spread_rows(1_700_000_000, 30));
+    let q = analytics::Query {
+        from: 1,
+        to: 2,
+        cores: vec![1, 3, 7],
+        ..Default::default()
+    };
+    let src = analytics::unified_from(&conn, &q)
+        .ok()
+        .flatten()
+        .expect("реплика — годный источник");
+    let mut stmt = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN SELECT o.closedate FROM {src}"))
+        .unwrap();
+    // The source is a UNION branch inside a subquery, so its plan is several rows.
+    let plan = stmt
+        .query_map(rusqlite::params![1_i64, 2_i64], |r| r.get::<_, String>(3))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        plan.contains("idx_rep_core_close"),
+        "период с фильтром ядер идёт мимо составного индекса: {plan}"
+    );
+    drop(stmt);
+    drop(conn);
+    test_support::remove_db(&path);
+}
+
+/// Cores come out newest-first, each labelled by its CURRENT name.
+///
+/// Both halves are caller-visible, though not equally: the UI re-ranks this list by config
+/// order (`CoreOrder::from_db`), so the recency order decides only among cores the config does
+/// not know — which is exactly where it is the last word. The NAME has no such fallback: a core
+/// renamed on the server must not keep showing the name it carried at its first trade.
+///
+/// The loose index scan states both outright, where the previous `GROUP BY` leaned on SQLite's
+/// bare-column rule for a LONE min/max aggregate — a second one voids it silently, with no
+/// error anywhere. Note what this does NOT pin: the old statement satisfies it too. It guards
+/// the contract the rewrite had to preserve, not the plan — that one is measured, not asserted
+/// (250 ms → under 1 ms on a 458 MB replica).
+#[test]
+fn distinct_cores_lists_newest_first_with_the_current_name() {
+    let path = test_support::temp_db("cores");
+    let conn = test_support::build_replica(&path, &[]);
+    conn.execute_batch(
+        "INSERT INTO orders_rep (core_uid, core_name, newrecid) VALUES
+            (7, 'ИМЯ ДО ПЕРЕИМЕНОВАНИЯ', 1), (7, 'BinF1', 2),
+            (3, 'Gate', 5),
+            (9, 'HLSpot', 3);",
+    )
+    .unwrap();
+    let got = distinct_cores(&conn).expect("список ядер читается");
+    assert_eq!(
+        got,
+        vec![
+            (3, "Gate".to_string()),
+            (9, "HLSpot".to_string()),
+            (7, "BinF1".to_string()),
+        ],
+        "ядра — от последнего активного к первому, имя каждого — из его самой свежей строки"
+    );
+    drop(conn);
+    test_support::remove_db(&path);
+}
+
+/// Both report sources feed the selector, and a core present in both is listed once.
+///
+/// The two branches are DIFFERENT statements — the legacy table's recency key is indexed
+/// nowhere, so it keeps the grouped pass while the replica gets the loose index scan — and this
+/// is the only test that runs the legacy one. An untested branch is how the transitional source
+/// quietly stops showing up in the core selector of a half-migrated install.
+///
+/// Core 5 carries TWO legacy rows on purpose, and its NEWEST row is the one with the LOWER
+/// `db_id`: that is what exercises the bare-column rule the grouped branch leans on, and it
+/// separates "the name from the newest row" from "the name from the last row in key order",
+/// which a fixture with both ascending together cannot tell apart. Core 8 exists so the legacy
+/// branch contributes two cores of its own — with only one, its ORDER BY could be reversed and
+/// this test would not notice.
+#[test]
+fn distinct_cores_merges_legacy_source_without_duplicating_a_core() {
+    let conn = Connection::open_in_memory().unwrap();
+    init_db(&conn).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE closed_sell_reports (
+            core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, db_id INTEGER NOT NULL,
+            coin TEXT, profitbtc REAL, closedate INTEGER,
+            created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
+            PRIMARY KEY (core_uid, db_id));
+         INSERT INTO closed_sell_reports
+            (core_uid, core_name, db_id, coin, profitbtc, closedate, created_ms, updated_ms)
+         VALUES (1, 'BB1', 42, 'BTCUSDT', 0.5, 1780000000, 0, 10),
+                (5, 'Gate', 43, 'BTCUSDT', 0.5, 1780000000, 0, 30),
+                (5, 'Gate до переименования', 44, 'BTCUSDT', 0.5, 1780000000, 0, 20),
+                (8, 'QQ', 45, 'BTCUSDT', 0.5, 1780000000, 0, 15);",
+    )
+    .unwrap();
+    test_support::rep_init(&conn);
+    // Core 1 is ALSO on typed replication, under a name the server has since changed.
+    conn.execute(
+        "INSERT INTO orders_rep (core_uid, core_name, newrecid) VALUES (1, 'BB1 переименовано', 3)",
+        [],
+    )
+    .unwrap();
+    let got = distinct_cores(&conn).expect("список ядер читается");
+    assert_eq!(
+        got,
+        vec![
+            (1, "BB1 переименовано".to_string()),
+            (5, "Gate".to_string()),
+            (8, "QQ".to_string()),
+        ],
+        "реплика идёт первой и вытесняет легаси-строку того же ядра; легаси добавляет свои \
+         в порядке своей свежести"
     );
 }
 
