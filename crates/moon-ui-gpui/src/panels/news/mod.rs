@@ -953,11 +953,7 @@ impl Panel for NewsView {
     /// user switched counters off for this panel, or when nothing is unread.
     ///
     /// Reads the cached badge state rather than the settings maps — this is a per-frame path.
-    fn title_suffix(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    fn title_suffix(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (_, counters_on, merged) = self.badge;
         if !counters_on {
             return None;

@@ -37,7 +37,10 @@ fn tickers_head_the_post_and_topics_close_it() {
 #[test]
 fn the_stamp_is_absolute_utc() {
     let text = telegram_text(&item(), true);
-    assert!(text.starts_with("TOA · 25.07.2026 08:26:50 UTC\n"), "{text}");
+    assert!(
+        text.starts_with("TOA · 25.07.2026 08:26:50 UTC\n"),
+        "{text}"
+    );
 }
 
 /// Catches copying a language the user was not looking at: the toggle that picks the card's body

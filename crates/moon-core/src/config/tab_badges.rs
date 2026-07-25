@@ -119,7 +119,10 @@ impl TabBadgeSettings {
 
     /// The read watermark for `panel` in `group`, or `0` when nothing was ever marked read.
     pub fn watermark(&self, panel: &str, group: &str) -> i64 {
-        self.seen.get(&Self::key(panel, group)).copied().unwrap_or(0)
+        self.seen
+            .get(&Self::key(panel, group))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Raise the watermark for `panel` in `group`. Returns whether it changed.
