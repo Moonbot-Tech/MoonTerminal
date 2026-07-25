@@ -104,11 +104,10 @@ fn union_range(a: Option<(f32, f32)>, b: Option<(f32, f32)>) -> Option<(f32, f32
 /// only when the whole percentage differs from the selected step. An untouched fixed percentage
 /// matches the selected step by construction and stays hidden.
 fn scale_badge_pct(view: &moon_chart::view::ChartView) -> Option<i32> {
-    let center = view.render_center.abs();
-    if !(center > 1e-9) || !(view.render_range > 0.0) {
-        return None;
-    }
-    let cur = (view.render_range / center * 100.0).round() as i32;
+    // Measured against the instrument's price, not the centre of the viewport: dragging the chart
+    // vertically moves that centre without touching the zoom, and reporting a changed scale for a
+    // scale that did not change is what this badge is least allowed to do.
+    let cur = view.visible_scale_percent()?.round() as i32;
     if view.auto_price {
         return Some(cur);
     }
