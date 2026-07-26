@@ -8,7 +8,7 @@
 //! source of starts, knots, and ends for markers and segments.
 
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::feed::{OrderRow, OrderTrace};
 use crate::util::now_unix_ms;
@@ -201,6 +201,11 @@ pub struct RetainedOrder {
     pub closed_rev: Option<u64>,
     /// Last time the order appeared in a snapshot, used by the closure grace period.
     last_seen_ms: f64,
+    /// Update generation in which this order last appeared.
+    ///
+    /// Comparing this marker while iterating `OrderLineStore::open_uids` replaces a per-update
+    /// `HashSet` lookup for every retained closed order.
+    seen_generation: u64,
     /// Order appearance sequence.
     pub seq: u64,
     /// Traces by line kind, indexed by `LineKind as usize`.
@@ -237,6 +242,7 @@ impl RetainedOrder {
             closed_store_ms: None,
             closed_rev: None,
             last_seen_ms: now_ms,
+            seen_generation: 0,
             seq,
             lines: Default::default(),
             liq: None,
@@ -253,13 +259,21 @@ pub struct OrderLineStore {
     /// A newly closed UID enters at the back and overflow leaves from the front, without sorting or
     /// a pruning scan.
     closed_ring: VecDeque<u64>,
+    /// UIDs of currently open orders only.
+    ///
+    /// Closure removes an entry and revival adds it back, so update-time backstop and auto-fit work
+    /// scales with live orders instead of the retained closed-history cap.
+    open_uids: Vec<u64>,
     /// Cached per-market price range for auto-Y over open-order buy/sell lines and active protective
     /// stops of filled orders. Stop, trailing, and VStop prices exist only after fill. The cache is
-    /// rebuilt only when orders change, together with `rev`, rather than on every prepare pass.
-    auto_fit_ranges: HashMap<String, (f32, f32)>,
+    /// rebuilt only when orders change, together with `rev`, rather than on every prepare pass. Its
+    /// ordered map supports borrowed market lookup without SipHash and clones a key once per market.
+    auto_fit_ranges: BTreeMap<String, (f32, f32)>,
     /// Increments on any render-affecting change, including geometry, label inputs, and zones.
     pub rev: u64,
     seq_counter: u64,
+    /// Monotonic snapshot generation used by `RetainedOrder::seen_generation`.
+    update_generation: u64,
 }
 
 impl OrderLineStore {
@@ -270,8 +284,9 @@ impl OrderLineStore {
     /// `rev`.
     pub fn update(&mut self, rows: &[OrderRow]) -> bool {
         let now_ms = now_unix_ms();
+        self.update_generation = self.update_generation.wrapping_add(1);
+        let generation = self.update_generation;
         let mut changed = false;
-        let mut seen: HashSet<u64> = HashSet::with_capacity(rows.len());
         // UIDs closed by an explicit `job_is_done` flag in this update are remembered after the
         // loop because the loop holds a mutable borrow of `self.orders` through its entry.
         let mut close_now: Vec<u64> = Vec::new();
@@ -282,22 +297,24 @@ impl OrderLineStore {
         // a slot here because closure is processed later; after it closes, a later batch can reuse
         // the slot. An empty market therefore starts naturally at 1.
         let mut new_nums: HashMap<u64, u32> = HashMap::new();
-        {
-            let mut used: HashMap<String, HashSet<u32>> = HashMap::new();
-            for o in self.orders.values() {
-                if o.closed_ms.is_none() && o.chart_num > 0 {
-                    used.entry(o.market.clone())
-                        .or_default()
-                        .insert(o.chart_num);
+        let mut fresh: Vec<&OrderRow> = rows
+            .iter()
+            .filter(|r| !self.orders.contains_key(&r.uid))
+            .collect();
+        if !fresh.is_empty() {
+            let mut used: HashMap<&str, HashSet<u32>> = HashMap::new();
+            for uid in &self.open_uids {
+                if let Some(order) = self.orders.get(uid) {
+                    if order.chart_num > 0 {
+                        used.entry(order.market.as_str())
+                            .or_default()
+                            .insert(order.chart_num);
+                    }
                 }
             }
-            let mut fresh: Vec<&OrderRow> = rows
-                .iter()
-                .filter(|r| !self.orders.contains_key(&r.uid))
-                .collect();
             fresh.sort_by_key(|r| r.uid);
             for r in fresh {
-                let set = used.entry(r.market.clone()).or_default();
+                let set = used.entry(r.market.as_str()).or_default();
                 let mut n = 1u32;
                 while set.contains(&n) {
                     n += 1;
@@ -308,7 +325,7 @@ impl OrderLineStore {
         }
 
         for r in rows {
-            seen.insert(r.uid);
+            let mut became_open = false;
             let order = match self.orders.entry(r.uid) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
@@ -317,10 +334,12 @@ impl OrderLineStore {
                     changed = true;
                     let mut ro = RetainedOrder::new(r, now_ms, seq);
                     ro.chart_num = new_nums.get(&r.uid).copied().unwrap_or(0);
+                    became_open = true;
                     entry.insert(ro)
                 }
             };
             order.last_seen_ms = now_ms;
+            order.seen_generation = generation;
             // Revive a previously closed UID only when it is active again, without `job_is_done`.
             // A terminal order may remain in snapshots throughout the core's deferred-removal
             // window; reviving it would make the line flicker from closed to open on every update.
@@ -329,6 +348,7 @@ impl OrderLineStore {
                 order.closed_reason = None;
                 order.closed_store_ms = None;
                 order.closed_rev = None;
+                became_open = true;
                 changed = true;
             }
             order.is_short = r.is_short;
@@ -407,6 +427,10 @@ impl OrderLineStore {
                 closed_this_update.push(r.uid);
                 changed = true;
             }
+            let index_open = became_open && order.closed_ms.is_none();
+            if index_open {
+                self.open_uids.push(r.uid);
+            }
         }
 
         for uid in close_now {
@@ -419,16 +443,16 @@ impl OrderLineStore {
         // frame or gap; the grace period suppresses false closures on brief empty or partial
         // snapshots during reconnects or subscription churn.
         let mut newly_closed = Vec::new();
-        for (uid, ord) in self.orders.iter_mut() {
-            if !seen.contains(uid)
-                && ord.closed_ms.is_none()
-                && now_ms - ord.last_seen_ms > CLOSE_GRACE_MS
-            {
+        for uid in self.open_uids.iter().copied() {
+            let Some(ord) = self.orders.get_mut(&uid) else {
+                continue;
+            };
+            if ord.seen_generation != generation && now_ms - ord.last_seen_ms > CLOSE_GRACE_MS {
                 ord.closed_ms = Some(ord.last_seen_ms);
                 ord.closed_reason = Some(OrderCloseReason::BackstopMissing);
                 ord.closed_store_ms = Some(now_ms);
-                newly_closed.push(*uid);
-                closed_this_update.push(*uid);
+                newly_closed.push(uid);
+                closed_this_update.push(uid);
                 changed = true;
             }
         }
@@ -436,6 +460,12 @@ impl OrderLineStore {
         for uid in newly_closed {
             self.remember_closed(uid);
             changed = true;
+        }
+        if !closed_this_update.is_empty() {
+            closed_this_update.sort_unstable();
+            closed_this_update.dedup();
+            self.open_uids
+                .retain(|uid| closed_this_update.binary_search(uid).is_err());
         }
         if changed {
             self.rev = self.rev.wrapping_add(1);
@@ -449,20 +479,21 @@ impl OrderLineStore {
         changed
     }
 
-    /// Rebuilds per-market auto-fit ranges from the current open orders.
+    /// Rebuilds per-market auto-fit ranges from the compact open-order index.
     ///
     /// This runs only after a real change because line prices mutate only in `update`. The cache
     /// therefore stays current without scanning all orders during every render preparation.
     fn rebuild_auto_fit_ranges(&mut self) {
         self.auto_fit_ranges.clear();
-        for o in self.orders.values() {
-            if o.closed_ms.is_some() {
+        for uid in &self.open_uids {
+            let Some(order) = self.orders.get(uid) else {
                 continue;
-            }
+            };
             // Include Buy/Sell plus active protective stops. Stop, Trailing, and VStop have a
             // current price only after fill because synchronization gates their values on `filled`,
             // so only actual protective stops of filled orders enter the range. Unfilled orders
             // still contribute their Buy line, but no protective stop lines.
+            let mut range: Option<(f32, f32)> = None;
             for idx in [
                 LineKind::Buy as usize,
                 LineKind::Sell as usize,
@@ -470,21 +501,30 @@ impl OrderLineStore {
                 LineKind::Trailing as usize,
                 LineKind::VStop as usize,
             ] {
-                if let Some(p) = o.lines[idx].current_price() {
+                if let Some(p) = order.lines[idx].current_price() {
                     if p.is_finite() && p > 0.0 {
-                        let e = self
-                            .auto_fit_ranges
-                            .entry(o.market.clone())
-                            .or_insert((p, p));
-                        e.0 = e.0.min(p);
-                        e.1 = e.1.max(p);
+                        let entry = range.get_or_insert((p, p));
+                        entry.0 = entry.0.min(p);
+                        entry.1 = entry.1.max(p);
                     }
+                }
+            }
+            if let Some((min, max)) = range {
+                if let Some(entry) = self.auto_fit_ranges.get_mut(order.market.as_str()) {
+                    entry.0 = entry.0.min(min);
+                    entry.1 = entry.1.max(max);
+                } else {
+                    self.auto_fit_ranges
+                        .insert(order.market.clone(), (min, max));
                 }
             }
         }
     }
 
-    /// Records a closed UID and removes the oldest retained closed orders beyond the safety cap.
+    /// Records a UID's closure and enforces the retained-history safety cap.
+    ///
+    /// `update` removes all closed UIDs from the open index in one batch so a snapshot that closes
+    /// many orders does not repeatedly scan the live-order vector.
     fn remember_closed(&mut self, uid: u64) {
         self.closed_ring.push_back(uid);
         while self.closed_ring.len() > CLOSED_RING_CAP {

@@ -14,16 +14,16 @@ mod render;
 
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonScrollbarVisibility, MoonVirtualList, MoonVirtualListScrollHandle, Panel, PanelEvent,
-    PanelState, StyledExt, h_flex, v_flex,
+    h_flex, v_flex, DockArea, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize,
+    MoonPalette, MoonScrollbarVisibility, MoonVirtualList, MoonVirtualListScrollHandle, Panel,
+    PanelEvent, PanelState, StyledExt,
 };
 
 use rust_i18n::t;
 
-use crate::Backend;
 use crate::core_order::CoreOrder;
+use crate::Backend;
 use moon_core::applog::{self, LogLine};
 use moon_core::session::{CoreId, CoreStore};
 
@@ -89,15 +89,19 @@ pub struct LogPanel {
     /// earlier timers, so the five-second delay starts at the latest scroll.
     scroll_gen: u64,
     scroll: MoonVirtualListScrollHandle,
-    /// Last observed combined log signature. Rebuilding only on a revision change avoids repeatedly
-    /// cloning bounded source snapshots while scoped logs are idle. Aggregate may clone up to
-    /// `AGG_PER_CORE` rows from every scoped core before its final `VIEW_LIMIT` truncation.
-    last_sig: u64,
+    /// Visibility and selected-source revision gate for expensive row rebuilding.
+    ///
+    /// A hidden dock tab records no intermediate revisions; activation catches it up once.
+    refresh: render::RefreshGate,
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
 }
 
 impl LogPanel {
+    /// Creates a deferred Log panel for `group`.
+    ///
+    /// Dock activity or the first detached-window render performs the initial load, so constructing
+    /// a hidden default tab does not aggregate every core before the user opens it.
     pub fn new(
         backend: Entity<Backend>,
         group: String,
@@ -113,18 +117,18 @@ impl LogPanel {
             }
         })
         .detach();
-        // Reload only when the combined local and in-scope core log revision changes. This may wake
-        // a selected source even when the new row belongs to another source in the same scope.
+        // Reload only while visible and only when the selected live source's revision changes.
         cx.observe(&backend, |this, backend, cx| {
-            let sig = render::log_sig(backend.read(cx), &this.group);
-            if sig != this.last_sig {
-                this.last_sig = sig;
-                this.reload_rows(backend.read(cx), cx);
+            if !this.refresh.is_active() || !matches!(this.file, LogFile::Live) {
+                return;
+            }
+            let sig = render::log_sig(backend.read(cx), &this.group, &this.source);
+            if this.refresh.observe(sig) {
                 cx.notify();
             }
         })
         .detach();
-        let mut this = Self {
+        Self {
             backend,
             group,
             source: LogSource::Aggregate,
@@ -143,13 +147,10 @@ impl LogPanel {
             scroll_pause: false,
             scroll_gen: 0,
             scroll: MoonVirtualListScrollHandle::new(),
-            last_sig: 0,
+            refresh: render::RefreshGate::default(),
             dock: None,
             focus: cx.focus_handle(),
-        };
-        let backend_for_initial_load = this.backend.clone();
-        this.reload_rows(backend_for_initial_load.read(cx), cx);
-        this
+        }
     }
 
     /// Builds source-selector entries, ported from `App::build_log_sources`. A nonempty group limits
@@ -233,6 +234,7 @@ impl LogPanel {
         }
     }
 
+    /// Rebuilds render-ready rows while sharing one lowercase message across all text predicates.
     fn apply_filter(&mut self, cx: &App) {
         let query = self.query.read(cx).value().trim().to_lowercase();
         let errors_only = self.errors_only;
@@ -246,18 +248,19 @@ impl LogPanel {
         self.lines = self
             .raw_lines
             .iter()
-            .filter(|l| {
-                query.is_empty()
-                    || l.msg.to_lowercase().contains(&query)
-                    || l.target.to_lowercase().contains(&query)
-            })
-            .filter(|l| {
-                coin.as_ref()
-                    .is_none_or(|c| l.msg.to_lowercase().contains(c))
-            })
             .filter_map(|l| {
-                let cl = render::classify(l);
+                let lower = l.msg.to_lowercase();
+                let cl = render::classify_lower(l.level, &lower);
                 if errors_only && !render::is_error(cl.sev) {
+                    return None;
+                }
+                if !query.is_empty()
+                    && !lower.contains(&query)
+                    && !l.target.to_lowercase().contains(&query)
+                {
+                    return None;
+                }
+                if coin.as_ref().is_some_and(|coin| !lower.contains(coin)) {
                     return None;
                 }
                 Some(render::LineView::from_parts(l, cl, &known))
@@ -274,14 +277,14 @@ impl LogPanel {
         self.live && !self.scroll_pause
     }
 
-    /// Resumes Live intent, clears the scroll pause, reloads the current selection, and scrolls to
-    /// the filtered tail through `reload_rows` and `apply_filter`.
-    fn resume_live(&mut self, cx: &mut Context<Self>) {
+    /// Resumes Live intent and queues the current selection for reload on its next actual render.
+    ///
+    /// Deferring the heavy work keeps a delayed scroll timer from aggregating logs after the panel
+    /// has moved behind another tab or its entire outer dock has been hidden.
+    fn resume_live(&mut self) {
         self.scroll_pause = false;
         self.live = true;
-        let backend = self.backend.clone();
-        self.last_sig = render::log_sig(backend.read(cx), &self.group);
-        self.reload_rows(backend.read(cx), cx);
+        self.refresh.request_reload();
     }
 
     /// Handles a wheel event over the list. With Live intent enabled it temporarily unchecks
@@ -304,7 +307,7 @@ impl LogPanel {
                 this.update(cx, |t, cx| {
                     // Resume only if no newer scroll or manual Live toggle invalidated this timer.
                     if t.scroll_gen == want_gen && t.live && t.scroll_pause {
-                        t.resume_live(cx);
+                        t.resume_live();
                         cx.notify();
                     }
                 })
@@ -368,7 +371,10 @@ impl LogPanel {
         });
     }
 
+    /// Reloads the selected source, records its revision, and reapplies the current filters.
     fn reload_rows(&mut self, b: &Backend, cx: &App) {
+        self.refresh
+            .record_reload(render::log_sig(b, &self.group, &self.source));
         let sources = self.sources(b);
         let is_agg = matches!(self.source, LogSource::Aggregate);
         if !is_agg {
@@ -385,6 +391,17 @@ impl LogPanel {
             self.merge_paused(fresh);
         }
         self.apply_filter(cx);
+    }
+
+    /// Changes visibility-driven refresh activity and catches up immediately when activation is
+    /// newer than the last loaded source revision.
+    fn set_refresh_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        let backend = self.backend.clone();
+        let sig = render::log_sig(backend.read(cx), &self.group, &self.source);
+        if self.refresh.set_active(active, sig) {
+            self.reload_rows(backend.read(cx), cx);
+            cx.notify();
+        }
     }
 
     /// Merges a fresh snapshot into the paused buffer by finding its last retained row using
@@ -456,6 +473,10 @@ impl Panel for LogPanel {
     fn show_dock_header(&self, _cx: &App) -> bool {
         true
     }
+    /// Enables live refresh only for the front dock tab and catches up when it becomes visible.
+    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_refresh_active(active, cx);
+    }
     fn panel_name(&self) -> &'static str {
         "Log"
     }
@@ -492,7 +513,14 @@ impl Panel for LogPanel {
 }
 
 impl Render for LogPanel {
+    /// Renders the panel and activates direct detached-window hosts on their first frame.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.refresh.is_active() {
+            self.set_refresh_active(true, cx);
+        } else if self.refresh.take_observed_reload() {
+            let backend = self.backend.clone();
+            self.reload_rows(backend.read(cx), cx);
+        }
         let p = MoonPalette::active(cx);
 
         let sources = self.sources(self.backend.read(cx));
@@ -549,7 +577,7 @@ impl Render for LogPanel {
                         // A manual toggle invalidates any delayed automatic resumption.
                         t.scroll_gen = t.scroll_gen.wrapping_add(1);
                         if *ch {
-                            t.resume_live(cx); // Reload and return to the current selection's tail.
+                            t.resume_live(); // Reload on render and return to the selection's tail.
                         } else {
                             // Manual disable freezes following until the user enables it again.
                             t.live = false;

@@ -2,13 +2,72 @@
 //! one row with severity colors plus coin and search-match highlighting.
 //!
 //! [`super::LogPanel`] owns filtering, the virtual list, and follow-tail scrolling. Classification
-//! ([`classify`]) and coin detection ([`find_coin`]) run once while `apply_filter` builds
+//! ([`classify_lower`]) and coin detection ([`find_coin`]) run once while `apply_filter` builds
 //! [`LineView`] values instead of every frame: parsing is expensive, while the virtual list calls
 //! the row renderer for every visible line on each frame.
 
 use super::*;
-use std::collections::HashSet;
+use std::collections::{BinaryHeap, HashSet};
 use std::ops::Range;
+
+/// Tracks whether backend log revisions should rebuild this panel.
+///
+/// Dock tabs toggle `active` through `Panel::set_active`; detached panels activate themselves on
+/// their first render because their window host renders the view directly. Backend observations
+/// only queue the newest signature; the actual render performs the expensive reload. This keeps an
+/// outer dock hidden by its container idle even if the container does not call `set_active(false)`.
+#[derive(Default)]
+pub(super) struct RefreshGate {
+    active: bool,
+    loaded: bool,
+    last_sig: u64,
+    pending_sig: Option<u64>,
+}
+
+impl RefreshGate {
+    /// Changes panel activity and returns whether activation requires an immediate reload.
+    ///
+    /// `sig` is the selected live source's current revision. Deactivation never reloads.
+    pub(super) fn set_active(&mut self, active: bool, sig: u64) -> bool {
+        self.active = active;
+        if !active || self.loaded && self.last_sig == sig {
+            return false;
+        }
+        self.record_reload(sig);
+        true
+    }
+
+    /// Returns whether an observed backend revision should schedule an active panel render.
+    pub(super) fn observe(&mut self, sig: u64) -> bool {
+        if !self.active || self.loaded && self.last_sig == sig || self.pending_sig == Some(sig) {
+            return false;
+        }
+        self.pending_sig = Some(sig);
+        true
+    }
+
+    /// Records a reload caused directly by a source, file, or follow-mode action.
+    pub(super) fn record_reload(&mut self, sig: u64) {
+        self.loaded = true;
+        self.last_sig = sig;
+        self.pending_sig = None;
+    }
+
+    /// Queues a reload for the next actual render even when the source revision is unchanged.
+    pub(super) fn request_reload(&mut self) {
+        self.pending_sig.get_or_insert(self.last_sig);
+    }
+
+    /// Consumes a backend revision queued for the next actual panel render.
+    pub(super) fn take_observed_reload(&mut self) -> bool {
+        self.pending_sig.take().is_some()
+    }
+
+    /// Returns whether the panel currently participates in live backend refreshes.
+    pub(super) fn is_active(&self) -> bool {
+        self.active
+    }
+}
 
 /// Line severity, which determines the row's base text color.
 ///
@@ -66,9 +125,9 @@ impl LineView {
     /// Build a render-ready line from an existing classification.
     ///
     /// Coin detection happens here so errors-only filtering can reject a line before scanning it.
-    /// `cl` comes from [`classify`], which the caller runs before that filter to avoid classifying
-    /// twice. `known` contains coin bases collected from the full buffer, allowing bare tickers
-    /// such as `SPK` to be highlighted.
+    /// `cl` comes from [`classify_lower`], which the caller runs before that filter to avoid
+    /// classifying twice. `known` contains coin bases collected from the full buffer, allowing bare
+    /// tickers such as `SPK` to be highlighted.
     pub(super) fn from_parts(line: &LogLine, cl: Class, known: &HashSet<String>) -> Self {
         let time = line
             .ts
@@ -125,14 +184,12 @@ const CONN_KW: [&str; 8] = [
     "подключ",
 ];
 
-/// Classify severity and category using one lowercase conversion.
+/// Classifies a line from a lowercase message already prepared by the filtering pass.
 ///
-/// Explicit non-`Info` levels (`Error`, `Warn`, `Debug`, and `Trace`) take precedence over message
-/// text, while recognized GPUI noise overrides everything. Every `Info` line is inferred from text;
-/// this includes application/local entries and core lines, which use `Info` as a placeholder
-/// because their source has no level.
-pub(super) fn classify(line: &LogLine) -> Class {
-    let lower = line.msg.to_lowercase();
+/// Reusing `lower` keeps query, coin, severity, and category checks to one Unicode lowercase
+/// allocation per row. Explicit non-`Info` levels take precedence over message text, while
+/// recognized GPUI noise overrides everything; `Info` lines infer severity from their text.
+pub(super) fn classify_lower(level: log::Level, lower: &str) -> Class {
     if lower.contains("window not found") || lower.contains("недопустимый дескриптор окна")
     {
         return Class {
@@ -140,8 +197,8 @@ pub(super) fn classify(line: &LogLine) -> Class {
             cat: Cat::None,
         };
     }
-    let cat = categorize(&lower);
-    let sev = match line.level {
+    let cat = categorize(lower);
+    let sev = match level {
         log::Level::Error => Sev::Error,
         log::Level::Warn => Sev::Warn,
         log::Level::Debug | log::Level::Trace => Sev::Dim,
@@ -271,45 +328,75 @@ pub(super) fn find_coin(msg: &str, known: &HashSet<String>) -> Option<(Range<usi
     None
 }
 
-/// Build the log-rebuild signature from the application ring revision and an ordered fold of
-/// `log_rev` for cores in scope.
+/// Builds the selected live source's log-rebuild signature.
 ///
-/// A new local or scoped-core line changes the signature; an unchanged signature needs no rebuild.
-pub(super) fn log_sig(b: &Backend, group: &str) -> u64 {
+/// Aggregate folds `log_rev` for cores in scope, Local reads the application ring revision, and a
+/// Core source reads only that core. An unchanged unrelated source therefore cannot rebuild the
+/// active panel.
+pub(super) fn log_sig(b: &Backend, group: &str, source: &LogSource) -> u64 {
     let store = b.session.store();
-    let scoped = !group.is_empty();
-    let cores: u64 = b
-        .session
-        .sessions()
-        .iter()
-        .filter(|s| !scoped || s.group == group)
-        .filter_map(|s| store.core(s.id))
-        .fold(0u64, |a, c| a.wrapping_mul(31).wrapping_add(c.log_rev));
-    applog::revision().wrapping_add(cores)
+    match source {
+        LogSource::Aggregate => {
+            let scoped = !group.is_empty();
+            b.session
+                .sessions()
+                .iter()
+                .filter(|s| !scoped || s.group == group)
+                .filter_map(|s| store.core(s.id))
+                .fold(0u64, |a, c| a.wrapping_mul(31).wrapping_add(c.log_rev))
+        }
+        LogSource::Local => applog::revision(),
+        LogSource::Core(id) => store.core(*id).map_or(0, |core| core.log_rev),
+    }
 }
 
 /// Merge live logs from all scoped core sources in chronological order.
 ///
-/// The fixed timestamp format makes lexicographic `ts` order chronological. Retain only the newest
-/// [`VIEW_LIMIT`] merged lines.
+/// Each core ring is already chronological, so a newest-first k-way merge needs at most
+/// `VIEW_LIMIT` heap pops and clones only the retained output. Equal timestamps preserve the old
+/// stable-sort order: source order first, then original row order within each source.
 pub(super) fn aggregate(store: &CoreStore, sources: &[LogSourceItem]) -> Vec<LogLine> {
-    let mut merged: Vec<LogLine> = Vec::new();
+    let mut tails = Vec::new();
     for item in sources {
         if let LogSource::Core(id) = item.source {
             if let Some(c) = store.core(id) {
-                for mut l in c.log_snapshot(AGG_PER_CORE) {
-                    l.target = item.display.clone();
-                    merged.push(l);
-                }
+                tails.push((item.display.as_str(), c.log.iter().rev().take(AGG_PER_CORE)));
             }
         }
     }
-    merged.sort_by(|a, b| a.ts.cmp(&b.ts));
-    if merged.len() > VIEW_LIMIT {
-        let drop = merged.len() - VIEW_LIMIT;
-        merged.drain(0..drop);
+
+    let mut heads = vec![None; tails.len()];
+    let mut heap = BinaryHeap::with_capacity(tails.len());
+    for (source_ix, (_, tail)) in tails.iter_mut().enumerate() {
+        if let Some(line) = tail.next() {
+            heads[source_ix] = Some(line);
+            heap.push((line.ts.as_str(), source_ix));
+        }
     }
-    merged
+
+    let mut selected = Vec::with_capacity(VIEW_LIMIT);
+    while selected.len() < VIEW_LIMIT {
+        let Some((_, source_ix)) = heap.pop() else {
+            break;
+        };
+        let line = heads[source_ix]
+            .take()
+            .expect("aggregate heap entry must have a matching source head");
+        selected.push((source_ix, line));
+        if let Some(next) = tails[source_ix].1.next() {
+            heads[source_ix] = Some(next);
+            heap.push((next.ts.as_str(), source_ix));
+        }
+    }
+    selected.reverse();
+    selected
+        .into_iter()
+        .map(|(source_ix, line)| {
+            let mut line = line.clone();
+            line.target = tails[source_ix].0.to_string();
+            line
+        })
+        .collect()
 }
 
 /// Return the row's base text color for its severity.
@@ -382,13 +469,11 @@ fn message_spans(
         }
     }
     if coin.is_none() && matches.is_empty() {
-        return vec![
-            div()
-                .flex_none()
-                .text_color(rgb(base))
-                .child(flat.to_string())
-                .into_any_element(),
-        ];
+        return vec![div()
+            .flex_none()
+            .text_color(rgb(base))
+            .child(flat.to_string())
+            .into_any_element()];
     }
     let span = |text: &str, seg: Seg| -> AnyElement {
         match seg {
