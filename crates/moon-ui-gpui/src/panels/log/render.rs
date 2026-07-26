@@ -7,7 +7,8 @@
 //! the row renderer for every visible line on each frame.
 
 use super::*;
-use std::collections::{BinaryHeap, HashSet};
+use moon_core::session::CoreStore;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::ops::Range;
 
 /// Tracks whether backend log revisions should rebuild this panel.
@@ -328,37 +329,172 @@ pub(super) fn find_coin(msg: &str, known: &HashSet<String>) -> Option<(Range<usi
     None
 }
 
+/// Resolve live configured cores belonging to one exact exchange inside the panel scope.
+///
+/// Args:
+///     configured: Configured core ids paired with their window-group names.
+///     live: Core ids with current sessions.
+///     exchange_names: Reported exchange names keyed by core id.
+///     group: Panel window group, or empty for the global scope.
+///     exchange: Exact reported exchange name selected by the user.
+///
+/// Returns:
+///     Core ids present in every membership input.
+fn exchange_members_from<'a>(
+    configured: impl IntoIterator<Item = (CoreId, &'a str)>,
+    live: &HashSet<CoreId>,
+    exchange_names: &HashMap<CoreId, String>,
+    group: &str,
+    exchange: &str,
+) -> HashSet<CoreId> {
+    configured
+        .into_iter()
+        .filter(|(id, configured_group)| {
+            (group.is_empty() || *configured_group == group)
+                && live.contains(id)
+                && exchange_names.get(id).is_some_and(|name| name == exchange)
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// Resolve the current exchange membership shared by rows, refreshes, and chart actions.
+///
+/// Args:
+///     b: Backend containing config, live sessions, and reported exchange identities.
+///     group: Panel window group, or empty for the global scope.
+///     exchange: Exact reported exchange name selected by the user.
+///
+/// Returns:
+///     Live configured core ids belonging to the selected exchange and panel scope.
+pub(super) fn exchange_core_ids(b: &Backend, group: &str, exchange: &str) -> HashSet<CoreId> {
+    let live: HashSet<CoreId> = b
+        .session
+        .sessions()
+        .iter()
+        .map(|session| session.id)
+        .collect();
+    let exchange_names = b.session.market_source().core_exchange_names();
+    exchange_members_from(
+        b.config
+            .servers
+            .iter()
+            .map(|server| (server.id, server.group.as_str())),
+        &live,
+        &exchange_names,
+        group,
+        exchange,
+    )
+}
+
+/// Build one deterministic signature from exact core membership and log revisions.
+///
+/// Args:
+///     store: Current per-core data store.
+///     core_ids: Selected core membership.
+///
+/// Returns:
+///     An order-independent signature that changes when either membership or a selected revision
+///     changes.
+fn selected_core_log_sig(store: &CoreStore, core_ids: &HashSet<CoreId>) -> u64 {
+    let mut core_ids: Vec<CoreId> = core_ids.iter().copied().collect();
+    core_ids.sort_unstable();
+    core_ids.into_iter().fold(0u64, |signature, id| {
+        signature
+            .wrapping_mul(31)
+            .wrapping_add(id)
+            .wrapping_mul(31)
+            .wrapping_add(store.core(id).map_or(0, |core| core.log_rev))
+    })
+}
+
+/// Resolve chart-search candidates without leaving the selected exchange membership.
+///
+/// A row target matching a selected core narrows the search to that core. Otherwise every selected
+/// exchange member remains a fallback candidate in configured order.
+///
+/// Args:
+///     configured: Configured core ids paired with display names.
+///     members: Current selected-exchange membership.
+///     target: Source label attached to the clicked aggregate log row.
+///
+/// Returns:
+///     One exact target or all selected members, never a core outside `members`.
+pub(super) fn exchange_chart_candidates<'a>(
+    configured: impl IntoIterator<Item = (CoreId, &'a str)>,
+    members: &HashSet<CoreId>,
+    target: &str,
+) -> Vec<CoreId> {
+    let candidates: Vec<(CoreId, &'a str)> = configured
+        .into_iter()
+        .filter(|(id, _)| members.contains(id))
+        .collect();
+    candidates
+        .iter()
+        .find(|(_, name)| *name == target)
+        .map(|(id, _)| vec![*id])
+        .unwrap_or_else(|| candidates.into_iter().map(|(id, _)| id).collect())
+}
+
 /// Builds the selected live source's log-rebuild signature.
 ///
-/// Aggregate folds `log_rev` for cores in scope, Local reads the application ring revision, and a
-/// Core source reads only that core. An unchanged unrelated source therefore cannot rebuild the
-/// active panel.
+/// Aggregate and Exchange include exact core membership plus each selected `log_rev`, Local reads
+/// the application ring revision, and a Core source reads only that core. An unchanged unrelated
+/// source therefore cannot rebuild the active panel.
+///
+/// Args:
+///     b: Backend providing live sessions, exchange identities, and log revisions.
+///     group: Panel window group, or empty for the global scope.
+///     source: Currently selected live log source.
+///
+/// Returns:
+///     A deterministic rebuild signature scoped to the selected source.
 pub(super) fn log_sig(b: &Backend, group: &str, source: &LogSource) -> u64 {
     let store = b.session.store();
     match source {
         LogSource::Aggregate => {
             let scoped = !group.is_empty();
-            b.session
+            let core_ids = b
+                .session
                 .sessions()
                 .iter()
                 .filter(|s| !scoped || s.group == group)
-                .filter_map(|s| store.core(s.id))
-                .fold(0u64, |a, c| a.wrapping_mul(31).wrapping_add(c.log_rev))
+                .map(|session| session.id)
+                .collect();
+            selected_core_log_sig(store, &core_ids)
+        }
+        LogSource::Exchange(exchange) => {
+            selected_core_log_sig(store, &exchange_core_ids(b, group, exchange))
         }
         LogSource::Local => applog::revision(),
         LogSource::Core(id) => store.core(*id).map_or(0, |core| core.log_rev),
     }
 }
 
-/// Merge live logs from all scoped core sources in chronological order.
+/// Merge live logs from selected scoped core sources in chronological order.
 ///
 /// Each core ring is already chronological, so a newest-first k-way merge needs at most
 /// `VIEW_LIMIT` heap pops and clones only the retained output. Equal timestamps preserve the old
 /// stable-sort order: source order first, then original row order within each source.
-pub(super) fn aggregate(store: &CoreStore, sources: &[LogSourceItem]) -> Vec<LogLine> {
+///
+/// Args:
+///     store: Current per-core data store.
+///     sources: Canonically ordered scoped source entries.
+///     allowed: Optional selected core membership; `None` includes every core source.
+///
+/// Returns:
+///     At most `VIEW_LIMIT` newest rows across the allowed core sources.
+pub(super) fn aggregate(
+    store: &CoreStore,
+    sources: &[LogSourceItem],
+    allowed: Option<&HashSet<CoreId>>,
+) -> Vec<LogLine> {
     let mut tails = Vec::new();
     for item in sources {
         if let LogSource::Core(id) = item.source {
+            if allowed.is_some_and(|allowed| !allowed.contains(&id)) {
+                continue;
+            }
             if let Some(c) = store.core(id) {
                 tails.push((item.display.as_str(), c.log.iter().rev().take(AGG_PER_CORE)));
             }

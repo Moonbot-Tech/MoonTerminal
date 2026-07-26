@@ -30,6 +30,29 @@ impl ReportPanel {
         self.request_requery(cx);
     }
 
+    /// Toggle every still-available core from one clicked exchange section.
+    ///
+    /// Empty means All before the click, so the first exchange selection becomes explicit. A
+    /// fully selected exchange is removed without changing selections from other exchanges.
+    /// Database cores that disappeared after rendering are ignored.
+    ///
+    /// Args:
+    ///     exchange_cores: Core ids captured from one rendered exchange section.
+    ///     cx: Panel context used to request a filtered database query.
+    ///
+    /// Returns:
+    ///     Nothing; a changed selection schedules one requery, while a stale-only batch is a no-op.
+    pub(super) fn toggle_exchange_cores(
+        &mut self,
+        exchange_cores: Vec<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        let available = self.cores.iter().map(|(core, _)| *core).collect();
+        if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
+            self.request_requery(cx);
+        }
+    }
+
     /// Set the filter to only the clicked Core-cell UID, or clear it when already the sole selection.
     ///
     /// This matches Core-cell filtering in Orders and Assets.

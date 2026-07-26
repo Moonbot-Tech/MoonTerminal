@@ -1,10 +1,11 @@
 //! Log panel ported from egui's `src/dock/log_panel.rs`, with source and file selection, text and
 //! coin filters, and an errors-only mode.
 //!
-//! Sources are the live aggregate of in-scope core logs, the local application's `applog` ring, and
-//! each configured core's `CoreData.log` ring. Local and single-core sources can show either Live or
-//! a rotated `logs/<date>_<source>.log` file; Aggregate is Live-only. `MoonVirtualList` virtualizes
-//! rows, and effective follow mode keeps filtered output at the tail.
+//! Sources are live aggregates of all in-scope cores or one reported exchange, the local
+//! application's `applog` ring, and each configured core's `CoreData.log` ring. Local and
+//! single-core sources can show either Live or a rotated `logs/<date>_<source>.log` file; aggregate
+//! sources are Live-only. `MoonVirtualList` virtualizes rows, and effective follow mode keeps
+//! filtered output at the tail.
 //!
 //! State, row collection, filtering, and lifecycle live here; source and file selectors are in
 //! [`controls`]; signatures, aggregation, classification, and row rendering are in [`render`].
@@ -25,7 +26,8 @@ use rust_i18n::t;
 use crate::core_order::CoreOrder;
 use crate::Backend;
 use moon_core::applog::{self, LogLine};
-use moon_core::session::{CoreId, CoreStore};
+use moon_core::session::CoreId;
+use std::collections::HashSet;
 
 /// Maximum number of recent rows retained in a normal live or file snapshot.
 const VIEW_LIMIT: usize = 5000;
@@ -40,8 +42,27 @@ const PAUSED_CAP: usize = 20_000;
 #[derive(Clone, PartialEq)]
 pub(super) enum LogSource {
     Aggregate,
+    Exchange(String),
     Local,
     Core(CoreId),
+}
+
+/// Return whether an exchange source's current membership requires replacing cached rows.
+///
+/// A non-exchange source has no exchange membership to invalidate. The first exchange snapshot and
+/// every later membership change replace the buffer even while follow mode is paused.
+///
+/// Args:
+///     previous: Membership recorded by the previous reload, if it was an exchange source.
+///     current: Membership resolved for the current reload, if it is an exchange source.
+///
+/// Returns:
+///     `true` when the current exchange membership is new or changed.
+fn exchange_membership_changed(
+    previous: Option<&HashSet<CoreId>>,
+    current: Option<&HashSet<CoreId>>,
+) -> bool {
+    current.is_some() && previous != current
 }
 
 /// Whether to show live in-memory rows or a named rotated file from disk.
@@ -58,6 +79,7 @@ pub(super) struct LogSourceItem {
     pub(super) file_label: String,
 }
 
+/// Stateful dock, detached-window, or group-window Log panel.
 pub struct LogPanel {
     pub(super) backend: Entity<Backend>,
     pub(super) group: String,
@@ -75,6 +97,8 @@ pub struct LogPanel {
     available_files: Vec<String>,
     /// Unfiltered rows for the current source and file, updated outside `render`.
     raw_lines: Vec<LogLine>,
+    /// Exchange membership used by `raw_lines`; a membership change invalidates paused history.
+    exchange_membership: Option<HashSet<CoreId>>,
     /// Filtered render rows indexed by the virtual list. Classification and coin detection are
     /// precomputed in `apply_filter` rather than repeated for each rendered frame.
     lines: Vec<render::LineView>,
@@ -141,6 +165,7 @@ impl LogPanel {
             available_files_label: None,
             available_files: Vec::new(),
             raw_lines: Vec::new(),
+            exchange_membership: None,
             lines: Vec::new(),
             total: 0,
             live: true,
@@ -209,19 +234,43 @@ impl LogPanel {
         self.available_files_label = Some(label.to_string());
     }
 
-    /// Collects rows for the current selection. Live reads the local ring, one core ring, or the
-    /// merged core aggregate; Named reads and then caches at most `VIEW_LIMIT` rows from disk.
-    fn gather(&mut self, store: &CoreStore, sources: &[LogSourceItem]) -> Vec<LogLine> {
+    /// Collects rows for the current selection. Live reads the local ring, one core ring, every
+    /// scoped core, or the selected exchange's current membership. Named reads and then caches at
+    /// most `VIEW_LIMIT` rows from disk.
+    ///
+    /// Args:
+    ///     b: Backend providing live core stores and file-independent source state.
+    ///     sources: Canonically ordered source entries in the panel scope.
+    ///     exchange_membership: Pre-resolved membership for an Exchange source.
+    ///
+    /// Returns:
+    ///     The selected source's bounded live snapshot or cached named-file rows.
+    fn gather(
+        &mut self,
+        b: &Backend,
+        sources: &[LogSourceItem],
+        exchange_membership: Option<&HashSet<CoreId>>,
+    ) -> Vec<LogLine> {
         match &self.file {
             LogFile::Live => {
                 self.loaded_name = None;
                 match &self.source {
                     LogSource::Local => applog::snapshot(VIEW_LIMIT),
-                    LogSource::Core(id) => store
+                    LogSource::Core(id) => b
+                        .session
+                        .store()
                         .core(*id)
                         .map(|c| c.log_snapshot(VIEW_LIMIT))
                         .unwrap_or_default(),
-                    LogSource::Aggregate => render::aggregate(store, sources),
+                    LogSource::Aggregate => render::aggregate(b.session.store(), sources, None),
+                    LogSource::Exchange(_) => render::aggregate(
+                        b.session.store(),
+                        sources,
+                        Some(
+                            exchange_membership
+                                .expect("exchange source reload must resolve membership"),
+                        ),
+                    ),
                 }
             }
             LogFile::Named(name) => {
@@ -326,34 +375,55 @@ impl LogPanel {
         }
     }
 
-    /// Handles a ticker right-click by requesting its chart on Main. A Core source searches only
-    /// that core; Aggregate first resolves the row's `target` to a configured core; unresolved
-    /// Aggregate and Local rows scan configured cores in scope. Each candidate uses market search
-    /// for `base` and the first result rather than guessing a quote suffix. Main is not activated.
+    /// Handles a ticker right-click by requesting its chart on Main.
+    ///
+    /// A Core source searches only that core. Aggregate first resolves the row's `target` to a
+    /// configured core, while Exchange does the same strictly inside its current membership.
+    /// Unresolved aggregate sources and Local scan their allowed cores. Each candidate uses market
+    /// search for `base` and the first result rather than guessing a quote suffix. Main is not
+    /// activated.
+    ///
+    /// Args:
+    ///     base: Detected base ticker from the clicked log line.
+    ///     target: Core display name attached to the aggregate log row.
+    ///     cx: Panel context used to read market data and publish the chart request.
+    ///
+    /// Returns:
+    ///     Nothing.
     pub(super) fn open_coin_chart(&mut self, base: String, target: String, cx: &mut Context<Self>) {
         let resolved = {
             let b = self.backend.read(cx);
             let ms = b.session.market_source();
-            let core = match &self.source {
-                LogSource::Core(id) => Some(*id),
+            let scoped = !self.group.is_empty();
+            let scoped_candidates = || {
+                b.config
+                    .servers
+                    .iter()
+                    .filter(|server| !scoped || server.group == self.group)
+                    .map(|server| server.id)
+                    .collect::<Vec<_>>()
+            };
+            let candidates = match &self.source {
+                LogSource::Core(id) => vec![*id],
+                LogSource::Exchange(exchange) => {
+                    let members = render::exchange_core_ids(b, &self.group, exchange);
+                    render::exchange_chart_candidates(
+                        b.config
+                            .servers
+                            .iter()
+                            .map(|server| (server.id, server.name.as_str())),
+                        &members,
+                        &target,
+                    )
+                }
                 LogSource::Aggregate => b
                     .config
                     .servers
                     .iter()
-                    .find(|s| s.name == target)
-                    .map(|s| s.id),
-                LogSource::Local => None,
-            };
-            let scoped = !self.group.is_empty();
-            let candidates: Vec<CoreId> = match core {
-                Some(id) => vec![id],
-                None => b
-                    .config
-                    .servers
-                    .iter()
-                    .filter(|s| !scoped || s.group == self.group)
-                    .map(|s| s.id)
-                    .collect(),
+                    .find(|server| (!scoped || server.group == self.group) && server.name == target)
+                    .map(|server| vec![server.id])
+                    .unwrap_or_else(scoped_candidates),
+                LogSource::Local => scoped_candidates(),
             };
             candidates.into_iter().find_map(|id| {
                 ms.search_markets(id, &base, 1)
@@ -372,17 +442,38 @@ impl LogPanel {
     }
 
     /// Reloads the selected source, records its revision, and reapplies the current filters.
+    ///
+    /// A paused buffer retains ordinary new suffix rows, but an exchange membership change replaces
+    /// it so departed-core rows cannot remain under the selected exchange label.
+    ///
+    /// Args:
+    ///     b: Backend providing source revisions, live memberships, and log rows.
+    ///     cx: Application context used to rebuild filtered render rows.
+    ///
+    /// Returns:
+    ///     Nothing.
     fn reload_rows(&mut self, b: &Backend, cx: &App) {
         self.refresh
             .record_reload(render::log_sig(b, &self.group, &self.source));
         let sources = self.sources(b);
-        let is_agg = matches!(self.source, LogSource::Aggregate);
+        let is_agg = matches!(self.source, LogSource::Aggregate | LogSource::Exchange(_));
         if !is_agg {
             let label = self.file_label(&sources);
             self.refresh_available_files(&label);
         }
-        let fresh = self.gather(b.session.store(), &sources);
-        if self.following() {
+        let exchange_membership = match &self.source {
+            LogSource::Exchange(exchange) => {
+                Some(render::exchange_core_ids(b, &self.group, exchange))
+            }
+            LogSource::Aggregate | LogSource::Local | LogSource::Core(_) => None,
+        };
+        let membership_changed = exchange_membership_changed(
+            self.exchange_membership.as_ref(),
+            exchange_membership.as_ref(),
+        );
+        self.exchange_membership = exchange_membership.clone();
+        let fresh = self.gather(b, &sources, exchange_membership.as_ref());
+        if self.following() || membership_changed {
             // Effective follow replaces the buffer with the current bounded snapshot.
             self.raw_lines = fresh;
         } else {
@@ -514,6 +605,13 @@ impl Panel for LogPanel {
 
 impl Render for LogPanel {
     /// Renders the panel and activates direct detached-window hosts on their first frame.
+    ///
+    /// Args:
+    ///     _window: Host window; rendering needs no direct window operations.
+    ///     cx: Panel context used for backend reads, controls, and deferred reloads.
+    ///
+    /// Returns:
+    ///     The complete responsive Log panel element tree.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.refresh.is_active() {
             self.set_refresh_active(true, cx);
@@ -524,7 +622,7 @@ impl Render for LogPanel {
         let p = MoonPalette::active(cx);
 
         let sources = self.sources(self.backend.read(cx));
-        let is_agg = matches!(self.source, LogSource::Aggregate);
+        let is_agg = matches!(self.source, LogSource::Aggregate | LogSource::Exchange(_));
         let total = self.total;
 
         // Build the wrapping filter and follow controls.

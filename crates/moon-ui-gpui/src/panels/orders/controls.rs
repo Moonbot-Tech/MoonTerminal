@@ -8,7 +8,8 @@ impl OrdersPanel {
     /// [`crate::controls::core_combo`].
     ///
     /// Its fixed-width label shows All Cores for an empty or complete selection and the localized
-    /// current-core count otherwise, including a sole selection.
+    /// current-core count otherwise, including a sole selection. Clicking a known exchange header
+    /// batch-toggles its currently available cores.
     ///
     /// Args:
     ///     cores: Group cores in canonical display order.
@@ -22,6 +23,7 @@ impl OrdersPanel {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity();
+        let exchange_view = view.clone();
         let exchange_names = self
             .backend
             .read(cx)
@@ -38,6 +40,11 @@ impl OrdersPanel {
             170.0,
             move |id, app| {
                 view.update(app, |t, c| t.toggle_core(id, c));
+            },
+            move |exchange_cores, app| {
+                exchange_view.update(app, |t, c| {
+                    t.toggle_exchange_cores(exchange_cores, c);
+                });
             },
         )
     }

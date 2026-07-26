@@ -7,7 +7,8 @@ impl LogPanel {
     /// Build the pseudo-source-first, exchange-grouped log-source dropdown.
     ///
     /// A removed selected core remains visible as its numeric id until the user chooses another
-    /// source, rather than being mislabeled as Local.
+    /// source, rather than being mislabeled as Local. Known exchange headers select a live
+    /// aggregate for that exchange; the unknown-exchange header remains passive.
     ///
     /// Args:
     ///     sources: Available aggregate, local, and core log sources.
@@ -24,15 +25,16 @@ impl LogPanel {
             .iter()
             .find(|s| s.source == self.source)
             .map(|s| s.display.clone())
-            .unwrap_or_else(|| match self.source {
+            .unwrap_or_else(|| match &self.source {
                 LogSource::Core(core) => format!("#{core}"),
+                LogSource::Exchange(exchange) => exchange.clone(),
                 LogSource::Aggregate | LogSource::Local => t!("log.source.local").to_string(),
             });
         let cores: Vec<(CoreId, String)> = sources
             .iter()
-            .filter_map(|item| match item.source {
-                LogSource::Core(core) => Some((core, item.display.clone())),
-                LogSource::Aggregate | LogSource::Local => None,
+            .filter_map(|item| match &item.source {
+                LogSource::Core(core) => Some((*core, item.display.clone())),
+                LogSource::Aggregate | LogSource::Exchange(_) | LogSource::Local => None,
             })
             .collect();
         let exchange_names = self
@@ -65,16 +67,33 @@ impl LogPanel {
         if !sections.is_empty() {
             items.push(MoonMenuItem::separator());
         }
-        for (exchange, members) in &sections {
-            items.push(MoonMenuItem::label(
-                exchange.unwrap_or(unknown_exchange.as_str()),
-            ));
+        for (section_index, (exchange, members)) in sections.into_iter().enumerate() {
+            let exchange_label = exchange.unwrap_or(unknown_exchange.as_str());
+            if exchange.is_some() {
+                let selected = matches!(&self.source, LogSource::Exchange(current) if current == exchange_label);
+                let source = exchange_label.to_string();
+                let item_view = view.clone();
+                items.push(
+                    MoonMenuItem::action_label(
+                        format!("ls-exchange-{section_index}"),
+                        exchange_label,
+                    )
+                    .selected(selected)
+                    .on_click(move |_, _, app| {
+                        let source = source.clone();
+                        item_view.update(app, |this, cx| {
+                            this.set_source(LogSource::Exchange(source), cx);
+                        });
+                    }),
+                );
+            } else {
+                items.push(MoonMenuItem::label(exchange_label));
+            }
             for (core, name) in members {
-                let core = *core;
                 let selected = self.source == LogSource::Core(core);
                 let item_view = view.clone();
                 items.push(
-                    MoonMenuItem::with_key(format!("ls-core-{core}"), *name)
+                    MoonMenuItem::with_key(format!("ls-core-{core}"), name)
                         .selected(selected)
                         .on_click(move |_, _, app| {
                             item_view.update(app, |this, cx| {

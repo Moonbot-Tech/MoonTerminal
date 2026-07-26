@@ -204,6 +204,36 @@ impl CoreStatusView {
         self.rebuild_cache(b.read(cx));
         cx.notify();
     }
+
+    /// Toggle every still-available core from one clicked exchange section.
+    ///
+    /// Empty means All before the click, so the first exchange selection becomes explicit. A
+    /// fully selected exchange is removed without changing selections from other exchanges.
+    /// Rendered ids that left this panel's group are ignored.
+    ///
+    /// Args:
+    ///     exchange_cores: Core ids captured from one rendered exchange section.
+    ///     cx: View context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; a changed selection rebuilds the cache once, while a stale-only batch is a
+    ///     no-op.
+    pub(super) fn toggle_exchange_cores(
+        &mut self,
+        exchange_cores: Vec<CoreId>,
+        cx: &mut Context<Self>,
+    ) {
+        let available = self
+            .scope_cores(self.backend.read(cx))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
+            let backend = self.backend.clone();
+            self.rebuild_cache(backend.read(cx));
+            cx.notify();
+        }
+    }
 }
 
 /// Return a compact connection-status contribution to the cache signature.
@@ -307,6 +337,8 @@ impl Render for CoreStatusView {
 impl CoreStatusView {
     /// Render the core multi-selector in the top bar.
     ///
+    /// Clicking a known exchange header batch-toggles its currently available group cores.
+    ///
     /// Args:
     ///     cores: Scoped cores in canonical display order.
     ///     cx: View context used to read exchanges and wire selection callbacks.
@@ -315,6 +347,7 @@ impl CoreStatusView {
     ///     The top-bar row containing the fixed-trigger dropdown.
     fn core_bar(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        let exchange_view = view.clone();
         let exchange_names = self
             .backend
             .read(cx)
@@ -331,6 +364,11 @@ impl CoreStatusView {
             170.0,
             move |id, app| {
                 view.update(app, |t, c| t.toggle_core(id, c));
+            },
+            move |exchange_cores, app| {
+                exchange_view.update(app, |t, c| {
+                    t.toggle_exchange_cores(exchange_cores, c);
+                });
             },
         );
         h_flex()

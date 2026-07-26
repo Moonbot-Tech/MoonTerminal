@@ -272,6 +272,36 @@ impl OrdersPanel {
         cx.notify();
     }
 
+    /// Toggle every still-available core from one clicked exchange section.
+    ///
+    /// Empty means All before the click, so the first exchange selection becomes explicit. A
+    /// fully selected exchange is removed without changing selections from other exchanges.
+    /// Rendered ids that left this panel's group are ignored.
+    ///
+    /// Args:
+    ///     exchange_cores: Core ids captured from one rendered exchange section.
+    ///     cx: Panel context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; a changed selection rebuilds the cache once, while a stale-only batch is a
+    ///     no-op.
+    pub(super) fn toggle_exchange_cores(
+        &mut self,
+        exchange_cores: Vec<CoreId>,
+        cx: &mut Context<Self>,
+    ) {
+        let available = self
+            .group_cores(self.backend.read(cx))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
+            let backend = self.backend.clone();
+            self.rebuild_cache(backend.read(cx));
+            cx.notify();
+        }
+    }
+
     /// Set the filter to exactly one core after a Core-cell click, or clear it when that core is
     /// already the sole selection. Unlike [`Self::toggle_core`], this is not a multi-select toggle.
     pub(super) fn filter_to_core(&mut self, id: CoreId, cx: &mut Context<Self>) {

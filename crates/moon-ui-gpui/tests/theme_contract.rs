@@ -925,6 +925,152 @@ fn fn_body<'a>(source: &'a str, signature: &str) -> &'a str {
     after.split("\n}\n").next().unwrap_or(after)
 }
 
+/// Return one brace-delimited function or method body, including its signature.
+///
+/// Args:
+///     source: Rust source containing the target function or method.
+///     signature: Unique signature prefix that appears before the target's opening brace.
+///
+/// Returns:
+///     The source slice from the signature through its matching closing brace.
+fn braced_body<'a>(source: &'a str, signature: &str) -> &'a str {
+    let start = source
+        .find(signature)
+        .unwrap_or_else(|| panic!("expected to find `{signature}` in the source"));
+    let open = source[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .unwrap_or_else(|| panic!("expected `{signature}` to have a body"));
+    let mut depth = 0usize;
+    for (offset, byte) in source.as_bytes()[open..].iter().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &source[start..=open + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("expected `{signature}` to have a matching closing brace");
+}
+
+/// Protect every shared multi-select core picker from regressing to passive exchange labels.
+///
+/// Regression target: replacing one panel's `core_combo` batch callback with an individual-only
+/// selector leaves that panel's exchange headers inert while Analytics continues to work. The
+/// handler assertions also catch moving refresh work outside the helper's changed-selection guard
+/// or duplicating it, which would requery or rebuild once per exchange member.
+#[test]
+fn shared_core_selectors_batch_exchange_changes_once() {
+    let selector_cases = [
+        (
+            "Analytics",
+            "analytics/toolbar.rs",
+            "fn core_combo(",
+            "t.toggle_exchange_cores(exchange_cores, c);",
+        ),
+        (
+            "Orders",
+            "panels/orders/controls.rs",
+            "pub(super) fn source_combo(",
+            "t.toggle_exchange_cores(exchange_cores, c);",
+        ),
+        (
+            "Report",
+            "panels/report/controls.rs",
+            "pub(super) fn core_combo(",
+            "t.toggle_exchange_cores(exchange_cores, c);",
+        ),
+        (
+            "Assets",
+            "panels/assets/table.rs",
+            "pub(super) fn core_combo(",
+            "t.toggle_exchange_cores(exchange_cores, c);",
+        ),
+        (
+            "Core Status",
+            "panels/core_status/mod.rs",
+            "fn core_bar(",
+            "t.toggle_exchange_cores(exchange_cores, c);",
+        ),
+    ];
+    for (panel, path, signature, callback) in selector_cases {
+        let source = read_src(path);
+        let body = braced_body(&source, signature);
+        assert!(
+            body.contains("crate::controls::core_combo(") && body.contains(callback),
+            "{panel} must wire its exchange row to one batch-selection callback"
+        );
+    }
+
+    let shared = read_src("controls/core_combo.rs");
+    let shared_body = braced_body(&shared, "pub(crate) fn core_combo<");
+    assert!(
+        shared_body.contains("MoonMenuItem::action_label(")
+            && shared_body.contains("if exchange.is_some()")
+            && shared_body.contains("let exchange_cores = section_core_ids(&members);")
+            && shared_body.contains("MoonMenuItem::label(exchange_label)"),
+        "known exchanges must submit every section member while the unknown section remains a label"
+    );
+
+    let handler_cases: [(&str, &str, &str, &[&str]); 4] = [
+        (
+            "Orders",
+            "panels/orders/mod.rs",
+            "pub(super) fn toggle_exchange_cores(",
+            &["self.rebuild_cache(", "cx.notify()"],
+        ),
+        (
+            "Report",
+            "panels/report/actions.rs",
+            "pub(super) fn toggle_exchange_cores(",
+            &["self.request_requery("],
+        ),
+        (
+            "Assets",
+            "panels/assets/mod.rs",
+            "pub(super) fn toggle_exchange_cores(",
+            &["self.rebuild_cache(", "cx.notify()"],
+        ),
+        (
+            "Core Status",
+            "panels/core_status/mod.rs",
+            "pub(super) fn toggle_exchange_cores(",
+            &["self.rebuild_cache(", "cx.notify()"],
+        ),
+    ];
+    for (panel, path, signature, effects) in handler_cases {
+        let source = read_src(path);
+        let body = braced_body(&source, signature);
+        assert!(
+            body.contains("if crate::controls::toggle_exchange_cores("),
+            "{panel} must skip downstream work for a stale-only exchange batch"
+        );
+        let changed_branch = braced_body(body, "if crate::controls::toggle_exchange_cores(");
+        assert!(
+            !changed_branch.contains("for ")
+                && !changed_branch.contains("while ")
+                && !changed_branch.contains(".for_each("),
+            "{panel} must not repeat downstream work per exchange member"
+        );
+        for effect in effects {
+            assert_eq!(
+                changed_branch.matches(effect).count(),
+                1,
+                "{panel} must perform `{effect}` once inside the changed-selection guard"
+            );
+            assert_eq!(
+                body.matches(effect).count(),
+                changed_branch.matches(effect).count(),
+                "{panel} must not perform `{effect}` outside the changed-selection guard"
+            );
+        }
+    }
+}
+
 #[test]
 fn status_bar_connection_and_license_are_localized() {
     // Neither caption is on the deliberately-untranslated list in locales/README.md, so an English
@@ -997,6 +1143,50 @@ fn status_bar_keeps_three_glanceable_groups() {
             );
         }
     }
+}
+
+/// `panels/log/controls.rs:source_combo` replacing the known exchange action with a label would
+/// leave the Log tab's exchange headings inert even though the shared core selectors still work.
+#[test]
+fn log_exchange_headers_select_a_live_exchange_aggregate() {
+    let controls = read_src("panels/log/controls.rs");
+    let combo = braced_body(&controls, "pub(super) fn source_combo(");
+    let known_exchange = braced_body(combo, "if exchange.is_some()");
+    let unknown_exchange = braced_body(combo, "} else {");
+    assert!(
+        known_exchange.contains("MoonMenuItem::action_label(")
+            && known_exchange.contains("this.set_source(LogSource::Exchange(source), cx);")
+            && !known_exchange.contains("MoonMenuItem::label(exchange_label)")
+            && unknown_exchange.contains("MoonMenuItem::label(exchange_label)")
+            && !unknown_exchange.contains("MoonMenuItem::action_label("),
+        "known Log exchange headers must select an exchange source while Unknown stays passive"
+    );
+
+    let panel = read_src("panels/log/mod.rs");
+    let gather = braced_body(&panel, "fn gather(");
+    let reload = braced_body(&panel, "fn reload_rows(");
+    assert!(
+        panel.contains("Exchange(String)")
+            && gather.contains("LogSource::Exchange(_)")
+            && gather.contains("exchange_membership")
+            && panel
+                .matches("LogSource::Aggregate | LogSource::Exchange(_)")
+                .count()
+                == 2
+            && reload.contains("render::exchange_core_ids(")
+            && reload.contains("exchange_membership_changed(")
+            && reload.contains("self.following() || membership_changed"),
+        "the selected Log exchange source must gather only its current live membership"
+    );
+
+    let render = read_src("panels/log/render.rs");
+    let signature = braced_body(&render, "pub(super) fn log_sig(");
+    assert!(
+        signature.contains("LogSource::Exchange(exchange)")
+            && signature.contains("selected_core_log_sig(")
+            && render.contains("pub(super) fn exchange_chart_candidates"),
+        "exchange rows, refresh signatures, and chart candidates must share exchange scope"
+    );
 }
 
 #[test]

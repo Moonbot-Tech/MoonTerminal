@@ -128,6 +128,8 @@ impl AssetsView {
 
     /// Render the shared exchange-grouped core multi-selector with its localized summary label.
     ///
+    /// Clicking a known exchange header batch-toggles its currently available scoped cores.
+    ///
     /// Args:
     ///     cores: Scoped cores in canonical display order.
     ///     cx: View context used to read exchanges and wire selection callbacks.
@@ -136,6 +138,7 @@ impl AssetsView {
     ///     The configured fixed-trigger dropdown.
     pub(super) fn core_combo(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        let exchange_view = view.clone();
         let exchange_names = self
             .backend
             .read(cx)
@@ -152,6 +155,11 @@ impl AssetsView {
             170.0,
             move |id, app| {
                 view.update(app, |t, c| t.toggle_core(id, c));
+            },
+            move |exchange_cores, app| {
+                exchange_view.update(app, |t, c| {
+                    t.toggle_exchange_cores(exchange_cores, c);
+                });
             },
         )
     }
