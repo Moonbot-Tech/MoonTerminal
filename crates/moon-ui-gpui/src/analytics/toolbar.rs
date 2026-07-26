@@ -168,7 +168,7 @@ impl AnalyticsView {
             .items(items)
     }
 
-    /// Render the exchange-grouped core multi-selector with Analytics-only batch toggles.
+    /// Render the shared exchange-grouped core multi-selector with batch toggles.
     ///
     /// Args:
     ///     cx: Analytics context used to read current cores and wire selection callbacks.
@@ -187,7 +187,7 @@ impl AnalyticsView {
             )
         };
         let toggle_view = view.clone();
-        crate::controls::core_combo_with_exchange_toggle(
+        crate::controls::core_combo(
             "an-core",
             &cores,
             &exchange_names,

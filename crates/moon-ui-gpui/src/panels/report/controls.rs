@@ -7,7 +7,8 @@ use rust_i18n::t;
 impl ReportPanel {
     /// Render the shared multi-select core combo.
     ///
-    /// An empty set means all cores; every partial selection shows the selected count.
+    /// An empty set means all cores; every partial selection shows the selected count. Clicking a
+    /// known exchange header batch-toggles its currently available database cores.
     ///
     /// Args:
     ///     cx: Panel context used to order database cores, read exchanges, and wire callbacks.
@@ -16,6 +17,7 @@ impl ReportPanel {
     ///     The configured fixed-trigger dropdown.
     pub(super) fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        let exchange_view = view.clone();
         // Rank the raw DB result at render time; the query has no config and may include
         // deleted cores with database-owned names.
         let (cores, exchange_names) = {
@@ -35,6 +37,11 @@ impl ReportPanel {
             180.0,
             move |uid, app| {
                 view.update(app, |t, c| t.toggle_core(uid, c));
+            },
+            move |exchange_cores, app| {
+                exchange_view.update(app, |t, c| {
+                    t.toggle_exchange_cores(exchange_cores, c);
+                });
             },
         )
     }

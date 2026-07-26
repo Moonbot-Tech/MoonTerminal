@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    core_menu_sections, normalized_core_filter_ids, selection_summary, toggle_all_core_selection,
-    toggle_exchange_cores,
+    core_menu_sections, normalized_core_filter_ids, section_core_ids, selection_summary,
+    toggle_all_core_selection, toggle_exchange_cores,
 };
 
 /// `core_combo.rs:core_menu_sections` must keep unidentified cores first, sort exchange sections,
@@ -45,6 +45,16 @@ fn menu_sections_are_unknown_first_alphabetical_and_member_stable() {
             (Some("Bybit"), vec![1, 4]),
         ]
     );
+}
+
+/// `core_combo.rs:section_core_ids` must forward every rendered exchange member to the batch
+/// callback in canonical order. Adding `.take(1)` makes a group-header click toggle only its first
+/// core while the remaining checkboxes stay unchanged.
+#[test]
+fn section_batch_includes_every_member_in_order() {
+    let members = [(7, "First"), (11, "Second"), (19, "Third")];
+
+    assert_eq!(section_core_ids(&members), vec![7, 11, 19]);
 }
 
 /// `core_combo.rs:selection_summary` must format a one-core partial selection as a count. Restoring
