@@ -605,11 +605,13 @@ fn message_spans(
         }
     }
     if coin.is_none() && matches.is_empty() {
-        return vec![div()
-            .flex_none()
-            .text_color(rgb(base))
-            .child(flat.to_string())
-            .into_any_element()];
+        return vec![
+            div()
+                .flex_none()
+                .text_color(rgb(base))
+                .child(flat.to_string())
+                .into_any_element(),
+        ];
     }
     let span = |text: &str, seg: Seg| -> AnyElement {
         match seg {

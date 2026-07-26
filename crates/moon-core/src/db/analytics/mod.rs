@@ -31,8 +31,8 @@ pub use groups::{coin_groups, strategies_for_coins, GroupStat, KindCore, KindSta
 pub use query::Query;
 
 pub(in crate::db) use groups::{coin_groups_on, strategies_for_coins_on};
-pub(in crate::db) use query::{attach_strategies, unified_from};
 use groups::{groups, kind_stats, top_trades};
+pub(in crate::db) use query::{attach_strategies, unified_from};
 use query::{effective_sid_expr, strategies_attached, WHERE_UNDATED};
 
 /// Period totals: counters and metrics computed from the trade sequence ordered by

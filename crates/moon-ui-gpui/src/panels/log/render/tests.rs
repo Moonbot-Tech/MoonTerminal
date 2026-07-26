@@ -2,11 +2,11 @@
 // re-export, whose `test` shadows the built-in attribute and makes `#[test]` expand
 // recursively ("recursion limit reached").
 use super::{
-    aggregate, classify_lower, exchange_chart_candidates, exchange_members_from,
-    selected_core_log_sig, LineView, RefreshGate,
+    LineView, RefreshGate, aggregate, classify_lower, exchange_chart_candidates,
+    exchange_members_from, selected_core_log_sig,
 };
 use crate::panels::log::{
-    exchange_membership_changed, LogSource, LogSourceItem, AGG_PER_CORE, VIEW_LIMIT,
+    AGG_PER_CORE, LogSource, LogSourceItem, VIEW_LIMIT, exchange_membership_changed,
 };
 use moon_core::applog::LogLine;
 use moon_core::session::CoreStore;

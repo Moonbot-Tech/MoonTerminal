@@ -173,7 +173,11 @@ const UNIFIED_COLS: &[&str] = &[
 /// Returns the plain column whenever attribution is off, the strategy database is not
 /// attached, or the source lacks a column this needs — a source that cannot answer must not
 /// be made to guess.
-pub(super) fn effective_sid_expr(alias: &str, cols: &std::collections::HashSet<String>, on: bool) -> String {
+pub(super) fn effective_sid_expr(
+    alias: &str,
+    cols: &std::collections::HashSet<String>,
+    on: bool,
+) -> String {
     let plain = format!("{alias}.\"strategyid\"");
     // EVERY column the expression names. `core_uid` belongs here as much as the rest: a legacy
     // source can lack it (the projection right below emits `NULL AS "core_uid"` for exactly
