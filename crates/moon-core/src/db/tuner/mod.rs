@@ -468,14 +468,22 @@ fn variant_stats_on(
         .collect()
 }
 
-/// Scan one variant in `closedate` order, failing if any metric row is unreadable.
+/// Scan one variant in chronological order, failing if any metric row is unreadable.
+///
+/// The ordering has to be TOTAL, not merely chronological. `max_dd` reads the cumulative
+/// profit curve, so it depends on the row SEQUENCE and not just on the row set — yet the
+/// source is a UNION with no unique key, which leaves rows sharing a `closedate` in whatever
+/// order the query plan happens to emit them. Sorting by the two columns the scan actually
+/// reads makes the order total over everything observable here, so the reported drawdown
+/// stops moving with the plan.
 fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> ReadResult<VarStats> {
     const CTX: &str = "tuner: one_variant";
     let mut st = VarStats::default();
     let wh = v.where_sql();
     let sql = format!(
         "SELECT COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)
-         FROM {src} WHERE 1=1{wh} ORDER BY o.closedate"
+         FROM {src} WHERE 1=1{wh}
+         ORDER BY o.closedate, COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
     let rows = stmt
