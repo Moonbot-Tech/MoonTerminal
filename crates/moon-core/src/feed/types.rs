@@ -629,6 +629,8 @@ pub struct ClientSettings {
     /// Extended TP range from the `x_tmode` or `s9` flag: off means 0..100%, on means 100..900%,
     /// stored on the wire as `x_sell * 10`. This determines the slider range and popup checkbox.
     pub take_profit_extended: bool,
+    /// Exact main-TP encoding, including scalp mode where `x_sell == 0`.
+    pub take_profit_mode: crate::config::TakeProfitMode,
     /// Whether fixed-sell mode is enabled.
     pub fixed_sell_mode: bool,
     /// Stop-loss / price-drop level, % (`price_drop_level`).
@@ -663,6 +665,21 @@ pub struct ClientSettings {
     pub use_manual_strategy: bool,
     /// Selected manual-strategy ID from `manual_strategy_id`; `0` means none is selected.
     pub manual_strategy_id: u64,
+}
+
+impl ClientSettings {
+    /// Project visible core values into the group-local manual-exit contract.
+    pub fn group_exit_settings(&self) -> crate::config::GroupExitSettings {
+        crate::config::GroupExitSettings {
+            take_profit_pct: self.take_profit_main_pct,
+            take_profit_mode: self.take_profit_mode,
+            fixed_sell_pcts: self.fixed_sell_pcts,
+            fixed_sell_slot: self.fixed_sell_mode.then_some(self.fixed_sell_slot),
+            stop_loss_pct: self.stop_loss_pct,
+            stop_loss_enabled: self.panic_if_price_drop,
+            use_stop_market: self.use_stop_market,
+        }
+    }
 }
 
 /// Core leverage-management settings from moonproto `LevManage`, kept as a separate snapshot as in
@@ -835,7 +852,7 @@ pub enum FeedMsg {
     /// Core exchange from `server_info` after BaseCheck, sent once.
     Identity(ExchangeId),
     /// Core account base currency such as USDT or BTC from `server_info`, sent once alongside
-    /// `Identity`. The UI uses it for base-currency order-size defaults.
+    /// `Identity`. The UI uses it to convert a group-local USD-equivalent size before placement.
     CoreBase {
         base: String,
     },

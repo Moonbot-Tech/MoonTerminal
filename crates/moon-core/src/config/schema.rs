@@ -18,9 +18,11 @@ use crate::market::MarketDataMode;
 ///
 /// Incremented when persisted fields need serde defaults written back.
 ///
-/// Version 15 persists normalization of an invalid `core_sort` to `Name`. Before that write-back,
-/// `config::backup` preserves the original order for rollback.
-pub const SCHEMA_VERSION: u32 = 15;
+/// Version 16 moves manual size/exit controls from per-core base-coin settings to group-local
+/// USD-equivalent settings and deliberately discards old sizes whose units are ambiguous.
+/// Version 17 makes every group exit generation complete and neutral from first load, removing
+/// the startup dependency on whichever core settings snapshot happens to arrive first.
+pub const SCHEMA_VERSION: u32 = 17;
 
 /// Schema version from which runtime `CoreId == uid` and is stable. Older configs stored
 /// POSITIONAL CoreIds in `charts.json`, which must be rebound to uids once. This is fixed,
@@ -149,13 +151,6 @@ pub struct ServerMeta {
     /// global setting. Older files default to an empty string.
     #[serde(default)]
     pub chart_bundle: String,
-    /// Six manual-order size presets (F1-F6) in the base coin. `None`/older files use
-    /// defaults for the core's base (see `ServerConfig::order_sizes`).
-    #[serde(default)]
-    pub order_sizes: Option<[f64; 6]>,
-    /// Last selected size preset (index 0..=5); see `ServerConfig::order_size_sel`.
-    #[serde(default)]
-    pub order_size_sel: Option<usize>,
     /// Default alert strategy (id of type "Alerts"); see `ServerConfig::default_alert_strategy`.
     #[serde(default)]
     pub default_alert_strategy: u64,

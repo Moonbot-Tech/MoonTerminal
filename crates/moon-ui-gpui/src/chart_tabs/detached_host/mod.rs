@@ -357,7 +357,7 @@ impl DetachedChartHost {
             HotkeyAction::FigDelete => {
                 self.backend.update(cx, |b, bcx| {
                     // `FigDelete` does not use a target or core.
-                    crate::hotkeys::apply(action, b, bcx, None, None)
+                    crate::hotkeys::apply(action, b, bcx, &self.group, None, None)
                 }) || crate::hotkeys::cancel_hovered_order(&self.backend, cx)
             }
             // Built-in Shift+Esc closes every group's Main charts.
@@ -392,7 +392,7 @@ impl DetachedChartHost {
                 let target = self.window_target(cx);
                 let active_core = target.as_ref().map(|(c, _)| *c);
                 self.backend.update(cx, |b, bcx| {
-                    crate::hotkeys::apply(other, b, bcx, target.clone(), active_core)
+                    crate::hotkeys::apply(other, b, bcx, &self.group, target.clone(), active_core)
                 })
             }
         };

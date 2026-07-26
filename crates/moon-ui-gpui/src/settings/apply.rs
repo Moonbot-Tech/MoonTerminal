@@ -1,13 +1,71 @@
 //! Saving a Settings draft and applying presentation, logging, market, session, and window
 //! changes at their appropriate boundaries.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use gpui::*;
 use moon_ui::Root;
 
 use super::SettingsView;
 use moon_core::config::{AppConfig, SnapshotOutcome};
+
+/// Return each core and old group whose saved group membership changed.
+fn moved_cores(before: &[(u64, String)], after: &[(u64, String)]) -> Vec<(u64, String)> {
+    let after_by_id: HashMap<u64, &str> = after
+        .iter()
+        .map(|(id, group)| (*id, group.as_str()))
+        .collect();
+    before
+        .iter()
+        .filter(|(id, old_group)| {
+            after_by_id
+                .get(id)
+                .is_some_and(|new_group| *new_group != old_group)
+        })
+        .map(|(id, old_group)| (*id, old_group.clone()))
+        .collect()
+}
+
+/// Remove moved cores from old-group chart persistence before rebuilding those windows.
+fn sanitize_moved_chart_specs(
+    specs: &mut Vec<crate::persistence::chart_persist::ChartTabSpec>,
+    moved: &[(u64, String)],
+) -> bool {
+    let belongs_to_old_group = |core: u64, group: &str| {
+        moved
+            .iter()
+            .any(|(moved_core, old_group)| *moved_core == core && old_group == group)
+    };
+    let mut changed = false;
+    specs.retain_mut(|spec| {
+        let group = spec.group.clone();
+        if let moon_core::config::ChartBucket::Core(core) = spec.bucket() {
+            if belongs_to_old_group(core, &group) {
+                changed = true;
+                return false;
+            }
+        }
+        if let Some(coins) = spec.custom_coins.as_mut() {
+            let before_len = coins.len();
+            coins.retain(|(core, _)| !belongs_to_old_group(*core, &group));
+            changed |= coins.len() != before_len;
+            if coins.is_empty() {
+                changed = true;
+                return false;
+            }
+        }
+        if spec
+            .compare_anchor
+            .as_ref()
+            .is_some_and(|(core, _)| belongs_to_old_group(*core, &group))
+        {
+            spec.compare_anchor = None;
+            changed = true;
+        }
+        true
+    });
+    changed
+}
 
 impl SettingsView {
     /// Validate and save the draft, then apply it without closing the Settings window.
@@ -88,6 +146,14 @@ impl SettingsView {
         }
 
         let struct_changed = before.structural_sig() != after.structural_sig();
+        let server_groups = |config: &AppConfig| {
+            config
+                .servers
+                .iter()
+                .map(|server| (server.id, server.group.clone()))
+                .collect::<Vec<_>>()
+        };
+        let moved = moved_cores(&server_groups(before), &server_groups(&after));
         let mode_changed = before.market_mode != after.market_mode;
         let split_changed = before.charts_split_by_core != after.charts_split_by_core;
         // Changing a core's `chart_bundle` alters chart-tab composition without requiring a
@@ -122,7 +188,11 @@ impl SettingsView {
                 b.session.reconcile(&b.config, reports);
                 b.session.set_market_mode(b.config.market_mode);
             });
-            self.reconcile_group_windows(cx);
+            if moved.is_empty() && !split_changed && !bundle_changed {
+                self.reconcile_group_windows(cx);
+            } else {
+                self.rebuild_group_windows(&moved, cx);
+            }
         } else if mode_changed {
             // Apply market mode live. Cores stay connected and the coordinator reselects providers
             // on its next tick.
@@ -134,7 +204,7 @@ impl SettingsView {
         // group windows so their chart tabs use the new topology. Egui cleared chart tabs directly;
         // in GPUI tabs belong to their window, so the window is recreated.
         if !struct_changed && (split_changed || bundle_changed) {
-            self.rebuild_group_windows(cx);
+            self.rebuild_group_windows(&[], cx);
         }
     }
 
@@ -145,7 +215,7 @@ impl SettingsView {
     /// topology can change bucket keys; retaining old windows would leave duplicates and stale
     /// handles. The specs then return to the new group window's tab strip instead of reopening as
     /// detached off-screen windows.
-    fn rebuild_group_windows(&mut self, cx: &mut Context<Self>) {
+    fn rebuild_group_windows(&mut self, moved: &[(u64, String)], cx: &mut Context<Self>) {
         let (handles, chart_handles, cfg, epoch, layout) = self.backend.update(cx, |b, _| {
             let handles: Vec<WindowHandle<Root>> = b.group_windows.values().copied().collect();
             b.group_windows.clear();
@@ -156,6 +226,7 @@ impl SettingsView {
             for s in b.chart_specs.iter_mut() {
                 s.detached = None;
             }
+            sanitize_moved_chart_specs(&mut b.chart_specs, moved);
             b.chart_specs_dirty = true;
             (
                 handles,
@@ -171,6 +242,14 @@ impl SettingsView {
         for h in chart_handles {
             let _ = h.update(cx, |_, window, _| window.remove_window());
         }
+        // Detached-host release callbacks may enqueue repins while their owning ChartTabs entities
+        // are also being destroyed. Those panels cannot be reused after a topology rebuild.
+        self.backend.update(cx, |b, _| {
+            b.chart_repin_request.clear();
+            if sanitize_moved_chart_specs(&mut b.chart_specs, moved) {
+                b.chart_specs_dirty = true;
+            }
+        });
         for (i, g) in crate::window::group_window::groups(&cfg)
             .into_iter()
             .enumerate()
@@ -189,9 +268,10 @@ impl SettingsView {
 
     /// Reconcile group windows incrementally instead of calling [`Self::rebuild_group_windows`].
     ///
-    /// Close only removed groups and their detached charts, open only new groups, and leave retained
-    /// group windows intact. Their `ChartTabs` signatures pick up added or removed cores, preserving
-    /// open tabs and layout across server membership changes.
+    /// Close removed groups and their detached hosts, and open new groups.
+    ///
+    /// Retained group windows stay intact. Their `ChartTabs` signatures pick up added or removed
+    /// cores, preserving open tabs and layout across server membership changes.
     fn reconcile_group_windows(&mut self, cx: &mut Context<Self>) {
         let (close_group, close_detached, spawn_groups, cfg, epoch, layout) =
             self.backend.update(cx, |b, _| {
@@ -211,14 +291,17 @@ impl SettingsView {
                     .cloned()
                     .collect();
                 b.group_windows.retain(|g, _| want_set.contains(g.as_str()));
-                // Collect detached charts whose groups no longer exist.
+                // A detached host keeps its group for life, so removed groups close their hosts.
+                let stale_detached_groups: HashSet<&str> =
+                    gone.iter().map(String::as_str).collect();
                 let close_detached: Vec<WindowHandle<Root>> = b
                     .detached_chart_windows
                     .iter()
-                    .filter(|(g, _)| gone.contains(g))
+                    .filter(|(g, _)| stale_detached_groups.contains(g.as_str()))
                     .map(|(_, h)| *h)
                     .collect();
-                b.detached_chart_windows.retain(|(g, _)| !gone.contains(g));
+                b.detached_chart_windows
+                    .retain(|(g, _)| !stale_detached_groups.contains(g.as_str()));
                 // Spawn groups requested by the config that do not already have a window.
                 let spawn_groups: Vec<String> = want
                     .iter()
@@ -253,3 +336,6 @@ impl SettingsView {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

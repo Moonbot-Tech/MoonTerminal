@@ -92,7 +92,7 @@ impl Render for ChartPanel {
         let (theme, orders_style, follow, prospective_usd, candle_view) = {
             let b = self.backend.read(cx);
             let eff = b.preview.as_ref().unwrap_or(&b.config);
-            // Prospective s1-s6 order size in dollars for the active coin's crosshair label.
+            // Prospective F1-F6 order size in dollars for the active coin's crosshair label.
             let prospective = self
                 .chart
                 .active_target()

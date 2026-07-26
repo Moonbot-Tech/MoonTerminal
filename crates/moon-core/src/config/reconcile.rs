@@ -96,8 +96,14 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let chart_memory_percent = clamp_chart_memory_percent(meta.chart_memory_percent);
     let core_sort = meta.core_sort;
     let hotkeys = meta.hotkeys;
+    let mut groups = meta.groups.clone();
+    for group in &mut groups {
+        if group.trade.repair() {
+            dirty = true;
+        }
+    }
 
-    let servers = sf
+    let servers: Vec<ServerConfig> = sf
         .servers
         .into_iter()
         .map(|e| {
@@ -133,16 +139,18 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 color: m.map(|m| m.color).unwrap_or_else(servers::default_color),
                 synthetic: false,
                 chart_bundle: m.map(|m| m.chart_bundle.clone()).unwrap_or_default(),
-                order_sizes: m.and_then(|m| m.order_sizes),
-                order_size_sel: m.and_then(|m| m.order_size_sel),
                 default_alert_strategy: m.map(|m| m.default_alert_strategy).unwrap_or(0),
             }
         })
         .collect();
 
+    // Older settings files can name a server group without carrying a matching `[[groups]]` row.
+    // Materialize those rows now so every server immediately has durable local manual controls.
+    dirty |= super::ensure_server_group_configs(&servers, &mut groups);
+
     Merged {
         servers,
-        groups: meta.groups,
+        groups,
         language,
         market_mode,
         charts_split_by_core,
@@ -230,8 +238,6 @@ pub fn split(
                 market: s.market.clone(),
                 color: s.color,
                 chart_bundle: s.chart_bundle.clone(),
-                order_sizes: s.order_sizes,
-                order_size_sel: s.order_size_sel,
                 default_alert_strategy: s.default_alert_strategy,
             })
             .collect(),

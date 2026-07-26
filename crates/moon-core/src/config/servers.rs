@@ -54,6 +54,7 @@ impl Default for FeedFlags {
     }
 }
 
+/// Persisted connection and core-owned behavior for one MoonBot server.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
     /// Runtime core id (CoreId). Since schema v11 it EQUALS `uid`, making it stable across
@@ -98,17 +99,6 @@ pub struct ServerConfig {
     /// title uses the bundle name. Names are local to a group.
     #[serde(default)]
     pub chart_bundle: String,
-    /// Six manual-order size presets (toolbar F1-F6 buttons), in the core's BASE coin.
-    /// `None` means unconfigured and uses `default_order_sizes` for the core base: BTC needs
-    /// approximately 0.01..0.5 while USDT needs larger values around 50..2500. moonproto has
-    /// NO buy-size values, only ClientSettings sell presets, so this is local config.
-    #[serde(default)]
-    pub order_sizes: Option<[f64; 6]>,
-    /// Last SELECTED size preset (index 0..=5 for F1-F6), restored after restart. `None` means
-    /// no selection and defaults to F3. Like the preset values, this is local config because
-    /// moonproto has no buy-size selection.
-    #[serde(default)]
-    pub order_size_sel: Option<usize>,
     /// Default alert strategy (Def Strategy): id of this core's strategy of type "Alerts",
     /// automatically assigned to a new alert when its Alert checkbox is enabled. 0 means none.
     /// This is local terminal config because the protocol does not provide the core default.
@@ -264,14 +254,6 @@ impl ServerConfig {
             ChartBucket::Shared
         }
     }
-
-    /// Six manual-order size presets for the toolbar: configured `order_sizes` or defaults for
-    /// the core's base coin (`base`, such as "BTC"/"USDT"/…). The UI gets `base` from
-    /// `SessionManager::core_base`.
-    pub fn order_sizes_or_default(&self, base: &str) -> [f64; 6] {
-        self.order_sizes
-            .unwrap_or_else(|| default_order_sizes(base))
-    }
 }
 
 pub fn default_color() -> [u8; 3] {
@@ -284,17 +266,6 @@ pub fn default_group() -> String {
 
 pub fn default_market() -> String {
     "BTCUSDT".to_string()
-}
-
-/// Default order-size presets (F1-F6) by core base coin. BTC uses small values previously
-/// hard-coded in the toolbar; everything else (USDT/stables/alts) uses larger values. These are
-/// only initial values and users can edit them in core Settings (`order_sizes`).
-pub fn default_order_sizes(base: &str) -> [f64; 6] {
-    if base.eq_ignore_ascii_case("BTC") {
-        [0.01, 0.025, 0.05, 0.10, 0.25, 0.50]
-    } else {
-        [50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0]
-    }
 }
 
 pub fn default_true() -> bool {

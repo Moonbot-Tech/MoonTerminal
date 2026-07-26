@@ -41,12 +41,17 @@ mod store;
 mod toml_io;
 mod uid_counter;
 
+#[cfg(test)]
+mod tests;
+
 pub use badges::{BadgeEntry, BadgesConfig};
 pub use detect_view::{
     detect_slot_count, DetectChart, DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg,
     DetectViewFile, DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI,
 };
-pub use groups::GroupConfig;
+pub use groups::{
+    GroupConfig, GroupExitSettings, GroupTradeSettings, TakeProfitMode, DEFAULT_ORDER_SIZES_USD,
+};
 pub use hotkeys::{
     HotkeysConfig, MouseGestureBinding, MANUAL_STRATEGY_KEYS, ORDER_SIZE_KEYS, SELL_PRESET_KEYS,
 };
@@ -96,6 +101,29 @@ enum SaveKind {
     Routine,
     /// A deliberate user save for which rollback may be needed.
     Deliberate,
+}
+
+/// Add a default [`GroupConfig`] for every server group that has no persisted row yet.
+///
+/// Existing rows are never replaced or removed, so callers can use this while editing an
+/// incomplete group name without losing its local manual-trading state. Returns whether at least
+/// one row was inserted.
+pub fn ensure_server_group_configs(
+    servers: &[ServerConfig],
+    groups: &mut Vec<GroupConfig>,
+) -> bool {
+    let mut names: Vec<String> = servers.iter().map(|server| server.group.clone()).collect();
+    names.sort();
+    names.dedup();
+
+    let mut changed = false;
+    for name in names {
+        if groups.iter().all(|group| group.name != name) {
+            groups.push(GroupConfig::new(name));
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Runtime configuration merged from the persisted config files.
@@ -457,7 +485,28 @@ impl AppConfig {
         log::warn!(
             "MOON_CONFIG_PLAINTEXT=1: тестовый plaintext-конфиг, servers.enc/keyring пропущены"
         );
-        Ok(Some(Self {
+        Ok(Some(Self::build_plaintext_config(
+            uid_floor, theme, orders, badges, name, group, market, key, synthetic,
+        )))
+    }
+
+    /// Build the runtime config after environment parsing has supplied one plaintext server.
+    ///
+    /// The constructor is separate from environment access so its complete runtime invariants can
+    /// be tested without reading or mutating process credentials.
+    #[allow(clippy::too_many_arguments)]
+    fn build_plaintext_config(
+        uid_floor: Option<u64>,
+        theme: ChartThemeSet,
+        orders: OrdersStyleSet,
+        badges: BadgesConfig,
+        name: String,
+        group: String,
+        market: String,
+        key: String,
+        synthetic: bool,
+    ) -> Self {
+        let mut config = Self {
             servers: vec![ServerConfig {
                 id: 1,
                 uid: 1,
@@ -471,8 +520,6 @@ impl AppConfig {
                 color: servers::default_color(),
                 synthetic,
                 chart_bundle: String::new(),
-                order_sizes: None,
-                order_size_sel: None,
                 default_alert_strategy: 0,
             }],
             groups: Vec::new(),
@@ -501,7 +548,9 @@ impl AppConfig {
             // Plaintext mode never reads settings.toml, so there is nothing to overwrite or damage.
             settings_unreadable: false,
             chart_core_remap_needed: false,
-        }))
+        };
+        ensure_server_group_configs(&config.servers, &mut config.groups);
+        config
     }
 
     /// Saves split server/settings configuration plus portable theme, orders, badges, and hotkeys
@@ -539,6 +588,7 @@ impl AppConfig {
             );
         }
         reconcile::ensure_uids(&mut self.servers, &mut self.next_uid);
+        ensure_server_group_configs(&self.servers, &mut self.groups);
         self.prune_orphan_groups();
         self.validate()?;
         let (sf, meta) = reconcile::split(
@@ -616,23 +666,28 @@ impl AppConfig {
     /// cores and recreating windows. Theme updates live, while language, market mode, and hotkeys
     /// need no reconnect, so they are neutralized to defaults.
     pub fn structural_sig(&self) -> String {
-        // Chart-tab bundles (`chart_bundle`) and order-size presets (`order_sizes`) are purely
-        // UI/local settings. Changing them does NOT reconnect cores or rebuild sessions (see
-        // apply_settings), so neutralize them to keep them non-structural.
+        // Chart bundles and manual-trading values are local presentation/behavior settings.
+        // Changing them does not reconnect cores or rebuild sessions.
         let servers: Vec<ServerConfig> = self
             .servers
             .iter()
             .map(|s| ServerConfig {
                 chart_bundle: String::new(),
-                order_sizes: None,
-                order_size_sel: None,
                 default_alert_strategy: 0,
                 ..s.clone()
             })
             .collect();
+        let groups: Vec<GroupConfig> = self
+            .groups
+            .iter()
+            .map(|g| GroupConfig {
+                trade: GroupTradeSettings::default(),
+                ..g.clone()
+            })
+            .collect();
         let (sf, meta) = reconcile::split(
             &servers,
-            &self.groups,
+            &groups,
             Language::default(),
             MarketDataMode::default(),
             true,  // The chart toggle is non-structural; no rebuild.
@@ -659,13 +714,27 @@ impl AppConfig {
         format!("{a}\n{b}")
     }
 
+    /// Return persisted group properties by name without allocating a default copy.
+    pub fn group_ref(&self, name: &str) -> Option<&GroupConfig> {
+        self.groups.iter().find(|g| g.name == name)
+    }
+
     /// Group properties by name, returning existing values or defaults.
     pub fn group(&self, name: &str) -> GroupConfig {
-        self.groups
-            .iter()
-            .find(|g| g.name == name)
+        self.group_ref(name)
             .cloned()
             .unwrap_or_else(|| GroupConfig::new(name))
+    }
+
+    /// Return mutable group properties, inserting safe defaults when the group is not persisted yet.
+    pub fn group_mut(&mut self, name: &str) -> &mut GroupConfig {
+        if let Some(index) = self.groups.iter().position(|group| group.name == name) {
+            return &mut self.groups[index];
+        }
+        self.groups.push(GroupConfig::new(name));
+        self.groups
+            .last_mut()
+            .expect("a group was inserted immediately before lookup")
     }
 
     /// Whether config has been set up, defined as at least one server with a key. False means

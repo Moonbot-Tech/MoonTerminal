@@ -21,7 +21,7 @@ use moon_ui::{MoonColorPickerState, MoonInputEvent, MoonInputState};
 
 use super::SettingsView;
 use crate::Backend;
-use moon_core::config::{AppConfig, GroupConfig, Secret, ServerConfig};
+use moon_core::config::{ensure_server_group_configs, GroupConfig, Secret, ServerConfig};
 
 /// Component state for one server row's text fields and color picker.
 pub(super) struct ConnRow {
@@ -35,24 +35,15 @@ pub(super) struct ConnRow {
     color: Entity<MoonColorPickerState>,
 }
 
-pub(super) fn sync_groups_from_servers(cfg: &mut AppConfig) -> bool {
-    let mut names: Vec<String> = cfg.servers.iter().map(|s| s.group.clone()).collect();
-    names.sort();
-    names.dedup();
-
-    let mut changed = false;
-    cfg.groups.retain(|g| {
-        let keep = names.contains(&g.name);
-        changed |= !keep;
-        keep
-    });
-    for name in names {
-        if !cfg.groups.iter().any(|g| g.name == name) {
-            cfg.groups.push(GroupConfig::new(name));
-            changed = true;
-        }
-    }
-    changed
+/// Add missing group rows to a Settings preview without removing intermediate names.
+///
+/// Returns whether a row was inserted. Orphan removal stays at `AppConfig::save_impl`, so erasing
+/// and retyping a group name cannot replace its Size, TP, SL, S-slot, or stop-market settings.
+pub(super) fn sync_groups_from_servers(
+    servers: &[ServerConfig],
+    groups: &mut Vec<GroupConfig>,
+) -> bool {
+    ensure_server_group_configs(servers, groups)
 }
 
 /// Build a text input bound to a field of draft server `servers[i]`.
@@ -75,7 +66,7 @@ fn conn_input(
                         if get(s) != val {
                             set(s, val);
                             if sync_groups {
-                                sync_groups_from_servers(p);
+                                sync_groups_from_servers(&p.servers, &mut p.groups);
                             }
                             bcx.notify();
                         }

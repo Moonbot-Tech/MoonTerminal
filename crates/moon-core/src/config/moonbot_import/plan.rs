@@ -28,8 +28,6 @@ pub enum PlannedValue {
     UiThemeLight(bool),
     /// sRGB color.
     Rgb([u8; 3]),
-    /// Six manual-order sizes.
-    OrderSizes([f64; 6]),
     /// Selected size-preset index.
     OrderSizeSel(usize),
     /// Six fixed-sell percentages reserved for preview; no application path consumes them.
@@ -44,7 +42,7 @@ pub enum PlannedValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettingChange {
     /// Stable identifier (`hotkey.cancel_buy`, `theme.bg.dark`,
-    /// `orders.buy.color.light`, `core.order_sizes`, …).
+    /// `orders.buy.color.light`, `group.order_size_sel`, …).
     pub id: String,
     /// Human-readable item label (Moonbot terms remain untranslated).
     pub label: String,
@@ -78,8 +76,8 @@ pub struct MoonBotImportPlan {
     pub unsupported_hotkeys: Vec<Unsupported>,
     /// "Chart and lines" group: colors for both themes.
     pub chart: Vec<SettingChange>,
-    /// "Core" group, local config: per-core order-size presets.
-    pub per_core: Vec<SettingChange>,
+    /// "Window group" local config: group-local preset selection.
+    pub group_items: Vec<SettingChange>,
     /// "Core" preview/reserved group: fixed-sell values are not applied or sent to cores.
     pub core_commands: Vec<SettingChange>,
     /// "Not imported" group, excluding hotkeys stored in `unsupported_hotkeys`.
@@ -95,7 +93,7 @@ impl MoonBotImportPlan {
         self.terminal.is_empty()
             && self.hotkeys.is_empty()
             && self.chart.is_empty()
-            && self.per_core.is_empty()
+            && self.group_items.is_empty()
             && self.core_commands.is_empty()
     }
 
@@ -105,7 +103,7 @@ impl MoonBotImportPlan {
             .iter()
             .chain(self.hotkeys.iter())
             .chain(self.chart.iter())
-            .chain(self.per_core.iter())
+            .chain(self.group_items.iter())
     }
 }
 
@@ -118,9 +116,6 @@ pub struct PlanContext<'a> {
     pub orders: &'a OrdersStyleSet,
     /// Active UI theme: true means light.
     pub ui_theme_light: bool,
-    /// Current size presets of the active core, used as the preview's "before" values.
-    pub order_sizes: [f64; 6],
-    pub order_size_sel: Option<usize>,
 }
 
 /// Builds the plan without mutating anything.
@@ -129,7 +124,7 @@ pub fn build_plan(mb: &MoonBotConfig, cur: &PlanContext) -> MoonBotImportPlan {
     map_ui_theme(mb, cur, &mut plan);
     map_hotkeys(mb, cur, &mut plan);
     map_colors(mb, cur, &mut plan);
-    map_core(mb, cur, &mut plan);
+    map_core(mb, &mut plan);
     collect_static_unsupported(mb, &mut plan);
     plan
 }
@@ -492,29 +487,27 @@ fn fmt_nums<T: Into<f64> + Copy>(vals: &[T]) -> String {
         .join(", ")
 }
 
-fn map_core(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPlan) {
+/// Map unit-independent group selections and preview-only core settings.
+fn map_core(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
     let h = &mb.ui.hotkeys;
-    // Six manual-order sizes → ServerConfig.order_sizes for selected cores.
-    plan.per_core.push(SettingChange {
-        id: "core.order_sizes".into(),
-        label: "Пресеты размера ордера (F1-F6)".into(),
-        current: fmt_nums(&cur.order_sizes),
-        new: fmt_nums(&h.order_sizes),
-        value: PlannedValue::OrderSizes(h.order_sizes),
-        same: h.order_sizes == cur.order_sizes,
-    });
+    // MoonBot exports raw base-currency quantities without their base asset. Reinterpreting those
+    // values as Terminal USD equivalents could turn 0.01 BTC into $0.01, so skip them explicitly.
+    plan.warnings.push(
+        "OSize (F1-F6) не переносим: в буфере MoonBot нет валюты размера, а Terminal хранит USD-эквивалент"
+            .into(),
+    );
     // Selected preset: bNum must be in 0..=5; otherwise warn and skip it (spec section 9).
     match usize::try_from(h.order_size_sel).ok().filter(|v| *v <= 5) {
         Some(sel) => {
-            plan.per_core.push(SettingChange {
-                id: "core.order_size_sel".into(),
+            plan.group_items.push(SettingChange {
+                id: "group.order_size_sel".into(),
                 label: "Выбранный пресет размера".into(),
-                current: cur
-                    .order_size_sel
-                    .map_or("—".into(), |v| format!("F{}", v + 1)),
+                current: "зависит от выбранной группы".into(),
                 new: format!("F{}", sel + 1),
                 value: PlannedValue::OrderSizeSel(sel),
-                same: Some(sel) == cur.order_size_sel,
+                // Targets remain editable after planning, so one group's initial value cannot
+                // prove that every ultimately selected group already matches.
+                same: false,
             });
         }
         None => plan.warnings.push(format!(

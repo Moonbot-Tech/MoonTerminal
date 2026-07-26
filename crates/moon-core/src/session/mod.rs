@@ -107,7 +107,7 @@ pub struct SessionManager {
     /// Core-to-exchange mapping from `Identity`. A core cannot become a provider without it.
     core_key: HashMap<CoreId, ExchangeId>,
     /// Core-to-account-base mapping from `CoreBase`, such as "USDT" or "BTC". The UI uses it for
-    /// base-currency order-size defaults. It remains empty until the core is identified.
+    /// group-USD-to-base order-size conversion. It remains empty until the core is identified.
     core_base: HashMap<CoreId, String>,
     /// Core-to-market-provider mapping: one provider per exchange in deduplicated mode, or the
     /// core itself in per-core mode.

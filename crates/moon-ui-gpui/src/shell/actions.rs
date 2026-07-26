@@ -7,23 +7,39 @@ use gpui::*;
 use super::Shell;
 use crate::controls;
 
+/// Take an inline-edit request only when it belongs to the observing Shell's group.
+fn take_group_edit(
+    request: &mut Option<(String, usize)>,
+    shell_group: &str,
+) -> Option<(String, usize)> {
+    request
+        .as_ref()
+        .is_some_and(|(request_group, _)| request_group == shell_group)
+        .then(|| request.take())
+        .flatten()
+}
+
+/// Prefer a hovered chart target only when it belongs to the hotkey receiver's window group.
+fn select_hotkey_target(
+    hovered: Option<(moon_core::session::CoreId, String)>,
+    hovered_belongs_to_group: bool,
+    main: Option<(moon_core::session::CoreId, String)>,
+) -> Option<(moon_core::session::CoreId, String)> {
+    hovered.filter(|_| hovered_belongs_to_group).or(main)
+}
+
 impl Shell {
+    /// Open and focus this group's pending F1-F6 inline editor without consuming another group's.
     pub(super) fn drain_order_size_edit_request(&mut self, cx: &mut Context<Self>) {
-        let edit_req = self.backend.update(cx, |b, _| b.order_size_edit_req.take());
-        let Some((core, ix)) = edit_req.filter(|(_, i)| *i < 6) else {
+        let group = self.group.clone();
+        let edit_req = self.backend.update(cx, |b, _| {
+            take_group_edit(&mut b.order_size_edit_req, &group)
+        });
+        let Some((group, ix)) = edit_req.filter(|(_, i)| *i < 6) else {
             return;
         };
-        let cur = {
-            let b = self.backend.read(cx);
-            let base = b.session.core_base(core).unwrap_or("");
-            b.config
-                .servers
-                .iter()
-                .find(|s| s.id == core)
-                .map(|s| s.order_sizes_or_default(base)[ix])
-                .unwrap_or_else(|| moon_core::config::servers::default_order_sizes(base)[ix])
-        };
-        self.size_edit = Some((core, ix));
+        let cur = self.backend.read(cx).order_size_value(&group, ix);
+        self.size_edit = Some((group, ix));
         let input = self.size_input.clone();
         let value = controls::fmt_adaptive(cur);
         let handle = self.window_handle;
@@ -79,14 +95,17 @@ impl Shell {
     }
 
     /// Open and focus the inline editor after a fixed-sell S button is double-clicked.
-    /// Seeds it with the selected core's current preset percentage, mirroring the order-size editor.
+    /// Seeds it with the group's current preset percentage, mirroring the order-size editor.
     pub(super) fn drain_sell_edit_request(&mut self, cx: &mut Context<Self>) {
-        let edit_req = self.backend.update(cx, |b, _| b.sell_edit_req.take());
-        let Some((core, ix)) = edit_req.filter(|(_, i)| *i < 6) else {
+        let group = self.group.clone();
+        let edit_req = self
+            .backend
+            .update(cx, |b, _| take_group_edit(&mut b.sell_edit_req, &group));
+        let Some((group, ix)) = edit_req.filter(|(_, i)| *i < 6) else {
             return;
         };
-        let cur = self.backend.read(cx).fixed_sell_pct(core, ix);
-        self.sell_edit = Some((core, ix));
+        let cur = self.backend.read(cx).fixed_sell_pct(&group, ix);
+        self.sell_edit = Some((group, ix));
         let input = self.sell_input.clone();
         let value = controls::fmt_adaptive(cur);
         let handle = self.window_handle;
@@ -170,7 +189,7 @@ impl Shell {
             HotkeyAction::FigDelete => {
                 self.backend.update(cx, |b, bcx| {
                     // Figure deletion does not use a chart target or active core.
-                    crate::hotkeys::apply(action, b, bcx, None, None)
+                    crate::hotkeys::apply(action, b, bcx, &group, None, None)
                 }) || crate::hotkeys::cancel_hovered_order(&self.backend, cx)
             }
             // Built-in Shift+Escape increments the global revision that closes every Main stack.
@@ -189,11 +208,27 @@ impl Shell {
                 });
                 true
             }
-            other => self.backend.update(cx, |b, bcx| {
-                let target = b.main_chart_target(&group);
-                let active_core = b.active_trade_core(&group);
-                crate::hotkeys::apply(other, b, bcx, target, active_core)
-            }),
+            other => {
+                let hovered_target = self
+                    .backend
+                    .read(cx)
+                    .hovered_chart
+                    .clone()
+                    .and_then(|weak| weak.upgrade())
+                    .and_then(|chart| chart.read(cx).target_at_cursor());
+                self.backend.update(cx, |b, bcx| {
+                    let hovered_belongs_to_group = hovered_target
+                        .as_ref()
+                        .is_some_and(|(core, _)| b.core_belongs_to_group(&group, *core));
+                    let target = select_hotkey_target(
+                        hovered_target,
+                        hovered_belongs_to_group,
+                        b.main_chart_target(&group),
+                    );
+                    let active_core = b.active_trade_core(&group);
+                    crate::hotkeys::apply(other, b, bcx, &group, target, active_core)
+                })
+            }
         };
         if handled {
             cx.stop_propagation();
@@ -241,3 +276,6 @@ fn engine_action_label(kind: &moon_core::feed::EngineActionKind) -> String {
         K::ReloadOrderBook => t!("shell.engine_action.reload_order_book").to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests;

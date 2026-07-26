@@ -17,12 +17,12 @@ fn change(id: &str, value: PlannedValue) -> SettingChange {
 fn plan_with(
     terminal: Vec<SettingChange>,
     chart: Vec<SettingChange>,
-    per_core: Vec<SettingChange>,
+    group_items: Vec<SettingChange>,
 ) -> MoonBotImportPlan {
     MoonBotImportPlan {
         terminal,
         chart,
-        per_core,
+        group_items,
         ..Default::default()
     }
 }
@@ -31,7 +31,7 @@ fn all_ids(plan: &MoonBotImportPlan) -> HashSet<String> {
     plan.terminal
         .iter()
         .chain(plan.chart.iter())
-        .chain(plan.per_core.iter())
+        .chain(plan.group_items.iter())
         .map(|c| c.id.clone())
         .collect()
 }
@@ -97,9 +97,10 @@ fn selection_filter_and_unknown_ids() {
     assert!(cfg.hotkeys.panic_sell.is_empty()); // Not selected, so it remains unchanged.
 }
 
-/// Protects per-core changes from modifying cores outside the selected uid set.
+/// Regression target: applying only the first selected core's group leaves another selected
+/// window group on a different F-key slot than the MoonBot import preview promised.
 #[test]
-fn per_core_targets_only_selected_cores() {
+fn selected_cores_update_their_unique_groups() {
     let mut cfg = AppConfig::blank(None);
     // Three cores, targeting ids 1 and 3.
     for id in 1..=3u64 {
@@ -111,32 +112,24 @@ fn per_core_targets_only_selected_cores() {
             show_window: true,
             feed: crate::config::FeedFlags::default(),
             key: crate::config::Secret::new(String::new()),
-            group: "default".into(),
+            group: if id <= 2 { "desk-a" } else { "desk-b" }.into(),
             market: "BINANCE_FUTURES".into(),
             color: [0xFF, 0xB3, 0x47],
             synthetic: false,
             chart_bundle: String::new(),
-            order_sizes: None,
-            order_size_sel: None,
             default_alert_strategy: 0,
         });
     }
     let plan = plan_with(
         vec![],
         vec![],
-        vec![
-            change(
-                "core.order_sizes",
-                PlannedValue::OrderSizes([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
-            ),
-            change("core.order_size_sel", PlannedValue::OrderSizeSel(3)),
-        ],
+        vec![change(
+            "group.order_size_sel",
+            PlannedValue::OrderSizeSel(3),
+        )],
     );
     let out = apply_local(&mut cfg, &plan, &all_ids(&plan), &[1, 3]);
-    assert_eq!(out.applied, 2);
-    let sizes = Some([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    assert_eq!(cfg.servers[0].order_sizes, sizes);
-    assert_eq!(cfg.servers[0].order_size_sel, Some(3));
-    assert_eq!(cfg.servers[1].order_sizes, None); // Core 2 is not selected.
-    assert_eq!(cfg.servers[2].order_sizes, sizes);
+    assert_eq!(out.applied, 1);
+    assert_eq!(cfg.group("desk-a").trade.order_size_sel, 3);
+    assert_eq!(cfg.group("desk-b").trade.order_size_sel, 3);
 }

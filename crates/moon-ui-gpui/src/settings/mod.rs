@@ -446,7 +446,7 @@ pub fn open(
     }
     backend.update(cx, |b, _| {
         let mut preview = b.config.clone();
-        connections::sync_groups_from_servers(&mut preview);
+        connections::sync_groups_from_servers(&preview.servers, &mut preview.groups);
         b.preview = Some(preview);
     });
     // Restore geometry saved by `SettingsView`, as the Strategies and Assets windows do.

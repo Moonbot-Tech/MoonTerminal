@@ -264,6 +264,8 @@ pub enum CoreCmd {
         price: f64,
         size: f64,
         strategy_id: Option<u64>,
+        /// Group-local exit settings that must be confirmed before this order is released.
+        exit: crate::config::GroupExitSettings,
     },
     /// Move or replace an existing core order by `uid` at a new price, as when dragging its line.
     /// This becomes moonproto `orders().move_order`.
@@ -307,6 +309,8 @@ pub enum CoreCmd {
     /// The feed patches the retained settings snapshot through its helper and sends it in full
     /// with `settings().send`.
     EditClientSettings(ClientSettingsEdit),
+    /// Synchronize complete visible group exit settings through the per-core serializer.
+    SyncGroupExit(crate::config::GroupExitSettings),
     /// Targeted leverage-management edit. The feed patches the retained snapshot and sends it
     /// through `settings().manage_leverage`.
     EditLevManage(LevManageEdit),
@@ -459,8 +463,10 @@ pub fn spawn(
                 return;
             }
             let mut backoff = BACKOFF_MIN;
+            let mut client_settings_sequence = live::ClientSettingsSequence::new();
             loop {
                 let started = Instant::now();
+                client_settings_sequence.prepare_reconnect();
                 match live::run(
                     &server,
                     chart_memory_percent,
@@ -470,6 +476,7 @@ pub fn spawn(
                     &run_wake_rx,
                     reports.as_ref(),
                     thread_client.clone(),
+                    &mut client_settings_sequence,
                 ) {
                     Ok(()) => break,
                     Err(e) => {

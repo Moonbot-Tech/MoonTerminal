@@ -832,12 +832,19 @@ impl Runtime {
                 format!("order_cancel_lag has no live-correct latest price for {market}: {reason}")
             })?;
         let price = (latest_price as f64 * self.config.order_cancel_price_mult).max(1e-8);
-        let size = self.config.order_cancel_size.unwrap_or_else(|| {
+        let size_override = self.config.order_cancel_size.or_else(|| {
             self.config
                 .order_cancel_quote_size
                 .map(|quote| quote / price)
-                .unwrap_or_else(|| backend.manual_order_size(core))
         });
+        let terms = backend
+            .manual_order_terms(core, size_override)
+            .ok_or_else(|| {
+                format!(
+                    "order_cancel_lag core={core} has no complete local terms or valid order size"
+                )
+            })?;
+        let size = terms.size_base;
         if !(size.is_finite() && size > 0.0) {
             return Err(format!("order_cancel_lag invalid order size {size}"));
         }
@@ -861,7 +868,7 @@ impl Runtime {
         let place_submit_ms = now_unix_ms_i64();
         backend
             .session
-            .place_order(core, market.clone(), false, price, size, None)
+            .place_order(core, market.clone(), false, price, size, None, terms.exit)
             .map_err(|error| format!("order_cancel_lag place order failed: {error:#}"))?;
         firetest_info(&format!(
             "[firetest] order_cancel_lag place core={core} market={market} price={price:.8} size={size:.8} quote_size={} latest_price={latest_price:.8}",

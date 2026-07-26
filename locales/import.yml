@@ -25,10 +25,10 @@ import.group.chart:
   ru: "График и линии"
   en: "Chart & lines"
   es: "Gráfico y líneas"
-import.group.core:
-  ru: "Ядро (локальные настройки)"
-  en: "Core (local settings)"
-  es: "Núcleo (ajustes locales)"
+import.group.window_group:
+  ru: "Группа окон (локальные настройки)"
+  en: "Window group (local settings)"
+  es: "Grupo de ventanas (ajustes locales)"
 import.group.core_commands:
   ru: "Ядро (команды — пока не отправляются)"
   en: "Core (commands — not sent yet)"
@@ -38,9 +38,9 @@ import.group.unsupported:
   en: "Not transferred"
   es: "No transferido"
 import.core_targets:
-  ru: "Применить к ядрам:"
-  en: "Apply to cores:"
-  es: "Aplicar a núcleos:"
+  ru: "Применить к группам выбранных ядер:"
+  en: "Apply to groups of selected cores:"
+  es: "Aplicar a grupos de núcleos seleccionados:"
 import.all_cores:
   ru: "Все"
   en: "All"

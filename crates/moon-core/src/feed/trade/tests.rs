@@ -1,5 +1,14 @@
 use super::*;
 
+#[test]
+/// Regression target: deleting `with_market_stop` from `trade::new_order_params` makes a visible
+/// Stop Market selection place a stop-limit order instead.
+fn new_order_params_carry_stop_market() {
+    let params = new_order_params("BTCUSDT".to_string(), false, 100_000.0, 0.001, None, true);
+
+    assert!(params.use_market_stop);
+}
+
 /// A `(market_name, uid, has_live_sell_leg)` candidate for the resolver.
 fn candidate(market: &'static str, uid: u64, sell: bool) -> (&'static str, u64, bool) {
     (market, uid, sell)

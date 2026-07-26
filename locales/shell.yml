@@ -67,16 +67,12 @@ header.clock_tip:
 # --- Toolbar ---
 # Tooltips for preset strips. The group label itself is a literal (Size/Sell), like the adjacent
 # Lev/SL/TP labels; the prose tooltip is translated because it is not a technical token.
-# `unit` is the account's base currency and preserves the unit in narrow windows where the
-# "Size, USDT" group label has collapsed. With no active core, `_nounit` handles the unknown currency.
+# `unit` is the fixed USDT-equivalent label and preserves it in narrow windows where the full
+# "Size, USDT eq." group caption has collapsed.
 toolbar.size_hint:
   ru: "Размер ордера F%{n} в %{unit} · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить"
   en: "Order size F%{n} in %{unit} · click to select · double-click to edit · Ctrl+wheel to change"
   es: "Tamaño de orden F%{n} en %{unit} · clic para seleccionar · doble clic para editar · Ctrl+rueda para cambiar"
-toolbar.size_hint_nounit:
-  ru: "Размер ордера F%{n} · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить"
-  en: "Order size F%{n} · click to select · double-click to edit · Ctrl+wheel to change"
-  es: "Tamaño de orden F%{n} · clic para seleccionar · doble clic para editar · Ctrl+rueda para cambiar"
 toolbar.sell_hint:
   ru: "Фиксированная продажа S%{n} · клик — задействовать · двойной клик — правка · Ctrl+колесо — изменить"
   en: "Fixed sell S%{n} · click to engage · double-click to edit · Ctrl+wheel to change"

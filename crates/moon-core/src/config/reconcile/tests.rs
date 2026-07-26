@@ -1,5 +1,8 @@
-use super::super::schema::{default_ui_font_delta, default_ui_scale, ServersFile, SettingsFile};
+use super::super::schema::{
+    default_ui_font_delta, default_ui_scale, ServersFile, SettingsFile, SCHEMA_VERSION,
+};
 use super::{merge, Merged};
+use crate::config::{GroupConfig, DEFAULT_ORDER_SIZES_USD};
 
 /// Merge a settings file carrying nothing but the two scaling knobs.
 fn merged_with(ui_scale: f32, ui_font_delta: f32) -> Merged {
@@ -70,4 +73,104 @@ fn a_non_finite_font_delta_is_repaired_while_zero_is_kept() {
         0.0,
         "zero font delta is 'no adjustment', a legitimate choice — it must NOT be repaired"
     );
+}
+
+#[test]
+/// Regression target: restoring the removed `ServerMeta::order_sizes` assignment in
+/// `config::reconcile::merge` reinterprets a legacy 0.01 BTC preset as $0.01 in the new toolbar.
+fn legacy_base_coin_sizes_reset_to_group_usd_defaults() {
+    let servers: ServersFile = toml::from_str(
+        r#"
+        [[servers]]
+        uid = 1
+        name = "btc-core"
+        "#,
+    )
+    .expect("legacy servers file must parse");
+    let settings: SettingsFile = toml::from_str(
+        r#"
+        version = 15
+
+        [[groups]]
+        name = "desk"
+        active = true
+        icon = 0
+
+        [[servers]]
+        uid = 1
+        name = "btc-core"
+        group = "desk"
+        order_sizes = [0.01, 0.025, 0.05, 0.1, 0.25, 0.5]
+        order_size_sel = 5
+        "#,
+    )
+    .expect("legacy settings file must parse");
+
+    let merged = merge(servers, settings, None);
+
+    assert!(merged.dirty, "schema v15 must be written back as v17");
+    assert_eq!(
+        merged.groups[0].trade.order_sizes_usd,
+        DEFAULT_ORDER_SIZES_USD
+    );
+    assert_eq!(merged.groups[0].trade.order_size_sel, 2);
+}
+
+/// Regression target: removing the missing-group materialization loop in `config::reconcile::merge`
+/// leaves a migrated server without the local TP/SL generation promised by its toolbar.
+#[test]
+fn a_server_group_without_metadata_gets_complete_local_defaults() {
+    let servers: ServersFile = toml::from_str(
+        r#"
+        [[servers]]
+        uid = 1
+        name = "desk-core"
+        "#,
+    )
+    .expect("servers file must parse");
+    let mut settings: SettingsFile = toml::from_str(
+        r#"
+        version = 17
+        next_uid = 2
+
+        [[servers]]
+        uid = 1
+        name = "desk-core"
+        group = "desk"
+        "#,
+    )
+    .expect("settings file without a matching group row must parse");
+    settings.version = SCHEMA_VERSION;
+
+    let merged = merge(servers, settings, None);
+
+    assert!(
+        merged.dirty,
+        "materialized group metadata must be persisted"
+    );
+    assert_eq!(merged.groups, vec![GroupConfig::new("desk")]);
+}
+
+/// Regression target: replacing the repair loop in `config::reconcile::merge` with
+/// `groups.iter_mut().any(repair)` stops after the first changed group and leaves later exits corrupt.
+#[test]
+fn every_group_is_repaired_even_after_an_earlier_change() {
+    let mut first = GroupConfig::new("first");
+    first.trade.order_sizes_usd[0] = f64::NAN;
+    let mut second = GroupConfig::new("second");
+    second.trade.exit.stop_loss_pct = f32::NAN;
+    let settings = SettingsFile {
+        version: SCHEMA_VERSION,
+        groups: vec![first, second],
+        ..Default::default()
+    };
+
+    let merged = merge(ServersFile::default(), settings, None);
+
+    assert!(merged.dirty, "repaired group settings must be persisted");
+    assert_eq!(
+        merged.groups[0].trade.order_sizes_usd[0],
+        DEFAULT_ORDER_SIZES_USD[0]
+    );
+    assert_eq!(merged.groups[1].trade.exit, Default::default());
 }

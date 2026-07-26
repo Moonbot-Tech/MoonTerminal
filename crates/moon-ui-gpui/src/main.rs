@@ -212,29 +212,21 @@ struct Backend {
     close_active_chart_rev: u64,
     /// Toolbar live-follow state: `true` tracks the present; `false` pauses the view.
     follow: bool,
-    /// Selected manual-order size preset per core, as an F1-F6 button index in `0..=5`.
-    /// Bases differ between cores, such as BTC versus USDT, so values and selection are per-core.
-    /// `PlaceOrder` uses `ServerConfig::order_sizes_or_default(base)[sel]`; absence means default.
-    order_size_sel: HashMap<CoreId, usize>,
     /// Broad toolbar and order-controls revision used to trigger notification and redraw.
     /// It increments for hotkeys, size edits and wheel changes, fixed-sell slot changes, and
     /// fixed-sell percentage edits, as well as direct size selection.
     order_size_rev: u64,
     /// Request to edit a size-button value inline after a toolbar double-click, as
-    /// `(core, F1-F6 index)`. Shell consumes it during render, opens and focuses an input over
-    /// the button, then writes to `ServerConfig.order_sizes` and saves on blur or Enter.
-    order_size_edit_req: Option<(CoreId, usize)>,
+    /// `(group, F1-F6 index)`. Shell consumes it during render and persists the USD value locally.
+    order_size_edit_req: Option<(String, usize)>,
     /// Request to edit a fixed-sell preset inline after an S-button double-click, as
-    /// `(core, S1-S6 index)`. Shell sends `SetFixedSellPct` to the core on blur or Enter.
-    sell_edit_req: Option<(CoreId, usize)>,
-    /// Optimistic local cache of fixed-sell percentages, keyed by `(core, index)`.
-    /// Wheel and edit actions update it immediately for responsive display while sending to the core.
-    /// Otherwise the value would update only after the server echo because `send_settings` does not
-    /// modify the local snapshot, making sell changes appear unresponsive.
-    sell_pct_local: HashMap<(CoreId, usize), f64>,
-    /// Optimistic local fixed-sell slot selection. `Some(slot)` highlights S1-S6, while `None`
-    /// highlights the primary TP. Without it, clicks would visually wait for the core's settings echo.
-    sell_slot_local: HashMap<CoreId, Option<usize>>,
+    /// `(group, S1-S6 index)`. Shell writes the visible group value on blur or Enter.
+    sell_edit_req: Option<(String, usize)>,
+    /// Last attempted group-exit generation per core as `(settings, snapshot revision, ready)`.
+    ///
+    /// Including the coarse connection phase forces one retry after a feed respawn even when the
+    /// first new snapshot equals the retained pre-reconnect value and therefore keeps its revision.
+    group_exit_sync: HashMap<CoreId, (moon_core::config::GroupExitSettings, u64, bool)>,
     /// Optimistic local manual-strategy selection as `(enabled, id)`, keeping the header toggle and
     /// picker responsive until the core echoes its settings.
     manual_strat_local: HashMap<CoreId, (bool, u64)>,

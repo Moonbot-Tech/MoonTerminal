@@ -19,8 +19,6 @@ fn server(id: u64, uid: u64, name: &str) -> ServerConfig {
         color: [0, 0, 0],
         synthetic: false,
         chart_bundle: String::new(),
-        order_sizes: None,
-        order_size_sel: None,
         default_alert_strategy: 0,
     }
 }

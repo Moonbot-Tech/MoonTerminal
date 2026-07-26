@@ -194,9 +194,10 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::ConvertDust, "convert dust")
     }
 
-    /// Place a manual order on the core's `market`. `short` selects the Long or Short position
-    /// side; `strategy_id=None` maps to `StratID=0` for an order without a strategy. Non-positive
-    /// `price` or `size` values are ignored.
+    /// Place a manual order on the core's `market` after its group exit state is confirmed.
+    ///
+    /// `short` selects the Long or Short position side; `strategy_id=None` maps to `StratID=0` for
+    /// an order without a strategy. Non-finite or non-positive `price` or `size` values are ignored.
     pub fn place_order(
         &self,
         core: CoreId,
@@ -205,8 +206,12 @@ impl SessionManager {
         price: f64,
         size: f64,
         strategy_id: Option<u64>,
+        exit: crate::config::GroupExitSettings,
     ) -> Result<()> {
-        if market.is_empty() || !(price > 0.0) || !(size > 0.0) {
+        if market.is_empty()
+            || !(price.is_finite() && price > 0.0)
+            || !(size.is_finite() && size > 0.0)
+        {
             return Ok(());
         }
         self.send_core_cmd(
@@ -217,6 +222,7 @@ impl SessionManager {
                 price,
                 size,
                 strategy_id,
+                exit,
             },
             "place order",
         )
@@ -400,6 +406,19 @@ impl SessionManager {
         )
     }
 
+    /// Synchronize every visible manual-exit control to one core without changing core-owned fields.
+    pub fn sync_group_exit(
+        &self,
+        core: CoreId,
+        exit: crate::config::GroupExitSettings,
+    ) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::SyncGroupExit(exit),
+            "sync group exit settings",
+        )
+    }
+
     /// Apply a targeted leverage-management edit, such as fixed leverage from the toolbar.
     pub fn edit_lev_manage(&self, core: CoreId, edit: LevManageEdit) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::EditLevManage(edit), "edit lev manage")
@@ -462,7 +481,7 @@ impl SessionManager {
     }
 
     /// Return the core account's base currency, such as `USDT` or `BTC`, once `CoreBase` has
-    /// identified it. The UI uses this currency for base-denominated order-size defaults.
+    /// identified it. The UI uses this currency for group-USD-to-base order-size conversion.
     pub fn core_base(&self, core: CoreId) -> Option<&str> {
         self.core_base.get(&core).map(String::as_str)
     }

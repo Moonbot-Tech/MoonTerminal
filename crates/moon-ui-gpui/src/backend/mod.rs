@@ -4,7 +4,10 @@
 
 mod detect_sound;
 mod figures;
+#[cfg(test)]
+mod tests;
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use gpui::Context;
@@ -12,135 +15,279 @@ use gpui::Context;
 use crate::Backend;
 use crate::chartdx::ChartDataHandle;
 use crate::core_order::{CoreOrder, OrderedCores};
+use moon_core::config::{
+    DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
+};
+use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
 
-impl Backend {
-    pub(crate) fn manual_order_size_state(&self, core: CoreId) -> ([f64; 6], usize) {
-        const DEFAULT_SEL: usize = 2;
+/// Apply one visible toolbar edit with the same wire quantization used by MoonProto.
+fn apply_group_exit_edit(exit: &mut GroupExitSettings, edit: ClientSettingsEdit) -> bool {
+    match edit {
+        ClientSettingsEdit::TakeProfit { pct, extended } => {
+            let mode = if extended {
+                TakeProfitMode::Extended
+            } else {
+                TakeProfitMode::Normal
+            };
+            let Some(pct) = mode.canonical_take_profit_pct(pct) else {
+                return false;
+            };
+            exit.take_profit_mode = mode;
+            exit.take_profit_pct = pct;
+            for fixed_pct in &mut exit.fixed_sell_pcts {
+                *fixed_pct = exit
+                    .take_profit_mode
+                    .canonical_fixed_sell_pct(*fixed_pct)
+                    .unwrap_or_default();
+            }
+            exit.fixed_sell_slot = None;
+        }
+        ClientSettingsEdit::ScalpTakeProfit(pct) => {
+            let Some(pct) = TakeProfitMode::Scalp.canonical_take_profit_pct(pct) else {
+                return false;
+            };
+            exit.take_profit_mode = TakeProfitMode::Scalp;
+            exit.take_profit_pct = pct;
+            for fixed_pct in &mut exit.fixed_sell_pcts {
+                *fixed_pct = exit
+                    .take_profit_mode
+                    .canonical_fixed_sell_pct(*fixed_pct)
+                    .unwrap_or_default();
+            }
+            exit.fixed_sell_slot = None;
+        }
+        ClientSettingsEdit::StopLossPct(pct) => {
+            let Some(pct) = GroupExitSettings::canonical_stop_loss_pct(pct) else {
+                return false;
+            };
+            exit.stop_loss_pct = pct;
+        }
+        ClientSettingsEdit::SelectFixedSellSlot(slot) if (1..=6).contains(&slot) => {
+            exit.fixed_sell_slot = Some(slot);
+        }
+        ClientSettingsEdit::EngageMainTakeProfit => exit.fixed_sell_slot = None,
+        ClientSettingsEdit::SetFixedSellPct { slot, pct } if (1..=6).contains(&slot) => {
+            let Some(pct) = exit.take_profit_mode.canonical_fixed_sell_pct(pct) else {
+                return false;
+            };
+            exit.fixed_sell_pcts[slot - 1] = pct;
+        }
+        ClientSettingsEdit::UseStopMarket(on) => exit.use_stop_market = on,
+        ClientSettingsEdit::PanicIfPriceDrop(on) => exit.stop_loss_enabled = on,
+        _ => return false,
+    }
+    true
+}
 
-        let base = self.session.core_base(core).unwrap_or("");
-        let server = self.config.servers.iter().find(|s| s.id == core);
-        let sizes = server
-            .map(|s| s.order_sizes_or_default(base))
-            .unwrap_or_else(|| moon_core::config::servers::default_order_sizes(base));
-        // Selection precedence: runtime map -> persisted config from the previous run -> F3.
-        let sel = self
-            .order_size_sel
-            .get(&core)
-            .copied()
-            .or_else(|| server.and_then(|s| s.order_size_sel))
-            .unwrap_or(DEFAULT_SEL)
-            .min(sizes.len().saturating_sub(1));
-        (sizes, sel)
+/// Mirror one live toolbar mutation into an open Settings preview without replacing draft fields.
+fn update_group_trade_pair(
+    live: &mut GroupTradeSettings,
+    preview: Option<&mut GroupTradeSettings>,
+    update: impl Fn(&mut GroupTradeSettings),
+) {
+    update(live);
+    if let Some(preview) = preview {
+        update(preview);
+    }
+}
+
+/// Convert a positive USD equivalent to base quantity, rejecting unavailable or invalid rates.
+fn usd_to_base_amount(usd: f64, rate: Option<f64>) -> Option<f64> {
+    let rate = rate?;
+    if !(usd.is_finite() && usd > 0.0 && rate.is_finite() && rate > 0.0) {
+        return None;
+    }
+    let size = usd / rate;
+    (size.is_finite() && size > 0.0).then_some(size)
+}
+
+/// Group-owned terms resolved before one manual order is submitted to a core.
+pub(crate) struct ManualOrderTerms {
+    /// Base-currency quantity sent to the target core.
+    pub(crate) size_base: f64,
+    /// Visible USD equivalent, absent when an isolated FireTest overrides the base size.
+    pub(crate) size_usd: Option<f64>,
+    /// Complete visible exit generation serialized before the order.
+    pub(crate) exit: GroupExitSettings,
+}
+
+impl Backend {
+    /// Return the six USD-equivalent presets and selected slot for one window group.
+    pub(crate) fn manual_order_size_state(&self, group: &str) -> ([f64; 6], usize) {
+        self.config
+            .group_ref(group)
+            .map_or((DEFAULT_ORDER_SIZES_USD, 2), |group| {
+                (
+                    group.trade.order_sizes_usd,
+                    group
+                        .trade
+                        .order_size_sel
+                        .min(group.trade.order_sizes_usd.len() - 1),
+                )
+            })
     }
 
-    /// Select an order-size preset by F1-F6 click or hotkey, update the runtime map, and persist it
-    /// in the server config through the same debounced `config_dirty` drain as the preset values.
-    pub(crate) fn set_order_size_sel(&mut self, core: CoreId, ix: usize) {
+    /// Select an F1-F6 USD-equivalent preset for one group.
+    pub(crate) fn set_order_size_sel(&mut self, group: &str, ix: usize) {
         if ix >= 6 {
             return;
         }
-        self.order_size_sel.insert(core, ix);
-        if let Some(s) = self.config.servers.iter_mut().find(|s| s.id == core) {
-            if s.order_size_sel != Some(ix) {
-                s.order_size_sel = Some(ix);
-                self.config_dirty = true;
-            }
-        }
+        self.update_group_trade(group, |trade| trade.order_size_sel = ix);
     }
 
-    pub(crate) fn manual_order_size(&self, core: CoreId) -> f64 {
-        let (sizes, sel) = self.manual_order_size_state(core);
+    /// Return the selected USD-equivalent order amount for one group.
+    pub(crate) fn manual_order_size_usd(&self, group: &str) -> f64 {
+        let (sizes, sel) = self.manual_order_size_state(group);
         sizes[sel]
     }
 
-    /// Return the selected F1-F6 manual order size in USD: the account-base amount multiplied by
-    /// the base-to-USD rate. Returns `None` when the size or rate is unavailable; used by the chart
-    /// crosshair label.
-    pub(crate) fn prospective_order_usd(&self, core: CoreId) -> Option<f64> {
-        let size = self.manual_order_size(core);
-        if !(size > 0.0) {
-            return None;
-        }
-        let base = self.session.core_base(core).unwrap_or("");
-        let rate = self.session.market_source().currency_usd_rate(core, base)?;
-        (rate > 0.0).then_some(size * rate)
+    /// Convert a target core's group-local USD amount into that core's base currency.
+    pub(crate) fn manual_order_size_base(&self, core: CoreId) -> Option<(f64, f64)> {
+        let server = self
+            .config
+            .servers
+            .iter()
+            .find(|server| server.id == core)?;
+        let usd = self.manual_order_size_usd(&server.group);
+        let base = self.session.core_base(core)?;
+        let size = usd_to_base_amount(
+            usd,
+            self.session.market_source().currency_usd_rate(core, base),
+        )?;
+        Some((size, usd))
     }
 
-    /// Return core order-size preset `ix` (F1-F6) from config or the base-currency default.
-    pub(crate) fn order_size_value(&self, core: CoreId, ix: usize) -> f64 {
-        let (sizes, _) = self.manual_order_size_state(core);
+    /// Return the visible USD equivalent only when the target core can currently convert it.
+    pub(crate) fn prospective_order_usd(&self, core: CoreId) -> Option<f64> {
+        self.manual_order_size_base(core).map(|(_, usd)| usd)
+    }
+
+    /// Resolve group-owned exit settings and either the visible USD size or a FireTest override.
+    pub(crate) fn manual_order_terms(
+        &self,
+        core: CoreId,
+        size_base_override: Option<f64>,
+    ) -> Option<ManualOrderTerms> {
+        let server = self
+            .config
+            .servers
+            .iter()
+            .find(|server| server.id == core)?;
+        let exit = self.group_exit_settings(&server.group);
+        let (size_base, size_usd) = match size_base_override {
+            Some(size) if size.is_finite() && size > 0.0 => (size, None),
+            Some(_) => return None,
+            None => {
+                let (size, usd) = self.manual_order_size_base(core)?;
+                (size, Some(usd))
+            }
+        };
+        Some(ManualOrderTerms {
+            size_base,
+            size_usd,
+            exit,
+        })
+    }
+
+    /// Return one group-local USD-equivalent F1-F6 preset.
+    pub(crate) fn order_size_value(&self, group: &str, ix: usize) -> f64 {
+        let (sizes, _) = self.manual_order_size_state(group);
         sizes[ix.min(sizes.len().saturating_sub(1))]
     }
 
-    /// Write core order-size preset `ix` to config after a wheel or input edit.
-    ///
-    /// This only sets `config_dirty`; the drain performs the debounced disk save.
-    pub(crate) fn set_order_size_value(&mut self, core: CoreId, ix: usize, v: f64) {
-        if ix >= 6 || !(v > 0.0) {
+    /// Write one group-local USD-equivalent F1-F6 preset.
+    pub(crate) fn set_order_size_value(&mut self, group: &str, ix: usize, value: f64) {
+        if ix >= 6 || !(value.is_finite() && value > 0.0) {
             return;
         }
-        let base = self.session.core_base(core).unwrap_or("").to_string();
-        if let Some(s) = self.config.servers.iter_mut().find(|s| s.id == core) {
-            let mut arr = s
-                .order_sizes
-                .unwrap_or_else(|| moon_core::config::servers::default_order_sizes(&base));
-            arr[ix] = v;
-            s.order_sizes = Some(arr);
-            self.config_dirty = true;
+        self.update_group_trade(group, |trade| trade.order_sizes_usd[ix] = value);
+    }
+
+    /// Return complete visible group exits, falling back to the neutral standard before repair.
+    pub(crate) fn group_exit_settings(&self, group: &str) -> GroupExitSettings {
+        self.config
+            .group_ref(group)
+            .map(|group| group.trade.exit)
+            .unwrap_or_default()
+    }
+
+    /// Return one visible S1-S6 percentage for a group.
+    pub(crate) fn fixed_sell_pct(&self, group: &str, ix: usize) -> f64 {
+        self.group_exit_settings(group).fixed_sell_pcts[ix.min(5)]
+    }
+
+    /// Apply a visible ClientSettings edit to the group's local source of truth.
+    pub(crate) fn edit_group_exit(&mut self, group: &str, edit: ClientSettingsEdit) -> bool {
+        let mut exit = self.group_exit_settings(group);
+        if !apply_group_exit_edit(&mut exit, edit) {
+            return false;
         }
+        self.update_group_trade(group, |trade| trade.exit = exit);
+        true
     }
 
-    /// Return the currently displayed fixed-sell percentage for core preset `ix` (S1-S6).
-    ///
-    /// A process-lifetime local cache entry always takes precedence over the `ClientSettings`
-    /// snapshot. Core echoes and command failures do not reconcile or clear this override.
-    pub(crate) fn fixed_sell_pct(&self, core: CoreId, ix: usize) -> f64 {
-        if let Some(v) = self.sell_pct_local.get(&(core, ix)) {
-            return *v;
+    /// Apply one group-trade mutation to both live config and an open Settings preview.
+    fn update_group_trade(&mut self, group: &str, update: impl Fn(&mut GroupTradeSettings)) {
+        let live = &mut self.config.group_mut(group).trade;
+        let preview = self
+            .preview
+            .as_mut()
+            .map(|preview| &mut preview.group_mut(group).trade);
+        update_group_trade_pair(live, preview, update);
+        self.config_dirty = true;
+    }
+
+    /// Synchronize each group's complete local exit generation to every live core in that group.
+    pub(crate) fn sync_group_manual_settings(&mut self) {
+        let live_ids: HashSet<CoreId> = self
+            .session
+            .sessions()
+            .iter()
+            .map(|session| session.id)
+            .collect();
+        self.group_exit_sync
+            .retain(|core, _| live_ids.contains(core));
+
+        for server in self
+            .config
+            .servers
+            .iter()
+            .filter(|server| server.active && live_ids.contains(&server.id))
+        {
+            let exit = self.group_exit_settings(&server.group);
+            let (revision, ready, matches) = self
+                .session
+                .store()
+                .core(server.id)
+                .map(|data| {
+                    (
+                        data.client_settings_rev,
+                        data.status == moon_core::feed::ConnStatus::Ready,
+                        data.client_settings
+                            .as_ref()
+                            .is_some_and(|settings| settings.group_exit_settings() == exit),
+                    )
+                })
+                .unwrap_or((0, false, false));
+            let generation = (exit, revision, ready);
+            if matches {
+                self.group_exit_sync.insert(server.id, generation);
+                continue;
+            }
+            if self.group_exit_sync.get(&server.id) == Some(&generation) {
+                continue;
+            }
+            if let Err(error) = self.session.sync_group_exit(server.id, exit) {
+                log::warn!(
+                    "group manual settings sync failed: core={} group={}: {error:#}",
+                    server.id,
+                    server.group
+                );
+                continue;
+            }
+            self.group_exit_sync.insert(server.id, generation);
         }
-        self.session
-            .store()
-            .core(core)
-            .and_then(|d| d.client_settings.as_ref())
-            .map(|s| s.fixed_sell_pcts[ix.min(5)])
-            .unwrap_or(0.0)
-    }
-
-    /// Store a process-lifetime local fixed-sell override for immediate display.
-    ///
-    /// The override remains until replaced or the process exits; core echoes do not clear it.
-    pub(crate) fn set_fixed_sell_pct_local(&mut self, core: CoreId, ix: usize, v: f64) {
-        self.sell_pct_local.insert((core, ix), v);
-    }
-
-    /// Return the process-lifetime local `(core, ix)` override or the core-provided `fallback`.
-    ///
-    /// The local value continues to mask the fallback after core echoes or command failures.
-    pub(crate) fn fixed_sell_pct_with(&self, core: CoreId, ix: usize, fallback: f64) -> f64 {
-        self.sell_pct_local
-            .get(&(core, ix))
-            .copied()
-            .unwrap_or(fallback)
-    }
-
-    pub(crate) fn set_fixed_sell_slot_local(&mut self, core: CoreId, slot: Option<usize>) {
-        self.sell_slot_local.insert(core, slot);
-    }
-
-    pub(crate) fn fixed_sell_slot_with(
-        &self,
-        core: CoreId,
-        fallback: Option<usize>,
-    ) -> Option<usize> {
-        self.sell_slot_local.get(&core).copied().unwrap_or(fallback)
-    }
-
-    pub(crate) fn fixed_sell_mode_with(&self, core: CoreId, fallback: bool) -> bool {
-        self.sell_slot_local
-            .get(&core)
-            .map(|slot| slot.is_some())
-            .unwrap_or(fallback)
     }
 
     /// Store a process-lifetime local manual-strategy override for immediate feedback.

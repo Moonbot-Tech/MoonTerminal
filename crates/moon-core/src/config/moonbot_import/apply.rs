@@ -1,6 +1,6 @@
 //! Applies SELECTED [`MoonBotImportPlan`] items to an `AppConfig` draft copy.
-//! Local settings only: terminal (UI theme, hotkeys), chart/lines (colors), and per-core
-//! size presets for explicitly selected cores. The `core_commands` group (fixed-sell) is NOT
+//! Local settings only: terminal (UI theme, hotkeys), chart/lines (colors), and group-local
+//! preset selection applied through target cores. The `core_commands` group (fixed-sell) is NOT
 //! included here: it is reserved for preview and is not currently sent to cores.
 //!
 //! The function mutates the supplied config IN MEMORY and writes nothing to disk. The Save button
@@ -24,7 +24,7 @@ pub struct ApplyOutcome {
 
 /// Applies selected local plan changes to `cfg`, where `selected` contains item ids.
 ///
-/// `target_core_ids` identifies the cores (`ServerConfig.id`) for the per-core group.
+/// `target_core_ids` identifies cores whose unique groups receive group-local values.
 pub fn apply_local(
     cfg: &mut AppConfig,
     plan: &MoonBotImportPlan,
@@ -45,8 +45,8 @@ pub fn apply_local(
             out.unknown_ids.push(item.id.clone());
         }
     }
-    for item in plan.per_core.iter().filter(|c| selected.contains(&c.id)) {
-        if apply_per_core(cfg, item, target_core_ids) {
+    for item in plan.group_items.iter().filter(|c| selected.contains(&c.id)) {
+        if apply_group_item(cfg, item, target_core_ids) {
             out.applied += 1;
         } else {
             out.unknown_ids.push(item.id.clone());
@@ -162,28 +162,30 @@ fn apply_color(cfg: &mut AppConfig, id: &str, rgb: [u8; 3]) -> bool {
     true
 }
 
-/// Applies a per-core item to selected cores. Returns `false` for an unrecognized id.
+/// Applies a group-local item to the unique groups containing selected cores.
 ///
-/// An empty core list is not a plan error: the item is deliberately applied to no targets.
-fn apply_per_core(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: &[u64]) -> bool {
-    let apply_to_cores = |cfg: &mut AppConfig, f: &dyn Fn(&mut crate::config::ServerConfig)| {
-        for s in cfg
+/// An empty core list is not a plan error: the item is deliberately applied to no groups.
+fn apply_group_item(cfg: &mut AppConfig, item: &SettingChange, target_core_ids: &[u64]) -> bool {
+    /// Return selected group names once even when multiple target cores share a group.
+    fn target_groups(cfg: &AppConfig, target_core_ids: &[u64]) -> Vec<String> {
+        let mut groups = Vec::new();
+        for server in cfg
             .servers
-            .iter_mut()
-            .filter(|s| target_core_ids.contains(&s.id))
+            .iter()
+            .filter(|server| target_core_ids.contains(&server.id))
         {
-            f(s);
+            if !groups.contains(&server.group) {
+                groups.push(server.group.clone());
+            }
         }
-    };
+        groups
+    }
+
     match (&item.value, item.id.as_str()) {
-        (PlannedValue::OrderSizes(sizes), "core.order_sizes") => {
-            let sizes = *sizes;
-            apply_to_cores(cfg, &move |s| s.order_sizes = Some(sizes));
-            true
-        }
-        (PlannedValue::OrderSizeSel(sel), "core.order_size_sel") => {
-            let sel = *sel;
-            apply_to_cores(cfg, &move |s| s.order_size_sel = Some(sel));
+        (PlannedValue::OrderSizeSel(sel), "group.order_size_sel") => {
+            for group in target_groups(cfg, target_core_ids) {
+                cfg.group_mut(&group).trade.order_size_sel = *sel;
+            }
             true
         }
         _ => false,

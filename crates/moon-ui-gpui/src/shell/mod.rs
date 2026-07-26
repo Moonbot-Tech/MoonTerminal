@@ -30,8 +30,6 @@ use gpui::*;
 
 use moon_ui::{DockArea, MoonInputState, MoonSliderState};
 
-use moon_core::session::CoreId;
-
 use crate::{Backend, controls};
 
 /// Shell for one group and one OS window: fixed header and toolbar, one `DockArea`, and status bar.
@@ -70,16 +68,16 @@ pub(crate) struct Shell {
     /// Input for inline order-size editing after a toolbar button is double-clicked.
     /// One input per Shell is reused for every F button.
     size_input: Entity<MoonInputState>,
-    /// Toolbar order-size editor target as `(core, F1-F6 index)`, or `None` when idle.
-    size_edit: Option<(CoreId, usize)>,
+    /// Toolbar order-size editor target as `(group, F1-F6 index)`, or `None` when idle.
+    size_edit: Option<(String, usize)>,
     /// Input for inline fixed-sell percentage editing after an S button is double-clicked, plus
-    /// its `(core, S1-S6 index)` target. Blur or Enter sends `SetFixedSellPct` to the core.
+    /// its `(group, S1-S6 index)` target. Blur or Enter updates the local group.
     sell_input: Entity<MoonInputState>,
-    sell_edit: Option<(CoreId, usize)>,
+    sell_edit: Option<(String, usize)>,
     /// Sliders and fields for the TP/SL/leverage popups.
     ///
-    /// They persist across renders and are seeded from the active core when a popup opens. The
-    /// subscriptions created in `new` commit edits to the core. One set serves the window because
+    /// They persist across renders. TP/SL seed and edit the group-local exit generation; leverage
+    /// seeds and edits the active core plus Main-chart market. One set serves the window because
     /// only one metric popup can be open; TP uses separate fixed-range sliders for normal and
     /// `x_tmode` ranges.
     tp_slider_normal: Entity<MoonSliderState>,

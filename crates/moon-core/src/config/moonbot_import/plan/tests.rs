@@ -81,8 +81,6 @@ fn ctx<'a>(
         theme,
         orders,
         ui_theme_light: true, // MoonBot is dark, so the plan will contain a theme change.
-        order_sizes: [50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0],
-        order_size_sel: None,
     }
 }
 
@@ -186,18 +184,17 @@ fn core_items_and_range_checks() {
     );
     let plan = build_plan(&mb_config(), &ctx(&h, &t, &o));
 
-    let sizes = find(&plan.per_core, "core.order_sizes").unwrap();
-    assert_eq!(
-        sizes.value,
-        PlannedValue::OrderSizes([111.0, 222.0, 333.0, 444.0, 555.0, 666.0])
-    );
-    assert!(!sizes.same);
-    let sel = find(&plan.per_core, "core.order_size_sel").unwrap();
+    assert!(find(&plan.group_items, "group.order_sizes_usd").is_none());
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("OSize")));
+    let sel = find(&plan.group_items, "group.order_size_sel").unwrap();
     assert_eq!(sel.value, PlannedValue::OrderSizeSel(3));
     assert_eq!(sel.new, "F4");
     assert!(!sel.same);
 
-    // Fixed-sell belongs in core_commands (ClientSettings), not per_core.
+    // Fixed-sell belongs in core_commands (ClientSettings), not group-local imports.
     assert!(find(&plan.core_commands, "core.fixed_sell_prices").is_some());
     assert_eq!(
         find(&plan.core_commands, "core.fixed_sell_sel")
@@ -210,7 +207,7 @@ fn core_items_and_range_checks() {
     let mut mb = mb_config();
     mb.ui.hotkeys.order_size_sel = 9;
     let plan = build_plan(&mb, &ctx(&h, &t, &o));
-    assert!(find(&plan.per_core, "core.order_size_sel").is_none());
+    assert!(find(&plan.group_items, "group.order_size_sel").is_none());
     assert!(plan.warnings.iter().any(|w| w.contains("bNum")));
 }
 
@@ -247,8 +244,6 @@ fn identical_values_marked_same_and_visible() {
     );
     let mut mb = mb_config();
     mb.theme.current_style = 0; // Light, matching ctx.
-    mb.ui.hotkeys.order_sizes = [50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0];
     let plan = build_plan(&mb, &ctx(&h, &t, &o));
     assert!(find(&plan.terminal, "ui.theme_mode").unwrap().same);
-    assert!(find(&plan.per_core, "core.order_sizes").unwrap().same);
 }

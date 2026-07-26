@@ -10,11 +10,23 @@ use super::secrets::Secret;
 use super::servers::{self, FeedFlags};
 use super::{AppConfig, GroupConfig, ServerConfig};
 
+#[cfg(test)]
+mod tests;
+
 /// Migrate the legacy combined encrypted `config.enc` format.
 ///
 /// The legacy format has no durable counter, so construction still names `uid_floor`; see
 /// [`super::uid_counter::UidCounter`] for the invariant and best-effort boundary.
 pub fn from_legacy_enc(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
+    let plain = crypto::decrypt(&std::fs::read(paths::legacy_enc_path())?)?;
+    config_from_legacy_enc(&plain, uid_floor)
+}
+
+/// Parse decrypted legacy `config.enc` bytes into a complete runtime configuration.
+///
+/// Returns an error for malformed UTF-8 or TOML. Every server group receives a concrete
+/// [`GroupConfig`] while existing legacy group settings remain unchanged.
+fn config_from_legacy_enc(plain: &[u8], uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
     // Ignore host/port from the legacy format because the endpoint comes from the key.
     #[derive(Deserialize, Default)]
     struct OldServer {
@@ -37,7 +49,6 @@ pub fn from_legacy_enc(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
         groups: Vec<GroupConfig>,
     }
 
-    let plain = crypto::decrypt(&std::fs::read(paths::legacy_enc_path())?)?;
     let old: Old = toml::from_str(std::str::from_utf8(&plain)?)?;
     let servers = old
         .servers
@@ -56,23 +67,32 @@ pub fn from_legacy_enc(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
             color: s.color,
             synthetic: false,
             chart_bundle: String::new(),
-            order_sizes: None,
-            order_size_sel: None,
             default_alert_strategy: 0,
         })
         .collect();
-    Ok(AppConfig {
+    let mut config = AppConfig {
         servers,
         groups: old.groups,
         language: super::Language::default(),
         ..AppConfig::blank(uid_floor)
-    })
+    };
+    super::ensure_server_group_configs(&config.servers, &mut config.groups);
+    Ok(config)
 }
 
 /// Migrate the oldest plaintext `config.toml` format containing one server.
 ///
 /// Construction names `uid_floor` for the same reason as [`from_legacy_enc`].
 pub fn from_legacy_toml(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
+    let text = std::fs::read_to_string(paths::legacy_toml_path())?;
+    config_from_legacy_toml(&text, uid_floor)
+}
+
+/// Parse the oldest plaintext `config.toml` into a complete runtime configuration.
+///
+/// Returns an error for malformed TOML and materializes the default server group's local manual
+/// controls before the caller persists the migrated config.
+fn config_from_legacy_toml(text: &str, uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
     // Ignore host/port because the endpoint comes from the key.
     #[derive(Deserialize)]
     struct Legacy {
@@ -82,13 +102,13 @@ pub fn from_legacy_toml(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
         market: String,
     }
 
-    let l: Legacy = toml::from_str(&std::fs::read_to_string(paths::legacy_toml_path())?)?;
+    let l: Legacy = toml::from_str(text)?;
     let market = if l.market.is_empty() {
         servers::default_market()
     } else {
         l.market
     };
-    Ok(AppConfig {
+    let mut config = AppConfig {
         servers: vec![ServerConfig {
             id: 1,
             uid: 1,
@@ -102,12 +122,12 @@ pub fn from_legacy_toml(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
             color: servers::default_color(),
             synthetic: false,
             chart_bundle: String::new(),
-            order_sizes: None,
-            order_size_sel: None,
             default_alert_strategy: 0,
         }],
         groups: Vec::new(),
         language: super::Language::default(),
         ..AppConfig::blank(uid_floor)
-    })
+    };
+    super::ensure_server_group_configs(&config.servers, &mut config.groups);
+    Ok(config)
 }

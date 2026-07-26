@@ -32,8 +32,8 @@ pub(super) fn report<T, E: std::fmt::Display>(
 
 /// Places a new order (TNewOrderCommand). `short` is the POSITION side
 /// (Long/Short, mirroring `is_short`); `strategy_id=None` sends `StratID=0`, marking a manual
-/// order that may still be governed by the core's configured manual strategy. `size` is
-/// expressed in the base coin.
+/// order that may still be governed by the core's configured manual strategy. `size` is expressed
+/// in the base coin, while `use_market_stop` comes from the order's confirmed group settings.
 pub(super) fn place_order(
     client: &MoonClient,
     server_id: u64,
@@ -42,16 +42,16 @@ pub(super) fn place_order(
     price: f64,
     size: f64,
     strategy_id: Option<u64>,
+    use_market_stop: bool,
 ) {
-    let side = if short {
-        OrderSide::Short
-    } else {
-        OrderSide::Long
-    };
-    let mut params = NewOrderParams::new(market.clone(), side, price, size);
-    if let Some(id) = strategy_id {
-        params = params.with_strategy_id(id);
-    }
+    let params = new_order_params(
+        market.clone(),
+        short,
+        price,
+        size,
+        strategy_id,
+        use_market_stop,
+    );
     match client.trade().new_order(params) {
         Ok(_ticket) => log::info!(
             "core {server_id} place order {market} short={short} price={price} size={size} strat={strategy_id:?}"
@@ -60,6 +60,28 @@ pub(super) fn place_order(
             log::warn!("core {server_id} place order {market} failed: {error}")
         }
     }
+}
+
+/// Build complete MoonProto order parameters, including per-order stop-market semantics.
+fn new_order_params(
+    market: String,
+    short: bool,
+    price: f64,
+    size: f64,
+    strategy_id: Option<u64>,
+    use_market_stop: bool,
+) -> NewOrderParams {
+    let side = if short {
+        OrderSide::Short
+    } else {
+        OrderSide::Long
+    };
+    let mut params =
+        NewOrderParams::new(market, side, price, size).with_market_stop(use_market_stop);
+    if let Some(id) = strategy_id {
+        params = params.with_strategy_id(id);
+    }
+    params
 }
 
 /// Moves/replaces an existing core order identified by `uid` to a new price, as when dragging

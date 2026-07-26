@@ -1,6 +1,7 @@
 //! Compose the trading toolbar: size, leverage, stop loss, TP/S slots, and Live controls.
 
 use gpui::*;
+use moon_core::session::CoreId;
 use rust_i18n::t;
 
 use moon_ui::{
@@ -8,13 +9,14 @@ use moon_ui::{
     MoonInputState, MoonLabel, MoonPalette, h_flex,
 };
 
-use moon_core::session::CoreId;
-
 use super::metric::{metric_button, sl_toggle};
 use super::strips::{self, sell_strip, size_strip};
 use super::{TradeMetric, fmt_field2, fmt_field2_signed};
 use crate::shell::Shell;
 use crate::{Backend, design};
+
+#[cfg(test)]
+mod tests;
 
 /// Caption size for a preset group — one step below the strip's own cells, which render their
 /// labels at 11, so 10 reads as a label NAMING the group rather than as another value in it.
@@ -28,7 +30,7 @@ const CAPTION_SIZE: f32 = 10.0;
 ///
 /// The text is a literal, not `t!`: `Size`/`Sell` are on the deliberately-untranslated list
 /// (`locales/README.md`), as are the neighbouring `Lev`/`SL`/`TP`. The tooltip is translated, the
-/// caption is not. The account's base currency appended to `Size` is a ticker, likewise untranslated.
+/// caption is not. The appended `USDT eq.` is a deliberately-untranslated technical unit.
 fn strip_caption(text: impl Into<SharedString>, p: MoonPalette) -> impl IntoElement {
     div().flex_none().child(
         MoonLabel::new(text)
@@ -92,10 +94,8 @@ pub(crate) const ICON_BTN_W: f32 = 30.0;
 const SETTINGS_BTN_W: f32 = 92.0;
 /// Caption of the sell group — unlike `Size` it carries no unit, the cells already show percents.
 const SELL_CAPTION: &str = "Sell";
-
-/// Length ceiling for the base-currency code in the caption. The toolbar expects a short asset code;
-/// this bound prevents arbitrary server text from expanding the row.
-const BASE_CCY_MAX_CHARS: usize = 8;
+/// Stable unit for group-local manual order-size equivalents.
+const SIZE_UNIT: &str = "USDT eq.";
 
 /// Which of the row's optional LABELS fit a window of width `chrome_width`.
 ///
@@ -127,7 +127,6 @@ fn row_fit(
     chrome_width: f32,
     size: &strips::FittedCells,
     sell: &strips::FittedCells,
-    base_ccy: Option<&str>,
 ) -> RowFit {
     let gap = design::ui_value(cx, design::CHROME_GAP);
     let fw = |v: f32| design::font_w(cx, v);
@@ -160,19 +159,17 @@ fn row_fit(
     // optional, because the button itself is not.
     let settings_label_w = fw(SETTINGS_BTN_W) - ICON_BTN_W;
 
-    let full_caption = size_caption_text(base_ccy);
+    let full_caption = size_caption_text();
     let full = base + caption_w(&full_caption);
     let with_settings = full + settings_label_w;
 
     let size_caption = if chrome_width >= full {
         Some(full_caption)
     } else {
-        // Only the unit survives, and only if a core told us what it is. Measured lazily: at any
-        // width that fits the full caption this string is never needed, and measuring costs an
-        // uncached glyph layout per character on every frame.
-        base_ccy
-            .map(|ccy| SharedString::from(ccy.to_string()))
-            .filter(|ccy| chrome_width >= base + caption_w(ccy))
+        // Only the fixed unit survives. Measured lazily: at any width that fits the full caption
+        // this string is never needed, and measuring costs an uncached glyph layout per character
+        // on every frame.
+        (chrome_width >= base + caption_w(SIZE_UNIT)).then(|| SharedString::from(SIZE_UNIT))
     };
     RowFit {
         size_caption,
@@ -193,22 +190,51 @@ struct RowFit {
 
 /// Caption of the order-size group together with its unit.
 ///
-/// The unit is the active core's account base currency, not a constant: a core on a BTC account
-/// sizes its orders in BTC. No core means no currency, and the caption stays a bare `Size` — an
-/// invented unit would state something about an account we do not know.
+/// Manual sizes are displayed as one USDT equivalent for the whole group and converted only when
+/// an order targets a particular core.
 ///
-/// The unit lives on the CAPTION rather than in all six cells: it is one and the same fact for the
-/// whole group, and cell width is the row's scarcest resource. The cost is that a collapsed caption
-/// takes the unit with it; the cell tooltip, reachable at any width, covers that case.
-fn size_caption_text(base_ccy: Option<&str>) -> SharedString {
-    match base_ccy {
-        Some(ccy) => SharedString::from(format!("Size, {ccy}")),
-        None => SharedString::from("Size"),
-    }
+/// The unit lives on the caption rather than in all six cells. Narrow layouts retain the compact
+/// `USDT eq.` caption, and every cell tooltip repeats the same unit.
+fn size_caption_text() -> SharedString {
+    SharedString::from("Size, USDT eq.")
+}
+
+/// Prefer the hovered chart's core when deciding whether its core-owned manual strategy applies.
+pub(crate) fn manual_strategy_core(
+    active_core: Option<CoreId>,
+    hovered_core: Option<CoreId>,
+    hovered_belongs_to_group: bool,
+) -> Option<CoreId> {
+    hovered_core
+        .filter(|_| hovered_belongs_to_group)
+        .or(active_core)
+}
+
+/// Resolve the core whose manual-strategy state governs the toolbar and any open metric popup.
+pub(crate) fn effective_manual_strategy_core(
+    backend: &Entity<Backend>,
+    group: &str,
+    cx: &App,
+) -> Option<CoreId> {
+    let hovered_core = backend
+        .read(cx)
+        .hovered_chart
+        .clone()
+        .and_then(|weak| weak.upgrade())
+        .and_then(|chart| chart.read(cx).target_at_cursor())
+        .map(|(core, _)| core);
+    let backend = backend.read(cx);
+    manual_strategy_core(
+        backend.active_trade_core(group),
+        hovered_core,
+        hovered_core.is_some_and(|core| backend.core_belongs_to_group(group, core)),
+    )
 }
 
 /// The toolbar strip: an ordinary `Shell` child between the header and the dock, not a dock panel.
-/// It reads the active core's trading state from `backend`; clicks write back and notify.
+/// It reads size and exit state from the window group, plus leverage and manual strategy from the
+/// active core. While a chart is hovered, manual-strategy applicability follows that chart's core
+/// so the row describes the order target under the pointer.
 ///
 /// `chrome_width` is the window width. The row's controls are all `flex_none`, so nothing shrinks:
 /// its optional labels collapse against that width by an explicit priority ([`row_fit`]), because
@@ -217,9 +243,9 @@ fn size_caption_text(base_ccy: Option<&str>) -> SharedString {
 pub fn toolbar(
     backend: &Entity<Backend>,
     group: &str,
-    size_edit: Option<(CoreId, usize)>,
+    size_edit: Option<(String, usize)>,
     size_input: &Entity<MoonInputState>,
-    sell_edit: Option<(CoreId, usize)>,
+    sell_edit: Option<(String, usize)>,
     sell_input: &Entity<MoonInputState>,
     shell: &Entity<Shell>,
     metric_popup: Option<(TradeMetric, AnyElement)>,
@@ -236,6 +262,7 @@ pub fn toolbar(
         Some((TradeMetric::Tp, content)) => (None, None, Some(content)),
         None => (None, None, None),
     };
+    let manual_core = effective_manual_strategy_core(backend, group, cx);
     let (
         follow,
         focus_core,
@@ -249,74 +276,35 @@ pub fn toolbar(
         sell_pcts,
         sell_slot,
         manual_on,
-        base_ccy,
     ) = {
         let b = backend.read(cx);
-        // The active trade core is either the sticky header selection or the core of the open Main
-        // chart. Every trading control in this row reads that same core. With no core, values render
-        // as dashes and interactions are ignored.
+        // Group-local size and exit controls do not move with this selection. Only leverage and
+        // manual strategy read the active trade core.
         let focus_core = b.active_trade_core(group);
-        let (size_values, size_sel) = match focus_core {
-            Some(core) => {
-                let (values, sel) = b.manual_order_size_state(core);
-                (Some(values), Some(sel))
-            }
-            None => (None, None),
-        };
-        let core_data = focus_core.and_then(|c| b.session.store().core(c));
-        let cs = core_data.and_then(|d| d.client_settings.as_ref());
-        // The TP button always shows its own `take_profit_main_pct`, even while an S slot is engaged;
+        let (size_values, size_sel) = b.manual_order_size_state(group);
+        let exit = b.group_exit_settings(group);
+        // The TP button always shows its own `take_profit_pct`, even while an S slot is engaged;
         // selecting a slot must not replace the value displayed by TP.
-        // `None` is not merely "render a dash": it also means the popup has nothing to seed
-        // from, so the button must be drawn DISABLED rather than swallowing a click.
-        let tp_value = cs.map(|s| format!("{}%", fmt_field2(s.take_profit_main_pct as f32)));
-        // TP is lit while fixed-sell is off. Local optimistic state overrides the core snapshot so
-        // an S/TP click appears immediately instead of waiting for the ClientSettings echo.
-        let tp_engaged = match (focus_core, cs) {
-            (Some(core), Some(s)) => !b.fixed_sell_mode_with(core, s.fixed_sell_mode),
-            _ => true,
-        };
+        let tp_value = format!("{}%", fmt_field2(exit.take_profit_pct as f32));
+        let tp_engaged = exit.fixed_sell_slot.is_none();
         // SL is signed: `+1.00%` / `-20.00%`, avoiding `--` from manually prefixing a negative value.
-        let sl_value = cs.map(|s| format!("{}%", fmt_field2_signed(s.stop_loss_pct)));
+        let sl_value = format!("{}%", fmt_field2_signed(exit.stop_loss_pct));
         // The toggle beside SL controls `panic_if_price_drop`; while off, the SL button is disabled.
-        let sl_on = cs.map(|s| s.panic_if_price_drop).unwrap_or(false);
-        // Overlay the optimistic local cache on core values for a live sell display.
-        let sell_pcts = focus_core.zip(cs).map(|(core, s)| {
-            let arr: [f64; 6] =
-                std::array::from_fn(|i| b.fixed_sell_pct_with(core, i, s.fixed_sell_pcts[i]));
-            arr
-        });
-        // Highlight an S slot ONLY while fixed-sell is enabled; otherwise every S slot is dim.
-        let sell_slot = match (focus_core, cs) {
-            (Some(core), Some(s)) => {
-                b.fixed_sell_slot_with(core, s.fixed_sell_mode.then_some(s.fixed_sell_slot))
-            }
-            _ => None,
-        };
+        let sl_on = exit.stop_loss_enabled;
+        let sell_pcts = exit.fixed_sell_pcts;
+        let sell_slot = exit.fixed_sell_slot;
         // Leverage is the Main chart market's per-core, per-market value from assets.
         // `seed_value` rather than `current`: it carries the same "0 means not set" rule the
         // popup's own open guard uses, so the dash and the disabled button cannot disagree with it.
         let lev_value = TradeMetric::Lev
             .seed_value(b, group)
             .map(|l| format!("×{}", l as i32));
-        // With the header's MS toggle on, the core sets sell/stop levels for new orders from the
-        // manual strategy's fields. Dim toolbar TP/S slots/SL because their values do not apply.
-        let manual_on = focus_core
+        // The target chart wins over the header selection while it is hovered: mouse and market
+        // hotkeys address that chart's independent core, whose manual strategy can override the
+        // visible group exit values.
+        let manual_on = manual_core
             .map(|c| b.manual_strat_state(c).0)
             .unwrap_or(false);
-        // Account base currency, for the unit in the size caption. The value comes FROM THE SERVER
-        // with no guaranteed shape and lands in a fixed-height single-line surface, so normalize in
-        // three steps: fold hard breaks (GPUI lays out one visual line per `\n` even under nowrap,
-        // and an unfolded break would paint through neighbouring content), drop empty/blank instead
-        // of rendering "Size, ", and cap an anomalously long token that would stretch the caption.
-        // Cloned because `core_base` borrows from the backend read guard, which does not outlive
-        // this block.
-        let base_ccy = focus_core
-            .and_then(|c| b.session.core_base(c))
-            .map(crate::display_text::flatten_lines)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.chars().take(BASE_CCY_MAX_CHARS).collect::<String>());
         (
             b.follow,
             focus_core,
@@ -330,7 +318,6 @@ pub fn toolbar(
             sell_pcts,
             sell_slot,
             manual_on,
-            base_ccy,
         )
     };
     let p = MoonPalette::active(cx);
@@ -344,35 +331,20 @@ pub fn toolbar(
     // block already read, so the row and the `Shell` state that outlives an open popup cannot come
     // to different conclusions about the same metric.
     //
-    // Having a VALUE is part of it. A metric whose value is a dash has nothing for its popup to
-    // seed from, and `Shell` refuses to open one — so without this term the button would look live
-    // and silently swallow the click, which is worse than being visibly unavailable.
+    // Leverage alone needs a live value. Group-owned TP and SL are complete even before a core
+    // connects, so their availability depends only on manual-strategy and SL-toggle state.
     let has_core = focus_core.is_some();
-    let enabled = |metric: TradeMetric, value: &Option<String>| {
-        metric.available_with(has_core, sl_on, manual_on) && value.is_some()
-    };
-    let lev_available = enabled(TradeMetric::Lev, &lev_value);
-    let tp_available = enabled(TradeMetric::Tp, &tp_value);
-    let sl_available = enabled(TradeMetric::Sl, &sl_value);
-    // Rendered form of the same three: a dash wherever there is no value.
-    let dash = || "—".to_string();
-    let (tp_str, sl_str, lev_str) = (
-        tp_value.unwrap_or_else(dash),
-        sl_value.unwrap_or_else(dash),
-        lev_value.unwrap_or_else(dash),
-    );
+    let lev_available =
+        TradeMetric::Lev.available_with(has_core, sl_on, manual_on) && lev_value.is_some();
+    let tp_available = TradeMetric::Tp.available_with(has_core, sl_on, manual_on);
+    let sl_available = TradeMetric::Sl.available_with(has_core, sl_on, manual_on);
+    let lev_str = lev_value.unwrap_or_else(|| "—".to_string());
 
     // Cells are fitted BEFORE rendering: both the strip itself and the row budget that decides the
     // labels' fate read them. One computation, one source.
     let size_cells = strips::FittedCells::fit(cx, strips::size_labels(size_values));
     let sell_cells = strips::FittedCells::fit(cx, strips::sell_labels(sell_pcts));
-    let fit = row_fit(
-        cx,
-        chrome_width,
-        &size_cells,
-        &sell_cells,
-        base_ccy.as_deref(),
-    );
+    let fit = row_fit(cx, chrome_width, &size_cells, &sell_cells);
 
     // A section carries the gap INSIDE it; the boundary between two sections is drawn by the RULE
     // standing between them, not by a wider gap. Shared with the header — see
@@ -395,8 +367,7 @@ pub fn toolbar(
 
     row = row
         // §1 ORDER SIZE. Leads the row: it is the quantity the other three sections modify —
-        // leverage scales it, the stop and the target exit it. Same principle as the header, which
-        // leads with the active core because everything else is read through it.
+        // leverage scales it, the stop bounds it, and TP/S define its target exit.
         .child(
             section().child(captioned_strip(
                 fit.size_caption,
@@ -404,14 +375,14 @@ pub fn toolbar(
                 size_strip(
                     &size_cells,
                     size_sel,
-                    // Show the editor only when the request belongs to the toolbar's focused core.
+                    // Show the editor only when the request belongs to this toolbar's group.
                     size_edit
-                        .filter(|(c, _)| Some(*c) == focus_core)
+                        .filter(|(edit_group, _)| edit_group == group)
                         .map(|(_, i)| i),
                     size_input,
                     backend.clone(),
-                    focus_core,
-                    base_ccy.as_deref(),
+                    group.to_string(),
+                    SIZE_UNIT,
                 ),
                 cx,
             )),
@@ -446,7 +417,7 @@ pub fn toolbar(
                 ))
                 .child(metric_button(
                     TradeMetric::Sl,
-                    sl_str,
+                    sl_value,
                     sl_color,
                     design::font_w(cx, SL_W),
                     sl_popup.is_some(),
@@ -466,23 +437,23 @@ pub fn toolbar(
                 &sell_cells,
                 // Manual strategy mode does not apply these slots, so none is lit.
                 sell_slot.filter(|_| !manual_on),
-                // Show the S editor only when its request belongs to the toolbar's focused core.
+                // Show the S editor only when the request belongs to this toolbar's group.
                 sell_edit
-                    .filter(|(c, _)| Some(*c) == focus_core && !manual_on)
+                    .filter(|(edit_group, _)| edit_group == group && !manual_on)
                     .map(|(_, i)| i),
                 sell_input,
                 backend.clone(),
                 // Manual strategy mode disables all click, wheel, and double-click interaction.
-                focus_core.filter(|_| !manual_on),
+                (!manual_on).then(|| group.to_string()),
             );
             // MoonUI dims disabled cells once. An outer opacity would multiply that alpha in
-            // manual-strategy mode and make the values substantially darker than other disabled
-            // controls, while the TP button beside them intentionally stays live.
+            // manual-strategy mode and make the strip substantially darker than the disabled TP
+            // button beside it.
             let sell_block = captioned_strip(fit.sell_caption, p, strip, cx);
             section()
                 .child(metric_button(
                     TradeMetric::Tp,
-                    tp_str,
+                    tp_value,
                     tp_color,
                     design::font_w(cx, TP_W),
                     tp_popup.is_some(),

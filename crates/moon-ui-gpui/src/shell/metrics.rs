@@ -1,5 +1,5 @@
 //! Toolbar metric popups (TP/SL/Lev): open-state reconciliation, editor seeding, and guarded edits
-//! bound to the core and optional market captured when the popup opened.
+//! bound either to the window group or to the leverage core and market captured at open time.
 
 use gpui::*;
 
@@ -21,26 +21,30 @@ impl Shell {
     ///   armed). `MoonPopover` then renders only a disabled trigger and fires no `on_open_change`,
     ///   so the popup vanishes while the state stays `Some` — and pops back open, unclicked, the
     ///   moment the metric is available again, holding values seeded before the change.
-    /// * **the edit target changed underneath it.** A different active core moves every metric;
-    ///   changing the Main chart market moves leverage alone. Event handlers resolve that address
-    ///   when they fire, so availability alone cannot distinguish the stale popup from a live one.
+    /// * **the edit target changed underneath it.** A different active core or Main chart market
+    ///   moves leverage. Group-local TP and SL deliberately keep the same address across core
+    ///   changes. Event handlers resolve the address when they fire, so availability alone cannot
+    ///   distinguish a stale leverage popup from a live one.
     ///
     /// Lives beside the state it guards rather than in the frame-composition module, so the next
     /// rule added to [`controls::TradeMetric`] is edited within sight of it.
     pub(super) fn reconcile_metric_popup(&mut self, cx: &App) {
+        let manual_core =
+            controls::toolbar::effective_manual_strategy_core(&self.backend, &self.group, cx);
         let stale = self
             .open_metric_popup
             .as_ref()
             .is_some_and(|(metric, target)| {
                 let b = self.backend.read(cx);
-                !target.is_live(*metric, b, &self.group) || !metric.available(b, &self.group)
+                !target.is_live(*metric, b, &self.group)
+                    || !metric.available(b, &self.group, manual_core)
             });
         if stale {
             self.open_metric_popup = None;
         }
     }
 
-    /// Send a `ClientSettings` edit ON BEHALF OF the open metric popup.
+    /// Commit a group-exit edit on behalf of the open TP or SL popup.
     ///
     /// Refuses when the popup is not open for `metric`, or when the address it was seeded from is
     /// no longer the one this metric resolves to. That check has to happen HERE, at event time:
@@ -48,11 +52,8 @@ impl Shell {
     /// render, and repaints pass three stacked throttles. A slider drag inside that window would
     /// otherwise continue changing the no-longer-visible core or leverage market.
     ///
-    /// Distinct from [`Self::commit_client_edit`], which the core-settings gear popup uses and which
-    /// still resolves the active core at event time. That is a KNOWN GAP, not a design decision:
-    /// `seed_core_settings_popup` freezes Global TP, TrailingDrop and V-Stop from the core active
-    /// when the gear popup opened, so it has this same defect and wants this same treatment. It is
-    /// left alone here only because its files are outside this change.
+    /// Distinct from [`Self::commit_client_edit`], which the core-settings gear popup uses for
+    /// core-owned settings and resolves against the active core at event time.
     pub(super) fn commit_metric_edit(
         &self,
         metric: controls::TradeMetric,
@@ -62,29 +63,29 @@ impl Shell {
         let Some((open, target)) = self.open_metric_popup.as_ref() else {
             return;
         };
-        let b = self.backend.read(cx);
-        if *open != metric || !target.is_live(metric, b, &self.group) {
+        let is_live = {
+            let b = self.backend.read(cx);
+            *open == metric && target.is_live(metric, b, &self.group)
+        };
+        if !is_live {
             return;
         }
-        if let Err(error) = b.session.edit_client_settings(target.core, edit) {
-            log::warn!("toolbar metric edit failed: {error:#}");
-        }
+        self.backend.update(cx, |b, _| {
+            b.edit_group_exit(&self.group, edit);
+        });
     }
 
     /// Open or close a toolbar metric's popup — the `on_open_change` of its anchored `MoonPopover`.
     ///
-    /// Opening seeds the slider and the field with the active core's current value.
+    /// Opening seeds the slider and field with the current group or leverage-target value.
     ///
     /// The `EngageMainTakeProfit` edit goes out ONLY on OPENING TP. `MoonPopover` fires
     /// `on_open_change` for every close — a click elsewhere, Escape, a second click on the trigger —
-    /// and none of those is the user acting on TP. Sending a trading command from there is doubly
-    /// unsafe: `edit_client_settings` transmits the WHOLE last accepted `ClientSettings` snapshot,
-    /// so closing the popup right after editing TP — before the core echoed the new value back —
-    /// would roll that edit back. Closing now only clears UI state.
+    /// and none of those is the user acting on TP. Closing therefore only clears UI state.
     ///
-    /// Opening is a no-op unless both the target and its seed value exist. Every edit needs a core,
-    /// leverage also needs a Main-chart market, and a missing value would leave the long-lived
-    /// editor showing stale data from the previous target.
+    /// Opening is a no-op unless both the target and its seed value exist. Group-local TP and SL
+    /// always satisfy that guard; leverage still needs a core, Main-chart market, and known value.
+    /// Without the guard, its long-lived editor could show stale data from the previous target.
     pub(crate) fn set_metric_popup_open(
         &mut self,
         metric: controls::TradeMetric,
@@ -97,9 +98,9 @@ impl Shell {
             // BOTH an address and a value to show, or the popup does not open at all.
             //
             // The editors are long-lived entities: they keep whatever the LAST popup left in them.
-            // `seed_metric_popup` gives up silently when the value is missing — no client settings
-            // yet, or a market with no leverage entry — so an editor opened in that state would
-            // display the previous core's or the previous coin's number as if it were this one's.
+            // Group-local TP and SL always have a complete value. Leverage seeding can still give
+            // up when there is no active core, Main-chart market, or leverage entry; opening its
+            // editor in that state would display the previous core's or coin's number as current.
             // For leverage that is not merely misleading: Apply sends the FIELD, which the user need
             // never have touched, straight to the exchange.
             //
@@ -157,8 +158,8 @@ impl Shell {
         s
     }
 
-    /// Seed a metric popup's slider and field from the active core and optional Main-chart market.
-    /// TP selects its normal or extended slider from the active core's current `x_tmode`.
+    /// Seed a metric popup from the group exit or the active core's Main-chart leverage.
+    /// TP selects its normal or extended slider from the group's exact take-profit mode.
     fn seed_metric_popup(
         &self,
         metric: controls::TradeMetric,
@@ -203,15 +204,11 @@ impl Shell {
         }
     }
 
-    /// Return the active core's current extended-TP mode for edits entered in the TP field.
-    /// Missing core or client settings falls back to the normal 1..=100% range.
+    /// Return the group's current extended-TP mode for edits entered in the TP field.
     pub(super) fn active_tp_extended(&self, cx: &App) -> bool {
         let b = self.backend.read(cx);
-        b.active_trade_core(&self.group)
-            .and_then(|c| b.session.store().core(c))
-            .and_then(|d| d.client_settings.as_ref())
-            .map(|s| s.take_profit_extended)
-            .unwrap_or(false)
+        b.group_exit_settings(&self.group).take_profit_mode
+            == moon_core::config::TakeProfitMode::Extended
     }
 
     /// Update a popup field from its slider to provide live numeric feedback while dragging.

@@ -259,19 +259,19 @@ impl Shell {
         .detach();
 
         // Inline order-size editor opened by double-clicking an F1-F6 button. Every valid positive
-        // Change updates the focused core's `ServerConfig.order_sizes` immediately and schedules a
+        // Change updates the group's USD-equivalent preset immediately and schedules a
         // debounced save, so a hotkey or click before Enter uses the text already typed. Blur or
         // Enter performs a direct config save; empty, nonnumeric, or nonpositive input is ignored.
         let size_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(&size_input, |this, inp, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
-                let Some((core, ix)) = this.size_edit else {
+                let Some((group, ix)) = this.size_edit.as_ref() else {
                     return;
                 };
                 if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
-                    if v > 0.0 && ix < 6 {
+                    if v > 0.0 && *ix < 6 {
                         this.backend.update(cx, |b, bcx| {
-                            b.set_order_size_value(core, ix, v);
+                            b.set_order_size_value(group, *ix, v);
                             b.order_size_rev = b.order_size_rev.wrapping_add(1);
                             bcx.notify();
                         });
@@ -282,27 +282,18 @@ impl Shell {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
             }
-            let Some((core, ix)) = this.size_edit.take() else {
+            let Some((group, ix)) = this.size_edit.take() else {
                 return;
             };
             let raw = inp.read(cx).value().to_string();
             if let Ok(v) = raw.trim().replace(',', ".").parse::<f64>() {
                 if v > 0.0 && ix < 6 {
                     this.backend.update(cx, |b, bcx| {
-                        let base = b.session.core_base(core).unwrap_or("").to_string();
-                        let mut saved = false;
-                        if let Some(s) = b.config.servers.iter_mut().find(|s| s.id == core) {
-                            let mut arr = s.order_sizes.unwrap_or_else(|| {
-                                moon_core::config::servers::default_order_sizes(&base)
-                            });
-                            arr[ix] = v;
-                            s.order_sizes = Some(arr);
-                            saved = true;
-                        }
-                        if saved {
-                            if let Err(e) = b.config.save() {
-                                log::warn!("save order size failed: {e}");
-                            }
+                        b.set_order_size_value(&group, ix, v);
+                        if let Err(error) = b.config.save() {
+                            log::warn!("save order size failed: {error}");
+                        } else {
+                            b.config_dirty = false;
                         }
                         bcx.notify();
                     });
@@ -313,32 +304,30 @@ impl Shell {
         .detach();
 
         // Inline fixed-sell percentage editor opened by double-clicking an S button. Blur or Enter
-        // sends `SetFixedSellPct` to the captured core; empty, nonnumeric, or negative input is
+        // updates the captured group; empty, nonnumeric, or negative input is
         // ignored.
         let sell_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(&sell_input, |this, inp, ev: &MoonInputEvent, cx| {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
             }
-            let Some((core, ix)) = this.sell_edit.take() else {
+            let Some((group, ix)) = this.sell_edit.take() else {
                 return;
             };
-            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
+            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>()
+                && v.is_finite()
+            {
                 if v >= 0.0 && ix < 6 {
                     this.backend.update(cx, |b, bcx| {
-                        // Update the optimistic display cache before sending the edit to the core.
-                        b.set_fixed_sell_pct_local(core, ix, v);
-                        b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                        bcx.notify();
-                        if let Err(error) = b.session.edit_client_settings(
-                            core,
+                        b.edit_group_exit(
+                            &group,
                             ClientSettingsEdit::SetFixedSellPct {
                                 slot: ix + 1,
                                 pct: v,
                             },
-                        ) {
-                            log::warn!("set fixed-sell pct failed: {error}");
-                        }
+                        );
+                        b.order_size_rev = b.order_size_rev.wrapping_add(1);
+                        bcx.notify();
                     });
                 }
             }
@@ -421,7 +410,9 @@ impl Shell {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
             }
-            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
+            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>()
+                && v.is_finite()
+            {
                 this.commit_client_edit(
                     ClientSettingsEdit::GlobalTakeProfit { on: true, pct: v },
                     cx,
@@ -433,7 +424,9 @@ impl Shell {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
             }
-            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f32>() {
+            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f32>()
+                && v.is_finite()
+            {
                 this.commit_client_edit(ClientSettingsEdit::TrailingDrop(v), cx);
             }
         })
@@ -561,9 +554,9 @@ impl Shell {
 
     /// Subscribe the TP/SL/leverage popup editors to guarded writes and live field updates.
     ///
-    /// Each callback writes only while its metric popup is still open for the core and market from
-    /// which it was seeded. The entities are passed in because `new` registers these subscriptions
-    /// before `Shell` itself has been assembled.
+    /// Each callback writes only while its metric popup is still open for the group-local exit or
+    /// leverage core and market from which it was seeded. The entities are passed in because `new`
+    /// registers these subscriptions before `Shell` itself has been assembled.
     fn wire_metric_subscriptions(
         cx: &mut Context<Self>,
         tp_slider_normal: &Entity<MoonSliderState>,
@@ -631,12 +624,14 @@ impl Shell {
         .detach();
 
         // Inputs commit exact values on Blur or Enter and ignore empty or nonnumeric text. TP reads
-        // the active core's current `x_tmode` so the edit uses the same range.
+        // the group's exact mode so the edit uses the same range.
         cx.subscribe(tp_input, |this, inp, ev: &MoonInputEvent, cx| {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
             }
-            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>() {
+            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f64>()
+                && v.is_finite()
+            {
                 let extended = this.active_tp_extended(cx);
                 this.commit_metric_edit(
                     controls::TradeMetric::Tp,
@@ -650,7 +645,9 @@ impl Shell {
             if !matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 return;
             }
-            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f32>() {
+            if let Ok(v) = inp.read(cx).value().trim().replace(',', ".").parse::<f32>()
+                && v.is_finite()
+            {
                 this.commit_metric_edit(
                     controls::TradeMetric::Sl,
                     ClientSettingsEdit::StopLossPct(v),

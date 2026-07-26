@@ -326,12 +326,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
             close_active_chart_group: None,
             close_active_chart_rev: 0,
             follow: true,
-            order_size_sel: HashMap::new(),
             order_size_rev: 0,
             order_size_edit_req: None,
             sell_edit_req: None,
-            sell_pct_local: HashMap::new(),
-            sell_slot_local: HashMap::new(),
+            group_exit_sync: HashMap::new(),
             manual_strat_local: HashMap::new(),
             panic_armed: HashSet::new(),
             backend_dirty_since_notify: false,
@@ -571,6 +569,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
                         b.maybe_diag_open_first_market(cx);
                         b.refresh_header_ticker_default(false);
                         b.sync_open_markets_if_due();
+                        b.sync_group_manual_settings();
                         b.snap = b.metrics.sample(Instant::now());
                         crate::firetest::tick_backend(b, cx);
 

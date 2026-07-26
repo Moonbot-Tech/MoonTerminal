@@ -6,6 +6,7 @@ use std::sync::Arc;
 use moonproto::state::{Order, OrderTraceChartPoint, OrderTraceLine};
 use moonproto::{Event, MoonClient, OrderWorkerStatus};
 
+use crate::config::TakeProfitMode;
 use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
     ClientSettings, ClientSettingsEdit, CoreSysStatus, EngineActionKind, EngineActionResult,
@@ -89,6 +90,7 @@ fn main_take_profit_percent(c: &moonproto::ClientSettingsCommand) -> f64 {
     }
 }
 
+/// Convert the complete MoonProto settings snapshot into the terminal's retained projection.
 pub(super) fn client_settings_from_proto(c: &moonproto::ClientSettingsCommand) -> ClientSettings {
     let fixed_sell_pcts =
         std::array::from_fn(|i| c.fixed_sell_preset_percent(i + 1).unwrap_or(0.0));
@@ -96,6 +98,13 @@ pub(super) fn client_settings_from_proto(c: &moonproto::ClientSettingsCommand) -
         take_profit_pct: c.effective_take_profit_percent(),
         take_profit_main_pct: main_take_profit_percent(c),
         take_profit_extended: c.x_tmode,
+        take_profit_mode: if c.x_sell == 0 {
+            TakeProfitMode::Scalp
+        } else if c.x_tmode {
+            TakeProfitMode::Extended
+        } else {
+            TakeProfitMode::Normal
+        },
         fixed_sell_mode: c.fixed_sell_mode,
         stop_loss_pct: c.price_drop_level,
         trailing_drop_pct: c.trailing_drop,
@@ -184,17 +193,38 @@ pub(super) fn apply_client_settings_edit(
             // x_tmode/"s9": on -> x_sell stores pct/10 (displayed as 100..900%); off -> x_sell
             // stores pct directly (1..100%). The core clamps TP to 100 without this flag, so set
             // both fields.
+            let mode = if extended {
+                TakeProfitMode::Extended
+            } else {
+                TakeProfitMode::Normal
+            };
+            let Some(pct) = mode.canonical_take_profit_pct(pct) else {
+                return;
+            };
             s.fixed_sell_mode = false;
             if extended {
                 s.x_tmode = true;
-                s.x_sell = (pct / 10.0).round().clamp(10.0, 90.0) as i32;
+                s.x_sell = (pct / 10.0) as i32;
             } else {
                 s.x_tmode = false;
-                s.x_sell = pct.round().clamp(1.0, 100.0) as i32;
+                s.x_sell = pct as i32;
             }
         }
-        ClientSettingsEdit::StopLossPct(pct) => s.price_drop_level = pct,
-        ClientSettingsEdit::ScalpTakeProfit(pct) => s.set_scalp_take_profit_percent(pct),
+        ClientSettingsEdit::StopLossPct(pct) => {
+            let Some(pct) = crate::config::GroupExitSettings::canonical_stop_loss_pct(pct) else {
+                return;
+            };
+            s.price_drop_level = pct;
+        }
+        ClientSettingsEdit::ScalpTakeProfit(pct) => {
+            let Some(pct) = TakeProfitMode::Scalp.canonical_take_profit_pct(pct) else {
+                return;
+            };
+            // Fixed-sell preset encoding also reads x_tmode, so scalp must clear a previous
+            // extended generation before the group serializer writes S1-S6.
+            s.x_tmode = false;
+            s.set_scalp_take_profit_percent(pct);
+        }
         ClientSettingsEdit::SelectFixedSellSlot(slot) => {
             // Enable fixed-sell mode; otherwise the effective TP remains on x_sell and does not
             // change. This makes effective_take_profit_percent() equal the selected preset, while
@@ -209,6 +239,14 @@ pub(super) fn apply_client_settings_edit(
         }
         ClientSettingsEdit::SetFixedSellPct { slot, pct } => {
             // Displayed percentage = s_price * (x_tmode ? 10 : 1); derive s_price inversely.
+            let mode = if s.x_tmode {
+                TakeProfitMode::Extended
+            } else {
+                TakeProfitMode::Normal
+            };
+            let Some(pct) = mode.canonical_fixed_sell_pct(pct) else {
+                return;
+            };
             let price = if s.x_tmode {
                 (pct / 10.0) as f32
             } else {

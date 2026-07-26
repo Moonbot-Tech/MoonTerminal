@@ -7,7 +7,8 @@ use moonproto::{
     MoonClient, StrategyFields, StrategyKind, StrategySchema, StrategySnapshot, TradesStreamMode,
 };
 
-use super::convert::{apply_client_settings_edit, apply_lev_manage_edit};
+use super::client_settings::{ClientSettingsSequence, ManualOrder};
+use super::convert::apply_lev_manage_edit;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fv_from_str, strat_kind_name};
@@ -116,6 +117,7 @@ pub(super) fn drain_commands(
     force_market_sample: &mut bool,
     orders_mutated: &mut bool,
     local_strat_edits: &mut LocalStratEdits,
+    client_settings_sequence: &mut ClientSettingsSequence,
 ) -> bool {
     loop {
         match cmd_rx.try_recv() {
@@ -459,11 +461,16 @@ pub(super) fn drain_commands(
                 price,
                 size,
                 strategy_id,
+                exit,
             }) => {
-                // THE CORE sets the sell/stop for a new order from ClientSettings (ROE). The
-                // terminal does not reposition it and displays exactly what the core sent.
-                trade::place_order(client, server.id, market, short, price, size, strategy_id);
-                *orders_mutated = true;
+                client_settings_sequence.enqueue_order(ManualOrder {
+                    market,
+                    short,
+                    price,
+                    size,
+                    strategy_id,
+                    exit,
+                });
             }
             Ok(CoreCmd::MoveOrder { uid, new_price }) => {
                 trade::move_order(client, server.id, uid, new_price);
@@ -533,26 +540,10 @@ pub(super) fn drain_commands(
                 trade::split_order_for_market(client, server.id, market, parts);
             }
             Ok(CoreCmd::EditClientSettings(edit)) => {
-                // Edit the RETAINED snapshot (moonproto keeps the latest one in SettingsState),
-                // preserving tails/blobs, and send it in full. Without a snapshot there is
-                // nothing to send.
-                match client
-                    .snapshot()
-                    .and_then(|s| s.settings().client_settings.clone())
-                {
-                    Some(mut settings) => {
-                        apply_client_settings_edit(&mut settings, edit);
-                        if let Err(error) = client.settings().send(settings) {
-                            log::warn!("core {} send client settings failed: {error}", server.id);
-                        } else {
-                            log::info!("core {} client settings edit {edit:?} sent", server.id);
-                        }
-                    }
-                    None => log::warn!(
-                        "core {} edit client settings ignored: no snapshot yet",
-                        server.id
-                    ),
-                }
+                client_settings_sequence.enqueue_edit(edit);
+            }
+            Ok(CoreCmd::SyncGroupExit(exit)) => {
+                client_settings_sequence.enqueue_group_exit(exit);
             }
             Ok(CoreCmd::EditLevManage(edit)) => {
                 match client
@@ -629,20 +620,7 @@ pub(super) fn drain_commands(
                 }
             }
             Ok(CoreCmd::SetBlacklist { on, text }) => {
-                // Patch the retained settings snapshot (flag plus blacklist text) and send it in full.
-                match client
-                    .snapshot()
-                    .and_then(|s| s.settings().client_settings.clone())
-                {
-                    Some(mut settings) => {
-                        settings.use_coins_black_list = on;
-                        settings.coins_black_list_text = text;
-                        if let Err(error) = client.settings().send(settings) {
-                            log::warn!("core {} set blacklist failed: {error}", server.id);
-                        }
-                    }
-                    None => log::warn!("core {} set blacklist ignored: no snapshot yet", server.id),
-                }
+                client_settings_sequence.enqueue_blacklist(on, text);
             }
             Ok(CoreCmd::SetExcludeBlacklistedDelta(on)) => {
                 if let Err(error) = client
@@ -655,7 +633,10 @@ pub(super) fn drain_commands(
                     );
                 }
             }
-            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Empty) => {
+                *orders_mutated |= client_settings_sequence.drive(client, server.id);
+                return false;
+            }
             Err(TryRecvError::Disconnected) => {
                 let _ = client.disconnect();
                 return true;

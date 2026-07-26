@@ -1,6 +1,6 @@
 //! Structural-signature tests for presentation-only and server-order changes.
 
-use super::{AppConfig, CoreSortMode, ServerConfig};
+use super::{AppConfig, CoreSortMode, GroupConfig, ServerConfig};
 
 /// Build an `AppConfig` with the selected order and servers.
 fn config(mode: CoreSortMode, servers: Vec<ServerConfig>) -> AppConfig {
@@ -52,4 +52,18 @@ fn a_server_list_reorder_stays_structural() {
         reversed.structural_sig(),
         "reordering servers must reach the session layer"
     );
+}
+
+#[test]
+/// Regression target: passing live groups instead of neutralized groups in
+/// `AppConfig::structural_sig` reconnects every core when the user scrolls an order-size preset.
+fn group_manual_controls_are_not_structural() {
+    let mut before = config(CoreSortMode::Name, vec![server(1, "Alpha")]);
+    before.servers[0].group = "desk".to_string();
+    before.groups.push(GroupConfig::new("desk"));
+    let mut after = before.clone();
+    after.groups[0].trade.order_sizes_usd[0] = 75.0;
+    after.groups[0].trade.order_size_sel = 5;
+
+    assert_eq!(before.structural_sig(), after.structural_sig());
 }

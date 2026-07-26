@@ -3,7 +3,6 @@
 
 use gpui::*;
 use moon_core::feed::ClientSettingsEdit;
-use moon_core::session::CoreId;
 use moon_ui::{MoonAccent, MoonInput, MoonInputState, MoonSegmentItem, MoonSegmentedControl};
 use rust_i18n::t;
 
@@ -128,48 +127,44 @@ impl FittedCells {
     }
 }
 
-/// Format six preset values or no-core placeholders.
+/// Format six complete group-owned preset values.
 ///
 /// Args:
-///     values: Complete values for the focused core, if one exists.
+///     values: Complete values for the group.
 ///     fmt: Value formatter shared by all six cells.
 ///
 /// Returns:
 ///     Six display labels.
-fn labels(values: Option<[f64; 6]>, fmt: impl Fn(f64) -> String) -> [String; 6] {
-    std::array::from_fn(|i| match values {
-        Some(values) => fmt(values[i]),
-        None => "\u{2014}".to_string(),
-    })
+fn labels(values: [f64; 6], fmt: impl Fn(f64) -> String) -> [String; 6] {
+    values.map(fmt)
 }
 
-/// Return order-size labels, or dashes when no core is focused.
+/// Return the group's complete order-size labels.
 ///
 /// Args:
-///     values: Complete order-size values for the focused core, if one exists.
+///     values: Complete group-local USD-equivalent order-size values.
 ///
 /// Returns:
 ///     Six formatted order-size labels.
-pub(super) fn size_labels(values: Option<[f64; 6]>) -> [String; 6] {
+pub(super) fn size_labels(values: [f64; 6]) -> [String; 6] {
     labels(values, fmt_adaptive)
 }
 
-/// Return fixed-sell percentage labels, or dashes when no core is focused.
+/// Return the group's complete fixed-sell percentage labels.
 ///
 /// Args:
-///     pcts: Complete fixed-sell percentages for the focused core, if one exists.
+///     pcts: Complete group-local fixed-sell percentages.
 ///
 /// Returns:
 ///     Six formatted percentage labels.
-pub(super) fn sell_labels(pcts: Option<[f64; 6]>) -> [String; 6] {
+pub(super) fn sell_labels(pcts: [f64; 6]) -> [String; 6] {
     labels(pcts, |pct| format!("{}%", fmt_sell_pct(pct)))
 }
 
 /// Build the order-size preset strip.
 ///
 /// Single click selects and persists a preset, double click requests inline editing, and
-/// Ctrl+wheel changes the value by its order of magnitude. No focused core disables all cells and
-/// suppresses their handlers and tooltips.
+/// Ctrl+wheel changes the value by its order of magnitude.
 ///
 /// Args:
 ///     cells: MoonUI-fitted preset cells used by both rendering and toolbar budgeting.
@@ -177,49 +172,41 @@ pub(super) fn sell_labels(pcts: Option<[f64; 6]>) -> [String; 6] {
 ///     edit_ix: Zero-based cell to replace with the inline editor.
 ///     input: Shared editor state.
 ///     backend: Application state receiving edits.
-///     core: Focused core; absence disables the strip.
-///     unit: Optional account currency shown in tooltips.
+///     group: Window group that owns the local USD presets.
+///     unit: USDT-equivalent unit shown in tooltips.
 ///
 /// Returns:
 ///     The configured segmented control.
 pub(super) fn size_strip(
     cells: &FittedCells,
-    sel: Option<usize>,
+    sel: usize,
     edit_ix: Option<usize>,
     input: &Entity<MoonInputState>,
     backend: Entity<Backend>,
-    core: Option<CoreId>,
-    unit: Option<&str>,
+    group: String,
+    unit: &str,
 ) -> impl IntoElement {
-    let interactive = core.is_some();
-    let unit = unit.map(str::to_string);
+    let unit = unit.to_string();
     let items = (0..6).map(|index| {
-        let mut item = cells.items[index]
+        cells.items[index]
             .clone()
-            .selected(sel == Some(index))
-            .disabled(!interactive);
-        if interactive {
-            item = item.tooltip(match unit.as_deref() {
-                Some(unit) => t!("toolbar.size_hint", n = index + 1, unit = unit).to_string(),
-                None => t!("toolbar.size_hint_nounit", n = index + 1).to_string(),
-            });
-        }
-        item
+            .selected(sel == index)
+            .tooltip(t!("toolbar.size_hint", n = index + 1, unit = unit.as_str()).to_string())
     });
 
     let click_backend = backend.clone();
+    let click_group = group.clone();
     let mut segment = MoonSegmentedControl::new("toolbar-size-presets")
         .accent(MoonAccent::Amber)
         .items(items)
         .on_click(move |index, event, _, app| {
-            let Some(core) = core else { return };
             click_backend.update(app, |backend, cx| {
                 match size_click_action(index, event.click_count()) {
                     SizeClickAction::Select(index) => {
-                        backend.set_order_size_sel(core, index);
+                        backend.set_order_size_sel(&click_group, index);
                     }
                     SizeClickAction::Edit(index) => {
-                        backend.order_size_edit_req = Some((core, index));
+                        backend.order_size_edit_req = Some((click_group.clone(), index));
                     }
                 }
                 backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
@@ -230,19 +217,18 @@ pub(super) fn size_strip(
             let Some(up) = wheel_step_dir(event.modifiers, event.delta) else {
                 return;
             };
-            let Some(core) = core else { return };
             backend.update(app, |backend, cx| {
-                let current = backend.order_size_value(core, index);
+                let current = backend.order_size_value(&group, index);
                 let next = wheel_step(current, up, 1.0);
                 if next != current {
-                    backend.set_order_size_value(core, index, next);
+                    backend.set_order_size_value(&group, index, next);
                     backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
                     cx.notify();
                 }
             });
         });
 
-    if let Some(index) = edit_ix.filter(|index| interactive && *index < 6) {
+    if let Some(index) = edit_ix.filter(|index| *index < 6) {
         segment = segment.replace_item(
             index,
             MoonInput::new("toolbar-size-edit").state(input).small(),
@@ -254,8 +240,8 @@ pub(super) fn size_strip(
 /// Build the fixed-sell preset strip beside the main take-profit button.
 ///
 /// Single click engages a slot (or restores main TP when clicking the active slot), double click
-/// requests inline editing, and Ctrl+wheel changes the core-owned percentage. No focused core or
-/// manual-strategy mode disables all cells because the toolbar passes `None` in both states.
+/// requests inline editing, and Ctrl+wheel changes the group-owned percentage. Manual-strategy
+/// mode disables all cells because the toolbar passes `None`.
 ///
 /// Args:
 ///     cells: MoonUI-fitted preset cells used by both rendering and toolbar budgeting.
@@ -263,7 +249,7 @@ pub(super) fn size_strip(
 ///     edit_ix: Zero-based cell to replace with the inline editor.
 ///     input: Shared editor state.
 ///     backend: Application state receiving edits.
-///     core: Focused interactive core; absence disables the strip.
+///     group: Interactive group; absence disables the strip.
 ///
 /// Returns:
 ///     The configured segmented control.
@@ -273,9 +259,9 @@ pub(super) fn sell_strip(
     edit_ix: Option<usize>,
     input: &Entity<MoonInputState>,
     backend: Entity<Backend>,
-    core: Option<CoreId>,
+    group: Option<String>,
 ) -> impl IntoElement {
-    let interactive = core.is_some();
+    let interactive = group.is_some();
     let items = (0..6).map(|index| {
         let mut item = cells.items[index]
             .clone()
@@ -288,35 +274,27 @@ pub(super) fn sell_strip(
     });
 
     let click_backend = backend.clone();
+    let click_group = group.clone();
     let mut segment = MoonSegmentedControl::new("toolbar-sell-presets")
         .accent(MoonAccent::Blue)
         .items(items)
         .on_click(move |index, event, _, app| {
-            let Some(core) = core else { return };
+            let Some(group) = click_group.as_deref() else {
+                return;
+            };
             click_backend.update(app, |backend, cx| {
                 match sell_click_action(index, sel_slot, event.click_count()) {
                     SellClickAction::Edit(index) => {
-                        backend.sell_edit_req = Some((core, index));
+                        backend.sell_edit_req = Some((group.to_string(), index));
                     }
                     SellClickAction::EngageMain => {
-                        backend.set_fixed_sell_slot_local(core, None);
+                        backend.edit_group_exit(group, ClientSettingsEdit::EngageMainTakeProfit);
                         backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
-                        if let Err(error) = backend
-                            .session
-                            .edit_client_settings(core, ClientSettingsEdit::EngageMainTakeProfit)
-                        {
-                            log::warn!("toggle fixed-sell slot failed: {error}");
-                        }
                     }
                     SellClickAction::SelectFixed(slot) => {
-                        backend.set_fixed_sell_slot_local(core, Some(slot));
+                        backend
+                            .edit_group_exit(group, ClientSettingsEdit::SelectFixedSellSlot(slot));
                         backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
-                        if let Err(error) = backend.session.edit_client_settings(
-                            core,
-                            ClientSettingsEdit::SelectFixedSellSlot(slot),
-                        ) {
-                            log::warn!("toggle fixed-sell slot failed: {error}");
-                        }
                     }
                 }
                 cx.notify();
@@ -326,23 +304,22 @@ pub(super) fn sell_strip(
             let Some(up) = wheel_step_dir(event.modifiers, event.delta) else {
                 return;
             };
-            let Some(core) = core else { return };
+            let Some(group) = group.as_deref() else {
+                return;
+            };
             backend.update(app, |backend, cx| {
-                let current = backend.fixed_sell_pct(core, index);
+                let current = backend.fixed_sell_pct(group, index);
                 let next = wheel_step(current, up, 0.5);
                 if next != current {
-                    backend.set_fixed_sell_pct_local(core, index, next);
-                    backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
-                    cx.notify();
-                    if let Err(error) = backend.session.edit_client_settings(
-                        core,
+                    backend.edit_group_exit(
+                        group,
                         ClientSettingsEdit::SetFixedSellPct {
                             slot: index + 1,
                             pct: next,
                         },
-                    ) {
-                        log::warn!("set fixed-sell pct (wheel) failed: {error}");
-                    }
+                    );
+                    backend.order_size_rev = backend.order_size_rev.wrapping_add(1);
+                    cx.notify();
                 }
             });
         });

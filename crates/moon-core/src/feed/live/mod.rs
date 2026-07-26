@@ -6,6 +6,7 @@
 //! `run()` is the main event loop; role commands live in [`commands`], pure moonproto-to-terminal
 //! converters in [`convert`], and dirty-market calculation in [`dirty`].
 
+mod client_settings;
 mod commands;
 mod convert;
 mod dirty;
@@ -33,6 +34,7 @@ use crate::config::ServerConfig;
 use crate::db::{DbMsg, ReportTx};
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 
+pub(in crate::feed) use client_settings::ClientSettingsSequence;
 use commands::{drain_commands, LocalStratEdits};
 use convert::{
     build_order_rows, client_settings_from_proto, lev_manage_from_proto, license_state_from_proto,
@@ -55,7 +57,7 @@ impl Drop for ClientSlotGuard {
 /// Publishes account snapshots and lifecycle state through `tx`, consumes commands from
 /// `cmd_rx`, and exposes the active client through `client_slot`. Returns an error when setup or
 /// the live loop cannot continue; dropping the internal guard clears the shared client slot.
-pub fn run(
+pub(super) fn run(
     server: &ServerConfig,
     chart_memory_percent: u16,
     tx: &FeedTx,
@@ -64,6 +66,7 @@ pub fn run(
     wake_rx: &Receiver<()>,
     reports: Option<&ReportTx>,
     client_slot: SharedMoonClient,
+    client_settings_sequence: &mut ClientSettingsSequence,
 ) -> anyhow::Result<()> {
     let _ = tx.send(FeedMsg::Status(ConnStatus::Connecting));
 
@@ -190,7 +193,6 @@ pub fn run(
     let mut events = Vec::new();
     let mut lifecycle_events = Vec::new();
     let mut force_market_sample = false;
-
     loop {
         // `SetMarket` contains complete desired state; the other coordinator commands are deltas
         // or actions. A closed channel means the coordinator has exited, so disconnect.
@@ -205,6 +207,7 @@ pub fn run(
             &mut force_market_sample,
             &mut orders_mutated,
             &mut local_strat_edits,
+            client_settings_sequence,
         ) {
             return Ok(());
         }
@@ -241,7 +244,7 @@ pub fn run(
                         id
                     );
                     let _ = tx.send(FeedMsg::Identity(id));
-                    // The account base currency selects UI order-size defaults such as BTC vs USDT.
+                    // The account base currency selects the USD conversion used for manual orders.
                     let base = info.base_currency_name.unwrap_or_default();
                     if !base.is_empty() {
                         let _ = tx.send(FeedMsg::CoreBase { base });
@@ -577,6 +580,8 @@ pub fn run(
             },
         );
         if let Some(settings) = client_settings {
+            client_settings_sequence.observe_update();
+            client_settings_sequence.drive(&client, server.id);
             if tx.send(FeedMsg::ClientSettings(settings)).is_err() {
                 break;
             }

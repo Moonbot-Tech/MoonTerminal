@@ -163,6 +163,16 @@ impl ChartPanel {
         self.place_order_at_pos(pos, short, cx)
     }
 
+    /// Return the core and market under this panel's cursor for non-price hotkeys.
+    ///
+    /// Returns:
+    ///     The hovered pane's target, or `None` after the pointer leaves the chart.
+    pub(crate) fn target_at_cursor(&self) -> Option<(CoreId, String)> {
+        let pane = self.input.hovered_pane?;
+        self.chart
+            .with_container(|container| container.target(pane))
+    }
+
     /// Place a manual order at the price under the chart cursor for the new-long/new-short hotkey.
     ///
     /// The chart owns pane-Y-to-price conversion, so placement remains here rather than in the
@@ -177,7 +187,7 @@ impl ChartPanel {
     /// Place a manual order at slot-pixel position `pos`, using `short` to select its position side.
     ///
     /// `false` selects Long and `true` selects Short. This shared mouse/hotkey path resolves pane,
-    /// price, and `(core, market)`, then calls `place_order` with the core's configured manual size.
+    /// price, and `(core, market)`, then converts the core group's visible USD-equivalent size.
     fn place_order_at_pos(&mut self, pos: (f32, f32), short: bool, cx: &mut Context<Self>) -> bool {
         // In separate-zone mode place only from the order-book zone; otherwise accept any pane area.
         let pane = if self.separate_zones(cx) {
@@ -199,14 +209,32 @@ impl ChartPanel {
         };
 
         let placed = self.backend.update(cx, |b, _| {
-            let size = b.manual_order_size(core);
-            // The core derives the new order's sell and stop settings from its own ROE
-            // `ClientSettings`; the terminal sends no follow-up adjustment and renders core state.
-            match b.session.place_order(core, market.clone(), short, price, size, None) {
+            let Some(terms) = b.manual_order_terms(core, None) else {
+                log::warn!(
+                    "manual chart order blocked: core={core} market={market} has no complete local terms or valid base/USD rate"
+                );
+                return false;
+            };
+            let Some(usd) = terms.size_usd else {
+                return false;
+            };
+            match b
+                .session
+                .place_order(
+                    core,
+                    market.clone(),
+                    short,
+                    price,
+                    terms.size_base,
+                    None,
+                    terms.exit,
+                )
+            {
                 Ok(()) => {
                     log::info!(
-                        "manual chart order: core={core} market={market} side={} price={price:.8} size={size}",
-                        if short { "short" } else { "long" }
+                        "manual chart order: core={core} market={market} side={} price={price:.8} size={} usd={usd}",
+                        if short { "short" } else { "long" },
+                        terms.size_base
                     );
                     true
                 }

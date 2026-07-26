@@ -26,10 +26,10 @@ use crate::Backend;
 /// Semantic hotkey action independent of its configured key binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyAction {
-    /// Select one of the active core's six order-size presets.
+    /// Select one of the current window group's order-size presets.
     OrderSize(usize),
-    /// Select one of the active core's six fixed-sell slots, making that preset the effective take
-    /// profit instead of the main TP setting.
+    /// Select one of the current window group's fixed-sell slots, making that preset the effective
+    /// take profit instead of the main TP setting.
     SellPreset(usize),
     /// Select the indexed manual strategy in the active core's header picker and enable manual
     /// strategy mode, matching a click on that picker item.
@@ -264,14 +264,15 @@ pub fn cancel_hovered_order(backend: &Entity<Backend>, cx: &mut App) -> bool {
 /// Execute a shared backend action against the caller's trading context.
 ///
 /// `target` is the calling window's active chart market as `(core, market)`, and `active_core` is
-/// its active trading core. `true` means the action was handled and the caller should stop key
-/// propagation; for command-sending actions it does not guarantee remote success. Actions that
-/// require caller-level window, hovered-chart, group-revision, or application context return
-/// `false` for caller routing.
+/// its active trading core. `group` owns size and exit hotkeys even when no core is live. `true`
+/// means the action was handled and the caller should stop key propagation; for command-sending
+/// actions it does not guarantee remote success. Actions that require caller-level window,
+/// hovered-chart, group-revision, or application context return `false` for caller routing.
 pub fn apply(
     action: HotkeyAction,
     b: &mut Backend,
     bcx: &mut Context<Backend>,
+    group: &str,
     target: Option<(CoreId, String)>,
     active_core: Option<CoreId>,
 ) -> bool {
@@ -313,16 +314,12 @@ pub fn apply(
                 false
             }
         }
-        A::OrderSize(i) => match active_core {
-            Some(core) => {
-                // Select the preset and persist it in configuration for the next restart.
-                b.set_order_size_sel(core, i);
-                b.order_size_rev = b.order_size_rev.wrapping_add(1);
-                bcx.notify();
-                true
-            }
-            None => false,
-        },
+        A::OrderSize(i) => {
+            b.set_order_size_sel(group, i);
+            b.order_size_rev = b.order_size_rev.wrapping_add(1);
+            bcx.notify();
+            true
+        }
         A::ManualStrategy(i) => match active_core {
             Some(core) => {
                 if crate::controls::select_manual_strategy(b, core, i) {
@@ -334,18 +331,15 @@ pub fn apply(
             }
             None => false,
         },
-        A::SellPreset(i) => match active_core {
-            Some(core) => {
-                if let Err(error) = b
-                    .session
-                    .edit_client_settings(core, ClientSettingsEdit::SelectFixedSellSlot(i + 1))
-                {
-                    log::warn!("hotkey select fixed-sell slot failed: {error}");
-                }
+        A::SellPreset(i) => {
+            if b.edit_group_exit(group, ClientSettingsEdit::SelectFixedSellSlot(i + 1)) {
+                b.order_size_rev = b.order_size_rev.wrapping_add(1);
+                bcx.notify();
                 true
+            } else {
+                false
             }
-            None => false,
-        },
+        }
         A::CancelBuy => match target {
             Some((core, market)) => {
                 b.cancel_buy_orders(core, &market);

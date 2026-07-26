@@ -1,7 +1,7 @@
 //! MoonBot settings import preview overlay.
 //! The overlay has Loading, Error, and Ready states. Parsing and planning run on the background
 //! executor so large clipboard buffers do not block the UI. Ready groups terminal, hotkey, chart,
-//! per-core, command, warning, and unsupported items; offers per-item selection, light/dark color
+//! group-local, command, warning, and unsupported items; offers per-item selection, light/dark color
 //! swatches, and target-core selection; and applies selected local items to the draft through
 //! `apply_local`. Save later persists the draft to disk.
 
@@ -18,7 +18,6 @@ use super::{SettingsView, interface, lines};
 use crate::design;
 use moon_core::config::moonbot_import::plan::SettingChange;
 use moon_core::config::moonbot_import::{self, MoonBotImportPlan, PlanContext};
-use moon_core::config::servers::default_order_sizes;
 
 /// Completed import plan and current user selection.
 pub(super) struct ImportReady {
@@ -28,7 +27,7 @@ pub(super) struct ImportReady {
     /// Per-core targets as `(ServerConfig.id, name, selected)`.
     ///
     /// Initially selects only the first active core in canonical order, or the first core if none
-    /// is active, so per-core settings are not silently applied to every core.
+    /// is active, so group-local settings are not silently applied to every window group.
     cores: Vec<(u64, String, bool)>,
 }
 
@@ -82,13 +81,11 @@ impl SettingsView {
         cx.notify();
 
         // Clone the draft slices needed by the pure `build_plan` function into the background task.
-        let (hotkeys, theme, orders, ui_light, order_sizes, order_size_sel, cores) = {
+        let (hotkeys, theme, orders, ui_light, cores) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
-            // Rank first, then choose the default target from canonical order. Selecting from raw
-            // `servers` would choose the config's first core, which differs from the user's top row
-            // in Name or AddedNewest mode. That core also owns the order-size presets, so import
-            // would overwrite presets for a core the user was not viewing.
+            // Rank first, then choose the default target from canonical order so group-local
+            // imports initially address the same top-row core the user sees.
             let order = crate::core_order::CoreOrder::new(d);
             let mut ranked: Vec<&moon_core::config::ServerConfig> = d.servers.iter().collect();
             order.sort_by(&mut ranked, |s| s.id);
@@ -103,10 +100,6 @@ impl SettingsView {
                 d.theme.clone(),
                 d.orders.clone(),
                 d.ui_theme_mode == moon_core::config::UiThemeMode::Light,
-                first_active
-                    .map(|s| s.order_sizes_or_default("USDT"))
-                    .unwrap_or_else(|| default_order_sizes("USDT")),
-                first_active.and_then(|s| s.order_size_sel),
                 ranked
                     .iter()
                     .map(|s| (s.id, s.name.clone(), Some(s.id) == first_active_id))
@@ -125,8 +118,6 @@ impl SettingsView {
                             theme: &theme,
                             orders: &orders,
                             ui_theme_light: ui_light,
-                            order_sizes,
-                            order_size_sel,
                         },
                     );
                     Ok::<_, moonbot_import::ImportError>(plan)
@@ -312,10 +303,15 @@ impl SettingsView {
             .children(self.import_group(cx, "import.group.terminal", &state.plan.terminal, p))
             .children(self.hotkeys_group(cx, &state.plan, p))
             .children(self.chart_columns(cx, &state.plan.chart, p))
-            .children(self.import_group(cx, "import.group.core", &state.plan.per_core, p));
+            .children(self.import_group(
+                cx,
+                "import.group.window_group",
+                &state.plan.group_items,
+                p,
+            ));
 
-        // Show target-core selection only when the plan contains per-core items.
-        if !state.plan.per_core.is_empty() {
+        // Core checkboxes select the unique window groups that receive group-local items.
+        if !state.plan.group_items.is_empty() {
             let all_on = state.cores.iter().all(|(_, _, on)| *on);
             let mut row = h_flex()
                 .flex_wrap()

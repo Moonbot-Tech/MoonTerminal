@@ -175,11 +175,9 @@ impl SettingsView {
                     color: default_color,
                     synthetic: false,
                     chart_bundle: String::new(),
-                    order_sizes: None,
-                    order_size_sel: None,
                     default_alert_strategy: 0,
                 });
-                sync_groups_from_servers(p);
+                sync_groups_from_servers(&p.servers, &mut p.groups);
                 bcx.notify();
             }
         });
@@ -194,7 +192,7 @@ impl SettingsView {
             if let Some(p) = b.preview.as_mut() {
                 if i < p.servers.len() {
                     p.servers.remove(i);
-                    sync_groups_from_servers(p);
+                    sync_groups_from_servers(&p.servers, &mut p.groups);
                     bcx.notify();
                 }
             }

@@ -168,9 +168,9 @@ impl Render for Shell {
             .child(controls::toolbar(
                 &self.backend,
                 &self.group,
-                self.size_edit,
+                self.size_edit.clone(),
                 &self.size_input,
-                self.sell_edit,
+                self.sell_edit.clone(),
                 &self.sell_input,
                 &cx.entity(),
                 metric_popup,

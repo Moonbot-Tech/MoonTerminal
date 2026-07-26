@@ -2,8 +2,8 @@
 //!
 //! The row is built from five semantic sections — size, leverage, risk, exit, session — plus the
 //! window launchers at the trailing edge; `design::chrome_divider` draws the section boundaries.
-//! Edits go where they belong: order sizes into the core's config, TP/SL/sell into the core via
-//! `ClientSettingsEdit`, leverage to the exchange, `follow` into `Backend`.
+//! Edits go where they belong: size/TP/SL/sell into group-local config, leverage to the exchange,
+//! manual strategy to its core, and `follow` into `Backend`.
 //!
 //! Organized into submodules, while this module owns slider bounds and re-exports:
 //! - [`coin_menu`] provides the shared coin context menu;

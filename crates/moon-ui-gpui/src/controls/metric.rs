@@ -1,5 +1,5 @@
 //! Toolbar trading metrics (TP/SL/Lev): anchored popup triggers, the SL toggle, popup content, and
-//! the target identity that keeps edits bound to the core and market from which they were seeded.
+//! target identities that keep group exits local while leverage stays bound to one core and market.
 
 use gpui::*;
 use rust_i18n::t;
@@ -84,31 +84,24 @@ impl TradeMetric {
     /// unclicked, holding stale slider values.
     ///
     /// `manual_on` is the manual strategy: the core then takes sell and stop levels from ITS
-    /// fields, so the toolbar's TP and SL would not reach a new order. Leverage is not overridden
-    /// by the manual strategy, but like the other two it is meaningless without a core: every edit
-    /// these popups make is addressed to one, so `has_core` gates all three.
+    /// fields, so the toolbar's TP and SL would not reach a new order. Leverage requires an active
+    /// core; group-local TP and SL always have a complete neutral-or-user-edited generation.
     pub fn available_with(self, has_core: bool, sl_on: bool, manual_on: bool) -> bool {
-        has_core
-            && match self {
-                TradeMetric::Lev => true,
-                TradeMetric::Tp => !manual_on,
-                TradeMetric::Sl => sl_on && !manual_on,
-            }
+        match self {
+            TradeMetric::Lev => has_core,
+            TradeMetric::Tp => !manual_on,
+            TradeMetric::Sl => sl_on && !manual_on,
+        }
     }
 
-    /// [`Self::available_with`] for a caller holding only the backend — `Shell`, which keeps no
-    /// trading state of its own. The toolbar does NOT go through here: it already read every flag
-    /// while building the row, and `active_trade_core` is a session scan it would otherwise repeat
-    /// once per metric on every frame.
-    pub fn available(self, b: &Backend, group: &str) -> bool {
+    /// [`Self::available_with`] for `Shell`, using the same hover-aware manual core as the toolbar.
+    pub fn available(self, b: &Backend, group: &str, manual_core: Option<CoreId>) -> bool {
         let core = b.active_trade_core(group);
-        let sl_on = core
-            .and_then(|c| b.session.store().core(c))
-            .and_then(|d| d.client_settings.as_ref())
-            .map(|s| s.panic_if_price_drop)
+        let exit = b.group_exit_settings(group);
+        let manual_on = manual_core
+            .map(|core| b.manual_strat_state(core).0)
             .unwrap_or(false);
-        let manual_on = core.map(|c| b.manual_strat_state(c).0).unwrap_or(false);
-        self.available_with(core.is_some(), sl_on, manual_on)
+        self.available_with(core.is_some(), exit.stop_loss_enabled, manual_on)
     }
 
     /// The value this metric's popup would seed from, or `None` when there is none to show.
@@ -126,46 +119,51 @@ impl TradeMetric {
 
     /// Where an edit from this metric's popup is addressed right now, or `None` if nowhere.
     pub fn target(self, b: &Backend, group: &str) -> Option<MetricTarget> {
-        let core = b.active_trade_core(group)?;
         match self {
             // Leverage is stored per (core, MARKET) and applied per market, so the coin on the Main
             // chart is part of the address, not context.
-            TradeMetric::Lev => b.main_chart_target(group).map(|(_, market)| MetricTarget {
-                core,
-                market: Some(market),
+            TradeMetric::Lev => {
+                let core = b.active_trade_core(group)?;
+                b.main_chart_target(group).map(|(_, market)| MetricTarget {
+                    core: Some(core),
+                    market: Some(market),
+                })
+            }
+            TradeMetric::Tp | TradeMetric::Sl => Some(MetricTarget {
+                core: None,
+                market: None,
             }),
-            _ => Some(MetricTarget { core, market: None }),
         }
     }
 
-    /// Return the active core's current value for seeding this metric's slider and input.
+    /// Return the current group or core value for seeding this metric's slider and input.
     ///
     /// Leverage depends on both the core and the Main chart's current market and is read from the
     /// active core's asset state.
     ///
     /// Args:
-    ///     b: Backend providing the active trading core and its state.
-    ///     group: Window group used to resolve the active core and Main chart market.
+    ///     b: Backend providing group exits plus the active trading core and its state.
+    ///     group: Window group used directly for exits and to resolve the leverage target.
     ///
     /// Returns:
-    ///     The current metric value, or `None` when its core, settings, market, or leverage is absent.
+    ///     The current metric value, or `None` when the leverage target is absent.
     pub fn current(self, b: &Backend, group: &str) -> Option<f32> {
-        let core = b.active_trade_core(group)?;
-        let cd = b.session.store().core(core)?;
         match self {
-            TradeMetric::Tp => cd
-                .client_settings
-                .as_ref()
-                // Seed from the button's own TP, not the effective value; selecting an S slot must
-                // not replace the slider seed.
-                .map(|s| s.take_profit_main_pct as f32),
-            TradeMetric::Sl => cd.client_settings.as_ref().map(|s| s.stop_loss_pct),
+            TradeMetric::Tp => Some(b.group_exit_settings(group).take_profit_pct as f32),
+            TradeMetric::Sl => Some(b.group_exit_settings(group).stop_loss_pct),
             TradeMetric::Lev => {
+                let core = b.active_trade_core(group)?;
                 // Read the Main chart market's leverage from the per-core map, which includes every
                 // tracked market rather than only open positions. Absence means unknown leverage and
                 // renders as a dash.
                 let (_, market) = b.main_chart_target(group)?;
-                cd.assets.leverage.get(&market).map(|l| *l as f32)
+                b.session
+                    .store()
+                    .core(core)?
+                    .assets
+                    .leverage
+                    .get(&market)
+                    .map(|l| *l as f32)
             }
         }
     }
@@ -174,20 +172,17 @@ impl TradeMetric {
 /// Everything an open metric popup's edits are ADDRESSED TO — recorded when it opens, re-checked
 /// before every write.
 ///
-/// A popup seeds its slider and field from one place and its handlers resolve that place again when
-/// the event fires. Between those two moments the address can move without a click anyone would
-/// read as dismissing the popup: a hotkey or a chart tab changes the Main chart, which is both what
-/// `active_trade_core` falls back to and where leverage takes its market. Comparing the seeded
-/// address against the live one before each write stops a popup for core A, or BTC leverage, from
-/// continuing to modify that old target after the visible trading context has moved elsewhere.
+/// TP and SL use `(None, None)` because their address is the containing group, which does not change
+/// when its active core changes. Leverage records `(core, market)` so a chart switch cannot apply a
+/// stale value to the wrong exchange target.
 ///
 /// Checking only at render is not enough on its own: repaints pass three stacked throttles, so a
 /// slider drag can fire in the window between the address moving and the popup being taken down.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MetricTarget {
-    /// Core that owned the value when the popup was opened.
-    pub core: CoreId,
-    /// Only leverage is per-market; `None` for the per-core metrics.
+    /// Core that owns leverage; `None` for group-local exit metrics.
+    pub core: Option<CoreId>,
+    /// Market that owns leverage; `None` for group-local exit metrics.
     pub market: Option<String>,
 }
 
@@ -278,8 +273,8 @@ pub(super) fn metric_button(
 /// Args:
 ///     on: Current `panic_if_price_drop` value.
 ///     disabled: Whether manual-strategy mode prevents editing toolbar SL.
-///     backend: Backend used to resolve the active core and send the settings edit.
-///     group: Window group whose active trading core receives the edit.
+///     backend: Backend that owns the group-local exit settings.
+///     group: Window group whose local SL toggle receives the edit.
 ///
 /// Returns:
 ///     The configured SL toggle element.
@@ -297,15 +292,9 @@ pub(super) fn sl_toggle(
         .disabled(disabled)
         .on_change(move |ch: &bool, _w, app| {
             let v = *ch;
-            let b = backend.read(app);
-            if let Some(core) = b.active_trade_core(&group) {
-                if let Err(e) = b
-                    .session
-                    .edit_client_settings(core, ClientSettingsEdit::PanicIfPriceDrop(v))
-                {
-                    log::warn!("sl toggle failed: {e:#}");
-                }
-            }
+            backend.update(app, |b, _| {
+                b.edit_group_exit(&group, ClientSettingsEdit::PanicIfPriceDrop(v));
+            });
         })
 }
 
@@ -315,9 +304,9 @@ pub(super) fn sl_toggle(
 /// This returns content only. `MoonPopover` supplies the background, border, radius, padding, and
 /// width; drawing them here would create a second frame inside the anchored popup.
 ///
-/// `target` is the address the popup was seeded from. Every control in here writes to a core (and,
-/// for leverage, a market) resolved when its event fires, so each one re-checks that address first
-/// and drops the event if it has moved — see [`MetricTarget`].
+/// `target` is the address the popup was seeded from. Every control re-checks that address before
+/// writing, so group exits survive a core switch while leverage drops a stale event — see
+/// [`MetricTarget`].
 #[allow(clippy::too_many_arguments)]
 pub fn metric_popup_content(
     metric: TradeMetric,
@@ -370,27 +359,23 @@ pub fn metric_popup_content(
                 .size(MoonCheckboxSize::Compact)
                 .on_change(move |ch: &bool, _w, app| {
                     let ext = *ch;
-                    let b = backend.read(app);
-                    if !target.is_live(TradeMetric::Tp, b, &group) {
+                    let is_live = {
+                        let b = backend.read(app);
+                        target.is_live(TradeMetric::Tp, b, &group)
+                    };
+                    if !is_live {
                         return;
                     }
-                    let core = target.core;
-                    let cur = b
-                        .session
-                        .store()
-                        .core(core)
-                        .and_then(|d| d.client_settings.as_ref())
-                        .map(|s| s.take_profit_main_pct)
-                        .unwrap_or(0.0);
-                    if let Err(error) = b.session.edit_client_settings(
-                        core,
-                        ClientSettingsEdit::TakeProfit {
-                            pct: cur,
-                            extended: ext,
-                        },
-                    ) {
-                        log::warn!("tp extended toggle failed: {error}");
-                    }
+                    backend.update(app, |b, _| {
+                        let cur = b.group_exit_settings(&group).take_profit_pct;
+                        b.edit_group_exit(
+                            &group,
+                            ClientSettingsEdit::TakeProfit {
+                                pct: cur,
+                                extended: ext,
+                            },
+                        );
+                    });
                 }),
         );
         // The fine slider controls scalp TP values from 0 to `TP_FINE_CAP` (1.99) in 0.01 steps.
@@ -419,11 +404,7 @@ pub fn metric_popup_content(
         // stop-limit order. This control moved here from the core-settings popup.
         let stop_market_on = {
             let b = backend.read(cx);
-            b.active_trade_core(group)
-                .and_then(|c| b.session.store().core(c))
-                .and_then(|d| d.client_settings.as_ref())
-                .map(|s| s.use_stop_market)
-                .unwrap_or(false)
+            b.group_exit_settings(group).use_stop_market
         };
         let backend = backend.clone();
         let group = group.to_string();
@@ -435,16 +416,16 @@ pub fn metric_popup_content(
                 .size(MoonCheckboxSize::Compact)
                 .on_change(move |ch: &bool, _w, app| {
                     let on = *ch;
-                    let b = backend.read(app);
-                    if !target.is_live(TradeMetric::Sl, b, &group) {
+                    let is_live = {
+                        let b = backend.read(app);
+                        target.is_live(TradeMetric::Sl, b, &group)
+                    };
+                    if !is_live {
                         return;
                     }
-                    if let Err(error) = b
-                        .session
-                        .edit_client_settings(target.core, ClientSettingsEdit::UseStopMarket(on))
-                    {
-                        log::warn!("stop market toggle failed: {error}");
-                    }
+                    backend.update(app, |b, _| {
+                        b.edit_group_exit(&group, ClientSettingsEdit::UseStopMarket(on));
+                    });
                 }),
         );
     }
@@ -467,7 +448,10 @@ pub fn metric_popup_content(
                         if !target.is_live(TradeMetric::Lev, b, &group) {
                             return;
                         }
-                        if let Err(error) = b.session.set_hedge_mode(target.core, on) {
+                        let Some(core) = target.core else {
+                            return;
+                        };
+                        if let Err(error) = b.session.set_hedge_mode(core, on) {
                             log::warn!("set hedge mode failed: {error}");
                         }
                     }
@@ -498,10 +482,13 @@ pub fn metric_popup_content(
                     if !target.is_live(TradeMetric::Lev, b, &group) {
                         return;
                     }
+                    let Some(core) = target.core else {
+                        return;
+                    };
                     let Some(market) = target.market.clone() else {
                         return;
                     };
-                    if let Err(error) = b.session.set_leverage(target.core, market, v) {
+                    if let Err(error) = b.session.set_leverage(core, market, v) {
                         log::warn!("apply leverage failed: {error:#}");
                     }
                 })
