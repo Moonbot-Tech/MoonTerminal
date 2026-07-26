@@ -32,8 +32,8 @@ use super::strategies::{
     strat_kind_name,
 };
 use super::{
-    ConnStatus, CoreCmd, CoreLogLine, DetectRow, ExchangeId, FeedMsg, FeedTx, SharedMoonClient,
-    StrategyRow,
+    ConnStatus, CoreCmd, CoreLogLine, DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole,
+    SharedMoonClient, StrategyRow,
 };
 use crate::config::ServerConfig;
 use crate::db::{DbMsg, ReportTx};
@@ -41,7 +41,7 @@ use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 
 use account_reconciliation::AccountReconciliation;
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
-use commands::{drain_commands, LocalStratEdits};
+use commands::{drain_commands, CommandDrain, LocalStratEdits};
 use convert::{
     build_order_rows, client_settings_from_proto, lev_manage_from_proto, license_state_from_proto,
     runtime_state_from_proto, settings_event_snapshot, sys_status_from_proto,
@@ -65,6 +65,25 @@ impl Drop for ClientSlotGuard {
 /// exposes the active client through `client_slot`, and applies the retained `market_role` for this
 /// connection attempt. Returns an error when setup or the live loop cannot continue; dropping the
 /// internal guard clears the shared client slot.
+///
+/// Args:
+///     server: Core configuration containing the exported MoonBot key.
+///     chart_memory_percent: Retained market-history budget for the MoonProto client.
+///     tx: Account-plane channel carrying lifecycle and decoded core updates.
+///     cmd_rx: Commands directed to this core.
+///     wake_tx: Coordinator wake sender.
+///     wake_rx: Feed wake receiver.
+///     reports: Optional report-database channel.
+///     client_slot: Shared active-client slot cleared when this attempt ends.
+///     client_settings_sequence: Reconnect-safe manual-settings sequence.
+///     market_role: Market-provider role retained between attempts.
+///     latest_market_role: Latest successfully queued role, independent of the bounded backlog.
+///
+/// Returns:
+///     Success after orderly shutdown, or the terminal setup/live-loop error.
+///
+/// Errors:
+///     Returns an error when the key is invalid, the client cannot connect, or the event loop fails.
 pub(super) fn run(
     server: &ServerConfig,
     chart_memory_percent: u16,
@@ -76,9 +95,10 @@ pub(super) fn run(
     client_slot: SharedMoonClient,
     client_settings_sequence: &mut ClientSettingsSequence,
     market_role: &mut MarketRoleState,
+    latest_market_role: &LatestMarketRole,
 ) -> anyhow::Result<()> {
     let _ = tx.send(FeedMsg::Status(ConnStatus::Connecting));
-    market_role.begin_connection();
+    market_role.begin_client();
 
     // 1. Decode the key into master/MAC keys and its suggested network.
     let info = moonproto::parse_key_info(server.key.expose())
@@ -199,16 +219,18 @@ pub(super) fn run(
         // `SetMarket` contains complete desired state; the other coordinator commands are deltas
         // or actions. A closed channel means the coordinator has exited, so disconnect.
         let mut orders_mutated = false;
-        if drain_commands(
+        let command_drain = drain_commands(
             cmd_rx,
             &client,
             server,
+            latest_market_role,
             market_role,
             &mut force_market_sample,
             &mut orders_mutated,
             &mut local_strat_edits,
             client_settings_sequence,
-        ) {
+        );
+        if command_drain == CommandDrain::Disconnected {
             return Ok(());
         }
         // Publish an immediate best-effort order snapshot after a flagged command, bypassing the
@@ -267,17 +289,6 @@ pub(super) fn run(
         event_queue.drain_lifecycle_events_into(&mut lifecycle_events);
         for ev in lifecycle_events.drain(..) {
             log::info!("lifecycle: {ev:?}");
-            if matches!(
-                &ev,
-                LifecycleEvent::Connecting
-                    | LifecycleEvent::Connected { fresh: true }
-                    | LifecycleEvent::Reconnecting
-                    | LifecycleEvent::ServerRestart
-                    | LifecycleEvent::ConnectFailed { .. }
-                    | LifecycleEvent::Disconnected
-            ) {
-                market_role.set_non_operational();
-            }
             let request_license_state = match &ev {
                 LifecycleEvent::Ready => true,
                 LifecycleEvent::Connected { fresh } => !*fresh,
@@ -317,9 +328,6 @@ pub(super) fn run(
             };
             let _ = tx.send(FeedMsg::Status(st));
             if request_license_state {
-                // The complete desired assignment survives failed Init attempts. Apply it once
-                // whenever this MoonProto domain becomes operational.
-                market_role.set_operational(&client, server.id);
                 if let Err(error) = client.settings().request_kernel_license_state() {
                     log::warn!(
                         "core {} request kernel license state failed: {error}",
@@ -1058,6 +1066,10 @@ pub(super) fn run(
             }
         }
         force_market_sample = false;
+
+        if !command_drain.may_wait() {
+            continue;
+        }
 
         let order_wait = if server.feed.orders && orders_table_pending {
             let elapsed = last_orders.elapsed();

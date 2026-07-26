@@ -10,35 +10,16 @@ fn first_account_only_assignment_is_actionable_and_repeats_are_idempotent() {
     assert!(!role.update(false, Vec::new(), Vec::new()));
 }
 
-/// `market_role.rs:begin_connection` clearing `desired` would lose the coordinator's only
+/// `market_role.rs:begin_client` clearing `desired` would lose the coordinator's only
 /// account-only assignment after a failed Init and application-level retry.
 #[test]
-fn a_new_connection_reapplies_the_retained_complete_plan() {
+fn a_new_client_reapplies_the_retained_complete_plan() {
     let mut role = MarketRoleState {
         desired: Some(MarketPlan::new(false, Vec::new(), Vec::new())),
         applied: Some(MarketPlan::new(false, Vec::new(), Vec::new())),
-        operational: true,
     };
-    role.begin_connection();
+    role.begin_client();
+
     assert!(role.applied.is_none());
-    role.operational = true;
-
-    assert!(role.needs_apply());
-}
-
-/// `market_role.rs:set_non_operational` retaining `applied` would suppress the account-only
-/// unsubscribe after MoonProto reconnects and can resume a stale remote stream.
-#[test]
-fn reconnect_invalidates_the_connection_local_application() {
-    let plan = MarketPlan::new(false, Vec::new(), Vec::new());
-    let mut role = MarketRoleState {
-        desired: Some(plan.clone()),
-        applied: Some(plan),
-        operational: true,
-    };
-
-    role.set_non_operational();
-    role.operational = true;
-
     assert!(role.needs_apply());
 }
