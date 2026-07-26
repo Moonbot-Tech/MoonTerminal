@@ -21,7 +21,7 @@ mod fields;
 mod strategy_read;
 mod time;
 
-pub use fields::{params_for, slot_type_for, FieldClass, FieldSpec, FIELDS};
+pub use fields::{slot_type_for, FieldClass, FieldSpec, FIELDS};
 pub use strategy_read::{
     strategy_cores, strategy_current_values, strategy_current_values_opt, strategy_filters,
     StratFilters,

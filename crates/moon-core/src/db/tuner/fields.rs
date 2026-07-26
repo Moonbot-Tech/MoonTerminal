@@ -258,12 +258,3 @@ pub fn slot_type_for(field: &str) -> Option<&'static str> {
         .find(|s| s.col == field)
         .and_then(|s| s.slot_type)
 }
-
-/// Strategy parameters (min, max) for a report field; `(None, None)` means no mapping.
-pub fn params_for(field: &str) -> (Option<&'static str>, Option<&'static str>) {
-    FIELDS
-        .iter()
-        .find(|s| s.col == field)
-        .map(|s| (s.p_min, s.p_max))
-        .unwrap_or((None, None))
-}
