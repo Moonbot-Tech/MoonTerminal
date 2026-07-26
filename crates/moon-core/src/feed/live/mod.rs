@@ -3,13 +3,18 @@
 //! Flow: event-driven. `MoonEventSink` wakes the backend thread after an actual event; market data
 //! remains in an immutable read-model snapshot, and only a lightweight signal reaches this module.
 //!
-//! `run()` is the main event loop; role commands live in [`commands`], pure moonproto-to-terminal
-//! converters in [`convert`], and dirty-market calculation in [`dirty`].
+//! `run()` is the main event loop; commands live in [`commands`], persistent market assignment in
+//! [`market_role`], pure moonproto-to-terminal converters in [`convert`], and dirty-market
+//! calculation in [`dirty`].
 
+mod account_reconciliation;
 mod client_settings;
 mod commands;
 mod convert;
 mod dirty;
+mod market_role;
+#[cfg(test)]
+mod tests;
 
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -34,6 +39,7 @@ use crate::config::ServerConfig;
 use crate::db::{DbMsg, ReportTx};
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 
+use account_reconciliation::AccountReconciliation;
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
 use commands::{drain_commands, LocalStratEdits};
 use convert::{
@@ -41,6 +47,7 @@ use convert::{
     runtime_state_from_proto, settings_event_snapshot, sys_status_from_proto,
 };
 use dirty::market_dirty_from_events;
+pub(in crate::feed) use market_role::MarketRoleState;
 
 struct ClientSlotGuard {
     slot: SharedMoonClient,
@@ -54,9 +61,10 @@ impl Drop for ClientSlotGuard {
 
 /// Run one core's live MoonProto event loop until shutdown or a terminal connection error.
 ///
-/// Publishes account snapshots and lifecycle state through `tx`, consumes commands from
-/// `cmd_rx`, and exposes the active client through `client_slot`. Returns an error when setup or
-/// the live loop cannot continue; dropping the internal guard clears the shared client slot.
+/// Publishes account snapshots and lifecycle state through `tx`, consumes commands from `cmd_rx`,
+/// exposes the active client through `client_slot`, and applies the retained `market_role` for this
+/// connection attempt. Returns an error when setup or the live loop cannot continue; dropping the
+/// internal guard clears the shared client slot.
 pub(super) fn run(
     server: &ServerConfig,
     chart_memory_percent: u16,
@@ -67,8 +75,10 @@ pub(super) fn run(
     reports: Option<&ReportTx>,
     client_slot: SharedMoonClient,
     client_settings_sequence: &mut ClientSettingsSequence,
+    market_role: &mut MarketRoleState,
 ) -> anyhow::Result<()> {
     let _ = tx.send(FeedMsg::Status(ConnStatus::Connecting));
+    market_role.begin_connection();
 
     // 1. Decode the key into master/MAC keys and its suggested network.
     let info = moonproto::parse_key_info(server.key.expose())
@@ -149,13 +159,6 @@ pub(super) fn run(
         }
     }
 
-    // The core's market role, assigned by the coordinator through SetMarket.
-    // is_provider controls whether ALL exchange trades are retained via subscribe_all_trades.
-    // wanted lists the markets actively served through subscriptions and the snapshot source.
-    let mut is_provider = false;
-    let mut wanted: Vec<String> = Vec::new();
-    // Markets with order-book subscriptions: a subset of wanted, enabled in at least one window.
-    let mut wanted_orderbook: Vec<String> = Vec::new();
     let mut identity_sent = false;
     let mut last_orders = Instant::now();
     let mut orders_table_pending = false;
@@ -163,9 +166,8 @@ pub(super) fn run(
     // Assets snapshot rate cap: minimum 1 s between publishes while the Assets view is active,
     // otherwise 5 s. Publication still requires a domain event; this is not a periodic timer.
     let mut last_assets = Instant::now();
-    // Throttle for proactive CORE balance requests after fills; see the block in the loop.
-    let mut last_balance_refresh = Instant::now();
-    let mut last_wallet_refresh = Instant::now();
+    // Coalesced repair requests for account changes that need a fresh balance or wallet snapshot.
+    let mut account_reconciliation = AccountReconciliation::new();
     // Window for logging Balance events after our refresh, used to diagnose phantom Assets entries.
     let mut balance_refresh_log_until: Option<Instant> = None;
     // Transfer-assets cursor: publish only when the revision changes (request/response).
@@ -201,9 +203,7 @@ pub(super) fn run(
             cmd_rx,
             &client,
             server,
-            &mut is_provider,
-            &mut wanted,
-            &mut wanted_orderbook,
+            market_role,
             &mut force_market_sample,
             &mut orders_mutated,
             &mut local_strat_edits,
@@ -267,6 +267,17 @@ pub(super) fn run(
         event_queue.drain_lifecycle_events_into(&mut lifecycle_events);
         for ev in lifecycle_events.drain(..) {
             log::info!("lifecycle: {ev:?}");
+            if matches!(
+                &ev,
+                LifecycleEvent::Connecting
+                    | LifecycleEvent::Connected { fresh: true }
+                    | LifecycleEvent::Reconnecting
+                    | LifecycleEvent::ServerRestart
+                    | LifecycleEvent::ConnectFailed { .. }
+                    | LifecycleEvent::Disconnected
+            ) {
+                market_role.set_non_operational();
+            }
             let request_license_state = match &ev {
                 LifecycleEvent::Ready => true,
                 LifecycleEvent::Connected { fresh } => !*fresh,
@@ -306,6 +317,9 @@ pub(super) fn run(
             };
             let _ = tx.send(FeedMsg::Status(st));
             if request_license_state {
+                // The complete desired assignment survives failed Init attempts. Apply it once
+                // whenever this MoonProto domain becomes operational.
+                market_role.set_operational(&client, server.id);
                 if let Err(error) = client.settings().request_kernel_license_state() {
                     log::warn!(
                         "core {} request kernel license state failed: {error}",
@@ -334,6 +348,7 @@ pub(super) fn run(
                         server.id
                     );
                 }
+                account_reconciliation.mark_balance_attempt(Instant::now());
                 // Chart alerts are authoritative on the core. Request a full snapshot after
                 // initialization/reconnect so the local set cannot lag behind the server.
                 if server.feed.alerts {
@@ -385,23 +400,18 @@ pub(super) fn run(
                 )
             )
         });
-        // Filling/cancelling an order changes position and balance, but the core does NOT always
-        // push a fresh balance. A sold token can remain as a phantom in Assets until reconnect
-        // because the snapshot goes stale. Proactively request a fresh snapshot FROM THE CORE:
-        // `Command::Balance` goes to the core (Delphi `SendBalanceCmd`), NOT the exchange, so it is
-        // cheap. Throttle to 3 s so a sequence of fills does not spam requests. The response arrives
-        // as a Balance event on the next iteration and updates the snapshot.
-        if has_orders_table_event && last_balance_refresh.elapsed() >= Duration::from_secs(3) {
-            last_balance_refresh = Instant::now();
+        // Account changes normally produce incremental balance/wallet pushes. Explicit repair
+        // requests run immediately after an idle period and then coalesce inside their cooldown:
+        // presentation-only order events are ignored, and authoritative full/Spot updates cancel
+        // pending work.
+        let account_now = Instant::now();
+        account_reconciliation.observe_events(&events, account_now);
+        if account_reconciliation.balance_due(account_now) {
             match client.balances().refresh() {
-                // Diagnose phantom Assets entries by recording the request and, below in the event
-                // loop, WHAT the core returned: a full snapshot (SnapshotApplied, which clears
-                // missing coins) or an increment (IncrementalApplied, which does NOT clear a coin
-                // whose balance reached zero, exposing a core-side gap).
                 Ok(()) => {
                     balance_refresh_log_until = Some(Instant::now() + Duration::from_secs(5));
                     log::info!(
-                        "core {} balance refresh requested (orders event)",
+                        "core {} balance repair requested (account order change)",
                         server.id
                     );
                 }
@@ -409,14 +419,14 @@ pub(super) fn run(
                     log::warn!("core {} balance refresh request failed: {error}", server.id)
                 }
             }
+            account_reconciliation.mark_balance_attempt(account_now);
         }
         // On wallet-based spot exchanges such as Bitget and Hyperliquid spot, purchased coins exist
         // ONLY in transfer_assets; the core sends no per-market balances. Without polling again, a
-        // newly purchased coin does not appear in Assets until the core is clicked manually. Query
-        // one Spot wallet rather than all three and do it less often than balance refreshes because
-        // the core forwards this request to the exchange (CheckAssets can time out in core logs).
-        if has_orders_table_event && last_wallet_refresh.elapsed() >= Duration::from_secs(10) {
-            last_wallet_refresh = Instant::now();
+        // newly purchased coin does not appear in Assets until the core is clicked manually. Use the
+        // same account-relevant signal but a separate 10-second cooldown because this request reaches
+        // the exchange (CheckAssets can time out in core logs).
+        if account_reconciliation.spot_wallet_due(account_now) {
             if let Err(error) = client
                 .balances()
                 .refresh_transfer_assets_kind(moonproto::ExchangeKind::Spot)
@@ -426,6 +436,7 @@ pub(super) fn run(
                     server.id
                 );
             }
+            account_reconciliation.mark_spot_wallet_attempt(account_now);
         }
         // Track the outcome of the bulk 5-minute candle snapshot that moonproto requests
         // automatically after subscribe_all_trades. Retained-history candle metrics such as
@@ -660,8 +671,9 @@ pub(super) fn run(
                 break;
             }
         }
-        let dirty_markets = if is_provider && !wanted.is_empty() {
-            market_dirty_from_events(&events, &wanted, force_market_sample)
+        let wanted = market_role.wanted();
+        let dirty_markets = if market_role.is_provider() && !wanted.is_empty() {
+            market_dirty_from_events(&events, wanted, force_market_sample)
         } else {
             Vec::new()
         };
@@ -990,19 +1002,17 @@ pub(super) fn run(
             }
         }
 
-        // Core assets for the Assets window: after a domain event, publish no more often than about
-        // 1 Hz while the window is active. Without the window, the 5-second value is a minimum
-        // interval, not a periodic publish; a quiet core emits nothing. The snapshot is still needed
-        // for header balance and leverage, but rebuilding every market for N cores on every event is
-        // needless work. Prices come from the market, so publish the full snapshot; the UI gates
-        // repainting by placing assets_rev into one-second buckets. Publish transfer assets only on
-        // revision changes.
+        // Core assets for the Assets window: publish balance changes immediately because the header
+        // reads free/total funds from this snapshot. Other domain events remain rate-limited to about
+        // 1 Hz while the window is active and 0.2 Hz otherwise; a quiet core emits nothing. Prices
+        // come from the market, so publish the full snapshot; the UI gates repainting by placing
+        // assets_rev into one-second buckets. Publish transfer assets only on revision changes.
         let assets_every = if crate::feed::assets_view_active() {
             Duration::from_secs(1)
         } else {
             Duration::from_secs(5)
         };
-        if had_domain_event && last_assets.elapsed() >= assets_every {
+        if should_publish_assets(&events, last_assets.elapsed(), assets_every) {
             last_assets = Instant::now();
             if let Some(snap) = client.snapshot() {
                 // The account base currency (USDT/BTC/...) is required to convert `btc_balance_*`,
@@ -1055,7 +1065,13 @@ pub(super) fn run(
         } else {
             None
         };
-        let wake_result = match order_wait {
+        let account_wait = account_reconciliation.next_wait(Instant::now());
+        let wake_wait = match (order_wait, account_wait) {
+            (Some(order), Some(account)) => Some(order.min(account)),
+            (Some(wait), None) | (None, Some(wait)) => Some(wait),
+            (None, None) => None,
+        };
+        let wake_result = match wake_wait {
             Some(timeout) => wake_rx.recv_timeout(timeout).map_err(|err| match err {
                 std::sync::mpsc::RecvTimeoutError::Timeout => None,
                 std::sync::mpsc::RecvTimeoutError::Disconnected => Some(()),
@@ -1074,6 +1090,22 @@ pub(super) fn run(
 
     let _ = client.disconnect();
     Ok(())
+}
+
+/// Returns whether this event batch must publish the retained assets snapshot.
+///
+/// Balance events bypass the ordinary market-driven rate limit so the header reflects confirmed
+/// free funds immediately. Other domain events publish only after `assets_every` has elapsed.
+fn should_publish_assets(
+    events: &[Event],
+    assets_elapsed: Duration,
+    assets_every: Duration,
+) -> bool {
+    !events.is_empty()
+        && (assets_elapsed >= assets_every
+            || events
+                .iter()
+                .any(|event| matches!(event, Event::Balance(_))))
 }
 
 /// Returns bytes as a separator-free hex string for dumping chart-alert blobs while reverse

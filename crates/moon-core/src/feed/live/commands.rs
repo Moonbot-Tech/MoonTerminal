@@ -3,12 +3,11 @@
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use moonproto::{
-    MoonClient, StrategyFields, StrategyKind, StrategySchema, StrategySnapshot, TradesStreamMode,
-};
+use moonproto::{MoonClient, StrategyFields, StrategyKind, StrategySchema, StrategySnapshot};
 
 use super::client_settings::{ClientSettingsSequence, ManualOrder};
 use super::convert::apply_lev_manage_edit;
+use super::market_role::MarketRoleState;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fv_from_str, strat_kind_name};
@@ -104,16 +103,14 @@ fn rebuild_sync(
 }
 
 /// Drains coordinator commands; only `CoreCmd::SetMarket` is complete desired state, while the
-/// remaining variants are deltas or actions. `SetMarket` mutates the core's market role
-/// (`is_provider`/`wanted`/`wanted_orderbook`) and sets `force_market_sample`. Returns `true` when
-/// the command channel is closed, which means the coordinator exited and the core must disconnect.
+/// remaining variants are deltas or actions. `SetMarket` updates and conditionally applies the
+/// retained complete plan, then sets `force_market_sample`. Returns `true` when the command channel
+/// is closed, which means the coordinator exited and the core must disconnect.
 pub(super) fn drain_commands(
     cmd_rx: &Receiver<CoreCmd>,
     client: &MoonClient,
     server: &ServerConfig,
-    is_provider: &mut bool,
-    wanted: &mut Vec<String>,
-    wanted_orderbook: &mut Vec<String>,
+    market_role: &mut MarketRoleState,
     force_market_sample: &mut bool,
     orders_mutated: &mut bool,
     local_strat_edits: &mut LocalStratEdits,
@@ -126,73 +123,9 @@ pub(super) fn drain_commands(
                 markets,
                 orderbook_markets,
             }) => {
-                // Provider transition: on -> retain all exchange trades; off -> unsubscribe.
-                // Market-history read cursors belong to the consumer.
-                if provider != *is_provider {
-                    if provider {
-                        let _ = client
-                            .streams()
-                            .subscribe_all_trades(TradesStreamMode::TradesOnly);
-                        log::info!("core {} → market provider (all-trades)", server.id);
-                    } else {
-                        let _ = client.streams().unsubscribe_all_trades();
-                        log::info!("core {} → account-only", server.id);
-                    }
-                    *is_provider = provider;
+                if market_role.update(provider, markets, orderbook_markets) {
+                    market_role.apply_if_needed(client, server.id);
                 }
-                // A non-provider does not serve markets at all (order-book or reads).
-                let markets = if provider { markets } else { Vec::new() };
-                // Subscribe to order books ONLY for markets that need them (orderbook_markets is
-                // a subset of markets). A market without an order book is still read for trades
-                // and history, but its order book is not streamed.
-                let orderbook_markets = if provider {
-                    orderbook_markets
-                } else {
-                    Vec::new()
-                };
-                let diag_on = || {
-                    std::env::var_os("MOON_MARKET_DIAG").is_some()
-                        || std::env::var_os("MOON_RENDER_DIAG").is_some()
-                };
-                // Diff order-book subscriptions: subscribe new entries and unsubscribe removed ones.
-                for m in &orderbook_markets {
-                    if !wanted_orderbook.iter().any(|w| w == m) {
-                        match client.streams().subscribe_orderbook(m.clone()) {
-                            Ok(()) => {
-                                if diag_on() {
-                                    log::info!(
-                                        "[market_diag] core {} subscribe_orderbook({m})",
-                                        server.id
-                                    );
-                                }
-                            }
-                            Err(error) => log::warn!(
-                                "core {} subscribe_orderbook({m}) failed: {error}",
-                                server.id
-                            ),
-                        }
-                    }
-                }
-                for m in wanted_orderbook.iter() {
-                    if !orderbook_markets.iter().any(|x| x == m) {
-                        match client.streams().unsubscribe_orderbook(m.clone()) {
-                            Ok(()) => {
-                                if diag_on() {
-                                    log::info!(
-                                        "[market_diag] core {} unsubscribe_orderbook({m})",
-                                        server.id
-                                    );
-                                }
-                            }
-                            Err(error) => log::warn!(
-                                "core {} unsubscribe_orderbook({m}) failed: {error}",
-                                server.id
-                            ),
-                        }
-                    }
-                }
-                *wanted = markets;
-                *wanted_orderbook = orderbook_markets;
                 *force_market_sample = true;
             }
             Ok(CoreCmd::StrategiesAction { checks, start_stop }) => {

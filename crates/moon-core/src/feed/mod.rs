@@ -464,6 +464,7 @@ pub fn spawn(
             }
             let mut backoff = BACKOFF_MIN;
             let mut client_settings_sequence = live::ClientSettingsSequence::new();
+            let mut market_role = live::MarketRoleState::default();
             loop {
                 let started = Instant::now();
                 client_settings_sequence.prepare_reconnect();
@@ -477,6 +478,7 @@ pub fn spawn(
                     reports.as_ref(),
                     thread_client.clone(),
                     &mut client_settings_sequence,
+                    &mut market_role,
                 ) {
                     Ok(()) => break,
                     Err(e) => {
