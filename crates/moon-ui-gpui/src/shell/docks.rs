@@ -21,12 +21,13 @@ use super::Shell;
 /// The home-strip order is [`home_ordered_names`], derived from `panels::registry`. Remembered
 /// split placement and persisted left-neighbor/tab-index placement take priority; if those cannot
 /// place the panel, this index is clamped to the current tab count so a partially detached set
-/// still preserves the `Orders < Assets < Report < Alerts < Log` relative order.
+/// still preserves the
+/// `Orders < Assets < Report < Alerts < News < CoreStatus < Log` relative order.
 ///
 /// The order mirrors the default-layout push order in `shell/init.rs` because both derive from the
-/// registry. An existing user is unaffected either way: a saved layout whose `DOCK_VERSION` still
-/// matches is restored verbatim, so changing the registry order reorders nothing already on
-/// screen — closing a tab and letting it come back is what re-seats it here.
+/// registry. A saved layout whose `DOCK_VERSION` still matches is restored verbatim. After a
+/// version reset the default strip uses this canonical order, while an intentionally remembered
+/// detached-panel placement still takes priority when that panel is repinned.
 fn dock_home_priority(name: &str) -> usize {
     let order = home_ordered_names();
     order.iter().position(|n| *n == name).unwrap_or(order.len())

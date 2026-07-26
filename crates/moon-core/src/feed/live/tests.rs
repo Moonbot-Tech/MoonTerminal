@@ -1,6 +1,7 @@
 use super::*;
 use crate::feed::{CoreCmdTx, LatestMarketRole};
 use moonproto::state::BalanceEvent;
+use moonproto::{ImportedIpVersion, ImportedNetworkConfig};
 
 /// `feed/mod.rs:CoreCmdTx::send` publishing market roles only through the bounded FIFO would let a
 /// stale provider marker resubscribe a replacement client before a queued account-only assignment.
@@ -91,6 +92,29 @@ fn failed_market_role_send_does_not_change_the_authoritative_snapshot() {
 fn an_exhausted_command_budget_never_allows_blocking() {
     assert!(!commands::CommandDrain::BudgetExhausted.may_wait());
     assert!(commands::CommandDrain::QueueEmpty.may_wait());
+}
+
+/// `live/mod.rs:connection_target` must retain the parsed address and port; replacing either with
+/// the legacy fallback connects and groups a remote core under the wrong server.
+#[test]
+fn parsed_network_selects_the_connection_endpoint() {
+    let network = ImportedNetworkConfig {
+        ip_version: ImportedIpVersion::V4,
+        address: Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42))),
+        port: 4321,
+        transport_mode: TransportMode::V2,
+    };
+
+    let (endpoint, transport) = connection_target(Some(&network));
+
+    assert_eq!(
+        endpoint,
+        CoreEndpoint {
+            address: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42)),
+            port: 4321,
+        }
+    );
+    assert_eq!(transport, TransportMode::V2);
 }
 
 /// `live/mod.rs:should_publish_assets` removing the Balance-event bypass would leave the header's

@@ -25,16 +25,20 @@ fn panel_names_are_unique() {
     }
 }
 
+/// `registry.rs:DOCK_PANELS` changing Log from `Some(6)` to `Some(3)` must fail here; otherwise
+/// the diagnostic tab appears before News and Core Status instead of at the end of the home strip.
 #[test]
 fn home_strip_membership() {
-    // CoreStatus is intentionally not a default bottom tab (home_order None).
-    assert!(!home_ordered_names().contains(&"CoreStatus"));
-    // The default trading tabs must remain in the strip; dropping one to None here would silently
-    // remove it from a fresh layout.
-    for name in ["Orders", "Assets", "Report", "Alerts", "Log"] {
-        assert!(
-            home_ordered_names().contains(&name),
-            "{name} missing from the default home strip"
-        );
-    }
+    assert_eq!(
+        home_ordered_names(),
+        [
+            "Orders",
+            "Assets",
+            "Report",
+            "Alerts",
+            "News",
+            "CoreStatus",
+            "Log",
+        ]
+    );
 }

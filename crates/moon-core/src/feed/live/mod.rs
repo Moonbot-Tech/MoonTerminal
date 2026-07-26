@@ -16,6 +16,7 @@ mod market_role;
 #[cfg(test)]
 mod tests;
 
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,8 +33,8 @@ use super::strategies::{
     strat_kind_name,
 };
 use super::{
-    ConnStatus, CoreCmd, CoreLogLine, DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole,
-    SharedMoonClient, StrategyRow,
+    ConnStatus, CoreCmd, CoreEndpoint, CoreLogLine, DetectRow, ExchangeId, FeedMsg, FeedTx,
+    LatestMarketRole, SharedMoonClient, StrategyRow,
 };
 use crate::config::ServerConfig;
 use crate::db::{DbMsg, ReportTx};
@@ -59,6 +60,30 @@ impl Drop for ClientSlotGuard {
     }
 }
 
+/// Resolve the connection endpoint and transport carried by a parsed MoonBot key.
+///
+/// Args:
+///     network: Optional network metadata from `moonproto::parse_key_info`.
+///
+/// Returns:
+///     Decoded endpoint plus transport, with the same localhost/3000/V0 fallbacks used for legacy
+///     exports.
+fn connection_target(
+    network: Option<&moonproto::ImportedNetworkConfig>,
+) -> (CoreEndpoint, TransportMode) {
+    let address = network
+        .and_then(|network| network.address)
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let port = network
+        .map(|network| network.port)
+        .filter(|port| *port != 0)
+        .unwrap_or(3000);
+    let transport = network
+        .map(|network| network.transport_mode)
+        .unwrap_or(TransportMode::V0);
+    (CoreEndpoint { address, port }, transport)
+}
+
 /// Run one core's live MoonProto event loop until shutdown or a terminal connection error.
 ///
 /// Publishes account snapshots and lifecycle state through `tx`, consumes commands from `cmd_rx`,
@@ -69,7 +94,7 @@ impl Drop for ClientSlotGuard {
 /// Args:
 ///     server: Core configuration containing the exported MoonBot key.
 ///     chart_memory_percent: Retained market-history budget for the MoonProto client.
-///     tx: Account-plane channel carrying lifecycle and decoded core updates.
+///     tx: Account-plane channel, including the decoded endpoint and lifecycle updates.
 ///     cmd_rx: Commands directed to this core.
 ///     wake_tx: Coordinator wake sender.
 ///     wake_rx: Feed wake receiver.
@@ -106,13 +131,11 @@ pub(super) fn run(
 
     // 2. Derive the endpoint from the key, which embeds host/port/transport; the config no longer
     //    has separate fields for them.
-    let net = info.network.as_ref();
-    let host: String = net
-        .and_then(|n| n.address)
-        .map(|a| a.to_string())
-        .unwrap_or_else(|| "127.0.0.1".to_string());
-    let port: u16 = net.map(|n| n.port).filter(|p| *p != 0).unwrap_or(3000);
-    let transport = net.map(|n| n.transport_mode).unwrap_or(TransportMode::V0);
+    let (endpoint, transport) = connection_target(info.network.as_ref());
+    let address = endpoint.address;
+    let port = endpoint.port;
+    let host = address.to_string();
+    let _ = tx.send(FeedMsg::Endpoint(endpoint));
     log::info!("live connect {host}:{port} market={}", server.market);
 
     let client_cfg = ClientConfig::new(host, port, info.keys.master_key, info.keys.mac_key)

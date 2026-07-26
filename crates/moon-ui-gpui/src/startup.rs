@@ -723,7 +723,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             for (group, state) in &b.dock_states {
                 // A dock with a mismatched version is ignored at startup (shell/init.rs), so its
                 // panels will NOT be restored and must not participate in deduplication.
-                if state.version != Some(dock_persist::DOCK_VERSION) {
+                if !dock_persist::is_compatible_version(state.version) {
                     continue;
                 }
                 let mut names = Vec::new();

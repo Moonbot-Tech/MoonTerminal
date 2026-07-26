@@ -1,6 +1,8 @@
 //! Domain types sent from the backend to the UI. They are independent of moonproto so the UI and
 //! rendering layer do not need to know about the transport.
 
+use std::net::IpAddr;
+
 /// Side of a trade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -849,6 +851,11 @@ impl MarketDirty {
 #[derive(Debug, Clone)]
 pub enum FeedMsg {
     Status(ConnStatus),
+    /// Network endpoint selected from the exported MoonBot key before the connection attempt.
+    ///
+    /// The live feed publishes this domain value after parsing the key so UI consumers never need
+    /// access to plaintext credentials. Several cores may use different ports on one host.
+    Endpoint(CoreEndpoint),
     /// Core exchange from `server_info` after BaseCheck, sent once.
     Identity(ExchangeId),
     /// Core account base currency such as USDT or BTC from `server_info`, sent once alongside
@@ -897,7 +904,7 @@ pub enum FeedMsg {
     /// Batch of core chart-alert changes from one drain tick, gated by `feed.alerts`.
     ChartAlerts(Vec<ChartAlertUpdate>),
     /// Core resource telemetry from protocol-v4 `Event::KernelHealth`.
-    /// Emitted for every health event; the store gates the Core Status table with
+    /// Emitted for every health event; the store gates the Core Status panel with
     /// `sys_rev` only when metric values change.
     SysStatus(CoreSysStatus),
     /// Core news snapshot: logical news items plus the tags catalog, rebuilt from the retained
@@ -905,6 +912,15 @@ pub enum FeedMsg {
     /// `feed::news` and the projection in `feed::live::convert`. The store gates the News panel with
     /// `news_rev` only when the reduced snapshot changes.
     News(super::news::NewsSnapshot),
+}
+
+/// Network endpoint of one MoonBot core, decoded from its exported key by the live feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CoreEndpoint {
+    /// Host IP selected for the MoonProto connection.
+    pub address: IpAddr,
+    /// UDP port selected for this core on the host.
+    pub port: u16,
 }
 
 /// Latest resource telemetry for one core, from protocol v4 `Event::KernelHealth`.
