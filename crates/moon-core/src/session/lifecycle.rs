@@ -188,6 +188,16 @@ impl SessionManager {
     }
 
     /// Replace a core feed or insert the missing session, then reset provider coordination.
+    ///
+    /// Args:
+    ///     server: Updated configuration used to spawn the replacement feed.
+    ///     sig: Connection-sensitive configuration signature.
+    ///     mem: Chart-history memory budget.
+    ///     reports: Optional report-database channel.
+    ///     why: Diagnostic reason logged after replacement.
+    ///
+    /// Returns:
+    ///     Nothing; session, connection-scoped state, and coordination update in place.
     fn respawn_session(
         &mut self,
         server: ServerConfig,
@@ -217,7 +227,7 @@ impl SessionManager {
         }
         self.store.ensure(id);
         if let Some(core) = self.store.core_mut(id) {
-            core.status = ConnStatus::Connecting;
+            core.begin_connection_attempt();
         }
         self.clear_core_coordination(id);
         log::info!("{why}: core={id}");

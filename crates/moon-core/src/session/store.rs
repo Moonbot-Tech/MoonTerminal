@@ -80,6 +80,7 @@ impl BalanceState {
     }
 }
 
+/// Retained account-plane and operational state for one configured core.
 pub struct CoreData {
     pub status: ConnStatus,
     /// Latest combined core order rows across all markets.
@@ -136,8 +137,13 @@ pub struct CoreData {
     /// The UI continues to read the formatted `log`.
     pub server_log_raw: VecDeque<crate::feed::CoreLogLine>,
     /// Latest typed core resource telemetry from protocol-v4 `Event::KernelHealth`.
-    /// The Core Status table observes it through `sys_rev`.
+    /// The Core Status panel observes it through `sys_rev`.
     pub sys: crate::feed::CoreSysStatus,
+    /// Endpoint decoded by the live feed from the exported key.
+    ///
+    /// It is stored beside health telemetry because the Core Status panel groups processes by the
+    /// host address without ever reading the plaintext key.
+    pub endpoint: Option<crate::feed::CoreEndpoint>,
     /// Latest reduced news snapshot (logical items + tags catalog) for this core. The News panel
     /// observes it through `news_rev` and merges across the scoped cores by `meta.id`.
     pub news: NewsSnapshot,
@@ -163,8 +169,8 @@ pub struct CoreData {
     pub hedge_mode_rev: u64,
     pub log_rev: u64,
     pub chart_alerts_rev: u64,
-    /// Advances only when typed `KernelHealth` metric values change, gating the
-    /// Core Status table without repainting for receipt-time-only updates.
+    /// Advances when typed `KernelHealth` metric values or the decoded endpoint change, gating
+    /// Core Status without repainting for receipt-time-only updates.
     pub sys_rev: u64,
     /// Advances only when the reduced news snapshot changes, gating the News panel without
     /// repainting for duplicate frames that reduce to the same logical set.
@@ -193,6 +199,7 @@ impl CoreData {
             log: VecDeque::new(),
             server_log_raw: VecDeque::new(),
             sys: crate::feed::CoreSysStatus::default(),
+            endpoint: None,
             news: NewsSnapshot::default(),
             news_seen_at: HashMap::new(),
             orders_table_rev: 0,
@@ -235,10 +242,33 @@ impl CoreData {
         self.server_log_raw.iter().skip(start).cloned().collect()
     }
 
+    /// Begin a replacement feed without carrying endpoint-scoped telemetry across connections.
+    ///
+    /// Args:
+    ///     self: Retained core state whose connection attempt is being replaced.
+    ///
+    /// Returns:
+    ///     Nothing; status becomes connecting and Core Status inputs are cleared in place.
+    pub(crate) fn begin_connection_attempt(&mut self) {
+        self.apply(FeedMsg::Status(ConnStatus::Connecting));
+        let inputs_changed =
+            self.endpoint.take().is_some() || self.sys != crate::feed::CoreSysStatus::default();
+        self.sys = crate::feed::CoreSysStatus::default();
+        if inputs_changed {
+            self.sys_rev = self.sys_rev.wrapping_add(1);
+        }
+    }
+
     /// Apply an account-plane message to this core.
     ///
     /// The coordinator routes `Identity`, `CoreBase`, and `MarketDataChanged` without applying them
     /// to `CoreData`.
+    ///
+    /// Args:
+    ///     msg: Typed feed update for this core.
+    ///
+    /// Returns:
+    ///     Nothing; retained state and the relevant revision counter update in place.
     pub fn apply(&mut self, msg: FeedMsg) {
         match msg {
             FeedMsg::Status(s) => {
@@ -330,6 +360,12 @@ impl CoreData {
                 if self.runtime_state != Some(state) {
                     self.runtime_state = Some(state);
                     self.runtime_state_rev = self.runtime_state_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::Endpoint(endpoint) => {
+                if self.endpoint != Some(endpoint) {
+                    self.endpoint = Some(endpoint);
+                    self.sys_rev = self.sys_rev.wrapping_add(1);
                 }
             }
             FeedMsg::SysStatus(sys) => {

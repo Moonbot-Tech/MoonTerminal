@@ -1,4 +1,7 @@
+use std::net::{IpAddr, Ipv4Addr};
+
 use super::{BalanceState, ConnStatus, CoreData};
+use crate::feed::{CoreEndpoint, CoreSysStatus, FeedMsg};
 
 /// A core with the given freshness inputs; everything else stays at its default.
 fn core(assets_rev: u64, rate_known: bool, stale: bool, status: ConnStatus) -> CoreData {
@@ -72,4 +75,60 @@ fn every_state_hashes_distinctly() {
     // Only Live is current, and only Live/Stale carry a number.
     assert_eq!(all.iter().filter(|s| s.is_current()).count(), 1);
     assert_eq!(all.iter().filter(|s| s.has_value()).count(), 2);
+}
+
+/// `store.rs:CoreData::apply` must compare endpoint updates before bumping `sys_rev`; removing the
+/// comparison churns Core Status on duplicate messages, while ignoring a changed endpoint leaves
+/// the process displayed under the wrong server.
+#[test]
+fn an_endpoint_change_invalidates_core_status_once() {
+    let first = CoreEndpoint {
+        address: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
+        port: 3000,
+    };
+    let second = CoreEndpoint {
+        address: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11)),
+        port: 3000,
+    };
+    let mut core = CoreData::new();
+
+    core.apply(FeedMsg::Endpoint(first));
+    assert_eq!(core.endpoint, Some(first));
+    assert_eq!(core.sys_rev, 1);
+
+    core.apply(FeedMsg::Endpoint(first));
+    assert_eq!(core.sys_rev, 1);
+
+    core.apply(FeedMsg::Endpoint(second));
+    assert_eq!(core.endpoint, Some(second));
+    assert_eq!(core.sys_rev, 2);
+}
+
+/// `store.rs:CoreData::begin_connection_attempt` must clear both endpoint and telemetry; retaining
+/// either moves the previous machine's CPU/RAM under a replacement key before fresh health arrives.
+#[test]
+fn a_replacement_feed_clears_endpoint_scoped_health() {
+    let endpoint = CoreEndpoint {
+        address: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 8)),
+        port: 3000,
+    };
+    let health = CoreSysStatus {
+        process_cpu_percent: Some(21),
+        system_cpu_percent: Some(44),
+        used_memory_mb: Some(512),
+        free_physical_memory_mb: Some(4096),
+        logical_cpu_count: Some(16),
+        updated_ms: 123,
+    };
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::Endpoint(endpoint));
+    core.apply(FeedMsg::SysStatus(health));
+    let previous_rev = core.sys_rev;
+
+    core.begin_connection_attempt();
+
+    assert_eq!(core.status, ConnStatus::Connecting);
+    assert_eq!(core.endpoint, None);
+    assert_eq!(core.sys, CoreSysStatus::default());
+    assert_eq!(core.sys_rev, previous_rev + 1);
 }

@@ -19,7 +19,7 @@ use moon_core::session::CoreId;
 use super::Shell;
 use crate::chart_tabs::ChartTabs;
 use crate::panels::DetectsPanel;
-use crate::persistence::dock_persist::DOCK_VERSION;
+use crate::persistence::dock_persist::{DOCK_VERSION, is_compatible_version};
 use crate::shell::core_settings_popup;
 use crate::{Backend, controls};
 
@@ -64,7 +64,7 @@ impl Shell {
             .read(cx)
             .dock_states
             .get(&group)
-            .filter(|s| s.version == Some(DOCK_VERSION))
+            .filter(|s| is_compatible_version(s.version))
             .cloned();
 
         if let Some(state) = saved {
@@ -98,13 +98,11 @@ impl Shell {
                 .filter(|s| s.group == group)
                 .map(|s| s.panel.clone())
                 .collect();
-            // Build the default bottom strip from the panel registry in home-tab order (Orders,
-            // Assets, Report, Alerts, Log — the trading tabs first, the diagnostic Log last;
-            // CoreStatus is intentionally not a default tab, `home_order: None`). This order is the
-            // left-to-right tab order and is the SAME source `shell::docks` uses to re-seat a
-            // returning panel, so the two cannot disagree. A panel whose window startup restores
-            // detached is skipped so it is not also docked here; `build_docked(None)` starts each
-            // panel fresh, matching a first-run layout.
+            // Build the default bottom strip from the panel registry in home-tab order: Orders,
+            // Assets, Report, Alerts, News, CoreStatus, Log. `shell::docks` uses that same registry
+            // order to re-seat a returning panel, so the two cannot disagree. A panel restored as a
+            // detached window during startup is skipped so it is not also docked here;
+            // `build_docked(None)` starts each panel fresh, matching a first-run layout.
             let mut bottom_tabs: Vec<Rc<dyn PanelView>> = Vec::new();
             for name in crate::panels::registry::home_ordered_names() {
                 if detached_set.contains(*name) {

@@ -34,7 +34,20 @@ use moon_core::session::CoreId;
 /// - v5 temporarily disabled Core Status because, at that time, log-derived data was insufficient
 ///   and typed moonproto fields were not yet available; resetting removed the previously saved tab.
 /// - v6 added the News bottom tab and reset layouts so the new tab appeared.
-pub const DOCK_VERSION: usize = 6;
+/// - v7 restored the Core Status bottom tab with typed CPU and memory metrics.
+/// - v8 moved the Log tab after News and Core Status.
+pub const DOCK_VERSION: usize = 8;
+
+/// Return whether a saved dock layout can be restored by the current panel schema.
+///
+/// # Arguments
+/// * `version` - Schema version stored with the dock layout.
+///
+/// # Returns
+/// `true` when the saved layout matches [`DOCK_VERSION`].
+pub(crate) fn is_compatible_version(version: Option<usize>) -> bool {
+    version == Some(DOCK_VERSION)
+}
 
 /// Map each group name to its serialized `DockArea` state.
 pub type DockMap = HashMap<String, DockAreaState>;
@@ -125,9 +138,9 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
             Rc::new(cx.new(|cx| DetectsPanel::new(backend, group, cx)))
         });
     }
-    // Every detachable panel (Orders, Assets, Report, Alerts, Log, CoreStatus) registers from the
-    // single registry: `build_docked` with the persisted `PanelInfo` reapplies saved view state
-    // (Orders' sort/kind/filter/columns) and recovers the group.
+    // Every detachable panel registers from the single registry: `build_docked` with persisted
+    // `PanelInfo` reapplies saved view state (Orders' sort/kind/filter/columns) and recovers the
+    // group.
     for kind in registry::DOCK_PANELS {
         let backend = backend.clone();
         register_panel(cx, kind.name, move |_state, info, window, cx| {
@@ -136,3 +149,6 @@ pub fn register_panels(cx: &mut App, backend: Entity<Backend>, epoch: f64) {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -19,6 +19,72 @@ core_status.empty:
   ru: "Нет данных по ядрам"
   en: "No core data"
   es: "Sin datos de núcleos"
+core_status.mode.by_ip:
+  ru: "По IP"
+  en: "By IP"
+  es: "Por IP"
+core_status.mode.flat:
+  ru: "Плоско"
+  en: "Flat"
+  es: "Plano"
+core_status.footer:
+  ru: "Серверы: %{servers}  Ядра: %{cores}  Онлайн: %{online}  Скрыто: %{hidden}"
+  en: "Servers: %{servers}  Cores: %{cores}  Online: %{online}  Hidden: %{hidden}"
+  es: "Servidores: %{servers}  Núcleos: %{cores}  En línea: %{online}  Ocultos: %{hidden}"
+
+# --- Server tree ---
+core_status.unknown_server:
+  ru: "IP неизвестен: %{core}"
+  en: "Unknown IP: %{core}"
+  es: "IP desconocida: %{core}"
+core_status.online:
+  ru: "Онлайн"
+  en: "Online"
+  es: "En línea"
+core_status.degraded:
+  ru: "Частично"
+  en: "Degraded"
+  es: "Degradado"
+core_status.offline:
+  ru: "Офлайн"
+  en: "Offline"
+  es: "Fuera de línea"
+core_status.ready_count:
+  ru: "%{ready}/%{total} ядер"
+  en: "%{ready}/%{total} cores"
+  es: "%{ready}/%{total} núcleos"
+core_status.hide_server:
+  ru: "Скрыть процессы сервера"
+  en: "Hide server processes"
+  es: "Ocultar procesos del servidor"
+core_status.show_server:
+  ru: "Показать процессы сервера"
+  en: "Show server processes"
+  es: "Mostrar procesos del servidor"
+core_status.system_cpu:
+  ru: "CPU системы %{value}"
+  en: "System CPU %{value}"
+  es: "CPU sistema %{value}"
+core_status.process_cpu:
+  ru: "CPU %{value}"
+  en: "CPU %{value}"
+  es: "CPU %{value}"
+core_status.process_memory:
+  ru: "RAM %{value}"
+  en: "RAM %{value}"
+  es: "RAM %{value}"
+core_status.process_memory_total:
+  ru: "RAM процессов %{value}"
+  en: "Process RAM %{value}"
+  es: "RAM procesos %{value}"
+core_status.free_memory:
+  ru: "Свободно %{value}"
+  en: "Free %{value}"
+  es: "Libre %{value}"
+core_status.logical_cpus:
+  ru: "Логич. CPU %{value}"
+  en: "Logical CPUs %{value}"
+  es: "CPU lógicos %{value}"
 
 # --- Table columns ---
 core_status.col.core:

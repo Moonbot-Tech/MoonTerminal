@@ -1253,19 +1253,16 @@ fn moon_tree_closures_hold_weak_view_handles() {
     );
 }
 
-/// The Core-status panel renders protocol v4 `Event::KernelHealth` telemetry.
-/// Process vs system CPU is a SCOPE distinction, not a time average: a future
-/// edit that re-adds a machine-wide-CPU column under an "average" label, or
-/// resurrects the memory columns v4 has no source for, reddens here.
+/// `core_status/table.rs:core_status_row` and `server_view.rs:server_metrics` must keep each
+/// protocol-v4 field bound to its independently named UI metric. Swapping process/system CPU or
+/// process/free memory compiles but gives the operator a believable number with the wrong scope.
 #[test]
 fn core_status_table_binds_scoped_telemetry_columns() {
-    let table = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("panels")
-        .join("core_status")
-        .join("table.rs");
-    let text = fs::read_to_string(&table)
-        .unwrap_or_else(|err| panic!("failed to read {}: {err}", table.display()));
+    let text = read_src("panels/core_status/table.rs");
+    let flat_row = braced_body(&text, "fn core_status_row(");
+    let server = read_src("panels/core_status/server_view.rs");
+    let server_metrics = braced_body(&server, "fn server_metrics(");
+    let process_row = braced_body(&server, "fn core_row(");
 
     for key in [
         "core_status.col.cpu_proc",
@@ -1287,6 +1284,116 @@ fn core_status_table_binds_scoped_telemetry_columns() {
             !text.contains(banned),
             "core_status/table.rs must not resurrect the removed column `{banned}` (v4 \
              KernelHealth has no source for it; `cpu_avg` mislabels machine CPU as an average)"
+        );
+    }
+    for binding in [
+        "percent(sys.process_cpu_percent)",
+        "percent(sys.system_cpu_percent)",
+        "memory_u16(sys.used_memory_mb)",
+        "memory_u16(sys.free_physical_memory_mb)",
+        "optional_u8(sys.logical_cpu_count)",
+    ] {
+        assert!(
+            flat_row.contains(binding),
+            "the Flat Core Status row lost the scoped telemetry binding `{binding}`"
+        );
+    }
+    for binding in [
+        "percent(group.system_cpu_percent)",
+        "memory_u64(group.process_memory_mb)",
+        "memory_u16(group.free_physical_memory_mb)",
+        "optional_u8(group.logical_cpu_count)",
+    ] {
+        assert!(
+            server_metrics.contains(binding),
+            "the By IP server row lost the scoped telemetry binding `{binding}`"
+        );
+    }
+    for binding in [
+        "percent(core.sys.process_cpu_percent)",
+        "memory_u16(core.sys.used_memory_mb)",
+    ] {
+        assert!(
+            process_row.contains(binding),
+            "the By IP process row lost the scoped telemetry binding `{binding}`"
+        );
+    }
+}
+
+/// `core_status/server_view.rs:grouped_server_view` must not capture a strong
+/// `CoreStatusView` entity in MoonTree's retained renderer; replacing the weak
+/// owner with `let tree_owner = cx.entity();` leaks the panel and its observers.
+#[test]
+fn core_status_tree_renderer_holds_a_weak_owner() {
+    let text = read_src("panels/core_status/server_view.rs");
+
+    assert!(
+        text.contains("let weak_view = cx.entity().downgrade();")
+            && text.contains("weak_view.upgrade()"),
+        "Core Status tree callbacks must downgrade and conditionally upgrade their view owner"
+    );
+    assert!(
+        !text.contains("let tree_owner = cx.entity();"),
+        "Core Status MoonTree retained a strong panel handle and created an ownership cycle"
+    );
+}
+
+/// `core_status/mod.rs:CoreStatusView::collect` must record each scoped endpoint before applying
+/// the visible-core filter; moving the insertion below the filter loses hidden/expanded state when
+/// an unselected core discovers its IP.
+#[test]
+fn core_status_tracks_server_keys_outside_the_visible_filter() {
+    let text = read_src("panels/core_status/mod.rs");
+    let collect = braced_body(&text, "fn collect(");
+    let key_position = collect
+        .find("server_keys.insert(")
+        .expect("Core Status must retain unfiltered endpoint keys");
+    let filter_position = collect
+        .find("if !self.sel_cores.is_empty()")
+        .expect("Core Status must retain its visible-core filter");
+
+    assert!(
+        key_position < filter_position,
+        "Core Status must capture endpoint identity before an unselected core is skipped"
+    );
+}
+
+/// Removing any `normal_section_rule` attachment must fail here; otherwise Flat rows, server roots,
+/// or mixed-server children lose the requested attention-to-normal separator while model tests
+/// remain green.
+#[test]
+fn core_status_attention_boundaries_are_wired_layout_neutrally() {
+    let table = read_src("panels/core_status/table.rs");
+    let server_view = read_src("panels/core_status/server_view.rs");
+    let presentation = read_src("panels/core_status/presentation.rs");
+    let flat_row = braced_body(&table, "fn core_status_row(");
+    let server_row = braced_body(&server_view, "fn server_row(");
+    let core_row = braced_body(&server_view, "fn core_row(");
+
+    for (name, row) in [
+        ("Flat row", flat_row),
+        ("server root", server_row),
+        ("server child", core_row),
+    ] {
+        assert!(
+            row.contains(".relative()")
+                && row.contains(".children(normal_section_start.then(|| normal_section_rule(p)))"),
+            "{name} must attach the attention boundary as an overlay inside its row"
+        );
+    }
+
+    let rule = braced_body(&presentation, "pub(super) fn normal_section_rule(");
+    for style in [
+        ".absolute()",
+        ".top_0()",
+        ".left_0()",
+        ".right_0()",
+        ".h(px(2.0))",
+        ".bg(rgb(palette.amber))",
+    ] {
+        assert!(
+            rule.contains(style),
+            "Core Status attention boundary lost layout-neutral style `{style}`"
         );
     }
 }

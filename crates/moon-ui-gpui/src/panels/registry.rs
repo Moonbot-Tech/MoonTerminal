@@ -49,8 +49,8 @@ pub(crate) struct DockPanelKind {
     /// `docks.json`, `detached.json`, and [`crate::persistence::panel_meta::tab_label`].
     pub(crate) name: &'static str,
     /// Position in the default bottom home strip, or `None` for a panel that is not a default home
-    /// tab (CoreStatus). Drives both the default-layout push order (`shell::init`) and the restore
-    /// priority plus home-strip identification (`shell::docks`) via [`home_ordered_names`].
+    /// tab. Drives both the default-layout push order (`shell::init`) and the restore priority plus
+    /// home-strip identification (`shell::docks`) via [`home_ordered_names`].
     pub(crate) home_order: Option<u8>,
     /// Whether this panel's dock tab carries unread counters split by News tag colour — which is
     /// what decides that its tab has a right-click menu at all, and that the menu offers the
@@ -95,7 +95,7 @@ impl DockPanelKind {
 }
 
 /// Every detachable dock panel. The single source of truth; all other panel-name dispatch derives
-/// from it. Home tabs come first in strip order, then the non-home CoreStatus.
+/// from it. Home tabs are listed in their default strip order.
 pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
     DockPanelKind {
         name: "Orders",
@@ -168,22 +168,8 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
         },
     },
     DockPanelKind {
-        name: "Log",
-        home_order: Some(4),
-        tab_colour_counters: false,
-        mk_docked: |b, g, _info, w, cx| {
-            Rc::new(cx.new(|cx| LogPanel::new(b.clone(), g.to_string(), w, cx)))
-        },
-        mk_detached: |b, g, w, cx| DetachedContent {
-            view: cx
-                .new(|cx| LogPanel::new(b.clone(), g.to_string(), w, cx))
-                .into(),
-            widths_reset: None,
-        },
-    },
-    DockPanelKind {
         name: "News",
-        home_order: Some(5),
+        home_order: Some(4),
         tab_colour_counters: true,
         // News has no persisted view state and no resizable table, so both builders start fresh and
         // expose no width-reset button, mirroring Alerts/Log.
@@ -199,8 +185,8 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
     },
     DockPanelKind {
         name: "CoreStatus",
-        // Deliberately not a default bottom tab; see the home-strip note in `shell::docks`.
-        home_order: None,
+        // Keep operational health next to the other always-available group diagnostics.
+        home_order: Some(5),
         tab_colour_counters: false,
         mk_docked: |b, g, _info, w, cx| {
             Rc::new(cx.new(|cx| CoreStatusView::restored_group(b.clone(), g.to_string(), w, cx)))
@@ -212,6 +198,20 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
                 view: p.into(),
                 widths_reset: Some(("core-status-reset-widths-win", state)),
             }
+        },
+    },
+    DockPanelKind {
+        name: "Log",
+        home_order: Some(6),
+        tab_colour_counters: false,
+        mk_docked: |b, g, _info, w, cx| {
+            Rc::new(cx.new(|cx| LogPanel::new(b.clone(), g.to_string(), w, cx)))
+        },
+        mk_detached: |b, g, w, cx| DetachedContent {
+            view: cx
+                .new(|cx| LogPanel::new(b.clone(), g.to_string(), w, cx))
+                .into(),
+            widths_reset: None,
         },
     },
 ];
@@ -231,8 +231,7 @@ pub(crate) fn supports(name: &str) -> bool {
 /// This list both identifies the home strip and supplies the final fallback insertion priority
 /// during restore. It must contain ALL default bottom-row tabs: `shell::docks` identifies the
 /// "home" strip by the presence of any of these names, so a default tab missing from here would
-/// make its strip unfindable and send a returning panel into a second bottom zone. CoreStatus is
-/// excluded because it is not part of the default layout (`home_order: None`).
+/// make its strip unfindable and send a returning panel into a second bottom zone.
 static HOME_ORDER: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     let mut ordered: Vec<(u8, &'static str)> = DOCK_PANELS
         .iter()
