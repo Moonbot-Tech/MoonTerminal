@@ -21,7 +21,7 @@ use moon_ui::{MoonColorPickerState, MoonInputEvent, MoonInputState};
 
 use super::SettingsView;
 use crate::Backend;
-use moon_core::config::{ensure_server_group_configs, GroupConfig, Secret, ServerConfig};
+use moon_core::config::{GroupConfig, Secret, ServerConfig, ensure_server_group_configs};
 
 /// Component state for one server row's text fields and color picker.
 pub(super) struct ConnRow {

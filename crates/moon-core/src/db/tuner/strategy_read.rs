@@ -1,5 +1,5 @@
-use rusqlite::Connection;
 use super::fields::{FieldClass, FIELDS};
+use rusqlite::Connection;
 
 /// Open strategies.sqlite READ-ONLY, or `None` when it is absent or will not open.
 ///

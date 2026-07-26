@@ -1,7 +1,7 @@
 //! Deterministic regression coverage for the Connections hierarchy.
 
 use super::sync_groups_from_servers;
-use super::tab::{exchange_sections, pending_server_indices, ServerRowMeta};
+use super::tab::{ServerRowMeta, exchange_sections, pending_server_indices};
 use moon_core::config::{
     FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret, ServerConfig,
     TakeProfitMode,

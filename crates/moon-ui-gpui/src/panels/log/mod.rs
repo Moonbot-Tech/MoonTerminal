@@ -15,16 +15,16 @@ mod render;
 
 use gpui::*;
 use moon_ui::{
-    h_flex, v_flex, DockArea, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
-    MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize,
-    MoonPalette, MoonScrollbarVisibility, MoonVirtualList, MoonVirtualListScrollHandle, Panel,
-    PanelEvent, PanelState, StyledExt,
+    DockArea, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
+    MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette,
+    MoonScrollbarVisibility, MoonVirtualList, MoonVirtualListScrollHandle, Panel, PanelEvent,
+    PanelState, StyledExt, h_flex, v_flex,
 };
 
 use rust_i18n::t;
 
-use crate::core_order::CoreOrder;
 use crate::Backend;
+use crate::core_order::CoreOrder;
 use moon_core::applog::{self, LogLine};
 use moon_core::session::CoreId;
 use std::collections::HashSet;
