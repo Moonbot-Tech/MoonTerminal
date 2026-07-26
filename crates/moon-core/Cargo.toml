@@ -48,6 +48,10 @@ bytemuck = { version = "1", features = ["derive"] }
 # Local reports database (db/).
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# Restart fan-out of the tuner's threshold search (db/tuner/threshold_search/). Already in the
+# tree transitively through sysinfo, so this direct edge adds no crate and no build time.
+rayon = "1.12"
+
 # Importing MoonBot settings from the MBSC7 buffer (config/moonbot_import/): gzip
 # decompression of the payload and CRC32 of the compressed bytes. Both are already in the
 # dependency tree transitively.

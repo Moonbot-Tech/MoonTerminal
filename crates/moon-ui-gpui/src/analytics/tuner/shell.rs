@@ -1,22 +1,98 @@
-//! The SHARED tuner shell: the toolbar (rounding / Make a copy / Save) and the
-//! suggestion row (restarts / trades ≥ / depth / Search / Search all).
-//! Rendered by ONE piece of code for every axis ("By filter", "By time", …) —
-//! only the grid rows and the actions differ. Actions are dispatched by `TunerKind`
-//! to the concrete tuner; for "By time" they arrive in phase 2b (disabled for now).
+//! The tuner shell: the toolbar (rounding / Make a copy / Save), shared by every axis and
+//! dispatched by `TunerKind`, plus the suggestion row, which is NOT.
+//!
+//! The row is written per axis on purpose. "By filter" runs a stoppable joint search with live
+//! progress, a seed and a depth; "By time" runs one fixed sweep with a single setting. Rendering
+//! both from one parametrized row is how the time sweep would acquire a Stop button that stops
+//! nothing. On the filter row only the restart count stays inline, because the card is laid out
+//! at a fixed narrow width and a row that cannot wrap has to spend its space on the controls used
+//! every run — the rest sit behind the ⚙ settings popover.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use moon_core::db::ReadFail;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, h_flex,
+    MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, MoonPopover,
+    MoonPopoverPlacement, MoonTooltipView, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
-use super::filter::state::{EDGE_OPTIONS, iters_of};
+use super::filter::state::{
+    EDGE_OPTIONS, SuggestJob, SuggestState, TRAIN_OPTIONS, iters_of, persist_seed,
+};
 use super::shared::TunerKind;
 use crate::design;
 use crate::design::moon;
+
+/// Content width of the suggestion settings popover, before the font scale and the component's
+/// own padding, which [`MoonPopover::content_width_font`] adds.
+const SETTINGS_POPUP_W: f32 = 210.0;
+
+/// Which settings box of a suggestion row is being built.
+#[derive(Clone, Copy, PartialEq)]
+enum CfgInput {
+    /// Restart count of the joint search ("By filter" only).
+    Restarts,
+    /// Minimum trades a suggestion must retain.
+    MinTrades,
+    /// Base seed of the random restarts ("By filter" only).
+    Seed,
+}
+
+/// Cache key of one settings box, as one `&'static str` per axis-and-box pair.
+///
+/// Spelled out rather than composed with `format!` for two reasons: the ids are read on every
+/// frame, so building them would allocate per box per frame; and the one place that used to
+/// hand-write a composed id — the seed box, evicted by name when a seed is pinned — could drift
+/// from the builder with no compiler help, turning that button into a silent no-op.
+fn cfg_input_id(kind: TunerKind, which: CfgInput) -> &'static str {
+    match (kind, which) {
+        (TunerKind::Filter, CfgInput::Restarts) => "f-cfg-it",
+        (TunerKind::Filter, CfgInput::MinTrades) => "f-cfg-mn",
+        (TunerKind::Filter, CfgInput::Seed) => "f-cfg-seed",
+        (TunerKind::Time, CfgInput::Restarts) => "t-cfg-it",
+        (TunerKind::Time, CfgInput::MinTrades) => "t-cfg-mn",
+        (TunerKind::Time, CfgInput::Seed) => "t-cfg-seed",
+        (TunerKind::Coins, CfgInput::Restarts) => "c-cfg-it",
+        (TunerKind::Coins, CfgInput::MinTrades) => "c-cfg-mn",
+        (TunerKind::Coins, CfgInput::Seed) => "c-cfg-seed",
+    }
+}
+
+/// A muted caption standing next to a settings control.
+fn cfg_label(text: String, p: MoonPalette) -> Div {
+    div().flex_none().text_color(moon(p.text_muted)).child(text)
+}
+
+/// A seed shortened to what the settings row can hold, keeping both ends.
+///
+/// A drawn seed comes from the clock and runs to twenty digits, several times the width of this
+/// row. It also does not need to be read: the button beside it puts the WHOLE value into the box,
+/// which is the only way it is ever meant to be reused. So the display keeps enough of each end to
+/// tell one result from another, and the full number rides in the tooltip.
+fn short_seed(seed: u64) -> String {
+    let s = seed.to_string();
+    // Digits are ASCII, so slicing by byte is slicing by character here.
+    if s.len() <= 12 {
+        s
+    } else {
+        format!("{}…{}", &s[..6], &s[s.len() - 4..])
+    }
+}
+
+/// How a train share reads in the dropdown: a percentage, or the word for "no split".
+///
+/// 100% is spelled out as "off" rather than shown as a number, because a percentage that happens
+/// to be the whole period reads as a setting in effect when it is the absence of one.
+fn train_label(pct: usize) -> String {
+    if pct >= 100 {
+        t!("analytics.tuner.train_off").to_string()
+    } else {
+        format!("{pct}%")
+    }
+}
 
 impl AnalyticsView {
     /// The shared toolbar of the tuner card: the title + (when a strategy is selected)
@@ -149,9 +225,11 @@ impl AnalyticsView {
         header.into_any_element()
     }
 
-    /// The shared suggestion row: restarts / trades ≥ / depth (quantiles) +
-    /// "Search" / "Search all". The settings come from the axis state; the buttons
-    /// dispatch into its auto-suggestion (for "By time" still disabled — phase 2b).
+    /// The suggestion row of the tuner card, branched per axis.
+    ///
+    /// Explicit branches rather than one parametrized row: the axes no longer hold the same
+    /// controls, and a shared row is precisely how the time sweep would acquire a Stop button
+    /// that stops nothing.
     pub(super) fn shell_config_row(
         &mut self,
         kind: TunerKind,
@@ -159,23 +237,269 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let time = kind == TunerKind::Time;
-        let busy = match kind {
-            TunerKind::Filter => self.tuner.sugg_busy,
-            TunerKind::Time => self.time_tuner.sugg_busy,
+        match kind {
+            TunerKind::Filter => self.filter_config_row(p, window, cx),
+            TunerKind::Time => self.time_config_row(p, window, cx),
             // The coin axis does not draw this row yet — its own controls arrive with the
-            // selection metrics. Answering here keeps the match exhaustive rather than
-            // letting a fourth axis compile into a silent default.
-            TunerKind::Coins => false,
-        };
-        let edges = match kind {
-            TunerKind::Filter => self.tuner.edges,
-            TunerKind::Time => self.time_tuner.edges,
-            TunerKind::Coins => 0,
-        };
-        let it_input = self.shell_cfg_input(kind, 0, "20", window, cx);
-        let mn_input = self.shell_cfg_input(kind, 1, &t!("analytics.tuner.auto_ph"), window, cx);
-        // The number of quantiles — a combo box (4/8/…/128).
+            // selection metrics. Answering here keeps the match exhaustive rather than letting a
+            // fourth axis compile into a silent default.
+            TunerKind::Coins => div().into_any_element(),
+        }
+    }
+
+    /// The frame every suggestion row shares: pinned above the scrollable rows, caption-sized.
+    fn config_row_frame(&self, cx: &Context<Self>) -> Div {
+        h_flex()
+            .w_full()
+            // Pinned above the scrollable rows — must not shrink.
+            .flex_none()
+            .px(design::ui_px(cx, 12.0))
+            .pb(design::ui_px(cx, 6.0))
+            .items_center()
+            .gap(design::ui_px(cx, 6.0))
+            .text_size(design::t_caption(cx))
+    }
+
+    /// The "By filter" suggestion row: restarts, the settings gear, live status, Stop, Search.
+    ///
+    /// Only the restart count stays inline. The rest sit behind the gear because this card is
+    /// laid out at a fixed narrow width, and a row that cannot wrap has to spend its space on the
+    /// controls that are used every run rather than on the ones set once.
+    fn filter_config_row(
+        &mut self,
+        p: MoonPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let running = self.tuner.sugg.is_running();
+        // Only the joint search can be stopped; `Some(true)` means the stop is already in flight.
+        let stopping = self
+            .tuner
+            .sugg
+            .joint_run()
+            .map(|(handle, _)| handle.is_cancelled());
+        let (status, status_color) = self.filter_search_status(p);
+        let it_input =
+            self.shell_cfg_input(TunerKind::Filter, CfgInput::Restarts, "100", window, cx);
+        // `MoonPopover` holds its content eagerly, so building it while the popover is shut costs
+        // two menus, a dozen locale lookups and their closures on EVERY frame — and this panel
+        // repaints several times a second for the whole of a running search. Closed, the gear is
+        // all there is to draw.
+        let settings = self.filter_search_settings(p, window, cx);
+        self.config_row_frame(cx)
+            .child(cfg_label(t!("analytics.tuner.iters").to_string(), p))
+            .child(
+                div().w(design::font_w_px(cx, 46.0)).flex_none().child(
+                    MoonInput::new(SharedString::from("tun-cfg-it-f"))
+                        .state(&it_input)
+                        .small(),
+                ),
+            )
+            .child(settings)
+            // The status takes the free space and truncates, so a long failure message cannot
+            // push the buttons off a narrow dock.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(moon(status_color))
+                    .child(status),
+            )
+            .when_some(stopping, |el, stopping| {
+                el.child(
+                    MoonButton::new(SharedString::from("tun-suggest-stop-f"))
+                        .variant(MoonButtonVariant::Soft)
+                        .size(MoonButtonSize::Micro)
+                        .label(if stopping {
+                            t!("analytics.tuner.stopping").to_string()
+                        } else {
+                            t!("analytics.tuner.stop").to_string()
+                        })
+                        .disabled(stopping)
+                        .on_click(cx.listener(|this, _, _, cx| this.stop_suggest_into_v1(cx)))
+                        .render(),
+                )
+            })
+            // The suggestion buttons are ALWAYS visible — a suggestion can be run over the
+            // current scope (no selected strategy = over everything shown). The result can only
+            // be written into a selected strategy (that gate sits on Copy/Save in the toolbar).
+            .child(
+                MoonButton::new(SharedString::from("tun-suggest-one-f"))
+                    .variant(MoonButtonVariant::Soft)
+                    .size(MoonButtonSize::Micro)
+                    .label(t!("analytics.tuner.suggest_one").to_string())
+                    .disabled(running)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.tuner.sugg.is_running() {
+                            this.suggest_one_into_v1(cx);
+                            cx.notify();
+                        }
+                    }))
+                    .render(),
+            )
+            .child(
+                MoonButton::new(SharedString::from("tun-suggest-run-f"))
+                    .variant(MoonButtonVariant::Blue)
+                    .size(MoonButtonSize::Micro)
+                    .label(t!("analytics.tuner.suggest_run").to_string())
+                    .disabled(running)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.tuner.sugg.is_running() {
+                            this.suggest_into_v1(cx);
+                            cx.notify();
+                        }
+                    }))
+                    .render(),
+            )
+            .into_any_element()
+    }
+
+    /// One line describing what the "By filter" search is doing, with the colour to draw it in.
+    ///
+    /// An empty string is the idle state: the row simply shows nothing rather than a placeholder.
+    fn filter_search_status(&self, p: MoonPalette) -> (String, u32) {
+        match &self.tuner.sugg {
+            SuggestState::Idle => (String::new(), p.text_muted),
+            // The blocking overlay is this one's progress feedback, so the row stays quiet.
+            SuggestState::Running(SuggestJob::SingleField) => (String::new(), p.text_muted),
+            SuggestState::Running(SuggestJob::AllFields { handle, total }) => (
+                t!(
+                    "analytics.tuner.sugg_progress",
+                    done = handle.completed(),
+                    total = total
+                )
+                .to_string(),
+                p.text_soft,
+            ),
+            SuggestState::Done {
+                rounds,
+                stopped: true,
+                ..
+            } => (
+                t!("analytics.tuner.sugg_stopped", rounds = rounds).to_string(),
+                p.orange,
+            ),
+            // A search that ran to the end with nothing to give did not fail: the scope simply
+            // holds fewer trades than the minimum a suggestion must retain. Saying "done" here
+            // would read as "these are your thresholds", which is the one thing it is not.
+            SuggestState::Done { split: None, .. } => {
+                (t!("analytics.tuner.sugg_small").to_string(), p.text_soft)
+            }
+            SuggestState::Done { rounds, .. } => (
+                t!("analytics.tuner.sugg_done", rounds = rounds).to_string(),
+                p.text_muted,
+            ),
+            // A failed read must not read as "found nothing", so it is said in the danger colour
+            // with the database's own words rather than left to the log alone.
+            SuggestState::Failed(ReadFail::NotReady) => (
+                t!("common.db_not_ready").to_string(),
+                design::danger_color(p),
+            ),
+            SuggestState::Failed(e) => (
+                format!("{}: {e}", t!("analytics.tuner.sugg_failed")),
+                design::danger_color(p),
+            ),
+        }
+    }
+
+    /// The "By filter" search settings popover: the knobs that are set once and then left alone.
+    ///
+    /// It cannot start or stop a search — those stay in the row, reachable at any width.
+    ///
+    /// The contents are built ONLY while it is open. `MoonPopover` takes its content eagerly, so
+    /// a shut popover would otherwise rebuild two menus, their closures and a dozen locale
+    /// lookups on every frame — and this panel repaints several times a second for the whole of
+    /// a running search, which is exactly when nobody is looking at these knobs.
+    fn filter_search_settings(
+        &mut self,
+        p: MoonPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let open = self.tuner.sugg_cfg_open;
+        let content = open.then(|| self.filter_settings_content(p, window, cx));
+        let entity = cx.entity();
+        let mut popover = MoonPopover::new("tun-cfg-popover")
+            .placement(MoonPopoverPlacement::BottomStart)
+            .content_width_font(SETTINGS_POPUP_W)
+            .close_on_content_click(false)
+            // The depth dropdown opens in its own deferred layer, which may extend past the
+            // popover box; treating a click there as an outside click would close the popover the
+            // moment that menu is used. The ✕, Escape and the gear remain the dismissal paths.
+            .overlay_closable(false)
+            .open(open)
+            .on_open_change(move |open, _window, app| {
+                entity.update(app, |this, cx| {
+                    this.tuner.sugg_cfg_open = open;
+                    cx.notify();
+                });
+            })
+            .trigger(
+                MoonButton::new("tun-cfg-gear")
+                    .label("⚙")
+                    .size(MoonButtonSize::Micro)
+                    .variant(MoonButtonVariant::Soft)
+                    .tooltip(t!("analytics.tuner.cfg_title").to_string())
+                    .render(),
+            );
+        if let Some(content) = content {
+            popover = popover.content(content);
+        }
+        popover.into_any_element()
+    }
+
+    /// The knobs themselves, built only when the settings popover is open.
+    fn filter_settings_content(
+        &mut self,
+        p: MoonPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mn_input = self.shell_cfg_input(
+            TunerKind::Filter,
+            CfgInput::MinTrades,
+            &t!("analytics.tuner.auto_ph"),
+            window,
+            cx,
+        );
+        let seed_input = self.shell_cfg_input(
+            TunerKind::Filter,
+            CfgInput::Seed,
+            &t!("analytics.tuner.seed_ph"),
+            window,
+            cx,
+        );
+        let train_pct = self.tuner.train_pct;
+        let tr_view = cx.entity();
+        let tr_items = crate::panels::radio_items(
+            TRAIN_OPTIONS.map(|n| {
+                (
+                    n,
+                    SharedString::from(format!("tun-tr-{n}")),
+                    SharedString::from(train_label(n)),
+                )
+            }),
+            train_pct,
+            crate::panels::RadioMark::Highlight,
+            move |app, n| {
+                tr_view.update(app, |this, cx| {
+                    this.tuner.train_pct = n;
+                    this.tuner.invalidate_suggest();
+                    this.persist_tuner_train(cx);
+                    cx.notify();
+                });
+            },
+        );
+        let tr_combo = MoonDropdown::new(SharedString::from("tun-cfg-tr-f"))
+            .label(train_label(train_pct))
+            .trigger_caret(true)
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Micro)
+            .menu_width_scaled(96.0)
+            .menu_size(MoonMenuSize::Compact)
+            .items(tr_items);
+        let edges = self.tuner.edges;
         let ed_view = cx.entity();
         let ed_items = crate::panels::radio_items(
             EDGE_OPTIONS.map(|n| {
@@ -189,173 +513,201 @@ impl AnalyticsView {
             crate::panels::RadioMark::Highlight,
             move |app, n| {
                 ed_view.update(app, |this, cx| {
-                    match kind {
-                        TunerKind::Filter => {
-                            this.tuner.edges = n;
-                            this.tuner.invalidate_suggest();
-                            // Only this axis persists its depth — the layout key is the filter
-                            // tuner's, and the time sweep fixes its own.
-                            this.persist_tuner_edges(cx);
-                        }
-                        TunerKind::Time => {
-                            this.time_tuner.edges = n;
-                            this.time_tuner.invalidate_suggest();
-                        }
-                        // This row is not drawn on the coin axis, so the control that
-                        // would fire this cannot exist there.
-                        TunerKind::Coins => {}
-                    }
+                    this.tuner.edges = n;
+                    this.tuner.invalidate_suggest();
+                    this.persist_tuner_edges(cx);
                     cx.notify();
                 });
             },
         );
-        let ed_combo = MoonDropdown::new(SharedString::from(format!(
-            "tun-cfg-ed-{}",
-            if time { "t" } else { "f" }
-        )))
-        .label(edges.to_string())
-        .trigger_caret(true)
-        .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::Micro)
-        .menu_width_scaled(64.0)
-        .menu_size(MoonMenuSize::Compact)
-        .items(ed_items);
-        let mut cfg_row = h_flex()
+        let ed_combo = MoonDropdown::new(SharedString::from("tun-cfg-ed-f"))
+            .label(edges.to_string())
+            .trigger_caret(true)
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Micro)
+            .menu_width_scaled(64.0)
+            .menu_size(MoonMenuSize::Compact)
+            .items(ed_items);
+        let gap = design::ui_px(cx, 6.0);
+        let label_w = design::font_w_px(cx, 74.0);
+        let head = h_flex()
             .w_full()
-            // Pinned above the scrollable rows — must not shrink.
-            .flex_none()
-            .px(design::ui_px(cx, 12.0))
-            .pb(design::ui_px(cx, 6.0))
             .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .text_size(design::t_caption(cx))
-            // "restarts" — the filter's coordinate descent; unused for time (hidden).
-            .when(!time, |el| {
-                el.child(
-                    div()
-                        .text_color(moon(p.text_muted))
-                        .child(t!("analytics.tuner.iters").to_string()),
-                )
-                .child(
-                    div().w(design::font_w_px(cx, 46.0)).flex_none().child(
-                        MoonInput::new(SharedString::from("tun-cfg-it-f"))
-                            .state(&it_input)
-                            .small(),
-                    ),
-                )
-            })
             .child(
                 div()
+                    .flex_1()
                     .text_color(moon(p.text_muted))
-                    .child(t!("analytics.tuner.min_trades").to_string()),
+                    .child(t!("analytics.tuner.cfg_title").to_string()),
             )
             .child(
-                div().w(design::font_w_px(cx, 52.0)).flex_none().child(
-                    MoonInput::new(SharedString::from(format!(
-                        "tun-cfg-mn-{}",
-                        if time { "t" } else { "f" }
-                    )))
-                    .state(&mn_input)
-                    .small(),
-                ),
-            )
-            // "depth" (quantiles) — hidden for time: there the max precision is fixed.
-            .when(!time, |el| {
-                el.child(
-                    div()
-                        .text_color(moon(p.text_muted))
-                        .child(t!("analytics.tuner.edges").to_string()),
-                )
-                .child(div().flex_none().child(ed_combo))
-            })
-            .child(div().flex_1());
-        // The suggestion buttons are ALWAYS visible — a suggestion can be run over the current
-        // scope (no selected strategy = over everything shown). "Search" (a single field) exists
-        // only for the filter; "Search all" — for both axes. The result can only be written
-        // into a selected strategy (that gate sits on Copy/Save in the toolbar).
-        cfg_row = cfg_row
-            // "Search" (a single field) — filter only; hidden for time.
-            .when(!time, |el| {
-                el.child(
-                    MoonButton::new(SharedString::from("tun-suggest-one-f"))
-                        .variant(MoonButtonVariant::Soft)
-                        .size(MoonButtonSize::Micro)
-                        .label(if busy {
-                            "…".to_string()
-                        } else {
-                            t!("analytics.tuner.suggest_one").to_string()
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if kind == TunerKind::Filter && !this.tuner.sugg_busy {
-                                this.suggest_one_into_v1(cx);
-                                cx.notify();
-                            }
-                        }))
-                        .render(),
-                )
-            })
-            .child(
-                MoonButton::new(SharedString::from(format!(
-                    "tun-suggest-run-{}",
-                    if time { "t" } else { "f" }
-                )))
-                .variant(MoonButtonVariant::Blue)
-                .size(MoonButtonSize::Micro)
-                .label(if busy {
-                    "…".to_string()
-                } else {
-                    t!("analytics.tuner.suggest_run").to_string()
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    match kind {
-                        TunerKind::Filter => {
-                            if !this.tuner.sugg_busy {
-                                this.suggest_into_v1(cx);
-                                cx.notify();
-                            }
-                        }
-                        // No suggestion on the coin axis yet - the row is not drawn there.
-                        TunerKind::Coins => {}
-                        // time_suggest gates on its own sugg_busy itself.
-                        TunerKind::Time => {
-                            this.time_suggest(cx);
-                            cx.notify();
-                        }
-                    }
-                }))
-                .render(),
+                MoonButton::new("tun-cfg-close")
+                    .label("✕")
+                    .size(MoonButtonSize::Micro)
+                    .variant(MoonButtonVariant::Ghost)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.tuner.sugg_cfg_open = false;
+                        cx.notify();
+                    }))
+                    .render(),
             );
-        cfg_row.into_any_element()
+        let row = |caption: String, body: AnyElement| {
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(gap)
+                .child(div().w(label_w).flex_none().child(caption))
+                .child(body)
+        };
+        // No padding, background, border or corners here: `MoonPopover` supplies all four, and
+        // `content_width_font` treats the number it is given as the width of the CONTENT, adding
+        // its own padding and border on top. Drawing a second set inside would both double the
+        // chrome and make the real content box narrower than the width declared for it.
+        let mut content = v_flex()
+            .id("tun-cfg-popup")
+            .w_full()
+            .gap(gap)
+            .text_size(design::t_caption(cx))
+            .child(head)
+            .child(row(
+                t!("analytics.tuner.min_trades").to_string(),
+                div()
+                    .w(design::font_w_px(cx, 60.0))
+                    .flex_none()
+                    .child(
+                        MoonInput::new(SharedString::from("tun-cfg-mn-f"))
+                            .state(&mn_input)
+                            .small(),
+                    )
+                    .into_any_element(),
+            ))
+            .child(row(
+                t!("analytics.tuner.edges").to_string(),
+                div().flex_none().child(ed_combo).into_any_element(),
+            ))
+            // Holding trades back is what turns a suggestion from "these ranges fit the past" into
+            // a claim that can be checked, so the control sits with the settings and its verdict
+            // is printed under the grid rather than hidden in a log line.
+            .child(row(
+                t!("analytics.tuner.train_share").to_string(),
+                div().flex_none().child(tr_combo).into_any_element(),
+            ))
+            .child(row(
+                t!("analytics.tuner.seed").to_string(),
+                div()
+                    .w(design::font_w_px(cx, 100.0))
+                    .flex_none()
+                    .child(
+                        MoonInput::new(SharedString::from("tun-cfg-seed-f"))
+                            .state(&seed_input)
+                            .small(),
+                    )
+                    .into_any_element(),
+            ));
+        // The seed a finished search actually used, so an interesting result can be pinned and
+        // repeated. Without it a search left on "random" is not reproducible even once.
+        if let Some(last) = self.tuner.last_seed {
+            let full = SharedString::from(last.to_string());
+            content = content.child(row(
+                t!("analytics.tuner.seed_last").to_string(),
+                h_flex()
+                    .items_center()
+                    .gap(gap)
+                    .child(
+                        div()
+                            .id("tun-cfg-seed-last")
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(moon(p.text_soft))
+                            .tooltip(move |_w, cx| {
+                                cx.new(|_| MoonTooltipView::new(full.clone())).into()
+                            })
+                            .child(short_seed(last)),
+                    )
+                    .child(
+                        MoonButton::new("tun-cfg-seed-pin")
+                            .label(t!("analytics.tuner.seed_pin").to_string())
+                            .size(MoonButtonSize::Micro)
+                            .variant(MoonButtonVariant::Soft)
+                            .on_click(cx.listener(|this, _, _, cx| this.pin_last_seed(cx)))
+                            .render(),
+                    )
+                    .into_any_element(),
+            ));
+        }
+        content.into_any_element()
     }
 
-    /// A suggestion settings input (restarts / min. trades) for the `kind` axis, with a
-    /// lazy cache in its state. `which`: 0 = restarts, 1 = min. trades.
+    /// The "By time" suggestion row: the sweep has one setting and one action.
+    fn time_config_row(
+        &mut self,
+        p: MoonPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mn_input = self.shell_cfg_input(
+            TunerKind::Time,
+            CfgInput::MinTrades,
+            &t!("analytics.tuner.auto_ph"),
+            window,
+            cx,
+        );
+        let busy = self.time_tuner.sugg_busy;
+        self.config_row_frame(cx)
+            .child(cfg_label(t!("analytics.tuner.min_trades").to_string(), p))
+            .child(
+                div().w(design::font_w_px(cx, 52.0)).flex_none().child(
+                    MoonInput::new(SharedString::from("tun-cfg-mn-t"))
+                        .state(&mn_input)
+                        .small(),
+                ),
+            )
+            .child(div().flex_1())
+            .child(
+                MoonButton::new(SharedString::from("tun-suggest-run-t"))
+                    .variant(MoonButtonVariant::Blue)
+                    .size(MoonButtonSize::Micro)
+                    .label(if busy {
+                        "…".to_string()
+                    } else {
+                        t!("analytics.tuner.suggest_run").to_string()
+                    })
+                    // `time_suggest` gates on its own `sugg_busy` itself.
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.time_suggest(cx);
+                        cx.notify();
+                    }))
+                    .render(),
+            )
+            .into_any_element()
+    }
+
+    /// A suggestion settings box for the `kind` axis, with a lazy cache in that axis's state.
     fn shell_cfg_input(
         &mut self,
         kind: TunerKind,
-        which: usize,
+        which: CfgInput,
         placeholder: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<MoonInputState> {
-        let id = format!(
-            "{}-cfg-{which}",
-            if kind == TunerKind::Time { "t" } else { "f" }
-        );
+        let id = cfg_input_id(kind, which);
         let cached = match kind {
-            TunerKind::Filter => self.tuner.inputs.get(&id),
-            TunerKind::Time => self.time_tuner.inputs.get(&id),
+            TunerKind::Filter => self.tuner.inputs.get(id),
+            TunerKind::Time => self.time_tuner.inputs.get(id),
             TunerKind::Coins => None,
         };
         if let Some(state) = cached {
             return state.clone();
         }
         let value = match (kind, which) {
-            (TunerKind::Filter, 1) => self.tuner.min_trades.clone(),
-            (TunerKind::Filter, _) => self.tuner.iters.clone(),
-            (TunerKind::Time, 1) => self.time_tuner.min_trades.clone(),
-            (TunerKind::Time, _) => self.time_tuner.iters.clone(),
-            (TunerKind::Coins, _) => String::new(),
+            (TunerKind::Filter, CfgInput::MinTrades) => self.tuner.min_trades.clone(),
+            (TunerKind::Filter, CfgInput::Seed) => self.tuner.seed.clone(),
+            (TunerKind::Filter, CfgInput::Restarts) => self.tuner.iters.clone(),
+            (TunerKind::Time, CfgInput::MinTrades) => self.time_tuner.min_trades.clone(),
+            // The time row draws only the minimum-trades box, and the coin axis draws no row at
+            // all, so neither has a value for the rest.
+            (TunerKind::Time, _) | (TunerKind::Coins, _) => String::new(),
         };
         let ph = placeholder.to_string();
         let state = cx.new(|cx| {
@@ -371,24 +723,25 @@ impl AnalyticsView {
             ) {
                 let value = state.read(cx).value().to_string();
                 match (kind, which) {
-                    (TunerKind::Filter, 1) => {
+                    (TunerKind::Filter, CfgInput::MinTrades) => {
                         this.tuner.min_trades = value;
                         this.tuner.invalidate_suggest();
                     }
-                    (TunerKind::Filter, _) => {
+                    (TunerKind::Filter, CfgInput::Seed) => {
+                        this.tuner.seed = value;
+                        this.tuner.invalidate_suggest();
+                        this.persist_tuner_seed(cx);
+                    }
+                    (TunerKind::Filter, CfgInput::Restarts) => {
                         this.tuner.iters = value;
                         this.tuner.invalidate_suggest();
                         this.persist_tuner_iters(cx);
                     }
-                    (TunerKind::Time, 1) => {
+                    (TunerKind::Time, CfgInput::MinTrades) => {
                         this.time_tuner.min_trades = value;
                         this.time_tuner.invalidate_suggest();
                     }
-                    (TunerKind::Time, _) => {
-                        this.time_tuner.iters = value;
-                        this.time_tuner.invalidate_suggest();
-                    }
-                    (TunerKind::Coins, _) => {}
+                    (TunerKind::Time, _) | (TunerKind::Coins, _) => {}
                 }
                 if !matches!(ev, MoonInputEvent::Change) {
                     cx.notify();
@@ -397,34 +750,79 @@ impl AnalyticsView {
         })
         .detach();
         match kind {
-            TunerKind::Filter => self.tuner.inputs.insert(id, state.clone()),
-            TunerKind::Time => self.time_tuner.inputs.insert(id, state.clone()),
+            TunerKind::Filter => self.tuner.inputs.insert(id.to_string(), state.clone()),
+            TunerKind::Time => self.time_tuner.inputs.insert(id.to_string(), state.clone()),
             TunerKind::Coins => None,
         };
         state
     }
 
-    /// Persist a changed quantile depth through the layout dirty-flag drain.
-    fn persist_tuner_edges(&self, cx: &mut Context<Self>) {
-        let value = Some(self.tuner.edges as u32);
+    /// Copy the seed the last completed search ran with into the seed box, pinning it.
+    fn pin_last_seed(&mut self, cx: &mut Context<Self>) {
+        let Some(seed) = self.tuner.last_seed else {
+            return;
+        };
+        self.tuner.seed = seed.to_string();
+        // Recreate the box so it renders from the START of the value, as `apply_bounds` does.
+        self.tuner
+            .inputs
+            .remove(cfg_input_id(TunerKind::Filter, CfgInput::Seed));
+        self.tuner.invalidate_suggest();
+        self.persist_tuner_seed(cx);
+        cx.notify();
+    }
+
+    /// Write one search setting into the saved layout through its dirty-flag drain.
+    ///
+    /// `pick` names the field. Every setting persists the same way — compare, assign, mark dirty
+    /// — so keeping the sequence here prevents later settings from drifting into a subtly
+    /// different write path.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to update the backend layout.
+    ///     pick: The layout field this setting lives in.
+    ///     value: Its normalized value, or `None` where the setting has no usable value.
+    fn persist_setting<T: PartialEq>(
+        &self,
+        cx: &mut Context<Self>,
+        pick: impl Fn(&mut moon_core::config::WindowLayout) -> &mut T,
+        value: T,
+    ) {
         self.backend.update(cx, |b, _| {
-            if b.layout.analytics_tuner_edges != value {
-                b.layout.analytics_tuner_edges = value;
+            let slot = pick(&mut b.layout);
+            if *slot != value {
+                *slot = value;
                 b.layout_dirty = true;
             }
         });
     }
 
-    /// Persist the normalized restart count through the layout dirty-flag drain.
+    /// Persist a changed quantile depth.
+    fn persist_tuner_edges(&self, cx: &mut Context<Self>) {
+        let value = Some(self.tuner.edges as u32);
+        self.persist_setting(cx, |l| &mut l.analytics_tuner_edges, value);
+    }
+
+    /// Persist the normalized restart count.
     ///
     /// `Change` events must persist because closing the window does not guarantee a blur.
     fn persist_tuner_iters(&self, cx: &mut Context<Self>) {
         let value = Some(iters_of(&self.tuner.iters) as u32);
-        self.backend.update(cx, |b, _| {
-            if b.layout.analytics_tuner_iters != value {
-                b.layout.analytics_tuner_iters = value;
-                b.layout_dirty = true;
-            }
-        });
+        self.persist_setting(cx, |l| &mut l.analytics_tuner_iters, value);
+    }
+
+    /// Persist the chosen train share.
+    fn persist_tuner_train(&self, cx: &mut Context<Self>) {
+        let value = Some(self.tuner.train_pct as u32);
+        self.persist_setting(cx, |l| &mut l.analytics_tuner_train, value);
+    }
+
+    /// Persist the chosen seed.
+    ///
+    /// Only a usable seed is stored: box text that is not a plain number means "no seed", and
+    /// writing it back would reopen the tuner showing a seed no search would honour.
+    fn persist_tuner_seed(&self, cx: &mut Context<Self>) {
+        let value = persist_seed(&self.tuner.seed);
+        self.persist_setting(cx, |l| &mut l.analytics_tuner_seed, value);
     }
 }

@@ -1,18 +1,21 @@
 //! Unit tests for persisted filter-tuner controls.
 
 use super::{
-    DEFAULT_EDGES, DEFAULT_ITERS, EDGE_OPTIONS, TunerState, iters_of, restore_edges, restore_iters,
-    staged_dirty,
+    DEFAULT_EDGES, DEFAULT_ITERS, DEFAULT_TRAIN, EDGE_OPTIONS, SuggestJob, SuggestState,
+    TRAIN_OPTIONS, TunerState, fmt_bound, iters_of, parse_num, persist_seed, restore_edges,
+    restore_iters, restore_seed, restore_train, seed_of, staged_dirty, train_frac,
 };
 use moon_core::db::tuner::StratFilters;
-use moon_core::db::tuner_smart::{EDGES_MAX, EDGES_MIN, RESTARTS_MAX, RESTARTS_MIN};
+use moon_core::db::tuner::threshold_search::{
+    EDGES_MAX, EDGES_MIN, RESTARTS_MAX, RESTARTS_MIN, SearchHandle,
+};
 
 /// `filter/state.rs:TunerState::mark_report_stale` must not add the draft resets or request
 /// generation bumps from `invalidate`; the former clears edits and the latter starves a long
 /// filter scan while new trades keep arriving.
 #[test]
 fn report_staleness_preserves_filter_drafts() {
-    let mut state = TunerState::load(None, None);
+    let mut state = TunerState::load(None, None, None, None);
     state.bounds[0][0] = ("1".into(), "2".into());
     state.staged_ignore.insert("IgnoreFilters", true);
     let (seq, hist_seq, sugg_seq, dialog_seq) =
@@ -42,7 +45,7 @@ fn report_staleness_preserves_filter_drafts() {
 /// report-only staleness lets old KPI, histogram, or suggestion completions publish in a new scope.
 #[test]
 fn scope_change_retires_all_filter_requests() {
-    let mut state = TunerState::load(None, None);
+    let mut state = TunerState::load(None, None, None, None);
     let (seq, hist_seq, sugg_seq) = (state.seq, state.hist_seq, state.sugg_seq);
 
     state.invalidate();
@@ -53,11 +56,38 @@ fn scope_change_retires_all_filter_requests() {
     assert!(state.needs_reload());
 }
 
+/// Retiring a suggestion must STOP the search, not merely stop listening to it.
+///
+/// Breakage this pins: `state.rs:TunerState::invalidate_suggest` going back to advancing the
+/// generation alone. Every manual v1 edit retires the running search, so one that kept going
+/// would hold the whole worker pool producing an answer that can no longer be published — and
+/// the user's next Search click would start a second one alongside it.
+#[test]
+fn retiring_a_suggestion_stops_the_search_behind_it() {
+    let mut state = TunerState::load(None, None, None, None);
+    let handle = SearchHandle::new();
+    state.sugg = SuggestState::Running(SuggestJob::AllFields {
+        handle: handle.clone(),
+        total: 100,
+    });
+
+    state.invalidate_suggest();
+
+    assert!(
+        handle.is_cancelled(),
+        "the retired search must be told to stop"
+    );
+    assert!(
+        !state.sugg.is_running(),
+        "and must no longer read as running"
+    );
+}
+
 /// `filter/state.rs:TunerState::needs_reload` must include `hist_dirty`; checking only KPI state
 /// leaves an old histogram pinned when an automatic KPI finishes after the user leaves Filters.
 #[test]
 fn stale_histogram_keeps_the_filter_axis_reloadable() {
-    let mut state = TunerState::load(None, None);
+    let mut state = TunerState::load(None, None, None, None);
     state.stats.apply(Ok(Vec::new()));
     state.dirty = false;
     state.hist_dirty = true;
@@ -70,7 +100,7 @@ fn stale_histogram_keeps_the_filter_axis_reloadable() {
 /// assignment turns the next Save preview into a diff against invented defaults.
 #[test]
 fn automatic_missing_strategy_read_preserves_the_save_baseline() {
-    let mut state = TunerState::load(None, None);
+    let mut state = TunerState::load(None, None, None, None);
     state.apply_strategy_read(
         StratFilters {
             found: true,
@@ -90,7 +120,7 @@ fn automatic_missing_strategy_read_preserves_the_save_baseline() {
 /// that update lets an async Save preview open for the draft that existed before the user's edit.
 #[test]
 fn draft_change_retires_pending_save_preview() {
-    let mut state = TunerState::load(None, None);
+    let mut state = TunerState::load(None, None, None, None);
     let pending_preview = state.dialog_seq;
 
     state.mark_dialog_draft_changed();
@@ -120,6 +150,34 @@ fn every_offered_depth_is_one_the_search_accepts() {
         (EDGES_MIN..=EDGES_MAX).contains(&DEFAULT_EDGES),
         "the fallback depth must itself be acceptable to the search"
     );
+}
+
+/// Every default must be a value the control that shows it can actually represent.
+///
+/// The oracle is each control's own option set and the search's own bounds — the defaults are
+/// checked against what OTHER code declares, never against a literal restated here.
+///
+/// Breakage this pins: retuning a default to a number the control cannot show. A `DEFAULT_EDGES`
+/// of 48 makes `restore_edges(None)` hand back 48 unvalidated, so the depth dropdown opens
+/// displaying 48 with no item marked as chosen, and the first click silently moves the user to a
+/// different value. A `DEFAULT_ITERS` past the search ceiling would likewise display a count the
+/// search would quietly clamp away.
+#[test]
+fn every_default_is_a_value_its_control_can_show() {
+    assert!(
+        EDGE_OPTIONS.contains(&DEFAULT_EDGES),
+        "the default depth {DEFAULT_EDGES} is not one the dropdown offers"
+    );
+    assert!(
+        TRAIN_OPTIONS.contains(&DEFAULT_TRAIN),
+        "the default train share {DEFAULT_TRAIN} is not one the dropdown offers"
+    );
+    assert_eq!(
+        iters_of(&restore_iters(None)),
+        DEFAULT_ITERS,
+        "the restart box must open on the default the search would actually run"
+    );
+    assert!((RESTARTS_MIN..=RESTARTS_MAX).contains(&DEFAULT_ITERS));
 }
 
 /// The depth restored from `layout.toml` has to be one the dropdown can select again.
@@ -164,21 +222,145 @@ fn depth_restores_only_values_the_dropdown_offers() {
 #[test]
 fn restarts_reopen_as_the_count_the_search_runs() {
     for typed in [
-        "", "   ", "abc", "0", "1", "7", "500", "1000", "2000", "2001", "99999", "-5",
+        "", "   ", "abc", "0", "1", "7", "500", "1000", "2000", "2001", "99999", "-5", "20k",
+        "1.5k", " 2К ",
     ] {
         let effective = iters_of(typed);
+        // Reopened text may be COMPACT ("20k"), so the agreement to check is the count itself
+        // making the round trip — not the spelling.
         assert_eq!(
-            restore_iters(Some(effective as u32)),
-            effective.to_string(),
-            "storing what the search read from {typed:?} must reopen as that same value"
+            iters_of(&restore_iters(Some(effective as u32))),
+            effective,
+            "storing what the search read from {typed:?} must reopen as that same count"
         );
         assert!((RESTARTS_MIN..=RESTARTS_MAX).contains(&effective));
     }
+    // The compact form is only used where it is EXACT: a count that would lose digits stays long.
+    assert_eq!(restore_iters(Some(20_000)), "20k");
+    assert_eq!(restore_iters(Some(1_234)), "1234");
     // Boundary pair: the last accepted count passes through, one past it is pulled back.
     assert_eq!(iters_of(&RESTARTS_MAX.to_string()), RESTARTS_MAX);
     assert_eq!(iters_of(&(RESTARTS_MAX + 1).to_string()), RESTARTS_MAX);
     assert_eq!(iters_of(&RESTARTS_MIN.to_string()), RESTARTS_MIN);
     assert_eq!(iters_of("0"), RESTARTS_MIN);
+    // The suffix the box displays has to be one it reads back.
+    assert_eq!(iters_of("20k"), 20_000);
+    assert_eq!(iters_of("1.5k"), 1_500);
     // An absent value opens on the default rather than on an empty box.
     assert_eq!(restore_iters(None), DEFAULT_ITERS.to_string());
+}
+
+/// A pinned seed must reopen as the same seed, and an unusable one must not reopen as a seed.
+///
+/// The oracle is the agreement of two decoupled functions — `persist_seed` (box text → what is
+/// stored) and `restore_seed` (stored value → box text) — read back through `seed_of`, the one
+/// the search itself runs on. No literal is restated from any of them.
+///
+/// Breakage this pins: relaxing `state.rs:seed_of` to `parse().unwrap_or(0)`, which turns a typo
+/// into the fixed seed 0 and silently pins every later search to one set of random starts;
+/// or persisting the raw box text, which reopens the tuner displaying a seed no search honours.
+#[test]
+fn a_pinned_seed_reopens_as_the_seed_the_search_uses() {
+    for typed in [
+        "",
+        "   ",
+        "0",
+        "42",
+        " 7 ",
+        "abc",
+        "-1",
+        "1.5",
+        "18446744073709551615",
+        "99999999999999999999999",
+    ] {
+        let stored = persist_seed(typed);
+        let reopened = restore_seed(stored.clone());
+        assert_eq!(
+            seed_of(&reopened),
+            seed_of(typed),
+            "the seed {typed:?} reopened as {reopened:?}, a different search"
+        );
+        assert_eq!(
+            stored.is_some(),
+            seed_of(typed).is_some(),
+            "only a usable seed may be stored, and every usable one must be"
+        );
+    }
+    // An empty box is the "draw a fresh seed" state, and so is a stored value that stopped
+    // parsing — a file edited by hand must not pin the search to something arbitrary.
+    assert!(seed_of(&restore_seed(None)).is_none());
+    assert!(seed_of(&restore_seed(Some("not-a-seed".into()))).is_none());
+}
+
+/// A bound shown in the grid must be the bound that gets applied.
+///
+/// A v1 threshold is STORED as its displayed string and read back through `parse_num` to build
+/// the KPI query and to write the strategy, so a display form that does not survive that round
+/// trip is a different filter, not a shorter number.
+///
+/// The oracle is the round trip itself — `fmt_bound` and `parse_num` are decoupled functions, and
+/// no literal is restated from either.
+///
+/// Breakage this pins: `state.rs:fmt_bound` going back to returning its compact form
+/// unconditionally. `1234567` would display and apply as `1.23M` = 1 230 000, silently dropping
+/// every trade between the two, and a small threshold like `0.000123` would collapse to `0.0001`
+/// — a fifth of the way off, on a bound the search had chosen precisely.
+#[test]
+fn a_displayed_bound_reads_back_as_the_same_number() {
+    for v in [
+        0.0,
+        1.0,
+        -2.5,
+        0.5,
+        // Four decimals is exactly what the compact form keeps — one more is not.
+        0.0001,
+        0.000123,
+        -0.000123,
+        123.4567,
+        123.45678,
+        // The suffix forms keep two decimals, so three significant digits survive and more do not.
+        1_230_000.0,
+        1_234_567.0,
+        999.999,
+        -1_234_567_890.0,
+        1.2345e12,
+    ] {
+        let shown = fmt_bound(v);
+        assert_eq!(
+            parse_num(&shown),
+            Some(v),
+            "{v} displayed as {shown:?}, which reads back as a different filter"
+        );
+    }
+}
+
+/// A stored train share must reopen as a share the dropdown can select, and only 100 may mean
+/// "no split".
+///
+/// The oracle is the agreement of two decoupled functions — `restore_train` (stored value → the
+/// selected percentage) and `train_frac` (percentage → the fraction the search runs on) — with
+/// the search's own rule that only a fraction below 1 splits anything.
+///
+/// Breakage this pins: replacing `state.rs:restore_train`'s membership check with a clamp. A
+/// stored 0 or 5 would then survive as a real setting, and the search would fit on a handful of
+/// the oldest trades while the tuner displayed a share the dropdown cannot show as selected.
+#[test]
+fn a_stored_train_share_reopens_as_one_the_dropdown_offers() {
+    for offered in TRAIN_OPTIONS {
+        assert_eq!(restore_train(Some(offered as u32)), offered);
+        let frac = train_frac(offered);
+        assert_eq!(
+            frac < 1.0,
+            offered < 100,
+            "{offered}% must split the period exactly when it is not the whole period"
+        );
+    }
+    // Values a clamp would let through: outside the offered set, so they open on the default.
+    for between in [0u32, 5, 55, 99, 101, u32::MAX] {
+        assert_eq!(restore_train(Some(between)), DEFAULT_TRAIN);
+    }
+    assert_eq!(restore_train(None), DEFAULT_TRAIN);
+    // The default holds nothing back, so an untouched tuner behaves exactly as it did before the
+    // split existed.
+    assert_eq!(train_frac(DEFAULT_TRAIN), 1.0);
 }

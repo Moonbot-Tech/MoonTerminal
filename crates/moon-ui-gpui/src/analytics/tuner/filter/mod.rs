@@ -3,7 +3,8 @@
 //! from/to range builder per field and a profit histogram over the quantile buckets of
 //! the selected field. The scope is the strategy selected in the list (or all). Bounds retain
 //! the raw strings the user typed and start empty on every open because they describe one
-//! strategy's search. Only restart count and depth persist.
+//! strategy's search. Only the search SETTINGS persist — restart count, quantile depth, seed and
+//! train share.
 
 // Files of this axis.
 /// Its auto-suggestion and the write it produces.
@@ -145,8 +146,9 @@ impl AnalyticsView {
             }
             out
         };
-        // We do NOT reset the auto-suggestion: editing the bounds does not change the fact
-        // distribution it was computed from (the reset lives in invalidate()).
+        // Starting a KPI recomputation does not by itself retire the auto-suggestion. Input and
+        // v1-destination edits retire it at their mutation sites, while unrelated refreshes may
+        // carry the last completed verdict until one of those inputs changes.
         // Carry current numbers as stale during recomputation; any completed
         // non-data result drops them.
         self.tuner.stats.begin();
@@ -332,6 +334,14 @@ impl AnalyticsView {
         };
         let state = cx.new(|cx| MoonInputState::new(window, cx).default_value(value));
         cx.subscribe(&state, move |this, state, ev: &MoonInputEvent, cx| {
+            // Typing alone retires a running v1 suggestion, without committing the half-typed
+            // value or recomputing. The joint search runs WITHOUT the blocking overlay, so the
+            // user can type into this box while it works — and its completion overwrites every
+            // enabled v1 bound and drops the input entity. Waiting for Blur to notice would
+            // silently throw that edit away.
+            if vi == 0 && matches!(ev, MoonInputEvent::Change) {
+                this.tuner.invalidate_suggest();
+            }
             if matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
                 let value = state.read(cx).value().to_string();
                 this.commit_bound(vi, fi, is_to, value, cx);
@@ -669,7 +679,93 @@ impl AnalyticsView {
                     .overflow_y_scroll()
                     .child(grid),
             )
+            .children(self.split_summary(p, cx))
             .into_any_element()
+    }
+
+    /// What the last suggestion's ranges achieved, split in two by whether the search was allowed
+    /// to see the trades being measured.
+    ///
+    /// Pinned BELOW the scrolling rows rather than placed inside them: the fitted profit is the
+    /// number the search maximized and always looks good, so the held-back one has to be visible
+    /// at the same moment, not somewhere the user has to scroll to. Nothing is drawn until a
+    /// search has produced ranges — an untouched grid has nothing to report — and editing any
+    /// bound retires the suggestion, taking this with it.
+    fn split_summary(&self, p: MoonPalette, cx: &Context<Self>) -> Option<AnyElement> {
+        let state::SuggestState::Done {
+            split: Some(split), ..
+        } = &self.tuner.sugg
+        else {
+            return None;
+        };
+        // Nothing was held back, so there is no second opinion to show and the KPI matrix above
+        // already carries the fitted figures.
+        let holdout = split.holdout.as_ref()?;
+        let line = |caption: String, tally: &moon_core::db::metrics::Tally, color: u32| {
+            h_flex()
+                .w_full()
+                .gap(design::ui_px(cx, 6.0))
+                .child(
+                    div()
+                        .w(design::font_w_px(cx, 74.0))
+                        .flex_none()
+                        .truncate()
+                        .text_color(moon(p.text_muted))
+                        .child(caption),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(moon(color))
+                        // The same formatters the KPI matrix above uses for the same figures:
+                        // winrate to one decimal as the strategy table shows it, profit factor
+                        // and drawdown through the shared dimensionless one. Only the headline
+                        // profit carries the unit — the line has to survive truncation on a
+                        // narrow dock, and repeating "USDT" inside it spends that width twice.
+                        .child(
+                            t!(
+                                "analytics.tuner.split_stats",
+                                profit = super::super::summary::fmt_signed(tally.profit),
+                                n = tally.n,
+                                wr = format!("{:.1}", tally.winrate()),
+                                pf = super::super::summary::fmt_signed_plain(tally.profit_factor()),
+                                dd = super::super::summary::fmt_signed_plain(tally.max_dd)
+                            )
+                            .to_string(),
+                        ),
+                )
+        };
+        Some(
+            v_flex()
+                .w_full()
+                .flex_none()
+                .px(design::ui_px(cx, 12.0))
+                .py(design::ui_px(cx, 6.0))
+                .gap(design::ui_px(cx, 2.0))
+                .border_t_1()
+                .border_color(moon(p.border))
+                .text_size(design::t_caption(cx))
+                .child(line(
+                    t!("analytics.tuner.split_train").to_string(),
+                    &split.train,
+                    p.text_soft,
+                ))
+                // A losing holdout is the whole point of the exercise: the ranges fitted the past
+                // and did not survive contact with the rest of it. It is coloured as the failure
+                // it is rather than left to be read off a sign.
+                .child(line(
+                    t!("analytics.tuner.split_holdout").to_string(),
+                    holdout,
+                    if holdout.profit > 0.0 {
+                        design::positive_color(p)
+                    } else {
+                        design::danger_color(p)
+                    },
+                ))
+                .into_any_element(),
+        )
     }
 
     /// Group subheader: the label plus a clickable 'ignore' (which is staged) and an

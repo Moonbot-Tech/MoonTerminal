@@ -206,13 +206,24 @@ pub struct WindowLayout {
     pub analytics_strat_cols2: Option<u16>,
     /// Restart count of the "By filter" tuner's threshold search. None = the tuner's default.
     /// Values from an externally edited file are clamped to the range owned by
-    /// `db::tuner_smart` when the tuner loads.
-    #[serde(default)]
+    /// `db::tuner::threshold_search` when the tuner loads.
+    #[serde(default, deserialize_with = "de_lenient_u32")]
     pub analytics_tuner_iters: Option<u32>,
     /// Quantile depth of the "By filter" tuner's threshold search. None or a value absent from
     /// the dropdown selects the tuner's default.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_u32")]
     pub analytics_tuner_edges: Option<u32>,
+    /// Percentage of the period the "By filter" search may fit on, the rest being held back as a
+    /// holdout. None or a value absent from the dropdown means the whole period, i.e. no split.
+    #[serde(default, deserialize_with = "de_lenient_u32")]
+    pub analytics_tuner_train: Option<u32>,
+    /// Base seed of the "By filter" tuner's random restarts, so a chosen seed survives a restart.
+    /// None = draw a fresh seed per search, which is what an empty box has always meant.
+    ///
+    /// Held as text because a seed can exceed what TOML integers hold, and read through
+    /// [`de_lenient_seed`] because it must not be able to break anything else — see there.
+    #[serde(default, deserialize_with = "de_lenient_seed")]
+    pub analytics_tuner_seed: Option<String>,
     /// Visible columns of the Tuning strategy list, per axis. None = the UI's own defaults.
     #[serde(default)]
     pub analytics_strat_cols_modes: Option<StratColsByMode>,
@@ -330,6 +341,66 @@ pub struct DockSplitSlot {
 pub struct HeaderTicker {
     pub core_uid: u64,
     pub market: String,
+}
+
+/// Read the tuner seed from whatever `layout.toml` happens to hold, never failing.
+///
+/// This file is deserialized as ONE document with no schema version, so a single field that does
+/// not match its declared type discards the ENTIRE saved layout — every window position, every
+/// column width. The seed is the field most likely to be typed by hand, and the intuitive way to
+/// write it is bare (`analytics_tuner_seed = 123`), which a `String` field rejects. So the field
+/// accepts a quoted string, a bare integer, or anything else at all, and answers "no seed" rather
+/// than taking the rest of the layout down with it.
+fn de_lenient_seed<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// Every shape the seed field might be found in.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Seed {
+        /// A quoted decimal seed.
+        Text(String),
+        /// A bare non-negative integer seed.
+        Number(u64),
+        /// Anything else — a float, a boolean, a table. Accepted and discarded.
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match Option::<Seed>::deserialize(d)? {
+        Some(Seed::Text(s)) => Some(s),
+        Some(Seed::Number(n)) => Some(n.to_string()),
+        Some(Seed::Other(_)) | None => None,
+    })
+}
+
+/// Read a hand-editable tuner number the same forgiving way as [`de_lenient_seed`].
+///
+/// The tuner's search settings sit together in this file and are edited by hand together, so they
+/// carry the same hazard: one of them written as `"64"` instead of `64`, or as `0.7` instead of a
+/// percentage, would take every window position and column width in the document with it. Each
+/// answers "unset" instead, and the tuner then applies its own default.
+fn de_lenient_u32<'de, D>(d: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// Every shape one of these fields might be found in.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Num {
+        /// A bare non-negative integer.
+        Number(u32),
+        /// A quoted number, which is how a value gets written when copied from elsewhere.
+        Text(String),
+        /// Anything else — a float, a negative, a boolean, a table. Accepted and discarded.
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match Option::<Num>::deserialize(d)? {
+        Some(Num::Number(v)) => Some(v),
+        Some(Num::Text(s)) => s.trim().parse().ok(),
+        Some(Num::Other(_)) | None => None,
+    })
 }
 
 impl WindowLayout {
