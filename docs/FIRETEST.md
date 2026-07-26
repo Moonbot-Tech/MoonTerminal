@@ -1,6 +1,6 @@
 # FireTest
 
-Дата актуализации: 2026-06-24.
+Дата актуализации: 2026-07-25.
 
 FireTest — встроенный debug/test scenario runner для поиска дорогих UI-ошибок в горячем chart path.
 
@@ -26,7 +26,7 @@ Remove-Item -ErrorAction SilentlyContinue firetest.log, render_diag.log
 - `MOON_FIRETEST_STORM_MS` — длительность storm, по умолчанию `5000`.
 - `MOON_FIRETEST_TEXT_LABELS` — число retained text labels в static text stress, по умолчанию `10000`.
 - `MOON_FIRETEST_ORDER_CANCEL=1` — включает реальный тест place/cancel ордера на открытом BTC-графике. По умолчанию выключен, чтобы обычный FireTest не отправлял торговые команды.
-- `MOON_FIRETEST_ORDER_SIZE` — размер тестового ордера в базовой монете. Если не задан, берётся `MOON_FIRETEST_ORDER_QUOTE_SIZE / order_price`, а если не задан и quote-size — текущий ручной размер ордера выбранного ядра.
+- `MOON_FIRETEST_ORDER_SIZE` — явный размер тестового ордера в базовой монете. Если не задан, берётся `MOON_FIRETEST_ORDER_QUOTE_SIZE / order_price`, а если не задан и quote-size — групповой USD-эквивалент переводится в базовую монету по текущему base/USD rate. При отсутствии корректного курса сценарий завершится ошибкой, а не отправит размер как есть.
 - `MOON_FIRETEST_ORDER_QUOTE_SIZE` — размер тестового ордера в котируемой валюте (для BTCUSDT это USDT). Например `500` при `MOON_FIRETEST_ORDER_PRICE_MULT=0.95` даст количество `500 / (latest_price * 0.95)`.
 - `MOON_FIRETEST_ORDER_PRICE_MULT` — множитель к последней цене для тестового long-limit ордера, по умолчанию `0.98`. Ордер ставится ниже рынка, чтобы тест проверял отображение/отмену, а не случайное исполнение.
 - `MOON_FIRETEST_ORDER_CANCEL_MAX_DISPLAY_MS` — допустимая задержка от применения cancelled order в store до первого chart present/draw с этой order-line revision, по умолчанию `750`.
