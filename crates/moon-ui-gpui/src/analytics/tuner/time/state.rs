@@ -39,11 +39,11 @@ pub(in crate::analytics) struct TimeTunerState {
     pub(in crate::analytics::tuner) ignore_staged: Option<bool>,
     /// Lazy input cache (created in render, as in the filter tuner).
     pub(in crate::analytics::tuner) inputs: HashMap<String, Entity<MoonInputState>>,
-    // Shared-shell settings — parallel to `TunerState` (time hides some of them).
-    pub(in crate::analytics::tuner) iters: String,
     /// Minimum trade count as raw input text; empty selects the automatic threshold.
+    ///
+    /// The only search setting this axis exposes: the sweep fixes its own quantile depth and
+    /// takes no restarts, so it has no counterpart to the filter tuner's other boxes.
     pub(in crate::analytics::tuner) min_trades: String,
-    pub(in crate::analytics::tuner) edges: usize,
     /// Whether suggested bounds are rounded outward.
     pub(in crate::analytics::tuner) round_results: bool,
     /// Whether an auto-suggestion is in flight.
@@ -85,11 +85,7 @@ impl TimeTunerState {
             ign_filters_cur: false,
             ignore_staged: None,
             inputs: HashMap::new(),
-            // The time sweep fixes its own depth and restart count — they are not persisted
-            // per axis, so they open at the shared defaults rather than a saved value.
-            iters: super::super::filter::state::DEFAULT_ITERS.to_string(),
             min_trades: String::new(),
-            edges: 0,
             round_results: true,
             sugg_busy: false,
             sugg_seq: 0,

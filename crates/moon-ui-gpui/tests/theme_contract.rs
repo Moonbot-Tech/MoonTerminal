@@ -250,9 +250,8 @@ fn strategies_refresh_uses_the_compact_base() {
     )
     .unwrap();
     assert!(
-        analytics.contains(
-            "self.reload_strategy_base(true, true, show_overlay, cx)"
-        ) && analytics.contains("moon_core::db::analytics::strategy_base_data(&q, read_cores)"),
+        analytics.contains("self.reload_strategy_base(true, true, show_overlay, cx)")
+            && analytics.contains("moon_core::db::analytics::strategy_base_data(&q, read_cores)"),
         "Strategies refresh must not pay for the full Summary surface"
     );
 }
@@ -306,9 +305,7 @@ fn automatic_analytics_refresh_keeps_the_busy_overlay_hidden() {
 
     let analytics = read_src("analytics/mod.rs");
     assert!(
-        analytics.contains(
-            "this.reload_axis_after_report(this.strat_mode, show_overlay, cx);"
-        ),
+        analytics.contains("this.reload_axis_after_report(this.strat_mode, show_overlay, cx);"),
         "the Strategy base-to-axis chain must retain the original manual/background overlay policy"
     );
 }
@@ -389,6 +386,37 @@ fn analytics_core_metadata_is_throttled_across_tabs() {
             && !strategy_base.contains("distinct_cores")
             && summary.contains("cores: if read_cores {"),
         "Summary, Strategies, and Calendar must use the shared throttled core metadata path"
+    );
+}
+
+/// The joint threshold search must leave its own window usable while it runs.
+///
+/// The busy overlay appears 150 ms into a batch and SWALLOWS CLICKS, so a search that raised it
+/// would bury the Stop button it depends on — and this search runs for as long as the user asks
+/// it to. The plausible edit is "make the long search look busy like everything else": passing
+/// `true` to `spawn_db`, or restoring the `op_started()` call that used to sit here.
+#[test]
+fn the_joint_threshold_search_leaves_its_window_usable() {
+    let actions = read_src("analytics/tuner/filter/actions.rs");
+    let body = actions
+        .split_once("fn suggest_into_v1(")
+        .expect("filter/actions.rs must contain suggest_into_v1")
+        .1
+        .split("\n    }\n")
+        .next()
+        .unwrap();
+    let spawn_args = body
+        .split_once("self.spawn_db(")
+        .expect("suggest_into_v1 must run its search through spawn_db")
+        .1
+        .trim_start();
+    assert!(
+        spawn_args.starts_with("false,"),
+        "the joint search must not raise the blocking overlay over its own Stop button"
+    );
+    assert!(
+        !body.contains("op_started()"),
+        "the joint search must not enter the blocking-overlay accounting by hand either"
     );
 }
 

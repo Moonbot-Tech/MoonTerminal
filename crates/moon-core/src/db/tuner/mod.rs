@@ -13,12 +13,16 @@ use rusqlite::Connection;
 use super::analytics::{
     coin_groups_on, strategies_for_coins_on, unified_from, GroupStat, HourStat, Query,
 };
-use super::metrics::{improvement_margin, profit_factor, winrate};
+use super::metrics::{improvement_margin, winrate, Tally};
 use super::read_fail::read_fail;
 use super::{ReadFail, ReadResult};
 
 mod fields;
+/// The shared "best contiguous slice by profit" kernel both searches decide with.
+mod range_pick;
 mod strategy_read;
+/// Automatic threshold search over all fields at once, scan plus DB-free optimizer.
+pub mod threshold_search;
 mod time;
 
 pub use fields::{slot_type_for, FieldClass, FieldSpec, FIELDS};
@@ -468,17 +472,16 @@ fn variant_stats_on(
         .collect()
 }
 
-/// Scan one variant in chronological order, failing if any metric row is unreadable.
+/// Scan one variant in `closedate` order, failing if any metric row is unreadable.
 ///
-/// The ordering has to be TOTAL, not merely chronological. `max_dd` reads the cumulative
-/// profit curve, so it depends on the row SEQUENCE and not just on the row set — yet the
-/// source is a UNION with no unique key, which leaves rows sharing a `closedate` in whatever
-/// order the query plan happens to emit them. Sorting by the two columns the scan actually
-/// reads makes the order total over everything observable here, so the reported drawdown
-/// stops moving with the plan.
+/// The ordering carries a TOTAL tie-break, not just the timestamp. `max_dd` measures the
+/// cumulative curve, so it depends on the order trades arrive in, and this source is a UNION with
+/// no unique key — trades sharing a `closedate` would otherwise be returned in whatever order the
+/// query plan produced, and the same matrix could report a different drawdown between runs. The
+/// two extra keys are the only values this scan reads, so rows still tied after them are
+/// interchangeable in every figure below.
 fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> ReadResult<VarStats> {
     const CTX: &str = "tuner: one_variant";
-    let mut st = VarStats::default();
     let wh = v.where_sql();
     let sql = format!(
         "SELECT COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)
@@ -491,39 +494,30 @@ fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> ReadResu
             Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
         })
         .map_err(|e| read_fail(CTX, e))?;
-    let (mut wsum, mut lsum, mut spent) = (0.0f64, 0.0f64, 0.0f64);
-    let (mut cum, mut peak) = (0.0f64, 0.0f64);
+    // The ORDER BY above is what makes the shared tally's drawdown meaningful: it measures the
+    // cumulative curve, so it only describes this variant if the trades arrive chronologically.
+    let mut tally = Tally::default();
+    let mut spent = 0.0f64;
     for row in rows {
         // profit/spent are the whole point of the variant KPI — never skip.
         let (profit, sp) = row.map_err(|e| read_fail(CTX, e))?;
-        st.n += 1;
-        st.profit += profit;
+        tally.push(profit);
         spent += sp;
-        if profit > 0.0 {
-            st.wins += 1;
-            wsum += profit;
-        } else {
-            lsum -= profit;
-        }
-        cum += profit;
-        peak = peak.max(cum);
-        st.max_dd = st.max_dd.max(peak - cum);
     }
+    let mut st = VarStats {
+        n: tally.n,
+        wins: tally.wins,
+        profit: tally.profit,
+        max_dd: tally.max_dd,
+        ..VarStats::default()
+    };
     if st.n > 0 {
-        st.avg = st.profit / st.n as f64;
+        st.avg = tally.avg();
+        st.avg_win = tally.avg_win();
+        st.avg_loss = tally.avg_loss();
+        st.pf = tally.profit_factor();
+        // The one figure the tally has no business knowing: entry size is not a trade RESULT.
         st.avg_spent = spent / st.n as f64;
-        st.avg_win = if st.wins > 0 {
-            wsum / st.wins as f64
-        } else {
-            0.0
-        };
-        let losses = st.n - st.wins;
-        st.avg_loss = if losses > 0 {
-            lsum / losses as f64
-        } else {
-            0.0
-        };
-        st.pf = profit_factor(wsum, lsum);
     }
     Ok(st)
 }
@@ -641,7 +635,7 @@ pub fn round_bound(v: f64, up: bool) -> f64 {
 
 /// Round `(from, to)` outward to three significant digits, but keep the RAW pair when doing so
 /// would push both bounds past the observed range `[lo, hi]` and turn the pair into a no-op
-/// filter. Shared by `best_range` and `tuner_smart::smart_suggest`.
+/// filter. Shared by `best_range` and `threshold_search::suggest`.
 pub(super) fn round_pair_outward(from: f64, to: f64, lo: f64, hi: f64) -> (f64, f64) {
     let (rf, rt) = (round_bound(from, false), round_bound(to, true));
     if rf > lo || rt < hi {
@@ -703,44 +697,29 @@ fn best_range(
         pre.push(pre.last().unwrap() + p);
     }
     let pos: Vec<usize> = (0..=edges).map(|k| k * len / edges).collect();
+    // Cumulative profit AT each edge, which is what the shared picker slices. Full data
+    // coverage (min..max) is a no-op filter, and the picker rejects it by exact count.
+    let profit_at: Vec<f64> = pos.iter().map(|&p| pre[p]).collect();
     let total = pre[len];
-    let mut best: Option<(f64, usize, usize)> = None;
-    for i in 0..edges {
-        for j in (i + 1)..=edges {
-            let (a, b) = (pos[i], pos[j]);
-            if b - a < min_n {
-                continue;
-            }
-            // Full data coverage (min..max) is a no-op filter, not a candidate.
-            if a == 0 && b == len {
-                continue;
-            }
-            let profit = pre[b] - pre[a];
-            if best.is_none_or(|(bp, _, _)| profit > bp) {
-                best = Some((profit, i, j));
-            }
-        }
-    }
     // Suggest a range only when it REALLY improves profit over no filter by more than
     // floating-point summation noise. Otherwise a range excluding only zero-profit trades
     // can appear to "win" by about 1e-12.
-    let margin = improvement_margin(total);
-    best.filter(|(profit, _, _)| *profit > total + margin)
-        .map(|(profit, i, j)| {
-            let (a, b) = (pos[i], pos[j]);
-            // Always return both bounds; distribution edges use the observed
-            // minimum or maximum rather than an open interval.
-            let (mut from, mut to) = (vals[a].0, vals[b - 1].0);
-            if round {
-                (from, to) = round_pair_outward(from, to, vals[0].0, vals[len - 1].0);
-            }
-            Suggestion {
-                from: Some(from),
-                to: Some(to),
-                profit,
-                n: (b - a) as i64,
-            }
-        })
+    let floor = total + improvement_margin(total);
+    range_pick::best_pair(&profit_at, &pos, min_n, len, floor).map(|(i, j)| {
+        let (a, b) = (pos[i], pos[j]);
+        // Always return both bounds; distribution edges use the observed
+        // minimum or maximum rather than an open interval.
+        let (mut from, mut to) = (vals[a].0, vals[b - 1].0);
+        if round {
+            (from, to) = round_pair_outward(from, to, vals[0].0, vals[len - 1].0);
+        }
+        Suggestion {
+            from: Some(from),
+            to: Some(to),
+            profit: pre[b] - pre[a],
+            n: (b - a) as i64,
+        }
+    })
 }
 
 #[cfg(test)]

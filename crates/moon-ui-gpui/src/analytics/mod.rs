@@ -374,6 +374,8 @@ impl AnalyticsView {
         // Persisted "By filter" search knobs; `TunerState::load` owns their normalization.
         let saved_tuner_iters = backend.read(cx).layout.analytics_tuner_iters;
         let saved_tuner_edges = backend.read(cx).layout.analytics_tuner_edges;
+        let saved_tuner_seed = backend.read(cx).layout.analytics_tuner_seed.clone();
+        let saved_tuner_train = backend.read(cx).layout.analytics_tuner_train;
         // Profit metric from the previous run (default USDT).
         let saved_metric = if backend.read(cx).layout.analytics_profit_percent {
             ProfitMetric::Percent
@@ -496,7 +498,12 @@ impl AnalyticsView {
                 session.strat_mode
             },
             kpi_collapsed: saved_kpi_collapsed,
-            tuner: tuner::TunerState::load(saved_tuner_iters, saved_tuner_edges),
+            tuner: tuner::TunerState::load(
+                saved_tuner_iters,
+                saved_tuner_edges,
+                saved_tuner_seed,
+                saved_tuner_train,
+            ),
             coins: tuner::CoinsState::default(),
             coin_lists: tuner::CoinListsState::default(),
             time_tuner: tuner::TimeTunerState::load(),
@@ -567,11 +574,7 @@ impl AnalyticsView {
     /// Args:
     ///     error: Transient read failure, or `None` when the read escaped SQLite contention.
     ///     cx: GPUI context used to arm the quiet-period retry.
-    fn settle_report_refresh_retry(
-        &mut self,
-        error: Option<&ReadFail>,
-        cx: &mut Context<Self>,
-    ) {
+    fn settle_report_refresh_retry(&mut self, error: Option<&ReadFail>, cx: &mut Context<Self>) {
         if error.and_then(ReadFail::kind) != Some(FailKind::Busy) {
             self.report_busy_retries.resolve();
             return;
@@ -590,11 +593,7 @@ impl AnalyticsView {
     /// Args:
     ///     show_overlay: Whether a user action requires blocking progress feedback.
     ///     cx: GPUI context used to arm the shared refresh gate.
-    pub(super) fn request_report_refresh(
-        &mut self,
-        show_overlay: bool,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn request_report_refresh(&mut self, show_overlay: bool, cx: &mut Context<Self>) {
         self.report_refresh
             .request_refresh(std::time::Instant::now(), show_overlay);
         self.schedule_report_refresh(cx);
@@ -638,11 +637,7 @@ impl AnalyticsView {
     /// Args:
     ///     show_overlay: Whether coalesced user work requires blocking progress feedback.
     ///     cx: GPUI context used to start the visible surface's background reads.
-    fn refresh_visible_report_data(
-        &mut self,
-        show_overlay: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn refresh_visible_report_data(&mut self, show_overlay: bool, cx: &mut Context<Self>) {
         self.acknowledge_report_refresh();
         let base_dirty = match self.tab {
             Tab::Strategies => self.strategy_dirty || self.core_refresh_needed,
@@ -856,12 +851,7 @@ impl AnalyticsView {
     ///         while exposing a classified read error.
     ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
     ///     cx: GPUI context used to run and publish the shared background query.
-    fn reload_summary(
-        &mut self,
-        after_report: bool,
-        show_overlay: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn reload_summary(&mut self, after_report: bool, show_overlay: bool, cx: &mut Context<Self>) {
         // Mark the request at its start so an error from another period cannot
         // remain under the current period label.
         self.data.begin();
@@ -999,8 +989,7 @@ impl AnalyticsView {
                     data_error.is_some(),
                     undated_error.is_some(),
                     cores_error.is_some(),
-                )
-                    && !probe_took_over
+                ) && !probe_took_over
                     && chain_visible_axis
                     && this.tab == Tab::Strategies
                 {

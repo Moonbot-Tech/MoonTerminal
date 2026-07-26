@@ -213,6 +213,77 @@ analytics.tuner.suggest_one:
   ru: "Подобрать"
   en: "Search"
   es: "Buscar"
+# Settings popover of the filter tuner's search row: the knobs set once, not every run.
+analytics.tuner.cfg_title:
+  ru: "Настройки подбора"
+  en: "Search settings"
+  es: "Ajustes de búsqueda"
+analytics.tuner.seed:
+  ru: "seed"
+  en: "seed"
+  es: "seed"
+analytics.tuner.seed_ph:
+  ru: "случайный"
+  en: "random"
+  es: "aleatorio"
+analytics.tuner.seed_last:
+  ru: "прошлый"
+  en: "last used"
+  es: "último"
+analytics.tuner.seed_pin:
+  ru: "Взять"
+  en: "Use"
+  es: "Usar"
+# Train/holdout split: the share the search may fit on, and the verdict under the fields grid.
+analytics.tuner.train_share:
+  ru: "обучение"
+  en: "train on"
+  es: "entrenar"
+analytics.tuner.train_off:
+  ru: "весь период"
+  en: "whole period"
+  es: "todo el periodo"
+analytics.tuner.split_train:
+  ru: "в выборке"
+  en: "in sample"
+  es: "en muestra"
+analytics.tuner.split_holdout:
+  ru: "вне выборки"
+  en: "out of sample"
+  es: "fuera de muestra"
+analytics.tuner.split_stats:
+  ru: "%{profit} · %{n} сд. · WR %{wr}% · PF %{pf} · DD %{dd}"
+  en: "%{profit} · %{n} tr. · WR %{wr}% · PF %{pf} · DD %{dd}"
+  es: "%{profit} · %{n} op. · WR %{wr}% · PF %{pf} · DD %{dd}"
+# Stopping a running search, and the state of the last one.
+analytics.tuner.stop:
+  ru: "Стоп"
+  en: "Stop"
+  es: "Parar"
+analytics.tuner.stopping:
+  ru: "Останавливаю…"
+  en: "Stopping…"
+  es: "Parando…"
+analytics.tuner.sugg_progress:
+  ru: "попытка %{done} из %{total}"
+  en: "restart %{done} of %{total}"
+  es: "intento %{done} de %{total}"
+analytics.tuner.sugg_done:
+  ru: "готово, попыток: %{rounds}"
+  en: "done, restarts: %{rounds}"
+  es: "listo, intentos: %{rounds}"
+analytics.tuner.sugg_stopped:
+  ru: "остановлено, попыток: %{rounds}"
+  en: "stopped, restarts: %{rounds}"
+  es: "parado, intentos: %{rounds}"
+analytics.tuner.sugg_small:
+  ru: "сделок меньше минимума"
+  en: "fewer trades than the minimum"
+  es: "menos operaciones que el mínimo"
+analytics.tuner.sugg_failed:
+  ru: "подбор не выполнен"
+  en: "search failed"
+  es: "búsqueda fallida"
 analytics.tuner.save_btn:
   ru: "Сохранить"
   en: "Save"

@@ -27,7 +27,6 @@ mod report_read;
 #[cfg(test)]
 mod test_support;
 pub mod tuner;
-pub mod tuner_smart;
 
 pub use dates::{fmt_unix, fmt_unix_date, fmt_unix_secs, parse_ymd};
 pub use read_fail::{FailKind, ReadFail, ReadResult};

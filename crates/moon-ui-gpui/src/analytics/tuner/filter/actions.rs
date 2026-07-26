@@ -10,30 +10,43 @@ use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
 use super::super::shared::SaveTarget;
-use super::state::{edges_of, iters_of};
+use super::state::{
+    SearchSplit, SuggestJob, SuggestState, edges_of, iters_of, seed_of, train_frac,
+};
 use super::{fmt_bound, parse_num, staged_dirty};
+use moon_core::db::tuner::threshold_search::{SearchHandle, SearchParams};
 use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
+
+/// How often the suggestion row repaints while a search runs.
+///
+/// The search publishes its progress into an atomic instead of sending an event per restart, so
+/// this is what turns that counter into a moving number. Fast enough to read as live, slow enough
+/// that a 20 000-restart run costs a few dozen repaints rather than 20 000.
+const SUGGEST_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 
 impl AnalyticsView {
     /// Suggest all v1 ranges jointly with coordinate descent.
     ///
-    /// `NotReady` and failed reads are published through the shared KPI load
-    /// state; a valid result updates only fields enabled for search.
+    /// Deliberately WITHOUT the window's blocking overlay: this search can run for tens of
+    /// seconds, and the overlay would cover the Stop button it depends on. Its outcome and its
+    /// failures live in `tuner.sugg`, so a failed SEARCH no longer erases the KPI matrix, which
+    /// is a different read entirely. A valid result updates only fields enabled for search.
     ///
     /// Args:
     ///     cx: GPUI context used to execute and publish the suggestion.
     pub(in crate::analytics::tuner) fn suggest_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
-        // Suggestion failures share `tuner.stats` with KPI reads, so both the
-        // suggestion and KPI generations must still match before publishing.
-        let stats_req = self.tuner.seq;
-        self.tuner.sugg_busy = true;
+        // A search that is being replaced must be told, not merely ignored: its result is already
+        // unpublishable, and letting it run to the end holds every worker for nothing.
+        self.tuner.stop_suggest();
         let q = self.tuner_query();
-        let rounds = iters_of(&self.tuner.iters);
+        let restarts = iters_of(&self.tuner.iters);
         let min_n = self.suggest_min_n();
         let edges = self.suggest_edges();
         let round = self.tuner.round_results;
+        let seed = seed_of(&self.tuner.seed);
+        let train_frac = train_frac(self.tuner.train_pct);
         // Unchecked boxes: the field is not searched; with bounds filled in it
         // still participates as a fixed filter.
         let locked: Vec<Option<(Option<f64>, Option<f64>)>> = (0..FIELDS.len())
@@ -46,127 +59,219 @@ impl AnalyticsView {
                 }
             })
             .collect();
-        self.op_started();
+        let handle = SearchHandle::new();
+        self.tuner.sugg = SuggestState::Running(SuggestJob::AllFields {
+            handle: handle.clone(),
+            total: restarts,
+        });
+        self.poll_suggest_progress(handle.clone(), cx);
+        let worker = handle.clone();
+        self.spawn_db(
+            false,
+            cx,
+            move || {
+                moon_core::db::tuner::threshold_search::suggest(
+                    &q,
+                    SearchParams {
+                        restarts,
+                        min_n,
+                        locked: &locked,
+                        edges,
+                        round,
+                        seed,
+                        train_frac,
+                    },
+                    &worker,
+                )
+            },
+            move |this, sugg, cx| {
+                if this.tuner.sugg_seq != req {
+                    return;
+                }
+                // Read from the handle, not from the request: after a stop this is what the
+                // search actually got through.
+                let rounds = handle.completed();
+                // A stop that arrived after the last restart finished — while the result was on
+                // its way to this closure — abandoned nothing, so it is not a stop. Reporting it
+                // as one would tell the user their search was cut short when it was complete.
+                let stopped = handle.is_cancelled() && rounds < restarts;
+                let found = match sugg {
+                    Ok(found) => found,
+                    // A failed read must not look like "found nothing": the button would just
+                    // stop spinning and leave no trace.
+                    Err(e) => {
+                        log::warn!("analytics: smart suggestion failed — {e}");
+                        this.tuner.sugg = SuggestState::Failed(e);
+                        cx.notify();
+                        return;
+                    }
+                };
+                this.tuner.sugg = SuggestState::Done {
+                    rounds,
+                    stopped,
+                    split: found.as_ref().map(|res| SearchSplit {
+                        train: res.train.clone(),
+                        holdout: res.holdout.clone(),
+                    }),
+                };
+                // Offer the seed for pinning only after a COMPLETE run. A stopped search finishes
+                // an arbitrary subset of restart indices, not the first N, so rerunning its seed
+                // for its reported count would explore a different set and answer differently —
+                // the one thing a "reproduce this" button must not do.
+                if let (Some(res), false) = (found.as_ref(), stopped) {
+                    this.tuner.last_seed = Some(res.seed);
+                }
+                if let Some(res) = found {
+                    // The held-back figure is logged beside the fitted one on purpose: the two
+                    // together are the whole verdict, and a log carrying only the fitted profit
+                    // reports the flattering half of it.
+                    let holdout = res.holdout.as_ref().map_or_else(
+                        || "not split".to_string(),
+                        |h| format!("{:+.2} over {}", h.profit, h.n),
+                    );
+                    log::info!(
+                        "analytics: smart suggestion — in sample {:+.2} over {}, \
+                         out of sample {holdout}, restarts {rounds}, seed {}{}",
+                        res.train.profit,
+                        res.train.n,
+                        res.seed,
+                        if stopped { " (stopped)" } else { "" }
+                    );
+                    let by_field: HashMap<&str, _> =
+                        res.fields.into_iter().map(|f| (f.field, f)).collect();
+                    for fi in 0..FIELDS.len() {
+                        // Leave fields that were not searched alone (fixed/disabled).
+                        if !this.tuner.enabled[fi] {
+                            continue;
+                        }
+                        let (from, to) = by_field
+                            .get(FIELDS[fi].col)
+                            .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
+                            .unwrap_or_default();
+                        this.tuner.bounds[0][fi] = (from, to);
+                        this.tuner.inputs.remove(&format!("tv0f{fi}a"));
+                        this.tuner.inputs.remove(&format!("tv0f{fi}b"));
+                    }
+                    this.reload_tuner(cx);
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    /// Stop the running joint search from the row's Stop button.
+    ///
+    /// The state stays `Running` until the search returns, which is the truth: it is still
+    /// unwinding, and the restarts it already finished are what it will answer with.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to repaint the suggestion row.
+    pub(in crate::analytics::tuner) fn stop_suggest_into_v1(&mut self, cx: &mut Context<Self>) {
+        if self.tuner.stop_suggest() {
+            cx.notify();
+        }
+    }
+
+    /// Repaint the suggestion row while `handle`'s search runs, so its progress advances.
+    ///
+    /// Also the search's lifeline to its window: once the view is gone there is nobody left to
+    /// publish to, so the search is stopped rather than left running against a closed window.
+    ///
+    /// Args:
+    ///     handle: The run this poll follows; a search that replaced it ends the loop.
+    ///     cx: GPUI context used to spawn the timer loop.
+    fn poll_suggest_progress(&self, handle: SearchHandle, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            let sugg = executor
-                .spawn(async move {
-                    moon_core::db::tuner_smart::smart_suggest(
-                        &q, rounds, min_n, &locked, edges, round,
-                    )
-                })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    'completion: {
-                        if this.tuner.sugg_seq != req {
-                            break 'completion;
+            let mut shown = usize::MAX;
+            loop {
+                executor.timer(SUGGEST_POLL).await;
+                let mut mine = false;
+                let view_gone = cx.update(|cx| {
+                    this.update(cx, |this, cx| {
+                        mine = this
+                            .tuner
+                            .sugg
+                            .joint_run()
+                            .is_some_and(|(running, _)| running.same_run(&handle));
+                        // A repaint here redraws the WHOLE analytics panel — the 24-row grid, the
+                        // KPI matrix, the strategy list — to move one integer. Only ask for one
+                        // when that integer actually moved, so a search finishing inside a single
+                        // tick costs no repaint at all.
+                        let done = handle.completed();
+                        if mine && done != shown {
+                            shown = done;
+                            cx.notify();
                         }
-                        this.tuner.sugg_busy = false;
-                        // A non-successful read must not look like "found nothing": the
-                        // button would just stop spinning and leave no trace.
-                        let sugg = match sugg {
-                            Ok(v) => v,
-                            Err(e) => {
-                                log::warn!("analytics: smart suggestion failed — {e}");
-                                if this.tuner.seq == stats_req {
-                                    this.tuner.stats.apply(Err(e));
-                                }
-                                cx.notify();
-                                break 'completion;
-                            }
-                        };
-                        if let Some(res) = sugg {
-                            log::info!(
-                                "analytics: smart suggestion — profit {:+.2}, trades {}, rounds {}",
-                                res.profit,
-                                res.n,
-                                res.rounds
-                            );
-                            let by_field: HashMap<&str, _> =
-                                res.fields.into_iter().map(|f| (f.field, f)).collect();
-                            for fi in 0..FIELDS.len() {
-                                // Leave fields that were not searched alone (fixed/disabled).
-                                if !this.tuner.enabled[fi] {
-                                    continue;
-                                }
-                                let (from, to) = by_field
-                                    .get(FIELDS[fi].col)
-                                    .map(|f| (fmt_bound(f.from), fmt_bound(f.to)))
-                                    .unwrap_or_default();
-                                this.tuner.bounds[0][fi] = (from, to);
-                                this.tuner.inputs.remove(&format!("tv0f{fi}a"));
-                                this.tuner.inputs.remove(&format!("tv0f{fi}b"));
-                            }
-                            this.reload_tuner(cx);
-                        }
-                        cx.notify();
-                    }
-                    this.op_finished(cx);
-                    this.schedule_report_refresh(cx);
+                    })
+                    .is_err()
                 });
-            });
+                if view_gone {
+                    handle.cancel();
+                    return;
+                }
+                if !mine {
+                    return;
+                }
+            }
         })
         .detach();
     }
 
     /// Suggest the best v1 range for the selected field.
     ///
-    /// `NotReady` and failed reads are published through the shared KPI load
-    /// state; a valid `None` means no threshold improves on the baseline.
+    /// One field over one scan, so it keeps the blocking overlay rather than a Stop button: it
+    /// returns before a stop would be reachable. Failures land in `tuner.sugg` alongside the
+    /// joint search's; a valid `None` means no threshold improves on the baseline.
     ///
     /// Args:
     ///     cx: GPUI context used to execute and publish the suggestion.
     pub(in crate::analytics::tuner) fn suggest_one_into_v1(&mut self, cx: &mut Context<Self>) {
         self.tuner.sugg_seq = self.tuner.sugg_seq.wrapping_add(1);
         let req = self.tuner.sugg_seq;
-        // The shared KPI error channel requires the current KPI generation too.
-        let stats_req = self.tuner.seq;
-        self.tuner.sugg_busy = true;
+        self.tuner.stop_suggest();
         let fi = self.tuner.sel_field;
         let field = FIELDS[fi].col.to_string();
         let q = self.tuner_query();
-        let min_n = self.suggest_min_n();
+        // This search holds nothing back, so its automatic minimum is one tenth of the whole
+        // scope and can be settled here — unlike the joint search, whose train window is not
+        // known until the split has been snapped.
+        let min_n = self.suggest_min_n().unwrap_or_else(|| {
+            self.tuner
+                .stats
+                .data()
+                .and_then(|s| s.first().map(|f| f.n / 10))
+                .unwrap_or(0)
+                .max(1)
+        });
         let edges = self.suggest_edges();
         let round = self.tuner.round_results;
-        self.op_started();
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            let sugg = executor
-                .spawn(async move {
-                    moon_core::db::tuner::suggest_field(&q, &field, min_n, edges, round)
-                })
-                .await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    'completion: {
-                        if this.tuner.sugg_seq != req {
-                            break 'completion;
-                        }
-                        this.tuner.sugg_busy = false;
-                        match sugg {
-                            Ok(Some(s)) => {
-                                let from = s.from.map(fmt_bound).unwrap_or_default();
-                                let to = s.to.map(fmt_bound).unwrap_or_default();
-                                this.apply_bounds(0, fi, from, to, cx);
-                            }
-                            // A genuine "no threshold beats the baseline".
-                            Ok(None) => {}
-                            Err(e) => {
-                                log::warn!("analytics: threshold suggestion failed — {e}");
-                                if this.tuner.seq == stats_req {
-                                    this.tuner.stats.apply(Err(e));
-                                }
-                            }
-                        }
-                        cx.notify();
+        self.tuner.sugg = SuggestState::Running(SuggestJob::SingleField);
+        self.spawn_db(
+            true,
+            cx,
+            move || moon_core::db::tuner::suggest_field(&q, &field, min_n, edges, round),
+            move |this, sugg, cx| {
+                if this.tuner.sugg_seq != req {
+                    return;
+                }
+                match sugg {
+                    Ok(Some(s)) => {
+                        this.tuner.sugg = SuggestState::Idle;
+                        let from = s.from.map(fmt_bound).unwrap_or_default();
+                        let to = s.to.map(fmt_bound).unwrap_or_default();
+                        this.apply_bounds(0, fi, from, to, cx);
                     }
-                    this.op_finished(cx);
-                    this.schedule_report_refresh(cx);
-                });
-            });
-        })
-        .detach();
+                    // A genuine "no threshold beats the baseline".
+                    Ok(None) => this.tuner.sugg = SuggestState::Idle,
+                    Err(e) => {
+                        log::warn!("analytics: threshold suggestion failed — {e}");
+                        this.tuner.sugg = SuggestState::Failed(e);
+                    }
+                }
+                cx.notify();
+            },
+        );
     }
 
     /// Copy bounds v1 → v2: row `fi`, or the whole column with (None).
@@ -275,18 +380,15 @@ impl AnalyticsView {
         false
     }
 
-    /// Minimum trades for auto-suggestion: from the config string; empty = auto (1/5
-    /// of the scope's actual trades).
-    fn suggest_min_n(&self) -> i64 {
-        if let Ok(v) = self.tuner.min_trades.trim().parse::<i64>() {
-            return v.max(1);
-        }
-        self.tuner
-            .stats
-            .data()
-            .and_then(|s| s.first().map(|f| f.n / 5))
-            .unwrap_or(0)
-            .max(1)
+    /// Minimum trades a suggestion must retain: the number typed into the box, or `None` for the
+    /// search's own automatic value.
+    ///
+    /// A typed number is taken literally — it is the user's, not a share of anything. The
+    /// automatic one is deliberately NOT worked out here: it means one tenth of what the descent
+    /// fits on, and after the train share is snapped to a timestamp boundary only the search
+    /// knows how many trades that is.
+    fn suggest_min_n(&self) -> Option<i64> {
+        self.tuner.min_trades.trim().parse::<i64>().ok()
     }
 
     /// "To strategy": v1 thresholds → the selected strategy's parameters on all of

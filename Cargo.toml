@@ -25,6 +25,13 @@ debug-assertions = false
 [profile.dev.package."*"]
 opt-level = 3
 
+# The tuner's threshold search is a tight numeric loop over every trade in the report, run
+# thousands of times per click. Unoptimized it is several times slower than it needs to be, and
+# the wildcard above covers dependencies only. Kept at 2 rather than 3: it buys the same speed
+# here and rebuilds noticeably faster after an edit.
+[profile.dev.package.moon-core]
+opt-level = 2
+
 # Moon UI: a unified local/public base for the GPUI runtime and components.
 #
 # Moonbot-Tech/MoonUI is now the canonical source for the Moon stack: standalone GPUI
