@@ -1,4 +1,4 @@
-//! Retains and reconciles one core's complete market-data assignment across connections.
+//! Retains and reconciles one core's complete market-data assignment across MoonClient instances.
 
 use moonproto::{MoonClient, TradesStreamMode};
 
@@ -32,23 +32,22 @@ impl MarketPlan {
     }
 }
 
-/// Desired market assignment retained across connection attempts.
+/// Desired market assignment retained across application-level client replacements.
 ///
 /// `desired=None` preserves the unassigned startup state, making the first account-only assignment
-/// actionable. `applied` is connection-local and resets before every `live::run`, so a failed Init
-/// cannot consume the coordinator's only complete assignment.
+/// actionable. `applied` belongs to the current MoonClient and resets only when `live::run` creates
+/// a replacement client. MoonProto retains the applied intent across its own reconnects and runtime
+/// restarts.
 #[derive(Default)]
 pub(in crate::feed) struct MarketRoleState {
     desired: Option<MarketPlan>,
     applied: Option<MarketPlan>,
-    operational: bool,
 }
 
 impl MarketRoleState {
-    /// Resets connection-local application state while retaining the coordinator's desired plan.
-    pub(super) fn begin_connection(&mut self) {
+    /// Starts a replacement MoonClient while retaining the coordinator's desired plan.
+    pub(super) fn begin_client(&mut self) {
         self.applied = None;
-        self.operational = false;
     }
 
     /// Records a complete desired plan and returns whether it changed.
@@ -66,18 +65,6 @@ impl MarketRoleState {
         true
     }
 
-    /// Marks the current MoonProto domain operational and applies any pending complete plan.
-    pub(super) fn set_operational(&mut self, client: &MoonClient, server_id: u64) {
-        self.operational = true;
-        self.apply_if_needed(client, server_id);
-    }
-
-    /// Invalidates connection-local application until MoonProto reports an operational domain.
-    pub(super) fn set_non_operational(&mut self) {
-        self.operational = false;
-        self.applied = None;
-    }
-
     /// Returns whether this core currently owns exchange market data.
     pub(super) fn is_provider(&self) -> bool {
         self.desired.as_ref().is_some_and(|plan| plan.provider)
@@ -91,7 +78,10 @@ impl MarketRoleState {
             .unwrap_or_default()
     }
 
-    /// Applies the desired trade and order-book subscriptions once per connection or plan change.
+    /// Applies the desired subscriptions once per MoonClient or plan change.
+    ///
+    /// MoonProto accepts subscription intent before Ready and owns its restoration across internal
+    /// reconnects and runtime restarts.
     pub(super) fn apply_if_needed(&mut self, client: &MoonClient, server_id: u64) {
         if !self.needs_apply() {
             return;
@@ -150,17 +140,16 @@ impl MarketRoleState {
         self.applied = Some(desired.clone());
     }
 
-    /// Returns whether an operational connection has unapplied desired state.
+    /// Returns whether the current MoonClient has unapplied desired state.
     fn needs_apply(&self) -> bool {
-        self.operational && self.desired.is_some() && self.desired != self.applied
+        self.desired.is_some() && self.desired != self.applied
     }
 }
 
 /// Applies one market-provider role to MoonProto.
 ///
-/// Reapplying `account-only` after `Ready` or a hard reconnect is intentional: it makes the remote
-/// core stop an unsolicited all-trades stream even when the original role command arrived before
-/// MoonProto's domain layer was ready.
+/// MoonProto defers a pre-Ready command and retains the explicit provider or account-only intent
+/// across reconnects, so an unchanged role is not resent on lifecycle events.
 fn apply_market_role(client: &MoonClient, server_id: u64, provider: bool) {
     if provider {
         let _ = client

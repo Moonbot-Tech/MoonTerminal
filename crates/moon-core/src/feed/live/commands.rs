@@ -11,8 +11,60 @@ use super::market_role::MarketRoleState;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fv_from_str, strat_kind_name};
-use crate::feed::{order_edit, trade, CoreCmd};
+use crate::feed::{order_edit, trade, CoreCmd, LatestMarketRole, MarketRoleAssignment};
 use crate::util::now_unix_ms as now_ms;
+
+/// Maximum commands processed before a coalesced market role is applied and control is yielded.
+const MAX_COMMANDS_PER_DRAIN: usize = 256;
+
+/// Result of one bounded command-drain pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CommandDrain {
+    Disconnected,
+    QueueEmpty,
+    BudgetExhausted,
+}
+
+impl CommandDrain {
+    /// Returns whether the live loop may block waiting for its next wake signal.
+    pub(super) fn may_wait(self) -> bool {
+        matches!(self, Self::QueueEmpty)
+    }
+}
+
+/// Adopts the latest successfully queued market role while holding its publication lock.
+///
+/// The returned guard must remain alive until MoonProto receives the adopted role. This prevents a
+/// concurrent sender from publishing account-only state between adoption and an older provider
+/// apply.
+pub(super) fn lock_and_adopt_latest_market_role<'a>(
+    latest_market_role: &'a LatestMarketRole,
+    market_role: &mut MarketRoleState,
+    force_market_sample: &mut bool,
+) -> std::sync::MutexGuard<'a, Option<MarketRoleAssignment>> {
+    let latest = latest_market_role.lock();
+    if let Some(assignment) = latest.as_ref() {
+        *force_market_sample |= market_role.update(
+            assignment.provider,
+            assignment.markets.clone(),
+            assignment.orderbook_markets.clone(),
+        );
+    }
+    latest
+}
+
+/// Applies the authoritative market-role snapshot to the current MoonProto client.
+fn apply_latest_market_role(
+    latest_market_role: &LatestMarketRole,
+    market_role: &mut MarketRoleState,
+    force_market_sample: &mut bool,
+    client: &MoonClient,
+    server_id: u64,
+) {
+    let _latest =
+        lock_and_adopt_latest_market_role(latest_market_role, market_role, force_market_sample);
+    market_role.apply_if_needed(client, server_id);
+}
 
 /// Maps a `SignalType` field value to a strategy-kind (`StrategyKind`) ordinal. In Moonbot, a
 /// strategy's type (kind) is its SignalType, but the snapshot stores the kind in a separate `kind`
@@ -102,32 +154,34 @@ fn rebuild_sync(
     }
 }
 
-/// Drains coordinator commands; only `CoreCmd::SetMarket` is complete desired state, while the
-/// remaining variants are deltas or actions. `SetMarket` updates and conditionally applies the
-/// retained complete plan, then sets `force_market_sample`. Returns `true` when the command channel
-/// is closed, which means the coordinator exited and the core must disconnect.
+/// Drains one bounded coordinator-command batch while applying the latest market role separately.
+///
+/// `SetMarket` queue entries are wake/order markers; their payloads can be stale behind an action
+/// backlog, so the shared authoritative snapshot is adopted before and after the batch. The return
+/// value tells the live loop whether it disconnected, emptied the queue, or must poll again without
+/// blocking.
 pub(super) fn drain_commands(
     cmd_rx: &Receiver<CoreCmd>,
     client: &MoonClient,
     server: &ServerConfig,
+    latest_market_role: &LatestMarketRole,
     market_role: &mut MarketRoleState,
     force_market_sample: &mut bool,
     orders_mutated: &mut bool,
     local_strat_edits: &mut LocalStratEdits,
     client_settings_sequence: &mut ClientSettingsSequence,
-) -> bool {
+) -> CommandDrain {
+    apply_latest_market_role(
+        latest_market_role,
+        market_role,
+        force_market_sample,
+        client,
+        server.id,
+    );
+    let mut drained = 0usize;
     loop {
         match cmd_rx.try_recv() {
-            Ok(CoreCmd::SetMarket {
-                provider,
-                markets,
-                orderbook_markets,
-            }) => {
-                if market_role.update(provider, markets, orderbook_markets) {
-                    market_role.apply_if_needed(client, server.id);
-                }
-                *force_market_sample = true;
-            }
+            Ok(CoreCmd::SetMarket { .. }) => {}
             Ok(CoreCmd::StrategiesAction { checks, start_stop }) => {
                 // 1. Synchronize checkboxes: update local `checked` on changed entries and send
                 //    the delta (CheckedSync) to the server.
@@ -567,13 +621,32 @@ pub(super) fn drain_commands(
                 }
             }
             Err(TryRecvError::Empty) => {
+                apply_latest_market_role(
+                    latest_market_role,
+                    market_role,
+                    force_market_sample,
+                    client,
+                    server.id,
+                );
                 *orders_mutated |= client_settings_sequence.drive(client, server.id);
-                return false;
+                return CommandDrain::QueueEmpty;
             }
             Err(TryRecvError::Disconnected) => {
                 let _ = client.disconnect();
-                return true;
+                return CommandDrain::Disconnected;
             }
+        }
+        drained += 1;
+        if drained >= MAX_COMMANDS_PER_DRAIN {
+            apply_latest_market_role(
+                latest_market_role,
+                market_role,
+                force_market_sample,
+                client,
+                server.id,
+            );
+            *orders_mutated |= client_settings_sequence.drive(client, server.id);
+            return CommandDrain::BudgetExhausted;
         }
     }
 }

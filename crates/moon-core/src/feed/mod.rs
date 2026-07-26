@@ -15,7 +15,7 @@ pub use news::{NewsItem, NewsSnapshot};
 pub use types::*;
 
 use std::sync::mpsc::{Receiver, SendError, Sender};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::{Duration, Instant};
 
 use moonproto::MoonClient;
@@ -382,19 +382,75 @@ pub enum CoreCmd {
     ChartAlertDelete { market: String, obj_uid: u64 },
 }
 
+/// Complete market-role assignment published independently of the bounded command backlog.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::feed) struct MarketRoleAssignment {
+    pub(in crate::feed) provider: bool,
+    pub(in crate::feed) markets: Vec<String>,
+    pub(in crate::feed) orderbook_markets: Vec<String>,
+}
+
+/// Latest successfully queued market-role assignment shared by every command sender clone.
+///
+/// The mutex serializes the command-channel send with snapshot publication. The consumer holds the
+/// same mutex while adopting and applying the snapshot, so it cannot apply an older provider role
+/// after a newer account-only assignment has already been accepted.
+#[derive(Clone, Default)]
+pub(in crate::feed) struct LatestMarketRole {
+    inner: Arc<Mutex<Option<MarketRoleAssignment>>>,
+}
+
+impl LatestMarketRole {
+    /// Locks the latest assignment, recovering its data if an unrelated panic poisoned the mutex.
+    pub(in crate::feed) fn lock(&self) -> MutexGuard<'_, Option<MarketRoleAssignment>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Command sender that wakes the live loop and publishes market roles outside the bounded backlog.
 #[derive(Clone)]
 pub struct CoreCmdTx {
     data: Sender<CoreCmd>,
     wake: Sender<()>,
+    latest_market_role: LatestMarketRole,
 }
 
 impl CoreCmdTx {
-    fn new(data: Sender<CoreCmd>, wake: Sender<()>) -> Self {
-        Self { data, wake }
+    /// Creates a sender backed by one command queue, wake channel, and market-role snapshot.
+    fn new(data: Sender<CoreCmd>, wake: Sender<()>, latest_market_role: LatestMarketRole) -> Self {
+        Self {
+            data,
+            wake,
+            latest_market_role,
+        }
     }
 
+    /// Queues a command and wakes the live loop.
+    ///
+    /// A market-role snapshot is published only after the matching queue send succeeds. Holding the
+    /// snapshot lock across both operations gives cloned senders and the consumer one order.
     pub fn send(&self, cmd: CoreCmd) -> Result<(), SendError<CoreCmd>> {
-        self.data.send(cmd)?;
+        let assignment = match &cmd {
+            CoreCmd::SetMarket {
+                provider,
+                markets,
+                orderbook_markets,
+            } => Some(MarketRoleAssignment {
+                provider: *provider,
+                markets: markets.clone(),
+                orderbook_markets: orderbook_markets.clone(),
+            }),
+            _ => None,
+        };
+        if let Some(assignment) = assignment {
+            let mut latest = self.latest_market_role.lock();
+            self.data.send(cmd)?;
+            *latest = Some(assignment);
+        } else {
+            self.data.send(cmd)?;
+        }
         let _ = self.wake.send(());
         Ok(())
     }
@@ -447,7 +503,8 @@ pub fn spawn(
     let tx = FeedTx::new(data_tx, wake);
     let (cmd_data_tx, cmd_rx) = std::sync::mpsc::channel::<CoreCmd>();
     let (run_wake_tx, run_wake_rx) = std::sync::mpsc::channel::<()>();
-    let cmd_tx = CoreCmdTx::new(cmd_data_tx, run_wake_tx.clone());
+    let latest_market_role = LatestMarketRole::default();
+    let cmd_tx = CoreCmdTx::new(cmd_data_tx, run_wake_tx.clone(), latest_market_role.clone());
     let client = SharedMoonClient::default();
     let thread_client = client.clone();
     let join = std::thread::Builder::new()
@@ -479,6 +536,7 @@ pub fn spawn(
                     thread_client.clone(),
                     &mut client_settings_sequence,
                     &mut market_role,
+                    &latest_market_role,
                 ) {
                     Ok(()) => break,
                     Err(e) => {
