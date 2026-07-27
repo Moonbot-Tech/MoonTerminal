@@ -407,7 +407,6 @@ impl AnalyticsView {
             side: self.side,
             emulator: self.emu,
             strategies: Vec::new(),
-            attribute_liq: self.attr_liq,
             metric: self.metric,
         }
     }
@@ -425,7 +424,6 @@ impl AnalyticsView {
             side: self.side,
             emulator: self.emu,
             strategies: Vec::new(),
-            attribute_liq: self.attr_liq,
             metric: self.metric,
         })
     }

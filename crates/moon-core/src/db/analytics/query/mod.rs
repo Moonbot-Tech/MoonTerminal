@@ -25,22 +25,6 @@ pub struct Query {
     /// and that Save writes to. Scoping to the clicked row alone was the bug where
     /// "plan vs fact" compared one strategy while N were selected.
     pub strategies: Vec<(i64, Option<u64>)>,
-    /// Attribute LIQUIDATION rows to a strategy by the name the core leaves in the row.
-    ///
-    /// A liquidation arrives with `strategyid = 0` and `channelname = 'LIQUIDATION'`, so it
-    /// lands in "Manual (no strategy)" and the strategy that actually took the loss never
-    /// sees it. The name IS there — `signaltype`/`comment` carry `MainShotS  ( MoonShot )` —
-    /// and matching it against `strat.strategies` by `(core_uid, name)` recovers the owner.
-    ///
-    /// Off by default and switchable, because turning it on MOVES money between strategies
-    /// retroactively: measured on the real database, 291 of 319 liquidations attach and
-    /// −4582.89 USDT leaves "Manual". The 28 that do not attach (a deleted strategy, or no
-    /// parseable name) stay there rather than being guessed at.
-    ///
-    /// Deliberately NOT mirrored in the Report window: it reads through its own queries, and
-    /// the two panels are allowed to disagree here. Anyone "fixing" that divergence should
-    /// know it was chosen.
-    pub attribute_liq: bool,
     /// Which quantity every profit figure is measured in: absolute money (`Usdt`) or
     /// return on spent capital (`Percent`, the report's `Profit` column). Applied once in
     /// [`unified_from`]'s projected `pnl` column, so every reader below shares the choice.
@@ -239,9 +223,25 @@ pub(in crate::db) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Op
         .copied()
         .chain(super::super::tuner::FIELDS.iter().map(|s| s.col))
         .collect();
-    // Is the strategy database attached? Probed rather than passed down: the callers that
-    // attach it do so on this same connection, and the tests deliberately do not.
-    let has_names = q.attribute_liq && strategies_attached(conn);
+    // Attribute LIQUIDATION rows to the strategy named in the row, whenever the strategy
+    // database is attached.
+    //
+    // A liquidation arrives with `strategyid = 0` and `channelname = 'LIQUIDATION'`, so it
+    // lands in "Manual (no strategy)" and the strategy that actually took the loss never sees
+    // it. The name IS there — `signaltype`/`comment` carry `MainShotS  ( MoonShot )` — and
+    // matching it against `strat.strategies` by `(core_uid, name)` recovers the owner. Rows
+    // that do not attach (a deleted strategy, or no parseable name) stay in "Manual" rather
+    // than being guessed at.
+    //
+    // The Report window deliberately does NOT follow this: it reads through its own queries,
+    // and the two panels are allowed to disagree here. Anyone "fixing" that divergence should
+    // know it was chosen.
+    //
+    // Attachment is PROBED rather than passed down: the callers that attach the strategy
+    // database do so on this same connection, and the tests deliberately do not. Not to be
+    // confused with `super::super::summary`'s own `has_strat_names`, which uses the same probe
+    // independently to resolve strategy display names.
+    let has_names = strategies_attached(conn);
     // Percent mode measures each trade as profit ÷ spent, so a trade without a positive
     // `spentbtc` has no percent at all.
     let pct = q.metric == ProfitMetric::Percent;

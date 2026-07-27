@@ -227,14 +227,6 @@ pub struct WindowLayout {
     /// Visible columns of the Tuning strategy list, per axis. None = the UI's own defaults.
     #[serde(default)]
     pub analytics_strat_cols_modes: Option<StratColsByMode>,
-    /// Analytics: attribute LIQUIDATION trades to the strategy named in the row.
-    ///
-    /// Off by default. It moves money between strategies retroactively (measured: 291 of 319
-    /// liquidations attach, −4582.89 USDT leaves "Manual"), so it is a decision the user makes
-    /// rather than something that quietly changes their history on an update. The Report
-    /// window deliberately does NOT follow it.
-    #[serde(default)]
-    pub analytics_attribute_liq: bool,
     /// Analytics profit metric: `false` = absolute USDT (default, and every existing config),
     /// `true` = percent (the report `Profit` column, profit ÷ spent). A per-window display
     /// lens, so it lives here rather than being reset each session.
@@ -246,13 +238,6 @@ pub struct WindowLayout {
     /// session. `false` (default, every existing config) shows the full matrix.
     #[serde(default)]
     pub analytics_kpi_collapsed: bool,
-    /// The "closed trades the core never dated" banner: the count it was dismissed at.
-    ///
-    /// `None` — never dismissed, so it shows whenever there is anything to say. Otherwise it
-    /// comes back only once MORE such trades appear: the same count is the same news, already
-    /// read and put away.
-    #[serde(default)]
-    pub analytics_undated_hidden_n: Option<i64>,
     /// Visible screener columns (keys in canonical order). None = all.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

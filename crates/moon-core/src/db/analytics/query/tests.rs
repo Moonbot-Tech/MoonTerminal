@@ -180,7 +180,7 @@ fn the_name_comes_from_signaltype_then_comment() {
 }
 
 // ============================================================================
-//  Liquidation-attribution wiring — the flag must reach the generated SQL.
+//  Liquidation attribution — unconditional whenever the strategy DB is attached.
 // ============================================================================
 
 fn conn_with_orders() -> Connection {
@@ -195,7 +195,18 @@ fn conn_with_orders() -> Connection {
     c
 }
 
-fn q(on: bool) -> Query {
+/// Attach an empty strategy database, as every real reader does.
+fn attach_strategies(c: &Connection) {
+    c.execute_batch(
+        "ATTACH ':memory:' AS strat;
+         CREATE TABLE strat.strategies (core_uid INTEGER, strategy_id INTEGER,
+             name TEXT, deleted INTEGER);",
+    )
+    .expect("attach");
+}
+
+/// Build the baseline Analytics query used by liquidation-attribution tests.
+fn q() -> Query {
     Query {
         from: 0,
         to: i64::MAX,
@@ -203,49 +214,75 @@ fn q(on: bool) -> Query {
         side: SideFilter::All,
         emulator: None,
         strategies: Vec::new(),
-        attribute_liq: on,
         metric: Default::default(),
     }
 }
 
-/// The wiring test that matters: the flag must reach the generated SQL.
+/// Read the projected `strategyid` of every row, in insertion order.
+fn projected_sids(c: &Connection, src: &str) -> Vec<i64> {
+    let sql = format!("SELECT o.strategyid FROM {src} ORDER BY o.closedate");
+    let mut stmt = c
+        .prepare(&sql)
+        .unwrap_or_else(|e| panic!("the generated SQL must be valid: {e}\n{src}"));
+    let rows = stmt
+        .query_map(rusqlite::params![0i64, i64::MAX], |r| r.get::<_, i64>(0))
+        .expect("query");
+    rows.map(|r| r.expect("row")).collect()
+}
+
+/// The assertion that matters: a liquidation really is re-attributed to the strategy
+/// named in the row, and nothing else moves.
 ///
-/// It did not, once. `attach_strategies` was called by `summary` alone while
-/// `unified_from` is reached from fourteen places, so the expression fell back to the
-/// plain column everywhere else — the strategy list and that strategy's own KPI would
-/// have disagreed about which trades were its, silently and only on some screens.
+/// This runs the projection against real rows because matching SQL substrings cannot prove that
+/// the expression resolves the same owner for the strategy list and that strategy's KPI.
 #[test]
-fn the_flag_reaches_the_generated_sql() {
+fn a_liquidation_is_attributed_to_the_strategy_named_in_the_row() {
     let c = conn_with_orders();
-    c.execute_batch(
-        "ATTACH ':memory:' AS strat;
-         CREATE TABLE strat.strategies (core_uid INTEGER, strategy_id INTEGER,
-             name TEXT, deleted INTEGER);",
-    )
-    .expect("attach");
+    attach_strategies(&c);
     assert!(
         strategies_attached(&c),
         "the probe must see the attached db"
     );
+    c.execute_batch(
+        "INSERT INTO strat.strategies VALUES (7, 42, 'MainShotS', 0);
+         -- 1: an ordinary trade of another strategy — must not move.
+         INSERT INTO orders_rep VALUES
+             (7,'c','BTCUSDT',0,900,1000,3.5,13,0,100.0,'','','');
+         -- 2: a liquidation whose name matches — must become 42.
+         INSERT INTO orders_rep VALUES
+             (7,'c','BTCUSDT',0,900,2000,-5.0,0,0,100.0,'LIQUIDATION','MainShotS  ( MoonShot )','');
+         -- 3: a liquidation naming a strategy that does not exist — must stay in Manual.
+         INSERT INTO orders_rep VALUES
+             (7,'c','BTCUSDT',0,900,3000,-2.0,0,0,100.0,'LIQUIDATION','GhostStrat','');
+         -- 4: same name, but on a DIFFERENT core — the match is per core, so it stays 0.
+         INSERT INTO orders_rep VALUES
+             (9,'c','BTCUSDT',0,900,4000,-1.0,0,0,100.0,'LIQUIDATION','MainShotS','');",
+    )
+    .expect("rows");
 
-    let off = unified_from(&c, &q(false)).expect("off").expect("a source");
-    assert!(!off.contains("LIQUIDATION"), "{off}");
+    let src = unified_from(&c, &q()).expect("read").expect("a source");
+    assert_eq!(
+        projected_sids(&c, &src),
+        vec![13, 42, 0, 0],
+        "only the matching liquidation moves, and only on its own core"
+    );
+}
 
-    let on = unified_from(&c, &q(true)).expect("on").expect("a source");
-    assert!(on.contains("'LIQUIDATION'"), "{on}");
-    assert!(on.contains("strat.strategies"), "{on}");
-    // Published under the original name, so no outer query needed changing.
-    assert!(on.contains("AS \"strategyid\""), "{on}");
-    // RUN IT. Every other assertion here matches strings, and a string-matching test
-    // happily passed SQL that SQLite refuses ("no such column" from a correlated
-    // reference in a subquery's ORDER BY). Preparing the statement is what catches that.
-    c.prepare(&format!("SELECT * FROM {on}"))
-        .unwrap_or_else(|e| {
-            panic!(
-                "the generated SQL must be valid: {e}
-{on}"
-            )
-        });
+/// A deleted strategy must not reclaim the money: the row stays in "Manual" rather than
+/// being handed to a name that no longer exists.
+#[test]
+fn a_deleted_strategy_does_not_reclaim_its_liquidations() {
+    let c = conn_with_orders();
+    attach_strategies(&c);
+    c.execute_batch(
+        "INSERT INTO strat.strategies VALUES (7, 42, 'MainShotS', 1);
+         INSERT INTO orders_rep VALUES
+             (7,'c','BTCUSDT',0,900,1000,-5.0,0,0,100.0,'LIQUIDATION','MainShotS','');",
+    )
+    .expect("rows");
+
+    let src = unified_from(&c, &q()).expect("read").expect("a source");
+    assert_eq!(projected_sids(&c, &src), vec![0]);
 }
 
 /// Without the strategy database there is nothing to match against, so the expression
@@ -254,8 +291,14 @@ fn the_flag_reaches_the_generated_sql() {
 fn without_the_strategy_db_it_falls_back_silently() {
     let c = conn_with_orders();
     assert!(!strategies_attached(&c));
-    let on = unified_from(&c, &q(true)).expect("on").expect("a source");
-    assert!(!on.contains("LIQUIDATION"), "{on}");
-    c.prepare(&format!("SELECT * FROM {on}"))
-        .expect("must still be valid SQL");
+    c.execute_batch(
+        "INSERT INTO orders_rep VALUES
+             (7,'c','BTCUSDT',0,900,1000,-5.0,0,0,100.0,'LIQUIDATION','MainShotS','');",
+    )
+    .expect("rows");
+    let src = unified_from(&c, &q()).expect("read").expect("a source");
+    assert!(!src.contains("LIQUIDATION"), "{src}");
+    // RUN IT: a string-matching test happily passed SQL that SQLite refuses ("no such
+    // column" from a correlated reference in a subquery's ORDER BY).
+    assert_eq!(projected_sids(&c, &src), vec![0]);
 }
