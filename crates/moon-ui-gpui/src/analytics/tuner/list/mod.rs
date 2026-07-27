@@ -158,13 +158,21 @@ pub(in crate::analytics) fn filter_sort_indices(all: &[GroupStat], key: &Visible
         let desc = *desc;
         // A numeric metric column sorts by its `sort` value; the name/kind/core columns
         // sort case-insensitively by text.
+        // Every comparator below closes with the group key. Without it the order is only
+        // partial, and `partial_sort` resolves a tie with `select_nth_unstable_by`, which is
+        // free both to reorder equal elements AND to choose arbitrarily among them for the
+        // drawn head — so tied rows could change places, or appear and disappear, between two
+        // renders of identical data. `db::analytics::groups` makes its own order total for the
+        // same reason; this is where that guarantee has to be repeated, because sorting here
+        // discards it.
         if let Some(col) = METRIC_COLS.iter().find(|c| c.key == sort_key) {
             let f = col.sort;
             partial_sort(&mut out, |a, b| {
                 let o = f(&all[*a])
                     .partial_cmp(&f(&all[*b]))
                     .unwrap_or(Ordering::Equal);
-                if desc { o.reverse() } else { o }
+                let o = if desc { o.reverse() } else { o };
+                o.then_with(|| all[*a].key.cmp(&all[*b].key))
             });
         } else {
             let sel: fn(&GroupStat) -> &str = match sort_key.as_str() {
@@ -177,7 +185,8 @@ pub(in crate::analytics) fn filter_sort_indices(all: &[GroupStat], key: &Visible
             // rows whose keys are equal, so descending would not mirror ascending.
             partial_sort(&mut out, |a, b| {
                 let (x, y) = (sel(&all[*a]).to_lowercase(), sel(&all[*b]).to_lowercase());
-                if desc { y.cmp(&x) } else { x.cmp(&y) }
+                let o = if desc { y.cmp(&x) } else { x.cmp(&y) };
+                o.then_with(|| all[*a].key.cmp(&all[*b].key))
             });
         }
     }

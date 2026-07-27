@@ -1,5 +1,8 @@
 //! Strategy/coin group aggregates and top-trade lists.
 
+#[cfg(test)]
+mod tests;
+
 use rusqlite::Connection;
 
 use super::super::metrics::{profit_factor, winrate};
@@ -282,15 +285,32 @@ fn count_list(text: Option<String>) -> i64 {
     text.map_or(0, |t| crate::symbol::parse_coin_list(&t).len() as i64)
 }
 
-/// Strategy name in SQL, from the attached strategy DB or falling back to the bare id.
-fn strategy_name_expr(has_names: bool) -> &'static str {
+/// Strategy name in SQL: the head's name, or the bare id when the strategy DB cannot supply one.
+///
+/// The correlation columns are parameters because the same rule serves two shapes — `top_trades`
+/// resolves it per TRADE (`o.core_uid`/`o.strategyid`), `groups` per GROUP over its aggregate
+/// (`a.cid`/`a.sid`). One function so a change to the rule — a `deleted` filter, a different
+/// fallback — cannot reach one surface and leave the other naming the same strategy differently.
+fn name_expr(has_names: bool, core: &str, sid: &str, fallback: &str) -> String {
     if has_names {
-        "COALESCE((SELECT st.name FROM strat.strategies st
-                   WHERE st.core_uid = o.core_uid AND st.strategy_id = o.strategyid),
-                  CAST(o.strategyid AS TEXT))"
+        format!(
+            "COALESCE((SELECT st.name FROM strat.strategies st
+                       WHERE st.core_uid = {core} AND st.strategy_id = {sid}),
+                      {fallback})"
+        )
     } else {
-        "CAST(o.strategyid AS TEXT)"
+        fallback.to_string()
     }
+}
+
+/// Per-TRADE form of [`name_expr`], for the statements that select rows rather than groups.
+fn strategy_name_expr(has_names: bool) -> String {
+    name_expr(
+        has_names,
+        "o.core_uid",
+        "o.strategyid",
+        "CAST(o.strategyid AS TEXT)",
+    )
 }
 
 /// Group the period by strategy id or coin, sorted by descending profit.
@@ -307,89 +327,147 @@ pub(super) fn groups(
     // Strategy key is `id@core_uid`, splitting PER CORE so each core's activity is visible.
     // Renames do not create groups, distinct strategies sharing a name do not merge, and the
     // name is only a label.
-    // Raw text of a strategy field from its current version, or a NULL literal when the
-    // strategies DB is not attached.
-    let field = |name: &str| {
-        if has_names {
-            // CAST because `json_extract` returns the value's own type: a list stored as a
-            // number or a bool would otherwise come back as INTEGER/REAL and fail the row
-            // decode, taking the WHOLE grouping down over one odd field.
-            //
-            // `st.deleted = 0` mirrors `db::tuner::strategy_current_values`, which is what
-            // the coin table reads the same lists through. Without it a deleted strategy
-            // shows a count in this column that its own coin table cannot produce.
-            format!(
-                "MAX((SELECT CAST(json_extract(v.raw_json, '$.{name}') AS TEXT)
-                      FROM strat.strategy_versions v
-                      JOIN strat.strategies st
-                        ON st.core_uid = v.core_uid AND st.strategy_id = v.strategy_id
-                      WHERE v.core_uid = o.core_uid
-                        AND v.strategy_id = o.strategyid
-                        AND v.valid_to IS NULL
-                        AND st.deleted = 0))"
+    //
+    // The enrichment lookups read the attached strategy DB through scalar subqueries correlated
+    // on `(strategy id, core uid)`. They run over the aggregate, once per group; three parse a
+    // complete `raw_json` blob, so placing them inside the aggregate would repeat that work for
+    // every trade.
+    //
+    // What makes that legal is that the subqueries are constant within a group: the group key is
+    // built from exactly the pair they correlate on. The invariant behind THAT is worth stating,
+    // because it lives in another file. `core_uid` is NOT NULL in both report sources
+    // (`rep.rs`'s replica declares it so, and the legacy table carries it), while `strategyid`
+    // can be absent — `unified_from` projects a missing column as `NULL`. Concatenating a NULL
+    // yields a NULL key, so every unattributable row lands in ONE bucket. Because `core_uid`
+    // cannot be NULL, every row in that bucket has `strategyid` NULL; cores may differ, but
+    // `MAX(o.strategyid)` remains NULL and cannot match a stored id. Should a future source allow
+    // NULL `core_uid`, the bucket could mix rows missing opposite halves of the pair, letting the
+    // two `MAX` expressions fabricate a pair from different rows. `groups/tests.rs` pins the
+    // current NULL-`strategyid` behaviour.
+    //
+    // Scalar subqueries are deliberate: a `LEFT JOIN` would emit multiple group rows if malformed
+    // strategy data contains two current versions. Collapsing such duplicates with a tie-break
+    // would define which version wins, while the current lookup leaves that choice unspecified.
+    // One JSON field of the strategy's CURRENT version. `live_head` picks between the two shapes
+    // the columns genuinely need — and they differ, which is why this is a parameter rather than
+    // one expression: the coin lists must come from a strategy that still exists, while the type
+    // and edit date describe the version whether or not its head was deleted.
+    let version_field = |name: &str, live_head: bool| {
+        if !has_names {
+            return "NULL".to_string();
+        }
+        // CAST because `json_extract` returns the value's own type: a list stored as a number or
+        // a bool would otherwise come back as INTEGER/REAL and fail the row decode, taking the
+        // WHOLE grouping down over one odd field. Lists are normalized text inputs; labels retain
+        // native JSON typing so malformed non-text labels fail the read instead of being coerced.
+        let (project, join, gate) = if live_head {
+            (
+                format!("CAST(json_extract(v.raw_json, '$.{name}') AS TEXT)"),
+                "JOIN strat.strategies st
+                   ON st.core_uid = v.core_uid AND st.strategy_id = v.strategy_id",
+                "AND st.deleted = 0",
             )
         } else {
-            "NULL".to_string()
-        }
+            (format!("json_extract(v.raw_json, '$.{name}')"), "", "")
+        };
+        format!(
+            "(SELECT {project}
+              FROM strat.strategy_versions v
+              {join}
+              WHERE v.core_uid = a.cid
+                AND v.strategy_id = a.sid
+                AND v.valid_to IS NULL
+                {gate})"
+        )
     };
+    // `st.deleted = 0` on the lists mirrors `db::tuner::strategy_current_values`, which is what
+    // the coin table reads the same lists through. Without it a deleted strategy shows a count in
+    // this column that its own coin table cannot produce.
     let (blacklist, whitelist) = if by_strategy {
-        (field("CoinsBlackList"), field("CoinsWhiteList"))
+        (
+            version_field("CoinsBlackList", true),
+            version_field("CoinsWhiteList", true),
+        )
     } else {
         ("NULL".to_string(), "NULL".to_string())
     };
     let (key, name, kind, alive, lastedit) = if by_strategy {
         (
             "CAST(o.strategyid AS TEXT) || '@' || CAST(o.core_uid AS TEXT)".to_string(),
-            format!("MAX({})", strategy_name_expr(has_names)),
+            name_expr(has_names, "a.cid", "a.sid", "a.sid_text"),
             // Type (`SignalType`) from the strategy's current version; JSON1 is available
             // because rusqlite is bundled.
-            if has_names {
-                "MAX(COALESCE((SELECT json_extract(v.raw_json, '$.SignalType')
-                               FROM strat.strategy_versions v
-                               WHERE v.core_uid = o.core_uid
-                                 AND v.strategy_id = o.strategyid
-                                 AND v.valid_to IS NULL), ''))"
-            } else {
-                "''"
-            },
+            format!("COALESCE({}, '')", version_field("SignalType", false)),
             // Current status from the strategy DB heads: 2 means enabled, 1 present but
-            // disabled, and 0 deleted; take the maximum within the group.
+            // disabled, and 0 deleted. Read from `strategies` ALONE: a strategy with no
+            // current version still has a status, and sourcing it from `strategy_versions`
+            // would silently turn that into "deleted".
             if has_names {
-                "MAX(COALESCE((SELECT CASE WHEN st.deleted <> 0 THEN 0
-                                            WHEN COALESCE(st.checked,0) <> 0 THEN 2
-                                            ELSE 1 END
-                               FROM strat.strategies st
-                               WHERE st.core_uid = o.core_uid
-                                 AND st.strategy_id = o.strategyid), 0))"
+                "COALESCE((SELECT CASE WHEN st.deleted <> 0 THEN 0
+                                       WHEN COALESCE(st.checked,0) <> 0 THEN 2
+                                       ELSE 1 END
+                           FROM strat.strategies st
+                           WHERE st.core_uid = a.cid
+                             AND st.strategy_id = a.sid), 0)"
+                    .to_string()
             } else {
-                "NULL"
+                "NULL".to_string()
             },
             // Last edit date: the `LastEditDate` field of the strategy's current version.
-            if has_names {
-                "MAX(COALESCE((SELECT json_extract(v.raw_json, '$.LastEditDate')
-                               FROM strat.strategy_versions v
-                               WHERE v.core_uid = o.core_uid
-                                 AND v.strategy_id = o.strategyid
-                                 AND v.valid_to IS NULL), ''))"
-            } else {
-                "''"
-            },
+            format!("COALESCE({}, '')", version_field("LastEditDate", false)),
         )
     } else {
-        let coin = "COALESCE(o.coin,'')".to_string();
-        (coin.clone(), coin, "''", "NULL", "''")
+        // The coin key IS the label, so the outer query reads it straight off the aggregate.
+        (
+            "COALESCE(o.coin,'')".to_string(),
+            "a.k".to_string(),
+            "''".to_string(),
+            "NULL".to_string(),
+            "''".to_string(),
+        )
     };
+    // The correlation pair is carried out of the aggregate only for strategy groups. The coin
+    // path reads none of these columns, so it avoids an unused per-row CAST and three aggregates.
+    // `sid_text` is separate from `sid` because the name falls back to
+    // `CAST(o.strategyid AS TEXT)`, and taking the MAX of the CAST rather than casting the MAX
+    // keeps that fallback identical even where the column's storage class is not the INTEGER its
+    // affinity suggests (`rep::apply_upsert` writes whatever the core sends).
+    let pair = if by_strategy {
+        "MAX(o.strategyid) AS sid,
+         MAX(CAST(o.strategyid AS TEXT)) AS sid_text,
+         MAX(o.core_uid) AS cid,"
+    } else {
+        ""
+    };
+    // `ORDER BY a.profit DESC, a.k` — the tie-break is what makes the order TOTAL, and it has to
+    // be stated: profit alone leaves equally profitable groups in whatever order the sorter
+    // happens to emit, which changes with the query plan. That order is read as an answer — the
+    // Summary takes the first and last entry as "best" and "worst" — so leaving it to the plan
+    // means the same data can name a different best strategy from one build to the next. The key
+    // is unique per group, so this decides every tie. Tuning applies its own total comparators
+    // whenever the user selects a table sort.
     let sql = format!(
-        "SELECT {key} AS k, {name}, {kind}, MAX(o.core_name), COUNT(DISTINCT o.core_uid),
+        "WITH a AS (
+             SELECT {key} AS k,
+                    {pair}
+                    MAX(o.core_name) AS core_name,
+                    COUNT(DISTINCT o.core_uid) AS cores_n,
+                    COUNT(*) AS n,
+                    COALESCE(SUM(o.pnl),0) AS profit,
+                    COALESCE(SUM(o.pnl > 0),0) AS wins,
+                    COALESCE(SUM(CASE WHEN o.pnl > 0 THEN o.pnl END),0) AS wsum,
+                    COALESCE(SUM(CASE WHEN o.pnl <= 0 THEN -o.pnl END),0) AS lsum,
+                    COALESCE(MAX(o.pnl),0) AS best,
+                    COALESCE(MIN(o.pnl),0) AS worst
+             FROM {src}
+             GROUP BY k
+         )
+         SELECT a.k, {name}, {kind}, a.core_name, a.cores_n,
                 {alive},
-                COUNT(*), COALESCE(SUM(o.pnl),0),
-                COALESCE(SUM(o.pnl > 0),0),
-                COALESCE(SUM(CASE WHEN o.pnl > 0 THEN o.pnl END),0),
-                COALESCE(SUM(CASE WHEN o.pnl <= 0 THEN -o.pnl END),0),
-                COALESCE(MAX(o.pnl),0), COALESCE(MIN(o.pnl),0),
+                a.n, a.profit, a.wins, a.wsum, a.lsum, a.best, a.worst,
                 {lastedit}, {blacklist}, {whitelist}
-         FROM {src}
-         GROUP BY k ORDER BY 8 DESC"
+         FROM a
+         ORDER BY a.profit DESC, a.k"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
     let rows = stmt
