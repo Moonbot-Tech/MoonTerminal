@@ -331,6 +331,46 @@ fn the_tuning_strategy_list_stays_virtualized() {
     );
 }
 
+/// A `folder_path` is split only by `strategies::tree::ops::path_segments`.
+///
+/// Plausible edit this catches: a second hand-written split can disagree with the owning helper
+/// and address a folder the tree does not show.
+///
+/// The scan covers the whole crate and flags the obvious same-line `folder_path` plus `.split`
+/// form. It skips test modules, where spelling a deliberately invalid split is legitimate.
+#[test]
+fn folder_paths_are_split_only_by_path_segments() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sources = Vec::new();
+    rust_sources(&root, &mut sources);
+
+    let owner = Path::new("strategies").join("tree").join("ops.rs");
+    let mut violations = Vec::new();
+    for path in sources {
+        if path.ends_with(&owner) || path.ends_with("tests.rs") {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        for (line_ix, line) in text.lines().enumerate() {
+            if line.contains("folder_path") && line.contains(".split") {
+                violations.push(format!(
+                    "{}:{}: {}",
+                    path.display(),
+                    line_ix + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "a folder path must be split through tree::ops::path_segments, never by hand:\n{}",
+        violations.join("\n")
+    );
+}
+
 /// `startup.rs` must notify the dedicated report revision entity rather than the
 /// global Backend; restoring `mark_backend_dirty` repaints every shell for each
 /// report burst and makes Report/Analytics wake fan-out scale with window count.

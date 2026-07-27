@@ -50,6 +50,45 @@ fn split_and_join_roundtrip() {
     assert_eq!(join_path(&split_path("a/b")), "a/b");
 }
 
+/// A folder NAME may contain `/`. MoonProto flattens placement into one unescaped string and
+/// MoonBot allows a slash inside a name, so `"EMA / ORGANIC WAVE STRUCTURE STRATEGIES LLM"` is a
+/// single folder there; `path_segments` splits only at a slash with no whitespace beside it.
+///
+/// BREAKAGE: `ops.rs:path_segments` is "simplified" back to
+/// `path.split(['/', '\\']).filter(|s| !s.is_empty())` — the scan reads like pointless ceremony.
+/// The tree would then show a folder chain MoonBot does not have, and every folder rename, move
+/// and delete would address a folder that exists nowhere. Under that edit the real path below
+/// yields THREE segments instead of two, two of them carrying an edge space, so both the equality
+/// and the `trim()` assertion fail.
+#[test]
+fn a_slash_with_whitespace_beside_it_belongs_to_the_folder_name() {
+    let real = "EMA / ORGANIC WAVE STRUCTURE STRATEGIES LLM/RELATIVE STRENGTH LLM";
+    let parts = split_path(real);
+    assert_eq!(
+        parts,
+        vec![
+            "EMA / ORGANIC WAVE STRUCTURE STRATEGIES LLM",
+            "RELATIVE STRENGTH LLM"
+        ]
+    );
+    // The fingerprint of a cut made inside a name: the segment keeps the space that surrounded the
+    // slash. Across a live 53-core set that count is 91 under the old rule and 0 under this one.
+    assert!(parts.iter().all(|s| s.trim() == s));
+    // A canonical path round-trips; `join_path` is the inverse for that shape alone.
+    assert_eq!(join_path(&parts), real);
+
+    // The one-sided grey zone: live data holds none, so pin the intent rather than discover it.
+    assert_eq!(split_path("a/ b"), vec!["a/ b"]);
+    assert_eq!(split_path("a /b"), vec!["a /b"]);
+    assert_eq!(split_path("a/b"), vec!["a", "b"]);
+    // The edges obey the same rule, a missing neighbour counting as non-whitespace.
+    assert_eq!(split_path("/a"), vec!["a"]);
+    assert_eq!(split_path("/ a"), vec!["/ a"]);
+    // `\` is a separator on the same terms as `/`; pinned so the two cannot silently diverge.
+    assert_eq!(split_path("a\\ b"), vec!["a\\ b"]);
+    assert_eq!(split_path("a\\b"), vec!["a", "b"]);
+}
+
 #[test]
 fn rows_under_includes_nested() {
     let rows = vec![
