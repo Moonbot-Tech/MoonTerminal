@@ -160,12 +160,15 @@ pub(super) fn split_i18n(s: String) -> Vec<String> {
 
 impl AnalyticsView {
     /// Mode switch (+ persist) — the query range changes, so we refetch.
+    ///
+    /// Args:
+    ///     m: Calendar mode to activate.
+    ///     cx: GPUI context used to persist the mode and reload Calendar.
     fn set_cal_mode(&mut self, m: CalMode, cx: &mut Context<Self>) {
         if self.cal_mode == m {
             return;
         }
         self.cal_mode = m;
-        self.cal_hover = None;
         self.backend.update(cx, |b, _| {
             let id = Some(m.id().to_string());
             if b.layout.analytics_heat_mode != id {
@@ -179,6 +182,10 @@ impl AnalyticsView {
 
     /// Prev/Next navigation: "Month" steps a month, "Day" steps a day, "Year"
     /// does not page at all (every year is already on screen).
+    ///
+    /// Args:
+    ///     forward: Whether to move toward later dates.
+    ///     cx: GPUI context used to reload Calendar after navigation.
     fn cal_shift(&mut self, forward: bool, cx: &mut Context<Self>) {
         match self.cal_mode {
             CalMode::Year => return,
@@ -201,26 +208,32 @@ impl AnalyticsView {
                 self.cal_day += if forward { 86_400 } else { -86_400 };
             }
         }
-        self.cal_hover = None;
         self.reload_calendar(cx);
         cx.notify();
     }
 
     /// Jump to a specific month (click on a year cell).
+    ///
+    /// Args:
+    ///     y: Target calendar year.
+    ///     m: Target month in `1..=12`.
+    ///     cx: GPUI context used to persist Month mode and reload Calendar.
     pub(super) fn cal_goto_month(&mut self, y: i32, m: u32, cx: &mut Context<Self>) {
         self.cal_ym = (y, m);
         self.cal_mode = CalMode::Month;
-        self.cal_hover = None;
         self.persist_cal_mode(cx);
         self.reload_calendar(cx);
         cx.notify();
     }
 
     /// Jump to a specific day (click on a month cell).
+    ///
+    /// Args:
+    ///     dsec: Target day start, in unix seconds.
+    ///     cx: GPUI context used to persist Day mode and reload Calendar.
     fn cal_goto_day(&mut self, dsec: i64, cx: &mut Context<Self>) {
         self.cal_day = dsec;
         self.cal_mode = CalMode::Day;
-        self.cal_hover = None;
         self.persist_cal_mode(cx);
         self.reload_calendar(cx);
         cx.notify();
@@ -234,25 +247,6 @@ impl AnalyticsView {
                 b.layout_dirty = true;
             }
         });
-    }
-
-    /// Cell hover listener: keeps `cal_hover` at the day under the cursor.
-    fn cell_hover(
-        &self,
-        secs: i64,
-        cx: &Context<Self>,
-    ) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
-        cx.listener(move |this, hov: &bool, _, cx| {
-            if *hov {
-                if this.cal_hover != Some(secs) {
-                    this.cal_hover = Some(secs);
-                    cx.notify();
-                }
-            } else if this.cal_hover == Some(secs) {
-                this.cal_hover = None;
-                cx.notify();
-            }
-        })
     }
 
     /// Render Calendar data or its classified current/previous-period read failure.
@@ -468,9 +462,6 @@ impl AnalyticsView {
         self.cal_dirty = false;
         self.cal_days.begin();
         self.cal_prev.begin();
-        // The hovered day from the old series is no longer under the cursor —
-        // clear the stuck highlight (the new series may not contain that day).
-        self.cal_hover = None;
         self.cal_seq = self.cal_seq.wrapping_add(1);
         let req = self.cal_seq;
         let report_req = self.current_report_generation();

@@ -228,7 +228,7 @@ pub struct AnalyticsView {
     /// Automatic report refresh waits for this to reach zero so a burst cannot start a second
     /// full-period scan over an existing `overlay = false` task.
     db_ops: usize,
-    /// Start of the current operation batch; the overlay appears only after
+    /// Start and identity of the current operation batch. The overlay appears only after
     /// `BUSY_OVERLAY_DELAY`, so quick recomputations do not flash the dimmer.
     busy_since: Option<std::time::Instant>,
     /// Request sequence number used to discard stale results.
@@ -292,8 +292,6 @@ pub struct AnalyticsView {
     /// PREVIOUS month's aggregate `(profit, trades, wins)` for the KPI deltas against the
     /// previous period (calendar month versus calendar month, not 30 days).
     pub(super) cal_prev: LoadState<Option<(f64, i64, i64)>>,
-    /// Calendar day under the cursor, stored as the day start for cell highlighting.
-    pub(super) cal_hover: Option<i64>,
     /// Strategies-tab mode (Filters / Coins / Time). Privacy is module-based: tab submodules
     /// can see their parent's fields without `pub(super)`.
     strat_mode: tuner::StratMode,
@@ -502,7 +500,6 @@ impl AnalyticsView {
             },
             cal_day: (moon_core::util::now_unix_ms_i64() / 1000).div_euclid(86_400) * 86_400,
             cal_prev: LoadState::default(),
-            cal_hover: None,
             strat_mode: if probe {
                 tuner::StratMode::Coins
             } else {
@@ -760,10 +757,31 @@ impl AnalyticsView {
     /// Every operation that calls `op_started` must decrement exactly once, including stale
     /// completions. Completion handlers publish or discard their result first, then balance this
     /// counter before deferred report work is scheduled.
-    pub(super) fn op_started(&mut self) {
+    ///
+    /// The idle-to-busy transition arms one delayed repaint for the whole batch. Keeping timer
+    /// creation out of `render` prevents a repaint from scheduling its own successor.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to arm the delayed overlay repaint.
+    pub(super) fn op_started(&mut self, cx: &mut Context<Self>) {
         self.busy_ops += 1;
         if self.busy_since.is_none() {
-            self.busy_since = Some(std::time::Instant::now());
+            let opened_at = std::time::Instant::now();
+            self.busy_since = Some(opened_at);
+            cx.spawn(async move |this, cx| {
+                let executor = cx.update(|cx| cx.background_executor().clone());
+                executor.timer(BUSY_OVERLAY_DELAY).await;
+                let _ = cx.update(|cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        // Detached timers outlive their batches, so match the captured start time
+                        // before repainting; a later batch has its own delay and timer.
+                        if this.busy_since == Some(opened_at) {
+                            cx.notify();
+                        }
+                    });
+                });
+            })
+            .detach();
         }
     }
     /// Raise a write failure where the user is looking, and log it.
@@ -789,26 +807,15 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Whether to show the busy overlay; if the batch is younger than the delay, arms a timer
-    /// to repaint when the delay expires.
-    fn busy_overlay_due(&self, cx: &mut Context<Self>) -> bool {
-        let Some(since) = self.busy_since else {
-            return false;
-        };
-        let waited = since.elapsed();
-        if waited >= BUSY_OVERLAY_DELAY {
-            return true;
-        }
-        let left = BUSY_OVERLAY_DELAY - waited;
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            executor.timer(left).await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |_, cx| cx.notify());
-            });
-        })
-        .detach();
-        false
+    /// Whether the current batch has been running long enough to show the busy overlay.
+    ///
+    /// This remains a pure render-time read; `op_started` owns the delayed repaint.
+    ///
+    /// Returns:
+    ///     `true` once the open batch is older than `BUSY_OVERLAY_DELAY`.
+    fn busy_overlay_due(&self) -> bool {
+        self.busy_since
+            .is_some_and(|since| since.elapsed() >= BUSY_OVERLAY_DELAY)
     }
 
     /// Reload Analytics after a user-controlled period or filter scope change.
@@ -1254,7 +1261,7 @@ impl Render for AnalyticsView {
         let body_scrolls = false;
         let integrity = self.integrity_note(cx);
         let write_error = self.write_error.clone();
-        let busy_overlay = self.busy_overlay_due(cx);
+        let busy_overlay = self.busy_overlay_due();
         v_flex()
             .size_full()
             .relative()

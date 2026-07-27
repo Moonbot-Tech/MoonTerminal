@@ -147,6 +147,15 @@ impl AnalyticsView {
             ))
     }
 
+    /// Render the visible day window as weekday gutters and 24 hourly columns.
+    ///
+    /// Args:
+    ///     map: Hour-start timestamps mapped to their trade aggregates.
+    ///     p: Active MoonUI palette.
+    ///     cx: GPUI view context used for sizing and day-selection listeners.
+    ///
+    /// Returns:
+    ///     The complete Day grid.
     fn day_grid(
         &self,
         map: &HashMap<i64, &DayCell>,
@@ -267,7 +276,7 @@ impl AnalyticsView {
                 .child(gutter);
             for h in 0..24i64 {
                 let hsec = d + h * 3600;
-                rowel = rowel.child(self.hour_cell(
+                rowel = rowel.child(hour_cell(
                     hsec,
                     map.get(&hsec).copied(),
                     hour_max,
@@ -287,68 +296,80 @@ impl AnalyticsView {
             .child(rows)
             .into_any_element()
     }
+}
 
-    fn hour_cell(
-        &self,
-        hsec: i64,
-        cell: Option<&DayCell>,
-        hour_max: f64,
-        sel_day: bool,
-        p: MoonPalette,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let r = design::ui_px(cx, 4.0);
-        let profit = cell.map_or(0.0, |c| c.profit);
-        let trades = cell.map_or(0, |c| c.trades);
-        let hovered = self.cal_hover == Some(hsec);
-        let tint = (trades > 0 && profit != 0.0 && hour_max > 0.0).then(|| {
-            let a = (profit.abs() / hour_max).min(1.0) as f32 * 0.35;
-            moon_alpha(if profit > 0.0 { p.green } else { p.red }, a)
-        });
-        // The selected day's row stands out: lighter background + amber cell border.
-        let bg = if sel_day {
-            moon(p.panel_high)
-        } else {
-            moon(p.panel)
-        };
-        let border = if hovered {
-            moon(p.text)
-        } else if sel_day {
-            moon_alpha(p.amber, 0.45)
-        } else {
-            moon_alpha(p.border, 0.4)
-        };
-        let label: AnyElement = if trades > 0 {
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(moon(sign_color(p, profit)))
-                .child(hour_pnl(profit))
-                .into_any_element()
-        } else {
-            div().into_any_element()
-        };
+/// One hour cell of the Day grid: hourly PnL over a fill whose alpha tracks `|PnL|`.
+///
+/// This is a free function because the cell's highlight and rendering need no view state.
+///
+/// Args:
+///     hsec: Cell's hour start, in unix seconds.
+///     cell: Aggregate for that hour, or `None` when the hour holds no trades.
+///     hour_max: Largest `|PnL|` across the visible grid, the fill's scale.
+///     sel_day: Whether this cell belongs to the selected day's row.
+///     p: Active MoonUI palette.
+///     cx: Application context, for the UI-scale sizes only.
+///
+/// Returns:
+///     The complete hour cell.
+fn hour_cell(
+    hsec: i64,
+    cell: Option<&DayCell>,
+    hour_max: f64,
+    sel_day: bool,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let r = design::ui_px(cx, 4.0);
+    let profit = cell.map_or(0.0, |c| c.profit);
+    let trades = cell.map_or(0, |c| c.trades);
+    let tint = (trades > 0 && profit != 0.0 && hour_max > 0.0).then(|| {
+        let a = (profit.abs() / hour_max).min(1.0) as f32 * 0.35;
+        moon_alpha(if profit > 0.0 { p.green } else { p.red }, a)
+    });
+    // The selected day's row stands out: lighter background + amber cell border.
+    let bg = if sel_day {
+        moon(p.panel_high)
+    } else {
+        moon(p.panel)
+    };
+    let border = if sel_day {
+        moon_alpha(p.amber, 0.45)
+    } else {
+        moon_alpha(p.border, 0.4)
+    };
+    let label: AnyElement = if trades > 0 {
         div()
-            .id(("hc", hsec as u64))
-            .relative()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_hidden()
-            .rounded(r)
-            .bg(bg)
-            .border_1()
-            .border_color(border)
-            .on_hover(self.cell_hover(hsec, cx))
-            .children(tint.map(|tc| div().absolute().inset_0().rounded(r).bg(tc)))
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(label),
-            )
+            .text_size(design::t_caption(cx))
+            .text_color(moon(sign_color(p, profit)))
+            .child(hour_pnl(profit))
             .into_any_element()
-    }
+    } else {
+        div().into_any_element()
+    };
+    div()
+        .id(("hc", hsec as u64))
+        .relative()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .overflow_hidden()
+        .rounded(r)
+        .bg(bg)
+        .border_1()
+        .border_color(border)
+        // Keep this self-highlight in element state. The stable id persists that state between
+        // frames; `calendar_hover_is_element_state_not_view_state` guards the full contract.
+        .hover(move |s| s.border_color(moon(p.text)))
+        .children(tint.map(|tc| div().absolute().inset_0().rounded(r).bg(tc)))
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(label),
+        )
+        .into_any_element()
 }

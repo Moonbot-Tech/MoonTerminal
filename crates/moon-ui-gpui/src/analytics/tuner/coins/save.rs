@@ -122,7 +122,7 @@ impl AnalyticsView {
         // dialog open on a delta whose baseline had already been thrown away. A tick bumps it
         // too, and that is equally a reason to drop: the delta predates it.
         let rev = self.coins.lists_rev;
-        self.op_started();
+        self.op_started(cx);
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let read_keys = keys.clone();
