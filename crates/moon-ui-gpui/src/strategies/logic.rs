@@ -351,7 +351,7 @@ pub(super) struct FolderNode<'a> {
     pub(super) strategies: Vec<&'a StrategyRow>,
 }
 
-/// Build a nested tree from strategy paths, treating both `/` and `\` as separators.
+/// Build a nested tree from strategy paths, split through [`path_segments`].
 pub(super) fn build_node<'a>(it: impl Iterator<Item = &'a StrategyRow>) -> FolderNode<'a> {
     let mut root = FolderNode::default();
     for r in it {

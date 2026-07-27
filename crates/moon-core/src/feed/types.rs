@@ -357,7 +357,7 @@ pub struct StrategyRow {
     pub kind: String,
     /// Kind ordinal used to associate the strategy with its schema sections and fields.
     pub kind_ordinal: u8,
-    /// Folder path in the strategy tree, such as `test cpu/20`.
+    /// Folder placement preserved verbatim from `StrategySnapshot::path` for the UI to parse.
     pub folder_path: String,
     /// Whether the strategy checkbox is checked; this selection does not prove it is running.
     pub checked: bool,
