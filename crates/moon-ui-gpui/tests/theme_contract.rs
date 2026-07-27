@@ -331,6 +331,33 @@ fn the_tuning_strategy_list_stays_virtualized() {
     );
 }
 
+/// A strategy copy goes to the core root, sits beside its source, and is revealed to the user.
+///
+/// Plausible edits this catches: inheriting `row.folder_path` lets the receiving core reinterpret
+/// the flat path described by `strategies::tree::ops::path_segments`; dropping the reveal hides
+/// the copy from an open Strategies window, while dropping the notification leaves its destination
+/// unstated in this trade-derived view.
+#[test]
+fn analytics_copy_places_and_reveals_the_new_strategy() {
+    let save = read_src("analytics/tuner/save.rs");
+    // Scoped to the one function: whole-file greps would let an edit move the anchor while an
+    // unrelated match elsewhere in the file kept this green.
+    let body = braced_body(&save, "fn create_strategy_copy(");
+    assert!(
+        body.contains("insert_after: Some((cid, row.id))"),
+        "the copy must be placed after the strategy it was copied from"
+    );
+    assert!(
+        body.contains("folder_path: String::new()") && !body.contains("folder_path: row."),
+        "the copy must be sent to the core root, never inheriting its source's folder"
+    );
+    assert!(
+        body.contains("crate::strategies::reveal_name(")
+            && body.contains("\"analytics.copy_created_root\""),
+        "the copy must be revealed in the Strategies window and named where it went"
+    );
+}
+
 /// A `folder_path` is split only by `strategies::tree::ops::path_segments`.
 ///
 /// Plausible edit this catches: a second hand-written split can disagree with the owning helper
@@ -368,6 +395,34 @@ fn folder_paths_are_split_only_by_path_segments() {
         violations.is_empty(),
         "a folder path must be split through tree::ops::path_segments, never by hand:\n{}",
         violations.join("\n")
+    );
+}
+
+/// A revealed strategy is expanded to AND scrolled to, not merely selected.
+///
+/// The plausible edit is dropping the `pending_scroll` hand-off as redundant "because the row
+/// is already selected". Selection paints a highlight; only `scroll_to_item` brings the row on
+/// screen, and on a core with a hundred strategies a selected row the user cannot see reads
+/// exactly like a copy that was saved somewhere else.
+#[test]
+fn a_revealed_strategy_is_expanded_and_scrolled_into_view() {
+    let selection = read_src("strategies/selection.rs");
+    let window = read_src("strategies/mod.rs");
+    let sync = braced_body(&selection, "fn sync_pending_select(");
+    assert!(
+        sync.contains("expand_path(") && sync.contains("pending_scroll = Some(key)"),
+        "an echoed-back strategy must have its folder chain expanded and be queued for scroll"
+    );
+    assert!(
+        window.contains("pending_scroll.take()"),
+        "render must drain the queued scroll alongside a direct goto"
+    );
+    // The paste-target precedence rests on a strategy selection retiring any folder selection.
+    // One setter makes that structural instead of four copies a fifth site could omit.
+    let focus = braced_body(&selection, "fn focus_strategy(");
+    assert!(
+        focus.contains("self.selected_folder = None;"),
+        "focusing a strategy must retire the folder selection"
     );
 }
 

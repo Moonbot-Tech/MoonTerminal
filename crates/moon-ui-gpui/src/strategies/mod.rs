@@ -24,8 +24,8 @@ mod versions;
 mod window;
 
 use split::{PanelResizeDrag, PanelSplit};
+pub use window::{RevealTarget, open, open_goto, reveal_name};
 use window::{STRATEGIES_HEADER_H, strategies_header};
-pub use window::{open, open_goto};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -131,6 +131,11 @@ pub struct StrategiesView {
     last_sig: u64,
     /// Whether the parameters panel hides dependency-inactive fields.
     only_active_params: bool,
+    /// A key `sync_pending_select` resolved off-frame, waiting for render to scroll to it.
+    ///
+    /// Selection alone does not bring a row on screen: only `MoonTreeState::scroll_to_item`
+    /// does, and it needs the tree's item index, which exists only inside render.
+    pending_scroll: Option<Key>,
     focus: FocusHandle,
 }
 
@@ -138,7 +143,13 @@ impl Render for StrategiesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Drain navigation from an order-line context menu or Orders Strat click before building
         // the tree so filter, expansion, and selection changes appear in this frame.
-        let goto = self.drain_goto(window, cx);
+        // A reveal by name may precede the core echo that assigns its id. Both immediate and
+        // echo-resolved targets feed the same scroll path so selection and visibility stay coupled.
+        let direct = self.drain_goto(window, cx);
+        // Take the queued target even when a direct request wins; otherwise a later repaint could
+        // consume it and move the selection away from the direct request.
+        let queued = self.pending_scroll.take();
+        let goto = direct.or(queued);
 
         // Root nodes are connected cores in canonical order.
         let cores = {

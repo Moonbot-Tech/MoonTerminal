@@ -14,8 +14,68 @@ use crate::feed::strategies::{fv_from_str, strat_kind_name};
 use crate::feed::{order_edit, trade, CoreCmd, LatestMarketRole, MarketRoleAssignment};
 use crate::util::now_unix_ms as now_ms;
 
+#[cfg(test)]
+mod tests;
+
 /// Maximum commands processed before a coalesced market role is applied and control is yielded.
 const MAX_COMMANDS_PER_DRAIN: usize = 256;
+
+/// Resolve a spec's placement anchor for the core it is actually being applied to.
+///
+/// THE one place a foreign anchor is dropped. Strategy ids are small per-core sequences, so an
+/// id borrowed from another core almost certainly EXISTS here — it just belongs to an unrelated
+/// strategy, and the copy would land silently beside that one instead of appending.
+fn anchor_on_core(insert_after: Option<(u64, u64)>, core: u64) -> Option<u64> {
+    insert_after
+        .filter(|(anchor_core, _)| *anchor_core == core)
+        .map(|(_, id)| id)
+}
+
+/// One slot of the core's strategy list while a create batch is being applied.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    /// A strategy the core already has, identified by its id.
+    Existing(u64),
+    /// A strategy this batch adds, carrying the id it asked to sit after.
+    Added(Option<u64>),
+}
+
+/// Plans where each new strategy lands in the core's list, honouring "put it after this one".
+///
+/// Resolved against a MIRROR of the list as it will look while the batch is applied, not against
+/// one snapshot of the ids: every insertion shifts everything after it, so a batch with two
+/// different anchors resolved from stale indexes drops the later one in front of its own anchor.
+/// Specs sharing an anchor keep the order they were given, each landing after the sibling placed
+/// before it rather than reversing the batch.
+///
+/// An anchor this core does not have — a stale id or a cross-core paste — appends, preserving the
+/// safe fallback for callers without a valid placement request.
+///
+/// Args:
+///     ids: Strategy ids currently in the core's list, in list order.
+///     anchors: Per-spec `insert_after`, in the order the specs will be inserted.
+///
+/// Returns:
+///     One index per spec, to be used with `Vec::insert` in that same order.
+fn plan_insert_positions(ids: &[u64], anchors: &[Option<u64>]) -> Vec<usize> {
+    let mut live: Vec<Slot> = ids.iter().map(|id| Slot::Existing(*id)).collect();
+    let mut out = Vec::with_capacity(anchors.len());
+    for anchor in anchors.iter().copied() {
+        let at = match anchor.and_then(|a| live.iter().position(|s| *s == Slot::Existing(a))) {
+            Some(pos) => {
+                let mut at = pos + 1;
+                while live.get(at) == Some(&Slot::Added(anchor)) {
+                    at += 1;
+                }
+                at
+            }
+            None => live.len(),
+        };
+        live.insert(at, Slot::Added(anchor));
+        out.push(at);
+    }
+    out
+}
 
 /// Result of one bounded command-drain pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -290,7 +350,17 @@ pub(super) fn drain_commands(
                 // schema type, as `fv_from_str` does for edits, with `existing=None`.
                 rebuild_sync(client, server.id, "create", |full, schema, now| {
                     let mut next_id = full.iter().map(|s| s.strategy_id).max().unwrap_or(0) + 1;
-                    for spec in &specs {
+                    // Plan the whole batch before insertion because each insertion shifts every
+                    // later position; id assignment still scans the complete vector.
+                    let ids: Vec<u64> = full.iter().map(|s| s.strategy_id).collect();
+                    // The drain knows the destination core authoritatively, so it is the safe
+                    // boundary for rejecting a foreign placement anchor.
+                    let anchors: Vec<Option<u64>> = specs
+                        .iter()
+                        .map(|spec| anchor_on_core(spec.insert_after, server.id))
+                        .collect();
+                    let positions = plan_insert_positions(&ids, &anchors);
+                    for (spec, at) in specs.iter().zip(positions) {
                         let id = next_id;
                         next_id += 1;
                         let mut fields = StrategyFields::new();
@@ -298,15 +368,18 @@ pub(super) fn drain_commands(
                             let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
                             fields.insert(name.as_str(), fv_from_str(None, stype, val));
                         }
-                        full.push(StrategySnapshot::new(
-                            id,
-                            0,
-                            now,
-                            false,
-                            StrategyKind::from_ordinal(spec.kind_ordinal),
-                            spec.folder_path.clone(),
-                            fields,
-                        ));
+                        full.insert(
+                            at,
+                            StrategySnapshot::new(
+                                id,
+                                0,
+                                now,
+                                false,
+                                StrategyKind::from_ordinal(spec.kind_ordinal),
+                                spec.folder_path.clone(),
+                                fields,
+                            ),
+                        );
                     }
                     specs.len()
                 });

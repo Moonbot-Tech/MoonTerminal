@@ -863,9 +863,7 @@ fn strategy_row(
                 let pos = e.position;
                 view_menu.update(app, |this, cx| {
                     if !this.sel.contains(&key) {
-                        this.sel.clear();
-                        this.sel.insert(key);
-                        this.selected = Some(key);
+                        this.focus_strategy(key);
                         this.clamp_selected_section(cx);
                     }
                     this.open_menu(

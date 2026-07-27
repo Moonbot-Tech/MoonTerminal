@@ -457,6 +457,10 @@ impl StrategiesView {
 
     // ── Confirmed dispatch ────────────────────────────────────────────────────
 
+    /// Create a disabled strategy from schema defaults and select it after the core echo.
+    ///
+    /// The shared `NewStrategy` conversion keeps dialog creation aligned with paste and drop
+    /// dispatch, including placement metadata.
     fn confirm_create_strategy(
         &mut self,
         core: CoreId,
@@ -474,12 +478,9 @@ impl StrategiesView {
             else {
                 return Ok(());
             };
-            let ns = ops::new_strategy(&kind, &name, &target);
-            NewStrategySpec {
-                kind_ordinal: ns.kind_ordinal,
-                folder_path: ns.folder_path,
-                fields: ns.fields,
-            }
+            // Through the shared converter, so a field added to the intent cannot reach the
+            // core by one dispatch path and not the other.
+            NewStrategySpec::from(ops::new_strategy(&kind, &name, &target))
         };
         self.backend
             .read(cx)

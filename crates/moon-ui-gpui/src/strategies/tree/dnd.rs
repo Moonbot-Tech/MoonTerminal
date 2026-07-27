@@ -10,13 +10,15 @@ use moon_core::feed::NewStrategySpec;
 impl StrategiesView {
     // ── Clipboard: copy and paste ────────────────────────────────────────────
 
+    /// Copy the selected strategies and retain each row's core-qualified placement anchor.
     pub(super) fn copy_selection(&mut self, cx: &mut Context<Self>) {
         let store = self.backend.read(cx).session.store();
         let rows = self.selection_rows(store);
         if rows.is_empty() {
             return;
         }
-        let refs: Vec<&StrategyRow> = rows.iter().map(|(_, r)| r).collect();
+        // Each row keeps its own `(core, id)` so a paste back onto that core lands beside it.
+        let refs: Vec<(CoreId, &StrategyRow)> = rows.iter().map(|(c, r)| (*c, r)).collect();
         self.set_clipboard(ops::copy_rows(&refs), cx);
         cx.notify();
     }
@@ -138,12 +140,13 @@ impl StrategiesView {
         } else {
             let specs = {
                 let store = self.backend.read(cx).session.store();
-                let rows: Vec<&StrategyRow> = store
+                let rows: Vec<(CoreId, &StrategyRow)> = store
                     .core(drag.core)
                     .map(|c| {
                         c.strategies
                             .iter()
                             .filter(|r| ids.contains(&r.id))
+                            .map(|r| (drag.core, r))
                             .collect()
                     })
                     .unwrap_or_default();
@@ -152,6 +155,8 @@ impl StrategiesView {
                     .core(target_core)
                     .map(|c| c.strategies.iter().map(|r| r.name.clone()).collect())
                     .unwrap_or_default();
+                // This branch is the CROSS-core drop; the anchors it carries name the SOURCE
+                // core, so the feed's drain discards them and the copies append.
                 specs_from(ops::paste_plan(&clip, &target, &taken))
             };
             if let Err(error) = self
@@ -246,11 +251,5 @@ impl StrategiesView {
 
 /// Converts a paste/create plan into core command specifications.
 fn specs_from(plan: Vec<ops::NewStrategy>) -> Vec<NewStrategySpec> {
-    plan.into_iter()
-        .map(|n| NewStrategySpec {
-            kind_ordinal: n.kind_ordinal,
-            folder_path: n.folder_path,
-            fields: n.fields,
-        })
-        .collect()
+    plan.into_iter().map(NewStrategySpec::from).collect()
 }

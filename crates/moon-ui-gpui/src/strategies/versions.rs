@@ -288,11 +288,7 @@ impl StrategiesView {
     /// Select a DELETED strategy from the tree's Deleted folder and automatically open its latest
     /// version because it has no live parameters.
     pub(super) fn select_deleted_strategy(&mut self, key: Key, cx: &mut Context<Self>) {
-        self.sel.clear();
-        self.sel.insert(key);
-        self.anchor = Some(key);
-        self.selected = Some(key);
-        self.selected_folder = None;
+        self.focus_strategy(key);
         if self.versions.key == Some(key) && !self.versions.list.is_empty() {
             let vf = self.versions.list[0].valid_from;
             self.versions.pending_latest = false;
