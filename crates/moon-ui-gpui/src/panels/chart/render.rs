@@ -250,11 +250,11 @@ impl Render for ChartPanel {
         const ACT_BTN_W: f32 = 92.0;
         const ACT_GAP: f32 = 8.0;
         const ACT_MIN_W: f32 = 30.0;
-        // These use MoonButton Micro, like the chart's close/pin/lock overlays. Derive layout height
-        // FROM THE THEME so it follows the font slider just like the button, rather than hard-coding
-        // it. Micro's base h18/line12/pad3 metrics match moonui's height_for_size path through
-        // MoonTheme::fit_height. This layout controls button width from the available chart zone.
-        let act_btn_h = crate::design::fit_h_value(cx, 18.0, 12.0, 3.0);
+        // These use MoonButton Micro, like the chart's close/pin/lock overlays. The height comes
+        // from the shared helper so it follows the font slider just like the button does, and so
+        // the mirrored MoonUI metrics live in exactly one place. This layout controls button
+        // width from the available chart zone.
+        let act_btn_h = crate::design::micro_control_h_value(cx);
         let cancel_pos = self.cancel_buy_pos;
         let panic_pos = self.panic_sell_pos;
         // For the container's populated pane, place buttons through the GPUI `action_overlay` below

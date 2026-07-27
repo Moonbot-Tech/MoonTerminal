@@ -271,6 +271,13 @@ pub struct AnalyticsView {
     /// move OR a theme whose mode carries a different base mono size re-measures instead of
     /// scaling a width that assumed the old base.
     strat_core_w: Option<(f32, f32)>,
+    /// Memoized strategy-list row order, with the filter inputs it was built for.
+    ///
+    /// The filter-and-sort pass runs over every group the replica holds — thousands at 53 cores.
+    /// Its key carries the group slice's address alongside the filter-bar state, while replacement
+    /// explicitly clears the cache to protect against allocator address reuse.
+    /// `tuner::list::ensure_visible` owns it.
+    strat_visible: Option<tuner::VisibleRows>,
     /// Calendar tab: cells (PnL, trades, and wins) for the loaded range; Day mode uses hourly cells.
     pub(super) cal_days: LoadState<Vec<DayCell>>,
     cal_seq: u64,
@@ -483,6 +490,7 @@ impl AnalyticsView {
             strat_sort: Some(("analytics.col.profit".to_string(), true)),
             strat_cols: saved_strat_cols,
             strat_core_w: None,
+            strat_visible: None,
             cal_days: LoadState::default(),
             cal_seq: 0,
             cal_dirty: true,
@@ -985,6 +993,12 @@ impl AnalyticsView {
                     data_error.is_some() || undated_error.is_some() || cores_error.is_some(),
                 );
                 this.strat_core_w = None;
+                // Both caches describe the group set that was just replaced. The memo's key
+                // also carries that set's address, but an address is only unique among LIVE
+                // allocations: a failed load drops the old buffer and a later successful one
+                // can be handed the same address back, which unchanged filters would then
+                // accept as "same data". Dropping the memo here is what closes that.
+                this.strat_visible = None;
                 this.apply_undated_result(undated, after_report);
                 let probe_took_over = probe_selects_strategy() && this.probe_select_first(cx);
                 if refresh::strategy_base_allows_axis(

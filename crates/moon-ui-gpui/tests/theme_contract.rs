@@ -205,6 +205,130 @@ fn analytics_reopen_state_is_process_lifetime_only() {
             && !layout.contains("AnalyticsSessionState"),
         "process-lifetime UI state must not enter the serialized WindowLayout"
     );
+    // The undated-trades notice is process-lifetime state: it starts collapsed and cannot be
+    // persisted in a way that suppresses the only warning about omitted money across restarts.
+    assert!(
+        !layout.contains("analytics_undated_hidden_n")
+            && !toolbar.contains("b.layout.analytics_undated"),
+        "the undated-trades notice must not be persisted to layout.toml"
+    );
+    // The DEFAULT is asserted by `analytics::toolbar::tests`, which reads
+    // `AnalyticsSessionState::default()` directly; here only the wiring is pinned, so switching
+    // the session state to `#[derive(Default)]` stays an innocent refactor.
+    assert!(
+        analytics.contains("undated_expanded: session.undated_expanded,")
+            && toolbar.contains("b.ui_session.analytics.undated_expanded"),
+        "the notice's open state must live on the UI-session snapshot"
+    );
+}
+
+/// Liquidation attribution has no user-facing switch.
+///
+/// Plausible edit this catches: adding a checkbox, layout key, or environment gate would let two
+/// installations assign the same liquidation differently.
+#[test]
+fn liquidation_attribution_has_no_user_switch() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let toolbar = fs::read_to_string(root.join("analytics").join("toolbar.rs")).unwrap();
+    let analytics = fs::read_to_string(root.join("analytics").join("mod.rs")).unwrap();
+    let layout = fs::read_to_string(
+        root.parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("moon-core")
+            .join("src")
+            .join("config")
+            .join("layout.rs"),
+    )
+    .unwrap();
+    assert!(
+        !toolbar.contains("an-attr-liq") && !toolbar.contains("attr_liq"),
+        "the Analytics toolbar must carry no liquidation-attribution switch"
+    );
+    assert!(
+        !analytics.contains("attr_liq") && !layout.contains("analytics_attribute_liq"),
+        "liquidation attribution must not be gated by view or persisted state"
+    );
+    // A field-level gate is caught more strongly than any grep could: `query/tests.rs::q()` builds
+    // `Query { .. }` field by field with no `..Default::default()`, so a new field fails to
+    // COMPILE, and `a_liquidation_is_attributed_to_the_strategy_named_in_the_row` proves
+    // attribution happens with no flag in sight.
+}
+
+/// The Tuning card header: mode-button order and a title that shares the buttons' box.
+///
+/// The plausible edits are alphabetizing the three labels, or dropping the explicit height
+/// while simplifying the title to a bare `div`, making a 16px glyph sit low against an 18px pill.
+#[test]
+fn tuning_mode_buttons_keep_their_order_and_baseline() {
+    let table = read_src("analytics/tuner/list/table.rs");
+    let header = braced_body(&table, "fn strat_list_card(");
+    let at = |needle: &str| {
+        header
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} must be rendered in the card header"))
+    };
+    let (filters, time, coins) = (at("\"sm-filters\""), at("\"sm-time\""), at("\"sm-coins\""));
+    assert!(
+        filters < time && time < coins,
+        "the axis buttons must read filter, time, coin"
+    );
+    assert!(
+        at("design::micro_control_h(cx)") < filters,
+        "the matched height must sit on the TITLE, which precedes the first button — not on \
+         some other element of the header"
+    );
+    assert_eq!(
+        header.matches("mode_btn(").count(),
+        3,
+        "exactly three axis buttons — a fourth needs this test updated deliberately, not a \
+         copy-pasted line the ordering assertion above would happily accept"
+    );
+}
+
+/// The Tuning strategy list stays virtualized and reads its rows from the memo.
+///
+/// The plausible edit is rebuilding the list eagerly (`for g in rows`) while chasing a layout
+/// bug, or recomputing the filter inline instead of through `ensure_visible`; either makes mouse
+/// movement sort thousands of groups repeatedly.
+#[test]
+fn the_tuning_strategy_list_stays_virtualized() {
+    let table = read_src("analytics/tuner/list/table.rs");
+    // Scope every assertion to the list card's own body, so an unrelated scrollable sub-surface
+    // elsewhere in this file cannot redden the test for a reason that has nothing to do with
+    // the list — and so inserting a helper below it cannot silently widen the window.
+    let card = braced_body(&table, "fn strat_list_card(");
+    // Two substrings rather than one: rustfmt breaks the call across lines once its arguments
+    // grow, and a test that reddens on a reflow is a test people learn to ignore.
+    assert!(
+        card.contains("MoonVirtualList::new(") && card.contains("\"an-strat-rows\""),
+        "the strategy list must render through MoonVirtualList"
+    );
+    assert!(
+        !card.contains(".overflow_y_scroll()"),
+        "an eager scroll container would defeat the virtual list"
+    );
+    assert!(
+        card.contains("ensure_visible(") && card.contains("visible_indices()"),
+        "rows must come from the memoized index list, not a fresh filter+sort per render"
+    );
+    // The factory outlives the render, so a strong handle would leak the whole window — the
+    // same cycle `moon_tree_closures_hold_weak_view_handles` guards for MoonTree. Asserting on
+    // `weak.upgrade()` INSIDE the factory, not merely that a weak handle exists in the file:
+    // `cx.listener` cannot appear in a `'static` factory at all, so banning it proves nothing.
+    let factory = card
+        .find("MoonVirtualList::new(")
+        .map(|i| &card[i..])
+        .expect("the virtual list must be built here");
+    assert!(
+        factory.contains("weak.upgrade()"),
+        "the virtual row factory must reach the view through a WEAK handle"
+    );
+    assert!(
+        table.contains("weak: &WeakEntity<AnalyticsView>"),
+        "the row builder must take the weak handle rather than capturing the view"
+    );
 }
 
 /// `startup.rs` must notify the dedicated report revision entity rather than the
