@@ -7,6 +7,38 @@ use super::super::*;
 use super::ops;
 use rust_i18n::t;
 
+#[cfg(test)]
+mod tests;
+
+/// Where a paste — or a Create — should land, given the tree's two kinds of selection.
+///
+/// The folder outranks the strategy, and that is structural rather than a preference: making a
+/// strategy the primary selection goes through `selection::focus_strategy` (or
+/// `selection::apply_click` for a modified click), both of which clear `selected_folder`, while
+/// a folder click sets it and a core click clears it. So a value here can only mean the folder
+/// was the last thing the user pointed at — which is exactly when "paste it in there" is the
+/// answer.
+///
+/// Both halves of the answer come from one source so the target path and core cannot describe
+/// different selections.
+///
+/// Args:
+///     folder: `(core, folder path)` of the clicked folder, when one is selected.
+///     from_row: `(core, folder path)` of the primary selected strategy, when it resolves.
+///     first_core: First core in canonical order — the last-resort fallback.
+///
+/// Returns:
+///     The `(core, folder path)` to paste or create into; an empty path means the core root.
+pub(super) fn resolve_paste_target(
+    folder: Option<(CoreId, String)>,
+    from_row: Option<(CoreId, String)>,
+    first_core: Option<CoreId>,
+) -> (CoreId, String) {
+    folder
+        .or(from_row)
+        .unwrap_or_else(|| (first_core.unwrap_or(0), String::new()))
+}
+
 /// Active mutually exclusive operation modal rendered over the window.
 #[derive(Clone)]
 pub(crate) enum TreeOp {
@@ -105,19 +137,23 @@ impl StrategiesView {
             .collect()
     }
 
-    /// Returns the default `(core, path)` target: the primary strategy's folder or the first core's
-    /// root.
+    /// Returns the default `(core, path)` target for Paste and Create.
+    ///
+    /// Resolves the primary strategy into its folder and hands both selections to
+    /// [`resolve_paste_target`], which owns the precedence.
     pub(super) fn default_target(
         &self,
         store: &CoreStore,
         cores: &crate::core_order::OrderedCores,
     ) -> (CoreId, String) {
-        if let Some((core, id)) = self.selected {
-            if let Some(r) = row(store, core, id) {
-                return (core, r.folder_path.clone());
-            }
-        }
-        (cores.first().map(|(c, _)| *c).unwrap_or(0), String::new())
+        let from_row = self
+            .selected
+            .and_then(|(core, id)| row(store, core, id).map(|r| (core, r.folder_path.clone())));
+        resolve_paste_target(
+            self.selected_folder.clone(),
+            from_row,
+            cores.first().map(|(c, _)| *c),
+        )
     }
 
     // ── UI-only folders, empty until populated ────────────────────────────────

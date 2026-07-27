@@ -105,6 +105,20 @@ pub struct NewStrategySpec {
     pub kind_ordinal: u8,
     pub folder_path: String,
     pub fields: Vec<(String, String)>,
+    /// `(core, strategy id)` this strategy should sit immediately after; `None` appends.
+    ///
+    /// A copy belongs beside its source, not at the bottom of a list that can run to a hundred
+    /// strategies. A PLACEMENT REQUEST, not a durable guarantee: moonproto keeps the snapshot
+    /// order it is handed and an echo never reorders an id it already knows, so the position
+    /// holds for the session — but a core reconnect or a terminal restart rebuilds the list in
+    /// the server's own wire order, which is the Delphi core's and outside this terminal's say.
+    ///
+    /// CORE-QUALIFIED on purpose. Strategy ids are small per-core sequences, so an id borrowed
+    /// from another core almost certainly EXISTS on the destination — it just belongs to an
+    /// unrelated strategy, and the copy would land silently beside that one. Carrying the core
+    /// lets the drain drop a foreign anchor where `server.id` is known, instead of asking every
+    /// producer to remember the rule.
+    pub insert_after: Option<(u64, u64)>,
 }
 
 /// Order stop flag toggled by clicking a cell in the Orders table.

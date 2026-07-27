@@ -866,6 +866,17 @@ analytics.write_failed_ok:
   ru: "Понятно"
   en: "Got it"
   es: "Entendido"
+# Copy dispatch notification. It names the destination because this trade-derived view cannot show
+# a new strategy before it has trades, and uses "sent" because queuing does not confirm creation.
+analytics.copy_created_root:
+  ru: "Копия «%{name}» отправлена на ядро %{core} → корень"
+  en: "Copy \"%{name}\" sent to core %{core} → root"
+  es: "Copia «%{name}» enviada al núcleo %{core} → raíz"
+# Partial copy result: at least one core accepted the command and at least one rejected it.
+analytics.copy_partial:
+  ru: "Копия создана не на всех ядрах: %{err}"
+  en: "The copy was not created on every core: %{err}"
+  es: "La copia no se creó en todos los núcleos: %{err}"
 analytics.copy_failed:
   ru: "Копия НЕ создана: %{err}"
   en: "The copy was NOT created: %{err}"

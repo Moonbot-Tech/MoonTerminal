@@ -11,6 +11,7 @@
 use std::collections::HashSet;
 
 use moon_core::feed::{SchemaKind, StrategyRow};
+use moon_core::session::CoreId;
 
 /// Field name through which moonproto stores `StrategySnapshot::strategy_name`.
 pub const STRATEGY_NAME_FIELD: &str = "StrategyName";
@@ -59,7 +60,7 @@ pub fn split_path(path: &str) -> Vec<String> {
     path_segments(path).map(str::to_string).collect()
 }
 
-/// Joins path segments using canonical `/` separators — the inverse of [`path_segments`] for
+/// Joins path segments with `/`; for nonempty segments, this inverts [`path_segments`] on
 /// canonical paths.
 pub fn join_path(parts: &[String]) -> String {
     parts.join("/")
@@ -90,6 +91,22 @@ pub struct NewStrategy {
     pub kind_ordinal: u8,
     pub folder_path: String,
     pub fields: Vec<(String, String)>,
+    /// `(core, strategy id)` to sit immediately after; `None` appends. Mirrors
+    /// `moon_core::feed::NewStrategySpec::insert_after`, which this becomes.
+    pub insert_after: Option<(CoreId, u64)>,
+}
+
+impl From<NewStrategy> for moon_core::feed::NewStrategySpec {
+    /// One converter for both dispatch paths — the create dialog and paste/drop — so a field
+    /// added to the intent cannot reach the core through one of them and not the other.
+    fn from(n: NewStrategy) -> Self {
+        Self {
+            kind_ordinal: n.kind_ordinal,
+            folder_path: n.folder_path,
+            fields: n.fields,
+            insert_after: n.insert_after,
+        }
+    }
 }
 
 /// Returns schema defaults for every field in a kind, using an empty string when absent.
@@ -123,6 +140,8 @@ pub fn new_strategy(kind: &SchemaKind, name: &str, folder_path: &str) -> NewStra
         kind_ordinal: kind.ordinal,
         folder_path: folder_path.to_string(),
         fields,
+        // A brand-new strategy has no source to sit beside.
+        insert_after: None,
     }
 }
 
@@ -139,6 +158,16 @@ pub struct ClipItem {
     /// Path below the copy base; empty means the clipboard root.
     pub rel_path: Vec<String>,
     pub fields: Vec<(String, String)>,
+    /// `(core, strategy id)` this was copied FROM, so a paste back onto that same core can put
+    /// the copy beside its source instead of at the end of a hundred-strategy list.
+    ///
+    /// Meaningful only on that core: ids are per-core, so the feed command drain drops it when
+    /// applying the paste to any other core. `None` for a folder copy — a folder's rows have no
+    /// single anchor, and anchoring each one individually would interleave the copies through the
+    /// original.
+    /// [`clip_to_text`] deliberately does not carry it: a strategy shared as text arrives on a
+    /// different machine where that id belongs to something else entirely.
+    pub src: Option<(CoreId, u64)>,
 }
 
 fn clip_with_base(rows: &[&StrategyRow], base: &[String]) -> Vec<ClipItem> {
@@ -152,6 +181,7 @@ fn clip_with_base(rows: &[&StrategyRow], base: &[String]) -> Vec<ClipItem> {
                 name: r.name.clone(),
                 rel_path: rel,
                 fields: r.fields.clone(),
+                src: None,
             }
         })
         .collect()
@@ -161,14 +191,17 @@ fn clip_with_base(rows: &[&StrategyRow], base: &[String]) -> Vec<ClipItem> {
 ///
 /// Paste therefore places each copy directly in the target folder. Original paths are discarded
 /// because a multi-selection can span folders and users expect copies at the chosen destination.
-pub fn copy_rows(rows: &[&StrategyRow]) -> Vec<ClipItem> {
+/// Each item retains its source `(core, id)` so the feed can honor same-core placement and reject
+/// a foreign anchor at the destination drain.
+pub fn copy_rows(rows: &[(CoreId, &StrategyRow)]) -> Vec<ClipItem> {
     rows.iter()
-        .map(|r| ClipItem {
+        .map(|(core, r)| ClipItem {
             kind_ordinal: r.kind_ordinal,
             kind: r.kind.clone(),
             name: r.name.clone(),
             rel_path: Vec::new(),
             fields: r.fields.clone(),
+            src: Some((*core, r.id)),
         })
         .collect()
 }
@@ -180,41 +213,83 @@ pub fn copy_folder(rows: &[StrategyRow], folder_prefix: &[String]) -> Vec<ClipIt
     clip_with_base(&under, &folder_prefix[..parent_len])
 }
 
-/// Returns a name without any trailing ` (copy)` or ` (N)` copy suffixes.
+/// Returns whether the text between brackets marks a copy rather than being part of the name.
 ///
-/// For example, both `S (copy) (copy)` and `S (copy) (2)` reduce to `S`. A name made entirely of
-/// suffixes is left unchanged.
+/// ASCII digits only: a full-width `（2）` or an Arabic-Indic `٢` is somebody's actual name,
+/// not an ordinal this code wrote.
+fn is_copy_marker(inner: &str) -> bool {
+    inner == "copy" || (!inner.is_empty() && inner.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Strips one LEADING `(N) ` or `(copy) ` marker, returning the rest of the name.
+///
+/// `None` when the name does not open with a bare marker (`(v2) Grid` is a version tag,
+/// `((2)) S` nests a bracket inside the marker) or when stripping would leave nothing.
+///
+/// The separating space is NOT required. This code only ever writes `"(N) Base"`, but the copy
+/// dialog's name box is user-editable: deleting that space must not make the next copy nest into
+/// `(2) (2)Grid`. The price is that a name deliberately authored as `(2)Grid` is reduced to
+/// `Grid` when copied — a cosmetic loss, chosen over an accumulating one.
+fn strip_leading_affix(s: &str) -> Option<&str> {
+    let rest = s.strip_prefix('(')?;
+    let close = rest.find(')')?;
+    let inner = &rest[..close];
+    // A bracket inside the marker means the first `)` is not the marker's own.
+    if inner.contains('(') || !is_copy_marker(inner) {
+        return None;
+    }
+    let tail = rest[close + 1..].trim_start();
+    (!tail.is_empty()).then_some(tail)
+}
+
+/// Strips one trailing ` (N)` or ` (copy)` marker.
+///
+/// Accepting both leading and trailing forms keeps existing names from collecting a marker at
+/// each end when copied.
+fn strip_trailing_affix(s: &str) -> Option<&str> {
+    let open = s.rfind(" (")?;
+    let inner = s[open + 2..].strip_suffix(')')?;
+    if !is_copy_marker(inner) {
+        return None;
+    }
+    let head = s[..open].trim_end();
+    (!head.is_empty()).then_some(head)
+}
+
+/// Returns a name with every copy marker removed, from either end.
+///
+/// `(2) (3) www` and `(2) S (3)` reduce to `www` and `S`; `(v2) Grid` and `Grid (v2 beta)` are
+/// left alone, and so is a name made entirely of markers.
 fn base_name(name: &str) -> &str {
-    let mut s = name.trim_end();
+    let mut s = name.trim();
     loop {
-        let Some(open) = s.rfind(" (") else { break };
-        let Some(inner) = s[open + 2..].strip_suffix(')') else {
-            break;
-        };
-        let is_copy_suffix =
-            inner == "copy" || (!inner.is_empty() && inner.bytes().all(|b| b.is_ascii_digit()));
-        if !is_copy_suffix {
-            break;
-        }
-        let head = s[..open].trim_end();
-        if head.is_empty() {
+        // No re-trim: `s` starts trimmed, and neither stripper can reintroduce whitespace —
+        // the leading one `trim_start`s its tail and keeps the already-trimmed end, the
+        // trailing one `trim_end`s its head and keeps the already-trimmed start.
+        if let Some(rest) = strip_leading_affix(s) {
+            s = rest;
+        } else if let Some(head) = strip_trailing_affix(s) {
+            s = head;
+        } else {
             break;
         }
-        s = head;
     }
     s
 }
 
 /// Returns `desired` unchanged when it is free.
-/// On collision, removes existing suffixes through [`base_name`] and returns `Base (N)` with the
-/// smallest free `N` starting at two, preventing nested copy suffixes.
+///
+/// On collision, reduces the name through [`base_name`] and returns `(N) Base` with the
+/// smallest free `N` starting at two. The ordinal leads because the strategy column is narrow
+/// and truncates from the right: a trailing `(4)` is the first thing lost, which is exactly
+/// the part that tells two copies apart.
 pub fn unique_name(taken: &HashSet<String>, desired: &str) -> String {
     if !taken.contains(desired) {
         return desired.to_string();
     }
     let base = base_name(desired);
     for n in 2.. {
-        let cand = format!("{base} ({n})");
+        let cand = format!("({n}) {base}");
         if !taken.contains(&cand) {
             return cand;
         }
@@ -226,6 +301,11 @@ pub fn unique_name(taken: &HashSet<String>, desired: &str) -> String {
 ///
 /// Collisions within the batch are included. `taken_names` contains names already used anywhere
 /// in the target core because Moonbot strategy names are global across its folders.
+///
+/// An item's remembered source travels through as the anchor: a strategy pasted back onto its
+/// OWN core lands directly after the row it was copied from. The cross-core case needs no guard
+/// here — the anchor is core-qualified and the feed's command drain drops a foreign one where
+/// the destination core is known for certain.
 pub fn paste_plan(
     clip: &[ClipItem],
     target: &[String],
@@ -244,6 +324,7 @@ pub fn paste_plan(
             kind_ordinal: item.kind_ordinal,
             folder_path: join_path(&full),
             fields,
+            insert_after: item.src,
         });
     }
     out
@@ -328,6 +409,8 @@ pub fn clip_from_text(text: &str) -> Option<Vec<ClipItem>> {
                 name: String::new(),
                 rel_path: Vec::new(),
                 fields: Vec::new(),
+                // Text arrives from another terminal, where a strategy id names something else.
+                src: None,
             });
             continue;
         }

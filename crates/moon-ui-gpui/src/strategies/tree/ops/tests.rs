@@ -50,16 +50,11 @@ fn split_and_join_roundtrip() {
     assert_eq!(join_path(&split_path("a/b")), "a/b");
 }
 
-/// A folder NAME may contain `/`. MoonProto flattens placement into one unescaped string and
-/// MoonBot allows a slash inside a name, so `"EMA / ORGANIC WAVE STRUCTURE STRATEGIES LLM"` is a
-/// single folder there; `path_segments` splits only at a slash with no whitespace beside it.
+/// A slash surrounded by folder-name whitespace remains part of that segment.
 ///
-/// BREAKAGE: `ops.rs:path_segments` is "simplified" back to
-/// `path.split(['/', '\\']).filter(|s| !s.is_empty())` — the scan reads like pointless ceremony.
-/// The tree would then show a folder chain MoonBot does not have, and every folder rename, move
-/// and delete would address a folder that exists nowhere. Under that edit the real path below
-/// yields THREE segments instead of two, two of them carrying an edge space, so both the equality
-/// and the `trim()` assertion fail.
+/// Plausible edit this catches: replacing `ops.rs:path_segments` with an unconditional split
+/// produces three segments for the real path below, making tree operations address folders that
+/// MoonBot does not have. The owning function documents the complete separator rule.
 #[test]
 fn a_slash_with_whitespace_beside_it_belongs_to_the_folder_name() {
     let real = "EMA / ORGANIC WAVE STRUCTURE STRATEGIES LLM/RELATIVE STRENGTH LLM";
@@ -72,7 +67,7 @@ fn a_slash_with_whitespace_beside_it_belongs_to_the_folder_name() {
         ]
     );
     // The fingerprint of a cut made inside a name: the segment keeps the space that surrounded the
-    // slash. Across a live 53-core set that count is 91 under the old rule and 0 under this one.
+    // slash. Across this user's live core set that count is 91 under the old rule and 0 under this.
     assert!(parts.iter().all(|s| s.trim() == s));
     // A canonical path round-trips; `join_path` is the inverse for that shape alone.
     assert_eq!(join_path(&parts), real);
@@ -128,25 +123,62 @@ fn new_strategy_uses_defaults_and_name() {
     assert_eq!(spread.map(|(_, v)| v.as_str()), Some("0.5"));
 }
 
+/// The copy ordinal leads the name: `(2) S`, not `S (2)`.
+///
+/// Plausible edit this catches: `format!("({n}) {base}")` is changed to
+/// `format!("{base} ({n})")`, making the ordinal the first part lost to right-side truncation.
 #[test]
-fn unique_name_suffixing() {
+fn copy_ordinal_is_a_prefix() {
     let mut taken = HashSet::new();
-    assert_eq!(unique_name(&taken, "S"), "S");
+    assert_eq!(unique_name(&taken, "S"), "S", "a free name is untouched");
     taken.insert("S".to_string());
-    assert_eq!(unique_name(&taken, "S"), "S (2)");
-    taken.insert("S (2)".to_string());
-    assert_eq!(unique_name(&taken, "S"), "S (3)");
-    // Copying a copy strips old suffixes to the base instead of producing `(copy) (copy)`.
-    taken.insert("S (copy)".to_string());
-    assert_eq!(unique_name(&taken, "S (copy)"), "S (3)");
-    taken.insert("S (3)".to_string());
-    assert_eq!(unique_name(&taken, "S (3)"), "S (4)");
-    // An occupied `(copy) (copy)` name is uniquified from its base instead of extending the suffix.
-    taken.insert("S (copy) (copy)".to_string());
-    assert_eq!(unique_name(&taken, "S (copy) (copy)"), "S (4)");
-    // Parentheses unrelated to copying remain part of the name.
-    taken.insert("Grid (v2 beta)".to_string());
-    assert_eq!(unique_name(&taken, "Grid (v2 beta)"), "Grid (v2 beta) (2)");
+    assert_eq!(unique_name(&taken, "S"), "(2) S");
+    taken.insert("(2) S".to_string());
+    assert_eq!(unique_name(&taken, "S"), "(3) S");
+}
+
+/// Copying a copy re-numbers it instead of stacking markers.
+#[test]
+fn re_copying_a_prefixed_copy_does_not_nest() {
+    let taken: HashSet<String> = ["S", "(2) S"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(unique_name(&taken, "(2) S"), "(3) S");
+}
+
+/// A name carrying the supported trailing form still reduces to its base.
+///
+/// Plausible edit this catches: `strip_trailing_affix` is deleted as dead code because
+/// generated names use a leading marker, causing imported or persisted trailing-form names to
+/// collect a marker at each end, `(2) S (copy)`.
+#[test]
+fn a_legacy_trailing_suffix_still_reduces_to_its_base() {
+    let taken: HashSet<String> = ["S", "S (2)", "S (copy)", "S (copy) (copy)"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(unique_name(&taken, "S (copy)"), "(2) S");
+    assert_eq!(unique_name(&taken, "S (copy) (copy)"), "(2) S");
+    assert_eq!(unique_name(&taken, "S (2)"), "(2) S");
+}
+
+/// Brackets that are part of the name survive, at either end.
+#[test]
+fn a_parenthesised_version_tag_is_not_a_copy_marker() {
+    let taken: HashSet<String> = ["Grid (v2 beta)", "(v2) Grid", "((2)) S"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(unique_name(&taken, "Grid (v2 beta)"), "(2) Grid (v2 beta)");
+    assert_eq!(unique_name(&taken, "(v2) Grid"), "(2) (v2) Grid");
+    // The first `)` closes `(2`, which is not a marker — the name keeps its own brackets.
+    assert_eq!(unique_name(&taken, "((2)) S"), "(2) ((2)) S");
+}
+
+/// A name made entirely of markers has no base to fall back to, so it is left alone.
+#[test]
+fn an_all_affix_name_is_left_alone() {
+    let taken: HashSet<String> = ["(2)", "(copy)"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(unique_name(&taken, "(2)"), "(2) (2)");
+    assert_eq!(unique_name(&taken, "(copy)"), "(2) (copy)");
 }
 
 #[test]
@@ -160,10 +192,25 @@ fn clip_text_roundtrip() {
             (STRATEGY_NAME_FIELD.to_string(), "S (2)".to_string()),
             ("Formula".to_string(), "a\nb\\c".to_string()),
         ],
+        // `None` on purpose: the text format is for sharing between terminals, where a
+        // strategy id names a different strategy — see the field's docstring.
+        src: None,
     }];
     let text = clip_to_text(&clip);
     assert_eq!(clip_from_text(&text), Some(clip));
     assert_eq!(clip_from_text("случайный текст"), None);
+}
+
+/// The text clipboard must NOT carry a source id across terminals.
+///
+/// Plausible edit this catches: `src` is added to `clip_to_text` for symmetry, and a strategy
+/// shared by message then anchors itself to whatever unrelated strategy holds that id here.
+#[test]
+fn the_text_clipboard_drops_the_source_anchor() {
+    let clip = copy_rows(&[(7, &row(42, "S", "fld", false))]);
+    assert_eq!(clip[0].src, Some((7, 42)), "an in-app copy remembers it");
+    let parsed = clip_from_text(&clip_to_text(&clip)).expect("round trip");
+    assert_eq!(parsed[0].src, None, "text sharing must not carry it");
 }
 
 #[test]
@@ -173,12 +220,39 @@ fn copy_rows_flattens_to_target() {
         row(1, "a", "grpA/p1", false),
         row(2, "b", "grpB/sub/p2", false),
     ];
-    let refs: Vec<&StrategyRow> = rows.iter().collect();
+    let refs: Vec<(CoreId, &StrategyRow)> = rows.iter().map(|r| (7u64, r)).collect();
     let clip = copy_rows(&refs);
     assert!(clip.iter().all(|c| c.rel_path.is_empty()));
     // `paste_plan` therefore places both directly in the target folder.
     let plan = paste_plan(&clip, &split_path("dest"), &HashSet::new());
     assert!(plan.iter().all(|n| n.folder_path == "dest"));
+}
+
+/// A pasted strategy carries its source anchor, CORE-QUALIFIED.
+///
+/// Plausible edit this catches: the anchor is reduced to a bare id "because the caller knows
+/// the core" — and a cross-core paste then anchors to whatever unrelated strategy holds that
+/// small id on the destination. `feed::live::commands::anchor_on_core` is what drops a foreign
+/// one; it can only do that if the core travels with the id.
+#[test]
+fn a_paste_carries_its_source_anchor_with_the_core() {
+    let src = row(42, "S", "fld", false);
+    let clip = copy_rows(&[(7, &src)]);
+    let plan = paste_plan(&clip, &split_path("fld"), &HashSet::new());
+    assert_eq!(plan[0].insert_after, Some((7, 42)));
+}
+
+/// A FOLDER copy carries no anchor: its rows would otherwise interleave with the originals.
+#[test]
+fn a_folder_copy_carries_no_anchor() {
+    let rows = vec![
+        row(1, "a", "parent/fld", false),
+        row(2, "b", "parent/fld/sub", false),
+    ];
+    let clip = copy_folder(&rows, &split_path("parent/fld"));
+    assert!(clip.iter().all(|c| c.src.is_none()));
+    let plan = paste_plan(&clip, &split_path("dest"), &HashSet::new());
+    assert!(plan.iter().all(|n| n.insert_after.is_none()));
 }
 
 #[test]
@@ -205,6 +279,7 @@ fn paste_plan_rebases_and_dedups() {
             name: "S".to_string(),
             rel_path: vec![],
             fields: vec![(STRATEGY_NAME_FIELD.to_string(), "S".to_string())],
+            src: None,
         },
         ClipItem {
             kind_ordinal: 1,
@@ -212,6 +287,7 @@ fn paste_plan_rebases_and_dedups() {
             name: "S".to_string(),
             rel_path: split_path("sub"),
             fields: vec![(STRATEGY_NAME_FIELD.to_string(), "S".to_string())],
+            src: None,
         },
     ];
     let mut taken = HashSet::new();
@@ -234,8 +310,8 @@ fn paste_plan_rebases_and_dedups() {
         .unwrap()
         .1
         .clone();
-    assert_eq!(n0, "S (2)");
-    assert_eq!(n1, "S (3)");
+    assert_eq!(n0, "(2) S");
+    assert_eq!(n1, "(3) S");
     assert_ne!(n0, n1);
 }
 

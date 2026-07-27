@@ -9,7 +9,8 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette, h_flex, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonNotification, MoonPalette,
+    MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -91,7 +92,11 @@ impl AnalyticsView {
     }
 
     /// "Yes" in the confirmation dialog: write into the strategy or create a copy.
-    pub(super) fn confirm_save_dialog(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// `window` is threaded through for the copy path alone: a created strategy never appears in
+    /// this list (it is grouped from TRADES, and a new one has none), so the only way to say
+    /// where it went is a notification.
+    pub(super) fn confirm_save_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dlg) = self.tuner.save_dialog.take() else {
             return;
         };
@@ -99,12 +104,10 @@ impl AnalyticsView {
         // this write's own outcome.
         self.write_error = None;
         if dlg.copy {
-            self.create_strategy_copy(&dlg, cx);
+            self.create_strategy_copy(&dlg, window, cx);
         } else {
-            // NOT `staged_ignore.clear()` here: clearing before the send destroyed the filter
-            // axis's staged toggles even when the write reached no core at all, which is the
-            // one case the whole path exists to leave recoverable. It is cleared inside
-            // `send_bulk_changes`, once something has actually gone out.
+            // Keep staged filter toggles until at least one write is dispatched so a total
+            // delivery failure remains recoverable. `send_bulk_changes` clears them after send.
             self.send_bulk_changes(
                 dlg.targets.clone(),
                 dlg.changes.clone(),
@@ -115,12 +118,28 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Create a copy of the strategy with the changes applied on every core where
-    /// the original lives (per the live store). The name comes from the dialog input
-    /// (empty = auto); it is additionally uniqued on each core. The copy arrives
-    /// DISABLED (the create_strategies rule) — which is safe.
-    fn create_strategy_copy(&mut self, dlg: &super::shared::SaveDialog, cx: &mut Context<Self>) {
-        use crate::strategies::tree::ops::{STRATEGY_NAME_FIELD, set_field, unique_name};
+    /// Create a disabled copy with the requested changes on each target core.
+    ///
+    /// The dialog name is made unique per core; an empty name reuses the source name as its base.
+    /// Each copy is sent to the core root because the receiver re-splits nonempty flat paths; see
+    /// [`crate::strategies::tree::ops::path_segments`] for the path ambiguity. That covers THIS
+    /// COPY and no more: a create is applied by resending the core's whole strategy set
+    /// (`rebuild_sync`), so every existing strategy's flat path travels along either way.
+    ///
+    /// The raw-list anchor places the copy after its source. Once a command is dispatched, the
+    /// Strategies window is asked to reveal the echoed copy and a notification names its core.
+    ///
+    /// Names are not reserved between store snapshots, so concurrent requests can choose the same
+    /// generated name before either copy is echoed.
+    fn create_strategy_copy(
+        &mut self,
+        dlg: &super::shared::SaveDialog,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::strategies::tree::ops::{
+            NewStrategy, STRATEGY_NAME_FIELD, set_field, unique_name,
+        };
         let Some(target) = dlg.targets.first() else {
             return;
         };
@@ -141,7 +160,7 @@ impl AnalyticsView {
             String,
         )> = Vec::new();
         for (cid, cd) in b.session.store().cores() {
-            // Per-core: create the copy only on the selected core (None = legacy all-cores).
+            // A missing target core applies the copy to every core containing the strategy.
             if let Some(tc) = target_core {
                 if cid != tc {
                     continue;
@@ -160,19 +179,21 @@ impl AnalyticsView {
             set_field(&mut fields, STRATEGY_NAME_FIELD, &name);
             plans.push((
                 cid,
-                moon_core::feed::NewStrategySpec {
+                // Use the shared intent conversion so every creation path populates the same spec.
+                moon_core::feed::NewStrategySpec::from(NewStrategy {
                     kind_ordinal: row.kind_ordinal,
-                    folder_path: row.folder_path.clone(),
+                    // An empty path sends the copy to the core root; see this function's docstring.
+                    folder_path: String::new(),
                     fields,
-                },
+                    // The core-qualified anchor places the copy beside its source.
+                    insert_after: Some((cid, row.id)),
+                }),
                 name,
             ));
         }
         if plans.is_empty() {
             let (sid, core) = (target.sid, target_core);
-            // Same rule as Save: a copy that was never created must not look like one that
-            // was. The dialog has already closed, so the log alone would leave the user
-            // believing a new strategy exists.
+            // The closed dialog needs a visible failure when no live source can be copied.
             self.set_write_error(
                 t!(
                     "analytics.copy_failed_missing",
@@ -185,13 +206,14 @@ impl AnalyticsView {
             return;
         }
         let total = plans.len();
-        let mut sent = 0usize;
         let mut failed: Vec<String> = Vec::new();
+        // Keep the first successful dispatch for the reveal request and notification.
+        let mut landed: Option<(moon_core::session::CoreId, String)> = None;
         for (cid, spec, name) in plans {
             match b.session.create_strategies(cid, vec![spec]) {
                 Ok(()) => {
-                    sent += 1;
                     log::info!("analytics: copy '{name}' created on core {cid}");
+                    landed.get_or_insert((cid, name));
                 }
                 Err(e) => {
                     log::warn!("analytics: copy to core {cid} was not sent: {e:#}");
@@ -199,14 +221,35 @@ impl AnalyticsView {
                 }
             }
         }
-        log::info!("analytics: 'Make a copy' — cores {sent}/{total}");
+        log::info!(
+            "analytics: 'Make a copy' — cores {}/{total}",
+            total - failed.len()
+        );
         if failed.is_empty() {
             self.write_error = None;
         } else {
-            self.set_write_error(
-                t!("analytics.copy_failed", err = failed.join("; ")).to_string(),
-                cx,
-            );
+            // Report partial delivery separately when at least one core accepted the command.
+            let err = failed.join("; ");
+            let msg = if landed.is_some() {
+                t!("analytics.copy_partial", err = err.as_str())
+            } else {
+                t!("analytics.copy_failed", err = err.as_str())
+            };
+            self.set_write_error(msg.to_string(), cx);
+        }
+        if let Some((cid, name)) = landed {
+            // Dispatch confirms only that the command was queued, so the notification says "sent."
+            //
+            // The reveal takes effect when the core echoes the strategy into an open Strategies
+            // window; this trade-derived view cannot display a copy with no trades.
+            let note = t!(
+                "analytics.copy_created_root",
+                name = name.as_str(),
+                core = cid
+            )
+            .to_string();
+            crate::strategies::reveal_name(&self.backend, cid, name, cx);
+            window.push_notification(MoonNotification::success(note), cx);
         }
     }
 
@@ -631,8 +674,8 @@ impl AnalyticsView {
                                         .variant(MoonButtonVariant::Blue)
                                         .size(MoonButtonSize::Micro)
                                         .label(t!("analytics.tuner.save_yes").to_string())
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.confirm_save_dialog(cx);
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.confirm_save_dialog(window, cx);
                                         }))
                                         .render(),
                                 ),

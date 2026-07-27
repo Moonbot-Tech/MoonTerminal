@@ -249,10 +249,11 @@ struct Backend {
     settings_window: Option<WindowHandle<Root>>,
     /// Application-wide Strategies OS window handle for deduplication and focus.
     strategies_window: Option<WindowHandle<Root>>,
-    /// Request to show a strategy in the Strategies window as `(core, strategy id)`.
-    /// Set from a chart order-line context menu or an Orders-table strategy cell, then consumed by
-    /// `StrategiesView` during render to disable the active-only filter, expand, and select the row.
-    strategies_goto: Option<(CoreId, u64)>,
+    /// Request to show a strategy in the Strategies window as `(core, RevealTarget)`.
+    /// Set from a chart order-line context menu, an Orders-table strategy cell, or a freshly
+    /// created copy, then consumed by `StrategiesView` during render to disable the active-only
+    /// filter, expand the core and folders, and select the row.
+    strategies_goto: Option<(CoreId, strategies::RevealTarget)>,
     /// Global singleton Assets window for all cores, retained for deduplication and focus.
     assets_window: Option<WindowHandle<Root>>,
     /// Singleton Screener window covering all exchanges with provider deduplication.

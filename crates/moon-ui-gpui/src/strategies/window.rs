@@ -34,6 +34,19 @@ pub(super) fn strategies_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         })
 }
 
+/// Which strategy a `Backend::strategies_goto` request points at.
+///
+/// Two forms because the two kinds of caller know different things: a chart order line or an
+/// Orders row already holds the id, while a just-created copy does not — its id is assigned by
+/// the core and only arrives with the echo, so it can be named but not numbered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RevealTarget {
+    /// A strategy the caller already knows the id of.
+    Id(u64),
+    /// A strategy identified by its name on that core.
+    Name(String),
+}
+
 /// Open or focus the Strategies window and navigate to `strat_id` on `core`.
 /// Render drains the request, disables the active-only filter, expands the target core and folders,
 /// and selects the strategy. Entry points include chart order-line context menus and the Orders
@@ -47,11 +60,39 @@ pub fn open_goto(
     cx: &mut App,
 ) {
     backend.update(cx, |b, bcx| {
-        b.strategies_goto = Some((core, strat_id));
+        b.strategies_goto = Some((core, RevealTarget::Id(strat_id)));
         // Wake an existing window's observer because `open` only focuses a deduplicated window.
         bcx.notify();
     });
     open(backend, owner, owner_display, cx);
+}
+
+/// Ask an ALREADY-OPEN Strategies window to reveal a strategy by name.
+///
+/// By name because the caller cannot know the id: a created strategy's id is assigned core-side
+/// and only arrives with the snapshot echo.
+///
+/// Deliberately does NOT open the window. A dialog in another window that spawns a second window
+/// is a surprise, and a request parked on `Backend` for a window that is never opened would fire
+/// hours later and yank the user's selection out from under them.
+///
+/// Liveness is proved by UPDATING the handle rather than by `is_some()`: nothing clears
+/// `strategies_window` when the user closes the window, so the handle outlives it.
+///
+/// Returns:
+///     Whether a live window accepted the request.
+pub fn reveal_name(backend: &Entity<Backend>, core: CoreId, name: String, cx: &mut App) -> bool {
+    let Some(handle) = backend.read(cx).strategies_window else {
+        return false;
+    };
+    if handle.update(cx, |_, _, _| ()).is_err() {
+        return false;
+    }
+    backend.update(cx, |b, bcx| {
+        b.strategies_goto = Some((core, RevealTarget::Name(name)));
+        bcx.notify();
+    });
+    true
 }
 
 /// Open the Strategies tool window, deduplicated through `Backend`.
