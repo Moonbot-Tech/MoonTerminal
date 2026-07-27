@@ -7,6 +7,9 @@
 /// The list card, its rows and the sortable header row.
 mod table;
 
+#[cfg(test)]
+mod tests;
+
 use gpui::*;
 use moon_ui::{
     MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
@@ -71,68 +74,155 @@ impl StratListFilter {
 /// the top by |profit| carries little information, and the DOM is not infinitely stretchy).
 pub(in crate::analytics::tuner) const MAX_ROWS: usize = 300;
 
-impl AnalyticsView {
-    /// The strategy list after the filter bar (active-only, kind, name search) and the current
-    /// sort. Returns references into the loaded data — the caller still caps to `MAX_ROWS`, so
-    /// this may hand back more than that when the replica holds thousands of groups.
-    pub(super) fn visible_strategies<'a>(&self, all: &'a [GroupStat]) -> Vec<&'a GroupStat> {
-        let q = self.strat_search.trim().to_lowercase();
-        // Type + name are explicit user filters. Active-only is applied on top, but falls back to
-        // the pre-active set when it would empty a non-empty base — otherwise a period whose
-        // strategies replica is absent (alive = NULL for every row) or all-deleted would show an
-        // empty list even though rows exist. "Active" = still present in a core (alive >= 1).
-        let base: Vec<&GroupStat> = all
-            .iter()
-            .filter(|g| {
-                self.strat_type.as_ref().is_none_or(|t| &g.kind == t)
-                    && (q.is_empty() || g.name.to_lowercase().contains(&q))
-            })
-            .collect();
-        // The coin-list views need the strategies DB to say anything: without it every
-        // row reads bl = wl = 0, and filtering on that would present "we cannot see the
-        // lists" as "no strategy has one". Same shape as the active-only fallback below.
-        let base: Vec<&GroupStat> = if base.iter().any(|g| g.bl > 0 || g.wl > 0) {
-            base.into_iter()
-                .filter(|g| self.strat_lists.keeps(g))
-                .collect()
+/// Everything the strategy list's filter and sort depend on.
+///
+/// [`filter_sort_indices`] takes no state outside this type, so every filter control must extend
+/// the key before it can affect the result. This keeps cache invalidation coupled to filtering.
+#[derive(PartialEq)]
+pub(in crate::analytics) struct VisibleKey {
+    /// Address of the current group slice, paired with explicit invalidation whenever
+    /// `strategy_data` is replaced so allocator address reuse cannot preserve a stale result.
+    base: usize,
+    /// The search box, folded once here rather than per row on every render.
+    search_lower: String,
+    kind: Option<String>,
+    lists: StratListFilter,
+    active_only: bool,
+    sort: Option<(String, bool)>,
+}
+
+/// The memoized row-index order and the complete set of inputs that produced it.
+pub(in crate::analytics) struct VisibleRows {
+    key: VisibleKey,
+    idx: Vec<usize>,
+}
+
+/// Sort only as deep as the list can draw.
+///
+/// The virtual list never asks for a row past [`MAX_ROWS`], so the tail's order is unobservable
+/// and paying `O(n log n)` for it over thousands of groups is waste. Shared with the coin table,
+/// which faces the same cap.
+pub(in crate::analytics::tuner) fn partial_sort<T>(
+    items: &mut [T],
+    mut cmp: impl FnMut(&T, &T) -> Ordering,
+) {
+    if items.len() > MAX_ROWS {
+        items.select_nth_unstable_by(MAX_ROWS, &mut cmp);
+    }
+    let head = items.len().min(MAX_ROWS);
+    items[..head].sort_by(cmp);
+}
+
+/// Filter and sort the whole group set, returning INDICES into it.
+///
+/// Indices rather than references so the result can be cached on the view: a `Vec<&GroupStat>`
+/// would borrow from `strategy_data` and make the cache self-referential.
+///
+/// The list-membership and aliveness fallbacks preserve visible rows when the strategies replica
+/// does not provide enough information to evaluate those filters.
+pub(in crate::analytics) fn filter_sort_indices(all: &[GroupStat], key: &VisibleKey) -> Vec<usize> {
+    let q = key.search_lower.as_str();
+    // Type and name are always known from the report groups, so apply them before filters that
+    // depend on the optional strategies replica.
+    let base: Vec<usize> = all
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| {
+            key.kind.as_ref().is_none_or(|t| &g.kind == t)
+                && (q.is_empty() || g.name.to_lowercase().contains(q))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    // The coin-list views need the strategies DB to say anything: without it every
+    // row reads bl = wl = 0, and filtering on that would present "we cannot see the
+    // lists" as "no strategy has one". Same shape as the active-only fallback below.
+    let base: Vec<usize> = if base.iter().any(|i| all[*i].bl > 0 || all[*i].wl > 0) {
+        base.into_iter()
+            .filter(|i| key.lists.keeps(&all[*i]))
+            .collect()
+    } else {
+        base
+    };
+    // Apply active-only ONLY when aliveness is actually known (at least one row has it). If
+    // every row is alive = None (strategies replica absent), the filter has nothing to go on
+    // and would blank the list — so skip it. When alive IS known, filter normally; a genuinely
+    // all-deleted set then empties and the caller shows a "no matches" note.
+    let mut out: Vec<usize> = if key.active_only && base.iter().any(|i| all[*i].alive.is_some()) {
+        base.into_iter()
+            .filter(|i| all[*i].alive.is_some_and(|a| a >= 1))
+            .collect()
+    } else {
+        base
+    };
+    if let Some((sort_key, desc)) = &key.sort {
+        let desc = *desc;
+        // A numeric metric column sorts by its `sort` value; the name/kind/core columns
+        // sort case-insensitively by text.
+        if let Some(col) = METRIC_COLS.iter().find(|c| c.key == sort_key) {
+            let f = col.sort;
+            partial_sort(&mut out, |a, b| {
+                let o = f(&all[*a])
+                    .partial_cmp(&f(&all[*b]))
+                    .unwrap_or(Ordering::Equal);
+                if desc { o.reverse() } else { o }
+            });
         } else {
-            base
-        };
-        // Apply active-only ONLY when aliveness is actually known (at least one row has it). If
-        // every row is alive = None (strategies replica absent), the filter has nothing to go on
-        // and would blank the list — so skip it. When alive IS known, filter normally; a genuinely
-        // all-deleted set then empties and the caller shows a "no matches" note.
-        let mut out: Vec<&GroupStat> =
-            if self.strat_active_only && base.iter().any(|g| g.alive.is_some()) {
-                base.into_iter()
-                    .filter(|g| g.alive.is_some_and(|a| a >= 1))
-                    .collect()
-            } else {
-                base
+            let sel: fn(&GroupStat) -> &str = match sort_key.as_str() {
+                SORT_KIND => |g| g.kind.as_str(),
+                SORT_CORE => |g| g.core.as_str(),
+                SORT_LASTEDIT => |g| g.lastedit.as_str(),
+                _ => |g| g.name.as_str(),
             };
-        if let Some((key, desc)) = self.strat_sort.clone() {
-            // A numeric metric column sorts by its `sort` value; the name/kind/core columns
-            // sort case-insensitively by text (key cached once per row, not per comparison).
-            if let Some(col) = METRIC_COLS.iter().find(|c| c.key == key) {
-                let f = col.sort;
-                out.sort_by(|a, b| {
-                    let o = f(a).partial_cmp(&f(b)).unwrap_or(Ordering::Equal);
-                    if desc { o.reverse() } else { o }
-                });
-            } else {
-                let sel: fn(&GroupStat) -> &str = match key.as_str() {
-                    SORT_KIND => |g| g.kind.as_str(),
-                    SORT_CORE => |g| g.core.as_str(),
-                    SORT_LASTEDIT => |g| g.lastedit.as_str(),
-                    _ => |g| g.name.as_str(),
-                };
-                out.sort_by_cached_key(|g| sel(g).to_lowercase());
-                if desc {
-                    out.reverse();
-                }
-            }
+            // Compared in ONE direction rather than sorted-then-reversed: reversing also flips
+            // rows whose keys are equal, so descending would not mirror ascending.
+            partial_sort(&mut out, |a, b| {
+                let (x, y) = (sel(&all[*a]).to_lowercase(), sel(&all[*b]).to_lowercase());
+                if desc { y.cmp(&x) } else { x.cmp(&y) }
+            });
         }
-        out
+    }
+    out
+}
+
+/// Whether a cached result still describes the current inputs.
+///
+/// Split out so the memo's ONE decision can be exercised directly: "recomputed zero times while
+/// nothing changed" is the whole objective, and it is invisible from the rendered output.
+fn memo_is_fresh(cached: Option<&VisibleRows>, key: &VisibleKey) -> bool {
+    cached.is_some_and(|c| &c.key == key)
+}
+
+impl AnalyticsView {
+    /// Rebuild the row order unless the cache already holds the same inputs.
+    ///
+    /// Called once per render so hover and wheel notifications reuse the cached order instead of
+    /// sorting the complete group set.
+    ///
+    /// A data change is caught two ways, and BOTH are needed: the group set's address sits in
+    /// the key, and the memo is dropped where `strategy_data` is replaced. The address alone is
+    /// only unique among live allocations — a failed load frees the buffer and a later one can
+    /// be given the same address — so the explicit drop is what makes the key trustworthy.
+    pub(super) fn ensure_visible(&mut self, all: &[GroupStat]) -> &[usize] {
+        let key = VisibleKey {
+            base: all.as_ptr() as usize,
+            search_lower: self.strat_search.trim().to_lowercase(),
+            kind: self.strat_type.clone(),
+            lists: self.strat_lists,
+            active_only: self.strat_active_only,
+            sort: self.strat_sort.clone(),
+        };
+        if !memo_is_fresh(self.strat_visible.as_ref(), &key) {
+            let idx = filter_sort_indices(all, &key);
+            self.strat_visible = Some(VisibleRows { key, idx });
+        }
+        self.visible_indices()
+    }
+
+    /// Indices of the rows the list should draw, in order. Empty until [`Self::ensure_visible`].
+    pub(super) fn visible_indices(&self) -> &[usize] {
+        self.strat_visible
+            .as_ref()
+            .map_or(&[], |c| c.idx.as_slice())
     }
 
     /// The visible-column mask of the axis currently on screen.

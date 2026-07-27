@@ -1,11 +1,15 @@
-//! The strategy comparison table itself: the list card (header + filter bar + scroll),
+//! The strategy comparison table: the list card (header + filter bar + virtual list),
 //! one row per strategy group, and the sortable column header. The controls it renders
 //! under — filters, sort state, column masks — live in the parent (`list`).
 
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
+use moon_ui::{
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonScrollbarVisibility,
+    MoonVirtualList, h_flex, v_flex,
+};
 use rust_i18n::t;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use super::super::super::AnalyticsView;
 use super::super::{
@@ -18,6 +22,16 @@ use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::GroupStat;
 
+/// Height of one strategy row, in base px.
+///
+/// ONE definition because two consumers must agree exactly: the virtual list declares it as its
+/// item pitch, and the row draws itself at it. Two copies of the same three numbers agree only
+/// until someone edits one of them, and a pitch that disagrees with the drawn height overlaps or
+/// gaps every row on screen.
+fn strat_row_h(cx: &App) -> f32 {
+    design::fit_h_value(cx, 25.0, 14.0, 5.5)
+}
+
 impl AnalyticsView {
     /// The list card: header (title + modes + counter), filter bar, its own scroll.
     pub(in crate::analytics::tuner) fn strat_list_card(
@@ -26,8 +40,8 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // Resolved once for the whole list: this table is not virtualized, so a per-cell lookup
-        // would clone the theme tokens twice for each of up to 300 rows × 7 columns.
+        // Resolved once for the whole list and captured by value into the row factory: a
+        // per-cell lookup would clone the theme tokens twice for every drawn row × column.
         let scale = design::font_scale(cx);
         // The core column's content-measured width, computed once here and handed to both the
         // header and every row so they cannot disagree within a frame. `strat_core_w` documents
@@ -47,37 +61,69 @@ impl AnalyticsView {
         // The filter bar creates the search input (needs &mut) — build it before the immutable
         // data read below.
         let filter_bar = self.strat_filter_bar(p, window, cx);
-        let (list, total, shown): (AnyElement, usize, usize) =
-            match self.strategy_data.view(|d| d.strategies.is_empty()) {
-                Ok(d) => {
-                    // Filter + sort per the bar; count reflects the filtered set.
-                    let rows = self.visible_strategies(&d.strategies);
-                    let total = rows.len();
-                    let shown = total.min(MAX_ROWS);
-                    if rows.is_empty() {
-                        // Raw data exists but the filters/search matched nothing — say so instead
-                        // of leaving a blank area.
-                        let note = div()
-                            .w_full()
-                            .p(design::ui_px(cx, 18.0))
-                            .text_center()
-                            .text_color(moon(p.text_muted))
-                            .child(t!("analytics.strat.no_match").to_string());
-                        (note.into_any_element(), 0, 0)
-                    } else {
-                        let mut list = v_flex().w_full().gap_0();
-                        for g in rows.into_iter().take(MAX_ROWS) {
-                            list = list.child(self.strategy_row(g, p, scale, core_w, cx));
-                        }
-                        (list.into_any_element(), total, shown)
-                    }
+        // Clone the Arc out of the load state first: the memo below takes `&mut self`, so it
+        // cannot run while a borrow into `strategy_data` is alive.
+        let data = self
+            .strategy_data
+            .view(|d| d.strategies.is_empty())
+            .map(Arc::clone);
+        let (list, total, shown): (AnyElement, usize, usize) = match data {
+            Ok(d) => {
+                // Filter + sort per the bar, memoized; count reflects the filtered set.
+                let total = self.ensure_visible(&d.strategies).len();
+                let shown = total.min(MAX_ROWS);
+                if shown == 0 {
+                    // Raw data exists but the filters/search matched nothing — say so instead
+                    // of leaving a blank area.
+                    let note = div()
+                        .w_full()
+                        .p(design::ui_px(cx, 18.0))
+                        .text_center()
+                        .text_color(moon(p.text_muted))
+                        .child(t!("analytics.strat.no_match").to_string());
+                    (note.into_any_element(), 0, 0)
+                } else {
+                    // The factory runs only for rows on screen, bounding the work triggered by
+                    // `.hover()` notifications even though rows have no entity of their own.
+                    let weak = cx.entity().downgrade();
+                    (
+                        MoonVirtualList::new(
+                            "an-strat-rows",
+                            shown,
+                            strat_row_h(cx),
+                            move |ix, _w, app| {
+                                weak.upgrade()
+                                    .and_then(|e| {
+                                        // Rows AND their order are read from the view in one
+                                        // go, so an index can never be applied to a group set
+                                        // it was not computed against.
+                                        let view = e.read(app);
+                                        let all = &view.strategy_data.data()?.strategies;
+                                        let g = view
+                                            .visible_indices()
+                                            .get(ix)
+                                            .and_then(|i| all.get(*i))?;
+                                        Some(strategy_row(view, &weak, g, p, scale, core_w, app))
+                                    })
+                                    .unwrap_or_else(|| div().into_any_element())
+                            },
+                        )
+                        .surface(false)
+                        .border(false)
+                        .radius(0.0)
+                        .scrollbar_visibility(MoonScrollbarVisibility::Hover)
+                        .into_any_element(),
+                        total,
+                        shown,
+                    )
                 }
-                Err(note) => (
-                    super::super::super::note_el("an-strat-list-note", note, 18.0, p, cx),
-                    0,
-                    0,
-                ),
-            };
+            }
+            Err(note) => (
+                super::super::super::note_el("an-strat-list-note", note, 18.0, p, cx),
+                0,
+                0,
+            ),
+        };
 
         let mode_btn = |id: &'static str, mode: StratMode, label: String| {
             let on = self.strat_mode == mode;
@@ -114,24 +160,35 @@ impl AnalyticsView {
                     .gap(design::ui_px(cx, 8.0))
                     .child(
                         div()
+                            .flex_none()
+                            // Match the mode buttons' box so `items_center` aligns equal heights;
+                            // the explicit line height also contains the title glyph without a
+                            // low visual baseline.
+                            .h(design::micro_control_h(cx))
+                            .flex()
+                            .items_center()
                             .text_size(design::t_title(cx))
+                            .line_height(design::line_px(cx, 18.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(t!("analytics.strat.title").to_string()),
                     )
+                    // Order is deliberate and asserted by `theme_contract`: filter, then time,
+                    // then coin. Each id stays bound to its own mode — the persisted per-axis
+                    // column masks are keyed by mode, not by position.
                     .child(mode_btn(
                         "sm-filters",
                         StratMode::Filters,
                         t!("analytics.strat.mode_filter").to_string(),
                     ))
                     .child(mode_btn(
-                        "sm-coins",
-                        StratMode::Coins,
-                        t!("analytics.strat.mode_coin").to_string(),
-                    ))
-                    .child(mode_btn(
                         "sm-time",
                         StratMode::Time,
                         t!("analytics.strat.mode_time").to_string(),
+                    ))
+                    .child(mode_btn(
+                        "sm-coins",
+                        StratMode::Coins,
+                        t!("analytics.strat.mode_coin").to_string(),
                     ))
                     .child(div().flex_1())
                     .child({
@@ -159,163 +216,170 @@ impl AnalyticsView {
                     }),
             )
             .child(filter_bar)
+            // The header row stays OUTSIDE the virtual list so it cannot scroll away.
             .child(self.header_row(p, core_w, cx))
-            .child(
-                div()
-                    .id("an-strat-list")
-                    .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(list),
-            )
+            .child(div().w_full().flex_1().min_h_0().child(list))
             .into_any_element()
     }
+}
 
-    /// A comparison-table row; a click selects/deselects the group.
-    ///
-    /// `core_w` is the content-measured core-column width (see [`core_col_w`]) — passed in
-    /// because the header must lay the same value out, or it drifts off the column.
-    fn strategy_row(
-        &self,
-        g: &GroupStat,
-        p: MoonPalette,
-        scale: f32,
-        core_w: f32,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        // Anchor = amber; Ctrl-selected extras = a lighter amber. The anchor drives the
-        // right-hand scope (suggest/KPI/detail); extras are bulk-write addressees.
-        let is_anchor = self.sel_strategy.as_ref().is_some_and(|(k, _)| *k == g.key);
-        let is_extra = self.sel_extra.iter().any(|(k, _)| *k == g.key);
-        let key = g.key.clone();
-        // strategyid=0 = manual orders — a label instead of a bare "0" (both in the
-        // row and in the selection: the tuner/dialog titles take the same one).
-        let name = super::super::super::summary::strat_display(&g.name);
-        // "Alive right now" indicator: ● green — present in a core and enabled,
-        // ● muted — present but disabled, ○ outline — deleted from the cores.
-        let alive_dot = g.alive.map(|a| {
-            let dot = div()
-                .flex_none()
-                .w(design::ui_px(cx, 6.0))
-                .h(design::ui_px(cx, 6.0))
-                .rounded_full();
-            match a {
-                2 => dot.bg(moon(p.green)),
-                1 => dot.bg(moon_alpha(p.text_muted, 0.8)),
-                _ => dot.border_1().border_color(moon_alpha(p.text_muted, 0.6)),
+/// A comparison-table row; a click selects/deselects the group.
+///
+/// A free function taking a WEAK handle, not a method: `MoonVirtualList`'s row factory is
+/// `'static` and outlives the render, so a strong `cx.entity()` capture would close
+/// `AnalyticsView -> element -> closure -> AnalyticsView` and leak the window — the same cycle
+/// `theme_contract::moon_tree_closures_hold_weak_view_handles` guards for `MoonTree`.
+///
+/// `core_w` is the content-measured core-column width (see [`core_col_w`]) — passed in
+/// because the header must lay the same value out, or it drifts off the column.
+fn strategy_row(
+    view: &AnalyticsView,
+    weak: &WeakEntity<AnalyticsView>,
+    g: &GroupStat,
+    p: MoonPalette,
+    scale: f32,
+    core_w: f32,
+    cx: &App,
+) -> AnyElement {
+    // Anchor = amber; Ctrl-selected extras = a lighter amber. The anchor drives the
+    // right-hand scope (suggest/KPI/detail); extras are bulk-write addressees.
+    let is_anchor = view.sel_strategy.as_ref().is_some_and(|(k, _)| *k == g.key);
+    let is_extra = view.sel_extra.iter().any(|(k, _)| *k == g.key);
+    let key = g.key.clone();
+    // strategyid=0 = manual orders — a label instead of a bare "0" (both in the
+    // row and in the selection: the tuner/dialog titles take the same one).
+    let name = super::super::super::summary::strat_display(&g.name);
+    // "Alive right now" indicator: ● green — present in a core and enabled,
+    // ● muted — present but disabled, ○ outline — deleted from the cores.
+    let alive_dot = g.alive.map(|a| {
+        let dot = div()
+            .flex_none()
+            .w(design::ui_px(cx, 6.0))
+            .h(design::ui_px(cx, 6.0))
+            .rounded_full();
+        match a {
+            2 => dot.bg(moon(p.green)),
+            1 => dot.bg(moon_alpha(p.text_muted, 0.8)),
+            _ => dot.border_1().border_color(moon_alpha(p.text_muted, 0.6)),
+        }
+    });
+    let core_text = core_label(g);
+    // Name on the left (flexible, truncated), all fixed columns in one rigid
+    // cluster on the right (justify_between): when flex distribution glitches on
+    // resize, the columns do not drift out of alignment between rows.
+    let mut row = h_flex()
+        .id(SharedString::from(format!("an-strat-{}", g.key)))
+        .w_full()
+        .h(px(strat_row_h(cx)))
+        .px(design::ui_px(cx, 8.0))
+        .gap(design::ui_px(cx, 8.0))
+        .items_center()
+        .justify_between()
+        .cursor_pointer()
+        .bg(moon(p.table_body))
+        .border_t_1()
+        .border_color(moon_alpha(p.border, 0.6))
+        .child(
+            h_flex()
+                .flex_1()
+                // The floor belongs on the flex item because a floor on the text cannot stop the
+                // cluster from shrinking to zero and painting the name over the type column. The
+                // header uses the same floor to stay aligned.
+                .min_w(design::font_w_px(cx, STRAT_NAME_MIN_W))
+                .gap(design::ui_px(cx, 6.0))
+                .items_center()
+                .children(alive_dot)
+                // A flex basis prevents the truncated div from collapsing to an ellipsis, while
+                // `min_w_0` lets it truncate inside the floor held by its parent.
+                .child(div().flex_1().min_w_0().truncate().child(name.clone())),
+        )
+        .child(
+            h_flex()
+                // Shrinkable, not rigid: the columns inside carry their own floors, so the
+                // row squeezes them evenly and only overflows once every one is at its
+                // floor — instead of sliding off the edge at full width.
+                .flex_shrink_1()
+                .min_w_0()
+                .gap(design::ui_px(cx, 8.0))
+                .items_center()
+                // Each identity/metric column renders only when its visibility bit is set
+                // (column selector); the name column on the left is always shown.
+                .children(view.col_shown(COL_BIT_KIND).then(|| {
+                    div()
+                        .w(design::font_w_px(cx, KIND_W))
+                        .min_w(design::font_w_px(cx, KIND_MIN_W))
+                        .flex_shrink_1()
+                        .truncate()
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(p.text_muted))
+                        .child(g.kind.clone())
+                }))
+                .children(view.col_shown(COL_BIT_CORE).then(|| {
+                    div()
+                        .w(design::font_w_px(cx, core_w))
+                        .min_w(design::font_w_px(cx, CORE_MIN_W))
+                        .flex_shrink_1()
+                        .truncate()
+                        .text_color(moon(p.text_soft))
+                        .child(core_text)
+                }))
+                .children(
+                    METRIC_COLS
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| view.col_shown(metric_bit(*i)))
+                        .map(|(_, c)| metric_cell(c, g, p, scale)),
+                )
+                .children(view.col_shown(COL_BIT_LASTEDIT).then(|| {
+                    div()
+                        .w(design::font_w_px(cx, LASTEDIT_W))
+                        .min_w(design::font_w_px(cx, LASTEDIT_MIN_W))
+                        .flex_shrink_1()
+                        .truncate()
+                        .text_size(design::t_caption(cx))
+                        .text_color(moon(p.text_muted))
+                        .child(g.lastedit.clone())
+                })),
+        )
+        .on_click({
+            let weak = weak.clone();
+            move |ev: &ClickEvent, _window, app| {
+                // secondary() = Ctrl on Windows/Linux, ⌘ on macOS — the standard
+                // multi-select modifier (mirrors the strategies tree in tree_moon.rs).
+                let multi = ev.modifiers().secondary();
+                let (key, name) = (key.clone(), name.clone());
+                // The view may already be gone; a dropped window is not an error here.
+                let _ = weak.update(app, |this, cx| {
+                    if multi {
+                        this.toggle_multi(key, name, cx);
+                    } else {
+                        this.select_single(key, name, cx);
+                    }
+                });
             }
         });
-        let core_text = core_label(g);
-        // Name on the left (flexible, truncated), all fixed columns in one rigid
-        // cluster on the right (justify_between): when flex distribution glitches on
-        // resize, the columns do not drift out of alignment between rows.
-        let mut row = h_flex()
-            .id(SharedString::from(format!("an-strat-{}", g.key)))
-            .w_full()
-            .h(design::fit_h_px(cx, 25.0, 14.0, 5.5))
-            .px(design::ui_px(cx, 8.0))
-            .gap(design::ui_px(cx, 8.0))
-            .items_center()
-            .justify_between()
-            .cursor_pointer()
-            .bg(moon(p.table_body))
-            .border_t_1()
-            .border_color(moon_alpha(p.border, 0.6))
-            .child(
-                h_flex()
-                    .flex_1()
-                    // The floor belongs on the FLEX ITEM, not on the text inside it. On the
-                    // text it does nothing: the cluster still shrinks to zero, and the name
-                    // then paints outside its own box — straight over the type column, which
-                    // is what "the name runs under the type" was. Matching floor in the
-                    // header, or the heading drifts off the column it labels.
-                    .min_w(design::font_w_px(cx, STRAT_NAME_MIN_W))
-                    .gap(design::ui_px(cx, 6.0))
-                    .items_center()
-                    .children(alive_dot)
-                    // flex_1 is mandatory: a div with truncate() and no flex basis
-                    // collapses to "…" (that is how strategy names used to vanish).
-                    // min_w_0 lets it truncate INSIDE the floor its parent now holds.
-                    .child(div().flex_1().min_w_0().truncate().child(name.clone())),
-            )
-            .child(
-                h_flex()
-                    // Shrinkable, not rigid: the columns inside carry their own floors, so the
-                    // row squeezes them evenly and only overflows once every one is at its
-                    // floor — instead of sliding off the edge at full width.
-                    .flex_shrink_1()
-                    .min_w_0()
-                    .gap(design::ui_px(cx, 8.0))
-                    .items_center()
-                    // Each identity/metric column renders only when its visibility bit is set
-                    // (column selector); the name column on the left is always shown.
-                    .children(self.col_shown(COL_BIT_KIND).then(|| {
-                        div()
-                            .w(design::font_w_px(cx, KIND_W))
-                            .min_w(design::font_w_px(cx, KIND_MIN_W))
-                            .flex_shrink_1()
-                            .truncate()
-                            .text_size(design::t_caption(cx))
-                            .text_color(moon(p.text_muted))
-                            .child(g.kind.clone())
-                    }))
-                    .children(self.col_shown(COL_BIT_CORE).then(|| {
-                        div()
-                            .w(design::font_w_px(cx, core_w))
-                            .min_w(design::font_w_px(cx, CORE_MIN_W))
-                            .flex_shrink_1()
-                            .truncate()
-                            .text_color(moon(p.text_soft))
-                            .child(core_text)
-                    }))
-                    .children(
-                        METRIC_COLS
-                            .iter()
-                            .enumerate()
-                            .filter(|(i, _)| self.col_shown(metric_bit(*i)))
-                            .map(|(_, c)| metric_cell(c, g, p, scale)),
-                    )
-                    .children(self.col_shown(COL_BIT_LASTEDIT).then(|| {
-                        div()
-                            .w(design::font_w_px(cx, LASTEDIT_W))
-                            .min_w(design::font_w_px(cx, LASTEDIT_MIN_W))
-                            .flex_shrink_1()
-                            .truncate()
-                            .text_size(design::t_caption(cx))
-                            .text_color(moon(p.text_muted))
-                            .child(g.lastedit.clone())
-                    })),
-            )
-            .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
-                // secondary() = Ctrl on Windows/Linux, ⌘ on macOS — the standard multi-select
-                // modifier (mirrors the strategies tree in tree_moon.rs).
-                if ev.modifiers().secondary() {
-                    this.toggle_multi(key.clone(), name.clone(), cx);
-                } else {
-                    this.select_single(key.clone(), name.clone(), cx);
-                }
-            }));
-        // BLUE marks "this strategy traded the coin you clicked below" — an answer to a
-        // question, not a selection, so it never overrides the amber the user chose.
-        let traded_picked = self.coins.picked_strats.contains(&g.key);
-        if is_anchor {
-            row = row
-                .bg(moon_alpha(p.amber, 0.12))
-                .border_color(moon_alpha(p.amber, 0.5));
-        } else if traded_picked {
-            row = row
-                .bg(moon_alpha(p.blue, 0.16))
-                .border_color(moon_alpha(p.blue, 0.45));
-        } else if is_extra {
-            row = row
-                .bg(moon_alpha(p.amber, 0.06))
-                .border_color(moon_alpha(p.amber, 0.3));
-        } else {
-            row = row.hover(move |s| s.bg(moon_alpha(p.panel_high, 0.9)));
-        }
-        row
+    // BLUE marks "this strategy traded the coin you clicked below" — an answer to a
+    // question, not a selection, so it never overrides the amber the user chose.
+    let traded_picked = view.coins.picked_strats.contains(&g.key);
+    if is_anchor {
+        row = row
+            .bg(moon_alpha(p.amber, 0.12))
+            .border_color(moon_alpha(p.amber, 0.5));
+    } else if traded_picked {
+        row = row
+            .bg(moon_alpha(p.blue, 0.16))
+            .border_color(moon_alpha(p.blue, 0.45));
+    } else if is_extra {
+        row = row
+            .bg(moon_alpha(p.amber, 0.06))
+            .border_color(moon_alpha(p.amber, 0.3));
+    } else {
+        // Hover communicates that the whole line is clickable. Its notification redraws the
+        // shared Analytics view, so virtualization and the cached index order bound that redraw
+        // to the visible rows.
+        row = row.hover(move |s| s.bg(moon_alpha(p.panel_high, 0.9)));
     }
+    row.into_any_element()
 }
 
 impl AnalyticsView {

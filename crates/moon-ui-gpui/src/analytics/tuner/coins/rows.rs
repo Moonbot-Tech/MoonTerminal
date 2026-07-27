@@ -7,8 +7,8 @@
 //!
 //! GPUI repaints a view whenever anything asks it to, and a hovered row asks on every row
 //! boundary the cursor crosses (`div`'s hover style registers a `MouseMove` listener that
-//! calls `notify`). Hovering EITHER list therefore used to rebuild this model — the strategy
-//! list and the coin table share one view — while none of the model's inputs had changed.
+//! calls `notify`). Because the strategy list and coin table share one view, hover traffic
+//! must not rebuild this model when none of its inputs changed.
 //!
 //! So the model is built once per change of the things it actually depends on, and the cache
 //! key names every one of them. A miss costs the pass; a hover costs a `Vec` walk.
@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::SharedString;
 
-use super::super::list::MAX_ROWS;
+use super::super::list::{MAX_ROWS, partial_sort};
 use super::state::{CoinFilter, CoinsState, coin_token};
 use moon_core::db::analytics::GroupStat;
 
@@ -231,14 +231,6 @@ fn sort_rows(state: &CoinsState, rows: &mut [CoinRow]) {
             if desc { y.cmp(&x) } else { x.cmp(&y) }
         });
     }
-}
-
-fn partial_sort<T>(items: &mut [T], mut cmp: impl FnMut(&T, &T) -> std::cmp::Ordering) {
-    if items.len() > MAX_ROWS {
-        items.select_nth_unstable_by(MAX_ROWS, &mut cmp);
-    }
-    let head = items.len().min(MAX_ROWS);
-    items[..head].sort_by(cmp);
 }
 
 // Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`

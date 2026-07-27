@@ -321,6 +321,29 @@ pub fn fit_h_px(cx: &App, base_height: f32, base_line_height: f32, base_pad_y: f
     px(fit_h_value(cx, base_height, base_line_height, base_pad_y))
 }
 
+/// Return the drawn height of a `MoonButtonSize::Micro` control, in base px.
+///
+/// MIRRORS MoonUI: `MoonButtonMetrics::base_for_size(Size::XSmall)` is `height 18`,
+/// `line_height 12`, whose `pad_y` works out to `3` — exactly the arguments below. Only those
+/// three numbers are mirrored; the scaling goes through MoonUI's own `MoonTheme::fit_height`.
+///
+/// Two callers need it: a plain `div` sitting BESIDE such a button (a card title) takes the same
+/// box so the row's `items_center` centres two equal heights instead of centring a text line box
+/// against a taller pill, and the chart's action overlay sizes its own layout from it.
+///
+/// Nothing checks this against MoonUI: `MoonButtonMetrics` is private there and the sibling
+/// checkout is not guaranteed present in CI, so a test can neither call it nor grep it. If
+/// MoonUI's XSmall metrics move, this must follow by hand.
+pub fn micro_control_h_value(cx: &App) -> f32 {
+    fit_h_value(cx, 18.0, 12.0, 3.0)
+}
+
+/// [`micro_control_h_value`] as `Pixels` — the `*_value`/`*_px` pair every geometry helper in
+/// this file ships, because layout arithmetic needs the `f32` and styling needs the `Pixels`.
+pub fn micro_control_h(cx: &App) -> Pixels {
+    px(micro_control_h_value(cx))
+}
+
 /// Width of mono text drawn at the terminal's body size — [`ui_text_width`] with the theme's body
 /// base filled in.
 ///
