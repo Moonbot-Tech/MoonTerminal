@@ -2,6 +2,86 @@ use super::*;
 use rusqlite::types::Value;
 use std::cell::Cell;
 
+/// `db/mod.rs:tune_reader` must actually raise the page-cache budget it is handed.
+///
+/// Dropping its `pragma_update` line leaves every report reader on SQLite's ~2 MiB default
+/// against a replica of hundreds of MB: a period scan then evicts its own pages inside one
+/// statement batch, so Analytics gets slower with nothing failing and nothing else to notice it.
+///
+/// What this does NOT cover: `open_reader` itself, which resolves its path through the global
+/// `config::paths::reports_db_path()` and so cannot be called here. Deleting the
+/// `tune_reader(&conn)` line from it stays green — the only guard against that is the review of
+/// a four-line function.
+///
+/// The default is read back from an untuned connection rather than written down, so the
+/// assertion cannot pass by comparing the constant with itself.
+#[test]
+fn a_report_reader_gets_a_larger_page_cache_than_the_default() {
+    let untuned = Connection::open_in_memory().unwrap();
+    let default_kib: i64 = untuned
+        .pragma_query_value(None, "cache_size", |r| r.get(0))
+        .unwrap();
+
+    let tuned = Connection::open_in_memory().unwrap();
+    tune_reader(&tuned);
+    let tuned_kib: i64 = tuned
+        .pragma_query_value(None, "cache_size", |r| r.get(0))
+        .unwrap();
+
+    assert_eq!(tuned_kib, READER_CACHE_KIB);
+    // Negative form: KiB, so "bigger budget" is a more negative number.
+    assert!(
+        tuned_kib < default_kib,
+        "tuned cache_size {tuned_kib} must exceed the default {default_kib}"
+    );
+}
+
+/// `db/mod.rs:tune_reader` must leave `temp_store` and `mmap_size` at their defaults.
+///
+/// Setting `temp_store = MEMORY` can turn a successful sorter spill into an OOM once several
+/// readers scan at once. Setting `mmap_size` can make a truncated replica surface as an OS fault
+/// that `read_fail` cannot classify as corruption. Adding either setting to `tune_reader` changes
+/// failure behaviour and reddens the corresponding assertion.
+///
+/// `mmap_size` is checked on a FILE-backed database on purpose: it configures a mapping of the
+/// database file, so an in-memory connection answers the query with no row at all and an
+/// assertion there would pass whatever `tune_reader` did.
+#[test]
+fn reader_tuning_stays_behaviour_neutral() {
+    let baseline = Connection::open_in_memory().unwrap();
+    let default_temp_store: i64 = baseline
+        .pragma_query_value(None, "temp_store", |r| r.get(0))
+        .unwrap();
+
+    let tuned = Connection::open_in_memory().unwrap();
+    tune_reader(&tuned);
+    let temp_store: i64 = tuned
+        .pragma_query_value(None, "temp_store", |r| r.get(0))
+        .unwrap();
+
+    assert_eq!(
+        temp_store, default_temp_store,
+        "temp_store must stay at the default; MEMORY trades a disk spill for an OOM"
+    );
+
+    let path = test_support::temp_db("reader-tuning");
+    {
+        let on_disk = Connection::open(&path).unwrap();
+        let default_mmap: i64 = on_disk
+            .pragma_query_value(None, "mmap_size", |r| r.get(0))
+            .unwrap();
+        tune_reader(&on_disk);
+        let mmap: i64 = on_disk
+            .pragma_query_value(None, "mmap_size", |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            mmap, default_mmap,
+            "mmap_size must stay at the default; a mapping hides corruption from read_fail"
+        );
+    }
+    test_support::remove_db(&path);
+}
+
 /// `db/mod.rs:publish_report_commit` must set the dirty bit after the generation bump; removing
 /// that store leaves an open Report or Analytics view stale until an unrelated Backend repaint.
 #[test]

@@ -215,20 +215,27 @@ fn sort_rows(state: &CoinsState, rows: &mut [CoinRow]) {
         return;
     };
     let desc = *desc;
+    // Both comparators close with the coin name, which is unique per row. Without that the
+    // order is only partial, and `partial_sort` resolves a tie through `select_nth_unstable_by`
+    // — free to reorder equal rows AND to pick arbitrarily among them for the drawn head, so
+    // tied coins could swap places or drop out of the visible 300 between two renders of the
+    // same data. Ties are the common case here: `trades` is a small integer.
     if let Some(col) = super::super::COIN_COLS.iter().find(|c| c.key == key) {
         let f = col.sort;
         partial_sort(rows, |a, b| {
             let o = f(&a.stat)
                 .partial_cmp(&f(&b.stat))
                 .unwrap_or(std::cmp::Ordering::Equal);
-            if desc { o.reverse() } else { o }
+            let o = if desc { o.reverse() } else { o };
+            o.then_with(|| a.name.cmp(&b.name))
         });
     } else {
         // Compared in ONE direction rather than sorted-then-reversed: reversing also flips
         // rows whose keys are equal, so descending would not mirror ascending.
         partial_sort(rows, |a, b| {
             let (x, y) = (a.name.to_lowercase(), b.name.to_lowercase());
-            if desc { y.cmp(&x) } else { x.cmp(&y) }
+            let o = if desc { y.cmp(&x) } else { x.cmp(&y) };
+            o.then_with(|| a.name.cmp(&b.name))
         });
     }
 }
