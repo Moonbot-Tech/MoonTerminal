@@ -520,6 +520,40 @@ fn metadata_gate(path: &std::path::Path, ctx: &'static str) -> ReadResult<()> {
     }
 }
 
+/// Main report-schema page-cache budget for one reader connection, as SQLite's
+/// negative `cache_size` form (KiB rather than pages, so it does not move with
+/// `page_size`).
+///
+/// The default is ~2 MiB against a replica of hundreds of MB, so a reader starts
+/// evicting pages inside a single period scan and re-reads them for the next
+/// statement of the same batch — and one Analytics read is a batch: the summary
+/// alone runs seven statements over the same rows.
+///
+/// The budget is per connection, and concurrent readers are not bounded. Peak
+/// page-cache memory therefore scales as 16 MiB times the number of overlapping
+/// reads; raising this constant raises that peak proportionally.
+const READER_CACHE_KIB: i64 = -16_384;
+
+/// Apply the shared tuning of a read-only report connection.
+///
+/// Both settings are advisory: a failure changes how fast the connection is, never
+/// what it returns, so neither is allowed to fail opening a reader.
+///
+/// Intentionally omitted:
+/// - `temp_store = MEMORY` would keep the sorter's temporary b-tree off disk, but
+///   with unbounded concurrent readers it converts a successful file spill into an
+///   out-of-memory kill — a behaviour change, which is exactly what this must not be.
+/// - `mmap_size` would serve pages through a memory mapping, where truncation can
+///   surface as an OS-level fault instead of an `SQLITE_IOERR`/`SQLITE_CORRUPT`
+///   that [`read_fail`] can classify and present with repair guidance.
+///
+/// Args:
+///     conn: Freshly opened read-only connection to the report replica.
+fn tune_reader(conn: &Connection) {
+    let _ = conn.busy_timeout(Duration::from_secs(3));
+    let _ = conn.pragma_update(None, "cache_size", READER_CACHE_KIB);
+}
+
 /// Open a reader while distinguishing an absent replica from a SQLite failure.
 ///
 /// A genuinely absent file maps to `NotReady`; metadata and SQLite open errors
@@ -528,16 +562,14 @@ pub fn open_reader() -> ReadResult<Connection> {
     let path = paths::reports_db_path();
     metadata_gate(&path, "отчёты(reader): доступ к файлу")?;
     let conn = Connection::open(&path).map_err(|e| read_fail("отчёты(reader)", e))?;
-    let _ = conn.busy_timeout(Duration::from_secs(3));
+    // Before the ATTACH below: `cache_size` applies to one schema, and `main` is the
+    // one every period scan reads.
+    tune_reader(&conn);
     // The strategy database rides along on EVERY reader.
     //
-    // It used to be attached by `analytics::summary` alone, while `unified_from` — which is
-    // what actually needs it — is reached from fourteen places (the whole tuner, the calendar,
-    // the coin groups). Anything depending on it therefore worked on the summary and silently
-    // did not elsewhere: the strategy list and that same strategy's KPI would have disagreed
-    // about which trades belong to it. Attaching where the connection is born is the only
-    // place that covers every reader, and it must happen BEFORE any transaction is opened —
-    // ATTACH cannot run inside one.
+    // `unified_from` is shared by Analytics readers, so attaching where the connection is born
+    // keeps strategy-aware filtering consistent across all of them. It must happen before any
+    // transaction is opened because SQLite does not allow ATTACH inside a transaction.
     analytics::attach_strategies(&conn);
     Ok(conn)
 }
