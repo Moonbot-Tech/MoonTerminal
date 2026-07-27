@@ -134,6 +134,13 @@ pub(crate) struct AnalyticsSessionState {
     sel_cores: HashSet<u64>,
     /// Last Strategies axis selected while this process is running.
     strat_mode: tuner::StratMode,
+    /// Whether the "closed trades the core never dated" notice is expanded.
+    ///
+    /// Deliberately here and NOT in `WindowLayout`: the notice starts collapsed in every
+    /// process, for every user, so a restart cannot leave a warning about money missing from
+    /// the figures silently switched off. Expanding it is a look-at-it-now action, not a
+    /// preference — it survives closing the window and nothing more.
+    undated_expanded: bool,
 }
 
 impl Default for AnalyticsSessionState {
@@ -146,6 +153,7 @@ impl Default for AnalyticsSessionState {
             tab: Tab::Summary,
             sel_cores: HashSet::new(),
             strat_mode: tuner::StratMode::Filters,
+            undated_expanded: false,
         }
     }
 }
@@ -202,12 +210,9 @@ pub struct AnalyticsView {
     pub(super) undated: Option<moon_core::db::analytics::UndatedCloses>,
     /// Classified failure of the latest undated-close read.
     pub(super) undated_error: Option<ReadFail>,
-    /// Attribute LIQUIDATION trades to the strategy named in the row (see
-    /// `db::analytics::Query::attribute_liq`).
-    ///
-    /// Cached on the view rather than read from the layout per query, because `query()` has no
-    /// `cx` — and because it must not change under a reload that is already in flight.
-    pub(super) attr_liq: bool,
+    /// Whether the undated-close notice is expanded right now; mirrors
+    /// [`AnalyticsSessionState::undated_expanded`], which owns its lifetime.
+    pub(super) undated_expanded: bool,
     /// The last write that did not reach a single core, in the user's words.
     ///
     /// A failed `edit_strategies` used to be a log line and nothing else, while the panel
@@ -362,8 +367,6 @@ impl AnalyticsView {
             .analytics_period
             .as_deref()
             .and_then(Period::from_id);
-        // Read before `backend` is moved into the struct below.
-        let attr_liq = backend.read(cx).layout.analytics_attribute_liq;
         // The Tuning period has its own persisted key, independent of Summary.
         let saved_strat_period = backend
             .read(cx)
@@ -461,7 +464,7 @@ impl AnalyticsView {
             strategy_dirty: true,
             undated: None,
             undated_error: None,
-            attr_liq,
+            undated_expanded: session.undated_expanded,
             write_error: None,
             busy_ops: 0,
             db_ops: 0,
@@ -729,7 +732,6 @@ impl AnalyticsView {
             side: self.side,
             emulator: self.emu,
             strategies: Vec::new(),
-            attribute_liq: self.attr_liq,
             metric: self.metric,
         }
     }
@@ -1237,7 +1239,6 @@ impl Render for AnalyticsView {
         // internally, so there is no outer scroll.
         let body_scrolls = false;
         let integrity = self.integrity_note(cx);
-        let undated = self.undated_note(cx);
         let write_error = self.write_error.clone();
         let busy_overlay = self.busy_overlay_due(cx);
         v_flex()
@@ -1270,7 +1271,7 @@ impl Render for AnalyticsView {
                         .child(MoonAlert::warning("an-integrity-banner", detail).title(title)),
                 )
             })
-            // A write that reached nobody. Above the undated note deliberately: that one is
+            // A write that reached nobody. Above the undated-close notice deliberately: that one is
             // about numbers being incomplete, this one is about the user's strategies not
             // having changed when they were told they had.
             .when_some(write_error, |el, msg| {
@@ -1303,9 +1304,9 @@ impl Render for AnalyticsView {
                         ),
                 )
             })
-            // Money that is in NO figure on this window, plus the liquidation-attribution
-            // switch — one strip, always present: see `notice_strip`.
-            .child(self.notice_strip(undated, p, cx))
+            // Keep omitted money adjacent to the period bar; `notice_strip` returns no element
+            // when the scoped query has nothing to report.
+            .children(self.notice_strip(p, cx))
             .child(
                 div()
                     .id("analytics-body")

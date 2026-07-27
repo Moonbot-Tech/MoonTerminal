@@ -4,9 +4,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar, MoonCheckbox,
-    MoonCheckboxSize, MoonDropdown, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    h_flex,
+    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar, MoonDropdown,
+    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex,
 };
 use rust_i18n::t;
 
@@ -14,23 +13,64 @@ use super::{AnalyticsView, Period, Tab};
 use crate::design;
 use crate::design::moon;
 use crate::load_state::LoadState;
+use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::integrity::Integrity;
-use moon_core::db::{ProfitMetric, SideFilter};
+use moon_core::db::{ProfitMetric, ReadFail, SideFilter};
+
+#[cfg(test)]
+mod tests;
 
 /// What the "undated trades" strip should be right now.
 ///
-/// Three states rather than an `Option` plus a bool: once dismissed the strip does not
-/// disappear, it SHRINKS to a line carrying the way back. A banner the user can hide with no
-/// way to unhide it is a setting they cannot find again.
+/// Three states rather than an `Option` plus a bool: collapsed, the strip does not disappear
+/// — it SHRINKS to a line carrying the way back. A banner the user can hide with no way to
+/// unhide it is a setting they cannot find again.
+#[derive(Debug, PartialEq)]
 pub(super) enum UndatedBanner {
     /// Nothing to say — no undated trades, or the count is not known yet.
     None,
     /// The full warning: heading + the sentence about the money it excludes.
     Full(String, String),
-    /// Dismissed at this count or above: one muted line and a way back.
+    /// The default: one muted line naming the count, plus a way to open it.
     Collapsed(String),
     /// The undated-close query failed, so absence cannot be claimed.
     Failed(String, String),
+}
+
+/// Decide what the strip shows, given only the read outcome and whether the user opened it.
+///
+/// A free function rather than a method so the decision can be exercised directly: it is the
+/// only thing standing between "money is missing from these figures" and silence.
+///
+/// A read FAILURE outranks everything, collapsing included — a query that did not run cannot
+/// be summarised as a count, and hiding it behind a one-liner would let a broken replica read
+/// as a small tidy footnote.
+pub(super) fn undated_banner_state(
+    error: Option<&ReadFail>,
+    undated: Option<UndatedCloses>,
+    expanded: bool,
+) -> UndatedBanner {
+    if let Some(error) = error {
+        return UndatedBanner::Failed(t!("common.db_read_failed").to_string(), error.to_string());
+    }
+    let Some(u) = undated else {
+        return UndatedBanner::None;
+    };
+    if u.is_empty() {
+        return UndatedBanner::None;
+    }
+    if !expanded {
+        return UndatedBanner::Collapsed(t!("analytics.undated_collapsed", n = u.n).to_string());
+    }
+    UndatedBanner::Full(
+        t!("analytics.undated_title").to_string(),
+        t!(
+            "analytics.undated_detail",
+            n = u.n,
+            pnl = format!("{:+.2}", u.profit)
+        )
+        .to_string(),
+    )
 }
 
 impl AnalyticsView {
@@ -387,76 +427,31 @@ impl AnalyticsView {
         }
     }
 
-    /// Render period presets and the closed-trade or read-failure counter.
-    /// "Closed trades the core never dated" — title + detail, or `None` when there are none.
+    /// The strip under the period bar: the "closed trades the core never dated" notice, or
+    /// nothing at all.
     ///
-    /// Silent unless there is something to say. The count and the money are already scoped by
-    /// the window's own filters, so the sentence describes exactly the rows the figures beside
-    /// it were computed from — minus the ones that could not be.
-    pub(super) fn undated_note(&self, cx: &Context<Self>) -> UndatedBanner {
-        if let Some(error) = &self.undated_error {
-            return UndatedBanner::Failed(
-                t!("common.db_read_failed").to_string(),
-                error.to_string(),
-            );
-        }
-        let Some(u) = self.undated else {
-            return UndatedBanner::None;
-        };
-        if u.is_empty() {
-            return UndatedBanner::None;
-        }
-        // Dismissed at a count this one does not exceed: the user has already read this
-        // number and put it away, so re-raising it would be nagging, not news.
-        let hidden = self.backend.read(cx).layout.analytics_undated_hidden_n;
-        if hidden.is_some_and(|h| u.n <= h) {
-            return UndatedBanner::Collapsed(
-                t!("analytics.undated_collapsed", n = u.n).to_string(),
-            );
-        }
-        UndatedBanner::Full(
-            t!("analytics.undated_title").to_string(),
-            t!(
-                "analytics.undated_detail",
-                n = u.n,
-                pnl = format!("{:+.2}", u.profit)
-            )
-            .to_string(),
-        )
-    }
-
-    /// The strip under the period bar: the undated-trades notice (full, collapsed, or absent)
-    /// and the liquidation-attribution switch.
-    ///
-    /// ALWAYS rendered, even with nothing to warn about — the switch lives here, and hanging
-    /// it off the banner would make it disappear exactly on the databases that have no undated
-    /// trades. It is labelled rather than an anonymous tick because it silently changes whose
-    /// money is whose, and the label is how the user knows the numbers are being reinterpreted.
+    /// Silent unless there is something to say — a database with no undated trades gets no
+    /// empty band under its period bar. The count and the money are already scoped by the
+    /// window's own filters, so the sentence describes exactly the rows the figures beside it
+    /// were computed from, minus the ones that could not be.
     pub(super) fn notice_strip(
         &self,
-        undated: UndatedBanner,
         p: MoonPalette,
         cx: &Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let toggle = MoonCheckbox::new("an-attr-liq")
-            .checked(self.attr_liq)
-            .size(MoonCheckboxSize::Compact)
-            .label(t!("analytics.attr_liq").to_string())
-            .on_change({
-                let view = cx.entity();
-                move |ch: &bool, _w, app| {
-                    let on = *ch;
-                    view.update(app, |this, cx| this.set_attr_liq(on, cx));
-                }
-            });
-        let mut row = h_flex()
+    ) -> Option<impl IntoElement + use<>> {
+        let undated = undated_banner_state(
+            self.undated_error.as_ref(),
+            self.undated,
+            self.undated_expanded,
+        );
+        let row = h_flex()
             .w_full()
             .px(design::ui_px(cx, 10.0))
             .pb(design::ui_px(cx, 6.0))
             .gap(design::ui_px(cx, 8.0))
             .items_start();
-        row = match undated {
-            UndatedBanner::None => row.child(div().flex_1()),
+        let row = match undated {
+            UndatedBanner::None => return None,
             UndatedBanner::Full(title, detail) => row
                 .child(
                     div()
@@ -497,51 +492,37 @@ impl AnalyticsView {
                     .child(MoonAlert::error("an-undated-error", detail).title(title)),
             ),
         };
-        row.child(div().flex_none().child(toggle))
+        Some(row)
     }
 
-    /// Toggle liquidation attribution and reload everything it changes.
-    ///
-    /// It rewrites which strategy a trade belongs to, so every figure on the window is stale
-    /// the moment it flips — the reload is not a refresh, it is the point.
-    pub(super) fn set_attr_liq(&mut self, on: bool, cx: &mut Context<Self>) {
-        if self.attr_liq == on {
-            return;
-        }
-        self.attr_liq = on;
-        self.backend.update(cx, |b, _| {
-            b.layout.analytics_attribute_liq = on;
-            b.layout_dirty = true;
-        });
-        self.reload(cx);
-    }
-
-    /// Put the banner away at its CURRENT count, and remember that count.
-    ///
-    /// The count is the whole point of storing anything: "hidden" alone would silence the
-    /// banner for good, including the day the number doubles.
+    /// Collapse the notice back to its one-line form.
     pub(super) fn undated_hide(&mut self, cx: &mut Context<Self>) {
-        let Some(n) = self.undated.map(|u| u.n) else {
-            return;
-        };
-        self.set_undated_hidden(Some(n), cx);
+        self.set_undated_expanded(false, cx);
     }
 
-    /// Bring it back and forget the mark, so it behaves as it did before it was ever hidden.
+    /// Open the full notice.
     pub(super) fn undated_show(&mut self, cx: &mut Context<Self>) {
-        self.set_undated_hidden(None, cx);
+        self.set_undated_expanded(true, cx);
     }
 
-    fn set_undated_hidden(&mut self, at: Option<i64>, cx: &mut Context<Self>) {
+    /// Record the notice's open state for as long as this process runs.
+    ///
+    /// Deliberately NOT written to `layout.toml`: see
+    /// [`super::AnalyticsSessionState::undated_expanded`]. Storing it would let a user who
+    /// once tidied the warning away never be told again that money is missing from every
+    /// figure on the window.
+    fn set_undated_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
+        self.undated_expanded = expanded;
         self.backend.update(cx, |b, _| {
-            if b.layout.analytics_undated_hidden_n != at {
-                b.layout.analytics_undated_hidden_n = at;
-                b.layout_dirty = true;
-            }
+            b.ui_session.analytics.undated_expanded = expanded;
         });
         cx.notify();
     }
 
+    /// Render the active tab's period presets, custom date range, and scoped trade count.
+    ///
+    /// Summary and Tuning retain independent periods, so selection and count both read from the
+    /// currently visible tab.
     pub(super) fn period_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let mut seg = h_flex().gap(design::ui_px(cx, 4.0)).items_center();
         // Highlight follows the ACTIVE tab's period (Summary/Tuning are independent).

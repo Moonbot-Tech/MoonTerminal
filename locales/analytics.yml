@@ -874,12 +874,6 @@ analytics.copy_failed_missing:
   ru: "Копия НЕ создана: стратегия %{sid} не найдена среди живых на ядре %{core}."
   en: "The copy was NOT created: strategy %{sid} is not among the live ones on core %{core}."
   es: "No se creó la copia: la estrategia %{sid} no está entre las activas del núcleo %{core}."
-# The liquidation-attribution switch: it reinterprets whose trade a liquidation was, so the
-# label says what is happening rather than just naming a setting.
-analytics.attr_liq:
-  ru: "парсер ликвидаций"
-  en: "liquidation parser"
-  es: "parser de liquidaciones"
 # The profit metric switch: absolute money (USDT) vs the report's Profit column (profit / spent).
 # Both labels are units / a report column name, identical across languages.
 analytics.metric.usdt:

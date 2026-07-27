@@ -124,3 +124,40 @@ fn active_trade_core_selection_survives_toml_round_trip() {
         Some(&42)
     );
 }
+
+/// Analytics notice state and liquidation attribution must not reach `layout.toml`.
+///
+/// The round trip starts from a document carrying both stale keys because serializing a default
+/// cannot detect an optional persisted field whose value is `None`.
+///
+/// Plausible edit this catches: persisting dismissal state could suppress the only warning that
+/// money is missing from every Analytics figure, while a per-user attribution flag could make
+/// two installations assign the same liquidation differently.
+#[test]
+fn analytics_notice_and_attribution_are_not_persisted() {
+    let carrying = "analytics_undated_hidden_n = 12\nanalytics_attribute_liq = true\n";
+    let layout: WindowLayout = toml::from_str(carrying).expect("stale keys must be ignored");
+    let text = toml::to_string(&layout).expect("layout must serialize");
+    for banned in ["undated", "attribute_liq"] {
+        assert!(
+            !text.contains(banned),
+            "`{banned}` must not survive a load-and-save round trip:\n{text}"
+        );
+    }
+}
+
+/// Stale Analytics keys must not make the whole layout document fail.
+///
+/// `WindowLayout` is deserialized as ONE value, so a rejected key would cost every window
+/// position, column width, and detached-window slot in a file that still carries those keys.
+#[test]
+fn a_stale_key_from_an_older_build_still_loads() {
+    let stale = "analytics_undated_hidden_n = 12\n\
+                 analytics_attribute_liq = true\n\
+                 analytics_profit_percent = true\n";
+    let layout: WindowLayout = toml::from_str(stale).expect("a stale key must be ignored");
+    assert!(
+        layout.analytics_profit_percent,
+        "the keys that DO still exist must survive beside the ignored ones"
+    );
+}
