@@ -167,6 +167,17 @@ impl AnalyticsView {
             ))
     }
 
+    /// Render the displayed month as weekday headers and week rows.
+    ///
+    /// Args:
+    ///     map: Day-start timestamps mapped to their trade aggregates.
+    ///     month_max: Largest daily `|PnL|` in the month, used to scale cell fills.
+    ///     today: Current UTC day start, used to classify future cells.
+    ///     p: Active MoonUI palette.
+    ///     cx: GPUI view context used for sizing and day-selection listeners.
+    ///
+    /// Returns:
+    ///     The complete Month grid.
     fn cal_grid(
         &self,
         map: &HashMap<i64, &DayCell>,
@@ -205,8 +216,7 @@ impl AnalyticsView {
                 let in_month = dt.month() == m && dt.year() == y;
                 let is_future = t > today;
                 let day = if in_month { map.get(&t).copied() } else { None };
-                rowel =
-                    rowel.child(self.cal_cell(t, dom, day, in_month, is_future, month_max, p, cx));
+                rowel = rowel.child(cal_cell(t, dom, day, in_month, is_future, month_max, p, cx));
             }
             weeks = weeks.child(rowel);
         }
@@ -218,114 +228,19 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn cal_cell(
-        &self,
-        dsec: i64,
-        dom: u32,
-        day: Option<&DayCell>,
-        in_month: bool,
-        is_future: bool,
-        month_max: f64,
-        p: MoonPalette,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let pad = design::ui_px(cx, 8.0);
-        let r = design::ui_px(cx, 8.0);
-        let hovered = self.cal_hover == Some(dsec);
-        let date_only = !in_month || is_future;
-        let profit = day.map_or(0.0, |d| d.profit);
-        let trades = day.map_or(0, |d| d.trades);
-        let date_el = div()
-            .text_size(design::t_title(cx))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(moon(if date_only { p.text_muted } else { p.text }))
-            .child(dom.to_string());
-        let inner: AnyElement = if date_only {
-            date_el.into_any_element()
-        } else {
-            let muted = |txt: String| {
-                div()
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    .child(txt)
-            };
-            let right = if let Some(d) = day.filter(|d| d.trades > 0) {
-                let dwr = d.wins as f64 / d.trades as f64 * 100.0;
-                v_flex()
-                    .items_end()
-                    .child(
-                        div()
-                            .text_size(design::t_title(cx))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(moon(sign_color(p, d.profit)))
-                            .child(fmt_signed(d.profit)),
-                    )
-                    .child(muted(
-                        t!("analytics.heat.trades_full", n = d.trades).to_string(),
-                    ))
-                    .child(muted(format!("{}W {}L", d.wins, d.trades - d.wins)))
-                    .child(muted(format!("WR {dwr:.1}%")))
-            } else {
-                v_flex()
-                    .items_end()
-                    .child(
-                        div()
-                            .text_size(design::t_title(cx))
-                            .text_color(moon(p.text_muted))
-                            .child("—"),
-                    )
-                    .child(muted(t!("analytics.heat.trades_full", n = 0).to_string()))
-                    .child(muted("0W 0L".to_string()))
-                    .child(muted("WR —".to_string()))
-            };
-            h_flex()
-                .w_full()
-                .items_start()
-                .child(date_el)
-                .child(div().flex_1())
-                .child(right)
-                .into_any_element()
-        };
-        let tint = (!date_only && trades > 0 && profit != 0.0 && month_max > 0.0).then(|| {
-            let a = (profit.abs() / month_max).min(1.0) as f32 * 0.30;
-            moon_alpha(if profit > 0.0 { p.green } else { p.red }, a)
-        });
-        let bg = if in_month {
-            moon(p.panel)
-        } else {
-            moon(p.shell)
-        };
-        let border = if !date_only && hovered {
-            moon(p.text)
-        } else if in_month {
-            moon_alpha(p.border, 0.5)
-        } else {
-            moon_alpha(p.border, 0.3)
-        };
-        let cell = div()
-            .id(("mc", dsec as u64))
-            .relative()
-            .flex_1()
-            .h_full()
-            .overflow_hidden()
-            .cursor_pointer()
-            .rounded(r)
-            .bg(bg)
-            .border_1()
-            .border_color(border)
-            // Click a day → the "Day" breakdown.
-            .on_click(cx.listener(move |this, _, _, cx| this.cal_goto_day(dsec, cx)));
-        let cell = if date_only {
-            cell
-        } else {
-            cell.on_hover(self.cell_hover(dsec, cx))
-        };
-        cell.children(tint.map(|tc| div().absolute().inset_0().rounded(r).bg(tc)))
-            .child(div().absolute().inset_0().p(pad).child(inner))
-            .into_any_element()
-    }
-
+    /// Render the plus/minus-day bar under the grid: counts, a proportional split, and the
+    /// active/neutral tallies.
+    ///
+    /// Args:
+    ///     pos: Days closed in profit.
+    ///     neg: Days closed at a loss.
+    ///     active: Days that traded at all.
+    ///     neutral: Days that traded and closed flat.
+    ///     p: Active MoonUI palette.
+    ///     cx: GPUI view context used for sizing.
+    ///
+    /// Returns:
+    ///     The bar below the Month grid.
     fn cal_bottom(
         &self,
         pos: usize,
@@ -386,6 +301,128 @@ impl AnalyticsView {
                     .child(format!("{}: {}", t!("analytics.cal.neutral_days"), neutral)),
             )
     }
+}
+
+/// One day card of the Month grid: the date, and — for a day of this month that is not in the
+/// future — its PnL, trades, W/L and winrate over a fill whose alpha tracks `|PnL|`.
+///
+/// This is a free function because the card's rendering needs no view state.
+///
+/// Args:
+///     dsec: Day start, in unix seconds.
+///     dom: Day of month, the number drawn in the corner.
+///     day: Aggregate for that day, or `None` outside the month or with no trades.
+///     in_month: Whether the day belongs to the displayed month.
+///     is_future: Whether the day is still ahead of today.
+///     month_max: Largest daily `|PnL|` in the grid, the fill's scale.
+///     p: Active MoonUI palette.
+///     cx: GPUI context, for UI-scale sizes and the click listener.
+///
+/// Returns:
+///     The complete day card.
+#[allow(clippy::too_many_arguments)]
+fn cal_cell(
+    dsec: i64,
+    dom: u32,
+    day: Option<&DayCell>,
+    in_month: bool,
+    is_future: bool,
+    month_max: f64,
+    p: MoonPalette,
+    cx: &Context<AnalyticsView>,
+) -> AnyElement {
+    let pad = design::ui_px(cx, 8.0);
+    let r = design::ui_px(cx, 8.0);
+    let date_only = !in_month || is_future;
+    let profit = day.map_or(0.0, |d| d.profit);
+    let trades = day.map_or(0, |d| d.trades);
+    let date_el = div()
+        .text_size(design::t_title(cx))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(moon(if date_only { p.text_muted } else { p.text }))
+        .child(dom.to_string());
+    let inner: AnyElement = if date_only {
+        date_el.into_any_element()
+    } else {
+        let muted = |txt: String| {
+            div()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.text_muted))
+                .child(txt)
+        };
+        let right = if let Some(d) = day.filter(|d| d.trades > 0) {
+            let dwr = d.wins as f64 / d.trades as f64 * 100.0;
+            v_flex()
+                .items_end()
+                .child(
+                    div()
+                        .text_size(design::t_title(cx))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(moon(sign_color(p, d.profit)))
+                        .child(fmt_signed(d.profit)),
+                )
+                .child(muted(
+                    t!("analytics.heat.trades_full", n = d.trades).to_string(),
+                ))
+                .child(muted(format!("{}W {}L", d.wins, d.trades - d.wins)))
+                .child(muted(format!("WR {dwr:.1}%")))
+        } else {
+            v_flex()
+                .items_end()
+                .child(
+                    div()
+                        .text_size(design::t_title(cx))
+                        .text_color(moon(p.text_muted))
+                        .child("—"),
+                )
+                .child(muted(t!("analytics.heat.trades_full", n = 0).to_string()))
+                .child(muted("0W 0L".to_string()))
+                .child(muted("WR —".to_string()))
+        };
+        h_flex()
+            .w_full()
+            .items_start()
+            .child(date_el)
+            .child(div().flex_1())
+            .child(right)
+            .into_any_element()
+    };
+    let tint = (!date_only && trades > 0 && profit != 0.0 && month_max > 0.0).then(|| {
+        let a = (profit.abs() / month_max).min(1.0) as f32 * 0.30;
+        moon_alpha(if profit > 0.0 { p.green } else { p.red }, a)
+    });
+    let bg = if in_month {
+        moon(p.panel)
+    } else {
+        moon(p.shell)
+    };
+    let border = if in_month {
+        moon_alpha(p.border, 0.5)
+    } else {
+        moon_alpha(p.border, 0.3)
+    };
+    let cell = div()
+        .id(("mc", dsec as u64))
+        .relative()
+        .flex_1()
+        .h_full()
+        .overflow_hidden()
+        .cursor_pointer()
+        .rounded(r)
+        .bg(bg)
+        .border_1()
+        .border_color(border)
+        // Click a day → the "Day" breakdown.
+        .on_click(cx.listener(move |this, _, _, cx| this.cal_goto_day(dsec, cx)));
+    // Highlight only cards that show figures; date-only cards remain clickable navigation.
+    let cell = if date_only {
+        cell
+    } else {
+        cell.hover(move |s| s.border_color(moon(p.text)))
+    };
+    cell.children(tint.map(|tc| div().absolute().inset_0().rounded(r).bg(tc)))
+        .child(div().absolute().inset_0().p(pad).child(inner))
+        .into_any_element()
 }
 
 /// Calendar KPI tile: label + large value + delta to the previous period.

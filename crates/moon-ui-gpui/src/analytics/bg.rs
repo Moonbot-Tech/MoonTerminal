@@ -42,7 +42,7 @@ impl AnalyticsView {
     ) {
         self.db_ops += 1;
         if overlay {
-            self.op_started();
+            self.op_started(cx);
         }
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { db() }).await;

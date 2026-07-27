@@ -660,7 +660,7 @@ fn analytics_core_metadata_is_throttled_across_tabs() {
 /// The busy overlay appears 150 ms into a batch and SWALLOWS CLICKS, so a search that raised it
 /// would bury the Stop button it depends on — and this search runs for as long as the user asks
 /// it to. The plausible edit is "make the long search look busy like everything else": passing
-/// `true` to `spawn_db`, or restoring the `op_started()` call that used to sit here.
+/// `true` to `spawn_db`, or calling `op_started` directly.
 #[test]
 fn the_joint_threshold_search_leaves_its_window_usable() {
     let actions = read_src("analytics/tuner/filter/actions.rs");
@@ -681,8 +681,129 @@ fn the_joint_threshold_search_leaves_its_window_usable() {
         "the joint search must not raise the blocking overlay over its own Stop button"
     );
     assert!(
-        !body.contains("op_started()"),
+        !body.contains("op_started("),
         "the joint search must not enter the blocking-overlay accounting by hand either"
+    );
+}
+
+/// The Analytics render root must remain free of repaint scheduling.
+///
+/// Moving the busy-overlay timer into `render` or `busy_overlay_due` makes each timer-driven frame
+/// schedule its successor. `op_started` instead arms one timer on the batch's idle-to-busy
+/// transition and identifies that batch at wake-up.
+#[test]
+fn the_analytics_render_root_schedules_no_repaints() {
+    let src = read_src("analytics/mod.rs");
+
+    // Guard the render root as well as its predicate so scheduling cannot move one line outward.
+    let render = braced_body(&src, "fn render(&mut self, window: &mut Window");
+    for scheduler in ["cx.spawn(", "spawn_in(", ".timer(", "on_next_frame("] {
+        assert!(
+            !render.contains(scheduler),
+            "the Analytics render root must schedule nothing: found {scheduler}"
+        );
+    }
+    assert!(
+        render.contains("self.busy_overlay_due()"),
+        "the render root must read the overlay through busy_overlay_due — otherwise the \
+         predicate below is dead code and its guards hold vacuously"
+    );
+
+    // A context-free predicate cannot acquire the scheduling APIs used by this view.
+    assert!(
+        src.contains("fn busy_overlay_due(&self) -> bool"),
+        "busy_overlay_due must stay a pure predicate — a `&mut Context` parameter is how \
+         scheduling gets back into the render path"
+    );
+
+    // A batch can contain overlapping reads but needs only one delayed repaint.
+    let started = braced_body(&src, "fn op_started(");
+    assert!(
+        started.contains("if self.busy_since.is_none() {")
+            && started.contains("BUSY_OVERLAY_DELAY")
+            && started.matches("cx.spawn(").count() == 1,
+        "op_started must arm its one BUSY_OVERLAY_DELAY repaint in a single place, on the \
+         busy_since None -> Some transition"
+    );
+    // A detached timer may wake during a later batch, which must observe its own delay.
+    assert!(
+        started.contains("this.busy_since == Some(opened_at)"),
+        "the delayed repaint must fire only for the batch that armed it"
+    );
+}
+
+/// Calendar cells must keep their self-highlight in identified element state.
+///
+/// Adding a calendar hover field or callback couples a local border to `AnalyticsView` state and
+/// lets that state outlive the series that produced the cell. An identified `.hover()` style
+/// scopes the state to the cell; the id is required for GPUI to persist it between frames. This
+/// does not claim to eliminate hover-triggered view repaints: GPUI still notifies the owning view
+/// when element hover state changes.
+///
+/// Summary chart hover remains view state because it positions a sibling popup outside the
+/// hovered element. This guard is limited to calendar cells that highlight themselves.
+#[test]
+fn calendar_hover_is_element_state_not_view_state() {
+    // Include the window root, where a shared calendar hover field would be declared.
+    for rel in [
+        "analytics/mod.rs",
+        "analytics/calendar/mod.rs",
+        "analytics/calendar/day.rs",
+        "analytics/calendar/month.rs",
+    ] {
+        assert!(
+            !read_src(rel).contains("cal_hover"),
+            "{rel} must not carry calendar hover state on the view"
+        );
+    }
+
+    // Scan the directory so row-level callbacks and additional calendar grids cannot bypass the
+    // contract.
+    let mut calendar = Vec::new();
+    rust_sources(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("analytics")
+            .join("calendar"),
+        &mut calendar,
+    );
+    for path in calendar {
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+            .replace("\r\n", "\n");
+        for banned in [".on_hover(", ".on_mouse_move("] {
+            assert!(
+                !text.contains(banned),
+                "{} must not drive calendar highlighting from view state: found {banned}",
+                path.display()
+            );
+        }
+    }
+
+    let day = read_src("analytics/calendar/day.rs");
+    let hour = braced_body(&day, "fn hour_cell(");
+    // `hour_cell` has no click handler to require an id independently of hover state.
+    assert!(
+        hour.contains(".id((\"hc\",") && hour.contains(".hover("),
+        "hour_cell must highlight through a .hover() style on an identified element"
+    );
+
+    let month = read_src("analytics/calendar/month.rs");
+    let cell = braced_body(&month, "fn cal_cell(");
+    assert_eq!(
+        cell.matches(".hover(").count(),
+        1,
+        "cal_cell must carry exactly one hover style"
+    );
+    // Date-only cards navigate but show no figures, so they must not advertise a readable value.
+    let anchor = cell
+        .find(".id((\"mc\",")
+        .expect("cal_cell must identify its cell element");
+    let chain = &cell[anchor..];
+    let chain = chain.split_once(';').map_or(chain, |(head, _)| head);
+    assert!(
+        !chain.contains(".hover("),
+        "cal_cell must attach its highlight after the date_only gate, not to the shared chain"
     );
 }
 
