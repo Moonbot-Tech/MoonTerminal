@@ -331,6 +331,53 @@ fn the_tuning_strategy_list_stays_virtualized() {
     );
 }
 
+/// The Tuning coin table stays virtualized and reaches the view weakly.
+///
+/// Replacing `MoonVirtualList` with eager `v_flex().children(rows)`, or wrapping the card in
+/// `overflow_y_scroll`, makes each shared-view repaint build up to `MAX_ROWS` coin rows. Capturing
+/// a strong view handle in the retained factory additionally leaks the Analytics window.
+#[test]
+fn the_tuning_coin_table_stays_virtualized() {
+    let coins = read_src("analytics/tuner/coins/mod.rs");
+    // Scoped to the card's own body: another scrollable sub-surface in this file (the picker)
+    // must not redden the test for a reason that has nothing to do with the table.
+    let card = braced_body(&coins, "fn coins_card(");
+    assert!(
+        card.contains("MoonVirtualList::new(") && card.contains("\"an-coin-rows\""),
+        "the coin table must render through MoonVirtualList"
+    );
+    assert!(
+        !card.contains(".overflow_y_scroll()"),
+        "an eager scroll container would defeat the virtual list"
+    );
+    assert!(
+        card.contains("rows::rows_for("),
+        "rows must come from the memoized cache, not a fresh filter+sort per render"
+    );
+    // The factory outlives the render, so a strong handle would leak the whole window. Asserted
+    // INSIDE the factory: `cx.listener` cannot appear in a `'static` factory at all, so banning
+    // it proves nothing.
+    let factory = card
+        .find("MoonVirtualList::new(")
+        .map(|i| &card[i..])
+        .expect("the virtual list must be built here");
+    assert!(
+        factory.contains("weak.upgrade()"),
+        "the virtual row factory must reach the view through a WEAK handle"
+    );
+    // Scoped to the row builder rather than banned file-wide: a short-lived `cx.entity()` in some
+    // other method here is legitimate, and only the row's own handlers outlive the frame.
+    let row = braced_body(&coins, "fn coin_row(");
+    assert!(
+        !row.contains("cx.entity()"),
+        "a coin row's handlers outlive the render; they must capture the weak handle only"
+    );
+    assert!(
+        coins.contains("weak: &WeakEntity<AnalyticsView>"),
+        "the row builder must take the weak handle rather than capturing the view"
+    );
+}
+
 /// A strategy copy goes to the core root, sits beside its source, and is revealed to the user.
 ///
 /// Plausible edits this catches: inheriting `row.folder_path` lets the receiving core reinterpret

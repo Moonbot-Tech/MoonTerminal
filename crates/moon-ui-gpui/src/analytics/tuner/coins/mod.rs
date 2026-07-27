@@ -30,8 +30,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInput,
-    MoonInputEvent, MoonInputState, MoonPalette, MoonSlider, MoonSliderEvent, MoonSliderState,
-    h_flex, v_flex,
+    MoonInputEvent, MoonInputState, MoonPalette, MoonScrollbarVisibility, MoonSlider,
+    MoonSliderEvent, MoonSliderState, MoonVirtualList, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -221,7 +221,7 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// Sortable heading of the coin table, aligned column-for-column with [`Self::coin_row`].
+    /// Sortable heading of the coin table, aligned column-for-column with [`coin_row`].
     fn coin_header(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement + use<> {
         let scale = design::font_scale(cx);
         let sortable =
@@ -298,92 +298,6 @@ impl AnalyticsView {
             )
     }
 
-    /// One coin row. Each tick box carries its OWN handler: with two of them per row a
-    /// row-wide click could not say which list it meant, so the row itself is inert.
-    fn coin_row_el(
-        &self,
-        row: &CoinRow,
-        p: MoonPalette,
-        scale: f32,
-        cx: &Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let g: &GroupStat = &row.stat;
-        let name = row.name.clone();
-        // One tick box. It carries its own handler now: with two of them per row, a
-        // row-wide toggle could not say WHICH list the click meant.
-        let tick = |black_side: bool, on: bool| {
-            // Folded HERE, not per row per frame: the token is needed once per click, and
-            // building it for every one of thousands of rows on every frame was pure waste
-            // — worse, skipping it for speed left the handler editing the empty token.
-            let coin = name.to_string();
-            div()
-                .w(design::font_w_px(cx, COIN_TICK_W))
-                .flex_none()
-                .flex()
-                .justify_center()
-                .child(
-                    MoonCheckbox::new(SharedString::from(format!(
-                        "an-coin-{}-{name}",
-                        if black_side { "bl" } else { "wl" }
-                    )))
-                    .checked(on)
-                    .size(MoonCheckboxSize::Compact)
-                    .on_change({
-                        let view = cx.entity();
-                        move |_, _w, app| {
-                            let token = coin_token(&coin);
-                            view.update(app, |this, cx| {
-                                this.toggle_coin_list(black_side, token, cx);
-                            });
-                        }
-                    }),
-                )
-        };
-        let mut el = h_flex()
-            .id(SharedString::from(format!("an-coinrow-{name}")))
-            .w_full()
-            .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
-            .px(design::ui_px(cx, COIN_ROW_PAD_X))
-            .gap(design::ui_px(cx, COIN_ROW_GAP))
-            .items_center()
-            .bg(moon(p.table_body))
-            .border_t_1()
-            .border_color(moon_alpha(p.border, 0.5))
-            // The floor goes on the flex ITEM: at zero width the name would paint outside
-            // its own box, over the numbers next to it, instead of truncating.
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(design::font_w_px(cx, COIN_NAME_MIN_W))
-                    .truncate()
-                    .child(name.to_string()),
-            )
-            .children(COIN_COLS.iter().map(|col| metric_cell(col, g, p, scale)))
-            .child(tick(true, row.black))
-            .child(tick(false, row.white))
-            // Clicking the ROW asks "who traded this?" — the tick boxes keep their own
-            // handlers, so a click on one of them never reaches here as a selection.
-            .on_click(cx.listener({
-                let coin = name.to_string();
-                move |this, ev: &ClickEvent, _, cx| {
-                    this.pick_coin(coin.clone(), ev.modifiers().secondary(), cx);
-                }
-            }))
-            .cursor_pointer();
-        // Two different things get two different colours: BLUE is "this is the coin the
-        // strategy list is currently answering for", AMBER is "this row carries an unsaved
-        // edit". Selection wins the background when both are true — it is the transient one,
-        // and the edit is still shown by the ticks.
-        if row.picked {
-            el = el.bg(moon_alpha(p.blue, 0.18));
-        } else if row.changed {
-            el = el.bg(moon_alpha(p.amber, 0.12));
-        } else {
-            el = el.hover(move |s| s.bg(moon_alpha(p.panel_high, 0.9)));
-        }
-        el
-    }
-
     /// The coin table card — sits UNDER the strategy list.
     pub(in crate::analytics::tuner) fn coins_card(
         &mut self,
@@ -428,11 +342,16 @@ impl AnalyticsView {
             Ok((base, scoped)) => {
                 // Built once per change of what it depends on — NOT per frame. Hovering a
                 // row repaints the whole view without touching any of those inputs.
-                let (counts, total, empty) = {
+                //
+                // `drawn` is the cache's OWN length, not `total`: `rows::build` has already
+                // cut the tail at `MAX_ROWS`, while `total` is the pre-cut count. Taking it
+                // here, in the same block, is also what releases the borrow before
+                // `cx.entity()` below needs the view.
+                let (counts, total, drawn) = {
                     let cache = rows::rows_for(&mut self.coins, &base.coins, &scoped);
-                    (cache.counts, cache.total, cache.rows.is_empty())
+                    (cache.counts, cache.total, cache.rows.len())
                 };
-                if empty {
+                if drawn == 0 {
                     // Data exists but the search/filter matched nothing — say so instead of
                     // leaving a blank area.
                     let note = div()
@@ -444,21 +363,32 @@ impl AnalyticsView {
                         .into_any_element();
                     (note, counts, 0)
                 } else {
-                    let cache = self
-                        .coins
-                        .rows
-                        .as_ref()
-                        .expect("rows_for populates the cache above");
-                    let rows: Vec<AnyElement> = cache
-                        .rows
-                        .iter()
-                        .map(|r| self.coin_row_el(r, p, scale, cx).into_any_element())
-                        .collect();
-                    (
-                        v_flex().w_full().children(rows).into_any_element(),
-                        counts,
-                        total,
-                    )
+                    // The factory runs only for rows on screen, keeping repaints of the shared
+                    // Analytics view proportional to the visible rows; see `list::table` for the
+                    // same ownership shape.
+                    let weak = cx.entity().downgrade();
+                    // Resolved once and captured, like `scale` above: the pitch and the height
+                    // the row draws itself at must be the same number, and deriving it again
+                    // inside the factory would pay for a theme lookup per drawn row per frame.
+                    let row_h = coin_row_h(cx);
+                    let list =
+                        MoonVirtualList::new("an-coin-rows", drawn, row_h, move |ix, _w, app| {
+                            weak.upgrade()
+                                .and_then(|e| {
+                                    // Cache and index are read from the view in ONE go, so an
+                                    // index can never be applied to a row set it was not
+                                    // computed against.
+                                    let row = e.read(app).coins.rows.as_ref()?.rows.get(ix)?;
+                                    Some(coin_row(&weak, row, p, scale, row_h, app))
+                                })
+                                .unwrap_or_else(|| div().into_any_element())
+                        })
+                        .surface(false)
+                        .border(false)
+                        .radius(0.0)
+                        .scrollbar_visibility(MoonScrollbarVisibility::Hover)
+                        .into_any_element();
+                    (list, counts, total)
                 }
             }
         };
@@ -553,15 +483,9 @@ impl AnalyticsView {
             )
             .child(self.coin_filter_bar(&search, &min_trades, counts, p, cx))
             .child(self.coin_header(p, cx))
-            .child(
-                div()
-                    .id("an-coins-list")
-                    .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(body),
-            )
+            // No `overflow_y_scroll` here: the virtual list owns its own scrolling, and an
+            // outer scroller would hand it the full content height and defeat it entirely.
+            .child(div().w_full().flex_1().min_h_0().child(body))
             .into_any_element()
     }
 
@@ -594,6 +518,105 @@ impl AnalyticsView {
             cx,
         )
     }
+}
+
+/// Height of one coin row, in base px.
+///
+/// Follows the single-source pitch rule documented by `list::table::strat_row_h`: the virtual
+/// list and [`coin_row`] both consume this value, because differing pitches would overlap or gap
+/// rows.
+fn coin_row_h(cx: &App) -> f32 {
+    design::fit_h_value(cx, 24.0, 14.0, 5.0)
+}
+
+/// One coin row: each tick box toggles its own list, while clicking elsewhere selects the coin.
+///
+/// Uses the weak-handle rule documented by `list::table::strategy_row`: the `'static` factory
+/// must not retain a strong entity because that closes
+/// `AnalyticsView -> element state -> closure -> AnalyticsView` and leaks the window.
+fn coin_row(
+    weak: &WeakEntity<AnalyticsView>,
+    row: &CoinRow,
+    p: MoonPalette,
+    scale: f32,
+    row_h: f32,
+    cx: &App,
+) -> AnyElement {
+    let g: &GroupStat = &row.stat;
+    let name = row.name.clone();
+    // Each tick box carries its own handler because a row-wide toggle could not identify which
+    // of the two lists the click targets.
+    let tick = |black_side: bool, on: bool| {
+        // A refcount bump, not a copy: `CoinRow.name` is already a `SharedString`, and the
+        // handler only needs an owned token once, at click time.
+        let coin = name.clone();
+        let weak = weak.clone();
+        div()
+            .w(design::font_w_px(cx, COIN_TICK_W))
+            .flex_none()
+            .flex()
+            .justify_center()
+            .child(
+                MoonCheckbox::new(SharedString::from(format!(
+                    "an-coin-{}-{name}",
+                    if black_side { "bl" } else { "wl" }
+                )))
+                .checked(on)
+                .size(MoonCheckboxSize::Compact)
+                .on_change(move |_, _w, app| {
+                    let token = coin_token(&coin);
+                    // The view may already be gone; a dropped window is not an error here.
+                    let _ = weak.update(app, |this, cx| {
+                        this.toggle_coin_list(black_side, token, cx);
+                    });
+                }),
+            )
+    };
+    let mut el = h_flex()
+        .id(SharedString::from(format!("an-coinrow-{name}")))
+        .w_full()
+        .h(px(row_h))
+        .px(design::ui_px(cx, COIN_ROW_PAD_X))
+        .gap(design::ui_px(cx, COIN_ROW_GAP))
+        .items_center()
+        .bg(moon(p.table_body))
+        .border_t_1()
+        .border_color(moon_alpha(p.border, 0.5))
+        // The floor goes on the flex ITEM: at zero width the name would paint outside
+        // its own box, over the numbers next to it, instead of truncating.
+        .child(
+            div()
+                .flex_1()
+                .min_w(design::font_w_px(cx, COIN_NAME_MIN_W))
+                .truncate()
+                .child(name.clone()),
+        )
+        .children(COIN_COLS.iter().map(|col| metric_cell(col, g, p, scale)))
+        .child(tick(true, row.black))
+        .child(tick(false, row.white))
+        // Clicking the ROW asks "who traded this?" — the tick boxes keep their own
+        // handlers, so a click on one of them never reaches here as a selection.
+        .on_click({
+            let weak = weak.clone();
+            let coin = name.clone();
+            move |ev: &ClickEvent, _window, app| {
+                let (coin, multi) = (coin.to_string(), ev.modifiers().secondary());
+                let _ = weak.update(app, |this, cx| this.pick_coin(coin, multi, cx));
+            }
+        })
+        .cursor_pointer();
+    // Two different things get two different colours: BLUE is "this is the coin the
+    // strategy list is currently answering for", AMBER is "this row carries an unsaved
+    // edit". Selection wins the background when both are true — it is the transient one,
+    // and the edit is still shown by the ticks.
+    if row.picked {
+        el = el.bg(moon_alpha(p.blue, 0.18));
+    } else if row.changed {
+        el = el.bg(moon_alpha(p.amber, 0.12));
+    } else {
+        el = el.hover(move |s| s.bg(moon_alpha(p.panel_high, 0.9)));
+    }
+    el.into_any_element()
 }
 
 /// One line of the env-gated observation channel (see `analytics::probe_enabled`), written
