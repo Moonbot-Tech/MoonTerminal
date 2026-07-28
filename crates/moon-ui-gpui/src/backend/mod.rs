@@ -4,6 +4,7 @@
 
 mod detect_sound;
 mod figures;
+pub(crate) mod server_chart;
 #[cfg(test)]
 mod tests;
 

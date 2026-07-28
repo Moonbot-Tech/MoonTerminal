@@ -237,6 +237,9 @@ struct Backend {
     /// data goes straight into retained chart handles and must not dirty the whole tree.
     backend_dirty_since_notify: bool,
     last_backend_notify: Option<Instant>,
+    /// Shared per-server CPU/memory history for the Core Status detached-window chart. Kept here so
+    /// it accumulates continuously and survives a window opening and closing.
+    core_chart_hist: crate::backend::server_chart::ServerChartHistory,
     /// Core reconnect requests from the Connections button, drained into `session.reconnect`.
     /// Ported from egui's `SettingsActions.reconnect`.
     reconnect_request: Vec<CoreId>,
